@@ -12,7 +12,7 @@ const path = require('path');
 
 const platforms = {
   windows: { args: '', check: () => process.platform === 'win32' },
-  macos: { args: '--target universal-apple-darwin', check: () => process.platform === 'darwin' },
+  macos: { args: '--target x86_64-apple-darwin', check: () => process.platform === 'darwin' },
   linux: { args: '', check: () => process.platform === 'linux' },
   all: { args: '', check: () => true }
 };
@@ -45,7 +45,7 @@ try {
 function showOutputPath(platform) {
   const paths = {
     windows: 'src-tauri/target/release/bundle/nsis/ 或 msi/',
-    macos: 'src-tauri/target/universal-apple-darwin/release/bundle/dmg/',
+    macos: 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/',
     linux: 'src-tauri/target/release/bundle/deb/ 或 appimage/'
   };
   console.log(`📦 安装包位置: ${paths[platform] || 'src-tauri/target/*/release/bundle/'}`);

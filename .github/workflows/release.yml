@@ -13,8 +13,8 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            target: 'universal-apple-darwin'
-            name: 'macos-universal'
+            target: 'x86_64-apple-darwin'
+            name: 'macos-x64'
           - platform: 'ubuntu-22.04'
             target: ''
             name: 'linux'
@@ -62,7 +62,13 @@ jobs:
         run: npm ci
 
       - name: Build application
-        run: npm run tauri build -- --target ${{ matrix.target }}
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            npm run tauri build -- --target ${{ matrix.target }}
+          else
+            npm run tauri build
+          fi
+        shell: bash
 
       - name: Strip binary (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
@@ -71,7 +77,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: claude-gui-${{ matrix.name }}
+          name: cc-box-${{ matrix.name }}
           path: |
             src-tauri/target/*/release/bundle/*/
             !src-tauri/target/*/release/bundle/*/SYM/
@@ -97,8 +103,8 @@ jobs:
           files: |
             artifacts/windows/**/*.exe
             artifacts/windows/**/*.msi
-            artifacts/macos-universal/**/*.dmg
-            artifacts/macos-universal/**/*.app.tar.gz
+            artifacts/macos-x64/**/*.dmg
+            artifacts/macos-x64/**/*.app.tar.gz
             artifacts/linux/**/*.deb
             artifacts/linux/**/*.AppImage
         env:

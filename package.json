@@ -10,7 +10,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "build:win": "tauri build --target x86_64-pc-windows-gnu",
-    "build:mac": "tauri build --target universal-apple-darwin",
+    "build:mac": "tauri build --target x86_64-apple-darwin",
     "build:linux": "tauri build --target x86_64-unknown-linux-gnu"
   },
   "dependencies": {
