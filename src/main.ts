@@ -9,3 +9,8 @@ const pinia = createPinia()
 
 app.use(pinia)
 app.mount('#app')
+
+// 生产环境下禁用右键菜单
+if (import.meta.env.PROD) {
+  window.addEventListener('contextmenu', (e) => e.preventDefault())
+}

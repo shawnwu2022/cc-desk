@@ -29,6 +29,7 @@ import {
   onTerminalKeydown,
 } from '@/api/tauri'
 import { registerTerminalCommand } from '@/composables/useTerminalCommand'
+import { readText } from '@tauri-apps/plugin-clipboard-manager'
 
 const props = defineProps<{
   fontSize?: number
@@ -171,7 +172,7 @@ function createTerminal(tabId: string): Terminal {
   term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
     if (event.type === 'keydown' && event.ctrlKey && event.key === 'v') {
       event.preventDefault()
-      navigator.clipboard.readText().then(text => {
+      readText().then(text => {
         if (text) term.paste(text)
       }).catch(() => {})
       return false

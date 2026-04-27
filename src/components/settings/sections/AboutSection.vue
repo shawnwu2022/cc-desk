@@ -1,0 +1,153 @@
+<template>
+  <div class="section-content">
+    <h2 class="section-heading">About</h2>
+
+    <div class="about-card">
+      <div class="about-logo">
+        <span class="logo-text">CB</span>
+      </div>
+      <div class="about-details">
+        <span class="app-name">CC-Box</span>
+        <span class="app-version">Version {{ currentVersion }}</span>
+        <span class="app-desc">Multi-terminal manager for Claude Code power users.</span>
+      </div>
+    </div>
+
+    <div class="links-group">
+      <a class="about-link" @click="openExternal('https://github.com/orczh-hj/cc-box')">
+        <div class="link-content">
+          <span class="link-title">GitHub Repository</span>
+          <span class="link-url">github.com/orczh-hj/cc-box</span>
+        </div>
+        <span class="link-arrow">→</span>
+      </a>
+      <a class="about-link" @click="openExternal('https://code.claude.com/docs')">
+        <div class="link-content">
+          <span class="link-title">Claude Code Docs</span>
+          <span class="link-url">code.claude.com/docs</span>
+        </div>
+        <span class="link-arrow">→</span>
+      </a>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { open } from '@tauri-apps/plugin-shell'
+
+const currentVersion = __APP_VERSION__
+
+function openExternal(url: string) {
+  open(url)
+}
+</script>
+
+<style scoped>
+.section-content {
+  padding: 8px 0;
+}
+
+.section-heading {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 24px;
+}
+
+.about-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 24px;
+}
+
+.about-logo {
+  width: 56px;
+  height: 56px;
+  background: var(--accent-color);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.logo-text {
+  font-size: 20px;
+  font-weight: 700;
+  color: white;
+}
+
+.about-details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.app-version {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.app-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+.links-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.about-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  text-decoration: none;
+  color: var(--text-primary);
+}
+
+.about-link:hover {
+  background: var(--bg-secondary);
+}
+
+.link-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.link-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.link-url {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.link-arrow {
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+</style>

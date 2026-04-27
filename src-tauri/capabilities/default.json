@@ -10,7 +10,9 @@
     "core:window:allow-create",
     "core:window:allow-close",
     "core:window:allow-set-size",
+    "core:window:allow-set-position",
     "core:window:allow-set-title",
+    "core:window:allow-current-monitor",
     "core:webview:default",
     "core:app:default",
     "core:app:allow-app-hide",
@@ -19,6 +21,9 @@
     "shell:allow-execute",
     "dialog:default",
     "dialog:allow-open",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    "clipboard-manager:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
   ]
 }

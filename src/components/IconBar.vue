@@ -54,22 +54,34 @@
 
     </div>
 
-    <!-- 分隔线 -->
-    <div class="separator"></div>
+    <!-- 底部按钮组 -->
+    <div class="icon-group bottom">
+      <!-- Settings -->
+      <button
+        class="icon-btn settings-btn"
+        :class="{ active: sidebarStore.showSettings }"
+        @click="$emit('toggleSettings')"
+        title="Settings"
+      >
+        <img src="@/assets/icons/settings.svg" alt="Settings" />
+        <span v-if="sidebarStore.updateAvailable" class="update-badge"></span>
+      </button>
 
-    <!-- 文件夹按钮 -->
-    <button
-      class="icon-btn folder-btn"
-      @click="$emit('openFolder')"
-      title="Open folder"
-    >
-      <img src="@/assets/icons/folder.svg" alt="Folder" />
-    </button>
+      <!-- 文件夹按钮 -->
+      <button
+        class="icon-btn folder-btn"
+        @click="$emit('openFolder')"
+        title="Open folder"
+      >
+        <img src="@/assets/icons/folder.svg" alt="Folder" />
+      </button>
+    </div>
   </aside>
 </template>
 
 <script setup lang="ts">
 import type { SidebarPanelType } from '@/stores/sidebar'
+import { useSidebarStore } from '@/stores/sidebar'
 
 defineProps<{
   activePanel: SidebarPanelType
@@ -77,8 +89,11 @@ defineProps<{
 
 defineEmits<{
   toggle: [panel: SidebarPanelType]
+  toggleSettings: []
   openFolder: []
 }>()
+
+const sidebarStore = useSidebarStore()
 </script>
 
 <style scoped>
@@ -99,6 +114,10 @@ defineEmits<{
   gap: 4px;
 }
 
+.icon-group.bottom {
+  margin-top: auto;
+}
+
 .icon-btn {
   position: relative;
   width: 40px;
@@ -111,7 +130,7 @@ defineEmits<{
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   transition: all 0.15s ease;
 }
 
@@ -119,6 +138,8 @@ defineEmits<{
   width: 20px;
   height: 20px;
   flex-shrink: 0;
+  opacity: 0.85;
+  transition: opacity 0.15s ease;
 }
 
 .icon-btn:hover {
@@ -126,9 +147,17 @@ defineEmits<{
   color: var(--text-primary);
 }
 
+.icon-btn:hover img {
+  opacity: 1;
+}
+
 .icon-btn.active {
   background: var(--selected-bg);
-  color: var(--accent-color);
+  color: var(--accent-gold);
+}
+
+.icon-btn.active img {
+  opacity: 1;
 }
 
 .icon-btn.active::before {
@@ -138,17 +167,28 @@ defineEmits<{
   top: 8px;
   bottom: 8px;
   width: 3px;
-  background: var(--accent-color);
+  background: var(--accent-gold);
   border-radius: 0 2px 2px 0;
 }
 
-.separator {
-  height: 1px;
-  background: var(--border-color);
-  margin: 8px 8px;
+.settings-btn {
+  position: relative;
 }
 
-.folder-btn {
-  margin-top: auto;
+.update-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  background: var(--status-error);
+  border-radius: 50%;
+  border: 2px solid var(--bg-secondary);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 </style>

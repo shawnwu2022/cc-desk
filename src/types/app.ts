@@ -23,3 +23,12 @@ export interface ClaudeOptions {
   skipPermissions: boolean
   customArgs: string
 }
+
+// 软件更新信息
+export interface UpdateInfo {
+  version: string
+  currentVersion: string
+  hasUpdate: boolean
+  releaseNotes: string
+  downloadUrl: string
+}

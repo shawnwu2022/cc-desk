@@ -3,9 +3,6 @@
     <!-- Header -->
     <PanelHeader title="Sessions" @close="$emit('close')">
       <template #actions>
-        <button class="action-btn" @click="$emit('newSession')" title="New session">
-          <img src="@/assets/icons/plus.svg" alt="New session" />
-        </button>
         <button class="action-btn" @click="handleRefresh" title="Refresh sessions">
           <img src="@/assets/icons/refresh.svg" alt="Refresh" />
         </button>
@@ -59,40 +56,38 @@
       </div>
     </div>
 
-    <!-- 当前会话状态 -->
-    <SessionStatus
-      :tab="sessionStore.activeTab"
-      :project-path="appStore.cwd"
-      @restart="$emit('restartSession')"
-    />
-
-    <!-- 启动参数设置 -->
+    <!-- 底部操作区 -->
     <footer class="panel-footer">
-      <button class="settings-toggle" @click="optionsExpanded = !optionsExpanded">
-        <img src="@/assets/icons/settings.svg" alt="Settings" />
-        <span>Startup Options</span>
-        <img class="chevron" src="@/assets/icons/chevron.svg" alt="Toggle" :class="{ expanded: optionsExpanded }" />
-      </button>
+      <div class="action-buttons">
+        <button
+          class="action-btn"
+          @click="$emit('newSession')"
+          title="New session"
+        >
+          <img src="@/assets/icons/plus.svg" alt="New session" />
+          New
+        </button>
+        <button
+          class="action-btn"
+          @click="$emit('restartSession')"
+          :disabled="!sessionStore.activeTab"
+          title="Restart session"
+        >
+          <img src="@/assets/icons/refresh.svg" alt="Restart" />
+          Restart
+        </button>
+      </div>
 
-      <div v-if="optionsExpanded" class="options-content">
+      <div class="options-content">
         <label class="option-item">
           <input type="checkbox" v-model="localOptions.skipPermissions" />
           <span class="option-label">Allow</span>
-          <code class="option-flag warning">--skip-perm</code>
+          <code class="option-flag warning">skip-permissions</code>
         </label>
 
         <div class="option-item text-option">
           <span class="option-label">Custom args</span>
           <input type="text" v-model="localOptions.customArgs" placeholder="--model sonnet" />
-        </div>
-
-        <div class="font-size-control">
-          <span class="settings-label">Font:</span>
-          <div class="font-size-buttons">
-            <button @click="decreaseFontSize" :disabled="fontSize <= 10">-</button>
-            <span class="font-size-value">{{ fontSize }}</span>
-            <button @click="increaseFontSize" :disabled="fontSize >= 24">+</button>
-          </div>
         </div>
       </div>
     </footer>
@@ -104,7 +99,6 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useAppStore } from '@/stores/app'
 import SessionList from './SessionList.vue'
-import SessionStatus from './SessionStatus.vue'
 import PanelHeader from '../sidebar/PanelHeader.vue'
 
 const emit = defineEmits<{
@@ -119,7 +113,6 @@ const emit = defineEmits<{
 
 const sessionStore = useSessionStore()
 const appStore = useAppStore()
-const optionsExpanded = ref(false)
 const scrollContainer = ref<HTMLElement>()
 const searchQuery = ref('')
 
@@ -127,8 +120,6 @@ const localOptions = ref({
   skipPermissions: appStore.claudeOptions.skipPermissions,
   customArgs: appStore.claudeOptions.customArgs
 })
-
-const fontSize = computed(() => appStore.fontSize)
 
 const projectTabs = computed(() => {
   const cwd = appStore.cwd
@@ -158,14 +149,6 @@ function handleRefresh() {
   if (appStore.cwd) {
     sessionStore.loadHistorySessions(appStore.cwd)
   }
-}
-
-function decreaseFontSize() {
-  appStore.setFontSize(fontSize.value - 1)
-}
-
-function increaseFontSize() {
-  appStore.setFontSize(fontSize.value + 1)
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -272,46 +255,48 @@ onUnmounted(() => {
   padding: 12px;
 }
 
-.settings-toggle {
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.action-btn {
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
+  justify-content: center;
+  gap: 6px;
   padding: 8px 12px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
   cursor: pointer;
   border-radius: 6px;
   font-size: 13px;
   transition: all 0.15s ease;
 }
 
-.settings-toggle img:first-child {
-  width: 16px;
-  height: 16px;
+.action-btn img {
+  width: 14px;
+  height: 14px;
 }
 
-.settings-toggle:hover {
-  background: var(--hover-bg);
-  color: var(--text-primary);
+.action-btn:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
 }
 
-.chevron {
-  width: 16px;
-  height: 16px;
-  transition: transform 0.2s ease;
-}
-
-.chevron.expanded {
-  transform: rotate(180deg);
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .options-content {
-  padding: 12px;
+  padding: 10px;
   background: var(--bg-primary);
   border-radius: 6px;
-  margin-top: 8px;
+  border: 1px solid var(--border-color);
 }
 
 .option-item {
@@ -367,56 +352,5 @@ onUnmounted(() => {
 .text-option input[type="text"]:focus {
   outline: none;
   border-color: var(--accent-color);
-}
-
-.font-size-control {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-color);
-}
-
-.settings-label {
-  font-size: 12px;
-  color: var(--text-primary);
-}
-
-.font-size-buttons {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.font-size-buttons button {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 14px;
-}
-
-.font-size-buttons button:hover:not(:disabled) {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
-}
-
-.font-size-buttons button:disabled {
-  opacity: 0.5;
-  cursor: not-not-allowed;
-}
-
-.font-size-value {
-  font-size: 14px;
-  color: var(--text-primary);
-  min-width: 24px;
-  text-align: center;
 }
 </style>

@@ -38,7 +38,7 @@
         <label class="option-item">
           <input type="checkbox" v-model="localOptions.skipPermissions" />
           <span class="option-label">Allow</span>
-          <code class="option-flag warning">--skip-permissions</code>
+          <code class="option-flag warning">skip-permissions</code>
         </label>
 
         <div class="option-item text-option">
@@ -208,9 +208,10 @@ async function handleSaveDefault() {
 }
 
 .sessions-panel .panel-header h2 {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
+  letter-spacing: -0.3px;
 }
 
 .session-list {
@@ -227,10 +228,10 @@ async function handleSaveDefault() {
   padding: 10px 12px;
   border: none;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s ease;
+  transition: all 0.15s ease;
 }
 
 .session-item:hover {
@@ -240,10 +241,11 @@ async function handleSaveDefault() {
 .session-icon {
   flex-shrink: 0;
   color: var(--text-tertiary);
+  transition: color 0.15s ease;
 }
 
 .session-item:hover .session-icon {
-  color: var(--accent-color);
+  color: var(--accent-gold);
 }
 
 .session-info {
@@ -309,7 +311,7 @@ async function handleSaveDefault() {
 .option-item input[type="checkbox"] {
   width: 14px;
   height: 14px;
-  accent-color: var(--accent-color);
+  accent-color: var(--accent-primary);
 }
 
 .option-label {
@@ -322,14 +324,14 @@ async function handleSaveDefault() {
   padding: 1px 5px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: 3px;
-  font-family: 'Consolas', 'Monaco', monospace;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
   color: var(--text-secondary);
 }
 
 .option-flag.warning {
-  color: #e74c3c;
-  border-color: rgba(231, 76, 60, 0.3);
+  color: var(--status-error);
+  border-color: rgba(196, 92, 74, 0.3);
 }
 
 .text-option {
@@ -340,25 +342,26 @@ async function handleSaveDefault() {
 
 .text-option input[type="text"] {
   width: 100%;
-  padding: 5px 8px;
+  padding: 6px 10px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 12px;
   color: var(--text-primary);
+  transition: border-color 0.15s ease;
 }
 
 .text-option input[type="text"]:focus {
   outline: none;
-  border-color: var(--accent-color);
+  border-color: var(--focus-ring);
 }
 
 .save-default-btn {
   margin-top: 8px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   background: transparent;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 11px;
   color: var(--text-secondary);
   cursor: pointer;
@@ -367,8 +370,8 @@ async function handleSaveDefault() {
 }
 
 .save-default-btn:hover:not(:disabled):not(.success) {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
 }
 
 .save-default-btn.saving {
@@ -377,9 +380,9 @@ async function handleSaveDefault() {
 }
 
 .save-default-btn.success {
-  border-color: #27ae60;
-  color: #27ae60;
-  background: rgba(39, 174, 96, 0.1);
+  border-color: var(--status-success);
+  color: var(--status-success);
+  background: rgba(61, 140, 110, 0.1);
 }
 
 /* 右侧项目列表 */
@@ -396,10 +399,11 @@ async function handleSaveDefault() {
 }
 
 .projects-panel .panel-header h2 {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 12px;
+  letter-spacing: -0.3px;
 }
 
 .search-box {
@@ -409,7 +413,12 @@ async function handleSaveDefault() {
   padding: 8px 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s ease;
+}
+
+.search-box:focus-within {
+  border-color: var(--focus-ring);
 }
 
 .search-box svg {
@@ -443,10 +452,10 @@ async function handleSaveDefault() {
   padding: 12px 16px;
   border: none;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s ease;
+  transition: all 0.15s ease;
 }
 
 .project-item:hover {
@@ -456,10 +465,11 @@ async function handleSaveDefault() {
 .folder-icon {
   flex-shrink: 0;
   color: var(--text-secondary);
+  transition: color 0.15s ease;
 }
 
 .project-item:hover .folder-icon {
-  color: var(--accent-color);
+  color: var(--accent-gold);
 }
 
 .project-info {
@@ -503,8 +513,8 @@ async function handleSaveDefault() {
   width: 100%;
   padding: 10px 16px;
   background: transparent;
-  border: 1px dashed var(--border-color);
-  border-radius: 6px;
+  border: 1px dashed var(--border-dark);
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   font-size: 13px;
   cursor: pointer;
@@ -512,8 +522,9 @@ async function handleSaveDefault() {
 }
 
 .add-btn:hover {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  border-style: solid;
 }
 
 /* 滚动条 */
@@ -524,7 +535,7 @@ async function handleSaveDefault() {
 
 .session-list::-webkit-scrollbar-thumb,
 .project-list::-webkit-scrollbar-thumb {
-  background: var(--border-color);
+  background: var(--border-dark);
   border-radius: 3px;
 }
 

@@ -18,6 +18,7 @@ import type {
   McpServerDetail,
   PluginInfo,
   SkillInfo,
+  UpdateInfo,
 } from '@/types';
 
 // 重新导出类型（保持兼容性）
@@ -36,6 +37,7 @@ export type {
   McpServerDetail,
   PluginInfo,
   SkillInfo,
+  UpdateInfo,
 };
 
 // ============================================
@@ -165,6 +167,13 @@ export const getMcpServerDetail = (
 
 export const openInFileManager = (path: string): Promise<void> =>
   invoke<void>('open_in_file_manager', { path });
+
+// ============================================
+// Updater
+// ============================================
+
+export const checkForUpdates = (): Promise<UpdateInfo> =>
+  invoke<UpdateInfo>('check_for_updates');
 
 // ============================================
 // Dialog (Tauri dialog plugin)

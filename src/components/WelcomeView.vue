@@ -49,7 +49,11 @@ function handleSelectProject() {
 
 .logo {
   margin-bottom: 24px;
-  color: var(--accent-color);
+  color: var(--accent-primary);
+}
+
+.logo svg {
+  filter: drop-shadow(0 2px 8px rgba(30, 58, 95, 0.15));
 }
 
 h1 {
@@ -57,6 +61,7 @@ h1 {
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 8px;
+  letter-spacing: -0.5px;
 }
 
 .subtitle {
@@ -70,14 +75,15 @@ h1 {
   align-items: center;
   gap: 8px;
   padding: 12px 24px;
-  background: var(--accent-color);
-  color: #fff;
+  background: var(--accent-primary);
+  color: var(--text-inverse);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
+  box-shadow: var(--shadow-md);
 }
 
 .select-btn svg {
@@ -85,17 +91,19 @@ h1 {
 }
 
 .select-btn:hover {
-  background: #5b4cdb;
+  background: var(--accent-secondary);
   transform: translateY(-1px);
+  box-shadow: var(--shadow-lg);
 }
 
 .select-btn:active {
   transform: translateY(0);
+  box-shadow: var(--shadow-sm);
 }
 
 .hint {
   margin-top: 16px;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
 }
 </style>

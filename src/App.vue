@@ -17,23 +17,13 @@
       />
     </KeepAlive>
   </Transition>
-
-  <!-- Settings Modal -->
-  <SettingsModal
-    :visible="settingsVisible"
-    @close="settingsVisible = false"
-  />
-
-  <!-- Shortcuts Modal -->
-  <ShortcutsModal
-    :visible="shortcutsVisible"
-    @close="shortcutsVisible = false"
-  />
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { useSidebarStore } from '@/stores/sidebar'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   selectDirectory,
   onMenuSettings,
@@ -41,18 +31,17 @@ import {
   onConfigFontSize,
   onTerminalRestart
 } from '@/api/tauri'
+import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import WelcomeView from '@/components/WelcomeView.vue'
 import ProjectSelectView from '@/components/ProjectSelectView.vue'
 import TerminalView from '@/components/TerminalView.vue'
-import SettingsModal from '@/components/SettingsModal.vue'
-import ShortcutsModal from '@/components/ShortcutsModal.vue'
 
 type ViewType = 'welcome' | 'projects' | 'terminal'
 
 const appStore = useAppStore()
+const sidebarStore = useSidebarStore()
+const { handleKeydown } = useAppShortcuts()
 const currentView = ref<ViewType>('welcome')
-const settingsVisible = ref(false)
-const shortcutsVisible = ref(false)
 
 // Unlisten functions for cleanup
 let unlistenSettings: (() => void) | null = null
@@ -61,6 +50,9 @@ let unlistenFontSize: (() => void) | null = null
 let unlistenRestart: (() => void) | null = null
 
 onMounted(async () => {
+  // 全局快捷键
+  window.addEventListener('keydown', handleKeydown, true)
+
   if (appStore.cwd) {
     currentView.value = 'terminal'
   } else {
@@ -73,11 +65,15 @@ onMounted(async () => {
 
   // Listen for menu events
   unlistenSettings = await onMenuSettings(() => {
-    settingsVisible.value = true
+    if (currentView.value === 'terminal') {
+      sidebarStore.openSettings()
+    }
   })
 
   unlistenShortcuts = await onMenuShortcuts(() => {
-    shortcutsVisible.value = true
+    if (currentView.value === 'terminal') {
+      sidebarStore.openSettings('shortcuts')
+    }
   })
 
   unlistenFontSize = await onConfigFontSize((size) => {
@@ -92,6 +88,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown, true)
   unlistenSettings?.()
   unlistenShortcuts?.()
   unlistenFontSize?.()
@@ -127,6 +124,7 @@ function handleResumeSession(projectPath: string, sessionId: string, sessionName
 
 function handleBack() {
   currentView.value = 'projects'
+  getCurrentWindow().setTitle('CC-Box').catch(() => {})
 }
 </script>
 

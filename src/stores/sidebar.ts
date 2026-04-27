@@ -7,6 +7,11 @@ export const useSidebarStore = defineStore('sidebar', () => {
   const activePanel = ref<SidebarPanelType>(null)
   const panelVisible = ref(false)
 
+  // 设置模式
+  const showSettings = ref(false)
+  const activeSettingsSection = ref<string>('appearance')
+  const updateAvailable = ref(false)
+
   // Skills 面板折叠状态（按来源分组）
   const skillsExpandedGroups = ref({
     project: true,
@@ -37,11 +42,39 @@ export const useSidebarStore = defineStore('sidebar', () => {
 
   // 切换面板
   function togglePanel(panel: SidebarPanelType) {
+    // 如果设置打开，先关闭设置再打开面板
+    if (showSettings.value) {
+      showSettings.value = false
+      activePanel.value = panel
+      panelVisible.value = true
+      return
+    }
+
     if (activePanel.value === panel && panelVisible.value) {
       closePanel()
     } else {
       activePanel.value = panel
       panelVisible.value = true
+    }
+  }
+
+  // 设置模式
+  function openSettings(section?: string) {
+    panelVisible.value = false
+    activePanel.value = null
+    showSettings.value = true
+    if (section) activeSettingsSection.value = section
+  }
+
+  function closeSettings() {
+    showSettings.value = false
+  }
+
+  function toggleSettings() {
+    if (showSettings.value) {
+      closeSettings()
+    } else {
+      openSettings()
     }
   }
 
@@ -76,12 +109,18 @@ export const useSidebarStore = defineStore('sidebar', () => {
   return {
     activePanel,
     panelVisible,
+    showSettings,
+    activeSettingsSection,
+    updateAvailable,
     skillsExpandedGroups,
     agentsExpandedGroups,
     mcpExpandedGroups,
     pluginsExpandedGroups,
     togglePanel,
     closePanel,
+    openSettings,
+    closeSettings,
+    toggleSettings,
     toggleSkillGroup,
     toggleAgentGroup,
     toggleMcpGroup,

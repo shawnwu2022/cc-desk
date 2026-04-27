@@ -5,12 +5,14 @@ mod commands;
 mod store;
 mod checks;
 mod mcp;
+mod updater;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 log::info!("Window close requested, cleaning up PTYs...");
@@ -68,6 +70,7 @@ pub fn run() {
             commands::get_all_plugins,
             commands::get_mcp_server_detail,
             commands::test_communication,
+            commands::check_for_updates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -286,3 +286,11 @@ pub async fn get_mcp_server_detail(
 
     crate::mcp::get_mcp_server_detail_cached(&server_name, url, command, headers, force_refresh).await
 }
+
+// ==================== Updater Commands ====================
+
+/// 检查 GitHub Releases 是否有新版本
+#[tauri::command]
+pub async fn check_for_updates() -> Result<crate::updater::UpdateInfo, String> {
+    crate::updater::check_for_updates().await.map_err(|e| e.to_string())
+}
