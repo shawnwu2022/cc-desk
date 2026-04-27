@@ -16,20 +16,20 @@ jobs:
             target: 'x86_64-apple-darwin'
             name: 'macos-x64'
             patterns: |
-              src-tauri/target/*/release/bundle/**/*.dmg
-              src-tauri/target/*/release/bundle/**/*.app.tar.gz
+              src-tauri/target/**/*.dmg
+              src-tauri/target/**/*.app.tar.gz
           - platform: 'ubuntu-22.04'
             target: ''
             name: 'linux'
             patterns: |
-              src-tauri/target/*/release/bundle/**/*.deb
-              src-tauri/target/*/release/bundle/**/*.AppImage
+              src-tauri/target/**/*.deb
+              src-tauri/target/**/*.AppImage
           - platform: 'windows-latest'
             target: ''
             name: 'windows'
             patterns: |
-              src-tauri/target/*/release/bundle/**/*.exe
-              src-tauri/target/*/release/bundle/**/*.msi
+              src-tauri/target/**/*.exe
+              src-tauri/target/**/*.msi
 
     runs-on: ${{ matrix.platform }}
     steps:
