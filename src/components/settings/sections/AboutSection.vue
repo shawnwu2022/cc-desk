@@ -4,7 +4,7 @@
 
     <div class="about-card">
       <div class="about-logo">
-        <span class="logo-text">CB</span>
+        <img src="@/assets/icons/app-icon.png" alt="CC-Box" class="logo-icon" />
       </div>
       <div class="about-details">
         <span class="app-name">CC-Box</span>
@@ -68,18 +68,18 @@ function openExternal(url: string) {
 .about-logo {
   width: 56px;
   height: 56px;
-  background: var(--accent-color);
   border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
-.logo-text {
-  font-size: 20px;
-  font-weight: 700;
-  color: white;
+.logo-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .about-details {
