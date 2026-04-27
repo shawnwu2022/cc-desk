@@ -2,24 +2,29 @@
   <!-- 全局设置浮层 -->
   <SettingsOverlay />
 
+  <!-- 终端视图常驻 DOM，保持所有 PTY 和终端实例不销毁 -->
+  <TerminalView
+    v-show="currentView === 'terminal'"
+    :visible="currentView === 'terminal'"
+    @back="handleBack"
+    @select-project="handleOpenProject"
+  />
+
+  <!-- 覆盖层视图（固定定位叠加在终端之上） -->
   <Transition name="fade" mode="out-in">
     <WelcomeView
       v-if="currentView === 'welcome'"
+      class="overlay-view"
       @select-project="handleSelectProject"
     />
     <ProjectSelectView
       v-else-if="currentView === 'projects'"
+      class="overlay-view"
       @select-project="handleOpenProject"
       @add-project="handleSelectProject"
       @resume-session="handleResumeSession"
       @open-settings="sidebarStore.openSettings()"
     />
-    <KeepAlive v-else>
-      <TerminalView
-        @back="handleBack"
-        @select-project="handleOpenProject"
-      />
-    </KeepAlive>
   </Transition>
 </template>
 
@@ -130,6 +135,12 @@ function handleBack() {
 </script>
 
 <style scoped>
+.overlay-view {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+}
+
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.2s ease;

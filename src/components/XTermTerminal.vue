@@ -13,7 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted, onUnmounted, onActivated, nextTick, type ComponentPublicInstance } from 'vue'
+import { ref, reactive, watch, onMounted, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -510,10 +510,6 @@ async function restartCurrentPty() {
   }
 }
 
-onActivated(() => {
-  requestAnimationFrame(() => fitCurrentTerminal())
-})
-
 onUnmounted(() => {
   resizeObserver?.disconnect()
   unlistenPtyOutput?.()
@@ -533,6 +529,7 @@ defineExpose({
   cleanup,
   sendText,
   focus,
+  fitCurrentTerminal,
 })
 </script>
 

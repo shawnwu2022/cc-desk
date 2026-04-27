@@ -49,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, onActivated, nextTick, computed } from 'vue'
+import { ref, onMounted, watch, nextTick, computed } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore, type SidebarPanelType } from '@/stores/sidebar'
@@ -64,6 +64,10 @@ import SidebarPanel from './sidebar/SidebarPanel.vue'
 
 const emit = defineEmits<{
   back: []
+}>()
+
+const props = defineProps<{
+  visible?: boolean
 }>()
 
 const appStore = useAppStore()
@@ -132,16 +136,21 @@ onMounted(async () => {
   }
 })
 
-// KeepAlive 激活
-onActivated(async () => {
-  const cwd = appStore.cwd
-  if (cwd) {
-    await sessionStore.loadHistorySessions(cwd)
-    configStore.loadProjectConfig(cwd)
+// KeepAlive 激活 → 改为 visible watcher（v-show 常驻 DOM）
+watch(() => props.visible, async (isVisible) => {
+  if (isVisible) {
+    const cwd = appStore.cwd
+    if (cwd) {
+      updateWindowTitle(cwd)
+      await nextTick()
+      terminalRef.value?.fitCurrentTerminal?.()
+      sessionStore.loadHistorySessions(cwd)
+      configStore.loadProjectConfig(cwd)
 
-    const runningTab = sessionStore.getRunningTabForProject(cwd)
-    if (runningTab && sessionStore.activeTabId !== runningTab.tabId) {
-      sessionStore.setActiveTab(runningTab.tabId)
+      const runningTab = sessionStore.getRunningTabForProject(cwd)
+      if (runningTab && sessionStore.activeTabId !== runningTab.tabId) {
+        sessionStore.setActiveTab(runningTab.tabId)
+      }
     }
   }
 })
