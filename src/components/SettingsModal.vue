@@ -58,7 +58,7 @@
             <!-- About -->
             <section class="settings-section about-section">
               <div class="about-info">
-                <span class="version">Claude Code GUI v0.1.0</span>
+                <span class="version">CC-Box v0.1.0</span>
                 <a class="link" @click="openDocs">Claude Code Docs</a>
               </div>
             </section>

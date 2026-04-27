@@ -1,5 +1,5 @@
 [package]
-name = "claude-tauri-gui"
+name = "cc-box"
 version = "0.1.0"
 description = "Claude Code Desktop GUI (Tauri)"
 authors = ["orczh"]

@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" alt="Claude Code GUI" width="80" height="80">
+  <img src="src-tauri/icons/128x128.png" alt="CC-Box" width="80" height="80">
 </p>
 
-<h1 align="center">Claude Code GUI</h1>
+<h1 align="center">CC-Box</h1>
 
 <p align="center">
-  <strong>A desktop manager for power users of <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a></strong><br>
+  <strong>A multi-terminal manager for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> power users</strong><br>
   One window. Multiple sessions. Everything you wish the CLI could show you.
 </p>
 
@@ -18,11 +18,11 @@
 
 ---
 
-## Why Claude Code GUI?
+## Why CC-Box?
 
 Claude Code's CLI is great for single-session work. But if you're juggling **multiple projects**, **running several agents in parallel**, or want to **see token usage and costs at a glance** — the terminal alone falls short.
 
-Claude Code GUI doesn't replace the CLI. It wraps it with a native terminal experience and adds the things the CLI can't do well: multi-session orchestration, information dashboards, and quick project switching.
+CC-Box doesn't replace the CLI. It wraps it with a native terminal experience and adds the things the CLI can't do well: multi-session orchestration, information dashboards, and quick project switching.
 
 **Think of it as iTerm2/Warp, but purpose-built for Claude Code.**
 
@@ -69,7 +69,7 @@ claude        # Run once to authenticate
 
 ### 2. Download & Install
 
-Head to the [**Releases**](https://github.com/orczh/claude-tauri-gui/releases) page and grab the installer for your platform:
+Head to the [**Releases**](https://github.com/orczh/cc-box/releases) page and grab the installer for your platform:
 
 | Platform | File |
 |----------|------|
@@ -101,8 +101,8 @@ Head to the [**Releases**](https://github.com/orczh/claude-tauri-gui/releases) p
 ### Setup
 
 ```bash
-git clone https://github.com/orczh/claude-tauri-gui.git
-cd claude-tauri-gui
+git clone https://github.com/orczh/cc-box.git
+cd cc-box
 npm install
 ```
 

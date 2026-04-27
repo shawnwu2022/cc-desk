@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default capabilities for Claude Code GUI",
+  "description": "Default capabilities for CC-Box",
   "windows": ["*"],
   "permissions": [
     "core:event:default",

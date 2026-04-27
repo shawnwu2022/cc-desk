@@ -324,7 +324,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-tauri-gui"
+name = "cc-box"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -1,4 +1,4 @@
-# Claude Code Desktop GUI (Tauri)
+# CC-Box
 
 针对 Claude Code 开发的多终端管理器，用 Tauri 2 + Vue 3 + xterm.js + portable-pty 直连 Claude CLI，在原生终端体验基础上增加外围功能和信息呈现。
 
@@ -38,7 +38,7 @@ Tauri 2.x (Rust) + Vue 3 + TypeScript + Vite + xterm.js + portable-pty + Pinia +
 ## 项目架构
 
 ```
-claude-tauri-gui/
+cc-box/
 ├── src-tauri/                  # Rust 后端
 │   ├── src/
 │   │   ├── main.rs             # 入口
