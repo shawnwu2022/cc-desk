@@ -8,6 +8,7 @@
       v-else-if="currentView === 'projects'"
       @select-project="handleOpenProject"
       @add-project="handleSelectProject"
+      @resume-session="handleResumeSession"
     />
     <KeepAlive v-else>
       <TerminalView
@@ -34,7 +35,6 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useAppStore } from '@/stores/app'
 import {
-  getProjects,
   selectDirectory,
   onMenuSettings,
   onMenuShortcuts,
@@ -61,13 +61,12 @@ let unlistenFontSize: (() => void) | null = null
 let unlistenRestart: (() => void) | null = null
 
 onMounted(async () => {
-  // Check if there's a current working directory
   if (appStore.cwd) {
     currentView.value = 'terminal'
   } else {
-    // Check if there are any projects from Claude Code native config
-    const projects = await getProjects()
-    if (projects.length > 0) {
+    // 加载缓存（项目列表 + 近期会话）
+    await appStore.loadCache()
+    if (appStore.cachedProjects.length > 0) {
       currentView.value = 'projects'
     }
   }
@@ -103,19 +102,26 @@ async function handleSelectProject() {
   const result = await selectDirectory()
   if (result) {
     appStore.setCwd(result.path)
-    // Add project 时，启动命令为空（不包含额外启动命令）
     appStore.setClaudeOptions({
-      continue: false,
       resume: '',
       skipPermissions: false,
       customArgs: ''
     })
+    appStore.setAutoOpenSessions(true)
     currentView.value = 'terminal'
   }
 }
 
 async function handleOpenProject(path: string) {
   appStore.setCwd(path)
+  appStore.setAutoOpenSessions(true)
+  currentView.value = 'terminal'
+}
+
+function handleResumeSession(projectPath: string, sessionId: string, sessionName?: string) {
+  appStore.setCwd(projectPath)
+  appStore.setClaudeOptions({ resume: sessionId })
+  appStore.setPendingResume(sessionId, sessionName)
   currentView.value = 'terminal'
 }
 

@@ -33,13 +33,12 @@
           @pty-started="handlePtyStarted"
         />
       </div>
-      <InfoBar :status="statusText" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, onActivated, nextTick } from 'vue'
+import { ref, onMounted, watch, onActivated, nextTick } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore, type SidebarPanelType } from '@/stores/sidebar'
@@ -48,7 +47,6 @@ import { openInFileManager } from '@/api/tauri'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
 import TerminalHeader from './TerminalHeader.vue'
 import XTermTerminal from './XTermTerminal.vue'
-import InfoBar from './InfoBar.vue'
 import IconBar from './IconBar.vue'
 import SidebarPanel from './sidebar/SidebarPanel.vue'
 
@@ -61,14 +59,6 @@ const sessionStore = useSessionStore()
 const sidebarStore = useSidebarStore()
 const configStore = useConfigStore()
 const terminalRef = ref()
-
-// 状态文本
-const statusText = computed(() => {
-  const tab = sessionStore.activeTab
-  if (tab?.status === 'running') return 'Running'
-  if (tab?.status === 'stopped') return 'Stopped'
-  return 'Ready'
-})
 
 // 标记是否已启动 PTY
 let hasStartedPty = false
@@ -87,10 +77,25 @@ onMounted(async () => {
 
     if (runningTab) {
       sessionStore.setActiveTab(runningTab.tabId)
+    } else if (appStore.pendingResume) {
+      // 从 ProjectSelectView 点击会话恢复 — 直接创建带 sessionId 和 name 的 tab
+      hasStartedPty = true
+      const { sessionId, sessionName } = appStore.pendingResume
+      appStore.clearPendingResume()
+      await nextTick()
+
+      const tabId = sessionStore.createTab(cwd, { sessionId, name: sessionName })
+      sessionStore.setActiveTab(tabId)
+      if (terminalRef.value?.startTab) {
+        terminalRef.value.startTab(tabId)
+      }
+    } else if (appStore.shouldAutoOpenSessions) {
+      // 从 ProjectSelectView 点击项目进入，不自动启动，打开 Sessions 面板
+      appStore.setAutoOpenSessions(false)
+      sidebarStore.togglePanel('sessions')
     } else if (!hasStartedPty) {
       hasStartedPty = true
       await nextTick()
-
       if (terminalRef.value?.startWithOptions) {
         terminalRef.value.startWithOptions(cwd, appStore.claudeOptions)
       }
@@ -126,6 +131,20 @@ watch(() => appStore.cwd, async (newCwd, oldCwd) => {
       const runningTab = sessionStore.getRunningTabForProject(newCwd)
       if (runningTab) {
         sessionStore.setActiveTab(runningTab.tabId)
+      } else if (appStore.pendingResume) {
+        hasStartedPty = true
+        const { sessionId, sessionName } = appStore.pendingResume
+        appStore.clearPendingResume()
+        await nextTick()
+
+        const tabId = sessionStore.createTab(newCwd, { sessionId, name: sessionName })
+        sessionStore.setActiveTab(tabId)
+        if (terminalRef.value?.startTab) {
+          terminalRef.value.startTab(tabId)
+        }
+      } else if (appStore.shouldAutoOpenSessions) {
+        appStore.setAutoOpenSessions(false)
+        sidebarStore.togglePanel('sessions')
       } else if (!hasStartedPty) {
         hasStartedPty = true
         await nextTick()

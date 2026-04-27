@@ -31,9 +31,11 @@
         <SessionList
           :tabs="projectTabs"
           :active-id="sessionStore.activeTabId"
+          closable
           @switch="(id) => $emit('switchSession', id)"
           @rename="(id, name) => $emit('renameSession', id, name)"
           @restart="() => $emit('restartSession')"
+          @close="(id) => $emit('closeTab', id)"
         />
       </div>
 
@@ -64,17 +66,28 @@
       @restart="$emit('restartSession')"
     />
 
-    <!-- 设置区 -->
+    <!-- 启动参数设置 -->
     <footer class="panel-footer">
-      <button class="settings-toggle" @click="settingsExpanded = !settingsExpanded">
+      <button class="settings-toggle" @click="optionsExpanded = !optionsExpanded">
         <img src="@/assets/icons/settings.svg" alt="Settings" />
-        <span>Settings</span>
-        <img class="chevron" src="@/assets/icons/chevron.svg" alt="Toggle" :class="{ expanded: settingsExpanded }" />
+        <span>Startup Options</span>
+        <img class="chevron" src="@/assets/icons/chevron.svg" alt="Toggle" :class="{ expanded: optionsExpanded }" />
       </button>
 
-      <div v-if="settingsExpanded" class="settings-content">
+      <div v-if="optionsExpanded" class="options-content">
+        <label class="option-item">
+          <input type="checkbox" v-model="localOptions.skipPermissions" />
+          <span class="option-label">Allow</span>
+          <code class="option-flag warning">--skip-perm</code>
+        </label>
+
+        <div class="option-item text-option">
+          <span class="option-label">Custom args</span>
+          <input type="text" v-model="localOptions.customArgs" placeholder="--model sonnet" />
+        </div>
+
         <div class="font-size-control">
-          <span class="settings-label">Font Size:</span>
+          <span class="settings-label">Font:</span>
           <div class="font-size-buttons">
             <button @click="decreaseFontSize" :disabled="fontSize <= 10">-</button>
             <span class="font-size-value">{{ fontSize }}</span>
@@ -106,21 +119,23 @@ const emit = defineEmits<{
 
 const sessionStore = useSessionStore()
 const appStore = useAppStore()
-const settingsExpanded = ref(false)
+const optionsExpanded = ref(false)
 const scrollContainer = ref<HTMLElement>()
 const searchQuery = ref('')
 
-// 字体大小
+const localOptions = ref({
+  skipPermissions: appStore.claudeOptions.skipPermissions,
+  customArgs: appStore.claudeOptions.customArgs
+})
+
 const fontSize = computed(() => appStore.fontSize)
 
-// 当前项目的 Tab 列表
 const projectTabs = computed(() => {
   const cwd = appStore.cwd
   if (!cwd) return []
   return sessionStore.getProjectTabs(cwd)
 })
 
-// 过滤后的历史会话
 const filteredHistory = computed(() => {
   if (!searchQuery.value) return sessionStore.historySessions
   return sessionStore.historySessions.filter(s =>
@@ -128,7 +143,11 @@ const filteredHistory = computed(() => {
   )
 })
 
-// 监听 cwd 变化
+// 同步选项到 store
+watch(localOptions, (val) => {
+  appStore.setClaudeOptions(val)
+}, { deep: true })
+
 watch(() => appStore.cwd, (newCwd) => {
   if (newCwd) {
     sessionStore.loadHistorySessions(newCwd)
@@ -288,21 +307,79 @@ onUnmounted(() => {
   transform: rotate(180deg);
 }
 
-.settings-content {
+.options-content {
   padding: 12px;
   background: var(--bg-primary);
   border-radius: 6px;
   margin-top: 8px;
 }
 
+.option-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.option-item input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-color);
+}
+
+.option-label {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.option-flag {
+  font-size: 10px;
+  padding: 1px 5px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  color: var(--text-secondary);
+}
+
+.option-flag.warning {
+  color: #e74c3c;
+  border-color: rgba(231, 76, 60, 0.3);
+}
+
+.text-option {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.text-option input[type="text"] {
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.text-option input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
 .font-size-control {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
 }
 
 .settings-label {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-primary);
 }
 

@@ -27,7 +27,6 @@ import {
   onPtyOutput,
   onPtyExit,
   onTerminalKeydown,
-  getSessions,
 } from '@/api/tauri'
 import { registerTerminalCommand } from '@/composables/useTerminalCommand'
 
@@ -448,27 +447,15 @@ function buildClaudeArgs(tab: { sessionId: string | null }): string[] {
  * 使用启动选项创建并启动 Tab（兼容旧的 startWithOptions 入口）
  */
 async function startWithOptions(cwd: string, opts: {
-  continue: boolean
-  resume: string
-  skipPermissions: boolean
-  customArgs: string
+  resume?: string
+  skipPermissions?: boolean
+  customArgs?: string
 }) {
   if (isPtyStarting.value) return
 
-  // 创建 Tab
   const tabId = sessionStore.createTab(cwd, {
     sessionId: opts.resume || undefined,
   })
-
-  // 如果是 --continue，尝试找最近会话的 sessionId
-  if (opts.continue && !opts.resume) {
-    try {
-      const sessions = await getSessions(cwd, 1, 0)
-      if (sessions.length > 0) {
-        sessionStore.setTabSessionId(tabId, sessions[0].sessionId, sessions[0].name)
-      }
-    } catch {}
-  }
 
   sessionStore.setActiveTab(tabId)
   await startTab(tabId)

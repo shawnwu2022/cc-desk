@@ -337,16 +337,12 @@ pub fn get_project_info(path: &str) -> Result<Option<Project>> {
 /// 从 JSONL 提取会话名称
 fn extract_session_name(jsonl_path: &Path) -> String {
     if let Ok(content) = fs::read_to_string(jsonl_path) {
-        // 优先查找 custom-title（最后出现的）
         let mut custom_title: Option<String> = None;
         let mut last_user_message: Option<String> = None;
 
-        // 系统消息标记（需要过滤掉）
-        let system_markers = ["<local-command-caveat>", "<command-name>", "<system-reminder>"];
-
         for line in content.lines() {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                // 查找 custom-title
+                // 查找 custom-title（优先级最高）
                 if json.get("type").and_then(|v| v.as_str()) == Some("custom-title") {
                     if let Some(title) = json.get("customTitle").and_then(|v| v.as_str()) {
                         custom_title = Some(title.to_string());
@@ -356,11 +352,13 @@ fn extract_session_name(jsonl_path: &Path) -> String {
                 // 查找用户消息
                 if json.get("type").and_then(|v| v.as_str()) == Some("user") {
                     if let Some(msg_content) = json.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()) {
-                        // 过滤系统消息
                         let is_meta = json.get("isMeta").and_then(|v| v.as_bool()).unwrap_or(false);
-                        let is_system = system_markers.iter().any(|m| msg_content.starts_with(m));
 
-                        if !is_meta && !is_system {
+                        // 过滤所有系统注入消息：以 < 开头的都是系统标记
+                        // 如 <task-notification>, <local-command-stdout>, <system-reminder>, <command-name> 等
+                        let is_system_inject = msg_content.trim_start().starts_with('<');
+
+                        if !is_meta && !is_system_inject {
                             let truncated: String = msg_content.chars().take(50).collect();
                             last_user_message = if msg_content.chars().count() > 50 {
                                 Some(format!("{}...", truncated))
@@ -373,12 +371,10 @@ fn extract_session_name(jsonl_path: &Path) -> String {
             }
         }
 
-        // 优先返回 custom-title
         if let Some(title) = custom_title {
             return title;
         }
 
-        // 后备：最后一个有效的用户消息
         if let Some(msg) = last_user_message {
             return msg;
         }
@@ -434,6 +430,27 @@ pub fn get_sessions(project_path: &str, limit: usize, offset: usize) -> Result<V
     let end = (offset + limit).min(sessions.len());
 
     Ok(sessions[start..end].to_vec())
+}
+
+/// 获取所有项目的近期会话（跨项目，按 lastActiveAt 降序排列）
+pub fn get_all_recent_sessions(limit: usize) -> Result<Vec<SessionInfo>> {
+    let projects = get_projects()?;
+    let mut all_sessions = Vec::new();
+
+    for project in &projects {
+        // 每个项目取最多 limit 条（后续截断）
+        if let Ok(sessions) = get_sessions(&project.path, limit, 0) {
+            all_sessions.extend(sessions);
+        }
+    }
+
+    // 按 lastActiveAt 降序排列
+    all_sessions.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+
+    // 截断到 limit 条
+    all_sessions.truncate(limit);
+
+    Ok(all_sessions)
 }
 
 /// 获取会话总数

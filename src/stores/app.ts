@@ -5,20 +5,34 @@ import {
   updateAppConfig,
   saveLastProject,
   getDefaultClaudeOptions,
-  saveDefaultClaudeOptions
+  saveDefaultClaudeOptions,
+  getProjects,
+  getAllRecentSessions
 } from '@/api/tauri'
 
-// 从统一类型导入
-import type { ClaudeOptions } from '@/types'
+import type { ClaudeOptions, Project, SessionInfo } from '@/types'
+
+export interface PendingResume {
+  sessionId: string
+  sessionName?: string
+}
 
 export const useAppStore = defineStore('app', () => {
   const cwd = ref<string>('')
   const theme = ref<string>('light')
   const fontSize = ref<number>(10)
 
-  // Claude 启动选项（初始值，会被应用配置覆盖）
+  // 启动控制
+  const pendingResume = ref<PendingResume | null>(null)
+  const shouldAutoOpenSessions = ref(false)
+
+  // 缓存：项目列表和近期会话
+  const cachedProjects = ref<Project[]>([])
+  const cachedRecentSessions = ref<SessionInfo[]>([])
+  const cacheLoaded = ref(false)
+
+  // Claude 启动选项
   const claudeOptions = ref<ClaudeOptions>({
-    continue: true,
     resume: '',
     skipPermissions: false,
     customArgs: ''
@@ -30,22 +44,18 @@ export const useAppStore = defineStore('app', () => {
     return parts[parts.length - 1] || cwd.value
   })
 
-  // 从应用配置加载默认值
   async function loadAppConfig() {
     try {
       const config = await getAppConfig()
       theme.value = config.theme || 'light'
       fontSize.value = config.fontSize || 10
 
-      // 设置启动选项默认值
       claudeOptions.value = {
-        continue: config.defaultContinue ?? true,
         resume: '',
         skipPermissions: config.defaultSkipPermissions ?? false,
         customArgs: config.defaultCustomArgs ?? ''
       }
 
-      // 如果有上次打开的项目，可以自动恢复
       if (config.lastOpenedProject) {
         cwd.value = config.lastOpenedProject
       }
@@ -54,9 +64,27 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
+  async function loadCache() {
+    if (cacheLoaded.value) return
+    try {
+      const [projs, sessions] = await Promise.all([
+        getProjects(),
+        getAllRecentSessions(20)
+      ])
+      cachedProjects.value = projs
+      cachedRecentSessions.value = sessions
+      cacheLoaded.value = true
+    } catch (err) {
+      console.error('Failed to load cache:', err)
+    }
+  }
+
+  function refreshRecentSessions(sessions: SessionInfo[]) {
+    cachedRecentSessions.value = sessions
+  }
+
   function setCwd(path: string) {
     cwd.value = path
-    // 保存到应用配置
     saveLastProject(path)
   }
 
@@ -75,10 +103,8 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function resetClaudeOptions() {
-    // 重置为应用默认值
     getDefaultClaudeOptions().then(defaults => {
       claudeOptions.value = {
-        continue: defaults.continue ?? true,
         resume: '',
         skipPermissions: defaults.skipPermissions ?? false,
         customArgs: defaults.customArgs ?? ''
@@ -86,11 +112,9 @@ export const useAppStore = defineStore('app', () => {
     })
   }
 
-  // 保存当前启动选项为默认值
   async function saveAsDefault(): Promise<boolean> {
     try {
       await saveDefaultClaudeOptions({
-        continue: claudeOptions.value.continue,
         skipPermissions: claudeOptions.value.skipPermissions,
         customArgs: claudeOptions.value.customArgs
       })
@@ -101,14 +125,10 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  // 将选项转换为 CLI 参数
-  // 所有选项如实地传递给 CLI，不做任何转换
   function getClaudeArgs(): string[] {
     const opts = claudeOptions.value
     const args: string[] = []
 
-    // 如实传递所有选项
-    if (opts.continue) args.push('--continue')
     if (opts.resume) args.push('--resume', opts.resume)
     if (opts.skipPermissions) args.push('--dangerously-skip-permissions')
     if (opts.customArgs) {
@@ -119,7 +139,18 @@ export const useAppStore = defineStore('app', () => {
     return args
   }
 
-  // 初始化时加载配置
+  function setPendingResume(sessionId: string, sessionName?: string) {
+    pendingResume.value = { sessionId, sessionName }
+  }
+
+  function clearPendingResume() {
+    pendingResume.value = null
+  }
+
+  function setAutoOpenSessions(val: boolean) {
+    shouldAutoOpenSessions.value = val
+  }
+
   loadAppConfig()
 
   return {
@@ -128,13 +159,23 @@ export const useAppStore = defineStore('app', () => {
     fontSize,
     claudeOptions,
     currentProject,
+    pendingResume,
+    shouldAutoOpenSessions,
+    cachedProjects,
+    cachedRecentSessions,
+    cacheLoaded,
     loadAppConfig,
+    loadCache,
+    refreshRecentSessions,
     setCwd,
     setTheme,
     setFontSize,
     setClaudeOptions,
     resetClaudeOptions,
     saveAsDefault,
-    getClaudeArgs
+    getClaudeArgs,
+    setPendingResume,
+    clearPendingResume,
+    setAutoOpenSessions
   }
 })

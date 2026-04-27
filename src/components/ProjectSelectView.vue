@@ -1,137 +1,62 @@
 <template>
   <div class="project-select-view">
-    <!-- 左侧：项目详情面板 -->
-    <aside class="detail-panel">
-      <div class="panel-inner">
-        <!-- 无选中状态：显示打开新项目和默认配置 -->
-        <div v-if="!selectedProject" class="default-panel">
-          <header class="panel-header">
-            <h2>Quick Start</h2>
-          </header>
+    <!-- 左侧：近期会话列表 -->
+    <aside class="sessions-panel">
+      <header class="panel-header">
+        <h2>Recent Sessions</h2>
+      </header>
 
-          <div class="panel-body">
-            <!-- 打开新项目 -->
-            <section class="action-section">
-              <button class="new-project-btn" @click="$emit('addProject')">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                  <line x1="12" y1="11" x2="12" y2="17"/>
-                  <line x1="9" y1="14" x2="15" y2="14"/>
-                </svg>
-                <span>Open New Project</span>
-              </button>
-            </section>
-
-            <!-- 默认启动配置 -->
-            <section class="config-section">
-              <h3>Default Startup Options</h3>
-              <p class="config-hint">These options apply when launching a project</p>
-
-              <label class="option-item">
-                <input type="checkbox" v-model="localOptions.continue" />
-                <span class="option-label">Continue last session</span>
-                <code class="option-flag">--continue</code>
-              </label>
-
-              <label class="option-item">
-                <input type="checkbox" v-model="localOptions.skipPermissions" />
-                <span class="option-label">Allow</span>
-                <code class="option-flag warning">--skip-permissions</code>
-              </label>
-
-              <div class="option-item text-option">
-                <span class="option-label">Custom args</span>
-                <input type="text" v-model="localOptions.customArgs" placeholder="--model sonnet" />
-              </div>
-
-              <button
-                class="save-default-btn"
-                :class="{ saving: isSaving, success: saveSuccess }"
-                :disabled="isSaving"
-                @click="handleSaveDefault"
-              >
-                <span v-if="isSaving">Saving...</span>
-                <span v-else-if="saveSuccess">Saved!</span>
-                <span v-else>Save as Default</span>
-              </button>
-            </section>
+      <div class="session-list">
+        <button
+          v-for="session in recentSessions"
+          :key="session.sessionId"
+          class="session-item"
+          @click="handleResumeSession(session)"
+        >
+          <svg class="session-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 17 10 11 4 5"/>
+            <line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+          <div class="session-info">
+            <span class="session-name">{{ session.name }}</span>
+            <span class="session-project">{{ getProjectName(session.projectPath) }}</span>
           </div>
-        </div>
+          <span class="session-time">{{ formatTimeAgo(session.lastActiveAt) }}</span>
+        </button>
 
-        <!-- 项目详情 -->
-        <div v-else class="project-detail">
-          <header class="detail-header">
-            <div class="project-title">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-              </svg>
-              <h2>{{ selectedProject.name }}</h2>
-            </div>
-            <button class="close-btn" @click="selectedProject = null">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"/>
-                <line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
-          </header>
-
-          <!-- 启动按钮放在顶部 -->
-          <div class="detail-launch-section">
-            <button class="launch-btn" @click="handleLaunch">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="5 3 19 12 5 21 5 3"/>
-              </svg>
-              <span>Launch</span>
-            </button>
-          </div>
-
-          <div class="detail-body">
-            <!-- 项目路径 -->
-            <section class="info-section">
-              <label>Path</label>
-              <div class="path-display">{{ selectedProject.path }}</div>
-            </section>
-
-            <!-- 启动配置 -->
-            <section class="config-section">
-              <h3>Startup Options</h3>
-
-              <label class="option-item">
-                <input type="checkbox" v-model="localOptions.continue" />
-                <span class="option-label">Continue last session</span>
-                <code class="option-flag">--continue</code>
-              </label>
-
-              <label class="option-item">
-                <input type="checkbox" v-model="localOptions.skipPermissions" />
-                <span class="option-label">Allow</span>
-                <code class="option-flag warning">--skip-permissions</code>
-              </label>
-
-              <div class="option-item text-option">
-                <span class="option-label">Resume session</span>
-                <input type="text" v-model="localOptions.resume" placeholder="session ID" />
-              </div>
-
-              <div class="option-item text-option">
-                <span class="option-label">Custom args</span>
-                <input type="text" v-model="localOptions.customArgs" placeholder="--model sonnet" />
-              </div>
-
-              <button
-                class="save-default-btn"
-                :class="{ saving: isSaving, success: saveSuccess }"
-                :disabled="isSaving"
-                @click="handleSaveDefault"
-              >
-                <span v-if="isSaving">Saving...</span>
-                <span v-else-if="saveSuccess">Saved!</span>
-                <span v-else>Save as Default</span>
-              </button>
-            </section>
-          </div>
+        <div v-if="recentSessions.length === 0" class="empty-sessions">
+          <span>No recent sessions</span>
         </div>
       </div>
+
+      <!-- 底部：启动参数设置 -->
+      <footer class="startup-options">
+        <div class="options-header">
+          <span class="options-title">Startup Options</span>
+        </div>
+
+        <label class="option-item">
+          <input type="checkbox" v-model="localOptions.skipPermissions" />
+          <span class="option-label">Allow</span>
+          <code class="option-flag warning">--skip-permissions</code>
+        </label>
+
+        <div class="option-item text-option">
+          <span class="option-label">Custom args</span>
+          <input type="text" v-model="localOptions.customArgs" placeholder="--model sonnet" />
+        </div>
+
+        <button
+          class="save-default-btn"
+          :class="{ saving: isSaving, success: saveSuccess }"
+          :disabled="isSaving"
+          @click="handleSaveDefault"
+        >
+          <span v-if="isSaving">Saving...</span>
+          <span v-else-if="saveSuccess">Saved!</span>
+          <span v-else>Save as Default</span>
+        </button>
+      </footer>
     </aside>
 
     <!-- 右侧：项目列表 -->
@@ -156,8 +81,7 @@
           v-for="project in filteredProjects"
           :key="project.path"
           class="project-item"
-          :class="{ active: selectedProject?.path === project.path }"
-          @click="handleSelectProject(project)"
+          @click="$emit('selectProject', project.path)"
         >
           <svg class="folder-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -174,7 +98,6 @@
         </div>
       </div>
 
-      <!-- 添加项目按钮 -->
       <footer class="panel-footer">
         <button class="add-btn" @click="$emit('addProject')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -191,32 +114,28 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
-import { getProjects, getProjectInfo } from '@/api/tauri'
-import type { Project } from '@/api/tauri'
+import type { SessionInfo } from '@/api/tauri'
 
 const emit = defineEmits<{
   selectProject: [path: string]
   addProject: []
+  resumeSession: [projectPath: string, sessionId: string, sessionName?: string]
 }>()
 
 const appStore = useAppStore()
-const projects = ref<Project[]>([])
 const searchQuery = ref('')
-const selectedProject = ref<Project | null>(null)
-const projectInfo = ref<{ lastSessionId?: string; lastCost?: number } | null>(null)
 
 const localOptions = ref({
-  continue: appStore.claudeOptions.continue,
-  resume: '',
   skipPermissions: appStore.claudeOptions.skipPermissions,
   customArgs: appStore.claudeOptions.customArgs
 })
 
-// 保存状态
 const isSaving = ref(false)
 const saveSuccess = ref(false)
 
-// 过滤后的项目列表
+const projects = computed(() => appStore.cachedProjects)
+const recentSessions = computed(() => appStore.cachedRecentSessions)
+
 const filteredProjects = computed(() => {
   const query = searchQuery.value.toLowerCase()
   return projects.value.filter(p => {
@@ -226,63 +145,42 @@ const filteredProjects = computed(() => {
   })
 })
 
-// 同步选项到 store
 watch(localOptions, (val) => {
   appStore.setClaudeOptions(val)
 }, { deep: true })
 
-// 当输入 resume 时，自动取消 continue 选项（避免冲突）
-watch(() => localOptions.value.resume, (newResume) => {
-  if (newResume && localOptions.value.continue) {
-    localOptions.value.continue = false
-  }
+onMounted(() => {
+  appStore.loadCache()
 })
 
-onMounted(async () => {
-  projects.value = await getProjects()
-})
-
-// 选择项目 -> 显示详情（再次点击取消选中）
-async function handleSelectProject(project: Project) {
-  if (selectedProject.value?.path === project.path) {
-    // 点击已选中的项目 -> 取消选中
-    selectedProject.value = null
-    projectInfo.value = null
-  } else {
-    selectedProject.value = project
-
-    // 获取项目详细信息
-    const info = await getProjectInfo(project.path)
-    projectInfo.value = info
-
-    // 如果有 lastSessionId，自动填入 resume
-    if (info?.lastSessionId) {
-      localOptions.value.resume = info.lastSessionId
-    }
-  }
+function getProjectName(projectPath: string): string {
+  const parts = projectPath.replace(/\\/g, '/').split('/')
+  return parts[parts.length - 1] || projectPath
 }
 
-// 启动项目
-function handleLaunch() {
-  if (selectedProject.value) {
-    emit('selectProject', selectedProject.value.path)
-  }
+function formatTimeAgo(timestamp: number): string {
+  const diff = Date.now() - timestamp
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(diff / 3600000)
+  const days = Math.floor(diff / 86400000)
+  if (minutes < 1) return 'now'
+  if (minutes < 60) return `${minutes}m`
+  if (hours < 24) return `${hours}h`
+  return `${days}d`
 }
 
-// 保存为默认配置
+function handleResumeSession(session: SessionInfo) {
+  emit('resumeSession', session.projectPath, session.sessionId, session.name)
+}
+
 async function handleSaveDefault() {
   isSaving.value = true
   saveSuccess.value = false
-
   const success = await appStore.saveAsDefault()
-
   isSaving.value = false
   if (success) {
     saveSuccess.value = true
-    // 3秒后自动隐藏成功提示
-    setTimeout(() => {
-      saveSuccess.value = false
-    }, 3000)
+    setTimeout(() => { saveSuccess.value = false }, 3000)
   }
 }
 </script>
@@ -294,204 +192,139 @@ async function handleSaveDefault() {
   background: var(--bg-primary);
 }
 
-/* 左侧详情面板 */
-.detail-panel {
+/* 左侧近期会话面板 */
+.sessions-panel {
   width: 280px;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
-  order: -1;  /* 放在最左边 */
-}
-
-.panel-inner {
-  width: 280px;
-  height: 100%;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
 }
 
-/* 默认面板（无选中状态） */
-.default-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.default-panel .panel-header {
+.sessions-panel .panel-header {
   padding: 16px;
   border-bottom: 1px solid var(--border-color);
 }
 
-.default-panel .panel-header h2 {
+.sessions-panel .panel-header h2 {
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.default-panel .panel-body {
+.session-list {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 8px;
 }
 
-.action-section {
-  margin-bottom: 20px;
-}
-
-.new-project-btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 14px 20px;
-  background: var(--accent-color);
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.new-project-btn:hover {
-  background: #5b4cdb;
-}
-
-.config-hint {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-bottom: 12px;
-}
-
-/* 项目详情 */
-.project-detail {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.detail-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.project-title {
+.session-item {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
 }
 
-.project-title h2 {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
+.session-item:hover {
+  background: var(--hover-bg);
 }
 
-.project-title svg {
+.session-icon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.session-item:hover .session-icon {
   color: var(--accent-color);
 }
 
-.close-btn {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.close-btn:hover {
-  background: var(--hover-bg);
-  color: var(--text-primary);
-}
-
-.detail-body {
+.session-info {
   flex: 1;
-  overflow-y: auto;
-  padding: 16px;
+  min-width: 0;
 }
 
-.info-section {
-  margin-bottom: 16px;
+.session-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.info-section label {
+.session-project {
   font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 6px;
+  color: var(--text-tertiary);
   display: block;
 }
 
-.path-display {
-  font-size: 12px;
-  color: var(--text-primary);
-  background: var(--bg-primary);
-  padding: 8px 12px;
-  border-radius: 4px;
-  word-break: break-all;
+.session-time {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
 }
 
-.session-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
+.empty-sessions {
+  padding: 32px;
+  text-align: center;
   color: var(--text-secondary);
-}
-
-.config-section {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-color);
-}
-
-.config-section h3 {
   font-size: 13px;
+}
+
+/* 底部启动参数 */
+.startup-options {
+  border-top: 1px solid var(--border-color);
+  padding: 12px;
+}
+
+.options-header {
+  margin-bottom: 8px;
+}
+
+.options-title {
+  font-size: 11px;
   font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 12px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .option-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-bottom: 8px;
   cursor: pointer;
 }
 
 .option-item input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   accent-color: var(--accent-color);
 }
 
 .option-label {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-primary);
 }
 
 .option-flag {
-  font-size: 11px;
-  padding: 2px 6px;
+  font-size: 10px;
+  padding: 1px 5px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  font-family: 'SF Mono', 'Consolas', 'Monaco', 'Menlo', monospace;
-  font-weight: 500;
+  font-family: 'Consolas', 'Monaco', monospace;
   color: var(--text-secondary);
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
 }
 
 .option-flag.warning {
@@ -507,7 +340,7 @@ async function handleSaveDefault() {
 
 .text-option input[type="text"] {
   width: 100%;
-  padding: 6px 10px;
+  padding: 5px 8px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 4px;
@@ -521,15 +354,16 @@ async function handleSaveDefault() {
 }
 
 .save-default-btn {
-  margin-top: 12px;
-  padding: 8px 12px;
+  margin-top: 8px;
+  padding: 6px 10px;
   background: transparent;
   border: 1px solid var(--border-color);
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s ease;
+  width: 100%;
 }
 
 .save-default-btn:hover:not(:disabled):not(.success) {
@@ -546,38 +380,6 @@ async function handleSaveDefault() {
   border-color: #27ae60;
   color: #27ae60;
   background: rgba(39, 174, 96, 0.1);
-  cursor: default;
-}
-
-.save-default-btn:disabled {
-  cursor: not-allowed;
-}
-
-/* 顶部启动按钮区域 */
-.detail-launch-section {
-  padding: 16px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.launch-btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 12px 20px;
-  background: var(--accent-color);
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.launch-btn:hover {
-  background: #5b4cdb;
 }
 
 /* 右侧项目列表 */
@@ -588,12 +390,12 @@ async function handleSaveDefault() {
   min-width: 400px;
 }
 
-.panel-header {
+.projects-panel .panel-header {
   padding: 16px 20px;
   border-bottom: 1px solid var(--border-color);
 }
 
-.panel-header h2 {
+.projects-panel .panel-header h2 {
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
@@ -651,17 +453,12 @@ async function handleSaveDefault() {
   background: var(--bg-secondary);
 }
 
-.project-item.active {
-  background: var(--selected-bg);
-  border-left: 3px solid var(--accent-color);
-}
-
 .folder-icon {
   flex-shrink: 0;
   color: var(--text-secondary);
 }
 
-.project-item.active .folder-icon {
+.project-item:hover .folder-icon {
   color: var(--accent-color);
 }
 
@@ -720,19 +517,19 @@ async function handleSaveDefault() {
 }
 
 /* 滚动条 */
-.project-list::-webkit-scrollbar,
-.detail-body::-webkit-scrollbar {
+.session-list::-webkit-scrollbar,
+.project-list::-webkit-scrollbar {
   width: 6px;
 }
 
-.project-list::-webkit-scrollbar-thumb,
-.detail-body::-webkit-scrollbar-thumb {
+.session-list::-webkit-scrollbar-thumb,
+.project-list::-webkit-scrollbar-thumb {
   background: var(--border-color);
   border-radius: 3px;
 }
 
-.project-list::-webkit-scrollbar-track,
-.detail-body::-webkit-scrollbar-track {
+.session-list::-webkit-scrollbar-track,
+.project-list::-webkit-scrollbar-track {
   background: transparent;
 }
 </style>

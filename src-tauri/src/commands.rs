@@ -132,6 +132,14 @@ pub async fn get_session_count(project_path: String) -> Result<usize, String> {
     crate::store::get_session_count(&project_path).map_err(|e| e.to_string())
 }
 
+/// 获取所有项目的近期会话
+#[tauri::command]
+pub async fn get_all_recent_sessions(limit: Option<usize>) -> Result<Vec<SessionInfo>, String> {
+    let limit = limit.unwrap_or(20);
+    crate::store::get_all_recent_sessions(limit)
+        .map_err(|e| e.to_string())
+}
+
 /// 获取会话详情
 #[tauri::command]
 pub async fn get_session_details(

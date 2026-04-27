@@ -53,6 +53,7 @@ pub fn run() {
             commands::get_project_info,
             commands::get_sessions,
             commands::get_session_count,
+            commands::get_all_recent_sessions,
             commands::get_session_details,
             commands::get_app_config,
             commands::update_app_config,

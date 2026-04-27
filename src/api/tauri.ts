@@ -112,6 +112,9 @@ export const getSessions = (projectPath: string, limit?: number, offset?: number
 export const getSessionCount = (projectPath: string): Promise<number> =>
   invoke<number>('get_session_count', { projectPath });
 
+export const getAllRecentSessions = (limit?: number): Promise<SessionInfo[]> =>
+  invoke<SessionInfo[]>('get_all_recent_sessions', { limit });
+
 export const getSessionDetails = (projectPath: string, sessionId: string): Promise<SessionDetails | null> =>
   invoke<SessionDetails | null>('get_session_details', { projectPath, sessionId });
 

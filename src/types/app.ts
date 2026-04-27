@@ -13,15 +13,12 @@ export interface AppConfig {
 }
 
 export interface DefaultClaudeOptions {
-  continue?: boolean
-  resume?: string
   skipPermissions?: boolean
   customArgs?: string
 }
 
 // Claude 启动选项（前端使用）
 export interface ClaudeOptions {
-  continue: boolean
   resume: string
   skipPermissions: boolean
   customArgs: string

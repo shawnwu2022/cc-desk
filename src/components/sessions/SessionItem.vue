@@ -43,6 +43,18 @@
       >
         <img src="@/assets/icons/edit.svg" alt="Rename" />
       </button>
+      <!-- 关闭按钮 -->
+      <button
+        v-if="closable"
+        class="action-btn close-action-btn"
+        @click.stop="$emit('close', id)"
+        title="Close"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
     </template>
 
     <!-- 时间信息 -->
@@ -60,12 +72,14 @@ const props = defineProps<{
   isRunning?: boolean
   isStopped?: boolean
   lastActiveAt: number
+  closable?: boolean
 }>()
 
 const emit = defineEmits<{
   switch: [id: string]
   rename: [id: string, name: string]
   restart: [id: string]
+  close: [id: string]
 }>()
 
 const isRenaming = ref(false)
@@ -109,10 +123,11 @@ function startRename() {
 }
 
 function confirmRename() {
+  if (!isRenaming.value) return
+  isRenaming.value = false
   if (newName.value.trim() && newName.value !== props.name) {
     emit('rename', props.id, newName.value.trim())
   }
-  isRenaming.value = false
 }
 
 function cancelRename() {
