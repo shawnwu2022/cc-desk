@@ -99,17 +99,20 @@ jobs:
         with:
           path: artifacts
 
+      - name: List downloaded artifacts
+        run: find artifacts -type f | head -50
+
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           draft: true
           generate_release_notes: true
           files: |
-            artifacts/windows/**/*.exe
-            artifacts/windows/**/*.msi
-            artifacts/macos-x64/**/*.dmg
-            artifacts/macos-x64/**/*.app.tar.gz
-            artifacts/linux/**/*.deb
-            artifacts/linux/**/*.AppImage
+            artifacts/cc-box-windows/**/*.exe
+            artifacts/cc-box-windows/**/*.msi
+            artifacts/cc-box-macos-x64/**/*.dmg
+            artifacts/cc-box-macos-x64/**/*.app.tar.gz
+            artifacts/cc-box-linux/**/*.deb
+            artifacts/cc-box-linux/**/*.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
