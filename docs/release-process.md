@@ -20,84 +20,125 @@
 
 - [ ] 所有已计划的 feature 已完成
 - [ ] 所有已知 bug 已修复
-- [ ] 更新了 `docs/roadmap.md` 中的进度
-- [ ] 本地构建测试通过 (`npm run tauri:build`)
+- [ ] 本地构建测试通过 (`npm run build`)
+- [ ] Rust 编译通过 (`cargo check`)
 - [ ] 检查敏感信息不会被提交
 
 ## 快速发布命令
 
 ```bash
-# 1. 更新版本号（手动编辑以下三个文件）
-vim src-tauri/Cargo.toml package.json src-tauri/tauri.conf.json
+# 1. 更新版本号（编辑三个文件）
+#    - src-tauri/Cargo.toml
+#    - package.json
+#    - src-tauri/tauri.conf.json
 
-# 2. 提交并打标签
-git add -A && git commit -m "Release v1.2.3"
+# 2. 提交更改（使用规范格式）
+git add -A
+git commit -m "Release v0.2.4
+
+Bug fixes:
+- Fix terminal copy (Ctrl+C/Ctrl+Shift+C)
+- Fix console window flash on Windows
+
+Features:
+- Add Alt+N/Alt+R shortcuts for new/restart session
+
+Author <Chen Zihan>: orczh_hj@163.com"
+
+# 3. 推送到 GitHub 并创建标签
 git push origin main
-git tag -a v1.2.3 -m "Release v1.2.3"
-git push origin v1.2.3
+git tag -a v0.2.4 -m "Release v0.2.4"
+git push origin v0.2.4
 
-# 3. 等待 CI 构建完成后发布
-gh release edit v1.2.3 --draft=false
+# 4. 等待 CI 构建完成后发布
+#    访问 https://github.com/orczh-hj/cc-box/actions 查看进度
+#    构建完成后执行：
+gh release edit v0.2.4 --draft=false
 ```
 
-## 本地打包
+## 详细流程
 
-### Windows
-```bash
-npm run build:win
-```
-输出: `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/`
-- NSIS 安装程序: `bundle/nsis/*.exe`
-- MSI 安装程序: `bundle/msi/*.msi`
-- 免安装版: `release/*.exe`
+### 步骤 1：更新版本号
 
-> 首次打包下载 NSIS 组件时可能需要代理：
-> ```bash
-> set HTTP_PROXY=http://127.0.0.1:33210
-> set HTTPS_PROXY=http://127.0.0.1:33210
-> ```
+手动编辑以下文件中的 `version` 字段：
 
-### macOS
-```bash
-npm run build:mac
-```
-输出: `src-tauri/target/universal-apple-darwin/release/bundle/`
-- DMG 镜像: `bundle/dmg/*.dmg`
-- APP 包: `bundle/macos/*.app`
-
-### Linux
-```bash
-npm run build:linux
-```
-输出: `src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/`
-- Debian 包: `bundle/deb/*.deb`
-- AppImage: `bundle/appimage/*.AppImage`
-
-## CI/CD 发布（GitHub Actions）
-
-推送 `v*` 标签后自动触发：
-
-```
-git push origin v1.2.3
-  → GitHub Actions 自动构建三平台
-  → 创建草稿 Release（附带构建产物）
-  → 审核后发布
+```toml
+# src-tauri/Cargo.toml
+version = "0.2.4"
 ```
 
-构建产物：
-- **Windows** (x64): `.exe` + `.msi`
-- **macOS** (Universal): `.dmg` + `.app`
-- **Linux** (x64): `.deb` + `.AppImage`
+```json
+// package.json
+"version": "0.2.4"
+```
 
-### 发布草稿
+```json
+// src-tauri/tauri.conf.json
+"version": "0.2.4"
+```
+
+### 步骤 2：提交更改
+
+使用规范的 commit 格式，包含版本号、变更内容：
 
 ```bash
-# CLI 发布草稿
-gh release edit v1.2.3 --notes "更新内容..."
-gh release edit v1.2.3 --draft=false
+git add -A
+git commit -m "Release v0.2.4
+
+Bug fixes:
+- Fix terminal copy (Ctrl+C/Ctrl+Shift+C)
+- Fix console window flash on Windows (CREATE_NO_WINDOW)
+- Fix new/restart session shortcuts (Alt+N/Alt+R)
+- Fix window snap shortcuts (Ctrl+Shift+Arrow)
+- Fix sidebar data not loading on startup
+
+Features:
+- Add Alt+N/Alt+R shortcuts for new/restart session
+- Add shortcut hints on session buttons
+- Spawn new app instance instead of multi-window
+- Preload sidebar data (skills/agents/mcp/plugins)
+
+Author <Chen Zihan>: orczh_hj@163.com"
 ```
 
-或在 https://github.com/orczh-hj/cc-box/releases 手动发布。
+### 步骤 3：推送并创建标签
+
+```bash
+# 推送 commit
+git push origin main
+
+# 创建 annotated tag
+git tag -a v0.2.4 -m "Release v0.2.4"
+
+# 推送 tag（触发 CI 构建）
+git push origin v0.2.4
+```
+
+### 步骤 4：等待 CI 构建
+
+推送 tag 后，GitHub Actions 自动触发构建：
+
+1. 访问 https://github.com/orczh-hj/cc-box/actions
+2. 等待 "Release" workflow 完成（约 10-15 分钟）
+3. 构建产物：
+   - Windows (x64): `.exe` + `.msi`
+   - macOS (Universal): `.dmg` + `.app`
+   - Linux (x64): `.deb` + `.AppImage`
+
+### 步骤 5：发布 Release
+
+CI 构建完成后，会创建一个草稿 Release。发布方式：
+
+**方式 A：使用 CLI**
+```bash
+gh release edit v0.2.4 --draft=false
+```
+
+**方式 B：手动发布**
+1. 访问 https://github.com/orczh-hj/cc-box/releases
+2. 找到 v0.2.4 draft
+3. 编辑 Release notes
+4. 点击 "Publish release"
 
 ## 签名与公证（可选）
 
