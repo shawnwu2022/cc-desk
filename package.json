@@ -33,7 +33,8 @@
     "tauri:build": "tauri build",
     "build:win": "tauri build --target x86_64-pc-windows-gnu",
     "build:mac": "tauri build --target x86_64-apple-darwin",
-    "build:linux": "tauri build --target x86_64-unknown-linux-gnu"
+    "build:linux": "tauri build --target x86_64-unknown-linux-gnu",
+    "release": "bash scripts/release.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
