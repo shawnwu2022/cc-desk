@@ -5,48 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.4] - 2025-04-29
+## [0.2.4] - 2026-04-29
+
+### Added
+
+- Alt+N/Alt+R shortcuts for new/restart session (terminal view only)
+- Shortcut hints on session buttons (Alt+N, Alt+R)
+- Sidebar data preload on startup (skills, agents, MCP servers, plugins)
+- Spawn new app instance instead of multi-window (Ctrl+Shift+N)
 
 ### Fixed
 
-- Terminal copy not working (added Ctrl+C/Ctrl+Shift+C handling)
-- Console window flashing on Windows (added CREATE_NO_WINDOW flag)
-- Alt+N/Alt+R shortcuts not triggering new/restart session
-- Window snap shortcuts (Ctrl+Shift+Arrow) not working
-- Sidebar data (skills/agents/mcp/plugins) not loading on startup
-- Event listeners not set when cwd empty in TerminalView
-
-### Added
-
-- Alt+N shortcut for new session (only in terminal view)
-- Alt+R shortcut for restart session (only in terminal view)
-- Shortcut hints displayed under New/Restart buttons
-- Spawn new app instance (Ctrl+Shift+N) instead of multi-window
-- Preload sidebar data on entering terminal view
+- Terminal copy not working (Ctrl+C with selection, Ctrl+Shift+C)
+- Console window flash on Windows (CREATE_NO_WINDOW flag)
+- New/restart session shortcuts not triggering (event listener timing)
+- Window snap shortcuts not working (arrow key lowercase)
+- Sidebar data not loading on app startup
 
 ### Changed
 
-- Sidebar panels now use shared store data (pre-loaded on startup)
-- Keyboard event key comparison now uses lowercase for consistency
-- Updated interaction.md with new shortcuts documentation
+- Refactored sidebar store to support preloaded data
+- Panel components now use centralized sidebar store
+- Updated keyboard shortcuts documentation
 
-## [0.2.3] - 2025-04-28
+## [0.2.3] - 2026-04-28
 
 ### Added
 
-- Keyboard shortcuts for window management (snap left/right half screen)
-- Window snap buttons in terminal header
+- Keyboard shortcuts reference in docs/interaction.md
+- Session rename functionality in sidebar
+- Empty state UI for sessions panel
 
 ### Fixed
 
 - Terminal instances destroyed on view switch
-- Focus issues when switching between views
-- Keyboard shortcuts interfering with terminal input
+- Focus issues after window restoration
+- Keyboard shortcut interference between views
 
 ### Changed
 
-- Refactored keyboard shortcuts into dedicated composable
-- Improved focus recovery mechanism
+- Refactored keyboard shortcuts handling (capture phase)
+- Improved PTY lifecycle management
+- Window title updates based on project folder
 
 ## [0.2.1] - 2025-04-27
 
