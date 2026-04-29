@@ -95,7 +95,11 @@ npm run tauri:build        # 生产构建
 ### Windows 环境配置
 - **MinGW 设置**：`set PATH=C:\ProgramData\mingw64\mingw64\bin;%PATH%`
 - **代理设置**：
-  - 推送到 GitHub 需要代理：`set HTTP_PROXY=http://127.0.0.1:33210`
+  - 推送到 GitHub 需要代理：
+    ```bash
+    set HTTP_PROXY=http://127.0.0.1:33210
+    set HTTPS_PROXY=http://127.0.0.1:33210
+    ```
   - 推送到 Gitee 不需要代理
 - **打包代理设置**：首次打包下载 NSIS 组件时需要代理，设置环境变量：
   ```bash
