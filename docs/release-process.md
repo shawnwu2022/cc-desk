@@ -40,17 +40,31 @@ GitHub Actions 触发构建
 # 1. 更新版本号
 #    编辑: src-tauri/Cargo.toml, package.json, src-tauri/tauri.conf.json
 
-# 2. 更新 CHANGELOG.md（在对应版本区块添加变更记录）
+# 2. 更新 CHANGELOG.md（用英文编写变更记录）
 
 # 3. 提交并推送
 git add -A
-git commit -m "Release v0.2.4"
+git commit -m "Release v0.2.5"
 git push origin main
 
 # 4. 创建并推送标签（触发自动化发布）
-git tag -a v0.2.4 -m "Release v0.2.4"
-git push origin v0.2.4
+git tag -a v0.2.5 -m "Release v0.2.5"
+git push origin v0.2.5
+
+# 5. 等待CI构建完成（可通过链接动态查看）
+#    命令行: gh run watch <run-id>
+#    网页: https://github.com/orczh-hj/cc-box/actions
+
+# 6. 发布Release（编辑英文Release notes后发布）
+gh release edit v0.2.5 --draft=false
 ```
+
+## 重要提醒
+
+1. **CHANGELOG.md 必须用英文编写** - Release notes 从 CHANGELOG.md 自动提取，需使用英文
+2. **构建过程可动态监控** - 推送标签后可通过以下方式实时查看构建进度：
+   - 命令行：`gh run watch` 或 `gh run list`
+   - 网页：访问 GitHub Actions 页面查看实时构建状态
 
 ## 构建产物
 
