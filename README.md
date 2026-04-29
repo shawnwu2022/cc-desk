@@ -5,8 +5,8 @@
 <h1 align="center">CC-Box</h1>
 
 <p align="center">
-  <strong>A multi-terminal manager for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> power users</strong><br>
-  One window. Multiple sessions. Everything you wish the CLI could show you.
+  <strong>A desktop app for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> — multi-project, multi-session management</strong><br>
+  One window. Multiple projects. Instant session switching.
 </p>
 
 <p align="center">
@@ -24,29 +24,42 @@ English | [简体中文](README_CN.md)
 
 ## Why CC-Box?
 
-Claude Code's CLI is great for single-session work. But if you're juggling **multiple projects**, **running several agents in parallel**, or want to **see token usage and costs at a glance** — the terminal alone falls short.
+Claude Code's CLI is excellent for single-session work. But when you're managing **multiple projects** and need to **view, enter, and switch between sessions quickly** — the terminal alone becomes cumbersome.
 
-CC-Box doesn't replace the CLI. It wraps it with a native terminal experience and adds the things the CLI can't do well: multi-session orchestration, information dashboards, and quick project switching.
+CC-Box is essentially a **desktop application for Claude Code**. It wraps the CLI with a native terminal experience and adds the things the CLI can't do well: multi-project management, session overview, and quick switching.
 
-**Think of it as iTerm2/Warp, but purpose-built for Claude Code.**
+**Think of it as a desktop app purpose-built for Claude Code power users.**
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/projectselect.png" alt="Project Selection" width="400">
+  <img src="screenshots/project.png" alt="Session Management" width="400">
+</p>
 
 ---
 
 ## Highlights
 
+### Multi-Project Management
+
+Browse all your projects in one place. See which projects have active sessions, launch a new session with one click, and switch between projects instantly. No more `cd` between directories or managing multiple terminal windows.
+
 ### Multi-Session in One Window
 
-Open as many Claude Code sessions as you need — each runs independently in its own terminal tab. Switch between them instantly, output is preserved when you switch back. No more juggling terminal windows.
+Open as many Claude Code sessions as you need — each runs independently in its own terminal tab. View all sessions in the sidebar, switch between them instantly, output is preserved when you switch back.
 
-### Project Quick Launch
+### Quick Launch with Presets
 
-Browse your favorite projects and launch a session with one click. Set per-project startup options like `--continue`, `--model`, or custom flags. No need to `cd` and type the same arguments every time.
+Set per-project startup options like `--continue`, `--model`, or custom flags. Launch sessions with your preferred configuration without typing the same arguments every time.
 
 ### Sidebar Panels
 
 A side drawer with contextual panels — no overlay, no focus stealing:
 
-- **Sessions** — Browse, search, and switch between all sessions (with scroll-to-load for large histories)
+- **Sessions** — Browse, search, and switch between all sessions
 - **MCP Servers** — Inspect connected MCP servers, browse available tools and their schemas
 - **Skills & Agents** — Quick access to your Claude Code skills and agent configurations
 - **Plugins** — View installed plugins
@@ -55,25 +68,39 @@ A side drawer with contextual panels — no overlay, no focus stealing:
 
 The app runs the real Claude CLI binary through a pseudo-terminal. Everything works exactly as in your terminal — slash commands, keyboard shortcuts, streaming output, colors, and interactive prompts.
 
-### Settings That Make Sense
-
-Adjust font size in real time, set default startup flags (`--continue`, `--skip-permissions`, custom args), and configure once for all future sessions.
-
 ---
 
 ## Quick Start
 
-### 1. Make sure Claude Code is installed
+### 1. Install Claude Code
 
+Claude Code can no longer be installed via npm. Use one of the following methods:
+
+**macOS / Linux / WSL:**
 ```bash
-# If you haven't installed Claude Code yet
-npm install -g @anthropic-ai/claude-code
-claude        # Run once to authenticate
+curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-### 2. Download & Install
+**Windows PowerShell:**
+```powershell
+irm https://claude.ai/install.ps1 | iex
+```
 
-Head to the [**Releases**](https://github.com/orczh/cc-box/releases) page and grab the installer for your platform:
+**Homebrew:**
+```bash
+brew install --cask claude-code
+```
+
+**WinGet:**
+```powershell
+winget install Anthropic.ClaudeCode
+```
+
+Then run `claude` once to authenticate.
+
+### 2. Download & Install CC-Box
+
+Head to the [**Releases**](https://github.com/orczh-hj/cc-box/releases) page and grab the installer for your platform:
 
 | Platform | File |
 |----------|------|
@@ -84,7 +111,7 @@ Head to the [**Releases**](https://github.com/orczh/cc-box/releases) page and gr
 ### 3. Launch & Go
 
 1. Open the app
-2. Click **Open New Project** and select a directory
+2. Select or add a project directory
 3. A Claude Code session starts — just type as you would in the terminal
 4. Open more sessions from the sidebar, each runs independently
 
@@ -105,7 +132,7 @@ Head to the [**Releases**](https://github.com/orczh/cc-box/releases) page and gr
 ### Setup
 
 ```bash
-git clone https://github.com/orczh/cc-box.git
+git clone https://github.com/orczh-hj/cc-box.git
 cd cc-box
 npm install
 ```
