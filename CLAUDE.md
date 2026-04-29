@@ -94,12 +94,28 @@ npm run tauri:build        # 生产构建
 
 ### Windows 环境配置
 - **MinGW 设置**：`set PATH=C:\ProgramData\mingw64\mingw64\bin;%PATH%`
+- **代理设置**：
+  - 推送到 GitHub 需要代理：`set HTTP_PROXY=http://127.0.0.1:33210`
+  - 推送到 Gitee 不需要代理
 - **打包代理设置**：首次打包下载 NSIS 组件时需要代理，设置环境变量：
   ```bash
   set HTTP_PROXY=http://127.0.0.1:33210
   set HTTPS_PROXY=http://127.0.0.1:33210
   npm run build:win
   ```
+
+### 双仓库同步
+
+项目同步推送到 GitHub 和 Gitee 两个仓库，方便国内访问。
+
+- **GitHub**：`https://github.com/orczh-hj/cc-box`（需要代理）
+- **Gitee**：`https://gitee.com/orczh/cc-box`（国内直连）
+
+**同步机制**：
+1. Git 多 URL 远程：`git push origin` 自动推送到两个仓库
+2. GitHub Actions：push 到 main 或 release 发布时自动同步到 Gitee
+
+**推送时注意**：推送到 GitHub 需先设置代理，推送到 Gitee 无需代理。
 
 ### 版本发布（快速参考）
 ```bash
