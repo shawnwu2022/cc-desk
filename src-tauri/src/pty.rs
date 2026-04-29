@@ -174,6 +174,94 @@ impl PtyManager {
         None
     }
 
+    /// 判断是否需要用node启动（从配置读取或检测）
+    fn should_use_node_launcher(claude_path: &str) -> bool {
+        // 1. 从配置读取启动类型
+        if let Ok(config) = crate::store::get_app_config() {
+            if let Some(ref launcher_type) = config.claude_launcher_type {
+                if launcher_type == "node" {
+                    log::info!("Launcher type from config: node");
+                    return true;
+                } else if launcher_type == "direct" {
+                    log::info!("Launcher type from config: direct");
+                    return false;
+                }
+            }
+        }
+
+        // 2. 配置无值时进行检测
+        let needs_node = Self::detect_needs_node(claude_path);
+
+        // 3. 保存检测结果到配置
+        let launcher_type = if needs_node { "node" } else { "direct" };
+        let updates = serde_json::json!({ "claudeLauncherType": launcher_type });
+        if let Err(e) = crate::store::update_app_config(updates) {
+            log::warn!("Failed to save launcher type: {}", e);
+        }
+
+        needs_node
+    }
+
+    /// 检测文件是否需要node执行
+    fn detect_needs_node(path: &str) -> bool {
+        // 1. 直接检查扩展名
+        if path.ends_with(".js") {
+            log::info!("Direct .js file: {}", path);
+            return true;
+        }
+
+        // 2. 检查文件内容
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let first_lines = content.lines().take(5).collect::<Vec<_>>();
+
+            // 检查node shebang
+            if first_lines.iter().any(|line| line.contains("#!/usr/bin/env node")) {
+                log::info!("Detected Node.js script by shebang: {}", path);
+                return true;
+            }
+
+            // 检查Anthropic版权信息（cli.js的特征）
+            if first_lines.iter().any(|line|
+                line.contains("// (c) Anthropic") && line.contains("Version:")
+            ) {
+                log::info!("Detected Anthropic CLI.js by content: {}", path);
+                return true;
+            }
+        }
+
+        // 3. Mac/Linux: 解析符号链接
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Ok(full_path) = std::fs::canonicalize(path) {
+                let full_path_str = full_path.to_string_lossy();
+
+                // 检查真实文件扩展名
+                if full_path_str.ends_with(".js") {
+                    log::info!("Symlink points to .js file: {} -> {}", path, full_path_str);
+                    return true;
+                }
+
+                // 检查真实文件内容
+                if let Ok(content) = std::fs::read_to_string(&full_path) {
+                    let first_lines = content.lines().take(5).collect::<Vec<_>>();
+                    if first_lines.iter().any(|line| line.contains("#!/usr/bin/env node")) {
+                        log::info!("Real file is Node.js script: {}", full_path_str);
+                        return true;
+                    }
+                    // 检查Anthropic版权信息
+                    if first_lines.iter().any(|line|
+                        line.contains("// (c) Anthropic") && line.contains("Version:")
+                    ) {
+                        log::info!("Real file is Anthropic CLI.js: {}", full_path_str);
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     /// 构建环境变量（继承父进程环境 + 自定义设置）
     fn build_env_vars(cwd: &str) -> Vec<(String, String)> {
         let mut env_vars: Vec<(String, String)> = Vec::new();
@@ -240,16 +328,47 @@ impl PtyManager {
             }
         };
 
-        // Windows: 非 .exe 路径（如 npm shim 脚本）需要通过 cmd.exe 执行
+        // Windows: 非 .exe 路径需要特殊处理
+        // Mac/Linux: 检测启动类型，node脚本需要用node执行
         let mut cmd = if cfg!(target_os = "windows")
             && !claude_path.to_lowercase().ends_with(".exe")
         {
-            log::info!(
-                "Non-exe path detected, using cmd.exe to launch: {}",
-                claude_path
-            );
-            let mut c = CommandBuilder::new("cmd.exe");
-            c.arg("/C");
+            // Windows上检查是否是node脚本
+            if Self::should_use_node_launcher(&claude_path) {
+                let node_path = match Self::find_executable("node") {
+                    Some(p) => p,
+                    None => {
+                        let err_msg = "Claude CLI is a Node.js script but 'node' command not found. Please install Node.js first.";
+                        log::error!("{}", err_msg);
+                        self.emit_error(&id, err_msg, "node_detection");
+                        return Err(anyhow!("{}", err_msg));
+                    }
+                };
+                log::info!("Windows Node.js script, using node to launch: {} {}", node_path, claude_path);
+                let mut c = CommandBuilder::new(&node_path);
+                c.arg(&claude_path);
+                c
+            } else {
+                // Windows shim脚本用cmd.exe执行
+                log::info!("Windows shim, using cmd.exe to launch: {}", claude_path);
+                let mut c = CommandBuilder::new("cmd.exe");
+                c.arg("/C");
+                c.arg(&claude_path);
+                c
+            }
+        } else if Self::should_use_node_launcher(&claude_path) {
+            // Mac/Linux: node脚本需要用node执行
+            let node_path = match Self::find_executable("node") {
+                Some(p) => p,
+                None => {
+                    let err_msg = "Claude CLI is a Node.js script but 'node' command not found. Please install Node.js first.";
+                    log::error!("{}", err_msg);
+                    self.emit_error(&id, err_msg, "node_detection");
+                    return Err(anyhow!("{}", err_msg));
+                }
+            };
+            log::info!("Using Node.js to launch Claude CLI: {} {}", node_path, claude_path);
+            let mut c = CommandBuilder::new(&node_path);
             c.arg(&claude_path);
             c
         } else {

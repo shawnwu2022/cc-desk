@@ -37,17 +37,100 @@ pub fn kill_all(&self)
 
 ### Claude 进程启动
 
+Claude CLI 有多种安装方式，启动命令构建需要智能检测启动类型：
+
+#### 安装方式与文件特征
+
+| 安装方式 | 命令 | 文件类型 | Windows路径示例 | Mac/Linux路径示例 |
+|---------|------|---------|-----------------|-------------------|
+| Native Install | `curl -fsSL https://claude.ai/install.sh | bash` | 编译后可执行文件 | `~/.local/bin/claude.exe` | `~/.local/bin/claude` |
+| npm | `npm install -g @anthropic-ai/claude-code` | Node.js脚本 | `...\node_global\node_modules\@anthropic-ai\claude-code\cli.js` | `.../node_modules/@anthropic-ai/claude-code/cli.js` |
+| Homebrew | `brew install --cask claude-code` | 编译后可执行文件 | - | `/usr/local/bin/claude` |
+| WinGet | `winget install Anthropic.ClaudeCode` | 编译后可执行文件 | 系统PATH | - |
+
+#### npm shim 脚本结构
+
+npm安装会创建shim脚本（如`D:\...\node_global\claude`），内容为shell脚本：
+
+```bash
+#!/bin/sh
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+if [ -x "$basedir/node" ]; then
+  exec "$basedir/node" "$basedir/node_modules/@anthropic-ai/claude-code/cli.js" "$@"
+else 
+  exec node "$basedir/node_modules/@anthropic-ai/claude-code/cli.js" "$@"
+fi
+```
+
+cli.js文件特征：
+- 第一行：`#!/usr/bin/env node`
+- 包含Anthropic版权：`// (c) Anthropic PBC. All rights reserved...`
+
+#### 启动类型检测逻辑
+
+检测优先级（检测结果保存到配置避免重复检测）：
+
+```
+1. 检查扩展名
+   path.ends_with(".js") → node
+
+2. 检查文件内容（前5行）
+   "#!/usr/bin/env node" → node
+   "// (c) Anthropic" + "Version:" → node (cli.js特征)
+
+3. Mac/Linux: 解析符号链接
+   canonicalize(path).ends_with(".js") → node
+   真实文件内容检测 → node
+
+否则 → direct
+```
+
+#### 命令构建逻辑
+
 ```rust
 // Windows
-CommandBuilder::new("claude")
-    .args(["--history", "prompt"])
-    .env("CLAUDE_CODE_GIT_BASH_PATH", detected_path)
-    .env("TERM", "xterm-256color")
+if ends_with(".exe") {
+    // 直接执行编译版
+    CommandBuilder::new(&claude_path)
+} else if needs_node_launcher() {
+    // Node.js脚本：用node执行
+    CommandBuilder::new("node").arg(&claude_path)
+} else {
+    // shim脚本：用cmd.exe包装
+    CommandBuilder::new("cmd.exe").arg("/C").arg(&claude_path)
+}
 
-// Unix
-CommandBuilder::new("claude")
-    .arg("--history")
-    .arg("prompt")
+// Mac/Linux
+if needs_node_launcher() {
+    CommandBuilder::new("node").arg(&claude_path)
+} else {
+    CommandBuilder::new(&claude_path)  // 直接执行
+}
+```
+
+#### 配置存储
+
+检测结果保存到 `~/.cc-box/config.json`：
+
+```jsonc
+{
+  "claudeLauncherType": "node"  // 或 "direct"
+}
+```
+
+PTY启动时优先从配置读取，无值时检测并保存。
+
+#### 环境变量
+
+```rust
+// Windows: Git Bash 路径
+.env("CLAUDE_CODE_GIT_BASH_PATH", detected_path)
+
+// 基础终端环境
+.env("TERM", "xterm-256color")
+.env("COLORTERM", "truecolor")
+.env("PWD", cwd)
+```
 ```
 
 ### 数据流
@@ -110,7 +193,7 @@ onPtyExit((payload) => { ... }): Promise<UnlistenFn>
 ```typescript
 const term = new Terminal({
   fontFamily: 'Cascadia Code, Fira Code, Consolas, monospace',
-  fontSize: 14,
+  fontSize: 12,
   lineHeight: 1.2,
   cursorBlink: true,
   cursorStyle: 'bar',

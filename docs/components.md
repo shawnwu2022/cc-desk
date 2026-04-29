@@ -176,7 +176,7 @@ const cwd = ref<string>('')
 const favorites = ref<Favorite[]>([])
 const sidebarOpen = ref(false)
 const theme = ref<string>('light')
-const fontSize = ref<number>(14)
+const fontSize = ref<number>(12)
 
 // 计算属性
 currentProject // 从 cwd 提取项目名

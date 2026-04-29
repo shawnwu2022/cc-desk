@@ -73,6 +73,9 @@ pub struct AppConfig {
     pub claude_path: Option<String>,
     #[serde(rename = "gitBashPath")]
     pub git_bash_path: Option<String>,
+    /// Claude启动类型："direct" 或 "node"
+    #[serde(rename = "claudeLauncherType")]
+    pub claude_launcher_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -722,7 +725,7 @@ pub fn get_app_config() -> Result<AppConfig> {
             default_skip_permissions: Some(false),
             default_custom_args: Some("".to_string()),
             theme: Some("light".to_string()),
-            font_size: Some(14),
+            font_size: Some(12),
             hidden_projects: Some(Vec::new()),
             ..Default::default()
         });

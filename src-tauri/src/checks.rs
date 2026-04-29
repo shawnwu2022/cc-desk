@@ -59,6 +59,112 @@ impl ChecksResult {
     }
 }
 
+/// 检测claude启动类型："direct" 或 "node"
+fn detect_launcher_type(path: &str) -> String {
+    // 1. 直接检查扩展名
+    if path.ends_with(".js") {
+        log::info!("Direct .js file: {}", path);
+        return "node".to_string();
+    }
+
+    // 2. 检查文件内容
+    if let Ok(content) = std::fs::read_to_string(path) {
+        let first_lines = content.lines().take(5).collect::<Vec<_>>();
+
+        // 检查node shebang
+        if first_lines.iter().any(|line| line.contains("#!/usr/bin/env node")) {
+            log::info!("Detected Node.js script by shebang: {}", path);
+            return "node".to_string();
+        }
+
+        // 检查Anthropic版权信息（cli.js的特征）
+        if first_lines.iter().any(|line|
+            line.contains("// (c) Anthropic") && line.contains("Version:")
+        ) {
+            log::info!("Detected Anthropic CLI.js by content: {}", path);
+            return "node".to_string();
+        }
+    }
+
+    // 3. Mac/Linux: 解析符号链接
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(full_path) = std::fs::canonicalize(path) {
+            let full_path_str = full_path.to_string_lossy();
+
+            // 检查真实文件扩展名
+            if full_path_str.ends_with(".js") {
+                log::info!("Symlink points to .js file: {} -> {}", path, full_path_str);
+                return "node".to_string();
+            }
+
+            // 检查真实文件内容
+            if let Ok(content) = std::fs::read_to_string(&full_path) {
+                let first_lines = content.lines().take(5).collect::<Vec<_>>();
+                if first_lines.iter().any(|line| line.contains("#!/usr/bin/env node")) {
+                    log::info!("Real file is Node.js script: {}", full_path_str);
+                    return "node".to_string();
+                }
+                // 检查Anthropic版权信息
+                if first_lines.iter().any(|line|
+                    line.contains("// (c) Anthropic") && line.contains("Version:")
+                ) {
+                    log::info!("Real file is Anthropic CLI.js: {}", full_path_str);
+                    return "node".to_string();
+                }
+            }
+        }
+    }
+
+    "direct".to_string()
+}
+
+/// 检测node是否可用
+fn find_node_executable() -> Option<String> {
+    let cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        std::process::Command::new(cmd)
+            .arg("node")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()
+            .and_then(|output| {
+                if output.status.success() {
+                    String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .next()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                } else {
+                    None
+                }
+            })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new(cmd)
+            .arg("node")
+            .output()
+            .ok()
+            .and_then(|output| {
+                if output.status.success() {
+                    String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .next()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                } else {
+                    None
+                }
+            })
+    }
+}
+
 /// 运行所有检查
 pub fn run_checks() -> ChecksResult {
     let (claude_path, git_bash_path) = read_config_paths();
@@ -160,6 +266,21 @@ fn check_claude_cli(config_path: &Option<String>) -> CheckResult {
     // 1. 配置的自定义路径
     if let Some(ref path) = config_path {
         if Path::new(path).exists() {
+            // 检测启动类型并保存
+            let launcher_type = detect_launcher_type(path);
+            save_launcher_type(&launcher_type);
+
+            // 如果需要node，检查node是否可用
+            if launcher_type == "node" && find_node_executable().is_none() {
+                return CheckResult::fail_with_path(
+                    "Claude CLI",
+                    "Claude CLI is a Node.js script but 'node' not found.".to_string(),
+                    Some(path.clone()),
+                    "Install Node.js",
+                    "https://nodejs.org/",
+                );
+            }
+
             return CheckResult::pass_with_path("Claude CLI", &format!("Found (custom): {}", path), path);
         }
     }
@@ -169,6 +290,21 @@ fn check_claude_cli(config_path: &Option<String>) -> CheckResult {
     let found = find_all_executables(exe_name);
 
     if let Some(path) = found.first() {
+        // 检测启动类型并保存
+        let launcher_type = detect_launcher_type(path);
+        save_launcher_type(&launcher_type);
+
+        // 如果需要node，检查node是否可用
+        if launcher_type == "node" && find_node_executable().is_none() {
+            return CheckResult::fail_with_path(
+                "Claude CLI",
+                "Claude CLI is a Node.js script but 'node' not found.".to_string(),
+                Some(path.clone()),
+                "Install Node.js",
+                "https://nodejs.org/",
+            );
+        }
+
         return CheckResult::pass_with_path("Claude CLI", &format!("Found: {}", path), path);
     }
 
@@ -179,6 +315,17 @@ fn check_claude_cli(config_path: &Option<String>) -> CheckResult {
         "View installation guide",
         "https://code.claude.com/docs",
     )
+}
+
+/// 保存启动类型到配置
+fn save_launcher_type(launcher_type: &str) {
+    let updates = serde_json::json!({
+        "claudeLauncherType": launcher_type
+    });
+    match crate::store::update_app_config(updates) {
+        Ok(()) => log::info!("[Check] Claude launcher type saved: {}", launcher_type),
+        Err(e) => log::warn!("[Check] Failed to save launcher type: {}", e),
+    }
 }
 
 /// 检查 Git Bash（仅 Windows）

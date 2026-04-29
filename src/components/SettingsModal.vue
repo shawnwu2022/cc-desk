@@ -91,7 +91,7 @@ const defaultCustomArgs = ref(appStore.claudeOptions.customArgs)
 
 onMounted(async () => {
   const config = await getAppConfig()
-  fontSize.value = config.fontSize || 14
+  fontSize.value = config.fontSize || 12
   theme.value = config.theme || 'light'
 })
 

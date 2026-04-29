@@ -140,7 +140,7 @@ function fitCurrentTerminal() {
 function createTerminal(tabId: string): Terminal {
   const term = new Terminal({
     fontFamily: 'Cascadia Code, Fira Code, Consolas, monospace',
-    fontSize: props.fontSize ?? 14,
+    fontSize: props.fontSize ?? 12,
     lineHeight: 1.2,
     cursorBlink: true,
     cursorStyle: 'bar',

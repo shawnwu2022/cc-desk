@@ -97,6 +97,16 @@
           </div>
         </button>
 
+        <div v-if="!searchQuery && appStore.hasMoreProjects && !appStore.isLoadingProjects" class="load-more-section">
+          <button class="load-more-btn" @click="handleLoadMore">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            <span>Load More Projects</span>
+          </button>
+        </div>
+
         <div v-if="appStore.isLoadingProjects" class="loading-more">
           <span>Loading...</span>
         </div>
@@ -162,6 +172,12 @@ function handleProjectScroll() {
 
   const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 80
   if (nearBottom && appStore.hasMoreProjects && !appStore.isLoadingProjects) {
+    appStore.loadMoreProjects()
+  }
+}
+
+function handleLoadMore() {
+  if (!appStore.isLoadingProjects && appStore.hasMoreProjects) {
     appStore.loadMoreProjects()
   }
 }
@@ -554,6 +570,39 @@ async function handleSaveDefault() {
   text-align: center;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.load-more-section {
+  padding: 16px;
+  text-align: center;
+}
+
+.load-more-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.load-more-btn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: var(--hover-bg);
+}
+
+.load-more-btn svg {
+  opacity: 0.7;
+}
+
+.load-more-btn:hover svg {
+  opacity: 1;
 }
 
 .loading-more {

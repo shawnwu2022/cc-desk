@@ -24,7 +24,7 @@ export interface PendingResume {
 export const useAppStore = defineStore('app', () => {
   const cwd = ref<string>('')
   const theme = ref<string>('light')
-  const fontSize = ref<number>(10)
+  const fontSize = ref<number>(12)
 
   // 启动控制
   const pendingResume = ref<PendingResume | null>(null)
@@ -61,7 +61,7 @@ export const useAppStore = defineStore('app', () => {
     try {
       const config = await getAppConfig()
       theme.value = config.theme || 'light'
-      fontSize.value = config.fontSize || 10
+      fontSize.value = config.fontSize || 12
 
       claudeOptions.value = {
         resume: '',

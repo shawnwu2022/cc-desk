@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-04-29
+
+### Fixed
+
+- Projects list not loading when content height is too short to trigger scroll
+- Claude CLI not launching on Mac with npm installation (cli.js symlink detection)
+- Claude CLI not launching when path contains spaces (Windows)
+- Node.js script detection for various installation methods (exe, npm shim, cli.js)
+
+### Added
+
+- "Load More Projects" button for manual loading trigger
+- Claude launcher type detection and caching (direct/node)
+- Claude launcher type saved to config for faster startup
+
+### Changed
+
+- Default terminal font size changed to 12px (from 14px/10px inconsistency)
+- Improved Claude CLI startup detection for multiple installation types
+- Updated terminal integration and startup checks documentation
+
 ## [0.2.4] - 2026-04-29
 
 ### Added

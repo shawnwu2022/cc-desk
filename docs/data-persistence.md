@@ -60,7 +60,7 @@
   "defaultSkipPermissions": false,
   "defaultCustomArgs": "",
   "theme": "light",
-  "fontSize": 14,
+  "fontSize": 12,
   "lastOpenedProject": "D:/projects/my-app"
 }
 ```

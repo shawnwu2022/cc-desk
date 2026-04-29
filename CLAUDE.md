@@ -103,13 +103,17 @@ npm run tauri:build        # 生产构建
 
 ### 版本发布（快速参考）
 ```bash
-# 1. 更新版本号（编辑三个文件）
-#    src-tauri/Cargo.toml, package.json, src-tauri/tauri.conf.json
+# 1. 更新版本号（手动编辑）
+vim src-tauri/Cargo.toml package.json src-tauri/tauri.conf.json
 
-# 2. 更新 CHANGELOG.md
+# 2. 提交并打标签
+git add -A && git commit -m "Release v1.2.3"
+git push origin main
+git tag -a v1.2.3 -m "Release v1.2.3"
+git push origin v1.2.3
 
-# 3. 执行自动化发布
-npm run release
+# 3. 等待 CI 构建完成后发布
+gh release edit v1.2.3 --draft=false
 ```
 详细流程 → [docs/release-process.md](docs/release-process.md)
 
