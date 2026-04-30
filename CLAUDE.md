@@ -121,6 +121,8 @@ npm run tauri:build        # 生产构建
 
 **推送时注意**：推送到 GitHub 需先设置代理，推送到 Gitee 无需代理。
 
+- **Gitee API Token**：已存储在 `git config --local gitee.token`，用于通过 API 创建 Gitee Release
+
 ### 版本发布（快速参考）
 ```bash
 # 1. 更新版本号（手动编辑）
@@ -132,9 +134,20 @@ git push origin main
 git tag -a v1.2.3 -m "Release v1.2.3"
 git push origin v1.2.3
 
-# 3. 等待 CI 构建完成后发布
-gh release edit v1.2.3 --draft=false
+# 3. 等待 CI 构建完成后发布（必须附带 release notes）
+gh release edit v1.2.3 --draft=false --notes "$(cat <<'EOF'
+## What's Changed
+
+### Bug Fixes
+- ...
+
+### Features
+- ...
+EOF
+)"
 ```
+
+**重要**：每次发布 release 必须编写 release notes（`--notes`），说明本次版本的变更内容，按 Bug Fixes / Features 等分类。
 详细流程 → [docs/release-process.md](docs/release-process.md)
 
 ## 详细文档

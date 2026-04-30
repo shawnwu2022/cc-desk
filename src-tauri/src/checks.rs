@@ -69,6 +69,8 @@ pub fn run_checks() -> ChecksResult {
     // 刷新 PATH 以检测新安装的程序
     #[cfg(target_os = "windows")]
     refresh_path();
+    #[cfg(unix)]
+    refresh_path();
 
     let (claude_path, git_bash_path) = read_config_paths();
 
@@ -153,6 +155,41 @@ fn refresh_path() {
     }
 }
 
+/// 从登录 shell 获取完整 PATH（Unix）
+///
+/// GUI 应用不继承终端的 PATH（macOS Finder / Linux 桌面均如此），
+/// 通过启动 login shell 并读取其 PATH 来获取用户完整环境。
+#[cfg(unix)]
+fn refresh_path() {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    log::info!("[Check] Refreshing PATH via: {} -l -c 'printenv PATH'", shell);
+    log::debug!("[Check] Original PATH: {}", std::env::var("PATH").unwrap_or_default());
+
+    let output = Command::new(&shell)
+        .args(["-l", "-c", "printenv PATH"])
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let login_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !login_path.is_empty() {
+                log::info!("[Check] PATH refreshed from login shell ({} entries)", login_path.split(':').count());
+                log::debug!("[Check] Refreshed PATH: {}", login_path);
+                std::env::set_var("PATH", &login_path);
+            } else {
+                log::warn!("[Check] Login shell returned empty PATH, keeping default");
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::warn!("[Check] Login shell failed (exit {}): {}", output.status, stderr.trim());
+        }
+        Err(e) => {
+            log::warn!("[Check] Failed to run '{}': {}", shell, e);
+        }
+    }
+}
+
 /// 解析 reg query 输出中的值
 #[cfg(target_os = "windows")]
 fn extract_reg_value(stdout: &[u8]) -> Option<String> {
@@ -188,6 +225,7 @@ fn find_all_executables(name: &str) -> Vec<String> {
         if !stderr.trim().is_empty() {
             log::warn!("[Check] stderr: {}", stderr.trim());
         }
+        log::debug!("[Check] Current PATH: {}", std::env::var("PATH").unwrap_or_default());
         return Vec::new();
     }
 
