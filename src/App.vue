@@ -167,7 +167,6 @@ function handleResumeSession(projectPath: string, sessionId: string, sessionName
 
 function handleBack() {
   currentView.value = 'projects'
-  getCurrentWindow().setTitle('CC-Box').catch(() => {})
 }
 
 function openUrl(url: string) {

@@ -134,7 +134,12 @@ git push origin main
 git tag -a v1.2.3 -m "Release v1.2.3"
 git push origin v1.2.3
 
-# 3. 等待 CI 构建完成后发布（必须附带 release notes）
+# 3. 监控 CI 构建进度（需要代理）
+set HTTP_PROXY=http://127.0.0.1:33210
+set HTTPS_PROXY=http://127.0.0.1:33210
+gh run watch <run-id> --exit-status
+
+# 4. 构建完成后发布（必须附带 release notes）
 gh release edit v1.2.3 --draft=false --notes "$(cat <<'EOF'
 ## What's Changed
 

@@ -360,6 +360,11 @@ pub fn get_home_data(project_limit: usize, session_limit: usize) -> Result<HomeD
             None => continue,
         };
 
+        // 跳过原始路径已不存在的项目
+        if !Path::new(&real_path).exists() {
+            continue;
+        }
+
         let last_modified = fs::metadata(&path)
             .and_then(|m| m.modified())
             .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0))
@@ -427,6 +432,11 @@ pub fn get_projects(limit: Option<usize>, offset: Option<usize>) -> Result<Vec<P
                 continue;
             }
         };
+
+        // 跳过原始路径已不存在的项目
+        if !Path::new(&real_path).exists() {
+            continue;
+        }
 
         // 优先用目录修改时间（快），避免遍历所有 JSONL 文件
         let last_modified = fs::metadata(&path)
