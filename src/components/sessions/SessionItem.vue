@@ -21,6 +21,7 @@
         @blur="confirmRename"
         @click.stop
       />
+      <span v-if="snippet" class="session-snippet">{{ snippet }}</span>
     </div>
 
     <!-- 操作按钮 -->
@@ -77,6 +78,7 @@ const props = defineProps<{
   isStopped?: boolean
   lastActiveAt: number
   closable?: boolean
+  snippet?: string
 }>()
 
 const emit = defineEmits<{
@@ -223,6 +225,16 @@ function cancelRename() {
   text-overflow: ellipsis;
   white-space: nowrap;
   display: block;
+}
+
+.session-snippet {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
 }
 
 .rename-input {

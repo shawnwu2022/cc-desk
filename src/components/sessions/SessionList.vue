@@ -10,6 +10,7 @@
       :is-stopped="item.isStopped"
       :last-active-at="item.lastActiveAt"
       :closable="closable && item.isTab"
+      :snippet="item.snippet"
       @switch="(id) => $emit('switch', id)"
       @rename="(id, name) => $emit('rename', id, name)"
       @restart="(id) => $emit('restart', id)"
@@ -29,6 +30,7 @@ const props = defineProps<{
   activeId: string | null
   runningTabIds?: string[]
   closable?: boolean
+  snippetMap?: Map<string, string>
 }>()
 
 defineEmits<{
@@ -45,9 +47,12 @@ interface ListItem {
   isStopped: boolean
   isTab: boolean
   lastActiveAt: number
+  snippet?: string
 }
 
 const items = computed<ListItem[]>(() => {
+  const snippets = props.snippetMap
+
   const tabItems: ListItem[] = (props.tabs ?? []).map(tab => ({
     id: tab.tabId,
     name: tab.name,
@@ -64,6 +69,7 @@ const items = computed<ListItem[]>(() => {
     isStopped: false,
     isTab: false,
     lastActiveAt: s.lastActiveAt,
+    snippet: snippets?.get(s.sessionId),
   }))
 
   return [...tabItems, ...historyItems]

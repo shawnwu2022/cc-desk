@@ -42,6 +42,7 @@
         <SessionList
           :history="filteredHistory"
           :active-id="null"
+          :snippet-map="snippetMap"
           @switch="(id) => $emit('resumeSession', id)"
         />
       </div>
@@ -134,10 +135,35 @@ const projectTabs = computed(() => {
 })
 
 const filteredHistory = computed(() => {
-  if (!searchQuery.value) return sessionStore.historySessions
-  return sessionStore.historySessions.filter(s =>
-    s.name.toLowerCase().includes(searchQuery.value.toLowerCase())
+  const query = searchQuery.value.toLowerCase()
+  if (!query) return sessionStore.historySessions
+
+  const byName = sessionStore.historySessions.filter(s =>
+    s.name.toLowerCase().includes(query)
   )
+
+  const msgResults = sessionStore.messageSearchResults
+  const byNameIds = new Set(byName.map(s => s.sessionId))
+
+  return [
+    ...byName,
+    ...msgResults
+      .filter(r => !byNameIds.has(r.sessionId))
+      .map(r => ({
+        sessionId: r.sessionId,
+        name: r.name,
+        projectPath: r.projectPath,
+        lastActiveAt: r.lastActiveAt,
+      }))
+  ]
+})
+
+const snippetMap = computed(() => {
+  const map = new Map<string, string>()
+  for (const r of sessionStore.messageSearchResults) {
+    map.set(r.sessionId, r.snippet)
+  }
+  return map
 })
 
 // 同步选项到 store（仅在使用时临时设置，不持续同步）
@@ -150,6 +176,12 @@ watch(() => appStore.cwd, (newCwd) => {
     sessionStore.loadHistorySessions(newCwd)
   }
 }, { immediate: true })
+
+watch(searchQuery, (query) => {
+  if (appStore.cwd) {
+    sessionStore.debouncedSearchMessages(appStore.cwd, query)
+  }
+})
 
 function handleRefresh() {
   if (appStore.cwd) {

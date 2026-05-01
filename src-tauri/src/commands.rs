@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::pty::get_pty_manager;
-use crate::store::{AppConfig, HomeData, Project, SessionInfo, SessionDetails, ProjectConfig, AgentInfo, McpServerInfo, PluginInfo, SkillInfo};
+use crate::store::{AppConfig, HomeData, Project, SessionInfo, SessionDetails, SessionSearchResult, ProjectConfig, AgentInfo, McpServerInfo, PluginInfo, SkillInfo};
 use crate::checks::CheckResult;
 
 // ==================== PTY Commands ====================
@@ -175,6 +175,18 @@ pub async fn get_session_details(
     session_id: String,
 ) -> Result<Option<SessionDetails>, String> {
     crate::store::get_session_details(&project_path, &session_id).map_err(|e| e.to_string())
+}
+
+/// 搜索会话消息内容
+#[tauri::command]
+pub async fn search_session_messages(
+    project_path: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SessionSearchResult>, String> {
+    let limit = limit.unwrap_or(20);
+    crate::store::search_session_messages(&project_path, &query, limit)
+        .map_err(|e| e.to_string())
 }
 
 /// 获取应用配置

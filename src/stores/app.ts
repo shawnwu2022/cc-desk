@@ -38,6 +38,7 @@ export const useAppStore = defineStore('app', () => {
   const cachedProjects = ref<Project[]>([])
   const cachedRecentSessions = ref<SessionInfo[]>([])
   const cacheLoaded = ref(false)
+  const openedProjectPaths = ref<Set<string>>(new Set())
   const projectsPage = ref(0)
   const hasMoreProjects = ref(true)
   const isLoadingProjects = ref(false)
@@ -118,6 +119,7 @@ export const useAppStore = defineStore('app', () => {
 
   function setCwd(path: string) {
     cwd.value = path
+    openedProjectPaths.value.add(path)
     saveLastProject(path)
   }
 
@@ -198,6 +200,7 @@ export const useAppStore = defineStore('app', () => {
     cachedProjects,
     cachedRecentSessions,
     cacheLoaded,
+    openedProjectPaths,
     hasMoreProjects,
     isLoadingProjects,
     loadAppConfig,

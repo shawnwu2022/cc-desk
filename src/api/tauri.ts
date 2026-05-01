@@ -10,6 +10,7 @@ import type {
   Project,
   SessionInfo,
   SessionDetails,
+  SessionSearchResult,
   AppConfig,
   DefaultClaudeOptions,
   ProjectConfigResult,
@@ -31,6 +32,7 @@ export type {
   Project,
   SessionInfo,
   SessionDetails,
+  SessionSearchResult,
   AppConfig,
   DefaultClaudeOptions,
   ProjectConfigResult,
@@ -127,6 +129,13 @@ export const getAllRecentSessions = (limit?: number): Promise<SessionInfo[]> =>
 
 export const getSessionDetails = (projectPath: string, sessionId: string): Promise<SessionDetails | null> =>
   invoke<SessionDetails | null>('get_session_details', { projectPath, sessionId });
+
+export const searchSessionMessages = (
+  projectPath: string,
+  query: string,
+  limit?: number
+): Promise<SessionSearchResult[]> =>
+  invoke<SessionSearchResult[]>('search_session_messages', { projectPath, query, limit });
 
 // ============================================
 // Configuration

@@ -137,15 +137,23 @@ onUnmounted(() => {
 async function handleSelectProject() {
   const result = await selectDirectory()
   if (result) {
-    appStore.setCwd(result.path)
-    appStore.setClaudeOptions({
-      resume: '',
-      skipPermissions: false,
-      customArgs: ''
-    })
-    currentView.value = 'terminal'
-    // 启动时自动加载 sidebar 数据
-    sidebarStore.loadAllSidebarData(result.path)
+    const normalizePath = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+    const normalizedResult = normalizePath(result.path)
+    const existingProject = appStore.cachedProjects.find(
+      p => normalizePath(p.path) === normalizedResult
+    )
+    if (existingProject) {
+      handleOpenProject(result.path)
+    } else {
+      appStore.setCwd(result.path)
+      appStore.setClaudeOptions({
+        resume: '',
+        skipPermissions: false,
+        customArgs: ''
+      })
+      currentView.value = 'terminal'
+      sidebarStore.loadAllSidebarData(result.path)
+    }
   }
 }
 
@@ -225,9 +233,7 @@ function initAfterChecks() {
 
   // 后台检查更新
   checkForUpdates().then(info => {
-    if (info.hasUpdate) {
-      sidebarStore.updateAvailable = true
-    }
+    sidebarStore.setUpdateInfo(info)
   }).catch(() => {})
 }
 

@@ -2,6 +2,7 @@ import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi'
 import { useAppStore } from '@/stores/app'
+import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
 import { ptyKillAll, spawnNewInstance } from '@/api/tauri'
 
@@ -36,6 +37,7 @@ export async function openNewAppInstance() {
 
 export function useAppShortcuts() {
   const appStore = useAppStore()
+  const sessionStore = useSessionStore()
   const sidebarStore = useSidebarStore()
 
   let unlistenFocus: (() => void) | null = null
@@ -49,6 +51,27 @@ export function useAppShortcuts() {
   // 发送终端操作事件（由 TerminalView 监听）
   function emitTerminalAction(action: 'newSession' | 'restartSession' | 'backToProjects') {
     window.dispatchEvent(new CustomEvent(`terminal:${action}`))
+  }
+
+  function switchTab(direction: 'next' | 'prev') {
+    const cwd = appStore.cwd
+    if (!cwd) return
+    const tabs = sessionStore.getProjectTabs(cwd)
+    if (tabs.length < 2) return
+
+    const currentId = sessionStore.activeTabId
+    const currentIndex = tabs.findIndex(t => t.tabId === currentId)
+
+    let nextIndex: number
+    if (currentIndex === -1) {
+      nextIndex = 0
+    } else if (direction === 'next') {
+      nextIndex = (currentIndex + 1) % tabs.length
+    } else {
+      nextIndex = (currentIndex - 1 + tabs.length) % tabs.length
+    }
+
+    sessionStore.setActiveTab(tabs[nextIndex].tabId)
   }
 
   async function handleKeydown(e: KeyboardEvent) {
@@ -73,6 +96,24 @@ export function useAppShortcuts() {
       e.preventDefault()
       e.stopPropagation()
       emitTerminalAction('restartSession')
+      return
+    }
+
+    // Alt+ArrowDown — 切换到下一个 tab（仅终端视图有效）
+    if (alt && key === 'arrowdown' && !ctrl && !shift) {
+      if (!isTerminalVisible()) return
+      e.preventDefault()
+      e.stopPropagation()
+      switchTab('next')
+      return
+    }
+
+    // Alt+ArrowUp — 切换到上一个 tab（仅终端视图有效）
+    if (alt && key === 'arrowup' && !ctrl && !shift) {
+      if (!isTerminalVisible()) return
+      e.preventDefault()
+      e.stopPropagation()
+      switchTab('prev')
       return
     }
 

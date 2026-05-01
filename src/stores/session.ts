@@ -3,8 +3,10 @@ import { ref, computed, reactive } from 'vue'
 import {
   getSessionCount,
   getSessions,
-  ptyKill
+  ptyKill,
+  searchSessionMessages
 } from '@/api/tauri'
+import type { SessionSearchResult } from '@/types'
 
 // ==================== Tab-Centric 数据模型 ====================
 
@@ -46,6 +48,8 @@ export const useSessionStore = defineStore('session', () => {
   const historySessions = ref<HistorySession[]>([])
   const searchQuery = ref<string>('')
   const isLoading = ref<boolean>(false)
+  const messageSearchResults = ref<SessionSearchResult[]>([])
+  let messageSearchTimer: ReturnType<typeof setTimeout> | null = null
 
   // ---- Computed ----
 
@@ -329,6 +333,22 @@ export const useSessionStore = defineStore('session', () => {
     searchQuery.value = query
   }
 
+  function debouncedSearchMessages(projectPath: string, query: string) {
+    if (messageSearchTimer) clearTimeout(messageSearchTimer)
+    if (!query || query.length < 2) {
+      messageSearchResults.value = []
+      return
+    }
+    messageSearchTimer = setTimeout(async () => {
+      try {
+        messageSearchResults.value = await searchSessionMessages(projectPath, query, 10)
+      } catch (err) {
+        console.error('[SessionStore] searchMessages failed:', err)
+        messageSearchResults.value = []
+      }
+    }, 400)
+  }
+
   // ---- 清理 ----
 
   async function cleanupAll() {
@@ -393,6 +413,8 @@ export const useSessionStore = defineStore('session', () => {
 
     // Search
     setSearchQuery,
+    debouncedSearchMessages,
+    messageSearchResults,
 
     // Cleanup
     cleanupAll,

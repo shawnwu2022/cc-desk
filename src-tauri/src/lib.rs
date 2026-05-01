@@ -77,6 +77,7 @@ pub fn run() {
             commands::get_session_count,
             commands::get_all_recent_sessions,
             commands::get_session_details,
+            commands::search_session_messages,
             commands::get_app_config,
             commands::update_app_config,
             commands::get_default_claude_options,

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { getAllAgents, getAllSkills, getAllMcpServers, getAllPlugins } from '@/api/tauri'
-import type { AgentInfo, SkillInfo, McpServerInfo, PluginInfo } from '@/types'
+import type { AgentInfo, SkillInfo, McpServerInfo, PluginInfo, UpdateInfo } from '@/types'
 
 export type SidebarPanelType = 'sessions' | 'skills' | 'agents' | 'mcp' | 'plugins' | null
 
@@ -12,7 +12,12 @@ export const useSidebarStore = defineStore('sidebar', () => {
   // 设置模式
   const showSettings = ref(false)
   const activeSettingsSection = ref<string>('appearance')
-  const updateAvailable = ref(false)
+  const updateInfo = ref<UpdateInfo | null>(null)
+  const updateAvailable = computed(() => updateInfo.value?.hasUpdate ?? false)
+
+  function setUpdateInfo(info: UpdateInfo) {
+    updateInfo.value = info
+  }
 
   // Skills 面板折叠状态（按来源分组）
   const skillsExpandedGroups = ref({
@@ -189,7 +194,9 @@ export const useSidebarStore = defineStore('sidebar', () => {
     panelVisible,
     showSettings,
     activeSettingsSection,
+    updateInfo,
     updateAvailable,
+    setUpdateInfo,
     skillsExpandedGroups,
     agentsExpandedGroups,
     mcpExpandedGroups,

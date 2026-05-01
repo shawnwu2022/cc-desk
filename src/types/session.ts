@@ -16,3 +16,11 @@ export interface SessionDetails {
   createdAt?: number
   lastActiveAt: number
 }
+
+export interface SessionSearchResult {
+  sessionId: string
+  name: string
+  projectPath: string
+  lastActiveAt: number
+  snippet: string
+}

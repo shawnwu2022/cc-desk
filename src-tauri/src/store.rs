@@ -711,6 +711,111 @@ pub fn get_session_details(project_path: &str, session_id: &str) -> Result<Optio
     }))
 }
 
+/// 会话搜索结果（含消息片段）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSearchResult {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    pub name: String,
+    #[serde(rename = "projectPath")]
+    pub project_path: String,
+    #[serde(rename = "lastActiveAt")]
+    pub last_active_at: u64,
+    pub snippet: String,
+}
+
+/// 搜索会话消息内容
+pub fn search_session_messages(
+    project_path: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SessionSearchResult>> {
+    let project_dirs = get_project_dirs(project_path);
+    if project_dirs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+
+    for project_dir in &project_dirs {
+        if !project_dir.exists() {
+            continue;
+        }
+
+        for entry in fs::read_dir(project_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.extension().map(|e| e == "jsonl").unwrap_or(false)
+                && !path.file_name().map(|n| n.to_str().unwrap_or("").starts_with("agent-")).unwrap_or(false)
+            {
+                let session_id = path.file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                if let Ok(content) = fs::read_to_string(&path) {
+                    let name = extract_session_name(&path);
+                    let lines: Vec<&str> = content.lines().collect();
+                    let mut matched_snippet: Option<String> = None;
+
+                    // 从末尾开始读取（最新消息优先）
+                    for line in lines.iter().rev().take(200) {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                            let msg_type = json.get("type").and_then(|v| v.as_str());
+
+                            if msg_type == Some("user") || msg_type == Some("assistant") {
+                                if let Some(msg_content) = json.get("message")
+                                    .and_then(|m| m.get("content"))
+                                    .and_then(|c| c.as_str())
+                                {
+                                    if msg_content.to_lowercase().contains(&query_lower) {
+                                        let chars: Vec<char> = msg_content.chars().collect();
+                                        let lower_content: String = chars.iter().collect::<String>().to_lowercase();
+                                        let match_pos = lower_content.find(&query_lower).unwrap_or(0);
+                                        let char_match_pos = lower_content[..match_pos].chars().count();
+                                        let start = char_match_pos.saturating_sub(30);
+                                        let end = (char_match_pos + query.chars().count() + 70).min(chars.len());
+                                        let snippet_raw: String = chars[start..end].iter().collect();
+                                        matched_snippet = Some(if start > 0 || end < chars.len() {
+                                            format!("...{}...", snippet_raw)
+                                        } else {
+                                            snippet_raw
+                                        });
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(snippet) = matched_snippet {
+                        let last_active_at = fs::metadata(&path)
+                            .and_then(|m| m.modified())
+                            .map(|t| t.duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64).unwrap_or(0))
+                            .unwrap_or(0);
+
+                        results.push(SessionSearchResult {
+                            session_id,
+                            name,
+                            project_path: project_path.to_string(),
+                            last_active_at,
+                            snippet,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    results.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+    results.truncate(limit);
+
+    Ok(results)
+}
+
 /// 解析 ISO 时间戳
 fn parse_timestamp(ts: &str) -> u64 {
     // 简单解析 ISO 格式时间戳

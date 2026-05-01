@@ -159,13 +159,22 @@ const recentSessions = computed(() => appStore.cachedRecentSessions)
 
 const filteredProjects = computed(() => {
   const query = searchQuery.value.toLowerCase()
-  if (!query) return projects.value
-  return projects.value
-    .filter(p =>
+  const openedSet = appStore.openedProjectPaths
+
+  let list = projects.value
+  if (query) {
+    list = list.filter(p =>
       p.name.toLowerCase().includes(query) ||
       p.path.toLowerCase().includes(query)
     )
-    .sort((a, b) => (b.lastDuration ?? 0) - (a.lastDuration ?? 0))
+  }
+
+  return [...list].sort((a, b) => {
+    const aOpened = openedSet.has(a.path) ? 1 : 0
+    const bOpened = openedSet.has(b.path) ? 1 : 0
+    if (aOpened !== bOpened) return bOpened - aOpened
+    return (b.lastDuration ?? 0) - (a.lastDuration ?? 0)
+  })
 })
 
 function handleProjectScroll() {

@@ -57,12 +57,14 @@
 import { ref, computed } from 'vue'
 import { open } from '@tauri-apps/plugin-shell'
 import { checkForUpdates } from '@/api/tauri'
+import { useSidebarStore } from '@/stores/sidebar'
 import type { UpdateInfo } from '@/types'
 
+const sidebarStore = useSidebarStore()
 const currentVersion = __APP_VERSION__
 const checking = ref(false)
 const error = ref(false)
-const updateInfo = ref<UpdateInfo | null>(null)
+const updateInfo = ref<UpdateInfo | null>(sidebarStore.updateInfo)
 
 const renderedNotes = computed(() => {
   if (!updateInfo.value?.releaseNotes) return ''
@@ -79,7 +81,9 @@ async function handleCheckUpdate() {
   checking.value = true
   error.value = false
   try {
-    updateInfo.value = await checkForUpdates()
+    const info = await checkForUpdates()
+    updateInfo.value = info
+    sidebarStore.setUpdateInfo(info)
   } catch {
     error.value = true
   } finally {
