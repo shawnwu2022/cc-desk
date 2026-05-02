@@ -102,7 +102,9 @@ fn parse_server_info(info: &str, status: &str) -> Option<McpServerDetail> {
     let type_end_pos = info.find(')');
 
     let server_type = if type_marker_pos.is_some() && type_end_pos.is_some() {
-        info[type_marker_pos.unwrap() + 1..type_end_pos.unwrap()].trim().to_string()
+        info[type_marker_pos.unwrap() + 1..type_end_pos.unwrap()]
+            .trim()
+            .to_string()
     } else {
         if info.contains("http://") || info.contains("https://") {
             "http".to_string()
@@ -133,16 +135,20 @@ fn parse_server_info(info: &str, status: &str) -> Option<McpServerDetail> {
         after_colon.trim()
     };
 
-    let (url, command, args) = if command_or_url.starts_with("http://") || command_or_url.starts_with("https://") {
-        (Some(command_or_url.to_string()), None, None)
-    } else {
-        let parts: Vec<String> = command_or_url.split_whitespace().map(|s| s.to_string()).collect();
-        if parts.is_empty() {
-            (None, None, None)
+    let (url, command, args) =
+        if command_or_url.starts_with("http://") || command_or_url.starts_with("https://") {
+            (Some(command_or_url.to_string()), None, None)
         } else {
-            (None, Some(parts[0].clone()), Some(parts[1..].to_vec()))
-        }
-    };
+            let parts: Vec<String> = command_or_url
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
+            if parts.is_empty() {
+                (None, None, None)
+            } else {
+                (None, Some(parts[0].clone()), Some(parts[1..].to_vec()))
+            }
+        };
 
     let scope = if name.starts_with("plugin:") {
         "plugin"
@@ -184,15 +190,17 @@ fn find_name_separator(info: &str, server_type: &str) -> Option<usize> {
                     ""
                 };
 
-                let is_path_colon = after_colon.starts_with('/')
-                    || after_colon.starts_with('\\');
+                let is_path_colon = after_colon.starts_with('/') || after_colon.starts_with('\\');
                 let is_url_colon = after_colon.starts_with("//");
 
                 if is_path_colon || is_url_colon {
                     continue;
                 }
 
-                if after_colon.starts_with(' ') || after_colon.is_empty() || after_colon.find(':').is_none() {
+                if after_colon.starts_with(' ')
+                    || after_colon.is_empty()
+                    || after_colon.find(':').is_none()
+                {
                     return Some(i);
                 }
 
@@ -362,7 +370,9 @@ web-search-prime: https://open.bigmodel.cn/api/mcp/web_search_prime/mcp (HTTP) -
 
     assert_eq!(servers.len(), 4);
 
-    let plugin_server = servers.iter().find(|s| s.name == "plugin:paper-tool:paper-search");
+    let plugin_server = servers
+        .iter()
+        .find(|s| s.name == "plugin:paper-tool:paper-search");
     assert!(plugin_server.is_some());
     let plugin = plugin_server.unwrap();
     assert_eq!(plugin.scope, "plugin");
@@ -388,7 +398,10 @@ fn test_run_claude_mcp_list() {
 
         for server in &servers {
             assert!(!server.name.is_empty(), "Server name should not be empty");
-            assert!(!server.server_type.is_empty(), "Server type should not be empty");
+            assert!(
+                !server.server_type.is_empty(),
+                "Server type should not be empty"
+            );
         }
     }
 }
@@ -397,7 +410,8 @@ fn test_run_claude_mcp_list() {
 #[test]
 fn test_mcp_protocol_requests() {
     // 创建 web-reader 客户端
-    let mut client = McpHttpClient::new("https://open.bigmodel.cn/api/mcp/web_reader/mcp".to_string());
+    let mut client =
+        McpHttpClient::new("https://open.bigmodel.cn/api/mcp/web_reader/mcp".to_string());
 
     println!("\n=== MCP Protocol Requests for web-reader ===\n");
 
@@ -409,7 +423,10 @@ fn test_mcp_protocol_requests() {
     // 2. Initialized notification
     println!("\n2. Initialized Notification:");
     let init_notification = client.initialized();
-    println!("{}", serde_json::to_string_pretty(&init_notification).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&init_notification).unwrap()
+    );
 
     // 3. List tools
     println!("\n3. List Tools Request:");
@@ -419,12 +436,18 @@ fn test_mcp_protocol_requests() {
     // 4. List prompts
     println!("\n4. List Prompts Request:");
     let prompts_request = client.list_prompts();
-    println!("{}", serde_json::to_string_pretty(&prompts_request).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&prompts_request).unwrap()
+    );
 
     // 5. List resources
     println!("\n5. List Resources Request:");
     let resources_request = client.list_resources();
-    println!("{}", serde_json::to_string_pretty(&resources_request).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&resources_request).unwrap()
+    );
 
     println!("\n=== HTTP Headers Required ===");
     println!("Content-Type: application/json");
@@ -471,10 +494,22 @@ fn test_print_all_mcp_server_details() {
                     let mut client = McpHttpClient::new(url.clone());
 
                     println!("\n  MCP Protocol Requests to get details:");
-                    println!("  - initialize: {}", serde_json::to_string(&client.initialize()).unwrap_or_default());
-                    println!("  - tools/list: {}", serde_json::to_string(&client.list_tools()).unwrap_or_default());
-                    println!("  - prompts/list: {}", serde_json::to_string(&client.list_prompts()).unwrap_or_default());
-                    println!("  - resources/list: {}", serde_json::to_string(&client.list_resources()).unwrap_or_default());
+                    println!(
+                        "  - initialize: {}",
+                        serde_json::to_string(&client.initialize()).unwrap_or_default()
+                    );
+                    println!(
+                        "  - tools/list: {}",
+                        serde_json::to_string(&client.list_tools()).unwrap_or_default()
+                    );
+                    println!(
+                        "  - prompts/list: {}",
+                        serde_json::to_string(&client.list_prompts()).unwrap_or_default()
+                    );
+                    println!(
+                        "  - resources/list: {}",
+                        serde_json::to_string(&client.list_resources()).unwrap_or_default()
+                    );
                 }
             } else {
                 if let Some(cmd) = &server.command {
