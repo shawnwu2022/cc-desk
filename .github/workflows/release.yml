@@ -151,9 +151,18 @@ jobs:
 
           # Check if release already exists on Gitee
           EXISTING=$(curl -s "https://gitee.com/api/v5/repos/orczh/cc-box/releases/tags/$TAG?access_token=$GITEE_TOKEN")
+          RELEASE_ID=$(echo "$EXISTING" | python3 -c "
+          import sys, json
+          try:
+              data = json.load(sys.stdin)
+              if isinstance(data, dict) and 'id' in data:
+                  print(data['id'])
+                  sys.exit(0)
+          except: pass
+          sys.exit(1)
+          " 2>/dev/null || true)
 
-          if echo "$EXISTING" | python3 -c "import sys,json; json.load(sys.stdin); exit(0)" 2>/dev/null; then
-            RELEASE_ID=$(echo "$EXISTING" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          if [ -n "$RELEASE_ID" ]; then
             echo "Release $TAG already exists on Gitee (id=$RELEASE_ID), uploading assets..."
           else
             # Create release
@@ -163,7 +172,15 @@ jobs:
               -d "name=${NAME:-$TAG}" \
               -d "body=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.stdin.read()))" <<< "$BODY")" \
               -d "prerelease=false")
-            RELEASE_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+            RELEASE_ID=$(echo "$RESPONSE" | python3 -c "
+            import sys, json
+            data = json.load(sys.stdin)
+            if isinstance(data, dict) and 'id' in data:
+                print(data['id'])
+            else:
+                print(f'ERROR: {data}', file=sys.stderr)
+                sys.exit(1)
+            ")
             echo "Created Gitee release $TAG (id=$RELEASE_ID)"
           fi
 
