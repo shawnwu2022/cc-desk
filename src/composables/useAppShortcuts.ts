@@ -1,5 +1,4 @@
 import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window'
-import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
@@ -39,8 +38,6 @@ export function useAppShortcuts() {
   const appStore = useAppStore()
   const sessionStore = useSessionStore()
   const sidebarStore = useSidebarStore()
-
-  let unlistenFocus: (() => void) | null = null
 
   // 检查终端视图是否可见
   function isTerminalVisible(): boolean {
@@ -159,11 +156,11 @@ export function useAppShortcuts() {
       return
     }
 
-    // Ctrl+, — 打开设置（全局有效）
+    // Ctrl+, — 切换设置（全局有效）
     if (ctrl && key === ',') {
       e.preventDefault()
       e.stopPropagation()
-      sidebarStore.openSettings()
+      sidebarStore.toggleSettings()
       return
     }
 
@@ -192,19 +189,5 @@ export function useAppShortcuts() {
     }
   }
 
-  async function setupFocusRecovery() {
-    const win = getCurrentWindow()
-    unlistenFocus = await win.onFocusChanged(({ payload: focused }) => {
-      if (focused) {
-        // 窗口获得焦点时，恢复 webview 焦点
-        getCurrentWebview().setFocus().catch(() => {})
-      }
-    })
-  }
-
-  function cleanup() {
-    unlistenFocus?.()
-  }
-
-  return { handleKeydown, setupFocusRecovery, cleanup, isTerminalVisible }
+  return { handleKeydown, isTerminalVisible }
 }

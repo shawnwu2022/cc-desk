@@ -92,7 +92,7 @@ type ViewType = 'welcome' | 'projects' | 'terminal'
 
 const appStore = useAppStore()
 const sidebarStore = useSidebarStore()
-const { handleKeydown, setupFocusRecovery, cleanup: cleanupShortcuts } = useAppShortcuts()
+const { handleKeydown } = useAppShortcuts()
 const currentView = ref<ViewType>('welcome')
 
 // 路径输入（key 为 check name）
@@ -108,7 +108,6 @@ let unlistenRestart: (() => void) | null = null
 onMounted(async () => {
   // 全局快捷键
   window.addEventListener('keydown', handleKeydown, true)
-  await setupFocusRecovery()
 
   // 环境检查（同步拉取 Rust 已缓存的结果）
   await appStore.runChecks()
@@ -127,7 +126,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown, true)
-  cleanupShortcuts()
   unlistenSettings?.()
   unlistenShortcuts?.()
   unlistenFontSize?.()

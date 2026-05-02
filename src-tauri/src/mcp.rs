@@ -124,14 +124,20 @@ impl McpHttpClient {
             .map_err(|e| e.to_string())?;
 
         // 1. Initialize
-        let init_response = self.send_request(&client, "initialize", Some(serde_json::json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {
-                "name": "Claude-Tauri-GUI",
-                "version": "1.0.0"
-            }
-        }))).await?;
+        let init_response = self
+            .send_request(
+                &client,
+                "initialize",
+                Some(serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "Claude-Tauri-GUI",
+                        "version": "1.0.0"
+                    }
+                })),
+            )
+            .await?;
 
         // 解析 initialize 结果
         let init_result = init_response.result.unwrap_or(serde_json::json!({}));
@@ -139,7 +145,8 @@ impl McpHttpClient {
         let capabilities = parse_capabilities(&init_result);
 
         // 2. 发送 initialized 通知（无响应）
-        self.send_notification(&client, "notifications/initialized").await?;
+        self.send_notification(&client, "notifications/initialized")
+            .await?;
 
         // 3. 列出工具
         let tools = if capabilities.tools {
@@ -215,7 +222,8 @@ impl McpHttpClient {
         }
 
         // 解析 SSE 格式响应或 JSON 格式
-        let content_type = response.headers()
+        let content_type = response
+            .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
@@ -301,8 +309,16 @@ fn parse_sse_response(text: &str) -> Result<JsonRpcResponse, String> {
 fn parse_server_info(result: &serde_json::Value) -> Option<ServerInfo> {
     result.get("serverInfo").and_then(|info| {
         Some(ServerInfo {
-            name: info.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            version: info.get("version").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            name: info
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            version: info
+                .get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
         })
     })
 }
@@ -318,56 +334,114 @@ fn parse_capabilities(result: &serde_json::Value) -> ServerCapabilities {
 }
 
 fn parse_tools(response: &JsonRpcResponse) -> Vec<McpToolInfo> {
-    response.result
+    response
+        .result
         .as_ref()
         .and_then(|r| r.get("tools"))
         .and_then(|tools| tools.as_array())
-        .map(|arr| arr.iter().filter_map(|t| {
-            Some(McpToolInfo {
-                name: t.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                description: t.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                input_schema: t.get("inputSchema").cloned(),
-            })
-        }).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    Some(McpToolInfo {
+                        name: t
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        description: t
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        input_schema: t.get("inputSchema").cloned(),
+                    })
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 fn parse_prompts(response: &JsonRpcResponse) -> Vec<McpPromptInfo> {
-    response.result
+    response
+        .result
         .as_ref()
         .and_then(|r| r.get("prompts"))
         .and_then(|prompts| prompts.as_array())
-        .map(|arr| arr.iter().filter_map(|p| {
-            Some(McpPromptInfo {
-                name: p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                description: p.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                arguments: p.get("arguments").and_then(|args| args.as_array()).map(|arr| {
-                    arr.iter().filter_map(|a| {
-                        Some(PromptArgument {
-                            name: a.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                            description: a.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                            required: a.get("required").and_then(|v| v.as_bool()).unwrap_or(false),
-                        })
-                    }).collect()
-                }),
-            })
-        }).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| {
+                    Some(McpPromptInfo {
+                        name: p
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        description: p
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        arguments: p
+                            .get("arguments")
+                            .and_then(|args| args.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|a| {
+                                        Some(PromptArgument {
+                                            name: a
+                                                .get("name")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string(),
+                                            description: a
+                                                .get("description")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string()),
+                                            required: a
+                                                .get("required")
+                                                .and_then(|v| v.as_bool())
+                                                .unwrap_or(false),
+                                        })
+                                    })
+                                    .collect()
+                            }),
+                    })
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 fn parse_resources(response: &JsonRpcResponse) -> Vec<McpResourceInfo> {
-    response.result
+    response
+        .result
         .as_ref()
         .and_then(|r| r.get("resources"))
         .and_then(|resources| resources.as_array())
-        .map(|arr| arr.iter().filter_map(|r| {
-            Some(McpResourceInfo {
-                uri: r.get("uri").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                name: r.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                description: r.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                mime_type: r.get("mimeType").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            })
-        }).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    Some(McpResourceInfo {
+                        uri: r
+                            .get("uri")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        name: r
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        description: r
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        mime_type: r
+                            .get("mimeType")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                    })
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -408,7 +482,8 @@ impl McpDetailCache {
 }
 
 // 全局缓存实例
-static MCP_CACHE: once_cell::sync::Lazy<McpDetailCache> = once_cell::sync::Lazy::new(McpDetailCache::new);
+static MCP_CACHE: once_cell::sync::Lazy<McpDetailCache> =
+    once_cell::sync::Lazy::new(McpDetailCache::new);
 
 pub fn get_mcp_cache() -> &'static McpDetailCache {
     &MCP_CACHE
@@ -460,14 +535,19 @@ impl McpStdioClient {
         let mut stdin = stdin;
 
         // 1. Initialize
-        let init_response = self.send_request(&mut stdin, &mut reader, "initialize", Some(serde_json::json!({
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": {
-                "name": "Claude-Tauri-GUI",
-                "version": "1.0.0"
-            }
-        })))?;
+        let init_response = self.send_request(
+            &mut stdin,
+            &mut reader,
+            "initialize",
+            Some(serde_json::json!({
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "Claude-Tauri-GUI",
+                    "version": "1.0.0"
+                }
+            })),
+        )?;
 
         let init_result = init_response.result.unwrap_or(serde_json::json!({}));
         let server_info = parse_server_info(&init_result);
@@ -486,7 +566,8 @@ impl McpStdioClient {
 
         // 4. prompts/list
         let prompts = if capabilities.prompts {
-            let prompts_response = self.send_request(&mut stdin, &mut reader, "prompts/list", None)?;
+            let prompts_response =
+                self.send_request(&mut stdin, &mut reader, "prompts/list", None)?;
             parse_prompts(&prompts_response)
         } else {
             vec![]
@@ -494,7 +575,8 @@ impl McpStdioClient {
 
         // 5. resources/list
         let resources = if capabilities.resources {
-            let resources_response = self.send_request(&mut stdin, &mut reader, "resources/list", None)?;
+            let resources_response =
+                self.send_request(&mut stdin, &mut reader, "resources/list", None)?;
             parse_resources(&resources_response)
         } else {
             vec![]
@@ -529,13 +611,17 @@ impl McpStdioClient {
         };
 
         let json_str = serde_json::to_string(&request).map_err(|e| e.to_string())?;
-        stdin.write_all(json_str.as_bytes()).map_err(|e| e.to_string())?;
+        stdin
+            .write_all(json_str.as_bytes())
+            .map_err(|e| e.to_string())?;
         stdin.write_all(b"\n").map_err(|e| e.to_string())?;
         stdin.flush().map_err(|e| e.to_string())?;
 
         // 读取响应
         let mut response_line = String::new();
-        reader.read_line(&mut response_line).map_err(|e| e.to_string())?;
+        reader
+            .read_line(&mut response_line)
+            .map_err(|e| e.to_string())?;
 
         let json: JsonRpcResponse = serde_json::from_str(&response_line.trim())
             .map_err(|e| format!("JSON parse error: {} (line: {})", e, response_line))?;
@@ -554,7 +640,9 @@ impl McpStdioClient {
         });
 
         let json_str = serde_json::to_string(&request).map_err(|e| e.to_string())?;
-        stdin.write_all(json_str.as_bytes()).map_err(|e| e.to_string())?;
+        stdin
+            .write_all(json_str.as_bytes())
+            .map_err(|e| e.to_string())?;
         stdin.write_all(b"\n").map_err(|e| e.to_string())?;
         stdin.flush().map_err(|e| e.to_string())?;
 
@@ -565,7 +653,10 @@ impl McpStdioClient {
 // ==================== 获取 MCP Server 详情 ====================
 
 /// 通过 URL 获取 HTTP MCP Server 详情
-pub async fn fetch_http_mcp_detail(url: &str, headers: Option<&HashMap<String, String>>) -> Result<McpServerDetail, String> {
+pub async fn fetch_http_mcp_detail(
+    url: &str,
+    headers: Option<&HashMap<String, String>>,
+) -> Result<McpServerDetail, String> {
     let mut client = McpHttpClient::new(url.to_string(), headers.map(|h| h.clone()));
     client.get_server_detail().await
 }
@@ -615,9 +706,9 @@ pub async fn get_mcp_server_detail_cached(
     if let Some(command) = command {
         let command_str = command.to_string();
         // 在 tokio runtime 中执行同步操作
-        let detail = tokio::task::spawn_blocking(move || {
-            fetch_stdio_mcp_detail(&command_str)
-        }).await.map_err(|e| e.to_string())??;
+        let detail = tokio::task::spawn_blocking(move || fetch_stdio_mcp_detail(&command_str))
+            .await
+            .map_err(|e| e.to_string())??;
 
         cache.set(server_name.to_string(), detail.clone()).await;
         return Ok(Some(detail));

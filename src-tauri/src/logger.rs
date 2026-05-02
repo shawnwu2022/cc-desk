@@ -56,8 +56,8 @@ fn cleanup_old_logs(keep_days: u64) {
         _ => return,
     };
 
-    let cutoff = std::time::SystemTime::now()
-        - std::time::Duration::from_secs(keep_days * 24 * 60 * 60);
+    let cutoff =
+        std::time::SystemTime::now() - std::time::Duration::from_secs(keep_days * 24 * 60 * 60);
 
     if let Ok(entries) = fs::read_dir(&dir) {
         for entry in entries.flatten() {

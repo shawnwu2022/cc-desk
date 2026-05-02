@@ -134,34 +134,53 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          # Get release body and name
           BODY=$(gh release view "$TAG" --json body -q '.body')
           NAME=$(gh release view "$TAG" --json name -q '.name')
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          # Write body to file for multipart upload
           echo "$BODY" > release_body.md
 
-      - name: Create Gitee Release
+      - name: Create Gitee Release and Upload Assets
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
           TAG="${{ steps.gh_release.outputs.tag }}"
           NAME="${{ steps.gh_release.outputs.name }}"
           BODY=$(cat release_body.md)
 
-          # Check if release already exists
+          # Check if release already exists on Gitee
           EXISTING=$(curl -s "https://gitee.com/api/v5/repos/orczh/cc-box/releases/tags/$TAG?access_token=$GITEE_TOKEN")
 
           if echo "$EXISTING" | python3 -c "import sys,json; json.load(sys.stdin); exit(0)" 2>/dev/null; then
-            echo "Release $TAG already exists on Gitee, skipping"
-            exit 0
+            RELEASE_ID=$(echo "$EXISTING" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+            echo "Release $TAG already exists on Gitee (id=$RELEASE_ID), uploading assets..."
+          else
+            # Create release
+            RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/orczh/cc-box/releases" \
+              -d "access_token=$GITEE_TOKEN" \
+              -d "tag_name=$TAG" \
+              -d "name=${NAME:-$TAG}" \
+              -d "body=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.stdin.read()))" <<< "$BODY")" \
+              -d "prerelease=false")
+            RELEASE_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+            echo "Created Gitee release $TAG (id=$RELEASE_ID)"
           fi
 
-          # Create release
-          curl -s -X POST "https://gitee.com/api/v5/repos/orczh/cc-box/releases" \
-            -d "access_token=$GITEE_TOKEN" \
-            -d "tag_name=$TAG" \
-            -d "name=${NAME:-$TAG}" \
-            -d "body=$(python3 -c "import urllib.parse; print(urllib.parse.quote('''$BODY'''))")" \
-            -d "prerelease=false"
+          # Download GitHub release assets and upload to Gitee
+          ASSETS=$(gh release view "$TAG" --json assets -q '.assets[] | "\(.name) \(.url)"')
+
+          mkdir -p /tmp/release-assets
+          while IFS=' ' read -r name url; do
+            [ -z "$name" ] && continue
+            echo "Downloading $name..."
+            curl -sL -o "/tmp/release-assets/$name" -H "Authorization: token $GITHUB_TOKEN" "$url"
+
+            echo "Uploading $name to Gitee (release_id=$RELEASE_ID)..."
+            curl -s -X POST "https://gitee.com/api/v5/repos/orczh/cc-box/releases/$RELEASE_ID/attach_files" \
+              -F "access_token=$GITEE_TOKEN" \
+              -F "file=@/tmp/release-assets/$name"
+            echo ""
+          done <<< "$ASSETS"
+
+          echo "All assets uploaded to Gitee"

@@ -233,7 +233,9 @@ fn build_project_path_mapping() -> HashMap<String, Vec<PathBuf>> {
 /// 根据真实项目路径查找对应的 Claude 项目目录列表
 /// 使用缓存避免重复扫描
 fn get_project_dirs(project_path: &str) -> Vec<PathBuf> {
-    let mut cache = PROJECT_PATH_MAPPING.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = PROJECT_PATH_MAPPING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
 
     if cache.is_none() {
         *cache = Some(build_project_path_mapping());
@@ -248,7 +250,9 @@ fn get_project_dirs(project_path: &str) -> Vec<PathBuf> {
 
 /// 清除项目路径映射缓存（供外部调用以强制刷新）
 pub fn invalidate_project_path_mapping() {
-    let mut cache = PROJECT_PATH_MAPPING.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = PROJECT_PATH_MAPPING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *cache = None;
 }
 
@@ -265,7 +269,11 @@ fn extract_project_path_from_jsonl(project_dir: &Path) -> Option<String> {
 
         // 只读取非 agent 开头的 jsonl 文件
         if path.extension().map(|e| e == "jsonl").unwrap_or(false)
-            && !path.file_name().map(|n| n.to_str().unwrap_or("").starts_with("agent-")).unwrap_or(false) {
+            && !path
+                .file_name()
+                .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
+                .unwrap_or(false)
+        {
             if let Ok(content) = fs::read_to_string(&path) {
                 // 读取所有行直到找到 cwd（通常在前几行，但不确定具体位置）
                 for line in content.lines() {
@@ -294,10 +302,15 @@ fn get_project_last_modified(project_dir: &Path) -> u64 {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().map(|e| e == "jsonl").unwrap_or(false)
-                && !path.file_name().map(|n| n.to_str().unwrap_or("").starts_with("agent-")).unwrap_or(false) {
+                && !path
+                    .file_name()
+                    .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
+                    .unwrap_or(false)
+            {
                 if let Ok(meta) = fs::metadata(&path) {
                     if let Ok(modified) = meta.modified() {
-                        let millis = modified.duration_since(std::time::UNIX_EPOCH)
+                        let millis = modified
+                            .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)
                             .unwrap_or(0);
                         max_time = max_time.max(millis);
@@ -310,7 +323,8 @@ fn get_project_last_modified(project_dir: &Path) -> u64 {
     if max_time == 0 {
         if let Ok(meta) = fs::metadata(project_dir) {
             if let Ok(modified) = meta.modified() {
-                max_time = modified.duration_since(std::time::UNIX_EPOCH)
+                max_time = modified
+                    .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0);
             }
@@ -367,7 +381,11 @@ pub fn get_home_data(project_limit: usize, session_limit: usize) -> Result<HomeD
 
         let last_modified = fs::metadata(&path)
             .and_then(|m| m.modified())
-            .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0))
+            .map(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0)
+            })
             .unwrap_or(0);
 
         projects.push(Project {
@@ -390,7 +408,9 @@ pub fn get_home_data(project_limit: usize, session_limit: usize) -> Result<HomeD
 
     // 按最后修改时间排序
     projects.sort_by(|a, b| {
-        b.last_duration.unwrap_or(0).cmp(&a.last_duration.unwrap_or(0))
+        b.last_duration
+            .unwrap_or(0)
+            .cmp(&a.last_duration.unwrap_or(0))
     });
 
     let has_more = projects.len() > project_limit;
@@ -441,7 +461,11 @@ pub fn get_projects(limit: Option<usize>, offset: Option<usize>) -> Result<Vec<P
         // 优先用目录修改时间（快），避免遍历所有 JSONL 文件
         let last_modified = fs::metadata(&path)
             .and_then(|m| m.modified())
-            .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0))
+            .map(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0)
+            })
             .unwrap_or(0);
 
         let project = Project {
@@ -461,7 +485,9 @@ pub fn get_projects(limit: Option<usize>, offset: Option<usize>) -> Result<Vec<P
 
     // 按最后修改时间排序
     projects.sort_by(|a, b| {
-        b.last_duration.unwrap_or(0).cmp(&a.last_duration.unwrap_or(0))
+        b.last_duration
+            .unwrap_or(0)
+            .cmp(&a.last_duration.unwrap_or(0))
     });
 
     // 分页
@@ -496,8 +522,15 @@ fn extract_session_name(jsonl_path: &Path) -> String {
 
                 // 查找用户消息
                 if json.get("type").and_then(|v| v.as_str()) == Some("user") {
-                    if let Some(msg_content) = json.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()) {
-                        let is_meta = json.get("isMeta").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if let Some(msg_content) = json
+                        .get("message")
+                        .and_then(|m| m.get("content"))
+                        .and_then(|c| c.as_str())
+                    {
+                        let is_meta = json
+                            .get("isMeta")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
 
                         // 过滤所有系统注入消息：以 < 开头的都是系统标记
                         // 如 <task-notification>, <local-command-stdout>, <system-reminder>, <command-name> 等
@@ -548,8 +581,13 @@ pub fn get_sessions(project_path: &str, limit: usize, offset: usize) -> Result<V
             let path = entry.path();
 
             if path.extension().map(|e| e == "jsonl").unwrap_or(false)
-                && !path.file_name().map(|n| n.to_str().unwrap_or("").starts_with("agent-")).unwrap_or(false) {
-                let session_id = path.file_stem()
+                && !path
+                    .file_name()
+                    .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
+                    .unwrap_or(false)
+            {
+                let session_id = path
+                    .file_stem()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string();
@@ -558,7 +596,11 @@ pub fn get_sessions(project_path: &str, limit: usize, offset: usize) -> Result<V
 
                 let last_active_at = fs::metadata(&path)
                     .and_then(|m| m.modified())
-                    .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0))
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0)
+                    })
                     .unwrap_or(0);
 
                 sessions.push(SessionInfo {
@@ -620,11 +662,17 @@ pub fn get_session_count(project_path: &str) -> Result<usize> {
 
         count += fs::read_dir(project_dir)?
             .filter(|e| {
-                e.as_ref().ok().map(|entry| {
-                    let path = entry.path();
-                    path.extension().map(|e| e == "jsonl").unwrap_or(false)
-                        && !path.file_name().map(|n| n.to_str().unwrap_or("").starts_with("agent-")).unwrap_or(false)
-                }).unwrap_or(false)
+                e.as_ref()
+                    .ok()
+                    .map(|entry| {
+                        let path = entry.path();
+                        path.extension().map(|e| e == "jsonl").unwrap_or(false)
+                            && !path
+                                .file_name()
+                                .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
+                                .unwrap_or(false)
+                    })
+                    .unwrap_or(false)
             })
             .count();
     }
@@ -636,7 +684,8 @@ pub fn get_session_count(project_path: &str) -> Result<usize> {
 pub fn get_session_details(project_path: &str, session_id: &str) -> Result<Option<SessionDetails>> {
     let project_dirs = get_project_dirs(project_path);
 
-    let session_file = project_dirs.iter()
+    let session_file = project_dirs
+        .iter()
         .map(|dir| dir.join(format!("{}.jsonl", session_id)))
         .find(|f| f.exists());
 
@@ -697,15 +746,27 @@ pub fn get_session_details(project_path: &str, session_id: &str) -> Result<Optio
 
     let last_active_at = fs::metadata(&session_file)
         .and_then(|m| m.modified())
-        .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0))
+        .map(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0)
+        })
         .unwrap_or(0);
 
     Ok(Some(SessionDetails {
         session_id: session_id.to_string(),
         name,
         message_count,
-        total_tokens: if total_tokens > 0 { Some(total_tokens) } else { None },
-        total_cost: if total_cost > 0.0 { Some(total_cost) } else { None },
+        total_tokens: if total_tokens > 0 {
+            Some(total_tokens)
+        } else {
+            None
+        },
+        total_cost: if total_cost > 0.0 {
+            Some(total_cost)
+        } else {
+            None
+        },
         created_at,
         last_active_at,
     }))
@@ -748,9 +809,13 @@ pub fn search_session_messages(
             let path = entry.path();
 
             if path.extension().map(|e| e == "jsonl").unwrap_or(false)
-                && !path.file_name().map(|n| n.to_str().unwrap_or("").starts_with("agent-")).unwrap_or(false)
+                && !path
+                    .file_name()
+                    .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
+                    .unwrap_or(false)
             {
-                let session_id = path.file_stem()
+                let session_id = path
+                    .file_stem()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string();
@@ -766,18 +831,24 @@ pub fn search_session_messages(
                             let msg_type = json.get("type").and_then(|v| v.as_str());
 
                             if msg_type == Some("user") || msg_type == Some("assistant") {
-                                if let Some(msg_content) = json.get("message")
+                                if let Some(msg_content) = json
+                                    .get("message")
                                     .and_then(|m| m.get("content"))
                                     .and_then(|c| c.as_str())
                                 {
                                     if msg_content.to_lowercase().contains(&query_lower) {
                                         let chars: Vec<char> = msg_content.chars().collect();
-                                        let lower_content: String = chars.iter().collect::<String>().to_lowercase();
-                                        let match_pos = lower_content.find(&query_lower).unwrap_or(0);
-                                        let char_match_pos = lower_content[..match_pos].chars().count();
+                                        let lower_content: String =
+                                            chars.iter().collect::<String>().to_lowercase();
+                                        let match_pos =
+                                            lower_content.find(&query_lower).unwrap_or(0);
+                                        let char_match_pos =
+                                            lower_content[..match_pos].chars().count();
                                         let start = char_match_pos.saturating_sub(30);
-                                        let end = (char_match_pos + query.chars().count() + 70).min(chars.len());
-                                        let snippet_raw: String = chars[start..end].iter().collect();
+                                        let end = (char_match_pos + query.chars().count() + 70)
+                                            .min(chars.len());
+                                        let snippet_raw: String =
+                                            chars[start..end].iter().collect();
                                         matched_snippet = Some(if start > 0 || end < chars.len() {
                                             format!("...{}...", snippet_raw)
                                         } else {
@@ -793,8 +864,11 @@ pub fn search_session_messages(
                     if let Some(snippet) = matched_snippet {
                         let last_active_at = fs::metadata(&path)
                             .and_then(|m| m.modified())
-                            .map(|t| t.duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as u64).unwrap_or(0))
+                            .map(|t| {
+                                t.duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_millis() as u64)
+                                    .unwrap_or(0)
+                            })
                             .unwrap_or(0);
 
                         results.push(SessionSearchResult {
@@ -844,8 +918,8 @@ pub fn get_app_config() -> Result<AppConfig> {
     }
 
     let content = fs::read_to_string(&config_path)?;
-    let config: AppConfig = serde_json::from_str(&content)
-        .context("Failed to parse config.json")?;
+    let config: AppConfig =
+        serde_json::from_str(&content).context("Failed to parse config.json")?;
 
     Ok(config)
 }
@@ -853,7 +927,8 @@ pub fn get_app_config() -> Result<AppConfig> {
 /// 更新应用配置
 pub fn update_app_config(updates: serde_json::Value) -> Result<()> {
     let config_path = get_gui_config_path()?;
-    let config_dir = config_path.parent()
+    let config_dir = config_path
+        .parent()
         .context("Could not get parent directory of config path")?;
 
     if !config_dir.exists() {
@@ -953,9 +1028,18 @@ fn read_basic_config(project_path: &str) -> Result<Vec<BasicConfigItem>> {
         if let Ok(content) = fs::read_to_string(&user_settings) {
             if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
                 result.push(BasicConfigItem {
-                    model: settings.get("model").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    theme: settings.get("theme").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    editor_mode: settings.get("editorMode").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    model: settings
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    theme: settings
+                        .get("theme")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    editor_mode: settings
+                        .get("editorMode")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                     auto_connect_ide: settings.get("autoConnectIde").and_then(|v| v.as_bool()),
                     permissions: parse_permissions(&settings),
                     env: settings.get("env").cloned(),
@@ -970,14 +1054,25 @@ fn read_basic_config(project_path: &str) -> Result<Vec<BasicConfigItem>> {
     }
 
     // 项目级 .claude/settings.json
-    let project_settings = PathBuf::from(project_path).join(".claude").join("settings.json");
+    let project_settings = PathBuf::from(project_path)
+        .join(".claude")
+        .join("settings.json");
     if project_settings.exists() {
         if let Ok(content) = fs::read_to_string(&project_settings) {
             if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
                 result.push(BasicConfigItem {
-                    model: settings.get("model").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    theme: settings.get("theme").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    editor_mode: settings.get("editorMode").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    model: settings
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    theme: settings
+                        .get("theme")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    editor_mode: settings
+                        .get("editorMode")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                     auto_connect_ide: settings.get("autoConnectIde").and_then(|v| v.as_bool()),
                     permissions: parse_permissions(&settings),
                     env: settings.get("env").cloned(),
@@ -992,7 +1087,9 @@ fn read_basic_config(project_path: &str) -> Result<Vec<BasicConfigItem>> {
     }
 
     // 本地级 .claude/settings.local.json
-    let local_settings = PathBuf::from(project_path).join(".claude").join("settings.local.json");
+    let local_settings = PathBuf::from(project_path)
+        .join(".claude")
+        .join("settings.local.json");
     if local_settings.exists() {
         if let Ok(content) = fs::read_to_string(&local_settings) {
             if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -1018,8 +1115,18 @@ fn read_basic_config(project_path: &str) -> Result<Vec<BasicConfigItem>> {
 
 fn parse_permissions(settings: &serde_json::Value) -> Option<PermissionsConfig> {
     settings.get("permissions").map(|p| PermissionsConfig {
-        allow: p.get("allow").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()),
-        deny: p.get("deny").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()),
+        allow: p.get("allow").and_then(|v| v.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        }),
+        deny: p.get("deny").and_then(|v| v.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        }),
     })
 }
 
@@ -1048,7 +1155,12 @@ fn read_mcp_config(project_path: &str) -> Result<Vec<McpServerItem>> {
             if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object()) {
                     for (name, server_config) in servers {
-                        result.push(parse_mcp_server(name, server_config, "user", &user_config_path));
+                        result.push(parse_mcp_server(
+                            name,
+                            server_config,
+                            "user",
+                            &user_config_path,
+                        ));
                     }
                 }
             }
@@ -1058,14 +1170,33 @@ fn read_mcp_config(project_path: &str) -> Result<Vec<McpServerItem>> {
     Ok(result)
 }
 
-fn parse_mcp_server(name: &str, config: &serde_json::Value, source_type: &str, path: &Path) -> McpServerItem {
+fn parse_mcp_server(
+    name: &str,
+    config: &serde_json::Value,
+    source_type: &str,
+    path: &Path,
+) -> McpServerItem {
     McpServerItem {
         name: name.to_string(),
-        server_type: config.get("type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        command: config.get("command").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        args: config.get("args").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()),
+        server_type: config
+            .get("type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        command: config
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        args: config.get("args").and_then(|v| v.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        }),
         env: config.get("env").cloned(),
-        url: config.get("url").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        url: config
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         source: ConfigSource {
             source_type: source_type.to_string(),
             label: source_type.to_string(),
@@ -1141,7 +1272,10 @@ fn read_agents_config(project_path: &str) -> Result<Vec<AgentItem>> {
             let entry = entry?;
             let path = entry.path();
             if path.extension().map(|e| e == "md").unwrap_or(false) {
-                let name = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let name = path
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 let description = extract_md_description(&path);
                 result.push(AgentItem {
                     name,
@@ -1165,7 +1299,10 @@ fn read_agents_config(project_path: &str) -> Result<Vec<AgentItem>> {
             let entry = entry?;
             let path = entry.path();
             if path.extension().map(|e| e == "md").unwrap_or(false) {
-                let name = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let name = path
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 let description = extract_md_description(&path);
                 result.push(AgentItem {
                     name,
@@ -1191,8 +1328,18 @@ fn read_hooks_config(project_path: &str) -> Result<Vec<HookItem>> {
 
     let settings_paths: Vec<(PathBuf, &str)> = vec![
         (home.join(".claude").join("settings.json"), "user"),
-        (PathBuf::from(project_path).join(".claude").join("settings.json"), "project"),
-        (PathBuf::from(project_path).join(".claude").join("settings.local.json"), "local"),
+        (
+            PathBuf::from(project_path)
+                .join(".claude")
+                .join("settings.json"),
+            "project",
+        ),
+        (
+            PathBuf::from(project_path)
+                .join(".claude")
+                .join("settings.local.json"),
+            "local",
+        ),
     ];
 
     for (path, source_type) in settings_paths {
@@ -1205,10 +1352,26 @@ fn read_hooks_config(project_path: &str) -> Result<Vec<HookItem>> {
                                 for hook in list {
                                     result.push(HookItem {
                                         event: event.to_string(),
-                                        matcher: hook.get("matcher").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        command: hook.get("command").and_then(|v| v.as_str()).map(|s| s.to_string())
-                                            .or_else(|| hook.get("hooks").and_then(|h| h.as_array()).and_then(|a| a.first()).and_then(|h| h.get("command")).and_then(|v| v.as_str()).map(|s| s.to_string())),
-                                        hook_type: hook.get("type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        matcher: hook
+                                            .get("matcher")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string()),
+                                        command: hook
+                                            .get("command")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string())
+                                            .or_else(|| {
+                                                hook.get("hooks")
+                                                    .and_then(|h| h.as_array())
+                                                    .and_then(|a| a.first())
+                                                    .and_then(|h| h.get("command"))
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string())
+                                            }),
+                                        hook_type: hook
+                                            .get("type")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string()),
                                         source: ConfigSource {
                                             source_type: source_type.to_string(),
                                             label: source_type.to_string(),
@@ -1509,7 +1672,10 @@ pub fn get_all_skills(project_path: &str) -> Result<Vec<SkillInfo>> {
         if let Some(plugin_skills) = plugin.skills {
             for skill in plugin_skills {
                 // invoke_format 是 "/pluginName:skillName"，去掉 "/" 得到完整名称
-                let full_name = skill.invoke_format.strip_prefix('/').unwrap_or(&skill.invoke_format);
+                let full_name = skill
+                    .invoke_format
+                    .strip_prefix('/')
+                    .unwrap_or(&skill.invoke_format);
                 skills.push(SkillInfo {
                     name: full_name.to_string(),
                     display_name: skill.name.clone(),
@@ -1537,7 +1703,9 @@ pub fn get_all_mcp_servers(_project_path: &str) -> Result<Vec<McpServerInfo>> {
         let parsed_servers = parse_mcp_list_output(&output);
         for parsed in parsed_servers {
             // 从配置中获取 headers
-            let headers = mcp_configs.get(&parsed.name).and_then(|c| c.headers.clone());
+            let headers = mcp_configs
+                .get(&parsed.name)
+                .and_then(|c| c.headers.clone());
 
             servers.push(McpServerInfo {
                 name: parsed.name.clone(),
@@ -1583,10 +1751,18 @@ fn read_mcp_configs_from_claude_json() -> HashMap<String, McpConfigEntry> {
             // 读取顶级 mcpServers
             if let Some(mcp_servers) = json.get("mcpServers").and_then(|v| v.as_object()) {
                 for (name, server_config) in mcp_servers {
-                    let url = server_config.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let headers = server_config.get("headers").and_then(|v| v.as_object()).map(|obj| {
-                        obj.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect()
-                    });
+                    let url = server_config
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let headers = server_config
+                        .get("headers")
+                        .and_then(|v| v.as_object())
+                        .map(|obj| {
+                            obj.iter()
+                                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                                .collect()
+                        });
 
                     configs.insert(name.clone(), McpConfigEntry { url, headers });
                 }
@@ -1639,7 +1815,9 @@ fn parse_server_info_line(info: &str, status: &str) -> Option<ParsedMcpServer> {
     let type_end_pos = info.find(')');
 
     let server_type = if type_marker_pos.is_some() && type_end_pos.is_some() {
-        info[type_marker_pos.unwrap() + 1..type_end_pos.unwrap()].trim().to_string()
+        info[type_marker_pos.unwrap() + 1..type_end_pos.unwrap()]
+            .trim()
+            .to_string()
     } else {
         if info.contains("http://") || info.contains("https://") {
             "HTTP".to_string()
@@ -1669,11 +1847,12 @@ fn parse_server_info_line(info: &str, status: &str) -> Option<ParsedMcpServer> {
         after_colon.trim()
     };
 
-    let (url, command) = if command_or_url.starts_with("http://") || command_or_url.starts_with("https://") {
-        (Some(command_or_url.to_string()), None)
-    } else {
-        (None, Some(command_or_url.to_string()))
-    };
+    let (url, command) =
+        if command_or_url.starts_with("http://") || command_or_url.starts_with("https://") {
+            (Some(command_or_url.to_string()), None)
+        } else {
+            (None, Some(command_or_url.to_string()))
+        };
 
     let scope = if name.starts_with("plugin:") {
         "plugin"
@@ -1732,7 +1911,10 @@ fn find_name_separator(info: &str, server_type: &str) -> Option<usize> {
                 }
 
                 // 找到合适的分隔冒号
-                if after_colon.starts_with(' ') || after_colon.is_empty() || after_colon.find(':').is_none() {
+                if after_colon.starts_with(' ')
+                    || after_colon.is_empty()
+                    || after_colon.find(':').is_none()
+                {
                     return Some(i);
                 }
 
@@ -1969,8 +2151,8 @@ struct CliPluginInfo {
 pub fn get_all_plugins(project_path: &str) -> Result<Vec<PluginInfo>> {
     // 使用 CLI 命令获取 plugin 信息
     let output = run_claude_command("plugins list --json")?;
-    let cli_plugins: Vec<CliPluginInfo> = serde_json::from_str(&output)
-        .context("Failed to parse plugins list JSON")?;
+    let cli_plugins: Vec<CliPluginInfo> =
+        serde_json::from_str(&output).context("Failed to parse plugins list JSON")?;
 
     let mut plugins = Vec::new();
 
@@ -1979,7 +2161,11 @@ pub fn get_all_plugins(project_path: &str) -> Result<Vec<PluginInfo>> {
         let is_relevant = if cli_plugin.scope == "user" {
             true
         } else if cli_plugin.scope == "project" {
-            cli_plugin.project_path.as_ref().map(|p| p == project_path).unwrap_or(false)
+            cli_plugin
+                .project_path
+                .as_ref()
+                .map(|p| p == project_path)
+                .unwrap_or(false)
         } else {
             false
         };
@@ -1995,7 +2181,11 @@ pub fn get_all_plugins(project_path: &str) -> Result<Vec<PluginInfo>> {
         let valid_path = find_valid_plugin_path(&cli_plugin.install_path, &cli_plugin.id);
 
         if valid_path.is_none() {
-            log::warn!("Plugin {} install path not valid: {}", cli_plugin.id, cli_plugin.install_path);
+            log::warn!(
+                "Plugin {} install path not valid: {}",
+                cli_plugin.id,
+                cli_plugin.install_path
+            );
             continue;
         }
 
@@ -2006,7 +2196,9 @@ pub fn get_all_plugins(project_path: &str) -> Result<Vec<PluginInfo>> {
         let plugin_agents = parse_plugin_agents(&install_path, plugin_name);
 
         // 读取 mcpServers（优先从 CLI 输出，后备从文件读取）
-        let mcp_servers = cli_plugin.mcp_servers.clone()
+        let mcp_servers = cli_plugin
+            .mcp_servers
+            .clone()
             .or_else(|| read_plugin_mcp_servers(&install_path));
 
         plugins.push(PluginInfo {
@@ -2081,7 +2273,9 @@ fn read_plugin_mcp_servers(install_path: &str) -> Option<serde_json::Value> {
     }
 
     // 后备：读取 .claude-plugin/plugin.json
-    let plugin_config = PathBuf::from(install_path).join(".claude-plugin").join("plugin.json");
+    let plugin_config = PathBuf::from(install_path)
+        .join(".claude-plugin")
+        .join("plugin.json");
     if plugin_config.exists() {
         if let Ok(content) = fs::read_to_string(&plugin_config) {
             if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -2136,7 +2330,10 @@ fn parse_plugin_agents(install_path: &str, plugin_name: &str) -> Option<Vec<Plug
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().map(|e| e == "md").unwrap_or(false) {
-                let agent_name = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let agent_name = path
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 let description = extract_md_description(&path);
                 agents.push(PluginAgent {
                     name: agent_name.clone(),
@@ -2153,4 +2350,3 @@ fn parse_plugin_agents(install_path: &str, plugin_name: &str) -> Option<Vec<Plug
         Some(agents)
     }
 }
-

@@ -3,7 +3,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
-use portable_pty::{native_pty_system, CommandBuilder, PtyPair, PtySize, Child};
+use portable_pty::{native_pty_system, Child, CommandBuilder, PtyPair, PtySize};
 use std::collections::HashMap;
 use std::env;
 use std::io::Write;
@@ -59,7 +59,7 @@ pub enum PtyStatus {
 /// PTY 实例内部数据
 struct PtyInstanceData {
     pair: PtyPair,
-    child: Box<dyn Child + Send>,  // 存储 child 句柄
+    child: Box<dyn Child + Send>, // 存储 child 句柄
     cwd: String,
     pty_type: String,
     status: PtyStatus,
@@ -95,10 +95,7 @@ impl PtyManager {
             "which"
         };
 
-        let output = std::process::Command::new(cmd)
-            .arg(name)
-            .output()
-            .ok()?;
+        let output = std::process::Command::new(cmd).arg(name).output().ok()?;
 
         if !output.status.success() {
             return None;
@@ -106,7 +103,11 @@ impl PtyManager {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         // where/which 可能返回多行，取第一个
-        stdout.lines().next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        stdout
+            .lines()
+            .next()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     }
 
     /// 检测 Git Bash 路径（Windows）
@@ -398,14 +399,13 @@ impl PtyManager {
                 Ok(n) => {
                     consecutive_errors = 0;
                     let output = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let _ = app_handle
-                        .emit(
-                            "pty-output",
-                            PtyOutputPayload {
-                                id: pty_id.clone(),
-                                data: output,
-                            },
-                        );
+                    let _ = app_handle.emit(
+                        "pty-output",
+                        PtyOutputPayload {
+                            id: pty_id.clone(),
+                            data: output,
+                        },
+                    );
                 }
                 Err(e) => {
                     if e.kind() == std::io::ErrorKind::WouldBlock {
@@ -646,7 +646,9 @@ impl PtyManager {
             instance.status = PtyStatus::Stopping;
 
             // 强制终止进程
-            instance.child.kill()
+            instance
+                .child
+                .kill()
                 .with_context(|| format!("Failed to kill child process {}", id))?;
 
             // 等待进程退出（最多等待 5 秒）

@@ -20,6 +20,7 @@ import type {
   PluginInfo,
   SkillInfo,
   UpdateInfo,
+  DownloadProgress,
   HomeData,
   CheckResult,
 } from '@/types';
@@ -42,6 +43,7 @@ export type {
   PluginInfo,
   SkillInfo,
   UpdateInfo,
+  DownloadProgress,
 };
 
 // ============================================
@@ -191,6 +193,15 @@ export const openInFileManager = (path: string): Promise<void> =>
 
 export const checkForUpdates = (): Promise<UpdateInfo> =>
   invoke<UpdateInfo>('check_for_updates');
+
+export const downloadUpdate = (url: string, fileName: string): Promise<string> =>
+  invoke<string>('download_update', { url, fileName });
+
+export const installUpdate = (filePath: string): Promise<void> =>
+  invoke<void>('install_update', { filePath });
+
+export const onUpdateDownloadProgress = (callback: (progress: DownloadProgress) => void): Promise<UnlistenFn> =>
+  listen<DownloadProgress>('update:download-progress', (event) => callback(event.payload));
 
 // ============================================
 // App Instance

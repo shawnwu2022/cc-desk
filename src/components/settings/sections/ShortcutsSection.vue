@@ -29,9 +29,19 @@ const filteredGroups = computed(() => [
       { key: 'Ctrl+Shift+N', desc: 'Open new window' },
       { key: 'Ctrl+Shift+← / →', desc: 'Snap window to left / right half' },
       { key: 'Ctrl+Shift+R', desc: 'Restart application' },
-      { key: 'Ctrl+,', desc: 'Open settings' },
+      { key: 'Ctrl+Shift+H', desc: 'Back to project select' },
+      { key: 'Ctrl+,', desc: 'Toggle settings' },
       { key: 'Ctrl+Plus / −', desc: 'Increase / decrease font size' },
       { key: 'Ctrl+0', desc: 'Reset font size' },
+    ]
+  },
+  {
+    title: 'Session Management',
+    hint: 'Only available in terminal view.',
+    items: [
+      { key: `${alt.value}+N`, desc: 'New session' },
+      { key: `${alt.value}+R`, desc: 'Restart session' },
+      { key: `${alt.value}+↑ / ↓`, desc: 'Switch to previous / next tab' },
     ]
   },
   {

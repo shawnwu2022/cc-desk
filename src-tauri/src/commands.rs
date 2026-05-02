@@ -5,9 +5,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use crate::pty::get_pty_manager;
-use crate::store::{AppConfig, HomeData, Project, SessionInfo, SessionDetails, SessionSearchResult, ProjectConfig, AgentInfo, McpServerInfo, PluginInfo, SkillInfo};
 use crate::checks::CheckResult;
+use crate::pty::get_pty_manager;
+use crate::store::{
+    AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project, ProjectConfig,
+    SessionDetails, SessionInfo, SessionSearchResult, SkillInfo,
+};
 
 // ==================== PTY Commands ====================
 
@@ -15,7 +18,7 @@ use crate::checks::CheckResult;
 pub struct PtySpawnOptions {
     cwd: String,
     #[serde(rename = "type")]
-    pty_type: String,  // "claude" | "shell"
+    pty_type: String, // "claude" | "shell"
     cols: Option<u16>,
     rows: Option<u16>,
     args: Option<Vec<String>>,
@@ -38,8 +41,7 @@ pub async fn pty_spawn(
     let cols = options.cols.unwrap_or(80);
     let rows = options.rows.unwrap_or(24);
 
-    let manager = get_pty_manager()
-        .ok_or_else(|| "PTY manager not initialized".to_string())?;
+    let manager = get_pty_manager().ok_or_else(|| "PTY manager not initialized".to_string())?;
 
     let result = if options.pty_type == "shell" {
         manager.spawn_shell(&options.cwd, cols, rows)
@@ -53,17 +55,17 @@ pub async fn pty_spawn(
             pty_type: info.pty_type,
             cwd: info.cwd,
         })),
-        Err(e) => Err(e.to_string())
+        Err(e) => Err(e.to_string()),
     }
 }
 
 /// 写入 PTY 输入
 #[tauri::command]
 pub async fn pty_input(id: String, data: String) -> Result<bool, String> {
-    let manager = get_pty_manager()
-        .ok_or_else(|| "PTY manager not initialized".to_string())?;
+    let manager = get_pty_manager().ok_or_else(|| "PTY manager not initialized".to_string())?;
 
-    manager.write(&id, &data)
+    manager
+        .write(&id, &data)
         .map(|_| true)
         .map_err(|e| e.to_string())
 }
@@ -71,10 +73,10 @@ pub async fn pty_input(id: String, data: String) -> Result<bool, String> {
 /// resize PTY
 #[tauri::command]
 pub async fn pty_resize(id: String, cols: u16, rows: u16) -> Result<bool, String> {
-    let manager = get_pty_manager()
-        .ok_or_else(|| "PTY manager not initialized".to_string())?;
+    let manager = get_pty_manager().ok_or_else(|| "PTY manager not initialized".to_string())?;
 
-    manager.resize(&id, cols, rows)
+    manager
+        .resize(&id, cols, rows)
         .map(|_| true)
         .map_err(|e| e.to_string())
 }
@@ -82,19 +84,15 @@ pub async fn pty_resize(id: String, cols: u16, rows: u16) -> Result<bool, String
 /// 杀掉 PTY
 #[tauri::command]
 pub async fn pty_kill(id: String) -> Result<bool, String> {
-    let manager = get_pty_manager()
-        .ok_or_else(|| "PTY manager not initialized".to_string())?;
+    let manager = get_pty_manager().ok_or_else(|| "PTY manager not initialized".to_string())?;
 
-    manager.kill(&id)
-        .map(|_| true)
-        .map_err(|e| e.to_string())
+    manager.kill(&id).map(|_| true).map_err(|e| e.to_string())
 }
 
 /// 杀掉所有 PTY
 #[tauri::command]
 pub async fn pty_kill_all() -> Result<(), String> {
-    let manager = get_pty_manager()
-        .ok_or_else(|| "PTY manager not initialized".to_string())?;
+    let manager = get_pty_manager().ok_or_else(|| "PTY manager not initialized".to_string())?;
 
     manager.kill_all();
     Ok(())
@@ -122,8 +120,7 @@ pub async fn get_home_data(
 ) -> Result<HomeData, String> {
     let project_limit = project_limit.unwrap_or(12);
     let session_limit = session_limit.unwrap_or(20);
-    crate::store::get_home_data(project_limit, session_limit)
-        .map_err(|e| e.to_string())
+    crate::store::get_home_data(project_limit, session_limit).map_err(|e| e.to_string())
 }
 
 /// 获取项目列表（支持分页）
@@ -150,8 +147,7 @@ pub async fn get_sessions(
 ) -> Result<Vec<SessionInfo>, String> {
     let limit = limit.unwrap_or(20);
     let offset = offset.unwrap_or(0);
-    crate::store::get_sessions(&project_path, limit, offset)
-        .map_err(|e| e.to_string())
+    crate::store::get_sessions(&project_path, limit, offset).map_err(|e| e.to_string())
 }
 
 /// 获取会话总数
@@ -164,8 +160,7 @@ pub async fn get_session_count(project_path: String) -> Result<usize, String> {
 #[tauri::command]
 pub async fn get_all_recent_sessions(limit: Option<usize>) -> Result<Vec<SessionInfo>, String> {
     let limit = limit.unwrap_or(20);
-    crate::store::get_all_recent_sessions(limit)
-        .map_err(|e| e.to_string())
+    crate::store::get_all_recent_sessions(limit).map_err(|e| e.to_string())
 }
 
 /// 获取会话详情
@@ -185,8 +180,7 @@ pub async fn search_session_messages(
     limit: Option<usize>,
 ) -> Result<Vec<SessionSearchResult>, String> {
     let limit = limit.unwrap_or(20);
-    crate::store::search_session_messages(&project_path, &query, limit)
-        .map_err(|e| e.to_string())
+    crate::store::search_session_messages(&project_path, &query, limit).map_err(|e| e.to_string())
 }
 
 /// 获取应用配置
@@ -324,7 +318,8 @@ pub async fn get_mcp_server_detail(
     let command = server.command.as_deref();
     let headers = server.headers.as_ref();
 
-    crate::mcp::get_mcp_server_detail_cached(&server_name, url, command, headers, force_refresh).await
+    crate::mcp::get_mcp_server_detail_cached(&server_name, url, command, headers, force_refresh)
+        .await
 }
 
 // ==================== Logging Commands ====================
@@ -353,8 +348,7 @@ pub fn get_app_path() -> String {
 /// 启动新的应用实例
 #[tauri::command]
 pub fn spawn_new_instance() -> Result<(), String> {
-    let app_path = std::env::current_exe()
-        .map_err(|e| e.to_string())?;
+    let app_path = std::env::current_exe().map_err(|e| e.to_string())?;
 
     #[cfg(target_os = "windows")]
     {
@@ -381,5 +375,23 @@ pub fn spawn_new_instance() -> Result<(), String> {
 /// 检查 GitHub Releases 是否有新版本
 #[tauri::command]
 pub async fn check_for_updates() -> Result<crate::updater::UpdateInfo, String> {
-    crate::updater::check_for_updates().await.map_err(|e| e.to_string())
+    crate::updater::check_for_updates()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 下载更新文件
+#[tauri::command]
+pub async fn download_update(
+    url: String,
+    file_name: String,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    crate::updater::download_update(url, file_name, app_handle).await
+}
+
+/// 安装更新
+#[tauri::command]
+pub async fn install_update(file_path: String, app_handle: AppHandle) -> Result<(), String> {
+    crate::updater::install_update(file_path, app_handle).await
 }

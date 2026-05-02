@@ -40,10 +40,23 @@ export interface ClaudeOptions {
 }
 
 // 软件更新信息
+export interface PlatformAsset {
+  name: string
+  url: string
+  size: number
+}
+
 export interface UpdateInfo {
   version: string
   currentVersion: string
   hasUpdate: boolean
   releaseNotes: string
   downloadUrl: string
+  platformAsset: PlatformAsset | null
+}
+
+export interface DownloadProgress {
+  downloaded: number
+  total: number
+  percent: number
 }

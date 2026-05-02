@@ -64,8 +64,9 @@
       <header class="panel-header">
         <div class="header-row">
           <h2>Projects</h2>
-          <button class="settings-btn" @click="$emit('openSettings')" title="Settings (Ctrl+,)">
+          <button class="settings-btn" @click="handleSettingsClick" title="Settings (Ctrl+,)">
             <img src="@/assets/icons/settings.svg" alt="Settings" />
+            <span v-if="sidebarStore.updateAvailable" class="update-badge"></span>
           </button>
         </div>
         <div class="search-box">
@@ -133,6 +134,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { useSidebarStore } from '@/stores/sidebar'
 import type { SessionInfo } from '@/api/tauri'
 
 const emit = defineEmits<{
@@ -143,6 +145,7 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+const sidebarStore = useSidebarStore()
 const searchQuery = ref('')
 const projectListRef = ref<HTMLElement | null>(null)
 
@@ -176,6 +179,14 @@ const filteredProjects = computed(() => {
     return (b.lastDuration ?? 0) - (a.lastDuration ?? 0)
   })
 })
+
+function handleSettingsClick() {
+  if (sidebarStore.updateAvailable) {
+    sidebarStore.openSettings('update')
+  } else {
+    sidebarStore.openSettings()
+  }
+}
 
 function handleProjectScroll() {
   const el = projectListRef.value
@@ -461,6 +472,7 @@ async function handleSaveDefault() {
 }
 
 .settings-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -472,6 +484,23 @@ async function handleSaveDefault() {
   cursor: pointer;
   border-radius: 6px;
   transition: all 0.15s ease;
+}
+
+.update-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  background: var(--status-error);
+  border-radius: 50%;
+  border: 2px solid var(--bg-primary);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 .settings-btn img {
