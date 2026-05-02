@@ -84,6 +84,7 @@ import {
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import WelcomeView from '@/components/WelcomeView.vue'
 import ProjectSelectView from '@/components/ProjectSelectView.vue'
+import type { UnlistenFn } from '@tauri-apps/api/event'
 
 const TerminalView = defineAsyncComponent(() => import('@/components/TerminalView.vue'))
 const SettingsOverlay = defineAsyncComponent(() => import('@/components/settings/SettingsOverlay.vue'))
@@ -92,7 +93,7 @@ type ViewType = 'welcome' | 'projects' | 'terminal'
 
 const appStore = useAppStore()
 const sidebarStore = useSidebarStore()
-const { handleKeydown } = useAppShortcuts()
+const { setupShortcutListeners } = useAppShortcuts()
 const currentView = ref<ViewType>('welcome')
 
 // 路径输入（key 为 check name）
@@ -104,11 +105,9 @@ let unlistenSettings: (() => void) | null = null
 let unlistenShortcuts: (() => void) | null = null
 let unlistenFontSize: (() => void) | null = null
 let unlistenRestart: (() => void) | null = null
+const shortcutUnlisteners: UnlistenFn[] = []
 
 onMounted(async () => {
-  // 全局快捷键
-  window.addEventListener('keydown', handleKeydown, true)
-
   // 环境检查（同步拉取 Rust 已缓存的结果）
   await appStore.runChecks()
   if (appStore.checkFailed) {
@@ -125,11 +124,11 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', handleKeydown, true)
   unlistenSettings?.()
   unlistenShortcuts?.()
   unlistenFontSize?.()
   unlistenRestart?.()
+  shortcutUnlisteners.forEach(fn => fn())
 })
 
 async function handleSelectProject() {
@@ -204,6 +203,8 @@ async function browseFor(name: string) {
 
 function initAfterChecks() {
   appStore.loadAppConfig()
+
+  setupShortcutListeners().then(fns => shortcutUnlisteners.push(...fns))
 
   appStore.loadCache().then(() => {
     if (appStore.cachedProjects.length > 0 && currentView.value === 'welcome') {

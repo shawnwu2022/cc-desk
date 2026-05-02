@@ -259,22 +259,25 @@ term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 
 ### 原则
 
-**应用级快捷键由 DOM 处理，终端快捷键由 xterm.js + PTY 原生处理。**
+**应用级快捷键由 Rust 端 `tauri-plugin-global-shortcut` 在 OS 层拦截，通过事件传递到前端处理；终端快捷键由 xterm.js + PTY 原生处理。**
 
-- 应用快捷键：`src/composables/useAppShortcuts.ts` 中注册全局 `keydown` 监听器（capturing phase）
+- 应用快捷键：Rust 端 `lib.rs` 注册 `RegisterHotKey` → `app.emit("shortcut:*")` → 前端 `listen()` → `useAppShortcuts.ts`
 - 终端快捷键：xterm.js 通过 `onData` 发送到 PTY，由 Claude CLI 处理
-- 窗口焦点恢复：监听 `Window.onFocusChanged`，窗口获焦时调用 `Webview.setFocus()`
+- 窗口焦点检查：Windows 使用 `GetForegroundWindow()` FFI 直接检查前台窗口，其他平台使用 `on_window_event(Focused)`
 
 ### 应用级快捷键
 
 | 快捷键 | 功能 | 处理方 |
 |--------|------|--------|
-| Ctrl+Shift+N | 新建窗口 | useAppShortcuts |
-| Ctrl+Shift+←/→ | 窗口左移/右移半屏 | useAppShortcuts |
-| Ctrl+Shift+R | 重启应用 | useAppShortcuts |
-| Ctrl+, | 打开设置 | useAppShortcuts |
-| Ctrl+Plus/Minus | 增大/减小字体 | useAppShortcuts |
-| Ctrl+0 | 重置字体 | useAppShortcuts |
+| Ctrl+Shift+N | 新建窗口 | Rust global-shortcut → emit |
+| Ctrl+Shift+←/→ | 窗口左移/右移半屏 | Rust global-shortcut → emit |
+| Ctrl+Shift+R | 重启应用 | Rust global-shortcut → emit |
+| Ctrl+, | 打开设置 | Rust global-shortcut → emit |
+| Ctrl+Plus/Minus | 增大/减小字体 | Rust global-shortcut → emit |
+| Ctrl+0 | 重置字体 | Rust global-shortcut → emit |
+| Alt+N/R | 新建/重启会话 | Rust global-shortcut → emit |
+| Alt+↑/↓ | 切换标签 | Rust global-shortcut → emit |
+| Ctrl+Shift+H | 回到项目列表 | Rust global-shortcut → emit |
 
 ### 终端快捷键（由 Claude CLI 处理）
 
@@ -289,20 +292,21 @@ term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 | Alt+P | 切换模型 | xterm.js → PTY → Claude CLI |
 | Alt+T | 切换扩展思考 | xterm.js → PTY → Claude CLI |
 
-### 窗口焦点恢复
+### 窗口前台检查
 
-```typescript
-// src/composables/useAppShortcuts.ts
-async function setupFocusRecovery() {
-  const win = getCurrentWindow()
-  unlistenFocus = await win.onFocusChanged(({ payload: focused }) => {
-    if (focused) {
-      // 窗口获得焦点时，恢复 webview 焦点
-      getCurrentWebview().setFocus().catch(() => {})
-    }
-  })
+```rust
+// src-tauri/src/lib.rs
+// Windows: 使用 GetForegroundWindow() 直接检查前台窗口
+// 其他平台: 使用 on_window_event(Focused) 追踪焦点状态
+#[cfg(target_os = "windows")]
+fn is_window_foreground() -> bool {
+    let hwnd = OUR_HWND.load(Ordering::SeqCst);
+    if hwnd.is_null() { return true; }
+    unsafe { GetForegroundWindow() == hwnd }
 }
 ```
+
+详细快捷键架构文档见 [docs/interaction.md](interaction.md)。
 
 ## 环境检查 (src-tauri/src/checks.rs)
 

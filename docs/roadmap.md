@@ -64,7 +64,7 @@
 |---|------|--------|------|
 | 5A | 分屏布局 | P0* | TerminalView 重构为分片容器，CSS Grid，比例可拖拽 |
 | 5B | 系统托盘 | P1 | tauri-plugin-tray |
-| 5C | 全局快捷键 | P2 | Tauri global shortcut API |
+| 5C | ~~全局快捷键~~ | ~~P2~~ | ✅ 已完成（v0.3.1，tauri-plugin-global-shortcut + GetForegroundWindow） |
 | 5D | 多预设主题 | P2 | Catppuccin、Nord 等主题文件 |
 
 *Phase 5 的 P0 是该阶段内的相对优先级

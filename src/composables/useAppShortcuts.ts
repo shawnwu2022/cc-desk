@@ -1,5 +1,6 @@
 import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window'
 import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi'
+import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
@@ -34,21 +35,19 @@ export async function openNewAppInstance() {
   }
 }
 
+function isTerminalVisible(): boolean {
+  const terminalView = document.querySelector('[data-terminal-view]')
+  return terminalView !== null && terminalView.checkVisibility()
+}
+
+function emitTerminalAction(action: 'newSession' | 'restartSession' | 'backToProjects') {
+  window.dispatchEvent(new CustomEvent(`terminal:${action}`))
+}
+
 export function useAppShortcuts() {
   const appStore = useAppStore()
   const sessionStore = useSessionStore()
   const sidebarStore = useSidebarStore()
-
-  // 检查终端视图是否可见
-  function isTerminalVisible(): boolean {
-    const terminalView = document.querySelector('[data-terminal-view]')
-    return terminalView !== null && terminalView.checkVisibility()
-  }
-
-  // 发送终端操作事件（由 TerminalView 监听）
-  function emitTerminalAction(action: 'newSession' | 'restartSession' | 'backToProjects') {
-    window.dispatchEvent(new CustomEvent(`terminal:${action}`))
-  }
 
   function switchTab(direction: 'next' | 'prev') {
     const cwd = appStore.cwd
@@ -71,123 +70,72 @@ export function useAppShortcuts() {
     sessionStore.setActiveTab(tabs[nextIndex].tabId)
   }
 
-  async function handleKeydown(e: KeyboardEvent) {
-    const ctrl = e.ctrlKey || e.metaKey
-    const shift = e.shiftKey
-    const alt = e.altKey
-    const key = e.key.toLowerCase()
-    // console.log(ctrl, shift, alt, key);
+  async function setupShortcutListeners(): Promise<UnlistenFn[]> {
+    const unlisteners: UnlistenFn[] = []
 
-    // Alt+N — 新建会话（仅终端视图有效）
-    if (alt && key === 'n' && !ctrl && !shift) {
-      if (!isTerminalVisible()) return
-      e.preventDefault()
-      e.stopPropagation()
-      emitTerminalAction('newSession')
-      return
-    }
+    // 全局快捷键（不需要终端可见）
+    unlisteners.push(
+      await listen('shortcut:toggle-settings', () => sidebarStore.toggleSettings())
+    )
+    unlisteners.push(
+      await listen('shortcut:new-instance', () => openNewAppInstance())
+    )
+    unlisteners.push(
+      await listen('shortcut:snap-left', () => snapWindow('left'))
+    )
+    unlisteners.push(
+      await listen('shortcut:snap-right', () => snapWindow('right'))
+    )
+    unlisteners.push(
+      await listen('shortcut:restart-app', async () => {
+        try { await ptyKillAll() } catch { /* ignore */ }
+        window.location.reload()
+      })
+    )
+    unlisteners.push(
+      await listen('shortcut:font-increase', () => appStore.setFontSize(appStore.fontSize + 1))
+    )
+    unlisteners.push(
+      await listen('shortcut:font-decrease', () => appStore.setFontSize(appStore.fontSize - 1))
+    )
+    unlisteners.push(
+      await listen('shortcut:font-reset', () => appStore.setFontSize(12))
+    )
 
-    // Alt+R — 重启会话（仅终端视图有效）
-    if (alt && key === 'r' && !ctrl && !shift) {
-      if (!isTerminalVisible()) return
-      e.preventDefault()
-      e.stopPropagation()
-      emitTerminalAction('restartSession')
-      return
-    }
+    // 终端视图专属快捷键
+    unlisteners.push(
+      await listen('shortcut:new-session', () => {
+        if (!isTerminalVisible()) return
+        emitTerminalAction('newSession')
+      })
+    )
+    unlisteners.push(
+      await listen('shortcut:restart-session', () => {
+        if (!isTerminalVisible()) return
+        emitTerminalAction('restartSession')
+      })
+    )
+    unlisteners.push(
+      await listen('shortcut:tab-prev', () => {
+        if (!isTerminalVisible()) return
+        switchTab('prev')
+      })
+    )
+    unlisteners.push(
+      await listen('shortcut:tab-next', () => {
+        if (!isTerminalVisible()) return
+        switchTab('next')
+      })
+    )
+    unlisteners.push(
+      await listen('shortcut:back-to-projects', () => {
+        if (!isTerminalVisible()) return
+        emitTerminalAction('backToProjects')
+      })
+    )
 
-    // Alt+ArrowDown — 切换到下一个 tab（仅终端视图有效）
-    if (alt && key === 'arrowdown' && !ctrl && !shift) {
-      if (!isTerminalVisible()) return
-      e.preventDefault()
-      e.stopPropagation()
-      switchTab('next')
-      return
-    }
-
-    // Alt+ArrowUp — 切换到上一个 tab（仅终端视图有效）
-    if (alt && key === 'arrowup' && !ctrl && !shift) {
-      if (!isTerminalVisible()) return
-      e.preventDefault()
-      e.stopPropagation()
-      switchTab('prev')
-      return
-    }
-
-    // Ctrl+Shift+N — 新建应用实例（全局有效）
-    if (ctrl && shift && key === 'n') {
-      e.preventDefault()
-      e.stopPropagation()
-      await openNewAppInstance()
-      return
-    }
-
-    // Ctrl+Shift+← — 窗口左移半屏（全局有效）
-    if (ctrl && shift && key === 'arrowleft') {
-      e.preventDefault()
-      e.stopPropagation()
-      await snapWindow('left')
-      return
-    }
-
-    // Ctrl+Shift+→ — 窗口右移半屏（全局有效）
-    if (ctrl && shift && key === 'arrowright') {
-      e.preventDefault()
-      e.stopPropagation()
-      await snapWindow('right')
-      return
-    }
-
-    // Ctrl+Shift+R — 重启应用（全局有效）
-    if (ctrl && shift && key === 'r') {
-      e.preventDefault()
-      e.stopPropagation()
-      try { await ptyKillAll() } catch { /* ignore */ }
-      window.location.reload()
-      return
-    }
-
-    // Ctrl+Shift+H — 回到 Project Select（仅终端视图有效）
-    if (ctrl && shift && key === 'h') {
-      if (!isTerminalVisible()) return
-      e.preventDefault()
-      e.stopPropagation()
-      emitTerminalAction('backToProjects')
-      return
-    }
-
-    // Ctrl+, — 切换设置（全局有效）
-    if (ctrl && key === ',') {
-      e.preventDefault()
-      e.stopPropagation()
-      sidebarStore.toggleSettings()
-      return
-    }
-
-    // Ctrl+Plus / Ctrl+= — 增大字体（全局有效）
-    if (ctrl && (key === '+' || key === '=')) {
-      e.preventDefault()
-      e.stopPropagation()
-      appStore.setFontSize(appStore.fontSize + 1)
-      return
-    }
-
-    // Ctrl+Minus — 缩小字体（全局有效）
-    if (ctrl && key === '-') {
-      e.preventDefault()
-      e.stopPropagation()
-      appStore.setFontSize(appStore.fontSize - 1)
-      return
-    }
-
-    // Ctrl+0 — 重置字体（全局有效）
-    if (ctrl && key === '0') {
-      e.preventDefault()
-      e.stopPropagation()
-      appStore.setFontSize(12)
-      return
-    }
+    return unlisteners
   }
 
-  return { handleKeydown, isTerminalVisible }
+  return { setupShortcutListeners }
 }

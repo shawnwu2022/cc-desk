@@ -2,102 +2,96 @@
 
 ## 核心原则
 
-**终端输入直接发送到 PTY，由 Claude CLI 处理；应用级快捷键由 DOM 捕获期监听器处理。**
+**终端输入直接发送到 PTY，由 Claude CLI 处理；应用级快捷键由 Rust 端 `tauri-plugin-global-shortcut` 在 OS 层面拦截，通过事件传递到前端处理。**
 
 ```
-用户按键 → DOM 捕获期 → useAppShortcuts.handleKeydown
-                  ↓
-         匹配应用快捷键？
-         ├─ 是 → 执行应用操作（阻止默认行为）
-         └─ 否 → xterm.js.onData → PTY → Claude CLI
+用户按键 → OS 层 RegisterHotKey 拦截
+                ↓
+       匹配应用快捷键？
+       ├─ 是 → app.emit("shortcut:*") → 前端 listen → 执行应用操作
+       └─ 否 → 正常传递到 webview → xterm.js.onData → PTY → Claude CLI
 ```
 
 ## 快捷键处理架构
 
+### 架构：Rust global-shortcut → emit → 前端 listen
+
+快捷键在 OS 层面通过 `tauri-plugin-global-shortcut`（底层使用 Windows `RegisterHotKey` / macOS Carbon / Linux X11）注册，不依赖 webview 焦点。
+
+```
+Rust 端（lib.rs setup）：
+  1. Builder::new()
+     .with_shortcuts(["CmdOrCtrl+Comma", ...])
+     .with_handler(|app, shortcut, event| {
+         // 窗口焦点检查（AtomicBool，由 on_window_event 追踪）
+         // match (mods, key) → app.emit("shortcut:xxx", ())
+     })
+     .build()
+
+前端（useAppShortcuts.ts）：
+  setupShortcutListeners() → listen("shortcut:xxx", callback)
+```
+
+### 窗口焦点追踪
+
+`RegisterHotKey` 在 OS 层拦截按键，即使应用不在前台也会消费按键。通过追踪原生窗口焦点状态来限制：
+
+```rust
+// lib.rs
+static WINDOW_FOCUSED: AtomicBool = AtomicBool::new(true);
+
+.on_window_event(|_window, event| {
+    if let tauri::WindowEvent::Focused(focused) = event {
+        WINDOW_FOCUSED.store(*focused, Ordering::SeqCst);
+    }
+})
+
+// handler 中
+if !WINDOW_FOCUSED.load(Ordering::SeqCst) { return; }
+```
+
+**注意**：`WebviewWindow::is_focused()` 检查的是 webview 内部焦点，不适用于此场景（点击标题栏时返回 false）。必须使用 `on_window_event(Focused)` 追踪原生窗口焦点。
+
+### 跨平台修饰键
+
+使用 `CmdOrCtrl` 修饰键实现跨平台适配：
+- macOS → `SUPER`（⌘ Command）
+- Windows/Linux → `CONTROL`（Ctrl）
+
 ### 三种输入场景
 
-| 场景 | 焦点位置 | 事件流 | 处理机制 |
-|------|---------|--------|----------|
-| **1. 终端聚焦** | xterm.js | DOM keydown（捕获期） → handleKeydown → xterm.js | 应用快捷键优先，终端按键传给 PTY |
-| **2. 网页内容聚焦** | 其他 UI 元素 | DOM keydown（捕获期） → handleKeydown | 应用快捷键生效 |
-| **3. 标题栏点击** | 窗口框架 | Window.onFocusChanged → Webview.setFocus | 恢复 webview 焦点，DOM 快捷键重新生效 |
-
-### 关键技术：DOM 捕获期监听
-
-```typescript
-// src/App.vue
-window.addEventListener('keydown', handleKeydown, true)
-//                                              ^^^^
-//                                         捕获期（true）
-```
-
-**事件传播顺序**：
-```
-1. 捕获期（由外向内）：Window → Document → 目标元素
-2. 目标期：目标元素自身处理
-3. 冒泡期（由内向外）：目标元素 → Document → Window
-```
-
-使用捕获期（`true`）确保 `handleKeydown` **在 xterm.js 处理之前**执行，能够正确拦截应用快捷键。
-
-### 窗口焦点恢复
-
-```typescript
-// src/composables/useAppShortcuts.ts
-async function setupFocusRecovery() {
-  const win = getCurrentWindow()
-  unlistenFocus = await win.onFocusChanged(({ payload: focused }) => {
-    if (focused) {
-      // 窗口获得焦点时，恢复 webview 焦点
-      getCurrentWebview().setFocus().catch(() => {})
-    }
-  })
-}
-```
-
-**触发场景**：
-- 用户点击标题栏拖动窗口
-- 用户双击标题栏最大化/还原
-- 用户 Alt+Tab 切换回应用
+| 场景 | 焦点位置 | 应用快捷键 | 终端输入 |
+|------|---------|-----------|----------|
+| **1. 终端聚焦** | xterm.js | OS 层拦截 → emit | xterm.js → PTY |
+| **2. 标题栏点击** | 窗口框架 | OS 层拦截 → emit（正常工作） | 无法输入 |
+| **3. 窗口不在前台** | 其他应用 | handler 检查焦点，跳过 | 正常 |
 
 ## 应用级快捷键
 
-所有应用级快捷键定义在 `src/composables/useAppShortcuts.ts`：
+所有应用级快捷键在 Rust 端注册（`src-tauri/src/lib.rs`），前端通过事件监听处理（`src/composables/useAppShortcuts.ts`）：
 
-| 快捷键 | 功能 | 说明 |
-|--------|------|------|
-| Alt+N | 新建会话 | 仅终端视图有效 |
-| Alt+R | 重启会话 | 仅终端视图有效 |
-| Ctrl+Shift+N | 新建应用实例 | 启动独立的进程实例 |
-| Ctrl+Shift+← | 窗口左移半屏 | 将窗口移动到屏幕左半边 |
-| Ctrl+Shift+→ | 窗口右移半屏 | 将窗口移动到屏幕右半边 |
-| Ctrl+Shift+R | 重启应用 | 清理所有 PTY 并刷新页面 |
-| Ctrl+, | 打开设置 | 打开全局设置浮层 |
-| Ctrl+Plus / Ctrl+= | 增大字体 | 终端字体 +1 |
-| Ctrl+Minus | 缩小字体 | 终端字体 -1 |
-| Ctrl+0 | 重置字体 | 终端字体恢复为 12 |
+| 快捷键 | 事件名 | 功能 | 跨平台 |
+|--------|--------|------|--------|
+| Ctrl+, (⌘,) | `shortcut:toggle-settings` | 打开设置 | CmdOrCtrl |
+| Ctrl+Shift+N (⌘⇧N) | `shortcut:new-instance` | 新建应用实例 | CmdOrCtrl |
+| Ctrl+Shift+← (⌘⇧←) | `shortcut:snap-left` | 窗口左移半屏 | CmdOrCtrl |
+| Ctrl+Shift+→ (⌘⇧→) | `shortcut:snap-right` | 窗口右移半屏 | CmdOrCtrl |
+| Ctrl+Shift+R (⌘⇧R) | `shortcut:restart-app` | 重启应用 | CmdOrCtrl |
+| Ctrl+Shift+H (⌘⇧H) | `shortcut:back-to-projects` | 回到项目列表 | CmdOrCtrl |
+| Ctrl+= (⌘=) | `shortcut:font-increase` | 增大字体 | CmdOrCtrl |
+| Ctrl++ (⌘⇧=) | `shortcut:font-increase` | 增大字体 | CmdOrCtrl+Shift |
+| Ctrl+- (⌘-) | `shortcut:font-decrease` | 缩小字体 | CmdOrCtrl |
+| Ctrl+0 (⌘0) | `shortcut:font-reset` | 重置字体 | CmdOrCtrl |
+| Alt+N | `shortcut:new-session` | 新建会话（终端可见时） | 各平台一致 |
+| Alt+R | `shortcut:restart-session` | 重启会话（终端可见时） | 各平台一致 |
+| Alt+↑ | `shortcut:tab-prev` | 上一个标签（终端可见时） | 各平台一致 |
+| Alt+↓ | `shortcut:tab-next` | 下一个标签（终端可见时） | 各平台一致 |
 
 **终端视图可见性检查**：
-部分快捷键（Alt+N、Alt+R）仅在终端视图可见时生效，避免在 Welcome/Projects 视图中误触发。
+部分快捷键（Alt+N/R、Alt+↑↓、Ctrl+Shift+H）仅在终端视图可见时生效，避免在 Welcome/Projects 视图中误触发。
 
-**实现代码**：
-```typescript
-async function handleKeydown(e: KeyboardEvent) {
-  const ctrl = e.ctrlKey || e.metaKey
-  const shift = e.shiftKey
-  const key = e.key
-
-  // Ctrl+Shift+N — 新建窗口
-  if (ctrl && shift && key === 'N') {
-    e.preventDefault()
-    e.stopPropagation()
-    openNewWindow()
-    return
-  }
-
-  // ... 其他快捷键处理
-}
-```
+**Ctrl++ 特殊处理**：
+`Ctrl++` 在物理键盘上是 `Ctrl+Shift+=`，所以需要同时注册 `CmdOrCtrl+Equal` 和 `CmdOrCtrl+Shift+Equal`，两者触发相同事件。
 
 ## 终端快捷键（Claude CLI 处理）
 
@@ -232,16 +226,16 @@ Claude CLI 支持：
 
 | 特性 | Electron | Tauri |
 |------|----------|-------|
-| 快捷键拦截 | `before-input-event` | DOM 捕获期监听 |
+| 快捷键拦截 | `before-input-event` | Rust global-shortcut → emit → 前端 listen |
 | Ctrl+W 处理 | 需手动拦截发送 | xterm.js 原生处理 |
-| 焦点恢复 | webContents.focus | Webview.setFocus |
+| 焦点恢复 | webContents.focus | 不需要（OS 层拦截） |
 | 事件系统 | ipcMain/ipcRenderer | invoke/listen |
 | 进程通信 | webContents.send | emit |
 
 ## GUI 增强边界
 
 | 增强 | 做 | 不做 |
-|------|----|----|
+|------|----|------|
 | 终端主题 | 浅色 + 预设 | AI 补全 |
 | 多终端 | 标签切换 | 复杂布局 |
 | 会话历史 | SerializeAddon | 导出文件 |
