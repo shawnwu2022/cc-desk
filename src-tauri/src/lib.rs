@@ -10,7 +10,7 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::LazyLock;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use tauri::Emitter;
 use tauri::Manager;
 use raw_window_handle::HasWindowHandle;
