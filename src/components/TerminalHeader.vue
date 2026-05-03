@@ -1,6 +1,8 @@
 <template>
   <header class="terminal-header">
-    <span v-if="!isMac" class="project-name">{{ projectName }}</span>
+    <div class="title-area">
+      <span v-if="sessionName" class="header-title">{{ sessionName }}</span>
+    </div>
     <div class="header-right">
       <button class="header-btn" @click="snapWindow('left')" title="Snap to left half (Ctrl+Shift+←)">
         <img src="@/assets/icons/half-left.svg" alt="Snap left" />
@@ -16,8 +18,9 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { snapWindow } from '@/composables/useAppShortcuts'
-import { isMac } from '@/utils/platform'
+import { useSessionStore } from '@/stores/session'
 
 defineProps<{
   projectName: string
@@ -27,18 +30,45 @@ defineEmits<{
   back: []
   sidebar: []
 }>()
+
+const sessionStore = useSessionStore()
+
+const sessionName = computed(() => sessionStore.activeTab?.name || '')
 </script>
 
 <style scoped>
 .terminal-header {
   display: flex;
   align-items: center;
-  justify-content: center;
   height: 38px;
   padding: 0 12px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
-  position: relative;
+}
+
+.title-area {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  padding: 0 8px;
+}
+
+.header-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
 .header-btn {
@@ -63,26 +93,5 @@ defineEmits<{
 .header-btn:hover {
   background: var(--hover-bg);
   color: var(--text-primary);
-}
-
-.project-name {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 300px;
-}
-
-.header-right {
-  position: absolute;
-  right: 12px;
-  display: flex;
-  align-items: center;
-  gap: 2px;
 }
 </style>

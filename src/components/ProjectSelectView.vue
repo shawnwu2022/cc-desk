@@ -247,7 +247,6 @@ async function handleSaveDefault() {
 <style scoped>
 .project-select-view {
   display: flex;
-  height: 100vh;
   background: var(--bg-primary);
 }
 

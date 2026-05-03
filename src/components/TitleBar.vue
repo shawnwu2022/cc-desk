@@ -3,6 +3,12 @@
     <!-- macOS 红绿灯占位（系统原生绘制，此处仅预留空间） -->
     <div v-if="isMac" class="traffic-light-spacer"></div>
 
+    <!-- Windows 左侧图标和标题 -->
+    <div v-if="!isMac" class="win-title-left">
+      <img src="@/assets/icons/app-icon.png" alt="" class="win-app-icon" />
+      <span class="win-app-title">{{ title }}</span>
+    </div>
+
     <!-- Windows 窗口控制按钮 -->
     <div v-if="isWindows" class="window-controls">
       <button class="win-ctrl-btn" @click.stop="handleMinimize" @dblclick.stop>
@@ -30,12 +36,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isMac, isWindows } from '@/utils/platform'
+import { useAppStore } from '@/stores/app'
 
+const appStore = useAppStore()
 const win = getCurrentWindow()
 const isMaximized = ref(false)
+
+const title = computed(() => appStore?.currentProject || 'CC-Box')
 
 async function handleMinimize() {
   await win.minimize()
@@ -78,6 +88,25 @@ onUnmounted(() => {
   background: var(--bg-secondary);
   user-select: none;
   -webkit-user-select: none;
+}
+
+.win-title-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  padding-left: 12px;
+}
+
+.win-app-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.win-app-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 /* macOS 红绿灯占位（系统原生绘制，仅预留空间避免内容重叠） */
