@@ -177,12 +177,10 @@ jobs:
           RELEASE_ID=""
           if [ "$HTTP_CODE" = "200" ]; then
             RELEASE_ID=$(jq -r '.id // empty' /tmp/gitee_release.json)
-            if [ -n "$RELEASE_ID" ]; then
-              echo "Found existing release on Gitee (ID: $RELEASE_ID)"
-            else
-              echo "Tag exists but no release found, will create one..."
-              RELEASE_ID=""
-            fi
+          fi
+
+          if [ -n "$RELEASE_ID" ]; then
+            echo "Found existing release on Gitee (ID: $RELEASE_ID)"
           else
             echo "Creating new release on Gitee..."
             # 从 GitHub 获取 Release 说明
@@ -198,6 +196,7 @@ jobs:
                 -H "Content-Type: application/json" \
                 -d @-)
 
+            echo "Gitee API response: $RESPONSE"
             RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
           fi
 
