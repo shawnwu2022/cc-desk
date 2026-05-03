@@ -1,23 +1,28 @@
+# 本工作流用于：构建跨平台应用 -> 在 GitHub 发布 -> 自动同步到 Gitee（含 Release 和附件）
 name: Release
 
 on:
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - 'v*'          # 推送 v 开头的标签时触发（例如 v1.0.0）
+  workflow_dispatch:  # 允许在 GitHub 页面上手动触发
 
 permissions:
-  contents: write
+  contents: write    # 赋予写入 Release 的权限
 
 jobs:
+  # ==========================================================
+  # 任务一：跨平台构建 (Build)
+  # 作用：在 Windows, macOS, Linux 上分别编译打包你的应用
+  # ==========================================================
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: 'macos-latest'
-            target: 'x86_64-apple-darwin'
-            name: 'macos-x64'
+            target: 'aarch64-apple-darwin'
+            name: 'macos-arm64'
             patterns: |
               src-tauri/target/**/bundle/dmg/*.dmg
               src-tauri/target/**/*.app.tar.gz
@@ -25,7 +30,6 @@ jobs:
             target: ''
             name: 'linux'
             patterns: |
-              src-tauri/target/release/bundle/deb/*.deb
               src-tauri/target/release/bundle/appimage/*.AppImage
           - platform: 'windows-latest'
             target: ''
@@ -89,6 +93,10 @@ jobs:
           path: ${{ matrix.patterns }}
           if-no-files-found: error
 
+  # ==========================================================
+  # 任务二：在 GitHub 发布 (Create GitHub Release)
+  # 作用：将各平台构建好的产物收集起来，在 GitHub 上创建 Draft Release
+  # ==========================================================
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -105,103 +113,112 @@ jobs:
       - name: List downloaded artifacts
         run: find artifacts -type f | head -50
 
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
-          generate_release_notes: true
+          draft: true               # 创建为草稿，你可以检查一下再正式发布
+          generate_release_notes: true # 自动生成更新日志
           files: |
             artifacts/cc-box-windows/**/*.exe
             artifacts/cc-box-windows/**/*.msi
-            artifacts/cc-box-macos-x64/**/*.dmg
-            artifacts/cc-box-macos-x64/**/*.app.tar.gz
-            artifacts/cc-box-linux/**/*.deb
+            artifacts/cc-box-macos-arm64/**/*.dmg
+            artifacts/cc-box-macos-arm64/**/*.app.tar.gz
             artifacts/cc-box-linux/**/*.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  sync-gitee-release:
+  # ==========================================================
+  # 任务三：同步到 Gitee (Sync to Gitee)
+  # 作用：使用成熟的社区 Action 同步代码和标签，并附带发布产物
+  # ==========================================================
+  sync-to-gitee:
     needs: release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
+      # 1. 检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get release info from GitHub
-        id: gh_release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF#refs/tags/}"
-          BODY=$(gh release view "$TAG" --json body -q '.body')
-          NAME=$(gh release view "$TAG" --json name -q '.name')
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "$BODY" > /tmp/release_body.txt
+      # 2. 核心同步步骤：使用社区 Action 同步代码和 Tags 到 Gitee
+      - name: Mirror to Gitee
+        uses: Yikun/hub-mirror-action@master
+        with:
+          src: github/${{ github.repository_owner }}
+          dst: gitee/orczh
+          dst_key: ${{ secrets.GITEE_PRIVATE_KEY }}
+          dst_token: ${{ secrets.GITEE_TOKEN }}
+          static_list: "cc-box"
+          force_update: true
+          debug: true
 
-      - name: Download GitHub release assets
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.gh_release.outputs.tag }}"
-          mkdir -p /tmp/release-assets
-          gh release download "$TAG" --dir /tmp/release-assets --repo "$GITHUB_REPOSITORY"
-          echo "Downloaded assets:"
-          ls -la /tmp/release-assets
+      # 3. 下载刚才构建的应用产物，准备发到 Gitee
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
+      # 4. 在 Gitee 端创建/更新 Release 并上传附件
       - name: Create Gitee Release and Upload Assets
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.gh_release.outputs.tag }}"
-          NAME="${{ steps.gh_release.outputs.name }}"
+          TAG="${GITHUB_REF#refs/tags/}"
           GITEE_API="https://gitee.com/api/v5/repos/orczh/cc-box"
 
-          # Check if release already exists on Gitee
-          HTTP_CODE=$(curl -s -o /tmp/gitee_existing.json -w "%{http_code}" \
-            "${GITEE_API}/releases/tags/${TAG}?access_token=${GITEE_TOKEN}")
+          echo "Processing Gitee Release for tag: $TAG"
+
+          # 检查 Gitee 是否已有该 Release
+          HTTP_CODE=$(curl -s -o /tmp/gitee_release.json -w "%{http_code}" \
+            "$GITEE_API/releases/tags/$TAG?access_token=$GITEE_TOKEN")
 
           RELEASE_ID=""
           if [ "$HTTP_CODE" = "200" ]; then
-            RELEASE_ID=$(jq -r '.id' /tmp/gitee_existing.json)
-            echo "Release $TAG already exists on Gitee (id=$RELEASE_ID), uploading assets..."
+            RELEASE_ID=$(jq -r '.id' /tmp/gitee_release.json)
+            echo "Found existing release on Gitee (ID: $RELEASE_ID)"
           else
-            echo "Release $TAG not found on Gitee (HTTP $HTTP_CODE), creating..."
-            RESPONSE=$(curl -s -X POST "${GITEE_API}/releases" \
-              --data-urlencode "access_token=${GITEE_TOKEN}" \
-              --data-urlencode "tag_name=${TAG}" \
-              --data-urlencode "name=${NAME:-${TAG}}" \
-              --data-urlencode "body@/tmp/release_body.txt" \
-              --data-urlencode "prerelease=false")
-            RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id')
-            if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "null" ]; then
-              echo "ERROR: Failed to create Gitee release. Response:"
-              echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
-              exit 1
-            fi
-            echo "Created Gitee release $TAG (id=$RELEASE_ID)"
+            echo "Creating new release on Gitee..."
+            # 从 GitHub 获取 Release 说明
+            BODY=$(gh release view "$TAG" --json body -q '.body' 2>/dev/null || echo "")
+
+            # 用 jq 安全构造 JSON，避免 body 中特殊字符导致 JSON 损坏
+            RESPONSE=$(jq -n \
+              --arg token "$GITEE_TOKEN" \
+              --arg tag "$TAG" \
+              --arg body "$BODY" \
+              '{access_token: $token, tag_name: $tag, name: $tag, body: $body, prerelease: false}' \
+              | curl -s -X POST "$GITEE_API/releases" \
+                -H "Content-Type: application/json" \
+                -d @-)
+
+            RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
           fi
 
-          # Upload all downloaded assets to Gitee
-          UPLOAD_URL="${GITEE_API}/releases/${RELEASE_ID}/attach_files"
-          for file in /tmp/release-assets/*; do
-            [ -f "$file" ] || continue
+          if [ -z "$RELEASE_ID" ]; then
+            echo "ERROR: Failed to get or create Gitee release"
+            exit 1
+          fi
+
+          echo "Uploading assets to Gitee Release ID: $RELEASE_ID"
+          # 用 find 遍历产物，避免 glob 问题
+          UPLOAD_URL="$GITEE_API/releases/$RELEASE_ID/attach_files"
+          find artifacts/cc-box-* -type f \( \
+            -name "*.exe" -o -name "*.msi" -o \
+            -name "*.dmg" -o -name "*.app.tar.gz" -o \
+            -name "*.AppImage" \) | while IFS= read -r file; do
             FNAME=$(basename "$file")
-            echo "Uploading $FNAME to Gitee (release_id=$RELEASE_ID)..."
+            echo "  Uploading $FNAME ..."
             HTTP_CODE=$(curl -s -o /tmp/gitee_upload.json -w "%{http_code}" \
               -X POST "$UPLOAD_URL" \
-              -F "access_token=${GITEE_TOKEN}" \
-              -F "file=@${file}")
+              -F "access_token=$GITEE_TOKEN" \
+              -F "file=@$file")
             if [ "$HTTP_CODE" -ge 300 ] || [ "$HTTP_CODE" -lt 200 ]; then
-              echo "WARNING: Upload of $FNAME returned HTTP $HTTP_CODE"
+              echo "  WARNING: Upload of $FNAME returned HTTP $HTTP_CODE"
               cat /tmp/gitee_upload.json
             else
               echo "  Uploaded: $FNAME (HTTP $HTTP_CODE)"
             fi
           done
-
-          echo "All assets uploaded to Gitee"
+          echo "Gitee release synced successfully!"
