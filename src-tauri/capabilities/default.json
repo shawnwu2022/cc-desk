@@ -13,6 +13,13 @@
     "core:window:allow-set-position",
     "core:window:allow-set-title",
     "core:window:allow-current-monitor",
+    "core:window:allow-set-decorations",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-start-dragging",
+    "core:window:allow-inner-size",
+    "core:window:allow-is-focused",
     "core:webview:default",
     "core:webview:allow-create-webview",
     "core:app:default",
@@ -25,10 +32,6 @@
     "dialog:allow-save",
     "clipboard-manager:default",
     "clipboard-manager:allow-read-text",
-    "clipboard-manager:allow-write-text",
-    "global-shortcut:allow-register",
-    "global-shortcut:allow-is-registered",
-    "global-shortcut:allow-unregister",
-    "global-shortcut:allow-unregister-all"
+    "clipboard-manager:allow-write-text"
   ]
 }

@@ -267,7 +267,8 @@ function handlePtyStarted(_tabId: string, _ptyId: string) {
 <style scoped>
 .terminal-view {
   display: flex;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   background: var(--bg-primary);
 }
 

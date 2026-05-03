@@ -184,7 +184,7 @@ async function handleDownload() {
 
   try {
     const asset = updateInfo.value.platformAsset
-    downloadedFilePath.value = await downloadUpdate(asset.url, asset.name)
+    downloadedFilePath.value = await downloadUpdate(asset.url, asset.name, asset.size)
     downloadState.value = 'downloaded'
   } catch (err) {
     downloadError.value = `Download failed: ${err}`

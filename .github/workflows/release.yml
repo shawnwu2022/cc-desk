@@ -22,10 +22,9 @@ jobs:
         include:
           - platform: 'macos-latest'
             target: 'aarch64-apple-darwin'
-            name: 'macos-arm64'
+            name: 'macos'
             patterns: |
-              src-tauri/target/**/bundle/dmg/*.dmg
-              src-tauri/target/**/*.app.tar.gz
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
           - platform: 'ubuntu-22.04'
             target: ''
             name: 'linux'
@@ -36,7 +35,6 @@ jobs:
             name: 'windows'
             patterns: |
               src-tauri/target/release/bundle/nsis/*.exe
-              src-tauri/target/release/bundle/msi/*.msi
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -120,30 +118,8 @@ jobs:
           generate_release_notes: true # 自动生成更新日志
           files: |
             artifacts/cc-box-windows/**/*.exe
-            artifacts/cc-box-windows/**/*.msi
-            artifacts/cc-box-macos-arm64/**/*.dmg
-            artifacts/cc-box-macos-arm64/**/*.app.tar.gz
+            artifacts/cc-box-macos/**/*.dmg
             artifacts/cc-box-linux/**/*.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ==========================================================
-  # 任务三：同步到 Gitee (Sync to Gitee)
-  # 作用：使用成熟的社区 Action 同步代码和标签，并附带发布产物
-  # ==========================================================
-  sync-to-gitee:
-    needs: release
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      # 1. 使用社区 Action 同步 Release（含附件）到 Gitee
-      - name: Sync GitHub Release to Gitee
-        uses: trustedinster/sync-release-gitee@v1.3
-        with:
-          gitee_owner: orczh
-          gitee_repo: cc-box
-          gitee_token: ${{ secrets.GITEE_TOKEN }}
-          github_owner: ${{ github.repository_owner }}
-          github_repo: cc-box
-          gitee_upload_retry_times: 3
-          debug: true

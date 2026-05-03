@@ -374,8 +374,8 @@ pub fn spawn_new_instance() -> Result<(), String> {
 
 /// 检查 GitHub Releases 是否有新版本
 #[tauri::command]
-pub async fn check_for_updates() -> Result<crate::updater::UpdateInfo, String> {
-    crate::updater::check_for_updates()
+pub async fn check_for_updates(app_handle: AppHandle) -> Result<crate::updater::UpdateInfo, String> {
+    crate::updater::check_for_updates(app_handle)
         .await
         .map_err(|e| e.to_string())
 }
@@ -385,9 +385,10 @@ pub async fn check_for_updates() -> Result<crate::updater::UpdateInfo, String> {
 pub async fn download_update(
     url: String,
     file_name: String,
+    expected_size: u64,
     app_handle: AppHandle,
 ) -> Result<String, String> {
-    crate::updater::download_update(url, file_name, app_handle).await
+    crate::updater::download_update(url, file_name, expected_size, app_handle).await
 }
 
 /// 安装更新

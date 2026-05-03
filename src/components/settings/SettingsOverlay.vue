@@ -16,7 +16,10 @@ const sidebarStore = useSidebarStore()
 <style scoped>
 .settings-overlay {
   position: fixed;
-  inset: 0;
+  top: 32px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 1000;
   display: flex;
   background: var(--bg-primary);

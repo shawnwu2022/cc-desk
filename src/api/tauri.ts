@@ -194,8 +194,8 @@ export const openInFileManager = (path: string): Promise<void> =>
 export const checkForUpdates = (): Promise<UpdateInfo> =>
   invoke<UpdateInfo>('check_for_updates');
 
-export const downloadUpdate = (url: string, fileName: string): Promise<string> =>
-  invoke<string>('download_update', { url, fileName });
+export const downloadUpdate = (url: string, fileName: string, expectedSize: number): Promise<string> =>
+  invoke<string>('download_update', { url, fileName, expectedSize });
 
 export const installUpdate = (filePath: string): Promise<void> =>
   invoke<void>('install_update', { filePath });

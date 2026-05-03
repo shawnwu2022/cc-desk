@@ -1,0 +1,134 @@
+# 在 GitHub Release 发布后，同步到 Gitee（含附件和 release notes）
+name: Sync to Gitee
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets from GitHub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          ASSETS='${{ toJson(github.event.release.assets) }}'
+          echo "$ASSETS" | jq -c '.[]' | while read -r asset; do
+            name=$(echo "$asset" | jq -r '.name')
+            url=$(echo "$asset" | jq -r '.url')
+            echo "Downloading $name..."
+            curl -sS -L -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/octet-stream" \
+              -o "artifacts/$name" "$url"
+          done
+
+      - name: Sync to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          REL_NAME: ${{ github.event.release.name || github.event.release.tag_name }}
+          TARGET: ${{ github.event.release.target_commitish }}
+          REL_BODY: ${{ github.event.release.body }}
+        run: |
+          API="https://gitee.com/api/v5/repos/orczh/cc-box"
+
+          # 1. 写入 release body 到文件（避免 shell 转义问题）
+          printf '%s' "$REL_BODY" > /tmp/release_body.txt
+
+          echo "Syncing release: $REL_NAME ($TAG)"
+
+          # 2. 检查 Gitee 上是否已存在该 tag 的 release
+          GITEE_REL=$(curl -sS "$API/releases/tags/$TAG?access_token=$GITEE_TOKEN" 2>/dev/null || echo "{}")
+          REL_ID=$(echo "$GITEE_REL" | jq -r '.id // empty')
+
+          if [ -z "$REL_ID" ]; then
+            echo "Creating Gitee release..."
+            REL_ID=$(curl -sS -X POST "$API/releases" \
+              -F "access_token=$GITEE_TOKEN" \
+              -F "tag_name=$TAG" \
+              -F "name=$REL_NAME" \
+              -F "body=</tmp/release_body.txt" \
+              -F "target_commitish=$TARGET" \
+              | jq -r '.id')
+            if [ -z "$REL_ID" ] || [ "$REL_ID" = "null" ]; then
+              echo "ERROR: Failed to create Gitee release"
+              exit 1
+            fi
+            echo "Created release: $REL_ID"
+          else
+            echo "Release already exists: $REL_ID, updating notes..."
+            curl -sS -X PATCH "$API/releases/$REL_ID" \
+              -F "access_token=$GITEE_TOKEN" \
+              -F "name=$REL_NAME" \
+              -F "body=</tmp/release_body.txt" > /dev/null
+          fi
+
+          # 3. 收集待上传文件
+          mapfile -t FILES < <(find artifacts -type f \( \
+            -name "*.exe" -o \
+            -name "*.dmg" -o \
+            -name "*.AppImage" \
+          \))
+          TOTAL=${#FILES[@]}
+
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "No artifacts found to upload"
+            exit 0
+          fi
+
+          # 4. 获取 Gitee 已有的附件列表
+          EXISTING=$(curl -sS "$API/releases/$REL_ID?access_token=$GITEE_TOKEN" \
+            | jq -r '.assets[]?.name')
+
+          # 5. 逐个上传并显示进度
+          OK=0; SKIP=0; FAIL=0
+          for f in "${FILES[@]}"; do
+            name=$(basename "$f")
+            size=$(stat -c%s "$f" | numfmt --to=iec)
+
+            if echo "$EXISTING" | grep -qxF "$name"; then
+              SKIP=$((SKIP + 1))
+              echo "::group::[$((OK+SKIP+FAIL))/$TOTAL] Skip $name ($size) - already exists"
+              echo "::endgroup::"
+              continue
+            fi
+
+            echo "::group::[$((OK+SKIP+FAIL+1))/$TOTAL] Uploading $name ($size)"
+            UPLOADED=false
+            for i in 1 2 3; do
+              resp=$(curl --progress-bar -X POST "$API/releases/$REL_ID/attach_files" \
+                -F "access_token=$GITEE_TOKEN" \
+                -F "file=@$f") || true
+              if echo "$resp" | jq -e '.id' >/dev/null 2>&1; then
+                echo "OK (attempt $i)"
+                UPLOADED=true
+                break
+              fi
+              echo "Attempt $i failed"
+              [ "$i" -lt 3 ] && sleep 2
+            done
+            echo "::endgroup::"
+
+            if [ "$UPLOADED" = true ]; then
+              OK=$((OK + 1))
+            else
+              FAIL=$((FAIL + 1))
+              echo "::error::Failed to upload $name after 3 attempts"
+            fi
+          done
+
+          echo ""
+          echo "===== Upload Summary ====="
+          echo "  Total:   $TOTAL"
+          echo "  OK:      $OK"
+          echo "  Skipped: $SKIP"
+          echo "  Failed:  $FAIL"
+          echo "=========================="
+
+          [ "$FAIL" -gt 0 ] && exit 1
+          echo "Sync complete for $TAG"

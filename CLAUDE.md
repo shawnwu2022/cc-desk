@@ -163,6 +163,7 @@ EOF
 | [docs/layout-design.md](docs/layout-design.md) | 布局设计、窗口结构、色彩系统、排版规范 |
 | [docs/components.md](docs/components.md) | 组件树、各组件职责与 props/events、Store 结构 |
 | [docs/interaction.md](docs/interaction.md) | **快捷键处理架构**、三场景输入处理、DOM 捕获期监听、窗口焦点恢复 |
+| [docs/capabilities.md](docs/capabilities.md) | **Tauri 权限管理**、查询/确认/添加 capabilities 权限的方法 |
 | [docs/data-persistence.md](docs/data-persistence.md) | 数据存储架构、文件路径、JSON 结构 |
 | [docs/startup-checks.md](docs/startup-checks.md) | 启动先决条件检查、路径检测与自动保存 |
 | [docs/roadmap.md](docs/roadmap.md) | 开发路线图、进度跟踪、待办事项 |
@@ -171,8 +172,11 @@ EOF
 
 外部参考：[Claude Code 线上文档](https://code.claude.com/docs/llms.txt)
 
+外部参考：[Tauri 2.x JS API线上文档](https://v2.tauri.org.cn/reference/javascript/api/)
+
 ## 约定
 
 - 每次修改后，核心更新同步到 CLAUDE.md，细节更新同步到 docs/*.md
 - Rust 结构体返回前端时统一使用 `#[serde(rename_all = "camelCase")]`
 - 添加新 Tauri Command：commands.rs 定义 → lib.rs 注册 → api/tauri.ts 封装
+- 添加新 Tauri JS API 调用时，必须确认 `capabilities/default.json` 中有对应权限（`<plugin>:default` 不包含大部分写操作，需显式添加）→ 详见 [docs/capabilities.md](docs/capabilities.md)

@@ -1,10 +1,10 @@
 import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window'
 import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi'
-import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
 import { ptyKillAll, spawnNewInstance } from '@/api/tauri'
+import { isMac } from '@/utils/platform'
 
 export async function snapWindow(side: 'left' | 'right') {
   try {
@@ -14,7 +14,7 @@ export async function snapWindow(side: 'left' | 'right') {
 
     const scaleFactor = monitor.scaleFactor
     const halfWidth = Math.floor(monitor.size.width / scaleFactor / 2)
-    const height = window.screen.availHeight - 21
+    const height = window.screen.availHeight
     const x = side === 'left'
       ? monitor.position.x / scaleFactor
       : monitor.position.x / scaleFactor + halfWidth
@@ -70,71 +70,123 @@ export function useAppShortcuts() {
     sessionStore.setActiveTab(tabs[nextIndex].tabId)
   }
 
-  async function setupShortcutListeners(): Promise<UnlistenFn[]> {
-    const unlisteners: UnlistenFn[] = []
+  function handleGlobalKeydown(e: KeyboardEvent) {
+    const mod = isMac ? e.metaKey : e.ctrlKey
 
-    // 全局快捷键（不需要终端可见）
-    unlisteners.push(
-      await listen('shortcut:toggle-settings', () => sidebarStore.toggleSettings())
-    )
-    unlisteners.push(
-      await listen('shortcut:new-instance', () => openNewAppInstance())
-    )
-    unlisteners.push(
-      await listen('shortcut:snap-left', () => snapWindow('left'))
-    )
-    unlisteners.push(
-      await listen('shortcut:snap-right', () => snapWindow('right'))
-    )
-    unlisteners.push(
-      await listen('shortcut:restart-app', async () => {
-        try { await ptyKillAll() } catch { /* ignore */ }
-        window.location.reload()
-      })
-    )
-    unlisteners.push(
-      await listen('shortcut:font-increase', () => appStore.setFontSize(appStore.fontSize + 1))
-    )
-    unlisteners.push(
-      await listen('shortcut:font-decrease', () => appStore.setFontSize(appStore.fontSize - 1))
-    )
-    unlisteners.push(
-      await listen('shortcut:font-reset', () => appStore.setFontSize(12))
-    )
+    // --- 全局快捷键（所有视图生效） ---
 
-    // 终端视图专属快捷键
-    unlisteners.push(
-      await listen('shortcut:new-session', () => {
-        if (!isTerminalVisible()) return
-        emitTerminalAction('newSession')
-      })
-    )
-    unlisteners.push(
-      await listen('shortcut:restart-session', () => {
-        if (!isTerminalVisible()) return
-        emitTerminalAction('restartSession')
-      })
-    )
-    unlisteners.push(
-      await listen('shortcut:tab-prev', () => {
-        if (!isTerminalVisible()) return
-        switchTab('prev')
-      })
-    )
-    unlisteners.push(
-      await listen('shortcut:tab-next', () => {
-        if (!isTerminalVisible()) return
-        switchTab('next')
-      })
-    )
-    unlisteners.push(
-      await listen('shortcut:back-to-projects', () => {
-        if (!isTerminalVisible()) return
-        emitTerminalAction('backToProjects')
-      })
-    )
+    // Cmd/Ctrl + , => toggle settings
+    if (mod && e.key === ',') {
+      e.preventDefault()
+      e.stopPropagation()
+      sidebarStore.toggleSettings()
+      return
+    }
 
-    return unlisteners
+    // Cmd/Ctrl + Shift + N => new instance
+    if (mod && e.shiftKey && e.key === 'N') {
+      e.preventDefault()
+      e.stopPropagation()
+      openNewAppInstance()
+      return
+    }
+
+    // Cmd/Ctrl + Shift + Left => snap left
+    if (mod && e.shiftKey && e.key === 'ArrowLeft') {
+      e.preventDefault()
+      e.stopPropagation()
+      snapWindow('left')
+      return
+    }
+
+    // Cmd/Ctrl + Shift + Right => snap right
+    if (mod && e.shiftKey && e.key === 'ArrowRight') {
+      e.preventDefault()
+      e.stopPropagation()
+      snapWindow('right')
+      return
+    }
+
+    // Cmd/Ctrl + Shift + R => restart app
+    if (mod && e.shiftKey && e.key === 'R') {
+      e.preventDefault()
+      e.stopPropagation()
+      try { ptyKillAll() } catch { /* ignore */ }
+      window.location.reload()
+      return
+    }
+
+    // Cmd/Ctrl + = => font increase
+    if (mod && e.key === '=' && !e.altKey) {
+      e.preventDefault()
+      e.stopPropagation()
+      appStore.setFontSize(appStore.fontSize + 1)
+      return
+    }
+
+    // Cmd/Ctrl + - => font decrease
+    if (mod && e.key === '-' && !e.shiftKey) {
+      e.preventDefault()
+      e.stopPropagation()
+      appStore.setFontSize(appStore.fontSize - 1)
+      return
+    }
+
+    // Cmd/Ctrl + 0 => font reset
+    if (mod && e.key === '0') {
+      e.preventDefault()
+      e.stopPropagation()
+      appStore.setFontSize(12)
+      return
+    }
+
+    // --- 终端视图专属快捷键 ---
+    if (!isTerminalVisible()) return
+
+    // Cmd/Ctrl + Shift + H => back to projects
+    if (mod && e.shiftKey && e.key === 'H') {
+      e.preventDefault()
+      e.stopPropagation()
+      emitTerminalAction('backToProjects')
+      return
+    }
+
+    // Alt + N => new session
+    if (e.altKey && !mod && e.key === 'n') {
+      e.preventDefault()
+      e.stopPropagation()
+      emitTerminalAction('newSession')
+      return
+    }
+
+    // Alt + R => restart session
+    if (e.altKey && !mod && e.key === 'r') {
+      e.preventDefault()
+      e.stopPropagation()
+      emitTerminalAction('restartSession')
+      return
+    }
+
+    // Alt + Up => tab prev
+    if (e.altKey && e.key === 'ArrowUp') {
+      e.preventDefault()
+      e.stopPropagation()
+      switchTab('prev')
+      return
+    }
+
+    // Alt + Down => tab next
+    if (e.altKey && e.key === 'ArrowDown') {
+      e.preventDefault()
+      e.stopPropagation()
+      switchTab('next')
+      return
+    }
+  }
+
+  function setupShortcutListeners(): (() => void)[] {
+    window.addEventListener('keydown', handleGlobalKeydown, true)
+    return [() => window.removeEventListener('keydown', handleGlobalKeydown, true)]
   }
 
   return { setupShortcutListeners }

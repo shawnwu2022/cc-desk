@@ -1,4 +1,7 @@
 <template>
+<div class="app-root">
+  <TitleBar />
+
   <!-- 环境检查提示 -->
   <div v-if="appStore.checkFailed" class="check-failed-overlay">
     <div class="check-failed-card">
@@ -63,6 +66,7 @@
       @open-settings="sidebarStore.openSettings()"
     />
   </Transition>
+</div>
 </template>
 
 <script setup lang="ts">
@@ -84,7 +88,7 @@ import {
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import WelcomeView from '@/components/WelcomeView.vue'
 import ProjectSelectView from '@/components/ProjectSelectView.vue'
-import type { UnlistenFn } from '@tauri-apps/api/event'
+import TitleBar from '@/components/TitleBar.vue'
 
 const TerminalView = defineAsyncComponent(() => import('@/components/TerminalView.vue'))
 const SettingsOverlay = defineAsyncComponent(() => import('@/components/settings/SettingsOverlay.vue'))
@@ -105,7 +109,7 @@ let unlistenSettings: (() => void) | null = null
 let unlistenShortcuts: (() => void) | null = null
 let unlistenFontSize: (() => void) | null = null
 let unlistenRestart: (() => void) | null = null
-const shortcutUnlisteners: UnlistenFn[] = []
+const shortcutUnlisteners: (() => void)[] = []
 
 onMounted(async () => {
   // 环境检查（同步拉取 Rust 已缓存的结果）
@@ -204,7 +208,7 @@ async function browseFor(name: string) {
 function initAfterChecks() {
   appStore.loadAppConfig()
 
-  setupShortcutListeners().then(fns => shortcutUnlisteners.push(...fns))
+  shortcutUnlisteners.push(...setupShortcutListeners())
 
   appStore.loadCache().then(() => {
     if (appStore.cachedProjects.length > 0 && currentView.value === 'welcome') {
@@ -268,9 +272,19 @@ async function savePathsAndRetry() {
 </script>
 
 <style scoped>
+.app-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
 .overlay-view {
   position: fixed;
-  inset: 0;
+  top: 32px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 10;
 }
 
@@ -286,7 +300,10 @@ async function savePathsAndRetry() {
 
 .check-failed-overlay {
   position: fixed;
-  inset: 0;
+  top: 32px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 100;
   display: flex;
   align-items: center;
