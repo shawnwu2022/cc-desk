@@ -144,6 +144,7 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * 关闭 Tab（用户主动操作）
+   * 关闭后重新加载历史会话，让被释放的 sessionId 回到历史列表
    */
   async function closeTab(tabId: string) {
     const tab = tabs.get(tabId)
@@ -154,11 +155,15 @@ export const useSessionStore = defineStore('session', () => {
       try { await ptyKill(tab.ptyId) } catch {}
     }
 
+    const projectPath = tab.projectPath
     tabs.delete(tabId)
 
     if (activeTabId.value === tabId) {
       activeTabId.value = null
     }
+
+    // 重新加载历史会话，让关闭的 tab 回到历史列表
+    await loadHistorySessions(projectPath)
   }
 
   /**

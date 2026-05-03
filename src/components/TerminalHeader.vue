@@ -1,6 +1,6 @@
 <template>
   <header class="terminal-header">
-    <span class="project-name">{{ projectName }}</span>
+    <span v-if="!isMac" class="project-name">{{ projectName }}</span>
     <div class="header-right">
       <button class="header-btn" @click="snapWindow('left')" title="Snap to left half (Ctrl+Shift+←)">
         <img src="@/assets/icons/half-left.svg" alt="Snap left" />
@@ -17,6 +17,7 @@
 
 <script setup lang="ts">
 import { snapWindow } from '@/composables/useAppShortcuts'
+import { isMac } from '@/utils/platform'
 
 defineProps<{
   projectName: string
