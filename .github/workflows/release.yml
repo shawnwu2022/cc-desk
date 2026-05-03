@@ -173,14 +173,14 @@ jobs:
               -d "body=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.stdin.read()))" <<< "$BODY")" \
               -d "prerelease=false")
             RELEASE_ID=$(echo "$RESPONSE" | python3 -c "
-            import sys, json
-            data = json.load(sys.stdin)
-            if isinstance(data, dict) and 'id' in data:
-                print(data['id'])
-            else:
-                print(f'ERROR: {data}', file=sys.stderr)
-                sys.exit(1)
-            ")
+import sys, json
+data = json.load(sys.stdin)
+if isinstance(data, dict) and 'id' in data:
+    print(data['id'])
+else:
+    print(f'ERROR: {data}', file=sys.stderr)
+    sys.exit(1)
+")
             echo "Created Gitee release $TAG (id=$RELEASE_ID)"
           fi
 
