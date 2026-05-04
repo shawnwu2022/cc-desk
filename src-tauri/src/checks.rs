@@ -72,9 +72,13 @@ impl ChecksResult {
 
 /// 运行所有检查
 pub fn run_checks() -> ChecksResult {
-    // 刷新 PATH 以检测新安装的程序
+    // 修复 GUI 应用 PATH 继承问题（Windows）
+    // Rust std::process::Command 有时不能正确继承父进程环境变量，
+    // 重新 set_var 一次可强制子进程使用正确值。
     #[cfg(target_os = "windows")]
-    refresh_path();
+    if let Ok(path) = std::env::var("PATH") {
+        std::env::set_var("PATH", &path);
+    }
     #[cfg(unix)]
     refresh_path();
 
@@ -133,45 +137,6 @@ fn read_config_paths() -> (Option<String>, Option<String>) {
     }
 }
 
-/// 从 Windows 注册表刷新 PATH 环境变量，以检测新安装的程序
-#[cfg(target_os = "windows")]
-fn refresh_path() {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    // 读取系统 PATH
-    let sys_path = std::process::Command::new("reg")
-        .args([
-            "query",
-            r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-            "/v",
-            "Path",
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()
-        .and_then(|o| extract_reg_value(&o.stdout));
-
-    // 读取用户 PATH
-    let user_path = std::process::Command::new("reg")
-        .args(["query", r"HKCU\Environment", "/v", "Path"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()
-        .and_then(|o| extract_reg_value(&o.stdout));
-
-    match (sys_path, user_path) {
-        (Some(sys), Some(user)) => {
-            let combined = format!("{};{}", user, sys);
-            std::env::set_var("PATH", &combined);
-        }
-        (Some(sys), None) => {
-            std::env::set_var("PATH", &sys);
-        }
-        _ => {}
-    }
-}
-
 /// 从登录 shell 获取完整 PATH（Unix）
 ///
 /// GUI 应用不继承终端的 PATH（macOS Finder / Linux 桌面均如此），
@@ -220,23 +185,22 @@ fn refresh_path() {
     }
 }
 
-/// 解析 reg query 输出中的值
+/// 解码子进程输出为 UTF-8 字符串
+///
+/// Windows 上 cmd.exe 输出使用系统 OEM 代码页（中文系统为 GBK），
+/// 直接用 `from_utf8_lossy` 会产生乱码。先尝试 UTF-8，失败后回退 GBK。
 #[cfg(target_os = "windows")]
-fn extract_reg_value(stdout: &[u8]) -> Option<String> {
-    let output = String::from_utf8_lossy(stdout);
-    for line in output.lines() {
-        let line = line.trim();
-        if line.is_empty() || !line.contains("REG_") {
-            continue;
-        }
-        if let Some(idx) = line.find("REG_EXPAND_SZ") {
-            return Some(line[idx + 13..].trim().to_string());
-        }
-        if let Some(idx) = line.find("REG_SZ") {
-            return Some(line[idx + 6..].trim().to_string());
-        }
+fn decode_output(bytes: &[u8]) -> String {
+    if let Ok(s) = String::from_utf8(bytes.to_vec()) {
+        return s;
     }
-    None
+    let (cow, _, _) = encoding_rs::GBK.decode(bytes);
+    cow.into_owned()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn decode_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).to_string()
 }
 
 /// 用 where (Windows) / which (Unix) 查找可执行文件，返回所有结果
@@ -255,7 +219,7 @@ fn find_all_executables(name: &str) -> Vec<String> {
             name,
             output.status
         );
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = decode_output(&output.stderr);
         if !stderr.trim().is_empty() {
             log::warn!("[Check] stderr: {}", stderr.trim());
         }
@@ -266,7 +230,7 @@ fn find_all_executables(name: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    let results: Vec<String> = String::from_utf8_lossy(&output.stdout)
+    let results: Vec<String> = decode_output(&output.stdout)
         .lines()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && Path::new(s).exists())

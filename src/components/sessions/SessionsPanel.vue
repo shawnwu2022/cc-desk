@@ -62,18 +62,18 @@
       <div class="action-buttons">
         <button
           class="action-btn with-hint"
-          @click="applyLocalOptionsToStore(); $emit('newSession')"
+          @click="$emit('newSession')"
           title="New session (Alt+N)"
         >
           <div class="btn-content">
             <img src="@/assets/icons/plus.svg" alt="New session" />
             <span class="btn-label">New</span>
           </div>
-          <span class="btn-hint">Alt+N</span>
+          <span class="btn-hint">{{ alt }}+N</span>
         </button>
         <button
           class="action-btn with-hint"
-          @click="applyLocalOptionsToStore(); $emit('restartSession')"
+          @click="$emit('restartSession')"
           :disabled="!sessionStore.activeTab"
           title="Restart session (Alt+R)"
         >
@@ -81,20 +81,20 @@
             <img src="@/assets/icons/refresh.svg" alt="Restart" />
             <span class="btn-label">Restart</span>
           </div>
-          <span class="btn-hint">Alt+R</span>
+          <span class="btn-hint">{{ alt }}+R</span>
         </button>
       </div>
 
       <div class="options-content">
         <label class="option-item">
-          <input type="checkbox" v-model="localOptions.skipPermissions" />
+          <input type="checkbox" v-model="appStore.claudeOptions.skipPermissions" />
           <span class="option-label">Allow</span>
           <code class="option-flag warning">skip-permissions</code>
         </label>
 
         <div class="option-item text-option">
           <span class="option-label">Custom args</span>
-          <input type="text" v-model="localOptions.customArgs" placeholder="--model sonnet" />
+          <input type="text" v-model="appStore.claudeOptions.customArgs" placeholder="--model sonnet" />
         </div>
       </div>
     </footer>
@@ -105,6 +105,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useAppStore } from '@/stores/app'
+import { alt } from '@/utils/platform'
 import SessionList from './SessionList.vue'
 import PanelHeader from '../sidebar/PanelHeader.vue'
 
@@ -122,11 +123,6 @@ const sessionStore = useSessionStore()
 const appStore = useAppStore()
 const scrollContainer = ref<HTMLElement>()
 const searchQuery = ref('')
-
-const localOptions = ref({
-  skipPermissions: appStore.claudeOptions.skipPermissions,
-  customArgs: appStore.claudeOptions.customArgs
-})
 
 const projectTabs = computed(() => {
   const cwd = appStore.cwd
@@ -165,11 +161,6 @@ const snippetMap = computed(() => {
   }
   return map
 })
-
-// 同步选项到 store（仅在使用时临时设置，不持续同步）
-function applyLocalOptionsToStore() {
-  appStore.setClaudeOptions(localOptions.value)
-}
 
 watch(() => appStore.cwd, (newCwd) => {
   if (newCwd) {

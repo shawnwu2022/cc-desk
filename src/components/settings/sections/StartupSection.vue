@@ -34,18 +34,13 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
-import { saveDefaultClaudeOptions } from '@/api/tauri'
 
 const appStore = useAppStore()
-const skipPermissions = ref(appStore.claudeOptions.skipPermissions)
-const customArgs = ref(appStore.claudeOptions.customArgs)
+const skipPermissions = ref(appStore.defaultClaudeOptions.skipPermissions)
+const customArgs = ref(appStore.defaultClaudeOptions.customArgs)
 
 watch([skipPermissions, customArgs], () => {
-  appStore.setClaudeOptions({
-    skipPermissions: skipPermissions.value,
-    customArgs: customArgs.value
-  })
-  saveDefaultClaudeOptions({
+  appStore.setDefaultClaudeOptions({
     skipPermissions: skipPermissions.value,
     customArgs: customArgs.value
   })

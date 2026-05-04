@@ -133,6 +133,7 @@ onUnmounted(() => {
   unlistenFontSize?.()
   unlistenRestart?.()
   shortcutUnlisteners.forEach(fn => fn())
+  window.removeEventListener('app:toggleHome', handleToggleHome)
 })
 
 async function handleSelectProject() {
@@ -176,6 +177,14 @@ function handleResumeSession(projectPath: string, sessionId: string, sessionName
 
 function handleBack() {
   currentView.value = 'projects'
+}
+
+function handleToggleHome() {
+  if (currentView.value === 'terminal') {
+    currentView.value = 'projects'
+  } else if (currentView.value === 'projects' && appStore.cwd) {
+    currentView.value = 'terminal'
+  }
 }
 
 function openUrl(url: string) {
@@ -233,6 +242,9 @@ function initAfterChecks() {
       appStore.setCwd(data.cwd)
     }
   }).then(fn => { unlistenRestart = fn })
+
+  // Ctrl+Shift+H toggle home/projects
+  window.addEventListener('app:toggleHome', handleToggleHome)
 
   // 后台检查更新
   checkForUpdates().then(info => {

@@ -27,7 +27,7 @@ const filteredGroups = computed(() => [
       { key: `${ctrl}+Shift+N`, desc: 'Open new window' },
       { key: `${ctrl}+Shift+← / →`, desc: 'Snap window to left / right half' },
       { key: `${ctrl}+Shift+R`, desc: 'Restart application' },
-      { key: `${ctrl}+Shift+H`, desc: 'Back to project select' },
+      { key: `${ctrl}+Shift+H`, desc: 'Toggle home / terminal' },
       { key: `${ctrl}+,`, desc: 'Toggle settings' },
       { key: `${ctrl}+Plus / −`, desc: 'Increase / decrease font size' },
       { key: `${ctrl}+0`, desc: 'Reset font size' },

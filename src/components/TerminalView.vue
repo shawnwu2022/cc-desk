@@ -98,7 +98,6 @@ onMounted(async () => {
   // 监听快捷键事件（必须在 cwd 检查之前设置）
   window.addEventListener('terminal:newSession', handleNewSession)
   window.addEventListener('terminal:restartSession', handleRestartSession)
-  window.addEventListener('terminal:backToProjects', handleBack)
 
   const cwd = appStore.cwd
   if (!cwd) return
@@ -135,7 +134,6 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('terminal:newSession', handleNewSession)
   window.removeEventListener('terminal:restartSession', handleRestartSession)
-  window.removeEventListener('terminal:backToProjects', handleBack)
 })
 
 // KeepAlive 激活 → 改为 visible watcher（v-show 常驻 DOM）

@@ -47,7 +47,7 @@ function isTerminalVisible(): boolean {
   return terminalView !== null && terminalView.checkVisibility()
 }
 
-function emitTerminalAction(action: 'newSession' | 'restartSession' | 'backToProjects') {
+function emitTerminalAction(action: 'newSession' | 'restartSession') {
   window.dispatchEvent(new CustomEvent(`terminal:${action}`))
 }
 
@@ -123,6 +123,14 @@ export function useAppShortcuts() {
       return
     }
 
+    // Cmd/Ctrl + Shift + H => toggle home/projects
+    if (mod && e.shiftKey && e.key === 'H') {
+      e.preventDefault()
+      e.stopPropagation()
+      window.dispatchEvent(new CustomEvent('app:toggleHome'))
+      return
+    }
+
     // Cmd/Ctrl + = => font increase
     if (mod && e.key === '=' && !e.altKey) {
       e.preventDefault()
@@ -149,14 +157,6 @@ export function useAppShortcuts() {
 
     // --- 终端视图专属快捷键 ---
     if (!isTerminalVisible()) return
-
-    // Cmd/Ctrl + Shift + H => back to projects
-    if (mod && e.shiftKey && e.key === 'H') {
-      e.preventDefault()
-      e.stopPropagation()
-      emitTerminalAction('backToProjects')
-      return
-    }
 
     // Alt + N => new session
     if (e.altKey && !mod && e.code === 'KeyN') {

@@ -1,6 +1,6 @@
 [package]
 name = "cc-box"
-version = "0.3.7"
+version = "0.3.8"
 description = "Claude Code Desktop GUI (Tauri) - Multi-terminal manager for Claude Code power users"
 authors = ["orczh <orczh_hj@163.com>"]
 license = "MIT"
@@ -27,6 +27,7 @@ uuid = { version = "1", features = ["v4"] }
 parking_lot = "0.12"
 arc-swap = "1"
 chrono = "0.4"
+encoding_rs = "0.8"
 once_cell = "1"
 
 [profile.release]

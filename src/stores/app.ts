@@ -4,7 +4,6 @@ import {
   getAppConfig,
   updateAppConfig,
   saveLastProject,
-  getDefaultClaudeOptions,
   saveDefaultClaudeOptions,
   getHomeData,
   getProjects,
@@ -12,7 +11,7 @@ import {
   runChecks
 } from '@/api/tauri'
 
-import type { ClaudeOptions, CheckResult, Project, SessionInfo } from '@/types'
+import type { ClaudeOptions, DefaultClaudeOptions, CheckResult, Project, SessionInfo } from '@/types'
 
 const PAGE_SIZE = 12
 
@@ -43,7 +42,13 @@ export const useAppStore = defineStore('app', () => {
   const hasMoreProjects = ref(true)
   const isLoadingProjects = ref(false)
 
-  // Claude 启动选项
+  // Claude 默认启动参数（持久化，Settings 绑定）
+  const defaultClaudeOptions = ref<DefaultClaudeOptions>({
+    skipPermissions: false,
+    customArgs: ''
+  })
+
+  // Claude 当前使用启动参数（SessionsPanel/ProjectSelectView 绑定）
   const claudeOptions = ref<ClaudeOptions>({
     resume: '',
     skipPermissions: false,
@@ -64,10 +69,14 @@ export const useAppStore = defineStore('app', () => {
       theme.value = config.theme || 'light'
       fontSize.value = config.fontSize || 12
 
-      claudeOptions.value = {
-        resume: '',
+      defaultClaudeOptions.value = {
         skipPermissions: config.defaultSkipPermissions ?? false,
         customArgs: config.defaultCustomArgs ?? ''
+      }
+      claudeOptions.value = {
+        resume: '',
+        skipPermissions: defaultClaudeOptions.value.skipPermissions,
+        customArgs: defaultClaudeOptions.value.customArgs
       }
     } catch (err) {
       console.error('Failed to load app config:', err)
@@ -138,21 +147,31 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function resetClaudeOptions() {
-    getDefaultClaudeOptions().then(defaults => {
-      claudeOptions.value = {
-        resume: '',
-        skipPermissions: defaults.skipPermissions ?? false,
-        customArgs: defaults.customArgs ?? ''
-      }
-    })
+    claudeOptions.value = {
+      resume: '',
+      skipPermissions: defaultClaudeOptions.value.skipPermissions,
+      customArgs: defaultClaudeOptions.value.customArgs
+    }
+  }
+
+  async function setDefaultClaudeOptions(opts: Partial<DefaultClaudeOptions>) {
+    defaultClaudeOptions.value = { ...defaultClaudeOptions.value, ...opts }
+    claudeOptions.value = {
+      resume: claudeOptions.value.resume,
+      skipPermissions: defaultClaudeOptions.value.skipPermissions,
+      customArgs: defaultClaudeOptions.value.customArgs
+    }
+    await saveDefaultClaudeOptions(defaultClaudeOptions.value)
   }
 
   async function saveAsDefault(): Promise<boolean> {
     try {
-      await saveDefaultClaudeOptions({
+      const opts = {
         skipPermissions: claudeOptions.value.skipPermissions,
         customArgs: claudeOptions.value.customArgs
-      })
+      }
+      defaultClaudeOptions.value = opts
+      await saveDefaultClaudeOptions(opts)
       return true
     } catch (err) {
       console.error('Failed to save default options:', err)
@@ -190,6 +209,7 @@ export const useAppStore = defineStore('app', () => {
     cwd,
     theme,
     fontSize,
+    defaultClaudeOptions,
     claudeOptions,
     currentProject,
     pendingResume,
@@ -212,6 +232,7 @@ export const useAppStore = defineStore('app', () => {
     setTheme,
     setFontSize,
     setClaudeOptions,
+    setDefaultClaudeOptions,
     resetClaudeOptions,
     saveAsDefault,
     getClaudeArgs,
