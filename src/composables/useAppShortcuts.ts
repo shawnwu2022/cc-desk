@@ -152,7 +152,7 @@ export function useAppShortcuts() {
     }
 
     // Alt + N => new session
-    if (e.altKey && !mod && e.key === 'n') {
+    if (e.altKey && !mod && e.code === 'KeyN') {
       e.preventDefault()
       e.stopPropagation()
       emitTerminalAction('newSession')
@@ -160,7 +160,7 @@ export function useAppShortcuts() {
     }
 
     // Alt + R => restart session
-    if (e.altKey && !mod && e.key === 'r') {
+    if (e.altKey && !mod && e.code === 'KeyR') {
       e.preventDefault()
       e.stopPropagation()
       emitTerminalAction('restartSession')
