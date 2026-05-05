@@ -1,12 +1,8 @@
 # 版本发布流程
 
-本文档描述 CC-Box 的自动化版本发布流程。
-
-## 版本号规则
-
-遵循 [语义化版本](https://semver.org/lang/zh-CN/)：`vMAJOR.MINOR.PATCH`
-
 ## 版本号更新位置
+
+三个文件的版本号必须保持一致：
 
 | 文件 | 路径 |
 |------|------|
@@ -14,61 +10,39 @@
 | package.json | `package.json` → `version` |
 | tauri.conf.json | `src-tauri/tauri.conf.json` → `version` |
 
-三个文件的版本号必须保持一致。
-
-## 自动化发布流程
-
-推送版本标签后，CI 自动完成以下步骤：
-
-```
-git push origin v0.2.4
-  ↓
-GitHub Actions 触发构建
-  ↓
-构建三平台安装包（Windows/macOS/Linux）
-  ↓
-等待构建完成（gh run watch）
-  ↓
-自动生成 Release notes（从 CHANGELOG.md 提取）
-  ↓
-自动发布 Release（--draft=false）
-```
-
 ## 发布命令
 
 ```bash
-# 1. 更新版本号
-#    编辑: src-tauri/Cargo.toml, package.json, src-tauri/tauri.conf.json
+# 1. 更新版本号（编辑三个文件）
 
-# 2. 更新 CHANGELOG.md（用英文编写变更记录）
-
-# 3. 提交并推送
-git add -A
-git commit -m "Release v0.2.5"
+# 2. 提交并推送
+git add -A && git commit -m "Release v0.2.5"
 git push origin main
 
-# 4. 创建并推送标签（触发自动化发布）
+# 3. 创建并推送标签（触发 CI 构建）
 git tag -a v0.2.5 -m "Release v0.2.5"
 git push origin v0.2.5
 
-# 5. 等待CI构建完成（可通过链接动态查看）
-#    命令行: gh run watch <run-id>
-#    网页: https://github.com/orczh-hj/cc-box/actions
+# 4. 监控 CI 构建
+gh run watch <run-id> --exit-status
+# 或访问 https://github.com/orczh-hj/cc-box/actions
 
-# 6. 发布Release（编辑英文Release notes后发布）
-gh release edit v0.2.5 --draft=false
+# 5. 发布 Release（必须附带 release notes）
+gh release edit v0.2.5 --draft=false --notes "$(cat <<'EOF'
+## What's Changed
+
+### Bug Fixes
+- ...
+
+### Features
+- ...
+EOF
+)"
 ```
-
-## 重要提醒
-
-1. **CHANGELOG.md 必须用英文编写** - Release notes 从 CHANGELOG.md 自动提取，需使用英文
-2. **构建过程可动态监控** - 推送标签后可通过以下方式实时查看构建进度：
-   - 命令行：`gh run watch` 或 `gh run list`
-   - 网页：访问 GitHub Actions 页面查看实时构建状态
 
 ## 构建产物
 
-CI 自动构建并上传以下产物：
+CI 自动构建并上传：
 
 | 平台 | 产物 |
 |------|------|
@@ -81,38 +55,25 @@ CI 自动构建并上传以下产物：
 `CHANGELOG.md` 用于记录版本变更，CI 从中提取 Release notes：
 
 ```markdown
-## [v0.2.4] - 2026-04-29
+## [v0.2.5] - 2026-05-05
 
 ### Bug Fixes
-- Fix terminal copy (Ctrl+C/Ctrl+Shift+C)
-- Fix console window flash on Windows (CREATE_NO_WINDOW)
-- Fix new/restart session shortcuts (Alt+N/Alt+R)
+- Fix terminal copy (Ctrl+C)
 
 ### Features
-- Add Alt+N/Alt+R shortcuts for new/restart session
-- Add shortcut hints on session buttons
-- Spawn new app instance instead of multi-window
-- Preload sidebar data on startup
-
-## [v0.2.3] - 2026-04-28
-...
+- Add Alt+N/Alt+R shortcuts
 ```
 
-## 发布文档位置
+## 重要提醒
 
-| 文档 | 说明 |
-|------|------|
-| `CHANGELOG.md` | 版本变更记录 |
-| `docs/release-process.md` | 发布流程说明 |
-| GitHub Releases | 发布产物与说明 |
+1. **每次发布必须编写 release notes**，说明变更内容
+2. **CHANGELOG.md 用英文编写**，便于国际用户阅读
+3. **推送到 GitHub 需要代理**（国内环境）
 
 ## 回滚流程
 
 ```bash
-# 删除远程标签和 Release
-git push origin :refs/tags/v0.2.4
-git tag -d v0.2.4
-gh release delete v0.2.4 --yes
-
-# 修复问题后发布新版本
+git push origin :refs/tags/v0.2.5
+git tag -d v0.2.5
+gh release delete v0.2.5 --yes
 ```

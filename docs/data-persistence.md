@@ -2,10 +2,8 @@
 
 ## 数据保存原则
 
-应用遵循以下原则管理数据：
-
 1. **原生数据只读** — Claude Code 原生配置只读取不修改
-2. **应用配置独立** — GUI 特有设置保存在独立目录
+2. **应用配置独立** — GUI 特有设置保存在 `~/.cc-box/`
 3. **不重复存储** — 项目列表等数据直接从原生配置读取
 4. **默认值持久化** — 用户偏好设置保存在应用配置
 
@@ -24,39 +22,17 @@
 
 | 文件 | 用途 |
 |------|------|
-| `~/.cc-box/config.json` | GUI 配置（启动选项默认值、主题、字号等） |
-
-## ~/.claude.json 结构
-
-应用直接读取此文件获取项目列表：
-
-```json
-{
-  "projects": {
-    "D:/projects/my-app": {
-      "lastSessionId": "uuid-xxx",
-      "lastDuration": 123456,
-      "lastCost": 0.05
-    },
-    "D:/projects/api-server": {
-      "lastSessionId": "uuid-yyy",
-      "lastDuration": 78901
-    }
-  },
-  "theme": "light",
-  "autoConnectIde": true
-}
-```
-
-项目列表按 `lastDuration` 降序排序，最近使用的项目排在最前面。
+| `~/.cc-box/config.json` | GUI 配置（路径缓存、主题、字号、启动参数默认值） |
+| `~/.cc-box/claude-plugin/` | Hook Plugin 文件（运行时生成） |
+| `~/.cc-box/logs/` | 日志文件 |
 
 ## ~/.cc-box/config.json 结构
 
-应用专属配置，保存 GUI 特有设置：
-
 ```json
 {
-  "defaultContinue": true,
+  "claudePath": "C:\\Users\\xxx\\.local\\bin\\claude.exe",
+  "claudeLauncherType": "direct",
+  "gitBashPath": "C:\\Program Files\\Git\\bin\\bash.exe",
   "defaultSkipPermissions": false,
   "defaultCustomArgs": "",
   "theme": "light",
@@ -69,87 +45,38 @@
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `defaultContinue` | boolean | `-c` 选项默认值 |
+| `claudePath` | string? | Claude CLI 路径（检测后缓存） |
+| `claudeLauncherType` | "direct" \| "node"? | 启动类型（检测后缓存） |
+| `gitBashPath` | string? | Git Bash 路径（Windows，检测后缓存） |
 | `defaultSkipPermissions` | boolean | `--dangerously-skip-permissions` 默认值 |
 | `defaultCustomArgs` | string | 自定义参数默认值 |
 | `theme` | string | GUI 主题 |
 | `fontSize` | number | 终端字号 |
-| `lastOpenedProject` | string | 上次打开的项目路径 |
+| `lastOpenedProject` | string? | 上次打开的项目路径 |
 
-## 存储模块 (main/store.ts)
+## Store 命令 (IPC 通道)
 
-### Claude Code 原生数据
-
-```typescript
-// 获取项目列表（按最近使用排序）
-export function getProjects(): Project[]
-
-// 获取项目信息
-export function getProjectInfo(path: string): ProjectInfo | null
-
-// 获取全局设置
-export function getGlobalSettings(): Record<string, unknown>
-
-// 获取用户偏好
-export function getUserPreferences(): { theme, autoConnectIde, ... }
-```
-
-### 应用专属配置
-
-```typescript
-// 获取应用配置
-export function getAppConfig(): AppConfig
-
-// 更新应用配置
-export function updateAppConfig(updates: Partial<AppConfig>): void
-
-// 获取默认启动选项
-export function getDefaultClaudeOptions(): ClaudeOptions
-
-// 保存默认启动选项
-export function saveDefaultClaudeOptions(options): void
-
-// 保存上次打开的项目
-export function saveLastProject(path: string): void
-```
-
-## IPC 通道
-
-### Claude Code 数据
-
-| 通道 | 说明 |
+| 命令 | 说明 |
 |------|------|
-| `store:getProjects` | 获取项目列表 |
-| `store:getProjectInfo` | 获取项目详情 |
-| `store:getGlobalSettings` | 获取全局设置 |
-| `store:getUserPreferences` | 获取用户偏好 |
-
-### 应用配置
-
-| 通道 | 说明 |
-|------|------|
-| `store:getAppConfig` | 获取应用配置 |
-| `store:updateAppConfig` | 更新应用配置 |
-| `store:getDefaultClaudeOptions` | 获取默认启动选项 |
-| `store:saveDefaultClaudeOptions` | 保存默认启动选项 |
-| `store:saveLastProject` | 保存上次项目 |
-
-## 数据流程
-
-```
-启动时:
-  App.vue → loadAppConfig() → 恢复上次项目、默认选项
-  ProjectSelectView → getProjects() → 显示项目列表
-
-选择项目:
-  setCwd(path) → saveLastProject(path) → 记录到应用配置
-
-设置默认选项:
-  saveAsDefault() → saveDefaultClaudeOptions() → 持久化到应用配置
-
-启动终端:
-  getClaudeArgs() → 应用启动选项 → 传递给 Claude CLI
-```
+| `get_home_data` | 一次获取项目列表 + 近期会话（合并 IO） |
+| `get_projects` | 项目列表（分页） |
+| `get_project_info` | 项目详情 |
+| `get_sessions` | 会话列表（分页） |
+| `get_session_count` | 会话总数 |
+| `get_all_recent_sessions` | 跨项目近期会话 |
+| `get_session_details` | 会话详情 |
+| `search_session_messages` | 搜索会话消息内容 |
+| `get_app_config` | 获取应用配置 |
+| `update_app_config` | 更新应用配置（合并更新） |
+| `get_default_claude_options` | 获取默认启动选项 |
+| `save_default_claude_options` | 保存默认启动选项 |
+| `save_last_project` | 保存上次项目 |
+| `get_project_config` | 获取项目 Claude 配置（只读） |
+| `get_all_agents` | 获取所有 Agents |
+| `get_all_skills` | 获取所有 Skills |
+| `get_all_mcp_servers` | 获取所有 MCP Servers |
+| `get_all_plugins` | 获取所有 Plugins |
+| `get_mcp_server_detail` | 获取 MCP Server 详情（通过协议） |
 
 ## 兼容性
 

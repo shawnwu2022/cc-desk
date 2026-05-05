@@ -4,230 +4,175 @@
 
 ```
 App.vue
-├── WelcomeView.vue          # 欢迎引导页（无收藏项目时）
-├── ProjectSelectView.vue    # 项目选择页（有收藏项目时）
-└── TerminalView.vue         # 终端主视图（进入项目后）
-    ├── TerminalHeader.vue   # 标题栏（返回按钮、项目名）
-    ├── XTermTerminal.vue    # xterm.js 终端封装
-    ├── InfoBar.vue          # 信息栏（菜单按钮、状态）
-    └── SidebarDrawer.vue    # 左侧抽屉（项目列表、设置）
+├── TitleBar.vue                    # 自定义标题栏（Windows 去除原生装饰）
+├── SettingsOverlay.vue             # 全局设置浮层
+├── TerminalView.vue                # 终端主视图（常驻 DOM，v-show 控制）
+│   ├── IconBar.vue                 # 左侧图标栏（面板切换入口）
+│   ├── SidebarPanel.vue            # 侧边栏面板容器
+│   │   ├── SessionsPanel.vue       # 会话管理面板
+│   │   │   ├── SessionList.vue
+│   │   │   └── SessionItem.vue + SessionStatus.vue
+│   │   ├── SkillsPanel.vue         # Skills 面板
+│   │   ├── AgentsPanel.vue         # Agents 面板
+│   │   ├── McpPanel.vue            # MCP Servers 面板
+│   │   └── PluginsPanel.vue        # Plugins 面板
+│   ├── TerminalHeader.vue          # 终端标题栏（项目名 + 返回按钮）
+│   └── XTermTerminal.vue           # xterm.js 终端核心
+│
+├── WelcomeView.vue                 # 欢迎引导页（覆盖层，无收藏项目时）
+└── ProjectSelectView.vue           # 项目选择页（覆盖层，有收藏项目时）
 ```
-
-共 **7 个组件**，保持精简。
 
 ## 组件详情
 
-### App.vue — 视图切换
+### App.vue — 视图切换 + 环境检查
 
-```vue
-<template>
-  <Transition name="fade" mode="out-in">
-    <WelcomeView v-if="currentView === 'welcome'" />
-    <ProjectSelectView v-else-if="currentView === 'projects'" />
-    <TerminalView v-else />
-  </Transition>
-</template>
-
-<script setup>
-// 视图状态：'welcome' | 'projects' | 'terminal'
-const currentView = ref('welcome')
-
-// 启动时检查收藏项目
-onMounted(async () => {
-  const favorites = await window.api.getFavorites()
-  currentView.value = favorites.length > 0 ? 'projects' : 'welcome'
-})
-</script>
-```
+- 管理三个视图：`welcome` / `projects` / `terminal`
+- TerminalView 使用 `v-show` 常驻 DOM（保持 PTY 和终端实例不销毁）
+- WelcomeView/ProjectSelectView 使用 `v-if` 覆盖层叠加在终端之上
+- 环境检查失败时显示全屏遮罩
+- 初始化：hook store、快捷键监听、自动更新检查
 
 ### XTermTerminal.vue — 终端核心
 
 职责：
-- 创建和管理 xterm.js Terminal 实例
+- 管理多个终端实例（Map<tabId, TerminalInstance>）
 - 加载 FitAddon、SearchAddon、WebLinksAddon、SerializeAddon
 - 双向数据绑定：onData → ptyInput，onPtyOutput → term.write
-- resize 同步
+- Tab 创建/切换/重启/关闭
+- Ctrl+V 粘贴处理
+- 会话匹配轮询（通过 sessionStore）
 
 Props：
-- `cwd: string` — 工作目录
+- `fontSize: number` — 终端字号
 
 Events：
-- `sessionEnd` — PTY 进程退出时触发
+- `ptyStarted(tabId, ptyId)` — PTY 启动成功
 
-### TerminalView.vue — 终端容器
+### TerminalView.vue — 终端主视图
 
-布局结构：
+布局：
 ```
-┌──────────────────────────────────────┐
-│ TerminalHeader (38px)                │
-├──────────────────────────────────────┤
-│                                      │
-│ XTermTerminal (flex: 1)              │
-│                                      │
-├──────────────────────────────────────┤
-│ InfoBar (36px)                       │
-└──────────────────────────────────────┤
+┌────┬──────────────┬───────────────────────────┐
+│Icon│  SidebarPanel │  TerminalHeader (38px)     │
+│Bar │  (sessions/   ├───────────────────────────┤
+│(40px│  skills/     │                           │
+│    │  agents/      │  XTermTerminal (flex:1)   │
+│    │  mcp/         │                           │
+│    │  plugins)     │                           │
+└────┴──────────────┴───────────────────────────┘
 ```
 
 职责：
-- 组合 Header、Terminal、InfoBar、Sidebar
-- 管理 sidebarVisible 状态
-- 处理项目切换
+- 组合 IconBar、SidebarPanel、TerminalHeader、XTermTerminal
+- 管理会话操作（新建/切换/重命名/恢复/关闭）
+- 监听 cwd 变化，加载项目配置和历史会话
 
-### TerminalHeader.vue — 标题栏
+### IconBar.vue — 左侧图标栏
 
-元素：
-- 左侧：返回按钮 `←`
-- 中间：项目名（从 appStore.currentProject）
-- 右侧：设置按钮（触发 toggleSidebar）
+固定宽度 40px，提供面板切换入口：
+- Sessions、Skills、Agents、MCP、Plugins 图标按钮
+- Settings 按钮
+- Open Folder 按钮
 
-Events：
-- `back` — 返回项目列表
-- `settings` — 打开侧边栏
+### SidebarPanel.vue — 侧边栏面板
 
-### InfoBar.vue — 信息栏
+根据 `sidebarStore.activePanel` 显示对应面板内容，支持 `v-show` 切换（保留各面板状态）。
 
-元素：
-- 左侧：菜单按钮 `☰`（触发 toggleSidebar）
-- 状态文本：`Ready` 或 `Terminal running`
+### TitleBar.vue — 自定义标题栏
 
-Events：
-- `menu` — 打开侧边栏
-
-### SidebarDrawer.vue — 左侧抽屉
-
-布局：
-```
-┌─────────────────┐
-│ Claude Code  ✕ │  ← Header (关闭按钮)
-├─────────────────┤
-│ ── Projects ── │
-│ ○ project-a    │
-│ ○ project-b    │
-│ + Add project  │
-│                 │
-│ ── Settings ── │
-│ ○ Open Settings │
-├─────────────────┤
-│ v0.1.0         │  ← Footer
-└─────────────────┘
-```
-
-特性：
-- 从左侧滑入，宽度 260px
-- 点击外部或 Escape 关闭
-- Teleport to body
-
-Events：
-- `close` — 关闭抽屉
-- `selectProject` — 选择项目
-
-### WelcomeView.vue — 欢迎引导
-
-布局：
-- 全屏居中
-- Logo + 标题 + "Select Project Directory" 按钮
-
-Events：
-- `selectProject` — 打开目录选择器
-
-### ProjectSelectView.vue — 项目选择
-
-布局：
-- 项目卡片列表（显示名称、路径、最近使用时间）
-- "Add new project" 按钮
-
-Events：
-- `selectProject` — 打开目录选择器
-- `openProject` — 进入指定项目
+Windows 平台去除原生装饰后自定义的拖拽区域 + 窗口控制按钮。
 
 ## Store 结构
-
-### terminal.ts — 终端实例管理
-
-```typescript
-interface TerminalInstance {
-  id: string
-  cwd: string
-  createdAt: number
-  serialized?: string  // SerializeAddon 数据
-}
-
-const terminals = ref<Map<string, TerminalInstance>>(new Map())
-const activeId = ref<string>('')
-
-// 方法
-createTerminal(cwd): string
-removeTerminal(id)
-setActive(id)
-saveSerialized(id, data)
-```
 
 ### app.ts — 应用状态
 
 ```typescript
-interface Favorite {
-  path: string
-  name: string
-  lastOpened?: number
-}
-
-const cwd = ref<string>('')
-const favorites = ref<Favorite[]>([])
-const sidebarOpen = ref(false)
-const theme = ref<string>('light')
-const fontSize = ref<number>(12)
-
-// 计算属性
-currentProject // 从 cwd 提取项目名
-
-// 方法
-setCwd(path)
-setFavorites(favs)
-addFavorite(fav)
-removeFavorite(path)
-updateLastOpened(path)
-toggleSidebar()
-setTheme(theme)
-setFontSize(size)
+cwd: string                           // 当前工作目录
+theme: string                         // 主题
+fontSize: number                      // 终端字号
+pendingResume: PendingResume | null   // 待恢复会话信息
+checkResults: CheckResult[]           // 环境检查结果
+cachedProjects: Project[]             // 项目列表缓存（分页）
+cachedRecentSessions: SessionInfo[]   // 近期会话缓存
+defaultClaudeOptions: DefaultClaudeOptions  // 持久化默认启动参数
+claudeOptions: ClaudeOptions          // 当前启动参数
 ```
 
-## 样式体系
+方法：loadAppConfig、runChecks、loadCache、loadMoreProjects、setCwd、setFontSize、getClaudeArgs 等
 
-### global.css — CSS 变量
+### session.ts — 会话管理
+
+```typescript
+// Tab 数据模型（跨越 PTY 生命周期的稳定 UI 单元）
+interface TerminalTab {
+  tabId: string              // 稳定 ID
+  projectPath: string
+  ptyId: string | null       // PTY 进程 ID（停止时 null）
+  sessionId: string | null   // Claude session ID（匹配后赋值）
+  name: string
+  status: 'starting' | 'running' | 'stopped'
+  createdAt: number
+  lastActiveAt: number
+}
+
+tabs: Map<string, TerminalTab>        // 所有 Tab
+activeTabId: string | null            // 当前活跃 Tab
+historySessions: HistorySession[]     // 未被 Tab 占用的历史会话
+```
+
+方法：createTab、setTabPty、handlePtyExit、closeTab、matchSessionForTab、startMatchPolling、triggerOutputDrivenMatch
+
+### sidebar.ts — 侧边栏状态
+
+```typescript
+activePanel: SidebarPanelType  // 'sessions' | 'skills' | 'agents' | 'mcp' | 'plugins' | null
+panelVisible: boolean
+showSettings: boolean
+// 预加载数据
+skills: SkillInfo[]
+agents: AgentInfo[]
+mcpServers: McpServerInfo[]
+plugins: PluginInfo[]
+updateInfo: UpdateInfo | null
+```
+
+方法：togglePanel、loadAllSidebarData、openSettings
+
+### config.ts — 项目配置
+
+```typescript
+projectConfig: ProjectConfigResult | null  // 当前项目 Claude 配置（只读展示）
+```
+
+方法：loadProjectConfig（带缓存）
+
+### hook.ts — Hook 监控
+
+```typescript
+sessions: Map<string, SessionHookState>  // 按 ptyId 聚合的 hook 状态
+```
+
+方法：init（监听 hook-event）、getStateForPty、clearSession
+内置 2 分钟活跃状态陈旧检测（staleness check）。
+
+## 色彩系统
+
+主色调：**墨蓝 + 琥珀金**，温暖米灰基底。
 
 ```css
-:root {
-  /* 背景层级 */
-  --bg-primary: #ffffff;
-  --bg-secondary: #f7f8fa;
-  --bg-tertiary: #eef0f4;
+/* GUI 层 */
+--bg-primary: #faf9f6;        /* 温暖米灰 */
+--accent-primary: #1e3a5f;    /* 深邃墨蓝 */
+--accent-gold: #d4a574;       /* 琥珀金 */
 
-  /* 终端（浅色） */
-  --terminal-bg: #f8f9fa;
-  --terminal-fg: #1a1a2e;
+/* 状态语义色 */
+--status-success: #3d8c6e;    /* 墨绿 */
+--status-info: #2a5082;       /* 墨蓝 */
+--status-warning: #c4964a;    /* 琥珀 */
+--status-error: #c45c4a;      /* 赭红 */
 
-  /* 文字 */
-  --text-primary: #1a1a2e;
-  --text-secondary: #6b7280;
-  --text-tertiary: #9ca3af;
-
-  /* 边框 */
-  --border-color: #e5e7eb;
-
-  /* 交互 */
-  --hover-bg: #f3f4f6;
-  --active-bg: #e5e7eb;
-  --selected-bg: #ede9fe;
-
-  /* 强调色 */
-  --accent-color: #6c5ce7;
-}
+/* 终端层 */
+--terminal-bg: #f8f9fa;       /* 浅灰背景 */
+--terminal-fg: #1a1816;       /* 深炭灰文字 */
 ```
-
-### 组件样式原则
-
-- 使用 scoped CSS
-- 继承 CSS 变量
-- 不引入 CSS 框架
-- 终端区域使用 xterm.js 主题系统

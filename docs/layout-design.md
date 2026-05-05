@@ -6,191 +6,95 @@
 
 - 窗口进入即项目选择，符合用户第一步操作
 - 进入项目后全屏终端，最大化内容面积
-- 侧边栏按需展开，不打扰核心流程
+- 侧边栏面板按需展开，不打扰核心流程
 
 ## 窗口布局
 
-### 欢迎引导视图
+### 欢迎引导视图（WelcomeView）
 
-首次使用或无收藏项目时显示。
+首次使用或无收藏项目时显示，居中 Logo + "Select Project Directory" 按钮。
 
-```
-┌──────────────────────────────────────────────┐
-│                                               │
-│                                               │
-│                ◎ Claude Code                  │
-│                                               │
-│           AI-powered coding assistant         │
-│                                               │
-│      ┌────────────────────────────┐           │
-│      │  📁  Select Project Directory │         │
-│      └────────────────────────────┘           │
-│                                               │
-│         Choose a directory to start           │
-│                                               │
-└──────────────────────────────────────────────┘
-```
+### 项目选择视图（ProjectSelectView）
 
-### 项目选择视图
+有收藏项目时显示：项目卡片列表 + 近期会话列表 + "Add new project" 按钮。
 
-有收藏项目时显示。
+### 终端视图（TerminalView）
+
+进入项目后常驻 DOM（v-show 控制）。
 
 ```
-┌──────────────────────────────────────────────┐
-│   Claude Code                        ⚙ 设置  │
-│                                               │
-│   Recent Projects                             │
-│   ┌─────────────────────────────────────┐    │
-│   │ 📁 my-project-a                      │    │
-│   │ D:/projects/my-app                   │    │
-│   │ Last: 2 hours ago                    │    │
-│   └─────────────────────────────────────┘    │
-│   ┌─────────────────────────────────────┐    │
-│   │ 📁 website-2024                      │    │
-│   │ D:/projects/web                      │    │
-│   └─────────────────────────────────────┘    │
-│                                               │
-│   ┌─────────────────────────────────────┐    │
-│   │ +  Add new project                   │    │
-│   └─────────────────────────────────────┘    │
-└──────────────────────────────────────────────┘
+┌────┬──────────────┬───────────────────────────────┐
+│    │              │  ← my-project            ⚙    │  Header (38px)
+│ I  │  SidebarPanel├───────────────────────────────┤
+│ c  │              │                               │
+│ o  │  sessions/   │                               │
+│ n  │  skills/     │     XTermTerminal             │
+│ B  │  agents/     │     (浅灰背景 #f8f9fa)        │
+│ a  │  mcp/        │                               │
+│ r  │  plugins/    │     > _                       │
+│    │              │                               │
+│40px│  260px       │     flex:1                     │
+└────┴──────────────┴───────────────────────────────┘
 ```
 
-### 终端视图
+布局结构：
+- **IconBar**（40px）：左侧图标栏，面板切换入口
+- **SidebarPanel**（260px）：按需展开的侧边栏面板
+- **TerminalHeader**（38px）：项目名 + 返回按钮
+- **XTermTerminal**（flex:1）：终端区域
 
-进入项目后全屏显示。
-
-```
-┌──────────────────────────────────────────────┐
-│   ←   my-project-a                    ⚙      │  ← Header (38px)
-├──────────────────────────────────────────────┤
-│                                               │
-│   ┌────────────────────────────────────┐     │
-│   │                                    │     │
-│   │      xterm.js Terminal             │     │  ← Terminal (flex:1)
-│   │      (浅色背景 #f8f9fa)             │     │
-│   │                                    │     │
-│   │      Claude CLI 输出               │     │
-│   │      > _                           │     │
-│   │                                    │     │
-│   └────────────────────────────────────┘     │
-│                                               │
-├──────────────────────────────────────────────┤
-│   ☰    Ready                                 │  ← InfoBar (36px)
-└──────────────────────────────────────────────┘
-```
-
-### 侧边栏（Push 模式）
-
-点击 `☰` 或 `⚙` 按钮后从左侧展开，占据左侧空间而非浮动覆盖。
-
-```
-┌─────────────────┬──────────────────────────────┐
-│ Sessions    [+] │                               │
-│ ─────────────── │                               │
-│ 🔍 Search...    │                               │
-│ ─────────────── │                               │
-│ ● Session 1     │      终端区域（自动收缩）      │
-│   claude-sonnet │                               │
-│ ○ Debug bug     │                               │
-│   idle          │                               │
-│ ─────────────── │                               │
-│ Current Session │                               │
-│ Name: Session 1 │                               │
-│ Model: sonnet   │                               │
-│ [Restart]       │                               │
-│ ─────────────── │                               │
-│ Settings  [▼]   │                               │
-│ Font: [14]      │                               │
-└─────────────────┴──────────────────────────────┘
-```
-
-**特性**：
-- 宽度 260px，通过 flexbox 实现 Push 模式
-- 无遮罩层，终端区域自动收缩适应
-- 多会话管理：创建、切换、重命名、搜索
-- 运行状态指示：绿色圆点 ● = 运行中，空心 ○ = 空闲
-- 终端设置：字体大小调节（即时生效）
-- Escape 关闭侧边栏
+Windows 自定义标题栏（TitleBar）位于最顶部（32px）。
 
 ## 布局规格
 
-| 区域 | 高度/宽度 | 说明 |
-|------|----------|------|
-| 窗口最小 | 900×600 | 最小尺寸 |
-| 窗口默认 | 1200×800 | 启动尺寸 |
-| Header | 38px | 标题栏 |
-| Terminal | flex:1 | 自动填充 |
-| InfoBar | 36px | 固定底部 |
-| Sidebar | 260px | 抽屉宽度 |
-| 项目卡片 | 自适应 | padding 14px |
+| 区域 | 尺寸 | 说明 |
+|------|------|------|
+| TitleBar | 32px | 自定义标题栏（仅 Windows） |
+| IconBar | 40px | 左侧图标栏 |
+| SidebarPanel | 260px | 侧边栏面板宽度 |
+| TerminalHeader | 38px | 终端标题栏 |
+| XTermTerminal | flex:1 | 自动填充 |
 
 ## 色彩体系
 
-### GUI 层（浅色）
+主色调：**墨蓝 (#1e3a5f) + 琥珀金 (#d4a574)**，温暖米灰基底 (#faf9f6)。
 
-```css
---bg-primary: #ffffff;     /* 主背景 */
---bg-secondary: #f7f8fa;   /* 次级背景 */
---text-primary: #1a1a2e;   /* 主文字 */
---border-color: #e5e7eb;   /* 边框 */
---accent-color: #6c5ce7;   /* 强调色（紫色） */
-```
-
-### 终端层（浅色但保持可读性）
-
-```css
-background: #f8f9fa;       /* 浅灰背景 */
-foreground: #1a1a2e;       /* 深色文字 */
-cursor: #6c5ce7;           /* 紫色光标 */
-```
-
-ANSI 颜色适配浅色背景：
-- 黑色 → 深灰 (#1a1a2e)
-- 红/绿/黄/蓝 保持原色
-- 亮色系列适当调亮
+| 层级 | 用途 | 关键变量 |
+|------|------|----------|
+| GUI 背景 | 主/次/第三层 | `--bg-primary: #faf9f6` / `--bg-secondary: #f5f3ee` / `--bg-tertiary: #ebe8e0` |
+| GUI 强调 | 墨蓝 + 琥珀金 | `--accent-primary: #1e3a5f` / `--accent-gold: #d4a574` |
+| GUI 文字 | 深炭灰层级 | `--text-primary: #1a1816` / `--text-secondary: #5a5550` / `--text-tertiary: #8a8680` |
+| 终端 | 浅灰背景 + 深文字 | `--terminal-bg: #f8f9fa` / `--terminal-fg: #1a1816` |
+| 状态 | 成功/信息/警告/错误 | `--status-success: #3d8c6e` / `--status-info: #2a5082` / `--status-warning: #c4964a` / `--status-error: #c45c4a` |
 
 ## 字体
 
 ```css
 /* GUI */
-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+font-family: var(--font-sans);  /* SF Pro Text / Segoe UI / Noto Sans */
 font-size: 14px;
 
 /* 终端 */
-font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
-font-size: 14px;
+font-family: var(--font-mono);  /* Cascadia Code / Fira Code / JetBrains Mono / Consolas */
+font-size: 12px (默认，可调节 10-24)
 ```
 
 ## 圆角与阴影
 
 | 元素 | 圆角 | 阴影 |
 |------|------|------|
-| 项目卡片 | 10px | `0 1px 3px rgba(0,0,0,0.08)` |
-| 按钮 | 8px | 无 |
-| 终端容器 | 8px | 无 |
-| 侧边栏 | 无右圆角 | `4px 0 16px rgba(0,0,0,0.08)` |
-| 弹窗 | 12px | `0 4px 24px rgba(0,0,0,0.12)` |
+| 按钮 | `--radius-md` (6px) | 无 |
+| 终端容器 | `--radius-lg` (8px) | 无 |
+| 弹窗 | `--radius-xl` (12px) | `--shadow-lg` |
 
-## 功能模块
+## 侧边栏面板
 
-### Phase 1（当前）
+侧边栏通过 IconBar 按钮切换面板内容，`v-show` 控制显示（保留各面板状态）：
 
-- ✅ 终端集成（xterm.js + node-pty）
-- ✅ 环境检查（Git Bash、Claude CLI）
-- ✅ 项目收藏
-- ✅ 浅色主题
-- ✅ 基础侧边栏
-
-### Phase 2
-
-- 多终端标签
-- 会话历史恢复（SerializeAddon）
-- 终端内搜索（SearchAddon）
-- 主题切换
-
-### Phase 3
-
-- 快捷命令面板
-- 工作区保存/恢复
-- 主题库（预设 + 自定义）
+| 面板 | 组件 | 内容 |
+|------|------|------|
+| Sessions | SessionsPanel | Tab 列表 + 历史会话 + 状态指示灯 |
+| Skills | SkillsPanel | 按 source 分组的 Skill 列表 |
+| Agents | AgentsPanel | 按 source 分组的 Agent 列表 |
+| MCP | McpPanel | MCP Server 列表 + 工具/提示/资源详情 |
+| Plugins | PluginsPanel | Plugin 列表 + 包含的 Skills/Agents/MCP |

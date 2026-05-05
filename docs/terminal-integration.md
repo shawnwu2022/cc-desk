@@ -2,7 +2,7 @@
 
 ## 架构概述
 
-本项目使用 **Tauri 2 + xterm.js + portable-pty** 直接运行 Claude CLI，实现完全的原生终端体验。
+使用 **Tauri 2 + xterm.js + portable-pty** 直接运行 Claude CLI，实现完全的原生终端体验。
 
 ### 核心依赖
 
@@ -21,16 +21,9 @@
 ### 核心功能
 
 ```rust
-// 启动 Claude CLI 进程
 pub fn spawn(&self, cwd: String, cols: u16, rows: u16, args: Option<Vec<String>>) -> Result<PtyInfo>
-
-// 写入数据到 PTY
 pub fn write(&self, id: &str, data: &str) -> Result<()>
-
-// resize PTY
 pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<()>
-
-// 终止 PTY
 pub fn kill(&self, id: &str) -> Result<()>
 pub fn kill_all(&self)
 ```
@@ -43,28 +36,10 @@ Claude CLI 有多种安装方式，启动命令构建需要智能检测启动类
 
 | 安装方式 | 命令 | 文件类型 | Windows路径示例 | Mac/Linux路径示例 |
 |---------|------|---------|-----------------|-------------------|
-| Native Install | `curl -fsSL https://claude.ai/install.sh | bash` | 编译后可执行文件 | `~/.local/bin/claude.exe` | `~/.local/bin/claude` |
+| Native Install | `curl -fsSL https://claude.ai/install.sh \| bash` | 编译后可执行文件 | `~/.local/bin/claude.exe` | `~/.local/bin/claude` |
 | npm | `npm install -g @anthropic-ai/claude-code` | Node.js脚本 | `...\node_global\node_modules\@anthropic-ai\claude-code\cli.js` | `.../node_modules/@anthropic-ai/claude-code/cli.js` |
 | Homebrew | `brew install --cask claude-code` | 编译后可执行文件 | - | `/usr/local/bin/claude` |
 | WinGet | `winget install Anthropic.ClaudeCode` | 编译后可执行文件 | 系统PATH | - |
-
-#### npm shim 脚本结构
-
-npm安装会创建shim脚本（如`D:\...\node_global\claude`），内容为shell脚本：
-
-```bash
-#!/bin/sh
-basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
-if [ -x "$basedir/node" ]; then
-  exec "$basedir/node" "$basedir/node_modules/@anthropic-ai/claude-code/cli.js" "$@"
-else 
-  exec node "$basedir/node_modules/@anthropic-ai/claude-code/cli.js" "$@"
-fi
-```
-
-cli.js文件特征：
-- 第一行：`#!/usr/bin/env node`
-- 包含Anthropic版权：`// (c) Anthropic PBC. All rights reserved...`
 
 #### 启动类型检测逻辑
 
@@ -73,15 +48,12 @@ cli.js文件特征：
 ```
 1. 检查扩展名
    path.ends_with(".js") → node
-
 2. 检查文件内容（前5行）
    "#!/usr/bin/env node" → node
    "// (c) Anthropic" + "Version:" → node (cli.js特征)
-
 3. Mac/Linux: 解析符号链接
    canonicalize(path).ends_with(".js") → node
    真实文件内容检测 → node
-
 否则 → direct
 ```
 
@@ -89,49 +61,20 @@ cli.js文件特征：
 
 ```rust
 // Windows
-if ends_with(".exe") {
-    // 直接执行编译版
-    CommandBuilder::new(&claude_path)
-} else if needs_node_launcher() {
-    // Node.js脚本：用node执行
-    CommandBuilder::new("node").arg(&claude_path)
-} else {
-    // shim脚本：用cmd.exe包装
-    CommandBuilder::new("cmd.exe").arg("/C").arg(&claude_path)
-}
+if ends_with(".exe") { CommandBuilder::new(&claude_path) }
+else if needs_node_launcher() { CommandBuilder::new("node").arg(&claude_path) }
+else { CommandBuilder::new("cmd.exe").arg("/C").arg(&claude_path) }
 
 // Mac/Linux
-if needs_node_launcher() {
-    CommandBuilder::new("node").arg(&claude_path)
-} else {
-    CommandBuilder::new(&claude_path)  // 直接执行
-}
+if needs_node_launcher() { CommandBuilder::new("node").arg(&claude_path) }
+else { CommandBuilder::new(&claude_path) }
 ```
 
 #### 配置存储
 
-检测结果保存到 `~/.cc-box/config.json`：
+检测结果保存到 `~/.cc-box/config.json`：`{ "claudeLauncherType": "node" | "direct" }`
 
-```jsonc
-{
-  "claudeLauncherType": "node"  // 或 "direct"
-}
-```
-
-PTY启动时优先从配置读取，无值时检测并保存。
-
-#### 环境变量
-
-```rust
-// Windows: Git Bash 路径
-.env("CLAUDE_CODE_GIT_BASH_PATH", detected_path)
-
-// 基础终端环境
-.env("TERM", "xterm-256color")
-.env("COLORTERM", "truecolor")
-.env("PWD", cwd)
-```
-```
+PTY 启动时优先从配置读取，无值时检测并保存。
 
 ### 数据流
 
@@ -199,45 +142,21 @@ const term = new Terminal({
   cursorStyle: 'bar',
   theme: lightTheme,
   allowProposedApi: true,
-  macOptionIsMeta: true, // macOS Option 作为 Meta
+  macOptionIsMeta: true,
 })
-```
-
-### 浅色终端主题
-
-```typescript
-const lightTheme = {
-  background: '#f8f9fa',      // 浅灰背景
-  foreground: '#1a1a2e',      // 深色文字
-  cursor: '#6c5ce7',          // 紫色光标
-  selectionBackground: '#ede9fe',
-  // ANSI 16色...
-}
 ```
 
 ### 数据绑定
 
 ```typescript
 // 用户输入 → PTY
-term.onData(data => {
-  const instance = terminalInstances.get(tabId)
-  if (instance) {
-    ptyInput(instance.ptyId, data)
-  }
-})
+term.onData(data => { ptyInput(instance.ptyId, data) })
 
 // PTY 输出 → Terminal
-onPtyOutput(({ id, data }) => {
-  const instance = terminalInstances.get(tabId)
-  if (instance && id === instance.ptyId) {
-    instance.term.write(data)
-  }
-})
+onPtyOutput(({ id, data }) => { instance.term.write(data) })
 
 // resize 同步
-term.onResize(({ cols, rows }) => {
-  ptyResize(instance.ptyId, cols, rows)
-})
+term.onResize(({ cols, rows }) => { ptyResize(instance.ptyId, cols, rows) })
 ```
 
 ### Ctrl+V 粘贴处理
@@ -246,9 +165,7 @@ term.onResize(({ cols, rows }) => {
 term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
   if (event.ctrlKey && event.key === 'v') {
     event.preventDefault()
-    readText().then(text => {
-      if (text) term.paste(text)
-    })
+    readText().then(text => { if (text) term.paste(text) })
     return false
   }
   return true
@@ -257,82 +174,28 @@ term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 
 ## 快捷键处理机制
 
-### 原则
+**应用级快捷键由 `useAppShortcuts.ts` 通过 DOM `keydown` capturing phase 统一处理；终端快捷键由 xterm.js + PTY 原生处理。**
 
-**应用级快捷键由 Rust 端 `tauri-plugin-global-shortcut` 在 OS 层拦截，通过事件传递到前端处理；终端快捷键由 xterm.js + PTY 原生处理。**
-
-- 应用快捷键：Rust 端 `lib.rs` 注册 `RegisterHotKey` → `app.emit("shortcut:*")` → 前端 `listen()` → `useAppShortcuts.ts`
+- 应用快捷键：`window.addEventListener('keydown', handler, true)` → capturing phase 拦截 → 匹配后 `preventDefault` + `stopPropagation`
 - 终端快捷键：xterm.js 通过 `onData` 发送到 PTY，由 Claude CLI 处理
-- 窗口焦点检查：Windows 使用 `GetForegroundWindow()` FFI 直接检查前台窗口，其他平台使用 `on_window_event(Focused)`
+- 终端视图可见性检查：`document.querySelector('[data-terminal-view]').checkVisibility()`
 
 ### 应用级快捷键
 
-| 快捷键 | 功能 | 处理方 |
-|--------|------|--------|
-| Ctrl+Shift+N | 新建窗口 | Rust global-shortcut → emit |
-| Ctrl+Shift+←/→ | 窗口左移/右移半屏 | Rust global-shortcut → emit |
-| Ctrl+Shift+R | 重启应用 | Rust global-shortcut → emit |
-| Ctrl+, | 打开设置 | Rust global-shortcut → emit |
-| Ctrl+Plus/Minus | 增大/减小字体 | Rust global-shortcut → emit |
-| Ctrl+0 | 重置字体 | Rust global-shortcut → emit |
-| Alt+N/R | 新建/重启会话 | Rust global-shortcut → emit |
-| Alt+↑/↓ | 切换标签 | Rust global-shortcut → emit |
-| Ctrl+Shift+H | 回到项目列表 | Rust global-shortcut → emit |
+| 快捷键 | 功能 |
+|--------|------|
+| Ctrl+, | 打开设置 |
+| Ctrl+Shift+N | 新建应用实例 |
+| Ctrl+Shift+←/→ | 窗口左移/右移半屏 |
+| Ctrl+Shift+R | 重启应用 |
+| Ctrl+Shift+H | 回到项目列表 |
+| Ctrl+=/- | 增大/减小字体 |
+| Ctrl+0 | 重置字体 |
+| Alt+N | 新建会话（终端可见时） |
+| Alt+R | 重启会话（终端可见时） |
+| Alt+↑/↓ | 切换标签（终端可见时） |
 
-### 终端快捷键（由 Claude CLI 处理）
-
-| 快捷键 | 功能 | 处理方 |
-|--------|------|--------|
-| Ctrl+C | 取消当前输入/生成 | xterm.js → PTY → Claude CLI |
-| Ctrl+D | 退出 Claude Code | xterm.js → PTY → Claude CLI |
-| Ctrl+L | 清屏 | xterm.js → PTY → Claude CLI |
-| Ctrl+R | 反向搜索历史 | xterm.js → PTY → Claude CLI |
-| Ctrl+W | 删除前一个单词 | xterm.js 发送 `\x17` → PTY |
-| Ctrl+B | 后台运行任务 | xterm.js → PTY → Claude CLI |
-| Alt+P | 切换模型 | xterm.js → PTY → Claude CLI |
-| Alt+T | 切换扩展思考 | xterm.js → PTY → Claude CLI |
-
-### 窗口前台检查
-
-```rust
-// src-tauri/src/lib.rs
-// Windows: 使用 GetForegroundWindow() 直接检查前台窗口
-// 其他平台: 使用 on_window_event(Focused) 追踪焦点状态
-#[cfg(target_os = "windows")]
-fn is_window_foreground() -> bool {
-    let hwnd = OUR_HWND.load(Ordering::SeqCst);
-    if hwnd.is_null() { return true; }
-    unsafe { GetForegroundWindow() == hwnd }
-}
-```
-
-详细快捷键架构文档见 [docs/interaction.md](interaction.md)。
-
-## 环境检查 (src-tauri/src/checks.rs)
-
-### 检查项
-
-```rust
-pub fn run_checks() -> CheckResults {
-    vec![
-        check_claude_cli(),    // claude 命令可用
-        check_git_bash(),      // Git Bash 路径（Windows）
-    ]
-}
-```
-
-### 启动流程
-
-```rust
-// src-tauri/src/lib.rs
-.on_window_event(|_window, event| {
-    if let tauri::WindowEvent::CloseRequested { .. } = event {
-        if let Some(manager) = pty::get_pty_manager() {
-            manager.kill_all();
-        }
-    }
-})
-```
+详细快捷键架构 → [docs/interaction.md](interaction.md)
 
 ## 进程生命周期
 
@@ -343,13 +206,3 @@ pub fn run_checks() -> CheckResults {
                               ↓
 关闭窗口 → kill_all() → PTY 进程清理 → Claude CLI 退出
 ```
-
-## 与 Electron 架构的差异
-
-| 特性 | Electron | Tauri |
-|------|----------|-------|
-| PTY 实现 | node-pty (Node) | portable-pty (Rust) |
-| 快捷键拦截 | `before-input-event` | DOM capturing phase |
-| Ctrl+W 处理 | 需手动拦截发送 | xterm.js 原生处理 |
-| IPC | ipcMain/ipcRenderer | invoke/listen |
-| 进程通信 | webContents.send | emit/listen |

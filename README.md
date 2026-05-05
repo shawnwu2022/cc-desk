@@ -53,16 +53,16 @@ Open as many Claude Code sessions as you need — each runs independently in its
 
 ### Quick Launch with Presets
 
-Set per-project startup options like `--continue`, `--model`, or custom flags. Launch sessions with your preferred configuration without typing the same arguments every time.
+Set per-project startup options like `--resume`, `--model`, or custom flags. Launch sessions with your preferred configuration without typing the same arguments every time.
 
 ### Sidebar Panels
 
 A side drawer with contextual panels — no overlay, no focus stealing:
 
-- **Sessions** — Browse, search, and switch between all sessions
-- **MCP Servers** — Inspect connected MCP servers, browse available tools and their schemas
+- **Sessions** — Browse, search, and switch between all sessions. Status indicators show running/thinking/waiting states.
+- **MCP Servers** — Inspect connected MCP servers, browse available tools and their input schemas
 - **Skills & Agents** — Quick access to your Claude Code skills and agent configurations
-- **Plugins** — View installed plugins
+- **Plugins** — View installed plugins and their components
 
 ### Native Terminal, Zero Compromise
 
@@ -70,35 +70,16 @@ The app runs the real Claude CLI binary through a pseudo-terminal. Everything wo
 
 ---
 
+## Prerequisites
+
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated
+- **Windows only**: [Git for Windows](https://git-scm.com/download/win) (provides Git Bash)
+
+---
+
 ## Quick Start
 
-### 1. Install Claude Code
-
-Claude Code can no longer be installed via npm. Use one of the following methods:
-
-**macOS / Linux / WSL:**
-```bash
-curl -fsSL https://claude.ai/install.sh | bash
-```
-
-**Windows PowerShell:**
-```powershell
-irm https://claude.ai/install.ps1 | iex
-```
-
-**Homebrew:**
-```bash
-brew install --cask claude-code
-```
-
-**WinGet:**
-```powershell
-winget install Anthropic.ClaudeCode
-```
-
-Then run `claude` once to authenticate.
-
-### 2. Download & Install CC-Box
+### 1. Download & Install
 
 Head to the [**Releases**](https://github.com/orczh-hj/cc-box/releases) page and grab the installer for your platform:
 
@@ -108,7 +89,9 @@ Head to the [**Releases**](https://github.com/orczh-hj/cc-box/releases) page and
 | **macOS** | `.dmg` (universal binary) |
 | **Linux** | `.deb` or `.AppImage` |
 
-### 3. Launch & Go
+Users in China can download from [Gitee Releases](https://gitee.com/orczh/cc-box/releases).
+
+### 2. Launch & Go
 
 1. Open the app
 2. Select or add a project directory
@@ -127,7 +110,7 @@ Head to the [**Releases**](https://github.com/orczh-hj/cc-box/releases) page and
 - [Node.js](https://nodejs.org/) 18+
 - [Rust](https://www.rust-lang.org/tools/install) stable toolchain
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- **Windows only**: MinGW-w64 (`C:\ProgramData\mingw64\mingw64\bin` in PATH)
+- **Windows only**: [Git for Windows](https://git-scm.com/download/win)
 
 ### Setup
 
@@ -191,16 +174,6 @@ The app runs the CLI binary directly — it doesn't depend on any internal API. 
 ## Tech Stack
 
 Tauri 2 (Rust) + Vue 3 + TypeScript + xterm.js + portable-pty
-
----
-
-## Code Signing Policy
-
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org)
-
-- **Committers and reviewers**: [Contributors](https://github.com/orczh-hj/cc-box/graphs/contributors)
-- **Approvers**: [Owner](https://github.com/orczh-hj)
-- **Privacy policy**: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ---
 

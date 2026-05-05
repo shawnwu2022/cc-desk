@@ -47,10 +47,13 @@ cc-box/
 │   │   ├── commands.rs         # Tauri IPC 命令
 │   │   ├── store.rs            # Claude Code 原生数据读取
 │   │   ├── mcp.rs              # MCP 协议客户端（HTTP/SSE + stdio）
-│   │   ├── hook_events.rs      # Hook 事件数据结构与提取（信息提取定义中心）
+│   │   ├── hook_events.rs      # Hook 事件数据结构与提取
 │   │   ├── hook_server.rs      # Hook HTTP 服务器（接收 Claude 运行时事件）
 │   │   ├── hook_config.rs      # Hook Plugin 文件管理
-│   │   └── checks.rs           # 环境检查
+│   │   ├── checks.rs           # 环境检查
+│   │   ├── logger.rs           # 日志系统（FileLogger、文件轮转）
+│   │   └── updater.rs          # 自动更新（GitHub Releases）
+│   ├── plugin/                 # Claude Code Plugin 文件（编译时嵌入）
 │   ├── capabilities/           # Tauri 权限配置
 │   ├── Cargo.toml
 │   └── tauri.conf.json
@@ -58,17 +61,26 @@ cc-box/
 ├── src/                        # Vue 3 前端
 │   ├── api/tauri.ts            # Tauri invoke/listen 封装
 │   ├── components/             # UI 组件
-│   │   ├── XTermTerminal.vue   # xterm.js 终端
-│   │   ├── TerminalView.vue    # 终端容器
-│   │   ├── SidebarPanel.vue    # 侧边栏
-│   │   ├── sidebar/            # 侧边栏子面板（Session、MCP、Agent 等）
-│   │   ├── mcp/                # MCP 组件（McpPanel > McpGroup > McpItem > McpSubItem）
-│   │   ├── settings/           # 设置子组件
+│   │   ├── App.vue             # 视图切换 + 环境检查
+│   │   ├── TitleBar.vue        # 自定义标题栏（Windows）
 │   │   ├── WelcomeView.vue     # 欢迎页
-│   │   └── ProjectSelectView.vue
-│   ├── stores/                 # Pinia（app、session、sidebar、config、hook）
-│   ├── types/                  # TypeScript 类型定义（含 hook 事件类型）
-│   ├── composables/            # 组合式函数
+│   │   ├── ProjectSelectView.vue # 项目选择页
+│   │   ├── TerminalView.vue    # 终端主视图容器
+│   │   ├── XTermTerminal.vue   # xterm.js 终端核心
+│   │   ├── TerminalHeader.vue  # 终端标题栏
+│   │   ├── IconBar.vue         # 左侧图标栏
+│   │   ├── ShortcutsModal.vue  # 快捷键弹窗
+│   │   ├── sessions/           # 会话面板（SessionList > SessionItem > SessionStatus）
+│   │   ├── skills/             # Skills 面板（SkillsPanel > SkillGroup > SkillItem）
+│   │   ├── agents/             # Agents 面板（AgentsPanel > AgentGroup > AgentItem）
+│   │   ├── mcp/                # MCP 面板（McpPanel > McpGroup > McpItem > McpSubItem）
+│   │   ├── plugins/            # Plugins 面板（PluginsPanel > PluginGroup > PluginItem）
+│   │   ├── sidebar/            # 侧边栏容器（SidebarPanel > PanelHeader）
+│   │   └── settings/           # 设置（SettingsOverlay > SettingsView + sections/）
+│   ├── stores/                 # Pinia：app、session、sidebar、config、hook
+│   ├── types/                  # TypeScript 类型定义（pty、session、project、config、app、hook）
+│   ├── composables/            # useAppShortcuts、useTerminalCommand
+│   ├── utils/                  # platform 工具
 │   └── styles/global.css       # CSS 变量与全局样式
 │
 ├── docs/                       # 详细文档
@@ -177,7 +189,7 @@ EOF
 | [docs/hook-monitor.md](docs/hook-monitor.md) | **Hook 监控系统**：Plugin 注入、事件采集、状态机、多终端区分 |
 | [docs/layout-design.md](docs/layout-design.md) | 布局设计、窗口结构、色彩系统、排版规范 |
 | [docs/components.md](docs/components.md) | 组件树、各组件职责与 props/events、Store 结构 |
-| [docs/interaction.md](docs/interaction.md) | **快捷键处理架构**、三场景输入处理、DOM 捕获期监听、窗口焦点恢复 |
+| [docs/interaction.md](docs/interaction.md) | **快捷键处理架构**、三场景输入处理、DOM 捕获期监听 |
 | [docs/capabilities.md](docs/capabilities.md) | **Tauri 权限管理**、查询/确认/添加 capabilities 权限的方法 |
 | [docs/data-persistence.md](docs/data-persistence.md) | 数据存储架构、文件路径、JSON 结构 |
 | [docs/startup-checks.md](docs/startup-checks.md) | 启动先决条件检查、路径检测与自动保存 |
