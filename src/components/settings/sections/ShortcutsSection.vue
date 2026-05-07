@@ -28,9 +28,12 @@ const filteredGroups = computed(() => [
       { key: `${ctrl}+Shift+← / →`, desc: 'Snap window to left / right half' },
       { key: `${ctrl}+Shift+R`, desc: 'Restart application' },
       { key: `${ctrl}+Shift+H`, desc: 'Toggle home / terminal' },
+      { key: `${ctrl}+Shift+/`, desc: 'Show keyboard shortcuts' },
+      { key: `${ctrl}+Shift+S`, desc: 'Toggle sessions panel' },
       { key: `${ctrl}+,`, desc: 'Toggle settings' },
       { key: `${ctrl}+Plus / −`, desc: 'Increase / decrease font size' },
       { key: `${ctrl}+0`, desc: 'Reset font size' },
+      { key: 'Escape', desc: 'Close settings / panels' },
     ]
   },
   {
@@ -39,7 +42,10 @@ const filteredGroups = computed(() => [
     items: [
       { key: `${alt}+N`, desc: 'New session' },
       { key: `${alt}+R`, desc: 'Restart session' },
-      { key: `${alt}+↑ / ↓`, desc: 'Switch to previous / next tab' },
+      { key: `${alt}+W`, desc: 'Close current tab' },
+      { key: `${ctrl}+Tab`, desc: 'Switch to next tab' },
+      { key: `${ctrl}+Shift+Tab`, desc: 'Switch to previous tab' },
+      { key: `${alt}+↑ / ↓`, desc: 'Switch to previous / next tab (alt)' },
     ]
   },
   {

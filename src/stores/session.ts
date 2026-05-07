@@ -163,6 +163,8 @@ export const useSessionStore = defineStore('session', () => {
     const tab = tabs.get(tabId)
     if (!tab) return
 
+    const projectPath = tab.projectPath
+
     // 如果有运行中的 PTY，先 kill
     if (tab.ptyId) {
       try { await ptyKill(tab.ptyId) } catch {}
@@ -171,7 +173,13 @@ export const useSessionStore = defineStore('session', () => {
     tabs.delete(tabId)
 
     if (activeTabId.value === tabId) {
-      activeTabId.value = null
+      // 关闭当前活跃标签后，聚焦到同项目的相邻标签
+      const remaining = getProjectTabs(projectPath)
+      if (remaining.length > 0) {
+        activeTabId.value = remaining[0].tabId
+      } else {
+        activeTabId.value = null
+      }
     }
   }
 

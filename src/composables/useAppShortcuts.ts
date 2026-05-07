@@ -42,13 +42,27 @@ export async function openNewAppInstance() {
   }
 }
 
-function isTerminalVisible(): boolean {
-  const terminalView = document.querySelector('[data-terminal-view]')
-  return terminalView !== null && terminalView.checkVisibility()
-}
+export function switchTab(direction: 'next' | 'prev') {
+  const appStore = useAppStore()
+  const sessionStore = useSessionStore()
+  const cwd = appStore.cwd
+  if (!cwd) return
+  const tabs = sessionStore.getProjectTabs(cwd)
+  if (tabs.length < 2) return
 
-function emitTerminalAction(action: 'newSession' | 'restartSession') {
-  window.dispatchEvent(new CustomEvent(`terminal:${action}`))
+  const currentId = sessionStore.activeTabId
+  const currentIndex = tabs.findIndex(t => t.tabId === currentId)
+
+  let nextIndex: number
+  if (currentIndex === -1) {
+    nextIndex = 0
+  } else if (direction === 'next') {
+    nextIndex = (currentIndex + 1) % tabs.length
+  } else {
+    nextIndex = (currentIndex - 1 + tabs.length) % tabs.length
+  }
+
+  sessionStore.setActiveTab(tabs[nextIndex].tabId)
 }
 
 export function useAppShortcuts() {
@@ -56,33 +70,12 @@ export function useAppShortcuts() {
   const sessionStore = useSessionStore()
   const sidebarStore = useSidebarStore()
 
-  function switchTab(direction: 'next' | 'prev') {
-    const cwd = appStore.cwd
-    if (!cwd) return
-    const tabs = sessionStore.getProjectTabs(cwd)
-    if (tabs.length < 2) return
-
-    const currentId = sessionStore.activeTabId
-    const currentIndex = tabs.findIndex(t => t.tabId === currentId)
-
-    let nextIndex: number
-    if (currentIndex === -1) {
-      nextIndex = 0
-    } else if (direction === 'next') {
-      nextIndex = (currentIndex + 1) % tabs.length
-    } else {
-      nextIndex = (currentIndex - 1 + tabs.length) % tabs.length
-    }
-
-    sessionStore.setActiveTab(tabs[nextIndex].tabId)
-  }
-
   function handleGlobalKeydown(e: KeyboardEvent) {
-    const mod = e.ctrlKey
+    const mod = e.ctrlKey || e.metaKey
 
     // --- 全局快捷键（所有视图生效） ---
 
-    // Cmd/Ctrl + , => toggle settings
+    // Mod + , => toggle settings
     if (mod && e.key === ',') {
       e.preventDefault()
       e.stopPropagation()
@@ -90,15 +83,15 @@ export function useAppShortcuts() {
       return
     }
 
-    // Cmd/Ctrl + Shift + N => new instance
-    if (mod && e.shiftKey && e.key === 'N') {
+    // Mod + Shift + N => new instance
+    if (mod && e.shiftKey && e.code === 'KeyN') {
       e.preventDefault()
       e.stopPropagation()
       openNewAppInstance()
       return
     }
 
-    // Cmd/Ctrl + Shift + Left => snap left
+    // Mod + Shift + Left => snap left
     if (mod && e.shiftKey && e.key === 'ArrowLeft') {
       e.preventDefault()
       e.stopPropagation()
@@ -106,7 +99,7 @@ export function useAppShortcuts() {
       return
     }
 
-    // Cmd/Ctrl + Shift + Right => snap right
+    // Mod + Shift + Right => snap right
     if (mod && e.shiftKey && e.key === 'ArrowRight') {
       e.preventDefault()
       e.stopPropagation()
@@ -114,8 +107,8 @@ export function useAppShortcuts() {
       return
     }
 
-    // Cmd/Ctrl + Shift + R => restart app
-    if (mod && e.shiftKey && e.key === 'R') {
+    // Mod + Shift + R => restart app
+    if (mod && e.shiftKey && e.code === 'KeyR') {
       e.preventDefault()
       e.stopPropagation()
       try { ptyKillAll() } catch { /* ignore */ }
@@ -123,15 +116,15 @@ export function useAppShortcuts() {
       return
     }
 
-    // Cmd/Ctrl + Shift + H => toggle home/projects
-    if (mod && e.shiftKey && e.key === 'H') {
+    // Mod + Shift + H => toggle home/projects
+    if (mod && e.shiftKey && e.code === 'KeyH') {
       e.preventDefault()
       e.stopPropagation()
       window.dispatchEvent(new CustomEvent('app:toggleHome'))
       return
     }
 
-    // Cmd/Ctrl + = => font increase
+    // Mod + = => font increase
     if (mod && e.key === '=' && !e.altKey) {
       e.preventDefault()
       e.stopPropagation()
@@ -139,7 +132,7 @@ export function useAppShortcuts() {
       return
     }
 
-    // Cmd/Ctrl + - => font decrease
+    // Mod + - => font decrease
     if (mod && e.key === '-' && !e.shiftKey) {
       e.preventDefault()
       e.stopPropagation()
@@ -147,7 +140,7 @@ export function useAppShortcuts() {
       return
     }
 
-    // Cmd/Ctrl + 0 => font reset
+    // Mod + 0 => font reset
     if (mod && e.key === '0') {
       e.preventDefault()
       e.stopPropagation()
@@ -155,35 +148,92 @@ export function useAppShortcuts() {
       return
     }
 
-    // --- 终端视图专属快捷键 ---
-    if (!isTerminalVisible()) return
+    // Mod + Shift + / => shortcuts panel
+    if (mod && e.shiftKey && e.code === 'Slash') {
+      e.preventDefault()
+      e.stopPropagation()
+      sidebarStore.openSettings('shortcuts')
+      return
+    }
 
-    // Alt + N => new session
+    // Mod + Shift + S => toggle sessions panel
+    if (mod && e.shiftKey && e.code === 'KeyS') {
+      e.preventDefault()
+      e.stopPropagation()
+      sidebarStore.togglePanel('sessions')
+      return
+    }
+
+    // Escape => close overlays (settings, panels)
+    if (e.key === 'Escape') {
+      if (sidebarStore.showSettings || sidebarStore.panelVisible) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        if (sidebarStore.showSettings) {
+          sidebarStore.closeSettings()
+        }
+        if (sidebarStore.panelVisible) {
+          sidebarStore.closePanel()
+        }
+        return
+      }
+      // No overlay open: let Escape pass through to xterm/CLI
+    }
+
+    // --- 会话与标签管理（全局生效） ---
+
+    // Alt+N => new session
     if (e.altKey && !mod && e.code === 'KeyN') {
       e.preventDefault()
       e.stopPropagation()
-      emitTerminalAction('newSession')
+      window.dispatchEvent(new CustomEvent('terminal:newSession'))
       return
     }
 
-    // Alt + R => restart session
+    // Alt+R => restart session
     if (e.altKey && !mod && e.code === 'KeyR') {
       e.preventDefault()
       e.stopPropagation()
-      emitTerminalAction('restartSession')
+      window.dispatchEvent(new CustomEvent('terminal:restartSession'))
       return
     }
 
-    // Alt + Up => tab prev
-    if (e.altKey && e.key === 'ArrowUp') {
+    // Alt+W => close current tab
+    if (e.altKey && !mod && e.code === 'KeyW') {
+      e.preventDefault()
+      e.stopPropagation()
+      if (sessionStore.activeTabId) {
+        sessionStore.closeTab(sessionStore.activeTabId)
+      }
+      return
+    }
+
+    // Ctrl+Tab => switch to next tab (cyclic)
+    if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === 'Tab') {
+      e.preventDefault()
+      e.stopPropagation()
+      switchTab('next')
+      return
+    }
+
+    // Ctrl+Shift+Tab => switch to previous tab (cyclic)
+    if (e.ctrlKey && e.shiftKey && !e.altKey && e.key === 'Tab') {
       e.preventDefault()
       e.stopPropagation()
       switchTab('prev')
       return
     }
 
-    // Alt + Down => tab next
-    if (e.altKey && e.key === 'ArrowDown') {
+    // Alt+Up => switch to previous tab
+    if (e.altKey && !mod && e.key === 'ArrowUp') {
+      e.preventDefault()
+      e.stopPropagation()
+      switchTab('prev')
+      return
+    }
+
+    // Alt+Down => switch to next tab
+    if (e.altKey && !mod && e.key === 'ArrowDown') {
       e.preventDefault()
       e.stopPropagation()
       switchTab('next')

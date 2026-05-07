@@ -200,12 +200,22 @@ function createTerminal(tabId: string): Terminal {
       return false
     }
 
-    // Ctrl+V 粘贴
-    if (event.ctrlKey && event.key === 'v') {
+    // Ctrl+V / Cmd+V 粘贴
+    if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
       event.preventDefault()
       readText().then(text => {
         if (text) term.paste(text)
       }).catch(() => {})
+      return false
+    }
+
+    // Shift+Enter => 插入换行
+    if (event.shiftKey && event.key === 'Enter') {
+      event.preventDefault()
+      const instance = terminalInstances.get(tabId)
+      if (instance) {
+        ptyInput(instance.ptyId, '\n')
+      }
       return false
     }
 
