@@ -75,6 +75,29 @@ pub fn run() {
                 }
             }
 
+            // Windows: 禁用 WebView2 浏览器加速键（Ctrl+L/D 等不再被 WebView2 拦截）
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(ww) = app.get_webview_window("main") {
+                    let _ = ww.with_webview(|webview| {
+                        use windows_core::Interface;
+                        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+                        let controller = webview.controller();
+                        if let Ok(core_wv) = unsafe { controller.CoreWebView2() } {
+                            if let Ok(settings) = unsafe { core_wv.Settings() } {
+                                if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
+                                    if let Err(e) = unsafe { settings3.SetAreBrowserAcceleratorKeysEnabled(false) } {
+                                        log::warn!("Failed to disable browser accelerator keys: {}", e);
+                                    } else {
+                                        log::info!("WebView2 browser accelerator keys disabled");
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
             // 异步执行非关键初始化（不阻塞 UI 显示）
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
