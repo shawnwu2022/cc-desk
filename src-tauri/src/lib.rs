@@ -10,6 +10,7 @@ mod hook_server;
 mod hook_config;
 
 use tauri::Manager;
+use tauri::menu::MenuBuilder;
 
 /// 全局缓存环境检查结果（setup 前执行，仅一次）
 use std::sync::LazyLock;
@@ -63,6 +64,15 @@ pub fn run() {
         })
         .setup(|app| {
             logger::init();
+
+            // macOS: 注册原生 Copy 菜单项，使 Cmd+C 在 WebView 中生效
+            #[cfg(target_os = "macos")]
+            {
+                let menu = MenuBuilder::new(app)
+                    .copy()
+                    .build()?;
+                let _ = app.set_menu(menu);
+            }
 
             pty::init_pty_manager(app.handle().clone());
             log::info!("PTY manager initialized");
