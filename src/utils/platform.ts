@@ -14,3 +14,4 @@ export const isWindows = platform === 'windows'
 
 export const ctrl = isMac ? 'Control' : 'Ctrl'
 export const alt = isMac ? 'Option' : 'Alt'
+export const cmd = isMac ? 'Cmd' : 'Ctrl'

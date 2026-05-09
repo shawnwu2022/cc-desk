@@ -17,22 +17,22 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ctrl, alt, isMac } from '@/utils/platform'
+import { ctrl, alt, cmd, isMac } from '@/utils/platform'
 
 const filteredGroups = computed(() => [
   {
     title: 'Application Shortcuts',
     hint: '',
     items: [
-      { key: `${ctrl}+Shift+N`, desc: 'Open new window' },
-      { key: `${ctrl}+Shift+← / →`, desc: 'Snap window to left / right half' },
-      { key: `${ctrl}+Shift+R`, desc: 'Restart application' },
-      { key: `${ctrl}+Shift+H`, desc: 'Toggle home / terminal' },
-      { key: `${ctrl}+Shift+/`, desc: 'Show keyboard shortcuts' },
-      { key: `${ctrl}+Shift+S`, desc: 'Toggle sessions panel' },
-      { key: `${ctrl}+,`, desc: 'Toggle settings' },
-      { key: `${ctrl}+Plus / −`, desc: 'Increase / decrease font size' },
-      { key: `${ctrl}+0`, desc: 'Reset font size' },
+      { key: `${cmd}+Shift+N`, desc: 'Open new window' },
+      { key: `${cmd}+Shift+← / →`, desc: 'Snap window to left / right half' },
+      { key: `${cmd}+Shift+R`, desc: 'Restart application' },
+      { key: `${cmd}+Shift+H`, desc: 'Toggle home / terminal' },
+      { key: `${cmd}+Shift+/`, desc: 'Show keyboard shortcuts' },
+      { key: `${cmd}+Shift+S`, desc: 'Toggle sessions panel' },
+      { key: `${cmd},`, desc: 'Toggle settings' },
+      { key: `${cmd}+Plus / −`, desc: 'Increase / decrease font size' },
+      { key: `${cmd}+0`, desc: 'Reset font size' },
     ]
   },
   {

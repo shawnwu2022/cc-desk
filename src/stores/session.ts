@@ -52,6 +52,7 @@ export const useSessionStore = defineStore('session', () => {
   const allHistoryCache = ref<HistorySession[]>([])
   const searchQuery = ref<string>('')
   const isLoading = ref<boolean>(false)
+  const isLoadingMore = ref<boolean>(false)
   const messageSearchResults = ref<SessionSearchResult[]>([])
   let messageSearchTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -246,15 +247,19 @@ export const useSessionStore = defineStore('session', () => {
   // ---- 历史会话 ----
 
   /**
-   * 加载历史会话（全量缓存，computed 会过滤 Tab 占用的）
+   * 加载历史会话（分批加载，首批立即显示）
    */
   async function loadHistorySessions(projectPath: string) {
     isLoading.value = true
+    isLoadingMore.value = false
+    allHistoryCache.value = []
     try {
+      const batchSize = 20
       const count = await getSessionCount(projectPath)
-      const allSessions = await getSessions(projectPath, count, 0)
 
-      allHistoryCache.value = allSessions
+      // 首批立即加载并显示
+      const firstBatch = await getSessions(projectPath, Math.min(batchSize, count), 0)
+      allHistoryCache.value = firstBatch
         .map(s => ({
           sessionId: s.sessionId,
           name: s.name,
@@ -262,10 +267,28 @@ export const useSessionStore = defineStore('session', () => {
           lastActiveAt: s.lastActiveAt,
         }))
         .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+      isLoading.value = false
+
+      // 如果还有更多，继续加载
+      if (count > batchSize) {
+        isLoadingMore.value = true
+        const remaining = await getSessions(projectPath, count - batchSize, batchSize)
+        const more = remaining
+          .map(s => ({
+            sessionId: s.sessionId,
+            name: s.name,
+            projectPath: s.projectPath,
+            lastActiveAt: s.lastActiveAt,
+          }))
+          .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+        allHistoryCache.value = [...allHistoryCache.value, ...more]
+          .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+        isLoadingMore.value = false
+      }
     } catch (err) {
       console.error('[SessionStore] loadHistorySessions failed:', err)
-    } finally {
       isLoading.value = false
+      isLoadingMore.value = false
     }
   }
 
@@ -318,6 +341,7 @@ export const useSessionStore = defineStore('session', () => {
     historySessions,
     searchQuery,
     isLoading,
+    isLoadingMore,
 
     // Computed
     activeTab,

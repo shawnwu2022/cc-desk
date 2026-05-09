@@ -64,7 +64,7 @@
     </button>
 
     <!-- 时间信息 -->
-    <span class="time-info">{{ timeAgo }}</span>
+    <span v-if="showTime" class="time-info">{{ timeAgo }}</span>
   </div>
 </template>
 
@@ -83,6 +83,7 @@ const props = defineProps<{
   lastActiveAt: number
   closable?: boolean
   snippet?: string
+  showTime?: boolean
 }>()
 
 const dotClass = computed(() => {

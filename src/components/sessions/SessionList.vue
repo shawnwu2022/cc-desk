@@ -14,6 +14,7 @@
       :can-resume="item.canResume"
       :closable="closable && item.isTab"
       :snippet="item.snippet"
+      :show-time="item.showTime"
       @switch="(id) => $emit('switch', id)"
       @rename="(id, name) => $emit('rename', id, name)"
       @restart="(id) => $emit('restart', id)"
@@ -54,6 +55,7 @@ interface ListItem {
   snippet?: string
   working?: boolean
   pending?: boolean
+  showTime?: boolean
 }
 
 const items = computed<ListItem[]>(() => {
@@ -69,6 +71,7 @@ const items = computed<ListItem[]>(() => {
     canResume: tab.status === 'stopped' ? !!tab.sessionId : undefined,
     working: tab.status === 'running' ? tab.working : undefined,
     pending: tab.status === 'running' ? tab.pending : undefined,
+    showTime: false,
   }))
 
   const historyItems: ListItem[] = (props.history ?? []).map(s => ({
@@ -79,6 +82,7 @@ const items = computed<ListItem[]>(() => {
     isTab: false,
     lastActiveAt: s.lastActiveAt,
     snippet: snippets?.get(s.sessionId),
+    showTime: true,
   }))
 
   return [...tabItems, ...historyItems]

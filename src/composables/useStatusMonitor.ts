@@ -10,6 +10,7 @@ const STATUS_EVENTS: HookEventType[] = [
   'stop',
   'stopFailure',
   'notification',
+  'sessionEnd',
 ]
 
 export function useStatusMonitor(options: { isFocused: Ref<boolean> }) {
@@ -40,10 +41,13 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean> }) {
       return
     }
 
-    // stop/stopFailure/notification：仅在 working 时才处理
+    // stop/stopFailure/notification/sessionEnd：仅在 working 时才处理
     if (!tab.working) return
 
     tab.working = false
+
+    // sessionEnd 不需要 pending/attention 提示
+    if (payload.detail.type === 'sessionEnd') return
 
     // 第一层：应用失焦 → 任务栏跳动 + pending
     if (!options.isFocused.value) {

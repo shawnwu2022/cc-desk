@@ -11,102 +11,13 @@
           </header>
 
           <div class="modal-body">
-            <section class="shortcuts-section">
-              <h3>Claude Code Shortcuts</h3>
-              <p class="hint">These shortcuts are passed directly to the terminal.</p>
+            <section v-for="group in groups" :key="group.title" class="shortcuts-section">
+              <h3>{{ group.title }}</h3>
+              <p v-if="group.hint" class="hint">{{ group.hint }}</p>
               <div class="shortcuts-list">
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+C</kbd>
-                  <span>Cancel current input / interrupt</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+D</kbd>
-                  <span>Exit Claude session</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ alt }}+P</kbd>
-                  <span>Enter plan mode</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+L</kbd>
-                  <span>Clear terminal screen</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+R</kbd>
-                  <span>Search command history</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+W</kbd>
-                  <span>Delete word backward</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+K</kbd>
-                  <span>Clear line after cursor</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+U</kbd>
-                  <span>Clear line before cursor</span>
-                </div>
-              </div>
-            </section>
-
-            <section class="shortcuts-section">
-              <h3>Application Shortcuts</h3>
-              <div class="shortcuts-list">
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+Shift+N</kbd>
-                  <span>New window</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+Shift+R</kbd>
-                  <span>Restart application</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+,</kbd>
-                  <span>Settings</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+Plus/-</kbd>
-                  <span>Zoom in/out</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>{{ ctrl }}+0</kbd>
-                  <span>Reset zoom</span>
-                </div>
-              </div>
-            </section>
-
-            <section class="shortcuts-section">
-              <h3>Slash Commands</h3>
-              <p class="hint">Type these in Claude prompt:</p>
-              <div class="shortcuts-list">
-                <div class="shortcut-item">
-                  <kbd>/help</kbd>
-                  <span>Show available commands</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>/clear</kbd>
-                  <span>Clear conversation</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>/compact</kbd>
-                  <span>Compact conversation history</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>/cost</kbd>
-                  <span>Show session cost</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>/model</kbd>
-                  <span>Switch model</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>/permissions</kbd>
-                  <span>Review permissions</span>
-                </div>
-                <div class="shortcut-item">
-                  <kbd>/init</kbd>
-                  <span>Initialize CLAUDE.md</span>
+                <div v-for="item in group.items" :key="item.key" class="shortcut-item">
+                  <kbd>{{ item.key }}</kbd>
+                  <span>{{ item.desc }}</span>
                 </div>
               </div>
             </section>
@@ -118,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import { ctrl, alt } from '@/utils/platform'
+import { ctrl, alt, cmd, isMac } from '@/utils/platform'
 
 defineProps<{
   visible: boolean
@@ -127,6 +38,103 @@ defineProps<{
 defineEmits<{
   close: []
 }>()
+
+const groups = [
+  {
+    title: 'Application Shortcuts',
+    items: [
+      { key: `${cmd}+Shift+N`, desc: 'New window' },
+      { key: `${cmd}+Shift+← / →`, desc: 'Snap window to left / right half' },
+      { key: `${cmd}+Shift+R`, desc: 'Restart application' },
+      { key: `${cmd}+Shift+H`, desc: 'Toggle home / terminal' },
+      { key: `${cmd}+Shift+/`, desc: 'Show keyboard shortcuts' },
+      { key: `${cmd}+Shift+S`, desc: 'Toggle sessions panel' },
+      { key: `${cmd},`, desc: 'Settings' },
+      { key: `${cmd}+Plus / −`, desc: 'Zoom in / out' },
+      { key: `${cmd}+0`, desc: 'Reset zoom' },
+    ]
+  },
+  {
+    title: 'Session Management',
+    items: [
+      { key: `${alt}+N`, desc: 'New session' },
+      { key: `${alt}+R`, desc: 'Restart session' },
+      { key: `${alt}+W`, desc: 'Close current tab' },
+      { key: `${ctrl}+Tab`, desc: 'Switch to next tab' },
+      { key: `${ctrl}+Shift+Tab`, desc: 'Switch to previous tab' },
+      { key: `${alt}+↑ / ↓`, desc: 'Switch to previous / next tab' },
+    ]
+  },
+  {
+    title: 'Claude Code Shortcuts',
+    hint: 'Passed directly to the terminal.',
+    items: [
+      { key: `${ctrl}+C`, desc: 'Cancel current input or generation' },
+      { key: `${ctrl}+D`, desc: 'Exit Claude session' },
+      { key: `${alt}+P`, desc: 'Switch model without clearing prompt' },
+      { key: `${alt}+T`, desc: 'Toggle extended thinking' },
+      { key: `${alt}+O`, desc: 'Toggle fast mode' },
+      { key: `${ctrl}+L`, desc: 'Clear screen' },
+      { key: `${ctrl}+R`, desc: 'Search command history' },
+      { key: `${ctrl}+O`, desc: 'Toggle transcript viewer' },
+      { key: `${ctrl}+B`, desc: 'Run task in background' },
+      { key: `${ctrl}+T`, desc: 'Toggle task list' },
+      { key: 'Esc Esc', desc: 'Rewind or summarize' },
+    ]
+  },
+  {
+    title: 'Text Editing',
+    items: [
+      { key: `${ctrl}+A`, desc: 'Move cursor to start of line' },
+      { key: `${ctrl}+E`, desc: 'Move cursor to end of line' },
+      { key: `${ctrl}+W`, desc: 'Delete word backward' },
+      { key: `${ctrl}+K`, desc: 'Delete to end of line' },
+      { key: `${ctrl}+U`, desc: 'Delete from cursor to start of line' },
+      { key: `${ctrl}+Y`, desc: 'Paste deleted text' },
+      { key: `${alt}+B`, desc: 'Move cursor back one word' },
+      { key: `${alt}+F`, desc: 'Move cursor forward one word' },
+    ]
+  },
+  {
+    title: 'Multi-line Input',
+    items: [
+      { key: '\\ + Enter', desc: 'Insert newline' },
+      { key: `${ctrl}+J`, desc: 'Insert newline (any terminal)' },
+      ...(isMac
+        ? [{ key: 'Shift+Enter', desc: 'Insert newline (iTerm2, WezTerm, etc.)' }]
+        : [{ key: 'Shift+Enter', desc: 'Insert newline (if terminal supports it)' }]
+      ),
+    ]
+  },
+  {
+    title: 'Quick Input',
+    items: [
+      { key: '/ at start', desc: 'Command or skill' },
+      { key: '! at start', desc: 'Bash mode' },
+      { key: '@', desc: 'File path mention' },
+    ]
+  },
+  {
+    title: 'Slash Commands',
+    hint: 'Type in Claude prompt:',
+    items: [
+      { key: '/help', desc: 'Show available commands' },
+      { key: '/clear', desc: 'Start new conversation' },
+      { key: '/compact', desc: 'Summarize to free context window' },
+      { key: '/model', desc: 'Switch AI model' },
+      { key: '/cost', desc: 'Show session cost' },
+      { key: '/permissions', desc: 'Manage tool permission rules' },
+      { key: '/config', desc: 'Open settings' },
+      { key: '/init', desc: 'Initialize CLAUDE.md' },
+      { key: '/resume', desc: 'Resume a previous session' },
+      { key: '/diff', desc: 'Interactive diff viewer' },
+      { key: '/plan', desc: 'Enter plan mode' },
+      { key: '/review', desc: 'Review pull request' },
+      { key: '/doctor', desc: 'Diagnose installation' },
+      { key: '/exit', desc: 'Exit CLI' },
+    ]
+  },
+]
 </script>
 
 <style scoped>
@@ -144,7 +152,7 @@ defineEmits<{
 }
 
 .modal-content {
-  width: 420px;
+  width: 460px;
   max-height: 80vh;
   background: var(--bg-primary);
   border-radius: 12px;
@@ -219,32 +227,38 @@ defineEmits<{
 .shortcuts-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .shortcut-item {
   display: flex;
   align-items: center;
   gap: 12px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.shortcut-item:hover {
+  background: var(--bg-secondary);
 }
 
 kbd {
   display: inline-block;
-  padding: 4px 8px;
+  padding: 3px 8px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 4px;
   font-family: 'SF Mono', 'Consolas', 'Monaco', 'Menlo', monospace;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text-primary);
-  min-width: 80px;
+  min-width: 100px;
   text-align: center;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .shortcut-item span {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-primary);
 }
 

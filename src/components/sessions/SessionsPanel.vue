@@ -37,7 +37,7 @@
       </div>
 
       <!-- History -->
-      <div v-if="filteredHistory.length > 0" class="section">
+      <div v-if="filteredHistory.length > 0 || sessionStore.isLoading" class="section">
         <div class="section-title">History</div>
         <SessionList
           :history="filteredHistory"
@@ -48,12 +48,16 @@
       </div>
 
       <!-- 空状态 -->
-      <div v-if="projectTabs.length === 0 && filteredHistory.length === 0" class="empty-hint">
+      <div v-if="projectTabs.length === 0 && filteredHistory.length === 0 && !sessionStore.isLoading" class="empty-hint">
         No sessions found
       </div>
 
       <div v-if="sessionStore.isLoading" class="loading-indicator">
         Loading...
+      </div>
+
+      <div v-if="sessionStore.isLoadingMore" class="loading-indicator">
+        Loading more...
       </div>
     </div>
 

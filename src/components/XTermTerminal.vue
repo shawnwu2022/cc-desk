@@ -168,6 +168,12 @@ function createTerminal(tabId: string): Terminal {
     const instance = terminalInstances.get(tabId)
     if (instance) {
       ptyInput(instance.ptyId, data)
+
+      // Escape 按键：Claude 的 Stop hook 不在用户中断时触发，立即清除 working
+      if (data === '\x1b') {
+        const tab = sessionStore.tabs.get(tabId)
+        if (tab?.working) tab.working = false
+      }
     }
   })
 
@@ -179,19 +185,29 @@ function createTerminal(tabId: string): Terminal {
     }
   })
 
-  // Ctrl+V 粘贴 / Ctrl+C 复制 / Ctrl+Shift+C 复制
+  // 复制粘贴处理
   term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
     if (event.type !== 'keydown') return true
 
-    // Ctrl+C 复制（如果有选中文本）或发送 SIGINT（如果没有）
-    if (event.ctrlKey && event.key === 'c' && !event.shiftKey) {
+    // Cmd+C (macOS) 复制选中内容
+    if (event.metaKey && !event.ctrlKey && event.key === 'c') {
       const selection = term.getSelection()
       if (selection) {
         event.preventDefault()
         writeText(selection).catch(() => {})
         return false
       }
-      // 无选中文本，让 Ctrl+C 作为 SIGINT
+      return true
+    }
+
+    // Ctrl+C 复制（有选中）或 SIGINT（无选中）
+    if (event.ctrlKey && !event.metaKey && event.key === 'c' && !event.shiftKey) {
+      const selection = term.getSelection()
+      if (selection) {
+        event.preventDefault()
+        writeText(selection).catch(() => {})
+        return false
+      }
       return true
     }
 
