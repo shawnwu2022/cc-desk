@@ -165,20 +165,24 @@ export const useAppStore = defineStore('app', () => {
   }
 
   /** 同步当前 claudeEnvVars 到 cc-box config + ~/.claude/settings.json */
-  async function doSyncEnv() {
+  async function doSyncEnv(removedKeys: string[] = []) {
     updateAppConfig({ claudeEnvVars: claudeEnvVars.value })
-    await syncClaudeEnv(claudeEnvVars.value)
+    await syncClaudeEnv(claudeEnvVars.value, removedKeys)
   }
 
   /** 更新环境变量并同步 */
-  async function setClaudeEnvVars(vars: Record<string, string>) {
+  async function setClaudeEnvVars(vars: Record<string, string>, removedKeys: string[] = []) {
     claudeEnvVars.value = vars
-    await doSyncEnv()
+    await doSyncEnv(removedKeys)
   }
 
-  /** 重置为代码中定义的默认值 */
+  /** 将默认变量恢复为代码默认值，保留用户添加的变量 */
   async function resetClaudeEnvVars() {
-    claudeEnvVars.value = { ...DEFAULT_CLAUDE_ENV_VARS }
+    const updated = { ...claudeEnvVars.value }
+    for (const [key, value] of Object.entries(DEFAULT_CLAUDE_ENV_VARS)) {
+      updated[key] = value
+    }
+    claudeEnvVars.value = updated
     await doSyncEnv()
   }
 

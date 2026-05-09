@@ -204,8 +204,12 @@ fn get_gui_config_path() -> Result<PathBuf> {
 // ==================== Claude 环境变量注入 ====================
 
 /// 将 cc-box 管理的环境变量合并写入 ~/.claude/settings.json
-/// 只更新 user_env 中的 key，不影响 Claude settings 中其他已有的 env
-pub fn sync_claude_env(user_env: std::collections::HashMap<String, String>) -> Result<()> {
+/// user_env: 要写入的键值对
+/// removed_keys: 需要从 Claude settings env 中删除的 key（用户改名/删除操作产生）
+pub fn sync_claude_env(
+    user_env: std::collections::HashMap<String, String>,
+    removed_keys: Vec<String>,
+) -> Result<()> {
     let home = dirs::home_dir().context("Home directory not found")?;
     let settings_path = home.join(".claude").join("settings.json");
 
@@ -234,6 +238,12 @@ pub fn sync_claude_env(user_env: std::collections::HashMap<String, String>) -> R
         .and_then(|v| v.as_object_mut())
         .context("settings.json env is not an object")?;
 
+    // 删除不再管理的 key
+    for key in &removed_keys {
+        env_obj.remove(key);
+    }
+
+    // 写入/更新 key
     for (key, value) in &user_env {
         env_obj.insert(key.clone(), serde_json::Value::String(value.clone()));
     }

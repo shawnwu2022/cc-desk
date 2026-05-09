@@ -113,7 +113,7 @@ function handleKeyChange(oldKey: string, newKeyVal: string) {
   const value = envVars[oldKey]
   delete envVars[oldKey]
   envVars[trimmed] = value
-  syncEnv()
+  appStore.setClaudeEnvVars({ ...envVars }, [oldKey])
 }
 
 function handleValueChange(key: string, val: string) {
@@ -123,7 +123,7 @@ function handleValueChange(key: string, val: string) {
 
 function handleRemove(key: string) {
   delete envVars[key]
-  syncEnv()
+  appStore.setClaudeEnvVars({ ...envVars }, [key])
 }
 
 function handleAdd() {
@@ -136,8 +136,9 @@ function handleAdd() {
 }
 
 function handleReset() {
-  Object.keys(envVars).forEach(k => delete envVars[k])
-  Object.assign(envVars, DEFAULT_CLAUDE_ENV_VARS)
+  for (const [key, value] of Object.entries(DEFAULT_CLAUDE_ENV_VARS)) {
+    envVars[key] = value
+  }
   syncEnv()
 }
 </script>
