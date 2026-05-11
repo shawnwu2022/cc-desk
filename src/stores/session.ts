@@ -85,10 +85,15 @@ export const useSessionStore = defineStore('session', () => {
     return ids
   })
 
-  /** 未被 Tab 占用的历史会话（搜索过滤由组件处理） */
+  /** 未被 Tab 占用的历史会话（去重 + 过滤） */
   const historySessions = computed<HistorySession[]>(() => {
     const claimed = claimedSessionIds.value
-    return allHistoryCache.value.filter(s => !claimed.has(s.sessionId))
+    const seen = new Set<string>()
+    return allHistoryCache.value.filter(s => {
+      if (claimed.has(s.sessionId) || seen.has(s.sessionId)) return false
+      seen.add(s.sessionId)
+      return true
+    })
   })
 
   // ---- Tab 生命周期 ----
@@ -219,6 +224,13 @@ export const useSessionStore = defineStore('session', () => {
   function getTabByPtyId(ptyId: string): TerminalTab | null {
     for (const tab of tabs.values()) {
       if (tab.ptyId === ptyId) return tab
+    }
+    return null
+  }
+
+  function getTabBySessionId(sessionId: string): TerminalTab | null {
+    for (const tab of tabs.values()) {
+      if (tab.sessionId === sessionId) return tab
     }
     return null
   }
@@ -362,6 +374,7 @@ export const useSessionStore = defineStore('session', () => {
     setActiveTab,
     getRunningTabForProject,
     getTabByPtyId,
+    getTabBySessionId,
     getProjectTabs,
 
     // Session ID assignment

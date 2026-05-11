@@ -153,8 +153,21 @@ watch(() => props.visible, async (isVisible) => {
       configStore.loadProjectConfig(cwd)
 
       const runningTab = sessionStore.getRunningTabForProject(cwd)
-      if (runningTab && sessionStore.activeTabId !== runningTab.tabId) {
-        sessionStore.setActiveTab(runningTab.tabId)
+      if (runningTab) {
+        if (sessionStore.activeTabId !== runningTab.tabId) {
+          sessionStore.setActiveTab(runningTab.tabId)
+        }
+      } else if (appStore.pendingResume) {
+        hasStartedPty = true
+        const { sessionId, sessionName } = appStore.pendingResume
+        appStore.clearPendingResume()
+        await nextTick()
+
+        const tabId = sessionStore.createTab(cwd, { sessionId, name: sessionName })
+        sessionStore.setActiveTab(tabId)
+        if (terminalRef.value?.startTab) {
+          terminalRef.value.startTab(tabId)
+        }
       }
     }
   }
@@ -249,9 +262,6 @@ function handleResumeSession(sessionId: string) {
 
   const tabId = sessionStore.createTab(cwd, { sessionId, name })
   sessionStore.setActiveTab(tabId)
-
-  // 立即从历史列表移除，避免重复显示
-  sessionStore.historySessions = sessionStore.historySessions.filter(s => s.sessionId !== sessionId)
 
   terminalRef.value.startTab(tabId)
 }

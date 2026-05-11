@@ -83,6 +83,7 @@
 import { ref, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useHookStore } from '@/stores/hook'
+import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-shell'
@@ -108,6 +109,7 @@ const SettingsOverlay = defineAsyncComponent(() => import('@/components/settings
 type ViewType = 'welcome' | 'projects' | 'terminal'
 
 const appStore = useAppStore()
+const sessionStore = useSessionStore()
 const sidebarStore = useSidebarStore()
 const { setupShortcutListeners } = useAppShortcuts()
 const currentView = ref<ViewType>('welcome')
@@ -185,10 +187,19 @@ async function handleOpenProject(path: string) {
 
 function handleResumeSession(projectPath: string, sessionId: string, sessionName?: string) {
   appStore.setCwd(projectPath)
+
+  // 如果该 session 已在运行，直接切换到对应 tab
+  const existingTab = sessionStore.getTabBySessionId(sessionId)
+  if (existingTab && existingTab.status === 'running') {
+    sessionStore.setActiveTab(existingTab.tabId)
+    currentView.value = 'terminal'
+    sidebarStore.loadAllSidebarData(projectPath)
+    return
+  }
+
   appStore.setClaudeOptions({ resume: sessionId })
   appStore.setPendingResume(sessionId, sessionName)
   currentView.value = 'terminal'
-  // 启动时自动加载 sidebar 数据
   sidebarStore.loadAllSidebarData(projectPath)
 }
 

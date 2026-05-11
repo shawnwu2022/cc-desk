@@ -31,7 +31,8 @@
               <span class="session-name">{{ session.name }}</span>
               <span class="session-project">{{ getProjectName(session.projectPath) }}</span>
             </div>
-            <span class="session-time">{{ formatTimeAgo(session.lastActiveAt) }}</span>
+            <span v-if="isSessionRunning(session.sessionId)" class="status-dot running"></span>
+            <span v-else class="session-time">{{ formatTimeAgo(session.lastActiveAt) }}</span>
           </button>
 
           <div v-if="recentSessions.length === 0" class="empty-sessions">
@@ -117,6 +118,9 @@
               <span class="project-name">{{ project.name }}</span>
               <span class="project-path">{{ project.path }}</span>
             </div>
+            <span v-if="getProjectRunningCount(project.path) > 0" class="running-number">
+              {{ getProjectRunningCount(project.path) }}
+            </span>
           </button>
 
           <div v-if="!searchQuery && appStore.hasMoreProjects && !appStore.isLoadingProjects" class="load-more-section">
@@ -156,6 +160,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
 import { ctrl } from '@/utils/platform'
 import type { SessionInfo } from '@/api/tauri'
@@ -168,6 +173,7 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+const sessionStore = useSessionStore()
 const sidebarStore = useSidebarStore()
 const searchQuery = ref('')
 const projectListRef = ref<HTMLElement | null>(null)
@@ -181,7 +187,68 @@ const isSaving = ref(false)
 const saveSuccess = ref(false)
 
 const projects = computed(() => appStore.cachedProjects)
-const recentSessions = computed(() => appStore.cachedRecentSessions)
+
+/** 合并缓存的历史会话和当前运行中的 tabs */
+const recentSessions = computed(() => {
+  const result: SessionInfo[] = []
+  const addedIds = new Set<string>()
+
+  // 先添加运行中的 tabs
+  for (const tab of sessionStore.tabs.values()) {
+    if (tab.status === 'running' && tab.sessionId) {
+      addedIds.add(tab.sessionId)
+      result.push({
+        sessionId: tab.sessionId,
+        name: tab.name,
+        projectPath: tab.projectPath,
+        lastActiveAt: tab.lastActiveAt
+      })
+    }
+  }
+
+  // 再添加缓存的历史会话（排除已在运行中的）
+  for (const session of appStore.cachedRecentSessions) {
+    if (!addedIds.has(session.sessionId)) {
+      result.push(session)
+    }
+  }
+
+  // 按时间排序
+  return result.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+})
+
+/** 运行中的 sessionId 集合（用于 recent sessions 标记） */
+const runningSessionIds = computed<Set<string>>(() => {
+  const ids = new Set<string>()
+  for (const tab of sessionStore.tabs.values()) {
+    if (tab.status === 'running' && tab.sessionId) {
+      ids.add(tab.sessionId)
+    }
+  }
+  return ids
+})
+
+/** 每个 project 的运行会话数 */
+const projectRunningCounts = computed<Map<string, number>>(() => {
+  const counts = new Map<string, number>()
+  for (const tab of sessionStore.tabs.values()) {
+    if (tab.status === 'running') {
+      const current = counts.get(tab.projectPath) ?? 0
+      counts.set(tab.projectPath, current + 1)
+    }
+  }
+  return counts
+})
+
+/** 检查会话是否运行中 */
+function isSessionRunning(sessionId: string): boolean {
+  return runningSessionIds.value.has(sessionId)
+}
+
+/** 获取项目的运行会话数 */
+function getProjectRunningCount(projectPath: string): number {
+  return projectRunningCounts.value.get(projectPath) ?? 0
+}
 
 const filteredProjects = computed(() => {
   const query = searchQuery.value.toLowerCase()
@@ -350,6 +417,19 @@ async function handleSaveDefault() {
   font-size: 11px;
   color: var(--text-tertiary);
   flex-shrink: 0;
+}
+
+/* 状态圆点（与 SessionItem 样式一致） */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.3s ease;
+}
+
+.status-dot.running {
+  background: var(--status-success);
 }
 
 .empty-sessions {
@@ -621,6 +701,14 @@ async function handleSaveDefault() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 运行会话数（绿色数字） */
+.running-number {
+  font-size: 12px;
+  color: var(--status-success);
+  font-weight: 500;
+  flex-shrink: 0;
 }
 
 .empty-list {
