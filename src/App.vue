@@ -85,6 +85,7 @@ import { useAppStore } from '@/stores/app'
 import { useHookStore } from '@/stores/hook'
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
+import { useUpdateStore } from '@/stores/update'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-shell'
 import {
@@ -111,6 +112,7 @@ type ViewType = 'welcome' | 'projects' | 'terminal'
 const appStore = useAppStore()
 const sessionStore = useSessionStore()
 const sidebarStore = useSidebarStore()
+const updateStore = useUpdateStore()
 const { setupShortcutListeners } = useAppShortcuts()
 const currentView = ref<ViewType>('welcome')
 
@@ -260,6 +262,7 @@ function initAfterChecks() {
 
   checkForUpdates().then(info => {
     sidebarStore.setUpdateInfo(info)
+    updateStore.setUpdateInfo(info)
   }).catch(() => {})
 }
 
