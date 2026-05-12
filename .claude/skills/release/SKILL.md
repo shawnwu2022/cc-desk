@@ -5,44 +5,34 @@ description: CC-Box 版本发布。当用户说"发布"、"release"、"版本更
 
 # CC-Box Release
 
-执行 `npm run release`，根据情况配置参数。
+执行 `npm run release`，自动从 git diff 生成 release notes。
 
 ## 基本命令
 
 ```bash
-npm run release -- --bump <type> --notes "<notes>"
+npm run release -- --bump <type>
 ```
 
-## 参数组合
+## 参数
 
-| 场景 | 参数 |
+| 参数 | 说明 |
 |------|------|
-| 发布新版本 | `--bump patch` 或 `--bump minor` 或 `--bump major` |
-| 重新发布当前版本 | `--exact`（不 bump 版本号） |
-| CI 已构建完成 | 添加 `--skip-ci` |
-| 仅上传 OSS | `--oss-only v0.6.2` |
+| `--bump patch/minor/major` | 版本类型 |
+| `--exact` | 发布当前版本（不 bump） |
+| `--skip-ci` | CI 已构建时使用 |
+| `--oss-only v0.6.2` | 仅上传 OSS |
 
-## Notes 格式
-
-```bash
---notes "### Fixed\n- Fix issue\n\n### Features\n- Add feature"
-```
-
-- 英文
-- `\n` 表示换行
+**Release Notes 自动生成**：对比上一版本标签的 git diff，提取 commit 分类。
 
 ## 示例
 
-用户说：`发布 patch，修复 pending 显示问题`
-
-执行：
 ```bash
-npm run release -- --bump patch --notes "### Fixed\n- Fix pending display issue"
-```
+# 发布 patch（自动生成 notes）
+npm run release -- --bump patch
 
-用户说：`发布 minor，添加状态指示灯`
+# 发布 minor（手动指定 notes）
+npm run release -- --bump minor --notes "### Features\n- Add feature"
 
-执行：
-```bash
-npm run release -- --bump minor --notes "### Features\n- Add status indicators"
+# 重新发布当前版本
+npm run release -- --exact --skip-ci
 ```

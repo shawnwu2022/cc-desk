@@ -160,6 +160,106 @@ function bumpVersion(version, bumpType) {
 }
 
 // ============================================
+// 自动生成 Release Notes
+// ============================================
+
+function getPreviousTag() {
+  // 获取最近的版本标签（排除当前 HEAD 的标签）
+  try {
+    const tags = execSync('git tag --list "v*" --sort=-version:refname', { encoding: 'utf-8', stdio: 'pipe' }).trim().split('\n')
+    if (tags.length > 0) {
+      // 检查当前 HEAD 是否已有标签，如果有则取下一个
+      const headTag = execSync('git describe --tags --exact-match HEAD 2>/dev/null', { encoding: 'utf-8', stdio: 'pipe' }).trim()
+      if (headTag && tags[0] === headTag) {
+        return tags[1] || null
+      }
+      return tags[0]
+    }
+  } catch {}
+  return null
+}
+
+function generateReleaseNotes() {
+  logStep('生成 Release Notes...')
+
+  const prevTag = getPreviousTag()
+  if (!prevTag) {
+    logInfo('未找到上一版本标签，使用默认模板')
+    return '### Features\n- Initial release'
+  }
+
+  logInfo(`对比 ${prevTag} -> HEAD`)
+
+  // 获取 commit 历史
+  const commits = execSync(`git log ${prevTag}..HEAD --oneline --no-merges`, { encoding: 'utf-8', stdio: 'pipe' }).trim()
+  if (!commits) {
+    logInfo('没有新的 commits')
+    return '### Improvements\n- Minor updates'
+  }
+
+  const commitLines = commits.split('\n').filter(line => line.trim())
+
+  // 分类 commits
+  const features = []
+  const fixes = []
+  const improvements = []
+  const breaking = []
+
+  for (const line of commitLines) {
+    const msg = line.replace(/^[a-f0-9]+\s+/, '') // 去掉 hash
+    const lowerMsg = msg.toLowerCase()
+
+    if (lowerMsg.includes('fix') || lowerMsg.includes('bug')) {
+      fixes.push(msg.replace(/^fix[:(]?\s*/i, '').replace(/^bug[:(]?\s*/i, ''))
+    } else if (lowerMsg.includes('feat') || lowerMsg.includes('add') || lowerMsg.includes('new')) {
+      features.push(msg.replace(/^feat[:(]?\s*/i, '').replace(/^add\s+/i, '').replace(/^new\s+/i, ''))
+    } else if (lowerMsg.includes('break') || lowerMsg.includes('remove') || lowerMsg.includes('deprecate')) {
+      breaking.push(msg)
+    } else {
+      improvements.push(msg)
+    }
+  }
+
+  // 构建 release notes
+  let notes = ''
+  if (breaking.length > 0) {
+    notes += '### Breaking Changes\n'
+    for (const item of breaking) {
+      notes += `- ${item}\n`
+    }
+    notes += '\n'
+  }
+  if (features.length > 0) {
+    notes += '### Features\n'
+    for (const item of features) {
+      notes += `- ${item}\n`
+    }
+    notes += '\n'
+  }
+  if (fixes.length > 0) {
+    notes += '### Fixed\n'
+    for (const item of fixes) {
+      notes += `- ${item}\n`
+    }
+    notes += '\n'
+  }
+  if (improvements.length > 0) {
+    notes += '### Improvements\n'
+    for (const item of improvements) {
+      notes += `- ${item}\n`
+    }
+  }
+
+  notes = notes.trim() || '### Improvements\n- Minor updates'
+
+  logSuccess('Release Notes 已生成')
+  logInfo('\n生成的 Release Notes：')
+  logInfo(notes)
+
+  return notes
+}
+
+// ============================================
 // 版本号更新
 // ============================================
 
@@ -525,22 +625,26 @@ function parseArgs() {
 CC-Box 自动化发布脚本（全自动，无需交互）
 
 用法:
-  npm run release -- --bump <type> --notes "<notes>"    发布新版本
-  npm run release -- --exact --notes "<notes>"          发布当前版本（不 bump）
-  npm run release -- --oss-only <version>               仅上传 OSS
+  npm run release -- --bump <type>                 发布新版本（自动生成 notes）
+  npm run release -- --bump <type> --notes "<notes>" 发布新版本（手动指定 notes）
+  npm run release -- --exact                       发布当前版本（不 bump）
+  npm run release -- --oss-only <version>          仅上传 OSS
 
 参数:
   --bump <type>      版本类型: major / minor / patch（与 --exact 二选一）
   --exact            使用当前版本发布，不 bump 版本号
-  --notes "<notes>"  Release notes，用 \\n 表示换行（必填）
+  --notes "<notes>"  Release notes（可选，未提供则自动生成）
   --skip-ci          跳过 CI 监控（标签已构建时使用）
   --oss-only <ver>   仅下载指定版本并上传 OSS（如 --oss-only v0.5.1）
-  --yes              自动确认（默认，Claude 自动化时使用）
-  --no               显示确认提示（人工执行时使用）
+
+Release Notes 自动生成规则:
+  - 对比上一版本标签与 HEAD 的 git diff
+  - 从 commit message 提取分类: Features/Fixed/Improvements/Breaking Changes
 
 示例:
-  npm run release -- --bump patch --notes "### Fixed\\n- Fix copy issue"
-  npm run release -- --exact --notes "### Features\\n- Add feature"
+  npm run release -- --bump patch
+  npm run release -- --bump minor --notes "### Features\\n- Add feature"
+  npm run release -- --exact --skip-ci
   npm run release -- --oss-only v0.5.1
 `)
         process.exit(0)
@@ -574,10 +678,9 @@ async function main() {
     process.exit(1)
   }
 
+  // 如果没有提供 --notes，自动生成
   if (!args.releaseNotes) {
-    logError('缺少必填参数 --notes')
-    logInfo('使用 --help 查看帮助')
-    process.exit(1)
+    args.releaseNotes = generateReleaseNotes()
   }
 
   console.log('\x1b[35m======================================')
@@ -603,9 +706,6 @@ async function main() {
   console.log('  6. 发布 GitHub Release')
   console.log('  7. 发布 Gitee Release')
   console.log('  8. 上传到阿里云 OSS（国内更新渠道）')
-
-  console.log('\nRelease Notes 预览：')
-  console.log(args.releaseNotes)
 
   // 全自动模式无需确认
   if (!args.yes) {
