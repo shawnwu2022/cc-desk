@@ -19,13 +19,11 @@ npm run release -- --bump <level> --notes "<notes>"
 |------|------|
 | 仅上传 OSS | `--oss-only v0.6.2` |
 | 重新发布当前版本 | `--exact --skip-ci` |
-| 用户指定级别 | `--bump patch/minor/major` |
+| 用户指定级别 | `--bump patch/minor/major`（跳过自动判断） |
 | CI 已完成 | `--skip-ci` |
 | 没有变更 | 提示用户，中止 |
 
-## Notes 编写规范
-
-### 格式
+## Notes 格式
 
 ```markdown
 ### Fixed
@@ -33,47 +31,23 @@ npm run release -- --bump <level> --notes "<notes>"
 
 ### Features
 - Add <具体功能>
-
-### Improvements
-- Improve <具体改进>
 ```
 
-### 规则
-
-1. **英文**：全部用英文撰写
-2. **动词开头**：Fix / Add / Improve / Update / Remove / Refactor
-3. **具体描述**：写具体改动内容，不写抽象概括
-4. **每条独立**：一个改动一条，不合并多条
-5. **换行符**：`\n` 表示换行，类别之间空一行 `\n\n`
-
-### 示例
-
-正确：
-```
-### Fixed\n- Fix pending status not cleared on home page\n- Fix session badge showing for all projects\n\n### Features\n- Add working/pending indicators to home page session list
-```
-
-错误：
-```
-修复了一些bug，添加了新功能  ← 中文
-Fix various issues  ← 抽象概括
-Fix bug A and bug B  ← 多条合并
-```
-
-### 类别优先级
-
-| 级别 | 首选类别 |
-|------|----------|
-| patch | Fixed |
-| minor | Features / Improvements |
-| major | Breaking Changes |
+英文，`\n` 换行，动词开头。
 
 ## 验收标准
 
-| 项目 | 检查 | 预期 |
-|------|------|------|
-| GitHub Release | `gh release view v<x.y.z>` | 有 3 个资产 |
-| Gitee Release | curl API | body 不为空，换行正确 |
-| OSS latest.json | curl | version 正确 |
-| OSS 安装包 | curl HEAD | 3 个 200 |
-| 本地版本 | `git describe --tags` | 与发布一致 |
+发布完成后，验证以下项：
+
+| 项目 | 检查方式 | 预期 |
+|------|----------|------|
+| GitHub Release | `gh release view v<x.y.z>` | 存在，非 draft，有 3 个资产 |
+| Gitee Release | curl API 检查 | 存在，body 不为空 |
+| Release Notes | `gh release view` / Gitee 页面 | 格式正确，非字面 `\n`，动词开头，内容与 diff 匹配 |
+| OSS latest.json | curl `https://<bucket>/cc-box/latest.json` | version 字段正确 |
+| OSS 安装包 | curl HEAD 检查 | 3 个文件均返回 200 |
+| 本地版本号 | `git describe --tags` | 与发布版本一致 |
+
+全部通过 → 发布成功。
+
+任一失败 → 排查并手动修复。
