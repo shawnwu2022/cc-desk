@@ -68,12 +68,12 @@ jobs:
             # Convert Windows path to TOML-escaped format (double backslashes)
             LINK_PATH_TOML=$(echo "$LINK_PATH" | sed 's|\\|\\\\|g')
             echo "TOML path: $LINK_PATH_TOML"
-            # Create cargo config in project root
-            mkdir -p .cargo
-            echo '[target.x86_64-pc-windows-msvc]' > .cargo/config.toml
-            echo "linker = \"$LINK_PATH_TOML\"" >> .cargo/config.toml
-            echo "Created .cargo/config.toml:"
-            cat .cargo/config.toml
+            # Create cargo config in src-tauri directory (where cargo runs)
+            mkdir -p src-tauri/.cargo
+            echo '[target.x86_64-pc-windows-msvc]' > src-tauri/.cargo/config.toml
+            echo "linker = \"$LINK_PATH_TOML\"" >> src-tauri/.cargo/config.toml
+            echo "Created src-tauri/.cargo/config.toml:"
+            cat src-tauri/.cargo/config.toml
           else
             echo "ERROR: MSVC link.exe not found"
             echo "Available link commands:"
