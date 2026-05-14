@@ -57,17 +57,20 @@ jobs:
         with:
           arch: x64
 
-      - name: Find and set MSVC linker (windows only)
+      - name: Configure Rust linker via RUSTFLAGS (windows only)
         if: matrix.platform == 'windows-2022'
         shell: bash
         run: |
-          # Find the actual link.exe from the Enterprise VS installation
-          LINK_PATH=$(find "/c/Program Files/Microsoft Visual Studio/2022/Enterprise" -name "link.exe" -path "*Hostx64/x64*" 2>/dev/null | head -1)
+          # Get the link.exe path from PATH
+          LINK_PATH=$(where link | head -1 | tr -d '\r\n')
           if [ -n "$LINK_PATH" ]; then
             echo "Found link.exe at: $LINK_PATH"
-            echo "LINK=$LINK_PATH" >> $GITHUB_ENV
+            # Create cargo config
+            mkdir -p .cargo
+            printf '[target.x86_64-pc-windows-msvc]\nlinker = "%s"\n' "$LINK_PATH" > .cargo/config.toml
+            cat .cargo/config.toml
           else
-            echo "ERROR: link.exe not found in Enterprise VS"
+            echo "ERROR: link.exe not found in PATH"
             exit 1
           fi
 
