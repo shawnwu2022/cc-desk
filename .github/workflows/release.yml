@@ -54,14 +54,22 @@ jobs:
       - name: Setup MSVC developer command prompt (windows only)
         if: matrix.platform == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
-      - name: Configure Rust linker (windows only)
+      - name: Find and set MSVC linker (windows only)
         if: matrix.platform == 'windows-2022'
         shell: bash
         run: |
-          mkdir -p .cargo
-          echo '[target.x86_64-pc-windows-msvc]' > .cargo/config.toml
-          echo 'linker = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe"' >> .cargo/config.toml
+          # Find the actual link.exe from the Enterprise VS installation
+          LINK_PATH=$(find "/c/Program Files/Microsoft Visual Studio/2022/Enterprise" -name "link.exe" -path "*Hostx64/x64*" 2>/dev/null | head -1)
+          if [ -n "$LINK_PATH" ]; then
+            echo "Found link.exe at: $LINK_PATH"
+            echo "LINK=$LINK_PATH" >> $GITHUB_ENV
+          else
+            echo "ERROR: link.exe not found in Enterprise VS"
+            exit 1
+          fi
 
       - name: Install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
