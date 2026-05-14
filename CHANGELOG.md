@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.5] - 2026-05-14
+
+### Fixed
+- Add tests for startup environment variables (frontend 5, backend 6)
+
 ## [0.6.4] - 2026-05-12
 
 ### Fixed
