@@ -1784,7 +1784,6 @@ pub fn get_all_mcp_servers(_project_path: &str) -> Result<Vec<McpServerInfo>> {
 
 /// MCP 配置结构（从 ~/.claude.json 读取）
 struct McpConfigEntry {
-    url: Option<String>,
     headers: Option<HashMap<String, String>>,
 }
 
@@ -1807,10 +1806,6 @@ fn read_mcp_configs_from_claude_json() -> HashMap<String, McpConfigEntry> {
             // 读取顶级 mcpServers
             if let Some(mcp_servers) = json.get("mcpServers").and_then(|v| v.as_object()) {
                 for (name, server_config) in mcp_servers {
-                    let url = server_config
-                        .get("url")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
                     let headers = server_config
                         .get("headers")
                         .and_then(|v| v.as_object())
@@ -1820,7 +1815,7 @@ fn read_mcp_configs_from_claude_json() -> HashMap<String, McpConfigEntry> {
                                 .collect()
                         });
 
-                    configs.insert(name.clone(), McpConfigEntry { url, headers });
+                    configs.insert(name.clone(), McpConfigEntry { headers });
                 }
             }
         }

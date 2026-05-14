@@ -50,20 +50,15 @@ pub struct PtyErrorPayload {
 /// PTY 进程状态
 #[derive(Debug, Clone, PartialEq)]
 pub enum PtyStatus {
-    Starting,
     Running,
     Stopping,
-    Stopped,
 }
 
 /// PTY 实例内部数据
 struct PtyInstanceData {
     pair: PtyPair,
-    child: Box<dyn Child + Send>, // 存储 child 句柄
-    cwd: String,
-    pty_type: String,
+    child: Box<dyn Child + Send>,
     status: PtyStatus,
-    created_at: std::time::Instant,
 }
 
 /// PTY 管理器（全局）
@@ -208,8 +203,8 @@ impl PtyManager {
             .with_context(|| format!("Failed to open PTY with size {}x{}", cols, rows))?;
 
         // 获取 Claude CLI 路径（配置优先，其次自动检测）
-        let claude_path = match Self::get_claude_path() {
-            Some(p) => p,
+        match Self::get_claude_path() {
+            Some(_) => {} // 仅用于验证 Claude CLI 是否可用
             None => {
                 let err_msg = "Claude CLI not found. Please install Claude CLI first (npm install -g @anthropic-ai/claude-code)";
                 log::error!("{}", err_msg);
@@ -364,10 +359,7 @@ impl PtyManager {
         let instance = PtyInstanceData {
             pair,
             child,
-            cwd: cwd.to_string(),
-            pty_type: "claude".to_string(),
             status: PtyStatus::Running,
-            created_at: std::time::Instant::now(),
         };
 
         self.instances.lock().insert(id.clone(), instance);
@@ -603,10 +595,7 @@ impl PtyManager {
         let instance = PtyInstanceData {
             pair,
             child,
-            cwd: cwd.to_string(),
-            pty_type: "shell".to_string(),
             status: PtyStatus::Running,
-            created_at: std::time::Instant::now(),
         };
 
         self.instances.lock().insert(id.clone(), instance);
@@ -737,52 +726,6 @@ impl PtyManager {
         writers.clear();
 
         log::info!("Killed {} PTY instances", count);
-    }
-
-    /// 获取所有 PTY ID
-    pub fn list(&self) -> Vec<String> {
-        self.instances.lock().keys().cloned().collect()
-    }
-
-    /// 获取 PTY 信息
-    pub fn info(&self, id: &str) -> Option<PtyInfo> {
-        let instances = self.instances.lock();
-        instances.get(id).map(|i| PtyInfo {
-            id: id.to_string(),
-            pty_type: i.pty_type.clone(),
-            cwd: i.cwd.clone(),
-        })
-    }
-
-    /// 获取 PTY 状态
-    pub fn status(&self, id: &str) -> Option<PtyStatus> {
-        let instances = self.instances.lock();
-        instances.get(id).map(|i| i.status.clone())
-    }
-
-    /// 检查 PTY 是否存在
-    pub fn exists(&self, id: &str) -> bool {
-        self.instances.lock().contains_key(id)
-    }
-
-    /// 获取 PTY 运行时长（秒）
-    pub fn uptime(&self, id: &str) -> Option<u64> {
-        let instances = self.instances.lock();
-        instances.get(id).map(|i| i.created_at.elapsed().as_secs())
-    }
-
-    /// 清理已停止的 PTY（由 exited 事件触发）
-    pub fn cleanup(&self, id: &str) {
-        log::debug!("[{}] Cleaning up PTY resources", id);
-
-        if let Some(instance) = self.instances.lock().get_mut(id) {
-            instance.status = PtyStatus::Stopped;
-        }
-
-        // 注意：不立即移除，让前端有机会获取退出信息
-        // writer 可以安全移除
-        self.writers.lock().remove(id);
-        log::debug!("[{}] PTY writer cleaned up", id);
     }
 }
 

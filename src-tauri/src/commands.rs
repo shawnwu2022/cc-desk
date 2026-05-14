@@ -218,20 +218,6 @@ pub async fn save_last_project(path: String) -> Result<(), String> {
     crate::store::save_last_project(&path).map_err(|e| e.to_string())
 }
 
-/// 选择目录对话框
-#[tauri::command]
-pub async fn select_directory() -> Result<Option<SelectedDirectory>, String> {
-    // 使用 tauri-plugin-dialog 或 tauri API
-    // 暂时返回 None，需要添加 dialog plugin
-    Ok(None)
-}
-
-#[derive(Debug, Serialize)]
-pub struct SelectedDirectory {
-    path: String,
-    name: String,
-}
-
 /// 在文件管理器中打开
 #[tauri::command]
 pub async fn open_in_file_manager(path: String) -> Result<(), String> {

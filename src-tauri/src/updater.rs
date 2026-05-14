@@ -56,6 +56,7 @@ pub struct DownloadProgress {
 
 /// OSS latest.json 响应结构
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OssLatestInfo {
     version: String,
     #[serde(rename = "release_date")]

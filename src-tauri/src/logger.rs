@@ -175,8 +175,3 @@ pub fn init() {
         cleanup_old_logs(7);
     });
 }
-
-/// 获取日志目录路径（供前端展示）
-pub fn get_log_dir() -> Option<String> {
-    log_dir().map(|p| p.to_string_lossy().to_string())
-}

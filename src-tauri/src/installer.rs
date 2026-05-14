@@ -14,7 +14,6 @@ use std::process::Command;
 use tauri::{AppHandle, Emitter};
 
 /// OSS 配置
-const OSS_ENDPOINT: &str = "cc-box.oss-cn-beijing.aliyuncs.com";
 const OSS_BASE_URL: &str = "https://cc-box.oss-cn-beijing.aliyuncs.com";
 
 /// 安装路径

@@ -81,6 +81,7 @@ struct JsonRpcRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub(crate) struct JsonRpcResponse {
     pub(crate) jsonrpc: String,
     pub(crate) id: u64,
@@ -472,12 +473,6 @@ impl McpDetailCache {
     pub async fn set(&self, key: String, detail: McpServerDetail) {
         let mut cache = self.cache.lock().await;
         cache.insert(key, detail);
-    }
-
-    /// 清除指定缓存
-    pub async fn clear(&self, key: &str) {
-        let mut cache = self.cache.lock().await;
-        cache.remove(key);
     }
 }
 

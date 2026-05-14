@@ -14,6 +14,7 @@ mod providers;
 mod tests;
 
 use tauri::Manager;
+#[cfg(target_os = "macos")]
 use tauri::menu::MenuBuilder;
 
 /// 全局缓存环境检查结果（setup 前执行，仅一次）

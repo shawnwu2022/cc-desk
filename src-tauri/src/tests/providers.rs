@@ -168,7 +168,6 @@ fn ExtractParams_DefaultBaseUrl_001() {
         }
     });
     let params = extract_test_params(&config).expect("should extract params");
-    assert_eq!(params.base_url, "https://api.anthropic.com");
     assert_eq!(params.url, "https://api.anthropic.com/v1/messages");
 }
 

@@ -520,7 +520,6 @@ pub struct TestConnectionResult {
 /// 测试 Provider 连接参数
 pub(crate) struct TestConnectionParams {
     pub api_key: String,
-    pub base_url: String,
     pub model: String,
     pub url: String,
 }
@@ -559,7 +558,6 @@ pub(crate) fn extract_test_params(settings_config: &serde_json::Value) -> Option
 
     Some(TestConnectionParams {
         api_key,
-        base_url,
         model,
         url,
     })
