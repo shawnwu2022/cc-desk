@@ -276,11 +276,15 @@ function handleCloseTab(tabId: string) {
 }
 
 // PTY 启动回调
-function handlePtyStarted(_tabId: string, _ptyId: string) {
+function handlePtyStarted(tabId: string, _ptyId: string) {
   const cwd = appStore.cwd
   if (cwd) {
     appStore.ensureProjectInList(cwd)
-    sessionStore.loadHistorySessions(cwd)
+    // 恢复历史会话时不需要重载（claimedSessionIds 已自动过滤），仅新建会话时刷新
+    const tab = sessionStore.tabs.get(tabId)
+    if (!tab?.isResume) {
+      sessionStore.loadHistorySessions(cwd)
+    }
   }
 }
 </script>

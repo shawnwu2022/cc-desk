@@ -1,31 +1,5 @@
 # Changelog
 
-## [0.8.1] - 2026-05-16
-
-### Features
-- Add one-click update with custom confirmation dialog when active PTYs detected
-- Add manual download button opening GitHub Releases page
-- Add i18n support with Chinese/English language switching
-- Add useTimeFormat composable for localized relative time display
-
-### Fixed
-- Fix update check showing no status feedback when already up to date
-
-### Tests
-- Add hasActivePtys detection tests (5 cases)
-- Add checkForUpdates API return value tests (3 cases)
-- Add useTimeFormat composable tests (7 cases)
-- Add Rust AppConfig.language field tests (3 cases)
-- Add manual test cases for update flow (7) and time format (1)
-
-## [0.8.0] - 2026-05-14
-
-### Features
-- Switch to Tauri official updater plugin with signature verification
-- Generate dual-format OSS JSON for backward compatibility with v0.7.x
-- Auto-generate .sig signature files during CI build
-- Simplify update UI: single Download & Install button
-
 ## [0.7.0] - 2026-05-14
 
 ### Fixed

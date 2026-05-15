@@ -497,7 +497,7 @@ pub fn get_project_info(path: &str) -> Result<Option<Project>> {
 pub(crate) fn extract_session_name(jsonl_path: &Path) -> String {
     if let Ok(content) = fs::read_to_string(jsonl_path) {
         let mut custom_title: Option<String> = None;
-        let mut last_user_message: Option<String> = None;
+        let mut first_user_message: Option<String> = None;
 
         for line in content.lines() {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
@@ -508,8 +508,10 @@ pub(crate) fn extract_session_name(jsonl_path: &Path) -> String {
                     }
                 }
 
-                // 查找用户消息
-                if json.get("type").and_then(|v| v.as_str()) == Some("user") {
+                // 查找用户消息（只取第一条）
+                if json.get("type").and_then(|v| v.as_str()) == Some("user")
+                    && first_user_message.is_none()
+                {
                     if let Some(msg_content) = json
                         .get("message")
                         .and_then(|m| m.get("content"))
@@ -521,12 +523,11 @@ pub(crate) fn extract_session_name(jsonl_path: &Path) -> String {
                             .unwrap_or(false);
 
                         // 过滤所有系统注入消息：以 < 开头的都是系统标记
-                        // 如 <task-notification>, <local-command-stdout>, <system-reminder>, <command-name> 等
                         let is_system_inject = msg_content.trim_start().starts_with('<');
 
                         if !is_meta && !is_system_inject {
                             let truncated: String = msg_content.chars().take(50).collect();
-                            last_user_message = if msg_content.chars().count() > 50 {
+                            first_user_message = if msg_content.chars().count() > 50 {
                                 Some(format!("{}...", truncated))
                             } else {
                                 Some(msg_content.to_string())
@@ -541,7 +542,7 @@ pub(crate) fn extract_session_name(jsonl_path: &Path) -> String {
             return title;
         }
 
-        if let Some(msg) = last_user_message {
+        if let Some(msg) = first_user_message {
             return msg;
         }
     }

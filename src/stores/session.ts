@@ -30,6 +30,7 @@ export interface TerminalTab {
   working: boolean           // 正在工作中（用户发送消息后、响应返回前）
   model?: string
   pending: boolean           // 需要用户关注
+  isResume: boolean          // 是否为恢复历史会话（创建时已有 sessionId）
 }
 
 /**
@@ -120,6 +121,7 @@ export const useSessionStore = defineStore('session', () => {
       lastActiveAt: now,
       working: false,
       pending: false,
+      isResume: !!opts?.sessionId,
     })
 
     return tabId
@@ -155,19 +157,16 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * 关闭 Tab（用户主动操作）
-   * 不需要重新加载历史会话，computed 会自动显示释放的 sessionId
+   * 先删除 tab 让 UI 立即响应，再异步 kill PTY
    */
   async function closeTab(tabId: string) {
     const tab = tabs.get(tabId)
     if (!tab) return
 
     const projectPath = tab.projectPath
+    const ptyId = tab.ptyId
 
-    // 如果有运行中的 PTY，先 kill
-    if (tab.ptyId) {
-      try { await ptyKill(tab.ptyId) } catch {}
-    }
-
+    // 先删除 tab，UI 立即更新（历史列表通过 computed 自动显示释放的 sessionId）
     tabs.delete(tabId)
 
     if (activeTabId.value === tabId) {
@@ -178,6 +177,11 @@ export const useSessionStore = defineStore('session', () => {
       } else {
         activeTabId.value = null
       }
+    }
+
+    // 异步 kill PTY（不阻塞 UI）
+    if (ptyId) {
+      ptyKill(ptyId).catch(() => {})
     }
   }
 

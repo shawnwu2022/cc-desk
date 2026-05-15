@@ -106,6 +106,31 @@ describe('session store', () => {
       await store.closeTab(tabId)
       expect(store.activeTabId).toBeNull()
     })
+
+    // 关闭有 PTY 的 tab 时，tab 立即删除，PTY 异步 kill 不阻塞
+    it('CloseTab_ImmediateDelete_001', async () => {
+      const { ptyKill } = await import('@/api/tauri')
+      const mockKill = ptyKill as ReturnType<typeof vi.fn>
+
+      const store = useSessionStore()
+      const tabId = store.createTab('/project')
+      store.setTabPty(tabId, 'pty-immediate')
+
+      // closeTab 不再 await ptyKill，tab 应立即删除
+      await store.closeTab(tabId)
+      expect(store.tabs.has(tabId)).toBe(false)
+      expect(mockKill).toHaveBeenCalledWith('pty-immediate')
+    })
+
+    // 关闭 tab 后 claimedSessionIds 释放，历史会话自动显示
+    it('CloseTab_ReleaseClaim_001', async () => {
+      const store = useSessionStore()
+      const tabId = store.createTab('/project', { sessionId: 'sess-release' })
+
+      expect(store.claimedSessionIds.has('sess-release')).toBe(true)
+      await store.closeTab(tabId)
+      expect(store.claimedSessionIds.has('sess-release')).toBe(false)
+    })
   })
 
   // ==================== handlePtyExit ====================
@@ -165,6 +190,35 @@ describe('session store', () => {
       store.createTab('/project') // no sessionId
       const claimed = store.claimedSessionIds
       expect(claimed.size).toBe(0)
+    })
+  })
+
+  // ==================== isResume ====================
+
+  describe('isResume', () => {
+    // 创建 tab 时传入 sessionId，isResume 为 true
+    it('IsResume_True_001', () => {
+      const store = useSessionStore()
+      const tabId = store.createTab('/project', { sessionId: 'sess-resume-001' })
+      const tab = store.tabs.get(tabId)!
+      expect(tab.isResume).toBe(true)
+    })
+
+    // 创建 tab 时不传 sessionId，isResume 为 false
+    it('IsResume_False_001', () => {
+      const store = useSessionStore()
+      const tabId = store.createTab('/project')
+      const tab = store.tabs.get(tabId)!
+      expect(tab.isResume).toBe(false)
+    })
+
+    // 创建 tab 时传入 sessionId 和 name，isResume 仍为 true
+    it('IsResume_WithName_001', () => {
+      const store = useSessionStore()
+      const tabId = store.createTab('/project', { sessionId: 'sess-123', name: 'My Session' })
+      const tab = store.tabs.get(tabId)!
+      expect(tab.isResume).toBe(true)
+      expect(tab.name).toBe('My Session')
     })
   })
 })

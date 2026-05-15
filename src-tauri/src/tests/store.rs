@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use crate::store::{
-    extract_md_description, find_name_separator, merge_json_values, parse_agents_list_output,
-    parse_mcp_list_output, parse_timestamp, AgentInfo,
+    extract_md_description, extract_session_name, find_name_separator, merge_json_values,
+    parse_agents_list_output, parse_mcp_list_output, parse_timestamp, AgentInfo,
 };
 
 // ==================== merge_json_values ====================
@@ -282,4 +282,91 @@ fn ParseTimestamp_InvalidString_001() {
 fn ParseTimestamp_EmptyString_001() {
     let result = parse_timestamp("");
     assert_eq!(result, 0);
+}
+
+// ==================== extract_session_name ====================
+
+// 多条用户消息时返回第一条有效消息，而非最后一条
+#[test]
+fn ExtractSessionName_FirstUserMessage_001() {
+    let lines = vec![
+        r#"{"type":"user","message":{"content":"First prompt here"},"isMeta":false}"#,
+        r#"{"type":"assistant","message":{"content":"response"}}"#,
+        r#"{"type":"user","message":{"content":"Second prompt here"},"isMeta":false}"#,
+        r#"{"type":"user","message":{"content":"Third prompt here"},"isMeta":false}"#,
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("session.jsonl");
+    std::fs::write(&file_path, lines.join("\n")).unwrap();
+    let result = extract_session_name(&file_path);
+    assert_eq!(result, "First prompt here");
+}
+
+// custom-title 优先级高于用户消息
+#[test]
+fn ExtractSessionName_CustomTitlePriority_001() {
+    let lines = vec![
+        r#"{"type":"user","message":{"content":"User message"},"isMeta":false}"#,
+        r#"{"type":"custom-title","customTitle":"My Custom Title"}"#,
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("session.jsonl");
+    std::fs::write(&file_path, lines.join("\n")).unwrap();
+    let result = extract_session_name(&file_path);
+    assert_eq!(result, "My Custom Title");
+}
+
+// isMeta=true 的消息被过滤，不作为名称
+#[test]
+fn ExtractSessionName_SkipMeta_001() {
+    let lines = vec![
+        r#"{"type":"user","message":{"content":"meta prompt"},"isMeta":true}"#,
+        r#"{"type":"user","message":{"content":"real prompt"},"isMeta":false}"#,
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("session.jsonl");
+    std::fs::write(&file_path, lines.join("\n")).unwrap();
+    let result = extract_session_name(&file_path);
+    assert_eq!(result, "real prompt");
+}
+
+// 以 < 开头的系统注入消息被过滤
+#[test]
+fn ExtractSessionName_SkipSystemInject_001() {
+    let lines = vec![
+        r#"{"type":"user","message":{"content":"<system-reminder>some system text</system-reminder>"},"isMeta":false}"#,
+        r#"{"type":"user","message":{"content":"actual user message"},"isMeta":false}"#,
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("session.jsonl");
+    std::fs::write(&file_path, lines.join("\n")).unwrap();
+    let result = extract_session_name(&file_path);
+    assert_eq!(result, "actual user message");
+}
+
+// 超过 50 字符的消息被截断并加省略号
+#[test]
+fn ExtractSessionName_TruncateLong_001() {
+    let long_msg: String = "a".repeat(60);
+    let lines = vec![format!(
+        r#"{{"type":"user","message":{{"content":"{}"}},"isMeta":false}}"#,
+        long_msg
+    )];
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("session.jsonl");
+    std::fs::write(&file_path, lines.join("\n")).unwrap();
+    let result = extract_session_name(&file_path);
+    assert!(result.ends_with("..."));
+    // 50 chars + "..." = 53
+    assert_eq!(result.len(), 53);
+}
+
+// 无用户消息也无 custom-title 时返回 "Unnamed session"
+#[test]
+fn ExtractSessionName_NoMessages_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("session.jsonl");
+    std::fs::write(&file_path, "").unwrap();
+    let result = extract_session_name(&file_path);
+    assert_eq!(result, "Unnamed session");
 }
