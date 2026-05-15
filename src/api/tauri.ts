@@ -201,9 +201,18 @@ export const openInFileManager = (path: string): Promise<void> =>
 export type { Update } from '@tauri-apps/plugin-updater';
 export { check, relaunch };
 
-export const checkForUpdates = async (): Promise<UpdateInfo | null> => {
+export const checkForUpdates = async (): Promise<UpdateInfo> => {
   const update = await check();
-  if (!update) return null;
+  if (!update) {
+    return {
+      version: __APP_VERSION__,
+      currentVersion: __APP_VERSION__,
+      hasUpdate: false,
+      releaseNotes: '',
+      downloadUrl: '',
+      platformAsset: null,
+    };
+  }
   return {
     version: update.version,
     currentVersion: __APP_VERSION__,
