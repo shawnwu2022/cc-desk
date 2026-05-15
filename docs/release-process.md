@@ -20,9 +20,11 @@ node scripts/release.js --bump minor --notes "### Features\n- Add sidebar panel\
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
-| `--bump` | ✓ | 版本更新类型：`major` / `minor` / `patch` |
+| `--bump` | ✓* | 版本更新类型：`major` / `minor` / `patch`（与 `--exact` 二选一） |
+| `--exact` | ✓* | 使用当前版本发布，不 bump 版本号（用于重新发布） |
 | `--notes` | ✓ | Release notes 内容，用 `\n` 表示换行 |
 | `--skip-ci` |  | 跳过 CI 监控（用于已构建的标签） |
+| `--oss-only` |  | 仅下载指定版本并上传 OSS（如 `--oss-only v0.5.1`） |
 
 ### 执行流程
 
@@ -40,6 +42,20 @@ node scripts/release.js --bump minor --notes "### Features\n- Add sidebar panel\
 ```bash
 # 多行格式示例（用 \n 表示换行）
 --notes "### Bug Fixes\n- Fix issue A\n- Fix issue B\n\n### Features\n- Add feature X"
+```
+
+### 常用示例
+
+```bash
+# 新版本发布
+npm run release -- --bump patch --notes "### Fixed\n- Fix copy issue"
+npm run release -- --bump minor --notes "### Features\n- Add sidebar panel"
+
+# 重新发布当前版本（CI 已构建）
+npm run release -- --exact --notes "### Fixed\n- Fix issue" --skip-ci
+
+# 仅上传 OSS（补传某个版本）
+npm run release -- --oss-only v0.5.1
 ```
 
 ## 仅上传到 OSS
@@ -115,9 +131,9 @@ CI 自动构建并上传：
 
 | 平台 | 产物 |
 |------|------|
-| Windows (x64) | `.exe` (NSIS) + `.msi` |
-| macOS (Universal) | `.dmg` + `.app` |
-| Linux (x64) | `.deb` + `.AppImage` |
+| Windows (x64) | `.exe` (NSIS) + `.exe.sig` |
+| macOS (ARM) | `.dmg` + `.app.tar.gz` + `.app.tar.gz.sig` |
+| Linux (x64) | `.AppImage` + `.AppImage.sig` |
 
 ## CHANGELOG 格式
 
