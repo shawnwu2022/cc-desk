@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.1] - 2026-05-16
+
+### Fixed
+- Fix session resume from home page not opening the correct session due to watcher race condition
+- Fix active tab switching to wrong tab when returning to the same project
+- Fix history sessions not refreshing after new session starts
+
+### Improved
+- Refactor history sessions to per-project caching for faster project switching
+
 ## [0.9.0] - 2026-05-15
 
 ### Features
