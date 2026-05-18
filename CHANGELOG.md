@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.0] - 2026-05-18
+
+### Features
+- Add Windows Explorer right-click context menu: "Open with CC-Box" on folders and "Open CC-Box Here" on directory background
+- Support opening project from CLI argument (cross-platform)
+- Distinguish existing vs new project when opening from context menu
+
+### Fixed
+- Fix NSIS installer hook macro names for Tauri 2 compatibility
+
 ## [0.9.3] - 2026-05-18
 
 ### Fixed
