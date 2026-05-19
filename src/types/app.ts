@@ -62,3 +62,11 @@ export interface DownloadProgress {
   total: number
   percent: number
 }
+
+// Claude CLI 更新信息
+export interface ClaudeCliUpdateInfo {
+  installedVersion: string | null
+  latestVersion: string
+  hasUpdate: boolean
+  notInstalled: boolean
+}

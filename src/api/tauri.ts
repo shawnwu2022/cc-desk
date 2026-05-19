@@ -23,6 +23,7 @@ import type {
   SkillInfo,
   UpdateInfo,
   DownloadProgress,
+  ClaudeCliUpdateInfo,
   HomeData,
   CheckResult,
   HookEventPayload,
@@ -47,6 +48,7 @@ export type {
   SkillInfo,
   UpdateInfo,
   DownloadProgress,
+  ClaudeCliUpdateInfo,
 };
 
 // ============================================
@@ -306,6 +308,19 @@ export const downloadAndInstallGit = (): Promise<void> =>
 
 export const onInstallProgress = (callback: (progress: InstallProgress) => void): Promise<Unlisten> =>
   listen<InstallProgress>('download-progress', (event) => callback(event.payload));
+
+// ============================================
+// Claude CLI Update Check
+// ============================================
+
+export const checkClaudeCliUpdate = (): Promise<ClaudeCliUpdateInfo> =>
+  invoke<ClaudeCliUpdateInfo>('check_claude_cli_update');
+
+export const checkClaudeRunning = (): Promise<boolean> =>
+  invoke<boolean>('check_claude_running');
+
+export const killClaudeProcesses = (): Promise<void> =>
+  invoke<void>('kill_claude_processes');
 
 // 右键菜单打开目录
 export const onOpenDirectory = (callback: (dir: string) => void): Promise<Unlisten> =>

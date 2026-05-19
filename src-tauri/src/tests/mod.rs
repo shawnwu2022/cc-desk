@@ -12,3 +12,5 @@ mod pty;
 mod mcp;
 #[cfg(test)]
 mod env;
+#[cfg(test)]
+mod installer;

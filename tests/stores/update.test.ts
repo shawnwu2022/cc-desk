@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useUpdateStore } from '@/stores/update'
-import type { UpdateInfo } from '@/types'
+import type { UpdateInfo, ClaudeCliUpdateInfo } from '@/types'
 
 // 构造一个标准 UpdateInfo 对象
 function makeUpdateInfo(overrides: Partial<UpdateInfo> = {}): UpdateInfo {
@@ -116,6 +116,78 @@ describe('update store', () => {
       expect(store.downloadError).toBe('')
       expect(store.downloadState).toBe('downloading')
       expect(store.downloadProgress.percent).toBe(50)
+    })
+  })
+
+  describe('Claude CLI update', () => {
+    // 初始状态 claudeCliUpdateInfo 为 null
+    it('ClaudeCli_Initial_001', () => {
+      const store = useUpdateStore()
+      expect(store.claudeCliUpdateInfo).toBeNull()
+      expect(store.claudeCliDownloadState).toBe('idle')
+      expect(store.claudeCliDownloadProgress).toBe(0)
+      expect(store.claudeCliDownloadMessage).toBe('')
+      expect(store.claudeCliDownloadError).toBe('')
+    })
+
+    // 设置 Claude CLI 更新信息
+    it('ClaudeCli_SetUpdateInfo_001', () => {
+      const store = useUpdateStore()
+      const info: ClaudeCliUpdateInfo = {
+        installedVersion: '1.0.30',
+        latestVersion: '1.0.33',
+        hasUpdate: true,
+        notInstalled: false,
+      }
+      store.setClaudeCliUpdateInfo(info)
+      expect(store.claudeCliUpdateInfo).toEqual(info)
+    })
+
+    // 设置 null 清除
+    it('ClaudeCli_ClearUpdateInfo_001', () => {
+      const store = useUpdateStore()
+      store.setClaudeCliUpdateInfo({ installedVersion: '1.0.30', latestVersion: '1.0.33', hasUpdate: true, notInstalled: false })
+      store.setClaudeCliUpdateInfo(null)
+      expect(store.claudeCliUpdateInfo).toBeNull()
+    })
+
+    // 下载状态转换
+    it('ClaudeCli_DownloadState_001', () => {
+      const store = useUpdateStore()
+      store.setClaudeCliDownloadState('downloading')
+      expect(store.claudeCliDownloadState).toBe('downloading')
+      store.setClaudeCliDownloadState('done')
+      expect(store.claudeCliDownloadState).toBe('done')
+    })
+
+    // 下载进度更新
+    it('ClaudeCli_DownloadProgress_001', () => {
+      const store = useUpdateStore()
+      store.setClaudeCliDownloadProgress(50, '下载中 50%')
+      expect(store.claudeCliDownloadProgress).toBe(50)
+      expect(store.claudeCliDownloadMessage).toBe('下载中 50%')
+    })
+
+    // resetClaudeCliDownload 恢复初始状态
+    it('ClaudeCli_Reset_001', () => {
+      const store = useUpdateStore()
+      store.setClaudeCliDownloadState('downloading')
+      store.setClaudeCliDownloadProgress(80, '下载中')
+      store.setClaudeCliDownloadError('some error')
+
+      store.resetClaudeCliDownload()
+
+      expect(store.claudeCliDownloadState).toBe('idle')
+      expect(store.claudeCliDownloadProgress).toBe(0)
+      expect(store.claudeCliDownloadMessage).toBe('')
+      expect(store.claudeCliDownloadError).toBe('')
+    })
+
+    // 下载错误
+    it('ClaudeCli_DownloadError_001', () => {
+      const store = useUpdateStore()
+      store.setClaudeCliDownloadError('Network error')
+      expect(store.claudeCliDownloadError).toBe('Network error')
     })
   })
 })

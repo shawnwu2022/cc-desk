@@ -59,4 +59,42 @@ describe('sidebar store', () => {
       expect(store.panelVisible).toBe(true)
     })
   })
+
+  describe('updateAvailable badge', () => {
+    // 无任何更新时 badge 不显示
+    it('Badge_None_001', () => {
+      const store = useSidebarStore()
+      expect(store.updateAvailable).toBe(false)
+    })
+
+    // 仅软件更新时 badge 显示
+    it('Badge_AppUpdate_001', () => {
+      const store = useSidebarStore()
+      store.setUpdateInfo({ version: '0.8.0', currentVersion: '0.7.0', hasUpdate: true, releaseNotes: '', downloadUrl: '', platformAsset: null })
+      expect(store.updateAvailable).toBe(true)
+    })
+
+    // 仅 Claude CLI 更新时 badge 显示
+    it('Badge_CliUpdate_001', () => {
+      const store = useSidebarStore()
+      store.setClaudeCliUpdateInfo({ installedVersion: '1.0.30', latestVersion: '1.0.33', hasUpdate: true, notInstalled: false })
+      expect(store.updateAvailable).toBe(true)
+    })
+
+    // 两者都有更新时 badge 显示
+    it('Badge_Both_001', () => {
+      const store = useSidebarStore()
+      store.setUpdateInfo({ version: '0.8.0', currentVersion: '0.7.0', hasUpdate: true, releaseNotes: '', downloadUrl: '', platformAsset: null })
+      store.setClaudeCliUpdateInfo({ installedVersion: '1.0.30', latestVersion: '1.0.33', hasUpdate: true, notInstalled: false })
+      expect(store.updateAvailable).toBe(true)
+    })
+
+    // 软件无更新但 Claude CLI 无更新时 badge 不显示
+    it('Badge_NoUpdate_001', () => {
+      const store = useSidebarStore()
+      store.setUpdateInfo({ version: '0.7.0', currentVersion: '0.7.0', hasUpdate: false, releaseNotes: '', downloadUrl: '', platformAsset: null })
+      store.setClaudeCliUpdateInfo({ installedVersion: '1.0.33', latestVersion: '1.0.33', hasUpdate: false, notInstalled: false })
+      expect(store.updateAvailable).toBe(false)
+    })
+  })
 })

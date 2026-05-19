@@ -50,7 +50,7 @@ export default {
   envValuePlaceholder: 'value',
 
   // Update section
-  softwareUpdate: 'Software Update',
+  ccBoxUpdate: 'CC-Box Update',
   currentVersion: 'Current Version',
   checking: 'Checking...',
   checkForUpdates: 'Check for Updates',
@@ -61,12 +61,16 @@ export default {
   whatsNew: "What's New",
   downloadAndInstall: 'Download & Install',
   updateConfirmActivePtys: 'You have running terminal sessions. Updating will restart the app and close all sessions. Continue?',
+  updateConfirmClaudeRunning: 'Claude CLI is currently running. Updating will stop all terminal sessions and close Claude processes. Continue?',
   manualDownload: 'Manual Download',
   downloadingUpdate: 'Downloading update...',
   installingUpdate: 'Installing update...',
   willRestartAuto: 'The application will restart automatically.',
   noUpdateAvailable: 'No update available',
   updateFailed: 'Update failed: {error}',
+  notInstalled: 'Not installed',
+  installClaudeCli: 'Install Claude CLI',
+  claudeCliInstalled: 'Claude CLI installed successfully!',
 
   // About section
   aboutTitle: 'About',

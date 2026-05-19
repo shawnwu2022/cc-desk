@@ -50,7 +50,7 @@ export default {
   envValuePlaceholder: '变量值',
 
   // Update section
-  softwareUpdate: '软件更新',
+  ccBoxUpdate: 'CC-Box 更新',
   currentVersion: '当前版本',
   checking: '检查中...',
   checkForUpdates: '检查更新',
@@ -61,12 +61,16 @@ export default {
   whatsNew: '更新内容',
   downloadAndInstall: '下载并安装',
   updateConfirmActivePtys: '有正在运行的终端会话，更新将重启应用并关闭所有会话。确定继续？',
+  updateConfirmClaudeRunning: '检测到 Claude CLI 正在运行，更新将停止所有终端会话并关闭 Claude 进程。确定继续？',
   manualDownload: '手动下载',
   downloadingUpdate: '正在下载更新...',
   installingUpdate: '正在安装更新...',
   willRestartAuto: '应用将自动重启。',
   noUpdateAvailable: '暂无可用更新',
   updateFailed: '更新失败：{error}',
+  notInstalled: '未安装',
+  installClaudeCli: '安装 Claude CLI',
+  claudeCliInstalled: 'Claude CLI 安装成功！',
 
   // About section
   aboutTitle: '关于',

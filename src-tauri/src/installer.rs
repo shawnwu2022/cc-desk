@@ -584,6 +584,248 @@ pub async fn get_latest_versions() -> Result<LatestVersions, String> {
     Ok(LatestVersions { claude, git })
 }
 
+// ============================================
+// Claude CLI 更新检查
+// ============================================
+
+/// Claude CLI 更新检查结果
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeCliUpdateInfo {
+    pub installed_version: Option<String>,
+    pub latest_version: String,
+    pub has_update: bool,
+    pub not_installed: bool,
+}
+
+/// 获取已安装的 Claude CLI 版本号
+fn get_installed_claude_version() -> Option<String> {
+    let exe_name = if cfg!(target_os = "windows") {
+        "claude.exe"
+    } else {
+        "claude"
+    };
+
+    // 1. 优先使用配置路径
+    if let Ok(config) = crate::store::get_app_config() {
+        if let Some(ref path) = config.claude_path {
+            if Path::new(path).exists() {
+                if let Some(v) = run_version_command(Path::new(path)) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+
+    // 2. 检查标准安装目录
+    let (claude_dir, _) = get_install_dirs();
+    let claude_path = claude_dir.join(exe_name);
+    if claude_path.exists() {
+        if let Some(v) = run_version_command(&claude_path) {
+            return Some(v);
+        }
+    }
+
+    // 3. 检查 PATH 中的 claude
+    run_version_command(Path::new("claude"))
+}
+
+/// 执行 claude --version 并解析版本号
+fn run_version_command(program: &Path) -> Option<String> {
+    let mut cmd = Command::new(program);
+    cmd.arg("--version");
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = crate::checks::decode_output(&output.stdout);
+    parse_version_output(&stdout)
+}
+
+/// 解析版本输出，提取 x.y.z 格式的版本号
+pub(crate) fn parse_version_output(output: &str) -> Option<String> {
+    for part in output.split_whitespace() {
+        if let Some(v) = extract_semver(part) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// 从字符串中提取 semver 版本号 (x.y.z)
+pub(crate) fn extract_semver(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            let mut dot_count = 0u8;
+            while i < len && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                if bytes[i] == b'.' {
+                    dot_count += 1;
+                    // 取到第3段时停止（2个点 = x.y.z）
+                    if dot_count == 3 {
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            if dot_count >= 2 {
+                // 回退到最后一个数字（去除尾部点号）
+                let mut j = i;
+                while j > start && !bytes[j - 1].is_ascii_digit() {
+                    j -= 1;
+                }
+                let version = &s[start..j];
+                if !version.is_empty() && version.ends_with(|c: char| c.is_ascii_digit()) {
+                    return Some(version.to_string());
+                }
+            }
+            // 跳过剩余数字/点号
+            while i < len && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// 简单的 semver 比较：latest > current 则返回 true
+pub(crate) fn is_newer_version(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| -> Vec<u32> {
+        v.trim_start_matches('v')
+            .split('.')
+            .filter_map(|s| s.parse().ok())
+            .collect()
+    };
+    let l = parse(latest);
+    let c = parse(current);
+    for i in 0..std::cmp::max(l.len(), c.len()) {
+        let lv = l.get(i).unwrap_or(&0);
+        let cv = c.get(i).unwrap_or(&0);
+        if lv > cv {
+            return true;
+        }
+        if lv < cv {
+            return false;
+        }
+    }
+    false
+}
+
+/// 检查 Claude CLI 是否有更新
+#[tauri::command]
+pub async fn check_claude_cli_update() -> Result<ClaudeCliUpdateInfo, String> {
+    // 1. 获取已安装版本
+    let installed = tokio::task::spawn_blocking(|| get_installed_claude_version())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 2. 获取最新版本信息
+    let latest = tokio::task::spawn_blocking(|| fetch_claude_latest())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+
+    let not_installed = installed.is_none();
+    let has_update = match &installed {
+        Some(v) => is_newer_version(&latest.version, v),
+        None => false,
+    };
+
+    Ok(ClaudeCliUpdateInfo {
+        installed_version: installed,
+        latest_version: latest.version,
+        has_update,
+        not_installed,
+    })
+}
+
+// ============================================
+// Claude CLI 进程管理
+// ============================================
+
+/// 检测是否有 claude 进程在运行
+#[tauri::command]
+pub async fn check_claude_running() -> Result<bool, String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let output = Command::new("tasklist")
+                .args(["/FI", "IMAGENAME eq claude.exe", "/NH"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+                .map_err(|e| format!("Failed to run tasklist: {}", e))?;
+            let stdout = crate::checks::decode_output(&output.stdout);
+            Ok(stdout.contains("claude.exe"))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let status = Command::new("pgrep")
+                .args(["-x", "claude"])
+                .status()
+                .map_err(|e| format!("Failed to run pgrep: {}", e))?;
+            Ok(status.success())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 杀死所有 claude 进程
+#[tauri::command]
+pub async fn kill_claude_processes() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let output = Command::new("taskkill")
+                .args(["/F", "/IM", "claude.exe"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+                .map_err(|e| format!("Failed to run taskkill: {}", e))?;
+            if !output.status.success() {
+                let stderr = crate::checks::decode_output(&output.stderr);
+                // taskkill 在没有匹配进程时也会返回非零，不算错误
+                if !stderr.contains("not found") && !stderr.is_empty() {
+                    log::warn!("[Installer] taskkill stderr: {}", stderr);
+                }
+            }
+            log::info!("[Installer] Killed claude processes");
+            Ok(())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let status = Command::new("pkill")
+                .args(["-x", "claude"])
+                .status()
+                .map_err(|e| format!("Failed to run pkill: {}", e))?;
+            if !status.success() {
+                log::warn!("[Installer] pkill exited with non-zero status (may be no processes)");
+            }
+            log::info!("[Installer] Killed claude processes");
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 检查已安装版本
 #[tauri::command]
 pub async fn check_installed_versions() -> Result<std::collections::HashMap<String, bool>, String> {

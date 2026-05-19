@@ -97,6 +97,7 @@ import {
   onConfigFontSize,
   onTerminalRestart,
   checkForUpdates,
+  checkClaudeCliUpdate,
   downloadAndInstallClaude,
   downloadAndInstallGit,
   onInstallProgress,
@@ -290,6 +291,11 @@ function initAfterChecks() {
       sidebarStore.setUpdateInfo(info)
       updateStore.setUpdateInfo(info)
     }
+  }).catch(() => {})
+
+  checkClaudeCliUpdate().then(info => {
+    sidebarStore.setClaudeCliUpdateInfo(info)
+    updateStore.setClaudeCliUpdateInfo(info)
   }).catch(() => {})
 
   // 监听右键菜单传入的目录

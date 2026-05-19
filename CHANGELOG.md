@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1] - 2026-05-19
+
+### Features
+- Add Claude CLI update check from OSS in settings
+- Auto-check Claude CLI updates on startup with badge notification
+- Detect running Claude processes before update with confirmation dialog
+- Kill all PTY tabs and Claude processes before updating
+
 ## [0.10.0] - 2026-05-18
 
 ### Features

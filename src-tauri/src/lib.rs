@@ -168,6 +168,9 @@ pub fn run(initial_dir: Option<String>) {
             commands::log_message,
             installer::get_latest_versions,
             installer::check_installed_versions,
+            installer::check_claude_cli_update,
+            installer::check_claude_running,
+            installer::kill_claude_processes,
             installer::download_and_install_claude,
             #[cfg(target_os = "windows")]
             installer::download_and_install_git,
