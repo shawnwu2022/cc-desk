@@ -6,15 +6,23 @@
     </div>
 
     <div class="panel-content">
-      <div class="category-filter">
-        <button
-          v-for="cat in categories"
-          :key="cat.value"
-          class="filter-btn"
-          :class="{ active: selectedCategory === cat.value }"
-          @click="selectedCategory = cat.value"
-        >
-          {{ cat.label }}
+      <div class="filter-row">
+        <div class="category-filter">
+          <button
+            v-for="cat in categories"
+            :key="cat.value"
+            class="filter-btn"
+            :class="{ active: selectedCategory === cat.value }"
+            @click="selectedCategory = cat.value"
+          >
+            {{ cat.label }}
+          </button>
+        </div>
+        <button class="custom-btn" @click="handleSelectCustom">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          <span class="custom-btn-text">{{ t('customProvider') }}</span>
         </button>
       </div>
 
@@ -44,7 +52,7 @@ import { useI18n } from 'vue-i18n'
 import { providerPresets, getCategoryLabel } from '@/config/providerPresets'
 import type { ProviderPreset } from '@/types/provider'
 
-defineEmits<{
+const emit = defineEmits<{
   close: []
   select: [preset: ProviderPreset]
 }>()
@@ -52,6 +60,10 @@ defineEmits<{
 const { t } = useI18n()
 
 const presets = ref<ProviderPreset[]>(providerPresets)
+
+const customPreset = computed(() =>
+  presets.value.find(p => p.category === 'custom')
+)
 
 const categories = computed(() => [
   { value: '', label: t('categoryAll') },
@@ -66,10 +78,16 @@ const selectedCategory = ref<string>('')
 
 const filteredPresets = computed(() => {
   if (!selectedCategory.value) {
-    return presets.value.filter(p => !p.hidden)
+    return presets.value.filter(p => !p.hidden && p.category !== 'custom')
   }
-  return presets.value.filter(p => p.category === selectedCategory.value && !p.hidden)
+  return presets.value.filter(p => p.category === selectedCategory.value && !p.hidden && p.category !== 'custom')
 })
+
+function handleSelectCustom() {
+  if (customPreset.value) {
+    emit('select', customPreset.value)
+  }
+}
 
 function getIconChar(icon?: string): string {
   if (!icon) return 'P'
@@ -144,10 +162,19 @@ function getIconChar(icon?: string): string {
   overflow-y: auto;
 }
 
+/* 分类行 + 自定义按钮 */
+.filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  gap: 12px;
+}
+
 .category-filter {
   display: flex;
   gap: 8px;
-  margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 
 .filter-btn {
@@ -171,6 +198,32 @@ function getIconChar(icon?: string): string {
   border-color: var(--accent-color);
 }
 
+/* 自定义 Provider 按钮 — 与 active 筛选按钮一致 */
+.custom-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--accent-color);
+  color: white;
+  border: 1px solid var(--accent-color);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.custom-btn:hover {
+  opacity: 0.9;
+}
+
+.custom-btn-text {
+  line-height: 1;
+}
+
+/* 预设网格 */
 .preset-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));

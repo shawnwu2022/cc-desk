@@ -11,7 +11,7 @@ export default {
   add: 'Add',
   remove: 'Remove',
   settings: 'Settings',
-  back: '← Back',
+  back: 'Back',
 
   // Settings navigation
   appearance: 'Appearance',
@@ -303,7 +303,7 @@ export default {
   customVariables: 'Custom Variables ({count})',
   varNamePlaceholder: 'Variable name',
   varValuePlaceholder: 'Variable value',
-  addVariable: '+ Add Variable',
+  addVariable: 'Add Variable',
   configJson: 'Config (JSON)',
   applyCommonConfig: 'Apply common config',
   format: 'Format',
@@ -312,6 +312,9 @@ export default {
 
   // Provider preset panel
   selectPreset: 'Select Preset Template',
+  customProvider: 'Custom Provider',
+  customProviderDesc: 'Configure any API endpoint with full flexibility',
+  customProviderSub: 'Custom',
   categoryAll: 'All',
   categoryOfficial: 'Official',
   categoryCn: 'CN',

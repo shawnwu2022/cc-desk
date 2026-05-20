@@ -11,7 +11,7 @@ export default {
   add: '添加',
   remove: '移除',
   settings: '设置',
-  back: '← 返回',
+  back: '返回',
 
   // Settings navigation
   appearance: '外观',
@@ -303,7 +303,7 @@ export default {
   customVariables: '自定义变量 ({count})',
   varNamePlaceholder: '变量名',
   varValuePlaceholder: '变量值',
-  addVariable: '+ 添加自定义变量',
+  addVariable: '添加自定义变量',
   configJson: '配置 (JSON)',
   applyCommonConfig: '应用通用配置',
   format: '格式化',
@@ -312,6 +312,9 @@ export default {
 
   // Provider preset panel
   selectPreset: '选择预设模板',
+  customProvider: '自定义接口',
+  customProviderDesc: '自由配置任意 API 端点，完全灵活',
+  customProviderSub: 'Custom / 自定义',
   categoryAll: '全部',
   categoryOfficial: '官方',
   categoryCn: '国内',

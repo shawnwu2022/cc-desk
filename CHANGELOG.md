@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.2] - 2026-05-20
+
+### Fixed
+- Fix duplicated arrow and plus symbols in back and add-variable buttons
+
+### Improved
+- Add dedicated Custom Provider button in preset panel category row
+- Add i18n support for Custom Provider label
+
 ## [0.10.1] - 2026-05-19
 
 ### Features

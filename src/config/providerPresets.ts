@@ -618,6 +618,7 @@ export const providerPresets: ProviderPreset[] = [
   },
   {
     name: 'Custom Provider',
+    nameKey: 'customProvider',
     websiteUrl: '',
     settingsConfig: {
       env: {
@@ -626,7 +627,8 @@ export const providerPresets: ProviderPreset[] = [
       },
     },
     category: 'custom',
-    icon: 'generic',
+    icon: 'custom',
+    iconColor: '#6366F1',
   },
 ]
 
