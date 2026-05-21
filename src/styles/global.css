@@ -59,7 +59,7 @@
   --success-color: var(--status-success);
 
   /* 字体 */
-  --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', monospace;
   --font-sans: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', sans-serif;
 
   /* 圆角系统 */

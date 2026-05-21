@@ -163,7 +163,7 @@ const fitCurrentTerminal = debounce(() => {
 // 创建新的 Terminal 实例
 function createTerminal(tabId: string): Terminal {
   const term = new Terminal({
-    fontFamily: 'Cascadia Code, Fira Code, Consolas, monospace',
+    fontFamily: 'Cascadia Code, Fira Code, Consolas, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, monospace',
     fontSize: props.fontSize ?? 12,
     lineHeight: 1.2,
     cursorBlink: true,
