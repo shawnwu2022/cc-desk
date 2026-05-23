@@ -191,7 +191,8 @@ fn get_current_platform() -> String {
             .output()
         {
             if output.status.success() {
-                let val = String::from_utf8_lossy(&output.stdout).trim();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let val = stdout.trim();
                 if val == "1" {
                     return "darwin-arm64".to_string();
                 }
@@ -903,7 +904,10 @@ pub async fn kill_claude_processes() -> Result<(), String> {
 pub async fn check_installed_versions() -> Result<std::collections::HashMap<String, bool>, String> {
     let mut result = std::collections::HashMap::new();
 
+    #[cfg(target_os = "windows")]
     let (claude_dir, git_dir) = get_install_dirs();
+    #[cfg(not(target_os = "windows"))]
+    let (claude_dir, _git_dir) = get_install_dirs();
 
     // 检查 Claude
     let platform = get_current_platform();
