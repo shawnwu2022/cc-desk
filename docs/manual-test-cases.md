@@ -567,3 +567,151 @@
 **预期结果**：
 - CC-Box 启动后工作目录为 `D:\projects\test`
 - 行为与右键菜单打开一致
+
+---
+
+## Claude CLI 更新与安装
+
+### ClaudeCli_VersionDetect_WinNpm_001 — Windows npm 安装的 claude 版本检测
+
+**目标**：验证通过 npm 全局安装的 claude（`.cmd` 文件）能被正确检测到版本号
+
+**前置条件**：Windows 系统，claude 通过 `npm install -g @anthropic-ai/claude-code` 安装
+
+**操作步骤**：
+1. 启动 CC-Box，确认启动检查通过（显示 Claude CLI ✓）
+2. 进入设置 > 更新页
+3. 点击 Claude CLI 区域的「检查更新」按钮
+
+**预期结果**：
+- 版本号区域显示 `vX.Y.Z`（而非"未安装"）
+- 检查结果正确显示是否有更新可用
+
+### ClaudeCli_VersionDetect_MacArm_002 — macOS ARM 版本检测
+
+**目标**：验证 Apple Silicon Mac 上 claude 版本能被正确检测
+
+**前置条件**：macOS Apple Silicon，claude 通过任意方式安装
+
+**操作步骤**：
+1. 启动 CC-Box
+2. 进入设置 > 更新页
+3. 点击 Claude CLI 区域的「检查更新」按钮
+
+**预期结果**：
+- 版本号区域显示 `vX.Y.Z`
+- 不显示"未安装"
+
+### ClaudeCli_InstallPlatform_MacArm_003 — macOS ARM 下载正确架构
+
+**目标**：验证 Apple Silicon Mac 下载安装 `darwin-arm64` 二进制文件
+
+**前置条件**：macOS Apple Silicon，有新版本可用
+
+**操作步骤**：
+1. 进入设置 > 更新页
+2. 点击 Claude CLI 的「下载并安装」
+3. 等待安装完成
+4. 在终端执行 `file ~/.local/bin/claude`
+
+**预期结果**：
+- 下载进度正常推进
+- 安装完成后版本号更新
+- `file` 命令输出包含 `arm64` 或 `Mach-O 64-bit executable arm64`
+- 无 "Platform xxx not supported" 错误
+
+### ClaudeCli_InstallPlatform_MacIntel_004 — macOS Intel 下载正确架构
+
+**目标**：验证 Intel Mac 下载安装 `darwin-x64` 二进制文件
+
+**前置条件**：macOS Intel
+
+**操作步骤**：
+1. 进入设置 > 更新页
+2. 点击 Claude CLI 的「下载并安装」
+3. 等待安装完成
+4. 在终端执行 `file ~/.local/bin/claude`
+
+**预期结果**：
+- 下载 `darwin-x64` 二进制文件
+- `file` 命令输出包含 `x86_64`
+
+### ClaudeCli_InstallPlatform_LinuxArm64_005 — Linux ARM64 下载正确架构
+
+**目标**：验证 ARM64 Linux 桌面下载安装 `linux-arm64` 二进制文件
+
+**前置条件**：Linux ARM64 桌面环境
+
+**操作步骤**：
+1. 启动 CC-Box（从桌面环境启动，非终端）
+2. 进入设置 > 更新页
+3. 点击「下载并安装」
+4. 在终端执行 `file ~/.local/bin/claude`
+
+**预期结果**：
+- 下载 `linux-arm64` 二进制文件（不是 `linux-x64`）
+- `file` 命令输出包含 `aarch64`
+
+### ClaudeCli_PathPriority_Windows_006 — Windows 安装后 PATH 优先级最高
+
+**目标**：验证安装完成后 `~/.local/bin` 在 PATH 最前面，优先于其他 claude
+
+**前置条件**：Windows 系统，PATH 中已有其他 claude（如 npm 全局安装的）
+
+**操作步骤**：
+1. 进入设置 > 更新页，安装或更新 Claude CLI
+2. 安装完成后，打开 cmd 执行 `where claude`
+3. 观察 `claude.exe` 出现的顺序
+
+**预期结果**：
+- `%USERPROFILE%\.local\bin\claude.exe` 排在第一位
+- 用户 PATH 环境变量中 `~/.local/bin` 位于最前面
+
+### ClaudeCli_PathPriority_Mac_007 — macOS 安装后 PATH 持久化
+
+**目标**：验证安装完成后 `~/.local/bin` 被持久写入 shell 配置
+
+**前置条件**：macOS，默认 shell 为 zsh
+
+**操作步骤**：
+1. 进入设置 > 更新页，安装或更新 Claude CLI
+2. 检查 `~/.zshenv` 文件内容
+3. 打开新终端窗口，执行 `which claude`
+4. 重启 CC-Box，确认启动检查仍通过
+
+**预期结果**：
+- `~/.zshenv` 中包含 `export PATH="$HOME/.local/bin:$PATH"`
+- 新终端中 `which claude` 返回 `/Users/xxx/.local/bin/claude`
+- 重启后启动检查通过
+
+### ClaudeCli_PathPriority_Linux_008 — Linux 安装后 PATH 持久化
+
+**目标**：验证安装完成后 `~/.local/bin` 被持久写入 shell 配置
+
+**前置条件**：Linux，默认 shell 为 bash
+
+**操作步骤**：
+1. 进入设置 > 更新页，安装或更新 Claude CLI
+2. 检查 `~/.bashrc` 文件内容
+3. 打开新终端窗口，执行 `which claude`
+4. 重启 CC-Box，确认启动检查仍通过
+
+**预期结果**：
+- `~/.bashrc` 中包含 `export PATH="$HOME/.local/bin:$PATH"`
+- 新终端中 `which claude` 返回 `/home/xxx/.local/bin/claude`
+- 重启后启动检查通过
+
+### ClaudeCli_ReinstallPathPriority_009 — 重复安装后 PATH 不重复
+
+**目标**：验证多次安装/更新后 PATH 中不会出现重复条目
+
+**前置条件**：已安装 Claude CLI
+
+**操作步骤**：
+1. 进入设置 > 更新页，点击安装/更新
+2. 安装完成后，再次点击安装/更新
+3. 检查用户 PATH（Windows: 用户环境变量；macOS: `~/.zshenv`）
+
+**预期结果**：
+- PATH 中只有一条 `~/.local/bin` 相关条目
+- 该条目在 PATH 最前面

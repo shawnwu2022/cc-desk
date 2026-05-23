@@ -184,27 +184,38 @@ fn get_current_platform() -> String {
     }
     #[cfg(target_os = "macos")]
     {
-        // 检测架构
-        if std::env::var("PROCESSOR_ARCHITECTURE").unwrap_or_default() == "ARM64"
-            || std::env::var("HOSTTYPE").unwrap_or_default().contains("aarch64") {
-            "darwin-arm64".to_string()
-        } else {
-            "darwin-x64".to_string()
+        // sysctl 检测硬件架构（GUI 应用不继承 shell 的 HOSTTYPE 变量）
+        // hw.optional.arm64: Apple Silicon 返回 "1"，Intel Mac 不存在此 key
+        if let Ok(output) = Command::new("sysctl")
+            .args(["-n", "hw.optional.arm64"])
+            .output()
+        {
+            if output.status.success() {
+                let val = String::from_utf8_lossy(&output.stdout).trim();
+                if val == "1" {
+                    return "darwin-arm64".to_string();
+                }
+            }
         }
+        "darwin-x64".to_string()
     }
     #[cfg(target_os = "linux")]
     {
-        // 检测架构
-        let arch = std::env::var("HOSTTYPE").unwrap_or_default();
+        // uname -m 检测硬件架构（GUI 应用不继承 shell 的 HOSTTYPE 变量）
+        let arch = Command::new("uname")
+            .arg("-m")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+
         if arch.contains("aarch64") || arch.contains("arm64") {
-            // 检测 musl/glibc
             if std::path::Path::new("/lib/libc.musl-aarch64.so.1").exists() {
                 "linux-arm64-musl".to_string()
             } else {
                 "linux-arm64".to_string()
             }
         } else {
-            // x64
             if std::path::Path::new("/lib/libc.musl-x86_64.so.1").exists() {
                 "linux-x64-musl".to_string()
             } else {
@@ -467,22 +478,56 @@ fn save_install_path_to_config(key: &str, path: &Path) {
     }
 }
 
+/// 清理 PATH 字符串并将目录添加到开头（纯函数）
+///
+/// 移除已有条目（大小写不敏感）后添加到开头，确保最高优先级。
+pub(crate) fn clean_and_prepend_path(path: &str, dir: &str, sep: char) -> String {
+    let dir_lower = dir.to_lowercase();
+    let entries: Vec<&str> = path
+        .split(sep)
+        .filter(|e| e.trim().to_lowercase() != dir_lower)
+        .collect();
+    let clean_path = entries.join(&sep.to_string());
+
+    if clean_path.is_empty() {
+        dir.to_string()
+    } else {
+        format!("{}{}{}", dir, sep, clean_path)
+    }
+}
+
+/// 清理 rc 文件内容并将 export 行追加到末尾（纯函数）
+///
+/// 移除包含任一 marker 的旧行（大小写不敏感），追加新的 export 行。
+/// markers 用于同时匹配绝对路径和 $HOME 相对路径两种格式。
+pub(crate) fn clean_rc_content(content: &str, markers: &[&str], export_line: &str) -> String {
+    let markers_lower: Vec<String> = markers.iter().map(|m| m.to_lowercase()).collect();
+    let filtered: Vec<&str> = content
+        .lines()
+        .filter(|line| {
+            let line_lower = line.to_lowercase();
+            !markers_lower.iter().any(|m| line_lower.contains(m.as_str()))
+        })
+        .collect();
+    let mut result = filtered.join("\n");
+    if !result.is_empty() && !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result.push_str(&format!("{}\n", export_line));
+    result
+}
+
 /// 添加目录到进程 PATH（立即生效）
+///
+/// 始终将目录移到 PATH 最前面，确保最高优先级。
 fn add_to_path(dir: &Path) {
     let dir_str = dir.to_string_lossy().to_string();
     let current_path = std::env::var("PATH").unwrap_or_default();
+    let sep = if cfg!(windows) { ';' } else { ':' };
 
-    // 避免重复添加
-    if current_path.contains(&dir_str) {
-        log::info!("[Installer] {} already in PATH", dir_str);
-        return;
-    }
-
-    // 添加到 PATH 开头（优先级更高）
-    let new_path = format!("{};{}", dir_str, current_path);
+    let new_path = clean_and_prepend_path(&current_path, &dir_str, sep);
     std::env::set_var("PATH", &new_path);
-
-    log::info!("[Installer] Added {} to PATH", dir_str);
+    log::info!("[Installer] Ensured {} at PATH beginning", dir_str);
 }
 
 /// 添加目录到用户环境变量 PATH（持久化）
@@ -508,20 +553,8 @@ fn add_to_user_path_permanent(dir: &Path) {
         }
     };
 
-    // 避免重复添加
-    let current_lower = current_user_path.to_lowercase();
-    let dir_lower = dir_str.to_lowercase();
-    if current_lower.contains(&dir_lower) {
-        log::info!("[Installer] {} already in user PATH", dir_str);
-        return;
-    }
-
-    // 添加到用户 PATH 开头
-    let new_user_path = if current_user_path.is_empty() {
-        dir_str.clone()
-    } else {
-        format!("{};{}", dir_str, current_user_path)
-    };
+    // 移除已有条目后添加到开头，确保最高优先级
+    let new_user_path = clean_and_prepend_path(&current_user_path, &dir_str, ';');
 
     // 使用 PowerShell 设置用户 PATH
     let set_result = Command::new("powershell")
@@ -553,9 +586,37 @@ fn add_to_user_path_permanent(dir: &Path) {
 
 #[cfg(not(target_os = "windows"))]
 fn add_to_user_path_permanent(dir: &Path) {
-    // macOS/Linux: 写入 ~/.bashrc 或 ~/.zshrc
-    // 暂不实现，Unix 用户通常已安装 Claude CLI
-    log::info!("[Installer] User PATH persistence not implemented for non-Windows");
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let dir_str = dir.to_string_lossy();
+
+    // 使用 $HOME 相对路径，避免硬编码绝对路径
+    let rel_path = if dir_str.starts_with(&home) {
+        format!("$HOME{}", &dir_str[home.len()..])
+    } else {
+        dir_str.to_string()
+    };
+    let export_line = format!("export PATH=\"{}:$PATH\"", rel_path);
+
+    // macOS 默认 zsh → 写入 ~/.zshenv（所有 zsh shell 都加载）
+    // Linux 默认 bash → 写入 ~/.bashrc（交互式 shell 加载）
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let rc_file = if shell.contains("zsh") {
+        PathBuf::from(&home).join(".zshenv")
+    } else {
+        PathBuf::from(&home).join(".bashrc")
+    };
+
+    // 移除已有的该路径相关行，然后追加新行确保最高优先级
+    // 同时匹配绝对路径和 $HOME 相对路径格式
+    let existing = fs::read_to_string(&rc_file).unwrap_or_default();
+    let marker_abs = rel_path.replace("$HOME", &home);
+    let markers = [marker_abs.as_str(), rel_path.as_str()];
+    let new_content = clean_rc_content(&existing, &markers, &export_line);
+
+    match fs::write(&rc_file, &new_content) {
+        Ok(()) => log::info!("[Installer] Ensured {} at PATH beginning in {}", rel_path, rc_file.display()),
+        Err(e) => log::warn!("[Installer] Failed to write to {}: {}", rc_file.display(), e),
+    }
 }
 
 /// 获取最新版本信息（用于前端显示）
@@ -631,22 +692,33 @@ fn get_installed_claude_version() -> Option<String> {
 }
 
 /// 执行 claude --version 并解析版本号
+#[cfg(target_os = "windows")]
 fn run_version_command(program: &Path) -> Option<String> {
-    let mut cmd = Command::new(program);
-    cmd.arg("--version");
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    let output = cmd.output().ok()?;
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let program_str = program.to_string_lossy();
+    // 通过 cmd /C 执行，支持 .cmd/.bat 文件（npm 安装的 claude）
+    let output = Command::new("cmd")
+        .args(["/C", &*program_str, "--version"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
+    let stdout = crate::checks::decode_output(&output.stdout);
+    parse_version_output(&stdout)
+}
 
+#[cfg(not(target_os = "windows"))]
+fn run_version_command(program: &Path) -> Option<String> {
+    let output = Command::new(program)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
     let stdout = crate::checks::decode_output(&output.stdout);
     parse_version_output(&stdout)
 }

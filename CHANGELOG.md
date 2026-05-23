@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.4] - 2026-05-23
+
+### Fixed
+- Fix npm-installed Claude CLI not detected on Windows (use cmd /C to support .cmd files)
+- Fix macOS Apple Silicon detected as x64 (use sysctl instead of HOSTTYPE env var)
+- Fix Linux ARM64 detected as x64 (use uname -m instead of HOSTTYPE env var)
+- Fix installed Claude not having highest PATH priority after update
+- Implement persistent PATH on macOS/Linux (write to ~/.zshenv or ~/.bashrc)
+
 ## [0.10.3] - 2026-05-21
 
 ### Fixed
