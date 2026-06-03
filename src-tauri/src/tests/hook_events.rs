@@ -45,6 +45,13 @@ fn DeriveState_StopFail_001() {
     assert_eq!(derive_state("StopFailure", &data), "error");
 }
 
+// Notification + worker_permission_prompt 映射为 waiting_permission
+#[test]
+fn DeriveState_NotificationWorkerPerm_001() {
+    let data = json!({"notification_type": "worker_permission_prompt"});
+    assert_eq!(derive_state("Notification", &data), "waiting_permission");
+}
+
 // Notification + permission_prompt 映射为 waiting_permission
 #[test]
 fn DeriveState_NotificationPerm_001() {
@@ -52,18 +59,32 @@ fn DeriveState_NotificationPerm_001() {
     assert_eq!(derive_state("Notification", &data), "waiting_permission");
 }
 
-// Notification + idle_prompt 映射为 waiting_input
+// Notification + idle_prompt 映射为 idle
 #[test]
 fn DeriveState_NotificationIdle_001() {
     let data = json!({"notification_type": "idle_prompt"});
-    assert_eq!(derive_state("Notification", &data), "waiting_input");
+    assert_eq!(derive_state("Notification", &data), "idle");
 }
 
-// Notification + 未知 notification_type 映射为 waiting_input
+// Notification + computer_use_enter 映射为 unknown（不改变工作状态）
+#[test]
+fn DeriveState_NotificationComputerUse_001() {
+    let data = json!({"notification_type": "computer_use_enter"});
+    assert_eq!(derive_state("Notification", &data), "unknown");
+}
+
+// Notification + elicitation_complete 映射为 unknown
+#[test]
+fn DeriveState_NotificationElicitation_001() {
+    let data = json!({"notification_type": "elicitation_complete"});
+    assert_eq!(derive_state("Notification", &data), "unknown");
+}
+
+// Notification + 未知 notification_type 映射为 unknown
 #[test]
 fn DeriveState_NotificationOther_001() {
     let data = json!({"notification_type": "something_else"});
-    assert_eq!(derive_state("Notification", &data), "waiting_input");
+    assert_eq!(derive_state("Notification", &data), "unknown");
 }
 
 // SubagentStart 映射为 subagent_running
@@ -138,12 +159,17 @@ fn ExtractDetail_SessionStart_001() {
     }
 }
 
-// SessionEnd 返回 SessionEnd 变体
+// SessionEnd 提取 reason 字段
 #[test]
 fn ExtractDetail_SessionEnd_001() {
-    let data = json!({});
+    let data = json!({"reason": "prompt_input_exit"});
     let detail = extract_detail("SessionEnd", &data);
-    assert!(matches!(detail, HookEventDetail::SessionEnd));
+    match detail {
+        HookEventDetail::SessionEnd(d) => {
+            assert_eq!(d.reason.as_deref(), Some("prompt_input_exit"));
+        }
+        _ => panic!("Expected SessionEnd variant"),
+    }
 }
 
 // UserPromptSubmit 提取 prompt 字段
@@ -159,20 +185,156 @@ fn ExtractDetail_PromptSubmit_001() {
     }
 }
 
-// PreToolUse 返回 PreToolUse 变体
+// PreToolUse 提取 tool_name, tool_use_id
 #[test]
 fn ExtractDetail_PreToolUse_001() {
-    let data = json!({});
+    let data = json!({"tool_name": "Write", "tool_use_id": "tool-123"});
     let detail = extract_detail("PreToolUse", &data);
-    assert!(matches!(detail, HookEventDetail::PreToolUse));
+    match detail {
+        HookEventDetail::PreToolUse(d) => {
+            assert_eq!(d.tool_name.as_deref(), Some("Write"));
+            assert_eq!(d.tool_use_id.as_deref(), Some("tool-123"));
+        }
+        _ => panic!("Expected PreToolUse variant"),
+    }
 }
 
-// PostToolUse 返回 PostToolUse 变体
+// PostToolUse 提取 tool_name, tool_use_id
 #[test]
 fn ExtractDetail_PostToolUse_001() {
-    let data = json!({});
+    let data = json!({"tool_name": "Read", "tool_use_id": "tool-456"});
     let detail = extract_detail("PostToolUse", &data);
-    assert!(matches!(detail, HookEventDetail::PostToolUse));
+    match detail {
+        HookEventDetail::PostToolUse(d) => {
+            assert_eq!(d.tool_name.as_deref(), Some("Read"));
+            assert_eq!(d.tool_use_id.as_deref(), Some("tool-456"));
+        }
+        _ => panic!("Expected PostToolUse variant"),
+    }
+}
+
+// PostToolUseFailure 提取 tool_name, error, is_interrupt
+#[test]
+fn ExtractDetail_PostToolFail_001() {
+    let data = json!({
+        "tool_name": "Bash",
+        "tool_use_id": "tool-789",
+        "error": "command failed",
+        "is_interrupt": true
+    });
+    let detail = extract_detail("PostToolUseFailure", &data);
+    match detail {
+        HookEventDetail::PostToolUseFailure(d) => {
+            assert_eq!(d.tool_name.as_deref(), Some("Bash"));
+            assert_eq!(d.tool_use_id.as_deref(), Some("tool-789"));
+            assert_eq!(d.error.as_deref(), Some("command failed"));
+            assert_eq!(d.is_interrupt, Some(true));
+        }
+        _ => panic!("Expected PostToolUseFailure variant"),
+    }
+}
+
+// Stop 提取 stop_hook_active, last_assistant_message
+#[test]
+fn ExtractDetail_Stop_001() {
+    let data = json!({
+        "stop_hook_active": true,
+        "last_assistant_message": "Done!"
+    });
+    let detail = extract_detail("Stop", &data);
+    match detail {
+        HookEventDetail::Stop(d) => {
+            assert_eq!(d.stop_hook_active, Some(true));
+            assert_eq!(d.last_assistant_message.as_deref(), Some("Done!"));
+        }
+        _ => panic!("Expected Stop variant"),
+    }
+}
+
+// StopFailure 提取 error
+#[test]
+fn ExtractDetail_StopFail_001() {
+    let data = json!({"error": "API error"});
+    let detail = extract_detail("StopFailure", &data);
+    match detail {
+        HookEventDetail::StopFailure(d) => {
+            assert_eq!(d.error.as_deref(), Some("API error"));
+        }
+        _ => panic!("Expected StopFailure variant"),
+    }
+}
+
+// Notification 提取 notification_type, message, title
+#[test]
+fn ExtractDetail_Notification_001() {
+    let data = json!({
+        "notification_type": "idle_prompt",
+        "message": "waiting for input",
+        "title": "Claude"
+    });
+    let detail = extract_detail("Notification", &data);
+    match detail {
+        HookEventDetail::Notification(d) => {
+            assert_eq!(d.notification_type.as_deref(), Some("idle_prompt"));
+            assert_eq!(d.message.as_deref(), Some("waiting for input"));
+            assert_eq!(d.title.as_deref(), Some("Claude"));
+        }
+        _ => panic!("Expected Notification variant"),
+    }
+}
+
+// SubagentStart 提取 agent_id, agent_type
+#[test]
+fn ExtractDetail_SubagentStart_001() {
+    let data = json!({"agent_id": "agent-abc", "agent_type": "Explore"});
+    let detail = extract_detail("SubagentStart", &data);
+    match detail {
+        HookEventDetail::SubagentStart(d) => {
+            assert_eq!(d.agent_id.as_deref(), Some("agent-abc"));
+            assert_eq!(d.agent_type.as_deref(), Some("Explore"));
+        }
+        _ => panic!("Expected SubagentStart variant"),
+    }
+}
+
+// SubagentStop 提取 agent_id, agent_type
+#[test]
+fn ExtractDetail_SubagentStop_001() {
+    let data = json!({"agent_id": "agent-xyz", "agent_type": "general-purpose"});
+    let detail = extract_detail("SubagentStop", &data);
+    match detail {
+        HookEventDetail::SubagentStop(d) => {
+            assert_eq!(d.agent_id.as_deref(), Some("agent-xyz"));
+            assert_eq!(d.agent_type.as_deref(), Some("general-purpose"));
+        }
+        _ => panic!("Expected SubagentStop variant"),
+    }
+}
+
+// PreCompact 提取 trigger
+#[test]
+fn ExtractDetail_PreCompact_001() {
+    let data = json!({"trigger": "auto"});
+    let detail = extract_detail("PreCompact", &data);
+    match detail {
+        HookEventDetail::PreCompact(d) => {
+            assert_eq!(d.trigger.as_deref(), Some("auto"));
+        }
+        _ => panic!("Expected PreCompact variant"),
+    }
+}
+
+// PostCompact 提取 trigger
+#[test]
+fn ExtractDetail_PostCompact_001() {
+    let data = json!({"trigger": "manual"});
+    let detail = extract_detail("PostCompact", &data);
+    match detail {
+        HookEventDetail::PostCompact(d) => {
+            assert_eq!(d.trigger.as_deref(), Some("manual"));
+        }
+        _ => panic!("Expected PostCompact variant"),
+    }
 }
 
 // 未知事件名返回 Unknown 变体保留原始 JSON

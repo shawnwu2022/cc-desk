@@ -14,3 +14,5 @@ mod mcp;
 mod env;
 #[cfg(test)]
 mod installer;
+#[cfg(test)]
+mod platform;

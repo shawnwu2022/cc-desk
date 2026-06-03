@@ -82,29 +82,6 @@ impl PtyManager {
         }
     }
 
-    /// 使用 where (Windows) / which (Unix) 查找可执行文件
-    fn find_executable(name: &str) -> Option<String> {
-        let cmd = if cfg!(target_os = "windows") {
-            "where"
-        } else {
-            "which"
-        };
-
-        let output = std::process::Command::new(cmd).arg(name).output().ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // where/which 可能返回多行，取第一个
-        stdout
-            .lines()
-            .next()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    }
-
     /// 检测 Git Bash 路径（Windows）
     fn detect_git_bash() -> Option<String> {
         if !cfg!(target_os = "windows") {
@@ -132,7 +109,7 @@ impl PtyManager {
         }
 
         // 3. where git → 同目录下找 bash.exe
-        if let Some(git_path) = Self::find_executable("git") {
+        if let Some(git_path) = crate::platform::find_executable("git") {
             if let Some(parent) = Path::new(&git_path).parent() {
                 let bash_path = parent.join("bash.exe");
                 if bash_path.exists() {
@@ -159,7 +136,7 @@ impl PtyManager {
         }
 
         // 2. 自动检测（where/which）
-        Self::find_executable("claude")
+        crate::platform::find_executable("claude")
     }
 
     /// 启动 Claude CLI（通过 shell 执行，模拟终端行为）
@@ -251,32 +228,19 @@ impl PtyManager {
         };
 
         // 构建命令：不同平台使用不同的 shell
-        let mut cmd = if cfg!(target_os = "windows") {
-            // Windows: 使用 Git Bash 或 PowerShell
-            if let Some(git_bash) = Self::detect_git_bash() {
-                log::info!("Using Git Bash to launch Claude: {}", git_bash);
-                let mut c = CommandBuilder::new(&git_bash);
-                c.arg("-c");
-                c.arg(&claude_cmd);
-                c
-            } else {
-                // fallback: PowerShell
-                log::info!("Using PowerShell to launch Claude");
-                let mut c = CommandBuilder::new("powershell.exe");
-                c.arg("-NoLogo");
-                c.arg("-Command");
-                c.arg(&claude_cmd);
-                c
-            }
+        let git_bash = if cfg!(target_os = "windows") {
+            Self::detect_git_bash()
         } else {
-            // Mac/Linux: 使用 bash -i（交互模式，加载用户配置）
-            log::info!("Using bash -i to launch Claude");
-            let mut c = CommandBuilder::new("/bin/bash");
-            c.arg("-i");
-            c.arg("-c");
-            c.arg(&claude_cmd);
-            c
+            None
         };
+        let (program, args) = crate::platform::get_claude_shell(&claude_cmd, git_bash.as_deref());
+
+        log::info!("Using shell: {} with args: {:?}", program, args);
+
+        let mut cmd = CommandBuilder::new(&program);
+        for arg in &args {
+            cmd.arg(arg);
+        }
 
         cmd.cwd(cwd);
 
@@ -529,11 +493,7 @@ impl PtyManager {
             .with_context(|| format!("Failed to open PTY with size {}x{}", cols, rows))?;
 
         // 确定使用的 shell
-        let (program, args): (&str, Vec<&str>) = if cfg!(target_os = "windows") {
-            ("cmd.exe", vec![])
-        } else {
-            ("/bin/bash", vec!["-i"])
-        };
+        let (program, args) = crate::platform::get_default_shell();
 
         log::debug!("Using shell: {} with args: {:?}", program, args);
 

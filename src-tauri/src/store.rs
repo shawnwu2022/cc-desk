@@ -1277,11 +1277,13 @@ fn read_agents_config(project_path: &str) -> Result<Vec<AgentItem>> {
             let entry = entry?;
             let path = entry.path();
             if path.extension().map(|e| e == "md").unwrap_or(false) {
-                let name = path
-                    .file_stem()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let description = extract_md_description(&path);
+                let (name, description, _) = parse_agent_frontmatter(&path)
+                    .unwrap_or_else(|| {
+                        let fallback = path.file_stem()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        (fallback, extract_md_description(&path), None)
+                    });
                 result.push(AgentItem {
                     name,
                     description,
@@ -1304,11 +1306,13 @@ fn read_agents_config(project_path: &str) -> Result<Vec<AgentItem>> {
             let entry = entry?;
             let path = entry.path();
             if path.extension().map(|e| e == "md").unwrap_or(false) {
-                let name = path
-                    .file_stem()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let description = extract_md_description(&path);
+                let (name, description, _) = parse_agent_frontmatter(&path)
+                    .unwrap_or_else(|| {
+                        let fallback = path.file_stem()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        (fallback, extract_md_description(&path), None)
+                    });
                 result.push(AgentItem {
                     name,
                     description,
@@ -1324,6 +1328,70 @@ fn read_agents_config(project_path: &str) -> Result<Vec<AgentItem>> {
     }
 
     Ok(result)
+}
+
+/// 从文件系统读取 user/project agents，返回 AgentInfo（与 CLI 源码 loadMarkdownFilesForSubdir 一致）
+fn read_agents_from_filesystem(project_path: &str) -> Result<Vec<AgentInfo>> {
+    let mut agents = Vec::new();
+
+    // 项目级
+    let project_agents_dir = PathBuf::from(project_path).join(".claude").join("agents");
+    if project_agents_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&project_agents_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "md").unwrap_or(false) {
+                    let (name, description, model) = parse_agent_frontmatter(&path)
+                        .unwrap_or_else(|| {
+                            let fallback = path.file_stem()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            (fallback, extract_md_description(&path), None)
+                        });
+                    agents.push(AgentInfo {
+                        name: name.clone(),
+                        display_name: name.clone(),
+                        description,
+                        source_type: "project".to_string(),
+                        source_label: "Project".to_string(),
+                        model,
+                        invoke_format: format!("@\"{} (agent)\"", name),
+                    });
+                }
+            }
+        }
+    }
+
+    // 用户级 ~/.claude/agents/*.md
+    let home = dirs::home_dir().context("Home directory not found")?;
+    let user_agents_dir = home.join(".claude").join("agents");
+    if user_agents_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&user_agents_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "md").unwrap_or(false) {
+                    let (name, description, model) = parse_agent_frontmatter(&path)
+                        .unwrap_or_else(|| {
+                            let fallback = path.file_stem()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            (fallback, extract_md_description(&path), None)
+                        });
+                    agents.push(AgentInfo {
+                        name: name.clone(),
+                        display_name: name.clone(),
+                        description,
+                        source_type: "user".to_string(),
+                        source_label: "User".to_string(),
+                        model,
+                        invoke_format: format!("@\"{} (agent)\"", name),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(agents)
 }
 
 fn read_hooks_config(project_path: &str) -> Result<Vec<HookItem>> {
@@ -1491,9 +1559,122 @@ pub struct PluginAgent {
     pub name: String,
     /// 描述
     pub description: Option<String>,
+    /// 模型（如 haiku、sonnet、inherit）
+    pub model: Option<String>,
     /// 调用格式
     #[serde(rename = "invokeFormat")]
     pub invoke_format: String,
+}
+
+/// 从 agent .md 文件解析 frontmatter（与 CLI 源码 frontmatterParser.ts + loadAgentsDir.ts 一致）
+/// 提取 name、description、model 三个字段
+fn parse_agent_frontmatter(path: &Path) -> Option<(String, Option<String>, Option<String>)> {
+    let content = fs::read_to_string(path).ok()?;
+    let lines: Vec<&str> = content.lines().collect();
+
+    if lines.first().map(|l| l.trim()) != Some("---") {
+        return None;
+    }
+
+    let mut end_idx = None;
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        if line.trim() == "---" {
+            end_idx = Some(i);
+            break;
+        }
+    }
+    let end_idx = end_idx?;
+
+    let mut name: Option<String> = None;
+    let mut description: Option<String> = None;
+    let mut model: Option<String> = None;
+
+    for line in lines.iter().take(end_idx).skip(1) {
+        let trimmed = line.trim();
+        if let Some(val) = trimmed.strip_prefix("name:") {
+            let val = val.trim();
+            if !val.is_empty() {
+                name = Some(val.to_string());
+            }
+        } else if let Some(val) = trimmed.strip_prefix("description:") {
+            let val = val.trim();
+            if !val.is_empty() {
+                description = Some(val.to_string());
+            }
+        } else if let Some(val) = trimmed.strip_prefix("model:") {
+            let val = val.trim();
+            if !val.is_empty() {
+                model = Some(val.to_string());
+            }
+        }
+    }
+
+    // name 是必需字段（与源码 parseAgentFromMarkdown 一致）
+    name.map(|n| (n, description, model))
+}
+
+/// 从 SKILL.md 文件解析 frontmatter 中的 description（与 CLI 源码 loadSkillsDir.ts 一致）
+/// 优先取 frontmatter description，后备取正文第一行非空非标题
+fn parse_skill_description(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let lines: Vec<&str> = content.lines().collect();
+
+    if lines.first().map(|l| l.trim()) == Some("---") {
+        let mut end_idx = None;
+        for (i, line) in lines.iter().enumerate().skip(1) {
+            if line.trim() == "---" {
+                end_idx = Some(i);
+                break;
+            }
+        }
+
+        if let Some(end) = end_idx {
+            // 从 frontmatter 提取 description
+            for line in lines.iter().take(end).skip(1) {
+                let trimmed = line.trim();
+                if let Some(val) = trimmed.strip_prefix("description:") {
+                    let val = val.trim();
+                    if !val.is_empty() {
+                        let desc_chars: String = val.chars().take(200).collect();
+                        return Some(if val.chars().count() > 200 {
+                            format!("{}...", desc_chars)
+                        } else {
+                            val.to_string()
+                        });
+                    }
+                }
+            }
+
+            // 后备：跳过 frontmatter，从正文提取第一行非空非标题
+            let start = end + 1;
+            for line in lines.iter().skip(start) {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("---") {
+                    let desc_chars: String = trimmed.chars().take(100).collect();
+                    return Some(if trimmed.chars().count() > 100 {
+                        format!("{}...", desc_chars)
+                    } else {
+                        trimmed.to_string()
+                    });
+                }
+            }
+        }
+    } else {
+        // 无 frontmatter，从正文提取
+        for line in lines.iter() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("---") {
+                let desc_chars: String = trimmed.chars().take(100).collect();
+                return Some(if trimmed.chars().count() > 100 {
+                    format!("{}...", desc_chars)
+                } else {
+                    trimmed.to_string()
+                });
+            }
+        }
+    }
+
+    Some("No description".to_string())
 }
 
 /// Agent 信息（用于面板显示）
@@ -1562,86 +1743,62 @@ pub struct McpPromptInfo {
     pub invoke_format: String,
 }
 
-/// 获取所有 Agents（包括 built-in、plugin、user、project）
+/// 获取所有 Agents（包括 plugin、user、project）
+/// 与 CLI 源码 loadAgentsDir.ts 一致：从 .md 文件 frontmatter 解析 name/description/model
 pub fn get_all_agents(project_path: &str) -> Result<Vec<AgentInfo>> {
     let mut agents = Vec::new();
 
-    // 1. 通过 claude agents list 获取 built-in 和 plugin agents
-    if let Ok(output) = run_claude_command("agents list") {
-        parse_agents_list_output(&output, &mut agents);
-    }
-
-    // 2. 从 plugins 获取 plugin agents 的描述
+    // 1. 从 plugins 获取 plugin agents
     let plugins = get_all_plugins(project_path)?;
-    for agent in &mut agents {
-        if agent.source_type == "plugin" {
-            // agent.name 格式为 "plugin-name:agent-name"
-            // 需要分别匹配 plugin 名称和 agent 名称
-            let name_parts: Vec<&str> = agent.name.split(':').collect();
-            if name_parts.len() >= 2 {
-                let plugin_name = name_parts[0];
-                let agent_short_name = name_parts[1];
-
-                // 查找对应的 plugin
-                for plugin in &plugins {
-                    // plugin.name 是去除 @publisher 后的名称
-                    if plugin.name == plugin_name {
-                        if let Some(plugin_agents) = &plugin.agents {
-                            for plugin_agent in plugin_agents {
-                                if plugin_agent.name == agent_short_name {
-                                    agent.description = plugin_agent.description.clone();
-                                    break;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
+    for plugin in &plugins {
+        if let Some(plugin_agents) = &plugin.agents {
+            for agent in plugin_agents {
+                agents.push(AgentInfo {
+                    name: format!("{}:{}", plugin.name, agent.name),
+                    display_name: agent.name.clone(),
+                    description: agent.description.clone(),
+                    source_type: "plugin".to_string(),
+                    source_label: format!("Plugin · {}", plugin.name),
+                    model: agent.model.clone(),
+                    invoke_format: agent.invoke_format.clone(),
+                });
             }
         }
     }
 
-    // 3. 添加 user 和 project agents（从文件系统读取）
-    let user_project_agents = read_agents_config(project_path)?;
+    // 2. 从文件系统读取 user 和 project agents（与 CLI 源码 loadMarkdownFilesForSubdir 一致）
+    let user_project_agents = read_agents_from_filesystem(project_path)?;
     for agent in user_project_agents {
-        let invoke_format = format!("@\"{} (agent)\"", agent.name);
-        agents.push(AgentInfo {
-            name: agent.name.clone(),
-            display_name: agent.name,
-            description: agent.description,
-            source_type: agent.source.source_type,
-            source_label: agent.source.label,
-            model: None,
-            invoke_format,
-        });
+        agents.push(agent);
     }
 
     Ok(agents)
 }
 
 /// 获取所有 Skills（包括 project、user、plugin）
-/// 注意：不包含 builtin skills（如 /simplify、/debug 等）
+/// 与 CLI 源码 loadSkillsDir.ts 一致：从 skills/name/SKILL.md frontmatter 解析 description
 pub fn get_all_skills(project_path: &str) -> Result<Vec<SkillInfo>> {
     let mut skills = Vec::new();
 
-    // 1. 从项目目录读取 skills
+    // 1. 从项目目录读取 skills（与源码 loadSkillsFromSkillsDir 一致：只支持 dir/SKILL.md 格式）
     let project_skills_dir = PathBuf::from(project_path).join(".claude").join("skills");
     if project_skills_dir.exists() {
-        for entry in fs::read_dir(&project_skills_dir)? {
-            let entry = entry?;
-            if entry.path().is_dir() {
-                let skill_file = entry.path().join("SKILL.md");
-                if skill_file.exists() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let description = extract_md_description(&skill_file);
-                    skills.push(SkillInfo {
-                        name: name.clone(),
-                        display_name: name.clone(),
-                        description,
-                        source_type: "project".to_string(),
-                        source_label: "Project".to_string(),
-                        invoke_format: format!("/{}", name),
-                    });
+        if let Ok(entries) = fs::read_dir(&project_skills_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let skill_file = entry.path().join("SKILL.md");
+                    if skill_file.exists() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let description = parse_skill_description(&skill_file);
+                        skills.push(SkillInfo {
+                            name: name.clone(),
+                            display_name: name.clone(),
+                            description,
+                            source_type: "project".to_string(),
+                            source_label: "Project".to_string(),
+                            invoke_format: format!("/{}", name),
+                        });
+                    }
                 }
             }
         }
@@ -1651,32 +1808,32 @@ pub fn get_all_skills(project_path: &str) -> Result<Vec<SkillInfo>> {
     let home = dirs::home_dir().context("Home directory not found")?;
     let user_skills_dir = home.join(".claude").join("skills");
     if user_skills_dir.exists() {
-        for entry in fs::read_dir(&user_skills_dir)? {
-            let entry = entry?;
-            if entry.path().is_dir() {
-                let skill_file = entry.path().join("SKILL.md");
-                if skill_file.exists() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let description = extract_md_description(&skill_file);
-                    skills.push(SkillInfo {
-                        name: name.clone(),
-                        display_name: name.clone(),
-                        description,
-                        source_type: "user".to_string(),
-                        source_label: "User".to_string(),
-                        invoke_format: format!("/{}", name),
-                    });
+        if let Ok(entries) = fs::read_dir(&user_skills_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let skill_file = entry.path().join("SKILL.md");
+                    if skill_file.exists() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let description = parse_skill_description(&skill_file);
+                        skills.push(SkillInfo {
+                            name: name.clone(),
+                            display_name: name.clone(),
+                            description,
+                            source_type: "user".to_string(),
+                            source_label: "User".to_string(),
+                            invoke_format: format!("/{}", name),
+                        });
+                    }
                 }
             }
         }
     }
 
-    // 3. 从 plugins 获取 skills（使用 get_all_plugins）
+    // 3. 从 plugins 获取 skills
     let plugins = get_all_plugins(project_path)?;
     for plugin in plugins {
         if let Some(plugin_skills) = plugin.skills {
             for skill in plugin_skills {
-                // invoke_format 是 "/pluginName:skillName"，去掉 "/" 得到完整名称
                 let full_name = skill
                     .invoke_format
                     .strip_prefix('/')
@@ -1686,7 +1843,7 @@ pub fn get_all_skills(project_path: &str) -> Result<Vec<SkillInfo>> {
                     display_name: skill.name.clone(),
                     description: skill.description,
                     source_type: "plugin".to_string(),
-                    source_label: "Plugin".to_string(),
+                    source_label: format!("Plugin · {}", full_name.split(':').next().unwrap_or(&skill.name)),
                     invoke_format: skill.invoke_format,
                 });
             }
@@ -1960,12 +2117,7 @@ fn run_claude_command(args: &str) -> Result<String> {
     }
 
     // Windows 上禁止子进程创建控制台窗口
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::platform::configure_command(&mut cmd);
 
     let output = cmd.output().context("Failed to run claude command")?;
 
@@ -1983,36 +2135,13 @@ fn detect_git_bash_path() -> Option<String> {
         return None;
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let git_path = crate::platform::find_executable("git")?;
+    let parent = Path::new(&git_path).parent()?;
+    let bash_path = parent.join("bash.exe");
 
-        // where git → 同目录下找 bash.exe
-        let output = std::process::Command::new("where")
-            .arg("git")
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let git_path = stdout.lines().next()?.trim();
-        let parent = Path::new(git_path).parent()?;
-        let bash_path = parent.join("bash.exe");
-
-        if bash_path.exists() {
-            Some(bash_path.to_string_lossy().to_string())
-        } else {
-            None
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
+    if bash_path.exists() {
+        Some(bash_path.to_string_lossy().to_string())
+    } else {
         None
     }
 }
@@ -2221,42 +2350,84 @@ pub fn get_all_plugins(project_path: &str) -> Result<Vec<PluginInfo>> {
 }
 
 /// 查找有效的 plugin 安装路径
-/// 如果 installPath 不存在，在父目录下找最新版本
-/// 不检查 .orphaned_at，只看路径是否存在
-fn find_valid_plugin_path(original_path: &str, _plugin_id: &str) -> Option<String> {
-    // 先检查原始路径是否存在
+/// 查找链路（与 Claude CLI 源码 pluginLoader.ts 一致）：
+/// 1. cache 路径（installPath）存在 → 直接使用（cache-only 模式）
+/// 2. 不存在 → 回退到 marketplace source 路径（full loader 模式）
+///
+/// Claude CLI 源码中，source 为相对路径字符串的插件（本地 directory marketplace），
+/// 即使在 cache-only 模式下也是直接从 marketplaceInstallLocation + source 解析，
+/// 不依赖 installPath。只有 source 为对象（npm/github/url）的插件才依赖 installPath。
+pub(crate) fn find_valid_plugin_path(original_path: &str, plugin_id: &str) -> Option<String> {
+    // Step 1: cache 路径存在
     let original = PathBuf::from(original_path);
     if original.exists() {
         return Some(original_path.to_string());
     }
 
-    // 原始路径不存在，尝试在父目录下找最新版本
-    // 例如: ~/.claude/plugins/cache/orczh/paper-tool/ 下找最新版本目录
-    let parent = original.parent()?;
-    if !parent.exists() {
+    // Step 2: 回退到 marketplace source 路径
+    resolve_marketplace_plugin_path(plugin_id)
+}
+
+/// 从 known_marketplaces.json + marketplace.json 解析 plugin 的实际路径
+/// plugin_id 格式: "paper-tool@orczh" → 找 orczh marketplace → 找 paper-tool 的 source
+pub(crate) fn resolve_marketplace_plugin_path(plugin_id: &str) -> Option<String> {
+    let home = dirs::home_dir()?;
+    let marketplaces_file = home.join(".claude").join("plugins").join("known_marketplaces.json");
+
+    if !marketplaces_file.exists() {
         return None;
     }
 
-    // 遍历子目录找最新版本（不检查 orphaned）
-    let mut versions: Vec<(String, std::time::SystemTime)> = Vec::new();
+    // 解析 plugin_id: "paper-tool@orczh" → ("paper-tool", "orczh")
+    let parts: Vec<&str> = plugin_id.split('@').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let plugin_name = parts[0];
+    let marketplace_name = parts[1];
 
-    if let Ok(entries) = fs::read_dir(parent) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Ok(meta) = entry.metadata() {
-                    if let Ok(modified) = meta.modified() {
-                        versions.push((path.to_string_lossy().to_string(), modified));
+    // 读取 known_marketplaces.json
+    let content = fs::read_to_string(&marketplaces_file).ok()?;
+    let marketplaces: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let marketplace = marketplaces.get(marketplace_name)?;
+    let install_location = marketplace.get("installLocation")?.as_str()?;
+
+    // 读取 marketplace.json
+    let marketplace_json = PathBuf::from(install_location)
+        .join(".claude-plugin")
+        .join("marketplace.json");
+
+    if !marketplace_json.exists() {
+        return None;
+    }
+
+    let mp_content = fs::read_to_string(&marketplace_json).ok()?;
+    let mp_data: serde_json::Value = serde_json::from_str(&mp_content).ok()?;
+
+    // 在 plugins 数组中找匹配的 plugin
+    let plugins = mp_data.get("plugins")?.as_array()?;
+    for plugin in plugins {
+        if plugin.get("name").and_then(|n| n.as_str()) == Some(plugin_name) {
+            // source 可以是字符串 "./paper-tool" 或对象 {"source": "url", "url": "..."}
+            if let Some(source_str) = plugin.get("source").and_then(|s| s.as_str()) {
+                let resolved = PathBuf::from(install_location).join(source_str);
+                if resolved.exists() {
+                    return Some(resolved.to_string_lossy().to_string());
+                }
+            } else if let Some(source_obj) = plugin.get("source").and_then(|s| s.as_object()) {
+                // 对象格式: {"source": "./plugins/frontend-design"} 或 {"source": "url", "url": "..."}
+                if let Some(path) = source_obj.get("source").and_then(|s| s.as_str()) {
+                    let resolved = PathBuf::from(install_location).join(path);
+                    if resolved.exists() {
+                        return Some(resolved.to_string_lossy().to_string());
                     }
                 }
             }
         }
     }
 
-    // 按修改时间排序，返回最新的
-    versions.sort_by(|a, b| b.1.cmp(&a.1));
-
-    versions.first().map(|(path, _)| path.clone())
+    None
 }
 
 /// 读取 plugin 的 MCP servers 配置（从 .mcp.json）
@@ -2287,6 +2458,7 @@ fn read_plugin_mcp_servers(install_path: &str) -> Option<serde_json::Value> {
 }
 
 /// 解析 plugin 目录中的 skills
+/// 解析 plugin 目录中的 skills（从 SKILL.md frontmatter 提取 description，与 CLI 源码一致）
 fn parse_plugin_skills(install_path: &str, plugin_name: &str) -> Option<Vec<PluginSkill>> {
     let skills_dir = PathBuf::from(install_path).join("skills");
     if !skills_dir.exists() {
@@ -2300,7 +2472,7 @@ fn parse_plugin_skills(install_path: &str, plugin_name: &str) -> Option<Vec<Plug
                 let skill_file = entry.path().join("SKILL.md");
                 if skill_file.exists() {
                     let skill_name = entry.file_name().to_string_lossy().to_string();
-                    let description = extract_md_description(&skill_file);
+                    let description = parse_skill_description(&skill_file);
                     skills.push(PluginSkill {
                         name: skill_name.clone(),
                         description,
@@ -2318,7 +2490,7 @@ fn parse_plugin_skills(install_path: &str, plugin_name: &str) -> Option<Vec<Plug
     }
 }
 
-/// 解析 plugin 目录中的 agents
+/// 解析 plugin 目录中的 agents（从 .md 文件 frontmatter 提取，与 CLI 源码一致）
 fn parse_plugin_agents(install_path: &str, plugin_name: &str) -> Option<Vec<PluginAgent>> {
     let agents_dir = PathBuf::from(install_path).join("agents");
     if !agents_dir.exists() {
@@ -2330,16 +2502,14 @@ fn parse_plugin_agents(install_path: &str, plugin_name: &str) -> Option<Vec<Plug
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().map(|e| e == "md").unwrap_or(false) {
-                let agent_name = path
-                    .file_stem()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let description = extract_md_description(&path);
-                agents.push(PluginAgent {
-                    name: agent_name.clone(),
-                    description,
-                    invoke_format: format!("@\"{}:{} (agent)\"", plugin_name, agent_name),
-                });
+                if let Some((name, description, model)) = parse_agent_frontmatter(&path) {
+                    agents.push(PluginAgent {
+                        name: name.clone(),
+                        description,
+                        model,
+                        invoke_format: format!("@\"{}:{} (agent)\"", plugin_name, name),
+                    });
+                }
             }
         }
     }

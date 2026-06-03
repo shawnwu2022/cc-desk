@@ -18,18 +18,35 @@ pub struct HookPayload {
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub enum HookEventDetail {
     SessionStart(SessionStartData),
-    SessionEnd,
+    SessionEnd(SessionEndData),
     UserPromptSubmit(UserPromptSubmitData),
-    PreToolUse,
-    PostToolUse,
-    PostToolUseFailure,
-    Stop,
-    StopFailure,
-    Notification,
-    SubagentStart,
-    SubagentStop,
+    PreToolUse(PreToolUseData),
+    PostToolUse(PostToolUseData),
+    PostToolUseFailure(PostToolUseFailureData),
+    Stop(StopData),
+    StopFailure(StopFailureData),
+    Notification(NotificationData),
+    SubagentStart(SubagentStartData),
+    SubagentStop(SubagentStopData),
+    PreCompact(PreCompactData),
+    PostCompact(PostCompactData),
     /// 未识别事件，保留原始 JSON
     Unknown(Value),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStartData {
+    pub model: Option<String>,
+    pub cwd: Option<String>,
+    pub transcript_path: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionEndData {
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -40,11 +57,72 @@ pub struct UserPromptSubmitData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionStartData {
-    pub model: Option<String>,
-    pub cwd: Option<String>,
-    pub transcript_path: Option<String>,
-    pub source: Option<String>,
+pub struct PreToolUseData {
+    pub tool_name: Option<String>,
+    pub tool_use_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostToolUseData {
+    pub tool_name: Option<String>,
+    pub tool_use_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostToolUseFailureData {
+    pub tool_name: Option<String>,
+    pub tool_use_id: Option<String>,
+    pub error: Option<String>,
+    pub is_interrupt: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopData {
+    pub stop_hook_active: Option<bool>,
+    pub last_assistant_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopFailureData {
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationData {
+    pub notification_type: Option<String>,
+    pub message: Option<String>,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentStartData {
+    pub agent_id: Option<String>,
+    pub agent_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentStopData {
+    pub agent_id: Option<String>,
+    pub agent_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreCompactData {
+    pub trigger: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostCompactData {
+    pub trigger: Option<String>,
 }
 
 // ---- 提取逻辑 ----
@@ -76,6 +154,10 @@ fn str_field(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
 }
 
+fn bool_field(v: &Value, key: &str) -> Option<bool> {
+    v.get(key).and_then(|v| v.as_bool())
+}
+
 pub(crate) fn extract_detail(event_name: &str, event: &Value) -> HookEventDetail {
     match event_name {
         "SessionStart" => HookEventDetail::SessionStart(SessionStartData {
@@ -84,18 +166,52 @@ pub(crate) fn extract_detail(event_name: &str, event: &Value) -> HookEventDetail
             transcript_path: str_field(event, "transcript_path"),
             source: str_field(event, "source"),
         }),
-        "SessionEnd" => HookEventDetail::SessionEnd,
+        "SessionEnd" => HookEventDetail::SessionEnd(SessionEndData {
+            reason: str_field(event, "reason"),
+        }),
         "UserPromptSubmit" => HookEventDetail::UserPromptSubmit(UserPromptSubmitData {
             prompt: str_field(event, "prompt"),
         }),
-        "PreToolUse" => HookEventDetail::PreToolUse,
-        "PostToolUse" => HookEventDetail::PostToolUse,
-        "PostToolUseFailure" => HookEventDetail::PostToolUseFailure,
-        "Stop" => HookEventDetail::Stop,
-        "StopFailure" => HookEventDetail::StopFailure,
-        "Notification" => HookEventDetail::Notification,
-        "SubagentStart" => HookEventDetail::SubagentStart,
-        "SubagentStop" => HookEventDetail::SubagentStop,
+        "PreToolUse" => HookEventDetail::PreToolUse(PreToolUseData {
+            tool_name: str_field(event, "tool_name"),
+            tool_use_id: str_field(event, "tool_use_id"),
+        }),
+        "PostToolUse" => HookEventDetail::PostToolUse(PostToolUseData {
+            tool_name: str_field(event, "tool_name"),
+            tool_use_id: str_field(event, "tool_use_id"),
+        }),
+        "PostToolUseFailure" => HookEventDetail::PostToolUseFailure(PostToolUseFailureData {
+            tool_name: str_field(event, "tool_name"),
+            tool_use_id: str_field(event, "tool_use_id"),
+            error: str_field(event, "error"),
+            is_interrupt: bool_field(event, "is_interrupt"),
+        }),
+        "Stop" => HookEventDetail::Stop(StopData {
+            stop_hook_active: bool_field(event, "stop_hook_active"),
+            last_assistant_message: str_field(event, "last_assistant_message"),
+        }),
+        "StopFailure" => HookEventDetail::StopFailure(StopFailureData {
+            error: str_field(event, "error"),
+        }),
+        "Notification" => HookEventDetail::Notification(NotificationData {
+            notification_type: str_field(event, "notification_type"),
+            message: str_field(event, "message"),
+            title: str_field(event, "title"),
+        }),
+        "SubagentStart" => HookEventDetail::SubagentStart(SubagentStartData {
+            agent_id: str_field(event, "agent_id"),
+            agent_type: str_field(event, "agent_type"),
+        }),
+        "SubagentStop" => HookEventDetail::SubagentStop(SubagentStopData {
+            agent_id: str_field(event, "agent_id"),
+            agent_type: str_field(event, "agent_type"),
+        }),
+        "PreCompact" => HookEventDetail::PreCompact(PreCompactData {
+            trigger: str_field(event, "trigger"),
+        }),
+        "PostCompact" => HookEventDetail::PostCompact(PostCompactData {
+            trigger: str_field(event, "trigger"),
+        }),
         _ => HookEventDetail::Unknown(event.clone()),
     }
 }
@@ -110,9 +226,9 @@ pub(crate) fn derive_state(event_name: &str, event: &Value) -> String {
         "Notification" => {
             let ntype = str_field(event, "notification_type").unwrap_or_default();
             match ntype.as_str() {
-                "permission_prompt" => "waiting_permission",
-                "idle_prompt" => "waiting_input",
-                _ => "waiting_input",
+                "permission_prompt" | "worker_permission_prompt" => "waiting_permission",
+                "idle_prompt" => "idle",
+                _ => "unknown",
             }
             .into()
         }
@@ -125,4 +241,3 @@ pub(crate) fn derive_state(event_name: &str, event: &Value) -> String {
         _ => "unknown".into(),
     }
 }
-

@@ -1,9 +1,12 @@
 use serde_json::json;
 
 use crate::store::{
-    extract_md_description, extract_session_name, find_name_separator, merge_json_values,
-    parse_agents_list_output, parse_mcp_list_output, parse_timestamp, AgentInfo,
+    extract_md_description, extract_session_name, find_name_separator, find_valid_plugin_path,
+    merge_json_values, parse_agents_list_output, parse_mcp_list_output, parse_timestamp,
+    resolve_marketplace_plugin_path, AgentInfo,
 };
+
+use std::path::Path;
 
 // ==================== merge_json_values ====================
 
@@ -369,4 +372,97 @@ fn ExtractSessionName_NoMessages_001() {
     std::fs::write(&file_path, "").unwrap();
     let result = extract_session_name(&file_path);
     assert_eq!(result, "Unnamed session");
+}
+
+// ==================== find_valid_plugin_path ====================
+// 使用本机真实路径验证完整查找链路
+
+// frontend-design cache 路径存在，直接返回
+#[test]
+fn FindPlugin_CacheExists_001() {
+    let result = find_valid_plugin_path(
+        "C:\\Users\\orczh\\.claude\\plugins\\cache\\claude-plugins-official\\frontend-design\\104d39be10b7",
+        "frontend-design@claude-plugins-official",
+    );
+    assert!(result.is_some());
+    assert!(result.unwrap().contains("frontend-design"));
+}
+
+// paper-tool cache 路径不存在，回退到 marketplace source 找到真实路径
+#[test]
+fn FindPlugin_CacheMissingFallsBackToMarketplace_001() {
+    let result = find_valid_plugin_path(
+        "C:\\Users\\orczh\\.claude\\plugins\\cache\\orczh\\paper-tool\\2.4.1",
+        "paper-tool@orczh",
+    );
+    assert!(result.is_some());
+    let path = result.unwrap();
+    assert!(path.contains("paper-tool"));
+    // 路径存在且包含 plugin.json
+    assert!(std::path::Path::new(&path).join(".claude-plugin").join("plugin.json").exists());
+}
+
+// pyright-lsp cache 路径存在
+#[test]
+fn FindPlugin_PyrightCacheExists_001() {
+    let result = find_valid_plugin_path(
+        "C:\\Users\\orczh\\.claude\\plugins\\cache\\claude-plugins-official\\pyright-lsp\\1.0.0",
+        "pyright-lsp@claude-plugins-official",
+    );
+    assert!(result.is_some());
+}
+
+// claude-scientific-writer cache 路径存在
+#[test]
+fn FindPlugin_ScientificWriterCacheExists_001() {
+    let result = find_valid_plugin_path(
+        "C:\\Users\\orczh\\.claude\\plugins\\cache\\claude-scientific-writer\\claude-scientific-writer\\5bf6b597e2af",
+        "claude-scientific-writer@claude-scientific-writer",
+    );
+    assert!(result.is_some());
+}
+
+// 不存在的路径 + 无效 marketplace name 返回 None
+#[test]
+fn FindPlugin_InvalidId_001() {
+    let result = find_valid_plugin_path(
+        "C:\\nonexistent\\path",
+        "fake-plugin@fake-marketplace",
+    );
+    assert!(result.is_none());
+}
+
+// ==================== resolve_marketplace_plugin_path ====================
+
+// 通过 known_marketplaces.json 解析 paper-tool@orczh 的真实路径
+#[test]
+fn ResolveMarketplace_LocalDirectory_001() {
+    let result = resolve_marketplace_plugin_path("paper-tool@orczh");
+    assert!(result.is_some());
+    let path = result.unwrap();
+    assert!(std::path::Path::new(&path).exists());
+    assert!(std::path::Path::new(&path).join(".claude-plugin").join("plugin.json").exists());
+}
+
+// 通过 github marketplace 解析 frontend-design@claude-plugins-official
+#[test]
+fn ResolveMarketplace_GithubMarketplace_001() {
+    let result = resolve_marketplace_plugin_path("frontend-design@claude-plugins-official");
+    assert!(result.is_some());
+    let path = result.unwrap();
+    assert!(std::path::Path::new(&path).exists());
+}
+
+// 无效 marketplace name 返回 None
+#[test]
+fn ResolveMarketplace_UnknownMarketplace_001() {
+    let result = resolve_marketplace_plugin_path("plugin@nonexistent-marketplace");
+    assert!(result.is_none());
+}
+
+// 格式错误的 plugin_id（无 @ 分隔）返回 None
+#[test]
+fn ResolveMarketplace_BadFormat_001() {
+    let result = resolve_marketplace_plugin_path("no-at-sign");
+    assert!(result.is_none());
 }

@@ -6,11 +6,12 @@ export type ClaudeState =
   | 'thinking'
   | 'tool_executing'
   | 'waiting_permission'
-  | 'waiting_input'
   | 'subagent_running'
   | 'compacting'
   | 'error'
   | 'unknown'
+
+// ---- 事件数据结构 ----
 
 /** SessionStart 事件提取的数据 */
 export interface SessionStartData {
@@ -20,25 +21,92 @@ export interface SessionStartData {
   source?: string
 }
 
+/** SessionEnd 事件提取的数据 */
+export interface SessionEndData {
+  reason?: string
+}
+
 /** UserPromptSubmit 事件提取的数据 */
 export interface UserPromptSubmitData {
   prompt?: string
+}
+
+/** PreToolUse 事件提取的数据 */
+export interface PreToolUseData {
+  toolName?: string
+  toolUseId?: string
+}
+
+/** PostToolUse 事件提取的数据 */
+export interface PostToolUseData {
+  toolName?: string
+  toolUseId?: string
+}
+
+/** PostToolUseFailure 事件提取的数据 */
+export interface PostToolUseFailureData {
+  toolName?: string
+  toolUseId?: string
+  error?: string
+  isInterrupt?: boolean
+}
+
+/** Stop 事件提取的数据 */
+export interface StopData {
+  stopHookActive?: boolean
+  lastAssistantMessage?: string
+}
+
+/** StopFailure 事件提取的数据 */
+export interface StopFailureData {
+  error?: string
+}
+
+/** Notification 事件提取的数据 */
+export interface NotificationData {
+  notificationType?: string
+  message?: string
+  title?: string
+}
+
+/** SubagentStart 事件提取的数据 */
+export interface SubagentStartData {
+  agentId?: string
+  agentType?: string
+}
+
+/** SubagentStop 事件提取的数据 */
+export interface SubagentStopData {
+  agentId?: string
+  agentType?: string
+}
+
+/** PreCompact 事件提取的数据 */
+export interface PreCompactData {
+  trigger?: string
+}
+
+/** PostCompact 事件提取的数据 */
+export interface PostCompactData {
+  trigger?: string
 }
 
 // ---- 带标签的事件详情 ----
 
 export type HookEventDetail =
   | { type: 'sessionStart'; data: SessionStartData }
-  | { type: 'sessionEnd'; data: null }
+  | { type: 'sessionEnd'; data: SessionEndData }
   | { type: 'userPromptSubmit'; data: UserPromptSubmitData }
-  | { type: 'preToolUse'; data: null }
-  | { type: 'postToolUse'; data: null }
-  | { type: 'postToolUseFailure'; data: null }
-  | { type: 'stop'; data: null }
-  | { type: 'stopFailure'; data: null }
-  | { type: 'notification'; data: null }
-  | { type: 'subagentStart'; data: null }
-  | { type: 'subagentStop'; data: null }
+  | { type: 'preToolUse'; data: PreToolUseData }
+  | { type: 'postToolUse'; data: PostToolUseData }
+  | { type: 'postToolUseFailure'; data: PostToolUseFailureData }
+  | { type: 'stop'; data: StopData }
+  | { type: 'stopFailure'; data: StopFailureData }
+  | { type: 'notification'; data: NotificationData }
+  | { type: 'subagentStart'; data: SubagentStartData }
+  | { type: 'subagentStop'; data: SubagentStopData }
+  | { type: 'preCompact'; data: PreCompactData }
+  | { type: 'postCompact'; data: PostCompactData }
   | { type: 'unknown'; data: Record<string, unknown> }
 
 // ---- 完整 payload ----

@@ -249,7 +249,7 @@ async function fetchDetail(force: boolean) {
 }
 
 .expand-btn.rotated {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .server-full-name {

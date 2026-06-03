@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.7] - 2026-06-03
+
+### Fixed
+- Fix session status monitoring: only idle_prompt notification ends turn, not all notifications
+- Fix recap after Stop: add turnEnded guard to prevent recap/internal ops from restoring working state
+- Fix pending state not cleared when user is watching the tab
+- Fix permission_prompt/worker_permission_prompt notifications: now correctly set pending while waiting for user approval
+- Fix notification_type mapping to match actual Claude Code CLI values
+
+### Features
+- Add PreCompact/PostCompact hook event registration and monitoring
+- Add structured data extraction for all hook events (tool_name, agent_id, notification_type, etc.)
+- Add 37 Rust tests and 31 TypeScript tests for hook event processing and status monitoring
+
 ## [0.10.6] - 2026-05-23
 
 ### Fixed

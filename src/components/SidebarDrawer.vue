@@ -387,7 +387,7 @@ onUnmounted(() => {
 }
 
 .chevron.expanded {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .settings-content {

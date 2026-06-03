@@ -6,7 +6,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::process::Command;
 
 /// 检查结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,13 +71,8 @@ impl ChecksResult {
 
 /// 运行所有检查
 pub fn run_checks() -> ChecksResult {
-    // 修复 GUI 应用 PATH 继承问题（Windows）
-    // Rust std::process::Command 有时不能正确继承父进程环境变量，
-    // 重新 set_var 一次可强制子进程使用正确值。
-    #[cfg(target_os = "windows")]
-    refresh_path_windows();
-    #[cfg(unix)]
-    refresh_path();
+    // 修复 GUI 应用 PATH 继承问题
+    crate::platform::refresh_path();
 
     let (claude_path, git_bash_path) = read_config_paths();
 
@@ -135,169 +129,9 @@ fn read_config_paths() -> (Option<String>, Option<String>) {
     }
 }
 
-/// Windows PATH 刷新：添加便携版安装目录
-///
-/// 检测并添加：
-/// - %USERPROFILE%\.local\bin (Claude CLI)
-/// - %LOCALAPPDATA%\PortableGit\bin (Git 便携版)
-#[cfg(target_os = "windows")]
-fn refresh_path_windows() {
-    let mut path = std::env::var("PATH").unwrap_or_default();
-
-    let user_profile = std::env::var("USERPROFILE")
-        .unwrap_or_else(|_| format!("C:\\Users\\{}", std::env::var("USERNAME").unwrap_or_default()));
-
-    let local_app_data = std::env::var("LOCALAPPDATA")
-        .unwrap_or_else(|_| format!("{}\\AppData\\Local", user_profile));
-
-    // Claude: %USERPROFILE%\.local\bin
-    let claude_dir = format!("{}\\.local\\bin", user_profile);
-    if Path::new(&claude_dir).exists() {
-        let claude_dir_lower = claude_dir.to_lowercase();
-        let path_lower = path.to_lowercase();
-        if !path_lower.contains(&claude_dir_lower) {
-            path = format!("{};{}", claude_dir, path);
-            log::info!("[Check] Added Claude to PATH: {}", claude_dir);
-        }
-    }
-
-    // Git 便携版: %LOCALAPPDATA%\PortableGit\bin
-    let git_bin = format!("{}\\PortableGit\\bin", local_app_data);
-    if Path::new(&git_bin).exists() {
-        let git_bin_lower = git_bin.to_lowercase();
-        let path_lower = path.to_lowercase();
-        if !path_lower.contains(&git_bin_lower) {
-            path = format!("{};{}", git_bin, path);
-            log::info!("[Check] Added PortableGit to PATH: {}", git_bin);
-        }
-    }
-
-    std::env::set_var("PATH", &path);
-    log::debug!("[Check] Windows PATH refreshed");
-}
-
-/// 从登录 shell 获取完整 PATH（Unix）
-///
-/// GUI 应用不继承终端的 PATH（macOS Finder / Linux 桌面均如此），
-/// 通过启动 login shell 并读取其 PATH 来获取用户完整环境。
-#[cfg(unix)]
-fn refresh_path() {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-    log::info!(
-        "[Check] Refreshing PATH via: {} -l -c 'printenv PATH'",
-        shell
-    );
-    log::debug!(
-        "[Check] Original PATH: {}",
-        std::env::var("PATH").unwrap_or_default()
-    );
-
-    let output = Command::new(&shell)
-        .args(["-l", "-c", "printenv PATH"])
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() => {
-            let login_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !login_path.is_empty() {
-                log::info!(
-                    "[Check] PATH refreshed from login shell ({} entries)",
-                    login_path.split(':').count()
-                );
-                log::debug!("[Check] Refreshed PATH: {}", login_path);
-                std::env::set_var("PATH", &login_path);
-            } else {
-                log::warn!("[Check] Login shell returned empty PATH, keeping default");
-            }
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log::warn!(
-                "[Check] Login shell failed (exit {}): {}",
-                output.status,
-                stderr.trim()
-            );
-        }
-        Err(e) => {
-            log::warn!("[Check] Failed to run '{}': {}", shell, e);
-        }
-    }
-}
-
-/// 解码子进程输出为 UTF-8 字符串
-///
-/// Windows 上 cmd.exe 输出使用系统 OEM 代码页（中文系统为 GBK），
-/// 直接用 `from_utf8_lossy` 会产生乱码。先尝试 UTF-8，失败后回退 GBK。
-#[cfg(target_os = "windows")]
-pub(crate) fn decode_output(bytes: &[u8]) -> String {
-    if let Ok(s) = String::from_utf8(bytes.to_vec()) {
-        return s;
-    }
-    let (cow, _, _) = encoding_rs::GBK.decode(bytes);
-    cow.into_owned()
-}
-
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn decode_output(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).to_string()
-}
-
 /// 用 where (Windows) / which (Unix) 查找可执行文件，返回所有结果
 fn find_all_executables(name: &str) -> Vec<String> {
-    let output = match run_locate(name) {
-        Some(o) => o,
-        None => {
-            log::warn!("[Check] Failed to run locate for '{}'", name);
-            return Vec::new();
-        }
-    };
-
-    if !output.status.success() {
-        log::warn!(
-            "[Check] locate '{}' exited with status: {}",
-            name,
-            output.status
-        );
-        let stderr = decode_output(&output.stderr);
-        if !stderr.trim().is_empty() {
-            log::warn!("[Check] stderr: {}", stderr.trim());
-        }
-        log::debug!(
-            "[Check] Current PATH: {}",
-            std::env::var("PATH").unwrap_or_default()
-        );
-        return Vec::new();
-    }
-
-    let results: Vec<String> = decode_output(&output.stdout)
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && Path::new(s).exists())
-        .collect();
-
-    log::debug!(
-        "[Check] locate '{}' found {} result(s): {:?}",
-        name,
-        results.len(),
-        results
-    );
-    results
-}
-
-#[cfg(target_os = "windows")]
-fn run_locate(name: &str) -> Option<std::process::Output> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    Command::new("cmd")
-        .args(["/C", "where", name])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()
-}
-
-#[cfg(not(target_os = "windows"))]
-fn run_locate(name: &str) -> Option<std::process::Output> {
-    Command::new("which").arg(name).output().ok()
+    crate::platform::find_all_executables(name)
 }
 
 /// 检查 Claude CLI

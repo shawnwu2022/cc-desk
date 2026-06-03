@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "windows"))]
 use std::process::Command;
 use tauri::{AppHandle, Emitter};
 
@@ -174,56 +175,7 @@ fn fetch_claude_latest() -> io::Result<ClaudeLatestInfo> {
 
 /// 获取当前平台标识
 fn get_current_platform() -> String {
-    #[cfg(target_os = "windows")]
-    {
-        if std::env::var("PROCESSOR_ARCHITECTURE").unwrap_or_default() == "ARM64" {
-            "win32-arm64".to_string()
-        } else {
-            "win32-x64".to_string()
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // sysctl 检测硬件架构（GUI 应用不继承 shell 的 HOSTTYPE 变量）
-        // hw.optional.arm64: Apple Silicon 返回 "1"，Intel Mac 不存在此 key
-        if let Ok(output) = Command::new("sysctl")
-            .args(["-n", "hw.optional.arm64"])
-            .output()
-        {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let val = stdout.trim();
-                if val == "1" {
-                    return "darwin-arm64".to_string();
-                }
-            }
-        }
-        "darwin-x64".to_string()
-    }
-    #[cfg(target_os = "linux")]
-    {
-        // uname -m 检测硬件架构（GUI 应用不继承 shell 的 HOSTTYPE 变量）
-        let arch = Command::new("uname")
-            .arg("-m")
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
-
-        if arch.contains("aarch64") || arch.contains("arm64") {
-            if std::path::Path::new("/lib/libc.musl-aarch64.so.1").exists() {
-                "linux-arm64-musl".to_string()
-            } else {
-                "linux-arm64".to_string()
-            }
-        } else {
-            if std::path::Path::new("/lib/libc.musl-x86_64.so.1").exists() {
-                "linux-x64-musl".to_string()
-            } else {
-                "linux-x64".to_string()
-            }
-        }
-    }
+    crate::platform::get_platform_id()
 }
 
 /// 下载并安装 Claude CLI
@@ -349,8 +301,9 @@ fn extract_portable_git(archive_path: &Path, target_dir: &Path, app: &AppHandle)
     // PortableGit.7z.exe 参数：-y (自动确认), -o"path" (输出目录)
     let temp_extract_str = temp_extract_dir.to_string_lossy().to_string();
 
-    let status = Command::new(archive_path)
-        .args(["-y", &format!("-o{}", temp_extract_str)])
+    let mut cmd = crate::platform::new_command(&archive_path.to_string_lossy());
+    cmd.args(["-y", &format!("-o{}", temp_extract_str)]);
+    let status = cmd
         .spawn()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
         .wait()
@@ -534,17 +487,15 @@ fn add_to_path(dir: &Path) {
 /// 添加目录到用户环境变量 PATH（持久化）
 #[cfg(target_os = "windows")]
 fn add_to_user_path_permanent(dir: &Path) {
-    use std::process::Command;
-
     let dir_str = dir.to_string_lossy().to_string();
 
     // 获取当前用户 PATH
-    let output = Command::new("powershell")
-        .args([
-            "-Command",
-            "[Environment]::GetEnvironmentVariable('PATH', 'User')",
-        ])
-        .output();
+    let mut cmd = crate::platform::new_command("powershell");
+    cmd.args([
+        "-Command",
+        "[Environment]::GetEnvironmentVariable('PATH', 'User')",
+    ]);
+    let output = cmd.output();
 
     let current_user_path = match output {
         Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
@@ -558,15 +509,15 @@ fn add_to_user_path_permanent(dir: &Path) {
     let new_user_path = clean_and_prepend_path(&current_user_path, &dir_str, ';');
 
     // 使用 PowerShell 设置用户 PATH
-    let set_result = Command::new("powershell")
-        .args([
-            "-Command",
-            &format!(
-                "[Environment]::SetEnvironmentVariable('PATH', '{}', 'User')",
-                new_user_path
-            ),
-        ])
-        .output();
+    let mut set_cmd = crate::platform::new_command("powershell");
+    set_cmd.args([
+        "-Command",
+        &format!(
+            "[Environment]::SetEnvironmentVariable('PATH', '{}', 'User')",
+            new_user_path
+        ),
+    ]);
+    let set_result = set_cmd.output();
 
     match set_result {
         Ok(o) => {
@@ -695,19 +646,14 @@ fn get_installed_claude_version() -> Option<String> {
 /// 执行 claude --version 并解析版本号
 #[cfg(target_os = "windows")]
 fn run_version_command(program: &Path) -> Option<String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let program_str = program.to_string_lossy();
-    // 通过 cmd /C 执行，支持 .cmd/.bat 文件（npm 安装的 claude）
-    let output = Command::new("cmd")
-        .args(["/C", &*program_str, "--version"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
+    let mut cmd = crate::platform::new_command("cmd");
+    cmd.args(["/C", &*program_str, "--version"]);
+    let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
     }
-    let stdout = crate::checks::decode_output(&output.stdout);
+    let stdout = crate::platform::decode_output(&output.stdout);
     parse_version_output(&stdout)
 }
 
@@ -720,7 +666,7 @@ fn run_version_command(program: &Path) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    let stdout = crate::checks::decode_output(&output.stdout);
+    let stdout = crate::platform::decode_output(&output.stdout);
     parse_version_output(&stdout)
 }
 
@@ -835,25 +781,10 @@ pub async fn check_claude_cli_update() -> Result<ClaudeCliUpdateInfo, String> {
 pub async fn check_claude_running() -> Result<bool, String> {
     tokio::task::spawn_blocking(|| {
         #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            let output = Command::new("tasklist")
-                .args(["/FI", "IMAGENAME eq claude.exe", "/NH"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-                .map_err(|e| format!("Failed to run tasklist: {}", e))?;
-            let stdout = crate::checks::decode_output(&output.stdout);
-            Ok(stdout.contains("claude.exe"))
-        }
+        let name = "claude.exe";
         #[cfg(not(target_os = "windows"))]
-        {
-            let status = Command::new("pgrep")
-                .args(["-x", "claude"])
-                .status()
-                .map_err(|e| format!("Failed to run pgrep: {}", e))?;
-            Ok(status.success())
-        }
+        let name = "claude";
+        crate::platform::is_process_running(name)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -864,36 +795,12 @@ pub async fn check_claude_running() -> Result<bool, String> {
 pub async fn kill_claude_processes() -> Result<(), String> {
     tokio::task::spawn_blocking(|| {
         #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            let output = Command::new("taskkill")
-                .args(["/F", "/IM", "claude.exe"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-                .map_err(|e| format!("Failed to run taskkill: {}", e))?;
-            if !output.status.success() {
-                let stderr = crate::checks::decode_output(&output.stderr);
-                // taskkill 在没有匹配进程时也会返回非零，不算错误
-                if !stderr.contains("not found") && !stderr.is_empty() {
-                    log::warn!("[Installer] taskkill stderr: {}", stderr);
-                }
-            }
-            log::info!("[Installer] Killed claude processes");
-            Ok(())
-        }
+        let name = "claude.exe";
         #[cfg(not(target_os = "windows"))]
-        {
-            let status = Command::new("pkill")
-                .args(["-x", "claude"])
-                .status()
-                .map_err(|e| format!("Failed to run pkill: {}", e))?;
-            if !status.success() {
-                log::warn!("[Installer] pkill exited with non-zero status (may be no processes)");
-            }
-            log::info!("[Installer] Killed claude processes");
-            Ok(())
-        }
+        let name = "claude";
+        crate::platform::kill_processes_by_name(name)?;
+        log::info!("[Installer] Killed claude processes");
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?

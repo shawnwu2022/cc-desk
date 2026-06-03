@@ -9,6 +9,7 @@ mod hook_server;
 mod hook_config;
 mod installer;
 mod providers;
+mod platform;
 #[cfg(test)]
 mod tests;
 

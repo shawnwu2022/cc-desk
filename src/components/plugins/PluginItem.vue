@@ -162,7 +162,7 @@ function useAgent(invokeFormat: string) {
 }
 
 .expand-icon.expanded {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .plugin-name {
@@ -252,7 +252,7 @@ function useAgent(invokeFormat: string) {
 }
 
 .item-expand-icon.expanded {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .item-name {

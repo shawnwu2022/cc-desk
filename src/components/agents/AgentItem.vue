@@ -85,7 +85,7 @@ function emitUseAgent() {
 }
 
 .expand-icon.expanded {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .agent-info {

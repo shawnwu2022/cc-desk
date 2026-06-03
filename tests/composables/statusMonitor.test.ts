@@ -59,6 +59,16 @@ import { useStatusMonitor } from '@/composables/useStatusMonitor'
 const DEFAULT_DATA: Record<string, unknown> = {
   userPromptSubmit: { prompt: 'test prompt' },
   sessionStart: { model: 'claude-sonnet-4-6', cwd: '/project' },
+  preToolUse: { toolName: 'Read' },
+  postToolUse: { toolName: 'Read' },
+  postToolUseFailure: { toolName: 'Bash', error: 'failed' },
+  stop: {},
+  stopFailure: { error: 'API error' },
+  sessionEnd: { reason: 'prompt_input_exit' },
+  subagentStart: { agentId: 'agent-1', agentType: 'Explore' },
+  subagentStop: { agentId: 'agent-1', agentType: 'Explore' },
+  preCompact: { trigger: 'auto' },
+  postCompact: { trigger: 'auto' },
 }
 
 /** 构建测试用的 HookEventPayload */
@@ -76,6 +86,19 @@ function makePayload(
     detail: { type, data: (DEFAULT_DATA[type] ?? null) as any } as HookEventDetail,
     ...extra,
   }
+}
+
+/** 构建 notification 类型的 payload */
+function makeNotificationPayload(
+  notificationType: string,
+  ptyId: string = 'pty1',
+): HookEventPayload {
+  return makePayload('notification', ptyId, {
+    detail: {
+      type: 'notification',
+      data: { notificationType, message: 'test' },
+    } as any,
+  })
 }
 
 /** 创建一个处于 running 状态且绑定 ptyId 的 tab */
@@ -144,13 +167,13 @@ describe('useStatusMonitor', () => {
       expect(tab.pending).toBe(true)
     })
 
-    // notification → working = false, pending = true
-    it('StatusMonitor_Notification_001', () => {
+    // notification(idle_prompt) → working = false, pending = true
+    it('StatusMonitor_NotificationIdle_001', () => {
       createRunningTab('pty1')
       mountMonitor()
 
       emit(makePayload('userPromptSubmit', 'pty1'))
-      emit(makePayload('notification', 'pty1'))
+      emit(makeNotificationPayload('idle_prompt', 'pty1'))
 
       const tab = useSessionStore().getTabByPtyId('pty1')!
       expect(tab.working).toBe(false)
@@ -158,16 +181,123 @@ describe('useStatusMonitor', () => {
     })
   })
 
-  // ==================== 活跃事件恢复 working ====================
+  // ==================== Notification 类型区分 ====================
 
-  describe('活跃事件恢复 working（bug 修复）', () => {
-    // notification 后收到 preToolUse → working 恢复为 true
-    it('StatusMonitor_ActivityRestore_PreToolUse_001', () => {
+  describe('Notification 类型区分', () => {
+    // computer_use_enter 不会中断 working 状态
+    it('StatusMonitor_NotificationComputerUse_NoEffect_001', () => {
       createRunningTab('pty1')
       mountMonitor()
 
       emit(makePayload('userPromptSubmit', 'pty1'))
-      emit(makePayload('notification', 'pty1'))
+      emit(makeNotificationPayload('computer_use_enter', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(true)
+      expect(tab.pending).toBe(false)
+    })
+
+    // permission_prompt → working=false, pending=true（等待用户授权）
+    it('StatusMonitor_NotificationPermPrompt_Pending_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makeNotificationPayload('permission_prompt', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // worker_permission_prompt → working=false, pending=true
+    it('StatusMonitor_NotificationWorkerPerm_Pending_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makeNotificationPayload('worker_permission_prompt', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // permission_prompt 后 PostToolUse 恢复 working（授权后继续工作）
+    it('StatusMonitor_PermPrompt_ThenPostToolUse_Restore_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makeNotificationPayload('permission_prompt', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+
+      // 用户授权后工具执行
+      emit(makePayload('postToolUse', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(false)
+    })
+
+    // permission_prompt 后 PostToolUseFailure 也能恢复 working（拒绝后继续）
+    it('StatusMonitor_PermPrompt_ThenPostToolFail_Restore_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makeNotificationPayload('permission_prompt', 'pty1'))
+
+      // 用户拒绝后
+      emit(makePayload('postToolUseFailure', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(false)
+    })
+
+    // 完整权限流程：prompt → 工具 → 权限提示 → 授权 → 工具完成 → Stop
+    it('StatusMonitor_FullPermissionFlow_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+
+      emit(makePayload('preToolUse', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+
+      emit(makeNotificationPayload('permission_prompt', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(true)
+
+      emit(makePayload('postToolUse', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(false)
+
+      emit(makePayload('stop', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(true)
+    })
+
+    // 非 idle_prompt/permission 的 notification 在 working=false 时被忽略
+    it('StatusMonitor_NotificationNotIdleWhenIdle_Ignored_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makeNotificationPayload('computer_use_enter', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(false)
+    })
+  })
+
+  // ==================== 回合内活跃事件 ====================
+
+  describe('回合内活跃事件', () => {
+    // 回合内收到 preToolUse → working 保持 true
+    it('StatusMonitor_InTurnActivity_PreToolUse_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
       emit(makePayload('preToolUse', 'pty1'))
 
       const tab = useSessionStore().getTabByPtyId('pty1')!
@@ -175,13 +305,12 @@ describe('useStatusMonitor', () => {
       expect(tab.pending).toBe(false)
     })
 
-    // notification 后收到 postToolUse → working 恢复为 true
-    it('StatusMonitor_ActivityRestore_PostToolUse_001', () => {
+    // 回合内收到 postToolUse → working 保持 true
+    it('StatusMonitor_InTurnActivity_PostToolUse_001', () => {
       createRunningTab('pty1')
       mountMonitor()
 
       emit(makePayload('userPromptSubmit', 'pty1'))
-      emit(makePayload('notification', 'pty1'))
       emit(makePayload('postToolUse', 'pty1'))
 
       const tab = useSessionStore().getTabByPtyId('pty1')!
@@ -189,13 +318,12 @@ describe('useStatusMonitor', () => {
       expect(tab.pending).toBe(false)
     })
 
-    // notification 后收到 subagentStart → working 恢复为 true
-    it('StatusMonitor_ActivityRestore_SubagentStart_001', () => {
+    // 回合内收到 subagentStart → working 保持 true
+    it('StatusMonitor_InTurnActivity_SubagentStart_001', () => {
       createRunningTab('pty1')
       mountMonitor()
 
       emit(makePayload('userPromptSubmit', 'pty1'))
-      emit(makePayload('notification', 'pty1'))
       emit(makePayload('subagentStart', 'pty1'))
 
       const tab = useSessionStore().getTabByPtyId('pty1')!
@@ -203,22 +331,67 @@ describe('useStatusMonitor', () => {
       expect(tab.pending).toBe(false)
     })
 
-    // notification 后收到 postToolUseFailure → working 恢复为 true
-    it('StatusMonitor_ActivityRestore_PostToolUseFailure_001', () => {
+    // 回合内收到 preCompact → working 保持 true
+    it('StatusMonitor_InTurnActivity_PreCompact_001', () => {
       createRunningTab('pty1')
       mountMonitor()
 
       emit(makePayload('userPromptSubmit', 'pty1'))
-      emit(makePayload('notification', 'pty1'))
-      emit(makePayload('postToolUseFailure', 'pty1'))
+      emit(makePayload('preCompact', 'pty1'))
 
       const tab = useSessionStore().getTabByPtyId('pty1')!
       expect(tab.working).toBe(true)
       expect(tab.pending).toBe(false)
     })
+  })
 
-    // stop 后收到 subagentStop → working 恢复为 true
-    it('StatusMonitor_ActivityRestore_SubagentStop_001', () => {
+  // ==================== 回合结束保护（recap 防护） ====================
+
+  describe('回合结束保护（recap 等后续操作不应恢复 working）', () => {
+    // Stop 后 PreToolUse 不应恢复 working
+    it('StatusMonitor_RecapGuard_PreToolUse_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('stop', 'pty1'))
+      emit(makePayload('preToolUse', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // Stop 后 PostToolUse 不应恢复 working
+    it('StatusMonitor_RecapGuard_PostToolUse_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('stop', 'pty1'))
+      emit(makePayload('postToolUse', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // Stop 后 SubagentStart 不应恢复 working
+    it('StatusMonitor_RecapGuard_SubagentStart_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('stop', 'pty1'))
+      emit(makePayload('subagentStart', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // Stop 后 SubagentStop 不应恢复 working
+    it('StatusMonitor_RecapGuard_SubagentStop_001', () => {
       createRunningTab('pty1')
       mountMonitor()
 
@@ -227,25 +400,89 @@ describe('useStatusMonitor', () => {
       emit(makePayload('subagentStop', 'pty1'))
 
       const tab = useSessionStore().getTabByPtyId('pty1')!
-      expect(tab.working).toBe(true)
-      expect(tab.pending).toBe(false)
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
     })
 
-    // 完整流程：用户发消息 → 权限提示 → 用户授权 → 工具执行 → 完成
-    it('StatusMonitor_FullPermissionFlow_001', () => {
+    // Stop 后 PreCompact 不应恢复 working
+    it('StatusMonitor_RecapGuard_PreCompact_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('stop', 'pty1'))
+      emit(makePayload('preCompact', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // idle_prompt 后活动事件也不应恢复 working
+    it('StatusMonitor_RecapGuard_AfterIdlePrompt_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makeNotificationPayload('idle_prompt', 'pty1'))
+      emit(makePayload('preToolUse', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // StopFailure 后活动事件也不应恢复 working
+    it('StatusMonitor_RecapGuard_AfterStopFailure_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('stopFailure', 'pty1'))
+      emit(makePayload('preToolUse', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // UserPromptSubmit 重置回合，活动事件恢复生效
+    it('StatusMonitor_TurnReset_AfterNewPrompt_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      // 第一回合
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('stop', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+
+      // recap 的活动事件被忽略
+      emit(makePayload('preToolUse', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+
+      // 第二回合：新的 prompt 重置回合标记
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+
+      // 新回合内活动事件正常工作
+      emit(makePayload('preToolUse', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+    })
+  })
+
+  // ==================== 完整流程 ====================
+
+  describe('完整流程', () => {
+    // 正常工具使用流程
+    it('StatusMonitor_FullFlow_001', () => {
       createRunningTab('pty1')
       mountMonitor()
 
       emit(makePayload('userPromptSubmit', 'pty1'))
       expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
 
-      emit(makePayload('notification', 'pty1'))
-      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
-      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(true)
-
       emit(makePayload('preToolUse', 'pty1'))
       expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
-      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(false)
 
       emit(makePayload('postToolUse', 'pty1'))
       expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
@@ -253,6 +490,72 @@ describe('useStatusMonitor', () => {
       emit(makePayload('stop', 'pty1'))
       expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
       expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(true)
+    })
+
+    // computer_use 通知不干扰正常流程
+    it('StatusMonitor_ComputerUseFlow_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+
+      emit(makeNotificationPayload('computer_use_enter', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+
+      emit(makeNotificationPayload('computer_use_exit', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+
+      emit(makePayload('stop', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+    })
+
+    // recap 场景：Stop 后 recap 的工具调用不应恢复 working
+    it('StatusMonitor_RecapFlow_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      // 正常工作流程
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('preToolUse', 'pty1'))
+      emit(makePayload('postToolUse', 'pty1'))
+
+      // 回合结束
+      emit(makePayload('stop', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(true)
+
+      // recap 内部操作被忽略
+      emit(makePayload('preToolUse', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(true)
+
+      emit(makePayload('postToolUse', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(true)
+
+      // recap 可能的第二个 Stop 也不影响
+      emit(makePayload('stop', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(true)
+    })
+
+    // compact 流程（回合内的压缩是活跃操作）
+    it('StatusMonitor_CompactFlow_001', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+
+      emit(makePayload('preCompact', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+
+      emit(makePayload('postCompact', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+
+      emit(makePayload('stop', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
     })
   })
 
@@ -300,6 +603,43 @@ describe('useStatusMonitor', () => {
       const tab = useSessionStore().getTabByPtyId('pty1')!
       expect(tab.sessionId).toBe('new-session-id')
       expect(tab.model).toBe('claude-sonnet-4-6')
+    })
+
+    // Stop 时用户正在看 tab → pending 立即清除（不产生假 pending）
+    it('StatusMonitor_StopWhileWatching_NoPending_001', () => {
+      createRunningTab('pty1')
+      const { isFocused, isTerminalVisible } = mountMonitor()
+      const store = useSessionStore()
+
+      // 用户正在看 tab（focused + visible + active）
+      isFocused.value = true
+      isTerminalVisible.value = true
+      store.activeTabId = store.getTabByPtyId('pty1')!.tabId
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('stop', 'pty1'))
+
+      const tab = store.getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(false) // 关键：用户在看时不应该有 pending
+    })
+
+    // idle_prompt 时用户正在看 tab → pending 立即清除
+    it('StatusMonitor_IdlePromptWhileWatching_NoPending_001', () => {
+      createRunningTab('pty1')
+      const { isFocused, isTerminalVisible } = mountMonitor()
+      const store = useSessionStore()
+
+      isFocused.value = true
+      isTerminalVisible.value = true
+      store.activeTabId = store.getTabByPtyId('pty1')!.tabId
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makeNotificationPayload('idle_prompt', 'pty1'))
+
+      const tab = store.getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(false)
     })
   })
 })
