@@ -237,8 +237,8 @@ pub(crate) fn get_platform_id() -> String {
             .output()
         {
             if output.status.success() {
-                let val = String::from_utf8_lossy(&output.stdout).trim();
-                if val == "1" {
+                let val = String::from_utf8_lossy(&output.stdout);
+                if val.trim() == "1" {
                     return "darwin-arm64".to_string();
                 }
             }

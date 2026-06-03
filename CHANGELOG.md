@@ -6,6 +6,18 @@
 - Fix session status staying working when Claude waits for tool permission (handle permission_prompt notification)
 - Fix pending state incorrectly re-triggering when user switches tabs after work completes
 - Fix recap/auto-compact after Stop incorrectly restoring working state (add turnEnded guard)
+- Fix wrong notification_type mapping: add both permission_prompt and worker_permission_prompt
+- Fix PreCompact/PostCompact events not registered in hooks.json
+- Fix missing event data extraction for tool_name, agent_id, notification_type etc.
+- Fix macOS build error in platform.rs (temporary value lifetime)
+- Bump plugin version to 1.1.0 with PreCompact/PostCompact support
+
+## [0.10.8] - 2026-06-03
+
+### Fixed
+- Fix session status staying working when Claude waits for tool permission (handle permission_prompt notification)
+- Fix pending state incorrectly re-triggering when user switches tabs after work completes
+- Fix recap/auto-compact after Stop incorrectly restoring working state (add turnEnded guard)
 - Fix wrong notification_type mapping: permission_prompt did not exist in CLI source
 - Fix PreCompact/PostCompact events not registered in hooks.json
 - Fix missing event data extraction for tool_name, agent_id, notification_type etc.
