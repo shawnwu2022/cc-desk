@@ -12,12 +12,17 @@
  * 下载内容：
  *   - Claude CLI (各平台版本)
  *   - Git for Windows (便携版)
+ *
+ * 功能：
+ *   - 显示下载/上传进度
+ *   - 跳过已下载且 checksum 验证通过的文件
+ *   - 跳过 OSS 已存在的文件
  */
 
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
-const { execSync } = require('child_process')
+const { execSync, spawn } = require('child_process')
 
 // ============================================
 // 配置
@@ -62,24 +67,92 @@ function logInfo(msg) {
   console.log(msg)
 }
 
-// 使用 curl 下载（自动支持 HTTP_PROXY 环境变量）
-function curlDownload(url, outputPath) {
+function logSkip(msg) {
+  console.log(`\x1b[33m⊙ ${msg}\x1b[0m`)
+}
+
+// 格式化文件大小
+function formatSize(bytes) {
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`
+  return `${Math.round(bytes / 1024 / 1024)}MB`
+}
+
+// 格式化进度条
+function formatProgress(percent, downloaded, total) {
+  const barWidth = 40
+  const filled = Math.round(barWidth * percent / 100)
+  const empty = barWidth - filled
+  const bar = '\x1b[36m' + '█'.repeat(filled) + '\x1b[0m' + '░'.repeat(empty)
+  return `${bar} ${percent.toFixed(1)}% (${formatSize(downloaded)}/${formatSize(total)})`
+}
+
+// 使用 curl 下载（支持进度显示）
+async function curlDownload(url, outputPath, expectedChecksum = null) {
   const proxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY
-  const proxyArg = proxy ? `--proxy "${proxy}"` : ''
+
+  // 检查本地文件是否已存在且 checksum 匹配
+  if (fs.existsSync(outputPath)) {
+    if (expectedChecksum) {
+      const localChecksum = await calculateChecksum(outputPath)
+      if (localChecksum === expectedChecksum.toLowerCase()) {
+        logSkip(`已存在且校验通过: ${path.basename(outputPath)} (${formatSize(fs.statSync(outputPath).size)})`)
+        return { success: true, skipped: true }
+      } else {
+        logInfo(`本地文件 checksum 不匹配，重新下载...`)
+        fs.unlinkSync(outputPath)
+      }
+    } else {
+      logSkip(`已存在: ${path.basename(outputPath)} (${formatSize(fs.statSync(outputPath).size)})`)
+      return { success: true, skipped: true }
+    }
+  }
 
   logInfo(`下载: ${url}`)
   if (proxy) logInfo(`使用代理: ${proxy}`)
 
+  // 创建临时文件用于下载
+  const tempPath = outputPath + '.tmp'
+  // 清理可能存在的临时文件
+  if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
+
   try {
-    // --ssl-no-revoke: 禁用 SSL 证书吊销检查
-    // -L: 跟随重定向
-    execSync(`curl -fsSL ${proxyArg} --ssl-no-revoke -o "${outputPath}" "${url}"`, {
-      stdio: 'inherit'
+    // 构建 curl 参数
+    const curlArgs = [
+      '-fsSL',
+      '--ssl-no-revoke',
+      '-#', // 简短进度条（类似 wget）
+      '-o', tempPath,
+    ]
+    if (proxy) {
+      curlArgs.push('--proxy', proxy)
+    }
+    curlArgs.push(url)
+
+    // 使用 spawn 显示 curl 自带的进度条
+    const curl = spawn('curl', curlArgs, {
+      stdio: ['inherit', 'inherit', 'inherit']
     })
-    return true
+
+    // 等待下载完成
+    await new Promise((resolve, reject) => {
+      curl.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`curl exited with code ${code}`))
+      })
+      curl.on('error', reject)
+    })
+
+    // 移动临时文件到目标路径
+    fs.renameSync(tempPath, outputPath)
+
+    logSuccess(`下载完成: ${path.basename(outputPath)} (${formatSize(fs.statSync(outputPath).size)})`)
+    return { success: true, skipped: false }
   } catch (e) {
+    // 清理临时文件
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
     logError(`下载失败: ${e.message}`)
-    return false
+    return { success: false, skipped: false }
   }
 }
 
@@ -124,10 +197,47 @@ function loadOssConfig() {
   return config
 }
 
-// OSS 上传
-function uploadToOSS(localPath, ossPath) {
+// 检查 OSS 文件是否存在且完整（大小匹配）
+function checkOssFileValid(ossPath, expectedSize) {
   const config = loadOssConfig()
   if (!config) return false
+
+  const { bucketName, region, accessKeyId, accessKeySecret } = config
+  const endpoint = `${region}.aliyuncs.com`
+  const ossUtilPath = path.join(PROJECT_ROOT, 'ossutil64.exe')
+
+  if (!fs.existsSync(ossUtilPath)) return false
+
+  try {
+    const result = execSync(`"${ossUtilPath}" stat "oss://${bucketName}/${ossPath}" -e ${endpoint} -i ${accessKeyId} -k ${accessKeySecret}`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+
+    // 提取 Content-Length
+    const sizeMatch = result.match(/Content-Length\s*:\s*(\d+)/)
+    if (!sizeMatch) return false
+
+    const ossSize = parseInt(sizeMatch[1])
+    // 大小必须匹配（允许 0 字节的 latest.json）
+    return ossSize === expectedSize || expectedSize === 0
+  } catch {
+    return false
+  }
+}
+
+// OSS 上传（带进度显示）
+async function uploadToOSS(localPath, ossPath, skipIfExists = true) {
+  const config = loadOssConfig()
+  if (!config) return { success: false, skipped: false }
+
+  const fileSize = fs.statSync(localPath).size
+
+  // 检查 OSS 文件是否已存在且完整
+  if (skipIfExists && checkOssFileValid(ossPath, fileSize)) {
+    logSkip(`OSS 已存在且完整: ${ossPath} (${formatSize(fileSize)})`)
+    return { success: true, skipped: true }
+  }
 
   const { bucketName, region, accessKeyId, accessKeySecret } = config
   const endpoint = `${region}.aliyuncs.com`
@@ -136,23 +246,49 @@ function uploadToOSS(localPath, ossPath) {
   // 检查 ossutil
   if (!fs.existsSync(ossUtilPath)) {
     logInfo('下载 ossutil...')
-    downloadOssUtil(ossUtilPath)
+    await downloadOssUtil(ossUtilPath)
   }
 
-  // 配置 ossutil
-  const { execSync } = require('child_process')
-  execSync(`"${ossUtilPath}" config -e ${endpoint} -i ${accessKeyId} -k ${accessKeySecret} -L CH`, { stdio: 'ignore' })
+  logInfo(`上传: ${path.basename(localPath)} (${formatSize(fileSize)}) → oss://${bucketName}/${ossPath}`)
 
-  // 上传
-  execSync(`"${ossUtilPath}" cp "${localPath}" "oss://${bucketName}/${ossPath}" -f`, { stdio: 'inherit' })
-  return true
+  try {
+    // 使用 spawn 显示 ossutil 自带的进度输出
+    const ossutil = spawn(ossUtilPath, [
+      'cp',
+      localPath,
+      `oss://${bucketName}/${ossPath}`,
+      '-f',
+      '-e', endpoint,
+      '-i', accessKeyId,
+      '-k', accessKeySecret
+    ], {
+      stdio: ['inherit', 'inherit', 'inherit']
+    })
+
+    // 等待上传完成
+    await new Promise((resolve, reject) => {
+      ossutil.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`ossutil exited with code ${code}`))
+      })
+      ossutil.on('error', reject)
+    })
+
+    logSuccess(`已上传: ${ossPath}`)
+    return { success: true, skipped: false }
+  } catch (e) {
+    logError(`上传失败: ${e.message}`)
+    return { success: false, skipped: false }
+  }
 }
 
 // 下载 ossutil
-function downloadOssUtil(targetPath) {
-  const { execSync } = require('child_process')
+async function downloadOssUtil(targetPath) {
   const url = 'https://gosspublic.alicdn.com/ossutil/1.7.14/ossutil64.exe'
-  execSync(`curl -fsSL -o "${targetPath}" "${url}"`, { stdio: 'inherit' })
+  const result = await curlDownload(url, targetPath)
+  if (!result.success) {
+    throw new Error('下载 ossutil 失败')
+  }
 }
 
 // ============================================
@@ -183,6 +319,7 @@ async function downloadClaude() {
 
   // 下载各平台版本
   const platformInfos = []
+  const downloadResults = { downloaded: 0, skipped: 0, failed: 0 }
 
   for (const platform of CLAUDE_PLATFORMS) {
     const platformData = manifest.platforms?.[platform]
@@ -204,28 +341,44 @@ async function downloadClaude() {
     fs.mkdirSync(platformDir, { recursive: true })
     const outputPath = path.join(platformDir, filename)
 
-    logInfo(`下载 ${platform}/${filename}...`)
+    logInfo(`\n--- ${platform}/${filename} ---`)
     const downloadUrl = `${CLAUDE_DOWNLOAD_BASE}/${version}/${platform}/${filename}`
 
-    if (!curlDownload(downloadUrl, outputPath)) {
-      continue
-    }
+    const result = await curlDownload(downloadUrl, outputPath, expectedChecksum)
 
-    // 验证 checksum
-    const actualChecksum = await calculateChecksum(outputPath)
-    if (actualChecksum !== expectedChecksum.toLowerCase()) {
-      logError(`${platform} checksum 不匹配`)
-      fs.unlinkSync(outputPath)
-      continue
-    }
+    if (result.success) {
+      if (result.skipped) {
+        downloadResults.skipped++
+      } else {
+        downloadResults.downloaded++
+      }
 
-    logSuccess(`${platform} checksum 验证通过`)
-    platformInfos.push({
-      platform,
-      filename,
-      checksum: actualChecksum,
-      size: fs.statSync(outputPath).size,
-    })
+      // 验证 checksum（已下载的文件）
+      const actualChecksum = await calculateChecksum(outputPath)
+      if (actualChecksum !== expectedChecksum.toLowerCase()) {
+        logError(`${platform} checksum 不匹配`)
+        fs.unlinkSync(outputPath)
+        downloadResults.failed++
+        continue
+      }
+
+      logSuccess(`${platform} checksum 验证通过`)
+      platformInfos.push({
+        platform,
+        filename,
+        checksum: actualChecksum,
+        size: fs.statSync(outputPath).size,
+      })
+    } else {
+      downloadResults.failed++
+    }
+  }
+
+  // 显示下载统计
+  logInfo(`\n下载统计: 新下载 ${downloadResults.downloaded}, 跳过 ${downloadResults.skipped}, 失败 ${downloadResults.failed}`)
+
+  if (platformInfos.length === 0) {
+    throw new Error('没有成功下载任何平台版本')
   }
 
   // 生成 latest.json
@@ -247,7 +400,7 @@ async function downloadClaude() {
   fs.writeFileSync(latestJsonPath, JSON.stringify(latestJson, null, 2) + '\n')
   logSuccess(`latest.json 已生成: ${latestJsonPath}`)
 
-  return { version, versionDir, platformInfos }
+  return { version, versionDir, platformInfos, downloadResults }
 }
 
 // ============================================
@@ -288,13 +441,16 @@ async function downloadGitPortable() {
   fs.mkdirSync(gitDir, { recursive: true })
   const outputPath = path.join(gitDir, portableAsset.name)
 
-  logInfo(`下载 ${portableAsset.name}...`)
-  if (!curlDownload(portableAsset.browser_download_url, outputPath)) {
+  logInfo(`\n--- ${portableAsset.name} ---`)
+  const result = await curlDownload(portableAsset.browser_download_url, outputPath)
+
+  if (!result.success) {
     throw new Error('下载 Git 便携版失败')
   }
 
   const fileSize = fs.statSync(outputPath).size
-  logSuccess(`下载完成: ${Math.round(fileSize / 1024 / 1024)}MB`)
+  const downloadResult = result.skipped ? '跳过' : '新下载'
+  logSuccess(`下载完成 (${downloadResult}): ${formatSize(fileSize)}`)
 
   // 生成 latest.json
   const latestJson = {
@@ -309,18 +465,17 @@ async function downloadGitPortable() {
   fs.writeFileSync(latestJsonPath, JSON.stringify(latestJson, null, 2) + '\n')
   logSuccess(`latest.json 已生成: ${latestJsonPath}`)
 
-  return { version, outputPath, portableAsset }
+  return { version, outputPath, portableAsset, skipped: result.skipped }
 }
 
 // ============================================
 // 上传到 OSS
 // ============================================
 
-function uploadClaudeToOSS(version, versionDir) {
+async function uploadClaudeToOSS(version, versionDir) {
   logStep('上传 Claude CLI 到 OSS...')
 
-  const config = loadOssConfig()
-  if (!config) return
+  const uploadResults = { uploaded: 0, skipped: 0, failed: 0 }
 
   // 上传各平台文件
   const platforms = fs.readdirSync(versionDir)
@@ -332,30 +487,59 @@ function uploadClaudeToOSS(version, versionDir) {
     for (const file of files) {
       const localPath = path.join(platformDir, file)
       const ossPath = `deps/claude/${version}/${platform}/${file}`
-      uploadToOSS(localPath, ossPath)
-      logSuccess(`已上传: ${platform}/${file}`)
+
+      logInfo(`\n--- 上传 ${platform}/${file} ---`)
+      const result = await uploadToOSS(localPath, ossPath)
+
+      if (result.success) {
+        if (result.skipped) uploadResults.skipped++
+        else uploadResults.uploaded++
+      } else {
+        uploadResults.failed++
+      }
     }
   }
 
-  // 上传 latest.json
+  // 上传 latest.json（强制更新）
+  logInfo(`\n--- 上传 latest.json ---`)
   const latestJsonPath = path.join(RELEASES_DIR, 'claude', 'latest.json')
-  uploadToOSS(latestJsonPath, 'deps/claude/latest.json')
-  logSuccess('latest.json 已上传')
+  const result = await uploadToOSS(latestJsonPath, 'deps/claude/latest.json', false)
+  if (result.success) {
+    uploadResults.uploaded++
+  } else {
+    uploadResults.failed++
+  }
+
+  logInfo(`\n上传统计: 新上传 ${uploadResults.uploaded}, 跳过 ${uploadResults.skipped}, 失败 ${uploadResults.failed}`)
 }
 
-function uploadGitToOSS(outputPath, portableAsset) {
+async function uploadGitToOSS(outputPath, portableAsset, skipped) {
   logStep('上传 Git 便携版到 OSS...')
 
-  const config = loadOssConfig()
-  if (!config) return
+  // uploadToOSS 会自动检查 OSS 文件完整性
+  const uploadResults = { uploaded: 0, skipped: 0, failed: 0 }
 
-  uploadToOSS(outputPath, `deps/git/${portableAsset.name}`)
-  logSuccess(`已上传: ${portableAsset.name}`)
+  logInfo(`\n--- 上传 ${portableAsset.name} ---`)
+  const result = await uploadToOSS(outputPath, `deps/git/${portableAsset.name}`)
 
-  // 上传 latest.json
+  if (result.success) {
+    if (result.skipped) uploadResults.skipped++
+    else uploadResults.uploaded++
+  } else {
+    uploadResults.failed++
+  }
+
+  // 上传 latest.json（强制更新）
+  logInfo(`\n--- 上传 latest.json ---`)
   const latestJsonPath = path.join(RELEASES_DIR, 'git', 'latest.json')
-  uploadToOSS(latestJsonPath, 'deps/git/latest.json')
-  logSuccess('latest.json 已上传')
+  const jsonResult = await uploadToOSS(latestJsonPath, 'deps/git/latest.json', false)
+  if (jsonResult.success) {
+    uploadResults.uploaded++
+  } else {
+    uploadResults.failed++
+  }
+
+  logInfo(`\n上传统计: 新上传 ${uploadResults.uploaded}, 跳过 ${uploadResults.skipped}, 失败 ${uploadResults.failed}`)
 }
 
 // ============================================
@@ -376,14 +560,14 @@ async function main() {
   try {
     // 下载 Claude
     const claudeResult = await downloadClaude()
-    uploadClaudeToOSS(claudeResult.version, claudeResult.versionDir)
+    await uploadClaudeToOSS(claudeResult.version, claudeResult.versionDir)
 
     // 下载 Git（仅 Windows）
     const gitResult = await downloadGitPortable()
-    uploadGitToOSS(gitResult.outputPath, gitResult.portableAsset)
+    await uploadGitToOSS(gitResult.outputPath, gitResult.portableAsset, gitResult.skipped)
 
     console.log('\n\x1b[32m======================================')
-    console.log('     下载完成！')
+    console.log('     全部完成！')
     console.log('======================================\x1b[0m')
 
     logInfo('\nOSS 文件结构:')
