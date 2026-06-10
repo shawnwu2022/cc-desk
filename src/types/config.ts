@@ -85,12 +85,14 @@ export interface McpServerInfo {
   name: string
   displayName: string
   description?: string
-  sourceType: 'plugin' | 'user' | 'project' | 'managed'
+  sourceType: 'plugin' | 'user' | 'project' | 'local' | 'managed'
   sourceLabel: string
   serverType?: string
   status?: string
   url?: string      // HTTP/SSE server URL
   command?: string  // stdio server command
+  args?: string[]   // stdio server arguments
+  env?: Record<string, string>  // stdio server environment variables
   headers?: Record<string, string>  // HTTP headers for authentication
   prompts: McpPromptInfo[]
 }

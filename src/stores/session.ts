@@ -190,6 +190,57 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
+   * 关闭指定项目的所有 Tab
+   */
+  async function closeAllTabs(projectPath: string) {
+    const projectTabList = getProjectTabs(projectPath)
+    const ptyIds = projectTabList
+      .map(t => t.ptyId)
+      .filter((id): id is string => !!id)
+
+    tabs.forEach((tab, tabId) => {
+      if (tab.projectPath === projectPath) {
+        tabs.delete(tabId)
+      }
+    })
+
+    if (activeTabId.value && !tabs.has(activeTabId.value)) {
+      activeTabId.value = null
+    }
+
+    for (const ptyId of ptyIds) {
+      ptyKill(ptyId).catch(() => {})
+    }
+  }
+
+  /**
+   * 关闭除指定 Tab 外的所有同项目 Tab
+   */
+  async function closeOtherTabs(keepTabId: string) {
+    const keepTab = tabs.get(keepTabId)
+    if (!keepTab) return
+
+    const projectPath = keepTab.projectPath
+    const projectTabList = getProjectTabs(projectPath)
+    const ptyIds: string[] = []
+
+    for (const tab of projectTabList) {
+      if (tab.tabId !== keepTabId) {
+        if (tab.ptyId) ptyIds.push(tab.ptyId)
+        tabs.delete(tab.tabId)
+      }
+    }
+
+    if (activeTabId.value && !tabs.has(activeTabId.value)) {
+      activeTabId.value = keepTabId
+    }
+
+    for (const ptyId of ptyIds) {
+      ptyKill(ptyId).catch(() => {})
+    }
+  }
+
+  /**
    * 更新 Tab 名称
    */
   function updateTabName(tabId: string, name: string) {
@@ -408,6 +459,8 @@ export const useSessionStore = defineStore('session', () => {
     setTabPty,
     handlePtyExit,
     closeTab,
+    closeAllTabs,
+    closeOtherTabs,
     updateTabName,
     setTabSessionId,
 

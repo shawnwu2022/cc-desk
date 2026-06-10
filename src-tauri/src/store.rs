@@ -265,13 +265,14 @@ fn extract_project_path_from_jsonl(project_dir: &Path) -> Option<String> {
         return None;
     }
 
-    // 从 JSONL 内容提取 cwd
+    // 从 JSONL/TXT 内容提取 cwd
     for entry in fs::read_dir(project_dir).ok()? {
         let entry = entry.ok()?;
         let path = entry.path();
 
-        // 只读取非 agent 开头的 jsonl 文件
-        if path.extension().map(|e| e == "jsonl").unwrap_or(false)
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        // 只读取非 agent 开头的 jsonl 或 txt 文件
+        if (ext == "jsonl" || ext == "txt")
             && !path
                 .file_name()
                 .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
@@ -304,7 +305,8 @@ fn get_project_last_modified(project_dir: &Path) -> u64 {
     if let Ok(entries) = fs::read_dir(project_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map(|e| e == "jsonl").unwrap_or(false)
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if (ext == "jsonl" || ext == "txt")
                 && !path
                     .file_name()
                     .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
@@ -577,7 +579,8 @@ pub fn get_sessions(project_path: &str, limit: usize, offset: usize) -> Result<V
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map(|e| e == "jsonl").unwrap_or(false)
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if (ext == "jsonl" || ext == "txt")
                 && !path
                     .file_name()
                     .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
@@ -671,7 +674,8 @@ pub fn get_session_count(project_path: &str) -> Result<usize> {
                     .ok()
                     .map(|entry| {
                         let path = entry.path();
-                        path.extension().map(|e| e == "jsonl").unwrap_or(false)
+                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        (ext == "jsonl" || ext == "txt")
                             && !path
                                 .file_name()
                                 .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
@@ -691,7 +695,11 @@ pub fn get_session_details(project_path: &str, session_id: &str) -> Result<Optio
 
     let session_file = project_dirs
         .iter()
-        .map(|dir| dir.join(format!("{}.jsonl", session_id)))
+        .flat_map(|dir| {
+            let jsonl = dir.join(format!("{}.jsonl", session_id));
+            let txt = dir.join(format!("{}.txt", session_id));
+            vec![jsonl, txt]
+        })
         .find(|f| f.exists());
 
     let session_file = match session_file {
@@ -813,7 +821,8 @@ pub fn search_session_messages(
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map(|e| e == "jsonl").unwrap_or(false)
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if (ext == "jsonl" || ext == "txt")
                 && !path
                     .file_name()
                     .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
@@ -1710,7 +1719,7 @@ pub struct McpServerInfo {
     pub display_name: String,
     /// 描述
     pub description: Option<String>,
-    /// 来源类型：builtin、plugin、user、project
+    /// 来源类型：builtin、plugin、user、project、local
     #[serde(rename = "sourceType")]
     pub source_type: String,
     /// 来源标签
@@ -1723,8 +1732,12 @@ pub struct McpServerInfo {
     pub status: Option<String>,
     /// URL（HTTP/SSE server）
     pub url: Option<String>,
-    /// 命令（stdio server）
+    /// 命令（stdio server 可执行文件名）
     pub command: Option<String>,
+    /// 命令参数（stdio server）
+    pub args: Option<Vec<String>>,
+    /// 环境变量（stdio server）
+    pub env: Option<HashMap<String, String>>,
     /// HTTP Headers（用于认证）
     pub headers: Option<HashMap<String, String>>,
     /// 可用的 prompts 列表
@@ -1853,234 +1866,272 @@ pub fn get_all_skills(project_path: &str) -> Result<Vec<SkillInfo>> {
     Ok(skills)
 }
 
-/// 获取所有 MCP Servers（包括 plugin 和配置的）
-pub fn get_all_mcp_servers(_project_path: &str) -> Result<Vec<McpServerInfo>> {
-    let mut servers = Vec::new();
+/// 获取所有 MCP Servers（直接读配置文件 + plugin，不依赖 claude mcp list）
+pub fn get_all_mcp_servers(project_path: &str) -> Result<Vec<McpServerInfo>> {
+    let mut servers: Vec<McpServerInfo> = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
 
-    // 1. 从 ~/.claude.json 读取 MCP 配置（包括 headers）
-    let mcp_configs = read_mcp_configs_from_claude_json();
+    // 收集所有源（按优先级从低到高：plugin → user → project → local）
+    // 1. Plugin scope: 从 plugin 列表加载 MCP servers
+    if let Ok(plugins) = get_all_plugins(project_path) {
+        for plugin in &plugins {
+            if let Some(mcp_value) = &plugin.mcp_servers {
+                // plugin .mcp.json 格式：直接是 server 映射（不需要 mcpServers 包装）
+                // 也可能是带 mcpServers 包装的对象
+                let mcp_obj = if let Some(wrapped) = mcp_value.get("mcpServers").and_then(|v| v.as_object()) {
+                    wrapped
+                } else if let Some(direct) = mcp_value.as_object() {
+                    // 直接映射格式（plugin .mcp.json 常见格式）
+                    // 排除看起来像配置包装的字段
+                    direct
+                } else {
+                    continue;
+                };
 
-    // 2. 使用 claude mcp list 获取实时信息
-    if let Ok(output) = run_claude_command("mcp list") {
-        let parsed_servers = parse_mcp_list_output(&output);
-        for parsed in parsed_servers {
-            // 从配置中获取 headers
-            let headers = mcp_configs
-                .get(&parsed.name)
-                .and_then(|c| c.headers.clone());
+                for (server_name, config) in mcp_obj {
+                    // plugin server 名称为 "plugin:{plugin_name}:{server_name}"
+                    let full_name = format!("plugin:{}:{}", plugin.name, server_name);
+                    let display_name = server_name.clone();
 
-            servers.push(McpServerInfo {
-                name: parsed.name.clone(),
-                display_name: parsed.display_name.clone(),
-                description: None,
-                source_type: parsed.scope.clone(),
-                source_label: capitalize_scope(&parsed.scope),
-                server_type: Some(parsed.server_type.clone()),
-                status: Some(parsed.status.clone()),
-                url: parsed.url.clone(),
-                command: parsed.command.clone(),
-                headers,
-                prompts: Vec::new(),
-            });
+                    // 注入 CLAUDE_PLUGIN_ROOT 环境变量
+                    let mut plugin_env = HashMap::new();
+                    plugin_env.insert("CLAUDE_PLUGIN_ROOT".to_string(), plugin.install_path.clone());
+
+                    if let Some(mut info) = parse_mcp_server_entry(&full_name, config, "plugin", Some(&plugin_env)) {
+                        info.display_name = display_name;
+                        if seen_names.insert(full_name.clone()) {
+                            servers.push(info);
+                        } else if let Some(existing) = servers.iter_mut().find(|s| s.name == full_name) {
+                            *existing = info;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2-4. 配置文件来源
+    let sources = collect_mcp_config_sources(project_path);
+
+    for (path, scope) in &sources {
+        if let Ok(content) = fs::read_to_string(path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                let mcp_obj = json.get("mcpServers").and_then(|v| v.as_object());
+                if let Some(mcp_obj) = mcp_obj {
+                    for (name, config) in mcp_obj {
+                        if let Some(info) = parse_mcp_server_entry(name, config, scope, None) {
+                            if seen_names.insert(name.clone()) {
+                                servers.push(info);
+                            } else {
+                                // 同名 server：高优先级覆盖低优先级
+                                if let Some(existing) = servers.iter_mut().find(|s| s.name == *name) {
+                                    *existing = info;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
     Ok(servers)
 }
 
-/// MCP 配置结构（从 ~/.claude.json 读取）
-struct McpConfigEntry {
-    headers: Option<HashMap<String, String>>,
+/// 收集 MCP 配置文件路径和对应 scope
+fn collect_mcp_config_sources(project_path: &str) -> Vec<(PathBuf, String)> {
+    let mut sources = Vec::new();
+
+    // 1. User scope: ~/.claude.json
+    if let Some(home) = dirs::home_dir() {
+        sources.push((home.join(".claude.json"), "user".to_string()));
+    }
+
+    // 2. Project scope: 从项目目录向上查找所有 .mcp.json（子目录覆盖父目录）
+    let project_mcp_files = walk_up_find_mcp_jsons(project_path);
+    for path in project_mcp_files {
+        sources.push((path, "project".to_string()));
+    }
+
+    // 3. Local scope: {project_path}/.claude/settings.json
+    let local_settings = PathBuf::from(project_path)
+        .join(".claude")
+        .join("settings.json");
+    sources.push((local_settings, "local".to_string()));
+
+    sources
 }
 
-/// 从 ~/.claude.json 读取 MCP 配置
-fn read_mcp_configs_from_claude_json() -> HashMap<String, McpConfigEntry> {
-    let mut configs = HashMap::new();
+/// 从项目目录向上遍历查找所有 .mcp.json（父目录先、子目录后，后者覆盖前者）
+fn walk_up_find_mcp_jsons(start_dir: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let start = PathBuf::from(start_dir);
 
-    let home = dirs::home_dir();
-    if home.is_none() {
-        return configs;
+    let mut current = start.as_path();
+    loop {
+        let mcp_json = current.join(".mcp.json");
+        if mcp_json.exists() {
+            paths.push(mcp_json);
+        }
+        match current.parent() {
+            Some(parent) if parent != current => current = parent,
+            _ => break,
+        }
     }
 
-    let config_path = home.unwrap().join(".claude.json");
-    if !config_path.exists() {
-        return configs;
-    }
+    // 反转：父目录在前，子目录在后（子目录覆盖父目录）
+    paths.reverse();
+    paths
+}
 
-    if let Ok(content) = fs::read_to_string(&config_path) {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-            // 读取顶级 mcpServers
-            if let Some(mcp_servers) = json.get("mcpServers").and_then(|v| v.as_object()) {
-                for (name, server_config) in mcp_servers {
-                    let headers = server_config
-                        .get("headers")
-                        .and_then(|v| v.as_object())
-                        .map(|obj| {
-                            obj.iter()
-                                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
-                                .collect()
-                        });
+/// 展开字符串中的 ${VAR} 和 ${VAR:-default} 环境变量
+pub(crate) fn expand_env_vars(s: &str, extra_env: Option<&HashMap<String, String>>) -> String {
+    let mut result = s.to_string();
+    // 反复匹配 ${...} 模式
+    loop {
+        if let Some(start) = result.find("${") {
+            if let Some(end) = result[start + 2..].find('}') {
+                let expr = &result[start + 2..start + 2 + end];
+                let (var_name, default) = if let Some(colon_pos) = expr.find(":-") {
+                    (&expr[..colon_pos], Some(&expr[colon_pos + 2..]))
+                } else {
+                    (expr, None)
+                };
 
-                    configs.insert(name.clone(), McpConfigEntry { headers });
+                let value = extra_env
+                    .and_then(|e| e.get(var_name))
+                    .cloned()
+                    .or_else(|| std::env::var(var_name).ok())
+                    .or_else(|| default.map(|d| d.to_string()));
+
+                match value {
+                    Some(v) => {
+                        result.replace_range(start..start + 2 + end + 1, &v);
+                    }
+                    None => {
+                        // 变量未找到，保留原样
+                        break;
+                    }
                 }
+            } else {
+                break;
             }
+        } else {
+            break;
         }
     }
-
-    configs
+    result
 }
 
-/// 解析 claude mcp list 输出
-pub(crate) fn parse_mcp_list_output(output: &str) -> Vec<ParsedMcpServer> {
-    let mut servers = Vec::new();
+/// 解析单个 MCP server 配置条目
+pub(crate) fn parse_mcp_server_entry(
+    name: &str,
+    config: &serde_json::Value,
+    scope: &str,
+    extra_env: Option<&HashMap<String, String>>,
+) -> Option<McpServerInfo> {
+    let obj = config.as_object()?;
 
-    for line in output.lines() {
-        if line.contains(" - ") {
-            let parts: Vec<&str> = line.splitn(2, " - ").collect();
-            if parts.len() == 2 {
-                let server_info = parts[0].trim();
-                let status = parts[1].trim();
+    // 解析 command（可执行文件名），展开环境变量
+    let command = obj
+        .get("command")
+        .and_then(|v| v.as_str())
+        .map(|s| expand_env_vars(s, extra_env));
 
-                if let Some(parsed) = parse_server_info_line(server_info, status) {
-                    servers.push(parsed);
-                }
-            }
-        }
-    }
+    // 解析 args（数组），展开环境变量
+    let args = obj
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| expand_env_vars(s, extra_env)))
+                .collect()
+        });
 
-    servers
-}
+    // 解析 env（对象），展开环境变量值
+    let env = obj
+        .get("env")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| {
+                    v.as_str().map(|s| (k.clone(), expand_env_vars(s, extra_env)))
+                })
+                .collect()
+        });
 
-/// 解析后的 MCP Server（临时结构）
-pub(crate) struct ParsedMcpServer {
-    pub(crate) name: String,
-    pub(crate) display_name: String,
-    pub(crate) scope: String,
-    pub(crate) server_type: String,
-    pub(crate) status: String,
-    pub(crate) url: Option<String>,
-    pub(crate) command: Option<String>,
-}
+    // 解析 url，展开环境变量
+    let url = obj
+        .get("url")
+        .and_then(|v| v.as_str())
+        .map(|s| expand_env_vars(s, extra_env));
 
-/// 解析单个服务器信息行
-fn parse_server_info_line(info: &str, status: &str) -> Option<ParsedMcpServer> {
-    // 格式示例：
-    // plugin:paper-tool:paper-search: uv run --directory C:/claude-plugins/paper-tool/paper-search mcp_server.py
-    // zread: https://open.bigmodel.cn/api/mcp/zread/mcp (HTTP)
+    // 解析 headers，展开环境变量值
+    let headers = obj
+        .get("headers")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| {
+                    v.as_str().map(|s| (k.clone(), expand_env_vars(s, extra_env)))
+                })
+                .collect()
+        });
 
-    let type_marker_pos = info.find('(');
-    let type_end_pos = info.find(')');
-
-    let server_type = if type_marker_pos.is_some() && type_end_pos.is_some() {
-        info[type_marker_pos.unwrap() + 1..type_end_pos.unwrap()]
-            .trim()
-            .to_string()
-    } else {
-        if info.contains("http://") || info.contains("https://") {
-            "HTTP".to_string()
-        } else {
-            "stdio".to_string()
-        }
-    };
-
-    let colon_pos = find_name_separator(info, &server_type);
-    if colon_pos.is_none() {
-        return None;
-    }
-
-    let colon_idx = colon_pos.unwrap();
-    let name = info[..colon_idx].trim();
-
-    let after_colon = &info[colon_idx + 1..];
-
-    let command_or_url = if type_marker_pos.is_some() {
-        let type_rel_pos = type_marker_pos.unwrap() - colon_idx - 1;
-        if type_rel_pos > 0 && type_rel_pos < after_colon.len() {
-            after_colon[..type_rel_pos].trim()
-        } else {
-            after_colon.trim()
-        }
-    } else {
-        after_colon.trim()
-    };
-
-    let (url, command) =
-        if command_or_url.starts_with("http://") || command_or_url.starts_with("https://") {
-            (Some(command_or_url.to_string()), None)
-        } else {
-            (None, Some(command_or_url.to_string()))
-        };
-
-    let scope = if name.starts_with("plugin:") {
-        "plugin"
-    } else if name.starts_with("managed:") {
-        "managed"
-    } else {
-        "user"
-    };
+    // 推断 server type
+    let server_type = infer_server_type(config);
 
     let display_name = if scope == "plugin" {
-        // plugin:paper-tool:paper-search -> paper-search
         name.split(':').last().unwrap_or(name).to_string()
     } else {
         name.to_string()
     };
 
-    Some(ParsedMcpServer {
+    Some(McpServerInfo {
         name: name.to_string(),
         display_name,
-        scope: scope.to_string(),
-        server_type,
-        status: status.to_string(),
+        description: None,
+        source_type: scope.to_string(),
+        source_label: capitalize_scope(scope),
+        server_type: Some(server_type),
+        status: None,
         url,
         command,
+        args,
+        env,
+        headers,
+        prompts: Vec::new(),
     })
 }
 
-/// 找到分割 name 和 command/url 的冒号位置
-pub(crate) fn find_name_separator(info: &str, server_type: &str) -> Option<usize> {
-    if server_type == "HTTP" || server_type == "SSE" {
-        if let Some(http_pos) = info.find("https://").or_else(|| info.find("http://")) {
-            let before_url = &info[..http_pos];
-            before_url.rfind(':')
-        } else {
-            info.find(':')
-        }
-    } else {
-        // stdio server: 找最后一个冒号（但要排除 Windows 路径中的冒号）
-        let mut candidate: Option<usize> = None;
-        let chars = info.chars().collect::<Vec<_>>();
+/// 推断 MCP server 类型（与 Claude Code CLI 一致）
+pub(crate) fn infer_server_type(config: &serde_json::Value) -> String {
+    let obj = match config.as_object() {
+        Some(o) => o,
+        None => return "stdio".to_string(),
+    };
 
-        for i in (0..chars.len()).rev() {
-            if chars[i] == ':' {
-                let after_colon = if i + 1 < chars.len() {
-                    &info[i + 1..]
-                } else {
-                    ""
-                };
-
-                // 排除 Windows 路径中的冒号（如 C:/, D:/）
-                let is_path_colon = after_colon.starts_with('/') || after_colon.starts_with('\\');
-                let is_url_colon = after_colon.starts_with("//");
-
-                if is_path_colon || is_url_colon {
-                    continue;
-                }
-
-                // 找到合适的分隔冒号
-                if after_colon.starts_with(' ')
-                    || after_colon.is_empty()
-                    || after_colon.find(':').is_none()
-                {
-                    return Some(i);
-                }
-
-                candidate = Some(i);
-            }
-        }
-
-        candidate.or_else(|| info.rfind(':'))
+    // 显式 type 字段
+    if let Some(type_val) = obj.get("type").and_then(|v| v.as_str()) {
+        return match type_val {
+            "sse" => "sse".to_string(),
+            "http" => "http".to_string(),
+            "ws" => "ws".to_string(),
+            _ => type_val.to_string(),
+        };
     }
+
+    // 有 command 字段 → stdio
+    if obj.contains_key("command") {
+        return "stdio".to_string();
+    }
+
+    // 有 url 字段 → 默认 http
+    if obj.contains_key("url") {
+        return "http".to_string();
+    }
+
+    "stdio".to_string()
 }
 
 /// 转换 scope 为显示标签
@@ -2088,6 +2139,7 @@ fn capitalize_scope(scope: &str) -> String {
     match scope {
         "plugin" => "Plugin".to_string(),
         "managed" => "Managed".to_string(),
+        "local" => "Local".to_string(),
         "user" => "User".to_string(),
         "project" => "Project".to_string(),
         _ => scope.to_string(),

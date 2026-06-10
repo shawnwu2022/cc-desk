@@ -24,7 +24,17 @@
     <div class="panel-content" ref="scrollContainer">
       <!-- Open Tabs -->
       <div v-if="projectTabs.length > 0" class="section">
-        <div class="section-title">{{ t('openTabs') }}</div>
+        <div class="section-title-row">
+          <span class="section-title">{{ t('openTabs') }}</span>
+          <div v-if="projectTabs.length > 1" class="section-actions">
+            <button class="section-action-btn" @click="$emit('closeOtherTabs')" :title="t('closeOtherTabs')">
+              {{ t('closeOtherTabs') }}
+            </button>
+            <button class="section-action-btn" @click="$emit('closeAllTabs')" :title="t('closeAllTabs')">
+              {{ t('closeAllTabs') }}
+            </button>
+          </div>
+        </div>
         <SessionList
           :tabs="projectTabs"
           :active-id="sessionStore.activeTabId"
@@ -124,6 +134,8 @@ const emit = defineEmits<{
   newSession: []
   resumeSession: [sessionId: string]
   closeTab: [tabId: string]
+  closeAllTabs: []
+  closeOtherTabs: []
 }>()
 
 const sessionStore = useSessionStore()
@@ -268,8 +280,35 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--text-tertiary);
   text-transform: uppercase;
-  margin-bottom: 6px;
   padding: 0 4px;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.section-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.section-action-btn {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.section-action-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
 }
 
 .loading-indicator,

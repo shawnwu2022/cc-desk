@@ -208,6 +208,8 @@ export default {
   newSessionTitle: 'New session (Alt+N)',
   restartSessionTitle: 'Restart session (Alt+R)',
   waitingForSessionId: 'Waiting for session ID...',
+  closeAllTabs: 'Close All',
+  closeOtherTabs: 'Close Others',
 
   // Session item
   rename: 'Rename',

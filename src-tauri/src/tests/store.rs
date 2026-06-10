@@ -1,11 +1,12 @@
 use serde_json::json;
 
 use crate::store::{
-    extract_md_description, extract_session_name, find_name_separator, find_valid_plugin_path,
-    merge_json_values, parse_agents_list_output, parse_mcp_list_output, parse_timestamp,
-    resolve_marketplace_plugin_path, AgentInfo,
+    expand_env_vars, extract_md_description, extract_session_name, find_valid_plugin_path,
+    infer_server_type, merge_json_values, parse_agents_list_output, parse_mcp_server_entry,
+    parse_timestamp, resolve_marketplace_plugin_path, AgentInfo,
 };
 
+use std::collections::HashMap;
 use std::path::Path;
 
 // ==================== merge_json_values ====================
@@ -60,107 +61,163 @@ fn MergeJson_EmptyUpdate_001() {
     assert_eq!(result.as_object().unwrap().len(), 1);
 }
 
-// ==================== parse_mcp_list_output ====================
+// ==================== parse_mcp_server_entry ====================
 
-// 解析 HTTP 服务器行，提取 name、url、type 为 http
+// 解析 stdio server：带 command/args/env
 #[test]
-fn ParseMcp_HttpServer_001() {
-    let input = "zread: https://open.bigmodel.cn/api/mcp/zread/mcp (HTTP) - connected";
-    let servers = parse_mcp_list_output(input);
-    assert_eq!(servers.len(), 1);
-    let s = &servers[0];
-    assert_eq!(s.name, "zread");
-    assert_eq!(
-        s.url.as_deref(),
-        Some("https://open.bigmodel.cn/api/mcp/zread/mcp")
-    );
-    assert_eq!(s.command, None);
+fn ParseMcpEntry_StdioServer_001() {
+    let config = json!({
+        "command": "npx",
+        "args": ["-y", "chrome-devtools-mcp@latest"],
+        "env": { "CHROME_PATH": "/usr/bin/chrome" }
+    });
+    let result = parse_mcp_server_entry("chrome-devtools", &config, "user", None);
+    assert!(result.is_some());
+    let info = result.unwrap();
+    assert_eq!(info.name, "chrome-devtools");
+    assert_eq!(info.command.as_deref(), Some("npx"));
+    assert_eq!(info.args.as_ref().unwrap().len(), 2);
+    assert_eq!(info.args.as_ref().unwrap()[0], "-y");
+    assert_eq!(info.env.as_ref().unwrap().get("CHROME_PATH").unwrap(), "/usr/bin/chrome");
+    assert_eq!(info.server_type.as_deref(), Some("stdio"));
+    assert_eq!(info.source_type, "user");
+    assert!(info.url.is_none());
 }
 
-// 解析 stdio 服务器行，提取 name、command，type 为 stdio
+// 解析 HTTP server：带 url/headers
 #[test]
-fn ParseMcp_StdioServer_001() {
-    let input = "myserver: npx -y @my/mcp-server - running";
-    let servers = parse_mcp_list_output(input);
-    assert_eq!(servers.len(), 1);
-    let s = &servers[0];
-    assert_eq!(s.name, "myserver");
-    assert!(s.command.is_some());
-    assert_eq!(s.url, None);
+fn ParseMcpEntry_HttpServer_001() {
+    let config = json!({
+        "type": "http",
+        "url": "https://api.example.com/mcp",
+        "headers": { "Authorization": "Bearer token123" }
+    });
+    let result = parse_mcp_server_entry("zread", &config, "user", None);
+    assert!(result.is_some());
+    let info = result.unwrap();
+    assert_eq!(info.name, "zread");
+    assert_eq!(info.url.as_deref(), Some("https://api.example.com/mcp"));
+    assert_eq!(info.server_type.as_deref(), Some("http"));
+    assert_eq!(info.headers.as_ref().unwrap().get("Authorization").unwrap(), "Bearer token123");
+    assert!(info.command.is_none());
 }
 
-// 解析 plugin: 前缀的服务器，scope 为 plugin
+// 解析 SSE server：带 type:"sse"
 #[test]
-fn ParseMcp_PluginScope_001() {
-    let input = "plugin:paper-tool:paper-search: uv run mcp_server.py - connected";
-    let servers = parse_mcp_list_output(input);
-    assert_eq!(servers.len(), 1);
-    assert_eq!(servers[0].scope, "plugin");
+fn ParseMcpEntry_SseServer_001() {
+    let config = json!({
+        "type": "sse",
+        "url": "https://mcp.example.com/sse"
+    });
+    let result = parse_mcp_server_entry("slack", &config, "project", None);
+    assert!(result.is_some());
+    let info = result.unwrap();
+    assert_eq!(info.server_type.as_deref(), Some("sse"));
+    assert_eq!(info.source_type, "project");
 }
 
-// 不含 " - " 分隔符的标题行被跳过
+// 非对象配置返回 None
 #[test]
-fn ParseMcp_SkipHeader_001() {
-    let input = "MCP Servers:\n  some header line\nzread: https://example.com (HTTP) - connected";
-    let servers = parse_mcp_list_output(input);
-    assert_eq!(servers.len(), 1);
+fn ParseMcpEntry_NotObject_001() {
+    let config = json!("just a string");
+    let result = parse_mcp_server_entry("test", &config, "user", None);
+    assert!(result.is_none());
 }
 
-// 空字符串输入返回空 Vec
+// ==================== infer_server_type ====================
+
+// 有 command 字段无 type → stdio
 #[test]
-fn ParseMcp_EmptyInput_001() {
-    let servers = parse_mcp_list_output("");
-    assert!(servers.is_empty());
+fn InferType_Stdio_001() {
+    let config = json!({ "command": "npx", "args": ["-y", "some-package"] });
+    assert_eq!(infer_server_type(&config), "stdio");
 }
 
-// ==================== find_name_separator ====================
-
-// HTTP 模式跳过 :// 找到 name 与 url 之间的冒号
+// 有 url + type:"sse" → sse
 #[test]
-fn FindSeparator_HttpMode_001() {
-    let input = "zread: https://open.bigmodel.cn/api/mcp/zread/mcp (HTTP)";
-    let pos = find_name_separator(input, "HTTP");
-    assert!(pos.is_some());
-    let idx = pos.unwrap();
-    assert_eq!(&input[..idx], "zread");
+fn InferType_Sse_001() {
+    let config = json!({ "type": "sse", "url": "https://example.com/sse" });
+    assert_eq!(infer_server_type(&config), "sse");
 }
 
-// stdio 模式找到 name 与 command 之间的冒号
+// 有 url + type:"http" → http
 #[test]
-fn FindSeparator_StdioMode_001() {
-    let input = "myserver: npx -y @my/mcp-server";
-    let pos = find_name_separator(input, "stdio");
-    assert!(pos.is_some());
-    let idx = pos.unwrap();
-    assert_eq!(&input[..idx], "myserver");
+fn InferType_Http_001() {
+    let config = json!({ "type": "http", "url": "https://example.com/mcp" });
+    assert_eq!(infer_server_type(&config), "http");
 }
 
-// 跳过 Windows 盘符冒号 C: 不误判为分隔符
+// 有 url 无 type → http（默认）
 #[test]
-fn FindSeparator_WindowsDrive_001() {
-    let input = "myserver: C:/path/to/binary --arg1";
-    let pos = find_name_separator(input, "stdio");
-    assert!(pos.is_some());
-    let idx = pos.unwrap();
-    assert_eq!(&input[..idx], "myserver");
+fn InferType_UrlNoType_001() {
+    let config = json!({ "url": "https://example.com/mcp" });
+    assert_eq!(infer_server_type(&config), "http");
 }
 
-// 无冒号的字符串返回 None
+// 无 command/url → stdio（兜底）
 #[test]
-fn FindSeparator_NoColon_001() {
-    let input = "just-plain-text no separator";
-    let pos = find_name_separator(input, "stdio");
-    assert!(pos.is_none());
+fn InferType_Default_001() {
+    let config = json!({});
+    assert_eq!(infer_server_type(&config), "stdio");
 }
 
-// 跳过 :// 不在 URL 协议冒号处分割
+// 非 JSON 对象 → stdio（兜底）
 #[test]
-fn FindSeparator_UrlPrefix_001() {
-    let input = "server: https://example.com/path (HTTP)";
-    let pos = find_name_separator(input, "HTTP");
-    assert!(pos.is_some());
-    let idx = pos.unwrap();
-    assert_eq!(&input[..idx], "server");
+fn InferType_NonObject_001() {
+    let config = json!("string");
+    assert_eq!(infer_server_type(&config), "stdio");
+}
+
+// ==================== expand_env_vars ====================
+
+// extra_env 中的变量被展开
+#[test]
+fn ExpandEnvVars_ExtraEnv_001() {
+    let mut extra = HashMap::new();
+    extra.insert("CLAUDE_PLUGIN_ROOT".to_string(), "C:/plugins/paper".to_string());
+    let result = expand_env_vars("${CLAUDE_PLUGIN_ROOT}/sub", Some(&extra));
+    assert_eq!(result, "C:/plugins/paper/sub");
+}
+
+// ${VAR:-default} 使用默认值
+#[test]
+fn ExpandEnvVars_Default_001() {
+    let result = expand_env_vars("${NONEXISTENT_VAR:-fallback}", None);
+    assert_eq!(result, "fallback");
+}
+
+// 不含变量的字符串不变
+#[test]
+fn ExpandEnvVars_NoVars_001() {
+    let result = expand_env_vars("plain string", None);
+    assert_eq!(result, "plain string");
+}
+
+// 多个变量同时展开
+#[test]
+fn ExpandEnvVars_Multiple_001() {
+    std::env::set_var("CC_BOX_TEST_A", "hello");
+    let mut extra = HashMap::new();
+    extra.insert("CC_BOX_TEST_B".to_string(), "world".to_string());
+    let result = expand_env_vars("${CC_BOX_TEST_A}-${CC_BOX_TEST_B}", Some(&extra));
+    assert_eq!(result, "hello-world");
+    std::env::remove_var("CC_BOX_TEST_A");
+}
+
+// plugin scope 中 CLAUDE_PLUGIN_ROOT 被展开到 args
+#[test]
+fn ParseMcpEntry_PluginEnvExpand_001() {
+    let config = json!({
+        "command": "uv",
+        "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/paper-search", "mcp_server.py"]
+    });
+    let mut extra = HashMap::new();
+    extra.insert("CLAUDE_PLUGIN_ROOT".to_string(), "C:/plugins/paper-tool".to_string());
+    let result = parse_mcp_server_entry("plugin:paper-tool:paper", &config, "plugin", Some(&extra));
+    assert!(result.is_some());
+    let info = result.unwrap();
+    let args = info.args.unwrap();
+    assert_eq!(args[2], "C:/plugins/paper-tool/paper-search");
 }
 
 // ==================== parse_agents_list_output ====================

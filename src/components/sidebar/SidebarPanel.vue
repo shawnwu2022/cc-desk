@@ -11,6 +11,8 @@
         @new-session="$emit('newSession')"
         @resume-session="$emit('resumeSession', $event)"
         @close-tab="$emit('closeTab', $event)"
+        @close-all-tabs="$emit('closeAllTabs')"
+        @close-other-tabs="$emit('closeOtherTabs')"
       />
 
       <!-- Skills 面板 -->
@@ -61,6 +63,8 @@ defineEmits<{
   newSession: []
   resumeSession: [sessionId: string]
   closeTab: [tabId: string]
+  closeAllTabs: []
+  closeOtherTabs: []
 }>()
 </script>
 

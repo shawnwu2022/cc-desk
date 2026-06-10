@@ -208,6 +208,8 @@ export default {
   newSessionTitle: '新建会话 (Alt+N)',
   restartSessionTitle: '重启会话 (Alt+R)',
   waitingForSessionId: '等待会话 ID...',
+  closeAllTabs: '关闭所有',
+  closeOtherTabs: '关闭其他',
 
   // Session item
   rename: '重命名',

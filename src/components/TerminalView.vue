@@ -19,6 +19,8 @@
       @new-session="handleNewSession"
       @resume-session="handleResumeSession"
       @close-tab="handleCloseTab"
+      @close-all-tabs="handleCloseAllTabs"
+      @close-other-tabs="handleCloseOtherTabs"
     />
 
     <!-- 主内容区 -->
@@ -239,6 +241,22 @@ function handleResumeSession(sessionId: string) {
 // 关闭 Tab
 function handleCloseTab(tabId: string) {
   sessionStore.closeTab(tabId)
+}
+
+// 关闭所有 Tab
+function handleCloseAllTabs() {
+  const cwd = appStore.cwd
+  if (cwd) {
+    sessionStore.closeAllTabs(cwd)
+  }
+}
+
+// 关闭其他 Tab
+function handleCloseOtherTabs() {
+  const activeId = sessionStore.activeTabId
+  if (activeId) {
+    sessionStore.closeOtherTabs(activeId)
+  }
 }
 
 // PTY 启动回调
