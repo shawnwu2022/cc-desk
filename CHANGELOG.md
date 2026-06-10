@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.9] - 2026-06-10
+
+### Features
+- Add closeAllTabs/closeOtherTabs buttons to session panel
+- Add plugin scope MCP support with env var expansion
+
+### Improvements
+- Refactor MCP loading from subprocess to direct JSON file reading
+- Faster MCP panel loading without spawning claude process
+
+### Fixed
+- Fix MCP stdio client params null issue
+- Fix MCP response id matching loop
+- Add env injection support for stdio MCP servers
+
 ## [0.10.8] - 2026-06-03
 
 ### Fixed
