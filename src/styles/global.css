@@ -75,6 +75,118 @@
   --shadow-xl: 0 8px 32px rgba(26, 24, 22, 0.12);
 }
 
+/* ============================================
+ * CC-Box 暗色主题：工匠终端
+ * 温暖墨蓝 + 璀璨琥珀 · 深炭基底 · 温暖暗调
+ * ============================================ */
+[data-theme="dark"] {
+  /* GUI 层 — 温暖深炭基底（微棕倾向） */
+  --bg-primary: #1c1a17;       /* 主背景：温暖深炭 */
+  --bg-secondary: #252220;     /* 次级背景：柔和暗灰 */
+  --bg-tertiary: #302d2a;      /* 第三层：卡片/悬浮 */
+  --bg-hover: #3a3734;         /* 悬浮背景 */
+
+  /* 终端层 — 深灰基底 + 浅色文字 */
+  --terminal-bg: #1e1e1e;      /* 终端背景 */
+  --terminal-bg-alt: #252526;  /* 终端次级背景 */
+  --terminal-fg: #d4d4d4;      /* 终端文字 */
+  --terminal-fg-muted: #8a8a8a;/* 终端次要文字 */
+  --terminal-cursor: var(--accent-gold);  /* 终端光标：琥珀金 */
+
+  /* 文字层级 — 温暖浅色系列 */
+  --text-primary: #f8f6f3;     /* 主文字：温暖米白 */
+  --text-secondary: #c4c0b8;   /* 次级文字：暖灰 */
+  --text-tertiary: #7a7568;    /* 辅助文字：暗暖灰 */
+  --text-inverse: #1c1a17;     /* 反色文字 */
+
+  /* 边框系统 */
+  --border-color: #3a3734;     /* 默认边框 */
+  --border-light: #302d2a;     /* 轻边框 */
+  --border-dark: #4a4640;      /* 深边框 */
+
+  /* 强调色 — 温暖墨蓝 + 璀璨琥珀 */
+  --accent-primary: #4a7aad;   /* 主强调：温暖墨蓝（微紫调） */
+  --accent-secondary: #6a9acd; /* 次级墨蓝：更明亮 */
+  --accent-gold: #f0d4a8;      /* 琥珀金：璀璨 */
+  --accent-gold-light: #fce8d0;/* 浅琥珀：温暖奶色 */
+  --accent-gold-dark: #d4b890; /* 深琥珀：稳重 */
+
+  /* 交互状态 */
+  --hover-bg: rgba(74, 122, 173, 0.12);  /* 墨蓝悬浮 */
+  --active-bg: rgba(74, 122, 173, 0.20); /* 墨蓝激活 */
+  --selected-bg: rgba(240, 212, 168, 0.15); /* 琥珀选中 */
+  --selected-border: var(--accent-gold);
+
+  /* 聚焦状态 */
+  --focus-ring: var(--accent-primary);
+  --focus-ring-gold: var(--accent-gold);
+
+  /* 状态语义色（更饱和，更醒目） */
+  --status-success: #5dad8e;   /* 成功：明亮墨绿 */
+  --status-warning: #f0b460;   /* 警告：明亮琥珀 */
+  --status-error: #e8705a;     /* 错误：温暖赭红 */
+  --status-info: #6a9acd;      /* 信息：明亮墨蓝 */
+
+  /* 阴影系统 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-xl: 0 8px 32px rgba(0, 0, 0, 0.55);
+}
+
+/* 暗色主题：所有图标反色（通用规则） */
+[data-theme="dark"] img {
+  filter: invert(0.85) sepia(0.05) hue-rotate(180deg);
+}
+
+/* 暗色主题：PNG 图片（应用图标）不反色 */
+[data-theme="dark"] img[src*="app-icon"] {
+  filter: none;
+}
+
+/* 暗色主题：已有专用滤镜的按钮，覆盖通用规则 */
+[data-theme="dark"] .empty-state-btn img {
+  filter: brightness(0) invert(1);
+}
+[data-theme="dark"] .spinning img {
+  filter: brightness(0) invert(1);
+}
+
+/* 暗色主题：激活状态图标 → 琥珀金 */
+[data-theme="dark"] .icon-btn.active img {
+  filter: invert(0.75) sepia(0.3) hue-rotate(340deg) saturate(1.5) brightness(1.1);
+}
+
+/* 暗色主题：悬浮状态图标提亮 */
+[data-theme="dark"] button:hover > img,
+[data-theme="dark"] .group-header:hover > img,
+[data-theme="dark"] .item-header:hover > img {
+  filter: invert(0.95);
+}
+
+/* 暗色主题：搜索框图标稍微暗一些 */
+[data-theme="dark"] .search-icon {
+  filter: invert(0.65);
+}
+
+/* 暗色主题：类型标签适配（浅色背景 → 暗色半透明） */
+[data-theme="dark"] .agent-model {
+  background: rgba(74, 122, 173, 0.2);
+  color: var(--accent-secondary);
+}
+[data-theme="dark"] .component-tag.mcp {
+  background: rgba(74, 122, 173, 0.2);
+  color: var(--accent-secondary);
+}
+[data-theme="dark"] .component-tag.skills {
+  background: rgba(240, 180, 96, 0.2);
+  color: var(--status-warning);
+}
+[data-theme="dark"] .component-tag.agents {
+  background: rgba(160, 100, 200, 0.2);
+  color: #c490e0;
+}
+
 * {
   margin: 0;
   padding: 0;

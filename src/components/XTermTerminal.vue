@@ -137,6 +137,32 @@ const lightTheme = {
   brightWhite: '#ffffff'
 }
 
+// 暗色终端主题
+const darkTheme = {
+  background: '#1e1e1e',
+  foreground: '#d4d4d4',
+  cursor: '#f0d4a8',
+  cursorAccent: '#1e1e1e',
+  selectionBackground: '#4a7aad40',
+  selectionForeground: '#d4d4d4',
+  black: '#1c1a17',
+  red: '#e8705a',
+  green: '#5dad8e',
+  yellow: '#f0b460',
+  blue: '#4a7aad',
+  magenta: '#b8956a',
+  cyan: '#5dad8e',
+  white: '#c4c0b8',
+  brightBlack: '#3a3734',
+  brightRed: '#f0886e',
+  brightGreen: '#7abd9e',
+  brightYellow: '#f8ca80',
+  brightBlue: '#6a9acd',
+  brightMagenta: '#d0a87e',
+  brightCyan: '#7abd9e',
+  brightWhite: '#f8f6f3'
+}
+
 // 设置 Terminal DOM 元素引用
 function setTerminalEl(tabId: string, el: HTMLElement | null) {
   if (el) {
@@ -168,7 +194,7 @@ function createTerminal(tabId: string): Terminal {
     lineHeight: 1.2,
     cursorBlink: true,
     cursorStyle: 'bar',
-    theme: lightTheme,
+    theme: appStore.theme === 'dark' ? darkTheme : lightTheme,
     allowProposedApi: true,
     macOptionIsMeta: true,
     scrollback: 10000,
@@ -349,6 +375,14 @@ watch(() => props.fontSize, (newSize) => {
       instance.term.options.fontSize = newSize
       instance.fitAddon.fit()
     }
+  }
+})
+
+// 监听主题变化，更新所有终端实例
+watch(() => appStore.theme, (newTheme) => {
+  const themeConfig = newTheme === 'dark' ? darkTheme : lightTheme
+  for (const instance of terminalInstances.values()) {
+    instance.term.options.theme = themeConfig
   }
 })
 
@@ -666,7 +700,7 @@ defineExpose({
   height: 100%;
   padding: 8px;
   box-sizing: border-box;
-  background: #f8f9fa;
+  background: var(--terminal-bg);
   border-radius: 8px;
   position: relative;
   overflow: hidden;
@@ -706,7 +740,7 @@ defineExpose({
 }
 
 .terminal-wrapper :deep(.xterm-viewport::-webkit-scrollbar-thumb) {
-  background: #d1d5db;
+  background: var(--border-dark);
   border-radius: 4px;
 }
 

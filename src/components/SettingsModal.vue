@@ -278,7 +278,7 @@ function openDocs() {
 }
 
 .option-flag.warning {
-  color: #e74c3c;
+  color: var(--status-error);
 }
 
 .text-option {

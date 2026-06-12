@@ -213,7 +213,7 @@ onUnmounted(() => {
   height: 100%;
 }
 
-.sessions-panel :deep(.action-btn) {
+.sessions-panel :deep(.action-btn:not(.with-hint)) {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -226,12 +226,12 @@ onUnmounted(() => {
   padding: 0;
 }
 
-.sessions-panel :deep(.action-btn img) {
+.sessions-panel :deep(.action-btn:not(.with-hint) img) {
   width: 16px;
   height: 16px;
 }
 
-.sessions-panel :deep(.action-btn:hover) {
+.sessions-panel :deep(.action-btn:not(.with-hint):hover) {
   color: var(--text-primary);
 }
 
@@ -421,8 +421,8 @@ onUnmounted(() => {
 }
 
 .option-flag.warning {
-  color: #e74c3c;
-  border-color: rgba(231, 76, 60, 0.3);
+  color: var(--status-error);
+  border-color: rgba(232, 112, 90, 0.3);
 }
 
 .text-option {

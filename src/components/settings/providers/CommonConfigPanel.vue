@@ -46,9 +46,11 @@ import { json, jsonParseLinter } from '@codemirror/lang-json'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { linter } from '@codemirror/lint'
 import { EditorView } from '@codemirror/view'
+import { useAppStore } from '@/stores/app'
 import type { CommonConfig } from '@/types/provider'
 
 const { t } = useI18n()
+const appStore = useAppStore()
 
 const props = defineProps<{
   config: CommonConfig
@@ -71,7 +73,8 @@ const cmExtensions = computed(() => {
       '.cm-gutters': { fontFamily: 'var(--font-mono)' },
     }),
   ]
-  if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+  // 使用应用主题而非系统偏好
+  if (appStore.theme === 'dark') {
     exts.push(oneDark)
   }
   return exts

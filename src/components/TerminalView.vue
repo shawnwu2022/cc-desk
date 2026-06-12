@@ -325,7 +325,7 @@ function handlePtyStarted(tabId: string, _ptyId: string) {
   padding: 12px 24px;
   border: 1px solid var(--accent-primary);
   background: var(--accent-primary);
-  color: var(--text-inverse);
+  color: #fff;
   cursor: pointer;
   border-radius: var(--radius-lg);
   font-size: 14px;

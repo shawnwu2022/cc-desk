@@ -156,9 +156,11 @@ import { json, jsonParseLinter } from '@codemirror/lang-json'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { linter } from '@codemirror/lint'
 import { EditorView } from '@codemirror/view'
+import { useAppStore } from '@/stores/app'
 import type { Provider, CommonConfig } from '@/types/provider'
 
 const { t } = useI18n()
+const appStore = useAppStore()
 
 const props = defineProps<{
   provider: Provider
@@ -204,7 +206,8 @@ const cmExtensions = computed(() => {
       '.cm-gutters': { fontFamily: 'var(--font-mono)' },
     }),
   ]
-  if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+  // 使用应用主题而非系统偏好
+  if (appStore.theme === 'dark') {
     exts.push(oneDark)
   }
   return exts
@@ -601,7 +604,7 @@ function handleSave() {
 .btn-confirm-add {
   padding: 5px 10px;
   background: transparent;
-  color: #27ae60;
+  color: var(--status-success);
   border: 1px solid var(--border-color);
   border-radius: 4px;
   font-size: 13px;

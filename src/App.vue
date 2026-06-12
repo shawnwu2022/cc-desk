@@ -255,6 +255,12 @@ async function retryChecks() {
 }
 
 function initAfterChecks() {
+  // 应用主题到 DOM（loadAppConfig 已在 onMounted 中调用并设置 theme 值）
+  const html = document.documentElement
+  html.setAttribute('data-theme', appStore.theme)
+  html.classList.remove('light', 'dark')
+  html.classList.add(appStore.theme)
+
   // 并行启动所有独立初始化任务
   appStore.loadCache().then(() => {
     if (appStore.cachedProjects.length > 0 && currentView.value === 'welcome') {

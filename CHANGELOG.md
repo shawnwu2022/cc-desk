@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.0] - 2026-06-12
+
+### Features
+- Add dark theme support with warm color palette
+- Theme syncs across GUI, terminal (xterm.js), and CodeMirror editors
+- Theme preference persists to config file
+- SVG icons auto-invert colors in dark mode
+- Enable dark theme option in Settings > Appearance
+
+### Fixed
+- Fix hardcoded colors in SVG icons (agents, mcp) to support theming
+- Fix session panel action buttons text color in dark mode
+- Fix empty-state button text color consistency
+
 ## [0.10.9] - 2026-06-10
 
 ### Features

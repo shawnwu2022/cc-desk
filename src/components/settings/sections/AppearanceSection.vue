@@ -35,8 +35,8 @@
           </div>
           <span>{{ t('light') }}</span>
         </label>
-        <label class="theme-card" :class="{ active: theme === 'dark', disabled: true }">
-          <input type="radio" v-model="theme" value="dark" disabled />
+        <label class="theme-card" :class="{ active: theme === 'dark' }">
+          <input type="radio" v-model="theme" value="dark" />
           <div class="theme-preview dark-preview">
             <div class="preview-bar"></div>
             <div class="preview-lines">
@@ -44,7 +44,7 @@
               <div class="preview-line short"></div>
             </div>
           </div>
-          <span>{{ t('dark') }} <small>(Soon)</small></span>
+          <span>{{ t('dark') }}</span>
         </label>
       </div>
     </div>

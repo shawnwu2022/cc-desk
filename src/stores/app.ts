@@ -186,6 +186,12 @@ export const useAppStore = defineStore('app', () => {
 
   function setTheme(newTheme: string) {
     theme.value = newTheme
+    // 同步应用到 DOM
+    const html = document.documentElement
+    html.setAttribute('data-theme', newTheme)
+    html.classList.remove('light', 'dark')
+    html.classList.add(newTheme)
+    // 持久化
     updateAppConfig({ theme: newTheme })
   }
 
