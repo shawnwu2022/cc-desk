@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1] - 2026-06-16
+
+### Fixed
+- Fix terminal rendering glitches (floating characters, ghost overlap, misaligned CJK text) by enabling WebGL renderer (@xterm/addon-webgl)
+- Restore per-platform font fallback: declare monospace CJK fonts on Windows/Linux to prevent cell-width miscalculation
+- Remove padding interference on .xterm element that caused FitAddon column count errors
+
 ## [0.11.0] - 2026-06-12
 
 ### Features

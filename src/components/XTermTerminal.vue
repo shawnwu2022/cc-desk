@@ -16,11 +16,13 @@
 import { ref, reactive, watch, onMounted, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebglAddon } from '@xterm/addon-webgl'
 import { debounce } from 'lodash-es'
 import '@xterm/xterm/css/xterm.css'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useHookStore } from '@/stores/hook'
+import { isMac } from '@/utils/platform'
 import {
   ptySpawn,
   ptyInput,
@@ -170,6 +172,7 @@ function setTerminalEl(tabId: string, el: HTMLElement | null) {
     const instance = terminalInstances.get(tabId)
     if (instance && !instance.term.element) {
       instance.term.open(el)
+      loadWebglAddon(instance.term)
       if (tabId === currentDisplayTabId.value) {
         requestAnimationFrame(() => instance.fitAddon.fit())
       }
@@ -186,10 +189,30 @@ const fitCurrentTerminal = debounce(() => {
   }
 }, 50)
 
+// 按平台选择字体：macOS 保留纯英文避免 PingFang SC 等 proportional 字体破坏 cell 宽度；
+// Windows/Linux 显式声明等宽 CJK 字体，避免中文回退到非等宽字体导致字符错位
+function pickFontFamily(): string {
+  if (isMac) {
+    return 'Cascadia Code, Fira Code, JetBrains Mono, Consolas, monospace'
+  }
+  return '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "Microsoft YaHei", "Noto Sans CJK SC", monospace'
+}
+
+// 在 term.open(el) 之后加载 WebGL addon，失败时静默回退到默认 DOM 渲染器
+function loadWebglAddon(term: Terminal) {
+  try {
+    const addon = new WebglAddon()
+    addon.onContextLoss(() => addon.dispose())
+    term.loadAddon(addon)
+  } catch (err) {
+    console.warn('[XTerm] WebGL addon unavailable, using DOM renderer:', err)
+  }
+}
+
 // 创建新的 Terminal 实例
 function createTerminal(tabId: string): Terminal {
   const term = new Terminal({
-    fontFamily: 'Cascadia Code, Fira Code, Consolas, monospace',
+    fontFamily: pickFontFamily(),
     fontSize: props.fontSize ?? 12,
     lineHeight: 1.2,
     cursorBlink: true,
@@ -437,6 +460,7 @@ async function createTerminalForTab(tabId: string, ptyId: string) {
     if (!isActive) el.style.display = 'block'
 
     term.open(el)
+    loadWebglAddon(term)
 
     if (!isActive) {
       requestAnimationFrame(() => {
@@ -501,6 +525,7 @@ async function startTab(tabId: string) {
       const el = await waitForElement(tabId)
       if (el) {
         term.open(el)
+        loadWebglAddon(term)
         requestAnimationFrame(() => fitAddon.fit())
       }
 
@@ -562,6 +587,7 @@ async function restartTab(tabId: string) {
       const el = await waitForElement(tabId)
       if (el) {
         term.open(el)
+        loadWebglAddon(term)
         requestAnimationFrame(() => fitAddon.fit())
       }
 
@@ -717,7 +743,7 @@ defineExpose({
   left: 0;
   width: 100%;
   height: 100%;
-  padding: 8px;
+  padding: 12px;
   box-sizing: border-box;
   display: none;
 }
@@ -728,7 +754,6 @@ defineExpose({
 
 .terminal-wrapper :deep(.xterm) {
   height: 100%;
-  padding: 4px;
 }
 
 .terminal-wrapper :deep(.xterm-viewport) {
