@@ -190,4 +190,119 @@ describe('update store', () => {
       expect(store.claudeCliDownloadError).toBe('Network error')
     })
   })
+
+  // ============================================
+  // 本地 Claude 版本（启动检查）
+  // ============================================
+  describe('installedClaudeVersion', () => {
+    // 初始状态为 null
+    it('InstalledClaude_Initial_001', () => {
+      const store = useUpdateStore()
+      expect(store.installedClaudeVersion).toBeNull()
+    })
+
+    // 设置已安装版本
+    it('InstalledClaude_Set_001', () => {
+      const store = useUpdateStore()
+      store.setInstalledClaudeVersion('1.0.16')
+      expect(store.installedClaudeVersion).toBe('1.0.16')
+    })
+
+    // 设置 null（未安装）
+    it('InstalledClaude_SetNull_001', () => {
+      const store = useUpdateStore()
+      store.setInstalledClaudeVersion('1.0.16')
+      store.setInstalledClaudeVersion(null)
+      expect(store.installedClaudeVersion).toBeNull()
+    })
+  })
+
+  // ============================================
+  // 历史版本下载状态
+  // ============================================
+  describe('historyDownloads', () => {
+    // 初始状态空 Map
+    it('HistoryDownload_Initial_001', () => {
+      const store = useUpdateStore()
+      expect(store.historyDownloads.size).toBe(0)
+      expect(store.getHistoryDownload('1.0.17')).toBeUndefined()
+    })
+
+    // setHistoryDownload 创建新条目
+    it('HistoryDownload_Set_001', () => {
+      const store = useUpdateStore()
+      store.setHistoryDownload('1.0.17', { state: 'downloading', progress: 50, message: '下载中', savedPath: '', error: '' })
+      const d = store.getHistoryDownload('1.0.17')
+      expect(d).toBeDefined()
+      expect(d?.state).toBe('downloading')
+      expect(d?.progress).toBe(50)
+    })
+
+    // setHistoryDownload 增量更新
+    it('HistoryDownload_Patch_001', () => {
+      const store = useUpdateStore()
+      store.setHistoryDownload('1.0.17', { state: 'downloading', progress: 0, message: '', savedPath: '', error: '' })
+      store.setHistoryDownload('1.0.17', { progress: 80 })
+      const d = store.getHistoryDownload('1.0.17')
+      expect(d?.progress).toBe(80)
+      expect(d?.state).toBe('downloading')
+    })
+
+    // 完成状态保留 savedPath
+    it('HistoryDownload_Done_001', () => {
+      const store = useUpdateStore()
+      store.setHistoryDownload('1.0.17', { state: 'done', progress: 100, savedPath: 'C:\\Downloads\\claude-1.0.17.exe', message: '', error: '' })
+      const d = store.getHistoryDownload('1.0.17')
+      expect(d?.state).toBe('done')
+      expect(d?.savedPath).toContain('claude-1.0.17.exe')
+    })
+
+    // resetHistoryDownload 删除条目
+    it('HistoryDownload_Reset_001', () => {
+      const store = useUpdateStore()
+      store.setHistoryDownload('1.0.17', { state: 'done', progress: 100, savedPath: 'p', message: '', error: '' })
+      store.resetHistoryDownload('1.0.17')
+      expect(store.getHistoryDownload('1.0.17')).toBeUndefined()
+    })
+
+    // 取消状态：从 downloading 切换到 cancelled
+    it('HistoryDownload_Cancelled_001', () => {
+      const store = useUpdateStore()
+      store.setHistoryDownload('1.0.17', { state: 'downloading', progress: 60, message: '', savedPath: '', error: '' })
+      store.setHistoryDownload('1.0.17', { state: 'cancelled', progress: 0, message: '已取消' })
+      const d = store.getHistoryDownload('1.0.17')
+      expect(d?.state).toBe('cancelled')
+      expect(d?.progress).toBe(0)
+      expect(d?.message).toBe('已取消')
+    })
+
+    // 取消后可重新发起：cancelled → downloading
+    it('HistoryDownload_Cancelled_To_Downloading_001', () => {
+      const store = useUpdateStore()
+      store.setHistoryDownload('1.0.17', { state: 'cancelled', progress: 0, message: '', savedPath: '', error: '' })
+      store.setHistoryDownload('1.0.17', { state: 'downloading', progress: 0, message: '重新下载', savedPath: '', error: '' })
+      const d = store.getHistoryDownload('1.0.17')
+      expect(d?.state).toBe('downloading')
+    })
+
+    // 安装中状态：downloading → installing
+    it('HistoryDownload_Installing_001', () => {
+      const store = useUpdateStore()
+      store.setHistoryDownload('1.0.17', { state: 'downloading', progress: 100, savedPath: 'C:\\Downloads\\c.exe', message: '', error: '' })
+      store.setHistoryDownload('1.0.17', { state: 'installing', progress: 0, message: '正在安装' })
+      const d = store.getHistoryDownload('1.0.17')
+      expect(d?.state).toBe('installing')
+      expect(d?.savedPath).toBe('C:\\Downloads\\c.exe')
+    })
+
+    // 安装完成：installing → done，savedPath 保留
+    it('HistoryDownload_Installing_To_Done_001', () => {
+      const store = useUpdateStore()
+      store.setHistoryDownload('1.0.17', { state: 'installing', progress: 0, savedPath: 'p', message: '', error: '' })
+      store.setHistoryDownload('1.0.17', { state: 'done', progress: 100, message: '安装完成' })
+      const d = store.getHistoryDownload('1.0.17')
+      expect(d?.state).toBe('done')
+      expect(d?.savedPath).toBe('p')
+    })
+  })
 })

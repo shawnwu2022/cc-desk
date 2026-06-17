@@ -15,9 +15,8 @@ export const useSidebarStore = defineStore('sidebar', () => {
   const updateInfo = ref<UpdateInfo | null>(null)
   const claudeCliUpdateInfo = ref<ClaudeCliUpdateInfo | null>(null)
   const updateAvailable = computed(() => {
-    const appUpdate = updateInfo.value?.hasUpdate ?? false
-    const cliUpdate = claudeCliUpdateInfo.value?.hasUpdate ?? false
-    return appUpdate || cliUpdate
+    // 仅由 CC-Box 自身更新驱动（启动不再检测 Claude CLI 更新）
+    return updateInfo.value?.hasUpdate ?? false
   })
 
   function setUpdateInfo(info: UpdateInfo) {

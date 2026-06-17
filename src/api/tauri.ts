@@ -24,6 +24,8 @@ import type {
   UpdateInfo,
   DownloadProgress,
   ClaudeCliUpdateInfo,
+  ClaudeVersionEntry,
+  ClaudeVersions,
   HomeData,
   CheckResult,
   HookEventPayload,
@@ -49,6 +51,8 @@ export type {
   UpdateInfo,
   DownloadProgress,
   ClaudeCliUpdateInfo,
+  ClaudeVersionEntry,
+  ClaudeVersions,
 };
 
 // ============================================
@@ -315,6 +319,27 @@ export const onInstallProgress = (callback: (progress: InstallProgress) => void)
 
 export const checkClaudeCliUpdate = (): Promise<ClaudeCliUpdateInfo> =>
   invoke<ClaudeCliUpdateInfo>('check_claude_cli_update');
+
+// 获取本地已安装 Claude CLI 版本号（无 HTTP）
+export const getInstalledClaudeVersion = (): Promise<string | null> =>
+  invoke<string | null>('get_installed_claude_version');
+
+// 拉取所有支持的 Claude CLI 历史版本
+export const listClaudeVersions = (): Promise<ClaudeVersions> =>
+  invoke<ClaudeVersions>('list_claude_versions');
+
+// 下载指定历史版本的 Claude CLI（返回本地保存路径）
+export const downloadClaudeVersion = (version: string): Promise<string> =>
+  invoke<string>('download_claude_version', { version });
+
+// 取消指定历史版本的下载（返回是否找到活动下载并标记取消）
+export const cancelClaudeVersionDownload = (version: string): Promise<boolean> =>
+  invoke<boolean>('cancel_claude_download', { version });
+
+// 把本地下载好的 Claude CLI 覆盖安装到 ~/.local/bin/
+// 如果 claude 进程在运行，promise 会 reject 一个 'claude-running' 字符串
+export const installClaudeVersion = (sourcePath: string, version: string): Promise<string> =>
+  invoke<string>('install_claude_version', { sourcePath, version });
 
 export const checkClaudeRunning = (): Promise<boolean> =>
   invoke<boolean>('check_claude_running');

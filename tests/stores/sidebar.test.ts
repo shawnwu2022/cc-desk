@@ -74,11 +74,11 @@ describe('sidebar store', () => {
       expect(store.updateAvailable).toBe(true)
     })
 
-    // 仅 Claude CLI 更新时 badge 显示
-    it('Badge_CliUpdate_001', () => {
+    // Claude CLI 更新不再驱动 badge（启动检查已改为只读本地版本，不对比 OSS）
+    it('Badge_CliUpdate_Ignored_001', () => {
       const store = useSidebarStore()
       store.setClaudeCliUpdateInfo({ installedVersion: '1.0.30', latestVersion: '1.0.33', hasUpdate: true, notInstalled: false })
-      expect(store.updateAvailable).toBe(true)
+      expect(store.updateAvailable).toBe(false)
     })
 
     // 两者都有更新时 badge 显示

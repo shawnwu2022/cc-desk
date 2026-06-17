@@ -7,15 +7,25 @@
 //! - Git: %LOCALAPPDATA%\PortableGit\bin\bash.exe
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 #[cfg(not(target_os = "windows"))]
 use std::process::Command;
 use tauri::{AppHandle, Emitter};
 
 /// OSS 配置
 const OSS_BASE_URL: &str = "https://cc-box.oss-cn-beijing.aliyuncs.com";
+
+/// 正在进行的 Claude 历史版本下载：version → 取消标志
+///
+/// key 为 Claude CLI version（如 "2.1.177"），用于精确取消某次下载。
+/// 同一版本同时只允许一个活动下载；新发起会复用现有 flag。
+static ACTIVE_CLAUDE_DOWNLOADS: LazyLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 安装路径
 #[cfg(target_os = "windows")]
@@ -53,6 +63,22 @@ pub struct PlatformInfo {
     pub size: u64,
 }
 
+/// versions.json 中的单个版本条目
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ClaudeVersionEntry {
+    pub version: String,
+    pub release_date: String,
+    pub platforms: std::collections::HashMap<String, PlatformInfo>,
+}
+
+/// versions.json 顶层结构
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ClaudeVersions {
+    pub latest: String,
+    pub updated_at: String,
+    pub versions: Vec<ClaudeVersionEntry>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GitLatestInfo {
     pub version: String,
@@ -86,13 +112,30 @@ pub struct DownloadProgress {
 // ============================================
 
 /// 从 URL 下载文件（无代理，直接访问 OSS）
-fn download_file(url: &str, output_path: &Path, app: &AppHandle, item: &str) -> io::Result<()> {
+///
+/// `cancel_flag` 非 None 时，每次循环都会检查；为 true 时立即停止下载，
+/// 删除半成品文件，返回 `io::ErrorKind::Interrupted` 错误。
+fn download_file(
+    url: &str,
+    output_path: &Path,
+    app: &AppHandle,
+    item: &str,
+    cancel_flag: Option<&AtomicBool>,
+) -> io::Result<()> {
     log::info!("[Installer] Downloading {} from {}", item, url);
 
     // 发送进度事件
     emit_progress(app, item, "downloading", 0, "开始下载...");
 
-    let mut response = reqwest::blocking::get(url)
+    // 显式超时，避免网络挂起时前端 invoke 永久 pending
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+    let mut response = client
+        .get(url)
+        .send()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
     if !response.status().is_success() {
@@ -108,6 +151,17 @@ fn download_file(url: &str, output_path: &Path, app: &AppHandle, item: &str) -> 
     let mut buffer = vec![0u8; 8192];
 
     loop {
+        // 检查取消标志
+        if let Some(flag) = cancel_flag {
+            if flag.load(Ordering::SeqCst) {
+                // 同步刷新并关闭文件后再删除，避免 Windows 上文件占用
+                drop(file);
+                let _ = fs::remove_file(output_path);
+                emit_progress(app, item, "cancelled", 0, "已取消");
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "Download cancelled"));
+            }
+        }
+
         let bytes_read = response.read(&mut buffer)?;
         if bytes_read == 0 {
             break;
@@ -127,6 +181,7 @@ fn download_file(url: &str, output_path: &Path, app: &AppHandle, item: &str) -> 
         }
     }
 
+    file.flush()?;
     emit_progress(app, item, "downloading", 100, "下载完成");
     log::info!("[Installer] Downloaded {} bytes", downloaded);
 
@@ -218,7 +273,7 @@ pub async fn download_and_install_claude(app: AppHandle) -> Result<(), String> {
     emit_progress(&app, "claude", "downloading", 0, "开始下载...");
     let claude_path_clone = claude_path.clone();
     let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || download_file(&download_url, &claude_path_clone, &app_clone, "claude"))
+    tokio::task::spawn_blocking(move || download_file(&download_url, &claude_path_clone, &app_clone, "claude", None))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
@@ -379,7 +434,7 @@ pub async fn download_and_install_git(app: AppHandle) -> Result<(), String> {
     emit_progress(&app, "git", "downloading", 0, "开始下载...");
     let archive_path_clone = archive_path.clone();
     let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || download_file(&download_url, &archive_path_clone, &app_clone, "git"))
+    tokio::task::spawn_blocking(move || download_file(&download_url, &archive_path_clone, &app_clone, "git", None))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
@@ -611,8 +666,8 @@ pub struct ClaudeCliUpdateInfo {
     pub not_installed: bool,
 }
 
-/// 获取已安装的 Claude CLI 版本号
-fn get_installed_claude_version() -> Option<String> {
+/// 获取已安装的 Claude CLI 版本号（纯本地，无 HTTP）
+pub(crate) fn read_local_claude_version() -> Option<String> {
     let exe_name = if cfg!(target_os = "windows") {
         "claude.exe"
     } else {
@@ -748,7 +803,7 @@ pub(crate) fn is_newer_version(latest: &str, current: &str) -> bool {
 #[tauri::command]
 pub async fn check_claude_cli_update() -> Result<ClaudeCliUpdateInfo, String> {
     // 1. 获取已安装版本
-    let installed = tokio::task::spawn_blocking(|| get_installed_claude_version())
+    let installed = tokio::task::spawn_blocking(|| read_local_claude_version())
         .await
         .map_err(|e| e.to_string())?;
 
@@ -832,4 +887,430 @@ pub async fn check_installed_versions() -> Result<std::collections::HashMap<Stri
     }
 
     Ok(result)
+}
+
+// ============================================
+// Claude CLI 版本列表与历史版本下载
+// ============================================
+
+/// 获取本地已安装的 Claude CLI 版本号（轻量命令，纯本地，无 HTTP）
+#[tauri::command]
+pub async fn get_installed_claude_version() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| read_local_claude_version())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 拉取 OSS 上的 Claude versions.json（同步实现，由 spawn_blocking 调用）
+fn fetch_claude_versions() -> io::Result<ClaudeVersions> {
+    let url = format!("{}/deps/claude/versions.json", OSS_BASE_URL);
+    log::info!("[Installer] Fetching Claude versions.json from {}", url);
+
+    // 显式设置 15 秒超时，避免网络挂起导致前端 invoke 永久 pending
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+    if !response.status().is_success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("HTTP error: {}", response.status()),
+        ));
+    }
+
+    let versions: ClaudeVersions = response
+        .json()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+    log::info!(
+        "[Installer] Got {} Claude versions, latest: {}",
+        versions.versions.len(),
+        versions.latest
+    );
+    Ok(versions)
+}
+
+/// 从 OSS 拉取所有支持的 Claude CLI 历史版本列表
+#[tauri::command]
+pub async fn list_claude_versions() -> Result<ClaudeVersions, String> {
+    // 必须用 spawn_blocking 包装 reqwest::blocking，否则会阻塞 tokio runtime
+    tokio::task::spawn_blocking(fetch_claude_versions)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// 下载动作决策（纯函数，便于单测）
+///
+/// 综合考虑"本地缓存是否可用"和"是否被取消"，给出下一步动作：
+/// - `Cancelled`：优先级最高，即使有缓存也直接退出
+/// - `ReuseCache`：缓存可用，跳过下载
+/// - `Download`：需要发起下载
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DownloadAction {
+    Download,
+    ReuseCache,
+    Cancelled,
+}
+
+pub(crate) fn decide_download_action(
+    cache_exists: bool,
+    cache_size: u64,
+    expected_size: u64,
+    cancelled: bool,
+) -> DownloadAction {
+    if cancelled {
+        return DownloadAction::Cancelled;
+    }
+    if cache_exists && cache_size == expected_size {
+        DownloadAction::ReuseCache
+    } else {
+        DownloadAction::Download
+    }
+}
+
+/// 下载指定历史版本的 Claude CLI 二进制到本地（用户手动安装）
+///
+/// 下载到用户下载目录（无则 home 目录），返回保存的绝对路径。
+/// 前端拿到路径后调用 shell open 打开父目录，由用户手动复制/安装。
+///
+/// 行为：
+/// - 若本地已存在同名文件且 size 与 OSS 记录一致，直接复用，跳过下载
+/// - 下载过程可通过 `cancel_claude_download(version)` 取消
+/// - 下载完成后再次校验 size，不匹配则删除文件并报错
+#[tauri::command]
+pub async fn download_claude_version(
+    app: AppHandle,
+    version: String,
+) -> Result<String, String> {
+    log::info!("[Installer] Downloading Claude CLI version {}", version);
+
+    emit_progress(&app, "claude-history", "fetching", 0, "获取版本信息...");
+
+    // 拉取 versions.json
+    let versions = tokio::task::spawn_blocking(|| {
+        let url = format!("{}/deps/claude/versions.json", OSS_BASE_URL);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+        let resp = client
+            .get(&url)
+            .send()
+            .map_err(|e| format!("Failed to fetch versions.json: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("HTTP error: {}", resp.status()));
+        }
+        let v: ClaudeVersions = resp
+            .json()
+            .map_err(|e| format!("Failed to parse versions.json: {}", e))?;
+        Ok::<ClaudeVersions, String>(v)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // 查找对应版本条目
+    let entry = versions
+        .versions
+        .iter()
+        .find(|e| e.version == version)
+        .ok_or_else(|| format!("Version {} not found in versions.json", version))?;
+
+    // 取当前平台
+    let platform = get_current_platform();
+    let platform_info = entry
+        .platforms
+        .get(&platform)
+        .ok_or_else(|| format!("Version {} not available for platform {}", version, platform))?;
+
+    let expected_size = platform_info.size;
+    let download_url = format!("{}/{}", OSS_BASE_URL, platform_info.url);
+
+    // 文件名：claude-{version}.{ext}
+    let url_path = std::path::Path::new(&platform_info.url);
+    let original_name = url_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "claude".to_string());
+    let original_path = std::path::Path::new(&original_name);
+    let stem = original_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("claude");
+    let filename = match original_path.extension().and_then(|s| s.to_str()) {
+        Some(ext) => format!("{}-{}.{}", stem, version, ext),
+        None => format!("{}-{}", stem, version),
+    };
+
+    // 下载目录：用户下载目录 → home 目录 → 临时目录
+    let download_dir = dirs::download_dir()
+        .or_else(|| dirs::home_dir())
+        .unwrap_or_else(|| std::env::temp_dir());
+    let save_path = download_dir.join(&filename);
+
+    // 注册取消标志（提前到决策之前，便于在缓存检查阶段也能响应取消）
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    {
+        let mut map = ACTIVE_CLAUDE_DOWNLOADS.lock().unwrap();
+        map.insert(version.clone(), cancel_flag.clone());
+    }
+
+    // 本地缓存复用决策
+    let cache_exists = save_path.exists();
+    let cache_size = if cache_exists {
+        fs::metadata(&save_path).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
+    let cancelled = cancel_flag.load(Ordering::SeqCst);
+    match decide_download_action(cache_exists, cache_size, expected_size, cancelled) {
+        DownloadAction::ReuseCache => {
+            log::info!(
+                "[Installer] Reusing local cache: {} ({} bytes)",
+                save_path.display(),
+                cache_size
+            );
+            emit_progress(
+                &app,
+                "claude-history",
+                "done",
+                100,
+                format!("v{} 已存在本地缓存", version),
+            );
+            // 注销取消标志后返回
+            let mut map = ACTIVE_CLAUDE_DOWNLOADS.lock().unwrap();
+            map.remove(&version);
+            return Ok(save_path.to_string_lossy().to_string());
+        }
+        DownloadAction::Cancelled => {
+            // 极罕见：用户在拉 versions.json 期间就取消
+            let mut map = ACTIVE_CLAUDE_DOWNLOADS.lock().unwrap();
+            map.remove(&version);
+            return Err("cancelled".to_string());
+        }
+        DownloadAction::Download => {
+            if cache_exists {
+                log::info!(
+                    "[Installer] Local file size mismatch ({} vs {}), removing",
+                    cache_size,
+                    expected_size
+                );
+                let _ = fs::remove_file(&save_path);
+            }
+        }
+    }
+
+    log::info!(
+        "[Installer] Downloading {} to {}",
+        download_url,
+        save_path.display()
+    );
+
+    emit_progress(
+        &app,
+        "claude-history",
+        "downloading",
+        0,
+        format!("开始下载 v{}", version),
+    );
+
+    // 等待下载完成（带取消标志）
+    let save_path_clone = save_path.clone();
+    let app_clone = app.clone();
+    let cancel_for_task = cancel_flag.clone();
+    let download_result = tokio::task::spawn_blocking(move || {
+        download_file(
+            &download_url,
+            &save_path_clone,
+            &app_clone,
+            "claude-history",
+            Some(&cancel_for_task),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // 无论成功失败，移除取消标志
+    {
+        let mut map = ACTIVE_CLAUDE_DOWNLOADS.lock().unwrap();
+        map.remove(&version);
+    }
+
+    if let Err(e) = download_result {
+        // download_file 已处理半成品清理（取消 / 失败）
+        // 但保险起见再清理一次（cancel 路径下文件可能因 Windows 文件占用未删干净）
+        let _ = fs::remove_file(&save_path);
+
+        if e.kind() == io::ErrorKind::Interrupted {
+            return Err("cancelled".to_string());
+        }
+        return Err(e.to_string());
+    }
+
+    // 下载完成后再次校验 size（OSS 内容长度异常时拦截）
+    let actual_size = fs::metadata(&save_path).map(|m| m.len()).unwrap_or(0);
+    if actual_size != expected_size {
+        log::warn!(
+            "[Installer] Downloaded size {} != expected {}",
+            actual_size,
+            expected_size
+        );
+        let _ = fs::remove_file(&save_path);
+        return Err(format!(
+            "Downloaded file size mismatch: got {} bytes, expected {}",
+            actual_size, expected_size
+        ));
+    }
+
+    emit_progress(
+        &app,
+        "claude-history",
+        "done",
+        100,
+        format!("v{} 下载完成", version),
+    );
+
+    log::info!(
+        "[Installer] Claude CLI v{} downloaded to {}",
+        version,
+        save_path.display()
+    );
+    Ok(save_path.to_string_lossy().to_string())
+}
+
+/// 取消指定版本的 Claude CLI 历史版本下载
+///
+/// 返回 true 表示找到了活动下载并已标记取消；false 表示无活动下载（可能已完成或已取消）。
+#[tauri::command]
+pub async fn cancel_claude_download(version: String) -> Result<bool, String> {
+    let flag = {
+        let map = ACTIVE_CLAUDE_DOWNLOADS.lock().unwrap();
+        map.get(&version).cloned()
+    };
+    if let Some(f) = flag {
+        f.store(true, Ordering::SeqCst);
+        log::info!("[Installer] Cancel requested for Claude CLI v{}", version);
+        Ok(true)
+    } else {
+        log::info!(
+            "[Installer] Cancel requested but no active download for v{}",
+            version
+        );
+        Ok(false)
+    }
+}
+
+/// 把本地下载好的 Claude CLI 二进制覆盖安装到标准安装目录
+///
+/// - Windows: `%USERPROFILE%\.local\bin\claude.exe`
+/// - macOS/Linux: `~/.local/bin/claude`
+///
+/// 行为：
+/// - 若检测到 claude 进程正在运行，返回 `claude-running` 错误字符串供前端识别并提示用户
+/// - 复制（覆盖）源文件到目标路径
+/// - Unix 下设置 0o755 权限
+/// - 保存路径到 app config 的 `claudePath`
+///
+/// 前端典型调用流：
+/// 1. 第一次调用，若返回 `claude-running` 错误 → 弹窗提示用户
+/// 2. 用户确认 → 调用 `kill_claude_processes` 关闭所有 Claude 进程
+/// 3. 再次调用本命令完成覆盖安装
+#[tauri::command]
+pub async fn install_claude_version(
+    app: AppHandle,
+    source_path: String,
+    version: String,
+) -> Result<String, String> {
+    log::info!(
+        "[Installer] Installing Claude CLI v{} from {}",
+        version,
+        source_path
+    );
+
+    let source = PathBuf::from(&source_path);
+    if !source.exists() {
+        return Err(format!("Source file not found: {}", source_path));
+    }
+
+    emit_progress(&app, "claude-history", "installing", 0, "检查 Claude 进程...");
+
+    // 检测 claude 进程是否在运行
+    let claude_running = tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "windows")]
+        let name = "claude.exe";
+        #[cfg(not(target_os = "windows"))]
+        let name = "claude";
+        crate::platform::is_process_running(name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    if claude_running {
+        log::warn!("[Installer] Claude is running, aborting install");
+        return Err("claude-running".to_string());
+    }
+
+    // 目标路径
+    let (claude_dir, _) = get_install_dirs();
+    fs::create_dir_all(&claude_dir)
+        .map_err(|e| format!("Failed to create claude dir: {}", e))?;
+
+    let filename = if cfg!(target_os = "windows") {
+        "claude.exe"
+    } else {
+        "claude"
+    };
+    let target_path = claude_dir.join(filename);
+
+    emit_progress(&app, "claude-history", "installing", 50, "复制文件...");
+
+    let source_clone = source.clone();
+    let target_clone = target_path.clone();
+    tokio::task::spawn_blocking(move || fs::copy(&source_clone, &target_clone))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("Failed to copy file: {}", e))?;
+
+    // 验证 size（fs::copy 不会改变字节数，但防御性校验）
+    let src_size = fs::metadata(&source).map(|m| m.len()).unwrap_or(0);
+    let tgt_size = fs::metadata(&target_path).map(|m| m.len()).unwrap_or(0);
+    if src_size != tgt_size {
+        return Err(format!(
+            "Size mismatch after copy: source={}, target={}",
+            src_size, tgt_size
+        ));
+    }
+
+    // Unix 设置权限
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&target_path, fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("Failed to set permissions: {}", e))?;
+    }
+
+    // 保存路径到 app config
+    save_install_path_to_config("claudePath", &target_path);
+
+    emit_progress(
+        &app,
+        "claude-history",
+        "done",
+        100,
+        format!("v{} 安装完成", version),
+    );
+
+    log::info!(
+        "[Installer] Claude CLI v{} installed to {}",
+        version,
+        target_path.display()
+    );
+    Ok(target_path.to_string_lossy().to_string())
 }

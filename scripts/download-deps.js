@@ -472,7 +472,92 @@ async function downloadGitPortable() {
 // 上传到 OSS
 // ============================================
 
-async function uploadClaudeToOSS(version, versionDir) {
+// 构建 versions.json 中的单条 entry（纯函数）
+function buildVersionEntryFromPlatformInfos(version, platformInfos) {
+  const platforms = {}
+  for (const info of platformInfos) {
+    platforms[info.platform] = {
+      url: `deps/claude/${version}/${info.platform}/${info.filename}`,
+      checksum: info.checksum,
+      size: info.size,
+    }
+  }
+  return {
+    version,
+    release_date: new Date().toISOString().split('T')[0],
+    platforms,
+  }
+}
+
+// 比较两个版本号，降序（纯函数）
+function compareVersionsDesc(a, b) {
+  const pa = String(a.version).split('.').map(n => parseInt(n, 10) || 0)
+  const pb = String(b.version).split('.').map(n => parseInt(n, 10) || 0)
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i++) {
+    const va = pa[i] || 0
+    const vb = pb[i] || 0
+    if (va !== vb) return vb - va
+  }
+  return 0
+}
+
+// 合并现有版本列表与新 entry：去重 + 降序排序（纯函数）
+function mergeVersionEntries(existing, newEntry) {
+  const map = new Map()
+  for (const e of existing || []) {
+    if (e && e.version) map.set(e.version, e)
+  }
+  if (newEntry && newEntry.version) {
+    map.set(newEntry.version, newEntry)
+  }
+  return Array.from(map.values()).sort(compareVersionsDesc)
+}
+
+// 拉取 OSS 上的 versions.json（不存在时返回 null）
+function fetchExistingVersionsJson() {
+  const config = loadOssConfig()
+  if (!config) return null
+  const { bucketName, region } = config
+  const endpoint = `${region}.aliyuncs.com`
+  const url = `https://${bucketName}.${endpoint}/deps/claude/versions.json`
+  try {
+    const text = curlFetch(url)
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+// 维护 deps/claude/versions.json：拉取现有 → 合并当前版本 → 上传
+async function mergeAndUploadVersionsJson(version, platformInfos) {
+  logInfo('\n--- 维护 versions.json ---')
+  try {
+    const existing = fetchExistingVersionsJson() || { latest: '', updated_at: '', versions: [] }
+    const newEntry = buildVersionEntryFromPlatformInfos(version, platformInfos)
+    const mergedVersions = mergeVersionEntries(existing.versions, newEntry)
+    const merged = {
+      latest: version,
+      updated_at: new Date().toISOString(),
+      versions: mergedVersions,
+    }
+
+    const versionsJsonPath = path.join(RELEASES_DIR, 'claude', 'versions.json')
+    fs.mkdirSync(path.dirname(versionsJsonPath), { recursive: true })
+    fs.writeFileSync(versionsJsonPath, JSON.stringify(merged, null, 2) + '\n')
+
+    const result = await uploadToOSS(versionsJsonPath, 'deps/claude/versions.json', false)
+    if (result.success) {
+      logSuccess(`versions.json 已更新（共 ${mergedVersions.length} 个版本，最新 v${version}）`)
+    } else {
+      throw new Error('上传失败')
+    }
+  } catch (e) {
+    logError(`versions.json 维护失败（不影响主流程）: ${e.message}`)
+  }
+}
+
+async function uploadClaudeToOSS(version, versionDir, platformInfos) {
   logStep('上传 Claude CLI 到 OSS...')
 
   const uploadResults = { uploaded: 0, skipped: 0, failed: 0 }
@@ -510,7 +595,18 @@ async function uploadClaudeToOSS(version, versionDir) {
     uploadResults.failed++
   }
 
+  // 维护 versions.json（失败不影响主流程）
+  if (platformInfos && platformInfos.length > 0) {
+    await mergeAndUploadVersionsJson(version, platformInfos)
+  }
+
   logInfo(`\n上传统计: 新上传 ${uploadResults.uploaded}, 跳过 ${uploadResults.skipped}, 失败 ${uploadResults.failed}`)
+}
+
+module.exports = {
+  buildVersionEntryFromPlatformInfos,
+  compareVersionsDesc,
+  mergeVersionEntries,
 }
 
 async function uploadGitToOSS(outputPath, portableAsset, skipped) {
@@ -560,7 +656,7 @@ async function main() {
   try {
     // 下载 Claude
     const claudeResult = await downloadClaude()
-    await uploadClaudeToOSS(claudeResult.version, claudeResult.versionDir)
+    await uploadClaudeToOSS(claudeResult.version, claudeResult.versionDir, claudeResult.platformInfos)
 
     // 下载 Git（仅 Windows）
     const gitResult = await downloadGitPortable()
@@ -572,6 +668,7 @@ async function main() {
 
     logInfo('\nOSS 文件结构:')
     logInfo('  deps/claude/latest.json')
+    logInfo('  deps/claude/versions.json')
     logInfo(`  deps/claude/${claudeResult.version}/win32-x64/claude.exe`)
     logInfo('  deps/git/latest.json')
     logInfo(`  deps/git/${gitResult.portableAsset.name}`)
@@ -582,4 +679,7 @@ async function main() {
   }
 }
 
-main()
+// 仅在直接执行时运行 main（允许测试时 require 纯函数）
+if (require.main === module) {
+  main()
+}

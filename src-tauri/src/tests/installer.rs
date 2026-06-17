@@ -1,4 +1,8 @@
-use crate::installer::{clean_and_prepend_path, clean_rc_content, extract_semver, is_newer_version, parse_version_output};
+use crate::installer::{
+    clean_and_prepend_path, clean_rc_content, decide_download_action, extract_semver,
+    is_newer_version, parse_version_output, ClaudeVersionEntry, ClaudeVersions,
+    DownloadAction,
+};
 
 // 版本号 "1.0.33" 直接提取
 #[test]
@@ -250,4 +254,115 @@ fn CleanRcContent_MultipleMatches_001() {
     let local_bin_count = lines.iter().filter(|l| l.contains(".local/bin")).count();
     assert_eq!(local_bin_count, 1);
     assert!(result.contains("export PATH=\"/usr/bin:$PATH\""));
+}
+
+// ============================================
+// ClaudeVersions 反序列化测试
+// ============================================
+
+// 完整 versions.json 反序列化（多版本、多平台）
+#[test]
+fn ClaudeVersions_Full_001() {
+    let json = r#"{
+        "latest": "1.0.17",
+        "updated_at": "2026-06-17T08:00:00Z",
+        "versions": [
+            {
+                "version": "1.0.17",
+                "release_date": "2026-06-10",
+                "platforms": {
+                    "win32-x64": { "url": "deps/claude/1.0.17/win32-x64/claude.exe", "checksum": "abc", "size": 100 }
+                }
+            },
+            {
+                "version": "1.0.16",
+                "release_date": "2026-06-01",
+                "platforms": {
+                    "win32-x64": { "url": "deps/claude/1.0.16/win32-x64/claude.exe", "checksum": "def", "size": 90 }
+                }
+            }
+        ]
+    }"#;
+    let parsed: ClaudeVersions = serde_json::from_str(json).unwrap();
+    assert_eq!(parsed.latest, "1.0.17");
+    assert_eq!(parsed.updated_at, "2026-06-17T08:00:00Z");
+    assert_eq!(parsed.versions.len(), 2);
+    assert_eq!(parsed.versions[0].version, "1.0.17");
+    assert_eq!(parsed.versions[1].version, "1.0.16");
+    let win = parsed.versions[0].platforms.get("win32-x64").unwrap();
+    assert_eq!(win.size, 100);
+    assert_eq!(win.checksum, "abc");
+}
+
+// 空 versions 数组也能反序列化
+#[test]
+fn ClaudeVersions_Empty_001() {
+    let json = r#"{ "latest": "", "updated_at": "", "versions": [] }"#;
+    let parsed: ClaudeVersions = serde_json::from_str(json).unwrap();
+    assert_eq!(parsed.versions.len(), 0);
+}
+
+// 单个 ClaudeVersionEntry 反序列化（多平台）
+#[test]
+fn ClaudeVersionEntry_Single_001() {
+    let json = r#"{
+        "version": "1.0.17",
+        "release_date": "2026-06-10",
+        "platforms": {
+            "win32-x64": { "url": "u", "checksum": "c", "size": 1 },
+            "darwin-arm64": { "url": "u2", "checksum": "c2", "size": 2 }
+        }
+    }"#;
+    let entry: ClaudeVersionEntry = serde_json::from_str(json).unwrap();
+    assert_eq!(entry.version, "1.0.17");
+    assert_eq!(entry.platforms.len(), 2);
+    assert!(entry.platforms.contains_key("darwin-arm64"));
+}
+
+// 版本条目缺 platforms 字段时反序列化失败（强约束）
+#[test]
+fn ClaudeVersionEntry_MissingPlatforms_001() {
+    let json = r#"{ "version": "1.0.0", "release_date": "2026-01-01" }"#;
+    let result: Result<ClaudeVersionEntry, _> = serde_json::from_str(json);
+    assert!(result.is_err());
+}
+
+// ============================================
+// decide_download_action 测试
+// ============================================
+
+// 无缓存 + 未取消 → Download
+#[test]
+fn DecideDownload_NoCache_001() {
+    assert_eq!(decide_download_action(false, 0, 100, false), DownloadAction::Download);
+}
+
+// 缓存存在但 size 不匹配 → Download
+#[test]
+fn DecideDownload_SizeMismatch_001() {
+    assert_eq!(decide_download_action(true, 50, 100, false), DownloadAction::Download);
+}
+
+// 缓存存在且 size 匹配 → ReuseCache
+#[test]
+fn DecideDownload_ReuseCache_001() {
+    assert_eq!(decide_download_action(true, 100, 100, false), DownloadAction::ReuseCache);
+}
+
+// 已取消优先级最高（即使缓存可用也返回 Cancelled）
+#[test]
+fn DecideDownload_Cancelled_HighPriority_001() {
+    assert_eq!(decide_download_action(true, 100, 100, true), DownloadAction::Cancelled);
+}
+
+// 已取消 + 无缓存 → Cancelled
+#[test]
+fn DecideDownload_Cancelled_NoCache_001() {
+    assert_eq!(decide_download_action(false, 0, 100, true), DownloadAction::Cancelled);
+}
+
+// size 都为 0 + 文件存在（空文件）：等值匹配 → ReuseCache
+#[test]
+fn DecideDownload_EmptyFileZeroExpected_001() {
+    assert_eq!(decide_download_action(true, 0, 0, false), DownloadAction::ReuseCache);
 }

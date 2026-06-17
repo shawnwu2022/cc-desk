@@ -715,3 +715,260 @@
 **预期结果**：
 - PATH 中只有一条 `~/.local/bin` 相关条目
 - 该条目在 PATH 最前面
+
+---
+
+## Claude CLI 历史版本切换
+
+### Claude_Version_StartupNoHttp_001 — 启动检查零 HTTP 请求
+
+**目标**：验证启动应用时不再调用 OSS `deps/claude/latest.json`，只读本地 Claude 版本号
+
+**前置条件**：本机已安装 Claude CLI（任意版本）
+
+**操作步骤**：
+1. 启动 Fiddler/Wireshark 等抓包工具，过滤 `cc-box.oss-cn-beijing.aliyuncs.com`
+2. 断网或保持抓包监听，启动 CC-Box
+3. 等待应用完全启动（进入项目选择页或终端页）
+
+**预期结果**：
+- 应用启动速度与有网环境一致（不再等待 Claude latest.json 响应）
+- 抓包记录中没有对 `deps/claude/latest.json` 的请求
+- 抓包记录中仍可能有对 `cc-box/latest.json` 的请求（CC-Box 自身更新检查，保留）
+
+### Claude_Version_StartupLocalVersion_002 — 启动显示本地 Claude 版本
+
+**目标**：验证启动后进入设置 > 更新，Claude CLI 卡片显示本地实际版本号
+
+**前置条件**：本机已安装 Claude CLI（如 `claude --version` 输出 `1.0.33`）
+
+**操作步骤**：
+1. 启动 CC-Box
+2. 打开 Settings → Update section
+3. 查看 Claude CLI 卡片顶部
+
+**预期结果**：
+- 卡片顶部显示 `Claude CLI` 与 `v1.0.33`（或当前实际版本）
+- 未触发任何加载状态（直接显示版本号）
+
+### Claude_Version_NotInstalled_003 — 未安装时显示「未安装」
+
+**目标**：本机未装 Claude 时，启动后 Claude CLI 卡片显示「未安装」且版本列表正常加载
+
+**前置条件**：本机 PATH 中无 `claude` 命令
+
+**操作步骤**：
+1. 启动 CC-Box
+2. 打开 Settings → Update section
+
+**预期结果**：
+- Claude CLI 卡片顶部显示「未安装」
+- 下方历史版本列表正常加载，可下载任意版本
+- 不会有「已安装」徽标显示
+
+### Claude_Version_List_004 — 历史版本列表正确展示
+
+**目标**：验证 Claude CLI 卡片能从 OSS 拉取并展示所有历史版本
+
+**前置条件**：能访问 `https://cc-box.oss-cn-beijing.aliyuncs.com/deps/claude/versions.json`
+
+**操作步骤**：
+1. 启动 CC-Box，进入 Settings → Update section
+2. 等待 Claude CLI 卡片的版本列表加载完成
+
+**预期结果**：
+- 列表头部显示「历史版本」标题与版本计数（如「共 N 个版本，最新 v1.0.17」）
+- 每行显示版本号、发布日期
+- 当前已安装版本行右侧有绿色「已安装」徽标
+- 最新版本行右侧有蓝色「最新」徽标
+- 列表按版本号降序排列（1.0.17 → 1.0.16 → ...）
+
+### Claude_Version_Refresh_005 — 手动刷新版本列表
+
+**目标**：点击「刷新版本列表」按钮强制重新拉取
+
+**前置条件**：版本列表已加载
+
+**操作步骤**：
+1. 点击 Claude CLI 卡片右上角「刷新版本列表」按钮
+
+**预期结果**：
+- 按钮显示旋转图标 + 「检查中...」文字
+- 列表短暂闪烁后重新加载
+- 5 分钟内重复点击会触发实际 HTTP 请求（缓存被强制跳过）
+
+### Claude_Version_Download_006 — 下载历史版本到本地
+
+**目标**：选择某个历史版本下载并自动安装，验证整个流程
+
+**前置条件**：版本列表已加载，有可下载的版本；本机当前未运行 Claude CLI（即所有终端会话已关闭）
+
+**操作步骤**：
+1. 选择一个版本（如 v2.1.170），点击右侧「安装」按钮
+2. 观察行内进度条
+3. 等待下载完成 → 自动进入安装
+
+**预期结果**：
+- 按钮变为行内进度条 + 取消按钮，显示百分比
+- 进度从 0% 推进到 100%
+- 下载完成后短暂显示「正在安装 v2.1.170...」
+- 安装完成后按钮变为「在文件夹中显示」
+- 卡片顶部「使用中」徽标移到 v2.1.170 这一行
+- 用户下载目录中存在 `claude-2.1.170.exe`（Windows）或 `claude-2.1.170`（Unix）
+- 文件大小与 OSS 上对应版本一致
+
+### Claude_Version_PlatformMissing_007 — 平台不支持时禁用下载
+
+**目标**：当某版本缺失当前平台产物时，禁用下载按钮并显示提示
+
+**前置条件**：手动改 OSS versions.json，删除某版本的 `win32-x64` 平台条目（仅测试时）
+
+**操作步骤**：
+1. 刷新版本列表
+2. 查看被改动的版本行
+
+**预期结果**：
+- 该版本行的下载按钮变为「当前平台不支持此版本」灰色文字
+- 鼠标悬停显示 tooltip
+- 其他版本行不受影响
+
+### Claude_Version_VersionsJsonMissing_008 — versions.json 不存在时降级
+
+**目标**：OSS 上 versions.json 被删除时，UI 不崩溃且显示明确提示
+
+**前置条件**：手动删除 OSS `deps/claude/versions.json`（仅测试时）
+
+**操作步骤**：
+1. 启动 CC-Box，进入 Update section
+
+**预期结果**：
+- 版本列表区域显示「暂无可用版本」灰底提示框
+- 卡片不崩溃、其他区域（CC-Box 更新检查）仍正常工作
+- 终端功能不受影响
+
+### Claude_Version_DownloadError_009 — 下载失败后可重试
+
+**目标**：网络中断或文件不存在时，显示错误并提供重试
+
+**前置条件**：版本列表已加载
+
+**操作步骤**：
+1. 选择一个版本点击下载
+2. 下载过程中断网或手动改 OSS 上该版本路径使请求 404
+
+**预期结果**：
+- 进度条变为错误状态，显示「下载失败」与「重试」按钮
+- 点击「重试」后重新进入下载流程
+
+### Claude_Version_OldCcBoxCompat_010 — 旧版 CC-Box 仍能更新 Claude
+
+**目标**：保证旧版 CC-Box（不读 versions.json）的自动安装 Claude 流程未受影响
+
+**前置条件**：使用改动前的 CC-Box 安装包（v0.11.1 或更早）
+
+**操作步骤**：
+1. 安装并启动旧版 CC-Box
+2. 进入 Update section，点击 Claude CLI 的「检查更新」/「安装」
+
+**预期结果**：
+- 旧版仍能拉取 `deps/claude/latest.json` 并显示最新版本
+- 点击「下载并安装」可成功安装最新版 Claude
+- 整个流程无错误
+
+### Claude_Version_CancelDownload_012 — 下载过程可取消
+
+**目标**：下载进行中点击「取消」立即终止下载，并清理半成品
+
+**前置条件**：版本列表已加载，下载目录无对应版本的缓存文件
+
+**操作步骤**：
+1. 点击某个版本「安装」按钮
+2. 进度推进到 30%-60% 之间时，点击进度条旁的「取消」按钮
+3. 等待状态切换
+
+**预期结果**：
+- 进度条立即消失，按钮恢复为「安装」
+- 显示「已取消」灰色文字与「安装」按钮（可重新发起）
+- 用户下载目录中无半成品文件（`claude-X.X.X.exe` 不存在）
+- 后端日志记录 `Download cancelled`
+
+### Claude_Version_LocalCacheReuse_013 — 本地缓存可复用
+
+**目标**：用户下载目录已有完整文件时，跳过下载直接安装
+
+**前置条件**：之前已成功下载过 v2.1.170，下载目录 `claude-2.1.170.exe` 仍存在且大小匹配
+
+**操作步骤**：
+1. 进入 Update section，点击 v2.1.170 行的「安装」按钮
+2. 观察状态变化
+
+**预期结果**：
+- 不出现下载进度条
+- 直接进入「正在安装 v2.1.170...」
+- 安装完成后显示「在文件夹中显示」按钮
+- 后端日志记录 `Reusing local cache`
+
+### Claude_Version_LocalCacheInvalid_014 — 本地缓存损坏时重新下载
+
+**目标**：本地文件 size 与 OSS 记录不一致时，自动删除并重新下载
+
+**前置条件**：用户下载目录存在 `claude-2.1.170.exe` 但 size 小于实际大小（模拟下载中断）
+
+**操作步骤**：
+1. 手动用 `echo > claude-2.1.170.exe` 等方式制造 size 不匹配的文件
+2. 点击「安装」按钮
+
+**预期结果**：
+- 后端日志记录 `Local file size mismatch, removing`
+- 自动删除损坏文件并重新下载
+- 流程正常完成
+
+### Claude_Version_ClaudeRunning_015 — Claude 运行时弹窗确认
+
+**目标**：用户在 Claude 终端会话运行时点击安装，提示终止并让用户选择
+
+**前置条件**：在 CC-Box 中打开至少一个 Claude 终端会话（PTY 中运行 claude.exe）
+
+**操作步骤**：
+1. 下载完成后，安装阶段会检测到 claude 进程
+2. 观察弹窗
+
+**预期结果**：
+- 出现确认对话框，标题「检测到 Claude 进程正在运行」
+- 提示「继续安装需要终止所有正在运行的 Claude 终端会话」
+- 「终止并安装」按钮 + 「取消」按钮
+- 点击「取消」后状态回退为「在文件夹中显示」（下载文件保留）
+- 点击「终止并安装」后所有 Claude 终端退出 → 文件被覆盖 → 「使用中」徽标更新
+
+### Claude_Version_CancelButtonDuringInstall_016 — 安装阶段无取消按钮
+
+**目标**：确认下载完成后进入安装阶段时不再显示取消按钮（防止部分文件覆盖）
+
+**前置条件**：版本列表已加载，无 Claude 进程运行
+
+**操作步骤**：
+1. 点击「安装」
+2. 等待下载完成进入安装阶段
+
+**预期结果**：
+- 下载阶段：进度条 + 「取消」按钮
+- 安装阶段：显示「正在安装...」文字，无取消按钮
+- 安装完成后：变为「在文件夹中显示」
+
+### Claude_Version_PublishScript_011 — 发布脚本正确生成 versions.json
+
+**目标**：验证 `npm run download-deps` 执行后，OSS 上 versions.json 被正确更新
+
+**前置条件**：配置好 `scripts/oss-config.json` 与代理
+
+**操作步骤**：
+1. 运行 `npm run download-deps`
+2. 浏览器访问 `https://cc-box.oss-cn-beijing.aliyuncs.com/deps/claude/versions.json`
+
+**预期结果**：
+- 脚本日志输出「versions.json 已更新（共 N 个版本，最新 vX.X.X）」
+- 浏览器返回的 JSON 包含 `latest`、`updated_at`、`versions` 三个字段
+- `versions` 数组按版本号降序排列
+- 当前发布的版本在数组首位，platforms 字段完整
+- `latest.json` 仍然存在且内容正确（未被破坏）
+

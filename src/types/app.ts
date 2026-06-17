@@ -70,3 +70,24 @@ export interface ClaudeCliUpdateInfo {
   hasUpdate: boolean
   notInstalled: boolean
 }
+
+// Claude CLI 单个历史版本条目
+export interface ClaudeVersionEntry {
+  version: string
+  releaseDate: string
+  platforms: Record<string, ClaudePlatformInfo>
+}
+
+// Claude CLI 版本的平台产物信息
+export interface ClaudePlatformInfo {
+  url: string
+  checksum: string
+  size: number
+}
+
+// versions.json 顶层结构
+export interface ClaudeVersions {
+  latest: string
+  updatedAt: string
+  versions: ClaudeVersionEntry[]
+}

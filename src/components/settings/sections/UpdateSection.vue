@@ -93,89 +93,133 @@
       </template>
     </div>
 
-    <!-- Claude CLI Update Card -->
+    <!-- Claude CLI 历史版本卡片 -->
     <div class="update-card claude-cli-card">
       <div class="version-row">
         <div class="version-info">
           <span class="version-label">Claude CLI</span>
-          <span class="version-value" v-if="!updateStore.claudeCliUpdateInfo?.notInstalled">
-            v{{ updateStore.claudeCliUpdateInfo?.installedVersion || '...' }}
+          <span class="version-value" v-if="updateStore.installedClaudeVersion">
+            v{{ updateStore.installedClaudeVersion }}
           </span>
           <span class="version-value not-installed" v-else>
-            {{ t('notInstalled') }}
+            {{ t('notInstalledShort') }}
           </span>
         </div>
         <button
           class="check-btn"
-          :disabled="cliChecking"
-          @click="handleCheckClaudeCliUpdate"
+          :disabled="updateStore.claudeVersionListLoading"
+          @click="handleRefreshVersions"
         >
-          <img v-if="cliChecking" src="@/assets/icons/refresh.svg" class="spinning" alt="" />
-          <span>{{ cliChecking ? t('checking') : t('checkForUpdates') }}</span>
+          <img v-if="updateStore.claudeVersionListLoading" src="@/assets/icons/refresh.svg" class="spinning" alt="" />
+          <span>{{ updateStore.claudeVersionListLoading ? t('checking') : t('refreshVersions') }}</span>
         </button>
       </div>
 
-      <div v-if="cliError" class="update-message error">
-        <span>{{ t('checkFailed', { error: cliErrorMessage }) }}</span>
+      <div v-if="updateStore.claudeVersionListError" class="update-message error">
+        <span>{{ t('loadVersionsFailed') }}: {{ updateStore.claudeVersionListError }}</span>
       </div>
 
-      <div v-if="updateStore.claudeCliUpdateInfo && !updateStore.claudeCliUpdateInfo.hasUpdate
-                  && !updateStore.claudeCliUpdateInfo.notInstalled && !cliChecking" class="update-message success">
-        <span>{{ t('upToDate') }}</span>
-      </div>
+      <div class="version-list-wrapper">
+        <div class="version-list-header">
+          <span class="version-list-title">{{ t('versionHistory') }}</span>
+          <span v-if="updateStore.claudeVersionList.length > 0" class="version-list-count">
+            {{ t('versionCount', { count: updateStore.claudeVersionList.length, latest: updateStore.claudeVersionLatest }) }}
+          </span>
+        </div>
+        <div class="version-list-hint">{{ t('versionHistoryHint') }}</div>
 
-      <template v-if="updateStore.claudeCliUpdateInfo?.hasUpdate">
-        <div class="update-available">
-          <div class="update-banner">
-            <span class="update-icon">🆕</span>
-            <div>
-              <span class="update-version">{{ t('versionAvailable', { version: updateStore.claudeCliUpdateInfo.latestVersion }) }}</span>
-              <span class="update-hint">{{ t('yourVersion') }} v{{ updateStore.claudeCliUpdateInfo.installedVersion }}</span>
+        <div v-if="updateStore.claudeVersionList.length === 0 && !updateStore.claudeVersionListLoading" class="version-empty">
+          {{ t('noVersionsAvailable') }}
+        </div>
+
+        <div v-else class="version-list">
+          <div v-for="entry in updateStore.claudeVersionList" :key="entry.version" class="version-item">
+            <div class="version-item-info">
+              <span class="version-item-number">v{{ entry.version }}</span>
+              <span class="version-item-date">{{ entry.releaseDate }}</span>
+              <span v-if="entry.version === updateStore.installedClaudeVersion" class="version-tag installed-tag">
+                {{ t('installed') }}
+              </span>
+              <span v-else-if="entry.version === updateStore.claudeVersionLatest" class="version-tag latest-tag">
+                {{ t('latest') }}
+              </span>
             </div>
-          </div>
 
-          <div class="update-actions">
-            <template v-if="updateStore.claudeCliDownloadState === 'idle'">
-              <button class="action-btn primary" @click="handleInstallClaudeCli">
-                {{ t('downloadAndInstall') }}
+            <div class="version-item-actions">
+              <span
+                v-if="!isVersionAvailableForCurrentPlatform(entry)"
+                class="version-item-disabled"
+                :title="t('versionNotAvailableForPlatform')"
+              >
+                {{ t('versionNotAvailableForPlatform') }}
+              </span>
+
+              <div v-else-if="getDownload(entry.version)?.state === 'downloading'" class="version-progress">
+                <div class="version-progress-bar">
+                  <div class="version-progress-fill" :style="{ width: (getDownload(entry.version)?.progress || 0) + '%' }"></div>
+                </div>
+                <span class="version-progress-text">{{ (getDownload(entry.version)?.progress || 0).toFixed(0) }}%</span>
+                <button
+                  class="action-btn secondary small cancel-btn"
+                  @click="handleCancelDownload(entry.version)"
+                >
+                  {{ t('cancelInstall') }}
+                </button>
+              </div>
+
+              <span
+                v-else-if="getDownload(entry.version)?.state === 'installing'"
+                class="version-item-installing"
+              >
+                {{ t('installingVersion', { version: entry.version }) }}
+              </span>
+
+              <template v-else-if="getDownload(entry.version)?.state === 'error'">
+                <span class="version-item-error" :title="getDownload(entry.version)?.error">
+                  {{ t('downloadFailed', { error: '' }) }}
+                </span>
+                <button class="action-btn primary small" @click="handleDownloadVersion(entry.version)">
+                  {{ t('retry') }}
+                </button>
+              </template>
+
+              <template v-else-if="getDownload(entry.version)?.state === 'cancelled'">
+                <span class="version-item-cancelled">{{ t('installCancelled') }}</span>
+                <button class="action-btn primary small" @click="handleDownloadVersion(entry.version)">
+                  {{ t('download') }}
+                </button>
+              </template>
+
+              <!-- 使用中版本（idle 或 done）：只显示「重装」 -->
+              <button
+                v-else-if="entry.version === updateStore.installedClaudeVersion"
+                class="action-btn secondary small"
+                @click="handleDownloadVersion(entry.version)"
+              >
+                {{ t('reinstall') }}
               </button>
-            </template>
 
-            <template v-if="updateStore.claudeCliDownloadState === 'downloading'">
-              <div class="progress-section">
-                <div class="progress-header">
-                  <span>{{ updateStore.claudeCliDownloadMessage }}</span>
-                </div>
-                <div class="progress-bar">
-                  <div class="progress-fill" :style="{ width: updateStore.claudeCliDownloadProgress + '%' }"></div>
-                </div>
-                <div class="progress-info">
-                  <span>{{ updateStore.claudeCliDownloadProgress }}%</span>
-                </div>
-              </div>
-            </template>
+              <!-- 非使用中 + done：显示「在文件夹中显示」 -->
+              <button
+                v-else-if="getDownload(entry.version)?.state === 'done'"
+                class="action-btn secondary small"
+                @click="openDownloadedFolder(entry.version)"
+              >
+                {{ t('openFolder') }}
+              </button>
 
-            <div v-if="updateStore.claudeCliDownloadState === 'done'" class="update-message success">
-              <span>{{ t('claudeCliInstalled') }}</span>
-            </div>
-
-            <div v-if="updateStore.claudeCliDownloadState === 'error'" class="update-message error">
-              <span>{{ updateStore.claudeCliDownloadError }}</span>
-              <div class="error-actions">
-                <button class="retry-link" @click="handleInstallClaudeCli">{{ t('retry') }}</button>
-              </div>
+              <!-- 非使用中 + idle：显示「安装」 -->
+              <button
+                v-else
+                class="action-btn primary small"
+                @click="handleDownloadVersion(entry.version)"
+              >
+                {{ t('download') }}
+              </button>
             </div>
           </div>
         </div>
-      </template>
-
-      <template v-if="updateStore.claudeCliUpdateInfo?.notInstalled && updateStore.claudeCliDownloadState === 'idle'">
-        <div class="update-actions" style="margin-top: 12px;">
-          <button class="action-btn primary" @click="handleInstallClaudeCli">
-            {{ t('installClaudeCli') }}
-          </button>
-        </div>
-      </template>
+      </div>
     </div>
 
     <!-- CC-Box 更新确认对话框 -->
@@ -189,13 +233,14 @@
       </div>
     </div>
 
-    <!-- Claude CLI 更新确认对话框 -->
-    <div v-if="showCliConfirm" class="confirm-overlay" @click.self="showCliConfirm = false">
+    <!-- Claude CLI 历史版本安装：检测到 Claude 运行的确认弹窗 -->
+    <div v-if="claudeRunningConfirm" class="confirm-overlay" @click.self="dismissClaudeRunning">
       <div class="confirm-dialog">
-        <p class="confirm-text">{{ t('updateConfirmClaudeRunning') }}</p>
+        <p class="confirm-text">{{ t('claudeRunningTitle') }}</p>
+        <p class="confirm-hint">{{ t('claudeRunningHint') }}</p>
         <div class="confirm-actions">
-          <button class="btn-cancel" @click="showCliConfirm = false">{{ t('cancel') }}</button>
-          <button class="btn-primary" @click="confirmCliUpdate">{{ t('downloadAndInstall') }}</button>
+          <button class="btn-cancel" @click="dismissClaudeRunning">{{ t('cancel') }}</button>
+          <button class="btn-primary" @click="confirmKillAndInstall">{{ t('killAndInstall') }}</button>
         </div>
       </div>
     </div>
@@ -203,14 +248,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { check, relaunch } from '@/api/tauri'
-import { checkForUpdates, checkClaudeCliUpdate, checkClaudeRunning, killClaudeProcesses, downloadAndInstallClaude, onInstallProgress, ptyKillAll } from '@/api/tauri'
+import { checkForUpdates, downloadClaudeVersion, cancelClaudeVersionDownload, installClaudeVersion, killClaudeProcesses, getInstalledClaudeVersion, onInstallProgress } from '@/api/tauri'
 import { open } from '@tauri-apps/plugin-shell'
 import { useSidebarStore } from '@/stores/sidebar'
 import { useSessionStore } from '@/stores/session'
 import { useUpdateStore } from '@/stores/update'
+import { getClaudePlatformKey } from '@/utils/platform'
+import type { ClaudeVersionEntry } from '@/types'
 
 const { t } = useI18n()
 const sidebarStore = useSidebarStore()
@@ -222,12 +269,13 @@ const error = ref(false)
 const errorMessage = ref('')
 const showConfirm = ref(false)
 
-// Claude CLI 更新状态
-const cliChecking = ref(false)
-const cliError = ref(false)
-const cliErrorMessage = ref('')
-const showCliConfirm = ref(false)
-let unlistenCliProgress: (() => void) | null = null
+// Claude 运行时的安装确认弹窗：记录待安装的版本与下载路径
+const claudeRunningConfirm = ref<{ version: string; savedPath: string } | null>(null)
+
+const currentPlatformKey = getClaudePlatformKey()
+
+// 监听 Claude CLI 历史版本下载进度
+let unlistenHistoryProgress: (() => void) | null = null
 
 const renderedNotes = computed(() => {
   if (!updateStore.updateInfo?.releaseNotes) return ''
@@ -327,83 +375,184 @@ async function handleRetry() {
   await startDownload()
 }
 
-// ============ Claude CLI 更新 ============
+// ============ Claude CLI 历史版本 ============
 
-async function handleCheckClaudeCliUpdate() {
-  cliChecking.value = true
-  cliError.value = false
-  cliErrorMessage.value = ''
-  try {
-    const info = await checkClaudeCliUpdate()
-    updateStore.setClaudeCliUpdateInfo(info)
-    sidebarStore.setClaudeCliUpdateInfo(info)
-  } catch (err) {
-    cliError.value = true
-    cliErrorMessage.value = String(err)
-  } finally {
-    cliChecking.value = false
-  }
+async function handleRefreshVersions() {
+  await updateStore.loadClaudeVersionList(true)
 }
 
-async function handleInstallClaudeCli() {
-  // 检测是否有 claude 进程在运行
-  try {
-    const running = await checkClaudeRunning()
-    if (running) {
-      showCliConfirm.value = true
-      return
-    }
-  } catch {}
-
-  startCliDownload()
+function isVersionAvailableForCurrentPlatform(entry: ClaudeVersionEntry): boolean {
+  return !!entry.platforms?.[currentPlatformKey]
 }
 
-async function confirmCliUpdate() {
-  showCliConfirm.value = false
-  // 先停止所有 PTY Tab，避免杀死 claude 后终端残留不可用
-  await ptyKillAll()
-  // 再杀死全局所有 claude 进程（包括非 CC-Box 启动的）
-  await killClaudeProcesses()
-  startCliDownload()
+function getDownload(version: string) {
+  return updateStore.getHistoryDownload(version)
 }
 
-async function startCliDownload() {
-  updateStore.resetClaudeCliDownload()
-  updateStore.setClaudeCliDownloadState('downloading')
-  updateStore.setClaudeCliDownloadProgress(0, t('checking'))
-
-  // 监听安装进度
-  unlistenCliProgress = await onInstallProgress((progress) => {
-    if (progress.item === 'claude') {
-      if (progress.stage === 'done') {
-        updateStore.setClaudeCliDownloadState('done')
-      } else if (progress.stage === 'error') {
-        updateStore.setClaudeCliDownloadError(progress.message)
-        updateStore.setClaudeCliDownloadState('error')
-      } else {
-        updateStore.setClaudeCliDownloadProgress(progress.progress, progress.message)
-      }
-    }
+async function handleDownloadVersion(version: string) {
+  updateStore.setHistoryDownload(version, {
+    state: 'downloading',
+    progress: 0,
+    message: t('downloadingVersion', { version }),
+    error: '',
+    savedPath: '',
   })
 
   try {
-    await downloadAndInstallClaude()
-    updateStore.setClaudeCliDownloadState('done')
-    // 重新检查版本
-    const info = await checkClaudeCliUpdate()
-    updateStore.setClaudeCliUpdateInfo(info)
-    sidebarStore.setClaudeCliUpdateInfo(info)
+    const savedPath = await downloadClaudeVersion(version)
+    // 下载完成（或本地缓存复用）后立即尝试安装
+    await performInstall(version, savedPath)
   } catch (err) {
-    updateStore.setClaudeCliDownloadError(t('updateFailed', { error: String(err) }))
-    updateStore.setClaudeCliDownloadState('error')
-  } finally {
-    unlistenCliProgress?.()
-    unlistenCliProgress = null
+    const errStr = String(err)
+    // 后端取消返回 'cancelled' 字符串，识别后展示为已取消状态
+    if (errStr.includes('cancelled')) {
+      updateStore.setHistoryDownload(version, {
+        state: 'cancelled',
+        progress: 0,
+        message: t('installCancelled'),
+      })
+    } else {
+      updateStore.setHistoryDownload(version, {
+        state: 'error',
+        error: errStr,
+      })
+    }
   }
 }
 
+// 执行覆盖安装：若 claude 在运行 → 弹窗；否则直接复制覆盖
+async function performInstall(version: string, savedPath: string) {
+  updateStore.setHistoryDownload(version, {
+    state: 'installing',
+    progress: 0,
+    message: t('installingVersion', { version }),
+    savedPath,
+  })
+
+  try {
+    await installClaudeVersion(savedPath, version)
+    // 刷新本地版本号
+    try {
+      const v = await getInstalledClaudeVersion()
+      updateStore.setInstalledClaudeVersion(v)
+    } catch { /* 读取失败不影响整体流程 */ }
+    updateStore.setHistoryDownload(version, {
+      state: 'done',
+      progress: 100,
+      message: t('installComplete'),
+    })
+  } catch (err) {
+    const errStr = String(err)
+    if (errStr.includes('claude-running')) {
+      // 弹窗让用户决定是否 kill 后重试
+      claudeRunningConfirm.value = { version, savedPath }
+      // 状态保留在 installing，等用户决定
+      return
+    }
+    updateStore.setHistoryDownload(version, {
+      state: 'error',
+      error: t('installFailed', { error: errStr }),
+    })
+  }
+}
+
+function dismissClaudeRunning() {
+  const info = claudeRunningConfirm.value
+  claudeRunningConfirm.value = null
+  if (info) {
+    // 用户取消安装，回退到 done 状态（文件仍保留在下载目录）
+    updateStore.setHistoryDownload(info.version, {
+      state: 'done',
+      progress: 100,
+      message: t('downloadComplete'),
+      savedPath: info.savedPath,
+    })
+  }
+}
+
+async function confirmKillAndInstall() {
+  const info = claudeRunningConfirm.value
+  if (!info) return
+  claudeRunningConfirm.value = null
+
+  try {
+    await killClaudeProcesses()
+  } catch (err) {
+    updateStore.setHistoryDownload(info.version, {
+      state: 'error',
+      error: t('killClaudeFailed', { error: String(err) }),
+    })
+    return
+  }
+
+  // kill 后再尝试安装
+  await performInstall(info.version, info.savedPath)
+}
+
+async function handleCancelDownload(version: string) {
+  try {
+    await cancelClaudeVersionDownload(version)
+    // 标记为 cancelled；后端也会异步 emit 'cancelled' 进度，但前端 invoke 会被 reject
+    // 这里乐观更新，避免等后端 reject 期间按钮一直显示"取消中"
+    updateStore.setHistoryDownload(version, {
+      state: 'cancelled',
+      progress: 0,
+      message: t('installCancelled'),
+    })
+  } catch (err) {
+    console.error('Failed to cancel download:', err)
+    updateStore.setHistoryDownload(version, {
+      state: 'error',
+      error: t('installCancelFailed', { error: String(err) }),
+    })
+  }
+}
+
+async function openDownloadedFolder(version: string) {
+  const download = updateStore.getHistoryDownload(version)
+  if (!download?.savedPath) return
+  // 从保存路径取父目录
+  const path = download.savedPath
+  const lastSep = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  const dir = lastSep >= 0 ? path.substring(0, lastSep) : path
+  try {
+    await open(dir)
+  } catch (err) {
+    console.error('Failed to open folder:', err)
+  }
+}
+
+onMounted(async () => {
+  // 自动加载版本列表（带缓存）
+  await updateStore.loadClaudeVersionList()
+
+  // 监听历史版本下载进度事件
+  unlistenHistoryProgress = await onInstallProgress((progress) => {
+    if (progress.item !== 'claude-history') return
+    // 找到当前正在下载的版本（state === 'downloading'）
+    for (const [version, info] of updateStore.historyDownloads) {
+      if (info.state === 'downloading') {
+        if (progress.stage === 'done') {
+          // done 由 handleDownloadVersion 的 await 返回值统一处理
+        } else if (progress.stage === 'error') {
+          updateStore.setHistoryDownload(version, {
+            state: 'error',
+            error: progress.message,
+          })
+        } else {
+          updateStore.setHistoryDownload(version, {
+            progress: progress.progress,
+            message: progress.message,
+          })
+        }
+        break
+      }
+    }
+  })
+})
+
 onUnmounted(() => {
-  unlistenCliProgress?.()
+  unlistenHistoryProgress?.()
 })
 </script>
 
@@ -757,5 +906,188 @@ onUnmounted(() => {
 
 .confirm-actions .btn-primary:hover {
   opacity: 0.9;
+}
+
+/* ============ Claude CLI 版本列表 ============ */
+
+.version-list-wrapper {
+  margin-top: 16px;
+}
+
+.version-list-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.version-list-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.version-list-count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.version-list-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-bottom: 12px;
+}
+
+.version-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  background: var(--bg-primary);
+  border-radius: 6px;
+  border: 1px dashed var(--border-color);
+}
+
+.version-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+}
+
+.version-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  gap: 12px;
+}
+
+.version-item:last-child {
+  border-bottom: none;
+}
+
+.version-item-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.version-item-number {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.version-item-date {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.version-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.installed-tag {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success-color);
+}
+
+.latest-tag {
+  background: var(--accent-light);
+  color: var(--accent-color);
+}
+
+.version-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.version-item-disabled {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.version-item-error {
+  font-size: 12px;
+  color: var(--error-color);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-item-cancelled {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.version-item-installing {
+  font-size: 12px;
+  color: var(--accent-color);
+  animation: pulse-text 1.5s ease-in-out infinite;
+}
+
+.cancel-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+.confirm-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 16px 0;
+  line-height: 1.5;
+}
+
+.version-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 140px;
+}
+
+.version-progress-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.version-progress-fill {
+  height: 100%;
+  background: var(--accent-color);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.version-progress-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+}
+
+.action-btn.small {
+  padding: 5px 12px;
+  font-size: 12px;
 }
 </style>

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.12.0] - 2026-06-17
+
+### Features
+- Add Claude CLI version history: list all available versions in Settings > Update with one-click install to ~/.local/bin/
+- Support canceling in-progress Claude CLI downloads with partial-file cleanup
+- Reuse local cached downloads when file size matches OSS record
+- Switch startup check to local-only: no HTTP request to latest.json, just read installed version
+- Maintain deps/claude/versions.json in OSS via download-deps.js with full version history
+- Add rebuild-claude-versions.js to reconstruct versions.json from local releases
+- Show Reinstall button for in-use version, Install for others
+
+### Changed
+- Sidebar update badge no longer driven by Claude CLI updates (CC-Box app updates only)
+- Rename Download to Install and Installed to In Use in Claude CLI card
+- Auto-detect running Claude process before install and prompt user to terminate
+
 ## [0.11.1] - 2026-06-16
 
 ### Fixed

@@ -173,6 +173,11 @@ pub fn run(initial_dir: Option<String>) {
             installer::check_claude_running,
             installer::kill_claude_processes,
             installer::download_and_install_claude,
+            installer::get_installed_claude_version,
+            installer::list_claude_versions,
+            installer::download_claude_version,
+            installer::cancel_claude_download,
+            installer::install_claude_version,
             #[cfg(target_os = "windows")]
             installer::download_and_install_git,
             // Provider Commands

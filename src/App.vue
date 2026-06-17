@@ -97,7 +97,7 @@ import {
   onConfigFontSize,
   onTerminalRestart,
   checkForUpdates,
-  checkClaudeCliUpdate,
+  getInstalledClaudeVersion,
   downloadAndInstallClaude,
   downloadAndInstallGit,
   onInstallProgress,
@@ -299,9 +299,9 @@ function initAfterChecks() {
     }
   }).catch(() => {})
 
-  checkClaudeCliUpdate().then(info => {
-    sidebarStore.setClaudeCliUpdateInfo(info)
-    updateStore.setClaudeCliUpdateInfo(info)
+  // 启动只读本地 Claude CLI 版本号，不发 HTTP 请求对比 OSS
+  getInstalledClaudeVersion().then(version => {
+    updateStore.setInstalledClaudeVersion(version)
   }).catch(() => {})
 
   // 监听右键菜单传入的目录
