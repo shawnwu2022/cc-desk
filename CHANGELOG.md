@@ -15,6 +15,11 @@
 ### Fixed
 - Fix restart tab failing with "Could not dispose an addon that has not been loaded" error when terminal element wait timed out before term.open()
 
+## [0.12.1] - 2026-06-17
+
+### Fixed
+- Fix restart tab failing with "Could not dispose an addon that has not been loaded" error when terminal element wait timed out before term.open()
+
 ## [0.12.0] - 2026-06-17
 
 ### Features

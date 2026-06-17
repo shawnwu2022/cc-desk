@@ -229,8 +229,9 @@ function gitPush(version) {
   execWithProxyRetry(`git push ${REMOTE_NAME} ${MAIN_BRANCH}`)
   logSuccess('main 分支已推送')
 
-  execWithProxyRetry(`git tag -a v${version} -m "Release v${version}"`)
-  execWithProxyRetry(`git push ${REMOTE_NAME} v${version}`)
+  // tag 已存在不算错误（重新发布、tag 已 push 等场景），允许失败以继续后续流程
+  execWithProxyRetry(`git tag -a v${version} -m "Release v${version}"`, { allowFail: true })
+  execWithProxyRetry(`git push ${REMOTE_NAME} v${version}`, { allowFail: true })
   logSuccess(`标签 v${version} 已推送`)
 }
 
