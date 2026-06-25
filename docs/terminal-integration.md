@@ -79,20 +79,31 @@ PTY 启动时优先从配置读取，无值时检测并保存。
 ### 数据流
 
 ```
-PTY reader → utf8_complete_boundary() 截断保护 → decode_output()（UTF-8 优先，失败回退 GBK）→ emit('pty-output', { id, data }) → frontend
-PTY exit → emit('pty-exit', { id, exit_code }) → frontend
+PTY reader → PtyDecoder::decode()（跨 read 状态 + 贪心解码）→ emit('pty-output', { id, data }) → frontend
+PTY exit → PtyDecoder::flush() 刷出残留 → emit('pty-exit', { id, exit_code }) → frontend
 ```
 
-**输出编码处理**（`src-tauri/src/pty.rs::read_output_loop`）：
+**输出编码处理**（`src-tauri/src/pty.rs::read_output_loop` + `src-tauri/src/pty_decoder.rs`）：
 
-PTY 是字节流，子进程可能输出 UTF-8 或 GBK（Windows 中文 cmd.exe、某些 git 输出）。处理流程：
+PTY 是字节流，子进程可能输出 UTF-8 或 GBK（Windows 中文 cmd.exe、某些 git 输出）。两层抽象协同：
 
-1. `reader.read()` 读到 `[u8; 4096]` 缓冲区，追加到 `carry: Vec<u8>`
-2. `utf8_complete_boundary(&carry)` 从末尾扫描续字节，找到最后一个完整 UTF-8 序列的边界，避免多字节字符跨 chunk 被切断（也对部分 GBK 前导字节巧合生效）
-3. `decode_output(&carry)`（`src-tauri/src/platform.rs:117`）解码：UTF-8 优先，失败时回退 GBK，避免 `String::from_utf8_lossy` 把 GBK 字节替换为 `U+FFFD` 导致乱码
-4. emit `PtyOutputPayload { id, data: String }` 到前端
+1. **`PtyDecoder`**（有状态流式解码器，跨 read 边界）
+   - 每次 `reader.read()` 的字节通过 `decoder.decode(&buf[..n])` 处理
+   - 内部维护 `pending: Vec<u8>`，把末尾潜在不完整字符（UTF-8 续字节不足 / GBK 首字节缺次字节）保留到下次拼接
+   - `find_safe_boundary` 贪心扫描：合法 UTF-8 序列前进对应字节、合法 GBK 双字节前进 2、末尾孤立 GBK 首字节保留、单字节非法前进 1
+   - EOF 时调用 `decoder.flush()` 强制刷出残留（不完整 UTF-8 按 GBK 兜底，优于丢失）
 
-历史教训：曾长期使用 `String::from_utf8_lossy`，导致 Windows 中文子进程输出的 GBK 字节变成黑色方块乱码。回归测试：`src-tauri/src/tests/pty.rs::PtyDecode_*`。
+2. **`decode_output`**（无状态字节 → 字符串，`src-tauri/src/platform.rs:117`）
+   - 贪心扫描：ASCII 直解、合法 UTF-8 多字节序列优先、否则尝试 GBK 双字节、最后兜底 `U+FFFD`
+   - 保证 UTF-8 与 GBK 混合输出（Claude CLI UTF-8 + cmd.exe GBK）各自正确解码，互不污染
+   - 同时被 `installer.rs` 等一次性处理子进程 stdout 的场景复用
+
+历史教训：
+- v0.12.2 之前用 `String::from_utf8_lossy`，Windows 中文子进程的 GBK 字节变成黑色方块乱码
+- v0.12.2 改为 UTF-8 优先 + 整体回退 GBK，但混合输出时整体 GBK 解码污染 UTF-8 内容
+- v0.12.3 改为贪心扫描 + PtyDecoder 状态机，三个根源（整体 GBK 污染、carry 中间非法字节、GBK 跨 read 损坏）一并解决
+
+回归测试：`src-tauri/src/tests/pty_decoder.rs`（PtyDecoder 行为）、`src-tauri/src/tests/pty.rs::PtyDecode_*`（decode_output 行为）。
 
 ## IPC 通道 (Tauri Commands)
 
