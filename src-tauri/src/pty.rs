@@ -355,7 +355,7 @@ impl PtyManager {
         _cwd: &str,
     ) {
         let mut buf = [0u8; 4096];
-        let mut carry: Vec<u8> = Vec::new();
+        let mut decoder = crate::pty_decoder::PtyDecoder::new();
         let mut consecutive_errors = 0;
         const MAX_CONSECUTIVE_ERRORS: i32 = 5;
 
@@ -363,10 +363,9 @@ impl PtyManager {
             use std::io::Read;
             match reader.read(&mut buf) {
                 Ok(0) => {
-                    // 刷出残留字节后退出
-                    if !carry.is_empty() {
-                        // UTF-8 优先，失败回退 GBK（Windows 中文子进程兼容）
-                        let output = crate::platform::decode_output(&carry);
+                    // EOF：刷出残留字节后退出
+                    let output = decoder.flush();
+                    if !output.is_empty() {
                         let _ = app_handle.emit(
                             "pty-output",
                             PtyOutputPayload {
@@ -390,25 +389,16 @@ impl PtyManager {
                 }
                 Ok(n) => {
                     consecutive_errors = 0;
-                    carry.extend_from_slice(&buf[..n]);
-
-                    let boundary = utf8_complete_boundary(&carry);
-                    if boundary == 0 {
-                        continue;
+                    let output = decoder.decode(&buf[..n]);
+                    if !output.is_empty() {
+                        let _ = app_handle.emit(
+                            "pty-output",
+                            PtyOutputPayload {
+                                id: pty_id.clone(),
+                                data: output,
+                            },
+                        );
                     }
-
-                    let remaining = carry.split_off(boundary);
-                    // UTF-8 优先，失败回退 GBK（Windows 中文子进程兼容）
-                    let output = crate::platform::decode_output(&carry);
-                    carry = remaining;
-
-                    let _ = app_handle.emit(
-                        "pty-output",
-                        PtyOutputPayload {
-                            id: pty_id.clone(),
-                            data: output,
-                        },
-                    );
                 }
                 Err(e) => {
                     if e.kind() == std::io::ErrorKind::WouldBlock {
@@ -722,47 +712,5 @@ pub fn init_pty_manager(app_handle: AppHandle) {
 /// 获取 PTY 管理器
 pub fn get_pty_manager() -> Option<Arc<PtyManager>> {
     PTY_MANAGER.lock().clone()
-}
-
-/// 返回 `data` 中最后一个完整 UTF-8 字符序列的结束位置
-pub(crate) fn utf8_complete_boundary(data: &[u8]) -> usize {
-    if data.is_empty() {
-        return 0;
-    }
-
-    // 从末尾向前找到前导字节（非 10xxxxxx 的字节）
-    let mut pos = data.len();
-    while pos > 0 && data[pos - 1] & 0xC0 == 0x80 {
-        pos -= 1;
-    }
-
-    if pos == 0 {
-        // 全部是续字节，直接刷出（from_utf8_lossy 会替换）
-        return data.len();
-    }
-
-    let leading = data[pos - 1];
-    let expected = utf8_seq_len(leading);
-
-    if pos - 1 + expected <= data.len() {
-        data.len() // 序列完整
-    } else {
-        pos - 1 // 序列不完整，截断到前导字节之前
-    }
-}
-
-/// 根据 UTF-8 前导字节判断序列长度
-pub(crate) fn utf8_seq_len(byte: u8) -> usize {
-    if byte & 0x80 == 0 {
-        1
-    } else if byte & 0xE0 == 0xC0 {
-        2
-    } else if byte & 0xF0 == 0xE0 {
-        3
-    } else if byte & 0xF8 == 0xF0 {
-        4
-    } else {
-        1
-    }
 }
 
