@@ -736,9 +736,6 @@ defineExpose({
   width: 100%;
   height: 100%;
   padding: 8px;
-  /* 底部余量：xterm 行高 14.4px 非整数时，最后一行可能被裁。
-     额外 4px 余量确保整数行 fit 后仍能完整渲染 */
-  padding-bottom: 12px;
   box-sizing: border-box;
   background: var(--terminal-bg);
   border-radius: 8px;
@@ -757,7 +754,7 @@ defineExpose({
   left: 0;
   width: 100%;
   height: 100%;
-  padding: 0;
+  padding: 12px;
   box-sizing: border-box;
   display: none;
 }
@@ -767,7 +764,9 @@ defineExpose({
 }
 
 .terminal-wrapper :deep(.xterm) {
-  height: 100%;
+  /* 减少 6px：让 fit 计算的 clientHeight 比实际容器小，
+     floor 后的行数留出最后一行的渲染余量，避免被 viewport 裁掉 */
+  height: calc(100% - 6px);
 }
 
 .terminal-wrapper :deep(.xterm-viewport) {
