@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.5] - 2026-06-26
+
+### Fixed
+- Fix long-session glyph corruption (boxes with random ASCII letters) by periodically clearing WebGL texture atlas every 5 minutes, working around @xterm/addon-webgl@0.19.0 race condition bug (xtermjs/xterm.js#4325)
+- Unify terminal disposal via disposeTerminal helper to prevent atlas timer leaks across tab close / restart / unmount
+
 ## [0.12.4] - 2026-06-25
 
 ### Fixed
