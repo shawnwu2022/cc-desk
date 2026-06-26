@@ -205,9 +205,9 @@ function pickFontFamily(): string {
 //
 // WebGL renderer 的 glyph atlas 在长会话累积大量字符后会出现 race condition
 // 导致 glyph 错位（@xterm/addon-webgl@0.19.0 已知 bug，见 xtermjs/xterm.js#4325）。
-// 规避方法：每 5 分钟主动调用 clearTextureAtlas() 重建 atlas，防止 corruption
-// 累积。重建只清空 GPU 贴图缓存并重绘当前可见行，不影响 PTY 进程、字节流、
-// buffer 滚动历史，瞬间完成（<100ms）。
+// 规避方法：每 5 分钟清空 atlas + 全量 refresh 可见行，等价于一次无尺寸变化的
+// resize（resize 触发的更新流程经用户验证可稳定恢复 corruption）。不影响 PTY
+// 进程、字节流、buffer 滚动历史。
 function loadRendererAddons(term: Terminal) {
   try {
     const unicode11 = new Unicode11Addon()
@@ -224,7 +224,12 @@ function loadRendererAddons(term: Terminal) {
 
     const timer = setInterval(() => {
       try {
+        // clearTextureAtlas 单独调用触发的 redraw 不可靠（会出现渲染状态错乱）。
+        // resize 之所以能稳定恢复，是因为 resize 触发了 term.refresh() 风格的
+        // 全量重绘。这里手动组合：先清 atlas，再 refresh 所有可见行，等价于
+        // 一次"无尺寸变化的 resize"。
         addon.clearTextureAtlas()
+        term.refresh(0, term.rows - 1)
       } catch (err) {
         console.warn('[XTerm] Atlas cleanup failed:', err)
       }
