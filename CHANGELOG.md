@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.6] - 2026-06-26
+
+### Fixed
+- Fix WebGL glyph corruption after long sessions: combine clearTextureAtlas + term.refresh for full redraw (clearTextureAtlas alone caused page distortion during 5-min refresh)
+- Restore WebGL renderer for table/box-drawing continuity (revert v0.12.4 removal that caused visible cell gaps in DOM renderer)
+- Unify terminal disposal via disposeTerminal helper to prevent atlas timer leaks
+
 ## [0.12.5] - 2026-06-26
 
 ### Fixed
