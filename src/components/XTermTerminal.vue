@@ -16,6 +16,7 @@
 import { ref, reactive, watch, onMounted, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebglAddon } from '@xterm/addon-webgl'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { debounce } from 'lodash-es'
 import '@xterm/xterm/css/xterm.css'
@@ -191,31 +192,31 @@ const fitCurrentTerminal = debounce(() => {
 }, 50)
 
 // 按平台选择字体：CJK 用等宽字体（Microsoft YaHei / Noto Sans CJK），
-// emoji 在主字体中缺失时回退到系统 emoji 字体，最后兜底符号字体覆盖 Unicode 符号
-// （⚠ ✓ ✗ → ↑ ● ○ 等），避免符号渲染宽度与 cell 不符破坏表格对齐。
+// emoji 在主字体中缺失时回退到系统 emoji 字体。把 emoji 字体放在 monospace 前，
+// 确保渲染层能找到 emoji 字形（实际宽度由 Unicode 11 wcwidth 决定，与字体回退无关）
 function pickFontFamily(): string {
   if (isMac) {
-    return '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "Apple Color Emoji", "Apple Symbols", monospace'
+    return '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "Apple Color Emoji", monospace'
   }
-  return '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI Emoji", "Segoe UI Symbol", monospace'
+  return '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI Emoji", monospace'
 }
 
-// 在 term.open(el) 之后加载 Unicode 11（不加载 WebGL addon）
-//
-// 历史：v0.12.4 之前使用 WebglAddon 提升 GPU 渲染性能，但 WebGL renderer 的
-// glyph atlas 大小有限（约 1024-2048 glyph），长会话累积大量 CJK + emoji + 各种
-// 符号字符后，atlas 满了 LRU 淘汰会导致旧字符位置被新字符 glyph 占用，
-// 渲染出"多英文字符方块"乱码（实际是错误 glyph / codepoint hex 框）。
-//
-// 改用 xterm.js 默认 Canvas renderer：无 atlas 损坏、无 GPU context loss 问题，
-// 字符渲染更稳定。Canvas 性能对 Claude CLI 文本流（每秒几千字符以内）完全够用。
+// 在 term.open(el) 之后加载 WebGL addon + Unicode 11
 function loadRendererAddons(term: Terminal) {
   try {
     const unicode11 = new Unicode11Addon()
     term.loadAddon(unicode11)
     term.unicode.activeVersion = '11'
   } catch (err) {
-    console.warn('[XTerm] Unicode 11 addon unavailable:', err)
+    console.warn('[XTerm] Unicode 11 addon unavailable, fallback to default:', err)
+  }
+
+  try {
+    const addon = new WebglAddon()
+    addon.onContextLoss(() => addon.dispose())
+    term.loadAddon(addon)
+  } catch (err) {
+    console.warn('[XTerm] WebGL addon unavailable, using DOM renderer:', err)
   }
 }
 
