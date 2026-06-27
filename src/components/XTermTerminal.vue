@@ -203,11 +203,11 @@ function pickFontFamily(): string {
 
 // 在 term.open(el) 之后加载 Unicode 11 + WebGL addon
 //
-// WebGL renderer 的 glyph atlas 在长会话累积大量字符后会出现 race condition
-// 导致 glyph 错位（@xterm/addon-webgl@0.19.0 已知 bug，见 xtermjs/xterm.js#4325）。
-// 规避方法：每 5 分钟清空 atlas + 全量 refresh 可见行，等价于一次无尺寸变化的
-// resize（resize 触发的更新流程经用户验证可稳定恢复 corruption）。不影响 PTY
-// 进程、字节流、buffer 滚动历史。
+// 注：@xterm/addon-webgl@0.19.0 的 glyph atlas 在长会话累积大量字符后会出现
+// race condition 导致 glyph 错位（xtermjs/xterm.js#4325）。曾尝试用定时
+// clearTextureAtlas + term.refresh 主动恢复，但触发的 redraw 不可靠，反而
+// 导致页面渲染状态错乱。最终方案：依赖用户主动 resize 窗口触发完整的 renderer
+// 重建流程（resize 经用户验证可稳定恢复 corruption），代码层不做定时干预。
 function loadRendererAddons(term: Terminal) {
   try {
     const unicode11 = new Unicode11Addon()
@@ -221,35 +221,13 @@ function loadRendererAddons(term: Terminal) {
     const addon = new WebglAddon()
     addon.onContextLoss(() => addon.dispose())
     term.loadAddon(addon)
-
-    const timer = setInterval(() => {
-      try {
-        // clearTextureAtlas 单独调用触发的 redraw 不可靠（会出现渲染状态错乱）。
-        // resize 之所以能稳定恢复，是因为 resize 触发了 term.refresh() 风格的
-        // 全量重绘。这里手动组合：先清 atlas，再 refresh 所有可见行，等价于
-        // 一次"无尺寸变化的 resize"。
-        addon.clearTextureAtlas()
-        term.refresh(0, term.rows - 1)
-      } catch (err) {
-        console.warn('[XTerm] Atlas cleanup failed:', err)
-      }
-    }, 5 * 60 * 1000)
-    atlasTimers.set(term, timer)
   } catch (err) {
     console.warn('[XTerm] WebGL addon unavailable, using DOM renderer:', err)
   }
 }
 
-// 跟踪每个 Terminal 实例的 atlas cleanup timer
-const atlasTimers = new WeakMap<Terminal, ReturnType<typeof setInterval>>()
-
-// 统一清理 terminal：先停 atlas timer，再 dispose
+// 统一 terminal dispose 入口（保留以维持调用点一致性，内部直接转 safeDispose）
 async function disposeTerminal(term: Terminal, context: string) {
-  const timer = atlasTimers.get(term)
-  if (timer) {
-    clearInterval(timer)
-    atlasTimers.delete(term)
-  }
   await safeDispose(term, context)
 }
 
