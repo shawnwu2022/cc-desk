@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.8] - 2026-06-27
+
+### Fixed
+- Fix WebGL glyph corruption after long sessions by dispose + reload entire WebGL addon every 5 minutes (xterm.js designed renderer switch path, buffer untouched)
+- v0.12.7 resize(rows-1)+resize(rows) was unreliable: xterm.js Buffer.resize is not lossless on row round-trip, caused duplicate last two lines
+- Fix potential black screen on GPU context loss: onContextLoss now triggers full reload instead of dispose-only
+
 ## [0.12.7] - 2026-06-27
 
 ### Fixed
