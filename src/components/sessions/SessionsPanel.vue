@@ -18,57 +18,109 @@
         :placeholder="t('searchSessions')"
         class="search-input"
       />
+      <button
+        v-if="searchQuery"
+        class="search-clear-btn"
+        @click="searchQuery = ''"
+        :title="t('clearSearch')"
+      >
+        <img src="@/assets/icons/close.svg" :alt="t('clearSearch')" />
+      </button>
     </div>
 
     <!-- 会话列表 -->
     <div class="panel-content" ref="scrollContainer">
-      <!-- Open Tabs -->
-      <div v-if="projectTabs.length > 0" class="section">
-        <div class="section-title-row">
-          <span class="section-title">{{ t('openTabs') }}</span>
-          <div v-if="projectTabs.length > 1" class="section-actions">
-            <button class="section-action-btn" @click="$emit('closeOtherTabs')" :title="t('closeOtherTabs')">
-              {{ t('closeOtherTabs') }}
-            </button>
-            <button class="section-action-btn" @click="$emit('closeAllTabs')" :title="t('closeAllTabs')">
-              {{ t('closeAllTabs') }}
-            </button>
+      <!-- 搜索结果模式 -->
+      <template v-if="searchQuery.trim()">
+        <div class="section">
+          <div class="section-title">{{ t('searchResults') }}</div>
+
+          <!-- 来自 Open Tabs 的命中 -->
+          <div v-if="matchedTabs.length > 0" class="subsection">
+            <div class="subsection-title">{{ t('openTabs') }} · {{ matchedTabs.length }}</div>
+            <SessionList
+              :tabs="matchedTabs"
+              :active-id="sessionStore.activeTabId"
+              closable
+              @switch="(id) => $emit('switchSession', id)"
+              @rename="(id, name) => $emit('renameSession', id, name)"
+              @restart="() => $emit('restartSession')"
+              @close="(id) => $emit('closeTab', id)"
+            />
+          </div>
+
+          <!-- 来自 History 的命中 -->
+          <div v-if="filteredHistory.length > 0" class="subsection">
+            <div class="subsection-title">{{ t('history') }} · {{ filteredHistory.length }}</div>
+            <SessionList
+              :history="filteredHistory"
+              :active-id="null"
+              :snippet-map="snippetMap"
+              @switch="(id) => $emit('resumeSession', id)"
+            />
+          </div>
+
+          <!-- 空状态 -->
+          <div v-if="matchedTabs.length === 0 && filteredHistory.length === 0 && !sessionStore.isLoading" class="empty-hint">
+            {{ t('noSessionsFound') }}
+          </div>
+
+          <div v-if="sessionStore.isLoading" class="loading-indicator">
+            {{ t('loading') }}
           </div>
         </div>
-        <SessionList
-          :tabs="projectTabs"
-          :active-id="sessionStore.activeTabId"
-          closable
-          @switch="(id) => $emit('switchSession', id)"
-          @rename="(id, name) => $emit('renameSession', id, name)"
-          @restart="() => $emit('restartSession')"
-          @close="(id) => $emit('closeTab', id)"
-        />
-      </div>
+      </template>
 
-      <!-- History -->
-      <div v-if="filteredHistory.length > 0 || sessionStore.isLoading" class="section">
-        <div class="section-title">{{ t('history') }}</div>
-        <SessionList
-          :history="filteredHistory"
-          :active-id="null"
-          :snippet-map="snippetMap"
-          @switch="(id) => $emit('resumeSession', id)"
-        />
-      </div>
+      <!-- 正常模式 -->
+      <template v-else>
+        <!-- Open Tabs -->
+        <div v-if="projectTabs.length > 0" class="section">
+          <div class="section-title-row">
+            <span class="section-title">{{ t('openTabs') }}</span>
+            <div v-if="projectTabs.length > 1" class="section-actions">
+              <button class="section-action-btn" @click="$emit('closeOtherTabs')" :title="t('closeOtherTabs')">
+                {{ t('closeOtherTabs') }}
+              </button>
+              <button class="section-action-btn" @click="$emit('closeAllTabs')" :title="t('closeAllTabs')">
+                {{ t('closeAllTabs') }}
+              </button>
+            </div>
+          </div>
+          <SessionList
+            :tabs="projectTabs"
+            :active-id="sessionStore.activeTabId"
+            closable
+            @switch="(id) => $emit('switchSession', id)"
+            @rename="(id, name) => $emit('renameSession', id, name)"
+            @restart="() => $emit('restartSession')"
+            @close="(id) => $emit('closeTab', id)"
+          />
+        </div>
 
-      <!-- 空状态 -->
-      <div v-if="projectTabs.length === 0 && filteredHistory.length === 0 && !sessionStore.isLoading" class="empty-hint">
-        {{ t('noSessionsFound') }}
-      </div>
+        <!-- History -->
+        <div v-if="filteredHistory.length > 0 || sessionStore.isLoading" class="section">
+          <div class="section-title">{{ t('history') }}</div>
+          <SessionList
+            :history="filteredHistory"
+            :active-id="null"
+            :snippet-map="snippetMap"
+            @switch="(id) => $emit('resumeSession', id)"
+          />
+        </div>
 
-      <div v-if="sessionStore.isLoading" class="loading-indicator">
-        {{ t('loading') }}
-      </div>
+        <!-- 空状态 -->
+        <div v-if="projectTabs.length === 0 && filteredHistory.length === 0 && !sessionStore.isLoading" class="empty-hint">
+          {{ t('noSessionsFound') }}
+        </div>
 
-      <div v-if="sessionStore.isLoadingMore" class="loading-indicator">
-        {{ t('loadingMore') }}
-      </div>
+        <div v-if="sessionStore.isLoading" class="loading-indicator">
+          {{ t('loading') }}
+        </div>
+
+        <div v-if="sessionStore.isLoadingMore" class="loading-indicator">
+          {{ t('loadingMore') }}
+        </div>
+      </template>
     </div>
 
     <!-- 底部操作区 -->
@@ -147,6 +199,16 @@ const projectTabs = computed(() => {
   const cwd = appStore.cwd
   if (!cwd) return []
   return sessionStore.getProjectTabs(cwd)
+})
+
+const matchedTabs = computed(() => {
+  const q = searchQuery.value.toLowerCase().trim()
+  if (!q) return []
+  return projectTabs.value.filter(t =>
+    t.name.toLowerCase().includes(q)
+    || (t.sessionId?.toLowerCase().includes(q) ?? false)
+    || t.tabId.toLowerCase().includes(q)
+  )
 })
 
 const filteredHistory = computed(() => {
@@ -239,16 +301,42 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 5px 10px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  margin: 12px;
+  margin: 8px 12px;
 }
 
 .search-icon {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+}
+
+.search-clear-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.search-clear-btn img {
+  width: 12px;
+  height: 12px;
+}
+
+.search-clear-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
 }
 
 .search-input {
@@ -273,6 +361,19 @@ onUnmounted(() => {
 
 .section {
   margin-bottom: 12px;
+}
+
+.subsection {
+  margin-top: 8px;
+}
+
+.subsection-title {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  padding: 0 4px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
 
 .section-title {
@@ -321,13 +422,13 @@ onUnmounted(() => {
 
 .panel-footer {
   border-top: 1px solid var(--border-color);
-  padding: 12px;
+  padding: 8px 12px;
 }
 
 .action-buttons {
   display: flex;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .action-btn {
@@ -363,7 +464,7 @@ onUnmounted(() => {
 
 .action-btn.with-hint {
   flex-direction: column;
-  padding: 6px 12px;
+  padding: 4px 12px;
   gap: 2px;
 }
 
@@ -385,7 +486,7 @@ onUnmounted(() => {
 }
 
 .options-content {
-  padding: 10px;
+  padding: 6px 8px;
   background: var(--bg-primary);
   border-radius: 6px;
   border: 1px solid var(--border-color);
@@ -395,8 +496,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   cursor: pointer;
+}
+
+.option-item:last-child {
+  margin-bottom: 0;
 }
 
 .option-item input[type="checkbox"] {

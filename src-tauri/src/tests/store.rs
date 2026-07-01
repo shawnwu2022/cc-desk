@@ -3,7 +3,8 @@ use serde_json::json;
 use crate::store::{
     expand_env_vars, extract_md_description, extract_session_name, find_valid_plugin_path,
     infer_server_type, merge_json_values, parse_agents_list_output, parse_mcp_server_entry,
-    parse_timestamp, resolve_marketplace_plugin_path, AgentInfo,
+    parse_skill_description, parse_timestamp, resolve_marketplace_plugin_path,
+    search_session_messages_in_dirs, AgentInfo,
 };
 
 use std::collections::HashMap;
@@ -283,30 +284,30 @@ fn ExtractMd_BodyFallback_001() {
     assert_eq!(result.unwrap(), "First body line is the description");
 }
 
-// frontmatter 描述超过 200 字符时截断并加省略号
+// frontmatter 长描述完整返回，不截断不加省略号
 #[test]
-fn ExtractMd_FrontmatterTruncate_001() {
+fn ExtractMd_FrontmatterLongDesc_001() {
     let long_desc: String = "x".repeat(250);
     let content = format!("---\ndescription: {}\n---\nBody", long_desc);
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("test.md");
     std::fs::write(&file_path, content).unwrap();
     let result = extract_md_description(&file_path).unwrap();
-    assert!(result.ends_with("..."));
-    assert!(result.len() <= 203); // 200 chars + "..."
+    assert_eq!(result, long_desc);
+    assert!(!result.ends_with("..."));
 }
 
-// 正文描述超过 100 字符时截断并加省略号
+// 正文长描述完整返回，不截断不加省略号
 #[test]
-fn ExtractMd_BodyTruncate_001() {
+fn ExtractMd_BodyLongDesc_001() {
     let long_body: String = "a".repeat(150);
     let content = format!("# Title\n\n{}", long_body);
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("test.md");
     std::fs::write(&file_path, content).unwrap();
     let result = extract_md_description(&file_path).unwrap();
-    assert!(result.ends_with("..."));
-    assert!(result.len() <= 103); // 100 chars + "..."
+    assert_eq!(result, long_body);
+    assert!(!result.ends_with("..."));
 }
 
 // 空内容返回 "No description"
@@ -318,6 +319,56 @@ fn ExtractMd_EmptyContent_001() {
     let result = extract_md_description(&file_path);
     assert!(result.is_some());
     assert_eq!(result.unwrap(), "No description");
+}
+
+// ==================== parse_skill_description ====================
+
+// frontmatter 中 description 字段完整返回
+#[test]
+fn ParseSkill_Frontmatter_001() {
+    let content = "---\ndescription: Build skill\n---\n# Title\nBody";
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("SKILL.md");
+    std::fs::write(&file_path, content).unwrap();
+    let result = parse_skill_description(&file_path).unwrap();
+    assert_eq!(result, "Build skill");
+}
+
+// 无 frontmatter 时取正文第一行非空非标题行
+#[test]
+fn ParseSkill_BodyFallback_001() {
+    let content = "# Title\n\nFirst body line\nMore text";
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("SKILL.md");
+    std::fs::write(&file_path, content).unwrap();
+    let result = parse_skill_description(&file_path).unwrap();
+    assert_eq!(result, "First body line");
+}
+
+// frontmatter 长描述完整返回不截断
+#[test]
+fn ParseSkill_FrontmatterLongDesc_001() {
+    let long_desc: String = "y".repeat(300);
+    let content = format!("---\ndescription: {}\n---\nBody", long_desc);
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("SKILL.md");
+    std::fs::write(&file_path, content).unwrap();
+    let result = parse_skill_description(&file_path).unwrap();
+    assert_eq!(result, long_desc);
+    assert!(!result.ends_with("..."));
+}
+
+// 无 frontmatter 时正文长描述完整返回不截断
+#[test]
+fn ParseSkill_BodyLongDesc_001() {
+    let long_body: String = "b".repeat(200);
+    let content = format!("# Title\n\n{}", long_body);
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("SKILL.md");
+    std::fs::write(&file_path, content).unwrap();
+    let result = parse_skill_description(&file_path).unwrap();
+    assert_eq!(result, long_body);
+    assert!(!result.ends_with("..."));
 }
 
 // ==================== parse_timestamp ====================
@@ -522,4 +573,154 @@ fn ResolveMarketplace_UnknownMarketplace_001() {
 fn ResolveMarketplace_BadFormat_001() {
     let result = resolve_marketplace_plugin_path("no-at-sign");
     assert!(result.is_none());
+}
+
+// ==================== search_session_messages_in_dirs ====================
+
+// 构造一行 JSONL 消息（user/assistant，content 为 string）
+fn build_jsonl_line(msg_type: &str, content: &str) -> String {
+    let t = if msg_type == "user" { "user" } else { "assistant" };
+    format!(r#"{{"type":"{}","message":{{"content":"{}"}}}}"#, t, content)
+}
+
+// 单文件单消息按 query 匹配，返回 snippet
+#[test]
+fn SearchSession_BasicMatch_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("session-abc.jsonl");
+    std::fs::write(
+        &file_path,
+        format!("{}\n", build_jsonl_line("user", "hello world")),
+    )
+    .unwrap();
+
+    let dirs = vec![dir.path().to_path_buf()];
+    let results = search_session_messages_in_dirs(&dirs, "/proj", "hello", 10);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].session_id, "session-abc");
+    assert!(results[0].snippet.contains("hello"));
+}
+
+// 大小写不敏感匹配
+#[test]
+fn SearchSession_CaseInsensitive_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("s1.jsonl");
+    std::fs::write(
+        &file_path,
+        format!("{}\n", build_jsonl_line("assistant", "Hello WORLD")),
+    )
+    .unwrap();
+
+    let dirs = vec![dir.path().to_path_buf()];
+    let results = search_session_messages_in_dirs(&dirs, "/proj", "HELLO", 10);
+    assert_eq!(results.len(), 1);
+    assert!(results[0].snippet.to_lowercase().contains("hello"));
+}
+
+// 超过 200 行的文件，老消息（前 200 行之外）也能被匹配
+#[test]
+fn SearchSession_LongFile_OldMessage_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("long.jsonl");
+
+    // 前 250 行是不匹配的填充，第 1 行（最老）才是目标
+    let mut content = String::new();
+    content.push_str(&format!("{}\n", build_jsonl_line("user", "TARGET_KEYWORD_HERE")));
+    for i in 0..250 {
+        content.push_str(&format!("{}\n", build_jsonl_line("assistant", &format!("filler {}", i))));
+    }
+    std::fs::write(&file_path, content).unwrap();
+
+    let dirs = vec![dir.path().to_path_buf()];
+    let results = search_session_messages_in_dirs(&dirs, "/proj", "TARGET_KEYWORD", 10);
+    assert_eq!(results.len(), 1, "old message outside newest 200 lines should be matched");
+    assert!(results[0].snippet.contains("TARGET_KEYWORD"));
+}
+
+// 同一文件多条匹配，snippet 取最新（最末尾的匹配）
+#[test]
+fn SearchSession_LatestMatchFirst_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("multi.jsonl");
+    let mut content = String::new();
+    content.push_str(&format!("{}\n", build_jsonl_line("user", "KEYWORD old match")));
+    content.push_str(&format!("{}\n", build_jsonl_line("assistant", "no match here")));
+    content.push_str(&format!("{}\n", build_jsonl_line("user", "KEYWORD new match")));
+    std::fs::write(&file_path, content).unwrap();
+
+    let dirs = vec![dir.path().to_path_buf()];
+    let results = search_session_messages_in_dirs(&dirs, "/proj", "KEYWORD", 10);
+    assert_eq!(results.len(), 1);
+    assert!(results[0].snippet.contains("new match"));
+    assert!(!results[0].snippet.contains("old match"));
+}
+
+// agent- 开头的文件被跳过
+#[test]
+fn SearchSession_AgentFilesSkipped_001() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("agent-sub.jsonl"),
+        format!("{}\n", build_jsonl_line("user", "secret keyword")),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("normal.jsonl"),
+        format!("{}\n", build_jsonl_line("user", "no match")),
+    )
+    .unwrap();
+
+    let dirs = vec![dir.path().to_path_buf()];
+    let results = search_session_messages_in_dirs(&dirs, "/proj", "secret", 10);
+    assert_eq!(results.len(), 0, "agent-* files must be skipped");
+}
+
+// limit 截断生效
+#[test]
+fn SearchSession_LimitApplied_001() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..5 {
+        std::fs::write(
+            dir.path().join(format!("s{}.jsonl", i)),
+            format!("{}\n", build_jsonl_line("user", "shared keyword")),
+        )
+        .unwrap();
+    }
+
+    let dirs = vec![dir.path().to_path_buf()];
+    let results = search_session_messages_in_dirs(&dirs, "/proj", "shared", 3);
+    assert_eq!(results.len(), 3);
+}
+
+// 非 .jsonl / .txt 文件被忽略
+#[test]
+fn SearchSession_NonJsonlIgnored_001() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("notes.md"),
+        format!("{}\n", build_jsonl_line("user", "keyword in md")),
+    )
+    .unwrap();
+
+    let dirs = vec![dir.path().to_path_buf()];
+    let results = search_session_messages_in_dirs(&dirs, "/proj", "keyword", 10);
+    assert_eq!(results.len(), 0);
+}
+
+// content 为 array（多模态）的消息目前不匹配（仅 string content 才匹配）
+#[test]
+fn SearchSession_ArrayContentSkipped_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("multi-modal.jsonl");
+    std::fs::write(
+        &file_path,
+        r#"{"type":"user","message":{"content":[{"type":"text","text":"keyword in array"}]}}
+"#,
+    )
+    .unwrap();
+
+    let dirs = vec![dir.path().to_path_buf()];
+    let results = search_session_messages_in_dirs(&dirs, "/proj", "keyword", 10);
+    assert_eq!(results.len(), 0, "array content not yet supported");
 }

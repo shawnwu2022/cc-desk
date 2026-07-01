@@ -9,8 +9,10 @@
         alt="Toggle"
       />
       <span class="plugin-name">{{ plugin.name }}</span>
-      <span class="plugin-version">v{{ plugin.version }}</span>
     </div>
+
+    <!-- Plugin Version -->
+    <div class="plugin-version">v{{ plugin.version }}</div>
 
     <!-- Plugin ID -->
     <div class="plugin-id">{{ plugin.id }}</div>
@@ -172,6 +174,7 @@ function useAgent(invokeFormat: string) {
 }
 
 .plugin-version {
+  margin-top: 4px;
   font-size: 11px;
   color: var(--text-tertiary);
 }

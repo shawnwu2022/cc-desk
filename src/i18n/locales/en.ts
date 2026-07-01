@@ -225,6 +225,8 @@ export default {
   // Sessions panel
   sessions: 'Sessions',
   searchSessions: 'Search sessions...',
+  searchResults: 'Search Results',
+  clearSearch: 'Clear search',
   openTabs: 'Open Tabs',
   history: 'History',
   noSessionsFound: 'No sessions found',
@@ -243,6 +245,7 @@ export default {
 
   // MCP panel
   mcpServers: 'MCP Servers',
+  mcpDesc: 'Open protocol connecting AI with external tools and data sources (Model Context Protocol)',
   refreshMcp: 'Refresh MCP servers',
   loadingMcp: 'Loading MCP servers...',
   noMcpConfigured: 'No MCP servers configured',
@@ -272,6 +275,7 @@ export default {
 
   // Skills panel
   skills: 'Skills',
+  skillsDesc: 'Capability packages encapsulating task-specific workflows and prompts, ensuring consistent model behavior in specialized scenarios',
   refreshSkills: 'Refresh skills',
   loadingSkills: 'Loading skills...',
   noSkillsAvailable: 'No skills available',
@@ -282,6 +286,7 @@ export default {
 
   // Agents panel
   agents: 'Agents',
+  agentsDesc: 'Autonomous agents with dedicated roles and tool boundaries, executing subtasks independently',
   refreshAgents: 'Refresh agents',
   loadingAgents: 'Loading agents...',
   noAgentsAvailable: 'No agents available',
@@ -289,6 +294,7 @@ export default {
 
   // Plugins panel
   plugins: 'Plugins',
+  pluginsDesc: 'Independently distributable packages bundling skills / agents / mcp components',
   refreshPlugins: 'Refresh plugins',
   loadingPlugins: 'Loading plugins...',
   noPluginsInstalled: 'No plugins installed',

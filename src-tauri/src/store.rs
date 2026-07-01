@@ -809,99 +809,121 @@ pub fn search_session_messages(
         return Ok(Vec::new());
     }
 
+    Ok(search_session_messages_in_dirs(&project_dirs, project_path, query, limit))
+}
+
+/// 在指定项目目录下搜索会话消息（核心逻辑，可测试）
+/// 从每个文件最新行往回扫描全部行，命中第一个匹配即停止，snippet 取最新匹配
+pub(crate) fn search_session_messages_in_dirs(
+    project_dirs: &[PathBuf],
+    project_path: &str,
+    query: &str,
+    limit: usize,
+) -> Vec<SessionSearchResult> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    for project_dir in &project_dirs {
+    for project_dir in project_dirs {
         if !project_dir.exists() {
             continue;
         }
 
-        for entry in fs::read_dir(project_dir)? {
-            let entry = entry?;
+        let entries = match fs::read_dir(project_dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
             let path = entry.path();
 
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if (ext == "jsonl" || ext == "txt")
-                && !path
-                    .file_name()
-                    .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
-                    .unwrap_or(false)
-            {
-                let session_id = path
-                    .file_stem()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_string();
+            let is_agent = path
+                .file_name()
+                .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
+                .unwrap_or(false);
+            if (ext != "jsonl" && ext != "txt") || is_agent {
+                continue;
+            }
 
-                if let Ok(content) = fs::read_to_string(&path) {
-                    let name = extract_session_name(&path);
-                    let lines: Vec<&str> = content.lines().collect();
-                    let mut matched_snippet: Option<String> = None;
+            let session_id = path
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
 
-                    // 从末尾开始读取（最新消息优先）
-                    for line in lines.iter().rev().take(200) {
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                            let msg_type = json.get("type").and_then(|v| v.as_str());
+            let content = match fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
-                            if msg_type == Some("user") || msg_type == Some("assistant") {
-                                if let Some(msg_content) = json
-                                    .get("message")
-                                    .and_then(|m| m.get("content"))
-                                    .and_then(|c| c.as_str())
-                                {
-                                    if msg_content.to_lowercase().contains(&query_lower) {
-                                        let chars: Vec<char> = msg_content.chars().collect();
-                                        let lower_content: String =
-                                            chars.iter().collect::<String>().to_lowercase();
-                                        let match_pos =
-                                            lower_content.find(&query_lower).unwrap_or(0);
-                                        let char_match_pos =
-                                            lower_content[..match_pos].chars().count();
-                                        let start = char_match_pos.saturating_sub(30);
-                                        let end = (char_match_pos + query.chars().count() + 70)
-                                            .min(chars.len());
-                                        let snippet_raw: String =
-                                            chars[start..end].iter().collect();
-                                        matched_snippet = Some(if start > 0 || end < chars.len() {
-                                            format!("...{}...", snippet_raw)
-                                        } else {
-                                            snippet_raw
-                                        });
-                                        break;
-                                    }
-                                }
+            let name = extract_session_name(&path);
+            let lines: Vec<&str> = content.lines().collect();
+            let mut matched_snippet: Option<String> = None;
+
+            // 从末尾开始扫描全部行（最新消息优先）
+            for line in lines.iter().rev() {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                    let msg_type = json.get("type").and_then(|v| v.as_str());
+
+                    if msg_type == Some("user") || msg_type == Some("assistant") {
+                        if let Some(msg_content) = json
+                            .get("message")
+                            .and_then(|m| m.get("content"))
+                            .and_then(|c| c.as_str())
+                        {
+                            if msg_content.to_lowercase().contains(&query_lower) {
+                                let chars: Vec<char> = msg_content.chars().collect();
+                                let lower_content: String =
+                                    chars.iter().collect::<String>().to_lowercase();
+                                let match_pos =
+                                    lower_content.find(&query_lower).unwrap_or(0);
+                                let char_match_pos =
+                                    lower_content[..match_pos].chars().count();
+                                let start = char_match_pos.saturating_sub(30);
+                                let end = (char_match_pos + query.chars().count() + 70)
+                                    .min(chars.len());
+                                let snippet_raw: String =
+                                    chars[start..end].iter().collect();
+                                matched_snippet = Some(if start > 0 || end < chars.len() {
+                                    format!("...{}...", snippet_raw)
+                                } else {
+                                    snippet_raw
+                                });
+                                break;
                             }
                         }
                     }
-
-                    if let Some(snippet) = matched_snippet {
-                        let last_active_at = fs::metadata(&path)
-                            .and_then(|m| m.modified())
-                            .map(|t| {
-                                t.duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_millis() as u64)
-                                    .unwrap_or(0)
-                            })
-                            .unwrap_or(0);
-
-                        results.push(SessionSearchResult {
-                            session_id,
-                            name,
-                            project_path: project_path.to_string(),
-                            last_active_at,
-                            snippet,
-                        });
-                    }
                 }
+            }
+
+            if let Some(snippet) = matched_snippet {
+                let last_active_at = fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(0);
+
+                results.push(SessionSearchResult {
+                    session_id,
+                    name,
+                    project_path: project_path.to_string(),
+                    last_active_at,
+                    snippet,
+                });
             }
         }
     }
 
     results.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
     results.truncate(limit);
-
-    Ok(results)
+    results
 }
 
 /// 解析 ISO 时间戳
@@ -1488,12 +1510,7 @@ pub(crate) fn extract_md_description(path: &Path) -> Option<String> {
                 if let Some(desc) = line.strip_prefix("description:") {
                     let desc = desc.trim();
                     if !desc.is_empty() {
-                        let desc_chars: String = desc.chars().take(200).collect();
-                        return Some(if desc.chars().count() > 200 {
-                            format!("{}...", desc_chars)
-                        } else {
-                            desc.to_string()
-                        });
+                        return Some(desc.to_string());
                     }
                 }
             }
@@ -1513,12 +1530,7 @@ pub(crate) fn extract_md_description(path: &Path) -> Option<String> {
         for line in lines.iter().skip(start) {
             let trimmed = line.trim();
             if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("---") {
-                let desc_chars: String = trimmed.chars().take(100).collect();
-                return Some(if trimmed.chars().count() > 100 {
-                    format!("{}...", desc_chars)
-                } else {
-                    trimmed.to_string()
-                });
+                return Some(trimmed.to_string());
             }
         }
     }
@@ -1624,7 +1636,7 @@ fn parse_agent_frontmatter(path: &Path) -> Option<(String, Option<String>, Optio
 
 /// 从 SKILL.md 文件解析 frontmatter 中的 description（与 CLI 源码 loadSkillsDir.ts 一致）
 /// 优先取 frontmatter description，后备取正文第一行非空非标题
-fn parse_skill_description(path: &Path) -> Option<String> {
+pub(crate) fn parse_skill_description(path: &Path) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
     let lines: Vec<&str> = content.lines().collect();
 
@@ -1644,12 +1656,7 @@ fn parse_skill_description(path: &Path) -> Option<String> {
                 if let Some(val) = trimmed.strip_prefix("description:") {
                     let val = val.trim();
                     if !val.is_empty() {
-                        let desc_chars: String = val.chars().take(200).collect();
-                        return Some(if val.chars().count() > 200 {
-                            format!("{}...", desc_chars)
-                        } else {
-                            val.to_string()
-                        });
+                        return Some(val.to_string());
                     }
                 }
             }
@@ -1659,12 +1666,7 @@ fn parse_skill_description(path: &Path) -> Option<String> {
             for line in lines.iter().skip(start) {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("---") {
-                    let desc_chars: String = trimmed.chars().take(100).collect();
-                    return Some(if trimmed.chars().count() > 100 {
-                        format!("{}...", desc_chars)
-                    } else {
-                        trimmed.to_string()
-                    });
+                    return Some(trimmed.to_string());
                 }
             }
         }
@@ -1673,12 +1675,7 @@ fn parse_skill_description(path: &Path) -> Option<String> {
         for line in lines.iter() {
             let trimmed = line.trim();
             if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("---") {
-                let desc_chars: String = trimmed.chars().take(100).collect();
-                return Some(if trimmed.chars().count() > 100 {
-                    format!("{}...", desc_chars)
-                } else {
-                    trimmed.to_string()
-                });
+                return Some(trimmed.to_string());
             }
         }
     }

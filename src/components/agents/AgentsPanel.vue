@@ -9,23 +9,27 @@
       </template>
     </PanelHeader>
 
-    <!-- Loading -->
-    <div v-if="loading" class="loading-state">
-      <span class="loading-text">{{ t('loadingAgents') }}</span>
-    </div>
+    <div class="panel-content">
+      <!-- Concept Description -->
+      <div class="panel-desc">{{ t('agentsDesc') }}</div>
 
-    <!-- Error -->
-    <div v-else-if="error" class="error-state">
-      <span class="error-text">{{ error }}</span>
-    </div>
+      <!-- Loading -->
+      <div v-if="loading" class="loading-state">
+        <span class="loading-text">{{ t('loadingAgents') }}</span>
+      </div>
 
-    <!-- Empty -->
-    <div v-else-if="allAgents.length === 0" class="empty-state">
-      <span class="empty-text">{{ t('noAgentsAvailable') }}</span>
-    </div>
+      <!-- Error -->
+      <div v-else-if="error" class="error-state">
+        <span class="error-text">{{ error }}</span>
+      </div>
 
-    <!-- Agents List -->
-    <div v-else class="agents-list">
+      <!-- Empty -->
+      <div v-else-if="allAgents.length === 0" class="empty-state">
+        <span class="empty-text">{{ t('noAgentsAvailable') }}</span>
+      </div>
+
+      <!-- Agents List -->
+      <div v-else class="agents-list">
       <!-- Project Agents -->
       <AgentGroup
         v-if="projectAgents.length > 0"
@@ -65,6 +69,7 @@
         :agents="builtinAgents"
         @toggle="sidebarStore.toggleAgentGroup('builtin')"
       />
+    </div>
     </div>
   </div>
 </template>
@@ -155,6 +160,20 @@ onMounted(() => {
   color: var(--text-primary);
 }
 
+.panel-desc {
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
 .loading-state,
 .error-state,
 .empty-state {
@@ -183,8 +202,6 @@ onMounted(() => {
 }
 
 .agents-list {
-  flex: 1;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;

@@ -9,24 +9,28 @@
       </template>
     </PanelHeader>
 
-    <!-- Loading -->
-    <div v-if="loading" class="loading-state">
-      <span class="loading-text">{{ t('loadingPlugins') }}</span>
-    </div>
+    <div class="panel-content">
+      <!-- Concept Description -->
+      <div class="panel-desc">{{ t('pluginsDesc') }}</div>
 
-    <!-- Error -->
-    <div v-else-if="error" class="error-state">
-      <span class="error-text">{{ error }}</span>
-    </div>
+      <!-- Loading -->
+      <div v-if="loading" class="loading-state">
+        <span class="loading-text">{{ t('loadingPlugins') }}</span>
+      </div>
 
-    <!-- Empty -->
-    <div v-else-if="userPlugins.length === 0 && projectPlugins.length === 0" class="empty-state">
-      <span class="empty-text">{{ t('noPluginsInstalled') }}</span>
-      <span class="empty-hint">{{ t('installPluginsHint') }}</span>
-    </div>
+      <!-- Error -->
+      <div v-else-if="error" class="error-state">
+        <span class="error-text">{{ error }}</span>
+      </div>
 
-    <!-- Plugins List -->
-    <div v-else class="plugins-list">
+      <!-- Empty -->
+      <div v-else-if="userPlugins.length === 0 && projectPlugins.length === 0" class="empty-state">
+        <span class="empty-text">{{ t('noPluginsInstalled') }}</span>
+        <span class="empty-hint">{{ t('installPluginsHint') }}</span>
+      </div>
+
+      <!-- Plugins List -->
+      <div v-else class="plugins-list">
       <!-- Project Plugins -->
       <PluginGroup
         v-if="projectPlugins.length > 0"
@@ -46,6 +50,7 @@
         :plugins="userPlugins"
         @toggle="sidebarStore.togglePluginGroup('user')"
       />
+    </div>
     </div>
   </div>
 </template>
@@ -125,6 +130,20 @@ onMounted(() => {
   color: var(--text-primary);
 }
 
+.panel-desc {
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
 .loading-state,
 .error-state,
 .empty-state {
@@ -153,8 +172,6 @@ onMounted(() => {
 }
 
 .plugins-list {
-  flex: 1;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;

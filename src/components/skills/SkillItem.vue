@@ -141,6 +141,8 @@ function emitUseSkill() {
   color: var(--text-secondary);
   line-height: 1.5;
   white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .skill-description-empty {

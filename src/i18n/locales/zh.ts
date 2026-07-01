@@ -225,6 +225,8 @@ export default {
   // Sessions panel
   sessions: '会话',
   searchSessions: '搜索会话...',
+  searchResults: '搜索结果',
+  clearSearch: '清除搜索',
   openTabs: '打开的标签页',
   history: '历史记录',
   noSessionsFound: '未找到会话',
@@ -243,6 +245,7 @@ export default {
 
   // MCP panel
   mcpServers: 'MCP Servers',
+  mcpDesc: '连接 AI 与外部工具、数据源的开放协议（Model Context Protocol）',
   refreshMcp: '刷新 MCP Servers',
   loadingMcp: '加载 MCP Servers...',
   noMcpConfigured: '未配置 MCP Servers',
@@ -272,6 +275,7 @@ export default {
 
   // Skills panel
   skills: 'Skills',
+  skillsDesc: '封装特定任务工作流与指令的能力包，让模型在专精场景下行为一致',
   refreshSkills: '刷新 Skills',
   loadingSkills: '加载 Skills...',
   noSkillsAvailable: '暂无可用 Skills',
@@ -282,6 +286,7 @@ export default {
 
   // Agents panel
   agents: 'Agents',
+  agentsDesc: '拥有特定角色和工具边界的智能体，独立执行子任务',
   refreshAgents: '刷新 Agents',
   loadingAgents: '加载 Agents...',
   noAgentsAvailable: '暂无可用 Agents',
@@ -289,6 +294,7 @@ export default {
 
   // Plugins panel
   plugins: 'Plugins',
+  pluginsDesc: '可独立分发的扩展包，将 skills / agents / mcp 等组件打包组合',
   refreshPlugins: '刷新 Plugins',
   loadingPlugins: '加载 Plugins...',
   noPluginsInstalled: '未安装 Plugins',

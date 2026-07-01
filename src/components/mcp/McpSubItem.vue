@@ -26,10 +26,12 @@
         <div class="args-title">{{ t('parameters') }}</div>
         <div class="args-list">
           <div v-for="param in parsedParams" :key="param.name" class="arg-item">
-            <span class="arg-name">{{ param.name }}</span>
-            <span v-if="param.type" class="arg-type">{{ param.type }}</span>
-            <span v-if="param.required" class="arg-required">{{ t('required') }}</span>
-            <span v-if="param.description" class="arg-desc">{{ param.description }}</span>
+            <div class="arg-header">
+              <span class="arg-name">{{ param.name }}</span>
+              <span v-if="param.type" class="arg-type">{{ param.type }}</span>
+              <span v-if="param.required" class="arg-required">{{ t('required') }}</span>
+            </div>
+            <div v-if="param.description" class="arg-desc">{{ param.description }}</div>
           </div>
         </div>
       </div>
@@ -39,9 +41,11 @@
         <div class="args-title">{{ t('parameters') }}</div>
         <div class="args-list">
           <div v-for="arg in arguments" :key="arg.name" class="arg-item">
-            <span class="arg-name">{{ arg.name }}</span>
-            <span v-if="arg.required" class="arg-required">{{ t('required') }}</span>
-            <span v-if="arg.description" class="arg-desc">{{ arg.description }}</span>
+            <div class="arg-header">
+              <span class="arg-name">{{ arg.name }}</span>
+              <span v-if="arg.required" class="arg-required">{{ t('required') }}</span>
+            </div>
+            <div v-if="arg.description" class="arg-desc">{{ arg.description }}</div>
           </div>
         </div>
       </div>
@@ -200,9 +204,16 @@ function toggleExpand() {
 
 .arg-item {
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+}
+
+.arg-header {
+  display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  flex-wrap: wrap;
 }
 
 .arg-name {
@@ -220,6 +231,10 @@ function toggleExpand() {
 
 .arg-desc {
   color: var(--text-tertiary);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .sub-uri {

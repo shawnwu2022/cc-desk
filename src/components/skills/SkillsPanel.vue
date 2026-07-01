@@ -9,24 +9,28 @@
       </template>
     </PanelHeader>
 
-    <!-- Loading -->
-    <div v-if="loading" class="loading-state">
-      <span class="loading-text">{{ t('loadingSkills') }}</span>
-    </div>
+    <div class="panel-content">
+      <!-- Concept Description -->
+      <div class="panel-desc">{{ t('skillsDesc') }}</div>
 
-    <!-- Error -->
-    <div v-else-if="error" class="error-state">
-      <span class="error-text">{{ error }}</span>
-    </div>
+      <!-- Loading -->
+      <div v-if="loading" class="loading-state">
+        <span class="loading-text">{{ t('loadingSkills') }}</span>
+      </div>
 
-    <!-- Empty -->
-    <div v-else-if="allSkills.length === 0" class="empty-state">
-      <span class="empty-text">{{ t('noSkillsAvailable') }}</span>
-      <span class="empty-hint">{{ t('addSkillsHint') }}</span>
-    </div>
+      <!-- Error -->
+      <div v-else-if="error" class="error-state">
+        <span class="error-text">{{ error }}</span>
+      </div>
 
-    <!-- Skills List (按顺序: Project -> User -> Plugin) -->
-    <div v-else class="skills-list">
+      <!-- Empty -->
+      <div v-else-if="allSkills.length === 0" class="empty-state">
+        <span class="empty-text">{{ t('noSkillsAvailable') }}</span>
+        <span class="empty-hint">{{ t('addSkillsHint') }}</span>
+      </div>
+
+      <!-- Skills List (按顺序: Project -> User -> Plugin) -->
+      <div v-else class="skills-list">
       <!-- Project Skills -->
       <SkillGroup
         v-if="projectSkills.length > 0"
@@ -56,6 +60,7 @@
         :skills="pluginSkills"
         @toggle="sidebarStore.toggleSkillGroup('plugin')"
       />
+    </div>
     </div>
   </div>
 </template>
@@ -142,6 +147,20 @@ onMounted(() => {
   color: var(--text-primary);
 }
 
+.panel-desc {
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
 .loading-state,
 .error-state,
 .empty-state {
@@ -170,8 +189,6 @@ onMounted(() => {
 }
 
 .skills-list {
-  flex: 1;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
