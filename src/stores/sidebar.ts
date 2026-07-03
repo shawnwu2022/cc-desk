@@ -181,6 +181,15 @@ export const useSidebarStore = defineStore('sidebar', () => {
     if (idx >= 0) plugins.value[idx] = { ...plugins.value[idx], enabled }
     try {
       await setPluginEnabled(pluginId, enabled)
+      // 禁用/启用 plugin 影响其 skills/agents/mcp 是否展示，后端已按 plugin.enabled 过滤。
+      // 这里乐观更新只动了 plugins，需 reload 子项让侧边栏立即同步（不阻塞 toggle 主流程）。
+      if (loadedCwd.value) {
+        await Promise.all([
+          loadSkills(loadedCwd.value),
+          loadAgents(loadedCwd.value),
+          loadMcpServers(loadedCwd.value),
+        ])
+      }
     } catch (err) {
       if (idx >= 0 && old) plugins.value[idx] = old
       throw err

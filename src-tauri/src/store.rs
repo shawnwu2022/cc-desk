@@ -1805,9 +1805,12 @@ pub struct McpPromptInfo {
 pub fn get_all_agents(project_path: &str) -> Result<Vec<AgentInfo>> {
     let mut agents = Vec::new();
 
-    // 1. 从 plugins 获取 plugin agents
+    // 1. 从 plugins 获取 plugin agents（被禁用的 plugin 跳过：其子项不在侧边栏展示）
     let plugins = get_all_plugins(project_path)?;
     for plugin in &plugins {
+        if !plugin.enabled {
+            continue;
+        }
         if let Some(plugin_agents) = &plugin.agents {
             for agent in plugin_agents {
                 agents.push(AgentInfo {
@@ -1915,9 +1918,12 @@ pub fn get_all_skills(project_path: &str) -> Result<Vec<SkillInfo>> {
         }
     }
 
-    // 3. 从 plugins 获取 skills
+    // 3. 从 plugins 获取 skills（被禁用的 plugin 跳过：其子项不在侧边栏展示）
     let plugins = get_all_plugins(project_path)?;
     for plugin in plugins {
+        if !plugin.enabled {
+            continue;
+        }
         if let Some(plugin_skills) = plugin.skills {
             for skill in plugin_skills {
                 let full_name = skill
@@ -1946,9 +1952,12 @@ pub fn get_all_mcp_servers(project_path: &str) -> Result<Vec<McpServerInfo>> {
     let mut seen_names = std::collections::HashSet::new();
 
     // 收集所有源（按优先级从低到高：plugin → user → project → local）
-    // 1. Plugin scope: 从 plugin 列表加载 MCP servers
+    // 1. Plugin scope: 从 plugin 列表加载 MCP servers（被禁用的 plugin 跳过：其子项不在侧边栏展示）
     if let Ok(plugins) = get_all_plugins(project_path) {
         for plugin in &plugins {
+            if !plugin.enabled {
+                continue;
+            }
             if let Some(mcp_value) = &plugin.mcp_servers {
                 // plugin .mcp.json 格式：直接是 server 映射（不需要 mcpServers 包装）
                 // 也可能是带 mcpServers 包装的对象

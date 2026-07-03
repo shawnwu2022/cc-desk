@@ -171,7 +171,31 @@ describe('sidebar store', () => {
       expect(store.mcpServers[0].enabled).toBe(false)
     })
 
-    it('TogglePlugin_NoLoad_001', async () => {
+    it('TogglePlugin_NoReloadPlugins_001', async () => {
+      const store = useSidebarStore()
+      store.plugins = [
+        { id: 'paper-tool@orczh', name: 'paper-tool', version: '1.0', scope: 'user', enabled: true, installPath: '/x' },
+      ]
+      // 已加载过 cwd，触发子项 reload 时会用它
+      ;(store as unknown as { loadedCwd: string }).loadedCwd = '/proj'
+      mockSetPluginEnabled.mockResolvedValue(undefined)
+      mockGetAllSkills.mockResolvedValue([])
+      mockGetAllAgents.mockResolvedValue([])
+      mockGetAllMcpServers.mockResolvedValue([])
+
+      await store.togglePluginEnabled('paper-tool@orczh', false)
+
+      // plugin 自身的列表不重拉（避免覆盖乐观更新）
+      expect(mockGetAllPlugins).not.toHaveBeenCalled()
+      // skills/agents/mcp 子项需要 reload（后端按 plugin.enabled 过滤）
+      expect(mockGetAllSkills).toHaveBeenCalledWith('/proj')
+      expect(mockGetAllAgents).toHaveBeenCalledWith('/proj')
+      expect(mockGetAllMcpServers).toHaveBeenCalledWith('/proj')
+      expect(store.plugins[0].enabled).toBe(false)
+    })
+
+    // loadedCwd 为空时（尚未预加载过）不触发 reload，避免无 cwd 调用
+    it('TogglePlugin_NoReloadWhenNoCwd_001', async () => {
       const store = useSidebarStore()
       store.plugins = [
         { id: 'paper-tool@orczh', name: 'paper-tool', version: '1.0', scope: 'user', enabled: true, installPath: '/x' },
@@ -180,8 +204,9 @@ describe('sidebar store', () => {
 
       await store.togglePluginEnabled('paper-tool@orczh', false)
 
-      expect(mockGetAllPlugins).not.toHaveBeenCalled()
-      expect(store.plugins[0].enabled).toBe(false)
+      expect(mockGetAllSkills).not.toHaveBeenCalled()
+      expect(mockGetAllAgents).not.toHaveBeenCalled()
+      expect(mockGetAllMcpServers).not.toHaveBeenCalled()
     })
 
     // 失败时：store 数据回滚到原值，错误向上抛
@@ -207,6 +232,23 @@ describe('sidebar store', () => {
       await store.toggleSkillEnabled('ghost', false)
 
       expect(mockSetSkillEnabled).toHaveBeenCalledWith('ghost', false)
+    })
+
+    // toggle plugin 失败时：plugin.enabled 回滚，且不触发子项 reload
+    it('TogglePlugin_Failure_NoReload_001', async () => {
+      const store = useSidebarStore()
+      store.plugins = [
+        { id: 'paper-tool@orczh', name: 'paper-tool', version: '1.0', scope: 'user', enabled: true, installPath: '/x' },
+      ]
+      ;(store as unknown as { loadedCwd: string }).loadedCwd = '/proj'
+      mockSetPluginEnabled.mockRejectedValue(new Error('network down'))
+
+      await expect(store.togglePluginEnabled('paper-tool@orczh', false)).rejects.toThrow('network down')
+
+      expect(store.plugins[0].enabled).toBe(true) // 回滚
+      expect(mockGetAllSkills).not.toHaveBeenCalled()
+      expect(mockGetAllAgents).not.toHaveBeenCalled()
+      expect(mockGetAllMcpServers).not.toHaveBeenCalled()
     })
   })
 })

@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.13.1] - 2026-07-03
+
+### Featuresnn- Disabling a user-scope plugin now hides its skills/agents/mcp from the sidebar panels immediately
+
 ## [0.13.0] - 2026-07-02
 
 ### Features

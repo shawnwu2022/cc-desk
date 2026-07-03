@@ -35,6 +35,7 @@ import {
 } from '@/api/tauri'
 import { registerTerminalCommand } from '@/composables/useTerminalCommand'
 import { safeDispose } from '@/utils/dispose'
+import { relativizePath } from '@/utils/path'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -403,12 +404,17 @@ onMounted(async () => {
 // 设置事件监听器
 async function setupEventListeners() {
   // 文件拖放 → 将路径输入终端
+  // 项目内文件转换为相对路径，便于 Claude 直接引用
   unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
     if (event.payload.type === 'drop') {
       isDragOver.value = false
       const paths = event.payload.paths
       if (paths.length > 0) {
-        const text = paths.map(p => p.includes(' ') ? `"${p}"` : p).join(' ')
+        const projectPath = sessionStore.tabs.get(currentDisplayTabId.value ?? '')?.projectPath ?? ''
+        const text = paths
+          .map(p => relativizePath(p, projectPath))
+          .map(p => p.includes(' ') ? `"${p}"` : p)
+          .join(' ')
         sendText(text)
       }
     } else if (event.payload.type === 'enter' || event.payload.type === 'over') {

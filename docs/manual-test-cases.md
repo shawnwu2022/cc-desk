@@ -972,3 +972,56 @@
 - 当前发布的版本在数组首位，platforms 字段完整
 - `latest.json` 仍然存在且内容正确（未被破坏）
 
+---
+
+## 侧边栏 Plugin 子项过滤
+
+### Sidebar_PluginFilter_DisableHidesChildren_001 — 禁用 plugin 后其 skill/agent/mcp 不再展示
+
+**目标**：验证 user-scope plugin 被禁用时，其提供的 skill/agent/mcp 立即从侧边栏对应面板消失
+
+**前置条件**：已安装至少一个 user-scope plugin（如 paper-tool@orczh），且该 plugin 提供 skill / agent / mcp 子项；该 plugin 当前为启用状态
+
+**操作步骤**：
+1. 打开 Plugins 面板，记住目标 plugin 提供的 skill / agent / mcp 名称
+2. 打开 Skills 面板，确认 Plugin 分组下能看到该 plugin 的 skill
+3. 打开 Agents 面板，确认 Plugin 分组下能看到该 plugin 的 agent
+4. 打开 MCP 面板，确认 Plugin 分组下能看到该 plugin 的 mcp server
+5. 回到 Plugins 面板，点击该 plugin 的 ToggleSwitch 关闭它
+6. 不重启、不刷新，依次打开 Skills / Agents / MCP 面板
+
+**预期结果**：
+- 步骤 2-4：能看到目标 plugin 的子项
+- 步骤 5：plugin ToggleSwitch 立即变为关闭状态（乐观更新），无报错提示
+- 步骤 6：三个面板的 Plugin 分组中都不再出现该 plugin 的子项（如果某分组没有其他 plugin 子项，整组隐藏）
+
+### Sidebar_PluginFilter_EnableShowsChildren_001 — 启用 plugin 后其 skill/agent/mcp 重新出现
+
+**目标**：验证 user-scope plugin 从禁用切换为启用后，子项立即回到侧边栏
+
+**前置条件**：目标 plugin 处于禁用状态（步骤同上一用例先关闭它）
+
+**操作步骤**：
+1. 在 Plugins 面板点击该 plugin 的 ToggleSwitch 开启它
+2. 依次打开 Skills / Agents / MCP 面板
+
+**预期结果**：
+- 步骤 1：plugin ToggleSwitch 立即变为开启状态，无报错
+- 步骤 2：三个面板的 Plugin 分组重新出现该 plugin 的子项
+
+### Sidebar_PluginFilter_ToggleFailureRollback_001 — plugin toggle 失败时数据与子项展示均回滚
+
+**目标**：验证 toggle API 失败时，plugin.enabled 与子项展示均保持原状
+
+**前置条件**：构造 toggle 失败场景（例如手动停止 claude CLI 后端、或网络异常导致 `claude plugin` 命令失败）
+
+**操作步骤**：
+1. 在 Plugins 面板对一个 enabled=true 的 plugin 点击关闭
+2. 观察错误反馈
+
+**预期结果**：
+- plugin ToggleSwitch 短暂变灰后弹回开启位置（乐观更新被回滚）
+- 控制台/Toast 显示错误信息
+- Skills / Agents / MCP 面板中该 plugin 的子项仍然展示（未被错误移除）
+
+
