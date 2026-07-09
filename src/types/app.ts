@@ -20,6 +20,7 @@ export interface AppConfig {
   defaultSkipPermissions?: boolean
   defaultCustomArgs?: string
   theme?: 'light' | 'dark'
+  terminalTheme?: string
   fontSize?: number
   autoConnectIde?: boolean
   hiddenProjects?: string[]

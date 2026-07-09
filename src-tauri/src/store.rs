@@ -59,6 +59,8 @@ pub struct AppConfig {
     #[serde(rename = "defaultCustomArgs")]
     pub default_custom_args: Option<String>,
     pub theme: Option<String>,
+    #[serde(rename = "terminalTheme")]
+    pub terminal_theme: Option<String>,
     #[serde(rename = "fontSize")]
     pub font_size: Option<u16>,
     #[serde(rename = "autoConnectIde")]

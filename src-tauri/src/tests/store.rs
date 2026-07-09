@@ -5,7 +5,7 @@ use crate::store::{
     infer_server_type, merge_json_values, parse_agents_list_output, parse_mcp_server_entry,
     parse_skill_description, parse_timestamp, resolve_marketplace_plugin_path,
     search_session_messages_in_dirs, set_agent_enabled_in, set_mcp_server_enabled_in,
-    set_skill_enabled_in, AgentInfo,
+    set_skill_enabled_in, AgentInfo, AppConfig,
 };
 
 use std::collections::HashMap;
@@ -1054,4 +1054,25 @@ fn SetMcpEnabled_PathTraversal_001() {
 
     let r = set_mcp_server_enabled_in(&claude_json, &disabled_dir, "../escape", false);
     assert!(r.is_err());
+}
+
+// AppConfig 序列化包含 terminalTheme（camelCase rename），反序列化还原
+#[test]
+fn AppConfig_TerminalTheme_SerializeDeserialize_001() {
+    let config = AppConfig {
+        terminal_theme: Some("dracula".to_string()),
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    assert!(json.contains("\"terminalTheme\":\"dracula\""));
+
+    let parsed: AppConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.terminal_theme, Some("dracula".to_string()));
+}
+
+// terminal_theme 默认为 None（首次返回不设默认，迁移交前端）
+#[test]
+fn AppConfig_TerminalTheme_DefaultNone_001() {
+    let config = AppConfig::default();
+    assert_eq!(config.terminal_theme, None);
 }
