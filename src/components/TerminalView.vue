@@ -1,5 +1,9 @@
 <template>
-  <div class="terminal-view" data-terminal-view>
+  <div
+    class="terminal-view"
+    data-terminal-view
+    :style="terminalSurfaceStyle"
+  >
     <!-- 图标栏（常驻） -->
     <IconBar
       :active-panel="sidebarStore.activePanel"
@@ -54,6 +58,7 @@
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { computeTerminalSurfaceVars, getTerminalTheme } from '@/config/terminalThemes'
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore, type SidebarPanelType } from '@/stores/sidebar'
 import { useConfigStore } from '@/stores/config'
@@ -80,6 +85,11 @@ const sessionStore = useSessionStore()
 const sidebarStore = useSidebarStore()
 const configStore = useConfigStore()
 const terminalRef = ref()
+
+// 终端表面色 CSS 变量：随终端主题变化（与 GUI 浅/暗独立），向下继承给容器/滚动条/空态
+const terminalSurfaceStyle = computed(() =>
+  computeTerminalSurfaceVars(getTerminalTheme(appStore.terminalTheme))
+)
 
 const { t } = useI18n()
 
@@ -293,7 +303,7 @@ function handlePtyStarted(tabId: string, _ptyId: string) {
   min-height: 0;
   overflow: hidden;
   position: relative;
-  background: var(--terminal-bg);
+  background: var(--terminal-surface-bg);
 }
 
 .empty-state-overlay {
@@ -302,7 +312,7 @@ function handlePtyStarted(tabId: string, _ptyId: string) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--terminal-bg);
+  background: var(--terminal-surface-bg);
   z-index: 10;
 }
 
