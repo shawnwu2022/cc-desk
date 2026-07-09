@@ -42,6 +42,7 @@ App.vue
 - Tab 创建/切换/重启/关闭
 - Ctrl+V 粘贴处理
 - 会话匹配轮询（通过 sessionStore）
+- 终端主题配色：xterm theme 由 `appStore.terminalTheme` 驱动（`getTerminalTheme`），与 GUI 浅/暗独立；watch 联动所有 tab；容器背景/滚动条用 `--terminal-surface-bg`/`--terminal-scrollbar`（继承自 TerminalView）
 
 Props：
 - `fontSize: number` — 终端字号
@@ -50,6 +51,9 @@ Events：
 - `ptyStarted(tabId, ptyId)` — PTY 启动成功
 
 ### TerminalView.vue — 终端主视图
+
+> 终端容器表面色：根节点（`.terminal-view`）由 `computeTerminalSurfaceVars` 设置局部 CSS 变量 `--terminal-surface-bg`/`--terminal-scrollbar`（随 `appStore.terminalTheme` 变化），向下继承给 `.terminal-container`、`.xterm-container`、滚动条、空态。
+
 
 布局：
 ```

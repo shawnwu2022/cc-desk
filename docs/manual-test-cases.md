@@ -1024,4 +1024,127 @@
 - 控制台/Toast 显示错误信息
 - Skills / Agents / MCP 面板中该 plugin 的子项仍然展示（未被错误移除）
 
+---
+
+## 终端主题
+
+### TerminalTheme_SwitchLiveUpdate_001 — 切换终端主题所有 tab 实时变色
+
+**目标**：验证切换终端主题后，所有已开终端 tab 的字符栅格实时更新
+
+**前置条件**：应用已启动，已打开 ≥2 个终端 tab，当前为 CC-Box Dark
+
+**操作步骤**：
+1. 打开 Settings（`Ctrl+,`）> 外观
+2. 在「终端主题」下拉选择 Dracula
+
+**预期结果**：
+- 所有已开 tab 终端立即变为 Dracula 配色（深色背景 + 对应 ANSI 色）
+- 无需重启或刷新
+
+### TerminalTheme_IndependentFromGui_001 — 切 GUI 浅/暗不影响终端
+
+**目标**：验证终端主题与 GUI 浅/暗完全独立
+
+**前置条件**：终端主题设为 Dracula（深色终端）
+
+**操作步骤**：
+1. 在 Settings > 外观切换 GUI 主题「浅色」↔「暗色」
+
+**预期结果**：
+- GUI 配色随浅/暗变化
+- 终端字符栅格、容器背景、滚动条、空态**都不变**（保持 Dracula）
+
+### TerminalTheme_SurfaceConsistency_001 — light GUI + dark terminal 表面不拼接
+
+**目标**：验证 GUI 浅色 + 终端深色时，终端容器表面与字符栅格同为深色，无拼接
+
+**前置条件**：GUI 主题 = 浅色，终端主题 = Dracula（或任意深色）
+
+**操作步骤**：
+1. 观察终端区域整体（字符区 + 容器边框 + 滚动条 + 空态）
+
+**预期结果**：
+- 终端容器背景、滚动条、空态与字符栅格同为深色
+- 无"深色画布 + 浅色边框/滚动条"拼接
+
+### TerminalTheme_EmptyStateSurface_001 — 无 PTY 空态表面色正确
+
+**目标**：验证未启动会话时终端空态背景使用终端主题色
+
+**前置条件**：进入项目但未开任何终端 tab（空态）
+
+**操作步骤**：
+1. 终端主题设为深色（如 Dracula）
+2. 观察空态（"Start new session" 提示区）背景
+
+**预期结果**：
+- 空态背景为终端主题色（深色），不出现浅色拼接
+
+### TerminalTheme_PersistAcrossRestart_001 — 重启后终端主题保持
+
+**目标**：验证终端主题持久化
+
+**前置条件**：终端主题设为 Nord
+
+**操作步骤**：
+1. 关闭应用并重新启动
+
+**预期结果**：
+- 终端主题仍为 Nord
+
+### TerminalTheme_MigrationFromGui_001 — 老用户迁移按 GUI 映射
+
+**目标**：验证删除 config 的 terminalTheme 后，启动按 GUI 主题映射
+
+**前置条件**：手动编辑 `~/.cc-box/config.json` 删除 `terminalTheme` 字段；GUI 主题 = 暗色
+
+**操作步骤**：
+1. 删除 config 的 terminalTheme
+2. 重启应用
+
+**预期结果**：
+- 终端主题 = CC-Box Dark（按 GUI 暗色映射）
+- config.json 自动写回 `terminalTheme: "cc-box-dark"`
+
+### TerminalTheme_InvalidIdSelfHeal_001 — 非法 id 自修复
+
+**目标**：验证 config 终端主题为非法 id 时，启动归一化为默认
+
+**前置条件**：手动编辑 config，`terminalTheme = "bogus-theme"`
+
+**操作步骤**：
+1. 重启应用
+
+**预期结果**：
+- 终端主题 = CC-Box Dark（归一化为默认）
+- 下拉显示 CC-Box Dark，预览一致
+- config 写回 `terminalTheme: "cc-box-dark"`
+
+### TerminalTheme_PreviewLiveUpdate_001 — 下拉切换预览实时变化
+
+**目标**：验证下拉切换主题时预览块实时变化
+
+**前置条件**：打开 Settings > 外观
+
+**操作步骤**：
+1. 在终端主题下拉依次切换不同主题
+
+**预期结果**：
+- 右侧预览块背景、文字色、红/绿/黄示例随主题实时变化
+- 中文/符号（如 ⠿ ✔ ✖）对比度可读
+
+### TerminalTheme_256ColorFallback_001 — 256 色沿用 xterm 默认
+
+**目标**：验证 256 色输出沿用 xterm 默认调色板（与主题不一致属预期边界）
+
+**前置条件**：终端主题设为某主题
+
+**操作步骤**：
+1. 在终端运行 256 色命令（如 `printf '\x1b[38;5;200mtest\x1b[0m'`）与 16 色命令（`printf '\x1b[31mred\x1b[0m'`）
+
+**预期结果**：
+- 16 色 ANSI（红）随终端主题变
+- 256 色按 xterm 默认调色板显示（不随主题变，属预期）
+
 

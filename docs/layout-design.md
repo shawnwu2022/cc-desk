@@ -67,6 +67,10 @@ Windows 自定义标题栏（TitleBar）位于最顶部（32px）。
 | 终端 | 浅灰背景 + 深文字 | `--terminal-bg: #f8f9fa` / `--terminal-fg: #1a1816` |
 | 状态 | 成功/信息/警告/错误 | `--status-success: #3d8c6e` / `--status-info: #2a5082` / `--status-warning: #c4964a` / `--status-error: #c45c4a` |
 
+### 终端主题（独立于 GUI 浅/暗）
+
+终端区域支持独立配色方案，内置 16 个预设（CC-Box 浅/暗 + Dracula / Gruvbox / Nord 等程序员主题）。由 `src/config/terminalThemes.ts` 定义；`appStore.terminalTheme` 驱动 xterm 字符栅格；`computeTerminalSurfaceVars` 产出局部 CSS 变量（`--terminal-surface-bg`/`--terminal-scrollbar`）驱动终端容器背景、空态、滚动条。切换 GUI 浅/暗不影响终端。仅保证 16 色 ANSI 一致，256 色沿用 xterm 默认，truecolor 不受影响。
+
 ## 字体
 
 ```css

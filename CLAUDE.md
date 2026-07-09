@@ -69,7 +69,7 @@ cc-box/
 │   │   ├── WelcomeView.vue     # 欢迎页
 │   │   ├── ProjectSelectView.vue # 项目选择页
 │   │   ├── TerminalView.vue    # 终端主视图容器
-│   │   ├── XTermTerminal.vue   # xterm.js 终端核心
+│   │   ├── XTermTerminal.vue   # xterm.js 终端核心（终端主题独立于 GUI 浅/暗）
 │   │   ├── TerminalHeader.vue  # 终端标题栏
 │   │   ├── IconBar.vue         # 左侧图标栏
 │   │   ├── ShortcutsModal.vue  # 快捷键弹窗
