@@ -67,6 +67,7 @@ describe('computeTerminalSurfaceVars', () => {
   it('ComputeSurfaceVars_ReturnsAllVars_001', () => {
     const vars = computeTerminalSurfaceVars(getTerminalTheme('cc-box-dark'))
     expect(vars['--terminal-surface-bg']).toBe('#1e1e1e')
+    expect(vars['--terminal-surface-fg']).toBe('#d4d4d4')
     expect(vars['--terminal-scrollbar']).toBe(hexToRgba('#d4d4d4', 0.35))
   })
 })

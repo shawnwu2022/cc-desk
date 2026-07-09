@@ -514,6 +514,7 @@ export function hexToRgba(hex: string, alpha: number): string {
 export function computeTerminalSurfaceVars(colors: TerminalThemeColors): Record<string, string> {
   return {
     '--terminal-surface-bg': colors.background,
+    '--terminal-surface-fg': colors.foreground,
     '--terminal-scrollbar': hexToRgba(colors.foreground, 0.35),
   }
 }

@@ -325,7 +325,7 @@ function handlePtyStarted(tabId: string, _ptyId: string) {
 
 .empty-state-text {
   font-size: 14px;
-  color: var(--text-secondary);
+  color: var(--terminal-surface-fg);
 }
 
 .empty-state-btn {
