@@ -131,6 +131,96 @@ describe('session store', () => {
       await store.closeTab(tabId)
       expect(store.claimedSessionIds.has('sess-release')).toBe(false)
     })
+
+    // 关闭新会话 tab 后应刷新历史会话，让该会话立即出现在历史列表
+    // 复现：新会话的 sessionId 在新建时因时序过早未进入历史缓存，
+    // 关闭 tab 释放 claimed 后若不刷新，历史列表仍不显示该会话
+    it('CloseTab_RefreshHistory_001', async () => {
+      const { getSessions } = await import('@/api/tauri')
+      const mockGetSessions = getSessions as ReturnType<typeof vi.fn>
+
+      const store = useSessionStore()
+      const tabId = store.createTab('/project')
+      store.setTabPty(tabId, 'pty-refresh')
+      // 模拟 hook 事件为新会话赋 sessionId
+      store.setTabSessionId(tabId, 'sess-new')
+
+      // 模拟新会话的 JSONL 已存在（claude 运行期间创建），刷新即可读到
+      mockGetSessions.mockResolvedValue([
+        { sessionId: 'sess-new', name: 'New Session', projectPath: '/project', lastActiveAt: 1000 },
+      ])
+      mockGetSessions.mockClear()
+
+      await store.closeTab(tabId)
+
+      // 关闭后应触发历史刷新
+      expect(mockGetSessions).toHaveBeenCalled()
+      // 刷新后新会话应出现在历史列表（claimed 已释放）
+      expect(store.historySessions.some(s => s.sessionId === 'sess-new')).toBe(true)
+    })
+  })
+
+  // ==================== closeAllTabs ====================
+
+  describe('closeAllTabs', () => {
+    // 关闭所有 tab 后应刷新历史会话，让被关闭的会话出现在历史列表
+    it('CloseAllTabs_RefreshHistory_001', async () => {
+      const { getSessions } = await import('@/api/tauri')
+      const mockGetSessions = getSessions as ReturnType<typeof vi.fn>
+
+      const store = useSessionStore()
+      const t1 = store.createTab('/project')
+      store.setTabPty(t1, 'pty-1')
+      store.setTabSessionId(t1, 'sess-1')
+      const t2 = store.createTab('/project')
+      store.setTabPty(t2, 'pty-2')
+      store.setTabSessionId(t2, 'sess-2')
+
+      mockGetSessions.mockResolvedValue([
+        { sessionId: 'sess-1', name: 'S1', projectPath: '/project', lastActiveAt: 1000 },
+        { sessionId: 'sess-2', name: 'S2', projectPath: '/project', lastActiveAt: 2000 },
+      ])
+      mockGetSessions.mockClear()
+
+      await store.closeAllTabs('/project')
+
+      expect(mockGetSessions).toHaveBeenCalled()
+      const ids = store.historySessions.map(s => s.sessionId)
+      expect(ids).toContain('sess-1')
+      expect(ids).toContain('sess-2')
+    })
+  })
+
+  // ==================== closeOtherTabs ====================
+
+  describe('closeOtherTabs', () => {
+    // 关闭其他 tab 后应刷新历史会话（保留的 tab 仍 claimed，不出现在历史）
+    it('CloseOtherTabs_RefreshHistory_001', async () => {
+      const { getSessions } = await import('@/api/tauri')
+      const mockGetSessions = getSessions as ReturnType<typeof vi.fn>
+
+      const store = useSessionStore()
+      const keep = store.createTab('/project')
+      store.setTabPty(keep, 'pty-keep')
+      store.setTabSessionId(keep, 'sess-keep')
+      const other = store.createTab('/project')
+      store.setTabPty(other, 'pty-other')
+      store.setTabSessionId(other, 'sess-other')
+
+      mockGetSessions.mockResolvedValue([
+        { sessionId: 'sess-keep', name: 'Keep', projectPath: '/project', lastActiveAt: 1000 },
+        { sessionId: 'sess-other', name: 'Other', projectPath: '/project', lastActiveAt: 2000 },
+      ])
+      mockGetSessions.mockClear()
+
+      await store.closeOtherTabs(keep)
+
+      expect(mockGetSessions).toHaveBeenCalled()
+      const ids = store.historySessions.map(s => s.sessionId)
+      // 被关闭的 other 应出现在历史；保留的 keep 仍 claimed，不出现
+      expect(ids).toContain('sess-other')
+      expect(ids).not.toContain('sess-keep')
+    })
   })
 
   // ==================== handlePtyExit ====================
