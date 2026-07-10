@@ -151,22 +151,18 @@ function pickFontFamily(): string {
   return '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI Emoji", monospace'
 }
 
-// 在 term.open(el) 之后加载 Unicode 11 + WebGL addon
+// 在 term.open(el) 之后加载 Unicode 11，并选择渲染后端。
 //
-// @xterm/addon-webgl@0.19.0 的 glyph atlas 在长会话累积大量字符后会出现 race
-// condition 导致 glyph 错位（xtermjs/xterm.js#4325）。
+// 渲染后端默认 DOM renderer（不加载 WebGL）。
+// 原因：@xterm/addon-webgl 的 glyph atlas 渲染 CJK 宽字符时会概率性留白/错位
+// （某个字画成空白，或画错位覆盖邻居；Ctrl+L 全量重绘才修复）。DOM renderer 没有
+// glyph atlas 机制（每个字符直接是 DOM 节点），这个问题在 DOM 下不存在。
+// cc-box 的负载是 Claude CLI 交互式文本，DOM 性能足够；WebGL 的收益（高频刷屏）
+// 用不上，且附带 GPU context loss / 黑屏 / 驱动兼容等维护成本。
 //
-// 规避方法：每 5 分钟 dispose + reload 整个 WebGL addon。这是 xterm.js 设计内
-// 的"renderer 切换"路径：
-//   - dispose 触发 setRenderer 回退到 DOM renderer（buffer / cols / rows 不动）
-//   - 新建并 loadAddon 再次 setRenderer 到新 WebGL renderer（atlas 全新重建）
-//
-// 关键点：
-//   1. 完全不触碰 buffer，避免 v0.12.7 resize(rows-1)+resize(rows) 导致的最后
-//      两行重复（xterm.js Buffer.resize 在 rows round-trip 时不是无损的）
-//   2. onContextLoss 也走 reload（不再只 dispose），修复 GPU context 丢失后
-//      黑屏隐患
-//   3. 副作用：dispose → DOM 渲染 1-2 帧 → WebGL 接管，闪烁 < 50ms
+// 需要高频滚动性能时切 WebGL：外观设置「终端渲染后端」选 WebGL。此时保留每 5 分钟
+// reload + onContextLoss reload 的 glyph atlas 规避（xtermjs/xterm.js#4325），
+// 副作用是 reload 瞬间 <50ms 闪烁。
 function loadRendererAddons(term: Terminal) {
   try {
     const unicode11 = new Unicode11Addon()
@@ -176,6 +172,15 @@ function loadRendererAddons(term: Terminal) {
     console.warn('[XTerm] Unicode 11 addon unavailable, fallback to default:', err)
   }
 
+  // 渲染后端：外观设置 webglRenderer 控制。默认 DOM renderer（无 glyph atlas，
+  // 规避 CJK 渲染留白/错位）；WebGL 高频滚动更流畅但附带该问题。
+  // 仅对新开终端生效（renderer 在 term.open 时设定，运行时不切换）。
+  if (!appStore.webglRenderer) {
+    attachImeInputFix(term)
+    return
+  }
+
+  // ---- 可选：WebGL renderer（外观设置 webglRenderer=true 时启用）----
   let webglAddon: WebglAddon | null = null
 
   const reloadWebgl = () => {

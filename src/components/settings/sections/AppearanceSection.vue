@@ -84,6 +84,23 @@
     <div class="setting-group">
       <div class="setting-row">
         <div class="setting-info">
+          <span class="setting-label">{{ t('terminalRenderer') }}</span>
+          <span class="setting-desc">{{ t('terminalRendererDesc') }}</span>
+        </div>
+        <select
+          class="renderer-select"
+          v-model="webglRenderer"
+          :style="{ color: 'var(--text-primary)', backgroundColor: 'var(--bg-primary)' }"
+        >
+          <option :value="false">{{ t('terminalRendererDom') }}</option>
+          <option :value="true">{{ t('terminalRendererWebgl') }}</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-row">
+        <div class="setting-info">
           <span class="setting-label">{{ t('language') }}</span>
           <span class="setting-desc">{{ t('languageDesc') }}</span>
         </div>
@@ -123,6 +140,12 @@ const theme = ref(appStore.theme)
 const terminalTheme = computed({
   get: () => appStore.terminalTheme,
   set: (val: string) => appStore.setTerminalTheme(val),
+})
+
+// 渲染后端：双向绑定到 store（set 时持久化）
+const webglRenderer = computed({
+  get: () => appStore.webglRenderer,
+  set: (val: boolean) => appStore.setWebglRenderer(val),
 })
 
 // 按 category 分组供 optgroup 使用
@@ -377,5 +400,20 @@ function decreaseFontSize() { appStore.setFontSize(fontSize.value - 1) }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.renderer-select {
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  appearance: none;
+  background-image: none;
+  min-width: 140px;
+}
+
+.renderer-select:focus {
+  border-color: var(--accent-color);
 }
 </style>

@@ -41,6 +41,7 @@ export const useAppStore = defineStore('app', () => {
   const theme = ref<string>('light')
   const terminalTheme = ref<string>('cc-box-light')
   const fontSize = ref<number>(12)
+  const webglRenderer = ref<boolean>(false)
   const language = ref<string>('en')
   const alwaysOnTop = ref<boolean>(false)
   const claudeEnvVars = ref<Record<string, string>>({})
@@ -88,6 +89,7 @@ export const useAppStore = defineStore('app', () => {
       const config = await getAppConfig()
       theme.value = config.theme || 'light'
       fontSize.value = config.fontSize || 12
+      webglRenderer.value = config.webglRenderer ?? false
       language.value = config.language || detectSystemLocale()
       i18n.global.locale.value = language.value
 
@@ -217,6 +219,13 @@ export const useAppStore = defineStore('app', () => {
     updateAppConfig({ fontSize: size })
   }
 
+  // 渲染后端开关：true=WebGL（高频滚动流畅，但 CJK glyph atlas 可能留白/错位），
+  // false=DOM（默认，稳定）。仅对新开终端生效（renderer 在 term.open 时设定）。
+  function setWebglRenderer(enabled: boolean) {
+    webglRenderer.value = enabled
+    updateAppConfig({ webglRenderer: enabled })
+  }
+
   function detectSystemLocale(): string {
     const browserLang = navigator.language || 'en'
     return browserLang.toLowerCase().startsWith('zh') ? 'zh' : 'en'
@@ -328,6 +337,7 @@ export const useAppStore = defineStore('app', () => {
     theme,
     terminalTheme,
     fontSize,
+    webglRenderer,
     language,
     claudeEnvVars,
     defaultClaudeOptions,
@@ -356,6 +366,7 @@ export const useAppStore = defineStore('app', () => {
     setTheme,
     setTerminalTheme,
     setFontSize,
+    setWebglRenderer,
     setLanguage,
     setClaudeEnvVars,
     resetClaudeEnvVars,

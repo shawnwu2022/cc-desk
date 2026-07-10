@@ -38,6 +38,7 @@
   "defaultCustomArgs": "",
   "theme": "light",
   "fontSize": 12,
+  "webglRenderer": false,
   "lastOpenedProject": "D:/projects/my-app"
 }
 ```
@@ -53,6 +54,7 @@
 | `defaultCustomArgs` | string | 自定义参数默认值 |
 | `theme` | string | GUI 主题 |
 | `fontSize` | number | 终端字号 |
+| `webglRenderer` | boolean | 终端渲染后端：`false`=DOM（默认，稳定）/`true`=WebGL（高性能，CJK glyph atlas 可能留白/错位）。仅对新开终端生效 |
 | `lastOpenedProject` | string? | 上次打开的项目路径 |
 
 ## Store 命令 (IPC 通道)

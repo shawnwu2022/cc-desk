@@ -22,6 +22,7 @@ export interface AppConfig {
   theme?: 'light' | 'dark'
   terminalTheme?: string
   fontSize?: number
+  webglRenderer?: boolean
   autoConnectIde?: boolean
   hiddenProjects?: string[]
   lastOpenedProject?: string
