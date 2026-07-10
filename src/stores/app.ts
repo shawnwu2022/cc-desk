@@ -12,6 +12,7 @@ import {
   runChecks,
 } from '@/api/tauri'
 import { normalizeTerminalThemeId } from '@/config/terminalThemes'
+import { applyThemeToDom } from '@/utils/theme'
 import i18n from '@/i18n'
 
 import type { ClaudeOptions, DefaultClaudeOptions, CheckResult, Project, SessionInfo } from '@/types'
@@ -200,10 +201,7 @@ export const useAppStore = defineStore('app', () => {
   function setTheme(newTheme: string) {
     theme.value = newTheme
     // 同步应用到 DOM
-    const html = document.documentElement
-    html.setAttribute('data-theme', newTheme)
-    html.classList.remove('light', 'dark')
-    html.classList.add(newTheme)
+    applyThemeToDom(newTheme)
     // 持久化
     updateAppConfig({ theme: newTheme })
   }

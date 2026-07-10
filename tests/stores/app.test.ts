@@ -225,6 +225,28 @@ describe('loadAppConfig terminalTheme', () => {
   })
 })
 
+describe('loadAppConfig theme', () => {
+  // config 有 theme=dark 时加载到 store.theme（GUI 配色，区别于 terminalTheme）
+  it('LoadAppConfig_HasTheme_LoadsIt_001', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'get_app_config') return { theme: 'dark' }
+    })
+    const store = useAppStore()
+    await store.loadAppConfig()
+    expect(store.theme).toBe('dark')
+  })
+
+  // config 缺失 theme 时回退默认 'light'（loadAppConfig 用 `config.theme || 'light'`）
+  it('LoadAppConfig_MissingTheme_DefaultsLight_001', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'get_app_config') return {}
+    })
+    const store = useAppStore()
+    await store.loadAppConfig()
+    expect(store.theme).toBe('light')
+  })
+})
+
 describe('setTerminalTheme', () => {
   // 设置合法 id 更新 store 并持久化
   it('SetTerminalTheme_UpdatesValueAndPersists_001', () => {

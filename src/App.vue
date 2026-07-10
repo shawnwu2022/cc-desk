@@ -81,8 +81,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, defineAsyncComponent, nextTick } from 'vue'
+import { ref, watch, onMounted, onUnmounted, defineAsyncComponent, nextTick } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { applyThemeToDom } from '@/utils/theme'
 import { useHookStore } from '@/stores/hook'
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
@@ -121,6 +122,11 @@ const { t } = useI18n()
 const { setupShortcutListeners } = useAppShortcuts()
 const currentView = ref<ViewType>('welcome')
 const terminalViewRef = ref()
+
+// 应用 GUI 主题到 DOM。loadAppConfig 是异步 fire-and-forget：initAfterChecks 先用 store 初始值
+// （'light'）设置 DOM，待 loadAppConfig 把 theme.value 更新为持久化值后，由该 watch 同步到 DOM。
+// setTheme（设置页实时切换）也会触发它，保证两条路径都生效。
+watch(() => appStore.theme, (newTheme) => applyThemeToDom(newTheme))
 
 // 自动安装状态
 const isInstalling = ref(false)
@@ -255,11 +261,10 @@ async function retryChecks() {
 }
 
 function initAfterChecks() {
-  // 应用主题到 DOM（loadAppConfig 已在 onMounted 中调用并设置 theme 值）
-  const html = document.documentElement
-  html.setAttribute('data-theme', appStore.theme)
-  html.classList.remove('light', 'dark')
-  html.classList.add(appStore.theme)
+  // 先用 store 初始值（'light'）应用主题到 DOM，避免首屏闪烁；
+  // loadAppConfig（异步 fire-and-forget）完成后会把 theme.value 更新为持久化值，
+  // 由 setup 中的 watch(appStore.theme) 同步到 DOM（见上方）
+  applyThemeToDom(appStore.theme)
 
   // 并行启动所有独立初始化任务
   appStore.loadCache().then(() => {
