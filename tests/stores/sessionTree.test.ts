@@ -254,6 +254,44 @@ describe('session store — 全局树', () => {
       expect(sorted.map(g => g.projectPath)).toEqual(['/new', '/old'])
     })
   })
+
+  // ==================== filterProjectGroups（搜索范围限制） ====================
+  describe('filterProjectGroups', () => {
+    it('Filter_MatchProjectName_001', () => {
+      const store = useSessionStore()
+      const groups = [
+        { projectPath: '/alpha', name: 'alpha', tabs: [], runningCount: 0, pendingCount: 0, hasActive: false, isOrphan: false },
+        { projectPath: '/beta', name: 'beta', tabs: [], runningCount: 0, pendingCount: 0, hasActive: false, isOrphan: false },
+      ]
+      const out = store.filterProjectGroups(groups, 'alp')
+      expect(out.map(g => g.projectPath)).toEqual(['/alpha'])
+    })
+
+    // 空查询返回全部（无 matchedHistoryIds）
+    it('Filter_EmptyQueryReturnsAll_001', () => {
+      const store = useSessionStore()
+      const groups = [
+        { projectPath: '/a', name: 'a', tabs: [], runningCount: 0, pendingCount: 0, hasActive: false, isOrphan: false },
+      ]
+      const out = store.filterProjectGroups(groups, '')
+      expect(out).toHaveLength(1)
+      expect(out[0].matchedHistoryIds).toBeUndefined()
+    })
+
+    // 命中会话名（仅当该会话在该组的 tabs 或已加载历史中）
+    it('Filter_MatchSessionName_001', async () => {
+      const { getSessions } = await import('@/api/tauri')
+      ;(getSessions as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        { sessionId: 's-fix-bug', name: 'fix bug', projectPath: '/p-a', lastActiveAt: 1000 },
+      ])
+      const store = useSessionStore()
+      await store.loadHistorySessions('/p-a')
+      const groups = store.buildProjectGroups([{ path: '/p-a', name: 'a', lastDuration: 0 }])
+      const out = store.filterProjectGroups(groups, 'fix')
+      expect(out).toHaveLength(1)
+      expect(out[0].matchedHistoryIds).toEqual(['s-fix-bug'])
+    })
+  })
 })
 
 // 辅助：loadHistorySessions 的薄封装，便于测试中复用 store 实例

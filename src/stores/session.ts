@@ -53,6 +53,7 @@ export interface ProjectGroup {
   pendingCount: number
   hasActive: boolean          // 有 running 或 pending tab
   isOrphan: boolean           // projectPath 不在 cachedProjects
+  matchedHistoryIds?: string[]  // 搜索命中的会话 ID（供 UI 临时展开 + 高亮）
 }
 
 // ==================== Store ====================
@@ -578,6 +579,33 @@ export const useSessionStore = defineStore('session', () => {
     })
   }
 
+  /**
+   * 搜索过滤（对抗审查 B 的范围限制）：
+   * - 项目名：全量匹配
+   * - 会话名：仅匹配已加载历史（getHistoryFor）+ 该组 tabs 的 name/sessionId
+   * 命中会话的分组带 matchedHistoryIds（供 UI 临时展开 + 高亮）。
+   */
+  function filterProjectGroups(groups: ProjectGroup[], query: string): ProjectGroup[] {
+    const q = query.trim().toLowerCase()
+    if (!q) return groups
+    return groups
+      .map(g => {
+        const matchProject = g.name.toLowerCase().includes(q)
+        const tabHits = g.tabs
+          .filter(t => t.name.toLowerCase().includes(q) || (t.sessionId?.toLowerCase().includes(q) ?? false))
+          .map(t => t.sessionId)
+          .filter((id): id is string => !!id)
+        const historyHits = getHistoryFor(g.projectPath)
+          .filter(s => s.name.toLowerCase().includes(q) || s.sessionId.toLowerCase().includes(q))
+          .map(s => s.sessionId)
+        const matchedHistoryIds = [...new Set([...tabHits, ...historyHits])]
+        if (matchProject) return { ...g, matchedHistoryIds }   // 项目名命中：整个组保留
+        if (matchedHistoryIds.length > 0) return { ...g, matchedHistoryIds }
+        return null
+      })
+      .filter((g): g is ProjectGroup => g !== null)
+  }
+
   return {
     // State
     tabs,
@@ -635,5 +663,6 @@ export const useSessionStore = defineStore('session', () => {
     // 全局树：项目分组
     buildProjectGroups,
     sortProjectGroups,
+    filterProjectGroups,
   }
 })
