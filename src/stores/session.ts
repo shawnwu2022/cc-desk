@@ -446,10 +446,9 @@ export const useSessionStore = defineStore('session', () => {
     const p = runFetch(projectPath)
     inflight.set(n, p)
     // CAS 自清：p 结束后，仅当 inflight 仍指向 p 时清除（排队 force 已接管 inflight 时不清）。
-    // 用 .finally 而非 IIFE 内 try/finally，避免闭包引用未赋值的 p（TS2454）。
-    p.finally(() => {
-      if (inflight.get(n) === p) inflight.delete(n)
-    })
+    // 用 .then(clear, clear) 替代 .finally：避免 reject 时 unhandled rejection（.finally 返回新 promise 未消费）。
+    const clear = () => { if (inflight.get(n) === p) inflight.delete(n) }
+    p.then(clear, clear)
     return p
   }
 
