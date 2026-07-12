@@ -516,6 +516,105 @@ describe('session store - 全局树', () => {
       expect(store.getArchivedSessions('/p-a')).toContain('sess-1')
     })
   })
+
+  // ==================== 启动加载门禁 + 并发操作锁（P1.2/P1.3） ====================
+  describe('启动加载门禁 + 并发操作锁', () => {
+    // 加载未完成时并发 pin：门禁使其等待加载完成，不得用空内存覆写磁盘已有置顶
+    it('Pin_WaitsForLoad_NoOverwrite_001', async () => {
+      const { getProjectsState } = await import('@/api/tauri')
+      const mockGet = getProjectsState as ReturnType<typeof vi.fn>
+      // 模拟加载延迟：getProjectsState 不立即返回，磁盘已有置顶 '/p-pre'
+      let resolveGet!: (v: { pinnedProjects: string[]; archivedSessions: Record<string, string[]> }) => void
+      mockGet.mockReturnValueOnce(new Promise(r => { resolveGet = r }))
+      const store = useSessionStore()
+      // 启动 fire-and-forget 加载（未完成）
+      store.loadProjectsState()
+      // 加载未完成时并发 pin：门禁应使其等待，不得用空内存覆写磁盘 '/p-pre'
+      const pinP = store.pinProject('/p-a')
+      await new Promise(r => setTimeout(r, 0))
+      expect(store.isPinned('/p-a')).toBe(false)   // 尚未写入
+      expect(store.isPinned('/p-pre')).toBe(false) // 加载未完成，本地仍空
+      // 完成加载：磁盘 '/p-pre' 读入本地
+      resolveGet({ pinnedProjects: ['/p-pre'], archivedSessions: {} })
+      await pinP
+      // pin 在加载完成后执行：保留 '/p-pre' 并追加 '/p-a'（未用空内存覆写）
+      expect(store.isPinned('/p-pre')).toBe(true)
+      expect(store.isPinned('/p-a')).toBe(true)
+      expect(store.projectsStateLoaded).toBe(true)
+    })
+
+    // 加载失败后 pin 抛错不操作不持久化（门禁阻断，本地保持空）
+    it('Pin_LoadFail_BlocksOp_001', async () => {
+      const { getProjectsState, updateProjectsState } = await import('@/api/tauri')
+      ;(getProjectsState as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('read fail'))
+      const mockUpdate = updateProjectsState as ReturnType<typeof vi.fn>
+      mockUpdate.mockClear()
+      const store = useSessionStore()
+      // 加载失败：ensureProjectsStateLoaded 抛错，pin 不操作不持久化
+      await expect(store.pinProject('/p-a')).rejects.toThrow()
+      expect(store.isPinned('/p-a')).toBe(false)
+      expect(store.projectsStateLoaded).toBe(false)
+      expect(mockUpdate).not.toHaveBeenCalled()
+    })
+
+    // 并发 pin + archive（pin 先入锁）：操作锁串行化，磁盘最终同时含两者（不丢更新）
+    it('Concurrent_PinArchive_NoLostUpdate_001', async () => {
+      const { updateProjectsState } = await import('@/api/tauri')
+      const mockUpdate = updateProjectsState as ReturnType<typeof vi.fn>
+      mockUpdate.mockClear()
+      const store = useSessionStore()
+      await Promise.all([
+        store.pinProject('/p-a'),
+        store.archiveSession('/p-a', 'sess-1'),
+      ])
+      // 本地最终同时含置顶与存档
+      expect(store.isPinned('/p-a')).toBe(true)
+      expect(store.getArchivedSessions('/p-a')).toContain('sess-1')
+      // 最后一次 persist 须含两项（顶层替换语义下后操作基于前操作结果，不丢任一项）
+      const lastCall = mockUpdate.mock.calls[mockUpdate.mock.calls.length - 1][0] as {
+        pinnedProjects: string[]
+        archivedSessions: Record<string, string[]>
+      }
+      expect(lastCall.pinnedProjects).toContain('/p-a')
+      expect(lastCall.archivedSessions['/p-a']).toContain('sess-1')
+    })
+
+    // 并发 archive + pin（archive 先入锁）：反向顺序同样不丢更新
+    it('Concurrent_ArchivePin_NoLostUpdate_001', async () => {
+      const { updateProjectsState } = await import('@/api/tauri')
+      const mockUpdate = updateProjectsState as ReturnType<typeof vi.fn>
+      mockUpdate.mockClear()
+      const store = useSessionStore()
+      await Promise.all([
+        store.archiveSession('/p-a', 'sess-1'),
+        store.pinProject('/p-a'),
+      ])
+      expect(store.isPinned('/p-a')).toBe(true)
+      expect(store.getArchivedSessions('/p-a')).toContain('sess-1')
+      const lastCall = mockUpdate.mock.calls[mockUpdate.mock.calls.length - 1][0] as {
+        pinnedProjects: string[]
+        archivedSessions: Record<string, string[]>
+      }
+      expect(lastCall.pinnedProjects).toContain('/p-a')
+      expect(lastCall.archivedSessions['/p-a']).toContain('sess-1')
+    })
+
+    // ensureProjectsStateLoaded 复用同一 loadPromise：并发 pin 不重复发 getProjectsState
+    it('EnsureLoaded_ReusesLoadPromise_001', async () => {
+      const { getProjectsState } = await import('@/api/tauri')
+      const mockGet = getProjectsState as ReturnType<typeof vi.fn>
+      mockGet.mockClear()
+      const store = useSessionStore()
+      await Promise.all([
+        store.pinProject('/p-a'),
+        store.pinProject('/p-b'),
+      ])
+      // 两个并发 pin 共用首次加载：getProjectsState 只调一次
+      expect(mockGet).toHaveBeenCalledTimes(1)
+      expect(store.isPinned('/p-a')).toBe(true)
+      expect(store.isPinned('/p-b')).toBe(true)
+    })
+  })
 })
 
 // 辅助：loadHistorySessions 的薄封装，便于测试中复用 store 实例

@@ -273,8 +273,9 @@ function initAfterChecks() {
     }
   })
   appStore.loadAppConfig()
-  // 启动加载置顶/存档状态（projects.json）：必须在用户 pin/archive 前完成，
-  // 否则首次 pin/archive 会把空内存状态写回覆写旧数据（P1.2）。
+  // 启动加载置顶/存档状态（projects.json）：fire-and-forget 触发；即便未完成，
+  // pin/archive 内部的 ensureProjectsStateLoaded 门禁也会等待加载（P1.2），
+  // 避免首次 pin/archive 用空内存状态写回覆写旧数据。
   sessionStore.loadProjectsState()
   useHookStore().init()
 

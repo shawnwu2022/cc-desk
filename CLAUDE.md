@@ -119,11 +119,11 @@ Claude CLI hook 触发 → report-hook.sh → curl POST → hook_server.rs (axum
 
 ```
 sessionStore（tabs + historySessions）→ buildProjectGroups（分组+孤儿）→ sortProjectGroups（置顶→字母序→孤儿置底）→ filterProjectGroups（搜索）→ SessionsPanel 组装 ProjectNode 树
-点节点 → resolveSwitchAction（纯函数，D/E 参数直传无竞态）→ TerminalView handler（切 cwd + 切 tab / --resume）
+点会话节点 → resolveSwitchAction（纯函数，D/E 参数直传无竞态）→ TerminalView handler（切 cwd + 切 tab / --resume）；点项目节点 = 展开/折叠（toggleExpand），不切换
 ```
 
-- Sessions 面板从「当前项目扁平列表」升级为「项目→会话全局树」：终端视图内跨项目一步切换 + 并行项目状态徽标（`●N` 运行 / 琥珀点 pending）一眼可见，后端零改动
-- `resolveSwitchAction`：纯函数决策切换语义（noop / activate / resume / new），输入全显式参数、不读写全局单值中间态，连续调用互不影响
+- Sessions 面板从「当前项目扁平列表」升级为「项目→会话全局树」：终端视图内跨项目一步切换 + 并行项目状态徽标（`●N` 运行 / 琥珀点 pending）一眼可见，后端仅增 `projects.json` + `get_projects_state`/`update_projects_state` 2 command（置顶/存档持久化）
+- `resolveSwitchAction`：纯函数决策切换语义（activate / resume，点会话节点；点项目节点 = 展开/折叠不经此函数），输入全显式参数、不读写全局单值中间态，连续调用互不影响
 - `getHistoryFor(path)`：多项目历史选择器，按项目路径隔离历史，跨项目切换不串扰
 - 展开状态：`expandOverride`/`toggleExpand`/`isExpanded`，纯手动展开（不自动展开当前/active），其余折叠
 - 详细架构 → [docs/components.md](docs/components.md)

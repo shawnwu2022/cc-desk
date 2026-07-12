@@ -95,13 +95,13 @@ Windows 平台去除原生装饰后自定义的拖拽区域 + 窗口控制按钮
 
 `resolveSwitchAction(input)` 是树形项目会话管理的决策核心（对抗审查 D/E 的可测单元）。纯函数、无副作用、不读写全局单值中间态；输入全部显式参数直传，连续调用互不影响，避免竞态。
 
-输入 `SwitchInput`：`projectPath` / `sessionId?`（点项目名时不给）/ `isCurrent`（是否当前 cwd）/ `tabs` / `history` / `activeTabId`。
+v3：点项目节点 = 展开/折叠（`toggleExpand`，不经本函数）；切换只靠点会话节点。新建会话走项目节点的「+」按钮（`newSessionIn`），不在本函数决策。
+
+输入 `SwitchInput`：`projectPath` / `sessionId`（点会话节点时给定，必填）/ `tabs` / `history`。
 
 输出 `SwitchAction`：
-- `noop` — 当前项目且已有 active tab，不打断
-- `activate` — 点具体会话且对应 tab 存在，或点项目名且最近活跃 tab 为 running/stopped → 切到该 tab
-- `resume` — 点历史会话无对应 tab，或点项目名且历史非空 → `--resume` 该会话
-- `new` — 无 tab 无历史 → 新建会话
+- `activate` — sessionId 在 tabs 里 → 激活该 tab
+- `resume` — sessionId 在 history 里 → `--resume` 该历史会话；都不在也走 resume（name 缺省，下游 CLI 报错路径）
 
 `TerminalView.vue` 的 `handleSwitchToProjectSession` 等 handler 消费该结果，复用 `startResumeSession` 完成「切 cwd + 切 tab / --resume」。`SidebarPanel.vue` re-emit 新事件透传。
 

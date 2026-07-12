@@ -84,6 +84,12 @@ export const useSessionStore = defineStore('session', () => {
   const pinnedProjects = ref<string[]>([])
   /** 会话存档：projectPath -> sessionId[]（持久化到 projects.json，启动加载） */
   const archivedSessions = reactive(new Map<string, string[]>())
+  /** projects.json 是否已加载完成（P1.2 门禁：pin/archive 前须确保加载，否则用空内存覆写旧文件） */
+  const projectsStateLoaded = ref(false)
+  /** loadProjectsState 的进行中 Promise（供 ensureProjectsStateLoaded 复用，避免重复加载） */
+  let loadPromise: Promise<void> | null = null
+  /** pin/unpin/archive/restore 操作锁（P1.3 串行化，避免并发各自基于旧内存算 next 丢更新） */
+  let opLock: Promise<void> = Promise.resolve()
 
   // ---- Computed ----
 
@@ -616,18 +622,61 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * 启动加载：读取 pinnedProjects + archivedSessions（参考 loadAppConfig 范式）。
    * v3-1 后端 merge 为顶层替换，故写入时须发送完整 map。
+   * P1.2：不吞失败--失败时 projectsStateLoaded 保持 false，ensureProjectsStateLoaded 据此抛错
+   * 阻断 pin/archive；但本函数不抛出（避免阻断 App.vue fire-and-forget 启动）。
+   * 赋值 loadPromise 供 ensureProjectsStateLoaded 复用（并发等待同一加载，不重复发请求）。
    */
-  async function loadProjectsState() {
-    try {
-      const state = await getProjectsState()
-      pinnedProjects.value = state.pinnedProjects ?? []
-      archivedSessions.clear()
-      for (const [k, v] of Object.entries(state.archivedSessions ?? {})) {
-        archivedSessions.set(k, v)
+  function loadProjectsState(): Promise<void> {
+    loadPromise = (async () => {
+      try {
+        const state = await getProjectsState()
+        pinnedProjects.value = state.pinnedProjects ?? []
+        archivedSessions.clear()
+        for (const [k, v] of Object.entries(state.archivedSessions ?? {})) {
+          archivedSessions.set(k, v)
+        }
+        projectsStateLoaded.value = true
+      } catch (err) {
+        console.error('[SessionStore] loadProjectsState failed:', err)
+        projectsStateLoaded.value = false
+        // 不抛：避免阻断 App.vue fire-and-forget 启动；ensureProjectsStateLoaded 据标志抛
       }
-    } catch (err) {
-      console.error('[SessionStore] loadProjectsState failed:', err)
+    })()
+    return loadPromise
+  }
+
+  /**
+   * 确保 projects.json 已加载完成（P1.2 门禁，pin/unpin/archive/restore 开头调用）。
+   * - loadPromise 已存在（含已 resolved）则直接 await，避免重复加载
+   * - loadPromise 为 null 则触发 loadProjectsState 并 await
+   * - 加载失败（projectsStateLoaded=false）则抛错，阻止后续操作用空内存覆写磁盘旧数据
+   */
+  async function ensureProjectsStateLoaded(): Promise<void> {
+    if (loadPromise === null) {
+      loadProjectsState()
     }
+    await loadPromise
+    if (!projectsStateLoaded.value) {
+      throw new Error('projects state load failed; pin/archive blocked')
+    }
+  }
+
+  /**
+   * 操作锁（P1.3）：串行化 pin/unpin/archive/restore，避免并发各自基于旧内存算 next、
+   * 后 persist 覆盖前导致磁盘丢一项。ensureLoaded -> 算 next -> persist -> 改本地 全在锁内。
+   */
+  function withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = opLock
+    let release!: () => void
+    opLock = new Promise<void>(r => { release = r })
+    return (async () => {
+      await prev
+      try {
+        return await fn()
+      } finally {
+        release()
+      }
+    })()
   }
 
   /**
@@ -659,35 +708,43 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * 置顶项目（已存在则幂等返回，不发持久化）。
+   * P1.2：开头 ensureProjectsStateLoaded 门禁（加载完才算 next，加载失败抛错不操作）。
+   * P1.3：整个 withLock 串行化（ensureLoaded -> 算 next -> persist -> 改本地 全在锁内）。
    * P1.3：先 persist 新全量，成功后才改本地；失败抛错，本地不变。
    */
   async function pinProject(path: string) {
-    if (isPinned(path)) return
-    const next = [...pinnedProjects.value, path]
-    try {
-      await persistProjectsState({ pinnedProjects: next })
-      pinnedProjects.value = next
-    } catch (err) {
-      console.error('[SessionStore] pinProject persist failed:', err)
-      throw err
-    }
+    return withLock(async () => {
+      await ensureProjectsStateLoaded()
+      if (isPinned(path)) return
+      const next = [...pinnedProjects.value, path]
+      try {
+        await persistProjectsState({ pinnedProjects: next })
+        pinnedProjects.value = next
+      } catch (err) {
+        console.error('[SessionStore] pinProject persist failed:', err)
+        throw err
+      }
+    })
   }
 
   /**
    * 取消置顶（normalized 比较；未置顶则幂等返回）。
-   * P1.3：先 persist 新全量，成功后才改本地；失败抛错，本地不变。
+   * P1.2/P1.3：同 pinProject（ensureLoaded 门禁 + withLock 串行化 + persist-first 回滚）。
    */
   async function unpinProject(path: string) {
-    const n = normalizePath(path)
-    const next = pinnedProjects.value.filter(p => normalizePath(p) !== n)
-    if (next.length === pinnedProjects.value.length) return
-    try {
-      await persistProjectsState({ pinnedProjects: next })
-      pinnedProjects.value = next
-    } catch (err) {
-      console.error('[SessionStore] unpinProject persist failed:', err)
-      throw err
-    }
+    return withLock(async () => {
+      await ensureProjectsStateLoaded()
+      const n = normalizePath(path)
+      const next = pinnedProjects.value.filter(p => normalizePath(p) !== n)
+      if (next.length === pinnedProjects.value.length) return
+      try {
+        await persistProjectsState({ pinnedProjects: next })
+        pinnedProjects.value = next
+      } catch (err) {
+        console.error('[SessionStore] unpinProject persist failed:', err)
+        throw err
+      }
+    })
   }
 
   /**
@@ -718,54 +775,60 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * 存档会话（从历史列表隐藏；已存档则幂等返回）。
-   * P1.3：先 persist 新全量 archivedSessions，成功后才改本地；失败抛错，本地不变。
+   * P1.2/P1.3：ensureLoaded 门禁 + withLock 串行化 + persist-first 回滚。
    */
   async function archiveSession(projectPath: string, sessionId: string) {
-    const n = normalizePath(projectPath)
-    // 复用已有键（normalized 匹配）避免重复条目
-    let key: string | null = null
-    for (const k of archivedSessions.keys()) {
-      if (normalizePath(k) === n) { key = k; break }
-    }
-    const useKey = key ?? projectPath
-    const arr = archivedSessions.get(useKey) ?? []
-    if (arr.includes(sessionId)) return
-    const nextArr = [...arr, sessionId]
-    const nextArchived = new Map(archivedSessions.entries())
-    nextArchived.set(useKey, nextArr)
-    try {
-      await persistProjectsState({ archivedSessions: nextArchived })
-      archivedSessions.set(useKey, nextArr)
-    } catch (err) {
-      console.error('[SessionStore] archiveSession persist failed:', err)
-      throw err
-    }
+    return withLock(async () => {
+      await ensureProjectsStateLoaded()
+      const n = normalizePath(projectPath)
+      // 复用已有键（normalized 匹配）避免重复条目
+      let key: string | null = null
+      for (const k of archivedSessions.keys()) {
+        if (normalizePath(k) === n) { key = k; break }
+      }
+      const useKey = key ?? projectPath
+      const arr = archivedSessions.get(useKey) ?? []
+      if (arr.includes(sessionId)) return
+      const nextArr = [...arr, sessionId]
+      const nextArchived = new Map(archivedSessions.entries())
+      nextArchived.set(useKey, nextArr)
+      try {
+        await persistProjectsState({ archivedSessions: nextArchived })
+        archivedSessions.set(useKey, nextArr)
+      } catch (err) {
+        console.error('[SessionStore] archiveSession persist failed:', err)
+        throw err
+      }
+    })
   }
 
   /**
    * 恢复存档会话（重新出现在历史列表；未存档则幂等返回；空数组自动清理键）。
-   * P1.3：先 persist 新全量 archivedSessions，成功后才改本地；失败抛错，本地不变。
+   * P1.2/P1.3：ensureLoaded 门禁 + withLock 串行化 + persist-first 回滚。
    */
   async function restoreSession(projectPath: string, sessionId: string) {
-    const n = normalizePath(projectPath)
-    let key: string | null = null
-    for (const [k, val] of archivedSessions.entries()) {
-      if (normalizePath(k) === n && val.includes(sessionId)) { key = k; break }
-    }
-    if (key === null) return  // 未存档，幂等返回
-    const oldArr = archivedSessions.get(key)!
-    const nextArr = oldArr.filter(id => id !== sessionId)
-    const nextArchived = new Map(archivedSessions.entries())
-    if (nextArr.length === 0) nextArchived.delete(key)
-    else nextArchived.set(key, nextArr)
-    try {
-      await persistProjectsState({ archivedSessions: nextArchived })
-      if (nextArr.length === 0) archivedSessions.delete(key)
-      else archivedSessions.set(key, nextArr)
-    } catch (err) {
-      console.error('[SessionStore] restoreSession persist failed:', err)
-      throw err
-    }
+    return withLock(async () => {
+      await ensureProjectsStateLoaded()
+      const n = normalizePath(projectPath)
+      let key: string | null = null
+      for (const [k, val] of archivedSessions.entries()) {
+        if (normalizePath(k) === n && val.includes(sessionId)) { key = k; break }
+      }
+      if (key === null) return  // 未存档，幂等返回
+      const oldArr = archivedSessions.get(key)!
+      const nextArr = oldArr.filter(id => id !== sessionId)
+      const nextArchived = new Map(archivedSessions.entries())
+      if (nextArr.length === 0) nextArchived.delete(key)
+      else nextArchived.set(key, nextArr)
+      try {
+        await persistProjectsState({ archivedSessions: nextArchived })
+        if (nextArr.length === 0) archivedSessions.delete(key)
+        else archivedSessions.set(key, nextArr)
+      } catch (err) {
+        console.error('[SessionStore] restoreSession persist failed:', err)
+        throw err
+      }
+    })
   }
 
   return {
@@ -831,6 +894,8 @@ export const useSessionStore = defineStore('session', () => {
 
     // 项目置顶 + 会话存档
     loadProjectsState,
+    projectsStateLoaded,
+    ensureProjectsStateLoaded,
     isPinned,
     pinProject,
     unpinProject,
