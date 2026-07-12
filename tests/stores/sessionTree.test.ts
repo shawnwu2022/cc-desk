@@ -169,6 +169,40 @@ describe('session store — 全局树', () => {
       expect(e.hasActive).toBe(false)
     })
   })
+
+  // ==================== sortProjectGroups ====================
+  describe('sortProjectGroups', () => {
+    it('Sort_CurrentFirst_001', () => {
+      const store = useSessionStore()
+      const groups = [
+        { projectPath: '/p-a', name: 'a', tabs: [], runningCount: 1, pendingCount: 0, hasActive: true, isOrphan: false },
+        { projectPath: '/p-cur', name: 'cur', tabs: [], runningCount: 0, pendingCount: 0, hasActive: false, isOrphan: false },
+      ]
+      const sorted = store.sortProjectGroups(groups, '/p-cur')
+      expect(sorted[0].projectPath).toBe('/p-cur')
+    })
+
+    it('Sort_ActiveBeforeIdle_001', () => {
+      const store = useSessionStore()
+      const groups = [
+        { projectPath: '/idle', name: 'idle', tabs: [], runningCount: 0, pendingCount: 0, hasActive: false, isOrphan: false },
+        { projectPath: '/active', name: 'active', tabs: [], runningCount: 1, pendingCount: 0, hasActive: true, isOrphan: false },
+      ]
+      const sorted = store.sortProjectGroups(groups, '/other')
+      expect(sorted[0].projectPath).toBe('/active')
+    })
+
+    it('Sort_OrphanLast_001', () => {
+      const store = useSessionStore()
+      const groups = [
+        { projectPath: '/orphan', name: 'o', tabs: [], runningCount: 1, pendingCount: 0, hasActive: true, isOrphan: true },
+        { projectPath: '/idle', name: 'idle', tabs: [], runningCount: 0, pendingCount: 0, hasActive: false, isOrphan: false },
+      ]
+      const sorted = store.sortProjectGroups(groups, '/other')
+      // 孤儿即使 active 也排到非孤儿之后
+      expect(sorted[sorted.length - 1].projectPath).toBe('/orphan')
+    })
+  })
 })
 
 // 辅助：loadHistorySessions 的薄封装，便于测试中复用 store 实例

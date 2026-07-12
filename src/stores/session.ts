@@ -558,6 +558,26 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  /**
+   * 项目分组排序：当前项目 → 有 active tab 的 → 其余按最近活跃 → 孤儿置底。
+   * 「最近活跃」取该组 tabs 的最大 lastActiveAt，无 tab 的排最后（孤儿前）。
+   */
+  function sortProjectGroups(groups: ProjectGroup[], currentCwd: string): ProjectGroup[] {
+    const normalize = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+    const curN = normalize(currentCwd)
+    const lastActive = (g: ProjectGroup) =>
+      g.tabs.reduce((m, t) => Math.max(m, t.lastActiveAt), 0)
+
+    return [...groups].sort((a, b) => {
+      const aCur = normalize(a.projectPath) === curN ? 1 : 0
+      const bCur = normalize(b.projectPath) === curN ? 1 : 0
+      if (aCur !== bCur) return bCur - aCur          // 当前置顶
+      if (a.isOrphan !== b.isOrphan) return a.isOrphan ? 1 : -1  // 孤儿置底
+      if (a.hasActive !== b.hasActive) return a.hasActive ? -1 : 1
+      return lastActive(b) - lastActive(a)            // 最近活跃降序
+    })
+  }
+
   return {
     // State
     tabs,
@@ -614,5 +634,6 @@ export const useSessionStore = defineStore('session', () => {
 
     // 全局树：项目分组
     buildProjectGroups,
+    sortProjectGroups,
   }
 })
