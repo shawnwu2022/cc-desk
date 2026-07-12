@@ -42,3 +42,6 @@ npm-debug.log*
 
 # Release artifacts (downloaded from GitHub, local backup)
 releases/
+
+# Superpowers visual companion mockups
+.superpowers/

@@ -101,6 +101,23 @@ export const useSessionStore = defineStore('session', () => {
     })
   })
 
+  /**
+   * 取指定项目的历史会话（去重 + 不含已被 tab 占用的 sessionId）。
+   * 替代单值 historySessions 作为全局树的数据源（对抗审查 A）。
+   */
+  function getHistoryFor(projectPath: string): HistorySession[] {
+    const cached = historyCacheMap.get(projectPath) ?? []
+    const claimed = claimedSessionIds.value
+    const seen = new Set<string>()
+    return cached
+      .filter(s => {
+        if (claimed.has(s.sessionId) || seen.has(s.sessionId)) return false
+        seen.add(s.sessionId)
+        return true
+      })
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+  }
+
   // ---- Tab 生命周期 ----
 
   /**
@@ -426,6 +443,38 @@ export const useSessionStore = defineStore('session', () => {
     }, 400)
   }
 
+  // ---- 全局树：展开状态 ----
+
+  /**
+   * 显式展开/折叠覆盖：true=强制展开，false=强制折叠，缺省=按默认规则。
+   * 用 Map 而非 Set，以支持「手动折叠覆盖默认展开」。
+   */
+  const expandOverride = reactive(new Map<string, boolean>())
+
+  /** 切换展开/折叠；opts 传入以判断当前是否展开、决定取反方向 */
+  function toggleExpand(projectPath: string, opts?: { hasActive?: boolean; isCurrent?: boolean }) {
+    // 若未提供 opts，自动检测该项目是否有 running/pending tab
+    const finalOpts = opts ?? {
+      hasActive: [...tabs.values()].some(t => t.projectPath === projectPath && (t.status === 'running' || t.status === 'pending')),
+      isCurrent: false,
+    }
+    const cur = isExpanded(projectPath, finalOpts)
+    expandOverride.set(projectPath, !cur)
+  }
+
+  /**
+   * 判断项目是否展开。
+   * 规则：手动 toggle 过 → 以显式状态为准；否则按默认（当前项目 或 有 running/pending tab）。
+   * @param opts.hasActive 该项目是否有 running/pending tab（调用方算好传入，避免 store 反查 cwd）
+   * @param opts.isCurrent 该项目是否为当前项目（cwd）
+   */
+  function isExpanded(projectPath: string, opts?: { hasActive?: boolean; isCurrent?: boolean }): boolean {
+    if (expandOverride.has(projectPath)) return expandOverride.get(projectPath)!
+    if (opts?.isCurrent) return true
+    if (opts?.hasActive) return true
+    return false
+  }
+
   // ---- 清理 ----
 
   async function cleanupAll() {
@@ -495,5 +544,11 @@ export const useSessionStore = defineStore('session', () => {
 
     // Cleanup
     cleanupAll,
+
+    // 全局树：展开状态 + 多项目历史
+    expandOverride,
+    toggleExpand,
+    isExpanded,
+    getHistoryFor,
   }
 })
