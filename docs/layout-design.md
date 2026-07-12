@@ -97,7 +97,7 @@ font-size: 12px (默认，可调节 10-24)
 
 | 面板 | 组件 | 内容 |
 |------|------|------|
-| Sessions | SessionsPanel | Tab 列表 + 历史会话 + 状态指示灯 |
+| Sessions | SessionsPanel | 全局项目树（项目→会话两级，跨项目一步切换 + 状态徽标 `●N` 运行/琥珀点 pending） |
 | Skills | SkillsPanel | 按 source 分组的 Skill 列表 |
 | Agents | AgentsPanel | 按 source 分组的 Agent 列表 |
 | MCP | McpPanel | MCP Server 列表 + 工具/提示/资源详情 |

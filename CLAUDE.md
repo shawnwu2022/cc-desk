@@ -73,7 +73,7 @@ cc-box/
 │   │   ├── TerminalHeader.vue  # 终端标题栏
 │   │   ├── IconBar.vue         # 左侧图标栏
 │   │   ├── ShortcutsModal.vue  # 快捷键弹窗
-│   │   ├── sessions/           # 会话面板（SessionList > SessionItem > SessionStatus）
+│   │   ├── sessions/           # 会话面板（SessionsPanel 组装 ProjectNode 全局树 > SessionItem > SessionStatus）
 │   │   ├── skills/             # Skills 面板（SkillsPanel > SkillGroup > SkillItem）
 │   │   ├── agents/             # Agents 面板（AgentsPanel > AgentGroup > AgentItem）
 │   │   ├── mcp/                # MCP 面板（McpPanel > McpGroup > McpItem > McpSubItem）
@@ -85,7 +85,7 @@ cc-box/
 │   │   └── providerPresets.ts  # **Provider 预设模板**（50+ 厂商）
 │   ├── stores/                 # Pinia：app、session、sidebar、config、hook、providers
 │   ├── types/                  # TypeScript 类型定义（pty、session、project、config、app、hook、provider）
-│   ├── composables/            # useAppShortcuts、useTerminalCommand、useStatusMonitor、useWindowAttention
+│   ├── composables/            # useAppShortcuts、useTerminalCommand、useStatusMonitor、useWindowAttention、useProjectTreeNavigation（resolveSwitchAction 切换语义纯函数）
 │   ├── utils/                  # platform 工具
 │   └── styles/global.css       # CSS 变量与全局样式
 │
@@ -114,6 +114,19 @@ Claude CLI hook 触发 → report-hook.sh → curl POST → hook_server.rs (axum
 - `stores/hook.ts`：纯事件总线，模块通过 `subscribe(eventTypes[], handler)` 注册消费
 - `useStatusMonitor`：hook 事件 → Tab 的 `working`/`pending` 状态 + 任务栏跳动
 - 详细架构 → [docs/hook-monitor.md](docs/hook-monitor.md)
+
+### 全局项目树数据流
+
+```
+sessionStore（tabs + historySessions）→ buildProjectGroups（分组+孤儿）→ sortProjectGroups（当前→活→时间→孤儿置底）→ filterProjectGroups（搜索）→ SessionsPanel 组装 ProjectNode 树
+点节点 → resolveSwitchAction（纯函数，D/E 参数直传无竞态）→ TerminalView handler（切 cwd + 切 tab / --resume）
+```
+
+- Sessions 面板从「当前项目扁平列表」升级为「项目→会话全局树」：终端视图内跨项目一步切换 + 并行项目状态徽标（`●N` 运行 / 琥珀点 pending）一眼可见，后端零改动
+- `resolveSwitchAction`：纯函数决策切换语义（noop / activate / resume / new），输入全显式参数、不读写全局单值中间态，连续调用互不影响
+- `getHistoryFor(path)`：多项目历史选择器，按项目路径隔离历史，跨项目切换不串扰
+- 展开状态：`expandOverride`/`toggleExpand`/`isExpanded`，默认当前项目 + 有活跃会话项目展开，其余折叠
+- 详细架构 → [docs/components.md](docs/components.md)
 
 详细架构 → [docs/terminal-integration.md](docs/terminal-integration.md)
 
@@ -240,3 +253,4 @@ npm run release -- --oss-only v0.5.1
 - **命名规范**：英文函数名 `Feature_SubFeature_SeqNum` 格式，中文注释描述目标
 - **什么要测**：纯函数、数据转换、解析逻辑、状态管理、边界条件和错误路径
 - **什么不测**：getter/setter、类型定义、简单 props 传递、第三方库能力
+- **树形项目会话管理测试**：`tests/stores/sessionTree.test.ts`（分组/排序/过滤/展开/多项目历史选择器 getHistoryFor）+ `tests/composables/projectTreeNavigation.test.ts`（resolveSwitchAction 切换语义 noop/activate/resume/new，D/E 纯函数参数直传无竞态）

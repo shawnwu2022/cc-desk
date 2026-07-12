@@ -9,7 +9,8 @@ App.vue
 ├── TerminalView.vue                # 终端主视图（常驻 DOM，v-show 控制）
 │   ├── IconBar.vue                 # 左侧图标栏（面板切换入口）
 │   ├── SidebarPanel.vue            # 侧边栏面板容器
-│   │   ├── SessionsPanel.vue       # 会话管理面板
+│   │   ├── SessionsPanel.vue       # 会话管理面板（组装 ProjectNode 全局树 + 搜索 + 空状态 + 孤儿分组）
+│   │   │   ├── ProjectNode.vue     # 项目节点（图标+名+状态徽标 ●N/琥珀点 + ▸展开 + hover 新建/菜单）
 │   │   │   ├── SessionList.vue
 │   │   │   └── SessionItem.vue + SessionStatus.vue
 │   │   ├── SkillsPanel.vue         # Skills 面板
@@ -88,6 +89,26 @@ Events：
 
 Windows 平台去除原生装饰后自定义的拖拽区域 + 窗口控制按钮。
 
+## Composables
+
+### useProjectTreeNavigation — 切换语义纯函数
+
+`resolveSwitchAction(input)` 是树形项目会话管理的决策核心（对抗审查 D/E 的可测单元）。纯函数、无副作用、不读写全局单值中间态；输入全部显式参数直传，连续调用互不影响，避免竞态。
+
+输入 `SwitchInput`：`projectPath` / `sessionId?`（点项目名时不给）/ `isCurrent`（是否当前 cwd）/ `tabs` / `history` / `activeTabId`。
+
+输出 `SwitchAction`：
+- `noop` — 当前项目且已有 active tab，不打断
+- `activate` — 点具体会话且对应 tab 存在，或点项目名且最近活跃 tab 为 running/stopped → 切到该 tab
+- `resume` — 点历史会话无对应 tab，或点项目名且历史非空 → `--resume` 该会话
+- `new` — 无 tab 无历史 → 新建会话
+
+`TerminalView.vue` 的 `handleSwitchToProjectSession` 等 handler 消费该结果，复用 `startResumeSession` 完成「切 cwd + 切 tab / --resume」。`SidebarPanel.vue` re-emit 新事件透传。
+
+### 已知限制（§5.2 follow-up）
+
+每项目历史分页（5 条 + 显示更多懒加载）尚未实现，历史全量展示——重度多项目用户渲染性能待优化（follow-up，按实际体验定优先级）。
+
 ## Store 结构
 
 ### app.ts — 应用状态
@@ -130,6 +151,13 @@ historySessions: HistorySession[]     // 未被 Tab 占用的历史会话
 ```
 
 方法：createTab、setTabPty、handlePtyExit、closeTab、assignSessionIdByPtyId
+
+**全局项目树相关**（Sessions 面板从扁平列表升级为项目→会话全局树）：
+- `buildProjectGroups`：按项目路径分组 tabs + 历史，无 tab/历史的孤儿项目单独收集
+- `sortProjectGroups(groups, currentCwd)`：排序——当前项目置顶 → 有活跃会话 → 最近时间 → 孤儿项目置底
+- `filterProjectGroups(groups, query)`：搜索——匹配项目名 + 已加载历史会话名（`getHistoryFor`）+ 该组 tabs 的 name/sessionId
+- `getHistoryFor(projectPath)`：多项目历史选择器，按项目路径隔离历史，跨项目切换不串扰
+- `expandOverride` / `toggleExpand(path, opts)` / `isExpanded(path, opts)`：展开状态，默认当前项目 + 有活跃会话项目展开，其余折叠；`opts.hasActive`/`opts.isCurrent` 决定默认值
 
 ### sidebar.ts — 侧边栏状态
 
