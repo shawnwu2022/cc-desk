@@ -28,7 +28,7 @@
       @switch-to-project="handleSwitchToProjectSession"
       @new-session-in="handleNewSessionIn"
       @toggle-expand="handleToggleExpand"
-      @close-all-sessions="handleCloseAllSessionsIn"
+      @close-all-sessions-in="handleCloseAllSessionsIn"
       @toggle-favorite="handleToggleFavorite"
       @open-in-explorer="handleOpenInExplorer"
       @resume-session-in-project="(path, id) => handleSwitchToProjectSession(path, id)"
