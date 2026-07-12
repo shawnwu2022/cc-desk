@@ -12,6 +12,14 @@ export default {
   remove: '移除',
   settings: '设置',
   back: '返回',
+  collapse: '收起',
+  expand: '展开',
+  pendingHint: '有待处理',
+  uncollected: '未收藏',
+  more: '更多',
+  closeAllSessions: '关闭该项目所有会话',
+  addFavorite: '加入收藏',
+  noHistorySessions: '暂无历史会话',
 
   // Settings navigation
   appearance: '外观',

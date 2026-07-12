@@ -12,6 +12,14 @@ export default {
   remove: 'Remove',
   settings: 'Settings',
   back: 'Back',
+  collapse: 'Collapse',
+  expand: 'Expand',
+  pendingHint: 'Has pending',
+  uncollected: 'Uncollected',
+  more: 'More',
+  closeAllSessions: 'Close all sessions in this project',
+  addFavorite: 'Add to favorites',
+  noHistorySessions: 'No history sessions',
 
   // Settings navigation
   appearance: 'Appearance',
