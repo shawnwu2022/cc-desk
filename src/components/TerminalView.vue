@@ -25,13 +25,14 @@
       @close-tab="handleCloseTab"
       @close-all-tabs="handleCloseAllTabs"
       @close-other-tabs="handleCloseOtherTabs"
-      @switch-to-project="handleSwitchToProjectSession"
       @new-session-in="handleNewSessionIn"
-      @toggle-expand="handleToggleExpand"
       @close-all-sessions-in="handleCloseAllSessionsIn"
-      @toggle-favorite="handleToggleFavorite"
       @open-in-explorer="handleOpenInExplorer"
       @resume-session-in-project="(path, id) => handleSwitchToProjectSession(path, id)"
+      @pin-project="handlePin"
+      @unpin-project="handleUnpin"
+      @archive-session="(path, id) => handleArchive(path, id)"
+      @restore-session="(path, id) => handleRestore(path, id)"
     />
 
     <!-- 主内容区 -->
@@ -278,33 +279,26 @@ function handleCloseOtherTabs() {
 }
 
 /**
- * 点项目名或具体会话：解析动作后执行（对抗审查 D/E —— 全程参数直传，不读写全局单值中间态）。
- * 复用现有 startResumeSession（createTab(path,{sessionId}) 直传）天然无竞态。
+ * 点会话节点：解析动作后执行（v3：点项目=展开/折叠，不经此函数；切换只靠点会话节点）。
+ * 对抗审查 D/E —— 全程参数直传，不读写全局单值中间态；复用 startResumeSession 天然无竞态。
  */
-async function handleSwitchToProjectSession(projectPath: string, sessionId?: string) {
+async function handleSwitchToProjectSession(projectPath: string, sessionId: string) {
   appStore.setCwd(projectPath)
-  // 确保该项目历史已加载（缓存命中秒回）；避免 resolveSwitchAction 误判「无历史 → new」
+  // 确保该项目历史已加载（缓存命中秒回），供 resolveSwitchAction 判定 activate/resume
   await sessionStore.loadHistorySessions(projectPath)
   await nextTick()
   const action = resolveSwitchAction({
     projectPath,
-    sessionId: sessionId ?? null,
-    isCurrent: appStore.cwd === projectPath,
+    sessionId,
     tabs: sessionStore.getProjectTabs(projectPath),
     history: sessionStore.getHistoryFor(projectPath),
-    activeTabId: sessionStore.activeTabId,
   })
   switch (action.type) {
-    case 'noop':
-      return
     case 'activate':
       sessionStore.setActiveTab(action.tabId)
       return
     case 'resume':
       await startResumeSession(action.projectPath, action.sessionId, action.name)
-      return
-    case 'new':
-      if (terminalRef.value) terminalRef.value.startNewSession(action.projectPath)
       return
   }
 }
@@ -315,17 +309,26 @@ function handleNewSessionIn(projectPath: string) {
   if (terminalRef.value) terminalRef.value.startNewSession(projectPath)
 }
 
-function handleToggleExpand(_path: string) {
-  /* SessionsPanel 已直接调 store.toggleExpand；此处占位以备未来接线 */
-}
-
 function handleCloseAllSessionsIn(projectPath: string) {
   sessionStore.closeAllTabs(projectPath)
 }
 
-async function handleToggleFavorite(projectPath: string) {
-  // 收藏：复用 ensureProjectInList 将项目加入缓存列表（取消收藏需后端 command，当前后端零改动约束下仅实现加入）
-  appStore.ensureProjectInList(projectPath)
+// v3 项目置顶（持久化到 projects.json，跨重启保持）
+function handlePin(projectPath: string) {
+  sessionStore.pinProject(projectPath)
+}
+
+function handleUnpin(projectPath: string) {
+  sessionStore.unpinProject(projectPath)
+}
+
+// v3 会话存档/恢复（archived 会话从历史树隐藏，项目 ⋯ 菜单可查看与恢复）
+function handleArchive(projectPath: string, sessionId: string) {
+  sessionStore.archiveSession(projectPath, sessionId)
+}
+
+function handleRestore(projectPath: string, sessionId: string) {
+  sessionStore.restoreSession(projectPath, sessionId)
 }
 
 async function handleOpenInExplorer(projectPath: string) {

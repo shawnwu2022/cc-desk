@@ -13,13 +13,16 @@
         @close-tab="$emit('closeTab', $event)"
         @close-all-tabs="$emit('closeAllTabs')"
         @close-other-tabs="$emit('closeOtherTabs')"
-        @switch-to-project="$emit('switchToProject', $event)"
         @new-session-in="$emit('newSessionIn', $event)"
         @toggle-expand="$emit('toggleExpand', $event)"
         @close-all-sessions="$emit('closeAllSessionsIn', $event)"
-        @toggle-favorite="$emit('toggleFavorite', $event)"
         @open-in-explorer="$emit('openInExplorer', $event)"
         @resume-session-in-project="(p, id, name) => $emit('resumeSessionInProject', p, id, name)"
+        @pin-project="$emit('pinProject', $event)"
+        @unpin-project="$emit('unpinProject', $event)"
+        @archive-session="(p, id) => $emit('archiveSession', p, id)"
+        @restore-session="(p, id) => $emit('restoreSession', p, id)"
+        @show-archived="$emit('showArchived', $event)"
       />
 
       <!-- Skills 面板 -->
@@ -72,13 +75,16 @@ defineEmits<{
   closeTab: [tabId: string]
   closeAllTabs: []
   closeOtherTabs: []
-  switchToProject: [projectPath: string]
   newSessionIn: [projectPath: string]
   toggleExpand: [projectPath: string]
   closeAllSessionsIn: [projectPath: string]
-  toggleFavorite: [projectPath: string]
   openInExplorer: [projectPath: string]
   resumeSessionInProject: [projectPath: string, sessionId: string, name?: string]
+  pinProject: [projectPath: string]
+  unpinProject: [projectPath: string]
+  archiveSession: [projectPath: string, sessionId: string]
+  restoreSession: [projectPath: string, sessionId: string]
+  showArchived: [projectPath: string]
 }>()
 </script>
 
