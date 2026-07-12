@@ -646,3 +646,155 @@ async function store_loadHistory(path: string) {
   const store = useSessionStore()
   await store.loadHistorySessions(path)
 }
+
+// ==================== v5-T4：fetchHistory 两层 force 状态机 ====================
+describe('session store - fetchHistory 两层 force', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  // 普通 + inflight 复用：同项目并发 loadHistoryFor -> getSessions 调 1 次
+  it('FetchHistory_ReuseInflight_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    mock.mockResolvedValue([])
+    const store = useSessionStore()
+    await Promise.all([store.loadHistoryFor('/p-a'), store.loadHistoryFor('/p-a')])
+    expect(mock).toHaveBeenCalledTimes(1)
+  })
+
+  // force + inflight：等当前后追加一次刷新 -> getSessions 调 2 次
+  it('FetchHistory_ForceAfterInflight_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    mock.mockResolvedValueOnce([{ sessionId: 's1', name: 'S1', projectPath: '/p-a', lastActiveAt: 1 }])
+    mock.mockResolvedValueOnce([{ sessionId: 's2', name: 'S2', projectPath: '/p-a', lastActiveAt: 2 }])
+    const store = useSessionStore()
+    await Promise.all([
+      store.loadHistoryFor('/p-a'),          // 普通发起 inflight
+      store.loadHistoryFor('/p-a', true),     // force 等当前后追加
+    ])
+    expect(mock).toHaveBeenCalledTimes(2)
+  })
+
+  // 多 force 并发合并：3 个 force -> getSessions 调最多 2 次
+  it('FetchHistory_MultiForceMerge_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    mock.mockResolvedValue([])
+    const store = useSessionStore()
+    await Promise.all([
+      store.loadHistoryFor('/p-a', true),
+      store.loadHistoryFor('/p-a', true),
+      store.loadHistoryFor('/p-a', true),
+    ])
+    expect(mock.mock.calls.length).toBeLessThanOrEqual(2)
+  })
+
+  // force 无 inflight：直接发 -> getSessions 调 1 次
+  it('FetchHistory_ForceNoInflight_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    mock.mockResolvedValue([])
+    const store = useSessionStore()
+    await store.loadHistoryFor('/p-a', true)
+    expect(mock).toHaveBeenCalledTimes(1)
+  })
+
+  // loadHistoryFor 不改 currentHistoryProject（无副作用）
+  it('LoadHistoryFor_NoCurrentChange_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    ;(getSessions as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    const store = useSessionStore()
+    const before = store.currentHistoryProject
+    await store.loadHistoryFor('/p-a')
+    expect(store.currentHistoryProject).toBe(before)
+  })
+
+  // loadHistorySessions 仍切 currentHistoryProject
+  it('LoadHistorySessions_ChangesCurrent_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    ;(getSessions as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    const store = useSessionStore()
+    await store.loadHistorySessions('/p-a')
+    expect(store.currentHistoryProject).toBe('/p-a')
+  })
+
+  // historyLoadState 反映 per 项目 loading
+  it('FetchHistory_LoadStatePerProject_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    let resolveFn!: (v: unknown[]) => void
+    ;(getSessions as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(r => { resolveFn = r as (v: unknown[]) => void }))
+    const store = useSessionStore()
+    const p = store.loadHistoryFor('/p-a')
+    expect(store.historyLoadState.get('/p-a')?.loading).toBe(true)
+    resolveFn!([])
+    await p
+    expect(store.historyLoadState.get('/p-a')?.loading).toBe(false)
+  })
+})
+
+// ==================== v5-T4：buildProjectGroups 过滤 hidden ====================
+describe('session store - buildProjectGroups 过滤 hidden', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  // hidden 项目不在分组
+  it('Group_FilterHidden_001', () => {
+    const store = useSessionStore()
+    const groups = store.buildProjectGroups(
+      [{ path: '/p-a', name: 'a' }, { path: '/p-b', name: 'b' }],
+      new Set(['/p-a']),
+    )
+    expect(groups.map(g => g.projectPath)).toEqual(['/p-b'])
+  })
+
+  // hidden 项目的 running tab 也不作孤儿出现
+  it('Group_FilterHiddenTab_001', () => {
+    const store = useSessionStore()
+    const tabId = store.createTab('/p-hidden')
+    store.setTabPty(tabId, 'pty-1') // running tab
+    const groups = store.buildProjectGroups(
+      [{ path: '/p-vis', name: 'vis' }],
+      new Set(['/p-hidden']),
+    )
+    expect(groups.map(g => g.projectPath)).toEqual(['/p-vis']) // 不含 /p-hidden 孤儿
+  })
+
+  // 不传 hidden（undefined）= 不过滤（向后兼容现有调用/测试）
+  it('Group_NoHiddenParam_NoFilter_001', () => {
+    const store = useSessionStore()
+    const groups = store.buildProjectGroups([{ path: '/p-a', name: 'a' }])
+    expect(groups.map(g => g.projectPath)).toEqual(['/p-a'])
+  })
+
+  // 规范化比较：hidden 用正斜杠小写仍隐藏反斜杠大写项目
+  it('Group_HiddenNormalized_001', () => {
+    const store = useSessionStore()
+    const groups = store.buildProjectGroups(
+      [{ path: 'E:\\Source\\Foo', name: 'Foo' }],
+      new Set(['e:/source/foo']),
+    )
+    expect(groups).toHaveLength(0)
+  })
+})
+
+// ==================== v5-T4：removeTab 不刷历史 ====================
+describe('session store - removeTab 不刷历史', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  // removeTab 删 tab 不触发 loadHistorySessions（getSessions 未调）
+  it('RemoveTab_NoHistoryRefresh_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    mock.mockResolvedValue([])
+    const store = useSessionStore()
+    const tabId = store.createTab('/p-a')
+    store.removeTab(tabId)
+    expect(store.tabs.has(tabId)).toBe(false)
+    expect(mock).not.toHaveBeenCalled()
+  })
+})

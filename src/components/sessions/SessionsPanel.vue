@@ -198,8 +198,9 @@ const scrollContainer = ref<HTMLElement>()
 const searchQuery = ref('')
 
 // 全部分组（基于 cachedProjects 构建 + 排序：置顶 → 字母序 → 孤儿置底）
+// v5-T4：传 hiddenProjects 过滤隐藏项目（及其孤儿 tab）
 const allGroups = computed<ProjectGroup[]>(() => {
-  const built = sessionStore.buildProjectGroups(appStore.cachedProjects)
+  const built = sessionStore.buildProjectGroups(appStore.cachedProjects, appStore.hiddenProjects)
   return sessionStore.sortProjectGroups(built)
 })
 

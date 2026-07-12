@@ -72,10 +72,13 @@ export const useSessionStore = defineStore('session', () => {
   const historyCacheMap = reactive(new Map<string, HistorySession[]>())
   /** 当前展示历史会话的项目路径 */
   const currentHistoryProject = ref<string>('')
-  /** 正在加载的项目路径（去重用） */
-  const inflightLoadProject = ref<string | null>(null)
+  /** per 项目历史加载状态（v5-T4 替代旧单值 inflightLoadProject） */
+  const historyLoadState = reactive(new Map<string, { loading: boolean; error: string | null }>())
+  /** 当前请求（每规范化路径最多 1） */
+  const inflight = new Map<string, Promise<HistorySession[]>>()
+  /** 排队 force（每规范化路径最多 1）：force 遇 inflight 时排队，等当前结束后追加刷新 */
+  const queuedForce = new Map<string, Promise<HistorySession[]>>()
   const searchQuery = ref<string>('')
-  const isLoading = ref<boolean>(false)
   const isLoadingMore = ref<boolean>(false)
   const messageSearchResults = ref<SessionSearchResult[]>([])
   let messageSearchTimer: ReturnType<typeof setTimeout> | null = null
@@ -304,8 +307,21 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * 更新 Tab 名称
+   * 删除 Tab 但不 kill PTY、不刷历史（供 startTab 失败时清理未启动 tab）。
+   * 与 closeTab 的区别：closeTab 是用户主动关闭（kill PTY + 刷历史），
+   * removeTab 是内部清理（tab 尚未启动或 PTY 已失败，无需 kill/刷新）。
    */
+  function removeTab(tabId: string) {
+    const tab = tabs.get(tabId)
+    if (!tab) return
+    const projectPath = tab.projectPath
+    tabs.delete(tabId)
+    if (activeTabId.value === tabId) {
+      // 聚焦到同项目的相邻 tab；无则置空
+      const remaining = getProjectTabs(projectPath)
+      activeTabId.value = remaining.length > 0 ? remaining[0].tabId : null
+    }
+  }
   function updateTabName(tabId: string, name: string) {
     const tab = tabs.get(tabId)
     if (tab) {
@@ -382,70 +398,122 @@ export const useSessionStore = defineStore('session', () => {
 
   const BATCH_SIZE = 20
 
+  /** isLoading 由当前展示项目的 loadState 派生（替代旧单值 inflightLoadProject） */
+  const isLoading = computed(() => {
+    const n = normalizePath(currentHistoryProject.value)
+    return historyLoadState.get(n)?.loading ?? false
+  })
+
+  function setLoadState(n: string, loading: boolean, error: string | null) {
+    historyLoadState.set(n, { loading, error })
+  }
+
+  /** 实际拉取 + 分页 + 写缓存（不处理并发/force） */
+  async function runFetch(projectPath: string): Promise<HistorySession[]> {
+    // 请求 BATCH_SIZE + 1 条来判断是否有更多
+    const firstBatch = await getSessions(projectPath, BATCH_SIZE + 1, 0)
+    const hasMore = firstBatch.length > BATCH_SIZE
+    const firstPage = hasMore ? firstBatch.slice(0, BATCH_SIZE) : firstBatch
+
+    const mapped = firstPage
+      .map(s => ({ sessionId: s.sessionId, name: s.name, projectPath: s.projectPath, lastActiveAt: s.lastActiveAt }))
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+
+    // 数据就绪后才写入缓存（不提前清空）
+    historyCacheMap.set(projectPath, mapped)
+
+    if (hasMore) {
+      isLoadingMore.value = true
+      let offset = BATCH_SIZE
+      let all = [...mapped]
+      while (true) {
+        const batch = await getSessions(projectPath, BATCH_SIZE, offset)
+        if (batch.length === 0) break
+        const more = batch
+          .map(s => ({ sessionId: s.sessionId, name: s.name, projectPath: s.projectPath, lastActiveAt: s.lastActiveAt }))
+        all = [...all, ...more].sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+        offset += batch.length
+        if (batch.length < BATCH_SIZE) break
+      }
+      historyCacheMap.set(projectPath, all)
+      isLoadingMore.value = false
+    }
+    return historyCacheMap.get(projectPath) ?? []
+  }
+
+  /** 启动一次新拉取并登记为 inflight（CAS 自清：旧不覆盖新） */
+  function startFetch(n: string, projectPath: string): Promise<HistorySession[]> {
+    const p = runFetch(projectPath)
+    inflight.set(n, p)
+    // CAS 自清：p 结束后，仅当 inflight 仍指向 p 时清除（排队 force 已接管 inflight 时不清）。
+    // 用 .finally 而非 IIFE 内 try/finally，避免闭包引用未赋值的 p（TS2454）。
+    p.finally(() => {
+      if (inflight.get(n) === p) inflight.delete(n)
+    })
+    return p
+  }
+
   /**
-   * 加载历史会话（项目级缓存 + 去重 + 不提前清空）
+   * 历史加载核心（v5-T4 两层 force 状态机）。
+   * - 普通：缓存命中秒回；否则复用排队 force（更新）> 当前 inflight > 新建
+   * - force + 无 inflight：直接新建
+   * - force + 有 inflight：排队一次（多 force 合并），等当前结束后追加刷新
+   * - 每规范化路径最多 1 当前 + 1 排队 force -> 无两并发 -> 旧不覆盖新天然成立
+   */
+  async function fetchHistory(projectPath: string, force = false): Promise<{ ok: true; sessions: HistorySession[] } | { ok: false; error: string }> {
+    const n = normalizePath(projectPath)
+    // 缓存命中秒回（非 force；保留 v3 语义，避免 watch/toggle 触发冗余拉取）
+    if (!force && historyCacheMap.has(projectPath)) {
+      return { ok: true, sessions: historyCacheMap.get(projectPath)! }
+    }
+    setLoadState(n, true, null)
+    try {
+      let p: Promise<HistorySession[]>
+      if (!force) {
+        const q = queuedForce.get(n)
+        const c = inflight.get(n)
+        if (q) p = q                       // 复用排队 force（更新）
+        else if (c) p = c                  // 复用当前 inflight
+        else p = startFetch(n, projectPath) // 新建
+      } else {
+        const c = inflight.get(n)
+        if (!c) {
+          p = startFetch(n, projectPath)   // 无当前：直接发
+        } else {
+          // 有当前：排队一次（多 force 合并）
+          let q = queuedForce.get(n)
+          if (!q) {
+            q = (async () => {
+              await c.catch(() => {})            // 等当前结束（忽略其错误，force 仍刷新）
+              queuedForce.delete(n)              // 清排队标记
+              return startFetch(n, projectPath)  // 追加刷新（startFetch 设 inflight）
+            })()
+            queuedForce.set(n, q)
+          }
+          p = q
+        }
+      }
+      const sessions = await p
+      setLoadState(n, false, null)
+      return { ok: true, sessions }
+    } catch (e) {
+      setLoadState(n, false, String(e))
+      return { ok: false, error: String(e) }
+    }
+  }
+
+  /** 管理页用：加载历史，不改 currentHistoryProject（无副作用） */
+  async function loadHistoryFor(projectPath: string, force = false) {
+    return fetchHistory(projectPath, force)
+  }
+
+  /**
+   * 侧栏用：加载历史 + 切 currentHistoryProject（保持原语义，改调 fetchHistory）。
    */
   async function loadHistorySessions(projectPath: string, force = false) {
     // 切换当前展示项目（即使还在加载中也立即切换，让 computed 指向正确项目）
     currentHistoryProject.value = projectPath
-
-    // 缓存命中且非强制刷新，直接返回
-    if (!force && historyCacheMap.has(projectPath)) return
-    // 去重：已在加载同一项目
-    if (inflightLoadProject.value === projectPath) return
-
-    inflightLoadProject.value = projectPath
-    isLoading.value = true
-    isLoadingMore.value = false
-
-    try {
-      // 请求 BATCH_SIZE + 1 条来判断是否有更多
-      const firstBatch = await getSessions(projectPath, BATCH_SIZE + 1, 0)
-      const hasMore = firstBatch.length > BATCH_SIZE
-      const firstPage = hasMore ? firstBatch.slice(0, BATCH_SIZE) : firstBatch
-
-      const mapped = firstPage
-        .map(s => ({
-          sessionId: s.sessionId,
-          name: s.name,
-          projectPath: s.projectPath,
-          lastActiveAt: s.lastActiveAt,
-        }))
-        .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
-
-      // 数据就绪后才写入缓存（不提前清空）
-      historyCacheMap.set(projectPath, mapped)
-      isLoading.value = false
-
-      if (hasMore) {
-        isLoadingMore.value = true
-        let offset = BATCH_SIZE
-        let allSessions = [...mapped]
-        while (true) {
-          const batch = await getSessions(projectPath, BATCH_SIZE, offset)
-          if (batch.length === 0) break
-          const more = batch
-            .map(s => ({
-              sessionId: s.sessionId,
-              name: s.name,
-              projectPath: s.projectPath,
-              lastActiveAt: s.lastActiveAt,
-            }))
-          allSessions = [...allSessions, ...more]
-            .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
-          offset += batch.length
-          if (batch.length < BATCH_SIZE) break
-        }
-        historyCacheMap.set(projectPath, allSessions)
-        isLoadingMore.value = false
-      }
-    } catch (err) {
-      console.error('[SessionStore] loadHistorySessions failed:', err)
-      isLoading.value = false
-      isLoadingMore.value = false
-    } finally {
-      inflightLoadProject.value = null
-    }
+    return fetchHistory(projectPath, force)
   }
 
   /** 清除指定项目或全部历史缓存 */
@@ -513,8 +581,10 @@ export const useSessionStore = defineStore('session', () => {
     }
     tabs.clear()
     historyCacheMap.clear()
+    historyLoadState.clear()
+    inflight.clear()
+    queuedForce.clear()
     currentHistoryProject.value = ''
-    inflightLoadProject.value = null
   }
 
   function getProjectTabs(projectPath: string): TerminalTab[] {
@@ -526,18 +596,27 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * 构建项目分组（含孤儿）。
    * @param cachedProjects 来自 appStore.cachedProjects 的项目列表
+   * @param hidden 隐藏项目集合（normalized 比较；隐藏项目及其孤儿 tab 不入树）
    */
   function buildProjectGroups(
     cachedProjects: { path: string; name: string }[],
+    hidden?: Set<string>,
   ): ProjectGroup[] {
     const normalize = (p: string) => p.replace(/\\/g, '/').toLowerCase()
-    const known = new Set(cachedProjects.map(p => normalize(p.path)))
+    const hiddenSet = hidden ? new Set([...hidden].map(h => normalize(h))) : null
+    // 过滤 hidden 项目（含规范化比较）
+    const visibleProjects = hiddenSet
+      ? cachedProjects.filter(p => !hiddenSet.has(normalize(p.path)))
+      : cachedProjects
+    const known = new Set(visibleProjects.map(p => normalize(p.path)))
 
     // 按 normalized path 聚合 tabs，避免 Windows 路径大小写/斜杠不一致时
     // 精确匹配（getProjectTabs）漏 tab：known 判非孤儿却贴不到 tab。
     const tabsByNorm = new Map<string, { tabs: TerminalTab[]; firstRaw: string }>()
     for (const tab of tabs.values()) {
       const n = normalize(tab.projectPath)
+      // hidden 项目的 tab 不入树（不作孤儿出现）
+      if (hiddenSet && hiddenSet.has(n)) continue
       const entry = tabsByNorm.get(n)
       if (entry) entry.tabs.push(tab)
       else tabsByNorm.set(n, { tabs: [tab], firstRaw: tab.projectPath })
@@ -548,7 +627,7 @@ export const useSessionStore = defineStore('session', () => {
     }
 
     const groups: ProjectGroup[] = []
-    for (const p of cachedProjects) {
+    for (const p of visibleProjects) {
       const projTabs = tabsByNorm.get(normalize(p.path))?.tabs ?? []
       groups.push(makeGroup(p.path, p.name, projTabs, false))
     }
@@ -647,8 +726,10 @@ export const useSessionStore = defineStore('session', () => {
         projectsStateLoaded.value = false
         projectsStateError.value = true
         // 重置 loadPromise：下次 ensureProjectsStateLoaded 可重新触发加载（P2 重试）。
-        // 不抛：避免阻断 App.vue fire-and-forget 启动；ensureProjectsStateLoaded 据标志抛。
         loadPromise = null
+        // rethrow（v5 P1：不吞；ensureProjectsStateLoaded await 的调用方据此抛错，
+        // App.vue 启动门禁感知失败 -- 后续 T7 在 App.vue 包 catch 处理）。
+        throw err
       }
     })()
     return loadPromise
@@ -851,6 +932,8 @@ export const useSessionStore = defineStore('session', () => {
     isLoadingMore,
     pinnedProjects,
     archivedSessions,
+    currentHistoryProject,
+    historyLoadState,
 
     // Computed
     activeTab,
@@ -866,6 +949,7 @@ export const useSessionStore = defineStore('session', () => {
     closeTab,
     closeAllTabs,
     closeOtherTabs,
+    removeTab,
     updateTabName,
     setTabSessionId,
 
@@ -880,6 +964,8 @@ export const useSessionStore = defineStore('session', () => {
     assignSessionIdByPtyId,
 
     // History
+    fetchHistory,
+    loadHistoryFor,
     loadHistorySessions,
     invalidateHistoryCache,
 
