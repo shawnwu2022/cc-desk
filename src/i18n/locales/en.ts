@@ -9,6 +9,7 @@ export default {
   loading: 'Loading...',
   loadingMore: 'Loading more...',
   projectsLoadFailed: 'Failed to load pin/archive state',
+  startupFailed: 'Startup failed to load',
   add: 'Add',
   remove: 'Remove',
   settings: 'Settings',

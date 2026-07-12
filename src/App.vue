@@ -49,6 +49,15 @@
     </div>
   </div>
 
+  <!-- 启动加载/失败门禁 -->
+  <div v-if="startupError" class="startup-error-overlay">
+    <div class="startup-error-card">
+      <h2>{{ t('startupFailed') }}</h2>
+      <p class="startup-error-msg">{{ startupError }}</p>
+      <button class="startup-retry-btn" @click="initStartup">{{ t('retry') }}</button>
+    </div>
+  </div>
+
   <!-- 全局设置浮层 -->
   <SettingsOverlay />
 
@@ -102,9 +111,11 @@ import {
   downloadAndInstallClaude,
   downloadAndInstallGit,
   onInstallProgress,
-  onOpenDirectory
+  onOpenDirectory,
+  getProjectStartupState
 } from '@/api/tauri'
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
+import { decideStartupView } from '@/composables/useStartupDecision'
 import WelcomeView from '@/components/WelcomeView.vue'
 import ProjectSelectView from '@/components/ProjectSelectView.vue'
 import TitleBar from '@/components/TitleBar.vue'
@@ -122,6 +133,11 @@ const { t } = useI18n()
 const { setupShortcutListeners } = useAppShortcuts()
 const currentView = ref<ViewType>('welcome')
 const terminalViewRef = ref()
+
+// 启动加载/失败门禁（v5-T7）：initStartup 中三路并行加载或启动摘要门禁失败时置位，
+// 弹出错误卡 + 重试按钮；成功后清空。
+const startupError = ref<string | null>(null)
+const startupLoading = ref(false)
 
 // 应用 GUI 主题到 DOM。loadAppConfig 是异步 fire-and-forget：initAfterChecks 先用 store 初始值
 // （'light'）设置 DOM，待 loadAppConfig 把 theme.value 更新为持久化值后，由该 watch 同步到 DOM。
@@ -158,6 +174,7 @@ onMounted(async () => {
   }
 
   initAfterChecks()
+  await initStartup()
 })
 
 onUnmounted(() => {
@@ -173,24 +190,25 @@ onUnmounted(() => {
 
 async function handleSelectProject() {
   const result = await selectDirectory()
-  if (result) {
-    const normalizePath = (p: string) => p.replace(/\\/g, '/').toLowerCase()
-    const normalizedResult = normalizePath(result.path)
-    const existingProject = appStore.cachedProjects.find(
-      p => normalizePath(p.path) === normalizedResult
-    )
-    if (existingProject) {
-      handleOpenProject(result.path)
-    } else {
-      appStore.setCwd(result.path)
-      // 保留用户的启动参数设置，只清除 resume（新项目不需要恢复会话）
-      appStore.setClaudeOptions({
-        resume: '',
-        // 保留 skipPermissions 和 customArgs
-      })
-      currentView.value = 'terminal'
-      sidebarStore.loadAllSidebarData(result.path)
-    }
+  if (!result) return
+  const path = result.path
+  const normalizePath = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+  const existing = appStore.cachedProjects.find(p => normalizePath(p.path) === normalizePath(path))
+  if (existing) {
+    // 已存在项目走统一切换
+    handleOpenProject(path)
+    return
+  }
+  // 新项目：进终端 + startProjectSession 事务（spawn 后切 cwd + 等 sessionStart 持久化）。
+  // cancelled/spawnFail/timeout/提前退出 reject 统一 catch -> startupError 提示
+  // （T6 concern：unmount 期间 reject 'cancelled' 亦走此路径，不悬空）。
+  currentView.value = 'terminal'
+  await nextTick()
+  try {
+    appStore.setClaudeOptions({ resume: '' }) // 新项目不恢复会话
+    await terminalViewRef.value?.startProjectSession(path)
+  } catch (e) {
+    startupError.value = t('claudeStartFailed') + ': ' + String(e)
   }
 }
 
@@ -257,26 +275,16 @@ async function retryChecks() {
   await appStore.runChecks(true)
   if (!appStore.checkFailed) {
     initAfterChecks()
+    await initStartup()
   }
 }
 
 function initAfterChecks() {
   // 先用 store 初始值（'light'）应用主题到 DOM，避免首屏闪烁；
-  // loadAppConfig（异步 fire-and-forget）完成后会把 theme.value 更新为持久化值，
+  // loadAppConfig（在 initStartup 内并行执行）完成后会把 theme.value 更新为持久化值，
   // 由 setup 中的 watch(appStore.theme) 同步到 DOM（见上方）
   applyThemeToDom(appStore.theme)
 
-  // 并行启动所有独立初始化任务
-  appStore.loadCache().then(() => {
-    if (appStore.cachedProjects.length > 0 && currentView.value === 'welcome') {
-      currentView.value = 'projects'
-    }
-  })
-  appStore.loadAppConfig()
-  // 启动加载置顶/存档状态（projects.json）：fire-and-forget 触发；即便未完成，
-  // pin/archive 内部的 ensureProjectsStateLoaded 门禁也会等待加载（P1.2），
-  // 避免首次 pin/archive 用空内存状态写回覆写旧数据。
-  sessionStore.loadProjectsState()
   useHookStore().init()
 
   shortcutUnlisteners.push(...setupShortcutListeners())
@@ -324,6 +332,61 @@ function initAfterChecks() {
       sidebarStore.loadAllSidebarData(dir)
     }
   }).then(fn => { unlistenOpenDir = fn })
+}
+
+/**
+ * 启动协调（v5-T7 §4.2）：Promise.allSettled(loadAppConfig, loadCache, loadProjectsState)
+ * -> 门禁（任一失败 -> 错误+重试）-> get_project_startup_state 门禁 -> decideStartupView 决策。
+ *
+ * 收尾 T3/T4 unhandled：loadAppConfig/loadCache（T3 改抛错）/ loadProjectsState（T4 rethrow）
+ * 原本在 initAfterChecks 里 fire-and-forget 调用会产生 unhandled rejection；现统一收进
+ * Promise.allSettled，reject 由 results 显式消费，不再悬空。
+ *
+ * P2.8 已知简化：loadCache（getHomeData）与 get_project_startup_state 各扫一次
+ * ~/.claude/projects/；可接受（启动一次），后续可合并为一次扫描返回 HomeData+摘要。
+ */
+async function initStartup() {
+  startupLoading.value = true
+  startupError.value = null
+  try {
+    // 1. 并行加载（加载器抛错不吞：Promise.allSettled 收纳，下方统一判定）
+    const results = await Promise.allSettled([
+      appStore.loadAppConfig(),
+      appStore.loadCache(),
+      sessionStore.loadProjectsState(),
+    ])
+    const failed = results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined
+    if (failed) {
+      startupError.value = String(failed.reason)
+      return
+    }
+    // 2. 启动摘要门禁
+    let state
+    try {
+      state = await getProjectStartupState(appStore.lastOpenedProject, [...appStore.hiddenProjects])
+    } catch (e) {
+      startupError.value = String(e)
+      return
+    }
+    // 3. lastOpenedProjectInfo 注入缓存（确保树里可高亮，含分页 12 外）
+    if (state.lastOpenedProjectInfo) {
+      appStore.ensureProjectInList(state.lastOpenedProjectInfo.path)
+    }
+    // 4. 决策
+    const decision = decideStartupView(state, appStore.lastOpenedProject, appStore.isHidden)
+    currentView.value = decision.view
+    if (decision.openSessionsPanel) {
+      sidebarStore.togglePanel('sessions')
+    }
+    if (decision.restoreProject) {
+      // 恢复上次项目：persist:false（lastOpened 已持久化，不重复写）
+      await appStore.setCurrentProject(decision.restoreProject, { persist: false })
+    }
+  } catch (e) {
+    startupError.value = String(e)
+  } finally {
+    startupLoading.value = false
+  }
 }
 
 // 自动安装（并发执行）
@@ -400,6 +463,7 @@ async function autoInstall() {
     // 检查是否全部通过
     if (!appStore.checkFailed) {
       initAfterChecks()
+      await initStartup()
     } else {
       // 如果仍有失败项，更新错误信息
       for (const task of installTasks.value) {
@@ -656,5 +720,58 @@ async function autoInstall() {
   height: 100%;
   background: var(--accent-primary);
   transition: width 0.3s ease;
+}
+
+/* 启动加载失败门禁 */
+.startup-error-overlay {
+  position: fixed;
+  top: 32px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.startup-error-card {
+  background: var(--bg-primary);
+  border-radius: var(--radius-lg);
+  padding: 24px 32px;
+  max-width: 420px;
+  width: 90%;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.startup-error-card h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--status-error);
+  margin-bottom: 16px;
+}
+
+.startup-error-msg {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+  word-break: break-word;
+}
+
+.startup-retry-btn {
+  padding: 10px 24px;
+  background: var(--accent-primary);
+  color: var(--text-inverse);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.startup-retry-btn:hover {
+  opacity: 0.9;
 }
 </style>
