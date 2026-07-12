@@ -47,6 +47,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   ptyStarted: [tabId: string, ptyId: string]
+  // PTY 退出通知（供 TerminalView settle sessionStart waiter）
+  ptyExited: [tabId: string, ptyId: string]
 }>()
 
 const appStore = useAppStore()
@@ -465,6 +467,8 @@ async function setupEventListeners() {
         void disposeTerminal(instance.term, `onPtyExit(tabId=${tabId})`)
         terminalInstances.delete(tabId)
         terminalEls.delete(tabId)
+        // 通知 TerminalView settle sessionStart waiter（PTY 退出）
+        emit('ptyExited', tabId, id)
         break
       }
     }
@@ -556,18 +560,19 @@ async function createTerminalForTab(tabId: string, ptyId: string) {
 // ==================== Tab 操作（外部调用） ====================
 
 /**
- * 启动 Tab 的 PTY
- * 由 TerminalView 调用，传入已创建好的 tabId
+ * 启动 Tab 的 PTY。
+ * 由 TerminalView 调用，传入已创建好的 tabId。
+ * @returns 成功 {ok:true}；失败 {ok:false,error}（已统一清理 tab/terminal instance，不刷历史）
  */
-async function startTab(tabId: string) {
+async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const tab = sessionStore.tabs.get(tabId)
   if (!tab) {
     logMessage('warn', `startTab: tab not found, tabId=${tabId}`)
-    return
+    return { ok: false, error: 'tab not found' }
   }
   if (isPtyStarting.value) {
     logMessage('warn', `startTab: blocked by isPtyStarting, tabId=${tabId}`)
-    return
+    return { ok: false, error: 'blocked by isPtyStarting' }
   }
 
   // 已有运行中的 PTY
@@ -575,7 +580,7 @@ async function startTab(tabId: string) {
     if (!terminalInstances.has(tabId)) {
       await createTerminalForTab(tabId, tab.ptyId)
     }
-    return
+    return { ok: true }
   }
 
   isPtyStarting.value = true
@@ -618,18 +623,35 @@ async function startTab(tabId: string) {
       if (instance) instance.ptyId = info.id
       sessionStore.setTabPty(tabId, info.id)
       emit('ptyStarted', tabId, info.id)
-    } else {
-      // spawn 未返回 id，清理预注册实例
-      terminalInstances.delete(tabId)
+      return { ok: true }
     }
+    // info==null：统一清理（P2.7 修复：原仅 delete terminalInstances，tab 残留）
+    discardUnstartedTab(tabId)
+    return { ok: false, error: 'no pty info' }
   } catch (err) {
-    // 异常时清理预注册实例
-    terminalInstances.delete(tabId)
+    // 异常统一清理（P2.7 修复：原裸 terminalInstances.delete 绕过 disposeTerminal）
+    discardUnstartedTab(tabId)
     console.error('[XTerm] startTab ERROR:', err)
     logMessage('error', `startTab failed, tabId=${tabId}: ${err}`)
+    return { ok: false, error: String(err) }
   } finally {
     isPtyStarting.value = false
   }
+}
+
+/**
+ * 统一清理未成功启动的 Tab（P2.7）：
+ * - disposeTerminal（停 atlas/IME timer + safeDispose，非裸 term.dispose）
+ * - sessionStore.removeTab（删 tab 不 kill PTY 不刷历史，区别于 closeTab）
+ */
+function discardUnstartedTab(tabId: string) {
+  const instance = terminalInstances.get(tabId)
+  if (instance) {
+    void disposeTerminal(instance.term, `discardUnstartedTab(tabId=${tabId})`)
+    terminalInstances.delete(tabId)
+    terminalEls.delete(tabId)
+  }
+  sessionStore.removeTab(tabId)
 }
 
 /**
