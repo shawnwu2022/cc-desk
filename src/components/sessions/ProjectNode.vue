@@ -64,9 +64,12 @@
         </div>
         <div v-if="archivedList.length === 0" class="archived-empty">{{ t('noArchivedSessions') }}</div>
         <div v-else class="archived-list">
-          <div v-for="sid in archivedList" :key="sid" class="archived-item">
-            <span class="archived-id" :title="sid">{{ sid.slice(0, 8) }}</span>
-            <button class="restore-btn" @click="onRestore(sid)" :title="t('restore')">{{ t('restore') }}</button>
+          <div v-for="item in archivedList" :key="item.sessionId" class="archived-item">
+            <div class="archived-info">
+              <span class="archived-name" :title="item.name">{{ item.name }}</span>
+              <span v-if="item.lastActiveAt > 0" class="archived-time">{{ timeAgo(item.lastActiveAt) }}</span>
+            </div>
+            <button class="restore-btn" @click="onRestore(item.sessionId)" :title="t('restore')">{{ t('restore') }}</button>
           </div>
         </div>
       </div>
@@ -134,8 +137,9 @@ const emit = defineEmits<{
 const menuOpen = ref(false)
 const archivedOpen = ref(false)
 
-// 该项目的已存档会话 ID 列表（响应式：restore 后 store 更新则自动收缩）
-const archivedList = computed(() => sessionStore.getArchivedSessions(props.project.projectPath))
+// 该项目的已存档会话信息列表（响应式：restore 后 store 更新则自动收缩）
+// name/lastActiveAt 从 historyCacheMap 查；未加载则 name 回退 ID 截断
+const archivedList = computed(() => sessionStore.getArchivedSessionInfos(props.project.projectPath))
 
 // 点击外部关闭菜单与已存档弹层：⋯ 按钮 / 菜单 / 弹层内部已 @click.stop，不会触发此处
 function closeOnOutside() {
@@ -166,6 +170,18 @@ function onMenu(action: 'closeAll' | 'openInExplorer' | 'pin' | 'unpin' | 'showA
 
 function onRestore(sessionId: string) {
   emit('restoreSession', props.project.projectPath, sessionId)
+}
+
+// 已存档弹层的相对时间（与 SessionItem 的 timeAgo 口径一致）
+function timeAgo(ts: number): string {
+  const diff = Date.now() - ts
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(diff / 3600000)
+  const days = Math.floor(diff / 86400000)
+  if (minutes < 1) return t('justNow')
+  if (minutes < 60) return `${minutes}m`
+  if (hours < 24) return `${hours}h`
+  return `${days}d`
 }
 
 function resumeName(sessionId: string): string | undefined {
@@ -262,10 +278,15 @@ function onSessionSwitch(id: string) {
   padding: 4px 6px; border-radius: 4px;
 }
 .archived-item:hover { background: var(--hover-bg); }
-.archived-id {
-  font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary);
+.archived-info {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
+  overflow: hidden;
+}
+.archived-name {
+  font-size: 11px; color: var(--text-secondary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.archived-time { font-size: 10px; color: var(--text-tertiary); flex-shrink: 0; }
 .restore-btn {
   border: 1px solid var(--border-color); background: transparent;
   color: var(--text-primary); cursor: pointer; border-radius: 3px;

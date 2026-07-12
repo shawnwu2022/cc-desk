@@ -440,6 +440,37 @@ describe('session store - 全局树', () => {
       expect(archived).toContain('sess-2')
     })
   })
+
+  // ==================== getArchivedSessionInfos（name/lastActiveAt 查 historyCacheMap） ====================
+  describe('getArchivedSessionInfos', () => {
+    // historyCacheMap 命中：返回会话名与 lastActiveAt（区分存档会话）
+    it('ArchivedInfos_HitReturnsName_001', async () => {
+      const { getSessions } = await import('@/api/tauri')
+      ;(getSessions as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        { sessionId: 'sess-named', name: '修复登录bug', projectPath: '/p-a', lastActiveAt: 5000 },
+      ])
+      const store = useSessionStore()
+      await store.loadHistorySessions('/p-a')
+      await store.archiveSession('/p-a', 'sess-named')
+      const infos = store.getArchivedSessionInfos('/p-a')
+      expect(infos).toHaveLength(1)
+      expect(infos[0].sessionId).toBe('sess-named')
+      expect(infos[0].name).toBe('修复登录bug')
+      expect(infos[0].lastActiveAt).toBe(5000)
+    })
+
+    // historyCacheMap 未加载：name 回退 ID 截断（前 8 位）、lastActiveAt 回退 0
+    it('ArchivedInfos_MissFallbackId_001', async () => {
+      const store = useSessionStore()
+      // 未 loadHistorySessions -> historyCacheMap 无该项目
+      await store.archiveSession('/p-a', 'abcdef1234567890')
+      const infos = store.getArchivedSessionInfos('/p-a')
+      expect(infos).toHaveLength(1)
+      expect(infos[0].sessionId).toBe('abcdef1234567890')
+      expect(infos[0].name).toBe('abcdef12')  // ID.slice(0,8) 截断
+      expect(infos[0].lastActiveAt).toBe(0)
+    })
+  })
 })
 
 // 辅助：loadHistorySessions 的薄封装，便于测试中复用 store 实例

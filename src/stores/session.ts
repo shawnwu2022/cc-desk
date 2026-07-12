@@ -676,6 +676,20 @@ export const useSessionStore = defineStore('session', () => {
     return result
   }
 
+  /**
+   * 取该项目的已存档会话信息（name/lastActiveAt）。
+   * 从 historyCacheMap 按 archived ID 查；未加载或缓存未命中则 name 回退 ID 截断、
+   * lastActiveAt 回退 0（UI 据此隐藏时间）。供已存档弹层区分会话用。
+   */
+  function getArchivedSessionInfos(projectPath: string): { sessionId: string; name: string; lastActiveAt: number }[] {
+    const ids = getArchivedSessions(projectPath)
+    const cached = historyCacheMap.get(projectPath) ?? []
+    return ids.map(id => {
+      const h = cached.find(s => s.sessionId === id)
+      return { sessionId: id, name: h?.name ?? id.slice(0, 8), lastActiveAt: h?.lastActiveAt ?? 0 }
+    })
+  }
+
   /** 存档会话（从历史列表隐藏；已存档则幂等返回） */
   async function archiveSession(projectPath: string, sessionId: string) {
     const n = normalizePath(projectPath)
@@ -778,6 +792,7 @@ export const useSessionStore = defineStore('session', () => {
     pinProject,
     unpinProject,
     getArchivedSessions,
+    getArchivedSessionInfos,
     archiveSession,
     restoreSession,
   }
