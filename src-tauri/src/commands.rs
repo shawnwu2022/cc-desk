@@ -9,7 +9,7 @@ use crate::checks::CheckResult;
 use crate::pty::get_pty_manager;
 use crate::store::{
     AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project, ProjectConfig,
-    SessionDetails, SessionInfo, SessionSearchResult, SkillInfo,
+    ProjectsState, SessionDetails, SessionInfo, SessionSearchResult, SkillInfo,
 };
 use crate::providers::{
     Provider, ProvidersConfig, ProviderMeta, ImportResult, TestConnectionResult,
@@ -196,6 +196,18 @@ pub async fn get_app_config() -> Result<AppConfig, String> {
 #[tauri::command]
 pub async fn update_app_config(updates: serde_json::Value) -> Result<(), String> {
     crate::store::update_app_config(updates).map_err(|e| e.to_string())
+}
+
+/// 获取 projects 状态（置顶项目 + 会话存档）
+#[tauri::command]
+pub async fn get_projects_state() -> Result<ProjectsState, String> {
+    crate::store::get_projects_state().map_err(|e| e.to_string())
+}
+
+/// 更新 projects 状态（合并写入）
+#[tauri::command]
+pub async fn update_projects_state(updates: serde_json::Value) -> Result<(), String> {
+    crate::store::update_projects_state(updates).map_err(|e| e.to_string())
 }
 
 /// 获取默认 Claude 选项

@@ -154,6 +154,8 @@ pub fn run(initial_dir: Option<String>) {
             commands::search_session_messages,
             commands::get_app_config,
             commands::update_app_config,
+            commands::get_projects_state,
+            commands::update_projects_state,
             commands::get_default_claude_options,
             commands::save_default_claude_options,
             commands::save_last_project,

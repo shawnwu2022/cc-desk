@@ -209,6 +209,11 @@ fn get_gui_config_path() -> Result<PathBuf> {
     get_gui_config_dir().map(|d| d.join("config.json"))
 }
 
+/// 获取 projects 状态文件路径（置顶项目 + 会话存档，独立于 config.json）
+fn get_projects_state_path() -> Result<PathBuf> {
+    get_gui_config_dir().map(|d| d.join("projects.json"))
+}
+
 /// 扫描 ~/.claude/projects/ 构建真实路径到项目目录的映射
 /// 每个目录通过读取 JSONL 中的 cwd 字段获取真实项目路径
 fn build_project_path_mapping() -> HashMap<String, Vec<PathBuf>> {
@@ -1004,6 +1009,60 @@ pub(crate) fn merge_json_values(base: serde_json::Value, updates: serde_json::Va
         }
         (_, updates) => updates,
     }
+}
+
+/// 项目置顶 + 会话存档持久化状态（~/.cc-box/projects.json）
+/// 与 config.json 分开存储，仅承载前端派生的视图状态
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProjectsState {
+    #[serde(rename = "pinnedProjects", default)]
+    pub pinned_projects: Vec<String>,
+    #[serde(rename = "archivedSessions", default)]
+    pub archived_sessions: HashMap<String, Vec<String>>,
+}
+
+/// 读取 projects 状态（文件不存在返回默认空状态：空 pinned + 空 map）
+pub fn get_projects_state() -> Result<ProjectsState> {
+    let path = get_projects_state_path()?;
+    get_projects_state_at(&path)
+}
+
+/// 读取指定路径的 projects 状态（注入路径，便于单元测试）
+pub(crate) fn get_projects_state_at(path: &Path) -> Result<ProjectsState> {
+    if !path.exists() {
+        return Ok(ProjectsState::default());
+    }
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let state: ProjectsState = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    Ok(state)
+}
+
+/// 更新 projects 状态（读现有 -> merge -> 写入，模仿 update_app_config）
+pub fn update_projects_state(updates: serde_json::Value) -> Result<()> {
+    let path = get_projects_state_path()?;
+    update_projects_state_at(&path, updates)
+}
+
+/// 更新指定路径的 projects 状态（注入路径，便于单元测试）
+pub(crate) fn update_projects_state_at(path: &Path, updates: serde_json::Value) -> Result<()> {
+    let config_dir = path
+        .parent()
+        .context("Could not get parent directory of projects state path")?;
+    if !config_dir.exists() {
+        fs::create_dir_all(config_dir)?;
+    }
+
+    let existing = get_projects_state_at(path)?;
+    let existing_json = serde_json::to_value(existing)?;
+
+    let merged = merge_json_values(existing_json, updates);
+
+    let content = serde_json::to_string_pretty(&merged)?;
+    fs::write(path, content)?;
+
+    Ok(())
 }
 
 /// 获取默认 Claude 选项

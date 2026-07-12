@@ -2,10 +2,10 @@ use serde_json::json;
 
 use crate::store::{
     expand_env_vars, extract_md_description, extract_session_name, find_valid_plugin_path,
-    infer_server_type, merge_json_values, parse_agents_list_output, parse_mcp_server_entry,
-    parse_skill_description, parse_timestamp, resolve_marketplace_plugin_path,
+    get_projects_state_at, infer_server_type, merge_json_values, parse_agents_list_output,
+    parse_mcp_server_entry, parse_skill_description, parse_timestamp, resolve_marketplace_plugin_path,
     search_session_messages_in_dirs, set_agent_enabled_in, set_mcp_server_enabled_in,
-    set_skill_enabled_in, AgentInfo, AppConfig,
+    set_skill_enabled_in, update_projects_state_at, AgentInfo, AppConfig, ProjectsState,
 };
 
 use std::collections::HashMap;
@@ -1075,4 +1075,152 @@ fn AppConfig_TerminalTheme_SerializeDeserialize_001() {
 fn AppConfig_TerminalTheme_DefaultNone_001() {
     let config = AppConfig::default();
     assert_eq!(config.terminal_theme, None);
+}
+
+// ==================== get_projects_state_at / update_projects_state_at ====================
+
+// 文件不存在 -> 返回默认空状态（pinned 为空 Vec，archived 为空 Map）
+#[test]
+fn GetProjectsState_NoFile_DefaultEmpty_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    let state = get_projects_state_at(&path).unwrap();
+    assert!(state.pinned_projects.is_empty(), "pinned 应为空");
+    assert!(state.archived_sessions.is_empty(), "archived 应为空");
+}
+
+// 文件不存在时返回的默认状态与 ProjectsState::default() 一致（字段级校验，struct 未 derive PartialEq）
+#[test]
+fn GetProjectsState_NoFile_MatchesDefault_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    let state = get_projects_state_at(&path).unwrap();
+    let default = ProjectsState::default();
+    assert_eq!(state.pinned_projects, default.pinned_projects);
+    assert_eq!(state.archived_sessions, default.archived_sessions);
+}
+
+// update 写入后 get 读回一致（pinnedProjects + archivedSessions 双字段）
+#[test]
+fn UpdateProjectsState_WriteThenReadBack_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    let updates = json!({
+        "pinnedProjects": ["E:/proj/a", "E:/proj/b"],
+        "archivedSessions": {"E:/proj/a": ["sess-1", "sess-2"]}
+    });
+    update_projects_state_at(&path, updates).unwrap();
+
+    let state = get_projects_state_at(&path).unwrap();
+    assert_eq!(state.pinned_projects, vec!["E:/proj/a", "E:/proj/b"]);
+    let archived = state.archived_sessions.get("E:/proj/a").unwrap();
+    assert_eq!(*archived, vec!["sess-1".to_string(), "sess-2".to_string()]);
+}
+
+// merge：只更新 pinnedProjects，已有的 archivedSessions 不丢失
+#[test]
+fn UpdateProjectsState_PartialMergeKeepsArchived_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    // 先写入两个字段
+    update_projects_state_at(
+        &path,
+        json!({"pinnedProjects": ["a"], "archivedSessions": {"a": ["s1"]}}),
+    )
+    .unwrap();
+    // 只更新 pinnedProjects
+    update_projects_state_at(&path, json!({"pinnedProjects": ["b", "c"]})).unwrap();
+
+    let state = get_projects_state_at(&path).unwrap();
+    assert_eq!(state.pinned_projects, vec!["b", "c"], "pinned 应被覆盖");
+    assert!(state.archived_sessions.contains_key("a"), "archived 应保留");
+    assert_eq!(
+        state.archived_sessions.get("a").unwrap(),
+        &vec!["s1".to_string()],
+        "archived 内容不变"
+    );
+}
+
+// merge：只更新 archivedSessions，已有的 pinnedProjects 不丢失
+#[test]
+fn UpdateProjectsState_PartialMergeKeepsPinned_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    update_projects_state_at(
+        &path,
+        json!({"pinnedProjects": ["a", "b"], "archivedSessions": {"a": ["s1"]}}),
+    )
+    .unwrap();
+    update_projects_state_at(&path, json!({"archivedSessions": {"b": ["s2", "s3"]}})).unwrap();
+
+    let state = get_projects_state_at(&path).unwrap();
+    assert_eq!(state.pinned_projects, vec!["a", "b"], "pinned 应保留");
+    // archivedSessions 整体被覆盖为 updates 中的值（merge 顶层替换语义）
+    assert!(!state.archived_sessions.contains_key("a"), "a 被覆盖");
+    assert!(state.archived_sessions.contains_key("b"), "b 为新值");
+    assert_eq!(
+        state.archived_sessions.get("b").unwrap(),
+        &vec!["s2".to_string(), "s3".to_string()]
+    );
+}
+
+// 父目录不存在时 update 自动创建
+#[test]
+fn UpdateProjectsState_CreatesParentDir_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let nested = tmp.path().join("nested").join("deep").join("projects.json");
+    update_projects_state_at(&nested, json!({"pinnedProjects": ["x"]})).unwrap();
+    assert!(nested.exists(), "文件应被创建");
+    let state = get_projects_state_at(&nested).unwrap();
+    assert_eq!(state.pinned_projects, vec!["x"]);
+}
+
+// 文件存在但为空对象 {} -> 反序列化为默认空状态（serde default 生效）
+#[test]
+fn GetProjectsState_EmptyObject_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    std::fs::write(&path, "{}").unwrap();
+    let state = get_projects_state_at(&path).unwrap();
+    assert!(state.pinned_projects.is_empty());
+    assert!(state.archived_sessions.is_empty());
+}
+
+// 文件存在但缺一个字段 -> 缺失字段用默认值（serde default 生效）
+#[test]
+fn GetProjectsState_MissingField_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    std::fs::write(&path, r#"{"pinnedProjects":["only"]}"#).unwrap();
+    let state = get_projects_state_at(&path).unwrap();
+    assert_eq!(state.pinned_projects, vec!["only"]);
+    assert!(state.archived_sessions.is_empty(), "缺失字段应默认空");
+}
+
+// update 后文件内容是合法 JSON 且字段名为 camelCase
+#[test]
+fn UpdateProjectsState_WritesCamelCase_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    update_projects_state_at(&path, json!({"pinnedProjects": ["a"]})).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("\"pinnedProjects\""), "应使用 camelCase 字段名");
+    assert!(!content.contains("pinned_projects"), "不应出现 snake_case");
+    // 内容整体可被解析回 ProjectsState
+    let reparsed: ProjectsState = serde_json::from_str(&content).unwrap();
+    assert_eq!(reparsed.pinned_projects, vec!["a"]);
+}
+
+// 首次 update（无现存文件）-> 读默认空再 merge，结果只含 updates 字段
+#[test]
+fn UpdateProjectsState_FirstWrite_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    update_projects_state_at(&path, json!({"archivedSessions": {"p": ["s1"]}})).unwrap();
+    let state = get_projects_state_at(&path).unwrap();
+    assert!(state.pinned_projects.is_empty(), "未提供 pinned 应为空");
+    assert_eq!(
+        state.archived_sessions.get("p").unwrap(),
+        &vec!["s1".to_string()]
+    );
 }
