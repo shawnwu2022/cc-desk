@@ -28,95 +28,67 @@
       </button>
     </div>
 
-    <!-- 会话列表 -->
-    <div class="panel-content" ref="scrollContainer">
-      <!-- 搜索结果模式 -->
+    <!-- 项目树列表 -->
+    <div class="panel-content" ref="scrollContainer" @scroll="handleScroll">
+      <!-- 搜索结果模式：命中的项目组（带 matchedHistoryIds） -->
       <template v-if="searchQuery.trim()">
-        <div class="section">
-          <div class="section-title">{{ t('searchResults') }}</div>
-
-          <!-- 来自 Open Tabs 的命中 -->
-          <div v-if="matchedTabs.length > 0" class="subsection">
-            <div class="subsection-title">{{ t('openTabs') }} · {{ matchedTabs.length }}</div>
-            <SessionList
-              :tabs="matchedTabs"
-              :active-id="sessionStore.activeTabId"
-              closable
-              @switch="(id) => $emit('switchSession', id)"
-              @rename="(id, name) => $emit('renameSession', id, name)"
-              @restart="() => $emit('restartSession')"
-              @close="(id) => $emit('closeTab', id)"
-            />
-          </div>
-
-          <!-- 来自 History 的命中 -->
-          <div v-if="filteredHistory.length > 0" class="subsection">
-            <div class="subsection-title">{{ t('history') }} · {{ filteredHistory.length }}</div>
-            <SessionList
-              :history="filteredHistory"
-              :active-id="null"
-              :snippet-map="snippetMap"
-              @switch="(id) => $emit('resumeSession', id)"
-            />
-          </div>
-
-          <!-- 空状态 -->
-          <div v-if="matchedTabs.length === 0 && filteredHistory.length === 0 && !sessionStore.isLoading" class="empty-hint">
-            {{ t('noSessionsFound') }}
-          </div>
-
-          <div v-if="sessionStore.isLoading" class="loading-indicator">
-            {{ t('loading') }}
-          </div>
-        </div>
-      </template>
-
-      <!-- 正常模式 -->
-      <template v-else>
-        <!-- Open Tabs -->
-        <div v-if="projectTabs.length > 0" class="section">
-          <div class="section-title-row">
-            <span class="section-title">{{ t('openTabs') }}</span>
-            <div v-if="projectTabs.length > 1" class="section-actions">
-              <button class="section-action-btn" @click="$emit('closeOtherTabs')" :title="t('closeOtherTabs')">
-                {{ t('closeOtherTabs') }}
-              </button>
-              <button class="section-action-btn" @click="$emit('closeAllTabs')" :title="t('closeAllTabs')">
-                {{ t('closeAllTabs') }}
-              </button>
-            </div>
-          </div>
-          <SessionList
-            :tabs="projectTabs"
-            :active-id="sessionStore.activeTabId"
-            closable
-            @switch="(id) => $emit('switchSession', id)"
-            @rename="(id, name) => $emit('renameSession', id, name)"
-            @restart="() => $emit('restartSession')"
-            @close="(id) => $emit('closeTab', id)"
-          />
-        </div>
-
-        <!-- History -->
-        <div v-if="filteredHistory.length > 0 || sessionStore.isLoading" class="section">
-          <div class="section-title">{{ t('history') }}</div>
-          <SessionList
-            :history="filteredHistory"
-            :active-id="null"
-            :snippet-map="snippetMap"
-            @switch="(id) => $emit('resumeSession', id)"
-          />
-        </div>
-
-        <!-- 空状态 -->
-        <div v-if="projectTabs.length === 0 && filteredHistory.length === 0 && !sessionStore.isLoading" class="empty-hint">
+        <ProjectNode
+          v-for="g in filteredGroups"
+          :key="g.projectPath"
+          :project="g"
+          :expanded="true"
+          :is-current="g.projectPath === appStore.cwd"
+          :active-tab-id="sessionStore.activeTabId"
+          :history="matchedHistoryFor(g)"
+          @switch-to-project="(p) => $emit('switchToProject', p)"
+          @toggle-expand="(p) => sessionStore.toggleExpand(p, { hasActive: g.hasActive, isCurrent: p === appStore.cwd })"
+          @new-session-in="(p) => $emit('newSessionIn', p)"
+          @switch-session="(id) => $emit('switchSession', id)"
+          @rename-session="(id, name) => $emit('renameSession', id, name)"
+          @restart-session="(id) => $emit('restartSession', id)"
+          @close-tab="(id) => $emit('closeTab', id)"
+          @resume-session="(id, name) => $emit('resumeSessionInProject', g.projectPath, id, name)"
+          @close-all-sessions="(p) => $emit('closeAllSessions', p)"
+          @toggle-favorite="(p) => $emit('toggleFavorite', p)"
+          @open-in-explorer="(p) => $emit('openInExplorer', p)"
+        />
+        <div v-if="filteredGroups.length === 0 && !sessionStore.isLoading" class="empty-hint">
           {{ t('noSessionsFound') }}
         </div>
-
         <div v-if="sessionStore.isLoading" class="loading-indicator">
           {{ t('loading') }}
         </div>
+      </template>
 
+      <!-- 正常模式：全量项目组（按当前项目/活跃/最近活跃排序） -->
+      <template v-else>
+        <ProjectNode
+          v-for="g in displayedGroups"
+          :key="g.projectPath"
+          :project="g"
+          :expanded="sessionStore.isExpanded(g.projectPath, { hasActive: g.hasActive, isCurrent: g.projectPath === appStore.cwd })"
+          :is-current="g.projectPath === appStore.cwd"
+          :active-tab-id="sessionStore.activeTabId"
+          :history="sessionStore.getHistoryFor(g.projectPath)"
+          :loading="sessionStore.isLoading"
+          @switch-to-project="(p) => $emit('switchToProject', p)"
+          @toggle-expand="(p) => onToggleExpand(p, g)"
+          @new-session-in="(p) => $emit('newSessionIn', p)"
+          @switch-session="(id) => $emit('switchSession', id)"
+          @rename-session="(id, name) => $emit('renameSession', id, name)"
+          @restart-session="(id) => $emit('restartSession', id)"
+          @close-tab="(id) => $emit('closeTab', id)"
+          @resume-session="(id, name) => $emit('resumeSessionInProject', g.projectPath, id, name)"
+          @close-all-sessions="(p) => $emit('closeAllSessions', p)"
+          @toggle-favorite="(p) => $emit('toggleFavorite', p)"
+          @open-in-explorer="(p) => $emit('openInExplorer', p)"
+        />
+        <div v-if="displayedGroups.length === 0 && !sessionStore.isLoading" class="empty-hint">
+          {{ t('noProjectsYet') }}
+        </div>
+        <div v-if="sessionStore.isLoading" class="loading-indicator">
+          {{ t('loading') }}
+        </div>
         <div v-if="sessionStore.isLoadingMore" class="loading-indicator">
           {{ t('loadingMore') }}
         </div>
@@ -168,26 +140,35 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useSessionStore } from '@/stores/session'
+import { useSessionStore, type ProjectGroup } from '@/stores/session'
 import { useAppStore } from '@/stores/app'
 
 const { t } = useI18n()
 import { alt } from '@/utils/platform'
-import SessionList from './SessionList.vue'
+import ProjectNode from './ProjectNode.vue'
 import PanelHeader from '../sidebar/PanelHeader.vue'
 
 const emit = defineEmits<{
   close: []
   switchSession: [tabId: string]
   renameSession: [tabId: string, name: string]
-  restartSession: []
+  // footer 按钮（重启当前活动 tab）不带 tabId；ProjectNode 转发时带具体 tabId
+  restartSession: [tabId?: string]
   newSession: []
+  // 兼容旧调用方（当前项目维度）；ProjectNode 的 resume 走 resumeSessionInProject
   resumeSession: [sessionId: string]
+  resumeSessionInProject: [projectPath: string, sessionId: string, name?: string]
   closeTab: [tabId: string]
   closeAllTabs: []
   closeOtherTabs: []
+  switchToProject: [projectPath: string]
+  newSessionIn: [projectPath: string]
+  toggleExpand: [projectPath: string]
+  closeAllSessions: [projectPath: string]
+  toggleFavorite: [projectPath: string]
+  openInExplorer: [projectPath: string]
 }>()
 
 const sessionStore = useSessionStore()
@@ -195,59 +176,46 @@ const appStore = useAppStore()
 const scrollContainer = ref<HTMLElement>()
 const searchQuery = ref('')
 
-const projectTabs = computed(() => {
-  const cwd = appStore.cwd
-  if (!cwd) return []
-  return sessionStore.getProjectTabs(cwd)
+// 全部分组（基于 cachedProjects 构建 + 排序：当前项目 → 有 active → 最近活跃 → 孤儿置底）
+const allGroups = computed<ProjectGroup[]>(() => {
+  const built = sessionStore.buildProjectGroups(appStore.cachedProjects)
+  return sessionStore.sortProjectGroups(built, appStore.cwd)
 })
 
-const matchedTabs = computed(() => {
-  const q = searchQuery.value.toLowerCase().trim()
-  if (!q) return []
-  return projectTabs.value.filter(t =>
-    t.name.toLowerCase().includes(q)
-    || (t.sessionId?.toLowerCase().includes(q) ?? false)
-    || t.tabId.toLowerCase().includes(q)
-  )
+// 正常模式显示的分组（无搜索时）
+const displayedGroups = computed(() => allGroups.value)
+
+// 搜索结果：filterProjectGroups 做项目名/会话名命中，命中组带 matchedHistoryIds
+const filteredGroups = computed(() => {
+  if (!searchQuery.value.trim()) return allGroups.value
+  return sessionStore.filterProjectGroups(allGroups.value, searchQuery.value)
 })
 
-const filteredHistory = computed(() => {
-  const query = searchQuery.value.toLowerCase()
-  if (!query) return sessionStore.historySessions
+// 搜索模式下，每个分组只展示命中的历史会话（无 matchedHistoryIds 时回退到全量）
+function matchedHistoryFor(g: { projectPath: string; matchedHistoryIds?: string[] }) {
+  const all = sessionStore.getHistoryFor(g.projectPath)
+  if (!g.matchedHistoryIds || g.matchedHistoryIds.length === 0) return all
+  const ids = new Set(g.matchedHistoryIds)
+  return all.filter(s => ids.has(s.sessionId))
+}
 
-  const byName = sessionStore.historySessions.filter(s =>
-    s.name.toLowerCase().includes(query)
-  )
-
-  const msgResults = sessionStore.messageSearchResults
-  const byNameIds = new Set(byName.map(s => s.sessionId))
-
-  return [
-    ...byName,
-    ...msgResults
-      .filter(r => !byNameIds.has(r.sessionId))
-      .map(r => ({
-        sessionId: r.sessionId,
-        name: r.name,
-        projectPath: r.projectPath,
-        lastActiveAt: r.lastActiveAt,
-      }))
-  ]
-})
-
-const snippetMap = computed(() => {
-  const map = new Map<string, string>()
-  for (const r of sessionStore.messageSearchResults) {
-    map.set(r.sessionId, r.snippet)
+// 正常模式展开/折叠：切换 store 状态，展开时懒加载该项目的会话历史
+function onToggleExpand(path: string, g: { hasActive: boolean }) {
+  const opts = { hasActive: g.hasActive, isCurrent: path === appStore.cwd }
+  sessionStore.toggleExpand(path, opts)
+  if (sessionStore.isExpanded(path, opts)) {
+    sessionStore.loadHistorySessions(path)
   }
-  return map
-})
+}
 
-watch(searchQuery, (query) => {
-  if (appStore.cwd) {
-    sessionStore.debouncedSearchMessages(appStore.cwd, query)
+// 滚动到底加载更多项目（仅正常模式；搜索时无分页）
+function handleScroll() {
+  const el = scrollContainer.value
+  if (!el || searchQuery.value) return
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) {
+    appStore.loadMoreProjects()
   }
-})
+}
 
 function handleRefresh() {
   if (appStore.cwd) {
@@ -357,59 +325,6 @@ onUnmounted(() => {
   overflow-y: auto;
   padding: 0 12px;
   min-height: 0;
-}
-
-.section {
-  margin-bottom: 12px;
-}
-
-.subsection {
-  margin-top: 8px;
-}
-
-.subsection-title {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--text-tertiary);
-  padding: 0 4px 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.section-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  padding: 0 4px;
-}
-
-.section-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.section-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.section-action-btn {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 3px;
-  white-space: nowrap;
-}
-
-.section-action-btn:hover {
-  color: var(--text-primary);
-  background: var(--bg-secondary);
 }
 
 .loading-indicator,
