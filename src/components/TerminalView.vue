@@ -25,6 +25,13 @@
       @close-tab="handleCloseTab"
       @close-all-tabs="handleCloseAllTabs"
       @close-other-tabs="handleCloseOtherTabs"
+      @switch-to-project="handleSwitchToProjectSession"
+      @new-session-in="handleNewSessionIn"
+      @toggle-expand="handleToggleExpand"
+      @close-all-sessions="handleCloseAllSessionsIn"
+      @toggle-favorite="handleToggleFavorite"
+      @open-in-explorer="handleOpenInExplorer"
+      @resume-session-in-project="(path, id) => handleSwitchToProjectSession(path, id)"
     />
 
     <!-- 主内容区 -->
@@ -66,6 +73,7 @@ import { openInFileManager, logMessage } from '@/api/tauri'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
 import { useWindowAttention } from '@/composables/useWindowAttention'
 import { useStatusMonitor } from '@/composables/useStatusMonitor'
+import { resolveSwitchAction } from '@/composables/useProjectTreeNavigation'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import TerminalHeader from './TerminalHeader.vue'
 import XTermTerminal from './XTermTerminal.vue'
@@ -267,6 +275,63 @@ function handleCloseOtherTabs() {
   if (activeId) {
     sessionStore.closeOtherTabs(activeId)
   }
+}
+
+/**
+ * 点项目名或具体会话：解析动作后执行（对抗审查 D/E —— 全程参数直传，不读写全局单值中间态）。
+ * 复用现有 startResumeSession（createTab(path,{sessionId}) 直传）天然无竞态。
+ */
+async function handleSwitchToProjectSession(projectPath: string, sessionId?: string) {
+  appStore.setCwd(projectPath)
+  // 确保该项目历史已加载（缓存命中秒回）；避免 resolveSwitchAction 误判「无历史 → new」
+  await sessionStore.loadHistorySessions(projectPath)
+  await nextTick()
+  const action = resolveSwitchAction({
+    projectPath,
+    sessionId: sessionId ?? null,
+    isCurrent: appStore.cwd === projectPath,
+    tabs: sessionStore.getProjectTabs(projectPath),
+    history: sessionStore.getHistoryFor(projectPath),
+    activeTabId: sessionStore.activeTabId,
+  })
+  switch (action.type) {
+    case 'noop':
+      return
+    case 'activate':
+      sessionStore.setActiveTab(action.tabId)
+      return
+    case 'resume':
+      await startResumeSession(action.projectPath, action.sessionId, action.name)
+      return
+    case 'new':
+      if (terminalRef.value) terminalRef.value.startNewSession(action.projectPath)
+      return
+  }
+}
+
+/** 项目节点 + 新建：切到该项目并新建空会话 */
+function handleNewSessionIn(projectPath: string) {
+  appStore.setCwd(projectPath)
+  if (terminalRef.value) terminalRef.value.startNewSession(projectPath)
+}
+
+function handleToggleExpand(_path: string) {
+  /* SessionsPanel 已直接调 store.toggleExpand；此处占位以备未来接线 */
+}
+
+function handleCloseAllSessionsIn(projectPath: string) {
+  sessionStore.closeAllTabs(projectPath)
+}
+
+async function handleToggleFavorite(projectPath: string) {
+  // 收藏：复用 ensureProjectInList 将项目加入缓存列表（取消收藏需后端 command，当前后端零改动约束下仅实现加入）
+  appStore.ensureProjectInList(projectPath)
+}
+
+async function handleOpenInExplorer(projectPath: string) {
+  // 复用 @tauri-apps/plugin-shell 的 open：capabilities/default.json 已授权，open(文件夹) 由系统默认文件管理器打开
+  const { open } = await import('@tauri-apps/plugin-shell')
+  await open(projectPath)
 }
 
 // PTY 启动回调

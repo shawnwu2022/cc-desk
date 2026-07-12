@@ -140,7 +140,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore, type ProjectGroup } from '@/stores/session'
 import { useAppStore } from '@/stores/app'
@@ -207,6 +207,18 @@ function onToggleExpand(path: string, g: { hasActive: boolean }) {
     sessionStore.loadHistorySessions(path)
   }
 }
+
+// 观察项 fix：默认展开的项目（当前项目 + 有 running/pending tab 的）初始即展开，
+// 但不走 onToggleExpand，历史会空。此处对每个默认展开项目触发懒加载
+// （loadHistorySessions 内部 inflight 去重 + 缓存命中秒回，重复安全）。
+watch(displayedGroups, (groups) => {
+  for (const g of groups) {
+    const opts = { hasActive: g.hasActive, isCurrent: g.projectPath === appStore.cwd }
+    if (sessionStore.isExpanded(g.projectPath, opts)) {
+      sessionStore.loadHistorySessions(g.projectPath)
+    }
+  }
+}, { immediate: true })
 
 // 滚动到底加载更多项目（仅正常模式；搜索时无分页）
 function handleScroll() {
