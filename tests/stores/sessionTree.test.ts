@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+// @ts-expect-error - node:crypto 是 Node 内置模块，项目未安装 @types/node（与其它测试文件一致的 polyfill 模式）
 import { randomUUID } from 'crypto'
 
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -17,6 +18,7 @@ vi.mock('@/api/tauri', () => ({
 }))
 
 import { useSessionStore } from '@/stores/session'
+import type { TerminalTab } from '@/stores/session'
 
 describe('session store — 全局树', () => {
   beforeEach(() => setActivePinia(createPinia()))
@@ -125,7 +127,7 @@ describe('session store — 全局树', () => {
       const t1 = store.createTab('/p-a'); store.setTabPty(t1, 'pty-1')
       const t2 = store.createTab('/p-a'); store.setTabPty(t2, 'pty-2')
       const groups = store.buildProjectGroups(
-        [{ path: '/p-a', name: 'a', lastDuration: 0 }],
+        [{ path: '/p-a', name: 'a' }],
       )
       const a = groups.find(g => g.projectPath === '/p-a')!
       expect(a.tabs).toHaveLength(2)
@@ -140,7 +142,7 @@ describe('session store — 全局树', () => {
       const t1 = store.createTab('/p-a'); store.setTabPty(t1, 'pty-1')
       store.tabs.get(t1)!.pending = true
       const groups = store.buildProjectGroups(
-        [{ path: '/p-a', name: 'a', lastDuration: 0 }],
+        [{ path: '/p-a', name: 'a' }],
       )
       expect(groups.find(g => g.projectPath === '/p-a')!.hasActive).toBe(true)
       expect(groups.find(g => g.projectPath === '/p-a')!.pendingCount).toBe(1)
@@ -161,7 +163,7 @@ describe('session store — 全局树', () => {
     it('Group_EmptyProjectShown_001', () => {
       const store = useSessionStore()
       const groups = store.buildProjectGroups(
-        [{ path: '/p-empty', name: 'empty', lastDuration: 0 }],
+        [{ path: '/p-empty', name: 'empty' }],
       )
       const e = groups.find(g => g.projectPath === '/p-empty')!
       expect(e.tabs).toHaveLength(0)
@@ -222,7 +224,7 @@ describe('session store — 全局树', () => {
             working: false,
             pending: false,
             isResume: false,
-          }],
+          } as TerminalTab],
           runningCount: 0,
           pendingCount: 0,
           hasActive: false,
@@ -243,7 +245,7 @@ describe('session store — 全局树', () => {
             working: false,
             pending: false,
             isResume: false,
-          }],
+          } as TerminalTab],
           runningCount: 0,
           pendingCount: 0,
           hasActive: false,
@@ -286,7 +288,7 @@ describe('session store — 全局树', () => {
       ])
       const store = useSessionStore()
       await store.loadHistorySessions('/p-a')
-      const groups = store.buildProjectGroups([{ path: '/p-a', name: 'a', lastDuration: 0 }])
+      const groups = store.buildProjectGroups([{ path: '/p-a', name: 'a' }])
       const out = store.filterProjectGroups(groups, 'fix')
       expect(out).toHaveLength(1)
       expect(out[0].matchedHistoryIds).toEqual(['s-fix-bug'])

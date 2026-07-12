@@ -589,7 +589,7 @@ export const useSessionStore = defineStore('session', () => {
     const q = query.trim().toLowerCase()
     if (!q) return groups
     return groups
-      .map(g => {
+      .map((g): ProjectGroup | null => {
         const matchProject = g.name.toLowerCase().includes(q)
         const tabHits = g.tabs
           .filter(t => t.name.toLowerCase().includes(q) || (t.sessionId?.toLowerCase().includes(q) ?? false))
