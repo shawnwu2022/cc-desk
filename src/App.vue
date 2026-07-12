@@ -58,6 +58,18 @@
     </div>
   </div>
 
+  <!-- 添加项目 spawn 失败提示（独立于启动门禁：标题用 claudeStartFailed，重试=重 spawn 同目录） -->
+  <div v-if="projectSpawnError" class="startup-error-overlay">
+    <div class="startup-error-card">
+      <h2>{{ t('claudeStartFailed') }}</h2>
+      <p class="startup-error-msg">{{ projectSpawnError.msg }}</p>
+      <div class="startup-error-actions">
+        <button class="startup-cancel-btn" @click="projectSpawnError = null">{{ t('cancel') }}</button>
+        <button class="startup-retry-btn" @click="retryProjectSpawn">{{ t('retry') }}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 全局设置浮层 -->
   <SettingsOverlay />
 
@@ -139,6 +151,10 @@ const terminalViewRef = ref()
 const startupError = ref<string | null>(null)
 const startupLoading = ref(false)
 
+// 添加项目 spawn 失败提示（v5-T7 concern 1）：独立于 startupError，避免重试语义错位。
+// 用户要重 spawn 同目录，而非重跑 initStartup（重新决策），故单独 overlay + 重试按钮直连 startProjectSession。
+const projectSpawnError = ref<{ path: string; msg: string } | null>(null)
+
 // 应用 GUI 主题到 DOM。loadAppConfig 是异步 fire-and-forget：initAfterChecks 先用 store 初始值
 // （'light'）设置 DOM，待 loadAppConfig 把 theme.value 更新为持久化值后，由该 watch 同步到 DOM。
 // setTheme（设置页实时切换）也会触发它，保证两条路径都生效。
@@ -200,7 +216,7 @@ async function handleSelectProject() {
     return
   }
   // 新项目：进终端 + startProjectSession 事务（spawn 后切 cwd + 等 sessionStart 持久化）。
-  // cancelled/spawnFail/timeout/提前退出 reject 统一 catch -> startupError 提示
+  // cancelled/spawnFail/timeout/提前退出 reject 统一 catch -> projectSpawnError 提示
   // （T6 concern：unmount 期间 reject 'cancelled' 亦走此路径，不悬空）。
   currentView.value = 'terminal'
   await nextTick()
@@ -208,7 +224,21 @@ async function handleSelectProject() {
     appStore.setClaudeOptions({ resume: '' }) // 新项目不恢复会话
     await terminalViewRef.value?.startProjectSession(path)
   } catch (e) {
-    startupError.value = t('claudeStartFailed') + ': ' + String(e)
+    // 失败分离 projectSpawnError（不混 startupError）：重试语义=重 spawn 同 path，非重跑 initStartup
+    projectSpawnError.value = { path, msg: t('claudeStartFailed') + ': ' + String(e) }
+  }
+}
+
+// 添加项目 spawn 失败重试：重 spawn 同 path（非重跑 initStartup 决策，lastOpened 未持久化结果不可预测）。
+// 失败再次设 projectSpawnError，成功则 overlay 自动消失（startProjectSession 不抛即成功）。
+async function retryProjectSpawn() {
+  if (!projectSpawnError.value) return
+  const path = projectSpawnError.value.path
+  projectSpawnError.value = null
+  try {
+    await terminalViewRef.value?.startProjectSession(path)
+  } catch (e) {
+    projectSpawnError.value = { path, msg: t('claudeStartFailed') + ': ' + String(e) }
   }
 }
 
@@ -773,5 +803,26 @@ async function autoInstall() {
 
 .startup-retry-btn:hover {
   opacity: 0.9;
+}
+
+.startup-error-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.startup-cancel-btn {
+  padding: 10px 24px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.startup-cancel-btn:hover {
+  opacity: 0.8;
 }
 </style>

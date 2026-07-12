@@ -214,6 +214,9 @@ async function startProjectSession(path: string): Promise<void> {
   try {
     await waiter
   } catch (e) {
+    // 失败清理 tab：spawnFail 路径 startTab 内 discardUnstartedTab 已 removeTab（幂等，再调无害）；
+    // ptyExit 路径 PTY 已退、Terminal 实例已被 onPtyExit 销毁，但 tab（status=stopped）残留，此处 removeTab 清脏 tab。
+    sessionStore.removeTab(tabId)
     sessionStarting.value = false
     throw spawnError ?? e
   }
