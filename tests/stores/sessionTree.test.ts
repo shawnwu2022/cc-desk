@@ -164,6 +164,17 @@ describe('session store - 全局树', () => {
       expect(e.runningCount).toBe(0)
       expect(e.hasActive).toBe(false)
     })
+
+    // isPinned 由 buildProjectGroups 用 store.isPinned 填充（UI 置顶标记用；排序读 pinnedProjects）
+    it('Group_IsPinnedPopulated_001', async () => {
+      const store = useSessionStore()
+      await store.pinProject('/p-a')
+      const groups = store.buildProjectGroups(
+        [{ path: '/p-a', name: 'a' }, { path: '/p-b', name: 'b' }],
+      )
+      expect(groups.find(g => g.projectPath === '/p-a')!.isPinned).toBe(true)
+      expect(groups.find(g => g.projectPath === '/p-b')!.isPinned).toBe(false)
+    })
   })
 
   // ==================== sortProjectGroups（v3：置顶 + 字母序 + 孤儿置底） ====================

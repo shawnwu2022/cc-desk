@@ -20,6 +20,13 @@ export default {
   closeAllSessions: 'Close all sessions in this project',
   addFavorite: 'Add to favorites',
   noHistorySessions: 'No history sessions',
+  pin: 'Pin',
+  unpin: 'Unpin',
+  pinned: 'Pinned',
+  archive: 'Archive',
+  restore: 'Restore',
+  archivedSessions: 'Archived sessions',
+  noArchivedSessions: 'No archived sessions',
 
   // Settings navigation
   appearance: 'Appearance',

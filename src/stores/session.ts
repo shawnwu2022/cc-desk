@@ -55,6 +55,7 @@ export interface ProjectGroup {
   pendingCount: number
   hasActive: boolean          // 有 running 或 pending tab
   isOrphan: boolean           // projectPath 不在 cachedProjects
+  isPinned?: boolean          // 是否置顶（buildProjectGroups 填充，UI 展示用；排序读 pinnedProjects）
   matchedHistoryIds?: string[]  // 搜索命中的会话 ID（供 UI 临时展开 + 高亮）
 }
 
@@ -563,6 +564,7 @@ export const useSessionStore = defineStore('session', () => {
         runningCount, pendingCount,
         hasActive: runningCount > 0 || pendingCount > 0,
         isOrphan,
+        isPinned: isPinned(projectPath),
       }
     }
   }

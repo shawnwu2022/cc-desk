@@ -40,8 +40,7 @@
           :is-current="g.projectPath === appStore.cwd"
           :active-tab-id="sessionStore.activeTabId"
           :history="matchedHistoryFor(g)"
-          @switch-to-project="(p) => $emit('switchToProject', p)"
-          @toggle-expand="(p) => sessionStore.toggleExpand(p, { hasActive: g.hasActive, isCurrent: p === appStore.cwd })"
+          @toggle-expand="(p) => sessionStore.toggleExpand(p)"
           @new-session-in="(p) => $emit('newSessionIn', p)"
           @switch-session="(id) => $emit('switchSession', id)"
           @rename-session="(id, name) => $emit('renameSession', id, name)"
@@ -49,8 +48,12 @@
           @close-tab="(id) => $emit('closeTab', id)"
           @resume-session="(id, name) => $emit('resumeSessionInProject', g.projectPath, id, name)"
           @close-all-sessions="(p) => $emit('closeAllSessions', p)"
-          @toggle-favorite="(p) => $emit('toggleFavorite', p)"
           @open-in-explorer="(p) => $emit('openInExplorer', p)"
+          @pin-project="(p) => $emit('pinProject', p)"
+          @unpin-project="(p) => $emit('unpinProject', p)"
+          @archive-session="(p, sid) => $emit('archiveSession', p, sid)"
+          @restore-session="(p, sid) => $emit('restoreSession', p, sid)"
+          @show-archived="(p) => $emit('showArchived', p)"
         />
         <div v-if="filteredGroups.length === 0 && !sessionStore.isLoading" class="empty-hint">
           {{ t('noSessionsFound') }}
@@ -60,19 +63,18 @@
         </div>
       </template>
 
-      <!-- 正常模式：全量项目组（按当前项目/活跃/最近活跃排序） -->
+      <!-- 正常模式：全量项目组（置顶 -> 字母序 -> 孤儿置底） -->
       <template v-else>
         <ProjectNode
           v-for="g in displayedGroups"
           :key="g.projectPath"
           :project="g"
-          :expanded="sessionStore.isExpanded(g.projectPath, { hasActive: g.hasActive, isCurrent: g.projectPath === appStore.cwd })"
+          :expanded="sessionStore.isExpanded(g.projectPath)"
           :is-current="g.projectPath === appStore.cwd"
           :active-tab-id="sessionStore.activeTabId"
           :history="sessionStore.getHistoryFor(g.projectPath)"
           :loading="sessionStore.isLoading"
-          @switch-to-project="(p) => $emit('switchToProject', p)"
-          @toggle-expand="(p) => onToggleExpand(p, g)"
+          @toggle-expand="(p) => onToggleExpand(p)"
           @new-session-in="(p) => $emit('newSessionIn', p)"
           @switch-session="(id) => $emit('switchSession', id)"
           @rename-session="(id, name) => $emit('renameSession', id, name)"
@@ -80,8 +82,12 @@
           @close-tab="(id) => $emit('closeTab', id)"
           @resume-session="(id, name) => $emit('resumeSessionInProject', g.projectPath, id, name)"
           @close-all-sessions="(p) => $emit('closeAllSessions', p)"
-          @toggle-favorite="(p) => $emit('toggleFavorite', p)"
           @open-in-explorer="(p) => $emit('openInExplorer', p)"
+          @pin-project="(p) => $emit('pinProject', p)"
+          @unpin-project="(p) => $emit('unpinProject', p)"
+          @archive-session="(p, sid) => $emit('archiveSession', p, sid)"
+          @restore-session="(p, sid) => $emit('restoreSession', p, sid)"
+          @show-archived="(p) => $emit('showArchived', p)"
         />
         <div v-if="displayedGroups.length === 0 && !sessionStore.isLoading" class="empty-hint">
           {{ t('noProjectsYet') }}
@@ -163,12 +169,16 @@ const emit = defineEmits<{
   closeTab: [tabId: string]
   closeAllTabs: []
   closeOtherTabs: []
-  switchToProject: [projectPath: string]
   newSessionIn: [projectPath: string]
   toggleExpand: [projectPath: string]
   closeAllSessions: [projectPath: string]
-  toggleFavorite: [projectPath: string]
   openInExplorer: [projectPath: string]
+  // v3 新增：置顶 / 存档（转发给 TerminalView 调 store）
+  pinProject: [projectPath: string]
+  unpinProject: [projectPath: string]
+  archiveSession: [projectPath: string, sessionId: string]
+  restoreSession: [projectPath: string, sessionId: string]
+  showArchived: [projectPath: string]
 }>()
 
 const sessionStore = useSessionStore()
@@ -176,10 +186,10 @@ const appStore = useAppStore()
 const scrollContainer = ref<HTMLElement>()
 const searchQuery = ref('')
 
-// 全部分组（基于 cachedProjects 构建 + 排序：当前项目 → 有 active → 最近活跃 → 孤儿置底）
+// 全部分组（基于 cachedProjects 构建 + 排序：置顶 → 字母序 → 孤儿置底）
 const allGroups = computed<ProjectGroup[]>(() => {
   const built = sessionStore.buildProjectGroups(appStore.cachedProjects)
-  return sessionStore.sortProjectGroups(built, appStore.cwd)
+  return sessionStore.sortProjectGroups(built)
 })
 
 // 正常模式显示的分组（无搜索时）
@@ -199,22 +209,19 @@ function matchedHistoryFor(g: { projectPath: string; matchedHistoryIds?: string[
   return all.filter(s => ids.has(s.sessionId))
 }
 
-// 正常模式展开/折叠：切换 store 状态，展开时懒加载该项目的会话历史
-function onToggleExpand(path: string, g: { hasActive: boolean }) {
-  const opts = { hasActive: g.hasActive, isCurrent: path === appStore.cwd }
-  sessionStore.toggleExpand(path, opts)
-  if (sessionStore.isExpanded(path, opts)) {
+// 正常模式展开/折叠：切换 store 状态（v3 纯手动），展开时懒加载该项目的会话历史
+function onToggleExpand(path: string) {
+  sessionStore.toggleExpand(path)
+  if (sessionStore.isExpanded(path)) {
     sessionStore.loadHistorySessions(path)
   }
 }
 
-// 观察项 fix：默认展开的项目（当前项目 + 有 running/pending tab 的）初始即展开，
-// 但不走 onToggleExpand，历史会空。此处对每个默认展开项目触发懒加载
+// v3 纯手动展开：初始无默认展开，此处仅在分组重算时为已手动展开的项目补懒载历史
 // （loadHistorySessions 内部 inflight 去重 + 缓存命中秒回，重复安全）。
 watch(displayedGroups, (groups) => {
   for (const g of groups) {
-    const opts = { hasActive: g.hasActive, isCurrent: g.projectPath === appStore.cwd }
-    if (sessionStore.isExpanded(g.projectPath, opts)) {
+    if (sessionStore.isExpanded(g.projectPath)) {
       sessionStore.loadHistorySessions(g.projectPath)
     }
   }

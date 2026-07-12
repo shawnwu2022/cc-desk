@@ -20,6 +20,13 @@ export default {
   closeAllSessions: '关闭该项目所有会话',
   addFavorite: '加入收藏',
   noHistorySessions: '暂无历史会话',
+  pin: '置顶',
+  unpin: '取消置顶',
+  pinned: '已置顶',
+  archive: '存档',
+  restore: '恢复',
+  archivedSessions: '已存档会话',
+  noArchivedSessions: '暂无已存档会话',
 
   // Settings navigation
   appearance: '外观',

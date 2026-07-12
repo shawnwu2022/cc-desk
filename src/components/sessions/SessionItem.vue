@@ -50,6 +50,19 @@
         <path d="m15 5 4 4"/>
       </svg>
     </button>
+    <!-- 存档按钮（仅历史会话，running tab 不显示） -->
+    <button
+      v-if="archivable"
+      class="action-btn archive-btn"
+      @click.stop="$emit('archive', id)"
+      :title="t('archive')"
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="21 8 21 21 3 21 3 8"/>
+        <rect x="1" y="3" width="22" height="5"/>
+        <line x1="10" y1="12" x2="14" y2="12"/>
+      </svg>
+    </button>
     <!-- 关闭按钮 -->
     <button
       v-if="closable"
@@ -85,6 +98,7 @@ const props = defineProps<{
   pending?: boolean
   lastActiveAt: number
   closable?: boolean
+  archivable?: boolean
   snippet?: string
   showTime?: boolean
 }>()
@@ -103,6 +117,7 @@ const emit = defineEmits<{
   rename: [id: string, name: string]
   restart: [id: string]
   close: [id: string]
+  archive: [id: string]
 }>()
 
 const isRenaming = ref(false)

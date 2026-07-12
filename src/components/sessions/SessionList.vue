@@ -13,12 +13,14 @@
       :last-active-at="item.lastActiveAt"
       :can-resume="item.canResume"
       :closable="closable && item.isTab"
+      :archivable="!item.isTab"
       :snippet="item.snippet"
       :show-time="item.showTime"
       @switch="(id) => $emit('switch', id)"
       @rename="(id, name) => $emit('rename', id, name)"
       @restart="(id) => $emit('restart', id)"
       @close="(id) => $emit('close', id)"
+      @archive="(id) => $emit('archive', id)"
     />
   </div>
 </template>
@@ -42,6 +44,7 @@ defineEmits<{
   rename: [id: string, name: string]
   restart: [id: string]
   close: [id: string]
+  archive: [id: string]
 }>()
 
 interface ListItem {
