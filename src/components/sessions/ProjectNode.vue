@@ -200,7 +200,9 @@ function startRename() {
   renameRequestId++  // 作废先前在途请求
   renameValue.value = sessionStore.getDisplayName(props.project.projectPath)
   renameError.value = ''
-  editState.value = editReducer(editState.value, { type: 'start' })
+  // 显式重置 editing（v6-T5 Fix Round 1：修复卡死--submitting 态 reducer start 不变致 input 永久禁用；
+  // renameRequestId++ 已作废旧 persist，旧请求完成时 myId!==renameRequestId 早 return 不改 editState，安全）
+  editState.value = 'editing'
   nextTick(() => renameInputRef.value?.focus())
 }
 

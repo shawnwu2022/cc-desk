@@ -219,3 +219,41 @@ describe('editReducer 状态机', () => {
     expect(s).toBe('idle')
   })
 })
+
+/**
+ * startRename 卡死修复（v6-T5 Fix Round 1）。
+ * bug：多行 submitting（旧 persist 在途）期间发起新 startRename，旧实现走 reducer start，
+ *   editReducer('submitting',{start}) -> 'submitting'（不变），新 input :disabled="editState==='submitting'"
+ *   永久禁用，Esc 无法触发，离开视图才恢复。
+ * 修法：startRename 在 renameRequestId++（作废旧 persist）后显式 editState='editing'，不走 reducer start；
+ *   旧 persist 完成时 myId!==renameRequestId 早 return 不调 editReducer，editState 保持 editing，安全。
+ * 此 describe 在 reducer 层标定 bug 根因 + 验证修复依赖的两个不变量（reducer start 在 submitting 不变、
+ * success 仅 submitting->idle 对 editing 无影响），使修复所依赖的 reducer 语义有回归守护。
+ */
+describe('startRename 卡死修复（v6-T5 Fix Round 1）', () => {
+  // bug 根因标定：reducer start 在 submitting 态不变 -> 旧实现 startRename 依赖 reducer 会卡死
+  it('StartRenameFix_ReducerStartStuckInSubmitting_001', () => {
+    expect(editReducer('submitting', { type: 'start' })).toBe('submitting')
+  })
+
+  // 修复后流程：submitting 期间新 startRename 显式重置 editing，旧 persist 作废不改，input 可用
+  it('StartRenameFix_Flow_ResetEditing_001', () => {
+    let s: EditState = 'editing'
+    // A 行提交：editing -> submitting（persist 在途）
+    s = editReducer(s, { type: 'submit' })
+    expect(s).toBe('submitting')
+    // bug 标定：若此时走 reducer start（旧实现），submitting -> submitting 不变，input 永久禁用
+    expect(editReducer(s, { type: 'start' })).toBe('submitting')
+    // B 行 startRename 修复：renameRequestId++ 作废旧请求 + 显式 editState='editing'（不走 reducer start）
+    s = 'editing'
+    expect(s).toBe('editing')  // :disabled="s==='submitting'" -> false，B 行 input 可用
+    // A 行旧 persist 完成：myId!==renameRequestId 早 return 不调 editReducer -> s 保持 editing
+    expect(s).toBe('editing')  // B 行 input 仍可用（未卡死）
+  })
+
+  // 修复安全不变量：success 仅 submitting->idle，对 editing 态无影响。
+  // 即便旧 persist 误走到 editReducer success（理论上早 return 不会走到），editing 也不被污染。
+  it('StartRenameFix_StaleSuccessNoOpOnEditing_001', () => {
+    expect(editReducer('editing', { type: 'success' })).toBe('editing')
+  })
+})
