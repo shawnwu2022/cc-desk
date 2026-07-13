@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { computed } from 'vue'
 // @ts-expect-error - node:crypto 是 Node 内置模块，项目未安装 @types/node（与其它测试文件一致的 polyfill 模式）
 import { randomUUID } from 'crypto'
 
@@ -17,6 +18,18 @@ vi.mock('@/api/tauri', () => ({
   searchSessionMessages: vi.fn().mockResolvedValue([]),
   getProjectsState: vi.fn().mockResolvedValue({ pinnedProjects: [], archivedSessions: {} }),
   updateProjectsState: vi.fn().mockResolvedValue(undefined),
+}))
+
+// 平台确定性（codex 重要#3）：强制 Windows，使大小写不敏感测试在任意宿主全绿
+vi.mock('@/utils/platform', () => ({
+  detectPlatform: () => 'windows',
+  platform: 'windows',
+  isMac: false,
+  isWindows: true,
+  ctrl: 'Ctrl',
+  alt: 'Alt',
+  cmd: 'Ctrl',
+  getClaudePlatformKey: () => 'win32-x64',
 }))
 
 import { useSessionStore } from '@/stores/session'
@@ -637,6 +650,173 @@ describe('session store - 全局树', () => {
       expect(mockGet).toHaveBeenCalledTimes(1)
       expect(store.isPinned('/p-a')).toBe(true)
       expect(store.isPinned('/p-b')).toBe(true)
+    })
+  })
+
+  // ==================== displayNames / getDisplayName / setDisplayName ====================
+  describe('displayNames', () => {
+    // getDisplayName：有别名返别名，无则 basename 回退（去尾斜杠 + 反斜杠规范）
+    it('GetDisplayName_AliasOrBasename_001', () => {
+      const store = useSessionStore()
+      store.displayNames.set('/p-a', '主项目')
+      expect(store.getDisplayName('/p-a')).toBe('主项目')
+      expect(store.getDisplayName('/p-b')).toBe('p-b')        // basename 回退
+      expect(store.getDisplayName('/work/app/')).toBe('app')  // 去尾斜杠 basename
+      expect(store.getDisplayName('C:\\repo\\x\\')).toBe('x') // 反斜杠 + 尾斜杠
+    })
+
+    // getDisplayName 响应式（codex #10）：displayNames Map 变化 -> 依赖 getDisplayName 的 computed 重算
+    // 证明 native title watcher 的依赖（watch(getDisplayName(cwd))）会触发
+    it('GetDisplayName_Reactive_001', () => {
+      const store = useSessionStore()
+      const cwd = '/p-reactive'
+      const c = computed(() => store.getDisplayName(cwd))
+      expect(c.value).toBe('p-reactive')
+      store.displayNames.set('/p-reactive', '别名')
+      expect(c.value).toBe('别名')  // reactive Map -> computed 重算
+      store.displayNames.delete('/p-reactive')
+      expect(c.value).toBe('p-reactive')  // 删别名 -> 回退 basename
+    })
+
+    // setDisplayName：成功持久化并写入本地 Map（含规范化 key）+ 发完整三份
+    it('SetDisplayName_PersistAndLocal_001', async () => {
+      const { updateProjectsState } = await import('@/api/tauri')
+      const mockUpdate = updateProjectsState as ReturnType<typeof vi.fn>
+      mockUpdate.mockClear()
+      const store = useSessionStore()
+      await store.setDisplayName('/p-a', '主项目')
+      expect(store.getDisplayName('/p-a')).toBe('主项目')
+      expect(mockUpdate).toHaveBeenCalledTimes(1)
+      const payload = mockUpdate.mock.calls[0][0] as Record<string, unknown>
+      expect(payload.pinnedProjects).toEqual([])
+      expect(payload.archivedSessions).toEqual({})
+      expect(payload.displayNames).toEqual({ '/p-a': '主项目' })
+    })
+
+    // 并发 rename + pin 不丢：setDisplayName 与 pinProject 共享 withLock，串行化
+    // 最终磁盘（updateProjectsState 最后一次调用）含 alias + pinned
+    it('SetDisplayName_ConcurrentWithPin_NoLoss_001', async () => {
+      const { updateProjectsState } = await import('@/api/tauri')
+      const mockUpdate = updateProjectsState as ReturnType<typeof vi.fn>
+      mockUpdate.mockClear()
+      const store = useSessionStore()
+      await Promise.all([
+        store.setDisplayName('/p-a', '别名A'),
+        store.pinProject('/p-a'),
+      ])
+      expect(store.getDisplayName('/p-a')).toBe('别名A')
+      expect(store.isPinned('/p-a')).toBe(true)
+      // 串行化保证：最后一次写入时本地已含另一项 -> 不丢
+      const payloads = mockUpdate.mock.calls.map(c => c[0] as Record<string, unknown>)
+      const last = payloads[payloads.length - 1]
+      expect(last.displayNames).toEqual({ '/p-a': '别名A' })
+      expect(last.pinnedProjects).toEqual(['/p-a'])
+    })
+
+    // persist-first 失败回滚：updateProjectsState reject -> 本地 displayNames 不变 + 抛错
+    it('SetDisplayName_PersistFail_Rollback_001', async () => {
+      const { updateProjectsState } = await import('@/api/tauri')
+      const mockUpdate = updateProjectsState as ReturnType<typeof vi.fn>
+      mockUpdate.mockRejectedValueOnce(new Error('disk full'))
+      const store = useSessionStore()
+      await expect(store.setDisplayName('/p-a', '别名')).rejects.toThrow('disk full')
+      expect(store.getDisplayName('/p-a')).toBe('p-a') // 本地未改
+    })
+
+    // 空/空白清除：setDisplayName('/p-a','') -> 删 key（恢复 basename）
+    it('SetDisplayName_EmptyClears_001', async () => {
+      const store = useSessionStore()
+      store.displayNames.set('/p-a', '旧别名')
+      await store.setDisplayName('/p-a', '')
+      expect([...store.displayNames.keys()]).not.toContain('/p-a')
+      expect(store.getDisplayName('/p-a')).toBe('p-a')
+    })
+    it('SetDisplayName_WhitespaceClears_001', async () => {
+      const store = useSessionStore()
+      store.displayNames.set('/p-a', '旧别名')
+      await store.setDisplayName('/p-a', '   ')
+      expect([...store.displayNames.keys()]).not.toContain('/p-a')
+    })
+
+    // 规范化等价 key（codex #8 断言值非只数量）：set 前删等价旧 key。
+    // Windows 平台下 E:\Repo 与 e:/repo 规范化等价 -> 旧 key 删，新规范化 key 写入，值=新
+    it('SetDisplayName_NormalizedEqKey_001', async () => {
+      const store = useSessionStore()
+      store.displayNames.set('e:/repo', '旧')
+      await store.setDisplayName('E:\\Repo', '新')
+      const keys = [...store.displayNames.keys()]
+      expect(keys.length).toBe(1)                       // 不累积等价 key
+      expect(store.getDisplayName('E:\\Repo')).toBe('新')  // 断言值=新（非只数量）
+      expect(store.getDisplayName('e:/repo')).toBe('新')
+    })
+
+    // 校验失败不 persist：超长别名抛错且不调 updateProjectsState
+    it('SetDisplayName_TooLong_NoPersist_001', async () => {
+      const { updateProjectsState } = await import('@/api/tauri')
+      const mockUpdate = updateProjectsState as ReturnType<typeof vi.fn>
+      mockUpdate.mockClear()
+      const store = useSessionStore()
+      await expect(store.setDisplayName('/p-a', 'a'.repeat(33))).rejects.toThrow()
+      expect(mockUpdate).not.toHaveBeenCalled()
+    })
+
+    // 校验失败（控制字符）不 persist
+    it('SetDisplayName_ControlChar_NoPersist_001', async () => {
+      const { updateProjectsState } = await import('@/api/tauri')
+      const mockUpdate = updateProjectsState as ReturnType<typeof vi.fn>
+      mockUpdate.mockClear()
+      const store = useSessionStore()
+      await expect(store.setDisplayName('/p-a', 'a\nb')).rejects.toThrow()
+      expect(mockUpdate).not.toHaveBeenCalled()
+    })
+
+    // load 规范化 key：getProjectsState 返回混合斜杠/大小写 key -> 规范化入 Map
+    it('LoadProjectsState_NormalizedKeys_001', async () => {
+      const { getProjectsState } = await import('@/api/tauri')
+      const mockGet = getProjectsState as ReturnType<typeof vi.fn>
+      mockGet.mockResolvedValueOnce({
+        pinnedProjects: [],
+        archivedSessions: {},
+        displayNames: { 'E:\\Repo': '别名A', '/p-b': '别名B' },
+      })
+      const store = useSessionStore()
+      await store.loadProjectsState()
+      // Windows 规范化后查询命中（E:\Repo -> e:/repo）
+      expect(store.getDisplayName('e:/repo')).toBe('别名A')
+      expect(store.getDisplayName('E:\\REPO')).toBe('别名A')
+      expect(store.getDisplayName('/p-b')).toBe('别名B')
+    })
+
+    // load 规范化冲突（codex #8 断言后者值）：同规范化 key 多条目 -> 清空旧 Map 再填，后者覆盖
+    it('LoadProjectsState_DuplicateNormalizedKey_001', async () => {
+      const { getProjectsState } = await import('@/api/tauri')
+      const mockGet = getProjectsState as ReturnType<typeof vi.fn>
+      mockGet.mockResolvedValueOnce({
+        pinnedProjects: [],
+        archivedSessions: {},
+        displayNames: { 'E:\\Repo': 'A', 'e:/repo': 'B' }, // 规范化等价 -> 后者 B 覆盖
+      })
+      const store = useSessionStore()
+      await store.loadProjectsState()
+      const keys = [...store.displayNames.keys()]
+      expect(keys.length).toBe(1)                          // 不累积等价 key
+      expect(store.getDisplayName('e:/repo')).toBe('B')    // 断言后者值 B（非只数量）
+    })
+
+    // load 清空旧 Map：先 set 一条本地，load 后旧本地条目被清（以磁盘为准）
+    it('LoadProjectsState_ClearsStaleLocal_001', async () => {
+      const { getProjectsState } = await import('@/api/tauri')
+      const mockGet = getProjectsState as ReturnType<typeof vi.fn>
+      mockGet.mockResolvedValueOnce({
+        pinnedProjects: [],
+        archivedSessions: {},
+        displayNames: { '/p-new': '新' },
+      })
+      const store = useSessionStore()
+      store.displayNames.set('/p-stale', '旧本地')
+      await store.loadProjectsState()
+      expect([...store.displayNames.keys()]).not.toContain('/p-stale')
+      expect(store.getDisplayName('/p-new')).toBe('新')
     })
   })
 })

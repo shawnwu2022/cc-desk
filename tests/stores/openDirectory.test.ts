@@ -15,6 +15,18 @@ vi.mock('@/api/tauri', () => ({
   runChecks: vi.fn().mockResolvedValue([]),
 }))
 
+// 平台确定性（T2 concern）：强制 Windows，使大小写不敏感测试在任意宿主全绿
+vi.mock('@/utils/platform', () => ({
+  detectPlatform: () => 'windows',
+  platform: 'windows',
+  isMac: false,
+  isWindows: true,
+  ctrl: 'Ctrl',
+  alt: 'Alt',
+  cmd: 'Ctrl',
+  getClaudePlatformKey: () => 'win32-x64',
+}))
+
 beforeEach(() => {
   setActivePinia(createPinia())
   mockIPC(() => {})

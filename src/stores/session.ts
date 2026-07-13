@@ -8,6 +8,7 @@ import {
   updateProjectsState,
 } from '@/api/tauri'
 import { normalizePath } from '@/utils/path'
+import { validateDisplayName, projectBasename } from '@/utils/displayName'
 import type { SessionSearchResult } from '@/types'
 
 // ==================== Tab-Centric 数据模型 ====================
@@ -85,6 +86,8 @@ export const useSessionStore = defineStore('session', () => {
   const pinnedProjects = ref<string[]>([])
   /** 会话存档：projectPath -> sessionId[]（持久化到 projects.json，启动加载） */
   const archivedSessions = reactive(new Map<string, string[]>())
+  /** 项目别名：normalizedPath -> 别名（持久化到 projects.json displayNames，启动加载） */
+  const displayNames = reactive(new Map<string, string>())
   /** projects.json 是否已加载完成（P1.2 门禁：pin/archive 前须确保加载，否则用空内存覆写旧文件） */
   const projectsStateLoaded = ref(false)
   /** projects.json 加载是否失败（P1 v-if 门禁：失败时树显示失败提示 + 重试，不读空状态） */
@@ -716,6 +719,12 @@ export const useSessionStore = defineStore('session', () => {
         for (const [k, v] of Object.entries(state.archivedSessions ?? {})) {
           archivedSessions.set(k, v)
         }
+        // displayNames：清空旧 Map 再填，key 规范化（跨斜杠/大小写等价合并，后者覆盖），跳过非 string 值
+        displayNames.clear()
+        const rawNames = state.displayNames ?? {}
+        for (const [k, v] of Object.entries(rawNames)) {
+          if (typeof v === 'string') displayNames.set(normalizePath(k), v)
+        }
         projectsStateLoaded.value = true
       } catch (err) {
         console.error('[SessionStore] loadProjectsState failed:', err)
@@ -767,13 +776,14 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * 发送完整 pinnedProjects + archivedSessions（顶层替换语义，v3-1 merge 非深合并）。
+   * 发送完整 pinnedProjects + archivedSessions + displayNames（顶层替换语义，v3-1 merge 非深合并）。
    * 可传入待持久化的新状态；缺省时读当前本地状态（兼容）。
    * P1.3：调用方应传入新状态，persist 成功后再改本地，失败时不改本地（回滚）。
    */
   async function persistProjectsState(next?: {
     pinnedProjects?: string[]
     archivedSessions?: Map<string, string[]>
+    displayNames?: Map<string, string>
   }) {
     const pinned = next?.pinnedProjects ?? [...pinnedProjects.value]
     const archived = next?.archivedSessions ?? archivedSessions
@@ -781,9 +791,15 @@ export const useSessionStore = defineStore('session', () => {
     for (const [k, v] of archived.entries()) {
       archivedObj[k] = v
     }
+    const names = next?.displayNames ?? displayNames
+    const namesObj: Record<string, string> = {}
+    for (const [k, v] of names.entries()) {
+      namesObj[k] = v
+    }
     await updateProjectsState({
       pinnedProjects: pinned,
       archivedSessions: archivedObj,
+      displayNames: namesObj,
     })
   }
 
@@ -918,6 +934,47 @@ export const useSessionStore = defineStore('session', () => {
     })
   }
 
+  /**
+   * 取项目显示名：有别名返别名，无则 basename 回退（projectBasename 去尾斜杠 + 反斜杠规范）。
+   * 供 buildProjectGroups / TitleBar / native title / 管理页统一消费。
+   * reactive Map -> 依赖 getDisplayName 的 computed/watch 自动重算。
+   */
+  function getDisplayName(projectPath: string): string {
+    const alias = displayNames.get(normalizePath(projectPath))
+    return alias ? alias : projectBasename(projectPath)
+  }
+
+  /**
+   * 设置项目别名（复用 withLock，与 pin/archive 共享 opLock，串行化防并发丢更新）：
+   * - ensureProjectsStateLoaded 门禁（加载完才算 next）
+   * - validateDisplayName 校验（tooLong/控制字符 抛错，不 persist）
+   * - trim 后空 = 清除别名（恢复 basename）；非空 = set
+   * - 规范化身份：set 前删等价旧 key（避免 Map 累积 E:\Repo / e:/repo 双份）
+   * - persist-first：先持久化完整三份成功，再改本地；失败抛错，本地不变（回滚）
+   */
+  async function setDisplayName(path: string, alias: string): Promise<void> {
+    return withLock(async () => {
+      await ensureProjectsStateLoaded()
+      const v = validateDisplayName(alias)
+      if (!v.ok) {
+        throw new Error(v.error === 'tooLong' ? 'alias too long' : 'alias invalid characters')
+      }
+      const n = normalizePath(path)
+      const trimmed = alias.trim()
+      // 算 next：克隆当前 Map，删规范化等价旧 key，非空则 set
+      const next = new Map<string, string>()
+      for (const [k, val] of displayNames.entries()) {
+        if (normalizePath(k) !== n) next.set(k, val) // 删等价旧 key
+      }
+      if (trimmed) next.set(n, trimmed) // 空=清除（已删不 set）
+      // persist-first 发完整三份
+      await persistProjectsState({ displayNames: next })
+      // 成功才改本地
+      displayNames.clear()
+      for (const [k, val] of next) displayNames.set(k, val)
+    })
+  }
+
   return {
     // State
     tabs,
@@ -928,6 +985,7 @@ export const useSessionStore = defineStore('session', () => {
     isLoadingMore,
     pinnedProjects,
     archivedSessions,
+    displayNames,
     currentHistoryProject,
     historyLoadState,
 
@@ -996,5 +1054,7 @@ export const useSessionStore = defineStore('session', () => {
     getArchivedSessionInfos,
     archiveSession,
     restoreSession,
+    getDisplayName,
+    setDisplayName,
   }
 })
