@@ -29,6 +29,9 @@ export default {
   restore: '恢复',
   archivedSessions: '已存档会话',
   noArchivedSessions: '暂无已存档会话',
+  loadArchivedFailed: '部分已存档会话历史加载失败，可重试',
+  operationFailed: '操作失败，请重试',
+  loadHistoryFailed: '历史加载失败',
 
   // Settings navigation
   appearance: '外观',

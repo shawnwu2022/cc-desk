@@ -3,10 +3,10 @@ use serde_json::json;
 use crate::store::{
     compute_project_startup_state, expand_env_vars, extract_md_description, extract_session_name,
     find_valid_plugin_path, get_projects_state_at, infer_server_type, merge_json_values,
-    parse_agents_list_output, parse_mcp_server_entry, parse_skill_description, parse_timestamp,
-    resolve_marketplace_plugin_path, search_session_messages_in_dirs, set_agent_enabled_in,
-    set_mcp_server_enabled_in, set_skill_enabled_in, update_projects_state_at, write_json_atomic,
-    AgentInfo, AppConfig, Project, ProjectsState,
+    normalize_path_inner, parse_agents_list_output, parse_mcp_server_entry, parse_skill_description,
+    parse_timestamp, resolve_marketplace_plugin_path, search_session_messages_in_dirs,
+    set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,
+    update_projects_state_at, write_json_atomic, AgentInfo, AppConfig, Project, ProjectsState,
 };
 
 use std::collections::HashMap;
@@ -1503,4 +1503,57 @@ fn UpdateProjectsState_AtomicWrite_FailPreservesOriginal_001() {
     assert!(res.is_err(), "tmp 写失败须传播 Err");
     // 4) 原文件未被破坏
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original, "原子写：失败不破坏原文件");
+}
+
+// ==================== normalize_path_inner（平台感知规范化） ====================
+
+// Windows/macOS（case_sensitive=false）：反斜杠规范 + 去尾斜杠 + 小写
+#[test]
+fn NormalizePath_CaseInsensitive_Normalize_001() {
+    assert_eq!(normalize_path_inner("E:\\Source\\Foo\\", false), "e:/source/foo");
+}
+
+// Windows/macOS：大小写不敏感 -> E:\Repo 与 e:/repo 归一为同身份
+#[test]
+fn NormalizePath_CaseInsensitive_MergesIdentity_001() {
+    assert_eq!(
+        normalize_path_inner("E:\\Repo", false),
+        normalize_path_inner("e:/repo", false)
+    );
+}
+
+// Windows drive 根：C:\ / C: / C:/ 均归一为 c:（盘符小写 + 去尾斜杠）
+#[test]
+fn NormalizePath_CaseInsensitive_DriveRoot_001() {
+    assert_eq!(normalize_path_inner("C:\\", false), "c:");
+    assert_eq!(normalize_path_inner("C:", false), "c:");
+    assert_eq!(normalize_path_inner("C:/", false), "c:");
+}
+
+// Linux（case_sensitive=true）：不 lower，保留大小写身份
+#[test]
+fn NormalizePath_CaseSensitive_PreservesCase_001() {
+    assert_eq!(normalize_path_inner("/work/Foo/", true), "/work/Foo");
+}
+
+// Linux：大小写敏感 -> /work/Foo 与 /work/foo 不同身份（不误并）
+#[test]
+fn NormalizePath_CaseSensitive_DistinctIdentity_001() {
+    assert_ne!(
+        normalize_path_inner("/work/Foo", true),
+        normalize_path_inner("/work/foo", true)
+    );
+}
+
+// Linux：反斜杠规范 + 去尾斜杠仍生效（仅大小写保留）
+#[test]
+fn NormalizePath_CaseSensitive_NormalizeSlash_001() {
+    assert_eq!(normalize_path_inner("/work/Foo\\Bar/", true), "/work/Foo/Bar");
+}
+
+// POSIX 根 '/' 去尾斜杠后恢复 '/'（非空串 key），两支平台一致
+#[test]
+fn NormalizePath_PosixRoot_Recovered_001() {
+    assert_eq!(normalize_path_inner("/", true), "/");
+    assert_eq!(normalize_path_inner("///", false), "/");
 }

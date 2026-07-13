@@ -7,7 +7,7 @@ import {
   searchSessionMessages,
   updateProjectsState,
 } from '@/api/tauri'
-import { normalizePath } from '@/utils/path'
+import { normalizePath, sameProjectPath } from '@/utils/path'
 import { validateDisplayName, projectBasename, matchProjectQuery } from '@/utils/displayName'
 import type { SessionSearchResult } from '@/types'
 
@@ -77,6 +77,8 @@ export const useSessionStore = defineStore('session', () => {
   const inflight = new Map<string, Promise<HistorySession[]>>()
   /** 排队 force（每规范化路径最多 1）：force 遇 inflight 时排队，等当前结束后追加刷新 */
   const queuedForce = new Map<string, Promise<HistorySession[]>>()
+  /** 请求代次（每规范化路径递增）：仅最后有效请求可改 loading/error，避免旧请求 settle 把新请求的 loading 提前置 false */
+  const fetchGeneration = new Map<string, number>()
   const searchQuery = ref<string>('')
   const isLoadingMore = ref<boolean>(false)
   const messageSearchResults = ref<SessionSearchResult[]>([])
@@ -128,7 +130,7 @@ export const useSessionStore = defineStore('session', () => {
 
   /** 未被 Tab 占用的历史会话（去重 + 过滤） */
   const historySessions = computed<HistorySession[]>(() => {
-    const cached = historyCacheMap.get(currentHistoryProject.value) ?? []
+    const cached = historyCacheMap.get(normalizePath(currentHistoryProject.value)) ?? []
     const claimed = claimedSessionIds.value
     const seen = new Set<string>()
     return cached.filter(s => {
@@ -144,7 +146,7 @@ export const useSessionStore = defineStore('session', () => {
    * v3 §5.1：在去重基础上过滤 archivedSessions.get(projectPath) 的 sessionId。
    */
   function getHistoryFor(projectPath: string): HistorySession[] {
-    const cached = historyCacheMap.get(projectPath) ?? []
+    const cached = historyCacheMap.get(normalizePath(projectPath)) ?? []
     const claimed = claimedSessionIds.value
     const archived = new Set(getArchivedSessions(projectPath))
     const seen = new Set<string>()
@@ -260,7 +262,7 @@ export const useSessionStore = defineStore('session', () => {
       .filter((id): id is string => !!id)
 
     tabs.forEach((tab, tabId) => {
-      if (tab.projectPath === projectPath) {
+      if (sameProjectPath(tab.projectPath, projectPath)) {
         tabs.delete(tabId)
       }
     })
@@ -353,7 +355,7 @@ export const useSessionStore = defineStore('session', () => {
 
   function getRunningTabForProject(projectPath: string): TerminalTab | null {
     for (const tab of tabs.values()) {
-      if (tab.projectPath === projectPath && tab.status === 'running') {
+      if (sameProjectPath(tab.projectPath, projectPath) && tab.status === 'running') {
         return tab
       }
     }
@@ -409,9 +411,14 @@ export const useSessionStore = defineStore('session', () => {
     historyLoadState.set(n, { loading, error })
   }
 
-  /** 实际拉取 + 分页 + 写缓存（不处理并发/force） */
+  /**
+   * 实际拉取 + 分页 + 写缓存（不处理并发/force）。
+   * 缓存 key 用规范化路径（与 getHistoryFor/invalidate 一致）；调用后端 getSessions 保留原始路径
+   * （后端按原始路径查 JSONL）。分页 try/finally 保证 isLoadingMore 复位；分页失败清缓存避免 partial 当完整。
+   */
   async function runFetch(projectPath: string): Promise<HistorySession[]> {
-    // 请求 BATCH_SIZE + 1 条来判断是否有更多
+    const n = normalizePath(projectPath)
+    // 请求 BATCH_SIZE + 1 条来判断是否有更多（后端用原始路径）
     const firstBatch = await getSessions(projectPath, BATCH_SIZE + 1, 0)
     const hasMore = firstBatch.length > BATCH_SIZE
     const firstPage = hasMore ? firstBatch.slice(0, BATCH_SIZE) : firstBatch
@@ -420,11 +427,14 @@ export const useSessionStore = defineStore('session', () => {
       .map(s => ({ sessionId: s.sessionId, name: s.name, projectPath: s.projectPath, lastActiveAt: s.lastActiveAt }))
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
 
-    // 数据就绪后才写入缓存（不提前清空）
-    historyCacheMap.set(projectPath, mapped)
+    // 数据就绪后才写入缓存（规范化 key；不提前清空）
+    historyCacheMap.set(n, mapped)
+    if (!hasMore) return historyCacheMap.get(n) ?? []
 
-    if (hasMore) {
-      isLoadingMore.value = true
+    // 有更多：分页拉取剩余。try/finally 保证 isLoadingMore 必复位；
+    // 失败时清缓存（partial 不当完整）并向上抛错，由 fetchHistory 据代次置 error。
+    isLoadingMore.value = true
+    try {
       let offset = BATCH_SIZE
       let all = [...mapped]
       while (true) {
@@ -436,10 +446,15 @@ export const useSessionStore = defineStore('session', () => {
         offset += batch.length
         if (batch.length < BATCH_SIZE) break
       }
-      historyCacheMap.set(projectPath, all)
+      historyCacheMap.set(n, all)
+      return historyCacheMap.get(n) ?? []
+    } catch (e) {
+      // 分页失败：清缓存（避免 partial 被后续命中当完整），错误向上传播
+      historyCacheMap.delete(n)
+      throw e
+    } finally {
       isLoadingMore.value = false
     }
-    return historyCacheMap.get(projectPath) ?? []
   }
 
   /** 启动一次新拉取并登记为 inflight（CAS 自清：旧不覆盖新） */
@@ -454,19 +469,24 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * 历史加载核心（v5-T4 两层 force 状态机）。
+   * 历史加载核心（v5-T4 两层 force 状态机 + v6 代次保护）。
    * - 普通：缓存命中秒回；否则复用排队 force（更新）> 当前 inflight > 新建
    * - force + 无 inflight：直接新建
    * - force + 有 inflight：排队一次（多 force 合并），等当前结束后追加刷新
    * - 每规范化路径最多 1 当前 + 1 排队 force -> 无两并发 -> 旧不覆盖新天然成立
+   * - 代次（generation）：仅最后有效请求可置 loading/error，避免旧请求 settle 把新请求的 loading 提前置 false
+   *   （场景：normal A 在途，force B 排队；A resolve 不应把 loading 置 false，因 B 仍在拉）。
    */
   async function fetchHistory(projectPath: string, force = false): Promise<{ ok: true; sessions: HistorySession[] } | { ok: false; error: string }> {
     const n = normalizePath(projectPath)
-    // 缓存命中秒回（非 force；保留 v3 语义，避免 watch/toggle 触发冗余拉取）
-    if (!force && historyCacheMap.has(projectPath)) {
-      return { ok: true, sessions: historyCacheMap.get(projectPath)! }
+    // 缓存命中秒回（非 force；规范化 key；保留 v3 语义，避免 watch/toggle 触发冗余拉取）
+    if (!force && historyCacheMap.has(n)) {
+      return { ok: true, sessions: historyCacheMap.get(n)! }
     }
-    setLoadState(n, true, null)
+    const myGen = (fetchGeneration.get(n) ?? 0) + 1
+    fetchGeneration.set(n, myGen)
+    const isLatest = () => fetchGeneration.get(n) === myGen
+    if (isLatest()) setLoadState(n, true, null)
     try {
       let p: Promise<HistorySession[]>
       if (!force) {
@@ -494,10 +514,10 @@ export const useSessionStore = defineStore('session', () => {
         }
       }
       const sessions = await p
-      setLoadState(n, false, null)
+      if (isLatest()) setLoadState(n, false, null)
       return { ok: true, sessions }
     } catch (e) {
-      setLoadState(n, false, String(e))
+      if (isLatest()) setLoadState(n, false, String(e))
       return { ok: false, error: String(e) }
     }
   }
@@ -508,18 +528,18 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * 侧栏用：加载历史 + 切 currentHistoryProject（保持原语义，改调 fetchHistory）。
+   * 侧栏用：加载历史 + 切 currentHistoryProject（存规范化 key，与 historyCacheMap key 一致）。
    */
   async function loadHistorySessions(projectPath: string, force = false) {
     // 切换当前展示项目（即使还在加载中也立即切换，让 computed 指向正确项目）
-    currentHistoryProject.value = projectPath
+    currentHistoryProject.value = normalizePath(projectPath)
     return fetchHistory(projectPath, force)
   }
 
-  /** 清除指定项目或全部历史缓存 */
+  /** 清除指定项目或全部历史缓存（指定项目时按规范化 key 删，与缓存 key 一致） */
   function invalidateHistoryCache(projectPath?: string) {
     if (projectPath) {
-      historyCacheMap.delete(projectPath)
+      historyCacheMap.delete(normalizePath(projectPath))
     } else {
       historyCacheMap.clear()
     }
@@ -584,12 +604,13 @@ export const useSessionStore = defineStore('session', () => {
     historyLoadState.clear()
     inflight.clear()
     queuedForce.clear()
+    fetchGeneration.clear()
     currentHistoryProject.value = ''
   }
 
   function getProjectTabs(projectPath: string): TerminalTab[] {
     return [...tabs.values()]
-      .filter(t => t.projectPath === projectPath)
+      .filter(t => sameProjectPath(t.projectPath, projectPath))
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
   }
 
@@ -717,11 +738,26 @@ export const useSessionStore = defineStore('session', () => {
       try {
         projectsStateError.value = false
         const state = await getProjectsState()
-        pinnedProjects.value = state.pinnedProjects ?? []
-        archivedSessions.clear()
-        for (const [k, v] of Object.entries(state.archivedSessions ?? {})) {
-          archivedSessions.set(k, v)
+        // pinned：规范化 key 去重 + 值规范化路径（v6 codex batch2 #11：跨斜杠/大小写等价条目归一）
+        const seenPin = new Set<string>()
+        const dedupPinned: string[] = []
+        for (const p of (state.pinnedProjects ?? [])) {
+          const n = normalizePath(p)
+          if (!seenPin.has(n)) { seenPin.add(n); dedupPinned.push(n) }
         }
+        pinnedProjects.value = dedupPinned
+        // archivedSessions：按规范化路径合并（多 key 归一，sessionId 去重），canonical key
+        archivedSessions.clear()
+        const mergedArchived = new Map<string, string[]>()
+        for (const [k, v] of Object.entries(state.archivedSessions ?? {})) {
+          const n = normalizePath(k)
+          const existing = mergedArchived.get(n) ?? []
+          for (const sid of v) {
+            if (!existing.includes(sid)) existing.push(sid)
+          }
+          mergedArchived.set(n, existing)
+        }
+        for (const [n, arr] of mergedArchived) archivedSessions.set(n, arr)
         // displayNames：清空旧 Map 再填，key 规范化（跨斜杠/大小写等价合并，后者覆盖），跳过非 string 值
         displayNames.clear()
         const rawNames = state.displayNames ?? {}
@@ -788,11 +824,18 @@ export const useSessionStore = defineStore('session', () => {
     archivedSessions?: Map<string, string[]>
     displayNames?: Map<string, string>
   }) {
-    const pinned = next?.pinnedProjects ?? [...pinnedProjects.value]
+    // 统一序列化 canonical key（v6 codex batch2 #11）：pinned 规范化值去重，archived key 规范化
+    const pinnedRaw = next?.pinnedProjects ?? [...pinnedProjects.value]
+    const seenPin = new Set<string>()
+    const pinned: string[] = []
+    for (const p of pinnedRaw) {
+      const n = normalizePath(p)
+      if (!seenPin.has(n)) { seenPin.add(n); pinned.push(n) }
+    }
     const archived = next?.archivedSessions ?? archivedSessions
     const archivedObj: Record<string, string[]> = {}
     for (const [k, v] of archived.entries()) {
-      archivedObj[k] = v
+      archivedObj[normalizePath(k)] = v
     }
     const names = next?.displayNames ?? displayNames
     const namesObj: Record<string, string> = {}
@@ -872,7 +915,7 @@ export const useSessionStore = defineStore('session', () => {
    */
   function getArchivedSessionInfos(projectPath: string): { sessionId: string; name: string; lastActiveAt: number }[] {
     const ids = getArchivedSessions(projectPath)
-    const cached = historyCacheMap.get(projectPath) ?? []
+    const cached = historyCacheMap.get(normalizePath(projectPath)) ?? []
     return ids.map(id => {
       const h = cached.find(s => s.sessionId === id)
       return { sessionId: id, name: h?.name ?? id.slice(0, 8), lastActiveAt: h?.lastActiveAt ?? 0 }

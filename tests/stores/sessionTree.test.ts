@@ -1043,3 +1043,173 @@ describe('session store - removeTab 不刷历史', () => {
     expect(mock).not.toHaveBeenCalled()
   })
 })
+
+// ==================== v6 codex batch2：缓存 key 规范化 + generation + 分页失败 ====================
+describe('session store - codex batch2 缓存/状态一致性', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  // 历史缓存规范化 key：原始路径加载后，用规范化/等价路径访问命中同一缓存（不再重复拉取）
+  it('HistoryCache_NormalizedKey_Hit_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    mock.mockResolvedValue([{ sessionId: 's1', name: 'S1', projectPath: 'E:\\Foo', lastActiveAt: 1 }])
+    const store = useSessionStore()
+    // 原始反斜杠路径加载
+    await store.loadHistoryFor('E:\\Foo')
+    expect(mock).toHaveBeenCalledTimes(1)
+    // 等价正斜杠小写路径命中缓存（不再发请求）
+    const res = await store.loadHistoryFor('e:/foo')
+    expect(mock).toHaveBeenCalledTimes(1)
+    expect(res.ok).toBe(true)
+  })
+
+  // getHistoryFor 规范化查找：原始路径加载，等价路径取到同一批历史
+  it('HistoryCache_GetHistoryFor_NormalizedLookup_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    mock.mockResolvedValue([{ sessionId: 's1', name: 'S1', projectPath: 'E:\\Foo', lastActiveAt: 1 }])
+    const store = useSessionStore()
+    await store.loadHistoryFor('E:\\Foo')
+    // 等价路径 getHistoryFor 命中
+    const hist = store.getHistoryFor('e:/foo/')
+    expect(hist.length).toBe(1)
+    expect(hist[0].sessionId).toBe('s1')
+    expect(mock).toHaveBeenCalledTimes(1)
+  })
+
+  // invalidateHistoryCache 规范化删除：等价路径 invalidate 后缓存清空
+  it('HistoryCache_Invalidate_Normalized_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    mock.mockResolvedValue([{ sessionId: 's1', name: 'S1', projectPath: 'E:\\Foo', lastActiveAt: 1 }])
+    const store = useSessionStore()
+    await store.loadHistoryFor('E:\\Foo')
+    expect(store.getHistoryFor('e:/foo').length).toBe(1)
+    // 用等价路径 invalidate
+    store.invalidateHistoryCache('e:/foo')
+    // 缓存清空 -> 下次 force 或非 force 拉取重新请求
+    mock.mockClear()
+    await store.loadHistoryFor('E:\\Foo')
+    expect(mock).toHaveBeenCalledTimes(1)
+  })
+
+  // generation：normal A 在途 + force B 排队，A resolve 不应把 loading 提前置 false（B 仍在拉）
+  it('FetchHistory_Generation_OldNoFlipLoading_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const resolvers: ((v: unknown[]) => void)[] = []
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    // 每次调用登记一个 resolver，按顺序对应 A 的首页 / B 的追加刷新
+    mock.mockImplementation(() => new Promise(r => { resolvers.push(r as (v: unknown[]) => void) }))
+    const flush = () => new Promise<void>(r => setTimeout(r, 0))
+    const store = useSessionStore()
+    const pA = store.loadHistoryFor('/p-a')          // normal A（触发 getSessions #0）
+    const pB = store.loadHistoryFor('/p-a', true)    // force B（排队等 A）
+    await flush()
+    expect(resolvers.length).toBeGreaterThanOrEqual(1)
+    // A 首页 0 条（无分页）-> A settle；但 gen 已被 B 接管 -> A 不应把 loading 置 false
+    resolvers[0]([])
+    await flush()
+    // B 的 queued startFetch 触发 getSessions #1，仍在途 -> loading 保持 true
+    expect(store.historyLoadState.get('/p-a')?.loading).toBe(true)
+    expect(resolvers.length).toBeGreaterThanOrEqual(2)
+    resolvers[1]([])
+    await Promise.all([pA, pB])
+    expect(store.historyLoadState.get('/p-a')?.loading).toBe(false)
+  })
+
+  // 分页失败：首页成功有更多 -> 进入分页 -> 分页 reject -> isLoadingMore 复位 + 缓存清空（partial 不当完整）
+  it('FetchHistory_PaginationFail_ClearPartialAndResetLoadingMore_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    const BATCH = 20
+    // 首页返回 BATCH+1（触发 hasMore）；分页第二次 reject
+    const firstBatch = Array.from({ length: BATCH + 1 }, (_, i) => ({ sessionId: `s${i}`, name: `S${i}`, projectPath: '/big', lastActiveAt: i }))
+    mock.mockResolvedValueOnce(firstBatch)
+    mock.mockRejectedValueOnce(new Error('pagination io'))
+    const store = useSessionStore()
+    const res = await store.loadHistoryFor('/big')
+    expect(res.ok).toBe(false)                              // 分页失败向上传播
+    expect(store.isLoadingMore).toBe(false)                 // finally 复位
+    expect(store.getHistoryFor('/big').length).toBe(0)      // partial 缓存已清，不当完整
+  })
+
+  // 首页失败：不写缓存，error 置位
+  it('FetchHistory_FirstPageFail_NoCache_ErrorSet_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    mock.mockRejectedValue(new Error('first page io'))
+    const store = useSessionStore()
+    const res = await store.loadHistoryFor('/p-a')
+    expect(res.ok).toBe(false)
+    expect(store.historyLoadState.get('/p-a')?.error).toBeTruthy()
+    expect(store.getHistoryFor('/p-a').length).toBe(0)
+  })
+
+  // per-project loading：不同项目独立 loading 状态（互不干扰）
+  it('FetchHistory_PerProjectLoading_Independent_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    let resolveA!: (v: unknown[]) => void
+    let resolveB!: (v: unknown[]) => void
+    const mock = getSessions as ReturnType<typeof vi.fn>
+    mock.mockImplementationOnce(() => new Promise(r => { resolveA = r as (v: unknown[]) => void }))
+    mock.mockImplementationOnce(() => new Promise(r => { resolveB = r as (v: unknown[]) => void }))
+    const store = useSessionStore()
+    const pA = store.loadHistoryFor('/p-a')
+    const pB = store.loadHistoryFor('/p-b')
+    expect(store.historyLoadState.get('/p-a')?.loading).toBe(true)
+    expect(store.historyLoadState.get('/p-b')?.loading).toBe(true)
+    resolveA([])
+    await pA
+    // A 完成、B 仍在拉 -> A loading=false, B loading=true
+    expect(store.historyLoadState.get('/p-a')?.loading).toBe(false)
+    expect(store.historyLoadState.get('/p-b')?.loading).toBe(true)
+    resolveB([])
+    await pB
+    expect(store.historyLoadState.get('/p-b')?.loading).toBe(false)
+  })
+
+  // loadHistorySessions 切 currentHistoryProject 为规范化 key
+  it('LoadHistorySessions_CurrentNormalized_001', async () => {
+    const { getSessions } = await import('@/api/tauri')
+    ;(getSessions as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    const store = useSessionStore()
+    await store.loadHistorySessions('E:\\Foo\\')
+    // currentHistoryProject 存规范化（Windows：lower + 去尾斜杠 + 斜杠规范）
+    expect(store.currentHistoryProject).toBe('e:/foo')
+  })
+
+  // projects.json 加载：pinned 规范化去重（等价路径归一）
+  it('LoadProjectsState_PinnedNormalizeDedupe_001', async () => {
+    const { getProjectsState } = await import('@/api/tauri')
+    ;(getProjectsState as ReturnType<typeof vi.fn>).mockResolvedValue({
+      pinnedProjects: ['E:\\Foo', 'e:/foo', '/p-a'],
+    })
+    const store = useSessionStore()
+    await store.loadProjectsState()
+    // E:\Foo 与 e:/foo 归一为同一条（canonical e:/foo 出现一次）
+    const pinned = [...store.pinnedProjects]
+    expect(pinned.filter(p => p === 'e:/foo')).toHaveLength(1)
+    expect(pinned).toHaveLength(2)  // e:/foo + /p-a
+  })
+
+  // projects.json 加载：archivedSessions 按规范化路径合并（多 key 归一，sessionId 合并）
+  it('LoadProjectsState_ArchivedMergeByNormalized_001', async () => {
+    const { getProjectsState } = await import('@/api/tauri')
+    ;(getProjectsState as ReturnType<typeof vi.fn>).mockResolvedValue({
+      pinnedProjects: [],
+      archivedSessions: {
+        'E:\\Foo': ['s1', 's2'],
+        'e:/foo': ['s2', 's3'],   // 与 E:\Foo 归一；s2 去重
+      },
+    })
+    const store = useSessionStore()
+    await store.loadProjectsState()
+    // 两个等价 key 合并为一个 canonical key
+    expect([...store.archivedSessions.keys()].filter(k => k === 'e:/foo')).toHaveLength(1)
+    const ids = store.getArchivedSessions('E:\\Foo')
+    expect(ids.sort()).toEqual(['s1', 's2', 's3'])
+  })
+})

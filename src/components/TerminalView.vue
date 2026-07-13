@@ -78,7 +78,7 @@ import { sendTerminalCommand } from '@/composables/useTerminalCommand'
 import { useWindowAttention } from '@/composables/useWindowAttention'
 import { useStatusMonitor } from '@/composables/useStatusMonitor'
 import { resolveSwitchAction } from '@/composables/useProjectTreeNavigation'
-import { normalizePath } from '@/utils/path'
+import { sameProjectPath } from '@/utils/path'
 import { resolveWindowTitle } from '@/utils/displayName'
 import { reduceWaiter, isTimeoutError, STARTUP_TIMEOUT_CODE, type WaiterStatus, type WaiterEvent } from '@/composables/useSessionStartWaiter'
 import { useHookStore, type HookEventHandler } from '@/stores/hook'
@@ -385,7 +385,7 @@ function handleOpenFolder() {
 function handleSwitchSession(tabId: string) {
   const tab = sessionStore.tabs.get(tabId)
   if (tab) {
-    if (normalizePath(tab.projectPath) !== normalizePath(appStore.cwd)) {
+    if (!sameProjectPath(tab.projectPath, appStore.cwd)) {
       appStore.setCwdLocal(tab.projectPath)
       appStore.setCurrentProject(tab.projectPath, { persist: true }).catch(err => {
         console.error('[TerminalView] handleSwitchSession persist failed:', err)

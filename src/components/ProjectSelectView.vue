@@ -35,6 +35,11 @@
       </header>
 
       <div class="project-list" ref="projectListRef" @scroll="handleProjectScroll">
+        <!-- 操作失败提示（pin/hide/restore 持久化失败；内联非阻塞，可手动关闭） -->
+        <div v-if="manageError" class="manage-error-banner">
+          <span>{{ manageError }}</span>
+          <button class="manage-error-close" @click="manageError = null" :title="t('close')">×</button>
+        </div>
         <template v-if="!appStore.cacheLoaded">
           <div v-for="i in 6" :key="i" class="skeleton-item">
             <div class="skeleton-folder"></div>
@@ -165,6 +170,11 @@
         <template v-else>
           <div v-for="proj in archivedProjects" :key="proj.path" class="archived-project">
             <div class="archived-project-name">{{ proj.name }}</div>
+            <!-- 该项目历史加载失败：内联错误 + 重试（不阻塞其他项目展示） -->
+            <div v-if="archivedErrors.has(proj.path)" class="archived-project-error">
+              <span>{{ t('loadHistoryFailed') }}</span>
+              <button class="archived-retry-btn" @click="retryArchived(proj.path)">{{ t('retry') }}</button>
+            </div>
             <button
               v-for="s in sessionStore.getArchivedSessionInfos(proj.path)"
               :key="s.sessionId"
@@ -175,6 +185,11 @@
               <span v-if="s.lastActiveAt > 0" class="archived-time">{{ formatTime(s.lastActiveAt) }}</span>
             </button>
           </div>
+          <!-- 任一项目加载失败时整体提示（可重新加载全部） -->
+          <div v-if="archivedErrors.size > 0" class="archived-global-error">
+            <span>{{ t('loadArchivedFailed') }}</span>
+            <button class="archived-retry-btn" @click="loadArchived">{{ t('retry') }}</button>
+          </div>
         </template>
       </div>
     </div>
@@ -182,13 +197,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
 import { ctrl } from '@/utils/platform'
-import { normalizePath } from '@/utils/path'
+import { sameProjectPath } from '@/utils/path'
 import { matchProjectQuery, editReducer, validateDisplayName, type EditState } from '@/utils/displayName'
 
 const { t } = useI18n()
@@ -207,6 +222,10 @@ const searchQuery = ref('')
 const projectListRef = ref<HTMLElement | null>(null)
 const menuOpen = ref<string | null>(null)
 const archivedLoaded = ref(false)
+/** 已存档历史按项目加载失败标记（v6 codex batch2 #9：loadArchived 检查 {ok:false}，逐项目错误 + 可重试） */
+const archivedErrors = reactive(new Set<string>())
+/** 置顶/隐藏/恢复操作失败提示（统一非阻塞内联提示，取代 .catch(()=>{}) 吞错） */
+const manageError = ref<string | null>(null)
 
 // 项目别名编辑：editingPath 逐行（镜像 menuOpen 模式）+ editState/renameValue/renameError 单值（一次只编一行）
 const editingPath = ref<string | null>(null)
@@ -218,7 +237,7 @@ let renameRequestId = 0
 /** 判断给定项目是否为当前 cwd 项目（规范化比较，容忍 Windows 路径大小写/斜杠差异） */
 function isCwdProject(path: string): boolean {
   if (!appStore.cwd) return false
-  return normalizePath(appStore.cwd) === normalizePath(path)
+  return sameProjectPath(appStore.cwd, path)
 }
 
 /** 过滤 + 排序：置顶优先 -> 最近活跃（与全局树排序语义一致） */
@@ -341,8 +360,8 @@ function onGlobalKeydown(e: KeyboardEvent) {
 }
 
 function onMenuPin(path: string) {
-  if (sessionStore.isPinned(path)) sessionStore.unpinProject(path).catch(() => {})
-  else sessionStore.pinProject(path).catch(() => {})
+  const op = sessionStore.isPinned(path) ? sessionStore.unpinProject(path) : sessionStore.pinProject(path)
+  op.catch(() => { manageError.value = t('operationFailed') })
   closeMenuAndRestore(path)
 }
 
@@ -350,7 +369,7 @@ function onMenuHide(path: string) {
   // cwd 项目禁隐藏（规范化比较；与模板 :disabled 一致）
   if (isCwdProject(path)) return
   const willHide = !appStore.isHidden(path)
-  appStore.setHidden(path, willHide).catch(() => {})
+  appStore.setHidden(path, willHide).catch(() => { manageError.value = t('operationFailed') })
   closeMenuAndRestore(path)
 }
 
@@ -463,18 +482,34 @@ const archivedProjects = computed(() => {
   }))
 })
 
-/** 懒加载所有已存档项目的历史（loadHistoryFor 无副作用，不改 currentHistoryProject） */
-async function loadArchived() {
-  await Promise.all(archivedProjects.value.map(p => sessionStore.loadHistoryFor(p.path)))
-  archivedLoaded.value = true
-}
+  /**
+   * 懒加载所有已存档项目的历史（loadHistoryFor 无副作用，不改 currentHistoryProject）。
+   * v6 codex batch2 #9：逐项目检查 loadHistoryFor 返回 {ok:false} -> 标记失败，支持重试。
+   * 任一失败不阻塞其余项目，archivedLoaded 仍置 true 展示成功部分 + 失败项重试入口。
+   */
+  async function loadArchived() {
+    archivedErrors.clear()
+    const results = await Promise.all(
+      archivedProjects.value.map(async p => ({ path: p.path, res: await sessionStore.loadHistoryFor(p.path) }))
+    )
+    for (const { path, res } of results) {
+      if (!res.ok) archivedErrors.add(path)
+    }
+    archivedLoaded.value = true
+  }
 
-/** 恢复存档会话：restoreSession 持久化后切到该会话（--resume），透传 sessionName 供 tab 命名 */
-function handleRestore(projectPath: string, sessionId: string, sessionName?: string) {
-  sessionStore.restoreSession(projectPath, sessionId).then(() => {
-    emit('resumeSession', projectPath, sessionId, sessionName)
-  }).catch(() => {})
-}
+  /** 重试单个失败项目的已存档历史（force 刷新；成功则清错误标记） */
+  async function retryArchived(path: string) {
+    const res = await sessionStore.loadHistoryFor(path, true)
+    if (res.ok) archivedErrors.delete(path)
+  }
+
+  /** 恢复存档会话：restoreSession 持久化后切到该会话（--resume），透传 sessionName 供 tab 命名 */
+  function handleRestore(projectPath: string, sessionId: string, sessionName?: string) {
+    sessionStore.restoreSession(projectPath, sessionId).then(() => {
+      emit('resumeSession', projectPath, sessionId, sessionName)
+    }).catch(() => { manageError.value = t('operationFailed') })
+  }
 
 function formatTime(ts: number): string {
   if (!ts) return ''
@@ -935,6 +970,61 @@ function formatTime(ts: number): string {
   font-size: 11px;
   color: var(--text-tertiary);
   flex-shrink: 0;
+}
+
+/* 已存档历史加载失败（逐项目 + 全局提示）+ 操作失败 banner（v6 codex batch2 #9） */
+.archived-project-error,
+.archived-global-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--status-error);
+}
+.archived-retry-btn {
+  padding: 2px 10px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.archived-retry-btn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+.manage-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--status-error);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--status-error);
+}
+.manage-error-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.manage-error-close:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg);
 }
 
 /* 滚动条 */

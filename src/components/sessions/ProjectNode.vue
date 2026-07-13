@@ -108,6 +108,10 @@
         {{ t('noHistorySessions') }}
       </div>
       <div v-if="loading" class="loading-indicator">{{ t('loading') }}</div>
+      <div v-else-if="error" class="history-error">
+        <span class="history-error-msg">{{ t('loadHistoryFailed') }}</span>
+        <button class="history-error-retry" @click="onRetryHistory">{{ t('retry') }}</button>
+      </div>
     </div>
   </div>
 </template>
@@ -129,6 +133,8 @@ const props = defineProps<{
   activeTabId: string | null
   history: HistorySession[]
   loading?: boolean
+  /** 该项目历史加载错误（per-project；非空且非 loading 时显示重试入口） */
+  error?: string | null
   matchedHistoryIds?: string[]
   /** 禁用整行/箭头点击的展开切换（搜索模式临时展开不污染手动展开状态，spec §4.4） */
   disableToggle?: boolean
@@ -259,6 +265,11 @@ function onRenameCancel() {
 function onToggle() {
   if (props.disableToggle) return
   emit('toggleExpand', props.project.projectPath)
+}
+
+/** 历史加载失败重试：force 重新拉取该项目历史 */
+function onRetryHistory() {
+  sessionStore.loadHistorySessions(props.project.projectPath, true)
 }
 
 function onRestore(sessionId: string) {
@@ -402,5 +413,27 @@ function onSessionSwitch(id: string) {
 .restore-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
 .session-sub { padding-left: 22px; }
 .empty-hint, .loading-indicator { padding: 8px; font-size: 11px; color: var(--text-tertiary); text-align: center; }
+.history-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+}
+.history-error-msg { font-size: 11px; color: var(--status-error); }
+.history-error-retry {
+  padding: 2px 10px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 11px;
+  transition: all 0.15s ease;
+}
+.history-error-retry:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
 @keyframes status-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 </style>

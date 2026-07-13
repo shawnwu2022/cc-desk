@@ -46,7 +46,7 @@
           :key="g.projectPath"
           :project="g"
           :expanded="true"
-          :is-current="g.projectPath === appStore.cwd"
+          :is-current="sameProjectPath(g.projectPath, appStore.cwd)"
           :active-tab-id="sessionStore.activeTabId"
           :history="matchedHistoryFor(g)"
           :disable-toggle="true"
@@ -80,10 +80,11 @@
           :key="g.projectPath"
           :project="g"
           :expanded="sessionStore.isExpanded(g.projectPath)"
-          :is-current="g.projectPath === appStore.cwd"
+          :is-current="sameProjectPath(g.projectPath, appStore.cwd)"
           :active-tab-id="sessionStore.activeTabId"
           :history="sessionStore.getHistoryFor(g.projectPath)"
-          :loading="sessionStore.isLoading"
+          :loading="historyLoadStateFor(g.projectPath).loading"
+          :error="historyLoadStateFor(g.projectPath).error"
           @toggle-expand="(p) => onToggleExpand(p)"
           @new-session-in="(p) => $emit('newSessionIn', p)"
           @switch-session="(id) => $emit('switchSession', id)"
@@ -161,6 +162,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore, type ProjectGroup } from '@/stores/session'
 import { useAppStore } from '@/stores/app'
+import { sameProjectPath, normalizePath } from '@/utils/path'
 
 const { t } = useI18n()
 import { alt } from '@/utils/platform'
@@ -219,6 +221,12 @@ function matchedHistoryFor(g: { projectPath: string; matchedHistoryIds?: string[
   if (!g.matchedHistoryIds || g.matchedHistoryIds.length === 0) return all
   const ids = new Set(g.matchedHistoryIds)
   return all.filter(s => ids.has(s.sessionId))
+}
+
+// per 项目历史加载状态（v6 codex batch2 #8：替代给所有 ProjectNode 传同一 isLoading）
+// 读 historyLoadState.get(normalizePath(path))；未登记返 idle（loading=false, error=null）
+function historyLoadStateFor(path: string): { loading: boolean; error: string | null } {
+  return sessionStore.historyLoadState.get(normalizePath(path)) ?? { loading: false, error: null }
 }
 
 // 正常模式展开/折叠：切换 store 状态（v3 纯手动），展开时懒加载该项目的会话历史

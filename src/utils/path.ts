@@ -54,3 +54,12 @@ export function normalizePath(p: string): string {
   if (s === '' && p !== '') s = '/'
   return s
 }
+
+/**
+ * 判断两个项目路径是否为同一项目（规范化后比较）。
+ * 统一所有项目/tab 路径比较点，消除各处内联 === / normalizePath 比较的不一致风险
+ * （Windows 大小写/斜杠差异、尾斜杠、跨重启路径漂移）。Linux 区分大小写。
+ */
+export function sameProjectPath(a: string, b: string): boolean {
+  return normalizePath(a) === normalizePath(b)
+}

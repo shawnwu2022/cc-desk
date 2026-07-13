@@ -107,7 +107,7 @@
 import { ref, watch, onMounted, onUnmounted, defineAsyncComponent, nextTick } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { applyThemeToDom } from '@/utils/theme'
-import { normalizePath } from '@/utils/path'
+import { sameProjectPath } from '@/utils/path'
 import { useHookStore } from '@/stores/hook'
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
@@ -218,7 +218,7 @@ async function handleSelectProject() {
     projectSpawnError.value = { path, msg: t('showFirst'), persistFailed: false }
     return
   }
-  const existing = appStore.cachedProjects.find(p => normalizePath(p.path) === normalizePath(path))
+  const existing = appStore.cachedProjects.find(p => sameProjectPath(p.path, path))
   if (existing) {
     // 已存在项目走统一切换
     handleOpenProject(path)
@@ -294,7 +294,7 @@ async function handleOpenProject(path: string) {
 
   // 当前激活 tab 属于该项目则保持，否则切换到运行中 Tab
   const activeTab = sessionStore.activeTab
-  if (activeTab && activeTab.projectPath === path) return
+  if (activeTab && sameProjectPath(activeTab.projectPath, path)) return
 
   await nextTick()
   const runningTab = sessionStore.getRunningTabForProject(path)

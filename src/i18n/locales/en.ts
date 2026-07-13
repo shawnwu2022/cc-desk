@@ -29,6 +29,9 @@ export default {
   restore: 'Restore',
   archivedSessions: 'Archived sessions',
   noArchivedSessions: 'No archived sessions',
+  loadArchivedFailed: 'Some archived session history failed to load, you may retry',
+  operationFailed: 'Operation failed, please retry',
+  loadHistoryFailed: 'Failed to load history',
 
   // Settings navigation
   appearance: 'Appearance',

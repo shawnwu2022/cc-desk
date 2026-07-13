@@ -524,9 +524,29 @@ pub struct ProjectStartupState {
     pub last_opened_project_info: Option<ProjectInfo>,
 }
 
-/// 路径规范化（与前端 normalizePath 一致）：统一正斜杠小写，容忍 Windows 大小写/斜杠差异
+/// 路径规范化（与前端 normalizePath 一致）：统一正斜杠 + 去尾斜杠，
+/// 平台感知大小写：Linux 区分大小写（不 lower），Windows/macOS 不区分（lower）。
+/// POSIX 根 '/' 去尾斜杠后恢复 '/'，避免空串 key。
 fn normalize_path_str(p: &str) -> String {
-    p.replace('\\', "/").to_lowercase()
+    normalize_path_inner(p, cfg!(target_os = "linux"))
+}
+
+/// 平台感知规范化核心（注入 case_sensitive，便于单元测试在任意宿主验证两支）：
+/// - case_sensitive=true（Linux）：保留大小写身份
+/// - case_sensitive=false（Windows/macOS）：lower 后合并等价身份
+pub(crate) fn normalize_path_inner(p: &str, case_sensitive: bool) -> String {
+    let s = p.replace('\\', "/");
+    let trimmed = s.trim_end_matches('/');
+    let mut result = if case_sensitive {
+        trimmed.to_string()
+    } else {
+        trimmed.to_lowercase()
+    };
+    // POSIX 根 '/' 被去成空串 -> 恢复 '/'（与前端 normalizePath 一致，避免空串 key）
+    if result.is_empty() && !p.is_empty() {
+        result = "/".to_string();
+    }
+    result
 }
 
 /// 启动决策纯函数：基于已提取真实 cwd 的 Vec<Project> 计算 has_any/has_visible/last_info。

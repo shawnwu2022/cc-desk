@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { relativizePath } from '@/utils/path'
-
 describe('relativizePath', () => {
   // Windows 下文件位于项目目录内 → 返回用 '/' 分隔的相对路径
   it('RelativizePath_WinInside_001', () => {
@@ -193,5 +192,66 @@ describe('normalizePath 平台感知', () => {
     expect(normalizePath('C:')).toBe('c:')
     expect(normalizePath('C:/')).toBe('c:')
     expect(normalizePath('D:\\Proj\\')).toBe('d:/proj')
+  })
+})
+
+// sameProjectPath：统一项目路径比较（normalizePath 比较），平台感知
+describe('sameProjectPath 平台感知等价', () => {
+  beforeEach(() => { vi.resetModules() })
+  afterEach(() => { vi.doUnmock('@/utils/platform') })
+
+  // Windows：反斜杠 vs 正斜杠 + 大小写差异 -> 同一项目
+  it('SameProjectPath_Windows_Equal_001', async () => {
+    vi.doMock('@/utils/platform', () => ({
+      detectPlatform: () => 'windows', platform: 'windows',
+      isMac: false, isWindows: true,
+      ctrl: 'Ctrl', alt: 'Alt', cmd: 'Ctrl', getClaudePlatformKey: () => 'win32-x64',
+    }))
+    const { sameProjectPath } = await import('@/utils/path')
+    expect(sameProjectPath('E:\\Source\\Foo', 'e:/source/foo')).toBe(true)
+  })
+
+  // Windows：尾斜杠差异 -> 同一项目
+  it('SameProjectPath_Windows_TrailingSlash_001', async () => {
+    vi.doMock('@/utils/platform', () => ({
+      detectPlatform: () => 'windows', platform: 'windows',
+      isMac: false, isWindows: true,
+      ctrl: 'Ctrl', alt: 'Alt', cmd: 'Ctrl', getClaudePlatformKey: () => 'win32-x64',
+    }))
+    const { sameProjectPath } = await import('@/utils/path')
+    expect(sameProjectPath('E:\\Source\\Foo\\', 'e:/source/foo')).toBe(true)
+  })
+
+  // Windows：不同项目 -> false
+  it('SameProjectPath_Windows_Distinct_001', async () => {
+    vi.doMock('@/utils/platform', () => ({
+      detectPlatform: () => 'windows', platform: 'windows',
+      isMac: false, isWindows: true,
+      ctrl: 'Ctrl', alt: 'Alt', cmd: 'Ctrl', getClaudePlatformKey: () => 'win32-x64',
+    }))
+    const { sameProjectPath } = await import('@/utils/path')
+    expect(sameProjectPath('E:\\Foo', 'E:\\Bar')).toBe(false)
+  })
+
+  // Linux：大小写敏感 -> /work/Foo 与 /work/foo 不同项目
+  it('SameProjectPath_Linux_CaseSensitive_001', async () => {
+    vi.doMock('@/utils/platform', () => ({
+      detectPlatform: () => 'linux', platform: 'linux',
+      isMac: false, isWindows: false,
+      ctrl: 'Ctrl', alt: 'Alt', cmd: 'Ctrl', getClaudePlatformKey: () => 'linux-x64',
+    }))
+    const { sameProjectPath } = await import('@/utils/path')
+    expect(sameProjectPath('/work/Foo', '/work/foo')).toBe(false)
+  })
+
+  // Linux：斜杠规范 + 尾斜杠 -> 同一项目（仅大小写保留）
+  it('SameProjectPath_Linux_SlashNormalized_001', async () => {
+    vi.doMock('@/utils/platform', () => ({
+      detectPlatform: () => 'linux', platform: 'linux',
+      isMac: false, isWindows: false,
+      ctrl: 'Ctrl', alt: 'Alt', cmd: 'Ctrl', getClaudePlatformKey: () => 'linux-x64',
+    }))
+    const { sameProjectPath } = await import('@/utils/path')
+    expect(sameProjectPath('/work/Foo\\Bar/', '/work/Foo/Bar')).toBe(true)
   })
 })
