@@ -16,7 +16,22 @@
 
       <!-- 项目名区：整行点击展开/折叠 -->
       <div class="project-main" @click="onToggle">
-        <span class="project-name">{{ project.name }}</span>
+        <input
+          v-if="editState !== 'idle'"
+          ref="renameInputRef"
+          v-model="renameValue"
+          class="rename-input"
+          :maxlength="32"
+          :disabled="editState === 'submitting'"
+          :placeholder="t('aliasPlaceholder')"
+          @click.stop
+          @keyup.enter="onRenameSubmit"
+          @keyup.escape="onRenameCancel"
+          @blur="onRenameSubmit"
+        />
+        <span v-else class="project-name">{{ project.name }}</span>
+        <!-- 错误提示（error 态） -->
+        <span v-if="renameError" class="rename-error">{{ renameError }}</span>
         <!-- 置顶标记 -->
         <span v-if="project.isPinned" class="pin-mark" :title="t('pinned')">
           <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
@@ -47,6 +62,7 @@
       <div v-if="menuOpen" class="menu" @click.stop>
         <button v-if="!project.isPinned" @click="onMenu('pin')">{{ t('pin') }}</button>
         <button v-else @click="onMenu('unpin')">{{ t('unpin') }}</button>
+        <button @click="onMenu('rename')">{{ t('rename') }}</button>
         <button @click="onMenu('showArchived')">{{ t('archivedSessions') }}</button>
         <button @click="onMenu('closeAll')">{{ t('closeAllSessions') }}</button>
         <button @click="onMenu('openInExplorer')">{{ t('openFolder') }}</button>
@@ -97,10 +113,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SessionList from './SessionList.vue'
 import { useSessionStore } from '@/stores/session'
+import { editReducer, validateDisplayName, type EditState } from '@/utils/displayName'
 import type { ProjectGroup, HistorySession } from '@/stores/session'
 
 const { t } = useI18n()
@@ -139,6 +156,13 @@ const emit = defineEmits<{
 const menuOpen = ref(false)
 const archivedOpen = ref(false)
 
+// 项目别名编辑（单实例 editState，无 editingPath：ProjectNode 每实例只管自身项目）
+const editState = ref<EditState>('idle')
+const renameValue = ref('')
+const renameError = ref('')
+const renameInputRef = ref<HTMLInputElement | null>(null)
+let renameRequestId = 0
+
 // 该项目的已存档会话信息列表（响应式：restore 后 store 更新则自动收缩）
 // name/lastActiveAt 从 historyCacheMap 查；未加载则 name 回退 ID 截断
 const archivedList = computed(() => sessionStore.getArchivedSessionInfos(props.project.projectPath))
@@ -157,9 +181,10 @@ onUnmounted(() => {
   document.removeEventListener('click', closeOnOutside)
 })
 
-function onMenu(action: 'closeAll' | 'openInExplorer' | 'pin' | 'unpin' | 'showArchived') {
+function onMenu(action: 'closeAll' | 'openInExplorer' | 'pin' | 'unpin' | 'showArchived' | 'rename') {
   menuOpen.value = false
   const path = props.project.projectPath
+  if (action === 'rename') { startRename(); return }
   if (action === 'closeAll') emit('closeAllSessions', path)
   else if (action === 'openInExplorer') emit('openInExplorer', path)
   else if (action === 'pin') emit('pinProject', path)
@@ -168,6 +193,61 @@ function onMenu(action: 'closeAll' | 'openInExplorer' | 'pin' | 'unpin' | 'showA
     emit('showArchived', path)
     archivedOpen.value = true
   }
+}
+
+/** 进入重命名：作废在途请求 + 预填当前别名（或 basename） + 焦点入 input */
+function startRename() {
+  renameRequestId++  // 作废先前在途请求
+  renameValue.value = sessionStore.getDisplayName(props.project.projectPath)
+  renameError.value = ''
+  editState.value = editReducer(editState.value, { type: 'start' })
+  nextTick(() => renameInputRef.value?.focus())
+}
+
+/**
+ * 提交别名：仅 editing/error 态生效（submitting 幂等忽略；idle 忽略；blur 在 submitting/error 态被拦截不重入）。
+ * 校验失败 -> error（保留 input + 错误）；persist 失败 -> error；成功才关 input。
+ * request id 防 cancel-during-submit 后旧 success 覆盖 idle。
+ */
+async function onRenameSubmit() {
+  // 仅 editing/error 态提交（submitting 幂等；idle 忽略）
+  const next = editReducer(editState.value, { type: 'submit' })
+  if (next === editState.value) return
+  editState.value = next  // -> submitting
+  const raw = renameValue.value
+  const v = validateDisplayName(raw)
+  if (!v.ok) {
+    // 校验失败进 error（codex #5）：submitting -> error + 错误提示
+    renameError.value = v.error === 'tooLong' ? t('aliasTooLong') : t('aliasInvalid')
+    editState.value = editReducer(editState.value, { type: 'fail' })
+    return
+  }
+  const trimmed = raw.trim()
+  const path = props.project.projectPath
+  // no-op：值未变（含 basename 回退场景）则直接成功关闭，不持久化
+  if (trimmed === sessionStore.getDisplayName(path)) {
+    editState.value = editReducer(editState.value, { type: 'success' })
+    renameError.value = ''
+    return
+  }
+  const myId = ++renameRequestId
+  try {
+    await sessionStore.setDisplayName(path, trimmed)
+    if (myId !== renameRequestId) return  // 旧请求作废（codex #6 request id）
+    editState.value = editReducer(editState.value, { type: 'success' })  // 成功才关
+    renameError.value = ''
+  } catch {
+    if (myId !== renameRequestId) return  // 旧请求作废
+    renameError.value = t('aliasPersistFailed')
+    editState.value = editReducer(editState.value, { type: 'fail' })  // -> error 保留 input
+  }
+}
+
+/** 取消重命名：作废在途 + 清错 + 回 idle（不改） */
+function onRenameCancel() {
+  renameRequestId++  // 作废在途
+  renameError.value = ''
+  editState.value = editReducer(editState.value, { type: 'cancel' })
 }
 
 /**
@@ -234,6 +314,20 @@ function onSessionSwitch(id: string) {
 .project-name {
   font-size: 13px; font-weight: 500; color: var(--text-primary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rename-input {
+  flex: 1; min-width: 0;
+  font-size: 13px; padding: 2px 4px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  outline: none;
+}
+.rename-input:disabled { opacity: 0.6; }
+.rename-error {
+  font-size: 10px; color: var(--status-error);
+  flex-shrink: 0; margin-left: 4px;
 }
 .pin-mark {
   display: flex; align-items: center; flex-shrink: 0;

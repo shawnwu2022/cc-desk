@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { validateDisplayName, projectBasename, resolveWindowTitle, matchProjectQuery } from '@/utils/displayName'
+import {
+  validateDisplayName,
+  projectBasename,
+  resolveWindowTitle,
+  matchProjectQuery,
+  editReducer,
+} from '@/utils/displayName'
+import type { EditState, EditAction } from '@/utils/displayName'
 
 describe('validateDisplayName', () => {
   // 合法普通别名
@@ -100,5 +107,115 @@ describe('matchProjectQuery 三字段', () => {
   it('MatchQuery_AliasSetBasenameIndependent_001', () => {
     // displayName='客户的活' 不含 'client'；path='/work/c1' 不含 'client'；仅 basename='client' 含
     expect(matchProjectQuery('客户的活', 'client', '/work/c1', 'client')).toBe(true)
+  })
+})
+
+describe('editReducer 状态机', () => {
+  // start：从 idle/error 进入 editing（submitting 保持防中断）
+  it('EditReducer_Start_001', () => {
+    expect(editReducer('idle', { type: 'start' })).toBe('editing')
+    expect(editReducer('error', { type: 'start' })).toBe('editing')
+    expect(editReducer('submitting', { type: 'start' })).toBe('submitting')
+  })
+  // submit：editing -> submitting
+  it('EditReducer_Submit_001', () => {
+    expect(editReducer('editing', { type: 'submit' })).toBe('submitting')
+  })
+  // 防重复：submitting 态忽略重复 submit（不重复提交）
+  it('EditReducer_Submit_IdempotentWhileSubmitting_001', () => {
+    expect(editReducer('submitting', { type: 'submit' })).toBe('submitting')
+  })
+  // retry（codex #6）：error 态 submit -> submitting（用户改完重试）
+  it('EditReducer_Submit_FromError_Retry_001', () => {
+    expect(editReducer('error', { type: 'submit' })).toBe('submitting')
+  })
+  // idle 态 submit 忽略
+  it('EditReducer_Submit_Idle_001', () => {
+    expect(editReducer('idle', { type: 'submit' })).toBe('idle')
+  })
+  // success：submitting -> idle（成功才关 input）
+  it('EditReducer_Success_001', () => {
+    expect(editReducer('submitting', { type: 'success' })).toBe('idle')
+  })
+  // fail：submitting -> error（保留 input）
+  it('EditReducer_Fail_001', () => {
+    expect(editReducer('submitting', { type: 'fail' })).toBe('error')
+  })
+  // cancel：editing/error -> idle（不改）
+  it('EditReducer_Cancel_001', () => {
+    expect(editReducer('editing', { type: 'cancel' })).toBe('idle')
+    expect(editReducer('error', { type: 'cancel' })).toBe('idle')
+  })
+  // idle 态 cancel 幂等
+  it('EditReducer_Cancel_Idle_001', () => {
+    expect(editReducer('idle', { type: 'cancel' })).toBe('idle')
+  })
+
+  // ---- 流程测（codex #5/#6/#7：校验失败进 error + retry + 双击幂等）----
+
+  // 校验失败流程（codex #5）：editing -> submit -> submitting -> validate fail -> fail -> error（保留 input + 错误）
+  it('EditReducer_Flow_ValidationFail_001', () => {
+    let s: EditState = 'editing'
+    s = editReducer(s, { type: 'submit' })       // -> submitting
+    expect(s).toBe('submitting')
+    s = editReducer(s, { type: 'fail' })          // 校验失败 -> error
+    expect(s).toBe('error')                       // input 保留 + 错误提示
+  })
+
+  // retry 流程（codex #6）：error -> submit -> submitting -> success -> idle（重试成功关闭）
+  it('EditReducer_Flow_RetryAfterFail_001', () => {
+    let s: EditState = 'error'
+    s = editReducer(s, { type: 'submit' })        // retry -> submitting
+    expect(s).toBe('submitting')
+    s = editReducer(s, { type: 'success' })       // 成功 -> idle
+    expect(s).toBe('idle')
+  })
+
+  // persist 失败流程：submitting -> fail -> error -> retry -> submitting -> fail（连续失败保留）
+  it('EditReducer_Flow_PersistFailRetain_001', () => {
+    let s: EditState = 'editing'
+    s = editReducer(s, { type: 'submit' })        // submitting
+    s = editReducer(s, { type: 'fail' })          // error（persist 失败）
+    expect(s).toBe('error')
+    s = editReducer(s, { type: 'submit' })        // retry
+    expect(s).toBe('submitting')
+    s = editReducer(s, { type: 'fail' })          // 再次失败
+    expect(s).toBe('error')
+  })
+
+  // 双击/快速回车不重复提交（codex #7）：editing -> submit -> submitting -> 再 submit 幂等
+  it('EditReducer_Flow_DoubleSubmit_001', () => {
+    let s: EditState = 'editing'
+    s = editReducer(s, { type: 'submit' })        // -> submitting
+    const s2 = editReducer(s, { type: 'submit' }) // 幂等，仍 submitting
+    expect(s2).toBe('submitting')
+    // 仅一次 persist（由调用方据 state 转换触发；reducer 保证不二次进 submitting）
+  })
+
+  // Esc 取消流程：editing -> cancel -> idle（不改）
+  it('EditReducer_Flow_EscCancel_001', () => {
+    let s: EditState = 'editing'
+    s = editReducer(s, { type: 'cancel' })
+    expect(s).toBe('idle')
+  })
+
+  // EditAction 类型编译期校验（保证 action 形状完整，无回归）
+  it('EditAction_TypeShape_001', () => {
+    const actions: EditAction[] = [
+      { type: 'start' },
+      { type: 'submit' },
+      { type: 'success' },
+      { type: 'fail' },
+      { type: 'cancel' },
+    ]
+    let s: EditState = 'idle'
+    s = editReducer(s, actions[0])  // start -> editing
+    s = editReducer(s, actions[1])  // submit -> submitting
+    s = editReducer(s, actions[2])  // success -> idle
+    s = editReducer(s, actions[0])  // start -> editing
+    s = editReducer(s, actions[3])  // fail（editing 态忽略，仍 editing）
+    expect(s).toBe('editing')
+    s = editReducer(s, actions[4])  // cancel -> idle
+    expect(s).toBe('idle')
   })
 })

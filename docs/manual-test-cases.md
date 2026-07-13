@@ -1707,4 +1707,202 @@
 - 步骤 2：显示启动失败提示（startupFailed）+ 重试按钮，不卡在空白
 - 步骤 3：重试后正常加载并进入对应视图（直进终端或管理页）
 
+---
+
+## 项目别名（display name）
+
+项目别名持久化到 `~/.cc-box/projects.json` 的 `displayNames`（normalizedPath -> 别名），覆盖全局树 / 管理页 / TitleBar / native window title；空别名 = 恢复 basename。`editReducer` 状态机保证成功才关 input、失败保留 + 错误提示、防重复提交、retry。
+
+### DisplayName_MgmtPageRename_001 - 管理页 ⋯ 重命名四处同步
+
+**目标**：验证管理页 ⋯「重命名」输入别名后，全局树 + 管理页 + TitleBar + native window title 均显示别名
+
+**前置条件**：已进入某项目终端，项目 A 在管理页可见，未设别名
+
+**操作步骤**：
+1. 按 Home 进入管理页
+2. 点项目 A 的 ⋯ ->「重命名」
+3. 输入别名「客户的活」，按 Enter
+
+**预期结果**：
+- 管理页项目 A 行名立即变为「客户的活」
+- 切回终端视图，TitleBar 项目名变为「客户的活」
+- native window title（窗口标题栏/任务栏）变为「客户的活」
+- Sessions 面板全局树项目 A 名变为「客户的活」
+- `~/.cc-box/projects.json` 的 `displayNames` 含项目 A 路径 ->「客户的活」
+
+### DisplayName_ProjectNodeRename_002 - 全局树 ProjectNode ⋯ 重命名
+
+**目标**：验证 Sessions 面板全局树 ProjectNode ⋯「重命名」同样生效（与管理页等价入口）
+
+**前置条件**：项目 A 在全局树可见，未设别名
+
+**操作步骤**：
+1. 打开 Sessions 面板，hover 项目 A，点 ⋯ ->「重命名」
+2. 输入别名，按 Enter
+
+**预期结果**：
+- 全局树项目 A 名立即变为别名
+- 管理页、TitleBar、native title 同步更新
+- 持久化到 `projects.json`
+
+### DisplayName_EmptyRestoreBasename_003 - 空别名恢复 basename
+
+**目标**：验证清空别名提交后恢复 basename（四处同步）
+
+**前置条件**：项目 A 已设别名「客户的活」
+
+**操作步骤**：
+1. 管理页项目 A ⋯ ->「重命名」
+2. 清空输入框，按 Enter
+
+**预期结果**：
+- 项目 A 名恢复为 basename（原目录名）
+- 全局树 / 管理页 / TitleBar / native title 均恢复 basename
+- `projects.json` 的 `displayNames` 不再含项目 A 路径（key 删除）
+
+### DisplayName_EscCancel_004 - Esc 取消不改
+
+**目标**：验证编辑中按 Esc 取消，不改别名
+
+**前置条件**：项目 A 已设别名
+
+**操作步骤**：
+1. 管理页项目 A ⋯ ->「重命名」
+2. 修改输入框内容
+3. 按 Esc
+
+**预期结果**：
+- input 关闭，项目名保持原别名（未改）
+- `projects.json` 未变
+
+### DisplayName_PersistAcrossRestart_005 - 别名跨重启持久化
+
+**目标**：验证别名持久化，重启后仍在
+
+**前置条件**：项目 A 已设别名
+
+**操作步骤**：
+1. 关闭并重启应用
+2. 进入管理页 / 全局树观察项目 A 名
+
+**预期结果**：
+- 重启后项目 A 仍显示别名
+- `projects.json` 仍含该别名
+
+### DisplayName_SearchAlias_006 - 搜索别名命中
+
+**目标**：验证设置别名后，搜别名文本能定位项目
+
+**前置条件**：项目 A 别名为「客户的活」，basename 为 client
+
+**操作步骤**：
+1. 管理页搜索框输入「客户」
+
+**预期结果**：
+- 项目 A 命中显示（别名字段命中）
+
+### DisplayName_SearchBasenameIndependent_007 - 搜 basename 仍命中（三字段独立）
+
+**目标**：验证别名设置后搜原 basename 仍能找到项目（displayName/basename/path 三字段独立）
+
+**前置条件**：项目 A 别名为「客户的活」，basename 为 client，路径 /work/client
+
+**操作步骤**：
+1. 管理页搜索框输入「client」
+
+**预期结果**：
+- 项目 A 命中显示（basename 字段独立命中，未被别名遮蔽）
+
+### DisplayName_Ellipsis_008 - 别名过长 UI ellipsis
+
+**目标**：验证长别名在项目行/全局树用 text-overflow:ellipsis 截断显示（CSS 已有，不新增样式）
+
+**前置条件**：项目 A 设一个较长的别名（如 20+ 字符）
+
+**操作步骤**：
+1. 观察管理页项目行、全局树 ProjectNode 的别名显示
+
+**预期结果**：
+- 长别名以省略号截断，不撑破布局
+- hover 可见完整（title 或自然展开）
+
+### DisplayName_TooLongError_009 - 超长（>32）提交错误保留 input
+
+**目标**：验证输入 >32 字符提交时 input 保留 + 「别名过长」错误提示
+
+**前置条件**：管理页项目 A 重命名 input 打开
+
+**操作步骤**：
+1. 输入 33 个字符
+2. 按 Enter
+
+**预期结果**：
+- input 不关闭，显示「别名过长（最多 32 字符）」错误
+- 不持久化
+- 改短后按 Enter 可成功提交
+
+### DisplayName_InvalidCharError_010 - 含换行/制表符提交错误保留 input
+
+**目标**：验证含控制字符（换行/制表）提交时 input 保留 + 「别名含无效字符」错误
+
+**前置条件**：管理页项目 A 重命名 input 打开
+
+**操作步骤**：
+1. 输入含换行或制表符的内容（如从剪贴板粘贴多行）
+2. 按 Enter
+
+**预期结果**：
+- input 不关闭，显示「别名含无效字符（禁换行/控制字符）」错误
+- 不持久化
+- 删除控制字符后按 Enter 可成功提交
+
+### DisplayName_PersistFailRetry_011 - 持久化失败保留 input + retry 成功
+
+**目标**：验证持久化失败时 input 保留 + 「保存失败」错误，改完按 Enter 重试成功
+
+**前置条件**：将 `~/.cc-box/projects.json` 设为只读（模拟持久化失败）
+
+**操作步骤**：
+1. 管理页项目 A ⋯ ->「重命名」，输入别名，按 Enter
+2. 观察错误
+3. 恢复 projects.json 读写权限
+4. 再按 Enter（retry）
+
+**预期结果**：
+- 步骤 2：input 保留，显示「保存失败，请重试」错误
+- 步骤 4：retry 成功，input 关闭，别名生效（error 态 submit 仍生效 -> submitting -> success）
+
+### DisplayName_DoubleSubmitIdempotent_012 - 双击/快速回车不重复提交
+
+**目标**：验证快速双击 Enter 或连续回车不重复提交（editReducer submitting 态幂等）
+
+**前置条件**：管理页项目 A 重命名 input 打开
+
+**操作步骤**：
+1. 输入别名
+2. 快速连续按多次 Enter
+
+**预期结果**：
+- 仅一次 persist（不重复提交）
+- 成功后 input 关闭，无报错
+- `projects.json` 仅一次写入
+
+### DisplayName_MultiInstanceLimit_013 - 多实例并发限制（已知限制非 bug）
+
+**目标**：验证单实例闭环正确；多实例并发改 alias/pin/archive/displayName 可能丢一项（opLock 仅单 Pinia store 闭环）
+
+**前置条件**：开两个 cc-box 实例 A、B，均进入同一项目环境
+
+**操作步骤**：
+1. 实例 A 对项目 X 改别名
+2. 同时实例 B 对项目 Y 置顶
+3. 重启应用观察 X 别名 + Y 置顶
+
+**预期结果**：
+- 单实例操作（A 改 X 别名后，A 内 X 别名生效；B 置顶 Y 后，B 内 Y 置顶）各自闭环正确
+- 多实例并发：X 别名或 Y 置顶可能丢一项（后写者覆盖前写者的 projects.json 快照，已知限制，非 bug）
+- 建议单实例操作 alias/pin/archive/displayName
+
+
 

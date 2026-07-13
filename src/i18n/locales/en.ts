@@ -278,6 +278,10 @@ export default {
 
   // Session item
   rename: 'Rename',
+  aliasPlaceholder: 'Enter alias (empty=restore)',
+  aliasTooLong: 'Alias too long (max 32)',
+  aliasInvalid: 'Alias contains invalid characters (no line breaks/controls)',
+  aliasPersistFailed: 'Save failed, please retry',
   justNow: 'Just now',
 
   // MCP panel

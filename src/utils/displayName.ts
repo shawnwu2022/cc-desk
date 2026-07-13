@@ -60,3 +60,29 @@ export function matchProjectQuery(displayName: string, basename: string, path: s
     path.toLowerCase().includes(ql)
   )
 }
+
+/** 编辑状态机：idle（未编辑）/ editing（输入中）/ submitting（提交中）/ error（失败，保留 input） */
+export type EditState = 'idle' | 'editing' | 'submitting' | 'error'
+export type EditAction =
+  | { type: 'start' }    // 进入编辑
+  | { type: 'submit' }   // 提交（editing/error -> submitting；submitting/idle 忽略防重复）
+  | { type: 'success' }  // 提交成功（submitting -> idle，关 input）
+  | { type: 'fail' }     // 提交失败（submitting -> error，保留 input + 错误提示）
+  | { type: 'cancel' }   // 取消（-> idle，不改）
+
+/**
+ * 编辑状态机 reducer（纯函数，便于自动测）。
+ * 关键不变量：
+ * - 成功才关 input（success -> idle）；失败保留 input（fail -> error）
+ * - 防重复提交：submit 仅 editing/error 态生效（submitting 态忽略；error 态可重试 retry）
+ * - 校验失败：调用方先 submit(->submitting) 再 fail(->error)，error 态显示 input + 错误
+ */
+export function editReducer(state: EditState, action: EditAction): EditState {
+  switch (action.type) {
+    case 'start': return state === 'submitting' ? state : 'editing'
+    case 'submit': return state === 'editing' || state === 'error' ? 'submitting' : state
+    case 'success': return state === 'submitting' ? 'idle' : state
+    case 'fail': return state === 'submitting' ? 'error' : state
+    case 'cancel': return 'idle'
+  }
+}

@@ -57,7 +57,21 @@
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
             <div class="project-info">
-              <span class="project-name">{{ sessionStore.getDisplayName(project.path) }}</span>
+              <template v-if="editingPath === project.path && editState !== 'idle'">
+                <input
+                  v-model="renameValue"
+                  class="rename-input"
+                  :maxlength="32"
+                  :disabled="editState === 'submitting'"
+                  :placeholder="t('aliasPlaceholder')"
+                  @click.stop
+                  @keyup.enter="onRenameSubmit(project.path)"
+                  @keyup.escape="onRenameCancel"
+                  @blur="onRenameSubmit(project.path)"
+                />
+                <span v-if="renameError" class="rename-error">{{ renameError }}</span>
+              </template>
+              <span v-else class="project-name">{{ sessionStore.getDisplayName(project.path) }}</span>
               <span class="project-path">{{ project.path }}</span>
             </div>
             <!-- 置顶标记 -->
@@ -107,6 +121,7 @@
               >
                 {{ appStore.isHidden(project.path) ? t('show') : t('hide') }}
               </button>
+              <button role="menuitem" @click="onMenuRename(project.path)">{{ t('rename') }}</button>
             </div>
           </div>
 
@@ -174,7 +189,7 @@ import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
 import { ctrl } from '@/utils/platform'
 import { normalizePath } from '@/utils/path'
-import { matchProjectQuery } from '@/utils/displayName'
+import { matchProjectQuery, editReducer, validateDisplayName, type EditState } from '@/utils/displayName'
 
 const { t } = useI18n()
 
@@ -192,6 +207,13 @@ const searchQuery = ref('')
 const projectListRef = ref<HTMLElement | null>(null)
 const menuOpen = ref<string | null>(null)
 const archivedLoaded = ref(false)
+
+// 项目别名编辑：editingPath 逐行（镜像 menuOpen 模式）+ editState/renameValue/renameError 单值（一次只编一行）
+const editingPath = ref<string | null>(null)
+const editState = ref<EditState>('idle')
+const renameValue = ref('')
+const renameError = ref('')
+let renameRequestId = 0
 
 /** 判断给定项目是否为当前 cwd 项目（规范化比较，容忍 Windows 路径大小写/斜杠差异） */
 function isCwdProject(path: string): boolean {
@@ -330,6 +352,73 @@ function onMenuHide(path: string) {
   const willHide = !appStore.isHidden(path)
   appStore.setHidden(path, willHide).catch(() => {})
   closeMenuAndRestore(path)
+}
+
+/** ⋯ 菜单「重命名」：关菜单 + 进入编辑 */
+function onMenuRename(path: string) {
+  closeMenuAndRestore(path)
+  startRename(path)
+}
+
+/** 进入重命名：作废在途 + 设 editingPath + 预填当前别名（或 basename） + 焦点入 input（querySelector 精确定位行） */
+function startRename(path: string) {
+  renameRequestId++  // 作废先前在途
+  editingPath.value = path
+  renameValue.value = sessionStore.getDisplayName(path)
+  renameError.value = ''
+  editState.value = editReducer(editState.value, { type: 'start' })
+  nextTick(() => {
+    projectListRef.value?.querySelector<HTMLInputElement>(
+      `.project-row[data-path="${cssEscape(path)}"] .rename-input`
+    )?.focus()
+  })
+}
+
+/**
+ * 提交别名：仅 editing/error 态生效（submitting 幂等；idle 忽略）。
+ * 校验失败 -> error（保留 input + 错误）；persist 失败 -> error；成功才关 input + 清 editingPath。
+ * request id 防 cancel-during-submit 后旧 success 覆盖 idle。
+ */
+async function onRenameSubmit(path: string) {
+  // 仅 editing/error 态提交（submitting 幂等；idle 忽略）
+  const next = editReducer(editState.value, { type: 'submit' })
+  if (next === editState.value) return
+  editState.value = next  // -> submitting
+  const raw = renameValue.value
+  const v = validateDisplayName(raw)
+  if (!v.ok) {
+    renameError.value = v.error === 'tooLong' ? t('aliasTooLong') : t('aliasInvalid')
+    editState.value = editReducer(editState.value, { type: 'fail' })  // -> error
+    return
+  }
+  const trimmed = raw.trim()
+  // no-op：值未变（含 basename 回退场景）则直接成功关闭，不持久化
+  if (trimmed === sessionStore.getDisplayName(path)) {
+    editState.value = editReducer(editState.value, { type: 'success' })
+    renameError.value = ''
+    editingPath.value = null
+    return
+  }
+  const myId = ++renameRequestId
+  try {
+    await sessionStore.setDisplayName(path, trimmed)
+    if (myId !== renameRequestId) return  // 旧请求作废
+    editState.value = editReducer(editState.value, { type: 'success' })  // 成功才关
+    renameError.value = ''
+    editingPath.value = null
+  } catch {
+    if (myId !== renameRequestId) return
+    renameError.value = t('aliasPersistFailed')
+    editState.value = editReducer(editState.value, { type: 'fail' })  // -> error 保留 input
+  }
+}
+
+/** 取消重命名：作废在途 + 清错 + 清 editingPath + 回 idle（不改） */
+function onRenameCancel() {
+  renameRequestId++
+  renameError.value = ''
+  editingPath.value = null
+  editState.value = editReducer(editState.value, { type: 'cancel' })
 }
 
 function handleSettingsClick() {
@@ -594,6 +683,30 @@ function formatTime(ts: number): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rename-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 2px 4px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.rename-input:disabled {
+  opacity: 0.6;
+}
+
+.rename-error {
+  display: block;
+  font-size: 10px;
+  color: var(--status-error);
+  margin-top: 2px;
 }
 
 .pin-mark {

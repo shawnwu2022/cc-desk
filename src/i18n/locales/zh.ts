@@ -278,6 +278,10 @@ export default {
 
   // Session item
   rename: '重命名',
+  aliasPlaceholder: '输入别名（空=恢复原名）',
+  aliasTooLong: '别名过长（最多 32 字符）',
+  aliasInvalid: '别名含无效字符（禁换行/控制字符）',
+  aliasPersistFailed: '保存失败，请重试',
   justNow: '刚刚',
 
   // MCP panel
