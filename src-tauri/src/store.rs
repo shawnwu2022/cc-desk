@@ -1088,14 +1088,43 @@ pub(crate) fn merge_json_values(base: serde_json::Value, updates: serde_json::Va
     }
 }
 
-/// 项目置顶 + 会话存档持久化状态（~/.cc-box/projects.json）
-/// 与 config.json 分开存储，仅承载前端派生的视图状态
+/// 项目置顶 + 会话存档 + 项目别名持久化状态（~/.cc-box/projects.json）
+/// 与 config.json 分开存储，仅承载前端派生的视图状态。
+/// displayNames 容错：缺失/null/非 object 返空 map；object 内非 string 值跳过该条目，
+/// 避免旧/损坏文件的单个坏值导致整体解析失败 -> 启动加载门禁误判。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProjectsState {
     #[serde(rename = "pinnedProjects", default)]
     pub pinned_projects: Vec<String>,
     #[serde(rename = "archivedSessions", default)]
     pub archived_sessions: HashMap<String, Vec<String>>,
+    #[serde(rename = "displayNames", default, deserialize_with = "deserialize_display_names")]
+    pub display_names: HashMap<String, String>,
+}
+
+/// displayNames 容错反序列化：
+/// - None / Null / 非 object -> 空 map
+/// - object 内值非 string（数字/数组/对象/null）-> 跳过该条目（不整体失败）
+pub(crate) fn deserialize_display_names<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    match opt {
+        None | Some(serde_json::Value::Null) => Ok(HashMap::new()),
+        Some(serde_json::Value::Object(map)) => {
+            let mut out = HashMap::with_capacity(map.len());
+            for (k, v) in map {
+                if let serde_json::Value::String(s) = v {
+                    out.insert(k, s);
+                }
+                // 非 string 值：跳过该条目
+            }
+            Ok(out)
+        }
+        // displayNames 是数组/数字/字符串等非 object -> 容错返空
+        Some(_) => Ok(HashMap::new()),
+    }
 }
 
 /// 读取 projects 状态（文件不存在返回默认空状态：空 pinned + 空 map）
@@ -1136,8 +1165,8 @@ pub(crate) fn update_projects_state_at(path: &Path, updates: serde_json::Value) 
 
     let merged = merge_json_values(existing_json, updates);
 
-    let content = serde_json::to_string_pretty(&merged)?;
-    fs::write(path, content)?;
+    // 原子写：tmp + rename，防写入中途崩溃/断电截断文件 -> 启动门禁误判
+    write_json_atomic(path, &merged)?;
 
     Ok(())
 }
@@ -3091,11 +3120,24 @@ pub(crate) fn set_mcp_server_enabled_in(
     Ok(())
 }
 
-/// 原子写 JSON：先写 .tmp 再 rename
-fn write_json_atomic(path: &Path, value: &serde_json::Value) -> Result<()> {
+/// 原子写 JSON：先写 .tmp 再 rename（pub(crate) 供测试导入）。
+///
+/// Windows 原子替换（codex 致命#1）：`std::fs::rename` 在 Windows 上目标已存在时失败
+/// （与 POSIX 原子覆盖语义不同），projects.json 首次写入后后续 update 会持续失败。
+/// 修复：Windows 上先 `remove_file(path)` 再 `rename`；POSIX 直接 `rename` 原子覆盖。
+///
+/// 权衡：Windows remove 与 rename 之间若崩溃，原文件已 remove、.tmp 残留（含新内容），
+/// 下次写入会覆盖 .tmp；此为 view-state 文件（pinned/archive/displayNames）可接受的最佳折衷，
+/// 优于裸 fs::write 截断损坏或 rename 持续失败。POSIX 无此问题（rename 原子覆盖）。
+pub(crate) fn write_json_atomic(path: &Path, value: &serde_json::Value) -> Result<()> {
     let tmp = path.with_extension("json.tmp");
     let content = serde_json::to_string_pretty(value)?;
     fs::write(&tmp, &content).with_context(|| "Failed to write .tmp file")?;
+    #[cfg(windows)]
+    {
+        // Windows：目标存在时 fs::rename 失败，先 remove（目标不存在时 remove 返 Err，忽略）
+        let _ = fs::remove_file(path);
+    }
     fs::rename(&tmp, path).with_context(|| "Failed to rename .tmp to target")?;
     Ok(())
 }

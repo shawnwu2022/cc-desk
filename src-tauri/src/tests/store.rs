@@ -5,8 +5,8 @@ use crate::store::{
     find_valid_plugin_path, get_projects_state_at, infer_server_type, merge_json_values,
     parse_agents_list_output, parse_mcp_server_entry, parse_skill_description, parse_timestamp,
     resolve_marketplace_plugin_path, search_session_messages_in_dirs, set_agent_enabled_in,
-    set_mcp_server_enabled_in, set_skill_enabled_in, update_projects_state_at, AgentInfo,
-    AppConfig, Project, ProjectsState,
+    set_mcp_server_enabled_in, set_skill_enabled_in, update_projects_state_at, write_json_atomic,
+    AgentInfo, AppConfig, Project, ProjectsState,
 };
 
 use std::collections::HashMap;
@@ -1354,4 +1354,153 @@ fn ComputeStartup_NormalizePath_001() {
     // hidden 用正斜杠小写仍隐藏
     let state2 = compute_project_startup_state(&projects, "", &["e:/source/foo".to_string()]);
     assert!(!state2.has_visible_project);
+}
+
+// ==================== ProjectsState displayNames ====================
+
+// displayNames 序列化往返：camelCase 字段名 + 中文别名可还原
+#[test]
+fn ProjectsState_DisplayNames_Roundtrip_001() {
+    let mut m = HashMap::new();
+    m.insert("/p-a".to_string(), "主项目".to_string());
+    let state = ProjectsState {
+        pinned_projects: vec!["/p-a".into()],
+        archived_sessions: HashMap::new(),
+        display_names: m,
+    };
+    let json = serde_json::to_string(&state).unwrap();
+    assert!(json.contains("\"displayNames\""), "字段名须为 camelCase displayNames");
+    let back: ProjectsState = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.display_names.get("/p-a"), Some(&"主项目".to_string()));
+}
+
+// 旧文件无 displayNames 字段 -> 默认空 map（向后兼容，旧 projects.json 不挂）
+#[test]
+fn ProjectsState_DisplayNames_Default_001() {
+    let json = r#"{"pinnedProjects":["/p-a"],"archivedSessions":{}}"#;
+    let state: ProjectsState = serde_json::from_str(json).unwrap();
+    assert!(state.display_names.is_empty());
+}
+
+// displayNames 为 null -> 容错返空（不整体解析失败）
+#[test]
+fn ProjectsState_MalformedDisplayNames_Null_001() {
+    let json = r#"{"pinnedProjects":[],"archivedSessions":{},"displayNames":null}"#;
+    let state: ProjectsState = serde_json::from_str(json).unwrap();
+    assert!(state.display_names.is_empty());
+}
+
+// displayNames 为数组 -> 容错返空
+#[test]
+fn ProjectsState_MalformedDisplayNames_Array_001() {
+    let json = r#"{"pinnedProjects":[],"archivedSessions":{},"displayNames":["a","b"]}"#;
+    let state: ProjectsState = serde_json::from_str(json).unwrap();
+    assert!(state.display_names.is_empty());
+}
+
+// displayNames 内某条目值非 string（数字）-> 跳过该条目，其余保留
+#[test]
+fn ProjectsState_MalformedDisplayNames_NonStringValue_001() {
+    let json = r#"{"pinnedProjects":[],"archivedSessions":{},"displayNames":{"/p-a":"别名","/p-b":123}}"#;
+    let state: ProjectsState = serde_json::from_str(json).unwrap();
+    assert_eq!(state.display_names.get("/p-a"), Some(&"别名".to_string()));
+    assert!(state.display_names.get("/p-b").is_none(), "非 string 值条目跳过");
+}
+
+// ==================== write_json_atomic（含 Windows target exists） ====================
+
+// 原子写：写后目标文件内容正确
+#[test]
+fn WriteJsonAtomic_Content_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("projects.json");
+    let val = serde_json::json!({"displayNames": {"/p-a": "别名"}});
+    write_json_atomic(&path, &val).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(parsed["displayNames"]["/p-a"], "别名");
+}
+
+// 原子写：写后无 .json.tmp 残留（证明走了 tmp+rename 清理路径，fs::write 不产生 tmp）
+#[test]
+fn WriteJsonAtomic_NoTmpLeftover_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("projects.json");
+    write_json_atomic(&path, &serde_json::json!({"a":1})).unwrap();
+    let tmp = path.with_extension("json.tmp");
+    assert!(!tmp.exists(), "rename 成功后 .tmp 不应残留");
+}
+
+// 原子写：原文件存在时完整替换（读回 == 新值，非旧+新拼接）
+#[test]
+fn WriteJsonAtomic_ReplacesFully_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("projects.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&serde_json::json!({"old": true})).unwrap()).unwrap();
+    write_json_atomic(&path, &serde_json::json!({"displayNames": {"/p-a": "新"}})).unwrap();
+    let back: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(back["displayNames"]["/p-a"], "新");
+    assert!(back.get("old").is_none(), "完整替换，旧 key 不残留");
+}
+
+// 原子写：目标已存在时二次写入成功（Windows fs::rename 目标存在失败 -> remove+rename 修复）。
+// 这是 codex 致命#1 的核心场景：projects.json 首次写入后，后续 update 必须仍能覆盖。
+#[test]
+fn WriteJsonAtomic_ReplacesExisting_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("projects.json");
+    // 第一次写（目标不存在）
+    write_json_atomic(&path, &serde_json::json!({"displayNames": {"/p-a": "first"}})).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap().contains("first"), true);
+    // 第二次写（目标已存在）--Windows 上裸 fs::rename 会失败，remove+rename 修复后须成功
+    write_json_atomic(&path, &serde_json::json!({"displayNames": {"/p-a": "second"}})).unwrap();
+    let back: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(back["displayNames"]["/p-a"], "second", "目标已存在时二次写入须覆盖成功");
+    // 三次写仍成功（连续覆盖）
+    write_json_atomic(&path, &serde_json::json!({"displayNames": {"/p-a": "third"}})).unwrap();
+    let back3: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(back3["displayNames"]["/p-a"], "third");
+}
+
+// ==================== update_projects_state_at 原子写 ====================
+
+// update 用 (path, updates) 签名（path first），displayNames 持久化往返
+#[test]
+fn UpdateProjectsState_DisplayNames_Persist_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("projects.json");
+    update_projects_state_at(&path, serde_json::json!({"displayNames": {"/p-a": "别名"}})).unwrap();
+    let state: ProjectsState = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(state.display_names.get("/p-a"), Some(&"别名".to_string()));
+}
+
+// update 二次写入（目标已存在）仍成功：Windows remove+rename 闭环
+#[test]
+fn UpdateProjectsState_OverwriteExisting_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("projects.json");
+    update_projects_state_at(&path, serde_json::json!({"displayNames": {"/p-a": "旧"}})).unwrap();
+    update_projects_state_at(&path, serde_json::json!({"displayNames": {"/p-a": "新"}})).unwrap();
+    let state: ProjectsState = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(state.display_names.get("/p-a"), Some(&"新".to_string()));
+}
+
+// 故障注入：预先把 .json.tmp 建成目录 -> write_json_atomic 写 tmp 失败 ->
+// update_projects_state_at 返 Err 且原 projects.json 内容不变（原子性：失败不破坏旧文件）。
+// 裸 fs::write(path) 不经 tmp，此场景下会成功覆盖 -> 与 expect Err 冲突，故能区分（非 false green）。
+#[test]
+fn UpdateProjectsState_AtomicWrite_FailPreservesOriginal_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("projects.json");
+    // 1) 先写入合法旧内容
+    update_projects_state_at(&path, serde_json::json!({"displayNames": {"/p-a": "旧别名"}})).unwrap();
+    let original = std::fs::read_to_string(&path).unwrap();
+    // 2) 把 tmp 路径占为目录，迫使 write_json_atomic 写 tmp 失败
+    let tmp = path.with_extension("json.tmp");
+    std::fs::create_dir(&tmp).unwrap();
+    // 3) 再次写入应失败（fs::write(&tmp) 对目录失败，remove/rename 未到达）
+    let res = update_projects_state_at(&path, serde_json::json!({"displayNames": {"/p-a": "新别名"}}));
+    assert!(res.is_err(), "tmp 写失败须传播 Err");
+    // 4) 原文件未被破坏
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original, "原子写：失败不破坏原文件");
 }
