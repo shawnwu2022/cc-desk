@@ -6,7 +6,8 @@ use crate::store::{
     normalize_path_inner, parse_agents_list_output, parse_mcp_server_entry, parse_skill_description,
     parse_timestamp, resolve_marketplace_plugin_path, search_session_messages_in_dirs,
     set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,
-    canonicalize_state, update_projects_state_at, write_json_atomic, AgentInfo, AppConfig, Project, ProjectsState,
+    canonicalize_state, read_projects_state_locked, update_projects_state_at,
+    with_projects_state_locked, write_json_atomic, AgentInfo, AppConfig, Project, ProjectsState,
 };
 
 use std::collections::HashMap;
@@ -1608,4 +1609,65 @@ fn Canonicalize_Idempotent_001() {
     let after1 = s.pinned_projects.clone();
     canonicalize_state(&mut s);
     assert_eq!(s.pinned_projects, after1);
+}
+
+// ==================== with_projects_state_locked / read_projects_state_locked ====================
+
+// 首次（无数据文件）：apply 后写入，返回的状态含 apply 结果；数据文件被创建
+#[test]
+fn WithLocked_FirstWriteAppliesAndReturns_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    let state = with_projects_state_locked(&data, &lock, |s| {
+        s.pinned_projects.push("e:/a".into());
+        Ok::<(), anyhow::Error>(())
+    }).unwrap();
+    assert_eq!(state.pinned_projects, vec!["e:/a".to_string()]);
+    assert!(data.exists());
+    assert!(lock.exists(), "lock 文件应被创建");
+}
+
+// apply 闭包返 Err -> command 层错误，状态不写入（原子性：失败不破坏旧文件）
+#[test]
+fn WithLocked_ApplyErrDoesNotWrite_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    // 先写入基线
+    with_projects_state_locked(&data, &lock, |s| { s.pinned_projects.push("e:/keep".into()); Ok(()) }).unwrap();
+    // apply 返 Err
+    let res = with_projects_state_locked(&data, &lock, |_s| {
+        Err::<(), anyhow::Error>(anyhow::anyhow!("alias invalid"))
+    });
+    assert!(res.is_err());
+    // 旧内容保留
+    let state = read_projects_state_locked(&data, &lock).unwrap();
+    assert_eq!(state.pinned_projects, vec!["e:/keep".to_string()]);
+}
+
+// read_locked：数据文件不存在 -> default，不报错（不因空文件解析失败）
+#[test]
+fn ReadLocked_MissingFileDefaults_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    let state = read_projects_state_locked(&data, &lock).unwrap();
+    assert!(state.pinned_projects.is_empty());
+    assert!(state.archived_sessions.is_empty());
+}
+
+// 锁内 canonicalize：预置 legacy 等价键，with_locked 操作后返回已合并状态
+#[test]
+fn WithLocked_CanonicalizesBeforeApply_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    // 预置双等价 pinned
+    std::fs::write(&data, r#"{"pinnedProjects":["E:\\A","e:/a"]}"#).unwrap();
+    let state = with_projects_state_locked(&data, &lock, |s| {
+        s.pinned_projects.push("e:/b".into());
+        Ok::<(), anyhow::Error>(())
+    }).unwrap();
+    assert_eq!(state.pinned_projects, vec!["e:/a".to_string(), "e:/b".to_string()]);
 }

@@ -3259,6 +3259,49 @@ pub(crate) fn canonicalize_state(s: &mut ProjectsState) {
     s.display_names = dn;
 }
 
+// ---------- 锁内读改写 helper（排他写 / 共享读）----------
+
+/// 跨进程排他锁内：读最新 → canonicalize → 校验应用 → 原子写 → 返回最新。
+/// apply 闭包返回 Result<T>：校验失败返 Err（如别名非法），调用方据此返错，状态不写入。
+/// lock_file drop 释放排他锁（RAII；进程崩溃 OS 释放）。
+pub(crate) fn with_projects_state_locked<F, T>(
+    data_path: &Path,
+    lock_path: &Path,
+    apply: F,
+) -> Result<ProjectsState>
+where
+    F: FnOnce(&mut ProjectsState) -> Result<T>,
+{
+    ensure_parent(lock_path)?;
+    let lock_file = fs::OpenOptions::new()
+        .read(true).write(true).create(true).truncate(false)
+        .open(lock_path)?;
+    acquire_lock(&lock_file, /*exclusive*/ true, Duration::from_secs(5))?;
+
+    let result: Result<ProjectsState> = (|| {
+        let mut state = get_projects_state_at(data_path)?;   // 不存在 -> default
+        canonicalize_state(&mut state);
+        apply(&mut state)?;
+        write_json_atomic(data_path, &serde_json::to_value(&state)?)?;
+        Ok(state)
+    })();
+    let _ = lock_file.unlock();
+    result
+}
+
+/// 共享锁内读取完整状态。写者持排他锁时本调用阻塞（有界）直到写完，
+/// 不会读到 remove->rename 空窗的「不存在」。
+pub(crate) fn read_projects_state_locked(data_path: &Path, lock_path: &Path) -> Result<ProjectsState> {
+    ensure_parent(lock_path)?;
+    let lock_file = fs::OpenOptions::new()
+        .read(true).write(true).create(true).truncate(false)
+        .open(lock_path)?;
+    acquire_lock(&lock_file, /*exclusive*/ false, Duration::from_secs(5))?;
+    let state = get_projects_state_at(data_path);   // 不存在 -> default
+    let _ = lock_file.unlock();
+    state
+}
+
 // ---------- Plugin（CLI 调用）----------
 
 /// 切换 plugin 启用状态（调用 claude plugin enable/disable）
