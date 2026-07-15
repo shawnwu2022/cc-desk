@@ -77,8 +77,8 @@
 | `displayNames` | Record<string, string> | normalizedPath -> 项目别名（空/缺省 = 回退 basename） |
 
 - **key 规范化**：`displayNames` 的 key 为 `normalizePath` 后的路径（Windows/macOS 大小写不敏感 lower，Linux 保留大小写；去尾斜杠）。设置别名时删等价旧 key（避免 `E:\Repo` / `e:/repo` 双份）。
-- **原子写**：`update_projects_state` 走 `write_json_atomic`（写 `.json.tmp` + rename）。POSIX `rename` 原子覆盖目标；Windows 目标已存在时 `remove_file` + `rename`（remove 与 rename 之间崩溃则原文件已删、`.tmp` 残留含新内容，下次写入覆盖——view-state 文件可接受折衷，优于裸 `fs::write` 截断）。写失败不破坏原文件。
-- **多实例限制**：opLock 仅单 Pinia store（单实例）闭环；多实例并发改 alias/pin/archive/displayName 可能丢一项（后写者覆盖前写者快照）。建议单实例操作，已知限制非 bug。
+- **原子写**：apply 增量命令（pin/unpin/archive/restore/setDisplayName）在 `with_projects_state_locked` 锁内读最新 → canonicalize → 校验应用 → `write_json_atomic`（写 `.json.tmp` + rename）。POSIX `rename` 原子覆盖目标；Windows 目标已存在时 `remove_file` + `rename`（remove 与 rename 之间崩溃则原文件已删、`.tmp` 残留含新内容，下次写入覆盖——view-state 文件可接受折衷，优于裸 `fs::write` 截断）。写失败不破坏原文件。
+- **多实例并发安全**：写走后端独立 `projects.json.lock`（std `File::lock`）跨进程排他锁（写排他 / 读共享，有界超时；持锁进程被杀由 OS 自动释放），apply 增量操作在锁内原子读改写，不再依赖前端完整快照覆盖。前端 `utils/projectsStateSync` 串行队列 + `appliedSeq` 防 reload/action 逆序覆盖；窗口聚焦 reload 共享锁读。config.json 的 hiddenProjects/lastOpened 暂未纳入（同 pattern 可扩展）；新旧版本并存过渡期建议单实例。
 
 ## Store 命令 (IPC 通道)
 

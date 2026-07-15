@@ -31,6 +31,7 @@ export default {
   noArchivedSessions: '暂无已存档会话',
   loadArchivedFailed: '部分已存档会话历史加载失败，可重试',
   operationFailed: '操作失败，请重试',
+  lockTimeout: '操作超时，另一实例可能无响应，请重试',
   loadHistoryFailed: '历史加载失败',
 
   // Settings navigation

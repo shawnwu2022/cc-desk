@@ -1909,21 +1909,42 @@
 - 成功后 input 关闭，无报错
 - `projects.json` 仅一次写入
 
-### DisplayName_MultiInstanceLimit_013 - 多实例并发限制（已知限制非 bug）
+### MultiInstance_StaleWrite_NoLoss_010 — 双实例并发写不丢数据
 
-**目标**：验证单实例闭环正确；多实例并发改 alias/pin/archive/displayName 可能丢一项（opLock 仅单 Pinia store 闭环）
+**目标**：双实例并发改 projects.json 不丢数据（后端独立 lock 文件 + apply 增量操作兜底）
 
-**前置条件**：开两个 cc-box 实例 A、B，均进入同一项目环境
+**前置条件**：tauri:dev 运行，Mod+Shift+N 开第二实例
 
 **操作步骤**：
-1. 实例 A 对项目 X 改别名
-2. 同时实例 B 对项目 Y 置顶
-3. 重启应用观察 X 别名 + Y 置顶
+1. 实例 A 置顶项目 X，实例 B 置顶项目 Y（并发）
+2. 两实例窗口切换聚焦
 
 **预期结果**：
-- 单实例操作（A 改 X 别名后，A 内 X 别名生效；B 置顶 Y 后，B 内 Y 置顶）各自闭环正确
-- 多实例并发：X 别名或 Y 置顶可能丢一项（后写者覆盖前写者的 projects.json 快照，已知限制，非 bug）
-- 建议单实例操作 alias/pin/archive/displayName
+- 两边 pinned 列表都含 X + Y（磁盘无丢失）
+
+### MultiInstance_FocusReload_011 — 窗口聚焦拉取最新
+
+**目标**：A 改后切回 B 窗口聚焦，B 看到最新
+
+**前置条件**：双实例
+
+**操作步骤**：
+1. A 改项目别名；切到 B 窗口
+
+**预期结果**：
+- B 聚焦后别名刷新为 A 设的值
+
+### MultiInstance_LockHolderExit_012 — 持锁进程被杀后另一实例 5s 内成功
+
+**目标**：持锁实例被杀后另一实例 5s 内成功
+
+**前置条件**：双实例
+
+**操作步骤**：
+1. 任务管理器结束实例 A（持锁中）；实例 B 立即 pin
+
+**预期结果**：
+- B 在 5s 内成功（OS 释放锁）
 
 
 

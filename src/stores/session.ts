@@ -745,7 +745,7 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * 启动加载：读取 pinnedProjects + archivedSessions（参考 loadAppConfig 范式）。
-   * v3-1 后端 merge 为顶层替换，故写入时须发送完整 map。
+   * 后端 read_projects_state_locked 已 canonical（normalize + 去重 + 排序），前端 applyReturnedState 原样应用。
    * P1.2：不吞失败--失败时 projectsStateLoaded 保持 false，ensureProjectsStateLoaded 据此抛错
    * 阻断 pin/archive；但本函数不抛出（避免阻断 App.vue fire-and-forget 启动）。
    * 赋值 loadPromise 供 ensureProjectsStateLoaded 复用（并发等待同一加载，不重复发请求）。
@@ -805,8 +805,9 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * 操作锁（P1.3）：串行化 pin/unpin/archive/restore，避免并发各自基于旧内存算 next、
-   * 后 persist 覆盖前导致磁盘丢一项。ensureLoaded -> 算 next -> persist -> 改本地 全在锁内。
+   * 操作锁（P1.3）：串行化 invoke + apply--ensureProjectsStateLoaded → applyFromAction（发增量 invoke）
+   * → applyReturnedState 全在锁内。增量操作在后端锁内原子读改写，本锁仅保证前端单实例串行
+   * （多实例跨进程排他由后端 projects.json.lock 负责）。
    */
   function withLock<T>(fn: () => Promise<T>): Promise<T> {
     const prev = opLock

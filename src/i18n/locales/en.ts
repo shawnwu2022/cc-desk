@@ -31,6 +31,7 @@ export default {
   noArchivedSessions: 'No archived sessions',
   loadArchivedFailed: 'Some archived session history failed to load, you may retry',
   operationFailed: 'Operation failed, please retry',
+  lockTimeout: 'Operation timed out — another instance may be unresponsive. Please retry.',
   loadHistoryFailed: 'Failed to load history',
 
   // Settings navigation
