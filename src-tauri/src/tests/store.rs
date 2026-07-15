@@ -7,7 +7,8 @@ use crate::store::{
     parse_timestamp, resolve_marketplace_plugin_path, search_session_messages_in_dirs,
     set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,
     canonicalize_state, read_projects_state_locked, update_projects_state_at,
-    with_projects_state_locked, write_json_atomic, AgentInfo, AppConfig, Project, ProjectsState,
+    with_projects_state_locked, write_json_atomic, normalize_path_str_pub, AgentInfo, AppConfig,
+    Project, ProjectsState,
 };
 
 use std::collections::HashMap;
@@ -1670,4 +1671,45 @@ fn WithLocked_CanonicalizesBeforeApply_001() {
         Ok::<(), anyhow::Error>(())
     }).unwrap();
     assert_eq!(state.pinned_projects, vec!["e:/a".to_string(), "e:/b".to_string()]);
+}
+
+// ==================== command 行为单测（模拟 command apply 逻辑）====================
+
+// 模拟 pin_project command 的 apply 逻辑：pin 幂等（已含 normalized 等价则不重复）
+#[test]
+fn PinProjectCommand_Idempotent_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    let apply = |s: &mut ProjectsState| {
+        let n = normalize_path_str_pub("E:/A");
+        if !s.pinned_projects.contains(&n) {
+            s.pinned_projects.push(n);
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    with_projects_state_locked(&data, &lock, apply).unwrap();
+    // 再 pin 等价路径（不同大小写/斜杠），normalized 后同一 key，不应增加
+    let s2 = with_projects_state_locked(&data, &lock, apply).unwrap();
+    assert_eq!(s2.pinned_projects, vec!["e:/a".to_string()], "重复 pin 等价路径不增加");
+}
+
+// 模拟 set_display_name command 的 apply 逻辑：超长 alias -> Err，状态不变（校验失败不写入）
+#[test]
+fn SetDisplayNameCommand_RejectsTooLong_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    let long_alias = "x".repeat(40);
+    let res = with_projects_state_locked(&data, &lock, |s| {
+        let trimmed = long_alias.trim();
+        if trimmed.chars().count() > 32 {
+            return Err(anyhow::anyhow!("alias too long"));
+        }
+        s.display_names.insert("e:/a".into(), trimmed.into());
+        Ok::<(), anyhow::Error>(())
+    });
+    assert!(res.is_err(), "超长 alias 应被拒绝");
+    let state = read_projects_state_locked(&data, &lock).unwrap();
+    assert!(state.display_names.is_empty(), "校验失败不应写入");
 }

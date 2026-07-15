@@ -1,7 +1,7 @@
 //! Tauri Commands 模块
 //! 定义所有 IPC 命令
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
@@ -207,16 +207,114 @@ pub async fn update_app_config(updates: serde_json::Value) -> Result<(), String>
     crate::store::update_app_config(updates).map_err(|e| e.to_string())
 }
 
-/// 获取 projects 状态（置顶项目 + 会话存档）
+/// 获取 projects 状态（共享锁读，避开 Windows remove+rename 空窗）
 #[tauri::command]
 pub async fn get_projects_state() -> Result<ProjectsState, String> {
-    crate::store::get_projects_state().map_err(|e| e.to_string())
+    let (d, l) = crate::store::data_and_lock_paths().map_err(|e| e.to_string())?;
+    crate::store::read_projects_state_locked(&d, &l).map_err(|e| e.to_string())
 }
 
 /// 更新 projects 状态（合并写入）
 #[tauri::command]
 pub async fn update_projects_state(updates: serde_json::Value) -> Result<(), String> {
     crate::store::update_projects_state(updates).map_err(|e| e.to_string())
+}
+
+/// 别名校验（与前端 validateDisplayName 同规则）：trim 后 ≤ 32 字符、无控制字符。
+fn validate_display_name_inner(alias: &str) -> Result<()> {
+    let trimmed = alias.trim();
+    let len = trimmed.chars().count();
+    if len > 32 {
+        bail!("alias too long ({} > 32)", len);
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        bail!("alias contains control characters");
+    }
+    Ok(())
+}
+
+/// 置顶项目（锁内幂等：已含 normalized 等价则不重复）
+#[tauri::command]
+pub fn pin_project(path: String) -> Result<ProjectsState, String> {
+    let (d, l) = crate::store::data_and_lock_paths().map_err(|e| e.to_string())?;
+    crate::store::with_projects_state_locked(&d, &l, |s| {
+        let n = crate::store::normalize_path_str_pub(&path);
+        if !s.pinned_projects.contains(&n) {
+            s.pinned_projects.push(n);
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 取消置顶（锁内 normalized 过滤移除）
+#[tauri::command]
+pub fn unpin_project(path: String) -> Result<ProjectsState, String> {
+    let (d, l) = crate::store::data_and_lock_paths().map_err(|e| e.to_string())?;
+    crate::store::with_projects_state_locked(&d, &l, |s| {
+        let n = crate::store::normalize_path_str_pub(&path);
+        s.pinned_projects.retain(|p| *p != n);
+        Ok::<(), anyhow::Error>(())
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 存档会话（锁内归并到 canonical key 数组，sessionId 去重）
+#[tauri::command]
+pub fn archive_session(
+    project_path: String,
+    session_id: String,
+) -> Result<ProjectsState, String> {
+    let (d, l) = crate::store::data_and_lock_paths().map_err(|e| e.to_string())?;
+    crate::store::with_projects_state_locked(&d, &l, |s| {
+        // canonicalize 已保证 key 为 normalized，直接用 normalized key
+        let n = crate::store::normalize_path_str_pub(&project_path);
+        let arr = s.archived_sessions.entry(n).or_default();
+        if !arr.contains(&session_id) {
+            arr.push(session_id);
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 恢复会话（锁内从数组移除，空数组清理 key；未存档幂等）
+#[tauri::command]
+pub fn restore_session(
+    project_path: String,
+    session_id: String,
+) -> Result<ProjectsState, String> {
+    let (d, l) = crate::store::data_and_lock_paths().map_err(|e| e.to_string())?;
+    crate::store::with_projects_state_locked(&d, &l, |s| {
+        let n = crate::store::normalize_path_str_pub(&project_path);
+        if let Some(arr) = s.archived_sessions.get_mut(&n) {
+            arr.retain(|id| *id != session_id);
+            if arr.is_empty() {
+                s.archived_sessions.remove(&n);
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 设别名（锁内校验 + 删 canonical 等价 key + 非空 set / 空 clear）
+#[tauri::command]
+pub fn set_display_name(path: String, alias: String) -> Result<ProjectsState, String> {
+    let (d, l) = crate::store::data_and_lock_paths().map_err(|e| e.to_string())?;
+    crate::store::with_projects_state_locked(&d, &l, |s| {
+        validate_display_name_inner(&alias)?; // 校验失败返 Err（前后端同规则）
+        let n = crate::store::normalize_path_str_pub(&path);
+        // canonicalize 已合并等价 key，此处 key 已是 normalized，直接覆盖/删除
+        let trimmed = alias.trim();
+        if trimmed.is_empty() {
+            s.display_names.remove(&n);
+        } else {
+            s.display_names.insert(n, trimmed.to_string());
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// 获取默认 Claude 选项

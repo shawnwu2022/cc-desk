@@ -533,6 +533,11 @@ fn normalize_path_str(p: &str) -> String {
     normalize_path_inner(p, cfg!(target_os = "linux"))
 }
 
+/// normalize_path_str 的 pub(crate) 别名，供 commands 模块复用同一规范化逻辑。
+pub(crate) fn normalize_path_str_pub(p: &str) -> String {
+    normalize_path_str(p)
+}
+
 /// 平台感知规范化核心（注入 case_sensitive，便于单元测试在任意宿主验证两支）：
 /// - case_sensitive=true（Linux）：保留大小写身份
 /// - case_sensitive=false（Windows/macOS）：lower 后合并等价身份
