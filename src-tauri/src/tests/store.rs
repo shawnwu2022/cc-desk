@@ -6,7 +6,7 @@ use crate::store::{
     normalize_path_inner, parse_agents_list_output, parse_mcp_server_entry, parse_skill_description,
     parse_timestamp, resolve_marketplace_plugin_path, search_session_messages_in_dirs,
     set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,
-    canonicalize_state, read_projects_state_locked, update_projects_state_at,
+    canonicalize_state, read_projects_state_locked,
     with_projects_state_locked, write_json_atomic, normalize_path_str_pub, AgentInfo, AppConfig,
     Project, ProjectsState,
 };
@@ -1080,7 +1080,7 @@ fn AppConfig_TerminalTheme_DefaultNone_001() {
     assert_eq!(config.terminal_theme, None);
 }
 
-// ==================== get_projects_state_at / update_projects_state_at ====================
+// ==================== get_projects_state_at ====================
 
 // 文件不存在 -> 返回默认空状态（pinned 为空 Vec，archived 为空 Map）
 #[test]
@@ -1103,79 +1103,22 @@ fn GetProjectsState_NoFile_MatchesDefault_001() {
     assert_eq!(state.archived_sessions, default.archived_sessions);
 }
 
-// update 写入后 get 读回一致（pinnedProjects + archivedSessions 双字段）
+// 父目录不存在时 with_locked 自动创建 lock 文件 + 数据文件
 #[test]
-fn UpdateProjectsState_WriteThenReadBack_001() {
+fn WithLocked_CreatesParentDir_001() {
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("projects.json");
-    let updates = json!({
-        "pinnedProjects": ["E:/proj/a", "E:/proj/b"],
-        "archivedSessions": {"E:/proj/a": ["sess-1", "sess-2"]}
-    });
-    update_projects_state_at(&path, updates).unwrap();
-
-    let state = get_projects_state_at(&path).unwrap();
-    assert_eq!(state.pinned_projects, vec!["E:/proj/a", "E:/proj/b"]);
-    let archived = state.archived_sessions.get("E:/proj/a").unwrap();
-    assert_eq!(*archived, vec!["sess-1".to_string(), "sess-2".to_string()]);
-}
-
-// merge：只更新 pinnedProjects，已有的 archivedSessions 不丢失
-#[test]
-fn UpdateProjectsState_PartialMergeKeepsArchived_001() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("projects.json");
-    // 先写入两个字段
-    update_projects_state_at(
-        &path,
-        json!({"pinnedProjects": ["a"], "archivedSessions": {"a": ["s1"]}}),
-    )
+    let nested_dir = tmp.path().join("nested").join("deep");
+    let data = nested_dir.join("projects.json");
+    let lock = nested_dir.join("projects.json.lock");
+    with_projects_state_locked(&data, &lock, |s| {
+        s.pinned_projects.push("e:/x".into());
+        Ok::<(), anyhow::Error>(())
+    })
     .unwrap();
-    // 只更新 pinnedProjects
-    update_projects_state_at(&path, json!({"pinnedProjects": ["b", "c"]})).unwrap();
-
-    let state = get_projects_state_at(&path).unwrap();
-    assert_eq!(state.pinned_projects, vec!["b", "c"], "pinned 应被覆盖");
-    assert!(state.archived_sessions.contains_key("a"), "archived 应保留");
-    assert_eq!(
-        state.archived_sessions.get("a").unwrap(),
-        &vec!["s1".to_string()],
-        "archived 内容不变"
-    );
-}
-
-// merge：只更新 archivedSessions，已有的 pinnedProjects 不丢失
-#[test]
-fn UpdateProjectsState_PartialMergeKeepsPinned_001() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("projects.json");
-    update_projects_state_at(
-        &path,
-        json!({"pinnedProjects": ["a", "b"], "archivedSessions": {"a": ["s1"]}}),
-    )
-    .unwrap();
-    update_projects_state_at(&path, json!({"archivedSessions": {"b": ["s2", "s3"]}})).unwrap();
-
-    let state = get_projects_state_at(&path).unwrap();
-    assert_eq!(state.pinned_projects, vec!["a", "b"], "pinned 应保留");
-    // archivedSessions 整体被覆盖为 updates 中的值（merge 顶层替换语义）
-    assert!(!state.archived_sessions.contains_key("a"), "a 被覆盖");
-    assert!(state.archived_sessions.contains_key("b"), "b 为新值");
-    assert_eq!(
-        state.archived_sessions.get("b").unwrap(),
-        &vec!["s2".to_string(), "s3".to_string()]
-    );
-}
-
-// 父目录不存在时 update 自动创建
-#[test]
-fn UpdateProjectsState_CreatesParentDir_001() {
-    let tmp = tempfile::tempdir().unwrap();
-    let nested = tmp.path().join("nested").join("deep").join("projects.json");
-    update_projects_state_at(&nested, json!({"pinnedProjects": ["x"]})).unwrap();
-    assert!(nested.exists(), "文件应被创建");
-    let state = get_projects_state_at(&nested).unwrap();
-    assert_eq!(state.pinned_projects, vec!["x"]);
+    assert!(data.exists(), "数据文件应被创建");
+    assert!(lock.exists(), "lock 文件应被创建");
+    let state = get_projects_state_at(&data).unwrap();
+    assert_eq!(state.pinned_projects, vec!["e:/x"]);
 }
 
 // 文件存在但为空对象 {} -> 反序列化为默认空状态（serde default 生效）
@@ -1200,32 +1143,23 @@ fn GetProjectsState_MissingField_001() {
     assert!(state.archived_sessions.is_empty(), "缺失字段应默认空");
 }
 
-// update 后文件内容是合法 JSON 且字段名为 camelCase
+// with_locked 写后文件内容是合法 JSON 且字段名为 camelCase
 #[test]
-fn UpdateProjectsState_WritesCamelCase_001() {
+fn WithLocked_WritesCamelCase_001() {
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("projects.json");
-    update_projects_state_at(&path, json!({"pinnedProjects": ["a"]})).unwrap();
-    let content = std::fs::read_to_string(&path).unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    with_projects_state_locked(&data, &lock, |s| {
+        s.pinned_projects.push("a".into());
+        Ok::<(), anyhow::Error>(())
+    })
+    .unwrap();
+    let content = std::fs::read_to_string(&data).unwrap();
     assert!(content.contains("\"pinnedProjects\""), "应使用 camelCase 字段名");
     assert!(!content.contains("pinned_projects"), "不应出现 snake_case");
     // 内容整体可被解析回 ProjectsState
     let reparsed: ProjectsState = serde_json::from_str(&content).unwrap();
     assert_eq!(reparsed.pinned_projects, vec!["a"]);
-}
-
-// 首次 update（无现存文件）-> 读默认空再 merge，结果只含 updates 字段
-#[test]
-fn UpdateProjectsState_FirstWrite_001() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("projects.json");
-    update_projects_state_at(&path, json!({"archivedSessions": {"p": ["s1"]}})).unwrap();
-    let state = get_projects_state_at(&path).unwrap();
-    assert!(state.pinned_projects.is_empty(), "未提供 pinned 应为空");
-    assert_eq!(
-        state.archived_sessions.get("p").unwrap(),
-        &vec!["s1".to_string()]
-    );
 }
 
 // ==================== compute_project_startup_state ====================
@@ -1464,47 +1398,75 @@ fn WriteJsonAtomic_ReplacesExisting_001() {
     assert_eq!(back3["displayNames"]["/p-a"], "third");
 }
 
-// ==================== update_projects_state_at 原子写 ====================
+// ==================== with_projects_state_locked 原子写（含故障注入） ====================
 
-// update 用 (path, updates) 签名（path first），displayNames 持久化往返
+// with_locked apply displayNames 后读回一致（持久化往返）
 #[test]
-fn UpdateProjectsState_DisplayNames_Persist_001() {
+fn WithLocked_DisplayNames_Persist_001() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("projects.json");
-    update_projects_state_at(&path, serde_json::json!({"displayNames": {"/p-a": "别名"}})).unwrap();
-    let state: ProjectsState = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let data = dir.path().join("projects.json");
+    let lock = dir.path().join("projects.json.lock");
+    with_projects_state_locked(&data, &lock, |s| {
+        s.display_names.insert("/p-a".into(), "别名".into());
+        Ok::<(), anyhow::Error>(())
+    })
+    .unwrap();
+    let state: ProjectsState =
+        serde_json::from_str(&std::fs::read_to_string(&data).unwrap()).unwrap();
     assert_eq!(state.display_names.get("/p-a"), Some(&"别名".to_string()));
 }
 
-// update 二次写入（目标已存在）仍成功：Windows remove+rename 闭环
+// with_locked 二次 apply（目标已存在）仍成功：Windows remove+rename 闭环
 #[test]
-fn UpdateProjectsState_OverwriteExisting_001() {
+fn WithLocked_OverwriteExisting_001() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("projects.json");
-    update_projects_state_at(&path, serde_json::json!({"displayNames": {"/p-a": "旧"}})).unwrap();
-    update_projects_state_at(&path, serde_json::json!({"displayNames": {"/p-a": "新"}})).unwrap();
-    let state: ProjectsState = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let data = dir.path().join("projects.json");
+    let lock = dir.path().join("projects.json.lock");
+    with_projects_state_locked(&data, &lock, |s| {
+        s.display_names.insert("/p-a".into(), "旧".into());
+        Ok::<(), anyhow::Error>(())
+    })
+    .unwrap();
+    with_projects_state_locked(&data, &lock, |s| {
+        s.display_names.insert("/p-a".into(), "新".into());
+        Ok::<(), anyhow::Error>(())
+    })
+    .unwrap();
+    let state: ProjectsState =
+        serde_json::from_str(&std::fs::read_to_string(&data).unwrap()).unwrap();
     assert_eq!(state.display_names.get("/p-a"), Some(&"新".to_string()));
 }
 
 // 故障注入：预先把 .json.tmp 建成目录 -> write_json_atomic 写 tmp 失败 ->
-// update_projects_state_at 返 Err 且原 projects.json 内容不变（原子性：失败不破坏旧文件）。
+// with_projects_state_locked 返 Err 且原 projects.json 内容不变（原子性：失败不破坏旧文件）。
 // 裸 fs::write(path) 不经 tmp，此场景下会成功覆盖 -> 与 expect Err 冲突，故能区分（非 false green）。
 #[test]
-fn UpdateProjectsState_AtomicWrite_FailPreservesOriginal_001() {
+fn WithLocked_AtomicWrite_FailPreservesOriginal_001() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("projects.json");
+    let data = dir.path().join("projects.json");
+    let lock = dir.path().join("projects.json.lock");
     // 1) 先写入合法旧内容
-    update_projects_state_at(&path, serde_json::json!({"displayNames": {"/p-a": "旧别名"}})).unwrap();
-    let original = std::fs::read_to_string(&path).unwrap();
+    with_projects_state_locked(&data, &lock, |s| {
+        s.display_names.insert("/p-a".into(), "旧别名".into());
+        Ok::<(), anyhow::Error>(())
+    })
+    .unwrap();
+    let original = std::fs::read_to_string(&data).unwrap();
     // 2) 把 tmp 路径占为目录，迫使 write_json_atomic 写 tmp 失败
-    let tmp = path.with_extension("json.tmp");
+    let tmp = data.with_extension("json.tmp");
     std::fs::create_dir(&tmp).unwrap();
-    // 3) 再次写入应失败（fs::write(&tmp) 对目录失败，remove/rename 未到达）
-    let res = update_projects_state_at(&path, serde_json::json!({"displayNames": {"/p-a": "新别名"}}));
+    // 3) 再次 with_locked 应失败（fs::write(&tmp) 对目录失败，remove/rename 未到达）
+    let res = with_projects_state_locked(&data, &lock, |s| {
+        s.display_names.insert("/p-a".into(), "新别名".into());
+        Ok::<(), anyhow::Error>(())
+    });
     assert!(res.is_err(), "tmp 写失败须传播 Err");
     // 4) 原文件未被破坏
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), original, "原子写：失败不破坏原文件");
+    assert_eq!(
+        std::fs::read_to_string(&data).unwrap(),
+        original,
+        "原子写：失败不破坏原文件"
+    );
 }
 
 // ==================== normalize_path_inner（平台感知规范化） ====================

@@ -1172,32 +1172,6 @@ pub(crate) fn get_projects_state_at(path: &Path) -> Result<ProjectsState> {
     Ok(state)
 }
 
-/// 更新 projects 状态（读现有 -> merge -> 写入，模仿 update_app_config）
-pub fn update_projects_state(updates: serde_json::Value) -> Result<()> {
-    let path = get_projects_state_path()?;
-    update_projects_state_at(&path, updates)
-}
-
-/// 更新指定路径的 projects 状态（注入路径，便于单元测试）
-pub(crate) fn update_projects_state_at(path: &Path, updates: serde_json::Value) -> Result<()> {
-    let config_dir = path
-        .parent()
-        .context("Could not get parent directory of projects state path")?;
-    if !config_dir.exists() {
-        fs::create_dir_all(config_dir)?;
-    }
-
-    let existing = get_projects_state_at(path)?;
-    let existing_json = serde_json::to_value(existing)?;
-
-    let merged = merge_json_values(existing_json, updates);
-
-    // 原子写：tmp + rename，防写入中途崩溃/断电截断文件 -> 启动门禁误判
-    write_json_atomic(path, &merged)?;
-
-    Ok(())
-}
-
 /// 获取默认 Claude 选项
 pub fn get_default_claude_options() -> Result<DefaultClaudeOptions> {
     let config = get_app_config()?;

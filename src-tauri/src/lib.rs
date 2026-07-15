@@ -156,7 +156,6 @@ pub fn run(initial_dir: Option<String>) {
             commands::get_app_config,
             commands::update_app_config,
             commands::get_projects_state,
-            commands::update_projects_state,
             commands::pin_project,
             commands::unpin_project,
             commands::archive_session,
