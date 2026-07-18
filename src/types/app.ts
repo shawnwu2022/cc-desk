@@ -13,6 +13,7 @@ export interface HomeData {
   projects: import('./project').Project[]
   recentSessions: import('./session').SessionInfo[]
   hasMore: boolean
+  startupState: ProjectStartupState
 }
 
 export interface AppConfig {

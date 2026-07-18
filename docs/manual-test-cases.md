@@ -1215,6 +1215,37 @@
 - 重启后「终端渲染后端」仍为 WebGL（`config.webglRenderer = true`）
 
 
+## 多终端并行输出路由
+
+**目标**：验证多终端并行时各 PTY 输出按 ptyId 正确路由到对应 tab（ptyToTab 反查索引，替代遍历 terminalInstances 的 O(n) 线性扫描）
+
+### TerminalRoute_MultiParallel_001 — 多终端并行输出互不串扰
+
+**前置条件**：已开 ≥3 个不同项目的终端会话，各 Claude CLI 就绪
+
+**操作步骤**：
+1. 在终端 A 让 Claude 输出大段内容（如「生成一段长文本」）
+2. 输出进行中切到终端 B，也让其输出
+3. 再切到 C 同样操作
+4. 来回切 A/B/C 观察各 tab 内容
+
+**预期结果**：
+- 每个 tab 只显示自己 PTY 的输出，无串扰/错位/丢字
+- 切回某 tab 即时显示其最新内容
+
+### TerminalRoute_PtyExitOthersUnaffected_002 — 某终端退出后其余输出仍正确路由
+
+**前置条件**：≥3 个并行终端均在输出
+
+**操作步骤**：
+1. 在终端 B 让 Claude 结束会话（PTY 退出）
+2. 终端 B 状态变 stopped
+3. 终端 A、C 继续输出
+
+**预期结果**：
+- A、C 输出仍正确路由到各自 tab，不受 B 退出影响
+- B 的 ptyId 反查条目随退出清理（B tab 保留但不再收输出）
+
 ## 终端输入（IME）
 
 ### TerminalInput_ImeShiftToggle_001 — 搜狗 Shift 切换中英文时已输入拼音进入输入框

@@ -362,19 +362,31 @@ pub struct HomeData {
     pub projects: Vec<Project>,
     pub recent_sessions: Vec<SessionInfo>,
     pub has_more: bool,
+    /// 启动摘要（基于全量 projects 计算，含分页外项目）：合并自原 get_project_startup_state，
+    /// 消除启动时 get_projects(None,None) 的重复全扫。
+    pub startup_state: ProjectStartupState,
 }
 
 /// 一次遍历获取首页所需全部数据，避免重复 IO
-pub fn get_home_data(project_limit: usize, session_limit: usize) -> Result<HomeData> {
+pub fn get_home_data(
+    project_limit: usize,
+    session_limit: usize,
+    last_opened: &str,
+    hidden: &[String],
+) -> Result<HomeData> {
     let claude_dir = get_claude_dir()?;
     let projects_dir = claude_dir.join("projects");
 
     if !projects_dir.exists() {
-        return Ok(HomeData {
-            projects: Vec::new(),
-            recent_sessions: Vec::new(),
-            has_more: false,
-        });
+        // 空目录：仍经 assemble 算 startup_state（无项目 -> has_any=false）
+        return Ok(assemble_home_data(
+            Vec::new(),
+            Vec::new(),
+            last_opened,
+            hidden,
+            project_limit,
+            session_limit,
+        ));
     }
 
     let mut projects = Vec::new();
@@ -418,24 +430,46 @@ pub fn get_home_data(project_limit: usize, session_limit: usize) -> Result<HomeD
         }
     }
 
-    // 按最后修改时间排序
+    // 排序 + 分页 + startup_state 统一在 assemble_home_data（纯函数，已测）
+    Ok(assemble_home_data(
+        projects,
+        all_sessions,
+        last_opened,
+        hidden,
+        project_limit,
+        session_limit,
+    ))
+}
+
+/// 组装首页数据（纯函数）：排序 + 分页 + 计算 startup_state（基于全量 projects）。
+/// 不读文件系统，便于单元测试。get_home_data 扫描后调用。
+/// startup_state 用全量 projects（含分页外），与原 get_project_startup_state 语义一致。
+pub(crate) fn assemble_home_data(
+    mut projects: Vec<Project>,
+    mut all_sessions: Vec<SessionInfo>,
+    last_opened: &str,
+    hidden: &[String],
+    project_limit: usize,
+    session_limit: usize,
+) -> HomeData {
+    // 按最后修改时间降序
     projects.sort_by(|a, b| {
         b.last_duration
             .unwrap_or(0)
             .cmp(&a.last_duration.unwrap_or(0))
     });
-
+    // startup_state 基于全量 projects（含分页外），与原 get_project_startup_state 语义一致
+    let startup_state = compute_project_startup_state(&projects, last_opened, hidden);
     let has_more = projects.len() > project_limit;
     let paginated_projects: Vec<Project> = projects.into_iter().take(project_limit).collect();
-
     all_sessions.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
     all_sessions.truncate(session_limit);
-
-    Ok(HomeData {
+    HomeData {
         projects: paginated_projects,
         recent_sessions: all_sessions,
         has_more,
-    })
+        startup_state,
+    }
 }
 
 /// 获取项目列表（支持分页）
@@ -599,16 +633,6 @@ pub(crate) fn compute_project_startup_state(
         has_visible_project: has_visible,
         last_opened_project_info,
     }
-}
-
-/// 启动摘要 command 入口：复用 get_projects 提真实 cwd，再 compute。
-/// 复用 get_projects（已从 JSONL 提真实 cwd 并跳过路径不存在的项目），不分页拿全量。
-pub fn get_project_startup_state(
-    last_opened: String,
-    hidden: Vec<String>,
-) -> Result<ProjectStartupState> {
-    let projects = get_projects(None, None)?;
-    Ok(compute_project_startup_state(&projects, &last_opened, &hidden))
 }
 
 /// 从 JSONL 提取会话名称

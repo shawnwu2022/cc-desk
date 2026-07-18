@@ -16,7 +16,7 @@ import { normalizePath } from '@/utils/path'
 import { applyThemeToDom } from '@/utils/theme'
 import i18n from '@/i18n'
 
-import type { ClaudeOptions, DefaultClaudeOptions, CheckResult, Project, SessionInfo } from '@/types'
+import type { ClaudeOptions, DefaultClaudeOptions, CheckResult, Project, ProjectStartupState, SessionInfo } from '@/types'
 
 const PAGE_SIZE = 12
 
@@ -59,6 +59,8 @@ export const useAppStore = defineStore('app', () => {
   const cachedProjects = ref<Project[]>([])
   const cachedRecentSessions = ref<SessionInfo[]>([])
   const cacheLoaded = ref(false)
+  // 启动摘要（合并自 get_home_data，供 initStartup 决策；不再单独调 get_project_startup_state）
+  const startupState = ref<ProjectStartupState | null>(null)
   const openedProjectPaths = ref<Set<string>>(new Set())
   const projectsPage = ref(0)
   const hasMoreProjects = ref(true)
@@ -158,14 +160,16 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  async function loadCache() {
-    if (cacheLoaded.value) return
+  async function loadCache(force = false) {
+    if (cacheLoaded.value && !force) return
     try {
-      const data = await getHomeData(PAGE_SIZE, 20)
+      // 传 lastOpened/hidden：后端一次扫描同时返回首页数据 + 启动摘要（合并原 get_project_startup_state）
+      const data = await getHomeData(PAGE_SIZE, 20, lastOpenedProject.value, [...hiddenProjects.value])
       cachedProjects.value = data.projects
       cachedRecentSessions.value = data.recentSessions
       projectsPage.value = 1
       hasMoreProjects.value = data.hasMore
+      startupState.value = data.startupState
       cacheLoaded.value = true
     } catch (err) {
       console.error('Failed to load cache:', err)
@@ -480,6 +484,7 @@ export const useAppStore = defineStore('app', () => {
     cachedProjects,
     cachedRecentSessions,
     cacheLoaded,
+    startupState,
     openedProjectPaths,
     hasMoreProjects,
     isLoadingProjects,

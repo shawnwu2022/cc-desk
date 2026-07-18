@@ -8,7 +8,7 @@ use crate::store::{
     set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,
     acquire_lock, canonicalize_state, read_projects_state_locked,
     with_projects_state_locked, write_json_atomic, replace_file_atomic, normalize_path_str_pub, AgentInfo, AppConfig,
-    Project, ProjectsState,
+    Project, ProjectsState, assemble_home_data, HomeData, SessionInfo,
 };
 
 use std::collections::HashMap;
@@ -1290,6 +1290,113 @@ fn ComputeStartup_NormalizePath_001() {
     // hidden 用正斜杠小写仍隐藏
     let state2 = compute_project_startup_state(&projects, "", &["e:/source/foo".to_string()]);
     assert!(!state2.has_visible_project);
+}
+
+// ==================== assemble_home_data ====================
+
+fn sample_project(path: &str, last_duration: Option<u64>) -> Project {
+    let name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path)
+        .to_string();
+    Project {
+        path: path.into(),
+        name,
+        last_session_id: None,
+        last_cost: None,
+        last_duration,
+    }
+}
+
+fn sample_session(id: &str, project: &str, last_active_at: u64) -> SessionInfo {
+    SessionInfo {
+        session_id: id.into(),
+        name: id.into(),
+        project_path: project.into(),
+        last_active_at,
+    }
+}
+
+// startup_state 基于全量 projects + lastOpened 正确填充
+#[test]
+fn AssembleHome_StartupStateFromProjects_001() {
+    let projects = vec![sample_project("/p-a", Some(100))];
+    let home = assemble_home_data(projects, vec![], "/p-a", &[], 12, 20);
+    let info = home
+        .startup_state
+        .last_opened_project_info
+        .expect("info 应存在");
+    assert!(info.exists);
+    assert!(home.startup_state.has_any_project);
+    assert!(home.startup_state.has_visible_project);
+}
+
+// 分页：projects 超 limit -> has_more + 截断；sessions 截断到 session_limit
+#[test]
+fn AssembleHome_Pagination_001() {
+    let projects = vec![
+        sample_project("/p-a", Some(30)),
+        sample_project("/p-b", Some(20)),
+        sample_project("/p-c", Some(10)),
+    ];
+    let sessions = vec![
+        sample_session("s1", "/p-a", 5),
+        sample_session("s2", "/p-a", 4),
+        sample_session("s3", "/p-a", 3),
+    ];
+    let home = assemble_home_data(projects, sessions, "", &[], 2, 2);
+    assert!(home.has_more);
+    assert_eq!(home.projects.len(), 2);
+    assert_eq!(home.recent_sessions.len(), 2);
+    assert_eq!(home.projects[0].path, "/p-a");
+    assert_eq!(home.projects[1].path, "/p-b");
+}
+
+// 核心：startup_state 用全量 projects（含分页外），非分页结果
+#[test]
+fn AssembleHome_StartupUsesFullSetBeyondPagination_001() {
+    let projects = vec![
+        sample_project("/p-a", Some(100)),   // 分页内（limit=1）
+        sample_project("/p-deep", Some(50)),  // 分页外
+    ];
+    let home = assemble_home_data(projects, vec![], "/p-deep", &[], 1, 20);
+    assert_eq!(home.projects.len(), 1);
+    assert_eq!(home.projects[0].path, "/p-a");
+    let info = home
+        .startup_state
+        .last_opened_project_info
+        .expect("info 应存在");
+    assert!(
+        info.exists,
+        "startup_state 应基于全量 projects，含分页外项目"
+    );
+}
+
+// projects 按 last_duration 降序
+#[test]
+fn AssembleHome_SortByLastModifiedDesc_001() {
+    let projects = vec![
+        sample_project("/old", Some(10)),
+        sample_project("/new", Some(100)),
+        sample_project("/mid", Some(50)),
+    ];
+    let home = assemble_home_data(projects, vec![], "", &[], 12, 20);
+    assert_eq!(home.projects[0].path, "/new");
+    assert_eq!(home.projects[1].path, "/mid");
+    assert_eq!(home.projects[2].path, "/old");
+}
+
+// hidden 影响可见性（startup_state 用全量 + hidden 判定）
+#[test]
+fn AssembleHome_HiddenAffectsVisibility_001() {
+    let projects = vec![
+        sample_project("/p-a", Some(100)),
+        sample_project("/p-b", Some(50)),
+    ];
+    let home = assemble_home_data(projects, vec![], "", &["/p-a".to_string()], 12, 20);
+    assert!(home.startup_state.has_any_project);
+    assert!(home.startup_state.has_visible_project); // /p-b 仍可见
 }
 
 // ==================== ProjectsState displayNames ====================

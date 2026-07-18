@@ -377,6 +377,37 @@ describe('app store - 启动状态源 + setCwd 拆分 + setHidden opLock', () =>
     await expect(store.loadCache()).rejects.toThrow('home read failed')
   })
 
+  // 性能 #2 P1 #3：loadCache(force=true) 即使 cacheLoaded 也重新加载（刷新 startupState）。
+  // 场景：启动重试时 lastOpened/hidden 可能变，若 cacheLoaded 跳过会让 startupState 用旧快照。
+  it('LoadCache_ForceRefreshesDespiteCacheLoaded_001', async () => {
+    let callCount = 0
+    let lastOpenedSeen: string | null = null
+    mockIPC((cmd, args) => {
+      if (cmd === 'get_home_data') {
+        callCount++
+        lastOpenedSeen = (args as { lastOpened: string }).lastOpened
+        return {
+          projects: [], recentSessions: [], hasMore: false,
+          startupState: { hasAnyProject: false, hasVisibleProject: false, lastOpenedProjectInfo: null },
+        }
+      }
+      return null
+    })
+    const store = useAppStore()
+    store.lastOpenedProject = '/a'
+    await store.loadCache(true) // force：cacheLoaded=false -> 加载
+    expect(callCount).toBe(1)
+    expect(lastOpenedSeen).toBe('/a')
+    expect(store.cacheLoaded).toBe(true)
+    store.lastOpenedProject = '/b'
+    await store.loadCache(true) // force：cacheLoaded=true 仍刷新
+    expect(callCount).toBe(2)
+    expect(lastOpenedSeen).toBe('/b') // 用新 lastOpened，非旧快照
+    store.lastOpenedProject = '/c'
+    await store.loadCache() // 非 force：cacheLoaded=true -> 跳过
+    expect(callCount).toBe(2) // 未增加
+  })
+
   // v6 codex batch1 #3：setCurrentProject(persist:true) lastOpenedOpLock 串行化--
   // 快速 A->B 切换（A 的 saveLastProject 故意慢于 B）最终磁盘写入顺序仍为 A 后 B，
   // 终态 cwd=B、lastOpened 持久化调用顺序 [A, B]（opLock 保证 A 写完才写 B，不会乱序覆盖）。

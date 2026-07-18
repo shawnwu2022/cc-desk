@@ -126,8 +126,7 @@ import {
   downloadAndInstallClaude,
   downloadAndInstallGit,
   onInstallProgress,
-  onOpenDirectory,
-  getProjectStartupState
+  onOpenDirectory
 } from '@/api/tauri'
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import { decideStartupView } from '@/composables/useStartupDecision'
@@ -453,23 +452,25 @@ function initAfterChecks() {
 }
 
 /**
- * 启动协调（v5-T7 §4.2）：Promise.allSettled(loadAppConfig, loadCache, loadProjectsState)
- * -> 门禁（任一失败 -> 错误+重试）-> get_project_startup_state 门禁 -> decideStartupView 决策。
+ * 启动协调（v5-T7 §4.2，性能 #2 合并双扫）：
+ * loadAppConfig 先（拿 lastOpened/hidden，供 loadCache 合并扫描）-> loadCache（合并 getHomeData+startup_state，一次扫描）‖ loadProjectsState
+ * -> 门禁（任一失败 -> 错误+重试）-> 用缓存 startupState 决策。
  *
  * 收尾 T3/T4 unhandled：loadAppConfig/loadCache（T3 改抛错）/ loadProjectsState（T4 rethrow）
  * 原本在 initAfterChecks 里 fire-and-forget 调用会产生 unhandled rejection；现统一收进
  * Promise.allSettled，reject 由 results 显式消费，不再悬空。
  *
- * P2.8 已知简化：loadCache（getHomeData）与 get_project_startup_state 各扫一次
- * ~/.claude/projects/；可接受（启动一次），后续可合并为一次扫描返回 HomeData+摘要。
+ * 性能 #2：原 loadCache（getHomeData）与 get_project_startup_state 各扫一次 ~/.claude/projects/；
+ * 现合并为 get_home_data 一次扫描返回 HomeData+startup_state（store::assemble_home_data）。
  */
 async function initStartup() {
   startupError.value = null
   try {
-    // 1. 并行加载（加载器抛错不吞：Promise.allSettled 收纳，下方统一判定）
+    // 1. loadAppConfig 先（拿 lastOpened/hidden，供 loadCache 合并扫描；只读 config.json，轻）
+    await appStore.loadAppConfig()
+    // 2. 并行加载（loadCache 合并首页数据+启动摘要，一次扫描；loadProjectsState 独立）
     const results = await Promise.allSettled([
-      appStore.loadAppConfig(),
-      appStore.loadCache(),
+      appStore.loadCache(true),
       sessionStore.loadProjectsState(),
     ])
     const failed = results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined
@@ -477,19 +478,17 @@ async function initStartup() {
       startupError.value = String(failed.reason)
       return
     }
-    // 2. 启动摘要门禁
-    let state
-    try {
-      state = await getProjectStartupState(appStore.lastOpenedProject, [...appStore.hiddenProjects])
-    } catch (e) {
-      startupError.value = String(e)
+    // 3. 启动摘要（来自 loadCache 合并的数据，无需再扫）
+    const state = appStore.startupState
+    if (!state) {
+      startupError.value = 'startup state unavailable'
       return
     }
-    // 3. lastOpenedProjectInfo 注入缓存（确保树里可高亮，含分页 12 外）
+    // 4. lastOpenedProjectInfo 注入缓存（确保树里可高亮，含分页 12 外）
     if (state.lastOpenedProjectInfo) {
       appStore.ensureProjectInList(state.lastOpenedProjectInfo.path)
     }
-    // 4. 决策
+    // 5. 决策
     const decision = decideStartupView(state, appStore.lastOpenedProject, appStore.isHidden)
     currentView.value = decision.view
     if (decision.openSessionsPanel) {

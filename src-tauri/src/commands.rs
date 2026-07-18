@@ -115,15 +115,19 @@ pub async fn run_checks() -> Result<Vec<CheckResult>, String> {
     Ok(crate::rerun_checks())
 }
 
-/// 一次获取首页数据（项目列表 + 近期会话），避免重复 IO
+/// 一次获取首页数据（项目列表 + 近期会话 + 启动摘要），合并原 get_project_startup_state，
+/// 避免启动时重复全扫 ~/.claude/projects/。
 #[tauri::command]
 pub async fn get_home_data(
     project_limit: Option<usize>,
     session_limit: Option<usize>,
+    last_opened: String,
+    hidden: Vec<String>,
 ) -> Result<HomeData, String> {
     let project_limit = project_limit.unwrap_or(12);
     let session_limit = session_limit.unwrap_or(20);
-    crate::store::get_home_data(project_limit, session_limit).map_err(|e| e.to_string())
+    crate::store::get_home_data(project_limit, session_limit, &last_opened, &hidden)
+        .map_err(|e| e.to_string())
 }
 
 /// 获取项目列表（支持分页）
@@ -139,15 +143,6 @@ pub async fn get_projects(
 #[tauri::command]
 pub async fn get_project_info(path: String) -> Result<Option<Project>, String> {
     crate::store::get_project_info(&path).map_err(|e| e.to_string())
-}
-
-/// 启动摘要：项目存在性 + 可见性 + lastOpened 信息（供 App.vue 启动决策）
-#[tauri::command]
-pub async fn get_project_startup_state(
-    last_opened: String,
-    hidden: Vec<String>,
-) -> Result<crate::store::ProjectStartupState, String> {
-    crate::store::get_project_startup_state(last_opened, hidden).map_err(|e| e.to_string())
 }
 
 /// 获取会话列表

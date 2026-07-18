@@ -130,20 +130,19 @@ export const getCheckResults = (): Promise<CheckResult[]> =>
 export const runChecks = (): Promise<CheckResult[]> =>
   invoke<CheckResult[]>('run_checks');
 
-export const getHomeData = (projectLimit?: number, sessionLimit?: number): Promise<HomeData> =>
-  invoke<HomeData>('get_home_data', { projectLimit, sessionLimit });
+export const getHomeData = (
+  projectLimit: number,
+  sessionLimit: number,
+  lastOpened: string,
+  hidden: string[]
+): Promise<HomeData> =>
+  invoke<HomeData>('get_home_data', { projectLimit, sessionLimit, lastOpened, hidden });
 
 export const getProjects = (limit?: number, offset?: number): Promise<Project[]> =>
   invoke<Project[]>('get_projects', { limit, offset });
 
 export const getProjectInfo = (path: string): Promise<Project | null> =>
   invoke<Project | null>('get_project_info', { path });
-
-export const getProjectStartupState = (
-  lastOpened: string,
-  hidden: string[]
-): Promise<ProjectStartupState> =>
-  invoke<ProjectStartupState>('get_project_startup_state', { lastOpened, hidden });
 
 export const getSessions = (projectPath: string, limit?: number, offset?: number): Promise<SessionInfo[]> =>
   invoke<SessionInfo[]>('get_sessions', { projectPath, limit, offset });

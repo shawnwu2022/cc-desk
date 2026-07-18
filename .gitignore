@@ -34,6 +34,9 @@ ossutil64.exe
 *.log
 npm-debug.log*
 
+# 一次性类型检查输出（含本机路径与历史错误，勿提交）
+vue-tsc-output.txt
+
 # Cache
 .cache/
 *.tsbuildinfo

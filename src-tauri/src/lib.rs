@@ -147,7 +147,6 @@ pub fn run(initial_dir: Option<String>) {
             commands::pty_kill_all,
             commands::get_projects,
             commands::get_project_info,
-            commands::get_project_startup_state,
             commands::get_sessions,
             commands::get_session_count,
             commands::get_all_recent_sessions,

@@ -37,6 +37,7 @@ import {
 import { registerTerminalCommand } from '@/composables/useTerminalCommand'
 import { safeDispose } from '@/utils/dispose'
 import { relativizePath } from '@/utils/path'
+import { PtyIndex } from '@/utils/ptyIndex'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -86,6 +87,12 @@ const terminalInstances = reactive(new Map<string, {
 
 // Terminal DOM 元素引用
 const terminalEls = reactive(new Map<string, HTMLElement | null>())
+
+// ptyId → tabId 反查索引：PTY 输出/退出事件按 ptyId O(1) 定位 tab，
+// 替代遍历 terminalInstances 的 O(n) 线性扫描（多并行会话高频输出时随 N 线性放大）。
+// 与 terminalInstances 同生命周期：spawn 成功赋 ptyId 时 link，实例销毁时 unlink。
+// 抽取为 PtyIndex 类（@/utils/ptyIndex）便于单元测试；非 reactive（仅事件路由用，不驱动渲染）。
+const ptyToTab = new PtyIndex()
 
 // 当前显示的 Tab ID
 const currentDisplayTabId = ref<string | null>(null)
@@ -443,35 +450,34 @@ async function setupEventListeners() {
     }
   })
 
-  // PTY 输出 → 写入对应 Tab 的 Terminal
+  // PTY 输出 → 写入对应 Tab 的 Terminal（ptyToTab 反查 O(1)，替代遍历 terminalInstances）
   unlistenPtyOutput = await onPtyOutput(({ id, data }) => {
-    for (const [_tabId, instance] of terminalInstances) {
-      if (instance.ptyId === id) {
-        instance.term.write(data)
-        break
-      }
-    }
+    const tabId = ptyToTab.get(id)
+    if (!tabId) return
+    const instance = terminalInstances.get(tabId)
+    if (instance) instance.term.write(data)
   })
 
-  // PTY 退出 → 更新 Tab 状态（不删除 Tab）
+  // PTY 退出 → 更新 Tab 状态（不删除 Tab）；ptyToTab 反查 tabId
   unlistenPtyExit = await onPtyExit(({ id }) => {
-    for (const [tabId, instance] of terminalInstances) {
-      if (instance.ptyId === id) {
-        // 更新 store（Tab 保留，状态变 stopped）
-        sessionStore.handlePtyExit(id)
+    const tabId = ptyToTab.get(id)
+    if (!tabId) return
+    const instance = terminalInstances.get(tabId)
+    if (!instance) return
 
-        // 清理 hook 状态（防止残留旧数据）
-        hookStore.clearSession(id)
+    // 更新 store（Tab 保留，状态变 stopped）
+    sessionStore.handlePtyExit(id)
 
-        // 销毁 Terminal 实例（释放资源）
-        void disposeTerminal(instance.term, `onPtyExit(tabId=${tabId})`)
-        terminalInstances.delete(tabId)
-        terminalEls.delete(tabId)
-        // 通知 TerminalView settle sessionStart waiter（PTY 退出）
-        emit('ptyExited', tabId, id)
-        break
-      }
-    }
+    // 清理 hook 状态（防止残留旧数据）
+    hookStore.clearSession(id)
+
+    // 销毁 Terminal 实例（释放资源）
+    void disposeTerminal(instance.term, `onPtyExit(tabId=${tabId})`)
+    terminalInstances.delete(tabId)
+    terminalEls.delete(tabId)
+    ptyToTab.unlink(id)
+    // 通知 TerminalView settle sessionStart waiter（PTY 退出）
+    emit('ptyExited', tabId, id)
   })
 }
 
@@ -536,6 +542,7 @@ async function createTerminalForTab(tabId: string, ptyId: string) {
   term.loadAddon(fitAddon)
 
   terminalInstances.set(tabId, { term, fitAddon, ptyId })
+  ptyToTab.link(ptyId, tabId)
 
   const el = await waitForElement(tabId)
   if (el) {
@@ -622,6 +629,7 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
       const instance = terminalInstances.get(tabId)
       if (instance) instance.ptyId = info.id
       sessionStore.setTabPty(tabId, info.id)
+      ptyToTab.link(info.id, tabId)
       emit('ptyStarted', tabId, info.id)
       return { ok: true }
     }
@@ -663,6 +671,7 @@ function discardUnstartedTab(tabId: string) {
 function disposeTabInstance(tabId: string) {
   const instance = terminalInstances.get(tabId)
   if (instance) {
+    if (instance.ptyId) ptyToTab.unlink(instance.ptyId)
     void disposeTerminal(instance.term, `disposeTabInstance(tabId=${tabId})`)
     terminalInstances.delete(tabId)
     terminalEls.delete(tabId)
@@ -688,6 +697,7 @@ async function restartTab(tabId: string) {
     // 清理旧 Terminal 实例（dispose 失败不阻断重启流程，仍需清理 Map 引用）
     const oldInstance = terminalInstances.get(tabId)
     if (oldInstance) {
+      if (oldInstance.ptyId) ptyToTab.unlink(oldInstance.ptyId)
       await disposeTerminal(oldInstance.term, `restartTab(old term, tabId=${tabId})`)
       terminalInstances.delete(tabId)
       terminalEls.delete(tabId)
@@ -729,6 +739,7 @@ async function restartTab(tabId: string) {
       const instance = terminalInstances.get(tabId)
       if (instance) instance.ptyId = info.id
       sessionStore.setTabPty(tabId, info.id)
+      ptyToTab.link(info.id, tabId)
       emit('ptyStarted', tabId, info.id)
     } else {
       terminalInstances.delete(tabId)
@@ -806,6 +817,7 @@ async function cleanup() {
   }
   terminalInstances.clear()
   terminalEls.clear()
+  ptyToTab.clear()
   await sessionStore.cleanupAll()
 }
 
