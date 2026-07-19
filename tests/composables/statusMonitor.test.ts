@@ -1,14 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { ref } from 'vue'
-import { randomUUID } from 'crypto'
-
-// crypto.randomUUID polyfill for jsdom
+// crypto.randomUUID polyfill for jsdom：若环境无 webcrypto.randomUUID（旧 jsdom），
+// 用 Math.random 生成符合 UUID v4 格式的 id（测试用，非密码学安全，不依赖 node crypto 类型）
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
   Object.defineProperty(globalThis, 'crypto', {
     value: {
       ...globalThis.crypto,
-      randomUUID: () => randomUUID(),
+      randomUUID: () =>
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0
+          const v = c === 'x' ? r : (r & 0x3) | 0x8
+          return v.toString(16)
+        }),
     },
     writable: true,
     configurable: true,

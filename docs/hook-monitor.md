@@ -81,7 +81,7 @@ src-tauri/plugin/                       运行时目标 ~/.cc-box/claude-plugin/
 ├── .claude-plugin/                     ├── .claude-plugin/
 │   └── plugin.json                     │   └── plugin.json
 ├── hooks/                              ├── hooks/
-│   └── hooks.json     ← 11 个事件定义   │   └── hooks.json
+│   └── hooks.json     ← 13 个事件定义   │   └── hooks.json
 └── scripts/                            └── scripts/
     └── report-hook.sh                     └── report-hook.sh
 ```
@@ -147,6 +147,8 @@ if (payload.detail.type === 'sessionStart') {
 | `Notification` | — | → waiting_permission / waiting_input |
 | `SubagentStart` | — | → subagent_running |
 | `SubagentStop` | — | → thinking |
+| `PreCompact` | — | → compacting |
+| `PostCompact` | — | → thinking |
 
 ### 状态机
 

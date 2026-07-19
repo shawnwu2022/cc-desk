@@ -1,14 +1,19 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useSessionStore } from '@/stores/session'
-import { randomUUID } from 'crypto'
 
-// crypto.randomUUID polyfill for jsdom
+// crypto.randomUUID polyfill for jsdom：若环境无 webcrypto.randomUUID（旧 jsdom），
+// 用 Math.random 生成符合 UUID v4 格式的 id（测试用，非密码学安全，不依赖 node crypto 类型）
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
   Object.defineProperty(globalThis, 'crypto', {
     value: {
       ...globalThis.crypto,
-      randomUUID: () => randomUUID(),
+      randomUUID: () =>
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0
+          const v = c === 'x' ? r : (r & 0x3) | 0x8
+          return v.toString(16)
+        }),
     },
     writable: true,
     configurable: true,
@@ -255,6 +260,17 @@ describe('session store', () => {
       tab.working = true
       store.handlePtyExit('pty-003')
       expect(tab.working).toBe(false)
+    })
+
+    // codex 对抗审查：PTY 退出清 pending，修「权限→pending→PTY 退出」后 stopped tab 残留永久告警的泄漏
+    it('PtyExit_ClearPending_001', () => {
+      const store = useSessionStore()
+      const tabId = store.createTab('/project')
+      store.setTabPty(tabId, 'pty-pending')
+      const tab = store.tabs.get(tabId)!
+      tab.pending = true
+      store.handlePtyExit('pty-pending')
+      expect(tab.pending).toBe(false)
     })
 
     // v6 codex batch1 #1：handlePtyExit 后 getRunningTabForProject 不再返回该 tab--

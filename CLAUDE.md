@@ -78,14 +78,15 @@ cc-box/
 │   │   ├── agents/             # Agents 面板（AgentsPanel > AgentGroup > AgentItem）
 │   │   ├── mcp/                # MCP 面板（McpPanel > McpGroup > McpItem > McpSubItem）
 │   │   ├── plugins/            # Plugins 面板（PluginsPanel > PluginGroup > PluginItem）
+│   │   ├── attention/          # 焦点队列面板（AttentionPanel：跨项目未确认关注项，错误>等权限>完成）
 │   │   ├── sidebar/            # 侧边栏容器（SidebarPanel > PanelHeader）
 │   │   └── settings/           # 设置（SettingsOverlay > SettingsView + sections/）
 │   │       └── providers/      # **Provider 组件**（ProviderList > ProviderCard、EditPanel、PresetPanel、CommonConfigPanel）
 │   ├── config/
 │   │   └── providerPresets.ts  # **Provider 预设模板**（50+ 厂商）
-│   ├── stores/                 # Pinia：app、session、sidebar、config、hook、providers
+│   ├── stores/                 # Pinia：app、session、sidebar、config、hook、providers、attention
 │   ├── types/                  # TypeScript 类型定义（pty、session、project、config、app、hook、provider）
-│   ├── composables/            # useAppShortcuts、useTerminalCommand、useStatusMonitor、useWindowAttention、useProjectTreeNavigation（resolveSwitchAction 切换语义纯函数）
+│   ├── composables/            # useAppShortcuts、useTerminalCommand、useStatusMonitor、useWindowAttention、useProjectTreeNavigation（resolveSwitchAction 切换语义纯函数）、useAttentionQueue（attentionFromEvent 事件→关注项分类、severityRank/buildAttentionQueue 去重排序纯函数）
 │   ├── utils/                  # platform 工具
 │   └── styles/global.css       # CSS 变量与全局样式
 │
@@ -145,7 +146,7 @@ npm run tauri:build        # 生产构建
 - **Rust 工具链**：使用 MSVC 工具链（`rustup default stable-x86_64-pc-windows-msvc`）
 - **前置依赖**：需安装 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)，勾选「C++ build tools」和「Windows 11 SDK」
   - 安装后确保 `link.exe` 为 MSVC 版本而非 Git coreutils 的 `link`
-  - 若 Git bash 中 `cargo build/test` 提示 `link: extra operand`，在 `.cargo/config.toml` 中显式指定 linker 路径
+  - 若 Git bash 中 `cargo build/test` 提示 `link: extra operand`：仓库的 `.cargo/config.toml` 已移除机器专属 linker（可移植，cargo 默认发现 MSVC）；本机需 linker workaround 时先 `git update-index --skip-worktree src-tauri/.cargo/config.toml`，再在本地 config.toml 加 `[target.x86_64-pc-windows-msvc] linker = "<本机 MSVC link.exe 绝对路径>"`（不进仓库）
 - **代理设置**：
   - 推送到 GitHub 需要代理：
     ```bash
@@ -257,3 +258,4 @@ npm run release -- --oss-only v0.5.1
 - **什么要测**：纯函数、数据转换、解析逻辑、状态管理、边界条件和错误路径
 - **什么不测**：getter/setter、类型定义、简单 props 传递、第三方库能力
 - **树形项目会话管理测试**：`tests/stores/sessionTree.test.ts`（分组/排序/过滤/展开/多项目历史选择器 getHistoryFor）+ `tests/composables/projectTreeNavigation.test.ts`（resolveSwitchAction 切换语义 noop/activate/resume/new，D/E 纯函数参数直传无竞态）
+- **焦点队列测试**：`tests/composables/attentionQueue.test.ts`（attentionFromEvent 事件→关注项分类，含 codex 反驳 SessionStart 不报完成/PostToolUseFailure 不算 error；severityRank/buildAttentionQueue 去重排序）+ `tests/stores/attention.test.ts`（store ingestEvent upsert、ackPty/clearPty、queue getter）+ `tests/stores/session.test.ts` PtyExit_ClearPending（codex pending 泄漏回归）

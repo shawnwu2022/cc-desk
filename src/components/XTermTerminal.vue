@@ -23,6 +23,7 @@ import '@xterm/xterm/css/xterm.css'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useHookStore } from '@/stores/hook'
+import { useAttentionStore } from '@/stores/attention'
 import { isMac } from '@/utils/platform'
 import { getTerminalTheme } from '@/config/terminalThemes'
 import {
@@ -690,6 +691,9 @@ async function restartTab(tabId: string) {
   try {
     // 如果有旧 PTY 在运行，先 kill
     if (tab.ptyId) {
+      // 重启退役旧 PTY：clearPty 清焦点队列关注项 + 标 tombstone，
+      // 防 pty-exit 晚于 ptyToTab unlink 导致退出处理 return（不走 handlePtyExit）漏清（codex P2）
+      useAttentionStore().clearPty(tab.ptyId)
       try { await ptyKill(tab.ptyId) } catch {}
       hookStore.clearSession(tab.ptyId)
     }

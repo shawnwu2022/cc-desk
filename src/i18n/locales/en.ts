@@ -258,6 +258,7 @@ export default {
 
   // IconBar
   titleSessions: 'Sessions',
+  titleAttention: 'Attention',
   titleSkills: 'Skills',
   titleAgents: 'Agents',
   titleMcp: 'MCP Servers',
@@ -267,6 +268,11 @@ export default {
 
   // Sessions panel
   sessions: 'Sessions',
+  attention: 'Attention',
+  attentionEmpty: 'Nothing needs attention',
+  attentionKind_error: 'Error',
+  attentionKind_permission: 'Permission',
+  attentionKind_completed: 'Done',
   searchSessions: 'Search sessions...',
   searchResults: 'Search Results',
   clearSearch: 'Clear search',
@@ -415,9 +421,7 @@ export default {
   autoInstall: 'Auto Install',
   installing: 'Installing...',
   installWaiting: 'Waiting to install...',
-  installComplete: 'Installation complete',
   installVerifyFailed: 'Post-install verification failed',
-  installFailed: 'Installation failed: {error}',
 
   // Select directory dialog
   selectProjectDirectory: 'Select Project Directory',

@@ -13,6 +13,17 @@
         <span v-if="showPendingBadge" class="icon-badge pending-badge"></span>
       </button>
 
+      <!-- Attention（跨项目焦点队列） -->
+      <button
+        class="icon-btn"
+        :class="{ active: activePanel === 'attention' }"
+        @click="$emit('toggle', 'attention')"
+        :title="t('titleAttention')"
+      >
+        <img src="@/assets/icons/attention.svg" alt="Attention" />
+        <span v-if="attentionBadge" class="icon-badge attention-badge"></span>
+      </button>
+
       <!-- Skills -->
       <button
         class="icon-btn"
@@ -87,6 +98,7 @@ import type { SidebarPanelType } from '@/stores/sidebar'
 import { useSidebarStore } from '@/stores/sidebar'
 import { useSessionStore } from '@/stores/session'
 import { useAppStore } from '@/stores/app'
+import { useAttentionStore } from '@/stores/attention'
 import { ctrl } from '@/utils/platform'
 
 const { t } = useI18n()
@@ -104,6 +116,7 @@ defineEmits<{
 const sidebarStore = useSidebarStore()
 const sessionStore = useSessionStore()
 const appStore = useAppStore()
+const attentionStore = useAttentionStore()
 
 const showPendingBadge = computed(() => {
   if (sidebarStore.activePanel === 'sessions' && sidebarStore.panelVisible) return false
@@ -114,6 +127,12 @@ const showPendingBadge = computed(() => {
     if (tab.pending) return true
   }
   return false
+})
+
+// 跨项目焦点角标：有未确认关注项就亮（attention 面板可见时不亮——用户在看）
+const attentionBadge = computed(() => {
+  if (sidebarStore.activePanel === 'attention' && sidebarStore.panelVisible) return false
+  return attentionStore.queue.length > 0
 })
 
 function handleSettingsClick() {
@@ -221,6 +240,10 @@ function handleSettingsClick() {
 
 .pending-badge {
   background: var(--accent-gold);
+}
+
+.attention-badge {
+  background: var(--status-error);
 }
 
 @keyframes pulse {

@@ -258,6 +258,7 @@ export default {
 
   // IconBar
   titleSessions: '会话',
+  titleAttention: '关注',
   titleSkills: 'Skills',
   titleAgents: 'Agents',
   titleMcp: 'MCP Servers',
@@ -267,6 +268,11 @@ export default {
 
   // Sessions panel
   sessions: '会话',
+  attention: '关注',
+  attentionEmpty: '暂无待关注',
+  attentionKind_error: '出错',
+  attentionKind_permission: '等权限',
+  attentionKind_completed: '完成',
   searchSessions: '搜索会话...',
   searchResults: '搜索结果',
   clearSearch: '清除搜索',
@@ -415,9 +421,7 @@ export default {
   autoInstall: '自动安装',
   installing: '安装中...',
   installWaiting: '等待安装...',
-  installComplete: '安装完成',
   installVerifyFailed: '安装后验证失败',
-  installFailed: '安装失败：{error}',
 
   // Select directory dialog
   selectProjectDirectory: '选择项目目录',

@@ -15,6 +15,7 @@ import { normalizePath, sameProjectPath } from '@/utils/path'
 import { validateDisplayName, projectBasename, matchProjectQuery } from '@/utils/displayName'
 import type { SessionSearchResult } from '@/types'
 import type { ProjectsState } from '@/types/app'
+import { useAttentionStore } from './attention'
 
 // ==================== Tab-Centric 数据模型 ====================
 
@@ -258,10 +259,13 @@ export const useSessionStore = defineStore('session', () => {
         tab.ptyId = null
         tab.status = 'stopped'
         tab.working = false
+        tab.pending = false // 修 pending 泄漏：权限→pending→PTY 退出 后 stopped tab 不再残留永久告警（codex 对抗审查）
         tab.lastActiveAt = Date.now()
         break
       }
     }
+    // PTY 退出 = 会话彻底结束，清理其焦点队列关注项
+    useAttentionStore().clearPty(ptyId)
   }
 
   /**
@@ -290,6 +294,7 @@ export const useSessionStore = defineStore('session', () => {
 
     // 异步 kill PTY（不阻塞 UI）
     if (ptyId) {
+      useAttentionStore().clearPty(ptyId)
       ptyKill(ptyId).catch(() => {})
     }
 
@@ -318,6 +323,7 @@ export const useSessionStore = defineStore('session', () => {
     }
 
     for (const ptyId of ptyIds) {
+      useAttentionStore().clearPty(ptyId)
       ptyKill(ptyId).catch(() => {})
     }
 
@@ -348,6 +354,7 @@ export const useSessionStore = defineStore('session', () => {
     }
 
     for (const ptyId of ptyIds) {
+      useAttentionStore().clearPty(ptyId)
       ptyKill(ptyId).catch(() => {})
     }
 

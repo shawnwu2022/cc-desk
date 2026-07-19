@@ -109,12 +109,12 @@ import { useAppStore } from '@/stores/app'
 import { applyThemeToDom } from '@/utils/theme'
 import { sameProjectPath } from '@/utils/path'
 import { useHookStore } from '@/stores/hook'
+import { useAttentionStore } from '@/stores/attention'
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore } from '@/stores/sidebar'
 import { useUpdateStore } from '@/stores/update'
 import { useI18n } from 'vue-i18n'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { open } from '@tauri-apps/plugin-shell'
 import {
   selectDirectory,
   onMenuSettings,
@@ -374,10 +374,6 @@ function handleToggleHome() {
   }
 }
 
-function openUrl(url: string) {
-  open(url)
-}
-
 async function retryChecks() {
   await appStore.runChecks(true)
   if (!appStore.checkFailed) {
@@ -393,6 +389,7 @@ function initAfterChecks() {
   applyThemeToDom(appStore.theme)
 
   useHookStore().init()
+  useAttentionStore().init()
 
   shortcutUnlisteners.push(...setupShortcutListeners())
 
