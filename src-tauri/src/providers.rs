@@ -448,7 +448,7 @@ pub fn import_from_cc_switch() -> Result<ImportResult> {
         }
     }
 
-    // 如果识别到 cc-switch 的当前 Provider，且 CC-Box 尚无激活的，设置之
+    // 如果识别到 cc-switch 的当前 Provider，且 CC Desk 尚无激活的，设置之
     if config.active_provider_id.is_none() {
         if let Some(ref id) = current_provider_id {
             config.active_provider_id = Some(id.clone());

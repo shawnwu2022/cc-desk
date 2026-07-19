@@ -1,6 +1,6 @@
-# CC-Box 开发路线图
+# CC Desk 开发路线图
 
-本文档记录 CC-Box 的开发进度和下一步规划。
+本文档记录 CC Desk 的开发进度和下一步规划。
 
 ---
 
@@ -35,7 +35,7 @@
 
 ### 目标定位
 
-将 CC-Box 设定为 **"开箱即用的 Claude 软件"**：
+将 CC Desk 设定为 **"开箱即用的 Claude 软件"**：
 
 - 从"只读展示"升级到"可编辑管理"
 - 提供常用预设库，降低配置门槛
@@ -325,7 +325,7 @@
 
 ## 与 cc-switch 的差异化定位
 
-| 功能 | cc-switch | CC-Box |
+| 功能 | cc-switch | CC Desk |
 |------|-----------|--------|
 | 跨应用同步 | 支持 Claude/Codex/Gemini/OpenCode 等 | 仅聚焦 Claude Code |
 | 配置存储 | 独立的 `~/.cc-switch/` SQLite 数据层 | 直接操作 Claude 原生配置文件 |
@@ -334,7 +334,7 @@
 | 设计理念 | 多工具统一管理面板 | CLI 优先，GUI 增强 |
 
 **核心差异**：
-- CC-Box 保持对 Claude 原生配置文件的直接操作，用户可随时回归纯 CLI
+- CC Desk 保持对 Claude 原生配置文件的直接操作，用户可随时回归纯 CLI
 - 不引入独立数据层，保持轻量透明
 - 聚焦 Claude Code，而非多工具管理
 

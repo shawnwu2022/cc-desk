@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" alt="CC-Box" width="80" height="80">
+  <img src="src-tauri/icons/128x128.png" alt="CC Desk" width="80" height="80">
 </p>
 
-<h1 align="center">CC-Box</h1>
+<h1 align="center">CC Desk</h1>
 
 <p align="center">
   <strong>A desktop app for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> — multi-project, multi-session management</strong><br>
@@ -22,11 +22,11 @@ English | [简体中文](README_CN.md)
 
 ---
 
-## Why CC-Box?
+## Why CC Desk?
 
 Claude Code's CLI is excellent for single-session work. But when you're managing **multiple projects** and need to **view, enter, and switch between sessions quickly** — the terminal alone becomes cumbersome.
 
-CC-Box is essentially a **desktop application for Claude Code**. It wraps the CLI with a native terminal experience and adds the things the CLI can't do well: multi-project management, session overview, and quick switching.
+CC Desk is essentially a **desktop application for Claude Code**. It wraps the CLI with a native terminal experience and adds the things the CLI can't do well: multi-project management, session overview, and quick switching.
 
 **Think of it as a desktop app purpose-built for Claude Code power users.**
 
@@ -55,6 +55,10 @@ Open as many Claude Code sessions as you need — each runs independently in its
 
 Set per-project startup options like `--resume`, `--model`, or custom flags. Launch sessions with your preferred configuration without typing the same arguments every time.
 
+### Provider Management
+
+Manage Provider presets directly or import existing entries from cc-switch. Activating a Provider is an explicit action that merges the selected env/model fields into `~/.claude/settings.json`; unrelated Claude settings are preserved.
+
 ### Sidebar Panels
 
 A side drawer with contextual panels — no overlay, no focus stealing:
@@ -81,15 +85,13 @@ The app runs the real Claude CLI binary through a pseudo-terminal. Everything wo
 
 ### 1. Download & Install
 
-Head to the [**Releases**](https://github.com/orczh-hj/cc-box/releases) page and grab the installer for your platform:
+Head to the [**Releases**](https://github.com/shawnwu2022/cc-desk/releases) page and grab the installer for your platform:
 
 | Platform | File |
 |----------|------|
-| **Windows** | `.exe` (NSIS installer) or `.msi` |
-| **macOS** | `.dmg` (universal binary) |
-| **Linux** | `.deb` or `.AppImage` |
-
-Users in China can download from [Gitee Releases](https://gitee.com/orczh/cc-box/releases).
+| **Windows** | `.exe` (NSIS installer) |
+| **macOS** | `.dmg` (Apple silicon) |
+| **Linux** | `.AppImage` |
 
 ### 2. Launch & Go
 
@@ -115,8 +117,8 @@ Users in China can download from [Gitee Releases](https://gitee.com/orczh/cc-box
 ### Setup
 
 ```bash
-git clone https://github.com/orczh-hj/cc-box.git
-cd cc-box
+git clone https://github.com/shawnwu2022/cc-desk.git
+cd cc-desk
 npm install
 ```
 
@@ -148,7 +150,7 @@ Output goes to `src-tauri/target/release/bundle/`.
 <details>
 <summary><strong>Does this modify my Claude Code config?</strong></summary>
 
-No. The app only reads native Claude Code files. All GUI-specific settings are stored separately in `~/.cc-box/`. You can go back to the CLI at any time.
+CC Desk treats Claude session and history data as read-only. Most GUI settings stay in the legacy-compatible `~/.cc-box/` directory. The only deliberate native-config write is Provider activation, which merges the selected env/model fields into `~/.claude/settings.json` after an explicit user action. Existing unrelated settings are preserved.
 </details>
 
 <details>
@@ -168,6 +170,16 @@ Built with Tauri 2 (Rust backend), the app is ~10 MB installed and uses minimal 
 
 The app runs the CLI binary directly — it doesn't depend on any internal API. As long as the CLI is on your PATH, it works with any version.
 </details>
+
+---
+
+## Project Origin
+
+CC Desk began as a fork of [orczh-hj/cc-box](https://github.com/orczh-hj/cc-box). It has since evolved independently with a different product direction and is not presented as an official successor to the upstream project.
+
+The original MIT license and copyright notice are preserved in [LICENSE](LICENSE). Additional attribution details are recorded in [NOTICE.md](NOTICE.md).
+
+Because CC Desk uses a new application identifier, it installs independently from CC-Box. Existing settings are still reused from `~/.cc-box/`; uninstall the old application separately after confirming the new installation works.
 
 ---
 

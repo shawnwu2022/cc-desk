@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.14.0] - 2026-07-20
+
+### Features
+- Rebrand the independently maintained project as CC Desk
+- Add a coral radial application icon with a subtle Chengdu bamboo detail
+- Add multi-project navigation, project aliases, focus queues, and safer concurrent state updates
+- Add GitHub-based signed updater manifests for Windows, macOS, and Linux
+
+### Changed
+- Document the original CC-Box source and preserve MIT attribution
+- Keep `~/.cc-box`, `CC_BOX_*`, hook headers, and existing terminal theme IDs for upgrade compatibility
+- Move application updates and release metadata to the independent CC Desk GitHub repository
+
 ## [0.13.1] - 2026-07-03
 
 ### Features

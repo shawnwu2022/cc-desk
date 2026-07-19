@@ -1,5 +1,14 @@
 # 版本发布流程
 
+## 首次独立发布前
+
+1. 在 GitHub 将仓库创建或重命名为 `shawnwu2022/cc-desk`，并更新本地 `origin`。
+2. 为 CC Desk 生成独立的 Tauri updater 签名密钥；私钥保存到仓库 Secret `TAURI_SIGNING_PRIVATE_KEY`，密码保存到 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+3. 用对应公钥替换 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。当前值继承自 CC-Box，只能验证原签名密钥，不能作为 CC Desk 的独立发布密钥继续使用。
+4. 首次发布后确认 Release 附件包含 `latest.json` 以及三端安装包和 `.sig` 文件，再启用客户端自动更新。
+
+> 私钥不得提交到仓库、文档、日志或聊天记录。
+
 ## 自动化发布（推荐）
 
 使用 `scripts/release.js` 脚本全自动发布：
@@ -24,7 +33,7 @@ node scripts/release.js --bump minor --notes "### Features\n- Add sidebar panel\
 | `--exact` | ✓* | 使用当前版本发布，不 bump 版本号（用于重新发布） |
 | `--notes` | ✓ | Release notes 内容，用 `\n` 表示换行 |
 | `--skip-ci` |  | 跳过 CI 监控（用于已构建的标签） |
-| `--oss-only` |  | 仅下载指定版本并上传 OSS（如 `--oss-only v0.5.1`） |
+| `--oss-only` |  | 可选镜像：仅上传到自行配置的 OSS，不属于默认发布链 |
 
 ### 执行流程
 
@@ -35,7 +44,7 @@ node scripts/release.js --bump minor --notes "### Features\n- Add sidebar panel\
 4. 创建并推送标签
 5. 监控 CI 构建
 6. 发布 GitHub Release
-7. 下载 Release 产物并上传到阿里云 OSS（国内更新渠道）
+7. CI 生成 `latest.json` updater manifest，并与安装包一起上传到 GitHub Release
 
 ### Release Notes 格式
 
@@ -54,13 +63,13 @@ npm run release -- --bump minor --notes "### Features\n- Add sidebar panel"
 # 重新发布当前版本（CI 已构建）
 npm run release -- --exact --notes "### Fixed\n- Fix issue" --skip-ci
 
-# 仅上传 OSS（补传某个版本）
+# 可选：上传到自行配置的 OSS 镜像
 npm run release -- --oss-only v0.5.1
 ```
 
-## 仅上传到 OSS
+## 可选 OSS 镜像
 
-已有 Release 产物，只需上传到 OSS：
+默认更新通道是 CC Desk GitHub Releases。只有维护者自行配置镜像时，才使用以下兼容命令上传已有 Release 产物：
 
 ```bash
 # 无需代理（OSS 国内直连）
@@ -70,13 +79,13 @@ npm run release:oss -- v0.5.1
 node scripts/release.js --oss-only v0.5.1
 ```
 
-## OSS 配置
+## 可选 OSS 配置
 
 OSS 配置文件：`scripts/oss-config.json`
 
 ```json
 {
-  "bucketName": "cc-box",
+  "bucketName": "cc-desk",
   "region": "oss-cn-beijing",
   "accessKeyId": "YOUR_ACCESS_KEY_ID",
   "accessKeySecret": "YOUR_ACCESS_KEY_SECRET"
@@ -116,15 +125,24 @@ git push origin v0.2.5
 
 # 4. 监控 CI 构建
 gh run watch <run-id> --exit-status
-# 或访问 https://github.com/orczh-hj/cc-box/actions
+# 或访问 https://github.com/shawnwu2022/cc-desk/actions
 
 # 5. 发布 Release
 gh release edit v0.2.5 --draft=false --notes "## What's Changed\n\n..."
 
-# 6. 上传到 OSS（无需代理）
+# 6. 可选：上传到自行配置的 OSS 镜像（无需代理）
 node scripts/release.js --oss-only v0.2.5
 ```
 
+## Updater manifest
+
+`.github/workflows/release.yml` 在汇总三端产物后运行 `scripts/generate-updater-manifest.js`，校验每个平台的签名文件并生成 `latest.json`。该文件会作为 GitHub Release 附件发布，对应应用配置中的：
+
+```text
+https://github.com/shawnwu2022/cc-desk/releases/latest/download/latest.json
+```
+
+manifest 缺少任一平台产物或 `.sig` 时 CI 直接失败，避免发布一个无法自动更新的版本。
 ## 构建产物
 
 CI 自动构建并上传：

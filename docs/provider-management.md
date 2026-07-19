@@ -344,7 +344,7 @@ providersStore.importCcSwitch()
         ├── 4) 识别 is_current = true 的 Provider → 激活状态
         ├── 5) 按 ID 去重，追加到现有 providers
         ├── 6) 读取 settings 表 common_config_claude → 通用配置
-        ├── 7) 如果 CC-Box 无激活的 Provider，设置为 cc-switch 当前的
+        ├── 7) 如果 CC Desk 无激活的 Provider，设置为 cc-switch 当前的
         └── 8) 保存 providers.json，返回导入结果
 ```
 
@@ -362,7 +362,7 @@ interface ImportResult {
 
 **providers 表**（按 `app_type = 'claude'` 过滤）：
 
-| 列 | 类型 | 映射到 CC-Box |
+| 列 | 类型 | 映射到 CC Desk |
 |----|------|-------------|
 | id | TEXT | id |
 | name | TEXT | name |

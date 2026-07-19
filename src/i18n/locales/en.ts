@@ -57,7 +57,7 @@ export default {
   terminalRendererDesc: 'DOM is more stable (default); WebGL is smoother for heavy scrolling but may show gaps/artifacts with CJK. Takes effect on new terminals',
   terminalRendererDom: 'DOM (Stable)',
   terminalRendererWebgl: 'WebGL (High Performance)',
-  terminalThemeBuiltin: 'CC-Box',
+  terminalThemeBuiltin: 'CC Desk',
   terminalThemeDark: 'Dark',
   terminalThemeLight: 'Light',
   language: 'Language',
@@ -80,7 +80,7 @@ export default {
   envValuePlaceholder: 'value',
 
   // Update section
-  ccBoxUpdate: 'CC-Box Update',
+  ccDeskUpdate: 'CC Desk Update',
   currentVersion: 'Current Version',
   checking: 'Checking...',
   checkForUpdates: 'Check for Updates',

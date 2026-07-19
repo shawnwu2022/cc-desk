@@ -237,18 +237,18 @@
 
 **操作步骤**：
 1. 先记录 `~/.claude/settings.json` 当前内容（若文件存在）
-2. 在 cc-box 设置中修改 `PYTHONUTF8` 为 `0`，新增 `MY_TEST` = `val`
+2. 在 CC Desk 设置中修改 `PYTHONUTF8` 为 `0`，新增 `MY_TEST` = `val`
 3. 新建终端（触发 PTY 注入）
 4. 重新打开 `~/.claude/settings.json` 查看内容
 5. 检查 `env` 字段中是否包含 `PYTHONUTF8` 或 `MY_TEST`
 
 **预期结果**：
 - `settings.json` 的 `env` 字段中**没有** `PYTHONUTF8` 或 `MY_TEST`（如果 `env` 字段存在的话）
-- 如果之前通过旧版 cc-box 写入过这些 key，它们可能仍残留，但本次修改不会更新它们
+- 如果之前通过旧版 CC-Box 写入过这些 key，它们可能仍残留，但本次修改不会更新它们
 
 ### EnvVars_ProviderNoConflict_007 — Provider 激活后环境变量仍生效
 
-**目标**：验证激活 Provider 后，cc-box 环境变量注入不受影响
+**目标**：验证激活 Provider 后，CC Desk 环境变量注入不受影响
 
 **前置条件**：至少配置了一个 Provider
 
@@ -261,7 +261,7 @@
 **预期结果**：
 - `CLAUDE_CODE_NO_FLICKER` → `1`
 - `PYTHONUTF8` → `1`
-- 两者均不受 Provider 激活影响（Provider 写 settings.json，cc-box 注入 PTY 进程，互不干扰）
+- 两者均不受 Provider 激活影响（Provider 写 settings.json，CC Desk 注入 PTY 进程，互不干扰）
 
 ### EnvVars_PersistAcrossRestart_008 — 重启后环境变量配置保持
 
@@ -353,7 +353,7 @@
 3. 点击该按钮
 
 **预期结果**：
-- 系统默认浏览器打开 `https://github.com/orczh-hj/cc-box/releases`
+- 系统默认浏览器打开 `https://github.com/shawnwu2022/cc-desk/releases`
 - 页面正常加载，能看到各版本的 Release 列表
 - 按钮样式为边框按钮（非主按钮），与"下载并安装"并排
 
@@ -433,25 +433,25 @@
 
 ## 资源管理器右键菜单
 
-### ContextMenu_FolderRightClick_001 — 右键文件夹显示"使用 CC-Box 打开"
+### ContextMenu_FolderRightClick_001 — 右键文件夹显示"使用 CC Desk 打开"
 
-**目标**：验证在 Windows 资源管理器中右键文件夹时出现"使用 CC-Box 打开"菜单项
+**目标**：验证在 Windows 资源管理器中右键文件夹时出现"使用 CC Desk 打开"菜单项
 
-**前置条件**：CC-Box 已通过 NSIS 安装包安装（非 portable/开发模式）
+**前置条件**：CC Desk 已通过 NSIS 安装包安装（非 portable/开发模式）
 
 **操作步骤**：
 1. 打开 Windows 资源管理器
 2. 右键点击任意文件夹
 
 **预期结果**：
-- 右键菜单中出现"使用 CC-Box 打开"
-- 菜单项左侧显示 CC-Box 图标
+- 右键菜单中出现"使用 CC Desk 打开"
+- 菜单项左侧显示 CC Desk 图标
 
-### ContextMenu_BackgroundRightClick_002 — 右键空白处显示"在此处打开 CC-Box"
+### ContextMenu_BackgroundRightClick_002 — 右键空白处显示"在此处打开 CC Desk"
 
-**目标**：验证在文件夹内空白区域右键时出现"在此处打开 CC-Box"菜单项
+**目标**：验证在文件夹内空白区域右键时出现"在此处打开 CC Desk"菜单项
 
-**前置条件**：CC-Box 已通过 NSIS 安装包安装
+**前置条件**：CC Desk 已通过 NSIS 安装包安装
 
 **操作步骤**：
 1. 打开 Windows 资源管理器
@@ -459,40 +459,40 @@
 3. 在文件列表的空白区域右键
 
 **预期结果**：
-- 右键菜单中出现"在此处打开 CC-Box"
-- 菜单项左侧显示 CC-Box 图标
+- 右键菜单中出现"在此处打开 CC Desk"
+- 菜单项左侧显示 CC Desk 图标
 
 ### ContextMenu_OpenExistingProject_003 — 右键打开已有项目
 
-**目标**：右键点击一个 CC-Box 中已有缓存的项目文件夹，CC-Box 启动后直接打开该项目
+**目标**：右键点击一个 CC Desk 中已有缓存的项目文件夹，CC Desk 启动后直接打开该项目
 
-**前置条件**：CC-Box 已安装，`~/.claude/projects/` 中存在该项目的会话记录
+**前置条件**：CC Desk 已安装，`~/.claude/projects/` 中存在该项目的会话记录
 
 **操作步骤**：
-1. 确认 CC-Box 未运行
+1. 确认 CC Desk 未运行
 2. 在资源管理器中右键一个之前使用过的项目文件夹
-3. 点击"使用 CC-Box 打开"
-4. 等待 CC-Box 启动
+3. 点击"使用 CC Desk 打开"
+4. 等待 CC Desk 启动
 
 **预期结果**：
-- CC-Box 启动后直接进入终端视图（不显示欢迎页或项目选择页）
+- CC Desk 启动后直接进入终端视图（不显示欢迎页或项目选择页）
 - 终端工作目录为右键点击的文件夹
 - 侧边栏显示该项目的会话数据
 
 ### ContextMenu_OpenNewProject_004 — 右键打开新项目
 
-**目标**：右键点击一个 CC-Box 中没有缓存记录的文件夹，作为新项目打开
+**目标**：右键点击一个 CC Desk 中没有缓存记录的文件夹，作为新项目打开
 
-**前置条件**：CC-Box 已安装，目标文件夹不在 `~/.claude/projects/` 中
+**前置条件**：CC Desk 已安装，目标文件夹不在 `~/.claude/projects/` 中
 
 **操作步骤**：
-1. 确认 CC-Box 未运行
+1. 确认 CC Desk 未运行
 2. 创建一个新文件夹（如 `D:\test-new-project`）
-3. 右键该文件夹，点击"使用 CC-Box 打开"
-4. 等待 CC-Box 启动
+3. 右键该文件夹，点击"使用 CC Desk 打开"
+4. 等待 CC Desk 启动
 
 **预期结果**：
-- CC-Box 启动后直接进入终端视图
+- CC Desk 启动后直接进入终端视图
 - 终端工作目录为 `D:\test-new-project`
 - Claude CLI 在该目录下启动新会话（不尝试 resume）
 
@@ -500,72 +500,72 @@
 
 **目标**：验证路径中包含空格时右键菜单能正确传递目录
 
-**前置条件**：CC-Box 已安装
+**前置条件**：CC Desk 已安装
 
 **操作步骤**：
 1. 创建一个名称含空格的文件夹（如 `D:\My Projects\web app`）
-2. 右键该文件夹，点击"使用 CC-Box 打开"
+2. 右键该文件夹，点击"使用 CC Desk 打开"
 
 **预期结果**：
-- CC-Box 启动后工作目录为 `D:\My Projects\web app`
+- CC Desk 启动后工作目录为 `D:\My Projects\web app`
 - 路径完整无误，未截断
 
 ### ContextMenu_ChinesePath_006 — 中文路径正确打开
 
 **目标**：验证路径中包含中文字符时右键菜单能正确传递目录
 
-**前置条件**：CC-Box 已安装
+**前置条件**：CC Desk 已安装
 
 **操作步骤**：
 1. 创建一个中文名称的文件夹（如 `D:\项目\前端开发`）
-2. 右键该文件夹，点击"使用 CC-Box 打开"
+2. 右键该文件夹，点击"使用 CC Desk 打开"
 
 **预期结果**：
-- CC-Box 启动后工作目录为中文路径
+- CC Desk 启动后工作目录为中文路径
 - Claude CLI 正常启动，路径无乱码
 
 ### ContextMenu_UninstallCleanup_007 — 卸载后右键菜单项消失
 
-**目标**：验证通过 NSIS 卸载 CC-Box 后，右键菜单项被清除
+**目标**：验证通过 NSIS 卸载 CC Desk 后，右键菜单项被清除
 
-**前置条件**：CC-Box 已安装且右键菜单正常工作
+**前置条件**：CC Desk 已安装且右键菜单正常工作
 
 **操作步骤**：
-1. 通过系统"设置 > 应用"或卸载程序卸载 CC-Box
+1. 通过系统"设置 > 应用"或卸载程序卸载 CC Desk
 2. 在资源管理器中右键文件夹
 3. 在文件夹空白区域右键
 
 **预期结果**：
-- 右键菜单中不再出现"使用 CC-Box 打开"和"在此处打开 CC-Box"
-- 注册表 `HKCU\Software\Classes\Directory\shell\cc-box` 和 `HKCU\Software\Classes\Directory\Background\shell\cc-box` 不存在
+- 右键菜单中不再出现"使用 CC Desk 打开"和"在此处打开 CC Desk"
+- 注册表新键 `...\shell\cc-desk` 与兼容清理的旧键 `...\shell\cc-box` 均不存在
 
 ### ContextMenu_BackgroundDir_008 — 右键空白处传入当前目录
 
 **目标**：验证右键文件夹空白处时，传入的是当前目录而非空值
 
-**前置条件**：CC-Box 已安装
+**前置条件**：CC Desk 已安装
 
 **操作步骤**：
 1. 在资源管理器中进入 `D:\projects\my-app` 目录
 2. 在文件列表空白区域右键
-3. 点击"在此处打开 CC-Box"
+3. 点击"在此处打开 CC Desk"
 
 **预期结果**：
-- CC-Box 启动后工作目录为 `D:\projects\my-app`
+- CC Desk 启动后工作目录为 `D:\projects\my-app`
 - 不是父目录 `D:\projects`
 
 ### ContextMenu_CliDirectInvoke_009 — 命令行直接传入目录路径
 
-**目标**：验证通过命令行直接调用 `cc-box.exe <dir>` 也能正确打开（无需右键菜单）
+**目标**：验证通过命令行直接调用 `cc-desk.exe <dir>` 也能正确打开（无需右键菜单）
 
-**前置条件**：CC-Box 已安装，`cc-box.exe` 在 PATH 中或使用完整路径
+**前置条件**：CC Desk 已安装，`cc-desk.exe` 在 PATH 中或使用完整路径
 
 **操作步骤**：
 1. 打开命令提示符或 PowerShell
-2. 执行 `"C:\Program Files\CC-Box\cc-box.exe" "D:\projects\test"`
+2. 执行 `"C:\Program Files\CC Desk\cc-desk.exe" "D:\projects\test"`
 
 **预期结果**：
-- CC-Box 启动后工作目录为 `D:\projects\test`
+- CC Desk 启动后工作目录为 `D:\projects\test`
 - 行为与右键菜单打开一致
 
 ---
@@ -579,7 +579,7 @@
 **前置条件**：Windows 系统，claude 通过 `npm install -g @anthropic-ai/claude-code` 安装
 
 **操作步骤**：
-1. 启动 CC-Box，确认启动检查通过（显示 Claude CLI ✓）
+1. 启动 CC Desk，确认启动检查通过（显示 Claude CLI ✓）
 2. 进入设置 > 更新页
 3. 点击 Claude CLI 区域的「检查更新」按钮
 
@@ -594,7 +594,7 @@
 **前置条件**：macOS Apple Silicon，claude 通过任意方式安装
 
 **操作步骤**：
-1. 启动 CC-Box
+1. 启动 CC Desk
 2. 进入设置 > 更新页
 3. 点击 Claude CLI 区域的「检查更新」按钮
 
@@ -643,7 +643,7 @@
 **前置条件**：Linux ARM64 桌面环境
 
 **操作步骤**：
-1. 启动 CC-Box（从桌面环境启动，非终端）
+1. 启动 CC Desk（从桌面环境启动，非终端）
 2. 进入设置 > 更新页
 3. 点击「下载并安装」
 4. 在终端执行 `file ~/.local/bin/claude`
@@ -677,7 +677,7 @@
 1. 进入设置 > 更新页，安装或更新 Claude CLI
 2. 检查 `~/.zshenv` 文件内容
 3. 打开新终端窗口，执行 `which claude`
-4. 重启 CC-Box，确认启动检查仍通过
+4. 重启 CC Desk，确认启动检查仍通过
 
 **预期结果**：
 - `~/.zshenv` 中包含 `export PATH="$HOME/.local/bin:$PATH"`
@@ -694,7 +694,7 @@
 1. 进入设置 > 更新页，安装或更新 Claude CLI
 2. 检查 `~/.bashrc` 文件内容
 3. 打开新终端窗口，执行 `which claude`
-4. 重启 CC-Box，确认启动检查仍通过
+4. 重启 CC Desk，确认启动检查仍通过
 
 **预期结果**：
 - `~/.bashrc` 中包含 `export PATH="$HOME/.local/bin:$PATH"`
@@ -728,13 +728,13 @@
 
 **操作步骤**：
 1. 启动 Fiddler/Wireshark 等抓包工具，过滤 `cc-box.oss-cn-beijing.aliyuncs.com`
-2. 断网或保持抓包监听，启动 CC-Box
+2. 断网或保持抓包监听，启动 CC Desk
 3. 等待应用完全启动（进入项目选择页或终端页）
 
 **预期结果**：
 - 应用启动速度与有网环境一致（不再等待 Claude latest.json 响应）
 - 抓包记录中没有对 `deps/claude/latest.json` 的请求
-- 抓包记录中仍可能有对 `cc-box/latest.json` 的请求（CC-Box 自身更新检查，保留）
+- CC Desk 自身更新检查只访问 `github.com/shawnwu2022/cc-desk/releases/latest/download/latest.json`，不访问旧项目的 `cc-box/latest.json`
 
 ### Claude_Version_StartupLocalVersion_002 — 启动显示本地 Claude 版本
 
@@ -743,7 +743,7 @@
 **前置条件**：本机已安装 Claude CLI（如 `claude --version` 输出 `1.0.33`）
 
 **操作步骤**：
-1. 启动 CC-Box
+1. 启动 CC Desk
 2. 打开 Settings → Update section
 3. 查看 Claude CLI 卡片顶部
 
@@ -758,7 +758,7 @@
 **前置条件**：本机 PATH 中无 `claude` 命令
 
 **操作步骤**：
-1. 启动 CC-Box
+1. 启动 CC Desk
 2. 打开 Settings → Update section
 
 **预期结果**：
@@ -773,7 +773,7 @@
 **前置条件**：能访问 `https://cc-box.oss-cn-beijing.aliyuncs.com/deps/claude/versions.json`
 
 **操作步骤**：
-1. 启动 CC-Box，进入 Settings → Update section
+1. 启动 CC Desk，进入 Settings → Update section
 2. 等待 Claude CLI 卡片的版本列表加载完成
 
 **预期结果**：
@@ -839,11 +839,11 @@
 **前置条件**：手动删除 OSS `deps/claude/versions.json`（仅测试时）
 
 **操作步骤**：
-1. 启动 CC-Box，进入 Update section
+1. 启动 CC Desk，进入 Update section
 
 **预期结果**：
 - 版本列表区域显示「暂无可用版本」灰底提示框
-- 卡片不崩溃、其他区域（CC-Box 更新检查）仍正常工作
+- 卡片不崩溃、其他区域（CC Desk 更新检查）仍正常工作
 - 终端功能不受影响
 
 ### Claude_Version_DownloadError_009 — 下载失败后可重试
@@ -927,7 +927,7 @@
 
 **目标**：用户在 Claude 终端会话运行时点击安装，提示终止并让用户选择
 
-**前置条件**：在 CC-Box 中打开至少一个 Claude 终端会话（PTY 中运行 claude.exe）
+**前置条件**：在 CC Desk 中打开至少一个 Claude 终端会话（PTY 中运行 claude.exe）
 
 **操作步骤**：
 1. 下载完成后，安装阶段会检测到 claude 进程
@@ -1064,7 +1064,7 @@
 
 **目标**：验证切换终端主题后，所有已开终端 tab 的字符栅格实时更新
 
-**前置条件**：应用已启动，已打开 ≥2 个终端 tab，当前为 CC-Box Dark
+**前置条件**：应用已启动，已打开 ≥2 个终端 tab，当前为 CC Desk Dark
 
 **操作步骤**：
 1. 打开 Settings（`Ctrl+,`）> 外观
@@ -1136,7 +1136,7 @@
 2. 重启应用
 
 **预期结果**：
-- 终端主题 = CC-Box Dark（按 GUI 暗色映射）
+- 终端主题 = CC Desk Dark（按 GUI 暗色映射）
 - config.json 自动写回 `terminalTheme: "cc-box-dark"`
 
 ### TerminalTheme_InvalidIdSelfHeal_001 — 非法 id 自修复
@@ -1149,8 +1149,8 @@
 1. 重启应用
 
 **预期结果**：
-- 终端主题 = CC-Box Dark（归一化为默认）
-- 下拉显示 CC-Box Dark，预览一致
+- 终端主题 = CC Desk Dark（归一化为默认）
+- 下拉显示 CC Desk Dark，预览一致
 - config 写回 `terminalTheme: "cc-box-dark"`
 
 ### TerminalTheme_PreviewLiveUpdate_001 — 下拉切换预览实时变化
@@ -2061,9 +2061,9 @@
 
 ### Attention_TwoWindows_006 — 两窗口隔离（codex 场景）
 
-**目标**：两个 cc-box 实例的焦点队列互不干扰
+**目标**：两个 CC Desk 实例的焦点队列互不干扰
 
-**前置条件**：启动两个 cc-box 实例，各自有会话
+**前置条件**：启动两个 CC Desk 实例，各自有会话
 
 **操作步骤**：
 1. 实例 A 某会话完成 → 实例 A 队列显示该 completed 项

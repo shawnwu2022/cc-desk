@@ -269,7 +269,7 @@ impl PtyManager {
             }
         }
 
-        // 注入 cc-box 管理的环境变量（从 ~/.cc-box/config.json 读取）
+        // 注入 CC Desk 管理的环境变量（从 ~/.cc-box/config.json 读取）
         if let Ok(config) = crate::store::get_app_config() {
             if let Some(env_vars) = config.claude_env_vars {
                 for (key, value) in &env_vars {
@@ -504,7 +504,7 @@ impl PtyManager {
         // 添加终端环境变量
         cmd.env("TERM", "xterm-256color");
 
-        // 注入 cc-box 管理的环境变量（从 ~/.cc-box/config.json 读取）
+        // 注入 CC Desk 管理的环境变量（从 ~/.cc-box/config.json 读取）
         if let Ok(config) = crate::store::get_app_config() {
             if let Some(env_vars) = config.claude_env_vars {
                 for (key, value) in &env_vars {

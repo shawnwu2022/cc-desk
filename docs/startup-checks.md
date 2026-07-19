@@ -46,7 +46,7 @@
 ### OSS 资源
 
 ```
-cc-box/
+cc-desk/
 ├── deps/
 │   ├── claude/
 │   │   ├── latest.json              # 元数据（版本号、checksum、各平台下载链接）

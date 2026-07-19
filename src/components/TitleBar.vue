@@ -48,7 +48,7 @@ const win = getCurrentWindow()
 const isMaximized = ref(false)
 
 // title 用 getDisplayName（别名优先 basename 回退）；cwd 为空时 currentProject 二次兜底
-const title = computed(() => sessionStore.getDisplayName(appStore.cwd) || appStore?.currentProject || 'CC-Box')
+const title = computed(() => sessionStore.getDisplayName(appStore.cwd) || appStore?.currentProject || 'CC Desk')
 
 async function handleMinimize() {
   await win.minimize()

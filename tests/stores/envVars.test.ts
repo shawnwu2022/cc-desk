@@ -78,7 +78,7 @@ describe('resetClaudeEnvVars', () => {
 })
 
 describe('setClaudeEnvVars', () => {
-  // setClaudeEnvVars 更新 claudeEnvVars 并持久化到 cc-box config
+  // setClaudeEnvVars 更新 claudeEnvVars 并持久化到 CC Desk config
   it('EnvVars_Set_001', async () => {
     const store = useAppStore()
     const newVars = {

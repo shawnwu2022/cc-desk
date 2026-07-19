@@ -4,20 +4,20 @@
 
     <div class="about-card">
       <div class="about-logo">
-        <img src="@/assets/icons/app-icon.png" alt="CC-Box" class="logo-icon" />
+        <img src="@/assets/icons/app-icon.png" alt="CC Desk" class="logo-icon" />
       </div>
       <div class="about-details">
-        <span class="app-name">CC-Box</span>
+        <span class="app-name">CC Desk</span>
         <span class="app-version">{{ t('version', { version: currentVersion }) }}</span>
         <span class="app-desc">{{ t('aboutDesc') }}</span>
       </div>
     </div>
 
     <div class="links-group">
-      <a class="about-link" @click="openExternal('https://github.com/orczh-hj/cc-box')">
+      <a class="about-link" @click="openExternal('https://github.com/shawnwu2022/cc-desk')">
         <div class="link-content">
           <span class="link-title">{{ t('githubRepo') }}</span>
-          <span class="link-url">github.com/orczh-hj/cc-box</span>
+          <span class="link-url">github.com/shawnwu2022/cc-desk</span>
         </div>
         <span class="link-arrow">→</span>
       </a>

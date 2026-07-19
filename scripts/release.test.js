@@ -29,13 +29,13 @@ function test(name, fn) {
 
 function makeFiles() {
   return [
-    { name: 'CC-Box_0.8.0_x64-setup.exe', path: '/tmp/test/CC-Box_0.8.0_x64-setup.exe' },
-    { name: 'CC-Box_0.8.0_x64-setup.exe.sig', path: '/tmp/test/CC-Box_0.8.0_x64-setup.exe.sig' },
-    { name: 'CC-Box_0.8.0_x64.app.tar.gz', path: '/tmp/test/CC-Box_0.8.0_x64.app.tar.gz' },
-    { name: 'CC-Box_0.8.0_x64.app.tar.gz.sig', path: '/tmp/test/CC-Box_0.8.0_x64.app.tar.gz.sig' },
-    { name: 'CC-Box_0.8.0_x64.dmg', path: '/tmp/test/CC-Box_0.8.0_x64.dmg' },
-    { name: 'CC-Box_0.8.0_amd64.AppImage', path: '/tmp/test/CC-Box_0.8.0_amd64.AppImage' },
-    { name: 'CC-Box_0.8.0_amd64.AppImage.sig', path: '/tmp/test/CC-Box_0.8.0_amd64.AppImage.sig' },
+    { name: 'CC Desk_0.8.0_x64-setup.exe', path: '/tmp/test/CC Desk_0.8.0_x64-setup.exe' },
+    { name: 'CC Desk_0.8.0_x64-setup.exe.sig', path: '/tmp/test/CC Desk_0.8.0_x64-setup.exe.sig' },
+    { name: 'CC Desk_0.8.0_x64.app.tar.gz', path: '/tmp/test/CC Desk_0.8.0_x64.app.tar.gz' },
+    { name: 'CC Desk_0.8.0_x64.app.tar.gz.sig', path: '/tmp/test/CC Desk_0.8.0_x64.app.tar.gz.sig' },
+    { name: 'CC Desk_0.8.0_x64.dmg', path: '/tmp/test/CC Desk_0.8.0_x64.dmg' },
+    { name: 'CC Desk_0.8.0_amd64.AppImage', path: '/tmp/test/CC Desk_0.8.0_amd64.AppImage' },
+    { name: 'CC Desk_0.8.0_amd64.AppImage.sig', path: '/tmp/test/CC Desk_0.8.0_amd64.AppImage.sig' },
   ]
 }
 
@@ -55,7 +55,7 @@ const fakeGetFileSize = (filePath) => {
   return 0
 }
 
-const BASE_URL = 'https://cc-box.oss-cn-beijing.aliyuncs.com/cc-box'
+const BASE_URL = 'https://cc-box.oss-cn-beijing.aliyuncs.com/cc-desk'
 
 // ============================================
 // 官方格式（platforms）测试
@@ -215,7 +215,7 @@ test('LatestJson_ReleaseNotesUrl_001', () => {
     readFileContent: fakeReadFileContent,
     getFileSize: fakeGetFileSize,
   })
-  assert.strictEqual(json.release_notes_url, 'https://github.com/orczh-hj/cc-box/releases/tag/v0.8.0')
+  assert.strictEqual(json.release_notes_url, 'https://github.com/shawnwu2022/cc-desk/releases/tag/v0.8.0')
 })
 
 // release_date 格式为 YYYY-MM-DD

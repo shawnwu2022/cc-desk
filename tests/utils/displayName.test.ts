@@ -70,9 +70,9 @@ describe('projectBasename', () => {
 describe('resolveWindowTitle', () => {
   // cwd 空 -> 默认标题
   it('ResolveWindowTitle_NoCwd_001', () => {
-    expect(resolveWindowTitle(null, () => 'x')).toBe('CC-Box')
-    expect(resolveWindowTitle('', () => 'x')).toBe('CC-Box')
-    expect(resolveWindowTitle(undefined, () => 'x')).toBe('CC-Box')
+    expect(resolveWindowTitle(null, () => 'x')).toBe('CC Desk')
+    expect(resolveWindowTitle('', () => 'x')).toBe('CC Desk')
+    expect(resolveWindowTitle(undefined, () => 'x')).toBe('CC Desk')
   })
   // cwd 有值 -> 用 resolveName（getDisplayName，含别名/basename）
   it('ResolveWindowTitle_WithName_001', () => {

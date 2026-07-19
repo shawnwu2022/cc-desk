@@ -1,4 +1,4 @@
-# CC-Box
+# CC Desk
 
 针对 Claude Code 开发的多终端管理器，用 Tauri 2 + Vue 3 + xterm.js + portable-pty 直连 Claude CLI，在原生终端体验基础上增加外围功能和信息呈现。
 
@@ -18,9 +18,9 @@
 ### 设计原则
 
 - **CLI 优先，GUI 增强** — 直接运行 Claude CLI 二进制文件，输入行为与原生终端完全一致；GUI 只做 CLI 做不好或做起来不方便的事
-- **轻量透明** — JSON 文件存储，不引入数据库/路由/状态机；原生数据只读，GUI 配置独立保存在 `~/.cc-box/config.json`
+- **轻量透明** — JSON 文件存储，不引入数据库/路由/状态机；原生会话与历史数据只读，Provider 仅在用户明确激活时合并 `~/.claude/settings.json`，GUI 配置独立保存在 `~/.cc-box/config.json`
 - **功能边界** — CLI 里已经很好用的功能（对话交互、slash 命令、快捷键、模型切换），不在 GUI 里重复实现；GUI 专注于管理、可视化、辅助三类增强
-- **可逆性** — 用户可随时回到纯 CLI，GUI 不修改任何 Claude Code 原生配置文件，不留副作用
+- **可逆性** — 用户可随时回到纯 CLI；仅在显式激活 Provider 时合并其 env/model 字段，停用或切换可恢复，且不覆盖其他 Claude Code 配置
 - **最小依赖** — 完全兼容 Claude Code 任何更新，无需适配 SDK API；新功能通过读取原生配置文件和 CLI 命令获取
 
 ### 不做什么
@@ -28,7 +28,7 @@
 - 不做 AI 补全/输入建议（CLI 已有）
 - 不做 slash 命令的 GUI 封装（CLI 已有）
 - 不做对话消息的结构化展示（终端原生渲染足够好）
-- 不做 Claude Code 配置的编辑器（只做只读展示，编辑由 CLI/settings.json 完成）
+- 不做通用 Claude Code 配置编辑器（Provider 激活只管理其负责的 env/model 字段，其余配置由 CLI/settings.json 完成）
 - 不做独立的 prompt 管理系统（CLI 的 /memory 和 AGENTS.md 已覆盖）
 
 ## 技术栈
@@ -38,7 +38,7 @@ Tauri 2.x (Rust) + Vue 3 + TypeScript + Vite + xterm.js + portable-pty + Pinia +
 ## 项目架构
 
 ```
-cc-box/
+cc-desk/
 ├── src-tauri/                  # Rust 后端
 │   ├── src/
 │   │   ├── main.rs             # 入口
@@ -152,7 +152,6 @@ npm run tauri:build        # 生产构建
     set HTTP_PROXY=http://127.0.0.1:33210
     set HTTPS_PROXY=http://127.0.0.1:33210
     ```
-  - 推送到 Gitee 不需要代理
 - **打包代理设置**：首次打包下载 NSIS 组件时需要代理，设置环境变量：
   ```bash
   set HTTP_PROXY=http://127.0.0.1:33210
@@ -160,21 +159,13 @@ npm run tauri:build        # 生产构建
   npm run build:win
   ```
 
-### 双仓库同步
+### 独立仓库
 
-项目同步推送到 GitHub 和 Gitee 两个仓库，方便国内访问。
-
-- **GitHub**：`https://github.com/orczh-hj/cc-box`（需要代理）
-- **Gitee**：`https://gitee.com/orczh/cc-box`（国内直连）
-
-**同步机制**：
-1. Git 多 URL 远程：`git push origin` 自动推送到两个仓库
-2. GitHub Actions：push 到 main 或 release 发布时自动同步到 Gitee
-
-**推送时注意**：推送到 GitHub 需先设置代理，推送到 Gitee 无需代理。
-
-- **Gitee API Token**：已存储在 `git config --local gitee.token`，用于通过 API 创建 Gitee Release
-
+- **GitHub**：`https://github.com/shawnwu2022/cc-desk`
+- 项目源自 `orczh-hj/cc-box`，现按独立产品方向维护；来源与版权说明见 `NOTICE.md`
+- `~/.cc-box/`、`CC_BOX_*` 与 `cc-box-light` / `cc-box-dark` 暂作为兼容标识保留，避免旧用户配置和插件协议失效
+- 发布默认只面向 CC Desk 的 GitHub Releases，不再自动同步或发布到原项目的 Gitee / OSS 渠道
+- 首次发布前必须换用 CC Desk 自有 Tauri updater 密钥；私钥只存 GitHub Secrets，禁止提交到仓库
 ### 版本发布（全自动）
 
 **一句话发布**：
@@ -182,7 +173,7 @@ npm run tauri:build        # 生产构建
 npm run release -- --bump patch --notes "### Features\n- Add feature"
 ```
 
-脚本自动完成：更新版本号 → 更新 CHANGELOG → 提交推送 → 创建标签 → 监控 CI → 发布 Release → 上传 OSS。
+脚本自动完成：更新版本号 → 更新 CHANGELOG → 提交推送 → 创建标签 → 监控 CI → 发布 GitHub Release；CI 同时生成并上传 `latest.json` updater manifest。
 
 **参数说明**：
 | 参数 | 说明 |
@@ -191,7 +182,7 @@ npm run release -- --bump patch --notes "### Features\n- Add feature"
 | `--exact` | 使用当前版本发布，不 bump 版本号（适用于重新发布） |
 | `--notes "<text>"` | Release notes，`\n` 表示换行（必填），必须用英文写 |
 | `--skip-ci` | 跳过 CI 监控（标签已构建时用） |
-| `--oss-only <ver>` | 仅上传 OSS（如 `--oss-only v0.5.1`） |
+| `--oss-only <ver>` | 可选镜像工具：仅上传到自行配置的 OSS，不属于默认发布链 |
 
 **常用示例**：
 ```bash
@@ -202,7 +193,7 @@ npm run release -- --bump minor --notes "### Features\n- Add feature"
 # 重新发布当前版本（CI 已构建）
 npm run release -- --exact --notes "### Fixed\n- Fix issue" --skip-ci
 
-# 仅上传 OSS（补传某个版本）
+# 可选：上传到自行配置的 OSS 镜像
 npm run release -- --oss-only v0.5.1
 ```
 

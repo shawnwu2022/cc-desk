@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default capabilities for CC-Box",
+  "description": "Default capabilities for CC Desk",
   "windows": ["*"],
   "permissions": [
     "core:event:default",

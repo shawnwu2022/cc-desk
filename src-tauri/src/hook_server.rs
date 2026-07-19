@@ -29,7 +29,7 @@ pub async fn init(app_handle: AppHandle) {
         }
         Err(e) => {
             log::error!(
-                "Failed to start hook server: {}. CC-Box will continue without hook monitoring.",
+                "Failed to start hook server: {}. CC Desk will continue without hook monitoring.",
                 e
             );
         }

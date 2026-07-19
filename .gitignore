@@ -48,3 +48,6 @@ releases/
 
 # Superpowers visual companion mockups
 .superpowers/
+
+# Local agent skills
+.agents/

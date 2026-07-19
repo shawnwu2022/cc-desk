@@ -1,10 +1,10 @@
 [package]
-name = "cc-box"
-version = "0.13.1"
-description = "Claude Code Desktop GUI (Tauri) - Multi-terminal manager for Claude Code power users"
-authors = ["orczh <orczh_hj@163.com>"]
+name = "cc-desk"
+version = "0.14.0"
+description = "CC Desk - a multi-project, multi-session desktop workspace for Claude Code"
+authors = ["shawnwu2022"]
 license = "MIT"
-repository = "https://github.com/orczh-hj/cc-box"
+repository = "https://github.com/shawnwu2022/cc-desk"
 edition = "2021"
 rust-version = "1.89" # std File::lock_*（feature file_locks，1.89 稳定）；windows 0.61 亦要求 ≥1.89
 

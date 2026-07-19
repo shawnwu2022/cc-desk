@@ -1,11 +1,11 @@
 #!/bin/bash
-# CC-Box Hook Reporter — 跨平台兼容，任何异常均 exit 0
+# CC Desk Hook Reporter — 跨平台兼容，任何异常均 exit 0
 #
-# 作用：将 Claude Code 的 hook 事件通过 HTTP POST 发送给 CC-Box
-# 触发条件：由 cc-box-monitor plugin 的 hooks.json 注册
+# 作用：将 Claude Code 的 hook 事件通过 HTTP POST 发送给 CC Desk
+# 触发条件：由 cc-desk-monitor plugin 的 hooks.json 注册
 #
-# 环境变量（由 CC-Box spawn PTY 时注入）：
-# - CC_BOX_HOOK_PORT   CC-Box HTTP 服务器端口（未设置 = 非 CC-Box 会话）
+# 环境变量（由 CC Desk spawn PTY 时注入）：
+# - CC_BOX_HOOK_PORT   CC Desk HTTP 服务器端口（未设置 = 非 CC Desk 会话）
 # - CC_BOX_SESSION_ID  当前 PTY 的唯一标识（用于区分多终端）
 #
 # 安全保障：

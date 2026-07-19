@@ -370,7 +370,7 @@ export const useAppStore = defineStore('app', () => {
     i18n.global.locale.value = lang
   }
 
-  /** 同步当前 claudeEnvVars 到 cc-box config */
+  /** 同步当前 claudeEnvVars 到 CC Desk config */
   async function doSyncEnv() {
     await updateAppConfig({ claudeEnvVars: claudeEnvVars.value })
   }

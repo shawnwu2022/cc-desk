@@ -45,7 +45,7 @@ export const DEFAULT_TERMINAL_THEME_ID = 'cc-box-dark'
 export const TERMINAL_THEMES: TerminalTheme[] = [
   {
     id: 'cc-box-light',
-    name: 'CC-Box Light',
+    name: 'CC Desk Light',
     category: 'builtin',
     colors: {
       background: '#f8f9fa',
@@ -74,7 +74,7 @@ export const TERMINAL_THEMES: TerminalTheme[] = [
   },
   {
     id: 'cc-box-dark',
-    name: 'CC-Box Dark',
+    name: 'CC Desk Dark',
     category: 'builtin',
     colors: {
       background: '#1e1e1e',

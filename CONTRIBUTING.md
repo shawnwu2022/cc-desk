@@ -1,4 +1,4 @@
-# Contributing to CC-Box
+# Contributing to CC Desk
 
 Thanks for your interest in contributing! This document outlines how to get started.
 
@@ -14,8 +14,8 @@ Thanks for your interest in contributing! This document outlines how to get star
 ### Getting Started
 
 ```bash
-git clone https://github.com/orczh-hj/cc-box.git
-cd cc-box
+git clone https://github.com/shawnwu2022/cc-desk.git
+cd cc-desk
 npm install
 npm run tauri:dev
 ```
@@ -23,7 +23,7 @@ npm run tauri:dev
 ## Project Structure
 
 ```
-cc-box/
+cc-desk/
 ├── src-tauri/          # Rust backend (PTY, IPC commands)
 │   ├── src/
 │   │   ├── lib.rs      # App initialization
@@ -58,7 +58,7 @@ cc-box/
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/orczh-hj/cc-box/issues) for:
+Use [GitHub Issues](https://github.com/shawnwu2022/cc-desk/issues) for:
 
 - Bug reports (include OS, version, steps to reproduce)
 - Feature requests

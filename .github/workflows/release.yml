@@ -1,4 +1,4 @@
-# 本工作流用于：构建跨平台应用 -> 在 GitHub 发布 -> 自动同步到 Gitee（含 Release 和附件）
+# 本工作流用于：构建跨平台应用 -> 在 GitHub 构建并发布跨平台安装包与 updater manifest
 name: Release
 
 on:
@@ -109,6 +109,17 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify updater signing secrets
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
+            echo "::error::Missing CC Desk updater signing secrets"
+            exit 1
+          fi
+
       - name: Build application
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -124,7 +135,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cc-box-${{ matrix.name }}
+          name: cc-desk-${{ matrix.name }}
           path: ${{ matrix.patterns }}
           if-no-files-found: error
 
@@ -148,18 +159,22 @@ jobs:
       - name: List downloaded artifacts
         run: find artifacts -type f | head -50
 
+      - name: Generate updater manifest
+        run: node scripts/generate-updater-manifest.js artifacts latest.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           draft: true               # 创建为草稿，你可以检查一下再正式发布
           generate_release_notes: true # 自动生成更新日志
           files: |
-            artifacts/cc-box-windows/**/*.exe
-            artifacts/cc-box-windows/**/*.exe.sig
-            artifacts/cc-box-macos/**/*.dmg
-            artifacts/cc-box-macos/**/*.app.tar.gz
-            artifacts/cc-box-macos/**/*.app.tar.gz.sig
-            artifacts/cc-box-linux/**/*.AppImage
-            artifacts/cc-box-linux/**/*.AppImage.sig
+            artifacts/cc-desk-windows/**/*.exe
+            artifacts/cc-desk-windows/**/*.exe.sig
+            artifacts/cc-desk-macos/**/*.dmg
+            artifacts/cc-desk-macos/**/*.app.tar.gz
+            artifacts/cc-desk-macos/**/*.app.tar.gz.sig
+            artifacts/cc-desk-linux/**/*.AppImage
+            artifacts/cc-desk-linux/**/*.AppImage.sig
+            latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -21,7 +21,7 @@
         </button>
       </div>
       <div class="nav-footer">
-        <span class="footer-version">CC-Box v{{ currentVersion }}</span>
+        <span class="footer-version">CC Desk v{{ currentVersion }}</span>
       </div>
     </nav>
 

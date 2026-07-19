@@ -57,7 +57,7 @@ export default {
   terminalRendererDesc: 'DOM 更稳定（默认）；WebGL 高频滚动更流畅，但中文可能显示留白/错位。新开终端生效',
   terminalRendererDom: 'DOM（稳定）',
   terminalRendererWebgl: 'WebGL（高性能）',
-  terminalThemeBuiltin: 'CC-Box',
+  terminalThemeBuiltin: 'CC Desk',
   terminalThemeDark: '暗色',
   terminalThemeLight: '浅色',
   language: '语言',
@@ -80,7 +80,7 @@ export default {
   envValuePlaceholder: '变量值',
 
   // Update section
-  ccBoxUpdate: 'CC-Box 更新',
+  ccDeskUpdate: 'CC Desk 更新',
   currentVersion: '当前版本',
   checking: '检查中...',
   checkForUpdates: '检查更新',

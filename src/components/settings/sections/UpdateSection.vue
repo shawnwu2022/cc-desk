@@ -1,11 +1,11 @@
 <template>
   <div class="section-content">
-    <h2 class="section-heading">{{ t('ccBoxUpdate') }}</h2>
+    <h2 class="section-heading">{{ t('ccDeskUpdate') }}</h2>
 
     <div class="update-card">
       <div class="version-row">
         <div class="version-info">
-          <span class="version-label">CC-Box</span>
+          <span class="version-label">CC Desk</span>
           <span class="version-value">v{{ currentVersion }}</span>
         </div>
         <button
@@ -222,7 +222,7 @@
       </div>
     </div>
 
-    <!-- CC-Box 更新确认对话框 -->
+    <!-- CC Desk 更新确认对话框 -->
     <div v-if="showConfirm" class="confirm-overlay" @click.self="showConfirm = false">
       <div class="confirm-dialog">
         <p class="confirm-text">{{ t('updateConfirmActivePtys') }}</p>
@@ -314,7 +314,7 @@ function hasActivePtys(): boolean {
 }
 
 function openReleases() {
-  open('https://github.com/orczh-hj/cc-box/releases')
+  open('https://github.com/shawnwu2022/cc-desk/releases')
 }
 
 async function handleDownloadAndInstall() {

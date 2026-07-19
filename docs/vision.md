@@ -1,48 +1,48 @@
-# CC-Box 项目愿景（fork 后）
+# CC Desk 项目愿景
 
-> 本文件是 fork 后的真实定位锚，是所有后续功能决策的 source of truth。
-> `CLAUDE.md` / `docs/roadmap.md` 为原作者（orczh-hj）版，降级为参考。
+> 本文件是 CC Desk 独立维护后的产品定位锚，是功能取舍与文档对齐的 source of truth。
 
 ## 一句话定位
 
-接在 cc-switch 下游，让重度多项目玩家同时驾驭多个原生 Claude Code 会话的指挥台。
+面向 Claude Code 重度用户的多项目、多会话桌面工作台：保留原生 CLI 体验，把跨会话管理、状态总览与工作流辅助集中到一个窗口。
 
-## 生态分工
+## 项目来源与独立性
 
-| 工具 | 职责 | 层次 |
-|------|------|------|
-| **cc-switch** | 管理 cc：provider / API Key / 配置切换 | 配置层 |
-| **cc-box** | 增强 cc 的管理和能力：多会话 / 终端 / hook 监控 / 信息可视化 | 运行时层 |
+CC Desk 最初基于 [orczh-hj/cc-box](https://github.com/orczh-hj/cc-box) fork。随着产品目标、功能边界和实现持续分化，项目现以独立名称、仓库和发布渠道维护，不以重新合并回原项目为目标。
 
-cc-box 不管 provider，只消费 cc-switch 设好的配置启动原生 Claude CLI。
+来源、版权与商标说明见根目录 `NOTICE.md` 和 `LICENSE`。
 
 ## 目标用户
 
-重度、多项目并行、高强度使用、且要求保持原生 Claude Code 完整能力的玩家。
+同时维护多个项目、并行运行多个 Claude Code 会话，并要求保留原生 CLI 完整能力的开发者。
 
 ## 核心价值
 
-让 N 个原生 Claude Code 会话同时跑，提供 CLI 天生做不了的跨会话 / 全局视野 / 可视化增强。
+1. **多项目与多会话并行** —— 在一个桌面窗口中启动、恢复、切换和观察多个原生 Claude Code 会话。
+2. **全局状态与信息增强** —— 用项目树、会话状态、Hook 监控和侧边栏面板补足 CLI 的全局视野。
+3. **外围工作流辅助** —— 提供快捷启动、Provider 管理与导入、MCP/Skills/Agents/Plugins 只读呈现等桌面端能力。
+4. **CLI 可逆** —— 会话仍由真实 Claude CLI 驱动，用户随时可以离开 GUI 回到终端。
 
-## 两条硬约束
+## 与 cc-switch 的关系
 
-1. **保持原生 CC** —— CLI 全部能力（对话、slash 命令、快捷键、模型切换）原样可用，GUI 只增强不替代；Claude Code 升级后 cc-box 不能坏。
-2. **不做 switch 能力** —— provider / API Key / 配置切换交给 cc-switch。
+| 工具 | 主要职责 | 关系 |
+|------|----------|------|
+| **cc-switch** | 独立管理 Provider、API Key 与配置切换 | 可选外部工具 |
+| **CC Desk** | 管理项目、会话、终端与运行状态，并可独立管理或从 cc-switch 导入 Provider | 桌面运行工作台 |
+
+CC Desk 不依赖 cc-switch 才能运行；已使用 cc-switch 的用户可以把现有 Provider 导入 CC Desk，未使用者也能独立配置。
 
 ## 设计原则
 
-- **开箱即用、零配置优先** —— 任何需要用户手动配置才能用的功能（如模型定价表），除非有自动获取来源，否则降级或放弃。
-- **性能与可用性优先于功能堆砌** —— 启动快、多会话切换流畅、解析不卡；少配置、好上手。
-- **功能边界测试** —— 任何新功能必须通过「CLI 在单会话里做不好或做不到吗？」才做。做得到 → 不做（CLI 已经够）；做不到（跨会话 / 全局 / 可视化）→ 做。
-
-## 退役 / 搁置
-
-- **退役**：原作者 roadmap 的配置管理 6 阶段（MCP/Skills/Agents/Plugins CRUD）——与 cc-switch 重叠，非核心价值。
-- **搁置**：现有 provider 管理模块（`providers.rs` / `providerPresets.ts` / 设置 UI）——先不动，将来瘦身成「model→单价」定价元数据表或整体退役。
+- **CLI 优先，GUI 增强** —— 不重做 Claude CLI 已经成熟的对话、slash 命令、快捷键和交互式提示。
+- **多会话优先** —— 优先解决跨项目、跨会话和全局状态问题，而不是堆叠单会话功能。
+- **透明与可逆** —— 原生 Claude Code 数据以只读为主；CC Desk 自有数据单独存储。
+- **兼容优先** —— `~/.cc-box/`、`CC_BOX_*` 和既有主题 ID 暂作为兼容 ABI 保留，后续如迁移必须提供自动迁移与回滚路径。
+- **独立发布** —— 不再从原项目更新通道获取应用更新，也不默认向原项目的镜像和 OSS 渠道发布。
 
 ## 当前主线
 
-B 方向：多会话指挥中心。
-
-- **第一刀：多项目焦点队列**（B1 收敛形态，经 codex 对抗审查修正）——常驻区域只列**未确认**的关注项「错误 > 等权限 > 新完成」（严重度排序，一键跳转），工作中/空闲只显总数。不复用 `pending`（那是注意力确认位非业务状态），引入独立 `AttentionItem{kind,createdAt,acknowledgedAt}`，`working/pending` 退为兼容派生值。「完成」只由 idle_prompt 判定（Stop 不直接生成 completed——stop hook 可能阻止停止让 Claude 继续，reporter 不知晓最终决策；SessionStart 也归 idle，用 state 会误报）。范围限定单进程（多窗口聚合需 broker，延后）。**不走系统 toast 通知**（重度用户事件量大，toast 刷屏打扰）。
-- 待办：成本 / token 看板（token 计数版，零配置）。
+- 强化全局项目树与跨项目会话切换。
+- 通过 Hook 事件完善 working / pending / attention 等会话状态。
+- 提升多实例数据一致性与恢复可靠性。
+- 保持 Provider、终端主题和外围面板与多会话主线一致，避免演变为通用 Claude 配置编辑器。

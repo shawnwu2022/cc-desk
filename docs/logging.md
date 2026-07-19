@@ -27,8 +27,8 @@
 ## 日志格式
 
 ```
-[2026-04-28 14:30:00.123][INFO] [cc_box::pty] Claude CLI spawned successfully
-[2026-04-28 14:30:01.456][ERROR] [cc_box::checks] [Check Failed] Claude CLI: ...
+[2026-04-28 14:30:00.123][INFO] [cc_desk::pty] Claude CLI spawned successfully
+[2026-04-28 14:30:01.456][ERROR] [cc_desk::checks] [Check Failed] Claude CLI: ...
 [2026-04-28 14:30:02.789][WARN] [Frontend] startTab: blocked by isPtyStarting
 ```
 

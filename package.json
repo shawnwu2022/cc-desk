@@ -1,20 +1,19 @@
 {
-  "name": "cc-box",
-  "version": "0.13.1",
-  "description": "Claude Code Desktop GUI (Tauri) - Multi-terminal manager for Claude Code power users",
+  "name": "cc-desk",
+  "version": "0.14.0",
+  "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code",
   "license": "MIT",
   "author": {
-    "name": "orczh",
-    "email": "orczh_hj@163.com"
+    "name": "shawnwu2022"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/orczh-hj/cc-box.git"
+    "url": "https://github.com/shawnwu2022/cc-desk.git"
   },
   "bugs": {
-    "url": "https://github.com/orczh-hj/cc-box/issues"
+    "url": "https://github.com/shawnwu2022/cc-desk/issues"
   },
-  "homepage": "https://github.com/orczh-hj/cc-box#readme",
+  "homepage": "https://github.com/shawnwu2022/cc-desk#readme",
   "keywords": [
     "claude-code",
     "claude",

@@ -1,6 +1,6 @@
 # Hook 监控系统
 
-通过 Claude Code Plugin 机制注入 Hook，实时采集 Claude 运行时状态，经 HTTP 发送到 CC-Box 后端，再推送到前端展示。
+通过 Claude Code Plugin 机制注入 Hook，实时采集 Claude 运行时状态，经 HTTP 发送到 CC Desk 后端，再推送到前端展示。
 
 ## 设计理念
 
@@ -15,7 +15,7 @@ Hook 系统只采集**对 GUI 有意义**的信息：
 ## 架构总览
 
 ```
-┌─ CC-Box 启动 ────────────────────────────────────────────────┐
+┌─ CC Desk 启动 ────────────────────────────────────────────────┐
 │  1. 生成 plugin 文件到 ~/.cc-box/claude-plugin/               │
 │  2. 启动 axum HTTP 服务器（127.0.0.1:随机端口）                │
 │  3. 端口写入 OnceLock，供 PTY spawn 读取                      │
@@ -25,7 +25,7 @@ Hook 系统只采集**对 GUI 有意义**的信息：
 │  pty.rs spawn_claude()                                        │
 │  ├─ 命令追加：--plugin-dir ~/.cc-box/claude-plugin            │
 │  └─ 环境变量：                                                │
-│       CC_BOX_HOOK_PORT=<端口>     ← 共享，一个 CC-Box 实例一个 │
+│       CC_BOX_HOOK_PORT=<端口>     ← 共享，一个 CC Desk 实例一个 │
 │       CC_BOX_SESSION_ID=<pty_id>  ← 每个 PTY 唯一             │
 └──────────────────────────────────────────────────────────────┘
 
@@ -39,7 +39,7 @@ Hook 系统只采集**对 GUI 有意义**的信息：
 │         body: <hook 事件 JSON>                                │
 └──────────────────────────────────────────────────────────────┘
 
-┌─ CC-Box Rust 后端 ──────────────────────────────────────────┐
+┌─ CC Desk Rust 后端 ──────────────────────────────────────────┐
 │  hook_server.rs handle_hook()                                 │
 │  ├─ 从 header 读 pty_id（区分多终端）                         │
 │  ├─ 从 body 读 session_id                                     │
@@ -70,7 +70,7 @@ Hook 系统只采集**对 GUI 有意义**的信息：
 |------|------|------|
 | `CC_BOX_SESSION_ID`（= PTY ID） | spawn 时注入环境变量 | 标识**哪个终端 tab** |
 | `session_id` | Claude hook 事件 JSON | 标识 **Claude 内部会话** |
-| `CC_BOX_HOOK_PORT` | CC-Box 启动时分配 | **HTTP 服务器端口**（所有终端共享） |
+| `CC_BOX_HOOK_PORT` | CC Desk 启动时分配 | **HTTP 服务器端口**（所有终端共享） |
 
 ## Plugin 文件
 
@@ -86,7 +86,7 @@ src-tauri/plugin/                       运行时目标 ~/.cc-box/claude-plugin/
     └── report-hook.sh                     └── report-hook.sh
 ```
 
-**加载方式**：`--plugin-dir` 按 session 加载，仅在 CC-Box 启动的 Claude 会话中生效。
+**加载方式**：`--plugin-dir` 按 session 加载，仅在 CC Desk 启动的 Claude 会话中生效。
 **更新方式**：修改 `src-tauri/plugin/` 下的文件，重新编译。`hook_config.rs` 的 `write_if_changed` 检测变化后覆盖。
 
 ## 采集的事件与数据
@@ -231,7 +231,7 @@ interface TerminalTab {
 
 ## 稳定性保障
 
-**原则：Hook 是监控通道，不是核心功能。异常不能影响 CC-Box 和 Claude 正常运行。**
+**原则：Hook 是监控通道，不是核心功能。异常不能影响 CC Desk 和 Claude 正常运行。**
 
 | 层级 | 保障措施 |
 |------|----------|

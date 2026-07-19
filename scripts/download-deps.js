@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * CC-Box 依赖下载脚本
+ * CC Desk 依赖下载脚本
  *
  * 从 Claude 官方和 GitHub 下载最新版本，上传到阿里云 OSS
  *
@@ -644,7 +644,7 @@ async function uploadGitToOSS(outputPath, portableAsset, skipped) {
 
 async function main() {
   console.log('\x1b[35m======================================')
-  console.log('     CC-Box 依赖下载脚本')
+  console.log('     CC Desk 依赖下载脚本')
   console.log('======================================\x1b[0m')
 
   // 检查代理

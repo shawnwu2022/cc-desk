@@ -34,13 +34,13 @@ export function projectBasename(projectPath: string): string {
 
 /**
  * 解析 native window title（纯函数，便于测）：
- * cwd 空 -> 'CC-Box'；否则用 resolveName(cwd)（调用方传 getDisplayName，含别名/basename 回退）。
+ * cwd 空 -> 'CC Desk'；否则用 resolveName(cwd)（调用方传 getDisplayName，含别名/basename 回退）。
  */
 export function resolveWindowTitle(
   cwd: string | null | undefined,
   resolveName: (p: string) => string,
 ): string {
-  if (!cwd) return 'CC-Box'
+  if (!cwd) return 'CC Desk'
   return resolveName(cwd)
 }
 

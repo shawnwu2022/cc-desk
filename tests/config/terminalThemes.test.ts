@@ -89,7 +89,7 @@ describe('TERMINAL_THEMES integrity', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 
-  // 共 16 条预设（CC-Box 2 + 第三方 14）
+  // 共 16 条预设（CC Desk 2 + 第三方 14）
   it('TerminalThemes_CountIs16_001', () => {
     expect(TERMINAL_THEMES.length).toBe(16)
   })

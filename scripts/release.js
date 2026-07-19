@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * CC-Box 自动化发布脚本
+ * CC Desk 自动化发布脚本
  *
  * 用法：
  *   node scripts/release.js --bump patch --notes "### Fixed\n- Fix issue"
@@ -248,7 +248,7 @@ async function watchCIBuild() {
 
   const runsJson = execWithProxyRetry('gh run list --limit 5 --json databaseId,displayTitle,conclusion,status', { silent: true })
   if (!runsJson) {
-    logError('无法获取 GitHub Actions 状态，请手动检查：https://github.com/orczh-hj/cc-box/actions')
+    logError('无法获取 GitHub Actions 状态，请手动检查：https://github.com/shawnwu2022/cc-desk/actions')
     return
   }
 
@@ -265,7 +265,7 @@ async function watchCIBuild() {
     execWithProxyRetry(`gh run watch ${run.databaseId} --exit-status`)
     logSuccess('CI 构建成功')
   } catch {
-    logError('CI 构建失败，请检查：https://github.com/orczh-hj/cc-box/actions')
+    logError('CI 构建失败，请检查：https://github.com/shawnwu2022/cc-desk/actions')
     // 全自动模式继续执行，不中断流程
     logInfo('继续执行发布流程...')
   }
@@ -280,79 +280,19 @@ function publishRelease(version, releaseNotes) {
 
   const fullNotes = `## What's Changed\n\n${releaseNotes}`
   // 用临时文件传递多行 notes，避免 shell 转义问题
-  const notesFile = path.join(require('os').tmpdir(), `cc-box-release-notes-${version}.txt`)
+  const notesFile = path.join(require('os').tmpdir(), `cc-desk-release-notes-${version}.txt`)
   fs.writeFileSync(notesFile, fullNotes)
 
   try {
     execWithProxyRetry(`gh release edit v${version} --draft=false --notes-file "${notesFile}"`)
     logSuccess(`GitHub Release v${version} 已发布！`)
-    logInfo(`查看: https://github.com/orczh-hj/cc-box/releases/tag/v${version}`)
+    logInfo(`查看: https://github.com/shawnwu2022/cc-desk/releases/tag/v${version}`)
   } catch {
-    logError('GitHub Release 发布失败，请手动发布：https://github.com/orczh-hj/cc-box/releases')
+    logError('GitHub Release 发布失败，请手动发布：https://github.com/shawnwu2022/cc-desk/releases')
     process.exit(1)
   } finally {
     try { fs.unlinkSync(notesFile) } catch {}
   }
-}
-
-// ============================================
-// Gitee Release
-// ============================================
-
-function publishGiteeRelease(version, releaseNotes) {
-  logStep('发布 Gitee Release...')
-
-  // 获取 Gitee token
-  let giteeToken = process.env.GITEE_TOKEN
-  if (!giteeToken) {
-    try {
-      giteeToken = execSync('git config --local gitee.token', { encoding: 'utf-8', stdio: 'pipe' }).trim()
-    } catch {}
-  }
-
-  if (!giteeToken) {
-    logError('未找到 Gitee token，跳过 Gitee Release')
-    logInfo('请设置: git config --local gitee.token <your-token>')
-    return
-  }
-
-  const https = require('https')
-  const tagName = `v${version}`
-  const body = JSON.stringify({
-    access_token: giteeToken,
-    tag_name: tagName,
-    name: tagName,
-    target_commitish: 'main',
-    body: releaseNotes
-  })
-
-  const options = {
-    hostname: 'gitee.com',
-    path: '/api/v5/repos/orczh/cc-box/releases',
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' }
-  }
-
-  const req = https.request(options, res => {
-    let data = ''
-    res.on('data', chunk => data += chunk)
-    res.on('end', () => {
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        logSuccess(`Gitee Release ${tagName} 已发布！`)
-        logInfo(`查看: https://gitee.com/orczh/cc-box/releases/${tagName}`)
-      } else {
-        logError(`Gitee Release 发布失败: HTTP ${res.statusCode}`)
-        logInfo('请手动发布: https://gitee.com/orczh/cc-box/releases')
-      }
-    })
-  })
-
-  req.on('error', e => {
-    logError(`Gitee Release 发布失败: ${e.message}`)
-  })
-
-  req.write(body)
-  req.end()
 }
 
 // ============================================
@@ -428,7 +368,7 @@ function generateLatestJson({ version, releaseNotes, files, bucketName, endpoint
   const macPlatformKey = `darwin-${macArch}`
 
   const versionWithoutV = version.replace(/^v/, '')
-  const makeUrl = (file) => `https://${bucketName}.${endpoint}/cc-box/${version}/${file?.name || ''}`
+  const makeUrl = (file) => `https://${bucketName}.${endpoint}/cc-desk/${version}/${file?.name || ''}`
 
   return {
     // === Tauri 官方格式（新版本使用） ===
@@ -453,7 +393,7 @@ function generateLatestJson({ version, releaseNotes, files, bucketName, endpoint
     // === 自定义格式（旧版本兼容） ===
     release_date: new Date().toISOString().split('T')[0],
     release_notes: releaseNotes || '',
-    release_notes_url: `https://github.com/orczh-hj/cc-box/releases/tag/${version}`,
+    release_notes_url: `https://github.com/shawnwu2022/cc-desk/releases/tag/${version}`,
     assets: {
       windows: {
         url: makeUrl(winFile),
@@ -505,7 +445,7 @@ function uploadToOSS(version, versionDir, releaseNotes) {
   }))
 
   for (const file of files) {
-    exec(`"${ossUtilPath}" cp "${file.path}" "oss://${bucketName}/cc-box/${version}/" -f`)
+    exec(`"${ossUtilPath}" cp "${file.path}" "oss://${bucketName}/cc-desk/${version}/" -f`)
     logSuccess(`已上传: ${file.name}`)
   }
 
@@ -531,7 +471,7 @@ function uploadToOSS(version, versionDir, releaseNotes) {
   // latest.json 保存到项目 releases 目录
   const jsonPath = path.join(versionDir, 'latest.json')
   fs.writeFileSync(jsonPath, JSON.stringify(latestJson, null, 2))
-  exec(`"${ossUtilPath}" cp "${jsonPath}" "oss://${bucketName}/cc-box/latest.json" -f`)
+  exec(`"${ossUtilPath}" cp "${jsonPath}" "oss://${bucketName}/cc-desk/latest.json" -f`)
   logSuccess('latest.json 已上传（双格式：官方 + 旧版本兼容）')
 }
 
@@ -583,19 +523,19 @@ function parseArgs() {
       case '--help':
       case '-h':
         console.log(`
-CC-Box 自动化发布脚本（全自动，无需交互）
+CC Desk 自动化发布脚本（全自动，无需交互）
 
 用法:
   npm run release -- --bump <type> --notes "<notes>"    发布新版本
   npm run release -- --exact --notes "<notes>"          发布当前版本（不 bump）
-  npm run release -- --oss-only <version>               仅上传 OSS
+  npm run release -- --oss-only <version>               仅上传到自行配置的 OSS 镜像
 
 参数:
   --bump <type>      版本类型: major / minor / patch（与 --exact 二选一）
   --exact            使用当前版本发布，不 bump 版本号
   --notes "<notes>"  Release notes，用 \\n 表示换行（必填）
   --skip-ci          跳过 CI 监控（标签已构建时使用）
-  --oss-only <ver>   仅下载指定版本并上传 OSS（如 --oss-only v0.5.1）
+  --oss-only <ver>   仅下载指定版本并上传到自行配置的 OSS 镜像（如 --oss-only v0.5.1）
   --yes              自动确认（默认，Claude 自动化时使用）
   --no               显示确认提示（人工执行时使用）
 
@@ -642,7 +582,7 @@ async function main() {
   }
 
   console.log('\x1b[35m======================================')
-  console.log('     CC-Box 自动化发布脚本')
+  console.log('     CC Desk 自动化发布脚本')
   console.log('======================================\x1b[0m')
 
   const currentVersion = getCurrentVersion()
@@ -662,8 +602,7 @@ async function main() {
   console.log(`  4. 创建并推送标签 v${newVersion}`)
   if (!args.skipCI) console.log('  5. 监控 CI 构建')
   console.log('  6. 发布 GitHub Release')
-  console.log('  7. 发布 Gitee Release')
-  console.log('  8. 上传到阿里云 OSS（国内更新渠道）')
+  console.log('  7. 生成并发布 GitHub updater manifest')
 
   console.log('\nRelease Notes 预览：')
   console.log(args.releaseNotes)
@@ -690,11 +629,6 @@ async function main() {
   }
 
   publishRelease(newVersion, args.releaseNotes)
-  publishGiteeRelease(newVersion, args.releaseNotes)
-
-  // 下载并上传到 OSS
-  const { versionDir } = downloadGitHubRelease(`v${newVersion}`)
-  uploadToOSS(`v${newVersion}`, versionDir, args.releaseNotes)
 
   // 清理代理配置
   clearAllProxyConfig()

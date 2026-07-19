@@ -168,8 +168,8 @@
 
 | # | 测试项 | 预期结果 |
 |---|--------|----------|
-| 7.2.1 | 数据库有 3 个 Provider，CC-Box 无 Provider | 导入 3 个，提示"成功导入 3 个" |
-| 7.2.2 | 数据库有 Provider，CC-Box 已有同 ID 的 | 跳过已存在的，只导入新的 |
+| 7.2.1 | 数据库有 3 个 Provider，CC Desk 无 Provider | 导入 3 个，提示"成功导入 3 个" |
+| 7.2.2 | 数据库有 Provider，CC Desk 已有同 ID 的 | 跳过已存在的，只导入新的 |
 | 7.2.3 | 导入后 Provider 字段完整 | id、name、settingsConfig、websiteUrl、category、createdAt、sortIndex、notes、icon、iconColor、meta、inFailoverQueue 全部保留 |
 | 7.2.4 | 导入的 settingsConfig 正确解析 | JSON 字符串正确反序列化为对象 |
 | 7.2.5 | 导入的 meta 字段正确解析 | JSON 字符串正确反序列化为 ProviderMeta（含 isPartner 等扩展字段） |
@@ -242,7 +242,7 @@
 | # | 测试项 | 预期结果 |
 |---|--------|----------|
 | 9.1.1 | settingsConfig 为空对象 `{}` | 正常激活，写入空对象到 settings.json |
-| 9.1.2 | settingsConfig.env 为空（无 API Key） | 可激活，但 Claude CLI 启动会报错（非 CC-Box 职责） |
+| 9.1.2 | settingsConfig.env 为空（无 API Key） | 可激活，但 Claude CLI 启动会报错（非 CC Desk 职责） |
 | 9.1.3 | Provider 数量很多（50+） | 列表渲染正常，滚动流畅 |
 | 9.1.4 | settingsConfig 包含深层嵌套 JSON | 合并和写入正确 |
 | 9.1.5 | name 包含 HTML 特殊字符（`<script>`） | 不执行脚本，纯文本显示 |
@@ -262,4 +262,4 @@
 | 9.3.1 | 从 cc-switch 导入的数据可直接激活 | settings.json 正确写入 |
 | 9.3.2 | cc-switch 导入的 commonConfigEnabled 生效 | 合并/不合并行为正确 |
 | 9.3.3 | 未知 category 值的 Provider | category 解析为 null，不影响其他功能 |
-| 9.3.4 | meta 字段含 CC-Box 不识别的额外 key | 忽略额外 key，不报错 |
+| 9.3.4 | meta 字段含 CC Desk 不识别的额外 key | 忽略额外 key，不报错 |

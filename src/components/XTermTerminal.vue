@@ -167,7 +167,7 @@ function pickFontFamily(): string {
 // 原因：@xterm/addon-webgl 的 glyph atlas 渲染 CJK 宽字符时会概率性留白/错位
 // （某个字画成空白，或画错位覆盖邻居；Ctrl+L 全量重绘才修复）。DOM renderer 没有
 // glyph atlas 机制（每个字符直接是 DOM 节点），这个问题在 DOM 下不存在。
-// cc-box 的负载是 Claude CLI 交互式文本，DOM 性能足够；WebGL 的收益（高频刷屏）
+// CC Desk 的负载是 Claude CLI 交互式文本，DOM 性能足够；WebGL 的收益（高频刷屏）
 // 用不上，且附带 GPU context loss / 黑屏 / 驱动兼容等维护成本。
 //
 // 需要高频滚动性能时切 WebGL：外观设置「终端渲染后端」选 WebGL。此时保留每 5 分钟

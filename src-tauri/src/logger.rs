@@ -165,7 +165,7 @@ pub fn init() {
         eprintln!("[Logger] Warning: another logger already set");
     }
 
-    log::info!("=== CC-Box started ===");
+    log::info!("=== CC Desk started ===");
     if let Some(dir) = log_dir() {
         log::info!("Log directory: {}", dir.display());
     }

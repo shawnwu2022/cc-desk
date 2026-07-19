@@ -40,13 +40,13 @@ function test(name, fn) {
 // 构造完整的测试文件列表
 function makeFiles() {
   return [
-    { name: 'CC-Box_0.8.0_x64-setup.exe', path: '/tmp/test/CC-Box_0.8.0_x64-setup.exe' },
-    { name: 'CC-Box_0.8.0_x64-setup.exe.sig', path: '/tmp/test/CC-Box_0.8.0_x64-setup.exe.sig' },
-    { name: 'CC-Box_0.8.0_x64.app.tar.gz', path: '/tmp/test/CC-Box_0.8.0_x64.app.tar.gz' },
-    { name: 'CC-Box_0.8.0_x64.app.tar.gz.sig', path: '/tmp/test/CC-Box_0.8.0_x64.app.tar.gz.sig' },
-    { name: 'CC-Box_0.8.0_x64.dmg', path: '/tmp/test/CC-Box_0.8.0_x64.dmg' },
-    { name: 'CC-Box_0.8.0_amd64.AppImage', path: '/tmp/test/CC-Box_0.8.0_amd64.AppImage' },
-    { name: 'CC-Box_0.8.0_amd64.AppImage.sig', path: '/tmp/test/CC-Box_0.8.0_amd64.AppImage.sig' },
+    { name: 'CC Desk_0.8.0_x64-setup.exe', path: '/tmp/test/CC Desk_0.8.0_x64-setup.exe' },
+    { name: 'CC Desk_0.8.0_x64-setup.exe.sig', path: '/tmp/test/CC Desk_0.8.0_x64-setup.exe.sig' },
+    { name: 'CC Desk_0.8.0_x64.app.tar.gz', path: '/tmp/test/CC Desk_0.8.0_x64.app.tar.gz' },
+    { name: 'CC Desk_0.8.0_x64.app.tar.gz.sig', path: '/tmp/test/CC Desk_0.8.0_x64.app.tar.gz.sig' },
+    { name: 'CC Desk_0.8.0_x64.dmg', path: '/tmp/test/CC Desk_0.8.0_x64.dmg' },
+    { name: 'CC Desk_0.8.0_amd64.AppImage', path: '/tmp/test/CC Desk_0.8.0_amd64.AppImage' },
+    { name: 'CC Desk_0.8.0_amd64.AppImage.sig', path: '/tmp/test/CC Desk_0.8.0_amd64.AppImage.sig' },
   ]
 }
 
