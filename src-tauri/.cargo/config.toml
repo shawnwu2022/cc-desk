@@ -6,8 +6,3 @@ replace-with = "aliyun"
 
 [net]
 git-fetch-with-cli = true
-
-# Windows MSVC: 显式指定 linker 绝对路径，避免 Git bash 中 coreutils 的 link.exe 被误用
-# 注意：路径中的 MSVC 版本号随 Visual Studio Build Tools 更新可能变化，需同步更新
-[target.x86_64-pc-windows-msvc]
-linker = "D:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.42.34433\\bin\\Hostx64\\x64\\link.exe"
