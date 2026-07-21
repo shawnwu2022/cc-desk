@@ -13,6 +13,10 @@ function encodeAssetName(name) {
   return name.split('/').map(encodeURIComponent).join('/')
 }
 
+function toPublishedAssetName(name) {
+  return name.replaceAll(' ', '.')
+}
+
 function buildUpdaterManifest({ repository, tag, assets, notes = '', pubDate = new Date().toISOString() }) {
   if (!repository || !tag) throw new Error('repository and tag are required')
 
@@ -24,7 +28,7 @@ function buildUpdaterManifest({ repository, tag, assets, notes = '', pubDate = n
 
     platforms[platform] = {
       signature: asset.signature.trim(),
-      url: `https://github.com/${repository}/releases/download/${tag}/${encodeAssetName(asset.name)}`,
+      url: `https://github.com/${repository}/releases/download/${tag}/${encodeAssetName(toPublishedAssetName(asset.name))}`,
     }
   }
 

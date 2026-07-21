@@ -143,6 +143,8 @@ https://github.com/shawnwu2022/cc-desk/releases/latest/download/latest.json
 ```
 
 manifest 缺少任一平台产物或 `.sig` 时 CI 直接失败，避免发布一个无法自动更新的版本。
+
+GitHub Release 对带空格的产物名按点号发布（例如 `CC Desk_0.15.0_x64-setup.exe` 发布为 `CC.Desk_0.15.0_x64-setup.exe`）；生成 manifest 时必须使用该已发布资产名。发布验收还应请求 `latest.json` 中每个平台的 `url`，确认均不返回 404。
 ## 构建产物
 
 CI 自动构建并上传：

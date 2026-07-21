@@ -50,7 +50,7 @@ describe('generate updater manifest', () => {
     expect(manifest.platforms['linux-x86_64'].signature).toBe('linux-sig')
   })
 
-  it('UpdaterManifest_EncodedAssetName_002', () => {
+  it('UpdaterManifest_PublishedAssetName_002', () => {
     const manifest = buildUpdaterManifest({
       repository: 'shawnwu2022/cc-desk',
       tag: 'v1.2.3',
@@ -58,7 +58,13 @@ describe('generate updater manifest', () => {
     })
 
     expect(manifest.platforms['windows-x86_64'].url).toBe(
-      'https://github.com/shawnwu2022/cc-desk/releases/download/v1.2.3/CC%20Desk_1.2.3_x64-setup.exe',
+      'https://github.com/shawnwu2022/cc-desk/releases/download/v1.2.3/CC.Desk_1.2.3_x64-setup.exe',
+    )
+    expect(manifest.platforms['darwin-aarch64'].url).toBe(
+      'https://github.com/shawnwu2022/cc-desk/releases/download/v1.2.3/CC.Desk_aarch64.app.tar.gz',
+    )
+    expect(manifest.platforms['linux-x86_64'].url).toBe(
+      'https://github.com/shawnwu2022/cc-desk/releases/download/v1.2.3/CC.Desk_1.2.3_amd64.AppImage',
     )
   })
 
