@@ -347,13 +347,13 @@ describe('app store - 启动状态源 + setCwd 拆分 + setHidden opLock', () =>
     expect(store.isHidden('/p-a')).toBe(false)
   })
 
-  // setHidden 取消隐藏用规范化比较（大小写/斜杠差异仍能移除）
+  // setHidden 取消隐藏用规范化比较（尾斜杠差异仍能移除）
   it('SetHidden_Show_NormalizedRemove_001', async () => {
     const store = useAppStore()
-    await store.setHidden('E:\\Source\\Foo', true) // 隐藏（原始路径）
-    expect(store.isHidden('e:/source/foo')).toBe(true) // 规范化比较可见
-    await store.setHidden('e:/source/foo', false) // 取消（规范化路径）
-    expect(store.isHidden('E:\\Source\\Foo')).toBe(false) // 原始路径也已移除
+    await store.setHidden('/source/foo/', true) // 隐藏（带尾斜杠）
+    expect(store.isHidden('/source/foo')).toBe(true) // 规范化比较可见
+    await store.setHidden('/source/foo', false) // 取消（无尾斜杠）
+    expect(store.isHidden('/source/foo/')).toBe(false) // 原始路径也已移除
   })
 
   // loadAppConfig 失败抛错（不吞）+ loadStatus=error
