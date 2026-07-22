@@ -62,7 +62,6 @@ export const useSidebarStore = defineStore('sidebar', () => {
   const agents = ref<AgentInfo[]>([])
   const mcpServers = ref<McpServerInfo[]>([])
   const plugins = ref<PluginInfo[]>([])
-  const lastReloadAt = ref(0)
 
   // 加载状态
   const skillsLoading = ref(false)
@@ -195,21 +194,6 @@ export const useSidebarStore = defineStore('sidebar', () => {
       if (idx >= 0 && old) plugins.value[idx] = old
       throw err
     }
-  }
-
-  // 强制重新加载所有 sidebar 数据（多窗口同步：他窗口修改后，本窗口聚焦时调用）
-  // 带 2 秒节流，避免焦点抖动导致频繁刷新
-  async function reloadAll(cwd: string, force = false) {
-    const now = Date.now()
-    if (!force && now - lastReloadAt.value < 2000) return
-    lastReloadAt.value = now
-
-    await Promise.all([
-      loadSkills(cwd),
-      loadAgents(cwd),
-      loadMcpServers(cwd),
-      loadPlugins(cwd),
-    ])
   }
 
   // 切换面板
