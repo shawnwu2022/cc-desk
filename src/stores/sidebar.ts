@@ -62,6 +62,7 @@ export const useSidebarStore = defineStore('sidebar', () => {
   const agents = ref<AgentInfo[]>([])
   const mcpServers = ref<McpServerInfo[]>([])
   const plugins = ref<PluginInfo[]>([])
+  const lastReloadAt = ref(0)
 
   // 加载状态
   const skillsLoading = ref(false)
