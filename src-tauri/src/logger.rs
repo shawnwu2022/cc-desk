@@ -2,6 +2,7 @@
 //! 将日志写入 ~/.cc-box/logs/ 目录，按日期分文件
 //! - {date}.log: 全部日志（INFO 及以上）
 //! - {date}.error.log: 仅 WARN 及以上
+//!
 //! 保留最近 7 天日志，自动清理旧文件
 
 use std::fs::{self, File, OpenOptions};

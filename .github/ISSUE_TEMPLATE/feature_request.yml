@@ -1,0 +1,48 @@
+name: Feature request
+description: Propose a focused improvement to CC Desk.
+title: "[Feature]: "
+labels:
+  - feature
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use GitHub Discussions for early exploration or general questions. This form is for a concrete, scoped proposal.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Explain who is affected and what cannot be done today.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Proposed outcome
+      description: Describe the observable result, not only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include workarounds, CLI workflows, or existing tools you evaluated.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and compatibility impact
+      description: Note affected platforms, settings, existing sessions, providers, or updater behavior.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submit checks
+      options:
+        - label: I searched existing issues and discussions for related proposals.
+          required: true
+        - label: This request does not include credentials or private user data.
+          required: true

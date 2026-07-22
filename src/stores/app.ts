@@ -43,7 +43,7 @@ export const useAppStore = defineStore('app', () => {
   const terminalTheme = ref<string>('cc-box-light')
   const fontSize = ref<number>(12)
   const webglRenderer = ref<boolean>(false)
-  const language = ref<string>('en')
+  const language = ref<'en' | 'zh'>('en')
   const alwaysOnTop = ref<boolean>(false)
   const claudeEnvVars = ref<Record<string, string>>({})
 
@@ -107,7 +107,7 @@ export const useAppStore = defineStore('app', () => {
       theme.value = config.theme || 'light'
       fontSize.value = config.fontSize || 12
       webglRenderer.value = config.webglRenderer ?? false
-      language.value = config.language || detectSystemLocale()
+      language.value = config.language === 'zh' ? 'zh' : config.language === 'en' ? 'en' : detectSystemLocale()
       i18n.global.locale.value = language.value
 
       // 终端主题：归一化 + 迁移推断（缺失时按 GUI 映射）
@@ -359,15 +359,16 @@ export const useAppStore = defineStore('app', () => {
     updateAppConfig({ webglRenderer: enabled })
   }
 
-  function detectSystemLocale(): string {
+  function detectSystemLocale(): 'en' | 'zh' {
     const browserLang = navigator.language || 'en'
     return browserLang.toLowerCase().startsWith('zh') ? 'zh' : 'en'
   }
 
   function setLanguage(lang: string) {
-    language.value = lang
-    updateAppConfig({ language: lang })
-    i18n.global.locale.value = lang
+    const normalized = lang === 'zh' ? 'zh' : 'en'
+    language.value = normalized
+    updateAppConfig({ language: normalized })
+    i18n.global.locale.value = normalized
   }
 
   /** 同步当前 claudeEnvVars 到 CC Desk config */

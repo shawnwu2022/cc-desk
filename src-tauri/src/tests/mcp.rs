@@ -18,7 +18,8 @@ fn ParseSse_ValidData_001() {
 // data 中包含 error 对象时返回 Err
 #[test]
 fn ParseSse_RpcError_001() {
-    let body = r#"data:{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Invalid Request"}}"#;
+    let body =
+        r#"data:{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Invalid Request"}}"#;
     let result = parse_sse_response(body);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("RPC error"));

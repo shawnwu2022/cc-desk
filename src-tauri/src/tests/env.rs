@@ -40,10 +40,7 @@ fn EnvVars_SpecialChars_001() {
         "PATH_EXTRA".to_string(),
         "/usr/bin:/home/user/bin".to_string(),
     );
-    env_vars.insert(
-        "VAR_WITH_SPACES".to_string(),
-        "hello world".to_string(),
-    );
+    env_vars.insert("VAR_WITH_SPACES".to_string(), "hello world".to_string());
 
     let config = crate::store::AppConfig {
         claude_env_vars: Some(env_vars.clone()),

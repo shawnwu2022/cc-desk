@@ -72,7 +72,6 @@ import { useSidebarStore } from '@/stores/sidebar'
 import { useAppStore } from '@/stores/app'
 
 const { t } = useI18n()
-import type { SkillInfo } from '@/types'
 import SkillGroup from './SkillGroup.vue'
 import PanelHeader from '../sidebar/PanelHeader.vue'
 

@@ -257,7 +257,11 @@ impl PtyManager {
         if let Some(hook_port) = crate::hook_server::get_port() {
             cmd.env("CC_BOX_HOOK_PORT", hook_port.to_string());
             cmd.env("CC_BOX_SESSION_ID", &id);
-            log::debug!("Set CC_BOX_HOOK_PORT={}, CC_BOX_SESSION_ID={}", hook_port, id);
+            log::debug!(
+                "Set CC_BOX_HOOK_PORT={}, CC_BOX_SESSION_ID={}",
+                hook_port,
+                id
+            );
         }
 
         // Windows 特定：Claude CLI 需要知道 Git Bash 的位置
@@ -713,4 +717,3 @@ pub fn init_pty_manager(app_handle: AppHandle) {
 pub fn get_pty_manager() -> Option<Arc<PtyManager>> {
     PTY_MANAGER.lock().clone()
 }
-

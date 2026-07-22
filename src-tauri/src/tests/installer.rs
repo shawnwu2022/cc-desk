@@ -1,7 +1,6 @@
 use crate::installer::{
     clean_and_prepend_path, clean_rc_content, decide_download_action, extract_semver,
-    is_newer_version, parse_version_output, ClaudeVersionEntry, ClaudeVersions,
-    DownloadAction,
+    is_newer_version, parse_version_output, ClaudeVersionEntry, ClaudeVersions, DownloadAction,
 };
 
 // 版本号 "1.0.33" 直接提取
@@ -145,7 +144,11 @@ fn CleanPrepend_NewDir_001() {
 // 已在 PATH 中的目录被移到最前（大小写不敏感）
 #[test]
 fn CleanPrepend_MoveToFront_001() {
-    let result = clean_and_prepend_path("/usr/bin:/HOME/USER/.local/bin:/usr/local/bin", "/home/user/.local/bin", ':');
+    let result = clean_and_prepend_path(
+        "/usr/bin:/HOME/USER/.local/bin:/usr/local/bin",
+        "/home/user/.local/bin",
+        ':',
+    );
     assert_eq!(result, "/home/user/.local/bin:/usr/bin:/usr/local/bin");
 }
 
@@ -159,15 +162,29 @@ fn CleanPrepend_AlreadyFirst_001() {
 // Windows 风格 PATH 用分号分隔
 #[test]
 fn CleanPrepend_WindowsSep_001() {
-    let result = clean_and_prepend_path("C:\\Windows;C:\\System32", "C:\\Users\\test\\.local\\bin", ';');
-    assert_eq!(result, "C:\\Users\\test\\.local\\bin;C:\\Windows;C:\\System32");
+    let result = clean_and_prepend_path(
+        "C:\\Windows;C:\\System32",
+        "C:\\Users\\test\\.local\\bin",
+        ';',
+    );
+    assert_eq!(
+        result,
+        "C:\\Users\\test\\.local\\bin;C:\\Windows;C:\\System32"
+    );
 }
 
 // Windows 大小写不敏感匹配
 #[test]
 fn CleanPrepend_WindowsCaseInsensitive_001() {
-    let result = clean_and_prepend_path("C:\\Windows;C:\\USERS\\TEST\\.LOCAL\\BIN;C:\\System32", "c:\\users\\test\\.local\\bin", ';');
-    assert_eq!(result, "c:\\users\\test\\.local\\bin;C:\\Windows;C:\\System32");
+    let result = clean_and_prepend_path(
+        "C:\\Windows;C:\\USERS\\TEST\\.LOCAL\\BIN;C:\\System32",
+        "c:\\users\\test\\.local\\bin",
+        ';',
+    );
+    assert_eq!(
+        result,
+        "c:\\users\\test\\.local\\bin;C:\\Windows;C:\\System32"
+    );
 }
 
 // 末尾有多余分隔符时不会产生空条目
@@ -181,7 +198,11 @@ fn CleanPrepend_TrailingSep_001() {
 // 目录出现多次时全部移除后前置一次
 #[test]
 fn CleanPrepend_DuplicateEntries_001() {
-    let result = clean_and_prepend_path("/usr/bin:/home/user/.local/bin:/usr/local/bin:/home/user/.local/bin", "/home/user/.local/bin", ':');
+    let result = clean_and_prepend_path(
+        "/usr/bin:/home/user/.local/bin:/usr/local/bin:/home/user/.local/bin",
+        "/home/user/.local/bin",
+        ':',
+    );
     assert_eq!(result, "/home/user/.local/bin:/usr/bin:/usr/local/bin");
 }
 
@@ -230,7 +251,10 @@ fn CleanRcContent_CaseInsensitive_001() {
     let markers = ["/home/user/.local/bin", "$HOME/.local/bin"];
     let result = clean_rc_content(content, &markers, "export PATH=\"$HOME/.local/bin:$PATH\"");
     let lines: Vec<&str> = result.lines().collect();
-    let local_bin_count = lines.iter().filter(|l| l.contains(".local/bin") || l.contains(".LOCAL/BIN")).count();
+    let local_bin_count = lines
+        .iter()
+        .filter(|l| l.contains(".local/bin") || l.contains(".LOCAL/BIN"))
+        .count();
     assert_eq!(local_bin_count, 1);
 }
 
@@ -334,35 +358,53 @@ fn ClaudeVersionEntry_MissingPlatforms_001() {
 // 无缓存 + 未取消 → Download
 #[test]
 fn DecideDownload_NoCache_001() {
-    assert_eq!(decide_download_action(false, 0, 100, false), DownloadAction::Download);
+    assert_eq!(
+        decide_download_action(false, 0, 100, false),
+        DownloadAction::Download
+    );
 }
 
 // 缓存存在但 size 不匹配 → Download
 #[test]
 fn DecideDownload_SizeMismatch_001() {
-    assert_eq!(decide_download_action(true, 50, 100, false), DownloadAction::Download);
+    assert_eq!(
+        decide_download_action(true, 50, 100, false),
+        DownloadAction::Download
+    );
 }
 
 // 缓存存在且 size 匹配 → ReuseCache
 #[test]
 fn DecideDownload_ReuseCache_001() {
-    assert_eq!(decide_download_action(true, 100, 100, false), DownloadAction::ReuseCache);
+    assert_eq!(
+        decide_download_action(true, 100, 100, false),
+        DownloadAction::ReuseCache
+    );
 }
 
 // 已取消优先级最高（即使缓存可用也返回 Cancelled）
 #[test]
 fn DecideDownload_Cancelled_HighPriority_001() {
-    assert_eq!(decide_download_action(true, 100, 100, true), DownloadAction::Cancelled);
+    assert_eq!(
+        decide_download_action(true, 100, 100, true),
+        DownloadAction::Cancelled
+    );
 }
 
 // 已取消 + 无缓存 → Cancelled
 #[test]
 fn DecideDownload_Cancelled_NoCache_001() {
-    assert_eq!(decide_download_action(false, 0, 100, true), DownloadAction::Cancelled);
+    assert_eq!(
+        decide_download_action(false, 0, 100, true),
+        DownloadAction::Cancelled
+    );
 }
 
 // size 都为 0 + 文件存在（空文件）：等值匹配 → ReuseCache
 #[test]
 fn DecideDownload_EmptyFileZeroExpected_001() {
-    assert_eq!(decide_download_action(true, 0, 0, false), DownloadAction::ReuseCache);
+    assert_eq!(
+        decide_download_action(true, 0, 0, false),
+        DownloadAction::ReuseCache
+    );
 }

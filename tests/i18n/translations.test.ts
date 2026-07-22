@@ -28,7 +28,7 @@ describe('i18n 翻译文件一致性', () => {
   // 插值占位符在两个 locale 中匹配
   it('I18n_InterpolationMatch_001', () => {
     const placeholderPattern = /\{(\w+)\}/g
-    for (const key of getKeys(en)) {
+    for (const key of getKeys(en) as Array<keyof typeof en>) {
       const enPlaceholders = [...(en[key] as string).matchAll(placeholderPattern)].map(m => m[1]).sort()
       const zhPlaceholders = [...(zh[key] as string).matchAll(placeholderPattern)].map(m => m[1]).sort()
       expect(zhPlaceholders, `zh.${key} placeholders should match en`).toEqual(enPlaceholders)

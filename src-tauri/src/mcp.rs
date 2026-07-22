@@ -180,16 +180,23 @@ impl McpHttpClient {
         self.send_notification(&client, "notifications/initialized")
             .await
             .map_err(|e| {
-                log::error!("[MCP] HTTP initialized notification failed for {}: {}", self.url, e);
+                log::error!(
+                    "[MCP] HTTP initialized notification failed for {}: {}",
+                    self.url,
+                    e
+                );
                 e
             })?;
 
         // 3. 列出工具
         let tools = if capabilities.tools {
-            let tools_response = self.send_request(&client, "tools/list", None).await.map_err(|e| {
-                log::error!("[MCP] HTTP tools/list failed for {}: {}", self.url, e);
-                e
-            })?;
+            let tools_response = self
+                .send_request(&client, "tools/list", None)
+                .await
+                .map_err(|e| {
+                    log::error!("[MCP] HTTP tools/list failed for {}: {}", self.url, e);
+                    e
+                })?;
             parse_tools(&tools_response)
         } else {
             vec![]
@@ -197,10 +204,13 @@ impl McpHttpClient {
 
         // 4. 列出 prompts
         let prompts = if capabilities.prompts {
-            let prompts_response = self.send_request(&client, "prompts/list", None).await.map_err(|e| {
-                log::error!("[MCP] HTTP prompts/list failed for {}: {}", self.url, e);
-                e
-            })?;
+            let prompts_response = self
+                .send_request(&client, "prompts/list", None)
+                .await
+                .map_err(|e| {
+                    log::error!("[MCP] HTTP prompts/list failed for {}: {}", self.url, e);
+                    e
+                })?;
             parse_prompts(&prompts_response)
         } else {
             vec![]
@@ -208,16 +218,25 @@ impl McpHttpClient {
 
         // 5. 列出 resources
         let resources = if capabilities.resources {
-            let resources_response = self.send_request(&client, "resources/list", None).await.map_err(|e| {
-                log::error!("[MCP] HTTP resources/list failed for {}: {}", self.url, e);
-                e
-            })?;
+            let resources_response = self
+                .send_request(&client, "resources/list", None)
+                .await
+                .map_err(|e| {
+                    log::error!("[MCP] HTTP resources/list failed for {}: {}", self.url, e);
+                    e
+                })?;
             parse_resources(&resources_response)
         } else {
             vec![]
         };
 
-        log::info!("[MCP] HTTP detail fetched successfully: {} (tools={}, prompts={}, resources={})", self.url, tools.len(), prompts.len(), resources.len());
+        log::info!(
+            "[MCP] HTTP detail fetched successfully: {} (tools={}, prompts={}, resources={})",
+            self.url,
+            tools.len(),
+            prompts.len(),
+            resources.len()
+        );
 
         Ok(McpServerDetail {
             name: self.url.clone(),
@@ -354,19 +373,17 @@ pub(crate) fn parse_sse_response(text: &str) -> Result<JsonRpcResponse, String> 
 }
 
 pub(crate) fn parse_server_info(result: &serde_json::Value) -> Option<ServerInfo> {
-    result.get("serverInfo").and_then(|info| {
-        Some(ServerInfo {
-            name: info
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            version: info
-                .get("version")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-        })
+    result.get("serverInfo").map(|info| ServerInfo {
+        name: info
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        version: info
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -388,25 +405,22 @@ pub(crate) fn parse_tools(response: &JsonRpcResponse) -> Vec<McpToolInfo> {
         .and_then(|tools| tools.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|t| {
-                    Some(McpToolInfo {
-                        name: t
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        description: t
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        input_schema: t.get("inputSchema").cloned(),
-                    })
+                .map(|t| McpToolInfo {
+                    name: t
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    description: t
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    input_schema: t.get("inputSchema").cloned(),
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
-
 pub(crate) fn parse_prompts(response: &JsonRpcResponse) -> Vec<McpPromptInfo> {
     response
         .result
@@ -415,48 +429,43 @@ pub(crate) fn parse_prompts(response: &JsonRpcResponse) -> Vec<McpPromptInfo> {
         .and_then(|prompts| prompts.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|p| {
-                    Some(McpPromptInfo {
-                        name: p
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        description: p
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        arguments: p
-                            .get("arguments")
-                            .and_then(|args| args.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|a| {
-                                        Some(PromptArgument {
-                                            name: a
-                                                .get("name")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("")
-                                                .to_string(),
-                                            description: a
-                                                .get("description")
-                                                .and_then(|v| v.as_str())
-                                                .map(|s| s.to_string()),
-                                            required: a
-                                                .get("required")
-                                                .and_then(|v| v.as_bool())
-                                                .unwrap_or(false),
-                                        })
-                                    })
-                                    .collect()
-                            }),
-                    })
+                .map(|p| McpPromptInfo {
+                    name: p
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    description: p
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    arguments: p
+                        .get("arguments")
+                        .and_then(|args| args.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .map(|a| PromptArgument {
+                                    name: a
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    description: a
+                                        .get("description")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
+                                    required: a
+                                        .get("required")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false),
+                                })
+                                .collect()
+                        }),
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
-
 pub(crate) fn parse_resources(response: &JsonRpcResponse) -> Vec<McpResourceInfo> {
     response
         .result
@@ -465,33 +474,30 @@ pub(crate) fn parse_resources(response: &JsonRpcResponse) -> Vec<McpResourceInfo
         .and_then(|resources| resources.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|r| {
-                    Some(McpResourceInfo {
-                        uri: r
-                            .get("uri")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        name: r
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        description: r
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        mime_type: r
-                            .get("mimeType")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                    })
+                .map(|r| McpResourceInfo {
+                    uri: r
+                        .get("uri")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    name: r
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    description: r
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    mime_type: r
+                        .get("mimeType")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
-
 // ==================== 缓存管理 ====================
 
 type CacheKey = String; // server_name or URL
@@ -592,13 +598,11 @@ impl McpStdioClient {
             }
         }
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| {
-                let msg = format!("Failed to spawn process '{}': {}", self.command, e);
-                log::error!("[MCP] {}", msg);
-                msg
-            })?;
+        let mut child = cmd.spawn().map_err(|e| {
+            let msg = format!("Failed to spawn process '{}': {}", self.command, e);
+            log::error!("[MCP] {}", msg);
+            msg
+        })?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
             log::error!("[MCP] Failed to get stdin for '{}'", self.command);
@@ -613,34 +617,39 @@ impl McpStdioClient {
         let mut stdin = stdin;
 
         // 1. Initialize
-        let init_response = self.send_request(
-            &mut stdin,
-            &mut reader,
-            "initialize",
-            Some(serde_json::json!({
-                "protocolVersion": "2025-11-25",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "Claude-Tauri-GUI",
-                    "version": "1.0.0"
-                }
-            })),
-        )
-        .map_err(|e| {
-            let stderr_output = stderr
-                .and_then(|mut s| {
-                    let mut buf = String::new();
-                    s.read_to_string(&mut buf).ok().map(|_| buf)
-                })
-                .unwrap_or_default();
-            log::error!(
-                "[MCP] stdio initialize failed for '{}': {} | stderr: {}",
-                self.command,
-                e,
-                if stderr_output.is_empty() { "(empty)" } else { &stderr_output }
-            );
-            e
-        })?;
+        let init_response = self
+            .send_request(
+                &mut stdin,
+                &mut reader,
+                "initialize",
+                Some(serde_json::json!({
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "Claude-Tauri-GUI",
+                        "version": "1.0.0"
+                    }
+                })),
+            )
+            .map_err(|e| {
+                let stderr_output = stderr
+                    .and_then(|mut s| {
+                        let mut buf = String::new();
+                        s.read_to_string(&mut buf).ok().map(|_| buf)
+                    })
+                    .unwrap_or_default();
+                log::error!(
+                    "[MCP] stdio initialize failed for '{}': {} | stderr: {}",
+                    self.command,
+                    e,
+                    if stderr_output.is_empty() {
+                        "(empty)"
+                    } else {
+                        &stderr_output
+                    }
+                );
+                e
+            })?;
 
         let init_result = init_response.result.unwrap_or(serde_json::json!({}));
         let server_info = parse_server_info(&init_result);
@@ -658,10 +667,16 @@ impl McpStdioClient {
 
         // 3. tools/list
         let tools = if capabilities.tools {
-            let tools_response = self.send_request(&mut stdin, &mut reader, "tools/list", None).map_err(|e| {
-                log::error!("[MCP] stdio tools/list failed for '{}': {}", self.command, e);
-                e
-            })?;
+            let tools_response = self
+                .send_request(&mut stdin, &mut reader, "tools/list", None)
+                .map_err(|e| {
+                    log::error!(
+                        "[MCP] stdio tools/list failed for '{}': {}",
+                        self.command,
+                        e
+                    );
+                    e
+                })?;
             parse_tools(&tools_response)
         } else {
             vec![]
@@ -669,9 +684,14 @@ impl McpStdioClient {
 
         // 4. prompts/list
         let prompts = if capabilities.prompts {
-            let prompts_response =
-                self.send_request(&mut stdin, &mut reader, "prompts/list", None).map_err(|e| {
-                    log::error!("[MCP] stdio prompts/list failed for '{}': {}", self.command, e);
+            let prompts_response = self
+                .send_request(&mut stdin, &mut reader, "prompts/list", None)
+                .map_err(|e| {
+                    log::error!(
+                        "[MCP] stdio prompts/list failed for '{}': {}",
+                        self.command,
+                        e
+                    );
                     e
                 })?;
             parse_prompts(&prompts_response)
@@ -681,9 +701,14 @@ impl McpStdioClient {
 
         // 5. resources/list
         let resources = if capabilities.resources {
-            let resources_response =
-                self.send_request(&mut stdin, &mut reader, "resources/list", None).map_err(|e| {
-                    log::error!("[MCP] stdio resources/list failed for '{}': {}", self.command, e);
+            let resources_response = self
+                .send_request(&mut stdin, &mut reader, "resources/list", None)
+                .map_err(|e| {
+                    log::error!(
+                        "[MCP] stdio resources/list failed for '{}': {}",
+                        self.command,
+                        e
+                    );
                     e
                 })?;
             parse_resources(&resources_response)
@@ -694,7 +719,13 @@ impl McpStdioClient {
         // 关闭进程
         child.kill().ok();
 
-        log::info!("[MCP] stdio detail fetched successfully: {} (tools={}, prompts={}, resources={})", self.command, tools.len(), prompts.len(), resources.len());
+        log::info!(
+            "[MCP] stdio detail fetched successfully: {} (tools={}, prompts={}, resources={})",
+            self.command,
+            tools.len(),
+            prompts.len(),
+            resources.len()
+        );
 
         Ok(McpServerDetail {
             name: self.command.clone(),
@@ -733,9 +764,9 @@ impl McpStdioClient {
         // 循环读取，跳过服务端主动推送的通知/日志，按 id 匹配响应
         loop {
             let mut line = String::new();
-            let bytes_read = reader.read_line(&mut line).map_err(|e| {
-                format!("read_line failed for '{}' request: {}", method, e)
-            })?;
+            let bytes_read = reader
+                .read_line(&mut line)
+                .map_err(|e| format!("read_line failed for '{}' request: {}", method, e))?;
 
             if bytes_read == 0 {
                 return Err(format!(
@@ -823,7 +854,7 @@ pub async fn fetch_http_mcp_detail(
     url: &str,
     headers: Option<&HashMap<String, String>>,
 ) -> Result<McpServerDetail, String> {
-    let mut client = McpHttpClient::new(url.to_string(), headers.map(|h| h.clone()));
+    let mut client = McpHttpClient::new(url.to_string(), headers.cloned());
     client.get_server_detail().await
 }
 
@@ -845,7 +876,7 @@ pub fn fetch_stdio_mcp_detail(
     };
 
     let mut client = McpStdioClient::new(cmd, cmd_args);
-    client.set_env(env.map(|e| e.clone()));
+    client.set_env(env.cloned());
     client.get_server_detail()
 }
 
@@ -884,23 +915,27 @@ pub async fn get_mcp_server_detail_cached(
 
     // stdio server
     if let Some(command) = command {
-        log::info!("[MCP] Fetching via stdio: command={}, args={:?}", command, args);
+        log::info!(
+            "[MCP] Fetching via stdio: command={}, args={:?}",
+            command,
+            args
+        );
         let command_str = command.to_string();
         let args_clone = args.cloned();
-        let env_clone = env.map(|e| e.clone());
+        let env_clone = env.cloned();
         // 在 tokio runtime 中执行同步操作
         let detail = tokio::task::spawn_blocking(move || {
             fetch_stdio_mcp_detail(&command_str, args_clone.as_ref(), env_clone.as_ref())
         })
-            .await
-            .map_err(|e| {
-                log::error!("[MCP] stdio spawn_blocking failed: {}", e);
-                e.to_string()
-            })?
-            .map_err(|e| {
-                log::error!("[MCP] stdio fetch failed for '{}': {}", server_name, e);
-                e
-            })?;
+        .await
+        .map_err(|e| {
+            log::error!("[MCP] stdio spawn_blocking failed: {}", e);
+            e.to_string()
+        })?
+        .map_err(|e| {
+            log::error!("[MCP] stdio fetch failed for '{}': {}", server_name, e);
+            e
+        })?;
 
         cache.set(server_name.to_string(), detail.clone()).await;
         return Ok(Some(detail));
@@ -912,4 +947,3 @@ pub async fn get_mcp_server_detail_cached(
     );
     Ok(None)
 }
-

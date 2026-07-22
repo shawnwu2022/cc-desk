@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /// <reference types="vue/compiler-sfc" />
 
 declare const __APP_VERSION__: string
@@ -14,6 +15,8 @@ declare module '@tauri-apps/api/core' {
 }
 
 declare module '@tauri-apps/api/event' {
+  export type UnlistenFn = () => void
+
   export interface Event<T> {
     id: number
     event: string

@@ -1,0 +1,69 @@
+name: Bug report
+description: Report a reproducible problem in CC Desk.
+title: "[Bug]: "
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug. Do not include API keys, access tokens, session content, private paths, or Provider configuration. For security issues, use the Security Policy instead of this form.
+  - type: input
+    id: version
+    attributes:
+      label: CC Desk version
+      description: Include the version shown in About or the release tag.
+      placeholder: v0.15.0
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      description: Include the OS version and CPU architecture.
+      placeholder: Windows 11 24H2, x86_64
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: Run `claude --version` if Claude Code is involved.
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reproducible sequence.
+      placeholder: |
+        1. Start CC Desk with ...
+        2. Open ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted logs, screenshots, or diagnostics
+      description: Remove secrets, personal data, private paths, project names, session transcripts, and Provider configuration.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submit checks
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I removed private or sensitive data from this report.
+          required: true

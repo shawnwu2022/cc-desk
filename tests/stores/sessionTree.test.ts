@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { computed } from 'vue'
-// @ts-expect-error - node:crypto 是 Node 内置模块，项目未安装 @types/node（与其它测试文件一致的 polyfill 模式）
 import { randomUUID } from 'crypto'
 
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {

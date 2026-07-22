@@ -11,10 +11,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
 #[cfg(not(target_os = "windows"))]
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use tauri::{AppHandle, Emitter};
 
 /// OSS 配置
@@ -30,8 +30,12 @@ static ACTIVE_CLAUDE_DOWNLOADS: LazyLock<Mutex<HashMap<String, Arc<AtomicBool>>>
 /// 安装路径
 #[cfg(target_os = "windows")]
 fn get_install_dirs() -> (PathBuf, PathBuf) {
-    let user_profile = std::env::var("USERPROFILE")
-        .unwrap_or_else(|_| format!("C:\\Users\\{}", std::env::var("USERNAME").unwrap_or_default()));
+    let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| {
+        format!(
+            "C:\\Users\\{}",
+            std::env::var("USERNAME").unwrap_or_default()
+        )
+    });
     let claude_dir = PathBuf::from(&user_profile).join(".local").join("bin");
 
     let local_app_data = std::env::var("LOCALAPPDATA")
@@ -101,9 +105,9 @@ pub struct LatestVersions {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadProgress {
-    pub item: String,       // "claude" | "git"
-    pub stage: String,      // "fetching" | "downloading" | "extracting" | "placing" | "done" | "error"
-    pub progress: u8,       // 0-100
+    pub item: String,  // "claude" | "git"
+    pub stage: String, // "fetching" | "downloading" | "extracting" | "placing" | "done" | "error"
+    pub progress: u8,  // 0-100
     pub message: String,
 }
 
@@ -131,18 +135,18 @@ fn download_file(
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     let mut response = client
         .get(url)
         .send()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     if !response.status().is_success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("HTTP error: {}", response.status()),
-        ));
+        return Err(io::Error::other(format!(
+            "HTTP error: {}",
+            response.status()
+        )));
     }
 
     let total_size = response.content_length().unwrap_or(0);
@@ -158,7 +162,10 @@ fn download_file(
                 drop(file);
                 let _ = fs::remove_file(output_path);
                 emit_progress(app, item, "cancelled", 0, "已取消");
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "Download cancelled"));
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Download cancelled",
+                ));
             }
         }
 
@@ -189,7 +196,13 @@ fn download_file(
 }
 
 /// 发送进度事件
-fn emit_progress(app: &AppHandle, item: &str, stage: &str, progress: u8, message: impl Into<String>) {
+fn emit_progress(
+    app: &AppHandle,
+    item: &str,
+    stage: &str,
+    progress: u8,
+    message: impl Into<String>,
+) {
     let progress_event = DownloadProgress {
         item: item.to_string(),
         stage: stage.to_string(),
@@ -210,19 +223,18 @@ fn fetch_claude_latest() -> io::Result<ClaudeLatestInfo> {
     let url = format!("{}/deps/claude/latest.json", OSS_BASE_URL);
     log::info!("[Installer] Fetching Claude latest.json from {}", url);
 
-    let response = reqwest::blocking::get(&url)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let response = reqwest::blocking::get(&url).map_err(|e| io::Error::other(e.to_string()))?;
 
     if !response.status().is_success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Failed to fetch latest.json: {}", response.status()),
-        ));
+        return Err(io::Error::other(format!(
+            "Failed to fetch latest.json: {}",
+            response.status()
+        )));
     }
 
     let info: ClaudeLatestInfo = response
         .json()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     log::info!("[Installer] Claude latest version: {}", info.version);
     Ok(info)
@@ -241,12 +253,18 @@ pub async fn download_and_install_claude(app: AppHandle) -> Result<(), String> {
     emit_progress(&app, "claude", "fetching", 0, "获取版本信息...");
 
     // 获取最新版本信息
-    let latest = tokio::task::spawn_blocking(|| fetch_claude_latest())
+    let latest = tokio::task::spawn_blocking(fetch_claude_latest)
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
 
-    emit_progress(&app, "claude", "fetching", 100, format!("版本: {}", latest.version));
+    emit_progress(
+        &app,
+        "claude",
+        "fetching",
+        100,
+        format!("版本: {}", latest.version),
+    );
 
     // 获取平台信息
     let platform = get_current_platform();
@@ -264,8 +282,7 @@ pub async fn download_and_install_claude(app: AppHandle) -> Result<(), String> {
 
     // 创建安装目录
     let (claude_dir, _) = get_install_dirs();
-    fs::create_dir_all(&claude_dir)
-        .map_err(|e| format!("Failed to create Claude dir: {}", e))?;
+    fs::create_dir_all(&claude_dir).map_err(|e| format!("Failed to create Claude dir: {}", e))?;
 
     let claude_path = claude_dir.join(filename);
 
@@ -273,10 +290,18 @@ pub async fn download_and_install_claude(app: AppHandle) -> Result<(), String> {
     emit_progress(&app, "claude", "downloading", 0, "开始下载...");
     let claude_path_clone = claude_path.clone();
     let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || download_file(&download_url, &claude_path_clone, &app_clone, "claude", None))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        download_file(
+            &download_url,
+            &claude_path_clone,
+            &app_clone,
+            "claude",
+            None,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
 
     // 验证 checksum（可选）
     emit_progress(&app, "claude", "verifying", 50, "验证文件...");
@@ -300,7 +325,10 @@ pub async fn download_and_install_claude(app: AppHandle) -> Result<(), String> {
 
     emit_progress(&app, "claude", "done", 100, "安装完成");
 
-    log::info!("[Installer] Claude CLI installed to {}", claude_path.display());
+    log::info!(
+        "[Installer] Claude CLI installed to {}",
+        claude_path.display()
+    );
     Ok(())
 }
 
@@ -314,19 +342,18 @@ fn fetch_git_latest() -> io::Result<GitLatestInfo> {
     let url = format!("{}/deps/git/latest.json", OSS_BASE_URL);
     log::info!("[Installer] Fetching Git latest.json from {}", url);
 
-    let response = reqwest::blocking::get(&url)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let response = reqwest::blocking::get(&url).map_err(|e| io::Error::other(e.to_string()))?;
 
     if !response.status().is_success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Failed to fetch Git latest.json: {}", response.status()),
-        ));
+        return Err(io::Error::other(format!(
+            "Failed to fetch Git latest.json: {}",
+            response.status()
+        )));
     }
 
     let info: GitLatestInfo = response
         .json()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     log::info!("[Installer] Git latest version: {}", info.version);
     Ok(info)
@@ -335,15 +362,22 @@ fn fetch_git_latest() -> io::Result<GitLatestInfo> {
 #[cfg(target_os = "windows")]
 /// 解压 PortableGit.7z.exe
 fn extract_portable_git(archive_path: &Path, target_dir: &Path, app: &AppHandle) -> io::Result<()> {
-    log::info!("[Installer] Extracting PortableGit to {}", target_dir.display());
+    log::info!(
+        "[Installer] Extracting PortableGit to {}",
+        target_dir.display()
+    );
 
     emit_progress(app, "git", "extracting", 0, "开始解压...");
 
     // PortableGit.7z.exe 自解压后内容直接放在输出目录
     // 所以需要：解压到临时目录 → 移动到目标目录
 
-    let local_app_data = std::env::var("LOCALAPPDATA")
-        .unwrap_or_else(|_| format!("{}\\AppData\\Local", std::env::var("USERPROFILE").unwrap_or_default()));
+    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| {
+        format!(
+            "{}\\AppData\\Local",
+            std::env::var("USERPROFILE").unwrap_or_default()
+        )
+    });
 
     // 创建临时解压目录
     let temp_extract_dir = PathBuf::from(&local_app_data).join("PortableGit-temp");
@@ -360,17 +394,17 @@ fn extract_portable_git(archive_path: &Path, target_dir: &Path, app: &AppHandle)
     cmd.args(["-y", &format!("-o{}", temp_extract_str)]);
     let status = cmd
         .spawn()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
+        .map_err(|e| io::Error::other(e.to_string()))?
         .wait()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     if !status.success() {
         // 清理临时目录
         fs::remove_dir_all(&temp_extract_dir).ok();
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Extract failed with status: {}", status),
-        ));
+        return Err(io::Error::other(format!(
+            "Extract failed with status: {}",
+            status
+        )));
     }
 
     emit_progress(app, "git", "extracting", 50, "移动文件...");
@@ -393,9 +427,8 @@ fn extract_portable_git(archive_path: &Path, target_dir: &Path, app: &AppHandle)
         if alt_bash_path.exists() {
             log::info!("[Installer] bash.exe found in usr/bin");
         } else {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("bash.exe not found after extraction"),
+            return Err(io::Error::other(
+                "bash.exe not found after extraction".to_string(),
             ));
         }
     }
@@ -414,12 +447,18 @@ pub async fn download_and_install_git(app: AppHandle) -> Result<(), String> {
     emit_progress(&app, "git", "fetching", 0, "获取版本信息...");
 
     // 获取最新版本信息
-    let latest = tokio::task::spawn_blocking(|| fetch_git_latest())
+    let latest = tokio::task::spawn_blocking(fetch_git_latest)
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
 
-    emit_progress(&app, "git", "fetching", 100, format!("版本: {}", latest.version));
+    emit_progress(
+        &app,
+        "git",
+        "fetching",
+        100,
+        format!("版本: {}", latest.version),
+    );
 
     let download_url = format!("{}/{}", OSS_BASE_URL, latest.url);
 
@@ -434,20 +473,24 @@ pub async fn download_and_install_git(app: AppHandle) -> Result<(), String> {
     emit_progress(&app, "git", "downloading", 0, "开始下载...");
     let archive_path_clone = archive_path.clone();
     let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || download_file(&download_url, &archive_path_clone, &app_clone, "git", None))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        download_file(&download_url, &archive_path_clone, &app_clone, "git", None)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
 
     // 解压
     emit_progress(&app, "git", "extracting", 0, "开始解压...");
     let archive_path_clone = archive_path.clone();
     let git_dir_clone = git_dir.clone();
     let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || extract_portable_git(&archive_path_clone, &git_dir_clone, &app_clone))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        extract_portable_git(&archive_path_clone, &git_dir_clone, &app_clone)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
 
     // 添加到 PATH（进程级 + 用户级持久化）
     let git_bin_dir = git_dir.join("bin");
@@ -464,7 +507,10 @@ pub async fn download_and_install_git(app: AppHandle) -> Result<(), String> {
 
     emit_progress(&app, "git", "done", 100, "安装完成");
 
-    log::info!("[Installer] Git portable installed to {}", git_dir.display());
+    log::info!(
+        "[Installer] Git portable installed to {}",
+        git_dir.display()
+    );
     Ok(())
 }
 
@@ -509,13 +555,16 @@ pub(crate) fn clean_and_prepend_path(path: &str, dir: &str, sep: char) -> String
 ///
 /// 移除包含任一 marker 的旧行（大小写不敏感），追加新的 export 行。
 /// markers 用于同时匹配绝对路径和 $HOME 相对路径两种格式。
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn clean_rc_content(content: &str, markers: &[&str], export_line: &str) -> String {
     let markers_lower: Vec<String> = markers.iter().map(|m| m.to_lowercase()).collect();
     let filtered: Vec<&str> = content
         .lines()
         .filter(|line| {
             let line_lower = line.to_lowercase();
-            !markers_lower.iter().any(|m| line_lower.contains(m.as_str()))
+            !markers_lower
+                .iter()
+                .any(|m| line_lower.contains(m.as_str()))
         })
         .collect();
     let mut result = filtered.join("\n");
@@ -621,8 +670,16 @@ fn add_to_user_path_permanent(dir: &Path) {
     let new_content = clean_rc_content(&existing, &markers, &export_line);
 
     match fs::write(&rc_file, &new_content) {
-        Ok(()) => log::info!("[Installer] Ensured {} at PATH beginning in {}", rel_path, rc_file.display()),
-        Err(e) => log::warn!("[Installer] Failed to write to {}: {}", rc_file.display(), e),
+        Ok(()) => log::info!(
+            "[Installer] Ensured {} at PATH beginning in {}",
+            rel_path,
+            rc_file.display()
+        ),
+        Err(e) => log::warn!(
+            "[Installer] Failed to write to {}: {}",
+            rc_file.display(),
+            e
+        ),
     }
 }
 
@@ -632,7 +689,7 @@ pub async fn get_latest_versions() -> Result<LatestVersions, String> {
     log::info!("[Installer] Fetching latest versions info");
 
     // 获取 Claude 信息
-    let claude = tokio::task::spawn_blocking(|| fetch_claude_latest())
+    let claude = tokio::task::spawn_blocking(fetch_claude_latest)
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
@@ -640,7 +697,7 @@ pub async fn get_latest_versions() -> Result<LatestVersions, String> {
     // 获取 Git 信息（Windows only）
     #[cfg(target_os = "windows")]
     let git = Some(
-        tokio::task::spawn_blocking(|| fetch_git_latest())
+        tokio::task::spawn_blocking(fetch_git_latest)
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?,
@@ -714,10 +771,7 @@ fn run_version_command(program: &Path) -> Option<String> {
 
 #[cfg(not(target_os = "windows"))]
 fn run_version_command(program: &Path) -> Option<String> {
-    let output = Command::new(program)
-        .arg("--version")
-        .output()
-        .ok()?;
+    let output = Command::new(program).arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -803,12 +857,12 @@ pub(crate) fn is_newer_version(latest: &str, current: &str) -> bool {
 #[tauri::command]
 pub async fn check_claude_cli_update() -> Result<ClaudeCliUpdateInfo, String> {
     // 1. 获取已安装版本
-    let installed = tokio::task::spawn_blocking(|| read_local_claude_version())
+    let installed = tokio::task::spawn_blocking(read_local_claude_version)
         .await
         .map_err(|e| e.to_string())?;
 
     // 2. 获取最新版本信息
-    let latest = tokio::task::spawn_blocking(|| fetch_claude_latest())
+    let latest = tokio::task::spawn_blocking(fetch_claude_latest)
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
@@ -883,7 +937,10 @@ pub async fn check_installed_versions() -> Result<std::collections::HashMap<Stri
     // 检查 Git（Windows only）
     #[cfg(target_os = "windows")]
     {
-        result.insert("git".to_string(), git_dir.join("bin").join("bash.exe").exists());
+        result.insert(
+            "git".to_string(),
+            git_dir.join("bin").join("bash.exe").exists(),
+        );
     }
 
     Ok(result)
@@ -896,7 +953,7 @@ pub async fn check_installed_versions() -> Result<std::collections::HashMap<Stri
 /// 获取本地已安装的 Claude CLI 版本号（轻量命令，纯本地，无 HTTP）
 #[tauri::command]
 pub async fn get_installed_claude_version() -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(|| read_local_claude_version())
+    tokio::task::spawn_blocking(read_local_claude_version)
         .await
         .map_err(|e| e.to_string())
 }
@@ -910,23 +967,23 @@ fn fetch_claude_versions() -> io::Result<ClaudeVersions> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     let response = client
         .get(&url)
         .send()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     if !response.status().is_success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("HTTP error: {}", response.status()),
-        ));
+        return Err(io::Error::other(format!(
+            "HTTP error: {}",
+            response.status()
+        )));
     }
 
     let versions: ClaudeVersions = response
         .json()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     log::info!(
         "[Installer] Got {} Claude versions, latest: {}",
@@ -985,10 +1042,7 @@ pub(crate) fn decide_download_action(
 /// - 下载过程可通过 `cancel_claude_download(version)` 取消
 /// - 下载完成后再次校验 size，不匹配则删除文件并报错
 #[tauri::command]
-pub async fn download_claude_version(
-    app: AppHandle,
-    version: String,
-) -> Result<String, String> {
+pub async fn download_claude_version(app: AppHandle, version: String) -> Result<String, String> {
     log::info!("[Installer] Downloading Claude CLI version {}", version);
 
     emit_progress(&app, "claude-history", "fetching", 0, "获取版本信息...");
@@ -1024,10 +1078,12 @@ pub async fn download_claude_version(
 
     // 取当前平台
     let platform = get_current_platform();
-    let platform_info = entry
-        .platforms
-        .get(&platform)
-        .ok_or_else(|| format!("Version {} not available for platform {}", version, platform))?;
+    let platform_info = entry.platforms.get(&platform).ok_or_else(|| {
+        format!(
+            "Version {} not available for platform {}",
+            version, platform
+        )
+    })?;
 
     let expected_size = platform_info.size;
     let download_url = format!("{}/{}", OSS_BASE_URL, platform_info.url);
@@ -1050,8 +1106,8 @@ pub async fn download_claude_version(
 
     // 下载目录：用户下载目录 → home 目录 → 临时目录
     let download_dir = dirs::download_dir()
-        .or_else(|| dirs::home_dir())
-        .unwrap_or_else(|| std::env::temp_dir());
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(std::env::temp_dir);
     let save_path = download_dir.join(&filename);
 
     // 注册取消标志（提前到决策之前，便于在缓存检查阶段也能响应取消）
@@ -1238,7 +1294,13 @@ pub async fn install_claude_version(
         return Err(format!("Source file not found: {}", source_path));
     }
 
-    emit_progress(&app, "claude-history", "installing", 0, "检查 Claude 进程...");
+    emit_progress(
+        &app,
+        "claude-history",
+        "installing",
+        0,
+        "检查 Claude 进程...",
+    );
 
     // 检测 claude 进程是否在运行
     let claude_running = tokio::task::spawn_blocking(|| {
@@ -1259,8 +1321,7 @@ pub async fn install_claude_version(
 
     // 目标路径
     let (claude_dir, _) = get_install_dirs();
-    fs::create_dir_all(&claude_dir)
-        .map_err(|e| format!("Failed to create claude dir: {}", e))?;
+    fs::create_dir_all(&claude_dir).map_err(|e| format!("Failed to create claude dir: {}", e))?;
 
     let filename = if cfg!(target_os = "windows") {
         "claude.exe"

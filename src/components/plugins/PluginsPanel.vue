@@ -62,7 +62,6 @@ import { useSidebarStore } from '@/stores/sidebar'
 import { useAppStore } from '@/stores/app'
 
 const { t } = useI18n()
-import type { PluginInfo } from '@/types'
 import PluginGroup from './PluginGroup.vue'
 import PanelHeader from '../sidebar/PanelHeader.vue'
 

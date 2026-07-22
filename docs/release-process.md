@@ -45,6 +45,7 @@ node scripts/release.js --bump minor --notes "### Features\n- Add sidebar panel\
 5. 监控 CI 构建
 6. 发布 GitHub Release
 7. CI 生成 `latest.json` updater manifest，并与安装包一起上传到 GitHub Release
+8. 发布脚本请求 manifest 中每个平台资产链接；任一链接返回 404 或不可用状态时发布失败
 
 ### Release Notes 格式
 

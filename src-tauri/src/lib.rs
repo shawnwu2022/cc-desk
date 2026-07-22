@@ -1,23 +1,23 @@
-mod pty;
-mod pty_decoder;
-mod commands;
-mod store;
 mod checks;
-mod mcp;
-mod logger;
+mod commands;
+mod hook_config;
 mod hook_events;
 mod hook_server;
-mod hook_config;
 mod installer;
-mod providers;
+mod logger;
+mod mcp;
 mod platform;
+mod providers;
+mod pty;
+mod pty_decoder;
+mod store;
 #[cfg(test)]
 mod tests;
 
-use tauri::Manager;
-use tauri::Emitter;
 #[cfg(target_os = "macos")]
 use tauri::menu::MenuBuilder;
+use tauri::Emitter;
+use tauri::Manager;
 
 /// 全局缓存环境检查结果（setup 前执行，仅一次）
 use std::sync::LazyLock;
@@ -61,14 +61,11 @@ pub fn run(initial_dir: Option<String>) {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .on_window_event(|_window, event| {
-            match event {
-                tauri::WindowEvent::CloseRequested { .. } => {
-                    log::info!("Window close requested, cleaning up PTYs...");
-                    if let Some(manager) = pty::get_pty_manager() {
-                        manager.kill_all();
-                    }
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                log::info!("Window close requested, cleaning up PTYs...");
+                if let Some(manager) = pty::get_pty_manager() {
+                    manager.kill_all();
                 }
-                _ => {}
             }
         })
         .setup(|app| {
@@ -77,9 +74,7 @@ pub fn run(initial_dir: Option<String>) {
             // macOS: 注册原生 Copy 菜单项，使 Cmd+C 在 WebView 中生效
             #[cfg(target_os = "macos")]
             {
-                let menu = MenuBuilder::new(app)
-                    .copy()
-                    .build()?;
+                let menu = MenuBuilder::new(app).copy().build()?;
                 let _ = app.set_menu(menu);
             }
 
@@ -99,14 +94,19 @@ pub fn run(initial_dir: Option<String>) {
             {
                 if let Some(ww) = app.get_webview_window("main") {
                     let _ = ww.with_webview(|webview| {
-                        use windows_core::Interface;
                         use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+                        use windows_core::Interface;
                         let controller = webview.controller();
                         if let Ok(core_wv) = unsafe { controller.CoreWebView2() } {
                             if let Ok(settings) = unsafe { core_wv.Settings() } {
                                 if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
-                                    if let Err(e) = unsafe { settings3.SetAreBrowserAcceleratorKeysEnabled(false) } {
-                                        log::warn!("Failed to disable browser accelerator keys: {}", e);
+                                    if let Err(e) = unsafe {
+                                        settings3.SetAreBrowserAcceleratorKeysEnabled(false)
+                                    } {
+                                        log::warn!(
+                                            "Failed to disable browser accelerator keys: {}",
+                                            e
+                                        );
                                     } else {
                                         log::info!("WebView2 browser accelerator keys disabled");
                                     }
@@ -122,7 +122,10 @@ pub fn run(initial_dir: Option<String>) {
             tauri::async_runtime::spawn(async move {
                 // Plugin 文件部署（版本匹配时跳过）
                 if let Err(e) = hook_config::ensure_plugin_files() {
-                    log::warn!("Failed to create plugin files: {}. Hook monitoring may not work.", e);
+                    log::warn!(
+                        "Failed to create plugin files: {}. Hook monitoring may not work.",
+                        e
+                    );
                 }
                 // Hook HTTP 服务器
                 hook_server::init(handle.clone()).await;

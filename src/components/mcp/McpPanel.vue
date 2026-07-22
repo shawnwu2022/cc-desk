@@ -72,7 +72,7 @@ import { useSidebarStore } from '@/stores/sidebar'
 import { useAppStore } from '@/stores/app'
 
 const { t } = useI18n()
-import type { McpServerInfo, McpServerDetail } from '@/types'
+import type { McpServerDetail } from '@/types'
 import McpGroup from './McpGroup.vue'
 import PanelHeader from '../sidebar/PanelHeader.vue'
 

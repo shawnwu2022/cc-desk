@@ -8,7 +8,7 @@ on:
   workflow_dispatch:  # 允许在 GitHub 页面上手动触发
 
 permissions:
-  contents: write    # 赋予写入 Release 的权限
+  contents: read
 
 jobs:
   # ==========================================================
@@ -147,6 +147,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

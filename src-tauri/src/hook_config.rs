@@ -16,7 +16,10 @@ const REPORT_HOOK_SH: &str = include_str!("../plugin/scripts/report-hook.sh");
 static PLUGIN_VERSION: Lazy<String> = Lazy::new(|| {
     serde_json::from_str::<serde_json::Value>(PLUGIN_JSON)
         .ok()
-        .and_then(|v| v.get("version").map(|s| s.as_str().unwrap_or("unknown").to_string()))
+        .and_then(|v| {
+            v.get("version")
+                .map(|s| s.as_str().unwrap_or("unknown").to_string())
+        })
         .unwrap_or_else(|| "unknown".to_string())
 });
 
@@ -37,7 +40,10 @@ pub fn ensure_plugin_files() -> Result<()> {
     if version_file.exists() {
         if let Ok(existing_version) = fs::read_to_string(&version_file) {
             if existing_version.trim() == *PLUGIN_VERSION {
-                log::info!("Plugin version {} matches, skipping deployment", *PLUGIN_VERSION);
+                log::info!(
+                    "Plugin version {} matches, skipping deployment",
+                    *PLUGIN_VERSION
+                );
                 return Ok(());
             }
         }

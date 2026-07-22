@@ -295,6 +295,12 @@ function publishRelease(version, releaseNotes) {
   }
 }
 
+function verifyPublishedUpdaterManifest(version) {
+  logStep('验证 updater 资产链接...')
+  const manifestUrl = `https://github.com/shawnwu2022/cc-desk/releases/download/v${version}/latest.json`
+  execWithProxyRetry(`node scripts/verify-updater-manifest.js "${manifestUrl}"`)
+  logSuccess('updater 资产链接可用')
+}
 // ============================================
 // OSS 上传
 // ============================================
@@ -629,6 +635,7 @@ async function main() {
   }
 
   publishRelease(newVersion, args.releaseNotes)
+  verifyPublishedUpdaterManifest(newVersion)
 
   // 清理代理配置
   clearAllProxyConfig()

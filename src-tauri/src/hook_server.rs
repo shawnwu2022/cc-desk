@@ -83,7 +83,11 @@ async fn handle_hook(
     let event: Value = match serde_json::from_str(&body_str) {
         Ok(v) => v,
         Err(e) => {
-            log::warn!("[hook-server] JSON parse error: {} (body length={})", e, body_str.len());
+            log::warn!(
+                "[hook-server] JSON parse error: {} (body length={})",
+                e,
+                body_str.len()
+            );
             return Json(json!({}));
         }
     };
@@ -100,10 +104,18 @@ async fn handle_hook(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    log::info!("[hook-server] received: {} pty={}", event_name, pty_id.as_deref().unwrap_or("?"));
+    log::info!(
+        "[hook-server] received: {} pty={}",
+        event_name,
+        pty_id.as_deref().unwrap_or("?")
+    );
 
     // 建立 session_id ↔ pty_id 映射
-    if let Some(ref sid) = event.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+    if let Some(ref sid) = event
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+    {
         if let Some(ref pty) = pty_id {
             let mut sessions = SESSIONS.lock().await;
             sessions.insert(sid.to_string(), pty.clone());

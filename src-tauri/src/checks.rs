@@ -146,7 +146,10 @@ fn check_claude_cli(config_path: &Option<String>) -> CheckResult {
             return CheckResult::pass_with_path("Claude CLI", &format!("Found: {}", path), path);
         }
         // 配置路径不存在，记录警告，继续尝试 where 查找
-        log::warn!("[Check] Configured Claude path not found: {}, trying where...", path);
+        log::warn!(
+            "[Check] Configured Claude path not found: {}, trying where...",
+            path
+        );
     }
 
     // 2. 自动检测（where/which）
@@ -182,7 +185,10 @@ fn check_git_bash(config_path: &Option<String>) -> CheckResult {
             );
         }
         // 配置路径不存在，记录警告，继续尝试其他方式查找
-        log::warn!("[Check] Configured Git Bash path not found: {}, trying other methods...", path);
+        log::warn!(
+            "[Check] Configured Git Bash path not found: {}, trying other methods...",
+            path
+        );
     }
 
     // 2. 环境变量
@@ -251,4 +257,3 @@ fn detect_git_bash_from_git() -> Option<String> {
 
     None
 }
-

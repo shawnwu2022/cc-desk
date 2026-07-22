@@ -29,7 +29,7 @@ export interface AppConfig {
   lastOpenedProject?: string
   windowSize?: { width: number; height: number }
   claudeEnvVars?: Record<string, string>
-  language?: string
+  language?: 'en' | 'zh'
 }
 
 // 项目置顶 + 会话存档 + 项目别名持久化状态（~/.cc-box/projects.json，与 config.json 分开存储）
@@ -41,8 +41,8 @@ export interface ProjectsState {
 }
 
 export interface DefaultClaudeOptions {
-  skipPermissions?: boolean
-  customArgs?: string
+  skipPermissions: boolean
+  customArgs: string
 }
 
 // Claude 启动选项（前端使用）

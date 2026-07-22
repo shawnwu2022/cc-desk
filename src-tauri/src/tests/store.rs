@@ -1,14 +1,14 @@
 use serde_json::json;
 
 use crate::store::{
-    compute_project_startup_state, expand_env_vars, extract_md_description, extract_session_name,
-    find_valid_plugin_path, get_projects_state_at, infer_server_type, merge_json_values,
-    normalize_path_inner, parse_agents_list_output, parse_mcp_server_entry, parse_skill_description,
-    parse_timestamp, resolve_marketplace_plugin_path, search_session_messages_in_dirs,
-    set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,
-    acquire_lock, canonicalize_state, read_projects_state_locked,
-    with_projects_state_locked, write_json_atomic, replace_file_atomic, normalize_path_str_pub, AgentInfo, AppConfig,
-    Project, ProjectsState, assemble_home_data, HomeData, SessionInfo,
+    acquire_lock, assemble_home_data, canonicalize_state, compute_project_startup_state,
+    expand_env_vars, extract_md_description, extract_session_name, find_valid_plugin_path,
+    get_projects_state_at, infer_server_type, merge_json_values, normalize_path_inner,
+    normalize_path_str_pub, parse_agents_list_output, parse_mcp_server_entry,
+    parse_skill_description, parse_timestamp, read_projects_state_locked, replace_file_atomic,
+    resolve_marketplace_plugin_path_at, search_session_messages_in_dirs, set_agent_enabled_in,
+    set_mcp_server_enabled_in, set_skill_enabled_in, with_projects_state_locked, write_json_atomic,
+    AgentInfo, AppConfig, Project, ProjectsState, SessionInfo,
 };
 
 use std::collections::HashMap;
@@ -83,7 +83,10 @@ fn ParseMcpEntry_StdioServer_001() {
     assert_eq!(info.command.as_deref(), Some("npx"));
     assert_eq!(info.args.as_ref().unwrap().len(), 2);
     assert_eq!(info.args.as_ref().unwrap()[0], "-y");
-    assert_eq!(info.env.as_ref().unwrap().get("CHROME_PATH").unwrap(), "/usr/bin/chrome");
+    assert_eq!(
+        info.env.as_ref().unwrap().get("CHROME_PATH").unwrap(),
+        "/usr/bin/chrome"
+    );
     assert_eq!(info.server_type.as_deref(), Some("stdio"));
     assert_eq!(info.source_type, "user");
     assert!(info.url.is_none());
@@ -103,7 +106,10 @@ fn ParseMcpEntry_HttpServer_001() {
     assert_eq!(info.name, "zread");
     assert_eq!(info.url.as_deref(), Some("https://api.example.com/mcp"));
     assert_eq!(info.server_type.as_deref(), Some("http"));
-    assert_eq!(info.headers.as_ref().unwrap().get("Authorization").unwrap(), "Bearer token123");
+    assert_eq!(
+        info.headers.as_ref().unwrap().get("Authorization").unwrap(),
+        "Bearer token123"
+    );
     assert!(info.command.is_none());
 }
 
@@ -179,7 +185,10 @@ fn InferType_NonObject_001() {
 #[test]
 fn ExpandEnvVars_ExtraEnv_001() {
     let mut extra = HashMap::new();
-    extra.insert("CLAUDE_PLUGIN_ROOT".to_string(), "C:/plugins/paper".to_string());
+    extra.insert(
+        "CLAUDE_PLUGIN_ROOT".to_string(),
+        "C:/plugins/paper".to_string(),
+    );
     let result = expand_env_vars("${CLAUDE_PLUGIN_ROOT}/sub", Some(&extra));
     assert_eq!(result, "C:/plugins/paper/sub");
 }
@@ -217,7 +226,10 @@ fn ParseMcpEntry_PluginEnvExpand_001() {
         "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/paper-search", "mcp_server.py"]
     });
     let mut extra = HashMap::new();
-    extra.insert("CLAUDE_PLUGIN_ROOT".to_string(), "C:/plugins/paper-tool".to_string());
+    extra.insert(
+        "CLAUDE_PLUGIN_ROOT".to_string(),
+        "C:/plugins/paper-tool".to_string(),
+    );
     let result = parse_mcp_server_entry("plugin:paper-tool:paper", &config, "plugin", Some(&extra));
     assert!(result.is_some());
     let info = result.unwrap();
@@ -404,7 +416,7 @@ fn ParseTimestamp_EmptyString_001() {
 // 多条用户消息时返回第一条有效消息，而非最后一条
 #[test]
 fn ExtractSessionName_FirstUserMessage_001() {
-    let lines = vec![
+    let lines = [
         r#"{"type":"user","message":{"content":"First prompt here"},"isMeta":false}"#,
         r#"{"type":"assistant","message":{"content":"response"}}"#,
         r#"{"type":"user","message":{"content":"Second prompt here"},"isMeta":false}"#,
@@ -420,7 +432,7 @@ fn ExtractSessionName_FirstUserMessage_001() {
 // custom-title 优先级高于用户消息
 #[test]
 fn ExtractSessionName_CustomTitlePriority_001() {
-    let lines = vec![
+    let lines = [
         r#"{"type":"user","message":{"content":"User message"},"isMeta":false}"#,
         r#"{"type":"custom-title","customTitle":"My Custom Title"}"#,
     ];
@@ -434,7 +446,7 @@ fn ExtractSessionName_CustomTitlePriority_001() {
 // isMeta=true 的消息被过滤，不作为名称
 #[test]
 fn ExtractSessionName_SkipMeta_001() {
-    let lines = vec![
+    let lines = [
         r#"{"type":"user","message":{"content":"meta prompt"},"isMeta":true}"#,
         r#"{"type":"user","message":{"content":"real prompt"},"isMeta":false}"#,
     ];
@@ -448,7 +460,7 @@ fn ExtractSessionName_SkipMeta_001() {
 // 以 < 开头的系统注入消息被过滤
 #[test]
 fn ExtractSessionName_SkipSystemInject_001() {
-    let lines = vec![
+    let lines = [
         r#"{"type":"user","message":{"content":"<system-reminder>some system text</system-reminder>"},"isMeta":false}"#,
         r#"{"type":"user","message":{"content":"actual user message"},"isMeta":false}"#,
     ];
@@ -463,7 +475,7 @@ fn ExtractSessionName_SkipSystemInject_001() {
 #[test]
 fn ExtractSessionName_TruncateLong_001() {
     let long_msg: String = "a".repeat(60);
-    let lines = vec![format!(
+    let lines = [format!(
         r#"{{"type":"user","message":{{"content":"{}"}},"isMeta":false}}"#,
         long_msg
     )];
@@ -487,104 +499,103 @@ fn ExtractSessionName_NoMessages_001() {
 }
 
 // ==================== find_valid_plugin_path ====================
-// 使用本机真实路径验证完整查找链路
 
-// frontend-design cache 路径存在，直接返回
 #[test]
 fn FindPlugin_CacheExists_001() {
-    let result = find_valid_plugin_path(
-        "C:\\Users\\orczh\\.claude\\plugins\\cache\\claude-plugins-official\\frontend-design\\104d39be10b7",
-        "frontend-design@claude-plugins-official",
-    );
-    assert!(result.is_some());
-    assert!(result.unwrap().contains("frontend-design"));
-}
+    let temp = tempfile::tempdir().unwrap();
+    let cache_path = temp.path().join("cache").join("frontend-design");
+    std::fs::create_dir_all(&cache_path).unwrap();
 
-// paper-tool cache 路径不存在，回退到 marketplace source 找到真实路径
-#[test]
-fn FindPlugin_CacheMissingFallsBackToMarketplace_001() {
-    let result = find_valid_plugin_path(
-        "C:\\Users\\orczh\\.claude\\plugins\\cache\\orczh\\paper-tool\\2.4.1",
-        "paper-tool@orczh",
-    );
-    assert!(result.is_some());
-    let path = result.unwrap();
-    assert!(path.contains("paper-tool"));
-    // 路径存在且包含 plugin.json
-    assert!(std::path::Path::new(&path).join(".claude-plugin").join("plugin.json").exists());
-}
+    let result = find_valid_plugin_path(cache_path.to_str().unwrap(), "ignored@fixture");
 
-// pyright-lsp cache 路径存在
-#[test]
-fn FindPlugin_PyrightCacheExists_001() {
-    let result = find_valid_plugin_path(
-        "C:\\Users\\orczh\\.claude\\plugins\\cache\\claude-plugins-official\\pyright-lsp\\1.0.0",
-        "pyright-lsp@claude-plugins-official",
-    );
-    assert!(result.is_some());
-}
-
-// claude-scientific-writer cache 路径存在
-#[test]
-fn FindPlugin_ScientificWriterCacheExists_001() {
-    let result = find_valid_plugin_path(
-        "C:\\Users\\orczh\\.claude\\plugins\\cache\\claude-scientific-writer\\claude-scientific-writer\\5bf6b597e2af",
-        "claude-scientific-writer@claude-scientific-writer",
-    );
-    assert!(result.is_some());
+    assert_eq!(result.as_deref(), cache_path.to_str());
 }
 
 // 不存在的路径 + 无效 marketplace name 返回 None
 #[test]
 fn FindPlugin_InvalidId_001() {
-    let result = find_valid_plugin_path(
-        "C:\\nonexistent\\path",
-        "fake-plugin@fake-marketplace",
-    );
+    let result = find_valid_plugin_path("C:\\nonexistent\\path", "fake-plugin@fake-marketplace");
     assert!(result.is_none());
 }
 
 // ==================== resolve_marketplace_plugin_path ====================
 
-// 通过 known_marketplaces.json 解析 paper-tool@orczh 的真实路径
+fn create_marketplace_fixture(
+    source: serde_json::Value,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let install_location = temp.path().join("marketplace");
+    let plugin_path = install_location.join("plugins").join("fixture-plugin");
+    std::fs::create_dir_all(plugin_path.join(".claude-plugin")).unwrap();
+    std::fs::write(plugin_path.join(".claude-plugin").join("plugin.json"), "{}").unwrap();
+    std::fs::create_dir_all(install_location.join(".claude-plugin")).unwrap();
+    std::fs::write(
+        install_location
+            .join(".claude-plugin")
+            .join("marketplace.json"),
+        serde_json::to_string(&json!({"plugins": [{"name": "fixture-plugin", "source": source}]}))
+            .unwrap(),
+    )
+    .unwrap();
+    let known_dir = temp.path().join(".claude").join("plugins");
+    std::fs::create_dir_all(&known_dir).unwrap();
+    std::fs::write(
+        known_dir.join("known_marketplaces.json"),
+        serde_json::to_string(&json!({"fixture": {"installLocation": install_location}})).unwrap(),
+    )
+    .unwrap();
+    (temp, plugin_path)
+}
+
 #[test]
 fn ResolveMarketplace_LocalDirectory_001() {
-    let result = resolve_marketplace_plugin_path("paper-tool@orczh");
-    assert!(result.is_some());
-    let path = result.unwrap();
-    assert!(std::path::Path::new(&path).exists());
-    assert!(std::path::Path::new(&path).join(".claude-plugin").join("plugin.json").exists());
+    let (temp, plugin_path) = create_marketplace_fixture(json!("./plugins/fixture-plugin"));
+    let result = resolve_marketplace_plugin_path_at(temp.path(), "fixture-plugin@fixture");
+
+    let resolved = std::path::PathBuf::from(result.expect("fixture plugin path should resolve"));
+    assert_eq!(
+        resolved.canonicalize().unwrap(),
+        plugin_path.canonicalize().unwrap()
+    );
 }
 
-// 通过 github marketplace 解析 frontend-design@claude-plugins-official
 #[test]
-fn ResolveMarketplace_GithubMarketplace_001() {
-    let result = resolve_marketplace_plugin_path("frontend-design@claude-plugins-official");
-    assert!(result.is_some());
-    let path = result.unwrap();
-    assert!(std::path::Path::new(&path).exists());
+fn ResolveMarketplace_SourceObject_001() {
+    let (temp, plugin_path) =
+        create_marketplace_fixture(json!({"source": "./plugins/fixture-plugin"}));
+    let result = resolve_marketplace_plugin_path_at(temp.path(), "fixture-plugin@fixture");
+
+    let resolved = std::path::PathBuf::from(result.expect("fixture plugin path should resolve"));
+    assert_eq!(
+        resolved.canonicalize().unwrap(),
+        plugin_path.canonicalize().unwrap()
+    );
 }
 
-// 无效 marketplace name 返回 None
 #[test]
 fn ResolveMarketplace_UnknownMarketplace_001() {
-    let result = resolve_marketplace_plugin_path("plugin@nonexistent-marketplace");
-    assert!(result.is_none());
+    let (temp, _) = create_marketplace_fixture(json!("./plugins/fixture-plugin"));
+    assert!(resolve_marketplace_plugin_path_at(temp.path(), "plugin@missing").is_none());
 }
 
-// 格式错误的 plugin_id（无 @ 分隔）返回 None
 #[test]
 fn ResolveMarketplace_BadFormat_001() {
-    let result = resolve_marketplace_plugin_path("no-at-sign");
-    assert!(result.is_none());
+    let (temp, _) = create_marketplace_fixture(json!("./plugins/fixture-plugin"));
+    assert!(resolve_marketplace_plugin_path_at(temp.path(), "no-at-sign").is_none());
 }
-
 // ==================== search_session_messages_in_dirs ====================
 
 // 构造一行 JSONL 消息（user/assistant，content 为 string）
 fn build_jsonl_line(msg_type: &str, content: &str) -> String {
-    let t = if msg_type == "user" { "user" } else { "assistant" };
-    format!(r#"{{"type":"{}","message":{{"content":"{}"}}}}"#, t, content)
+    let t = if msg_type == "user" {
+        "user"
+    } else {
+        "assistant"
+    };
+    format!(
+        r#"{{"type":"{}","message":{{"content":"{}"}}}}"#,
+        t, content
+    )
 }
 
 // 单文件单消息按 query 匹配，返回 snippet
@@ -630,15 +641,25 @@ fn SearchSession_LongFile_OldMessage_001() {
 
     // 前 250 行是不匹配的填充，第 1 行（最老）才是目标
     let mut content = String::new();
-    content.push_str(&format!("{}\n", build_jsonl_line("user", "TARGET_KEYWORD_HERE")));
+    content.push_str(&format!(
+        "{}\n",
+        build_jsonl_line("user", "TARGET_KEYWORD_HERE")
+    ));
     for i in 0..250 {
-        content.push_str(&format!("{}\n", build_jsonl_line("assistant", &format!("filler {}", i))));
+        content.push_str(&format!(
+            "{}\n",
+            build_jsonl_line("assistant", &format!("filler {}", i))
+        ));
     }
     std::fs::write(&file_path, content).unwrap();
 
     let dirs = vec![dir.path().to_path_buf()];
     let results = search_session_messages_in_dirs(&dirs, "/proj", "TARGET_KEYWORD", 10);
-    assert_eq!(results.len(), 1, "old message outside newest 200 lines should be matched");
+    assert_eq!(
+        results.len(),
+        1,
+        "old message outside newest 200 lines should be matched"
+    );
     assert!(results[0].snippet.contains("TARGET_KEYWORD"));
 }
 
@@ -648,9 +669,18 @@ fn SearchSession_LatestMatchFirst_001() {
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("multi.jsonl");
     let mut content = String::new();
-    content.push_str(&format!("{}\n", build_jsonl_line("user", "KEYWORD old match")));
-    content.push_str(&format!("{}\n", build_jsonl_line("assistant", "no match here")));
-    content.push_str(&format!("{}\n", build_jsonl_line("user", "KEYWORD new match")));
+    content.push_str(&format!(
+        "{}\n",
+        build_jsonl_line("user", "KEYWORD old match")
+    ));
+    content.push_str(&format!(
+        "{}\n",
+        build_jsonl_line("assistant", "no match here")
+    ));
+    content.push_str(&format!(
+        "{}\n",
+        build_jsonl_line("user", "KEYWORD new match")
+    ));
     std::fs::write(&file_path, content).unwrap();
 
     let dirs = vec![dir.path().to_path_buf()];
@@ -918,14 +948,26 @@ fn SetMcpEnabled_Disable_CutsEntry_001() {
 
     // backup 文件含单条 server 配置
     let backup = std::fs::read_to_string(disabled_dir.join("zread.json")).unwrap();
-    assert!(backup.contains("https://x"), "backup should contain url content");
-    assert!(!backup.contains("\"other\""), "backup should only contain zread");
+    assert!(
+        backup.contains("https://x"),
+        "backup should contain url content"
+    );
+    assert!(
+        !backup.contains("\"other\""),
+        "backup should only contain zread"
+    );
 
     // 主配置保留其他字段和其他 server
     let main = std::fs::read_to_string(&claude_json).unwrap();
-    assert!(main.contains("\"keepMe\""), "other config must be preserved");
+    assert!(
+        main.contains("\"keepMe\""),
+        "other config must be preserved"
+    );
     assert!(main.contains("\"other\""), "other server must be preserved");
-    assert!(!main.contains("zread"), "zread should be removed from main config");
+    assert!(
+        !main.contains("zread"),
+        "zread should be removed from main config"
+    );
 }
 
 // 启用 MCP：backup 内容贴回 mcpServers，backup 文件删除
@@ -949,11 +991,20 @@ fn SetMcpEnabled_Enable_PastesBack_001() {
     set_mcp_server_enabled_in(&claude_json, &disabled_dir, "zread", true).unwrap();
 
     let main = std::fs::read_to_string(&claude_json).unwrap();
-    assert!(main.contains("zread"), "zread should be back in main config");
-    assert!(main.contains("https://x"), "zread config content should be intact");
+    assert!(
+        main.contains("zread"),
+        "zread should be back in main config"
+    );
+    assert!(
+        main.contains("https://x"),
+        "zread config content should be intact"
+    );
     assert!(main.contains("\"keepMe\""), "other config preserved");
     assert!(main.contains("\"other\""), "other server preserved");
-    assert!(!disabled_dir.join("zread.json").exists(), "backup file should be removed");
+    assert!(
+        !disabled_dir.join("zread.json").exists(),
+        "backup file should be removed"
+    );
 }
 
 // 禁用不存在的 server → Err
@@ -976,11 +1027,7 @@ fn SetMcpEnabled_Disable_AlreadyDisabled_001() {
     let claude_json = tmp.path().join(".claude.json");
     let disabled_dir = tmp.path().join("disabled_mcp");
     std::fs::create_dir_all(&disabled_dir).unwrap();
-    std::fs::write(
-        &claude_json,
-        r#"{"mcpServers":{"zread":{"url":"x"}}}"#,
-    )
-    .unwrap();
+    std::fs::write(&claude_json, r#"{"mcpServers":{"zread":{"url":"x"}}}"#).unwrap();
     std::fs::write(disabled_dir.join("zread.json"), r#"{"url":"x"}"#).unwrap();
 
     let r = set_mcp_server_enabled_in(&claude_json, &disabled_dir, "zread", false);
@@ -994,11 +1041,7 @@ fn SetMcpEnabled_Enable_Conflict_001() {
     let claude_json = tmp.path().join(".claude.json");
     let disabled_dir = tmp.path().join("disabled_mcp");
     std::fs::create_dir_all(&disabled_dir).unwrap();
-    std::fs::write(
-        &claude_json,
-        r#"{"mcpServers":{"zread":{"url":"old"}}}"#,
-    )
-    .unwrap();
+    std::fs::write(&claude_json, r#"{"mcpServers":{"zread":{"url":"old"}}}"#).unwrap();
     std::fs::write(disabled_dir.join("zread.json"), r#"{"url":"new"}"#).unwrap();
 
     let r = set_mcp_server_enabled_in(&claude_json, &disabled_dir, "zread", true);
@@ -1155,7 +1198,10 @@ fn WithLocked_WritesCamelCase_001() {
     })
     .unwrap();
     let content = std::fs::read_to_string(&data).unwrap();
-    assert!(content.contains("\"pinnedProjects\""), "应使用 camelCase 字段名");
+    assert!(
+        content.contains("\"pinnedProjects\""),
+        "应使用 camelCase 字段名"
+    );
     assert!(!content.contains("pinned_projects"), "不应出现 snake_case");
     // 内容整体可被解析回 ProjectsState
     let reparsed: ProjectsState = serde_json::from_str(&content).unwrap();
@@ -1358,7 +1404,7 @@ fn AssembleHome_Pagination_001() {
 fn AssembleHome_StartupUsesFullSetBeyondPagination_001() {
     let projects = vec![
         sample_project("/p-a", Some(100)),   // 分页内（limit=1）
-        sample_project("/p-deep", Some(50)),  // 分页外
+        sample_project("/p-deep", Some(50)), // 分页外
     ];
     let home = assemble_home_data(projects, vec![], "/p-deep", &[], 1, 20);
     assert_eq!(home.projects.len(), 1);
@@ -1412,7 +1458,10 @@ fn ProjectsState_DisplayNames_Roundtrip_001() {
         display_names: m,
     };
     let json = serde_json::to_string(&state).unwrap();
-    assert!(json.contains("\"displayNames\""), "字段名须为 camelCase displayNames");
+    assert!(
+        json.contains("\"displayNames\""),
+        "字段名须为 camelCase displayNames"
+    );
     let back: ProjectsState = serde_json::from_str(&json).unwrap();
     assert_eq!(back.display_names.get("/p-a"), Some(&"主项目".to_string()));
 }
@@ -1444,10 +1493,14 @@ fn ProjectsState_MalformedDisplayNames_Array_001() {
 // displayNames 内某条目值非 string（数字）-> 跳过该条目，其余保留
 #[test]
 fn ProjectsState_MalformedDisplayNames_NonStringValue_001() {
-    let json = r#"{"pinnedProjects":[],"archivedSessions":{},"displayNames":{"/p-a":"别名","/p-b":123}}"#;
+    let json =
+        r#"{"pinnedProjects":[],"archivedSessions":{},"displayNames":{"/p-a":"别名","/p-b":123}}"#;
     let state: ProjectsState = serde_json::from_str(json).unwrap();
     assert_eq!(state.display_names.get("/p-a"), Some(&"别名".to_string()));
-    assert!(state.display_names.get("/p-b").is_none(), "非 string 值条目跳过");
+    assert!(
+        !state.display_names.contains_key("/p-b"),
+        "非 string 值条目跳过"
+    );
 }
 
 // ==================== write_json_atomic（含 Windows target exists） ====================
@@ -1479,9 +1532,14 @@ fn WriteJsonAtomic_NoTmpLeftover_001() {
 fn WriteJsonAtomic_ReplacesFully_001() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("projects.json");
-    std::fs::write(&path, serde_json::to_string_pretty(&serde_json::json!({"old": true})).unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&serde_json::json!({"old": true})).unwrap(),
+    )
+    .unwrap();
     write_json_atomic(&path, &serde_json::json!({"displayNames": {"/p-a": "新"}})).unwrap();
-    let back: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let back: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(back["displayNames"]["/p-a"], "新");
     assert!(back.get("old").is_none(), "完整替换，旧 key 不残留");
 }
@@ -1493,15 +1551,32 @@ fn WriteJsonAtomic_ReplacesExisting_001() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("projects.json");
     // 第一次写（目标不存在）
-    write_json_atomic(&path, &serde_json::json!({"displayNames": {"/p-a": "first"}})).unwrap();
-    assert_eq!(std::fs::read_to_string(&path).unwrap().contains("first"), true);
+    write_json_atomic(
+        &path,
+        &serde_json::json!({"displayNames": {"/p-a": "first"}}),
+    )
+    .unwrap();
+    assert!(std::fs::read_to_string(&path).unwrap().contains("first"));
     // 第二次写（目标已存在）--Windows 上裸 fs::rename 会失败，原子 replace 后须成功
-    write_json_atomic(&path, &serde_json::json!({"displayNames": {"/p-a": "second"}})).unwrap();
-    let back: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(back["displayNames"]["/p-a"], "second", "目标已存在时二次写入须覆盖成功");
+    write_json_atomic(
+        &path,
+        &serde_json::json!({"displayNames": {"/p-a": "second"}}),
+    )
+    .unwrap();
+    let back: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        back["displayNames"]["/p-a"], "second",
+        "目标已存在时二次写入须覆盖成功"
+    );
     // 三次写仍成功（连续覆盖）
-    write_json_atomic(&path, &serde_json::json!({"displayNames": {"/p-a": "third"}})).unwrap();
-    let back3: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    write_json_atomic(
+        &path,
+        &serde_json::json!({"displayNames": {"/p-a": "third"}}),
+    )
+    .unwrap();
+    let back3: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(back3["displayNames"]["/p-a"], "third");
 }
 
@@ -1593,7 +1668,10 @@ fn WithLocked_AtomicWrite_FailPreservesOriginal_001() {
 // Windows/macOS（case_sensitive=false）：反斜杠规范 + 去尾斜杠 + 小写
 #[test]
 fn NormalizePath_CaseInsensitive_Normalize_001() {
-    assert_eq!(normalize_path_inner("E:\\Source\\Foo\\", false), "e:/source/foo");
+    assert_eq!(
+        normalize_path_inner("E:\\Source\\Foo\\", false),
+        "e:/source/foo"
+    );
 }
 
 // Windows/macOS：大小写不敏感 -> E:\Repo 与 e:/repo 归一为同身份
@@ -1631,7 +1709,10 @@ fn NormalizePath_CaseSensitive_DistinctIdentity_001() {
 // Linux：反斜杠规范 + 去尾斜杠仍生效（仅大小写保留）
 #[test]
 fn NormalizePath_CaseSensitive_NormalizeSlash_001() {
-    assert_eq!(normalize_path_inner("/work/Foo\\Bar/", true), "/work/Foo/Bar");
+    assert_eq!(
+        normalize_path_inner("/work/Foo\\Bar/", true),
+        "/work/Foo/Bar"
+    );
 }
 
 // POSIX 根 '/' 去尾斜杠后恢复 '/'（非空串 key），两支平台一致
@@ -1651,19 +1732,31 @@ fn Canonicalize_PinnedMergesEquivalent_001() {
         ..Default::default()
     };
     canonicalize_state(&mut s);
-    assert_eq!(s.pinned_projects, vec!["e:/repo".to_string(), "e:/other".to_string()]);
+    assert_eq!(
+        s.pinned_projects,
+        vec!["e:/repo".to_string(), "e:/other".to_string()]
+    );
 }
 
 // archivedSessions：等价 key 合并、sessionId 去重
 #[test]
 fn Canonicalize_ArchivedMergesEquivalent_001() {
     let mut a = std::collections::HashMap::new();
-    a.insert("E:\\P".to_string(), vec!["s1".to_string(), "s2".to_string()]);
+    a.insert(
+        "E:\\P".to_string(),
+        vec!["s1".to_string(), "s2".to_string()],
+    );
     a.insert("e:/p".to_string(), vec!["s2".to_string(), "s3".to_string()]);
-    let mut s = ProjectsState { archived_sessions: a, ..Default::default() };
+    let mut s = ProjectsState {
+        archived_sessions: a,
+        ..Default::default()
+    };
     canonicalize_state(&mut s);
     let merged = s.archived_sessions.get("e:/p").unwrap();
-    assert_eq!(merged, &vec!["s1".to_string(), "s2".to_string(), "s3".to_string()]);
+    assert_eq!(
+        merged,
+        &vec!["s1".to_string(), "s2".to_string(), "s3".to_string()]
+    );
     assert_eq!(s.archived_sessions.len(), 1, "等价 key 应合并为 1 个");
 }
 
@@ -1671,9 +1764,12 @@ fn Canonicalize_ArchivedMergesEquivalent_001() {
 #[test]
 fn Canonicalize_DisplayNamesConflictDeterministic_001() {
     let mut d = std::collections::HashMap::new();
-    d.insert("E:\\B".to_string(), "beta".to_string());   // 原始 key "E:\B"
-    d.insert("e:/b".to_string(), "alpha".to_string());   // 原始 key "e:/b"
-    let mut s = ProjectsState { display_names: d, ..Default::default() };
+    d.insert("E:\\B".to_string(), "beta".to_string()); // 原始 key "E:\B"
+    d.insert("e:/b".to_string(), "alpha".to_string()); // 原始 key "e:/b"
+    let mut s = ProjectsState {
+        display_names: d,
+        ..Default::default()
+    };
     canonicalize_state(&mut s);
     // 原始 key 字典序最小："E:\B" < "e:/b"（ASCII 'E'=69 < 'e'=101）-> 保留 "beta"
     assert_eq!(s.display_names.get("e:/b"), Some(&"beta".to_string()));
@@ -1704,7 +1800,8 @@ fn WithLocked_FirstWriteAppliesAndReturns_001() {
     let state = with_projects_state_locked(&data, &lock, |s| {
         s.pinned_projects.push("e:/a".into());
         Ok::<(), anyhow::Error>(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(state.pinned_projects, vec!["e:/a".to_string()]);
     assert!(data.exists());
     assert!(lock.exists(), "lock 文件应被创建");
@@ -1717,7 +1814,11 @@ fn WithLocked_ApplyErrDoesNotWrite_001() {
     let data = tmp.path().join("projects.json");
     let lock = tmp.path().join("projects.json.lock");
     // 先写入基线
-    with_projects_state_locked(&data, &lock, |s| { s.pinned_projects.push("e:/keep".into()); Ok(()) }).unwrap();
+    with_projects_state_locked(&data, &lock, |s| {
+        s.pinned_projects.push("e:/keep".into());
+        Ok(())
+    })
+    .unwrap();
     // apply 返 Err
     let res = with_projects_state_locked(&data, &lock, |_s| {
         Err::<(), anyhow::Error>(anyhow::anyhow!("alias invalid"))
@@ -1769,8 +1870,12 @@ fn WithLocked_CanonicalizesBeforeApply_001() {
     let state = with_projects_state_locked(&data, &lock, |s| {
         s.pinned_projects.push("e:/b".into());
         Ok::<(), anyhow::Error>(())
-    }).unwrap();
-    assert_eq!(state.pinned_projects, vec!["e:/a".to_string(), "e:/b".to_string()]);
+    })
+    .unwrap();
+    assert_eq!(
+        state.pinned_projects,
+        vec!["e:/a".to_string(), "e:/b".to_string()]
+    );
 }
 
 // ==================== command 行为单测（模拟 command apply 逻辑）====================
@@ -1791,7 +1896,11 @@ fn PinProjectCommand_Idempotent_001() {
     with_projects_state_locked(&data, &lock, apply).unwrap();
     // 再 pin 等价路径（不同大小写/斜杠），normalized 后同一 key，不应增加
     let s2 = with_projects_state_locked(&data, &lock, apply).unwrap();
-    assert_eq!(s2.pinned_projects, vec!["e:/a".to_string()], "重复 pin 等价路径不增加");
+    assert_eq!(
+        s2.pinned_projects,
+        vec!["e:/a".to_string()],
+        "重复 pin 等价路径不增加"
+    );
 }
 
 // 模拟 set_display_name command 的 apply 逻辑：超长 alias -> Err，状态不变（校验失败不写入）
@@ -1833,7 +1942,11 @@ fn conc_dirs() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
 fn wait_for_file(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while !path.exists() {
-        assert!(Instant::now() < deadline, "等待文件超时: {}", path.display());
+        assert!(
+            Instant::now() < deadline,
+            "等待文件超时: {}",
+            path.display()
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -1862,18 +1975,25 @@ fn run_conc_child_if_set() -> bool {
     let data = std::path::Path::new(&dir).join("projects.json");
     let lock = std::path::Path::new(&dir).join("projects.json.lock");
     if env::var_os("CC_BOX_CONC_BARRIER").is_some() {
-        wait_for_file(&std::path::Path::new(&dir).join("start"), Duration::from_secs(5));
+        wait_for_file(
+            &std::path::Path::new(&dir).join("start"),
+            Duration::from_secs(5),
+        );
     }
     match mode.as_str() {
         "pin_a" => {
             with_projects_state_locked(&data, &lock, |s| {
-                s.pinned_projects.push("e:/a".into()); Ok::<(), anyhow::Error>(())
-            }).unwrap();
+                s.pinned_projects.push("e:/a".into());
+                Ok::<(), anyhow::Error>(())
+            })
+            .unwrap();
         }
         "pin_b" => {
             with_projects_state_locked(&data, &lock, |s| {
-                s.pinned_projects.push("e:/b".into()); Ok::<(), anyhow::Error>(())
-            }).unwrap();
+                s.pinned_projects.push("e:/b".into());
+                Ok::<(), anyhow::Error>(())
+            })
+            .unwrap();
         }
         "read" => {
             // 持共享锁读，结果写入 marker 文件供主测试校验「未返空」
@@ -1882,10 +2002,19 @@ fn run_conc_child_if_set() -> bool {
             std::fs::write(&marker, format!("pinned={}", s.pinned_projects.len())).unwrap();
         }
         "hold_lock" => {
-            let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&lock).unwrap();
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&lock)
+                .unwrap();
             acquire_lock(&file, true, Duration::from_secs(1)).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("lock_held"), "1").unwrap();
-            wait_for_file(&std::path::Path::new(&dir).join("release_lock"), Duration::from_secs(30));
+            wait_for_file(
+                &std::path::Path::new(&dir).join("release_lock"),
+                Duration::from_secs(30),
+            );
         }
         _ => {}
     }
@@ -1895,31 +2024,64 @@ fn run_conc_child_if_set() -> bool {
 // 两子进程并发 pin 不同项目 -> 磁盘含两者（无 stale-write 丢失）
 #[test]
 fn Concurrent_TwoChildrenBothPreserved_001() {
-    if run_conc_child_if_set() { return; }
+    if run_conc_child_if_set() {
+        return;
+    }
     let (_tmp, data, lock) = conc_dirs();
     let dir = data.parent().unwrap();
     let exe = env::current_exe().unwrap();
     // 子进程只跑本测试单名 -> 单线程 -> 操作仅应用一次，避免默认 harness 并行跑全部 test 引入竞态
-    let mut ha = Command::new(&exe).arg("Concurrent_TwoChildrenBothPreserved_001").env("CC_BOX_CONC_TEST", "pin_a").env("CC_BOX_CONC_DIR", dir).env("CC_BOX_CONC_BARRIER", "1").spawn().unwrap();
-    let mut hb = Command::new(&exe).arg("Concurrent_TwoChildrenBothPreserved_001").env("CC_BOX_CONC_TEST", "pin_b").env("CC_BOX_CONC_DIR", dir).env("CC_BOX_CONC_BARRIER", "1").spawn().unwrap();
+    let mut ha = Command::new(&exe)
+        .arg("Concurrent_TwoChildrenBothPreserved_001")
+        .env("CC_BOX_CONC_TEST", "pin_a")
+        .env("CC_BOX_CONC_DIR", dir)
+        .env("CC_BOX_CONC_BARRIER", "1")
+        .spawn()
+        .unwrap();
+    let mut hb = Command::new(&exe)
+        .arg("Concurrent_TwoChildrenBothPreserved_001")
+        .env("CC_BOX_CONC_TEST", "pin_b")
+        .env("CC_BOX_CONC_DIR", dir)
+        .env("CC_BOX_CONC_BARRIER", "1")
+        .spawn()
+        .unwrap();
     std::fs::write(dir.join("start"), "1").unwrap();
     wait_for_child(&mut ha, Duration::from_secs(10));
     wait_for_child(&mut hb, Duration::from_secs(10));
     let state = read_projects_state_locked(&data, &lock).unwrap();
-    let mut got = state.pinned_projects.clone(); got.sort();
-    assert_eq!(got, vec!["e:/a".to_string(), "e:/b".to_string()], "两子进程操作都应保留");
+    let mut got = state.pinned_projects.clone();
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["e:/a".to_string(), "e:/b".to_string()],
+        "两子进程操作都应保留"
+    );
 }
 
 // 首次（无数据文件）并发写不失败、不解析空文件
 #[test]
 fn Concurrent_FirstWriteNoFile_001() {
-    if run_conc_child_if_set() { return; }
+    if run_conc_child_if_set() {
+        return;
+    }
     let (_tmp, data, lock) = conc_dirs();
     assert!(!data.exists());
     let dir = data.parent().unwrap();
     let exe = env::current_exe().unwrap();
-    let mut ha = Command::new(&exe).arg("Concurrent_FirstWriteNoFile_001").env("CC_BOX_CONC_TEST", "pin_a").env("CC_BOX_CONC_DIR", dir).env("CC_BOX_CONC_BARRIER", "1").spawn().unwrap();
-    let mut hb = Command::new(&exe).arg("Concurrent_FirstWriteNoFile_001").env("CC_BOX_CONC_TEST", "pin_b").env("CC_BOX_CONC_DIR", dir).env("CC_BOX_CONC_BARRIER", "1").spawn().unwrap();
+    let mut ha = Command::new(&exe)
+        .arg("Concurrent_FirstWriteNoFile_001")
+        .env("CC_BOX_CONC_TEST", "pin_a")
+        .env("CC_BOX_CONC_DIR", dir)
+        .env("CC_BOX_CONC_BARRIER", "1")
+        .spawn()
+        .unwrap();
+    let mut hb = Command::new(&exe)
+        .arg("Concurrent_FirstWriteNoFile_001")
+        .env("CC_BOX_CONC_TEST", "pin_b")
+        .env("CC_BOX_CONC_DIR", dir)
+        .env("CC_BOX_CONC_BARRIER", "1")
+        .spawn()
+        .unwrap();
     std::fs::write(dir.join("start"), "1").unwrap();
     wait_for_child(&mut ha, Duration::from_secs(10));
     wait_for_child(&mut hb, Duration::from_secs(10));
@@ -1932,17 +2094,34 @@ fn Concurrent_FirstWriteNoFile_001() {
 // writer 持排他锁时 reader（共享锁）阻塞到写完，不返 default 空
 #[test]
 fn Concurrent_ReaderDuringWrite_NotEmpty_001() {
-    if run_conc_child_if_set() { return; }
+    if run_conc_child_if_set() {
+        return;
+    }
     let (_tmp, data, _lock) = conc_dirs();
     let dir = data.parent().unwrap();
     let exe = env::current_exe().unwrap();
     // 先写入基线 pin_a
-    let mut h0 = Command::new(&exe).arg("Concurrent_ReaderDuringWrite_NotEmpty_001").env("CC_BOX_CONC_TEST", "pin_a").env("CC_BOX_CONC_DIR", dir).spawn().unwrap();
+    let mut h0 = Command::new(&exe)
+        .arg("Concurrent_ReaderDuringWrite_NotEmpty_001")
+        .env("CC_BOX_CONC_TEST", "pin_a")
+        .env("CC_BOX_CONC_DIR", dir)
+        .spawn()
+        .unwrap();
     wait_for_child(&mut h0, Duration::from_secs(5));
     // 子进程明确持排他锁，marker 出现后再启动 reader，证明共享读会等待。
-    let mut holder = Command::new(&exe).arg("Concurrent_ReaderDuringWrite_NotEmpty_001").env("CC_BOX_CONC_TEST", "hold_lock").env("CC_BOX_CONC_DIR", dir).spawn().unwrap();
+    let mut holder = Command::new(&exe)
+        .arg("Concurrent_ReaderDuringWrite_NotEmpty_001")
+        .env("CC_BOX_CONC_TEST", "hold_lock")
+        .env("CC_BOX_CONC_DIR", dir)
+        .spawn()
+        .unwrap();
     wait_for_file(&dir.join("lock_held"), Duration::from_secs(5));
-    let mut hr = Command::new(&exe).arg("Concurrent_ReaderDuringWrite_NotEmpty_001").env("CC_BOX_CONC_TEST", "read").env("CC_BOX_CONC_DIR", dir).spawn().unwrap();
+    let mut hr = Command::new(&exe)
+        .arg("Concurrent_ReaderDuringWrite_NotEmpty_001")
+        .env("CC_BOX_CONC_TEST", "read")
+        .env("CC_BOX_CONC_DIR", dir)
+        .spawn()
+        .unwrap();
     let marker = dir.join("read_result.txt");
     std::thread::sleep(Duration::from_millis(100));
     assert!(!marker.exists(), "writer 持排他锁期间 reader 不应完成");
@@ -1956,17 +2135,34 @@ fn Concurrent_ReaderDuringWrite_NotEmpty_001() {
 // 持锁进程被杀后，OS 释放锁，另一实例可继续写。
 #[test]
 fn Concurrent_LockHolderExit_OtherProceeds_001() {
-    if run_conc_child_if_set() { return; }
+    if run_conc_child_if_set() {
+        return;
+    }
     let (_tmp, data, lock) = conc_dirs();
     let dir = data.parent().unwrap();
     let exe = env::current_exe().unwrap();
-    let mut holder = Command::new(&exe).arg("Concurrent_LockHolderExit_OtherProceeds_001").env("CC_BOX_CONC_TEST", "hold_lock").env("CC_BOX_CONC_DIR", dir).spawn().unwrap();
+    let mut holder = Command::new(&exe)
+        .arg("Concurrent_LockHolderExit_OtherProceeds_001")
+        .env("CC_BOX_CONC_TEST", "hold_lock")
+        .env("CC_BOX_CONC_DIR", dir)
+        .spawn()
+        .unwrap();
     wait_for_file(&dir.join("lock_held"), Duration::from_secs(5));
     holder.kill().unwrap();
     holder.wait().unwrap();
-    let mut writer = Command::new(&exe).arg("Concurrent_LockHolderExit_OtherProceeds_001").env("CC_BOX_CONC_TEST", "pin_b").env("CC_BOX_CONC_DIR", dir).spawn().unwrap();
+    let mut writer = Command::new(&exe)
+        .arg("Concurrent_LockHolderExit_OtherProceeds_001")
+        .env("CC_BOX_CONC_TEST", "pin_b")
+        .env("CC_BOX_CONC_DIR", dir)
+        .spawn()
+        .unwrap();
     wait_for_child(&mut writer, Duration::from_secs(5));
-    assert_eq!(read_projects_state_locked(&data, &lock).unwrap().pinned_projects, vec!["e:/b".to_string()]);
+    assert_eq!(
+        read_projects_state_locked(&data, &lock)
+            .unwrap()
+            .pinned_projects,
+        vec!["e:/b".to_string()]
+    );
 }
 
 // 同一进程内第二个 handle 竞争同一文件锁时也必须有界超时。
@@ -1974,11 +2170,24 @@ fn Concurrent_LockHolderExit_OtherProceeds_001() {
 fn AcquireLock_Timeout_001() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("projects.json.lock");
-    let first = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-    let second = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
+    let first = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .unwrap();
+    let second = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
     acquire_lock(&first, true, Duration::from_secs(1)).unwrap();
     let started = Instant::now();
     let err = acquire_lock(&second, true, Duration::from_millis(80)).unwrap_err();
     assert!(started.elapsed() >= Duration::from_millis(60));
-    assert!(err.to_string().contains("lock timeout"), "实际错误: {err:#}");
+    assert!(
+        err.to_string().contains("lock timeout"),
+        "实际错误: {err:#}"
+    );
 }

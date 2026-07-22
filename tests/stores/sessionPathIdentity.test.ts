@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-// @ts-expect-error - node:crypto polyfill（与 sessionTree.test.ts 一致）
 import { randomUUID } from 'crypto'
 
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {

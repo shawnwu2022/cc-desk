@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/shawnwu2022/cc-desk/discussions
+    about: Ask how-to questions or discuss early ideas with the community.
+  - name: Security Policy
+    url: https://github.com/shawnwu2022/cc-desk/security/policy
+    about: Report security vulnerabilities privately. Do not create a public issue.

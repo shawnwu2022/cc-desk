@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::checks::CheckResult;
+use crate::providers::{
+    ImportResult, Provider, ProviderMeta, ProvidersConfig, TestConnectionResult,
+};
 use crate::pty::get_pty_manager;
 use crate::store::{
     AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project, ProjectConfig,
     ProjectsState, SessionDetails, SessionInfo, SessionSearchResult, SkillInfo,
-};
-use crate::providers::{
-    Provider, ProvidersConfig, ProviderMeta, ImportResult, TestConnectionResult,
 };
 
 // ==================== PTY Commands ====================
@@ -221,7 +221,7 @@ where
 /// 获取 projects 状态（共享锁读，与写入事务互斥并返回 canonical 状态）
 #[tauri::command]
 pub async fn get_projects_state() -> Result<ProjectsState, String> {
-    spawn_blocking_locked(|d, l| crate::store::read_projects_state_locked(d, l)).await
+    spawn_blocking_locked(crate::store::read_projects_state_locked).await
 }
 
 /// 别名校验（与前端 validateDisplayName/input maxlength 同规则）：原始输入 ≤ 32 UTF-16 code unit、无控制字符。
@@ -450,7 +450,13 @@ pub async fn get_mcp_server_detail(
     let headers = server.headers.as_ref();
 
     let result = crate::mcp::get_mcp_server_detail_cached(
-        &server_name, url, command, args, env, headers, force_refresh,
+        &server_name,
+        url,
+        command,
+        args,
+        env,
+        headers,
+        force_refresh,
     )
     .await;
 
@@ -532,8 +538,16 @@ pub async fn create_provider(
     icon_color: Option<String>,
     meta: Option<ProviderMeta>,
 ) -> Result<Provider, String> {
-    crate::providers::create_provider(name, settings_config, website_url, category, icon, icon_color, meta)
-        .map_err(|e| e.to_string())
+    crate::providers::create_provider(
+        name,
+        settings_config,
+        website_url,
+        category,
+        icon,
+        icon_color,
+        meta,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// 更新 Provider
@@ -563,7 +577,10 @@ pub async fn update_provider_sort_order(provider_ids: Vec<String>) -> Result<(),
 
 /// 更新通用配置
 #[tauri::command]
-pub async fn update_common_config(enabled: bool, settings: serde_json::Value) -> Result<(), String> {
+pub async fn update_common_config(
+    enabled: bool,
+    settings: serde_json::Value,
+) -> Result<(), String> {
     crate::providers::update_common_config(enabled, settings).map_err(|e| e.to_string())
 }
 

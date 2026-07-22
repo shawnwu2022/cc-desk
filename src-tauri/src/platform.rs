@@ -233,9 +233,7 @@ pub(crate) fn kill_processes_by_name(name: &str) -> Result<(), String> {
             .status()
             .map_err(|e| format!("Failed to run pkill: {}", e))?;
         if !status.success() {
-            log::warn!(
-                "[Platform] pkill exited non-zero (may be no processes)"
-            );
+            log::warn!("[Platform] pkill exited non-zero (may be no processes)");
         }
     }
     Ok(())
@@ -427,8 +425,7 @@ fn refresh_path_windows() {
 
 #[cfg(unix)]
 fn refresh_path_unix() {
-    let shell =
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
     log::info!(
         "[Platform] Refreshing PATH via: {} -l -c 'printenv PATH'",
         shell
@@ -444,8 +441,7 @@ fn refresh_path_unix() {
 
     match output {
         Ok(output) if output.status.success() => {
-            let login_path =
-                String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let login_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !login_path.is_empty() {
                 log::info!(
                     "[Platform] PATH refreshed from login shell ({} entries)",
@@ -454,9 +450,7 @@ fn refresh_path_unix() {
                 log::debug!("[Platform] Refreshed PATH: {}", login_path);
                 std::env::set_var("PATH", &login_path);
             } else {
-                log::warn!(
-                    "[Platform] Login shell returned empty PATH, keeping default"
-                );
+                log::warn!("[Platform] Login shell returned empty PATH, keeping default");
             }
         }
         Ok(output) => {

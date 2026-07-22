@@ -24,7 +24,7 @@ function makePayload(
     eventName: type,
     state: 'thinking',
     timestamp: Date.now(),
-    detail: { type, data: null } as HookEventDetail,
+    detail: { type, data: null } as unknown as HookEventDetail,
   }
 }
 

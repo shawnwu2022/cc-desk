@@ -3,15 +3,7 @@ import { ref } from 'vue'
 import { getProjectConfig } from '@/api/tauri'
 
 // 从统一类型导入
-import type {
-  ConfigSource,
-  McpServerItem,
-  SkillItem,
-  AgentItem,
-  HookItem,
-  BasicConfigItem,
-  ProjectConfigResult,
-} from '@/types'
+import type { ProjectConfigResult } from '@/types'
 
 export const useConfigStore = defineStore('config', () => {
   const projectConfig = ref<ProjectConfigResult | null>(null)

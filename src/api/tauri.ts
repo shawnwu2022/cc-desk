@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { listen, type Unlisten } from '@tauri-apps/api/event';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
@@ -97,27 +97,27 @@ export const ptyKillAll = async (): Promise<void> => {
 // Event Listeners (Tauri events)
 // ============================================
 
-export const onPtyOutput = (callback: (payload: PtyOutputPayload) => void): Promise<Unlisten> =>
+export const onPtyOutput = (callback: (payload: PtyOutputPayload) => void): Promise<UnlistenFn> =>
   listen<PtyOutputPayload>('pty-output', (event) => callback(event.payload));
 
-export const onPtyExit = (callback: (payload: PtyExitPayload) => void): Promise<Unlisten> =>
+export const onPtyExit = (callback: (payload: PtyExitPayload) => void): Promise<UnlistenFn> =>
   listen<PtyExitPayload>('pty-exit', (event) => callback(event.payload));
 
 // Hook 监控事件
-export const onHookEvent = (callback: (payload: HookEventPayload) => void): Promise<Unlisten> =>
+export const onHookEvent = (callback: (payload: HookEventPayload) => void): Promise<UnlistenFn> =>
   listen<HookEventPayload>('hook-event', (event) => callback(event.payload));
 
 // Menu events
-export const onMenuSettings = (callback: () => void): Promise<Unlisten> =>
+export const onMenuSettings = (callback: () => void): Promise<UnlistenFn> =>
   listen('menu:settings', () => callback());
 
-export const onMenuShortcuts = (callback: () => void): Promise<Unlisten> =>
+export const onMenuShortcuts = (callback: () => void): Promise<UnlistenFn> =>
   listen('menu:shortcuts', () => callback());
 
-export const onConfigFontSize = (callback: (size: number) => void): Promise<Unlisten> =>
+export const onConfigFontSize = (callback: (size: number) => void): Promise<UnlistenFn> =>
   listen<number>('config:fontSize', (event) => callback(event.payload));
 
-export const onTerminalRestart = (callback: (data: { cwd: string }) => void): Promise<Unlisten> =>
+export const onTerminalRestart = (callback: (data: { cwd: string }) => void): Promise<UnlistenFn> =>
   listen<{ cwd: string }>('terminal:restart', (event) => callback(event.payload));
 
 // ============================================
@@ -354,7 +354,7 @@ export const downloadAndInstallClaude = (): Promise<void> =>
 export const downloadAndInstallGit = (): Promise<void> =>
   invoke<void>('download_and_install_git');
 
-export const onInstallProgress = (callback: (progress: InstallProgress) => void): Promise<Unlisten> =>
+export const onInstallProgress = (callback: (progress: InstallProgress) => void): Promise<UnlistenFn> =>
   listen<InstallProgress>('download-progress', (event) => callback(event.payload));
 
 // ============================================
@@ -392,5 +392,5 @@ export const killClaudeProcesses = (): Promise<void> =>
   invoke<void>('kill_claude_processes');
 
 // 右键菜单打开目录
-export const onOpenDirectory = (callback: (dir: string) => void): Promise<Unlisten> =>
+export const onOpenDirectory = (callback: (dir: string) => void): Promise<UnlistenFn> =>
   listen<string>('open-directory', (event) => callback(event.payload));

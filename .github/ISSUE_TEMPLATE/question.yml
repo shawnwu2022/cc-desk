@@ -1,0 +1,37 @@
+name: Question or support request
+description: Ask for help with using CC Desk.
+title: "[Question]: "
+labels:
+  - question
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions are normally answered in GitHub Discussions. Continue only when a repository issue is needed to track a reproducible documentation or product gap. Do not report security vulnerabilities here.
+  - type: textarea
+    id: question
+    attributes:
+      label: What do you need help with?
+      description: State the goal, what you tried, and where the current documentation falls short.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: CC Desk version
+      description: Include this if the question concerns current behavior.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted context
+      description: Remove secrets, personal data, private paths, session content, and Provider configuration.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submit checks
+      options:
+        - label: I checked the README, Support policy, and existing discussions.
+          required: true
+        - label: This is not a security vulnerability or a request involving private credentials.
+          required: true

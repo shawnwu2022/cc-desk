@@ -77,7 +77,7 @@ The app runs the real Claude CLI binary through a pseudo-terminal. Everything wo
 ## Prerequisites
 
 - **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated
-- **Windows only**: [Git for Windows](https://git-scm.com/download/win) (provides Git Bash)
+- **Windows only**: [Git for Windows](https://git-scm.com/download/win), Microsoft C++ Build Tools, and Windows SDK (provides Git Bash)
 
 ---
 
@@ -109,10 +109,10 @@ Head to the [**Releases**](https://github.com/shawnwu2022/cc-desk/releases) page
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 18+
-- [Rust](https://www.rust-lang.org/tools/install) stable toolchain
+- [Node.js](https://nodejs.org/) 20+
+- [Rust](https://www.rust-lang.org/tools/install) stable toolchain (MSVC on Windows)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- **Windows only**: [Git for Windows](https://git-scm.com/download/win)
+- **Windows only**: [Git for Windows](https://git-scm.com/download/win), Microsoft C++ Build Tools, and Windows SDK
 
 ### Setup
 
@@ -134,7 +134,7 @@ npm run tauri:dev     # Start dev mode with hot reload
 npm run tauri:build   # Build for current platform
 
 # Or platform-specific:
-npm run build:win     # Windows (x86_64-pc-windows-gnu)
+npm run build:win     # Windows (x86_64-pc-windows-msvc)
 npm run build:mac     # macOS (universal)
 npm run build:linux   # Linux (x86_64)
 ```
@@ -192,3 +192,13 @@ Tauri 2 (Rust) + Vue 3 + TypeScript + xterm.js + portable-pty
 ## License
 
 [MIT](LICENSE)
+
+## Community
+
+- [Contributing](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md)
+- [Support](SUPPORT.md)
+- [Governance](GOVERNANCE.md)
+- [Issues](https://github.com/shawnwu2022/cc-desk/issues)
+- [Discussions](https://github.com/shawnwu2022/cc-desk/discussions)

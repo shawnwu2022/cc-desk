@@ -1,4 +1,4 @@
-use crate::hook_events::{derive_state, extract_detail, HookPayload, HookEventDetail};
+use crate::hook_events::{derive_state, extract_detail, HookEventDetail, HookPayload};
 use serde_json::json;
 
 // ---- derive_state 测试 ----

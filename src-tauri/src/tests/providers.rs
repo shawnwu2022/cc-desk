@@ -1,7 +1,7 @@
-use serde_json::json;
 use crate::providers::deep_merge_json;
 use crate::providers::extract_test_params;
 use crate::providers::strip_core_env;
+use serde_json::json;
 
 // source 覆盖 target 中同名的叶值
 #[test]
@@ -145,7 +145,10 @@ fn ExtractParams_NoApiKey_001() {
             "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
         }
     });
-    assert!(extract_test_params(&config).is_none(), "expected None when no api key");
+    assert!(
+        extract_test_params(&config).is_none(),
+        "expected None when no api key"
+    );
 }
 
 // env 中 API Key 为空字符串时返回 None
@@ -156,7 +159,10 @@ fn ExtractParams_EmptyApiKey_001() {
             "ANTHROPIC_AUTH_TOKEN": ""
         }
     });
-    assert!(extract_test_params(&config).is_none(), "expected None when api key is empty");
+    assert!(
+        extract_test_params(&config).is_none(),
+        "expected None when api key is empty"
+    );
 }
 
 // 无 ANTHROPIC_BASE_URL 时默认 https://api.anthropic.com
@@ -200,14 +206,20 @@ fn ExtractParams_TrailingSlash_001() {
 #[test]
 fn ExtractParams_NoEnv_001() {
     let config = json!({"model": "claude-sonnet-4-6"});
-    assert!(extract_test_params(&config).is_none(), "expected None when no env field");
+    assert!(
+        extract_test_params(&config).is_none(),
+        "expected None when no env field"
+    );
 }
 
 // settingsConfig 为空对象时返回 None
 #[test]
 fn ExtractParams_EmptyConfig_001() {
     let config = json!({});
-    assert!(extract_test_params(&config).is_none(), "expected None for empty config");
+    assert!(
+        extract_test_params(&config).is_none(),
+        "expected None for empty config"
+    );
 }
 
 // ---------- strip_core_env ----------
@@ -229,13 +241,35 @@ fn StripCoreEnv_AllSix_001() {
     });
     let result = strip_core_env(&common);
     let env = result.get("env").unwrap().as_object().unwrap();
-    assert!(env.get("ANTHROPIC_AUTH_TOKEN").is_none(), "ANTHROPIC_AUTH_TOKEN should be stripped");
-    assert!(env.get("ANTHROPIC_BASE_URL").is_none(), "ANTHROPIC_BASE_URL should be stripped");
-    assert!(env.get("ANTHROPIC_MODEL").is_none(), "ANTHROPIC_MODEL should be stripped");
-    assert!(env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL").is_none(), "HAIKU should be stripped");
-    assert!(env.get("ANTHROPIC_DEFAULT_SONNET_MODEL").is_none(), "SONNET should be stripped");
-    assert!(env.get("ANTHROPIC_DEFAULT_OPUS_MODEL").is_none(), "OPUS should be stripped");
-    assert_eq!(env.get("CLAUDE_CODE_SCROLL_SPEED").unwrap(), "5", "non-core env should remain");
+    assert!(
+        env.get("ANTHROPIC_AUTH_TOKEN").is_none(),
+        "ANTHROPIC_AUTH_TOKEN should be stripped"
+    );
+    assert!(
+        env.get("ANTHROPIC_BASE_URL").is_none(),
+        "ANTHROPIC_BASE_URL should be stripped"
+    );
+    assert!(
+        env.get("ANTHROPIC_MODEL").is_none(),
+        "ANTHROPIC_MODEL should be stripped"
+    );
+    assert!(
+        env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL").is_none(),
+        "HAIKU should be stripped"
+    );
+    assert!(
+        env.get("ANTHROPIC_DEFAULT_SONNET_MODEL").is_none(),
+        "SONNET should be stripped"
+    );
+    assert!(
+        env.get("ANTHROPIC_DEFAULT_OPUS_MODEL").is_none(),
+        "OPUS should be stripped"
+    );
+    assert_eq!(
+        env.get("CLAUDE_CODE_SCROLL_SPEED").unwrap(),
+        "5",
+        "non-core env should remain"
+    );
 }
 
 // 设置非核心 env 时全部保留
@@ -310,34 +344,28 @@ fn ImportMerge_PreserveApiKey_001() {
 
     // 验证：各 Provider 的 API Key 保留原值，不被通用配置覆盖
     assert_eq!(
-        merged_a["env"]["ANTHROPIC_AUTH_TOKEN"],
-        "key-A",
+        merged_a["env"]["ANTHROPIC_AUTH_TOKEN"], "key-A",
         "Provider A should keep its own API key"
     );
     assert_eq!(
-        merged_a["env"]["ANTHROPIC_BASE_URL"],
-        "https://a.example.com",
+        merged_a["env"]["ANTHROPIC_BASE_URL"], "https://a.example.com",
         "Provider A should keep its own base URL"
     );
     assert_eq!(
-        merged_b["env"]["ANTHROPIC_AUTH_TOKEN"],
-        "key-B",
+        merged_b["env"]["ANTHROPIC_AUTH_TOKEN"], "key-B",
         "Provider B should keep its own API key"
     );
     assert_eq!(
-        merged_b["env"]["ANTHROPIC_BASE_URL"],
-        "https://b.example.com",
+        merged_b["env"]["ANTHROPIC_BASE_URL"], "https://b.example.com",
         "Provider B should keep its own base URL"
     );
     // 验证：非核心 env 被正确合并进来
     assert_eq!(
-        merged_a["env"]["CLAUDE_CODE_SCROLL_SPEED"],
-        "5",
+        merged_a["env"]["CLAUDE_CODE_SCROLL_SPEED"], "5",
         "non-core env should be merged in"
     );
     assert_eq!(
-        merged_b["env"]["CLAUDE_CODE_SCROLL_SPEED"],
-        "5",
+        merged_b["env"]["CLAUDE_CODE_SCROLL_SPEED"], "5",
         "non-core env should be merged in"
     );
 }
@@ -354,8 +382,7 @@ fn ImportMerge_WithoutStrip_OverwritesKey_001() {
     let merged = deep_merge_json(&provider, &common);
     // 验证：不剥离时，deep_merge 确实会覆盖（这就是 bug 的根因）
     assert_eq!(
-        merged["env"]["ANTHROPIC_AUTH_TOKEN"],
-        "common-key",
+        merged["env"]["ANTHROPIC_AUTH_TOKEN"], "common-key",
         "without strip, common config overwrites provider key"
     );
 }

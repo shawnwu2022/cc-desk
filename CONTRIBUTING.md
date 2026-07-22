@@ -1,69 +1,66 @@
 # Contributing to CC Desk
 
-Thanks for your interest in contributing! This document outlines how to get started.
+Thanks for contributing to CC Desk. This document is the source of truth for the public contribution workflow.
 
-## Development Setup
+## Before You Start
 
-### Prerequisites
+- Read the [Code of Conduct](CODE_OF_CONDUCT.md), [Security Policy](SECURITY.md), and [Governance](GOVERNANCE.md).
+- Use GitHub Issues for reproducible bugs and GitHub Discussions for questions or early ideas.
+- Do not include API keys, access tokens, unredacted logs, private paths, session transcripts, or Provider configuration in public content.
 
-- [Node.js](https://nodejs.org/) 18+
-- [Rust](https://www.rust-lang.org/tools/install) stable toolchain
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- **Windows only**: MinGW-w64 (`C:\ProgramData\mingw64\mingw64\bin` in PATH)
+## Development Environment
 
-### Getting Started
+| Requirement | Version or purpose |
+|---|---|
+| Node.js | 20 or later |
+| Rust | stable MSVC toolchain on Windows; stable toolchain on macOS/Linux |
+| Claude Code CLI | Installed and authenticated for real terminal-session testing |
+| Windows build tools | Microsoft C++ Build Tools and Windows SDK |
+| macOS/Linux | Platform packages required by Tauri/WebKit when building locally |
+
+On Windows, use the MSVC Rust target. Do not use the GNU target for CI-compatible builds:
+
+```powershell
+rustup default stable-x86_64-pc-windows-msvc
+```
+
+## Setup
 
 ```bash
 git clone https://github.com/shawnwu2022/cc-desk.git
 cd cc-desk
-npm install
+npm ci
+```
+
+For local development:
+
+```bash
 npm run tauri:dev
 ```
 
-## Project Structure
+## Required Verification
 
-```
-cc-desk/
-├── src-tauri/          # Rust backend (PTY, IPC commands)
-│   ├── src/
-│   │   ├── lib.rs      # App initialization
-│   │   ├── pty.rs      # PTY management
-│   │   ├── commands.rs # Tauri IPC commands
-│   │   └── store.rs    # Claude Code data reading
-│   └── tauri.conf.json # Tauri configuration
-├── src/                # Vue 3 frontend
-│   ├── components/     # UI components
-│   ├── stores/         # Pinia state management
-│   ├── api/tauri.ts    # Tauri API wrappers
-│   └── styles/         # CSS variables & global styles
-├── docs/               # Detailed documentation
-└── CLAUDE.md           # Project instructions for Claude Code
+Run the checks relevant to your change before opening a pull request:
+
+```bash
+npm run typecheck
+npm test
+(
+  cd src-tauri
+  cargo fmt --check
+  cargo clippy -- -D warnings
+  cargo test
+)
 ```
 
-## Code Style
+Run real PTY, installer, updater, and visual checks manually when your change affects those boundaries. Record the manual verification in the pull request.
 
-- **Rust**: Follow standard Rust conventions (`cargo fmt`, `cargo clippy`)
-- **Vue/TypeScript**: Use composition API, follow existing patterns
-- **CSS**: Use CSS variables from `global.css`, avoid hardcoded colors
-- **Commits**: Use descriptive messages, reference issues when applicable
+## Pull Requests
 
-## Pull Request Process
+1. Fork the repository and create a focused branch.
+2. Keep commits scoped to one change; do not bundle formatting or unrelated refactors.
+3. Add or update automated tests for changed behavior. Bug fixes must include a regression test when feasible.
+4. Update public documentation when behavior, configuration, supported platforms, or user-visible copy changes.
+5. Complete the pull request template and wait for required CI checks before requesting review.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/your-feature`)
-3. Make your changes
-4. Test with `npm run tauri:dev`
-5. Commit and push (`git push origin feature/your-feature`)
-6. Open a Pull Request with a clear description
-
-## Reporting Issues
-
-Use [GitHub Issues](https://github.com/shawnwu2022/cc-desk/issues) for:
-
-- Bug reports (include OS, version, steps to reproduce)
-- Feature requests
-- Questions about usage
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the MIT License.
+All contributions are licensed under the [MIT License](LICENSE).

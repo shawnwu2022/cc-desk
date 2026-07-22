@@ -462,7 +462,7 @@ pub(crate) fn assemble_home_data(
     let startup_state = compute_project_startup_state(&projects, last_opened, hidden);
     let has_more = projects.len() > project_limit;
     let paginated_projects: Vec<Project> = projects.into_iter().take(project_limit).collect();
-    all_sessions.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+    all_sessions.sort_by_key(|b| std::cmp::Reverse(b.last_active_at));
     all_sessions.truncate(session_limit);
     HomeData {
         projects: paginated_projects,
@@ -610,15 +610,12 @@ pub(crate) fn compute_project_startup_state(
         None
     } else {
         let norm = normalize_path_str(last_opened);
-        let exists = projects
-            .iter()
-            .any(|p| normalize_path_str(&p.path) == norm);
+        let exists = projects.iter().any(|p| normalize_path_str(&p.path) == norm);
         // name 取 lastOpened 末段（与 get_projects 的 name 推导一致：取 path 末段目录名）
         let name = last_opened
             .replace('\\', "/")
             .split('/')
-            .filter(|s| !s.is_empty())
-            .last()
+            .rfind(|s| !s.is_empty())
             .unwrap_or(last_opened)
             .to_string();
         Some(ProjectInfo {
@@ -751,7 +748,7 @@ pub fn get_sessions(project_path: &str, limit: usize, offset: usize) -> Result<V
     }
 
     // 按最后活跃时间排序
-    entries.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+    entries.sort_by_key(|b| std::cmp::Reverse(b.last_active_at));
 
     // 分页
     let start = offset.min(entries.len());
@@ -786,7 +783,7 @@ pub fn get_all_recent_sessions(limit: usize) -> Result<Vec<SessionInfo>> {
     }
 
     // 按 lastActiveAt 降序排列
-    all_sessions.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+    all_sessions.sort_by_key(|b| std::cmp::Reverse(b.last_active_at));
 
     // 截断到 limit 条
     all_sessions.truncate(limit);
@@ -949,7 +946,12 @@ pub fn search_session_messages(
         return Ok(Vec::new());
     }
 
-    Ok(search_session_messages_in_dirs(&project_dirs, project_path, query, limit))
+    Ok(search_session_messages_in_dirs(
+        &project_dirs,
+        project_path,
+        query,
+        limit,
+    ))
 }
 
 /// 在指定项目目录下搜索会话消息（核心逻辑，可测试）
@@ -1019,15 +1021,12 @@ pub(crate) fn search_session_messages_in_dirs(
                                 let chars: Vec<char> = msg_content.chars().collect();
                                 let lower_content: String =
                                     chars.iter().collect::<String>().to_lowercase();
-                                let match_pos =
-                                    lower_content.find(&query_lower).unwrap_or(0);
-                                let char_match_pos =
-                                    lower_content[..match_pos].chars().count();
+                                let match_pos = lower_content.find(&query_lower).unwrap_or(0);
+                                let char_match_pos = lower_content[..match_pos].chars().count();
                                 let start = char_match_pos.saturating_sub(30);
-                                let end = (char_match_pos + query.chars().count() + 70)
-                                    .min(chars.len());
-                                let snippet_raw: String =
-                                    chars[start..end].iter().collect();
+                                let end =
+                                    (char_match_pos + query.chars().count() + 70).min(chars.len());
+                                let snippet_raw: String = chars[start..end].iter().collect();
                                 matched_snippet = Some(if start > 0 || end < chars.len() {
                                     format!("...{}...", snippet_raw)
                                 } else {
@@ -1061,7 +1060,7 @@ pub(crate) fn search_session_messages_in_dirs(
         }
     }
 
-    results.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+    results.sort_by_key(|b| std::cmp::Reverse(b.last_active_at));
     results.truncate(limit);
     results
 }
@@ -1123,7 +1122,10 @@ pub fn update_app_config(updates: serde_json::Value) -> Result<()> {
 }
 
 /// 合并 JSON 值
-pub(crate) fn merge_json_values(base: serde_json::Value, updates: serde_json::Value) -> serde_json::Value {
+pub(crate) fn merge_json_values(
+    base: serde_json::Value,
+    updates: serde_json::Value,
+) -> serde_json::Value {
     match (base, updates) {
         (serde_json::Value::Object(mut base_map), serde_json::Value::Object(updates_map)) => {
             for (key, value) in updates_map {
@@ -1149,14 +1151,20 @@ pub struct ProjectsState {
     pub pinned_projects: Vec<String>,
     #[serde(rename = "archivedSessions", default)]
     pub archived_sessions: HashMap<String, Vec<String>>,
-    #[serde(rename = "displayNames", default, deserialize_with = "deserialize_display_names")]
+    #[serde(
+        rename = "displayNames",
+        default,
+        deserialize_with = "deserialize_display_names"
+    )]
     pub display_names: HashMap<String, String>,
 }
 
 /// displayNames 容错反序列化：
 /// - None / Null / 非 object -> 空 map
 /// - object 内值非 string（数字/数组/对象/null）-> 跳过该条目（不整体失败）
-pub(crate) fn deserialize_display_names<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
+pub(crate) fn deserialize_display_names<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -1178,19 +1186,13 @@ where
     }
 }
 
-/// 读取 projects 状态（文件不存在返回默认空状态：空 pinned + 空 map）
-pub fn get_projects_state() -> Result<ProjectsState> {
-    let path = get_projects_state_path()?;
-    get_projects_state_at(&path)
-}
-
 /// 读取指定路径的 projects 状态（注入路径，便于单元测试）
 pub(crate) fn get_projects_state_at(path: &Path) -> Result<ProjectsState> {
     if !path.exists() {
         return Ok(ProjectsState::default());
     }
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
     let state: ProjectsState = serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse {}", path.display()))?;
     Ok(state)
@@ -1229,26 +1231,14 @@ pub fn save_last_project(path: &str) -> Result<()> {
 
 /// 获取项目配置
 pub fn get_project_config(project_path: &str) -> Result<ProjectConfig> {
-    let mut config = ProjectConfig::default();
-
-    // 读取基本配置
-    config.basic = read_basic_config(project_path)?;
-
-    // 读取 MCP 配置
-    config.mcp = read_mcp_config(project_path)?;
-
-    // 读取 Skills 配置
-    config.skills = read_skills_config(project_path)?;
-
-    // 读取 Agents 配置
-    config.agents = read_agents_config(project_path)?;
-
-    // 读取 Hooks 配置
-    config.hooks = read_hooks_config(project_path)?;
-
-    Ok(config)
+    Ok(ProjectConfig {
+        basic: read_basic_config(project_path)?,
+        mcp: read_mcp_config(project_path)?,
+        skills: read_skills_config(project_path)?,
+        agents: read_agents_config(project_path)?,
+        hooks: read_hooks_config(project_path)?,
+    })
 }
-
 // ==================== 配置读取辅助函数 ====================
 
 fn read_basic_config(project_path: &str) -> Result<Vec<BasicConfigItem>> {
@@ -1505,13 +1495,13 @@ fn read_agents_config(project_path: &str) -> Result<Vec<AgentItem>> {
             let entry = entry?;
             let path = entry.path();
             if path.extension().map(|e| e == "md").unwrap_or(false) {
-                let (name, description, _) = parse_agent_frontmatter(&path)
-                    .unwrap_or_else(|| {
-                        let fallback = path.file_stem()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        (fallback, extract_md_description(&path), None)
-                    });
+                let (name, description, _) = parse_agent_frontmatter(&path).unwrap_or_else(|| {
+                    let fallback = path
+                        .file_stem()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    (fallback, extract_md_description(&path), None)
+                });
                 result.push(AgentItem {
                     name,
                     description,
@@ -1534,13 +1524,13 @@ fn read_agents_config(project_path: &str) -> Result<Vec<AgentItem>> {
             let entry = entry?;
             let path = entry.path();
             if path.extension().map(|e| e == "md").unwrap_or(false) {
-                let (name, description, _) = parse_agent_frontmatter(&path)
-                    .unwrap_or_else(|| {
-                        let fallback = path.file_stem()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        (fallback, extract_md_description(&path), None)
-                    });
+                let (name, description, _) = parse_agent_frontmatter(&path).unwrap_or_else(|| {
+                    let fallback = path
+                        .file_stem()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    (fallback, extract_md_description(&path), None)
+                });
                 result.push(AgentItem {
                     name,
                     description,
@@ -1569,9 +1559,10 @@ fn read_agents_from_filesystem(project_path: &str) -> Result<Vec<AgentInfo>> {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().map(|e| e == "md").unwrap_or(false) {
-                    let (name, description, model) = parse_agent_frontmatter(&path)
-                        .unwrap_or_else(|| {
-                            let fallback = path.file_stem()
+                    let (name, description, model) =
+                        parse_agent_frontmatter(&path).unwrap_or_else(|| {
+                            let fallback = path
+                                .file_stem()
                                 .map(|n| n.to_string_lossy().to_string())
                                 .unwrap_or_default();
                             (fallback, extract_md_description(&path), None)
@@ -1599,9 +1590,10 @@ fn read_agents_from_filesystem(project_path: &str) -> Result<Vec<AgentInfo>> {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().map(|e| e == "md").unwrap_or(false) {
-                    let (name, description, model) = parse_agent_frontmatter(&path)
-                        .unwrap_or_else(|| {
-                            let fallback = path.file_stem()
+                    let (name, description, model) =
+                        parse_agent_frontmatter(&path).unwrap_or_else(|| {
+                            let fallback = path
+                                .file_stem()
                                 .map(|n| n.to_string_lossy().to_string())
                                 .unwrap_or_default();
                             (fallback, extract_md_description(&path), None)
@@ -1633,9 +1625,7 @@ fn read_agents_from_filesystem(project_path: &str) -> Result<Vec<AgentInfo>> {
                             .map(|n| n.to_string_lossy().to_string())
                             .unwrap_or_default();
                         let (parsed_name, description, model) = parse_agent_frontmatter(&path)
-                            .unwrap_or_else(|| {
-                                (name.clone(), extract_md_description(&path), None)
-                            });
+                            .unwrap_or_else(|| (name.clone(), extract_md_description(&path), None));
                         agents.push(AgentInfo {
                             name: parsed_name.clone(),
                             display_name: parsed_name.clone(),
@@ -2127,7 +2117,10 @@ pub fn get_all_skills(project_path: &str) -> Result<Vec<SkillInfo>> {
                     display_name: skill.name.clone(),
                     description: skill.description,
                     source_type: "plugin".to_string(),
-                    source_label: format!("Plugin · {}", full_name.split(':').next().unwrap_or(&skill.name)),
+                    source_label: format!(
+                        "Plugin · {}",
+                        full_name.split(':').next().unwrap_or(&skill.name)
+                    ),
                     invoke_format: skill.invoke_format,
                     enabled: true,
                 });
@@ -2153,7 +2146,9 @@ pub fn get_all_mcp_servers(project_path: &str) -> Result<Vec<McpServerInfo>> {
             if let Some(mcp_value) = &plugin.mcp_servers {
                 // plugin .mcp.json 格式：直接是 server 映射（不需要 mcpServers 包装）
                 // 也可能是带 mcpServers 包装的对象
-                let mcp_obj = if let Some(wrapped) = mcp_value.get("mcpServers").and_then(|v| v.as_object()) {
+                let mcp_obj = if let Some(wrapped) =
+                    mcp_value.get("mcpServers").and_then(|v| v.as_object())
+                {
                     wrapped
                 } else if let Some(direct) = mcp_value.as_object() {
                     // 直接映射格式（plugin .mcp.json 常见格式）
@@ -2170,13 +2165,20 @@ pub fn get_all_mcp_servers(project_path: &str) -> Result<Vec<McpServerInfo>> {
 
                     // 注入 CLAUDE_PLUGIN_ROOT 环境变量
                     let mut plugin_env = HashMap::new();
-                    plugin_env.insert("CLAUDE_PLUGIN_ROOT".to_string(), plugin.install_path.clone());
+                    plugin_env.insert(
+                        "CLAUDE_PLUGIN_ROOT".to_string(),
+                        plugin.install_path.clone(),
+                    );
 
-                    if let Some(mut info) = parse_mcp_server_entry(&full_name, config, "plugin", Some(&plugin_env)) {
+                    if let Some(mut info) =
+                        parse_mcp_server_entry(&full_name, config, "plugin", Some(&plugin_env))
+                    {
                         info.display_name = display_name;
                         if seen_names.insert(full_name.clone()) {
                             servers.push(info);
-                        } else if let Some(existing) = servers.iter_mut().find(|s| s.name == full_name) {
+                        } else if let Some(existing) =
+                            servers.iter_mut().find(|s| s.name == full_name)
+                        {
                             *existing = info;
                         }
                     }
@@ -2199,7 +2201,8 @@ pub fn get_all_mcp_servers(project_path: &str) -> Result<Vec<McpServerInfo>> {
                                 servers.push(info);
                             } else {
                                 // 同名 server：高优先级覆盖低优先级
-                                if let Some(existing) = servers.iter_mut().find(|s| s.name == *name) {
+                                if let Some(existing) = servers.iter_mut().find(|s| s.name == *name)
+                                {
                                     *existing = info;
                                 }
                             }
@@ -2294,33 +2297,29 @@ fn walk_up_find_mcp_jsons(start_dir: &str) -> Vec<PathBuf> {
 pub(crate) fn expand_env_vars(s: &str, extra_env: Option<&HashMap<String, String>>) -> String {
     let mut result = s.to_string();
     // 反复匹配 ${...} 模式
-    loop {
-        if let Some(start) = result.find("${") {
-            if let Some(end) = result[start + 2..].find('}') {
-                let expr = &result[start + 2..start + 2 + end];
-                let (var_name, default) = if let Some(colon_pos) = expr.find(":-") {
-                    (&expr[..colon_pos], Some(&expr[colon_pos + 2..]))
-                } else {
-                    (expr, None)
-                };
-
-                let value = extra_env
-                    .and_then(|e| e.get(var_name))
-                    .cloned()
-                    .or_else(|| std::env::var(var_name).ok())
-                    .or_else(|| default.map(|d| d.to_string()));
-
-                match value {
-                    Some(v) => {
-                        result.replace_range(start..start + 2 + end + 1, &v);
-                    }
-                    None => {
-                        // 变量未找到，保留原样
-                        break;
-                    }
-                }
+    while let Some(start) = result.find("${") {
+        if let Some(end) = result[start + 2..].find('}') {
+            let expr = &result[start + 2..start + 2 + end];
+            let (var_name, default) = if let Some(colon_pos) = expr.find(":-") {
+                (&expr[..colon_pos], Some(&expr[colon_pos + 2..]))
             } else {
-                break;
+                (expr, None)
+            };
+
+            let value = extra_env
+                .and_then(|e| e.get(var_name))
+                .cloned()
+                .or_else(|| std::env::var(var_name).ok())
+                .or_else(|| default.map(|d| d.to_string()));
+
+            match value {
+                Some(v) => {
+                    result.replace_range(start..start + 2 + end + 1, &v);
+                }
+                None => {
+                    // 变量未找到，保留原样
+                    break;
+                }
             }
         } else {
             break;
@@ -2328,7 +2327,6 @@ pub(crate) fn expand_env_vars(s: &str, extra_env: Option<&HashMap<String, String
     }
     result
 }
-
 /// 解析单个 MCP server 配置条目
 pub(crate) fn parse_mcp_server_entry(
     name: &str,
@@ -2345,26 +2343,21 @@ pub(crate) fn parse_mcp_server_entry(
         .map(|s| expand_env_vars(s, extra_env));
 
     // 解析 args（数组），展开环境变量
-    let args = obj
-        .get("args")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| expand_env_vars(s, extra_env)))
-                .collect()
-        });
+    let args = obj.get("args").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(|s| expand_env_vars(s, extra_env)))
+            .collect()
+    });
 
     // 解析 env（对象），展开环境变量值
-    let env = obj
-        .get("env")
-        .and_then(|v| v.as_object())
-        .map(|obj| {
-            obj.iter()
-                .filter_map(|(k, v)| {
-                    v.as_str().map(|s| (k.clone(), expand_env_vars(s, extra_env)))
-                })
-                .collect()
-        });
+    let env = obj.get("env").and_then(|v| v.as_object()).map(|obj| {
+        obj.iter()
+            .filter_map(|(k, v)| {
+                v.as_str()
+                    .map(|s| (k.clone(), expand_env_vars(s, extra_env)))
+            })
+            .collect()
+    });
 
     // 解析 url，展开环境变量
     let url = obj
@@ -2373,22 +2366,20 @@ pub(crate) fn parse_mcp_server_entry(
         .map(|s| expand_env_vars(s, extra_env));
 
     // 解析 headers，展开环境变量值
-    let headers = obj
-        .get("headers")
-        .and_then(|v| v.as_object())
-        .map(|obj| {
-            obj.iter()
-                .filter_map(|(k, v)| {
-                    v.as_str().map(|s| (k.clone(), expand_env_vars(s, extra_env)))
-                })
-                .collect()
-        });
+    let headers = obj.get("headers").and_then(|v| v.as_object()).map(|obj| {
+        obj.iter()
+            .filter_map(|(k, v)| {
+                v.as_str()
+                    .map(|s| (k.clone(), expand_env_vars(s, extra_env)))
+            })
+            .collect()
+    });
 
     // 推断 server type
     let server_type = infer_server_type(config);
 
     let display_name = if scope == "plugin" {
-        name.split(':').last().unwrap_or(name).to_string()
+        name.split(':').next_back().unwrap_or(name).to_string()
     } else {
         name.to_string()
     };
@@ -2519,7 +2510,11 @@ fn run_claude_command_strict(args: &str) -> Result<String> {
             "claude {} failed (exit {:?}): {}",
             args,
             output.status.code(),
-            if stderr.is_empty() { stdout.trim() } else { stderr.trim() }
+            if stderr.is_empty() {
+                stdout.trim()
+            } else {
+                stderr.trim()
+            }
         );
     }
 }
@@ -2542,6 +2537,7 @@ fn detect_git_bash_path() -> Option<String> {
 }
 
 /// 解析 claude agents list 输出
+#[cfg(test)]
 pub(crate) fn parse_agents_list_output(output: &str, agents: &mut Vec<AgentInfo>) {
     // 输出格式示例：
     // Plugin agents:
@@ -2590,7 +2586,7 @@ pub(crate) fn parse_agents_list_output(output: &str, agents: &mut Vec<AgentInfo>
 
             // 显示名称：去除前缀
             let display_name = if name.contains(':') {
-                name.split(':').last().unwrap_or(name)
+                name.split(':').next_back().unwrap_or(name)
             } else {
                 name
             };
@@ -2768,7 +2764,15 @@ pub(crate) fn find_valid_plugin_path(original_path: &str, plugin_id: &str) -> Op
 /// plugin_id 格式: "paper-tool@orczh" → 找 orczh marketplace → 找 paper-tool 的 source
 pub(crate) fn resolve_marketplace_plugin_path(plugin_id: &str) -> Option<String> {
     let home = dirs::home_dir()?;
-    let marketplaces_file = home.join(".claude").join("plugins").join("known_marketplaces.json");
+    resolve_marketplace_plugin_path_at(&home, plugin_id)
+}
+
+/// 从指定 home 目录解析 marketplace 插件路径，供测试隔离本机 Claude 配置。
+pub(crate) fn resolve_marketplace_plugin_path_at(home: &Path, plugin_id: &str) -> Option<String> {
+    let marketplaces_file = home
+        .join(".claude")
+        .join("plugins")
+        .join("known_marketplaces.json");
 
     if !marketplaces_file.exists() {
         return None;
@@ -2967,7 +2971,10 @@ pub(crate) fn set_skill_enabled_in(
             bail!("Skill '{}' is not disabled (no backup found)", name);
         }
         if src.exists() {
-            bail!("Skill '{}' already exists in active directory (conflict)", name);
+            bail!(
+                "Skill '{}' already exists in active directory (conflict)",
+                name
+            );
         }
         (dst, src, "enable")
     } else {
@@ -3088,8 +3095,8 @@ pub(crate) fn set_mcp_server_enabled_in(
             .with_context(|| format!("Invalid JSON in backup for '{}'", name))?;
 
         let mut root: serde_json::Value = if claude_json.exists() {
-            let raw = fs::read_to_string(claude_json)
-                .with_context(|| "Failed to read .claude.json")?;
+            let raw =
+                fs::read_to_string(claude_json).with_context(|| "Failed to read .claude.json")?;
             serde_json::from_str(&raw).with_context(|| "Failed to parse .claude.json")?
         } else {
             serde_json::json!({})
@@ -3106,7 +3113,10 @@ pub(crate) fn set_mcp_server_enabled_in(
             .context("mcpServers is not an object")?;
 
         if mcp_obj.contains_key(name) {
-            bail!("MCP server '{}' already exists in active config (conflict)", name);
+            bail!(
+                "MCP server '{}' already exists in active config (conflict)",
+                name
+            );
         }
         mcp_obj.insert(name.to_string(), entry);
 
@@ -3121,10 +3131,9 @@ pub(crate) fn set_mcp_server_enabled_in(
         if backup_file.exists() {
             bail!("MCP server '{}' already disabled", name);
         }
-        let raw = fs::read_to_string(claude_json)
-            .with_context(|| "Failed to read .claude.json")?;
-        let mut root: serde_json::Value = serde_json::from_str(&raw)
-            .with_context(|| "Failed to parse .claude.json")?;
+        let raw = fs::read_to_string(claude_json).with_context(|| "Failed to read .claude.json")?;
+        let mut root: serde_json::Value =
+            serde_json::from_str(&raw).with_context(|| "Failed to parse .claude.json")?;
 
         let mcp_obj = root
             .get_mut("mcpServers")
@@ -3210,9 +3219,9 @@ pub(crate) fn data_and_lock_paths() -> Result<(PathBuf, PathBuf)> {
 /// 锁竞争判断：兼容标准库 WouldBlock 及 Unix/Windows 的平台原始错误码。
 pub(crate) fn is_lock_contention(e: &io::Error) -> bool {
     match e.raw_os_error() {
-        Some(33) => true,                      // Windows ERROR_LOCK_VIOLATION
-        Some(13) => true,                      // EACCES
-        Some(11) | Some(35) => true,           // EAGAIN / EWOULDBLOCK
+        Some(33) => true,            // Windows ERROR_LOCK_VIOLATION
+        Some(13) => true,            // EACCES
+        Some(11) | Some(35) => true, // EAGAIN / EWOULDBLOCK
         _ => e.kind() == io::ErrorKind::WouldBlock,
     }
 }
@@ -3221,7 +3230,11 @@ pub(crate) fn is_lock_contention(e: &io::Error) -> bool {
 pub(crate) fn acquire_lock(file: &File, exclusive: bool, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        let r = if exclusive { file.try_lock() } else { file.try_lock_shared() };
+        let r = if exclusive {
+            file.try_lock()
+        } else {
+            file.try_lock_shared()
+        };
         match r {
             Ok(()) => return Ok(()),
             Err(e) => {
@@ -3257,7 +3270,9 @@ fn ensure_parent(p: &Path) -> Result<()> {
 pub(crate) fn canonicalize_state(s: &mut ProjectsState) {
     // pinned：normalize + 去重
     let mut seen: HashSet<String> = HashSet::new();
-    s.pinned_projects = s.pinned_projects.iter()
+    s.pinned_projects = s
+        .pinned_projects
+        .iter()
         .map(|p| normalize_path_str(p))
         .filter(|p| seen.insert(p.clone()))
         .collect();
@@ -3272,13 +3287,17 @@ pub(crate) fn canonicalize_state(s: &mut ProjectsState) {
         let nk = normalize_path_str(&k);
         let arr = merged.entry(nk).or_default();
         for id in v {
-            if !arr.contains(&id) { arr.push(id); }
+            if !arr.contains(&id) {
+                arr.push(id);
+            }
         }
     }
     s.archived_sessions = merged.into_iter().collect();
 
     // displayNames：key normalize；冲突保留原始 key 字典序最小者的值
-    let mut ordered: Vec<(String, String, String)> = s.display_names.iter()
+    let mut ordered: Vec<(String, String, String)> = s
+        .display_names
+        .iter()
         .map(|(k, v)| (normalize_path_str(k), v.clone(), k.clone()))
         .collect();
     ordered.sort_by(|a, b| a.2.cmp(&b.2));
@@ -3304,12 +3323,15 @@ where
 {
     ensure_parent(lock_path)?;
     let lock_file = fs::OpenOptions::new()
-        .read(true).write(true).create(true).truncate(false)
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
         .open(lock_path)?;
     acquire_lock(&lock_file, /*exclusive*/ true, Duration::from_secs(5))?;
 
     let result: Result<ProjectsState> = (|| {
-        let mut state = get_projects_state_at(data_path)?;   // 不存在 -> default
+        let mut state = get_projects_state_at(data_path)?; // 不存在 -> default
         canonicalize_state(&mut state);
         apply(&mut state)?;
         write_json_atomic(data_path, &serde_json::to_value(&state)?)?;
@@ -3321,16 +3343,22 @@ where
 
 /// 共享锁内读取完整状态。写者持排他锁时本调用阻塞（有界）直到写完，
 /// 不会读到 remove->rename 空窗的「不存在」。
-pub(crate) fn read_projects_state_locked(data_path: &Path, lock_path: &Path) -> Result<ProjectsState> {
+pub(crate) fn read_projects_state_locked(
+    data_path: &Path,
+    lock_path: &Path,
+) -> Result<ProjectsState> {
     ensure_parent(lock_path)?;
     let lock_file = fs::OpenOptions::new()
-        .read(true).write(true).create(true).truncate(false)
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
         .open(lock_path)?;
     acquire_lock(&lock_file, /*exclusive*/ false, Duration::from_secs(5))?;
     let state = get_projects_state_at(data_path).map(|mut state| {
         canonicalize_state(&mut state);
         state
-    });   // 不存在 -> default；返回前 canonicalize legacy 等价键
+    }); // 不存在 -> default；返回前 canonicalize legacy 等价键
     let _ = lock_file.unlock();
     state
 }
@@ -3350,4 +3378,3 @@ pub fn set_plugin_enabled(plugin_id: &str, enabled: bool) -> Result<()> {
         .with_context(|| format!("Failed to {} plugin '{}'", action, plugin_id))?;
     Ok(())
 }
-

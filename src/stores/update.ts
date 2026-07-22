@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import type { UpdateInfo, DownloadProgress, ClaudeCliUpdateInfo, ClaudeVersionEntry } from '@/types'
 import { listClaudeVersions } from '@/api/tauri'
 
-export type DownloadState = 'idle' | 'downloading' | 'installing' | 'error'
+export type DownloadState = 'idle' | 'downloading' | 'installing' | 'done' | 'error'
 
 export type HistoryDownloadState =
   | 'idle'

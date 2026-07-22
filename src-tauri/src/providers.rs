@@ -165,7 +165,10 @@ pub(crate) fn strip_core_env(settings: &serde_json::Value) -> serde_json::Value 
 
 /// 深度合并两个 JSON 对象（与 cc-switch json_deep_merge 兼容）
 /// source 的值覆盖 target 中同名键，对象递归合并，非对象直接覆盖
-pub(crate) fn deep_merge_json(target: &serde_json::Value, source: &serde_json::Value) -> serde_json::Value {
+pub(crate) fn deep_merge_json(
+    target: &serde_json::Value,
+    source: &serde_json::Value,
+) -> serde_json::Value {
     match (target, source) {
         (serde_json::Value::Object(target_map), serde_json::Value::Object(source_map)) => {
             let mut merged = target_map.clone();
@@ -180,7 +183,7 @@ pub(crate) fn deep_merge_json(target: &serde_json::Value, source: &serde_json::V
                 }
             }
             serde_json::Value::Object(merged)
-        },
+        }
         (_, source) => source.clone(),
     }
 }
@@ -372,15 +375,14 @@ pub fn import_from_cc_switch() -> Result<ImportResult> {
         });
     }
 
-    let conn = Connection::open(&db_path)
-        .context("Failed to open cc-switch database")?;
+    let conn = Connection::open(&db_path).context("Failed to open cc-switch database")?;
 
     // 读取 providers 表全部字段，含 is_current
     let mut stmt = conn
         .prepare(
             "SELECT id, name, settings_config, website_url, category, created_at, \
              sort_index, notes, icon, icon_color, meta, in_failover_queue, is_current \
-             FROM providers WHERE app_type = 'claude'"
+             FROM providers WHERE app_type = 'claude'",
         )
         .context("Failed to prepare query")?;
 
@@ -401,8 +403,7 @@ pub fn import_from_cc_switch() -> Result<ImportResult> {
             let icon: Option<String> = row.get(8)?;
             let icon_color: Option<String> = row.get(9)?;
             let meta_str: Option<String> = row.get(10)?;
-            let meta: Option<ProviderMeta> = meta_str
-                .and_then(|s| serde_json::from_str(&s).ok());
+            let meta: Option<ProviderMeta> = meta_str.and_then(|s| serde_json::from_str(&s).ok());
             let in_failover_queue: bool = row.get(11)?;
             let is_current: bool = row.get::<_, i32>(12)? != 0;
 
@@ -428,15 +429,15 @@ pub fn import_from_cc_switch() -> Result<ImportResult> {
         .context("Failed to query providers")?
         .collect();
 
-    let imported_providers: Vec<Provider> = rows
-        .into_iter()
-        .filter_map(|p| p.ok())
-        .collect();
+    let imported_providers: Vec<Provider> = rows.into_iter().filter_map(|p| p.ok()).collect();
     let count = imported_providers.len();
 
     // 查找当前激活 Provider 的名称
     let active_provider_name = current_provider_id.as_ref().and_then(|id| {
-        imported_providers.iter().find(|p| p.id == *id).map(|p| p.name.clone())
+        imported_providers
+            .iter()
+            .find(|p| p.id == *id)
+            .map(|p| p.name.clone())
     });
 
     // 合并到现有配置
@@ -464,7 +465,7 @@ pub fn import_from_cc_switch() -> Result<ImportResult> {
     ) {
         if let Ok(common_settings) = serde_json::from_str::<serde_json::Value>(&common_str) {
             if !common_settings.is_null()
-                && common_settings.as_object().map_or(false, |o| !o.is_empty())
+                && common_settings.as_object().is_some_and(|o| !o.is_empty())
             {
                 config.common_config.enabled = true;
                 config.common_config.settings = common_settings.clone();
@@ -526,10 +527,10 @@ pub(crate) struct TestConnectionParams {
 
 /// 从 Provider 的 settingsConfig.env 提取测试连接所需参数
 /// 返回 None 表示 api_key 为空（未配置）
-pub(crate) fn extract_test_params(settings_config: &serde_json::Value) -> Option<TestConnectionParams> {
-    let env = settings_config
-        .get("env")
-        .and_then(|v| v.as_object())?;
+pub(crate) fn extract_test_params(
+    settings_config: &serde_json::Value,
+) -> Option<TestConnectionParams> {
+    let env = settings_config.get("env").and_then(|v| v.as_object())?;
 
     let api_key = env
         .get("ANTHROPIC_AUTH_TOKEN")
@@ -623,10 +624,17 @@ pub async fn test_provider_connection(provider_id: &str) -> Result<TestConnectio
         Ok(resp) => {
             let status = resp.status();
             if !status.is_success() {
-                let body = resp.text().await.unwrap_or_else(|_| "无法读取响应".to_string());
+                let body = resp
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "无法读取响应".to_string());
                 return Ok(TestConnectionResult {
                     success: false,
-                    message: format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>()),
+                    message: format!(
+                        "HTTP {}: {}",
+                        status,
+                        body.chars().take(200).collect::<String>()
+                    ),
                     latency_ms: Some(start.elapsed().as_millis() as u64),
                 });
             }
@@ -682,4 +690,3 @@ pub async fn test_provider_connection(provider_id: &str) -> Result<TestConnectio
         }
     }
 }
-
