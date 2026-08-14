@@ -193,12 +193,23 @@ term.onResize(({ cols, rows }) => { ptyResize(instance.ptyId, cols, rows) })
 term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
   if (event.ctrlKey && event.key === 'v') {
     event.preventDefault()
-    readText().then(text => { if (text) term.paste(text) })
+    // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
+    // 触发光标回行首、后续覆盖前面。commitPaste 走完整流程：同步捕获 ptyId →
+    // readText() → isPasteStale 复核（防 restart 重建后把旧粘贴写到新 PTY）→
+    // 构造 payload（规范化 LF + bracketed 包装）→ 写 PTY。
+    commitPaste(
+      readText,
+      () => terminalInstances.get(tabId),
+      text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
+      ptyInput,
+    ).catch(() => {})
     return false
   }
   return true
 })
 ```
+
+`commitPaste` 的核心竞态守卫：`readText()` 是异步的，等待期间 restartTab 可能重建同 tabId 的新 PTY；实现先同步捕获按键瞬间的 ptyId，完成后复核当前实例仍是同一 ptyId（`isPasteStale`），否则丢弃过期粘贴。详见 `src/utils/pasteText.ts`。
 
 ## 终端缩放与布局刷新
 

@@ -101,12 +101,24 @@ Tauri 无特殊绑定，xterm.js 原生处理：用户按 Ctrl+W → `term.onDat
 term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
   if (event.ctrlKey && event.key === 'v') {
     event.preventDefault()
-    readText().then(text => { if (text) term.paste(text) })
+    // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
+    // 触发光标回行首、后续覆盖前面。commitPaste 走完整流程：同步捕获 ptyId →
+    // readText() → isPasteStale 复核（防 restart 重建后把旧粘贴写到新 PTY）→
+    // 构造 payload（规范化 LF + bracketed 包装）→ 写 PTY。
+    // 依赖注入，便于测试"重启重建后不写新 PTY"的竞态行为。
+    commitPaste(
+      readText,
+      () => terminalInstances.get(tabId),
+      text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
+      ptyInput,
+    ).catch(() => {})
     return false
   }
   return true
 })
 ```
+
+`commitPaste` 的核心竞态守卫：`readText()` 是异步的，等待期间 restartTab 可能重建同 tabId 的新 PTY；实现先同步捕获按键瞬间的 ptyId，完成后复核当前实例仍是同一 ptyId（`isPasteStale`），否则丢弃过期粘贴，避免旧 bracketed 模式落到新实例。详见 `src/utils/pasteText.ts`。
 
 ### 中文 IME Shift 切换中英文（搜狗等）
 

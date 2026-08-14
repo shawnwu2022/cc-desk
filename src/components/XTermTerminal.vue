@@ -40,6 +40,7 @@ import { safeDispose } from '@/utils/dispose'
 import { relativizePath } from '@/utils/path'
 import { PtyIndex } from '@/utils/ptyIndex'
 import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
+import { buildPastePayload, commitPaste } from '@/utils/pasteText'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -405,9 +406,16 @@ function createTerminal(tabId: string): Terminal {
     // Ctrl+V / Cmd+V 粘贴
     if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
       event.preventDefault()
-      readText().then(text => {
-        if (text) term.paste(text)
-      }).catch(() => {})
+      // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
+      // 触发光标回行首、后续覆盖前面（表现为"只显尾部"）。这里用 commitPaste 走完整
+      // 流程：capture ptyId → readText → isPasteStale 复核（防 restart 重建后写到新 PTY）
+      // → 构造 payload（规范化 LF + bracketed 包装）→ 写 PTY（见 utils/pasteText.ts）。
+      commitPaste(
+        readText,
+        () => terminalInstances.get(tabId),
+        text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
+        ptyInput,
+      ).catch(() => {})
       return false
     }
 
