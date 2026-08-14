@@ -181,6 +181,12 @@ onPtyOutput(({ id, data }) => { instance.term.write(data) })
 term.onResize(({ cols, rows }) => { ptyResize(instance.ptyId, cols, rows) })
 ```
 
+### 渲染器加载与分包
+
+- DOM renderer 为默认路径，Unicode 11 与 IME 修复在 `term.open` 后同步初始化。
+- 只有新终端创建时检测到 `webglRenderer=true`，才动态导入 `@xterm/addon-webgl`；导入或初始化失败会记录警告并回退 DOM，不让异步错误传播到终端启动调用方。
+- WebGL 的 context-loss reload、五分钟 atlas reload 与终端销毁清理保持不变。WebGL addon 单独生成动态 chunk，不与 `xterm-vendor` 合并。
+
 ### Ctrl+V 粘贴处理
 
 ```typescript

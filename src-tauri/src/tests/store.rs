@@ -1,18 +1,30 @@
 use serde_json::json;
 
+use super::store_profiling::{benchmark_active_full_scan_real, profile_real_home_variants};
+use crate::session_name_index::{
+    FileStamp, IndexHealth, IndexLimits, IndexMutation, PendingIndexFlush, SessionNameEntry,
+    SessionNameIndex, SessionNameIndexDelta, SessionNameIndexPaths, SessionNameIndexStore,
+};
 use crate::store::{
     acquire_lock, assemble_home_data, canonicalize_state, compute_project_startup_state,
-    expand_env_vars, extract_md_description, extract_session_name, find_valid_plugin_path,
-    get_projects_state_at, infer_server_type, merge_json_values, normalize_path_inner,
-    normalize_path_str_pub, parse_agents_list_output, parse_mcp_server_entry,
+    expand_env_vars, extract_md_description, extract_project_path_from_jsonl, extract_session_name,
+    find_valid_plugin_path, get_all_recent_sessions_indexed_at, get_home_data,
+    get_home_data_indexed_at, get_projects_state_at, get_sessions_from_dirs,
+    get_sessions_indexed_at, infer_server_type, invalidate_project_path_mapping, merge_json_values,
+    normalize_path_inner, normalize_path_str, parse_agents_list_output, parse_mcp_server_entry,
     parse_skill_description, parse_timestamp, read_projects_state_locked, replace_file_atomic,
-    resolve_marketplace_plugin_path_at, search_session_messages_in_dirs, set_agent_enabled_in,
-    set_mcp_server_enabled_in, set_skill_enabled_in, with_projects_state_locked, write_json_atomic,
-    AgentInfo, AppConfig, Project, ProjectsState, SessionInfo,
+    resolve_marketplace_plugin_path_at, scan_home_projects_at, search_session_messages_in_dirs,
+    set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,
+    with_project_path_mapping, with_projects_state_locked, write_json_atomic, AgentInfo, AppConfig,
+    Project, ProjectPathMapping, ProjectsState, SessionInfo,
 };
 
 use std::collections::HashMap;
+use std::hint::black_box;
+use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 // ==================== merge_json_values ====================
 
@@ -413,7 +425,1153 @@ fn ParseTimestamp_EmptyString_001() {
 
 // ==================== extract_session_name ====================
 
-// 多条用户消息时返回第一条有效消息，而非最后一条
+#[test]
+#[ignore = "reads the real ~/.claude/projects dataset"]
+fn BenchmarkHomeData_RealHistory_001() {
+    assert_eq!(
+        std::env::var("CC_DESK_BENCH_REAL_HOME").as_deref(),
+        Ok("1"),
+        "set CC_DESK_BENCH_REAL_HOME=1 explicitly"
+    );
+
+    let mut samples = Vec::with_capacity(5);
+    for _ in 0..5 {
+        invalidate_project_path_mapping();
+        let started = Instant::now();
+        let home = get_home_data(12, 20, "", &[]).expect("real home scan should succeed");
+        assert!(
+            !home.projects.is_empty(),
+            "real home benchmark found no projects under {:?}",
+            dirs::home_dir()
+        );
+        black_box(home);
+        samples.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    eprintln!(
+        "home_data_warm_p50_ms={:.1}; samples_ms={samples:?}",
+        samples[2]
+    );
+}
+
+// 对同一真实数据交错比较旧双扫、单快照旧名称解析、单快照流式名称解析。
+#[test]
+#[ignore = "reads the real ~/.claude/projects dataset"]
+fn BenchmarkHomeBreakdown_Real_002() {
+    assert_eq!(std::env::var("CC_DESK_BENCH_REAL_HOME").as_deref(), Ok("1"));
+    let report = profile_real_home_variants(7).expect("profile should succeed");
+    assert_eq!(report.rounds, 7);
+    assert!(report.variants_are_equivalent);
+    assert_eq!(report.samples.len(), 3);
+    assert_eq!(report.p50.len(), 3);
+    eprintln!(
+        "{report:#?}\nsnapshot_overhead_ms={:.1}; snapshot_overhead_percent={:.1}; stream_overhead_ms={:.1}; stream_overhead_percent={:.1}; residual_p50_ms={:.1}; final_warm_limit_ms={:.1}; phase0a_should_stop={}",
+        report.snapshot_overhead_ms,
+        report.snapshot_overhead_percent,
+        report.stream_overhead_ms,
+        report.stream_overhead_percent,
+        report.residual_p50_ms,
+        report.final_warm_limit_ms,
+        report.phase0a_should_stop,
+    );
+}
+
+// 在真实近期会话的临时副本上量化 active-1/4/8 每次失效后的全量名称重扫。
+#[test]
+#[ignore = "reads the real ~/.claude/projects dataset and writes only temporary copies"]
+fn BenchmarkActiveFullScan_Real_004() {
+    assert_eq!(std::env::var("CC_DESK_BENCH_REAL_HOME").as_deref(), Ok("1"));
+    let phase0a = profile_real_home_variants(7).expect("Phase 0A profile should succeed");
+    assert!(
+        !phase0a.phase0a_should_stop,
+        "Phase 0A stop gate blocks active-session benchmarking"
+    );
+    let report =
+        benchmark_active_full_scan_real(7, phase0a.residual_p50_ms, phase0a.final_warm_limit_ms)
+            .expect("active full-scan benchmark should succeed");
+    assert_eq!(report.rounds, 7);
+    assert!(report.samples.values().all(|samples| samples.len() == 7));
+    assert!(report
+        .samples
+        .iter()
+        .all(|(k, samples)| samples.iter().all(|sample| sample.k == *k)));
+    assert_eq!(report.source_file_sizes.len(), 8);
+    assert_eq!(report.p50_name_parse_ms.len(), 3);
+    assert_eq!(report.p50_jsonl_bytes_read.len(), 3);
+    assert_eq!(report.estimated_active_total_p50_ms.len(), 3);
+    eprintln!(
+        "{report:#?}\nactive4_limit_ms={:.1}; append_resume_required={}",
+        report.active4_limit_ms, report.append_resume_required
+    );
+}
+
+fn percentile_ms(samples: &[f64], percentile_index: usize) -> f64 {
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    sorted[percentile_index.min(sorted.len() - 1)]
+}
+
+fn normalized_session_rows(sessions: &[SessionInfo]) -> Vec<(String, String, String)> {
+    sessions
+        .iter()
+        .map(|session| {
+            (
+                session.project_path.clone(),
+                session.session_id.clone(),
+                session.name.clone(),
+            )
+        })
+        .collect()
+}
+
+// 真实 ~/.claude/projects 的 direct/cold/warm/history 对照；索引只写测试临时目录。
+#[test]
+#[ignore = "reads real ~/.claude/projects and writes only temporary indexes"]
+fn BenchmarkHomeIndex_Real_003() {
+    let projects_root = dirs::home_dir().unwrap().join(".claude").join("projects");
+    let scan = scan_home_projects_at(&projects_root).unwrap();
+    assert!(!scan.projects.is_empty());
+    let history_project = scan
+        .projects
+        .iter()
+        .find_map(|project| {
+            scan.mapping
+                .get(&project.path)
+                .filter(|dirs| !dirs.is_empty())
+                .map(|dirs| (project.path.clone(), dirs.clone()))
+        })
+        .expect("real benchmark requires one project with sessions");
+
+    let mut direct_samples = Vec::new();
+    let mut cold_samples = Vec::new();
+    let mut warm_samples = Vec::new();
+    let mut history_cold_samples = Vec::new();
+    let mut history_warm_samples = Vec::new();
+    let mut warm_jsonl_bytes = Vec::new();
+    let mut history_warm_jsonl_bytes = Vec::new();
+    let orders = [
+        ["direct", "cold", "warm", "history-cold", "history-warm"],
+        ["cold", "warm", "history-cold", "history-warm", "direct"],
+        ["warm", "history-cold", "history-warm", "direct", "cold"],
+        ["history-cold", "history-warm", "direct", "cold", "warm"],
+        ["history-warm", "direct", "cold", "warm", "history-cold"],
+    ];
+
+    for round in 0usize..7 {
+        let home_temp = tempfile::tempdir().unwrap();
+        let (home_store, _, _) = indexed_store_for_test(&home_temp);
+        let history_temp = tempfile::tempdir().unwrap();
+        let (history_store, _, _) = indexed_store_for_test(&history_temp);
+
+        let cold_started = Instant::now();
+        let cold = get_home_data_indexed_at(
+            &projects_root,
+            12,
+            20,
+            "",
+            &[],
+            &home_store,
+            2_000 + round as u64,
+            None,
+        )
+        .unwrap();
+        let cold_elapsed = cold_started.elapsed().as_secs_f64() * 1000.0;
+        let cold_rows = normalized_session_rows(&cold.value.recent_sessions);
+        if let Some(pending) = cold.pending_flush {
+            home_store.flush_pending(pending).unwrap();
+        }
+
+        let history_cold_started = Instant::now();
+        let history_cold = get_sessions_indexed_at(
+            &history_project.0,
+            &history_project.1,
+            20,
+            0,
+            &history_store,
+            2_000 + round as u64,
+            None,
+        )
+        .unwrap();
+        let history_cold_elapsed = history_cold_started.elapsed().as_secs_f64() * 1000.0;
+        let history_rows = normalized_session_rows(&history_cold.value);
+        if let Some(pending) = history_cold.pending_flush {
+            history_store.flush_pending(pending).unwrap();
+        }
+
+        for mode in orders[round % orders.len()] {
+            match mode {
+                "direct" => {
+                    let started = Instant::now();
+                    let direct = get_home_data(12, 20, "", &[]).unwrap();
+                    direct_samples.push(started.elapsed().as_secs_f64() * 1000.0);
+                    assert_eq!(normalized_session_rows(&direct.recent_sessions), cold_rows);
+                }
+                "cold" => cold_samples.push(cold_elapsed),
+                "warm" => {
+                    let started = Instant::now();
+                    let warm = get_home_data_indexed_at(
+                        &projects_root,
+                        12,
+                        20,
+                        "",
+                        &[],
+                        &home_store,
+                        3_000 + round as u64,
+                        None,
+                    )
+                    .unwrap();
+                    warm_samples.push(started.elapsed().as_secs_f64() * 1000.0);
+                    warm_jsonl_bytes.push(warm.stats.jsonl_bytes_read);
+                    assert_eq!(
+                        normalized_session_rows(&warm.value.recent_sessions),
+                        cold_rows
+                    );
+                    assert!(warm.pending_flush.is_none());
+                }
+                "history-cold" => history_cold_samples.push(history_cold_elapsed),
+                "history-warm" => {
+                    let started = Instant::now();
+                    let warm = get_sessions_indexed_at(
+                        &history_project.0,
+                        &history_project.1,
+                        20,
+                        0,
+                        &history_store,
+                        3_000 + round as u64,
+                        None,
+                    )
+                    .unwrap();
+                    history_warm_samples.push(started.elapsed().as_secs_f64() * 1000.0);
+                    history_warm_jsonl_bytes.push(warm.stats.jsonl_bytes_read);
+                    assert_eq!(normalized_session_rows(&warm.value), history_rows);
+                    assert!(warm.pending_flush.is_none());
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    for (mode, samples) in [
+        ("direct", &direct_samples),
+        ("cold", &cold_samples),
+        ("warm", &warm_samples),
+        ("history-cold", &history_cold_samples),
+        ("history-warm", &history_warm_samples),
+    ] {
+        eprintln!(
+            "mode={mode}; samples_ms={samples:?}; p50_ms={:.3}; p95_ms={:.3}",
+            percentile_ms(samples, 3),
+            percentile_ms(samples, 6),
+        );
+    }
+    eprintln!(
+        "warm_jsonl_bytes={warm_jsonl_bytes:?}; history_warm_jsonl_bytes={history_warm_jsonl_bytes:?}"
+    );
+
+    let direct_p50 = percentile_ms(&direct_samples, 3);
+    let cold_p50 = percentile_ms(&cold_samples, 3);
+    let warm_p50 = percentile_ms(&warm_samples, 3);
+    assert!(cold_p50 <= direct_p50 * 1.15);
+    assert!(warm_p50 <= 250.0);
+    assert!(warm_p50 <= 2_200.6 * 0.25);
+    assert!(warm_jsonl_bytes.iter().all(|bytes| *bytes == 0));
+    assert!(history_warm_jsonl_bytes.iter().all(|bytes| *bytes == 0));
+}
+
+// 真实近期 JSONL 的临时副本：追加项必须 full rebuild，未改项必须 exact hit。
+#[test]
+#[ignore = "reads real ~/.claude/projects and writes only temporary copies/indexes"]
+fn BenchmarkActiveIndex_Real_005() {
+    assert_eq!(std::env::var("CC_DESK_BENCH_REAL_HOME").as_deref(), Ok("1"));
+    let projects_root = dirs::home_dir().unwrap().join(".claude").join("projects");
+    let mut sources = Vec::new();
+    for project in std::fs::read_dir(&projects_root).unwrap().flatten() {
+        if !project.path().is_dir() {
+            continue;
+        }
+        for file in std::fs::read_dir(project.path()).unwrap().flatten() {
+            let path = file.path();
+            if path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+                && !path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().starts_with("agent-"))
+                    .unwrap_or(false)
+            {
+                let modified = std::fs::metadata(&path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok();
+                sources.push((modified, path));
+            }
+        }
+    }
+    sources.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    let sources = sources
+        .into_iter()
+        .map(|(_, path)| path)
+        .take(8)
+        .collect::<Vec<_>>();
+    assert_eq!(sources.len(), 8);
+
+    for k in [1usize, 4, 8] {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real");
+        let encoded = root.path().join(format!("encoded-{k}"));
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(&encoded).unwrap();
+        let mut copies = Vec::new();
+        for (sequence, source) in sources.iter().enumerate() {
+            let copy = encoded.join(format!("session-{sequence}.jsonl"));
+            std::fs::copy(source, &copy).unwrap();
+            copies.push(copy);
+        }
+        let (store, paths, _) = indexed_store_for_test(&root);
+        let seeded = copies
+            .iter()
+            .map(|path| {
+                (
+                    encoded.as_path(),
+                    path.as_path(),
+                    extract_session_name(path),
+                )
+            })
+            .collect::<Vec<_>>();
+        let seed_refs = seeded
+            .iter()
+            .map(|(dir, path, name)| (*dir, *path, name.as_str()))
+            .collect::<Vec<_>>();
+        seed_name_index(&paths, &seed_refs);
+
+        let mut samples = Vec::new();
+        for round in 0..7 {
+            let title = format!("active-{k}-round-{round}");
+            for (sequence, path) in copies.iter().take(k).enumerate() {
+                let event = if sequence == 0 {
+                    format!(
+                        "{{\"type\":\"custom-title\",\"customTitle\":{}}}\n",
+                        serde_json::to_string(&title).unwrap()
+                    )
+                } else {
+                    "{\"type\":\"assistant\",\"message\":{\"content\":[]}}\n".to_string()
+                };
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(path)
+                    .unwrap()
+                    .write_all(event.as_bytes())
+                    .unwrap();
+            }
+
+            let started = Instant::now();
+            let result = get_sessions_indexed_at(
+                real.to_string_lossy().as_ref(),
+                std::slice::from_ref(&encoded),
+                8,
+                0,
+                &store,
+                10_000 + round,
+                None,
+            )
+            .unwrap();
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(result.stats.full_rebuilds, k as u64);
+            assert_eq!(result.stats.exact_hits, (8 - k) as u64);
+            assert!(result.stats.jsonl_bytes_read > 0);
+            assert!(result.value.iter().any(|session| session.name == title));
+        }
+        eprintln!(
+            "active_k={k}; samples_ms={samples:?}; p50_ms={:.3}; p95_ms={:.3}",
+            percentile_ms(&samples, 3),
+            percentile_ms(&samples, 6)
+        );
+        if k == 4 {
+            assert!(percentile_ms(&samples, 3) <= 350.0);
+        }
+        if k == 8 {
+            assert!(percentile_ms(&samples, 3) <= 500.0);
+        }
+    }
+}
+
+fn build_index_near_size(target_bytes: usize) -> Vec<u8> {
+    let mut count = (target_bytes / 180).max(1);
+    let mut closest = Vec::new();
+    for _ in 0..8 {
+        let mut index = SessionNameIndex::empty();
+        let bucket = index.projects.entry("synthetic".to_string()).or_default();
+        for sequence in 0..count {
+            bucket.insert(
+                format!("session-{sequence:08}.jsonl"),
+                SessionNameEntry {
+                    name: format!("Synthetic {sequence:08} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+                    observed_length: sequence as u64,
+                    modified_secs: 1_700_000_000,
+                    modified_nanos: sequence as u32,
+                    cached_at_ms: sequence as u64,
+                },
+            );
+        }
+        let bytes = serde_json::to_vec(&index).unwrap();
+        if closest.is_empty()
+            || bytes.len().abs_diff(target_bytes) < closest.len().abs_diff(target_bytes)
+        {
+            closest = bytes.clone();
+        }
+        if bytes.len().abs_diff(target_bytes) <= target_bytes / 100 {
+            break;
+        }
+        count = count
+            .saturating_mul(target_bytes)
+            .checked_div(bytes.len().max(1))
+            .unwrap_or(1)
+            .max(1);
+    }
+    closest
+}
+
+fn run_index_worker_if_set() -> bool {
+    let Ok(mode) = std::env::var("CC_DESK_INDEX_WORKER_MODE") else {
+        return false;
+    };
+    let dir = std::path::PathBuf::from(std::env::var("CC_DESK_INDEX_WORKER_DIR").unwrap());
+    let id = std::env::var("CC_DESK_INDEX_WORKER_ID")
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+    let request_compaction = std::env::var_os("CC_DESK_INDEX_WORKER_COMPACT").is_some();
+    let paths = SessionNameIndexPaths {
+        data: dir.join("session-name-index.json"),
+        lock: dir.join("session-name-index.json.lock"),
+    };
+    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let mut store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    );
+    let session_path = dir.join(format!("worker-{id}.jsonl"));
+    std::fs::write(&session_path, format!("worker-{id}")).unwrap();
+    let snapshot = store.read_snapshot();
+    let project_key = "worker-project".to_string();
+    let file_name = if mode == "same" {
+        "same.jsonl".to_string()
+    } else {
+        format!("worker-{id}.jsonl")
+    };
+    let base = snapshot
+        .index
+        .projects
+        .get(&project_key)
+        .and_then(|bucket| bucket.get(&file_name))
+        .cloned();
+    let stamp = FileStamp::read(&session_path).unwrap();
+    let replacement = SessionNameEntry {
+        name: format!("worker-{id}"),
+        observed_length: stamp.observed_length,
+        modified_secs: stamp.modified_secs,
+        modified_nanos: stamp.modified_nanos,
+        cached_at_ms: u64::MAX - id as u64,
+    };
+    let pending = PendingIndexFlush {
+        base_raw: snapshot.raw,
+        delta: SessionNameIndexDelta {
+            mutations: vec![IndexMutation {
+                project_key,
+                file_name,
+                path: session_path,
+                base,
+                replacement,
+            }],
+            request_compaction,
+            ..SessionNameIndexDelta::default()
+        },
+    };
+    if mode == "cas" {
+        let data_path = paths.data.clone();
+        store = store.with_flush_test_config(
+            Duration::from_secs(1),
+            4,
+            None,
+            Some(Arc::new(move |_| {
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&data_path)
+                    .unwrap()
+                    .write_all(b" ")
+                    .unwrap();
+            })),
+            None,
+        );
+    }
+    std::fs::write(dir.join(format!("ready-{id}")), "1").unwrap();
+    wait_for_file(&dir.join("start-flush"), Duration::from_secs(10));
+    let result = store.flush_pending(pending);
+    let report = match result {
+        Ok(metrics) => serde_json::json!({
+            "ok": true,
+            "exclusiveHoldMs": metrics.exclusive_hold.as_secs_f64() * 1000.0,
+            "attempts": metrics.attempts,
+        }),
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "error": error.to_string(),
+        }),
+    };
+    std::fs::write(
+        dir.join(format!("result-{id}.json")),
+        serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
+    std::process::exit(0);
+}
+
+fn run_four_index_workers(
+    initial: &[u8],
+    mode: &str,
+    compact: bool,
+) -> (tempfile::TempDir, Vec<serde_json::Value>) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("session-name-index.json"), initial).unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let mut children = Vec::new();
+    for id in 0..4 {
+        let mut command = std::process::Command::new(&exe);
+        command
+            .arg("BenchmarkIndexMultiProcess_Real_006")
+            .arg("--ignored")
+            .arg("--test-threads=1")
+            .env("CC_DESK_INDEX_WORKER_MODE", mode)
+            .env("CC_DESK_INDEX_WORKER_DIR", dir.path())
+            .env("CC_DESK_INDEX_WORKER_ID", id.to_string());
+        if compact {
+            command.env("CC_DESK_INDEX_WORKER_COMPACT", "1");
+        }
+        children.push(command.spawn().unwrap());
+    }
+    for id in 0..4 {
+        wait_for_file(
+            &dir.path().join(format!("ready-{id}")),
+            Duration::from_secs(10),
+        );
+    }
+    std::fs::write(dir.path().join("start-flush"), "1").unwrap();
+    for child in &mut children {
+        wait_for_child(child, Duration::from_secs(30));
+    }
+    let reports = (0..4)
+        .map(|id| {
+            serde_json::from_slice(
+                &std::fs::read(dir.path().join(format!("result-{id}.json"))).unwrap(),
+            )
+            .unwrap()
+        })
+        .collect();
+    (dir, reports)
+}
+
+// 四进程共享临时索引：real/8MiB disjoint、same-key stale base、CAS exhaustion。
+#[test]
+#[ignore = "reads real home for measured index size and runs four child processes"]
+fn BenchmarkIndexMultiProcess_Real_006() {
+    if run_index_worker_if_set() {
+        return;
+    }
+    assert_eq!(std::env::var("CC_DESK_BENCH_REAL_HOME").as_deref(), Ok("1"));
+    let projects_root = dirs::home_dir().unwrap().join(".claude").join("projects");
+    let real_temp = tempfile::tempdir().unwrap();
+    let (real_store, real_paths, _) = indexed_store_for_test(&real_temp);
+    let cold = get_home_data_indexed_at(&projects_root, 12, 20, "", &[], &real_store, 2_000, None)
+        .unwrap();
+    real_store
+        .flush_pending(cold.pending_flush.unwrap())
+        .unwrap();
+    let real_bytes = std::fs::read(&real_paths.data).unwrap();
+    let eight_mib = build_index_near_size(8 * 1024 * 1024);
+    eprintln!(
+        "multi_process_real_input_bytes={}; eight_mib_input_bytes={}",
+        real_bytes.len(),
+        eight_mib.len()
+    );
+
+    for (label, initial, compact) in [
+        ("real", real_bytes.as_slice(), false),
+        ("8mib", eight_mib.as_slice(), true),
+    ] {
+        for mode in ["disjoint", "same", "cas"] {
+            let (dir, reports) = run_four_index_workers(initial, mode, compact);
+            eprintln!("multi_process_size={label}; mode={mode}; reports={reports:?}");
+            assert!(std::fs::read_dir(dir.path())
+                .unwrap()
+                .flatten()
+                .all(|entry| {
+                    !entry
+                        .file_name()
+                        .to_string_lossy()
+                        .contains("session-name-index.json.tmp.")
+                }));
+            if mode == "cas" {
+                assert!(reports.iter().all(|report| {
+                    !report["ok"].as_bool().unwrap()
+                        && report["error"].as_str().unwrap().contains("CAS exhausted")
+                }));
+                continue;
+            }
+            assert!(reports.iter().all(|report| report["ok"].as_bool().unwrap()));
+            let persisted: SessionNameIndex = serde_json::from_slice(
+                &std::fs::read(dir.path().join("session-name-index.json")).unwrap(),
+            )
+            .unwrap();
+            let bucket = &persisted.projects["worker-project"];
+            assert_eq!(bucket.len(), if mode == "disjoint" { 4 } else { 1 });
+            let holds = reports
+                .iter()
+                .map(|report| report["exclusiveHoldMs"].as_f64().unwrap())
+                .collect::<Vec<_>>();
+            if label == "real" {
+                assert!(percentile_ms(&holds, 3) <= 100.0);
+            } else {
+                assert!(holds.iter().all(|hold| *hold <= 150.0));
+            }
+        }
+    }
+}
+
+// cwd 在无效字节尾之前：流式早停读到 cwd，不读坏尾。
+#[test]
+fn ExtractProjectPath_StopBeforeBadTail_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("session.jsonl");
+    let mut bytes = b"{\"cwd\":\"C:/work/project\"}\n".to_vec();
+    bytes.extend_from_slice(&[0xff, 0xfe, b'\n']);
+    std::fs::write(file, bytes).unwrap();
+
+    assert_eq!(
+        extract_project_path_from_jsonl(dir.path()).as_deref(),
+        Some("C:/work/project")
+    );
+}
+
+// cwd 在无效 UTF-8 行之后：逐行容错跳过坏行，仍读到后续 cwd。
+#[test]
+fn ExtractProjectPath_SkipBadUtf8_002() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("session.jsonl");
+    let mut bytes = vec![0xff, 0xfe, b'\n'];
+    bytes.extend_from_slice(b"{\"cwd\":\"C:/work/project\"}\n");
+    std::fs::write(file, bytes).unwrap();
+
+    assert_eq!(
+        extract_project_path_from_jsonl(dir.path()).as_deref(),
+        Some("C:/work/project")
+    );
+}
+
+fn create_claude_project_dir(root: &Path, name: &str, cwd: &Path) -> std::path::PathBuf {
+    let dir = root.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{name}.jsonl")),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+// 多个编码目录映射同一真实路径时，扫描结果按真实路径合并。
+#[test]
+fn ScanHomeProjects_MergeByRealPath_001() {
+    let root = tempfile::tempdir().unwrap();
+    let real = tempfile::tempdir().unwrap();
+    let first = create_claude_project_dir(root.path(), "old-encoding", real.path());
+    let second = create_claude_project_dir(root.path(), "new-encoding", real.path());
+
+    let scan = scan_home_projects_at(root.path()).unwrap();
+    let dirs = scan
+        .mapping
+        .get(real.path().to_string_lossy().as_ref())
+        .unwrap();
+
+    assert_eq!(scan.projects.len(), 2);
+    assert_eq!(dirs.len(), 2);
+    assert!(dirs.contains(&first));
+    assert!(dirs.contains(&second));
+}
+
+// 跨多个编码目录合并会话后，排序与分页结果正确。
+#[test]
+fn GetSessionsFromDirs_SortAcrossDirs_001() {
+    use std::time::{Duration, SystemTime};
+
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first");
+    let second = root.path().join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let old = first.join("old.jsonl");
+    let new = second.join("new.jsonl");
+    std::fs::write(
+        &old,
+        "{\"type\":\"user\",\"message\":{\"content\":\"Old\"}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &new,
+        "{\"type\":\"user\",\"message\":{\"content\":\"New\"}}\n",
+    )
+    .unwrap();
+    let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(base))
+        .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&new)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(base + Duration::from_secs(10)))
+        .unwrap();
+
+    let dirs = vec![first, second];
+    assert_eq!(
+        get_sessions_from_dirs("C:/project", &dirs, 1, 0).unwrap()[0].session_id,
+        "new"
+    );
+    assert_eq!(
+        get_sessions_from_dirs("C:/project", &dirs, 1, 1).unwrap()[0].session_id,
+        "old"
+    );
+}
+
+fn indexed_store_for_test(
+    root: &tempfile::TempDir,
+) -> (SessionNameIndexStore, SessionNameIndexPaths, Arc<AtomicU64>) {
+    let paths = SessionNameIndexPaths {
+        data: root.path().join("session-name-index.json"),
+        lock: root.path().join("session-name-index.json.lock"),
+    };
+    let reads = Arc::new(AtomicU64::new(0));
+    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    )
+    .with_snapshot_read_counter(Arc::clone(&reads));
+    (store, paths, reads)
+}
+
+fn create_indexed_session(
+    project_dir: &Path,
+    file_name: &str,
+    cwd: &Path,
+    name: &str,
+) -> std::path::PathBuf {
+    std::fs::create_dir_all(project_dir).unwrap();
+    let path = project_dir.join(file_name);
+    std::fs::write(
+        &path,
+        format!(
+            "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+            serde_json::to_string(&cwd.to_string_lossy()).unwrap(),
+            serde_json::to_string(name).unwrap(),
+        ),
+    )
+    .unwrap();
+    path
+}
+
+fn seed_name_index(
+    paths: &SessionNameIndexPaths,
+    entries: &[(&Path, &Path, &str)],
+) -> SessionNameIndex {
+    let mut index = SessionNameIndex::empty();
+    for (project_dir, path, name) in entries {
+        let stamp = FileStamp::read(path).unwrap();
+        let project_key = normalize_path_str(&project_dir.to_string_lossy());
+        let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+        index.projects.entry(project_key).or_default().insert(
+            file_name,
+            SessionNameEntry {
+                name: (*name).to_string(),
+                observed_length: stamp.observed_length,
+                modified_secs: stamp.modified_secs,
+                modified_nanos: stamp.modified_nanos,
+                cached_at_ms: 1_000,
+            },
+        );
+    }
+    std::fs::write(&paths.data, serde_json::to_vec(&index).unwrap()).unwrap();
+    index
+}
+
+// home 请求无论包含多少项目，都只能读取一次索引快照。
+#[test]
+fn HomeIndex_ReadsOnce_020() {
+    let root = tempfile::tempdir().unwrap();
+    let projects_root = root.path().join("projects");
+    let real_one = root.path().join("real-one");
+    let real_two = root.path().join("real-two");
+    std::fs::create_dir_all(&real_one).unwrap();
+    std::fs::create_dir_all(&real_two).unwrap();
+    create_indexed_session(
+        &projects_root.join("encoded-one"),
+        "one.jsonl",
+        &real_one,
+        "One",
+    );
+    create_indexed_session(
+        &projects_root.join("encoded-two"),
+        "two.jsonl",
+        &real_two,
+        "Two",
+    );
+    let (store, _, reads) = indexed_store_for_test(&root);
+
+    let result =
+        get_home_data_indexed_at(&projects_root, 12, 20, "", &[], &store, 2_000, None).unwrap();
+
+    assert_eq!(result.value.recent_sessions.len(), 2);
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+}
+
+// 单个项目目录在 resolve 阶段读取失败（目录被替换为同名文件 -> read_dir ENOTDIR）时，
+// 首页不整体失败，仍返回其他项目的会话（spec §7 失败隔离）。
+#[test]
+fn HomeIndex_SkipFailedProject_022() {
+    let root = tempfile::tempdir().unwrap();
+    let projects_root = root.path().join("projects");
+    let real_one = root.path().join("real-one");
+    let real_two = root.path().join("real-two");
+    std::fs::create_dir_all(&real_one).unwrap();
+    std::fs::create_dir_all(&real_two).unwrap();
+    let encoded_one = projects_root.join("encoded-one");
+    create_indexed_session(&encoded_one, "one.jsonl", &real_one, "One");
+    create_indexed_session(
+        &projects_root.join("encoded-two"),
+        "two.jsonl",
+        &real_two,
+        "Two",
+    );
+    let (store, _, _) = indexed_store_for_test(&root);
+
+    // scan 完成后、首个项目 resolve 前破坏 encoded-one：删目录 + 建同名文件 -> read_dir 失败。
+    let broken = std::sync::atomic::AtomicBool::new(false);
+    let before_resolve = std::sync::Arc::new(move || {
+        if !broken.swap(true, Ordering::SeqCst) {
+            std::fs::remove_dir_all(&encoded_one).unwrap();
+            std::fs::write(&encoded_one, b"not a dir").unwrap();
+        }
+    });
+
+    let result = get_home_data_indexed_at(
+        &projects_root,
+        12,
+        20,
+        "",
+        &[],
+        &store,
+        2_000,
+        Some(before_resolve),
+    )
+    .unwrap();
+
+    // 首页整体成功：失败项目会话被跳过（不出现"One"），成功项目会话仍返回（"Two"在）。
+    let names: Vec<&str> = result
+        .value
+        .recent_sessions
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert!(
+        names.contains(&"Two"),
+        "surviving project missing: {names:?}"
+    );
+    assert!(
+        !names.contains(&"One"),
+        "failed project must be skipped: {names:?}"
+    );
+}
+
+// all-recent 同语义：单项目 resolve 失败时仍返回其他项目会话。
+#[test]
+fn AllRecentIndex_SkipFailedProject_023() {
+    let root = tempfile::tempdir().unwrap();
+    let projects_root = root.path().join("projects");
+    let real_one = root.path().join("real-one");
+    let real_two = root.path().join("real-two");
+    std::fs::create_dir_all(&real_one).unwrap();
+    std::fs::create_dir_all(&real_two).unwrap();
+    let encoded_one = projects_root.join("encoded-one");
+    create_indexed_session(&encoded_one, "one.jsonl", &real_one, "One");
+    create_indexed_session(
+        &projects_root.join("encoded-two"),
+        "two.jsonl",
+        &real_two,
+        "Two",
+    );
+    let (store, _, _) = indexed_store_for_test(&root);
+
+    let broken = std::sync::atomic::AtomicBool::new(false);
+    let before_resolve = std::sync::Arc::new(move || {
+        if !broken.swap(true, Ordering::SeqCst) {
+            std::fs::remove_dir_all(&encoded_one).unwrap();
+            std::fs::write(&encoded_one, b"not a dir").unwrap();
+        }
+    });
+
+    let result =
+        get_all_recent_sessions_indexed_at(&projects_root, 20, &store, 2_000, Some(before_resolve))
+            .unwrap();
+
+    let names: Vec<&str> = result.value.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        names.contains(&"Two"),
+        "surviving project missing: {names:?}"
+    );
+    assert!(
+        !names.contains(&"One"),
+        "failed project must be skipped: {names:?}"
+    );
+}
+
+// home 仍只为每个真实项目解析排序后的前三条会话。
+#[test]
+fn HomeIndex_RecentThree_021() {
+    let root = tempfile::tempdir().unwrap();
+    let projects_root = root.path().join("projects");
+    let real = root.path().join("real");
+    let encoded = projects_root.join("encoded");
+    std::fs::create_dir_all(&real).unwrap();
+    for sequence in 0..5 {
+        let path = create_indexed_session(
+            &encoded,
+            &format!("session-{sequence}.jsonl"),
+            &real,
+            &format!("Session {sequence}"),
+        );
+        let modified =
+            std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + sequence);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+    let (store, _, _) = indexed_store_for_test(&root);
+
+    let result =
+        get_home_data_indexed_at(&projects_root, 12, 20, "", &[], &store, 2_000, None).unwrap();
+
+    assert_eq!(result.value.recent_sessions.len(), 3);
+    assert_eq!(result.stats.full_rebuilds, 3);
+}
+
+// warm history page 只解析分页命中的条目，并返回缓存名称与零 JSONL bytes。
+#[test]
+fn SessionsIndex_WarmPage_022() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    let encoded = root.path().join("encoded");
+    std::fs::create_dir_all(&real).unwrap();
+    let first = create_indexed_session(&encoded, "first.jsonl", &real, "Disk first");
+    let second = create_indexed_session(&encoded, "second.jsonl", &real, "Disk second");
+    let (store, paths, _) = indexed_store_for_test(&root);
+    seed_name_index(
+        &paths,
+        &[
+            (&encoded, &first, "Cached first"),
+            (&encoded, &second, "Cached second"),
+        ],
+    );
+
+    let result = get_sessions_indexed_at(
+        real.to_string_lossy().as_ref(),
+        &[encoded],
+        1,
+        0,
+        &store,
+        2_000,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.value.len(), 1);
+    assert!(result.value[0].name.starts_with("Cached"));
+    assert_eq!(result.stats.exact_hits, 1);
+    assert_eq!(result.stats.jsonl_bytes_read, 0);
+    assert!(result.pending_flush.is_none());
+}
+
+// append 后必须走 full rebuild 并返回新增 custom-title，不能使用增量 cursor。
+#[test]
+fn SessionsIndex_AppendFullRebuild_023() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    let encoded = root.path().join("encoded");
+    std::fs::create_dir_all(&real).unwrap();
+    let path = create_indexed_session(&encoded, "session.jsonl", &real, "Old");
+    let (store, paths, _) = indexed_store_for_test(&root);
+    seed_name_index(&paths, &[(&encoded, &path, "Old cached")]);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"{\"type\":\"custom-title\",\"customTitle\":\"New title\"}\n")
+        .unwrap();
+
+    let result = get_sessions_indexed_at(
+        real.to_string_lossy().as_ref(),
+        &[encoded],
+        20,
+        0,
+        &store,
+        2_000,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.value[0].name, "New title");
+    assert_eq!(result.stats.full_rebuilds, 1);
+    assert!(result.stats.jsonl_bytes_read > 0);
+    assert!(result.pending_flush.is_some());
+}
+
+// 同一真实 cwd 的多个编码目录必须在一次 history 请求中同时返回且索引键隔离。
+#[test]
+fn SessionsIndex_MultiDir_024() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    let old = root.path().join("encoded-old");
+    let new = root.path().join("encoded-new");
+    std::fs::create_dir_all(&real).unwrap();
+    create_indexed_session(&old, "old.jsonl", &real, "Old encoding");
+    create_indexed_session(&new, "new.jsonl", &real, "New encoding");
+    let (store, _, _) = indexed_store_for_test(&root);
+
+    let result = get_sessions_indexed_at(
+        real.to_string_lossy().as_ref(),
+        &[old, new],
+        20,
+        0,
+        &store,
+        2_000,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.value.len(), 2);
+    let pending = result.pending_flush.unwrap();
+    assert_eq!(pending.delta.mutations.len(), 2);
+    assert_ne!(
+        pending.delta.mutations[0].project_key,
+        pending.delta.mutations[1].project_key
+    );
+}
+
+// all-recent 与 home 一样必须跨项目共享一个 resolver/索引快照。
+#[test]
+fn AllRecentIndex_OneResolver_025() {
+    let root = tempfile::tempdir().unwrap();
+    let projects_root = root.path().join("projects");
+    for sequence in 0..2 {
+        let real = root.path().join(format!("real-{sequence}"));
+        std::fs::create_dir_all(&real).unwrap();
+        create_indexed_session(
+            &projects_root.join(format!("encoded-{sequence}")),
+            &format!("session-{sequence}.jsonl"),
+            &real,
+            &format!("Session {sequence}"),
+        );
+    }
+    let (store, _, reads) = indexed_store_for_test(&root);
+
+    let result =
+        get_all_recent_sessions_indexed_at(&projects_root, 20, &store, 2_000, None).unwrap();
+
+    assert_eq!(result.value.len(), 2);
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+}
+
+// metadata 枚举后、名称扫描前发生变化时可返回新名称，但不得产生持久 replacement。
+#[test]
+fn SessionsIndex_Unstable_NoFlush_026() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    let encoded = root.path().join("encoded");
+    std::fs::create_dir_all(&real).unwrap();
+    let path = create_indexed_session(&encoded, "session.jsonl", &real, "Before");
+    let mutate_path = path.clone();
+    let before_resolve = Arc::new(move || {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&mutate_path)
+            .unwrap()
+            .write_all(b"{\"type\":\"custom-title\",\"customTitle\":\"After\"}\n")
+            .unwrap();
+    });
+    let (store, _, _) = indexed_store_for_test(&root);
+
+    let result = get_sessions_indexed_at(
+        real.to_string_lossy().as_ref(),
+        &[encoded],
+        20,
+        0,
+        &store,
+        2_000,
+        Some(before_resolve),
+    )
+    .unwrap();
+
+    assert_eq!(result.value[0].name, "After");
+    assert_eq!(result.stats.full_rebuilds, 1);
+    assert!(result.pending_flush.is_none());
+}
+
+// 扫描发布快照后，排队的失效请求仍能正确清空缓存（不快照不覆盖失效）。
+#[test]
+fn ProjectPathMapping_QueueWinsRace_001() {
+    use std::sync::{mpsc, Mutex};
+    use std::thread;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    let _test_guard = TEST_LOCK.lock().unwrap();
+    with_project_path_mapping(|cache| *cache = None);
+
+    let (locked_tx, locked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let publisher = thread::spawn(move || {
+        with_project_path_mapping(|cache| {
+            locked_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            *cache = Some(ProjectPathMapping::from([(
+                "C:/project".to_string(),
+                vec![std::path::PathBuf::from("encoded-project")],
+            )]));
+        });
+    });
+
+    locked_rx.recv().unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let invalidator = thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        invalidate_project_path_mapping();
+    });
+    started_rx.recv().unwrap();
+    release_tx.send(()).unwrap();
+    publisher.join().unwrap();
+    invalidator.join().unwrap();
+
+    assert!(with_project_path_mapping(|cache| cache.is_none()));
+}
+
+// 多条用户消息时返回第一条有效消息，而非最后一条。
 #[test]
 fn ExtractSessionName_FirstUserMessage_001() {
     let lines = [
@@ -429,9 +1587,9 @@ fn ExtractSessionName_FirstUserMessage_001() {
     assert_eq!(result, "First prompt here");
 }
 
-// custom-title 优先级高于用户消息
+// custom-title 优先级高于用户消息。
 #[test]
-fn ExtractSessionName_CustomTitlePriority_001() {
+fn ExtractSessionName_CustomTitlePriority_002() {
     let lines = [
         r#"{"type":"user","message":{"content":"User message"},"isMeta":false}"#,
         r#"{"type":"custom-title","customTitle":"My Custom Title"}"#,
@@ -443,9 +1601,27 @@ fn ExtractSessionName_CustomTitlePriority_001() {
     assert_eq!(result, "My Custom Title");
 }
 
-// isMeta=true 的消息被过滤，不作为名称
+// 文件后部的 custom-title 覆盖前部首条用户消息（后部优先语义）。
 #[test]
-fn ExtractSessionName_SkipMeta_001() {
+fn ExtractSessionName_LateCustomTitleWins_003() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("session.jsonl");
+    std::fs::write(
+        &file,
+        concat!(
+            "{\"type\":\"user\",\"message\":{\"content\":\"First prompt\"},\"isMeta\":false}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":\"reply\"}}\n",
+            "{\"type\":\"custom-title\",\"customTitle\":\"Late title\"}\n"
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(extract_session_name(&file), "Late title");
+}
+
+// isMeta=true 的消息被过滤，不作为名称。
+#[test]
+fn ExtractSessionName_SkipMeta_004() {
     let lines = [
         r#"{"type":"user","message":{"content":"meta prompt"},"isMeta":true}"#,
         r#"{"type":"user","message":{"content":"real prompt"},"isMeta":false}"#,
@@ -457,9 +1633,9 @@ fn ExtractSessionName_SkipMeta_001() {
     assert_eq!(result, "real prompt");
 }
 
-// 以 < 开头的系统注入消息被过滤
+// 以 < 开头的系统注入消息被过滤。
 #[test]
-fn ExtractSessionName_SkipSystemInject_001() {
+fn ExtractSessionName_SkipSystemInject_005() {
     let lines = [
         r#"{"type":"user","message":{"content":"<system-reminder>some system text</system-reminder>"},"isMeta":false}"#,
         r#"{"type":"user","message":{"content":"actual user message"},"isMeta":false}"#,
@@ -471,9 +1647,9 @@ fn ExtractSessionName_SkipSystemInject_001() {
     assert_eq!(result, "actual user message");
 }
 
-// 超过 50 字符的消息被截断并加省略号
+// 超过 50 字符的消息被截断并加省略号。
 #[test]
-fn ExtractSessionName_TruncateLong_001() {
+fn ExtractSessionName_TruncateLong_006() {
     let long_msg: String = "a".repeat(60);
     let lines = [format!(
         r#"{{"type":"user","message":{{"content":"{}"}},"isMeta":false}}"#,
@@ -488,9 +1664,9 @@ fn ExtractSessionName_TruncateLong_001() {
     assert_eq!(result.len(), 53);
 }
 
-// 无用户消息也无 custom-title 时返回 "Unnamed session"
+// 无用户消息也无 custom-title 时返回 "Unnamed session"。
 #[test]
-fn ExtractSessionName_NoMessages_001() {
+fn ExtractSessionName_NoMessages_007() {
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("session.jsonl");
     std::fs::write(&file_path, "").unwrap();
@@ -1887,7 +3063,7 @@ fn PinProjectCommand_Idempotent_001() {
     let data = tmp.path().join("projects.json");
     let lock = tmp.path().join("projects.json.lock");
     let apply = |s: &mut ProjectsState| {
-        let n = normalize_path_str_pub("E:/A");
+        let n = normalize_path_str("E:/A");
         if !s.pinned_projects.contains(&n) {
             s.pinned_projects.push(n);
         }

@@ -103,6 +103,44 @@ pub async fn pty_kill_all() -> Result<(), String> {
 
 // ==================== Store Commands ====================
 
+pub(crate) async fn spawn_blocking_store<F, R>(command: &'static str, f: F) -> Result<R, String>
+where
+    F: FnOnce() -> anyhow::Result<R> + Send + 'static,
+    R: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|error| format!("{command} blocking task failed: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) async fn dispatch_indexed_store<F, R, G>(
+    command: &'static str,
+    load: F,
+    flush: G,
+) -> Result<R, String>
+where
+    F: FnOnce() -> anyhow::Result<crate::session_name_index::IndexedResult<R>> + Send + 'static,
+    R: Send + 'static,
+    G: FnOnce(crate::session_name_index::PendingIndexFlush) -> anyhow::Result<()> + Send + 'static,
+{
+    let indexed = spawn_blocking_store(command, load).await?;
+    if let Some(pending_flush) = indexed.pending_flush {
+        let _flush_task = tokio::task::spawn_blocking(move || {
+            let _ = flush(pending_flush);
+        });
+    }
+    Ok(indexed.value)
+}
+
+fn flush_session_name_index(
+    pending: crate::session_name_index::PendingIndexFlush,
+) -> anyhow::Result<()> {
+    let store = crate::session_name_index::SessionNameIndexStore::production()?;
+    store.flush_pending(pending)?;
+    Ok(())
+}
+
 /// 获取环境检查结果
 #[tauri::command]
 pub async fn get_check_results() -> Result<Vec<CheckResult>, String> {
@@ -126,8 +164,14 @@ pub async fn get_home_data(
 ) -> Result<HomeData, String> {
     let project_limit = project_limit.unwrap_or(12);
     let session_limit = session_limit.unwrap_or(20);
-    crate::store::get_home_data(project_limit, session_limit, &last_opened, &hidden)
-        .map_err(|e| e.to_string())
+    dispatch_indexed_store(
+        "get_home_data",
+        move || {
+            crate::store::get_home_data_indexed(project_limit, session_limit, &last_opened, &hidden)
+        },
+        flush_session_name_index,
+    )
+    .await
 }
 
 /// 获取项目列表（支持分页）
@@ -154,7 +198,12 @@ pub async fn get_sessions(
 ) -> Result<Vec<SessionInfo>, String> {
     let limit = limit.unwrap_or(20);
     let offset = offset.unwrap_or(0);
-    crate::store::get_sessions(&project_path, limit, offset).map_err(|e| e.to_string())
+    dispatch_indexed_store(
+        "get_sessions",
+        move || crate::store::get_sessions_indexed(&project_path, limit, offset),
+        flush_session_name_index,
+    )
+    .await
 }
 
 /// 获取会话总数
@@ -167,7 +216,12 @@ pub async fn get_session_count(project_path: String) -> Result<usize, String> {
 #[tauri::command]
 pub async fn get_all_recent_sessions(limit: Option<usize>) -> Result<Vec<SessionInfo>, String> {
     let limit = limit.unwrap_or(20);
-    crate::store::get_all_recent_sessions(limit).map_err(|e| e.to_string())
+    dispatch_indexed_store(
+        "get_all_recent_sessions",
+        move || crate::store::get_all_recent_sessions_indexed(limit),
+        flush_session_name_index,
+    )
+    .await
 }
 
 /// 获取会话详情
@@ -247,7 +301,7 @@ where
 #[tauri::command]
 pub async fn pin_project(path: String) -> Result<ProjectsState, String> {
     apply_projects_state_blocking(move |s| {
-        let n = crate::store::normalize_path_str_pub(&path);
+        let n = crate::store::normalize_path_str(&path);
         if !s.pinned_projects.contains(&n) {
             s.pinned_projects.push(n);
         }
@@ -260,7 +314,7 @@ pub async fn pin_project(path: String) -> Result<ProjectsState, String> {
 #[tauri::command]
 pub async fn unpin_project(path: String) -> Result<ProjectsState, String> {
     apply_projects_state_blocking(move |s| {
-        let n = crate::store::normalize_path_str_pub(&path);
+        let n = crate::store::normalize_path_str(&path);
         s.pinned_projects.retain(|p| *p != n);
         Ok::<(), anyhow::Error>(())
     })
@@ -275,7 +329,7 @@ pub async fn archive_session(
 ) -> Result<ProjectsState, String> {
     apply_projects_state_blocking(move |s| {
         // canonicalize 已保证 key 为 normalized，直接用 normalized key
-        let n = crate::store::normalize_path_str_pub(&project_path);
+        let n = crate::store::normalize_path_str(&project_path);
         let arr = s.archived_sessions.entry(n).or_default();
         if !arr.contains(&session_id) {
             arr.push(session_id);
@@ -292,7 +346,7 @@ pub async fn restore_session(
     session_id: String,
 ) -> Result<ProjectsState, String> {
     apply_projects_state_blocking(move |s| {
-        let n = crate::store::normalize_path_str_pub(&project_path);
+        let n = crate::store::normalize_path_str(&project_path);
         if let Some(arr) = s.archived_sessions.get_mut(&n) {
             arr.retain(|id| *id != session_id);
             if arr.is_empty() {
@@ -309,7 +363,7 @@ pub async fn restore_session(
 pub async fn set_display_name(path: String, alias: String) -> Result<ProjectsState, String> {
     apply_projects_state_blocking(move |s| {
         validate_display_name_inner(&alias)?; // 校验失败返 Err（前后端同规则）
-        let n = crate::store::normalize_path_str_pub(&path);
+        let n = crate::store::normalize_path_str(&path);
         // canonicalize 已合并等价 key，此处 key 已是 normalized，直接覆盖/删除
         let trimmed = alias.trim();
         if trimmed.is_empty() {

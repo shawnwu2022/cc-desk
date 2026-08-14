@@ -10,6 +10,7 @@ mod platform;
 mod providers;
 mod pty;
 mod pty_decoder;
+mod session_name_index;
 mod store;
 #[cfg(test)]
 mod tests;

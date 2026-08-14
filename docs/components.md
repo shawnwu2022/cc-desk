@@ -5,7 +5,7 @@
 ```
 App.vue
 ├── TitleBar.vue                    # 自定义标题栏（Windows 去除原生装饰）
-├── SettingsOverlay.vue             # 全局设置浮层
+├── SettingsOverlay.vue             # 全局设置浮层（首次打开才加载，之后常驻）
 ├── TerminalView.vue                # 终端主视图（常驻 DOM，v-show 控制）
 │   ├── IconBar.vue                 # 左侧图标栏（面板切换入口）
 │   ├── SidebarPanel.vue            # 侧边栏面板容器
@@ -30,6 +30,7 @@ App.vue
 
 - 管理三个视图：`welcome` / `projects` / `terminal`
 - TerminalView 使用 `v-show` 常驻 DOM（保持 PTY 和终端实例不销毁）
+- SettingsOverlay 使用 sticky activation：首次打开前不挂载，首次打开后保持挂载，由组件内部 `v-if` + Transition 控制关闭动画
 - WelcomeView/ProjectSelectView 使用 `v-if` 覆盖层叠加在终端之上
 - 环境检查失败时显示全屏遮罩
 - 初始化：hook store、快捷键监听、自动更新检查
@@ -42,6 +43,7 @@ App.vue
 - 双向数据绑定：onData → ptyInput，onPtyOutput → term.write
 - Tab 创建/切换/重启/关闭
 - Ctrl+V 粘贴处理
+- 默认使用 DOM renderer；仅当新终端启用 WebGL 配置时动态导入 addon，避免 WebGL 进入初始依赖
 - 会话匹配轮询（通过 sessionStore）
 - 终端主题配色：xterm theme 由 `appStore.terminalTheme` 驱动（`getTerminalTheme`），与 GUI 浅/暗独立；watch 联动所有 tab；容器背景/滚动条用 `--terminal-surface-bg`/`--terminal-scrollbar`（继承自 TerminalView）
 
@@ -50,6 +52,10 @@ Props：
 
 Events：
 - `ptyStarted(tabId, ptyId)` — PTY 启动成功
+
+### 设置组件加载边界
+
+`SettingsOverlay` 通过 `useStickyActivation` 在第一次打开时激活异步组件，关闭后不卸载，避免重复初始化并保留 Transition 离场动画。CodeMirror、Lezer 与 `vue-codemirror` 归入独立 `editor-vendor` chunk，不进入入口 vendor；只有设置组件加载后才请求。
 
 ### TerminalView.vue — 终端主视图
 

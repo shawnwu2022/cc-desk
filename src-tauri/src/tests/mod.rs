@@ -21,4 +21,8 @@ mod pty;
 #[cfg(test)]
 mod pty_decoder;
 #[cfg(test)]
+mod session_name_index;
+#[cfg(test)]
 mod store;
+#[cfg(test)]
+mod store_profiling;

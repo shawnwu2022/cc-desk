@@ -131,6 +131,13 @@ sessionStore（tabs + historySessions）→ buildProjectGroups（分组+孤儿�
 - **多实例并发安全**：projects.json 写走后端独立 `projects.json.lock`（std `File::lock`）跨进程排他锁 + apply 增量操作（pin/unpin/archive/restore/setDisplayName 各一 async command，`spawn_blocking` 内锁定读最新 → canonicalize → 校验应用 → 原子写 → 返回最新）；Windows 已有文件通过 `ReplaceFileW` 原子覆盖。前端 `session.ts` 的 `opLock` 串行完整 action/reload request + apply；窗口聚焦 reload 共享锁读。config.json 的 hiddenProjects/lastOpened 暂未纳入（同 pattern 可扩展）。升级时须先关闭旧版本实例（见 spec §8 迁移风险）
 - 详细架构 → [docs/components.md](docs/components.md)
 
+### 性能边界
+
+- `get_home_data` 单次扫描 `~/.claude/projects`，同时生成项目列表与真实路径映射；近期会话直接复用该映射的目录列表，`get_home_data` / `get_sessions` 的同步文件 IO 统一放入 `spawn_blocking`。
+- JSONL 按字节行流式解析：项目路径在首个有效 `cwd` 后停止，名称继续扫描到 EOF 以保留末尾 `custom-title` 优先级；峰值内存为 O(最大 JSONL 单行)。首页、项目历史和 all-recent 共享 `~/.cc-box/session-name-index.json` 派生名称索引：`length + 高精度 mtime` 完全一致才 exact-hit（读取 0 JSONL bytes），任一变化都 full rebuild，不使用 append cursor。
+- 名称索引每个请求只读一次快照，前台共享锁内只读取有界 raw bytes、锁外解析；业务值先返回，delta 在 detached `spawn_blocking` 中写回。后台使用 replacement stamp 复核、entry/bucket CAS、整文件 raw CAS 和唯一临时文件；排他锁内只做 64 KiB 分块 raw compare 与原子替换。8 MiB 以上压缩至 6 MiB，16 MiB 为读取硬上限；损坏、未知版本、锁/写失败均只降低命中率，不改变业务结果。
+- `SettingsOverlay` 首次打开时才加载，之后保持挂载以保留关闭动画与内部状态；编辑器依赖位于独立异步 chunk。WebGL 仅在新终端启用 WebGL renderer 时动态加载，DOM renderer 仍为默认。
+
 详细架构 → [docs/terminal-integration.md](docs/terminal-integration.md)
 
 ## 开发命令

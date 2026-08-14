@@ -16,7 +16,7 @@
 import { ref, reactive, watch, onMounted, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
+import type { WebglAddon } from '@xterm/addon-webgl'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { debounce } from 'lodash-es'
 import '@xterm/xterm/css/xterm.css'
@@ -39,6 +39,7 @@ import { registerTerminalCommand } from '@/composables/useTerminalCommand'
 import { safeDispose } from '@/utils/dispose'
 import { relativizePath } from '@/utils/path'
 import { PtyIndex } from '@/utils/ptyIndex'
+import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -134,7 +135,7 @@ function setTerminalEl(tabId: string, el: HTMLElement | null) {
     const instance = terminalInstances.get(tabId)
     if (instance && !instance.term.element) {
       instance.term.open(el)
-      loadRendererAddons(instance.term)
+      void loadRendererAddons(instance.term)
       if (tabId === currentDisplayTabId.value) {
         requestAnimationFrame(() => instance.fitAddon.fit())
       }
@@ -161,6 +162,12 @@ function pickFontFamily(): string {
   return '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI Emoji", monospace'
 }
 
+// Terminal 渲染生命周期注册表：per-terminal 单飞初始化、dispose 标记、reload timer。
+// key 一律 toRaw 归一——terminalInstances 是深度 reactive Map，setTerminalEl 取出的
+// instance.term 是 Vue proxy，与创建路径的 raw terminal 身份不同；不归一会让 WeakMap
+// 建立两个 key（单飞失效、timer 句柄被覆盖泄漏）。详见 utils/rendererRegistry.ts。
+const rendererRegistry = new TerminalRendererRegistry()
+
 // 在 term.open(el) 之后加载 Unicode 11，并选择渲染后端。
 //
 // 渲染后端默认 DOM renderer（不加载 WebGL）。
@@ -173,7 +180,17 @@ function pickFontFamily(): string {
 // 需要高频滚动性能时切 WebGL：外观设置「终端渲染后端」选 WebGL。此时保留每 5 分钟
 // reload + onContextLoss reload 的 glyph atlas 规避（xtermjs/xterm.js#4325），
 // 副作用是 reload 瞬间 <50ms 闪烁。
-function loadRendererAddons(term: Terminal) {
+async function loadRendererAddons(term: Terminal): Promise<void> {
+  // 单飞（registry 内 toRaw 归一 key）：并发调用复用同一 Promise，
+  // 避免重复 loadAddon 与 interval 句柄覆盖泄漏。
+  await rendererRegistry.runOnce(term, () => loadRendererAddonsOnce(term))
+}
+
+async function loadRendererAddonsOnce(term: Terminal) {
+  // dispose 已发生则不初始化（极端竞态：创建后立刻关）。
+  if (rendererRegistry.isDisposed(term)) {
+    return
+  }
   try {
     const unicode11 = new Unicode11Addon()
     term.loadAddon(unicode11)
@@ -182,11 +199,31 @@ function loadRendererAddons(term: Terminal) {
     console.warn('[XTerm] Unicode 11 addon unavailable, fallback to default:', err)
   }
 
+  // term.open 后 textarea 已创建，绑定 IME 输入修复（幂等）
+  try {
+    attachImeInputFix(term)
+  } catch (err) {
+    console.warn('[XTerm] IME input fix unavailable:', err)
+  }
+
   // 渲染后端：外观设置 webglRenderer 控制。默认 DOM renderer（无 glyph atlas，
   // 规避 CJK 渲染留白/错位）；WebGL 高频滚动更流畅但附带该问题。
   // 仅对新开终端生效（renderer 在 term.open 时设定，运行时不切换）。
   if (!appStore.webglRenderer) {
-    attachImeInputFix(term)
+    return
+  }
+
+  let WebglAddonCtor: (typeof import('@xterm/addon-webgl'))['WebglAddon']
+  try {
+    const module = await import('@xterm/addon-webgl')
+    // 竞态守卫：await 期间 terminal 可能已被 disposeTerminal 销毁（关 tab / 重启 / 退出）。
+    // 恢复后不得再加载 addon 或创建 timer，否则会操作已销毁实例并留下无人清除的定时器。
+    if (rendererRegistry.isDisposed(term)) {
+      return
+    }
+    WebglAddonCtor = module.WebglAddon
+  } catch (err) {
+    console.warn('[XTerm] WebGL addon unavailable, fallback to DOM renderer:', err)
     return
   }
 
@@ -194,12 +231,17 @@ function loadRendererAddons(term: Terminal) {
   let webglAddon: WebglAddon | null = null
 
   const reloadWebgl = () => {
+    // reload 定时器每次触发前也校验：dispose 后定时器本应被 clearTimer，
+    // 但万一竞态漏清，这里兜底防止操作已销毁 terminal。
+    if (rendererRegistry.isDisposed(term)) {
+      return
+    }
     if (webglAddon) {
       try { webglAddon.dispose() } catch { /* 已 dispose */ }
       webglAddon = null
     }
     try {
-      webglAddon = new WebglAddon()
+      webglAddon = new WebglAddonCtor()
       // context loss 也走 reload（修复之前只 dispose 导致的黑屏隐患）
       webglAddon.onContextLoss(() => reloadWebgl())
       term.loadAddon(webglAddon)
@@ -211,26 +253,17 @@ function loadRendererAddons(term: Terminal) {
 
   try {
     reloadWebgl()
-    const timer = setInterval(reloadWebgl, 5 * 60 * 1000)
-    atlasTimers.set(term, timer)
+    const handle = setInterval(reloadWebgl, 5 * 60 * 1000)
+    rendererRegistry.setTimer(term, () => clearInterval(handle))
   } catch (err) {
     console.warn('[XTerm] WebGL init failed:', err)
   }
-
-  // term.open 后 textarea 已创建，绑定 IME 输入修复（幂等）
-  attachImeInputFix(term)
 }
-
-// 跟踪每个 Terminal 实例的 WebGL reload timer
-const atlasTimers = new WeakMap<Terminal, ReturnType<typeof setInterval>>()
 
 // 统一清理 terminal：先停 timer，再 dispose
 async function disposeTerminal(term: Terminal, context: string) {
-  const timer = atlasTimers.get(term)
-  if (timer) {
-    clearInterval(timer)
-    atlasTimers.delete(term)
-  }
+  rendererRegistry.markDisposed(term)
+  rendererRegistry.clearTimer(term)
   const imeTa = term.textarea
   if (imeTa) {
     imeFixStates.get(imeTa)?.dispose()
@@ -552,7 +585,7 @@ async function createTerminalForTab(tabId: string, ptyId: string) {
     if (!isActive) el.style.display = 'block'
 
     term.open(el)
-    loadRendererAddons(term)
+    void loadRendererAddons(term)
 
     if (!isActive) {
       requestAnimationFrame(() => {
@@ -612,7 +645,7 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
     const el = await waitForElement(tabId)
     if (el) {
       term.open(el)
-      loadRendererAddons(term)
+      void loadRendererAddons(term)
       fitAddon.fit()
       cols = term.cols
       rows = term.rows
@@ -725,7 +758,7 @@ async function restartTab(tabId: string) {
     const el = await waitForElement(tabId)
     if (el) {
       term.open(el)
-      loadRendererAddons(term)
+      void loadRendererAddons(term)
       fitAddon.fit()
       cols = term.cols
       rows = term.rows

@@ -73,7 +73,7 @@
   </div>
 
   <!-- 全局设置浮层 -->
-  <SettingsOverlay />
+  <SettingsOverlay v-if="settingsLoaded" />
 
   <!-- 终端视图常驻 DOM，保持所有 PTY 和终端实例不销毁 -->
   <TerminalView
@@ -131,6 +131,7 @@ import {
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import { decideStartupView } from '@/composables/useStartupDecision'
 import { isPersistFailedError } from '@/composables/useSessionStartWaiter'
+import { useStickyActivation } from '@/composables/useStickyActivation'
 import WelcomeView from '@/components/WelcomeView.vue'
 import ProjectSelectView from '@/components/ProjectSelectView.vue'
 import TitleBar from '@/components/TitleBar.vue'
@@ -143,6 +144,7 @@ type ViewType = 'welcome' | 'projects' | 'terminal'
 const appStore = useAppStore()
 const sessionStore = useSessionStore()
 const sidebarStore = useSidebarStore()
+const settingsLoaded = useStickyActivation(() => sidebarStore.showSettings)
 const updateStore = useUpdateStore()
 const { t } = useI18n()
 

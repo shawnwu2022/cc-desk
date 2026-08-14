@@ -17,19 +17,21 @@ const ATTENTION_EVENTS: HookEventType[] = ['stopFailure', 'notification']
 /**
  * 焦点队列 store：维护未确认的 AttentionItem，提供有序队列。
  *
- * 独立于 useStatusMonitor 的 working/pending--那是「用户是否已看到」的注意力确认位，
- * 关注原因（错误 / 等权限 / 完成）用 AttentionItem 单独承载（codex 对抗审查建议）。
+ * 独立于 useStatusMonitor 的 working/pending——那是「用户是否已看到」的注意力确认位，
+ * 关注原因（错误 / 等权限 / 完成）用 AttentionItem 单独承载，与确认位解耦。
  *
  * 订阅 hook 事件总线，每 ptyId 维护一个 item（ingestEvent 按严重度 upsert），
  * queue getter 输出有序焦点队列（错误 > 等权限 > 新完成）。
  *
  * tombstone 门禁：clearPty（PTY 退出/关 tab）后该 ptyId 标记已关闭，迟到的在途 Hook
- * 事件直接拒绝，防「找不到 tab 的幽灵关注项」（codex P2 复审）。
+ * 事件直接拒绝，防「找不到 tab 的幽灵关注项」。
  */
 export const useAttentionStore = defineStore('attention', () => {
   // ptyId -> 未确认 AttentionItem（reducer 维护，每 ptyId 一个）
   const items = ref(new Map<string, AttentionItem>())
-  // tombstone：已关闭 PTY 的 ptyId，拒绝其迟到事件（防 clearPty 后在途 Hook 复活幽灵项）
+  // tombstone：已关闭 PTY 的 ptyId 集合，永久拒绝其迟到事件（防 clearPty 后在途 Hook 复活幽灵项）。
+  // ptyId 为 randomUUID 不复用，但 hook 事件可能因 server 拥塞/进程挂起等异常路径延迟到达，
+  // 永久保留墓碑保证迟到事件始终被拒；ptyId 字符串占用极小，无需 TTL 清理。
   const closedPtyIds = ref(new Set<string>())
 
   // 有序焦点队列：buildAttentionQueue 去重（防御）+ 严重度排序
@@ -63,8 +65,8 @@ export const useAttentionStore = defineStore('attention', () => {
   }
 
   /** 用户确认某会话的关注（打开会话 + 窗口聚焦时调）。
-   *  error 粘性:默认保留 error item（CLI 异常需持续提示，看了不清），
-   *  只在 clearError:true（新回合）或 clearPty（会话结束）时清 -- codex 审查 P0 修正。 */
+   *  error 粘性：默认保留 error item（CLI 异常需持续提示，看了不清），
+   *  只在 clearError:true（新回合）或 clearPty（会话结束）时清。 */
   function ackPty(ptyId: string, opts?: { clearError?: boolean }) {
     const existing = items.value.get(ptyId)
     if (!existing) return

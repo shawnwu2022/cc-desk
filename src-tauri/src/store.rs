@@ -1,11 +1,14 @@
 //! Store 模块
 //! Claude Code 原生数据读取
 
+use crate::session_name_index::{
+    FileStamp, IndexedResult, SessionNameIndexStore, SessionNameResolver,
+};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -183,12 +186,19 @@ pub struct ProjectConfig {
 
 /// 真实项目路径 → Claude 项目目录列表的缓存
 /// 同一 real_path 可能对应多个 Claude 项目目录（如编码规则变更后新旧目录共存）
-static PROJECT_PATH_MAPPING: Mutex<Option<HashMap<String, Vec<PathBuf>>>> = Mutex::new(None);
+pub(crate) type ProjectPathMapping = HashMap<String, Vec<PathBuf>>;
+
+pub(crate) struct HomeProjectScan {
+    pub(crate) projects: Vec<Project>,
+    pub(crate) mapping: ProjectPathMapping,
+}
+
+pub(crate) static PROJECT_PATH_MAPPING: Mutex<Option<ProjectPathMapping>> = Mutex::new(None);
 
 // ==================== 辅助函数 ====================
 
 /// 获取 Claude 配置目录
-fn get_claude_dir() -> Result<PathBuf> {
+pub(crate) fn get_claude_dir() -> Result<PathBuf> {
     dirs::home_dir()
         .map(|h| h.join(".claude"))
         .context("Home directory not found")
@@ -218,7 +228,7 @@ fn get_projects_state_path() -> Result<PathBuf> {
 
 /// 扫描 ~/.claude/projects/ 构建真实路径到项目目录的映射
 /// 每个目录通过读取 JSONL 中的 cwd 字段获取真实项目路径
-fn build_project_path_mapping() -> HashMap<String, Vec<PathBuf>> {
+fn build_project_path_mapping() -> ProjectPathMapping {
     let claude_dir = match get_claude_dir() {
         Ok(d) => d,
         Err(_) => return HashMap::new(),
@@ -229,7 +239,7 @@ fn build_project_path_mapping() -> HashMap<String, Vec<PathBuf>> {
         return HashMap::new();
     }
 
-    let mut mapping: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    let mut mapping = ProjectPathMapping::new();
 
     if let Ok(entries) = fs::read_dir(&projects_dir) {
         for entry in entries.flatten() {
@@ -247,34 +257,38 @@ fn build_project_path_mapping() -> HashMap<String, Vec<PathBuf>> {
     mapping
 }
 
+pub(crate) fn with_project_path_mapping<T>(
+    f: impl FnOnce(&mut Option<ProjectPathMapping>) -> T,
+) -> T {
+    let mut cache = PROJECT_PATH_MAPPING
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    f(&mut cache)
+}
+
 /// 根据真实项目路径查找对应的 Claude 项目目录列表
 /// 使用缓存避免重复扫描
 fn get_project_dirs(project_path: &str) -> Vec<PathBuf> {
-    let mut cache = PROJECT_PATH_MAPPING
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    with_project_path_mapping(|cache| {
+        if cache.is_none() {
+            *cache = Some(build_project_path_mapping());
+        }
 
-    if cache.is_none() {
-        *cache = Some(build_project_path_mapping());
-    }
-
-    cache
-        .as_ref()
-        .and_then(|m| m.get(project_path))
-        .cloned()
-        .unwrap_or_default()
+        cache
+            .as_ref()
+            .and_then(|mapping| mapping.get(project_path))
+            .cloned()
+            .unwrap_or_default()
+    })
 }
 
 /// 清除项目路径映射缓存（供外部调用以强制刷新）
 pub fn invalidate_project_path_mapping() {
-    let mut cache = PROJECT_PATH_MAPPING
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *cache = None;
+    with_project_path_mapping(|cache| *cache = None);
 }
 
 /// 从 JSONL 文件提取真实项目路径
-fn extract_project_path_from_jsonl(project_dir: &Path) -> Option<String> {
+pub(crate) fn extract_project_path_from_jsonl(project_dir: &Path) -> Option<String> {
     if !project_dir.exists() {
         return None;
     }
@@ -292,15 +306,16 @@ fn extract_project_path_from_jsonl(project_dir: &Path) -> Option<String> {
                 .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
                 .unwrap_or(false)
         {
-            if let Ok(content) = fs::read_to_string(&path) {
-                // 读取所有行直到找到 cwd（通常在前几行，但不确定具体位置）
-                for line in content.lines() {
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                        if let Some(cwd) = json.get("cwd").and_then(|v| v.as_str()) {
-                            return Some(cwd.to_string());
-                        }
-                    }
+            let mut found = None;
+            let _ = visit_jsonl_values(&path, |json| {
+                if let Some(cwd) = json.get("cwd").and_then(|value| value.as_str()) {
+                    found = Some(cwd.to_string());
+                    return true;
                 }
+                false
+            });
+            if found.is_some() {
+                return found;
             }
         }
     }
@@ -308,8 +323,81 @@ fn extract_project_path_from_jsonl(project_dir: &Path) -> Option<String> {
     None
 }
 
+fn visit_jsonl_values<F>(path: &Path, mut visit: F) -> io::Result<()>
+where
+    F: FnMut(&serde_json::Value) -> bool,
+{
+    let file = File::open(path)?;
+    let mut reader = io::BufReader::new(file);
+    let mut line = Vec::new();
+
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        let Ok(text) = std::str::from_utf8(&line) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+            continue;
+        };
+        if visit(&value) {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn scan_home_projects_at(projects_dir: &Path) -> Result<HomeProjectScan> {
+    if !projects_dir.exists() {
+        return Ok(HomeProjectScan {
+            projects: Vec::new(),
+            mapping: ProjectPathMapping::new(),
+        });
+    }
+
+    let mut projects = Vec::new();
+    let mut mapping = ProjectPathMapping::new();
+
+    for entry in fs::read_dir(projects_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let Some(real_path) = extract_project_path_from_jsonl(&path) else {
+            continue;
+        };
+        mapping
+            .entry(real_path.clone())
+            .or_default()
+            .push(path.clone());
+
+        if !Path::new(&real_path).exists() {
+            continue;
+        }
+
+        projects.push(Project {
+            path: real_path.clone(),
+            name: Path::new(&real_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&real_path)
+                .to_string(),
+            last_session_id: None,
+            last_cost: None,
+            last_duration: Some(get_project_last_modified(&path)),
+        });
+    }
+
+    Ok(HomeProjectScan { projects, mapping })
+}
+
 /// 获取项目目录最后修改时间
-fn get_project_last_modified(project_dir: &Path) -> u64 {
+pub(crate) fn get_project_last_modified(project_dir: &Path) -> u64 {
     if !project_dir.exists() {
         return 0;
     }
@@ -368,6 +456,7 @@ pub struct HomeData {
 }
 
 /// 一次遍历获取首页所需全部数据，避免重复 IO
+#[allow(dead_code)] // Phase 0 与 direct/reference 基准路径保留。
 pub fn get_home_data(
     project_limit: usize,
     session_limit: usize,
@@ -389,56 +478,136 @@ pub fn get_home_data(
         ));
     }
 
-    let mut projects = Vec::new();
+    let scan = with_project_path_mapping(|cache| -> Result<HomeProjectScan> {
+        let scan = scan_home_projects_at(&projects_dir)?;
+        *cache = Some(scan.mapping.clone());
+        Ok(scan)
+    })?;
+
     let mut all_sessions = Vec::new();
+    let mut sessions_by_path: HashMap<String, Vec<SessionInfo>> = HashMap::new();
 
-    for entry in fs::read_dir(&projects_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if !path.is_dir() {
-            continue;
-        }
-
-        let real_path = match extract_project_path_from_jsonl(&path) {
-            Some(p) => p,
-            None => continue,
-        };
-
-        // 跳过原始路径已不存在的项目
-        if !Path::new(&real_path).exists() {
-            continue;
-        }
-
-        let last_modified = get_project_last_modified(&path);
-
-        projects.push(Project {
-            path: real_path.clone(),
-            name: Path::new(&real_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(&real_path)
-                .to_string(),
-            last_session_id: None,
-            last_cost: None,
-            last_duration: Some(last_modified),
-        });
-
+    for project in &scan.projects {
         // 同一次遍历中收集每个项目的前 3 条会话
-        if let Ok(sessions) = get_sessions(&real_path, 3, 0) {
-            all_sessions.extend(sessions);
-        }
+        let sessions = sessions_by_path
+            .entry(project.path.clone())
+            .or_insert_with(|| {
+                scan.mapping
+                    .get(&project.path)
+                    .map(|dirs| get_sessions_from_dirs(&project.path, dirs, 3, 0))
+                    .transpose()
+                    .unwrap_or_default()
+                    .unwrap_or_default()
+            })
+            .clone();
+        all_sessions.extend(sessions);
     }
 
     // 排序 + 分页 + startup_state 统一在 assemble_home_data（纯函数，已测）
     Ok(assemble_home_data(
-        projects,
+        scan.projects,
         all_sessions,
         last_opened,
         hidden,
         project_limit,
         session_limit,
     ))
+}
+
+/// 收尾：快照 stats + finish 组装 IndexedResult（各 indexed 函数共用，消除重复收尾结构）。
+fn finish_resolver<T>(resolver: SessionNameResolver, value: T) -> IndexedResult<T> {
+    let stats = resolver.stats();
+    let pending_flush = resolver.finish();
+    IndexedResult {
+        value,
+        pending_flush,
+        stats,
+    }
+}
+
+pub fn get_home_data_indexed(
+    project_limit: usize,
+    session_limit: usize,
+    last_opened: &str,
+    hidden: &[String],
+) -> Result<IndexedResult<HomeData>> {
+    let projects_dir = get_claude_dir()?.join("projects");
+    let index_store = SessionNameIndexStore::production()?;
+    get_home_data_indexed_at(
+        &projects_dir,
+        project_limit,
+        session_limit,
+        last_opened,
+        hidden,
+        &index_store,
+        current_time_ms(),
+        None,
+    )
+}
+
+pub(crate) fn get_home_data_indexed_at(
+    projects_dir: &Path,
+    project_limit: usize,
+    session_limit: usize,
+    last_opened: &str,
+    hidden: &[String],
+    index_store: &SessionNameIndexStore,
+    cached_at_ms: u64,
+    before_resolve: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+) -> Result<IndexedResult<HomeData>> {
+    let snapshot = index_store.read_snapshot();
+    let mut resolver = SessionNameResolver::new(snapshot, cached_at_ms);
+    if !projects_dir.exists() {
+        return Ok(finish_resolver(
+            resolver,
+            assemble_home_data(
+                Vec::new(),
+                Vec::new(),
+                last_opened,
+                hidden,
+                project_limit,
+                session_limit,
+            ),
+        ));
+    }
+
+    let scan = with_project_path_mapping(|cache| -> Result<HomeProjectScan> {
+        let scan = scan_home_projects_at(projects_dir)?;
+        *cache = Some(scan.mapping.clone());
+        Ok(scan)
+    })?;
+    let mut all_sessions = Vec::new();
+    let mut completed_paths = HashSet::new();
+    for project in &scan.projects {
+        if !completed_paths.insert(project.path.clone()) {
+            continue;
+        }
+        if let Some(project_dirs) = scan.mapping.get(&project.path) {
+            // 单项目会话读取失败不拖垮整个首页（spec §7：跳过该项目、仍返回其他首页数据）。
+            // 只有顶层系统性 IO 错误（projects_dir 缺失 / scan 失败）才向上返回 Err。
+            // before_resolve 在枚举前触发（供测试注入目录级故障，验证失败隔离分支）。
+            if let Some(before_resolve) = before_resolve.as_deref() {
+                before_resolve();
+            }
+            match resolve_session_entries(&project.path, project_dirs, 3, 0, &mut resolver, None) {
+                Ok(sessions) => all_sessions.extend(sessions),
+                Err(error) => log::warn!(
+                    "home: skipping project {:?} sessions: {}",
+                    project.path,
+                    error
+                ),
+            }
+        }
+    }
+    let value = assemble_home_data(
+        scan.projects,
+        all_sessions,
+        last_opened,
+        hidden,
+        project_limit,
+        session_limit,
+    );
+    Ok(finish_resolver(resolver, value))
 }
 
 /// 组装首页数据（纯函数）：排序 + 分页 + 计算 startup_state（基于全量 projects）。
@@ -563,13 +732,8 @@ pub struct ProjectStartupState {
 /// 路径规范化（与前端 normalizePath 一致）：统一正斜杠 + 去尾斜杠，
 /// 平台感知大小写：Linux 区分大小写（不 lower），Windows/macOS 不区分（lower）。
 /// POSIX 根 '/' 去尾斜杠后恢复 '/'，避免空串 key。
-fn normalize_path_str(p: &str) -> String {
+pub(crate) fn normalize_path_str(p: &str) -> String {
     normalize_path_inner(p, cfg!(target_os = "linux"))
-}
-
-/// normalize_path_str 的 pub(crate) 别名，供 commands 模块复用同一规范化逻辑。
-pub(crate) fn normalize_path_str_pub(p: &str) -> String {
-    normalize_path_str(p)
 }
 
 /// 平台感知规范化核心（注入 case_sensitive，便于单元测试在任意宿主验证两支）：
@@ -634,86 +798,119 @@ pub(crate) fn compute_project_startup_state(
 
 /// 从 JSONL 提取会话名称
 pub(crate) fn extract_session_name(jsonl_path: &Path) -> String {
-    if let Ok(content) = fs::read_to_string(jsonl_path) {
-        let mut custom_title: Option<String> = None;
-        let mut first_user_message: Option<String> = None;
-
-        for line in content.lines() {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                // 查找 custom-title（优先级最高）
-                if json.get("type").and_then(|v| v.as_str()) == Some("custom-title") {
-                    if let Some(title) = json.get("customTitle").and_then(|v| v.as_str()) {
-                        custom_title = Some(title.to_string());
-                    }
-                }
-
-                // 查找用户消息（只取第一条）
-                if json.get("type").and_then(|v| v.as_str()) == Some("user")
-                    && first_user_message.is_none()
-                {
-                    if let Some(msg_content) = json
-                        .get("message")
-                        .and_then(|m| m.get("content"))
-                        .and_then(|c| c.as_str())
-                    {
-                        let is_meta = json
-                            .get("isMeta")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
-
-                        // 过滤所有系统注入消息：以 < 开头的都是系统标记
-                        let is_system_inject = msg_content.trim_start().starts_with('<');
-
-                        if !is_meta && !is_system_inject {
-                            let truncated: String = msg_content.chars().take(50).collect();
-                            first_user_message = if msg_content.chars().count() > 50 {
-                                Some(format!("{}...", truncated))
-                            } else {
-                                Some(msg_content.to_string())
-                            };
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(title) = custom_title {
-            return title;
-        }
-
-        if let Some(msg) = first_user_message {
-            return msg;
-        }
-    }
-
-    "Unnamed session".to_string()
+    crate::session_name_index::parse_session_name_full(jsonl_path)
+        .map(|parsed| parsed.name)
+        .unwrap_or_else(|_| "Unnamed session".to_string())
 }
 
 /// 轻量会话条目（仅文件元数据，不读内容）
-struct SessionEntry {
-    session_id: String,
-    path: PathBuf,
-    last_active_at: u64,
+pub(crate) struct SessionEntry {
+    pub(crate) session_id: String,
+    pub(crate) project_dir: PathBuf,
+    pub(crate) file_name: String,
+    pub(crate) path: PathBuf,
+    pub(crate) stamp: FileStamp,
+    pub(crate) last_active_at: u64,
 }
 
-/// 获取会话列表
-pub fn get_sessions(project_path: &str, limit: usize, offset: usize) -> Result<Vec<SessionInfo>> {
-    let project_dirs = get_project_dirs(project_path);
+#[derive(Debug)]
+pub(crate) struct SessionDirectoryEnumeration {
+    pub(crate) project_dir: PathBuf,
+    pub(crate) live_file_names: BTreeSet<String>,
+    pub(crate) complete: bool,
+}
 
+pub(crate) fn session_entry_from_path(project_dir: &Path, path: PathBuf) -> SessionEntry {
+    let metadata = fs::metadata(&path).ok();
+    let stamp = metadata
+        .as_ref()
+        .and_then(|metadata| FileStamp::from_metadata(metadata).ok())
+        .unwrap_or(FileStamp {
+            observed_length: 0,
+            modified_secs: 0,
+            modified_nanos: 0,
+        });
+    let last_active_at = metadata
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    SessionEntry {
+        session_id: path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_string(),
+        project_dir: project_dir.to_path_buf(),
+        file_name: path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        path,
+        stamp,
+        last_active_at,
+    }
+}
+
+pub(crate) fn get_sessions_from_dirs(
+    project_path: &str,
+    project_dirs: &[PathBuf],
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<SessionInfo>> {
+    let (mut entries, _) = enumerate_session_entries(project_dirs)?;
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_active_at));
+    let start = offset.min(entries.len());
+    let end = offset.saturating_add(limit).min(entries.len());
+    Ok(entries[start..end]
+        .iter()
+        .map(|entry| SessionInfo {
+            session_id: entry.session_id.clone(),
+            name: extract_session_name(&entry.path),
+            project_path: project_path.to_string(),
+            last_active_at: entry.last_active_at,
+        })
+        .collect())
+}
+
+fn enumerate_session_entries(
+    project_dirs: &[PathBuf],
+) -> Result<(Vec<SessionEntry>, Vec<SessionDirectoryEnumeration>)> {
     if project_dirs.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
 
-    // 第一遍：只扫文件名和元数据（不读 JSONL 内容）
-    let mut entries: Vec<SessionEntry> = Vec::new();
+    let mut entries = Vec::new();
+    let mut directories = Vec::new();
 
-    for project_dir in &project_dirs {
+    for project_dir in project_dirs {
         if !project_dir.exists() {
             continue;
         }
-
-        for entry in fs::read_dir(project_dir)? {
-            let entry = entry?;
+        let read_dir = match fs::read_dir(project_dir) {
+            Ok(read_dir) => read_dir,
+            Err(error) => {
+                directories.push(SessionDirectoryEnumeration {
+                    project_dir: project_dir.clone(),
+                    live_file_names: BTreeSet::new(),
+                    complete: false,
+                });
+                return Err(error.into());
+            }
+        };
+        let mut live_file_names = BTreeSet::new();
+        for entry in read_dir {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    directories.push(SessionDirectoryEnumeration {
+                        project_dir: project_dir.clone(),
+                        live_file_names,
+                        complete: false,
+                    });
+                    return Err(error.into());
+                }
+            };
             let path = entry.path();
 
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -723,52 +920,106 @@ pub fn get_sessions(project_path: &str, limit: usize, offset: usize) -> Result<V
                     .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
                     .unwrap_or(false)
             {
-                let session_id = path
-                    .file_stem()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                let last_active_at = fs::metadata(&path)
-                    .and_then(|m| m.modified())
-                    .map(|t| {
-                        t.duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as u64)
-                            .unwrap_or(0)
-                    })
-                    .unwrap_or(0);
-
-                entries.push(SessionEntry {
-                    session_id,
-                    path,
-                    last_active_at,
-                });
+                let session_entry = session_entry_from_path(project_dir, path);
+                live_file_names.insert(session_entry.file_name.clone());
+                entries.push(session_entry);
             }
         }
+        directories.push(SessionDirectoryEnumeration {
+            project_dir: project_dir.clone(),
+            live_file_names,
+            complete: true,
+        });
     }
+    Ok((entries, directories))
+}
 
-    // 按最后活跃时间排序
+fn resolve_session_entries(
+    project_path: &str,
+    project_dirs: &[PathBuf],
+    limit: usize,
+    offset: usize,
+    resolver: &mut SessionNameResolver,
+    before_resolve: Option<&(dyn Fn() + Send + Sync)>,
+) -> Result<Vec<SessionInfo>> {
+    let (mut entries, directories) = enumerate_session_entries(project_dirs)?;
     entries.sort_by_key(|b| std::cmp::Reverse(b.last_active_at));
-
-    // 分页
     let start = offset.min(entries.len());
-    let end = (offset + limit).min(entries.len());
-
-    // 第二遍：只读分页后的少量文件提取名称
-    let sessions: Vec<SessionInfo> = entries[start..end]
+    let end = offset.saturating_add(limit).min(entries.len());
+    if let Some(before_resolve) = before_resolve {
+        before_resolve();
+    }
+    let sessions = entries[start..end]
         .iter()
-        .map(|e| SessionInfo {
-            session_id: e.session_id.clone(),
-            name: extract_session_name(&e.path),
-            project_path: project_path.to_string(),
-            last_active_at: e.last_active_at,
+        .map(|entry| {
+            let resolution = resolver.resolve(&entry.project_dir, &entry.path, entry.stamp);
+            SessionInfo {
+                session_id: entry.session_id.clone(),
+                name: resolution.name,
+                project_path: project_path.to_string(),
+                last_active_at: entry.last_active_at,
+            }
         })
-        .collect();
-
+        .collect::<Vec<_>>();
+    for directory in directories {
+        resolver.record_directory(
+            &directory.project_dir,
+            directory.live_file_names,
+            directory.complete,
+        );
+    }
     Ok(sessions)
 }
 
+pub(crate) fn get_sessions_indexed_at(
+    project_path: &str,
+    project_dirs: &[PathBuf],
+    limit: usize,
+    offset: usize,
+    index_store: &SessionNameIndexStore,
+    cached_at_ms: u64,
+    before_resolve: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+) -> Result<IndexedResult<Vec<SessionInfo>>> {
+    let snapshot = index_store.read_snapshot();
+    let mut resolver = SessionNameResolver::new(snapshot, cached_at_ms);
+    let value = resolve_session_entries(
+        project_path,
+        project_dirs,
+        limit,
+        offset,
+        &mut resolver,
+        before_resolve.as_deref(),
+    )?;
+    Ok(finish_resolver(resolver, value))
+}
+
+/// 获取会话列表
+#[allow(dead_code)] // Phase 0 与 direct/reference 回归路径保留。
+pub fn get_sessions(project_path: &str, limit: usize, offset: usize) -> Result<Vec<SessionInfo>> {
+    let project_dirs = get_project_dirs(project_path);
+    get_sessions_from_dirs(project_path, &project_dirs, limit, offset)
+}
+
+pub fn get_sessions_indexed(
+    project_path: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<IndexedResult<Vec<SessionInfo>>> {
+    let project_dirs = get_project_dirs(project_path);
+    let index_store = SessionNameIndexStore::production()?;
+    get_sessions_indexed_at(
+        project_path,
+        &project_dirs,
+        limit,
+        offset,
+        &index_store,
+        current_time_ms(),
+        None,
+    )
+}
+
 /// 获取所有项目的近期会话（跨项目，按 lastActiveAt 降序排列）
+#[allow(dead_code)] // Phase 0 与 direct/reference 回归路径保留。
 pub fn get_all_recent_sessions(limit: usize) -> Result<Vec<SessionInfo>> {
     let projects = get_projects(None, None)?;
     let mut all_sessions = Vec::new();
@@ -789,6 +1040,67 @@ pub fn get_all_recent_sessions(limit: usize) -> Result<Vec<SessionInfo>> {
     all_sessions.truncate(limit);
 
     Ok(all_sessions)
+}
+
+pub fn get_all_recent_sessions_indexed(limit: usize) -> Result<IndexedResult<Vec<SessionInfo>>> {
+    let projects_dir = get_claude_dir()?.join("projects");
+    let index_store = SessionNameIndexStore::production()?;
+    get_all_recent_sessions_indexed_at(&projects_dir, limit, &index_store, current_time_ms(), None)
+}
+
+pub(crate) fn get_all_recent_sessions_indexed_at(
+    projects_dir: &Path,
+    limit: usize,
+    index_store: &SessionNameIndexStore,
+    cached_at_ms: u64,
+    before_resolve: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+) -> Result<IndexedResult<Vec<SessionInfo>>> {
+    let snapshot = index_store.read_snapshot();
+    let mut resolver = SessionNameResolver::new(snapshot, cached_at_ms);
+    if !projects_dir.exists() {
+        return Ok(finish_resolver(resolver, Vec::new()));
+    }
+    let scan = scan_home_projects_at(projects_dir)?;
+    let mut all_sessions = Vec::new();
+    let mut completed_paths = HashSet::new();
+    let per_project = 3.min(limit);
+    for project in &scan.projects {
+        if !completed_paths.insert(project.path.clone()) {
+            continue;
+        }
+        if let Some(project_dirs) = scan.mapping.get(&project.path) {
+            // 单项目会话读取失败不拖垮整个 all-recent（spec §7：跳过该项目、仍返回其他）。
+            // before_resolve 在枚举前触发（供测试注入目录级故障，验证失败隔离分支）。
+            if let Some(before_resolve) = before_resolve.as_deref() {
+                before_resolve();
+            }
+            match resolve_session_entries(
+                &project.path,
+                project_dirs,
+                per_project,
+                0,
+                &mut resolver,
+                None,
+            ) {
+                Ok(sessions) => all_sessions.extend(sessions),
+                Err(error) => log::warn!(
+                    "all-recent: skipping project {:?} sessions: {}",
+                    project.path,
+                    error
+                ),
+            }
+        }
+    }
+    all_sessions.sort_by_key(|session| std::cmp::Reverse(session.last_active_at));
+    all_sessions.truncate(limit);
+    Ok(finish_resolver(resolver, all_sessions))
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// 获取会话总数
@@ -3228,6 +3540,16 @@ pub(crate) fn is_lock_contention(e: &io::Error) -> bool {
 
 /// 有界获取锁：try_lock + 20ms 退避，达 timeout 返 Err（不无限阻塞，防挂起实例冻结所有写）。
 pub(crate) fn acquire_lock(file: &File, exclusive: bool, timeout: Duration) -> Result<()> {
+    acquire_lock_with_label(file, exclusive, timeout, "projects.json")
+}
+
+/// 使用调用方资源标签有界获取文件锁，避免不同状态文件共享错误文案。
+pub(crate) fn acquire_lock_with_label(
+    file: &File,
+    exclusive: bool,
+    timeout: Duration,
+    resource_label: &str,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
         let r = if exclusive {
@@ -3244,11 +3566,11 @@ pub(crate) fn acquire_lock(file: &File, exclusive: bool, timeout: Duration) -> R
                 let io_err = io::Error::from(e);
                 if is_lock_contention(&io_err) {
                     if Instant::now() >= deadline {
-                        bail!("projects.json lock timeout（另一实例可能无响应）");
+                        bail!("{resource_label} lock timeout（另一实例可能无响应）");
                     }
                     std::thread::sleep(Duration::from_millis(20));
                 } else {
-                    return Err(io_err).context("projects.json lock 获取失败");
+                    return Err(io_err).with_context(|| format!("{resource_label} lock 获取失败"));
                 }
             }
         }
