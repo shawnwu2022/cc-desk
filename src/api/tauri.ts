@@ -190,6 +190,9 @@ export const archiveSession = (projectPath: string, sessionId: string): Promise<
 export const restoreSession = (projectPath: string, sessionId: string): Promise<ProjectsState> =>
   invoke<ProjectsState>('restore_session', { projectPath, sessionId });
 
+export const deleteSessions = (projectPath: string, sessionIds: string[]): Promise<ProjectsState> =>
+  invoke<ProjectsState>('delete_sessions', { projectPath, sessionIds });
+
 export const setDisplayName = (path: string, alias: string): Promise<ProjectsState> =>
   invoke<ProjectsState>('set_display_name', { path, alias });
 

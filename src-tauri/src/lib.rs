@@ -164,6 +164,7 @@ pub fn run(initial_dir: Option<String>) {
             commands::archive_session,
             commands::restore_session,
             commands::set_display_name,
+            commands::delete_sessions,
             commands::get_default_claude_options,
             commands::save_default_claude_options,
             commands::save_last_project,

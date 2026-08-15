@@ -376,6 +376,22 @@ pub async fn set_display_name(path: String, alias: String) -> Result<ProjectsSta
     .await
 }
 
+/// 永久删除已存档会话(尽力批,非原子):删文件 + 清标记。薄壳,核心在 store::delete_sessions_inner。
+#[tauri::command]
+pub async fn delete_sessions(
+    project_path: String,
+    session_ids: Vec<String>,
+) -> Result<ProjectsState, String> {
+    tokio::task::spawn_blocking(move || {
+        let (data, lock) = crate::store::data_and_lock_paths()?;
+        let root = crate::store::claude_projects_root()?;
+        crate::store::delete_sessions_inner(&data, &lock, &root, &project_path, &session_ids)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
 /// 获取默认 Claude 选项
 #[tauri::command]
 pub async fn get_default_claude_options() -> Result<crate::store::DefaultClaudeOptions, String> {
