@@ -3421,15 +3421,32 @@ fn write_fake_session(project_dir: &std::path::Path, file_name: &str, cwd: &str)
     .unwrap();
 }
 
-// 等价 key 全集合并:两个目录的 cwd 分别是原始大小写与规范化形式,一次查找都命中
+// 等价 key 全集合并:两个目录的 cwd 经大小写不敏感规范化后相等,一次查找都命中。
+// 用 normalize_path_inner(_, false) 构造确定等价的 key:normalize_path_str 在 Linux
+// 大小写敏感,原始 "E:\Foo" 与 "e:/foo" 在 Linux 不等价;先强制不敏感语义归一,
+// 保证断言在任何宿主平台(含 Linux CI)成立。
 #[test]
 fn LookupProjectDirs_MergesEquivalentKeys_004() {
     let root = tempfile::tempdir().unwrap();
-    write_fake_session(&root.path().join("a-1"), "s1.jsonl", "E:\\Foo");
-    write_fake_session(&root.path().join("a-2"), "s2.jsonl", "e:/foo");
+    let upper_key = normalize_path_inner("E:\\Foo", false);
+    let lower_key = normalize_path_inner("e:/foo", false);
+    assert_eq!(upper_key, lower_key, "两 key 必须在任意宿主平台等价");
+    write_fake_session(&root.path().join("a-1"), "s1.jsonl", &upper_key);
+    write_fake_session(&root.path().join("a-2"), "s2.jsonl", &lower_key);
     let mapping = build_project_path_mapping_at(root.path()).unwrap();
-    assert_eq!(lookup_project_dirs(&mapping, "E:\\Foo").len(), 2);
-    assert_eq!(lookup_project_dirs(&mapping, "e:/foo").len(), 2);
+    assert_eq!(lookup_project_dirs(&mapping, &upper_key).len(), 2);
+    assert_eq!(lookup_project_dirs(&mapping, &lower_key).len(), 2);
+}
+
+// 锁定语义:projects_root 是文件而非目录时(try_exists Ok(true) + read_dir Err),
+// 扫描错误必须整体传播为 Err,不得折叠成「目录为空」的 Ok(空映射)——
+// 否则 delete 路径会把扫描失败误当「无目录」进而误清 projects.json 里的标记。
+#[test]
+fn BuildMappingAt_RootIsFile_Err_001() {
+    let root = tempfile::tempdir().unwrap();
+    let not_a_dir = root.path().join("not-a-dir");
+    std::fs::write(&not_a_dir, b"plain file").unwrap();
+    assert!(build_project_path_mapping_at(&not_a_dir).is_err());
 }
 
 #[test]
