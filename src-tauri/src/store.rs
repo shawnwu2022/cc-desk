@@ -226,8 +226,33 @@ fn get_projects_state_path() -> Result<PathBuf> {
     get_gui_config_dir().map(|d| d.join("projects.json"))
 }
 
-/// 扫描 projects_root 构建真实路径到项目目录的映射(每个目录读 JSONL 的 cwd;key 为原始字符串)。
-pub(crate) fn build_project_path_mapping_at(projects_root: &Path) -> Result<ProjectPathMapping> {
+/// 扫描 projects_root 构建真实路径到项目目录的映射(容错版,生产用):
+/// 单目录/单文件 IO 错误跳过该目录,不让整体失败——局部损坏不影响其余项目的历史展示。
+pub(crate) fn build_project_path_mapping_at(projects_root: &Path) -> ProjectPathMapping {
+    let mut mapping = ProjectPathMapping::new();
+    if !projects_root.exists() {
+        return mapping;
+    }
+    if let Ok(entries) = fs::read_dir(projects_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if let Some(real_path) = extract_project_path_from_jsonl(&path) {
+                mapping.entry(real_path).or_default().push(path);
+            }
+        }
+    }
+    mapping
+}
+
+/// 扫描 projects_root 构建映射(严格版,仅删除路径用):任何 IO 错误传播为 Err——
+/// 宁可拒绝删除,不可静默漏目录后误清标记(「文件未删标记已清」假成功)。
+/// 生产扫描禁止用此函数:任一目录损坏会让普通历史整体退化空映射。
+pub(crate) fn build_project_path_mapping_strict_at(
+    projects_root: &Path,
+) -> Result<ProjectPathMapping> {
     let mut mapping = ProjectPathMapping::new();
     // try_exists 区分「真不存在」(Ok(false) → 空映射,合法:全新机器)与「metadata/权限错误」
     // (Err → 传播;exists() 会把错误折叠成 false,误当不存在走清标记收敛)
@@ -239,8 +264,7 @@ pub(crate) fn build_project_path_mapping_at(projects_root: &Path) -> Result<Proj
     let entries = fs::read_dir(projects_root)
         .with_context(|| format!("Failed to read {}", projects_root.display()))?;
     for entry in entries {
-        // 单条目读取失败 → 整体 Err(删除路径宁可不执行,不可静默漏目录后误清标记;
-        // 生产扫描入口 build_project_path_mapping 对 Result 做 unwrap_or_default 回退旧行为)
+        // 单条目读取失败 → 整体 Err(删除路径宁可不执行,不可静默漏目录后误清标记)
         let entry = entry?;
         let path = entry.path();
         // file_type() 来自 readdir 数据(不额外打 metadata),错误同样传播而非折叠成「非目录」
@@ -257,11 +281,13 @@ pub(crate) fn build_project_path_mapping_at(projects_root: &Path) -> Result<Proj
     Ok(mapping)
 }
 
-/// 扫描 ~/.claude/projects/ 建映射(生产入口;扫描失败回退空映射维持旧行为,
-/// delete 路径不经此函数——它直接调 _at 版本并传播错误)。
+/// 扫描 ~/.claude/projects/ 建映射(生产入口,容错版:局部损坏只跳过该目录,
+/// delete 路径不经此函数——它直接调 strict 版本并传播错误)。
 fn build_project_path_mapping() -> ProjectPathMapping {
-    build_project_path_mapping_at(&claude_projects_root().unwrap_or_else(|_| PathBuf::new()))
-        .unwrap_or_default()
+    match claude_projects_root() {
+        Ok(root) => build_project_path_mapping_at(&root),
+        Err(_) => HashMap::new(),
+    }
 }
 
 /// Claude projects 根目录路径。
@@ -806,7 +832,9 @@ pub(crate) fn validate_session_id_component(id: &str) -> Result<(), String> {
         return Err("session id is empty".to_string());
     }
     if id.contains('/') || id.contains('\\') || id.contains(':') || id.contains('\0') {
-        return Err(format!("session id has path separators or special chars: {id}"));
+        return Err(format!(
+            "session id has path separators or special chars: {id}"
+        ));
     }
     if id == "." || id == ".." {
         return Err(format!("session id is dot path: {id}"));
@@ -815,9 +843,8 @@ pub(crate) fn validate_session_id_component(id: &str) -> Result<(), String> {
     let stem = id.split('.').next().unwrap_or(id);
     let upper = stem.to_ascii_uppercase();
     let reserved = [
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
     if reserved.contains(&upper.as_str()) {
         return Err(format!("session id is a windows reserved name: {id}"));
@@ -3761,7 +3788,7 @@ where
 /// (已删文件不恢复;重试靠「文件不存在视为已删」与「目录消失仍清标记」双路径收敛)。
 /// 失败收敛的两种残留状态:①文件已删但标记未清(状态写失败)→ 重试时目录可能已消失,
 /// 命中「目录消失仍清标记」收敛;②部分删失败 → 重试时已删文件不存在,跳过后删剩余。
-/// 注:目录枚举/文件打开/读取错误经 build_project_path_mapping_at 的 strict 提取传播为 Err,
+/// 注:目录枚举/文件打开/读取错误经 build_project_path_mapping_strict_at 的 strict 提取传播为 Err,
 /// 不折叠成「项目消失」清标记(见 extract_project_path_from_jsonl_strict)。
 pub(crate) fn delete_sessions_inner(
     data_path: &Path,
@@ -3794,7 +3821,7 @@ pub(crate) fn delete_sessions_inner(
         //    扫描失败(root 是文件/权限)→ Err 不动状态(不把 IO 错误折叠成「目录为空」误清标记)。
         //    try_exists 判定 root 真不存在,或查不到项目 → 无处可删,跳过删除直接清标记收敛。
         //    (此时不得 canonicalize root——root 缺失会 canonicalize 失败,违背收敛语义)
-        let mapping = build_project_path_mapping_at(projects_root)?;
+        let mapping = build_project_path_mapping_strict_at(projects_root)?;
         let dirs = lookup_project_dirs(&mapping, project_path);
         if !dirs.is_empty() {
             // 4. 可信根边界:canonical 后 prefix 比对,拒 junction/symlink 逃逸。

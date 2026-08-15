@@ -6,19 +6,20 @@ use crate::session_name_index::{
     SessionNameIndex, SessionNameIndexDelta, SessionNameIndexPaths, SessionNameIndexStore,
 };
 use crate::store::{
-    acquire_lock, assemble_home_data, build_project_path_mapping_at, canonicalize_state,
-    compute_project_startup_state, delete_sessions_inner,
-    expand_env_vars, extract_md_description, extract_project_path_from_jsonl, extract_session_name,
-    find_valid_plugin_path, get_all_recent_sessions_indexed_at, get_home_data,
-    get_home_data_indexed_at, get_projects_state_at, get_sessions_from_dirs,
-    get_sessions_indexed_at, infer_server_type, invalidate_project_path_mapping, lookup_project_dirs, merge_json_values,
-    normalize_path_inner, normalize_path_str, parse_agents_list_output, parse_mcp_server_entry,
-    parse_skill_description, parse_timestamp, read_projects_state_locked, replace_file_atomic,
+    acquire_lock, assemble_home_data, build_project_path_mapping_at,
+    build_project_path_mapping_strict_at, canonicalize_state, compute_project_startup_state,
+    delete_sessions_inner, expand_env_vars, extract_md_description,
+    extract_project_path_from_jsonl, extract_session_name, find_valid_plugin_path,
+    get_all_recent_sessions_indexed_at, get_home_data, get_home_data_indexed_at,
+    get_projects_state_at, get_sessions_from_dirs, get_sessions_indexed_at, infer_server_type,
+    invalidate_project_path_mapping, lookup_project_dirs, merge_json_values, normalize_path_inner,
+    normalize_path_str, parse_agents_list_output, parse_mcp_server_entry, parse_skill_description,
+    parse_timestamp, read_projects_state_locked, replace_file_atomic,
     resolve_marketplace_plugin_path_at, scan_home_projects_at, search_session_messages_in_dirs,
     set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,
     validate_session_id_component, with_project_path_mapping, with_projects_state_locked,
-    write_json_atomic, AgentInfo, AppConfig,
-    Project, ProjectPathMapping, ProjectsState, SessionInfo,
+    write_json_atomic, AgentInfo, AppConfig, Project, ProjectPathMapping, ProjectsState,
+    SessionInfo,
 };
 
 use std::collections::HashMap;
@@ -3397,7 +3398,9 @@ fn SessionId_RejectsDot_003() {
 // 检查 Windows 保留设备名(含扩展名)被拒
 #[test]
 fn SessionId_RejectsReserved_004() {
-    for name in ["CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "com1", "con"] {
+    for name in [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "com1", "con",
+    ] {
         assert!(
             validate_session_id_component(name).is_err(),
             "{} should be rejected",
@@ -3437,28 +3440,35 @@ fn LookupDirs_MergesEquiv_004() {
     std::fs::create_dir_all(&d1).unwrap();
     std::fs::write(
         d1.join("s1.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string(&upper_key).unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string(&upper_key).unwrap()
+        ),
     )
     .unwrap();
     let d2 = root.path().join("a-2");
     std::fs::create_dir_all(&d2).unwrap();
     std::fs::write(
         d2.join("s2.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string(&lower_key).unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string(&lower_key).unwrap()
+        ),
     )
     .unwrap();
-    let mapping = build_project_path_mapping_at(root.path()).unwrap();
+    let mapping = build_project_path_mapping_at(root.path());
     assert_eq!(lookup_project_dirs(&mapping, &upper_key).len(), 2);
     assert_eq!(lookup_project_dirs(&mapping, &lower_key).len(), 2);
 }
 
-// 锁定语义:projects_root 是文件而非目录时扫描报错,必须整体传播为 Err(不折叠为空映射)
+// 锁定语义(strict 版,删除路径用):projects_root 是文件而非目录时扫描报错,
+// 必须整体传播为 Err(不折叠为空映射)
 #[test]
-fn BuildMappingAt_RootIsFile_Err_001() {
+fn MappingStrict_RootIsFile_001() {
     let root = tempfile::tempdir().unwrap();
     let not_a_dir = root.path().join("not-a-dir");
     std::fs::write(&not_a_dir, b"plain file").unwrap();
-    assert!(build_project_path_mapping_at(&not_a_dir).is_err());
+    assert!(build_project_path_mapping_strict_at(&not_a_dir).is_err());
 }
 
 // 检查精确原始路径命中,规范化 key 兜底也能命中
@@ -3469,10 +3479,13 @@ fn LookupDirs_ExactAndNorm_001() {
     std::fs::create_dir_all(&dir_a).unwrap();
     std::fs::write(
         dir_a.join("s1.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
-    let mapping = build_project_path_mapping_at(root.path()).unwrap();
+    let mapping = build_project_path_mapping_at(root.path());
     assert_eq!(lookup_project_dirs(&mapping, "E:\\Foo").len(), 1);
     let norm = normalize_path_str("E:\\Foo");
     assert_eq!(lookup_project_dirs(&mapping, &norm).len(), 1);
@@ -3486,17 +3499,23 @@ fn LookupDirs_MultiDir_002() {
     std::fs::create_dir_all(&d1).unwrap();
     std::fs::write(
         d1.join("s1.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
     let d2 = root.path().join("a-2");
     std::fs::create_dir_all(&d2).unwrap();
     std::fs::write(
         d2.join("s2.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
-    let mapping = build_project_path_mapping_at(root.path()).unwrap();
+    let mapping = build_project_path_mapping_at(root.path());
     assert_eq!(lookup_project_dirs(&mapping, "E:\\Foo").len(), 2);
 }
 
@@ -3508,10 +3527,13 @@ fn LookupDirs_MissingEmpty_003() {
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(
         d.join("s1.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
-    let mapping = build_project_path_mapping_at(root.path()).unwrap();
+    let mapping = build_project_path_mapping_at(root.path());
     assert!(lookup_project_dirs(&mapping, "E:\\Bar").is_empty());
 }
 
@@ -3525,19 +3547,28 @@ fn Delete_MultiDirBothExt_001() {
     std::fs::create_dir_all(&a1).unwrap();
     std::fs::write(
         a1.join("s1.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
     std::fs::write(
         a1.join("s2.txt"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
     let a2 = dir.path().join("a2");
     std::fs::create_dir_all(&a2).unwrap();
     std::fs::write(
         a2.join("s1.txt"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
     let data = dir.path().join("projects.json");
@@ -3546,9 +3577,14 @@ fn Delete_MultiDirBothExt_001() {
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
 
-    let state =
-        delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into(), "s2".into()])
-            .unwrap();
+    let state = delete_sessions_inner(
+        &data,
+        &lock,
+        dir.path(),
+        "E:\\Foo",
+        &["s1".into(), "s2".into()],
+    )
+    .unwrap();
     assert!(state.archived_sessions.is_empty());
     assert!(!dir.path().join("a1/s1.jsonl").exists());
     assert!(!dir.path().join("a1/s2.txt").exists());
@@ -3563,7 +3599,10 @@ fn Delete_MissingFile_002() {
     std::fs::create_dir_all(&a1).unwrap();
     std::fs::write(
         a1.join("s1.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
     let data = dir.path().join("projects.json");
@@ -3592,7 +3631,10 @@ fn Delete_NotArchived_003() {
     std::fs::create_dir_all(&a1).unwrap();
     std::fs::write(
         a1.join("s1.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
     let data = dir.path().join("projects.json");
@@ -3602,9 +3644,7 @@ fn Delete_NotArchived_003() {
     let lock = dir.path().join("projects.json.lock");
     // s2 未存档 -> 整体 Err,projects.json 不变,s1 文件不动
     let before = get_projects_state_at(&data).unwrap();
-    assert!(
-        delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s2".into()]).is_err()
-    );
+    assert!(delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s2".into()]).is_err());
     let after = get_projects_state_at(&data).unwrap();
     assert_eq!(before.archived_sessions, after.archived_sessions);
     assert!(dir.path().join("a1/s1.jsonl").exists());
@@ -3618,7 +3658,10 @@ fn Delete_InvalidId_004() {
     std::fs::create_dir_all(&a1).unwrap();
     std::fs::write(
         a1.join("s1.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
     let data = dir.path().join("projects.json");
@@ -3644,8 +3687,7 @@ fn Delete_ProjectGone_005() {
     archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
-    let state =
-        delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into()]).unwrap();
+    let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into()]).unwrap();
     assert!(state.archived_sessions.is_empty());
 }
 
@@ -3661,9 +3703,7 @@ fn Delete_RootScanErr_008() {
     // root 路径是个文件(非目录)→ read_dir 失败 → Err 不动状态,不误清标记
     let root_file = dir.path().join("not-a-dir");
     std::fs::write(&root_file, b"x").unwrap();
-    assert!(
-        delete_sessions_inner(&data, &lock, &root_file, "E:\\Foo", &["s1".into()]).is_err()
-    );
+    assert!(delete_sessions_inner(&data, &lock, &root_file, "E:\\Foo", &["s1".into()]).is_err());
     let after = get_projects_state_at(&data).unwrap();
     assert_eq!(after.archived_sessions.len(), 1);
 }
@@ -3680,8 +3720,8 @@ fn Delete_RootMissing_009() {
     // root 整个不存在(全新机器/目录被移走)→ 无处可删,清标记收敛;
     // 此时不得 canonicalize root(会失败),命中 dirs.is_empty() 短路
     let missing_root = dir.path().join("no-such-root");
-    let state = delete_sessions_inner(&data, &lock, &missing_root, "E:\\Foo", &["s1".into()])
-        .unwrap();
+    let state =
+        delete_sessions_inner(&data, &lock, &missing_root, "E:\\Foo", &["s1".into()]).unwrap();
     assert!(state.archived_sessions.is_empty());
 }
 
@@ -3693,7 +3733,10 @@ fn Delete_NormPath_006() {
     std::fs::create_dir_all(&a1).unwrap();
     std::fs::write(
         a1.join("s1.jsonl"),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+        format!(
+            "{{\"cwd\":{}}}\n",
+            serde_json::to_string("E:\\Foo").unwrap()
+        ),
     )
     .unwrap();
     let data = dir.path().join("projects.json");
