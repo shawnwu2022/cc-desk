@@ -27,6 +27,8 @@ vi.mock('@/api/tauri', () => ({
   getSessionCount: vi.fn().mockResolvedValue(0),
   getSessions: vi.fn().mockResolvedValue([]),
   searchSessionMessages: vi.fn().mockResolvedValue([]),
+  getProjectsState: vi.fn().mockResolvedValue({ pinnedProjects: [], archivedSessions: {}, displayNames: {} }),
+  deleteSessions: vi.fn().mockResolvedValue({ pinnedProjects: [], archivedSessions: {}, displayNames: {} }),
 }))
 
 describe('session store', () => {
@@ -393,6 +395,68 @@ describe('session store', () => {
 
       sessionStore.setActiveTab(tabId)
       expect(attentionStore.getItem('pty-x')?.kind).toBe('error') // error 保留
+    })
+  })
+
+  // ==================== deleteSessions（永久删除） ====================
+  describe('deleteSessions', () => {
+    // 成功:applyReturnedState 清标记 + force 重载历史（getSessions 被调）。
+    // 注意:action 先 ensureProjectsStateLoaded,会用 getProjectsState 返回值覆盖本地 map,
+    // 所以「删除前状态」必须由 getProjectsState mock 提供,不能手动 set(会被预加载冲掉)。
+    it('DeleteSessions_AppliesStateAndForceReloads_001', async () => {
+      const { getProjectsState, deleteSessions, getSessions } = await import('@/api/tauri')
+      const mockLoad = getProjectsState as ReturnType<typeof vi.fn>
+      const mockDelete = deleteSessions as ReturnType<typeof vi.fn>
+      const mockGet = getSessions as ReturnType<typeof vi.fn>
+      // 预加载:含 s1 存档标记(删除前状态)
+      mockLoad.mockResolvedValueOnce({ pinnedProjects: [], archivedSessions: { '/p': ['s1'] }, displayNames: {} })
+      // 删除返回:标记已清(删除后状态)
+      mockDelete.mockResolvedValueOnce({ pinnedProjects: [], archivedSessions: {}, displayNames: {} })
+      mockGet.mockClear()
+      const store = useSessionStore()
+      await store.deleteSessions('/p', ['s1'])
+      expect(mockDelete).toHaveBeenCalledWith('/p', ['s1'])
+      expect(store.archivedSessions.has('/p')).toBe(false) // applyReturnedState 清标记
+      expect(mockGet).toHaveBeenCalled()                    // force 重载历史
+    })
+
+    // 失败:不 apply、不 force 重载,预加载的标记保留
+    it('DeleteSessions_Failure_NoApplyNoReload_002', async () => {
+      const { getProjectsState, deleteSessions, getSessions } = await import('@/api/tauri')
+      const mockLoad = getProjectsState as ReturnType<typeof vi.fn>
+      const mockDelete = deleteSessions as ReturnType<typeof vi.fn>
+      const mockGet = getSessions as ReturnType<typeof vi.fn>
+      mockLoad.mockResolvedValueOnce({ pinnedProjects: [], archivedSessions: { '/p': ['s1'] }, displayNames: {} })
+      mockDelete.mockRejectedValueOnce(new Error('delete failed'))
+      mockGet.mockClear()
+      const store = useSessionStore()
+      await expect(store.deleteSessions('/p', ['s1'])).rejects.toThrow()
+      expect(mockGet).not.toHaveBeenCalled()                // 失败不 force 重载
+      expect(store.archivedSessions.get('/p')).toEqual(['s1']) // 预加载标记未被清
+    })
+
+    // opLock 串行:两个并发 delete,第二个必须等第一个完成后才发 invoke
+    it('DeleteSessions_OpLockSerializes_003', async () => {
+      const { getProjectsState, deleteSessions } = await import('@/api/tauri')
+      const mockLoad = getProjectsState as ReturnType<typeof vi.fn>
+      const mockDelete = deleteSessions as ReturnType<typeof vi.fn>
+      mockLoad.mockResolvedValue({ pinnedProjects: [], archivedSessions: {}, displayNames: {} })
+      const emptyState = { pinnedProjects: [], archivedSessions: {}, displayNames: {} }
+      // 手控 resolve 顺序:第一个调用未 resolve 前,第二个不得发起。
+      // resolve 值必须是合法 state(后续 applyReturnedState 会读它,不能是 null)。
+      let resolveFirst!: (v: unknown) => void
+      const order: string[] = []
+      mockDelete.mockImplementationOnce(() => new Promise(r => { resolveFirst = r; order.push('first-start') }))
+      mockDelete.mockImplementationOnce(() => { order.push('second-start'); return Promise.resolve(emptyState) })
+      const store = useSessionStore()
+      const p1 = store.deleteSessions('/p', ['a'])
+      const p2 = store.deleteSessions('/p', ['b'])
+      // 宏任务边界:setTimeout(0) 前所有微任务(含 ensureProjectsStateLoaded 的多级 await)排空
+      await new Promise(r => setTimeout(r, 0))
+      expect(order).toEqual(['first-start']) // 第二个尚未发起(opLock 排队)
+      resolveFirst(emptyState)
+      await Promise.all([p1, p2])
+      expect(order).toEqual(['first-start', 'second-start'])
     })
   })
 })

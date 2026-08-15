@@ -9,6 +9,7 @@ import {
   unpinProject as unpinProjectApi,
   archiveSession as archiveSessionApi,
   restoreSession as restoreSessionApi,
+  deleteSessions as deleteSessionsApi,
   setDisplayName as setDisplayNameApi,
 } from '@/api/tauri'
 import { normalizePath, sameProjectPath } from '@/utils/path'
@@ -965,6 +966,21 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
+   * 永久删除已存档会话（opLock 串行；尽力批，非原子）。
+   * 成功后 applyReturnedState 以返回 state 覆盖本地，并 await loadHistoryFor(force=true)
+   * 强制刷新历史——只清缓存不够：在途 inflight 的删除前响应会写回缓存，把已删会话复活。
+   * 失败：不 apply、不强制重载，调用方据错误提示。
+   */
+  async function deleteSessions(projectPath: string, sessionIds: string[]) {
+    return withLock(async () => {
+      await ensureProjectsStateLoaded()
+      const s = await deleteSessionsApi(projectPath, sessionIds)
+      applyReturnedState(s)
+      await loadHistoryFor(projectPath, true)
+    })
+  }
+
+  /**
    * 取项目显示名：有别名返别名，无则 basename 回退（projectBasename 去尾斜杠 + 反斜杠规范）。
    * 供 buildProjectGroups / TitleBar / native title / 管理页统一消费。
    * reactive Map -> 依赖 getDisplayName 的 computed/watch 自动重算。
@@ -1067,6 +1083,7 @@ export const useSessionStore = defineStore('session', () => {
     getArchivedSessionInfos,
     archiveSession,
     restoreSession,
+    deleteSessions,
     getDisplayName,
     setDisplayName,
   }
