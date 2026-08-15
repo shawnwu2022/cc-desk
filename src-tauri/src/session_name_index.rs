@@ -839,7 +839,7 @@ pub(crate) enum FlushStage {
 }
 
 impl FlushStage {
-    /// 所有阶段（基准输出顺序）；仅 tests 的 flush_metric_stages 引用。
+    /// 所有阶段（基准输出顺序）；仅测试基准用例引用。
     #[allow(dead_code)]
     pub(crate) const ALL: [FlushStage; 12] = [
         FlushStage::Revalidate,
@@ -856,7 +856,7 @@ impl FlushStage {
         FlushStage::ExclusiveHold,
     ];
 
-    /// 阶段标签（基准输出用）；仅 tests 的 flush_metric_stages 引用。
+    /// 阶段标签（基准输出用）；仅测试基准用例引用。
     #[allow(dead_code)]
     pub(crate) fn label(self) -> &'static str {
         match self {
