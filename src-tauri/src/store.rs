@@ -3720,6 +3720,93 @@ where
     result
 }
 
+/// 永久删除会话(尽力批,非原子):删会话文件 + 清存档标记。
+/// 锁内执行;任一文件删除失败或校验失败则整体 Err,projects.json 不变
+/// (已删文件不恢复;重试靠「文件不存在视为已删」与「目录消失仍清标记」双路径收敛)。
+/// 失败收敛的两种残留状态:①文件已删但标记未清(状态写失败)→ 重试时目录可能已消失,
+/// 命中「目录消失仍清标记」收敛;②部分删失败 → 重试时已删文件不存在,跳过后删剩余。
+/// 已知残余风险:extract_project_path_from_jsonl 内部用 ok()? 早退、忽略 JSONL 内容
+/// 读取错误——项目目录里**任一**条目读取失败(权限等)即让该目录从 mapping 消失
+/// (即便后续条目本可读出 cwd),此时 delete 会清标记但文件残留。为修复它需改动该
+/// 生产函数签名并波及 3 个调用方(251/371/663),收益不抵;接受并如实记录。
+pub(crate) fn delete_sessions_inner(
+    data_path: &Path,
+    lock_path: &Path,
+    projects_root: &Path,
+    project_path: &str,
+    session_ids: &[String],
+) -> Result<ProjectsState> {
+    with_projects_state_locked(data_path, lock_path, move |state| {
+        // 0. 空列表:直接成功返回当前 state(不查目录、不动标记)
+        if session_ids.is_empty() {
+            return Ok(());
+        }
+        // 1. 校验文件名组件
+        for id in session_ids {
+            validate_session_id_component(id).map_err(anyhow::Error::msg)?;
+        }
+        // 2. 全部必须已存档
+        let n = normalize_path_str(project_path);
+        let archived = state
+            .archived_sessions
+            .get(&n)
+            .ok_or_else(|| anyhow::anyhow!("project has no archived sessions: {n}"))?;
+        for id in session_ids {
+            if !archived.contains(id) {
+                anyhow::bail!("session not archived: {id}");
+            }
+        }
+        // 3. 解析项目目录(多目录 + 等价 key 全集合并)。
+        //    扫描失败(root 是文件/权限)→ Err 不动状态(不把 IO 错误折叠成「目录为空」误清标记)。
+        //    try_exists 判定 root 真不存在,或查不到项目 → 无处可删,跳过删除直接清标记收敛。
+        //    (此时不得 canonicalize root——root 缺失会 canonicalize 失败,违背收敛语义)
+        let mapping = build_project_path_mapping_at(projects_root)?;
+        let dirs = lookup_project_dirs(&mapping, project_path);
+        if !dirs.is_empty() {
+            // 4. 可信根边界:canonical 后 prefix 比对,拒 junction/symlink 逃逸。
+            //    仅 dirs 非空时计算(有删除目标才需要边界校验)
+            let trusted_root = fs::canonicalize(projects_root)
+                .map_err(|e| anyhow::anyhow!("canonicalize projects root: {e}"))?;
+            // 5. 逐个删除(两扩展名、所有目录);agent- 前缀已被 validate 拒绝,不会命中子代理文件
+            for id in session_ids {
+                let mut targets = Vec::new();
+                for dir in &dirs {
+                    for ext in ["jsonl", "txt"] {
+                        let p = dir.join(format!("{id}.{ext}"));
+                        // try_exists 区分「真不存在」(Ok(false),跳过)与 metadata 错误(Err,传播;
+                        // exists() 会把权限错误折叠成 false → 误当已删 → 清标记但文件残留)
+                        match p.try_exists() {
+                            Ok(true) => targets.push(p),
+                            Ok(false) => {}
+                            Err(e) => anyhow::bail!("check {} failed: {e}", p.display()),
+                        }
+                    }
+                }
+                if targets.is_empty() {
+                    continue; // 文件已不存在 -> 容错跳过(幂等)
+                }
+                for t in &targets {
+                    let canon = fs::canonicalize(t)
+                        .map_err(|e| anyhow::anyhow!("canonicalize target {}: {e}", t.display()))?;
+                    if !canon.starts_with(&trusted_root) {
+                        anyhow::bail!("target escapes projects root: {}", t.display());
+                    }
+                    fs::remove_file(t)
+                        .map_err(|e| anyhow::anyhow!("delete {} failed: {e}", t.display()))?;
+                }
+            }
+        }
+        // 6. 全部删除成功 -> 清标记
+        if let Some(arr) = state.archived_sessions.get_mut(&n) {
+            arr.retain(|id| !session_ids.contains(id));
+            if arr.is_empty() {
+                state.archived_sessions.remove(&n);
+            }
+        }
+        Ok(())
+    })
+}
+
 /// 共享锁内读取完整状态。写者持排他锁时本调用阻塞（有界）直到写完，
 /// 不会读到 remove->rename 空窗的「不存在」。
 pub(crate) fn read_projects_state_locked(

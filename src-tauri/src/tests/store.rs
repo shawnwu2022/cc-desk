@@ -7,7 +7,7 @@ use crate::session_name_index::{
 };
 use crate::store::{
     acquire_lock, assemble_home_data, build_project_path_mapping_at, canonicalize_state,
-    compute_project_startup_state,
+    compute_project_startup_state, delete_sessions_inner,
     expand_env_vars, extract_md_description, extract_project_path_from_jsonl, extract_session_name,
     find_valid_plugin_path, get_all_recent_sessions_indexed_at, get_home_data,
     get_home_data_indexed_at, get_projects_state_at, get_sessions_from_dirs,
@@ -3478,4 +3478,126 @@ fn LookupProjectDirs_MissingProject_Empty_003() {
     write_fake_session(&root.path().join("a"), "s1.jsonl", "E:\\Foo");
     let mapping = build_project_path_mapping_at(root.path()).unwrap();
     assert!(lookup_project_dirs(&mapping, "E:\\Bar").is_empty());
+}
+
+// 构造一个含 archivedSessions 标记的 projects.json,返回其路径
+fn make_state_with_archived(dir: &tempfile::TempDir, project: &str, ids: &[&str]) -> std::path::PathBuf {
+    use serde_json::json;
+    let data = dir.path().join("projects.json");
+    let mut archived = serde_json::Map::new();
+    archived.insert(normalize_path_str(project).into(), json!(ids));
+    std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
+    data
+}
+
+#[test]
+fn DeleteSessions_FullSuccess_MultiDirBothExt_001() {
+    let dir = tempfile::tempdir().unwrap();
+    // 项目映射到两个目录,会话 s1 在两处、s2 只在一处,混 .jsonl/.txt
+    write_fake_session(&dir.path().join("a1"), "s1.jsonl", "E:\\Foo");
+    write_fake_session(&dir.path().join("a1"), "s2.txt", "E:\\Foo");
+    write_fake_session(&dir.path().join("a2"), "s1.txt", "E:\\Foo");
+    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1", "s2"]);
+    let lock = dir.path().join("projects.json.lock");
+
+    let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into(), "s2".into()]).unwrap();
+    // 标记清除
+    assert!(state.archived_sessions.is_empty());
+    // 文件全删(.jsonl 与 .txt、两目录)
+    assert!(!dir.path().join("a1/s1.jsonl").exists());
+    assert!(!dir.path().join("a1/s2.txt").exists());
+    assert!(!dir.path().join("a2/s1.txt").exists());
+}
+
+#[test]
+fn DeleteSessions_MissingFileIdempotent_002() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_session(&dir.path().join("a1"), "s1.jsonl", "E:\\Foo");
+    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1", "ghost"]);
+    let lock = dir.path().join("projects.json.lock");
+    // ghost 文件不存在 -> 容错跳过,仍清两标记
+    let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into(), "ghost".into()]).unwrap();
+    assert!(state.archived_sessions.is_empty());
+    assert!(!dir.path().join("a1/s1.jsonl").exists());
+}
+
+#[test]
+fn DeleteSessions_NotArchived_Rejected_003() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_session(&dir.path().join("a1"), "s1.jsonl", "E:\\Foo");
+    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let lock = dir.path().join("projects.json.lock");
+    // s2 未存档 -> 整体 Err,projects.json 不变,s1 文件不动
+    let before = get_projects_state_at(&data).unwrap();
+    assert!(delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s2".into()]).is_err());
+    let after = get_projects_state_at(&data).unwrap();
+    assert_eq!(before.archived_sessions, after.archived_sessions);
+    assert!(dir.path().join("a1/s1.jsonl").exists());
+}
+
+#[test]
+fn DeleteSessions_InvalidSessionId_Rejected_004() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_session(&dir.path().join("a1"), "s1.jsonl", "E:\\Foo");
+    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let lock = dir.path().join("projects.json.lock");
+    for bad in ["../evil", "a/b", "a\\b", "C:evil", "CON"] {
+        assert!(delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &[bad.into()]).is_err(), "{}", bad);
+    }
+}
+
+#[test]
+fn DeleteSessions_ProjectDirsGone_ClearsMarkers_005() {
+    let dir = tempfile::tempdir().unwrap();
+    // root 存在但项目查不到目录(项目已无可读会话文件)→ 无文件可删,清标记收敛
+    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let lock = dir.path().join("projects.json.lock");
+    let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into()]).unwrap();
+    assert!(state.archived_sessions.is_empty());
+}
+
+#[test]
+fn DeleteSessions_RootScanError_Err_008() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let lock = dir.path().join("projects.json.lock");
+    // root 路径是个文件(非目录)→ read_dir 失败 → Err 不动状态,不误清标记
+    let root_file = dir.path().join("not-a-dir");
+    std::fs::write(&root_file, b"x").unwrap();
+    assert!(delete_sessions_inner(&data, &lock, &root_file, "E:\\Foo", &["s1".into()]).is_err());
+    let after = get_projects_state_at(&data).unwrap();
+    assert_eq!(after.archived_sessions.len(), 1);
+}
+
+#[test]
+fn DeleteSessions_RootMissing_ClearsMarkers_009() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let lock = dir.path().join("projects.json.lock");
+    // root 整个不存在(全新机器/目录被移走)→ 无处可删,清标记收敛;
+    // 此时不得 canonicalize root(会失败),命中 dirs.is_empty() 短路
+    let missing_root = dir.path().join("no-such-root");
+    let state = delete_sessions_inner(&data, &lock, &missing_root, "E:\\Foo", &["s1".into()]).unwrap();
+    assert!(state.archived_sessions.is_empty());
+}
+
+#[test]
+fn DeleteSessions_NormalizedPathHitsDirs_006() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_session(&dir.path().join("a1"), "s1.jsonl", "E:\\Foo");
+    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let lock = dir.path().join("projects.json.lock");
+    // 传规范化 key e:/foo 也能命中目录并删除
+    let state = delete_sessions_inner(&data, &lock, dir.path(), &normalize_path_str("E:\\Foo"), &["s1".into()]).unwrap();
+    assert!(state.archived_sessions.is_empty());
+    assert!(!dir.path().join("a1/s1.jsonl").exists());
+}
+
+#[test]
+fn DeleteSessions_EmptyList_ReturnsState_007() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let lock = dir.path().join("projects.json.lock");
+    let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &[]).unwrap();
+    assert_eq!(state.archived_sessions.len(), 1);
 }
