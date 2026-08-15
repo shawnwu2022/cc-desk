@@ -14,59 +14,6 @@ use crate::session_name_index::{
 };
 use crate::store::{acquire_lock, acquire_lock_with_label};
 
-fn entry_from_stamp(name: &str, stamp: FileStamp, cached_at_ms: u64) -> SessionNameEntry {
-    SessionNameEntry {
-        name: name.to_string(),
-        observed_length: stamp.observed_length,
-        modified_secs: stamp.modified_secs,
-        modified_nanos: stamp.modified_nanos,
-        cached_at_ms,
-    }
-}
-
-fn index_paths(dir: &tempfile::TempDir) -> SessionNameIndexPaths {
-    SessionNameIndexPaths {
-        data: dir.path().join("session-name-index.json"),
-        lock: dir.path().join("session-name-index.json.lock"),
-    }
-}
-
-fn test_health() -> (Arc<IndexHealth>, Arc<AtomicU64>, Arc<Mutex<Vec<String>>>) {
-    let now_ms = Arc::new(AtomicU64::new(1_000));
-    let warnings = Arc::new(Mutex::new(Vec::new()));
-    let clock_state = Arc::clone(&now_ms);
-    let warning_state = Arc::clone(&warnings);
-    let health = Arc::new(IndexHealth::new(
-        move || clock_state.load(Ordering::SeqCst),
-        move |message| warning_state.lock().unwrap().push(message),
-    ));
-    (health, now_ms, warnings)
-}
-
-fn test_store(
-    paths: SessionNameIndexPaths,
-    limits: IndexLimits,
-    health: Arc<IndexHealth>,
-) -> SessionNameIndexStore {
-    SessionNameIndexStore::new(paths, limits, health, Duration::from_millis(100))
-}
-
-fn resolver_snapshot(
-    projects: BTreeMap<String, BTreeMap<String, SessionNameEntry>>,
-    needs_compaction: bool,
-) -> IndexSnapshot {
-    IndexSnapshot {
-        index: SessionNameIndex {
-            schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
-            parser_version: SESSION_NAME_PARSER_VERSION,
-            projects,
-        },
-        raw: RawIndexSnapshot::Bytes(b"base-index".to_vec()),
-        needs_compaction,
-        parse_attempted: true,
-    }
-}
-
 // 后部 custom-title 必须覆盖此前解析到的用户名称。
 #[test]
 fn Parser_LateTitle_001() {
@@ -128,7 +75,13 @@ fn Resolver_ExactHit_ReadsZero_004() {
     )
     .unwrap();
     let stamp = FileStamp::read(&path).unwrap();
-    let cached = entry_from_stamp("Cached name", stamp, 1_000);
+    let cached = SessionNameEntry {
+        name: "Cached name".to_string(),
+        observed_length: stamp.observed_length,
+        modified_secs: stamp.modified_secs,
+        modified_nanos: stamp.modified_nanos,
+        cached_at_ms: 1_000,
+    };
 
     let result = resolve_session_name_at(&path, stamp, Some(&cached), 2_000);
 
@@ -149,7 +102,13 @@ fn Resolver_Growth_Rebuilds_005() {
     )
     .unwrap();
     let old_stamp = FileStamp::read(&path).unwrap();
-    let cached = entry_from_stamp("Old name", old_stamp, 1_000);
+    let cached = SessionNameEntry {
+        name: "Old name".to_string(),
+        observed_length: old_stamp.observed_length,
+        modified_secs: old_stamp.modified_secs,
+        modified_nanos: old_stamp.modified_nanos,
+        cached_at_ms: 1_000,
+    };
     std::fs::OpenOptions::new()
         .append(true)
         .open(&path)
@@ -185,7 +144,13 @@ fn Resolver_SameLengthMtime_Rebuilds_006() {
         modified_secs: current.modified_secs.saturating_sub(1),
         modified_nanos: current.modified_nanos,
     };
-    let cached = entry_from_stamp("Stale name", cached_stamp, 1_000);
+    let cached = SessionNameEntry {
+        name: "Stale name".to_string(),
+        observed_length: cached_stamp.observed_length,
+        modified_secs: cached_stamp.modified_secs,
+        modified_nanos: cached_stamp.modified_nanos,
+        cached_at_ms: 1_000,
+    };
 
     let result = resolve_session_name_at(&path, current, Some(&cached), 2_000);
 
@@ -243,8 +208,24 @@ fn Resolver_Missing_Unnamed_008() {
 #[test]
 fn Index_Missing_Empty_010() {
     let dir = tempfile::tempdir().unwrap();
-    let (health, _, warnings) = test_health();
-    let snapshot = test_store(index_paths(&dir), IndexLimits::default(), health).read_snapshot();
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
+    let snapshot = SessionNameIndexStore::new(
+        SessionNameIndexPaths {
+            data: dir.path().join("session-name-index.json"),
+            lock: dir.path().join("session-name-index.json.lock"),
+        },
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    )
+    .read_snapshot();
 
     assert!(snapshot.index.projects.is_empty());
     assert_eq!(snapshot.raw, RawIndexSnapshot::Missing);
@@ -256,15 +237,31 @@ fn Index_Missing_Empty_010() {
 #[test]
 fn Index_SchemaVersion_Empty_011() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
     std::fs::write(
         &paths.data,
         r#"{"schemaVersion":2,"parserVersion":1,"projects":{"p":{"s.jsonl":{"name":"stale","observedLength":1,"modifiedSecs":1,"modifiedNanos":1,"cachedAtMs":1}}}}"#,
     )
     .unwrap();
-    let (health, _, warnings) = test_health();
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
 
-    let snapshot = test_store(paths, IndexLimits::default(), health).read_snapshot();
+    let snapshot = SessionNameIndexStore::new(
+        paths,
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    )
+    .read_snapshot();
 
     assert!(snapshot.index.projects.is_empty());
     assert!(snapshot.parse_attempted);
@@ -275,15 +272,31 @@ fn Index_SchemaVersion_Empty_011() {
 #[test]
 fn Index_ParserVersion_Empty_012() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
     std::fs::write(
         &paths.data,
         r#"{"schemaVersion":1,"parserVersion":0,"projects":{"p":{"s.jsonl":{"name":"stale","observedLength":1,"modifiedSecs":1,"modifiedNanos":1,"cachedAtMs":1}}}}"#,
     )
     .unwrap();
-    let (health, _, _) = test_health();
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
 
-    let snapshot = test_store(paths, IndexLimits::default(), health).read_snapshot();
+    let snapshot = SessionNameIndexStore::new(
+        paths,
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    )
+    .read_snapshot();
 
     assert!(snapshot.index.projects.is_empty());
     assert!(snapshot.parse_attempted);
@@ -293,11 +306,27 @@ fn Index_ParserVersion_Empty_012() {
 #[test]
 fn Index_Corrupt_Fallback_013() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
     std::fs::write(&paths.data, b"{not-json").unwrap();
-    let (health, _, warnings) = test_health();
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
 
-    let snapshot = test_store(paths, IndexLimits::default(), health).read_snapshot();
+    let snapshot = SessionNameIndexStore::new(
+        paths,
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    )
+    .read_snapshot();
 
     assert!(snapshot.index.projects.is_empty());
     assert!(snapshot.parse_attempted);
@@ -308,16 +337,27 @@ fn Index_Corrupt_Fallback_013() {
 #[test]
 fn Index_HardLimit_Fallback_014() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
     std::fs::write(&paths.data, vec![b'x'; 1_025]).unwrap();
-    let (health, _, _) = test_health();
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
     let limits = IndexLimits {
         target_bytes: 512,
         soft_bytes: 768,
         hard_bytes: 1_024,
     };
 
-    let snapshot = test_store(paths, limits, health).read_snapshot();
+    let snapshot = SessionNameIndexStore::new(paths, limits, health, Duration::from_millis(100))
+        .read_snapshot();
 
     assert!(snapshot.index.projects.is_empty());
     assert!(matches!(snapshot.raw, RawIndexSnapshot::Oversized(_)));
@@ -328,10 +368,25 @@ fn Index_HardLimit_Fallback_014() {
 #[test]
 fn Index_CorruptWarn_Throttles_015() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
     std::fs::write(&paths.data, b"{bad-one").unwrap();
-    let (health, _, warnings) = test_health();
-    let store = test_store(paths.clone(), IndexLimits::default(), health);
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    );
 
     let first = store.read_snapshot();
     let second = store.read_snapshot();
@@ -347,7 +402,14 @@ fn Index_CorruptWarn_Throttles_015() {
 // 写失败后 30 秒内禁止重复调度，窗口到期或成功后恢复。
 #[test]
 fn Index_WriteFail_BacksOff_016() {
-    let (health, now_ms, warnings) = test_health();
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
 
     assert!(health.allows_write());
     health.record_write_failure("disk full");
@@ -412,10 +474,28 @@ fn Resolver_ExactHit_NoDelta_020() {
         project_key,
         BTreeMap::from([(
             "session.jsonl".to_string(),
-            entry_from_stamp("Cached", stamp, 1_000),
+            SessionNameEntry {
+                name: "Cached".to_string(),
+                observed_length: stamp.observed_length,
+                modified_secs: stamp.modified_secs,
+                modified_nanos: stamp.modified_nanos,
+                cached_at_ms: 1_000,
+            },
         )]),
     );
-    let mut resolver = SessionNameResolver::new(resolver_snapshot(projects, false), 2_000);
+    let mut resolver = SessionNameResolver::new(
+        IndexSnapshot {
+            index: SessionNameIndex {
+                schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
+                parser_version: SESSION_NAME_PARSER_VERSION,
+                projects,
+            },
+            raw: RawIndexSnapshot::Bytes(b"base-index".to_vec()),
+            needs_compaction: false,
+            parse_attempted: true,
+        },
+        2_000,
+    );
 
     let resolved = resolver.resolve(&project_dir, &path, stamp);
     let stats = resolver.stats();
@@ -441,21 +521,36 @@ fn Resolver_Miss_CreatesStableDelta_021() {
     )
     .unwrap();
     let stamp = FileStamp::read(&path).unwrap();
-    let stale = entry_from_stamp(
-        "Stale",
-        FileStamp {
-            observed_length: stamp.observed_length.saturating_sub(1),
-            ..stamp
-        },
-        1_000,
-    );
+    let stale_stamp = FileStamp {
+        observed_length: stamp.observed_length.saturating_sub(1),
+        ..stamp
+    };
+    let stale = SessionNameEntry {
+        name: "Stale".to_string(),
+        observed_length: stale_stamp.observed_length,
+        modified_secs: stale_stamp.modified_secs,
+        modified_nanos: stale_stamp.modified_nanos,
+        cached_at_ms: 1_000,
+    };
     let project_key = crate::store::normalize_path_str(&project_dir.to_string_lossy());
     let mut projects = BTreeMap::new();
     projects.insert(
         project_key.clone(),
         BTreeMap::from([("session.jsonl".to_string(), stale.clone())]),
     );
-    let mut resolver = SessionNameResolver::new(resolver_snapshot(projects, false), 2_000);
+    let mut resolver = SessionNameResolver::new(
+        IndexSnapshot {
+            index: SessionNameIndex {
+                schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
+                parser_version: SESSION_NAME_PARSER_VERSION,
+                projects,
+            },
+            raw: RawIndexSnapshot::Bytes(b"base-index".to_vec()),
+            needs_compaction: false,
+            parse_attempted: true,
+        },
+        2_000,
+    );
 
     let resolved = resolver.resolve(&project_dir, &path, stamp);
     let pending = resolver.finish().unwrap();
@@ -489,7 +584,19 @@ fn Resolver_Unstable_NoDelta_022() {
         .unwrap()
         .write_all(b"{\"type\":\"custom-title\",\"customTitle\":\"After\"}\n")
         .unwrap();
-    let mut resolver = SessionNameResolver::new(resolver_snapshot(BTreeMap::new(), false), 2_000);
+    let mut resolver = SessionNameResolver::new(
+        IndexSnapshot {
+            index: SessionNameIndex {
+                schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
+                parser_version: SESSION_NAME_PARSER_VERSION,
+                projects: BTreeMap::new(),
+            },
+            raw: RawIndexSnapshot::Bytes(b"base-index".to_vec()),
+            needs_compaction: false,
+            parse_attempted: true,
+        },
+        2_000,
+    );
 
     let resolved = resolver.resolve(&project_dir, &path, stale_stamp);
     let stats = resolver.stats();
@@ -512,17 +619,38 @@ fn Resolver_Dirs_PruneComplete_023() {
         modified_nanos: 1,
     };
     let base_bucket = BTreeMap::from([
-        ("live.jsonl".to_string(), entry_from_stamp("Live", stamp, 1)),
+        (
+            "live.jsonl".to_string(),
+            SessionNameEntry {
+                name: "Live".to_string(),
+                observed_length: stamp.observed_length,
+                modified_secs: stamp.modified_secs,
+                modified_nanos: stamp.modified_nanos,
+                cached_at_ms: 1,
+            },
+        ),
         (
             "stale.jsonl".to_string(),
-            entry_from_stamp("Stale", stamp, 1),
+            SessionNameEntry {
+                name: "Stale".to_string(),
+                observed_length: stamp.observed_length,
+                modified_secs: stamp.modified_secs,
+                modified_nanos: stamp.modified_nanos,
+                cached_at_ms: 1,
+            },
         ),
     ]);
     let mut resolver = SessionNameResolver::new(
-        resolver_snapshot(
-            BTreeMap::from([(project_key.clone(), base_bucket.clone())]),
-            false,
-        ),
+        IndexSnapshot {
+            index: SessionNameIndex {
+                schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
+                parser_version: SESSION_NAME_PARSER_VERSION,
+                projects: BTreeMap::from([(project_key.clone(), base_bucket.clone())]),
+            },
+            raw: RawIndexSnapshot::Bytes(b"base-index".to_vec()),
+            needs_compaction: false,
+            parse_attempted: true,
+        },
         2_000,
     );
 
@@ -547,7 +675,19 @@ fn Resolver_Dirs_PruneComplete_023() {
 fn Resolver_Dirs_NoPruneIncomplete_024() {
     let dir = tempfile::tempdir().unwrap();
     let project_dir = dir.path().join("-e-source-project");
-    let mut resolver = SessionNameResolver::new(resolver_snapshot(BTreeMap::new(), false), 2_000);
+    let mut resolver = SessionNameResolver::new(
+        IndexSnapshot {
+            index: SessionNameIndex {
+                schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
+                parser_version: SESSION_NAME_PARSER_VERSION,
+                projects: BTreeMap::new(),
+            },
+            raw: RawIndexSnapshot::Bytes(b"base-index".to_vec()),
+            needs_compaction: false,
+            parse_attempted: true,
+        },
+        2_000,
+    );
 
     resolver.record_directory(
         &project_dir,
@@ -561,7 +701,19 @@ fn Resolver_Dirs_NoPruneIncomplete_024() {
 // 超过 soft limit 的有效快照即使全命中也必须请求压缩写回。
 #[test]
 fn Resolver_SoftSize_CompressDelta_025() {
-    let resolver = SessionNameResolver::new(resolver_snapshot(BTreeMap::new(), true), 2_000);
+    let resolver = SessionNameResolver::new(
+        IndexSnapshot {
+            index: SessionNameIndex {
+                schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
+                parser_version: SESSION_NAME_PARSER_VERSION,
+                projects: BTreeMap::new(),
+            },
+            raw: RawIndexSnapshot::Bytes(b"base-index".to_vec()),
+            needs_compaction: true,
+            parse_attempted: true,
+        },
+        2_000,
+    );
 
     let pending = resolver.finish().unwrap();
 
@@ -590,7 +742,19 @@ fn Resolver_DuplicateDirs_Separate_026() {
         "{\"type\":\"user\",\"message\":{\"content\":\"Second\"}}\n",
     )
     .unwrap();
-    let mut resolver = SessionNameResolver::new(resolver_snapshot(BTreeMap::new(), false), 2_000);
+    let mut resolver = SessionNameResolver::new(
+        IndexSnapshot {
+            index: SessionNameIndex {
+                schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
+                parser_version: SESSION_NAME_PARSER_VERSION,
+                projects: BTreeMap::new(),
+            },
+            raw: RawIndexSnapshot::Bytes(b"base-index".to_vec()),
+            needs_compaction: false,
+            parse_attempted: true,
+        },
+        2_000,
+    );
 
     resolver.resolve(
         &first_dir,
@@ -611,22 +775,6 @@ fn Resolver_DuplicateDirs_Separate_026() {
     );
 }
 
-fn mutation(
-    project_key: &str,
-    file_name: &str,
-    path: &std::path::Path,
-    base: Option<SessionNameEntry>,
-    replacement: SessionNameEntry,
-) -> IndexMutation {
-    IndexMutation {
-        project_key: project_key.to_string(),
-        file_name: file_name.to_string(),
-        path: path.to_path_buf(),
-        base,
-        replacement,
-    }
-}
-
 // 基于同一旧快照的互不相交 mutation 必须能合并，不能后写覆盖先写。
 #[test]
 fn Flush_Disjoint_MergesBoth_030() {
@@ -635,8 +783,20 @@ fn Flush_Disjoint_MergesBoth_030() {
         modified_secs: 1,
         modified_nanos: 1,
     };
-    let first = entry_from_stamp("First", stamp, 10);
-    let second = entry_from_stamp("Second", stamp, 20);
+    let first = SessionNameEntry {
+        name: "First".to_string(),
+        observed_length: stamp.observed_length,
+        modified_secs: stamp.modified_secs,
+        modified_nanos: stamp.modified_nanos,
+        cached_at_ms: 10,
+    };
+    let second = SessionNameEntry {
+        name: "Second".to_string(),
+        observed_length: stamp.observed_length,
+        modified_secs: stamp.modified_secs,
+        modified_nanos: stamp.modified_nanos,
+        cached_at_ms: 20,
+    };
     let latest = SessionNameIndex {
         projects: BTreeMap::from([(
             "project".to_string(),
@@ -645,13 +805,13 @@ fn Flush_Disjoint_MergesBoth_030() {
         ..SessionNameIndex::empty()
     };
     let delta = SessionNameIndexDelta {
-        mutations: vec![mutation(
-            "project",
-            "second.jsonl",
-            std::path::Path::new("second.jsonl"),
-            None,
-            second.clone(),
-        )],
+        mutations: vec![IndexMutation {
+            project_key: "project".to_string(),
+            file_name: "second.jsonl".to_string(),
+            path: std::path::Path::new("second.jsonl").to_path_buf(),
+            base: None,
+            replacement: second.clone(),
+        }],
         ..SessionNameIndexDelta::default()
     };
 
@@ -661,8 +821,11 @@ fn Flush_Disjoint_MergesBoth_030() {
     assert_eq!(merged.index.projects["project"]["second.jsonl"], second);
 
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
-    let initial_bytes = compact_index_bytes(&SessionNameIndex::empty());
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
+    let initial_bytes = serde_json::to_vec(&SessionNameIndex::empty()).unwrap();
     std::fs::write(&paths.data, &initial_bytes).unwrap();
     let first_path = dir.path().join("first.jsonl");
     let second_path = dir.path().join("second.jsonl");
@@ -671,38 +834,62 @@ fn Flush_Disjoint_MergesBoth_030() {
     let first_stamp = FileStamp::read(&first_path).unwrap();
     let second_stamp = FileStamp::read(&second_path).unwrap();
     let first_delta = SessionNameIndexDelta {
-        mutations: vec![mutation(
-            "project",
-            "first.jsonl",
-            &first_path,
-            None,
-            entry_from_stamp("First", first_stamp, 10),
-        )],
+        mutations: vec![IndexMutation {
+            project_key: "project".to_string(),
+            file_name: "first.jsonl".to_string(),
+            path: first_path.to_path_buf(),
+            base: None,
+            replacement: SessionNameEntry {
+                name: "First".to_string(),
+                observed_length: first_stamp.observed_length,
+                modified_secs: first_stamp.modified_secs,
+                modified_nanos: first_stamp.modified_nanos,
+                cached_at_ms: 10,
+            },
+        }],
         ..SessionNameIndexDelta::default()
     };
     let second_delta = SessionNameIndexDelta {
-        mutations: vec![mutation(
-            "project",
-            "second.jsonl",
-            &second_path,
-            None,
-            entry_from_stamp("Second", second_stamp, 20),
-        )],
+        mutations: vec![IndexMutation {
+            project_key: "project".to_string(),
+            file_name: "second.jsonl".to_string(),
+            path: second_path.to_path_buf(),
+            base: None,
+            replacement: SessionNameEntry {
+                name: "Second".to_string(),
+                observed_length: second_stamp.observed_length,
+                modified_secs: second_stamp.modified_secs,
+                modified_nanos: second_stamp.modified_nanos,
+                cached_at_ms: 20,
+            },
+        }],
         ..SessionNameIndexDelta::default()
     };
-    let (health, _, _) = test_health();
-    let store = test_store(paths.clone(), IndexLimits::default(), health);
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    );
     store
-        .flush_pending(pending_flush(
-            RawIndexSnapshot::Bytes(initial_bytes.clone()),
-            first_delta,
-        ))
+        .flush_pending(PendingIndexFlush {
+            base_raw: RawIndexSnapshot::Bytes(initial_bytes.clone()),
+            delta: first_delta,
+        })
         .unwrap();
     store
-        .flush_pending(pending_flush(
-            RawIndexSnapshot::Bytes(initial_bytes),
-            second_delta,
-        ))
+        .flush_pending(PendingIndexFlush {
+            base_raw: RawIndexSnapshot::Bytes(initial_bytes),
+            delta: second_delta,
+        })
         .unwrap();
 
     let persisted: SessionNameIndex =
@@ -718,9 +905,27 @@ fn Flush_StaleBase_PreservesNew_031() {
         modified_secs: 1,
         modified_nanos: 1,
     };
-    let base = entry_from_stamp("Base", stamp, 10);
-    let concurrent = entry_from_stamp("Concurrent", stamp, 20);
-    let replacement = entry_from_stamp("Stale replacement", stamp, 30);
+    let base = SessionNameEntry {
+        name: "Base".to_string(),
+        observed_length: stamp.observed_length,
+        modified_secs: stamp.modified_secs,
+        modified_nanos: stamp.modified_nanos,
+        cached_at_ms: 10,
+    };
+    let concurrent = SessionNameEntry {
+        name: "Concurrent".to_string(),
+        observed_length: stamp.observed_length,
+        modified_secs: stamp.modified_secs,
+        modified_nanos: stamp.modified_nanos,
+        cached_at_ms: 20,
+    };
+    let replacement = SessionNameEntry {
+        name: "Stale replacement".to_string(),
+        observed_length: stamp.observed_length,
+        modified_secs: stamp.modified_secs,
+        modified_nanos: stamp.modified_nanos,
+        cached_at_ms: 30,
+    };
     let latest = SessionNameIndex {
         projects: BTreeMap::from([(
             "project".to_string(),
@@ -729,13 +934,13 @@ fn Flush_StaleBase_PreservesNew_031() {
         ..SessionNameIndex::empty()
     };
     let delta = SessionNameIndexDelta {
-        mutations: vec![mutation(
-            "project",
-            "same.jsonl",
-            std::path::Path::new("same.jsonl"),
-            Some(base),
+        mutations: vec![IndexMutation {
+            project_key: "project".to_string(),
+            file_name: "same.jsonl".to_string(),
+            path: std::path::Path::new("same.jsonl").to_path_buf(),
+            base: Some(base),
             replacement,
-        )],
+        }],
         ..SessionNameIndexDelta::default()
     };
 
@@ -752,9 +957,27 @@ fn Flush_Cleanup_CasOnly_034() {
         modified_secs: 1,
         modified_nanos: 1,
     };
-    let old_unchanged = entry_from_stamp("Old unchanged", stamp, 10);
-    let old_changed = entry_from_stamp("Old changed", stamp, 10);
-    let concurrent = entry_from_stamp("Concurrent", stamp, 20);
+    let old_unchanged = SessionNameEntry {
+        name: "Old unchanged".to_string(),
+        observed_length: stamp.observed_length,
+        modified_secs: stamp.modified_secs,
+        modified_nanos: stamp.modified_nanos,
+        cached_at_ms: 10,
+    };
+    let old_changed = SessionNameEntry {
+        name: "Old changed".to_string(),
+        observed_length: stamp.observed_length,
+        modified_secs: stamp.modified_secs,
+        modified_nanos: stamp.modified_nanos,
+        cached_at_ms: 10,
+    };
+    let concurrent = SessionNameEntry {
+        name: "Concurrent".to_string(),
+        observed_length: stamp.observed_length,
+        modified_secs: stamp.modified_secs,
+        modified_nanos: stamp.modified_nanos,
+        cached_at_ms: 20,
+    };
     let latest = SessionNameIndex {
         projects: BTreeMap::from([(
             "project".to_string(),
@@ -796,7 +1019,14 @@ fn Flush_Cleanup_CasOnly_034() {
     assert_eq!(cleaned.cleaned_entries, 2);
 }
 
-fn compaction_fixture() -> SessionNameIndex {
+// 超过软上限的索引必须批量压缩到目标上限以内。
+#[test]
+fn Flush_Compaction_ToTarget_036() {
+    let delta = SessionNameIndexDelta {
+        request_compaction: true,
+        ..SessionNameIndexDelta::default()
+    };
+
     let stamp = FileStamp {
         observed_length: 1,
         modified_secs: 1,
@@ -806,40 +1036,33 @@ fn compaction_fixture() -> SessionNameIndex {
         .map(|sequence| {
             (
                 format!("session-{sequence:02}.jsonl"),
-                entry_from_stamp(
-                    &format!("Session {sequence:02} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
-                    stamp,
-                    sequence,
-                ),
+                SessionNameEntry {
+                    name: format!("Session {sequence:02} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+                    observed_length: stamp.observed_length,
+                    modified_secs: stamp.modified_secs,
+                    modified_nanos: stamp.modified_nanos,
+                    cached_at_ms: sequence,
+                },
             )
         })
         .collect();
-    SessionNameIndex {
-        projects: BTreeMap::from([("project".to_string(), bucket)]),
-        ..SessionNameIndex::empty()
-    }
-}
-
-fn tiny_compaction_limits() -> IndexLimits {
-    IndexLimits {
+    let limits = IndexLimits {
         target_bytes: 2_000,
         soft_bytes: 2_500,
         hard_bytes: 20_000,
-    }
-}
-
-// 超过软上限的索引必须批量压缩到目标上限以内。
-#[test]
-fn Flush_Compaction_ToTarget_036() {
-    let delta = SessionNameIndexDelta {
-        request_compaction: true,
-        ..SessionNameIndexDelta::default()
     };
 
-    let merged =
-        merge_delta_in_memory(compaction_fixture(), &delta, tiny_compaction_limits()).unwrap();
+    let merged = merge_delta_in_memory(
+        SessionNameIndex {
+            projects: BTreeMap::from([("project".to_string(), bucket)]),
+            ..SessionNameIndex::empty()
+        },
+        &delta,
+        limits,
+    )
+    .unwrap();
 
-    assert!(merged.serialized.len() as u64 <= tiny_compaction_limits().target_bytes);
+    assert!(merged.serialized.len() as u64 <= limits.target_bytes);
     assert!(merged.evicted_entries > 1);
 }
 
@@ -851,10 +1074,74 @@ fn Flush_Compaction_Deterministic_037() {
         ..SessionNameIndexDelta::default()
     };
 
-    let first =
-        merge_delta_in_memory(compaction_fixture(), &delta, tiny_compaction_limits()).unwrap();
-    let second =
-        merge_delta_in_memory(compaction_fixture(), &delta, tiny_compaction_limits()).unwrap();
+    let first = merge_delta_in_memory(
+        {
+            let stamp = FileStamp {
+                observed_length: 1,
+                modified_secs: 1,
+                modified_nanos: 1,
+            };
+            let bucket = (0..40)
+                .map(|sequence| {
+                    (
+                        format!("session-{sequence:02}.jsonl"),
+                        SessionNameEntry {
+                            name: format!("Session {sequence:02} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+                            observed_length: stamp.observed_length,
+                            modified_secs: stamp.modified_secs,
+                            modified_nanos: stamp.modified_nanos,
+                            cached_at_ms: sequence,
+                        },
+                    )
+                })
+                .collect();
+            SessionNameIndex {
+                projects: BTreeMap::from([("project".to_string(), bucket)]),
+                ..SessionNameIndex::empty()
+            }
+        },
+        &delta,
+        IndexLimits {
+            target_bytes: 2_000,
+            soft_bytes: 2_500,
+            hard_bytes: 20_000,
+        },
+    )
+    .unwrap();
+    let second = merge_delta_in_memory(
+        {
+            let stamp = FileStamp {
+                observed_length: 1,
+                modified_secs: 1,
+                modified_nanos: 1,
+            };
+            let bucket = (0..40)
+                .map(|sequence| {
+                    (
+                        format!("session-{sequence:02}.jsonl"),
+                        SessionNameEntry {
+                            name: format!("Session {sequence:02} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+                            observed_length: stamp.observed_length,
+                            modified_secs: stamp.modified_secs,
+                            modified_nanos: stamp.modified_nanos,
+                            cached_at_ms: sequence,
+                        },
+                    )
+                })
+                .collect();
+            SessionNameIndex {
+                projects: BTreeMap::from([("project".to_string(), bucket)]),
+                ..SessionNameIndex::empty()
+            }
+        },
+        &delta,
+        IndexLimits {
+            target_bytes: 2_000,
+            soft_bytes: 2_500,
+            hard_bytes: 20_000,
+        },
+    )
+    .unwrap();
 
     assert_eq!(first.serialized, second.serialized);
     assert_eq!(first.index, second.index);
@@ -868,39 +1155,52 @@ fn Flush_OldEntry_Evictable_039() {
         ..SessionNameIndexDelta::default()
     };
 
-    let merged =
-        merge_delta_in_memory(compaction_fixture(), &delta, tiny_compaction_limits()).unwrap();
+    let stamp = FileStamp {
+        observed_length: 1,
+        modified_secs: 1,
+        modified_nanos: 1,
+    };
+    let entries = (0..40)
+        .map(|sequence| {
+            (
+                format!("session-{sequence:02}.jsonl"),
+                SessionNameEntry {
+                    name: format!("Session {sequence:02} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+                    observed_length: stamp.observed_length,
+                    modified_secs: stamp.modified_secs,
+                    modified_nanos: stamp.modified_nanos,
+                    cached_at_ms: sequence,
+                },
+            )
+        })
+        .collect();
+    let merged = merge_delta_in_memory(
+        SessionNameIndex {
+            projects: BTreeMap::from([("project".to_string(), entries)]),
+            ..SessionNameIndex::empty()
+        },
+        &delta,
+        IndexLimits {
+            target_bytes: 2_000,
+            soft_bytes: 2_500,
+            hard_bytes: 20_000,
+        },
+    )
+    .unwrap();
     let bucket = &merged.index.projects["project"];
 
     assert!(!bucket.contains_key("session-00.jsonl"));
     assert!(bucket.contains_key("session-39.jsonl"));
 }
 
-fn compact_index_bytes(index: &SessionNameIndex) -> Vec<u8> {
-    serde_json::to_vec(index).unwrap()
-}
-
-fn pending_flush(base_raw: RawIndexSnapshot, delta: SessionNameIndexDelta) -> PendingIndexFlush {
-    PendingIndexFlush { base_raw, delta }
-}
-
-fn temporary_files(dir: &tempfile::TempDir) -> Vec<std::path::PathBuf> {
-    std::fs::read_dir(dir.path())
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.to_string_lossy()
-                .contains("session-name-index.json.tmp.")
-        })
-        .collect()
-}
-
 // JSONL 在前台解析后继续增长时，后台必须丢弃该 replacement。
 #[test]
 fn Flush_GrownFile_DropsReplacement_032() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
     let session_path = dir.path().join("session.jsonl");
     std::fs::write(
         &session_path,
@@ -909,13 +1209,19 @@ fn Flush_GrownFile_DropsReplacement_032() {
     .unwrap();
     let stamp = FileStamp::read(&session_path).unwrap();
     let delta = SessionNameIndexDelta {
-        mutations: vec![mutation(
-            "project",
-            "session.jsonl",
-            &session_path,
-            None,
-            entry_from_stamp("Before", stamp, 10),
-        )],
+        mutations: vec![IndexMutation {
+            project_key: "project".to_string(),
+            file_name: "session.jsonl".to_string(),
+            path: session_path.to_path_buf(),
+            base: None,
+            replacement: SessionNameEntry {
+                name: "Before".to_string(),
+                observed_length: stamp.observed_length,
+                modified_secs: stamp.modified_secs,
+                modified_nanos: stamp.modified_nanos,
+                cached_at_ms: 10,
+            },
+        }],
         ..SessionNameIndexDelta::default()
     };
     std::fs::OpenOptions::new()
@@ -924,23 +1230,50 @@ fn Flush_GrownFile_DropsReplacement_032() {
         .unwrap()
         .write_all(b"{\"type\":\"custom-title\",\"customTitle\":\"After\"}\n")
         .unwrap();
-    let (health, _, _) = test_health();
-    let store = test_store(paths.clone(), IndexLimits::default(), health);
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    );
 
     let metrics = store
-        .flush_pending(pending_flush(RawIndexSnapshot::Missing, delta))
+        .flush_pending(PendingIndexFlush {
+            base_raw: RawIndexSnapshot::Missing,
+            delta,
+        })
         .unwrap();
 
     assert_eq!(metrics.attempts, 1);
     assert!(!paths.data.exists());
-    assert!(temporary_files(&dir).is_empty());
+    assert!(std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.to_string_lossy()
+                .contains("session-name-index.json.tmp.")
+        })
+        .collect::<Vec<_>>()
+        .is_empty());
 }
 
 // 当前 exact stamp 与 replacement 不同，即使长度相同也不得写回。
 #[test]
 fn Flush_ChangedStamp_DropsReplacement_033() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
     let session_path = dir.path().join("session.jsonl");
     std::fs::write(&session_path, "same-length").unwrap();
     let current = FileStamp::read(&session_path).unwrap();
@@ -949,56 +1282,94 @@ fn Flush_ChangedStamp_DropsReplacement_033() {
         ..current
     };
     let delta = SessionNameIndexDelta {
-        mutations: vec![mutation(
-            "project",
-            "session.jsonl",
-            &session_path,
-            None,
-            entry_from_stamp("Stale", stale, 10),
-        )],
+        mutations: vec![IndexMutation {
+            project_key: "project".to_string(),
+            file_name: "session.jsonl".to_string(),
+            path: session_path.to_path_buf(),
+            base: None,
+            replacement: SessionNameEntry {
+                name: "Stale".to_string(),
+                observed_length: stale.observed_length,
+                modified_secs: stale.modified_secs,
+                modified_nanos: stale.modified_nanos,
+                cached_at_ms: 10,
+            },
+        }],
         ..SessionNameIndexDelta::default()
     };
-    let (health, _, _) = test_health();
-    let store = test_store(paths.clone(), IndexLimits::default(), health);
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    );
 
     store
-        .flush_pending(pending_flush(RawIndexSnapshot::Missing, delta))
+        .flush_pending(PendingIndexFlush {
+            base_raw: RawIndexSnapshot::Missing,
+            delta,
+        })
         .unwrap();
 
     assert!(!paths.data.exists());
-    assert!(temporary_files(&dir).is_empty());
-}
-
-fn compaction_pending(bytes: Vec<u8>) -> PendingIndexFlush {
-    pending_flush(
-        RawIndexSnapshot::Bytes(bytes),
-        SessionNameIndexDelta {
-            request_compaction: true,
-            ..SessionNameIndexDelta::default()
-        },
-    )
+    assert!(std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.to_string_lossy()
+                .contains("session-name-index.json.tmp.")
+        })
+        .collect::<Vec<_>>()
+        .is_empty());
 }
 
 // serde/merge/compaction/serialize/temp/sync 阶段都不得观察到排他锁已持有。
 #[test]
 fn Flush_NoExpensiveWork_UnderLock_035() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
-    let bytes = compact_index_bytes(&SessionNameIndex::empty());
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
+    let bytes = serde_json::to_vec(&SessionNameIndex::empty()).unwrap();
     std::fs::write(&paths.data, &bytes).unwrap();
     let observations = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&observations);
     let probe = Arc::new(move |stage, held| captured.lock().unwrap().push((stage, held)));
-    let (health, _, _) = test_health();
-    let store = test_store(paths, IndexLimits::default(), health).with_flush_test_config(
-        Duration::from_secs(1),
-        4,
-        Some(probe),
-        None,
-        None,
-    );
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
+    let store = SessionNameIndexStore::new(
+        paths,
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    )
+    .with_flush_test_config(Duration::from_secs(1), 4, Some(probe), None, None);
 
-    store.flush_pending(compaction_pending(bytes)).unwrap();
+    store
+        .flush_pending(PendingIndexFlush {
+            base_raw: RawIndexSnapshot::Bytes(bytes),
+            delta: SessionNameIndexDelta {
+                request_compaction: true,
+                ..SessionNameIndexDelta::default()
+            },
+        })
+        .unwrap();
 
     let expensive = [
         FlushStage::Deserialize,
@@ -1019,28 +1390,53 @@ fn Flush_NoExpensiveWork_UnderLock_035() {
 #[test]
 fn Flush_AtomicFail_KeepsOld_038() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
-    let bytes = compact_index_bytes(&SessionNameIndex::empty());
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
+    let bytes = serde_json::to_vec(&SessionNameIndex::empty()).unwrap();
     std::fs::write(&paths.data, &bytes).unwrap();
     let fail_replace = Arc::new(|_: &std::path::Path, _: &std::path::Path| {
         Err(std::io::Error::other("injected replace failure"))
     });
-    let (health, _, warnings) = test_health();
-    let store = test_store(paths.clone(), IndexLimits::default(), health).with_flush_test_config(
-        Duration::from_secs(1),
-        4,
-        None,
-        None,
-        Some(fail_replace),
-    );
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    )
+    .with_flush_test_config(Duration::from_secs(1), 4, None, None, Some(fail_replace));
 
     let error = store
-        .flush_pending(compaction_pending(bytes.clone()))
+        .flush_pending(PendingIndexFlush {
+            base_raw: RawIndexSnapshot::Bytes(bytes.clone()),
+            delta: SessionNameIndexDelta {
+                request_compaction: true,
+                ..SessionNameIndexDelta::default()
+            },
+        })
         .unwrap_err();
 
     assert!(error.to_string().contains("injected replace failure"));
     assert_eq!(std::fs::read(&paths.data).unwrap(), bytes);
-    assert!(temporary_files(&dir).is_empty());
+    assert!(std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.to_string_lossy()
+                .contains("session-name-index.json.tmp.")
+        })
+        .collect::<Vec<_>>()
+        .is_empty());
     assert_eq!(warnings.lock().unwrap().len(), 1);
 }
 
@@ -1048,22 +1444,40 @@ fn Flush_AtomicFail_KeepsOld_038() {
 #[test]
 fn Flush_Probe_AllPreparationUnlocked_040() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
-    let bytes = compact_index_bytes(&SessionNameIndex::empty());
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
+    let bytes = serde_json::to_vec(&SessionNameIndex::empty()).unwrap();
     std::fs::write(&paths.data, &bytes).unwrap();
     let observations = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&observations);
     let probe = Arc::new(move |stage, held| captured.lock().unwrap().push((stage, held)));
-    let (health, _, _) = test_health();
-    let store = test_store(paths, IndexLimits::default(), health).with_flush_test_config(
-        Duration::from_secs(1),
-        4,
-        Some(probe),
-        None,
-        None,
-    );
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
+    let store = SessionNameIndexStore::new(
+        paths,
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    )
+    .with_flush_test_config(Duration::from_secs(1), 4, Some(probe), None, None);
 
-    store.flush_pending(compaction_pending(bytes)).unwrap();
+    store
+        .flush_pending(PendingIndexFlush {
+            base_raw: RawIndexSnapshot::Bytes(bytes),
+            delta: SessionNameIndexDelta {
+                request_compaction: true,
+                ..SessionNameIndexDelta::default()
+            },
+        })
+        .unwrap();
 
     let observations = observations.lock().unwrap();
     assert!(observations.contains(&(FlushStage::TempWrite, false)));
@@ -1076,8 +1490,11 @@ fn Flush_Probe_AllPreparationUnlocked_040() {
 #[test]
 fn Flush_RetryBudget_Cumulative_041() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
-    let bytes = compact_index_bytes(&SessionNameIndex::empty());
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
+    let bytes = serde_json::to_vec(&SessionNameIndex::empty()).unwrap();
     std::fs::write(&paths.data, &bytes).unwrap();
     let holder = std::fs::OpenOptions::new()
         .read(true)
@@ -1093,31 +1510,58 @@ fn Flush_RetryBudget_Cumulative_041() {
         "session-name-index.json",
     )
     .unwrap();
-    let (health, _, _) = test_health();
-    let store = test_store(paths, IndexLimits::default(), health).with_flush_test_config(
-        Duration::from_millis(60),
-        4,
-        None,
-        None,
-        None,
-    );
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
+    let store = SessionNameIndexStore::new(
+        paths,
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    )
+    .with_flush_test_config(Duration::from_millis(60), 4, None, None, None);
 
     let started = Instant::now();
-    let error = store.flush_pending(compaction_pending(bytes)).unwrap_err();
+    let error = store
+        .flush_pending(PendingIndexFlush {
+            base_raw: RawIndexSnapshot::Bytes(bytes),
+            delta: SessionNameIndexDelta {
+                request_compaction: true,
+                ..SessionNameIndexDelta::default()
+            },
+        })
+        .unwrap_err();
     let elapsed = started.elapsed();
     let _ = holder.unlock();
 
     assert!(error.to_string().contains("lock timeout"));
     assert!(elapsed < Duration::from_millis(250), "elapsed={elapsed:?}");
-    assert!(temporary_files(&dir).is_empty());
+    assert!(std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.to_string_lossy()
+                .contains("session-name-index.json.tmp.")
+        })
+        .collect::<Vec<_>>()
+        .is_empty());
 }
 
 // 四次 whole-file CAS 都失配后必须停止并清理所有尝试的临时文件。
 #[test]
 fn Flush_CasExhausted_CleansTemps_042() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = index_paths(&dir);
-    let bytes = compact_index_bytes(&SessionNameIndex::empty());
+    let paths = SessionNameIndexPaths {
+        data: dir.path().join("session-name-index.json"),
+        lock: dir.path().join("session-name-index.json.lock"),
+    };
+    let bytes = serde_json::to_vec(&SessionNameIndex::empty()).unwrap();
     std::fs::write(&paths.data, &bytes).unwrap();
     let attempts = Arc::new(AtomicU64::new(0));
     let captured_attempts = Arc::clone(&attempts);
@@ -1138,10 +1582,23 @@ fn Flush_CasExhausted_CleansTemps_042() {
                 },
             )]),
         );
-        std::fs::write(&data_path, compact_index_bytes(&index)).unwrap();
+        std::fs::write(&data_path, serde_json::to_vec(&index).unwrap()).unwrap();
     });
-    let (health, _, _) = test_health();
-    let store = test_store(paths, IndexLimits::default(), health).with_flush_test_config(
+    let now_ms = Arc::new(AtomicU64::new(1_000));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let clock_state = Arc::clone(&now_ms);
+    let warning_state = Arc::clone(&warnings);
+    let health = Arc::new(IndexHealth::new(
+        move || clock_state.load(Ordering::SeqCst),
+        move |message| warning_state.lock().unwrap().push(message),
+    ));
+    let store = SessionNameIndexStore::new(
+        paths,
+        IndexLimits::default(),
+        health,
+        Duration::from_millis(100),
+    )
+    .with_flush_test_config(
         Duration::from_secs(1),
         4,
         None,
@@ -1149,54 +1606,28 @@ fn Flush_CasExhausted_CleansTemps_042() {
         None,
     );
 
-    let error = store.flush_pending(compaction_pending(bytes)).unwrap_err();
+    let error = store
+        .flush_pending(PendingIndexFlush {
+            base_raw: RawIndexSnapshot::Bytes(bytes),
+            delta: SessionNameIndexDelta {
+                request_compaction: true,
+                ..SessionNameIndexDelta::default()
+            },
+        })
+        .unwrap_err();
 
     assert!(error.to_string().contains("CAS exhausted"));
     assert_eq!(attempts.load(Ordering::SeqCst), 4);
-    assert!(temporary_files(&dir).is_empty());
-}
-
-fn build_compact_index_near(target_bytes: usize) -> Vec<u8> {
-    let mut entry_count = (target_bytes / 180).max(1);
-    let mut closest = Vec::new();
-    for _ in 0..8 {
-        let mut index = SessionNameIndex {
-            schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
-            parser_version: SESSION_NAME_PARSER_VERSION,
-            projects: Default::default(),
-        };
-        let bucket = index
-            .projects
-            .entry("E:/synthetic".to_string())
-            .or_default();
-        for sequence in 0..entry_count {
-            bucket.insert(
-                format!("session-{sequence:08}.jsonl"),
-                SessionNameEntry {
-                    name: format!("Synthetic benchmark session {sequence:08} xxxxxxxxxx"),
-                    observed_length: 1_000_000 + sequence as u64,
-                    modified_secs: 1_786_380_000,
-                    modified_nanos: sequence as u32,
-                    cached_at_ms: 1_786_380_000_000 + sequence as u64,
-                },
-            );
-        }
-        let bytes = serde_json::to_vec(&index).unwrap();
-        let actual_bytes = bytes.len();
-        let distance = bytes.len().abs_diff(target_bytes);
-        if closest.is_empty() || distance < closest.len().abs_diff(target_bytes) {
-            closest = bytes;
-        }
-        if distance <= target_bytes / 50 {
-            break;
-        }
-        entry_count = entry_count
-            .saturating_mul(target_bytes)
-            .checked_div(actual_bytes.max(1))
-            .unwrap_or(1)
-            .max(1);
-    }
-    closest
+    assert!(std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.to_string_lossy()
+                .contains("session-name-index.json.tmp.")
+        })
+        .collect::<Vec<_>>()
+        .is_empty());
 }
 
 // 五档紧凑索引只量化锁外 serde parse，不把 CPU 成本混入排他持锁时间。
@@ -1212,7 +1643,48 @@ fn BenchmarkIndexParseCost_002() {
     ];
     let payloads = targets
         .into_iter()
-        .map(|target| (target, build_compact_index_near(target)))
+        .map(|target| {
+            let mut entry_count = (target / 180).max(1);
+            let mut closest = Vec::new();
+            for _ in 0..8 {
+                let mut index = SessionNameIndex {
+                    schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
+                    parser_version: SESSION_NAME_PARSER_VERSION,
+                    projects: Default::default(),
+                };
+                let bucket = index
+                    .projects
+                    .entry("E:/synthetic".to_string())
+                    .or_default();
+                for sequence in 0..entry_count {
+                    bucket.insert(
+                        format!("session-{sequence:08}.jsonl"),
+                        SessionNameEntry {
+                            name: format!("Synthetic benchmark session {sequence:08} xxxxxxxxxx"),
+                            observed_length: 1_000_000 + sequence as u64,
+                            modified_secs: 1_786_380_000,
+                            modified_nanos: sequence as u32,
+                            cached_at_ms: 1_786_380_000_000 + sequence as u64,
+                        },
+                    );
+                }
+                let bytes = serde_json::to_vec(&index).unwrap();
+                let actual_bytes = bytes.len();
+                let distance = bytes.len().abs_diff(target);
+                if closest.is_empty() || distance < closest.len().abs_diff(target) {
+                    closest = bytes;
+                }
+                if distance <= target / 50 {
+                    break;
+                }
+                entry_count = entry_count
+                    .saturating_mul(target)
+                    .checked_div(actual_bytes.max(1))
+                    .unwrap_or(1)
+                    .max(1);
+            }
+            (target, closest)
+        })
         .collect::<Vec<_>>();
     let mut samples = std::collections::BTreeMap::<usize, Vec<f64>>::new();
 
@@ -1242,31 +1714,6 @@ fn BenchmarkIndexParseCost_002() {
     }
 }
 
-fn flush_metric_stages(
-    metrics: &crate::session_name_index::FlushMetrics,
-) -> [(&'static str, f64); 12] {
-    use crate::session_name_index::FlushStage;
-    let mut clone = crate::session_name_index::FlushMetrics {
-        revalidate: metrics.revalidate,
-        raw_read: metrics.raw_read,
-        deserialize: metrics.deserialize,
-        merge: metrics.merge,
-        compaction: metrics.compaction,
-        serialize: metrics.serialize,
-        temp_write: metrics.temp_write,
-        sync: metrics.sync,
-        lock_wait: metrics.lock_wait,
-        locked_raw_compare: metrics.locked_raw_compare,
-        replace: metrics.replace,
-        exclusive_hold: metrics.exclusive_hold,
-        ..Default::default()
-    };
-    FlushStage::ALL.map(|stage| {
-        let elapsed = std::mem::take(stage.field_mut(&mut clone));
-        (stage.label(), elapsed.as_secs_f64() * 1000.0)
-    })
-}
-
 // 五档完整 flush 基准量化每个阶段，所有索引和临时文件均位于测试临时目录。
 #[test]
 #[ignore = "synthetic 64 KiB to 16 MiB full flush benchmark"]
@@ -1280,7 +1727,48 @@ fn BenchmarkIndexSizes_001() {
     ];
     let payloads = targets
         .into_iter()
-        .map(|target| (target, build_compact_index_near(target)))
+        .map(|target| {
+            let mut entry_count = (target / 180).max(1);
+            let mut closest = Vec::new();
+            for _ in 0..8 {
+                let mut index = SessionNameIndex {
+                    schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
+                    parser_version: SESSION_NAME_PARSER_VERSION,
+                    projects: Default::default(),
+                };
+                let bucket = index
+                    .projects
+                    .entry("E:/synthetic".to_string())
+                    .or_default();
+                for sequence in 0..entry_count {
+                    bucket.insert(
+                        format!("session-{sequence:08}.jsonl"),
+                        SessionNameEntry {
+                            name: format!("Synthetic benchmark session {sequence:08} xxxxxxxxxx"),
+                            observed_length: 1_000_000 + sequence as u64,
+                            modified_secs: 1_786_380_000,
+                            modified_nanos: sequence as u32,
+                            cached_at_ms: 1_786_380_000_000 + sequence as u64,
+                        },
+                    );
+                }
+                let bytes = serde_json::to_vec(&index).unwrap();
+                let actual_bytes = bytes.len();
+                let distance = bytes.len().abs_diff(target);
+                if closest.is_empty() || distance < closest.len().abs_diff(target) {
+                    closest = bytes;
+                }
+                if distance <= target / 50 {
+                    break;
+                }
+                entry_count = entry_count
+                    .saturating_mul(target)
+                    .checked_div(actual_bytes.max(1))
+                    .unwrap_or(1)
+                    .max(1);
+            }
+            (target, closest)
+        })
         .collect::<Vec<_>>();
 
     for (target, bytes) in payloads {
@@ -1289,19 +1777,70 @@ fn BenchmarkIndexSizes_001() {
         let mut output_bytes = Vec::new();
         for _ in 0..7 {
             let dir = tempfile::tempdir().unwrap();
-            let paths = index_paths(&dir);
+            let paths = SessionNameIndexPaths {
+                data: dir.path().join("session-name-index.json"),
+                lock: dir.path().join("session-name-index.json.lock"),
+            };
             std::fs::write(&paths.data, &bytes).unwrap();
-            let (health, _, _) = test_health();
-            let store = test_store(paths, IndexLimits::default(), health);
+            let now_ms = Arc::new(AtomicU64::new(1_000));
+            let warnings = Arc::new(Mutex::new(Vec::new()));
+            let clock_state = Arc::clone(&now_ms);
+            let warning_state = Arc::clone(&warnings);
+            let health = Arc::new(IndexHealth::new(
+                move || clock_state.load(Ordering::SeqCst),
+                move |message| warning_state.lock().unwrap().push(message),
+            ));
+            let store = SessionNameIndexStore::new(
+                paths,
+                IndexLimits::default(),
+                health,
+                Duration::from_millis(100),
+            );
             let metrics = store
-                .flush_pending(compaction_pending(bytes.clone()))
+                .flush_pending(PendingIndexFlush {
+                    base_raw: RawIndexSnapshot::Bytes(bytes.clone()),
+                    delta: SessionNameIndexDelta {
+                        request_compaction: true,
+                        ..SessionNameIndexDelta::default()
+                    },
+                })
                 .unwrap();
-            for (stage, elapsed_ms) in flush_metric_stages(&metrics) {
+            let stage_timings = {
+                let mut clone = crate::session_name_index::FlushMetrics {
+                    revalidate: metrics.revalidate,
+                    raw_read: metrics.raw_read,
+                    deserialize: metrics.deserialize,
+                    merge: metrics.merge,
+                    compaction: metrics.compaction,
+                    serialize: metrics.serialize,
+                    temp_write: metrics.temp_write,
+                    sync: metrics.sync,
+                    lock_wait: metrics.lock_wait,
+                    locked_raw_compare: metrics.locked_raw_compare,
+                    replace: metrics.replace,
+                    exclusive_hold: metrics.exclusive_hold,
+                    ..Default::default()
+                };
+                FlushStage::ALL.map(|stage| {
+                    let elapsed = std::mem::take(stage.field_mut(&mut clone));
+                    (stage.label(), elapsed.as_secs_f64() * 1000.0)
+                })
+            };
+            for (stage, elapsed_ms) in stage_timings {
                 stages.entry(stage).or_default().push(elapsed_ms);
             }
             attempts.push(metrics.attempts);
             output_bytes.push(metrics.output_bytes);
-            assert!(temporary_files(&dir).is_empty());
+            assert!(std::fs::read_dir(dir.path())
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.to_string_lossy()
+                        .contains("session-name-index.json.tmp.")
+                })
+                .collect::<Vec<_>>()
+                .is_empty());
         }
 
         eprintln!(
