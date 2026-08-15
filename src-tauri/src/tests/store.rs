@@ -428,6 +428,7 @@ fn ParseTimestamp_EmptyString_001() {
 
 // ==================== extract_session_name ====================
 
+// 检查真实 ~/.claude/projects 数据集上的 home 聚合基准(需 CC_DESK_BENCH_REAL_HOME 门禁,默认跳过)
 #[test]
 #[ignore = "reads the real ~/.claude/projects dataset"]
 fn BenchmarkHomeData_RealHistory_001() {
@@ -1606,7 +1607,7 @@ fn ExtractSessionName_CustomTitlePriority_002() {
 
 // 文件后部的 custom-title 覆盖前部首条用户消息（后部优先语义）。
 #[test]
-fn ExtractSessionName_LateCustomTitleWins_003() {
+fn ExtractSessionName_LateTitleWins_003() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("session.jsonl");
     std::fs::write(

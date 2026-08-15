@@ -403,7 +403,7 @@ describe('session store', () => {
     // 成功:applyReturnedState 清标记 + force 重载历史（getSessions 被调）。
     // 注意:action 先 ensureProjectsStateLoaded,会用 getProjectsState 返回值覆盖本地 map,
     // 所以「删除前状态」必须由 getProjectsState mock 提供,不能手动 set(会被预加载冲掉)。
-    it('DeleteSessions_AppliesStateAndForceReloads_001', async () => {
+    it('Delete_ApplyAndReload_001', async () => {
       const { getProjectsState, deleteSessions, getSessions } = await import('@/api/tauri')
       const mockLoad = getProjectsState as ReturnType<typeof vi.fn>
       const mockDelete = deleteSessions as ReturnType<typeof vi.fn>
@@ -421,7 +421,7 @@ describe('session store', () => {
     })
 
     // 失败:不 apply、不 force 重载,预加载的标记保留
-    it('DeleteSessions_Failure_NoApplyNoReload_002', async () => {
+    it('Delete_FailNoReload_002', async () => {
       const { getProjectsState, deleteSessions, getSessions } = await import('@/api/tauri')
       const mockLoad = getProjectsState as ReturnType<typeof vi.fn>
       const mockDelete = deleteSessions as ReturnType<typeof vi.fn>
@@ -436,7 +436,7 @@ describe('session store', () => {
     })
 
     // opLock 串行:两个并发 delete,第二个必须等第一个完成后才发 invoke
-    it('DeleteSessions_OpLockSerializes_003', async () => {
+    it('Delete_OpLockSerial_003', async () => {
       const { getProjectsState, deleteSessions } = await import('@/api/tauri')
       const mockLoad = getProjectsState as ReturnType<typeof vi.fn>
       const mockDelete = deleteSessions as ReturnType<typeof vi.fn>
@@ -460,22 +460,26 @@ describe('session store', () => {
     })
 
     // 删除成功但删除后 force 刷新失败:须清该项目历史缓存,避免已删会话(标记已清)
-    // 作为普通历史重现。用行为断言:缓存被清后,再非 force 加载会重新调 getSessions,
-    // 而非命中仍含 s1 的旧缓存。
-    it('DeleteSessions_ForceReloadFail_InvalidatesCache_004', async () => {
+    // 作为普通历史重现。先预热含 s1 的旧缓存,再触发删除+失败刷新;若缓存未清,
+    // 后续非 force 加载会命中旧缓存(不调 getSessions),测试失败。
+    it('Delete_ForceFailClearCache_004', async () => {
       const { getProjectsState, deleteSessions, getSessions } = await import('@/api/tauri')
       const mockLoad = getProjectsState as ReturnType<typeof vi.fn>
       const mockDelete = deleteSessions as ReturnType<typeof vi.fn>
       const mockGet = getSessions as ReturnType<typeof vi.fn>
+      // 预热:先成功加载含 s1 的历史,写入缓存
+      mockGet.mockResolvedValueOnce([{ sessionId: 's1', name: 'n1', projectPath: '/p', lastActiveAt: 1 }])
+      const store = useSessionStore()
+      const warm = await store.loadHistoryFor('/p', true)
+      expect(warm.ok).toBe(true)
       mockLoad.mockResolvedValueOnce({ pinnedProjects: [], archivedSessions: { '/p': ['s1'] }, displayNames: {} })
       mockDelete.mockResolvedValueOnce({ pinnedProjects: [], archivedSessions: {}, displayNames: {} })
-      mockGet.mockClear() // 清跨测试累积计数,只数本用例
+      mockGet.mockClear() // 只数删除流程内的调用
       mockGet.mockRejectedValueOnce(new Error('reload failed')) // 删除后 force 刷新失败
       mockGet.mockResolvedValueOnce([]) // 缓存被清后,后续非 force 重拉成功
-      const store = useSessionStore()
       await store.deleteSessions('/p', ['s1'])
-      await store.loadHistoryFor('/p', false)
-      expect(mockGet).toHaveBeenCalledTimes(2) // 二次均真拉(缓存未命中)
+      const r2 = await store.loadHistoryFor('/p', false)
+      expect(mockGet).toHaveBeenCalledTimes(2)
     })
   })
 })
