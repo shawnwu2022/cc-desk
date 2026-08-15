@@ -88,6 +88,12 @@
               <span v-if="item.lastActiveAt > 0" class="archived-time">{{ timeAgo(item.lastActiveAt) }}</span>
             </div>
             <button class="restore-btn" @click="onRestore(item.sessionId)" :title="t('restore')">{{ t('restore') }}</button>
+            <button
+              class="delete-btn"
+              @click.stop="onDeleteArchived(item.sessionId)"
+              :disabled="isRunning(item.sessionId)"
+              :title="isRunning(item.sessionId) ? t('runningSessionHint') : t('deleteSession')"
+            >{{ t('deleteSession') }}</button>
           </div>
         </div>
       </div>
@@ -288,6 +294,24 @@ function onRestore(sessionId: string) {
   emit('restoreSession', props.project.projectPath, sessionId)
 }
 
+/** 该会话是否运行中（claimed），运行中禁止删除 */
+function isRunning(id: string): boolean {
+  return sessionStore.claimedSessionIds.has(id)
+}
+
+/** 删除单个已存档会话：运行中前置检查 → 确认 → 重查运行态(TOCTOU) → 直调 store */
+async function onDeleteArchived(sessionId: string) {
+  if (isRunning(sessionId)) return
+  if (!window.confirm(t('confirmBatchDelete', { count: 1 }))) return
+  if (isRunning(sessionId)) return // 确认等待期间可能变成运行态,重查
+  try {
+    // 该组件的 props 是 defineProps 定义,须经 props.project 访问(见 archivedList 的同款写法)
+    await sessionStore.deleteSessions(props.project.projectPath, [sessionId])
+  } catch (err) {
+    console.error('[ProjectNode] deleteSessions failed:', err)
+  }
+}
+
 // 已存档弹层的相对时间（与 SessionItem 的 timeAgo 口径一致）
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts
@@ -425,6 +449,13 @@ function onSessionSwitch(id: string) {
   font-size: 11px; padding: 2px 6px; flex-shrink: 0;
 }
 .restore-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
+.delete-btn {
+  border: 1px solid var(--border-color); background: transparent;
+  color: var(--text-secondary); cursor: pointer; border-radius: 3px;
+  font-size: 11px; padding: 2px 6px; flex-shrink: 0;
+}
+.delete-btn:hover:not(:disabled) { border-color: var(--status-error); color: var(--status-error); }
+.delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .session-sub { padding-left: 22px; }
 .empty-hint, .loading-indicator { padding: 8px; font-size: 11px; color: var(--text-tertiary); text-align: center; }
 .history-error {
