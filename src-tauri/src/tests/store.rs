@@ -3372,75 +3372,87 @@ fn AcquireLock_Timeout_001() {
 
 // ==================== validate_session_id_component ====================
 
+// 检查空 sessionId 被拒
 #[test]
-fn ValidateSessionIdComponent_RejectsEmpty_001() {
+fn SessionId_RejectsEmpty_001() {
     assert!(validate_session_id_component("").is_err());
 }
 
+// 检查含路径分隔符、冒号、空字符的 sessionId 被拒
 #[test]
-fn ValidateSessionIdComponent_RejectsSeparators_002() {
+fn SessionId_RejectsSep_002() {
     assert!(validate_session_id_component("a/b").is_err());
     assert!(validate_session_id_component("a\\b").is_err());
     assert!(validate_session_id_component("a:b").is_err()); // Windows 冒号/ADS
     assert!(validate_session_id_component("a\0b").is_err());
 }
 
+// 检查 "." 与 ".." 被拒
 #[test]
-fn ValidateSessionIdComponent_RejectsDot_003() {
+fn SessionId_RejectsDot_003() {
     assert!(validate_session_id_component(".").is_err());
     assert!(validate_session_id_component("..").is_err());
 }
 
+// 检查 Windows 保留设备名(含扩展名)被拒
 #[test]
-fn ValidateSessionIdComponent_RejectsWindowsReserved_004() {
+fn SessionId_RejectsReserved_004() {
     for name in ["CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "com1", "con"] {
-        assert!(validate_session_id_component(name).is_err(), "{} should be rejected", name);
+        assert!(
+            validate_session_id_component(name).is_err(),
+            "{} should be rejected",
+            name
+        );
     }
     assert!(validate_session_id_component("CON.txt").is_err()); // 保留名 + 扩展
 }
 
+// 检查普通合法 sessionId 被接受
 #[test]
-fn ValidateSessionIdComponent_AcceptsNormal_005() {
+fn SessionId_AcceptsNormal_005() {
     assert!(validate_session_id_component("abc123").is_ok());
     assert!(validate_session_id_component("a-b_c.2026").is_ok());
 }
 
+// 检查 agent- 前缀的 sessionId 被拒
 #[test]
-fn ValidateSessionIdComponent_RejectsAgentPrefix_006() {
+fn SessionId_RejectsAgent_006() {
     assert!(validate_session_id_component("agent-a1b2").is_err());
     assert!(validate_session_id_component("agent-").is_err());
 }
 
-// 构造一个含 cwd 的假会话文件(与既有 create_indexed_session 同格式)
-fn write_fake_session(project_dir: &std::path::Path, file_name: &str, cwd: &str) {
-    std::fs::create_dir_all(project_dir).unwrap();
-    std::fs::write(
-        project_dir.join(file_name),
-        format!("{{\"cwd\":{}}}\n", serde_json::to_string(cwd).unwrap()),
-    )
-    .unwrap();
-}
+// ==================== build_project_path_mapping_at / lookup_project_dirs ====================
 
-// 等价 key 全集合并:两个目录的 cwd 经大小写不敏感规范化后相等,一次查找都命中。
+// 等价 key 全集合并:两个 cwd 大小写/斜杠规范化后相等,一次查找两目录都命中。
 // 用 normalize_path_inner(_, false) 构造确定等价的 key:normalize_path_str 在 Linux
 // 大小写敏感,原始 "E:\Foo" 与 "e:/foo" 在 Linux 不等价;先强制不敏感语义归一,
 // 保证断言在任何宿主平台(含 Linux CI)成立。
 #[test]
-fn LookupProjectDirs_MergesEquivalentKeys_004() {
+fn LookupDirs_MergesEquiv_004() {
     let root = tempfile::tempdir().unwrap();
     let upper_key = normalize_path_inner("E:\\Foo", false);
     let lower_key = normalize_path_inner("e:/foo", false);
     assert_eq!(upper_key, lower_key, "两 key 必须在任意宿主平台等价");
-    write_fake_session(&root.path().join("a-1"), "s1.jsonl", &upper_key);
-    write_fake_session(&root.path().join("a-2"), "s2.jsonl", &lower_key);
+    let d1 = root.path().join("a-1");
+    std::fs::create_dir_all(&d1).unwrap();
+    std::fs::write(
+        d1.join("s1.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string(&upper_key).unwrap()),
+    )
+    .unwrap();
+    let d2 = root.path().join("a-2");
+    std::fs::create_dir_all(&d2).unwrap();
+    std::fs::write(
+        d2.join("s2.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string(&lower_key).unwrap()),
+    )
+    .unwrap();
     let mapping = build_project_path_mapping_at(root.path()).unwrap();
     assert_eq!(lookup_project_dirs(&mapping, &upper_key).len(), 2);
     assert_eq!(lookup_project_dirs(&mapping, &lower_key).len(), 2);
 }
 
-// 锁定语义:projects_root 是文件而非目录时(try_exists Ok(true) + read_dir Err),
-// 扫描错误必须整体传播为 Err,不得折叠成「目录为空」的 Ok(空映射)——
-// 否则 delete 路径会把扫描失败误当「无目录」进而误清 projects.json 里的标记。
+// 锁定语义:projects_root 是文件而非目录时扫描报错,必须整体传播为 Err(不折叠为空映射)
 #[test]
 fn BuildMappingAt_RootIsFile_Err_001() {
     let root = tempfile::tempdir().unwrap();
@@ -3449,154 +3461,267 @@ fn BuildMappingAt_RootIsFile_Err_001() {
     assert!(build_project_path_mapping_at(&not_a_dir).is_err());
 }
 
+// 检查精确原始路径命中,规范化 key 兜底也能命中
 #[test]
-fn LookupProjectDirs_ExactThenNormalized_001() {
+fn LookupDirs_ExactAndNorm_001() {
     let root = tempfile::tempdir().unwrap();
-    // 目录A: cwd 为大写带反斜杠的原始路径 E:\Foo
     let dir_a = root.path().join("proj-a");
-    write_fake_session(&dir_a, "s1.jsonl", "E:\\Foo");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::write(
+        dir_a.join("s1.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
     let mapping = build_project_path_mapping_at(root.path()).unwrap();
-    // 精确命中原始路径
     assert_eq!(lookup_project_dirs(&mapping, "E:\\Foo").len(), 1);
-    // 规范化 key(e:/foo)兜底命中
     let norm = normalize_path_str("E:\\Foo");
     assert_eq!(lookup_project_dirs(&mapping, &norm).len(), 1);
 }
 
+// 检查同一项目映射到多个编码目录时,一次查找全部命中
 #[test]
-fn LookupProjectDirs_MultiDirPerProject_002() {
+fn LookupDirs_MultiDir_002() {
     let root = tempfile::tempdir().unwrap();
-    write_fake_session(&root.path().join("a-1"), "s1.jsonl", "E:\\Foo");
-    write_fake_session(&root.path().join("a-2"), "s2.jsonl", "E:\\Foo");
+    let d1 = root.path().join("a-1");
+    std::fs::create_dir_all(&d1).unwrap();
+    std::fs::write(
+        d1.join("s1.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
+    let d2 = root.path().join("a-2");
+    std::fs::create_dir_all(&d2).unwrap();
+    std::fs::write(
+        d2.join("s2.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
     let mapping = build_project_path_mapping_at(root.path()).unwrap();
     assert_eq!(lookup_project_dirs(&mapping, "E:\\Foo").len(), 2);
 }
 
+// 检查不存在的项目路径查找返回空
 #[test]
-fn LookupProjectDirs_MissingProject_Empty_003() {
+fn LookupDirs_MissingEmpty_003() {
     let root = tempfile::tempdir().unwrap();
-    write_fake_session(&root.path().join("a"), "s1.jsonl", "E:\\Foo");
+    let d = root.path().join("a");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("s1.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
     let mapping = build_project_path_mapping_at(root.path()).unwrap();
     assert!(lookup_project_dirs(&mapping, "E:\\Bar").is_empty());
 }
 
-// 构造一个含 archivedSessions 标记的 projects.json,返回其路径
-fn make_state_with_archived(dir: &tempfile::TempDir, project: &str, ids: &[&str]) -> std::path::PathBuf {
-    use serde_json::json;
+// ==================== delete_sessions_inner ====================
+
+// 检查多目录、多扩展名的会话全部删除且全局标记清空
+#[test]
+fn Delete_MultiDirBothExt_001() {
+    let dir = tempfile::tempdir().unwrap();
+    let a1 = dir.path().join("a1");
+    std::fs::create_dir_all(&a1).unwrap();
+    std::fs::write(
+        a1.join("s1.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
+    std::fs::write(
+        a1.join("s2.txt"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
+    let a2 = dir.path().join("a2");
+    std::fs::create_dir_all(&a2).unwrap();
+    std::fs::write(
+        a2.join("s1.txt"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
     let data = dir.path().join("projects.json");
     let mut archived = serde_json::Map::new();
-    archived.insert(normalize_path_str(project).into(), json!(ids));
+    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1", "s2"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
-    data
-}
-
-#[test]
-fn DeleteSessions_FullSuccess_MultiDirBothExt_001() {
-    let dir = tempfile::tempdir().unwrap();
-    // 项目映射到两个目录,会话 s1 在两处、s2 只在一处,混 .jsonl/.txt
-    write_fake_session(&dir.path().join("a1"), "s1.jsonl", "E:\\Foo");
-    write_fake_session(&dir.path().join("a1"), "s2.txt", "E:\\Foo");
-    write_fake_session(&dir.path().join("a2"), "s1.txt", "E:\\Foo");
-    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1", "s2"]);
     let lock = dir.path().join("projects.json.lock");
 
-    let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into(), "s2".into()]).unwrap();
-    // 标记清除
+    let state =
+        delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into(), "s2".into()])
+            .unwrap();
     assert!(state.archived_sessions.is_empty());
-    // 文件全删(.jsonl 与 .txt、两目录)
     assert!(!dir.path().join("a1/s1.jsonl").exists());
     assert!(!dir.path().join("a1/s2.txt").exists());
     assert!(!dir.path().join("a2/s1.txt").exists());
 }
 
+// 检查不存在的会话文件容错跳过,仍清除标记
 #[test]
-fn DeleteSessions_MissingFileIdempotent_002() {
+fn Delete_MissingFile_002() {
     let dir = tempfile::tempdir().unwrap();
-    write_fake_session(&dir.path().join("a1"), "s1.jsonl", "E:\\Foo");
-    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1", "ghost"]);
+    let a1 = dir.path().join("a1");
+    std::fs::create_dir_all(&a1).unwrap();
+    std::fs::write(
+        a1.join("s1.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
+    let data = dir.path().join("projects.json");
+    let mut archived = serde_json::Map::new();
+    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1", "ghost"]));
+    std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     // ghost 文件不存在 -> 容错跳过,仍清两标记
-    let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into(), "ghost".into()]).unwrap();
+    let state = delete_sessions_inner(
+        &data,
+        &lock,
+        dir.path(),
+        "E:\\Foo",
+        &["s1".into(), "ghost".into()],
+    )
+    .unwrap();
     assert!(state.archived_sessions.is_empty());
     assert!(!dir.path().join("a1/s1.jsonl").exists());
 }
 
+// 检查未存档的会话被删除请求整体拒绝,状态与文件不变
 #[test]
-fn DeleteSessions_NotArchived_Rejected_003() {
+fn Delete_NotArchived_003() {
     let dir = tempfile::tempdir().unwrap();
-    write_fake_session(&dir.path().join("a1"), "s1.jsonl", "E:\\Foo");
-    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let a1 = dir.path().join("a1");
+    std::fs::create_dir_all(&a1).unwrap();
+    std::fs::write(
+        a1.join("s1.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
+    let data = dir.path().join("projects.json");
+    let mut archived = serde_json::Map::new();
+    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     // s2 未存档 -> 整体 Err,projects.json 不变,s1 文件不动
     let before = get_projects_state_at(&data).unwrap();
-    assert!(delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s2".into()]).is_err());
+    assert!(
+        delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s2".into()]).is_err()
+    );
     let after = get_projects_state_at(&data).unwrap();
     assert_eq!(before.archived_sessions, after.archived_sessions);
     assert!(dir.path().join("a1/s1.jsonl").exists());
 }
 
+// 检查含非法路径字符的 sessionId 被拒
 #[test]
-fn DeleteSessions_InvalidSessionId_Rejected_004() {
+fn Delete_InvalidId_004() {
     let dir = tempfile::tempdir().unwrap();
-    write_fake_session(&dir.path().join("a1"), "s1.jsonl", "E:\\Foo");
-    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let a1 = dir.path().join("a1");
+    std::fs::create_dir_all(&a1).unwrap();
+    std::fs::write(
+        a1.join("s1.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
+    let data = dir.path().join("projects.json");
+    let mut archived = serde_json::Map::new();
+    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     for bad in ["../evil", "a/b", "a\\b", "C:evil", "CON"] {
-        assert!(delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &[bad.into()]).is_err(), "{}", bad);
+        assert!(
+            delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &[bad.into()]).is_err(),
+            "{}",
+            bad
+        );
     }
 }
 
+// 检查项目目录已不存在时,无文件可删,清标记收敛
 #[test]
-fn DeleteSessions_ProjectDirsGone_ClearsMarkers_005() {
+fn Delete_ProjectGone_005() {
     let dir = tempfile::tempdir().unwrap();
-    // root 存在但项目查不到目录(项目已无可读会话文件)→ 无文件可删,清标记收敛
-    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let data = dir.path().join("projects.json");
+    let mut archived = serde_json::Map::new();
+    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
-    let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into()]).unwrap();
+    let state =
+        delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into()]).unwrap();
     assert!(state.archived_sessions.is_empty());
 }
 
+// 检查 root 是文件(扫描报错)时整体 Err,不误清标记
 #[test]
-fn DeleteSessions_RootScanError_Err_008() {
+fn Delete_RootScanErr_008() {
     let dir = tempfile::tempdir().unwrap();
-    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let data = dir.path().join("projects.json");
+    let mut archived = serde_json::Map::new();
+    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     // root 路径是个文件(非目录)→ read_dir 失败 → Err 不动状态,不误清标记
     let root_file = dir.path().join("not-a-dir");
     std::fs::write(&root_file, b"x").unwrap();
-    assert!(delete_sessions_inner(&data, &lock, &root_file, "E:\\Foo", &["s1".into()]).is_err());
+    assert!(
+        delete_sessions_inner(&data, &lock, &root_file, "E:\\Foo", &["s1".into()]).is_err()
+    );
     let after = get_projects_state_at(&data).unwrap();
     assert_eq!(after.archived_sessions.len(), 1);
 }
 
+// 检查 root 整个不存在时清标记收敛,不 canonicalize root
 #[test]
-fn DeleteSessions_RootMissing_ClearsMarkers_009() {
+fn Delete_RootMissing_009() {
     let dir = tempfile::tempdir().unwrap();
-    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let data = dir.path().join("projects.json");
+    let mut archived = serde_json::Map::new();
+    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     // root 整个不存在(全新机器/目录被移走)→ 无处可删,清标记收敛;
     // 此时不得 canonicalize root(会失败),命中 dirs.is_empty() 短路
     let missing_root = dir.path().join("no-such-root");
-    let state = delete_sessions_inner(&data, &lock, &missing_root, "E:\\Foo", &["s1".into()]).unwrap();
+    let state = delete_sessions_inner(&data, &lock, &missing_root, "E:\\Foo", &["s1".into()])
+        .unwrap();
     assert!(state.archived_sessions.is_empty());
 }
 
+// 检查传规范化 key 也能命中目录并删除会话
 #[test]
-fn DeleteSessions_NormalizedPathHitsDirs_006() {
+fn Delete_NormPath_006() {
     let dir = tempfile::tempdir().unwrap();
-    write_fake_session(&dir.path().join("a1"), "s1.jsonl", "E:\\Foo");
-    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let a1 = dir.path().join("a1");
+    std::fs::create_dir_all(&a1).unwrap();
+    std::fs::write(
+        a1.join("s1.jsonl"),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string("E:\\Foo").unwrap()),
+    )
+    .unwrap();
+    let data = dir.path().join("projects.json");
+    let mut archived = serde_json::Map::new();
+    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     // 传规范化 key e:/foo 也能命中目录并删除
-    let state = delete_sessions_inner(&data, &lock, dir.path(), &normalize_path_str("E:\\Foo"), &["s1".into()]).unwrap();
+    let state = delete_sessions_inner(
+        &data,
+        &lock,
+        dir.path(),
+        &normalize_path_str("E:\\Foo"),
+        &["s1".into()],
+    )
+    .unwrap();
     assert!(state.archived_sessions.is_empty());
     assert!(!dir.path().join("a1/s1.jsonl").exists());
 }
 
+// 检查空删除列表返回原状态,标记不清
 #[test]
-fn DeleteSessions_EmptyList_ReturnsState_007() {
+fn Delete_EmptyList_007() {
     let dir = tempfile::tempdir().unwrap();
-    let data = make_state_with_archived(&dir, "E:\\Foo", &["s1"]);
+    let data = dir.path().join("projects.json");
+    let mut archived = serde_json::Map::new();
+    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &[]).unwrap();
     assert_eq!(state.archived_sessions.len(), 1);
