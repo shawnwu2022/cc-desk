@@ -478,7 +478,7 @@ describe('session store', () => {
       mockGet.mockRejectedValueOnce(new Error('reload failed')) // 删除后 force 刷新失败
       mockGet.mockResolvedValueOnce([]) // 缓存被清后,后续非 force 重拉成功
       await store.deleteSessions('/p', ['s1'])
-      const r2 = await store.loadHistoryFor('/p', false)
+      await store.loadHistoryFor('/p', false)
       expect(mockGet).toHaveBeenCalledTimes(2)
     })
   })
