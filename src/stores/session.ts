@@ -976,7 +976,11 @@ export const useSessionStore = defineStore('session', () => {
       await ensureProjectsStateLoaded()
       const s = await deleteSessionsApi(projectPath, sessionIds)
       applyReturnedState(s)
-      await loadHistoryFor(projectPath, true)
+      // force 刷新历史;失败时清该项目缓存,避免已删会话(标记已清)作为普通历史重现
+      const res = await loadHistoryFor(projectPath, true)
+      if (!res.ok) {
+        invalidateHistoryCache(projectPath)
+      }
     })
   }
 
