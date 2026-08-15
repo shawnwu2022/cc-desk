@@ -563,9 +563,35 @@ fn BenchmarkHomeIndex_Real_003() {
 
     for round in 0usize..7 {
         let home_temp = tempfile::tempdir().unwrap();
-        let (home_store, _, _) = indexed_store_for_test(&home_temp);
+        let home_paths = SessionNameIndexPaths {
+            data: home_temp.path().join("session-name-index.json"),
+            lock: home_temp.path().join("session-name-index.json.lock"),
+        };
+        let home_reads = Arc::new(AtomicU64::new(0));
+        let home_health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+        let home_store = SessionNameIndexStore::new(
+            home_paths.clone(),
+            IndexLimits::default(),
+            home_health,
+            std::time::Duration::from_millis(100),
+        )
+        .with_snapshot_read_counter(Arc::clone(&home_reads));
         let history_temp = tempfile::tempdir().unwrap();
-        let (history_store, _, _) = indexed_store_for_test(&history_temp);
+        let history_store = {
+            let paths = SessionNameIndexPaths {
+                data: history_temp.path().join("session-name-index.json"),
+                lock: history_temp.path().join("session-name-index.json.lock"),
+            };
+            let reads = Arc::new(AtomicU64::new(0));
+            let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+            SessionNameIndexStore::new(
+                paths.clone(),
+                IndexLimits::default(),
+                health,
+                std::time::Duration::from_millis(100),
+            )
+            .with_snapshot_read_counter(Arc::clone(&reads))
+        };
 
         let cold_started = Instant::now();
         let cold = get_home_data_indexed_at(
@@ -728,7 +754,19 @@ fn BenchmarkActiveIndex_Real_005() {
             std::fs::copy(source, &copy).unwrap();
             copies.push(copy);
         }
-        let (store, paths, _) = indexed_store_for_test(&root);
+        let paths = SessionNameIndexPaths {
+            data: root.path().join("session-name-index.json"),
+            lock: root.path().join("session-name-index.json.lock"),
+        };
+        let reads = Arc::new(AtomicU64::new(0));
+        let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+        let store = SessionNameIndexStore::new(
+            paths.clone(),
+            IndexLimits::default(),
+            health,
+            std::time::Duration::from_millis(100),
+        )
+        .with_snapshot_read_counter(Arc::clone(&reads));
         let seeded = copies
             .iter()
             .map(|path| {
@@ -743,7 +781,25 @@ fn BenchmarkActiveIndex_Real_005() {
             .iter()
             .map(|(dir, path, name)| (*dir, *path, name.as_str()))
             .collect::<Vec<_>>();
-        seed_name_index(&paths, &seed_refs);
+        {
+            let mut seed_index = SessionNameIndex::empty();
+            for (project_dir, path, name) in &seed_refs {
+                let stamp = FileStamp::read(path).unwrap();
+                let project_key = normalize_path_str(&project_dir.to_string_lossy());
+                let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+                seed_index.projects.entry(project_key).or_default().insert(
+                    file_name,
+                    SessionNameEntry {
+                        name: (*name).to_string(),
+                        observed_length: stamp.observed_length,
+                        modified_secs: stamp.modified_secs,
+                        modified_nanos: stamp.modified_nanos,
+                        cached_at_ms: 1_000,
+                    },
+                );
+            }
+            std::fs::write(&paths.data, serde_json::to_vec(&seed_index).unwrap()).unwrap();
+        }
 
         let mut samples = Vec::new();
         for round in 0..7 {
@@ -983,7 +1039,19 @@ fn BenchmarkIndexMultiProcess_Real_006() {
     assert_eq!(std::env::var("CC_DESK_BENCH_REAL_HOME").as_deref(), Ok("1"));
     let projects_root = dirs::home_dir().unwrap().join(".claude").join("projects");
     let real_temp = tempfile::tempdir().unwrap();
-    let (real_store, real_paths, _) = indexed_store_for_test(&real_temp);
+    let real_paths = SessionNameIndexPaths {
+        data: real_temp.path().join("session-name-index.json"),
+        lock: real_temp.path().join("session-name-index.json.lock"),
+    };
+    let real_reads = Arc::new(AtomicU64::new(0));
+    let real_health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let real_store = SessionNameIndexStore::new(
+        real_paths.clone(),
+        IndexLimits::default(),
+        real_health,
+        std::time::Duration::from_millis(100),
+    )
+    .with_snapshot_read_counter(Arc::clone(&real_reads));
     let cold = get_home_data_indexed_at(&projects_root, 12, 20, "", &[], &real_store, 2_000, None)
         .unwrap();
     real_store
@@ -1070,27 +1138,37 @@ fn ExtractProjectPath_SkipBadUtf8_002() {
     );
 }
 
-fn create_claude_project_dir(root: &Path, name: &str, cwd: &Path) -> std::path::PathBuf {
-    let dir = root.join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join(format!("{name}.jsonl")),
-        format!(
-            "{{\"cwd\":{}}}\n",
-            serde_json::to_string(&cwd.to_string_lossy()).unwrap()
-        ),
-    )
-    .unwrap();
-    dir
-}
-
 // 多个编码目录映射同一真实路径时，扫描结果按真实路径合并。
 #[test]
 fn ScanHomeProjects_MergeByRealPath_001() {
     let root = tempfile::tempdir().unwrap();
     let real = tempfile::tempdir().unwrap();
-    let first = create_claude_project_dir(root.path(), "old-encoding", real.path());
-    let second = create_claude_project_dir(root.path(), "new-encoding", real.path());
+    let first = {
+        let dir = root.path().join("old-encoding");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("old-encoding.jsonl"),
+            format!(
+                "{{\"cwd\":{}}}\n",
+                serde_json::to_string(&real.path().to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+        dir
+    };
+    let second = {
+        let dir = root.path().join("new-encoding");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("new-encoding.jsonl"),
+            format!(
+                "{{\"cwd\":{}}}\n",
+                serde_json::to_string(&real.path().to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+        dir
+    };
 
     let scan = scan_home_projects_at(root.path()).unwrap();
     let dirs = scan
@@ -1151,9 +1229,41 @@ fn GetSessionsFromDirs_SortAcrossDirs_001() {
     );
 }
 
-fn indexed_store_for_test(
-    root: &tempfile::TempDir,
-) -> (SessionNameIndexStore, SessionNameIndexPaths, Arc<AtomicU64>) {
+// home 请求无论包含多少项目，都只能读取一次索引快照。
+#[test]
+fn HomeIndex_ReadsOnce_020() {
+    let root = tempfile::tempdir().unwrap();
+    let projects_root = root.path().join("projects");
+    let real_one = root.path().join("real-one");
+    let real_two = root.path().join("real-two");
+    std::fs::create_dir_all(&real_one).unwrap();
+    std::fs::create_dir_all(&real_two).unwrap();
+    {
+        std::fs::create_dir_all(&projects_root.join("encoded-one")).unwrap();
+        let path = projects_root.join("encoded-one").join("one.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real_one.to_string_lossy()).unwrap(),
+                serde_json::to_string("One").unwrap(),
+            ),
+        )
+        .unwrap();
+    }
+    {
+        std::fs::create_dir_all(&projects_root.join("encoded-two")).unwrap();
+        let path = projects_root.join("encoded-two").join("two.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real_two.to_string_lossy()).unwrap(),
+                serde_json::to_string("Two").unwrap(),
+            ),
+        )
+        .unwrap();
+    }
     let paths = SessionNameIndexPaths {
         data: root.path().join("session-name-index.json"),
         lock: root.path().join("session-name-index.json.lock"),
@@ -1164,78 +1274,9 @@ fn indexed_store_for_test(
         paths.clone(),
         IndexLimits::default(),
         health,
-        Duration::from_millis(100),
+        std::time::Duration::from_millis(100),
     )
     .with_snapshot_read_counter(Arc::clone(&reads));
-    (store, paths, reads)
-}
-
-fn create_indexed_session(
-    project_dir: &Path,
-    file_name: &str,
-    cwd: &Path,
-    name: &str,
-) -> std::path::PathBuf {
-    std::fs::create_dir_all(project_dir).unwrap();
-    let path = project_dir.join(file_name);
-    std::fs::write(
-        &path,
-        format!(
-            "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
-            serde_json::to_string(&cwd.to_string_lossy()).unwrap(),
-            serde_json::to_string(name).unwrap(),
-        ),
-    )
-    .unwrap();
-    path
-}
-
-fn seed_name_index(
-    paths: &SessionNameIndexPaths,
-    entries: &[(&Path, &Path, &str)],
-) -> SessionNameIndex {
-    let mut index = SessionNameIndex::empty();
-    for (project_dir, path, name) in entries {
-        let stamp = FileStamp::read(path).unwrap();
-        let project_key = normalize_path_str(&project_dir.to_string_lossy());
-        let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
-        index.projects.entry(project_key).or_default().insert(
-            file_name,
-            SessionNameEntry {
-                name: (*name).to_string(),
-                observed_length: stamp.observed_length,
-                modified_secs: stamp.modified_secs,
-                modified_nanos: stamp.modified_nanos,
-                cached_at_ms: 1_000,
-            },
-        );
-    }
-    std::fs::write(&paths.data, serde_json::to_vec(&index).unwrap()).unwrap();
-    index
-}
-
-// home 请求无论包含多少项目，都只能读取一次索引快照。
-#[test]
-fn HomeIndex_ReadsOnce_020() {
-    let root = tempfile::tempdir().unwrap();
-    let projects_root = root.path().join("projects");
-    let real_one = root.path().join("real-one");
-    let real_two = root.path().join("real-two");
-    std::fs::create_dir_all(&real_one).unwrap();
-    std::fs::create_dir_all(&real_two).unwrap();
-    create_indexed_session(
-        &projects_root.join("encoded-one"),
-        "one.jsonl",
-        &real_one,
-        "One",
-    );
-    create_indexed_session(
-        &projects_root.join("encoded-two"),
-        "two.jsonl",
-        &real_two,
-        "Two",
-    );
-    let (store, _, reads) = indexed_store_for_test(&root);
 
     let result =
         get_home_data_indexed_at(&projects_root, 12, 20, "", &[], &store, 2_000, None).unwrap();
@@ -1255,14 +1296,45 @@ fn HomeIndex_SkipFailedProject_022() {
     std::fs::create_dir_all(&real_one).unwrap();
     std::fs::create_dir_all(&real_two).unwrap();
     let encoded_one = projects_root.join("encoded-one");
-    create_indexed_session(&encoded_one, "one.jsonl", &real_one, "One");
-    create_indexed_session(
-        &projects_root.join("encoded-two"),
-        "two.jsonl",
-        &real_two,
-        "Two",
-    );
-    let (store, _, _) = indexed_store_for_test(&root);
+    {
+        std::fs::create_dir_all(&encoded_one).unwrap();
+        let path = encoded_one.join("one.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real_one.to_string_lossy()).unwrap(),
+                serde_json::to_string("One").unwrap(),
+            ),
+        )
+        .unwrap();
+    }
+    {
+        std::fs::create_dir_all(&projects_root.join("encoded-two")).unwrap();
+        let path = projects_root.join("encoded-two").join("two.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real_two.to_string_lossy()).unwrap(),
+                serde_json::to_string("Two").unwrap(),
+            ),
+        )
+        .unwrap();
+    }
+    let paths = SessionNameIndexPaths {
+        data: root.path().join("session-name-index.json"),
+        lock: root.path().join("session-name-index.json.lock"),
+    };
+    let reads = Arc::new(AtomicU64::new(0));
+    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        std::time::Duration::from_millis(100),
+    )
+    .with_snapshot_read_counter(Arc::clone(&reads));
 
     // scan 完成后、首个项目 resolve 前破坏 encoded-one：删目录 + 建同名文件 -> read_dir 失败。
     let broken = std::sync::atomic::AtomicBool::new(false);
@@ -1312,14 +1384,45 @@ fn AllRecentIndex_SkipFailedProject_023() {
     std::fs::create_dir_all(&real_one).unwrap();
     std::fs::create_dir_all(&real_two).unwrap();
     let encoded_one = projects_root.join("encoded-one");
-    create_indexed_session(&encoded_one, "one.jsonl", &real_one, "One");
-    create_indexed_session(
-        &projects_root.join("encoded-two"),
-        "two.jsonl",
-        &real_two,
-        "Two",
-    );
-    let (store, _, _) = indexed_store_for_test(&root);
+    {
+        std::fs::create_dir_all(&encoded_one).unwrap();
+        let path = encoded_one.join("one.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real_one.to_string_lossy()).unwrap(),
+                serde_json::to_string("One").unwrap(),
+            ),
+        )
+        .unwrap();
+    }
+    {
+        std::fs::create_dir_all(&projects_root.join("encoded-two")).unwrap();
+        let path = projects_root.join("encoded-two").join("two.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real_two.to_string_lossy()).unwrap(),
+                serde_json::to_string("Two").unwrap(),
+            ),
+        )
+        .unwrap();
+    }
+    let paths = SessionNameIndexPaths {
+        data: root.path().join("session-name-index.json"),
+        lock: root.path().join("session-name-index.json.lock"),
+    };
+    let reads = Arc::new(AtomicU64::new(0));
+    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        std::time::Duration::from_millis(100),
+    )
+    .with_snapshot_read_counter(Arc::clone(&reads));
 
     let broken = std::sync::atomic::AtomicBool::new(false);
     let before_resolve = std::sync::Arc::new(move || {
@@ -1353,12 +1456,20 @@ fn HomeIndex_RecentThree_021() {
     let encoded = projects_root.join("encoded");
     std::fs::create_dir_all(&real).unwrap();
     for sequence in 0..5 {
-        let path = create_indexed_session(
-            &encoded,
-            &format!("session-{sequence}.jsonl"),
-            &real,
-            &format!("Session {sequence}"),
-        );
+        let path = {
+            std::fs::create_dir_all(&encoded).unwrap();
+            let inner_path = encoded.join(format!("session-{sequence}.jsonl"));
+            std::fs::write(
+                &inner_path,
+                format!(
+                    "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                    serde_json::to_string(&real.to_string_lossy()).unwrap(),
+                    serde_json::to_string(&format!("Session {sequence}")).unwrap(),
+                ),
+            )
+            .unwrap();
+            inner_path
+        };
         let modified =
             std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + sequence);
         std::fs::File::options()
@@ -1368,7 +1479,19 @@ fn HomeIndex_RecentThree_021() {
             .set_times(std::fs::FileTimes::new().set_modified(modified))
             .unwrap();
     }
-    let (store, _, _) = indexed_store_for_test(&root);
+    let paths = SessionNameIndexPaths {
+        data: root.path().join("session-name-index.json"),
+        lock: root.path().join("session-name-index.json.lock"),
+    };
+    let reads = Arc::new(AtomicU64::new(0));
+    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        std::time::Duration::from_millis(100),
+    )
+    .with_snapshot_read_counter(Arc::clone(&reads));
 
     let result =
         get_home_data_indexed_at(&projects_root, 12, 20, "", &[], &store, 2_000, None).unwrap();
@@ -1384,16 +1507,69 @@ fn SessionsIndex_WarmPage_022() {
     let real = root.path().join("real");
     let encoded = root.path().join("encoded");
     std::fs::create_dir_all(&real).unwrap();
-    let first = create_indexed_session(&encoded, "first.jsonl", &real, "Disk first");
-    let second = create_indexed_session(&encoded, "second.jsonl", &real, "Disk second");
-    let (store, paths, _) = indexed_store_for_test(&root);
-    seed_name_index(
-        &paths,
-        &[
+    let first = {
+        std::fs::create_dir_all(&encoded).unwrap();
+        let inner_path = encoded.join("first.jsonl");
+        std::fs::write(
+            &inner_path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real.to_string_lossy()).unwrap(),
+                serde_json::to_string("Disk first").unwrap(),
+            ),
+        )
+        .unwrap();
+        inner_path
+    };
+    let second = {
+        std::fs::create_dir_all(&encoded).unwrap();
+        let inner_path = encoded.join("second.jsonl");
+        std::fs::write(
+            &inner_path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real.to_string_lossy()).unwrap(),
+                serde_json::to_string("Disk second").unwrap(),
+            ),
+        )
+        .unwrap();
+        inner_path
+    };
+    let paths = SessionNameIndexPaths {
+        data: root.path().join("session-name-index.json"),
+        lock: root.path().join("session-name-index.json.lock"),
+    };
+    let reads = Arc::new(AtomicU64::new(0));
+    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        std::time::Duration::from_millis(100),
+    )
+    .with_snapshot_read_counter(Arc::clone(&reads));
+    {
+        let mut seed_index = SessionNameIndex::empty();
+        for (project_dir, path, name) in [
             (&encoded, &first, "Cached first"),
             (&encoded, &second, "Cached second"),
-        ],
-    );
+        ] {
+            let stamp = FileStamp::read(path).unwrap();
+            let project_key = normalize_path_str(&project_dir.to_string_lossy());
+            let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+            seed_index.projects.entry(project_key).or_default().insert(
+                file_name,
+                SessionNameEntry {
+                    name: (*name).to_string(),
+                    observed_length: stamp.observed_length,
+                    modified_secs: stamp.modified_secs,
+                    modified_nanos: stamp.modified_nanos,
+                    cached_at_ms: 1_000,
+                },
+            );
+        }
+        std::fs::write(&paths.data, serde_json::to_vec(&seed_index).unwrap()).unwrap();
+    }
 
     let result = get_sessions_indexed_at(
         real.to_string_lossy().as_ref(),
@@ -1420,9 +1596,52 @@ fn SessionsIndex_AppendFullRebuild_023() {
     let real = root.path().join("real");
     let encoded = root.path().join("encoded");
     std::fs::create_dir_all(&real).unwrap();
-    let path = create_indexed_session(&encoded, "session.jsonl", &real, "Old");
-    let (store, paths, _) = indexed_store_for_test(&root);
-    seed_name_index(&paths, &[(&encoded, &path, "Old cached")]);
+    let path = {
+        std::fs::create_dir_all(&encoded).unwrap();
+        let inner_path = encoded.join("session.jsonl");
+        std::fs::write(
+            &inner_path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real.to_string_lossy()).unwrap(),
+                serde_json::to_string("Old").unwrap(),
+            ),
+        )
+        .unwrap();
+        inner_path
+    };
+    let paths = SessionNameIndexPaths {
+        data: root.path().join("session-name-index.json"),
+        lock: root.path().join("session-name-index.json.lock"),
+    };
+    let reads = Arc::new(AtomicU64::new(0));
+    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        std::time::Duration::from_millis(100),
+    )
+    .with_snapshot_read_counter(Arc::clone(&reads));
+    {
+        let mut seed_index = SessionNameIndex::empty();
+        for (project_dir, path, name) in [(&encoded, &path, "Old cached")] {
+            let stamp = FileStamp::read(path).unwrap();
+            let project_key = normalize_path_str(&project_dir.to_string_lossy());
+            let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+            seed_index.projects.entry(project_key).or_default().insert(
+                file_name,
+                SessionNameEntry {
+                    name: (*name).to_string(),
+                    observed_length: stamp.observed_length,
+                    modified_secs: stamp.modified_secs,
+                    modified_nanos: stamp.modified_nanos,
+                    cached_at_ms: 1_000,
+                },
+            );
+        }
+        std::fs::write(&paths.data, serde_json::to_vec(&seed_index).unwrap()).unwrap();
+    }
     std::fs::OpenOptions::new()
         .append(true)
         .open(&path)
@@ -1455,9 +1674,45 @@ fn SessionsIndex_MultiDir_024() {
     let old = root.path().join("encoded-old");
     let new = root.path().join("encoded-new");
     std::fs::create_dir_all(&real).unwrap();
-    create_indexed_session(&old, "old.jsonl", &real, "Old encoding");
-    create_indexed_session(&new, "new.jsonl", &real, "New encoding");
-    let (store, _, _) = indexed_store_for_test(&root);
+    {
+        std::fs::create_dir_all(&old).unwrap();
+        let path = old.join("old.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real.to_string_lossy()).unwrap(),
+                serde_json::to_string("Old encoding").unwrap(),
+            ),
+        )
+        .unwrap();
+    }
+    {
+        std::fs::create_dir_all(&new).unwrap();
+        let path = new.join("new.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real.to_string_lossy()).unwrap(),
+                serde_json::to_string("New encoding").unwrap(),
+            ),
+        )
+        .unwrap();
+    }
+    let paths = SessionNameIndexPaths {
+        data: root.path().join("session-name-index.json"),
+        lock: root.path().join("session-name-index.json.lock"),
+    };
+    let reads = Arc::new(AtomicU64::new(0));
+    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        std::time::Duration::from_millis(100),
+    )
+    .with_snapshot_read_counter(Arc::clone(&reads));
 
     let result = get_sessions_indexed_at(
         real.to_string_lossy().as_ref(),
@@ -1487,14 +1742,35 @@ fn AllRecentIndex_OneResolver_025() {
     for sequence in 0..2 {
         let real = root.path().join(format!("real-{sequence}"));
         std::fs::create_dir_all(&real).unwrap();
-        create_indexed_session(
-            &projects_root.join(format!("encoded-{sequence}")),
-            &format!("session-{sequence}.jsonl"),
-            &real,
-            &format!("Session {sequence}"),
-        );
+        {
+            std::fs::create_dir_all(&projects_root.join(format!("encoded-{sequence}"))).unwrap();
+            let path = projects_root
+                .join(format!("encoded-{sequence}"))
+                .join(format!("session-{sequence}.jsonl"));
+            std::fs::write(
+                &path,
+                format!(
+                    "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                    serde_json::to_string(&real.to_string_lossy()).unwrap(),
+                    serde_json::to_string(&format!("Session {sequence}")).unwrap(),
+                ),
+            )
+            .unwrap();
+        }
     }
-    let (store, _, reads) = indexed_store_for_test(&root);
+    let paths = SessionNameIndexPaths {
+        data: root.path().join("session-name-index.json"),
+        lock: root.path().join("session-name-index.json.lock"),
+    };
+    let reads = Arc::new(AtomicU64::new(0));
+    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        std::time::Duration::from_millis(100),
+    )
+    .with_snapshot_read_counter(Arc::clone(&reads));
 
     let result =
         get_all_recent_sessions_indexed_at(&projects_root, 20, &store, 2_000, None).unwrap();
@@ -1510,7 +1786,20 @@ fn SessionsIndex_Unstable_NoFlush_026() {
     let real = root.path().join("real");
     let encoded = root.path().join("encoded");
     std::fs::create_dir_all(&real).unwrap();
-    let path = create_indexed_session(&encoded, "session.jsonl", &real, "Before");
+    let path = {
+        std::fs::create_dir_all(&encoded).unwrap();
+        let inner_path = encoded.join("session.jsonl");
+        std::fs::write(
+            &inner_path,
+            format!(
+                "{{\"cwd\":{}}}\n{{\"type\":\"user\",\"message\":{{\"content\":{}}}}}\n",
+                serde_json::to_string(&real.to_string_lossy()).unwrap(),
+                serde_json::to_string("Before").unwrap(),
+            ),
+        )
+        .unwrap();
+        inner_path
+    };
     let mutate_path = path.clone();
     let before_resolve = Arc::new(move || {
         std::fs::OpenOptions::new()
@@ -1520,7 +1809,19 @@ fn SessionsIndex_Unstable_NoFlush_026() {
             .write_all(b"{\"type\":\"custom-title\",\"customTitle\":\"After\"}\n")
             .unwrap();
     });
-    let (store, _, _) = indexed_store_for_test(&root);
+    let paths = SessionNameIndexPaths {
+        data: root.path().join("session-name-index.json"),
+        lock: root.path().join("session-name-index.json.lock"),
+    };
+    let reads = Arc::new(AtomicU64::new(0));
+    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+    let store = SessionNameIndexStore::new(
+        paths.clone(),
+        IndexLimits::default(),
+        health,
+        std::time::Duration::from_millis(100),
+    )
+    .with_snapshot_read_counter(Arc::clone(&reads));
 
     let result = get_sessions_indexed_at(
         real.to_string_lossy().as_ref(),
