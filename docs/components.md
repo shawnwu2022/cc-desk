@@ -10,7 +10,7 @@ App.vue
 │   ├── IconBar.vue                 # 左侧图标栏（面板切换入口）
 │   ├── SidebarPanel.vue            # 侧边栏面板容器
 │   │   ├── SessionsPanel.vue       # 会话管理面板（组装 ProjectNode 全局树 + 搜索 + 空状态 + 孤儿分组）
-│   │   │   ├── ProjectNode.vue     # 项目节点（图标+名+状态徽标 ●N/琥珀点 + ▸展开 + hover 新建/菜单）
+│   │   │   ├── ProjectNode.vue     # 项目节点（图标+名+状态徽标 ●N/琥珀点 + ▸展开 + hover 新建/菜单 + 已存档弹层恢复/删除）
 │   │   │   ├── SessionList.vue
 │   │   │   └── SessionItem.vue + SessionStatus.vue
 │   │   ├── SkillsPanel.vue         # Skills 面板
@@ -21,7 +21,7 @@ App.vue
 │   └── XTermTerminal.vue           # xterm.js 终端核心
 │
 ├── WelcomeView.vue                 # 欢迎引导页（覆盖层，无收藏项目时）
-└── ProjectSelectView.vue           # 项目选择页（覆盖层，有收藏项目时）
+└── ProjectSelectView.vue           # 项目选择页（覆盖层，有收藏项目时；含已存档会话全局视图：恢复 + 删除（单删/跨项目批量））
 ```
 
 ## 组件详情
@@ -164,6 +164,8 @@ historySessions: HistorySession[]     // 未被 Tab 占用的历史会话
 - `filterProjectGroups(groups, query)`：搜索——匹配项目名 + 已加载历史会话名（`getHistoryFor`）+ 该组 tabs 的 name/sessionId
 - `getHistoryFor(projectPath)`：多项目历史选择器，按项目路径隔离历史，跨项目切换不串扰
 - `expandOverride` / `toggleExpand(path)` / `isExpanded(path)`：展开状态，纯手动展开（不自动展开当前/active），其余折叠
+- `deleteSessions(projectPath, sessionIds)`：永久删除已存档会话（opLock 串行；尽力批、非原子）。成功后 `applyReturnedState` 覆盖本地 + `loadHistoryFor(force=true)` 强制刷新历史（仅清缓存不够：在途 inflight 删除前响应会写回缓存复活已删会话）。失败不 apply 不强制重载，调用方据错误提示
+- 纯函数：`filterDeletable(sessionIds, activeTabSessionIds)`（滤掉运行中 claimed 会话）+ `groupByProject(items)`（跨项目分组，供批量删除逐项目调用）
 
 ### sidebar.ts — 侧边栏状态
 

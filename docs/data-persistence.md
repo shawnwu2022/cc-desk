@@ -78,7 +78,8 @@
 | `archivedSessions` | Record<string, string[]> | 项目路径 -> 已存档 sessionId 列表 |
 | `displayNames` | Record<string, string> | normalizedPath -> 项目别名（空/缺省 = 回退 basename） |
 
-- **key 规范化**：`displayNames` 的 key 为 `normalizePath` 后的路径（Windows/macOS 大小写不敏感 lower，Linux 保留大小写；去尾斜杠）。设置别名时删等价旧 key（避免 `E:\Repo` / `e:/repo` 双份）。
+- **key 规范化**：`archivedSessions` 与 `displayNames` 的 key 均为 `normalizePath` 后的路径（Windows/macOS 大小写不敏感 lower，Linux 保留大小写；去尾斜杠）。删除前按等价 key 合并查找（存档用 `E:\Repo`、删除走 `e:/repo` 也能命中）；设置别名时删等价旧 key（避免 `E:\Repo` / `e:/repo` 双份）。
+- **永久删除语义**：存档（archive）只在该 map 加标记，不删会话文件；**永久删除（`delete_sessions`）才删文件 + 移除标记**，且不可恢复。`delete_sessions_inner` 在锁内校验文件名组件与「全部已存档」后，删会话文件（`jsonl` + `txt`，所有编码目录）并移除 `archivedSessions` 标记，返回最新 `ProjectsState`。**尽力批、非原子**：任一文件删除失败或校验失败则整体 Err、projects.json 不变（已删文件不恢复）；重试靠「文件不存在视为已删」与「目录消失仍清标记」双路径收敛。
 - **原子写**：apply 增量命令（pin/unpin/archive/restore/setDisplayName）在 `with_projects_state_locked` 锁内读最新 → canonicalize → 校验应用 → `write_json_atomic`（完整写入并 `sync_all` `.json.tmp` 后替换）。POSIX 使用覆盖语义的 `rename`；Windows 已有目标使用 `ReplaceFileW`（忽略 ACL 合并错误 + write-through），首次创建使用 rename；替换失败保留原文件。
 - **多实例并发安全**：写走后端独立 `projects.json.lock`（std `File::lock`）跨进程排他锁（写排他 / 读共享，有界超时；持锁进程被杀由 OS 自动释放），async command 在 `spawn_blocking` 内完成锁定 IO，apply 增量操作在锁内原子读改写，不再依赖前端完整快照覆盖。前端 `session.ts` 的 `opLock` 串行完整 action/reload request + apply；窗口聚焦 reload 共享锁读。config.json 的 hiddenProjects/lastOpened 暂未纳入（同 pattern 可扩展）；升级时须先关闭所有旧版本实例。
 

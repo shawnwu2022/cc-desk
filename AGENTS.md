@@ -122,7 +122,8 @@ sessionStore（tabs + historySessions）→ buildProjectGroups（分组+孤儿�
 点节点 → resolveSwitchAction（纯函数，D/E 参数直传无竞态）→ TerminalView handler（切 cwd + 切 tab / --resume）
 ```
 
-- Sessions 面板从「当前项目扁平列表」升级为「项目→会话全局树」：终端视图内跨项目一步切换 + 并行项目状态徽标（`●N` 运行 / 琥珀点 pending）一眼可见，后端 `projects.json` + `get_projects_state`（共享锁读）+ pin/unpin/archive/restore/set_display_name 5 增量 command（独立 `projects.json.lock` 跨进程排他锁，置顶/存档/别名持久化）
+- Sessions 面板从「当前项目扁平列表」升级为「项目→会话全局树」：终端视图内跨项目一步切换 + 并行项目状态徽标（`●N` 运行 / 琥珀点 pending）一眼可见，后端 `projects.json` + `get_projects_state`（共享锁读）+ pin/unpin/archive/restore/set_display_name/delete_sessions 6 增量 command（独立 `projects.json.lock` 跨进程排他锁，置顶/存档/别名/永久删除持久化）
+- **会话永久删除**：`delete_sessions` command（薄壳 → `store::delete_sessions_inner`，opLock 串行）删会话文件 + 清 `archivedSessions` 标记，尽力批、非原子（任一失败整体不写 projects.json，重试靠「文件不存在视为已删」+「目录消失仍清标记」收敛）；前端 `deleteSessions` action（成功后 `applyReturnedState` + `loadHistoryFor(force=true)` 防 inflight 复活）+ 纯函数 `filterDeletable`/`groupByProject`；UI：管理页已存档区单删/跨项目批量 + ProjectNode 内联弹层单删，运行中（claimed）会话置灰拒删
 - `resolveSwitchAction`：纯函数决策切换语义（noop / activate / resume / new），输入全显式参数、不读写全局单值中间态，连续调用互不影响
 - `getHistoryFor(path)`：多项目历史选择器，按项目路径隔离历史，跨项目切换不串扰
 - 展开状态：`expandOverride`/`toggleExpand`/`isExpanded`，纯手动展开（不自动展开当前/active），其余折叠
