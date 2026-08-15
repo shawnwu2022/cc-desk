@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useSessionStore } from '@/stores/session'
+import { useSessionStore, filterDeletable, groupByProject } from '@/stores/session'
 import { useAttentionStore } from '@/stores/attention'
 
 // crypto.randomUUID polyfill for jsdom：若环境无 webcrypto.randomUUID（旧 jsdom），
@@ -394,5 +394,45 @@ describe('session store', () => {
       sessionStore.setActiveTab(tabId)
       expect(attentionStore.getItem('pty-x')?.kind).toBe('error') // error 保留
     })
+  })
+})
+
+describe('filterDeletable', () => {
+  // 运行中会话被滤除,其余保留
+  it('FilterDeletable_RemovesRunning_001', () => {
+    expect(filterDeletable(['a', 'b', 'c'], new Set(['b'])).sort()).toEqual(['a', 'c'])
+  })
+  // 空运行中集合:全部保留
+  it('FilterDeletable_NoRunning_KeepAll_002', () => {
+    expect(filterDeletable(['a', 'b'], new Set())).toEqual(['a', 'b'])
+  })
+  // 全部运行中:结果为空
+  it('FilterDeletable_AllRunning_Empty_003', () => {
+    expect(filterDeletable(['a', 'b'], new Set(['a', 'b']))).toEqual([])
+  })
+  // 空输入
+  it('FilterDeletable_EmptyInput_004', () => {
+    expect(filterDeletable([], new Set(['a']))).toEqual([])
+  })
+})
+
+describe('groupByProject', () => {
+  // 单项目保持一组
+  it('GroupByProject_SingleProject_001', () => {
+    const g = groupByProject([{ projectPath: 'p1', sessionId: 'a' }, { projectPath: 'p1', sessionId: 'b' }])
+    expect([...g.entries()]).toEqual([['p1', ['a', 'b']]])
+  })
+  // 跨项目正确拆组
+  it('GroupByProject_MultiProject_002', () => {
+    const g = groupByProject([
+      { projectPath: 'p1', sessionId: 'a' },
+      { projectPath: 'p2', sessionId: 'b' },
+      { projectPath: 'p1', sessionId: 'c' },
+    ])
+    expect([...g.entries()]).toEqual([['p1', ['a', 'c']], ['p2', ['b']]])
+  })
+  // 空输入
+  it('GroupByProject_Empty_003', () => {
+    expect(groupByProject([]).size).toBe(0)
   })
 })

@@ -21,6 +21,23 @@ import { useAttentionStore } from './attention'
 
 // 性能 #4：浅比较 helper（模块级 export 供单元测试），仅在变化时写 reactive，
 // 避免窗口聚焦 reload 等场景无条件 clear+rebuild 触发依赖（getDisplayName/buildProjectGroups）computed 重算。
+/** 从待删列表滤除运行中会话(已存档视图批量删除的前置过滤;UX 优化,非安全边界)。 */
+export function filterDeletable(sessionIds: string[], activeTabSessionIds: Set<string> | string[]): string[] {
+  const running = activeTabSessionIds instanceof Set ? activeTabSessionIds : new Set(activeTabSessionIds)
+  return sessionIds.filter(id => !running.has(id))
+}
+
+/** 按项目路径把(projectPath, sessionId)分组为 Map<projectPath, sessionId[]>;跨项目批量删除按此分组逐项目调用。 */
+export function groupByProject(items: { projectPath: string; sessionId: string }[]): Map<string, string[]> {
+  const g = new Map<string, string[]>()
+  for (const { projectPath, sessionId } of items) {
+    const arr = g.get(projectPath) ?? []
+    arr.push(sessionId)
+    g.set(projectPath, arr)
+  }
+  return g
+}
+
 export function stringArrEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
