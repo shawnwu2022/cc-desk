@@ -584,16 +584,18 @@ async function handleBatchDelete() {
   if (!window.confirm(t('confirmBatchDelete', { count: items.length }))) return
   const grouped = groupByProject(items)
   let failed = 0
+  const details: string[] = []
   for (const [path, ids] of grouped) {
     const deletable = filterDeletable(ids, sessionStore.claimedSessionIds)
     if (deletable.length === 0) continue // 全被运行态滤除:不发空请求
     try {
       await sessionStore.deleteSessions(path, deletable)
-    } catch {
+    } catch (e) {
       failed += deletable.length
+      details.push(typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e)))
     }
   }
-  if (failed > 0) { window.alert(t('deleteFailed')) }
+  if (failed > 0) { window.alert(details.length > 0 ? details.join('\n') : t('deleteFailed')) }
   exitBatchMode()
 }
 
