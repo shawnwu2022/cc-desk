@@ -6,45 +6,35 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
-    tokio::runtime::Runtime::new().unwrap().block_on(future)
-}
-
 // spawn_blocking 内 store 业务错误向前端透传（不吞错）。
 #[test]
 fn SpawnBlockingStore_PropagatesError_001() {
-    let error = run_async(spawn_blocking_store::<_, ()>("fixture", || {
-        anyhow::bail!("store failed")
-    }))
-    .unwrap_err();
+    let error = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(spawn_blocking_store::<_, ()>("fixture", || {
+            anyhow::bail!("store failed")
+        }))
+        .unwrap_err();
     assert!(error.contains("store failed"));
 }
 
 // spawn_blocking 任务 panic 转 JoinError，错误串含 command 标签与 blocking 提示。
 #[test]
 fn SpawnBlockingStore_LabelsJoinError_002() {
-    let error = run_async(spawn_blocking_store::<_, ()>("fixture", || {
-        panic!("worker panic")
-    }))
-    .unwrap_err();
+    let error = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(spawn_blocking_store::<_, ()>("fixture", || {
+            panic!("worker panic")
+        }))
+        .unwrap_err();
     assert!(error.contains("fixture"));
     assert!(error.contains("blocking task failed"));
-}
-
-fn pending_flush_fixture() -> PendingIndexFlush {
-    PendingIndexFlush {
-        base_raw: RawIndexSnapshot::Missing,
-        delta: SessionNameIndexDelta {
-            request_compaction: true,
-            ..SessionNameIndexDelta::default()
-        },
-    }
 }
 
 // command 必须在后台 flush 完成前返回业务值。
 #[test]
 fn IndexDispatch_ReturnsBeforeFlush_010() {
-    run_async(async {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let future = dispatch_indexed_store(
@@ -52,7 +42,13 @@ fn IndexDispatch_ReturnsBeforeFlush_010() {
             || {
                 Ok(IndexedResult {
                     value: 42,
-                    pending_flush: Some(pending_flush_fixture()),
+                    pending_flush: Some(PendingIndexFlush {
+                        base_raw: RawIndexSnapshot::Missing,
+                        delta: SessionNameIndexDelta {
+                            request_compaction: true,
+                            ..SessionNameIndexDelta::default()
+                        },
+                    }),
                     stats: ResolutionStats::default(),
                 })
             },
@@ -79,21 +75,23 @@ fn IndexDispatch_NoDelta_NoSpawn_011() {
     let calls = Arc::new(AtomicU64::new(0));
     let captured = Arc::clone(&calls);
 
-    let value = run_async(dispatch_indexed_store(
-        "fixture",
-        || {
-            Ok(IndexedResult {
-                value: 7,
-                pending_flush: None,
-                stats: ResolutionStats::default(),
-            })
-        },
-        move |_| {
-            captured.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        },
-    ))
-    .unwrap();
+    let value = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(dispatch_indexed_store(
+            "fixture",
+            || {
+                Ok(IndexedResult {
+                    value: 7,
+                    pending_flush: None,
+                    stats: ResolutionStats::default(),
+                })
+            },
+            move |_| {
+                captured.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        ))
+        .unwrap();
 
     assert_eq!(value, 7);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -103,13 +101,19 @@ fn IndexDispatch_NoDelta_NoSpawn_011() {
 #[test]
 fn IndexDispatch_FlushError_Ignored_012() {
     let (called_tx, called_rx) = mpsc::channel();
-    let value = run_async(async {
+    let value = tokio::runtime::Runtime::new().unwrap().block_on(async {
         let value = dispatch_indexed_store(
             "fixture",
             || {
                 Ok(IndexedResult {
                     value: "business",
-                    pending_flush: Some(pending_flush_fixture()),
+                    pending_flush: Some(PendingIndexFlush {
+                        base_raw: RawIndexSnapshot::Missing,
+                        delta: SessionNameIndexDelta {
+                            request_compaction: true,
+                            ..SessionNameIndexDelta::default()
+                        },
+                    }),
                     stats: ResolutionStats::default(),
                 })
             },
@@ -130,12 +134,14 @@ fn IndexDispatch_FlushError_Ignored_012() {
 // all-recent 等 indexed command 的 blocking 业务错误必须正常向 IPC 传播。
 #[test]
 fn AllRecent_BlockingError_013() {
-    let error = run_async(dispatch_indexed_store::<_, Vec<()>, _>(
-        "get_all_recent_sessions",
-        || anyhow::bail!("scan failed"),
-        |_| Ok(()),
-    ))
-    .unwrap_err();
+    let error = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(dispatch_indexed_store::<_, Vec<()>, _>(
+            "get_all_recent_sessions",
+            || anyhow::bail!("scan failed"),
+            |_| Ok(()),
+        ))
+        .unwrap_err();
 
     assert!(error.contains("scan failed"));
 }
@@ -144,13 +150,19 @@ fn AllRecent_BlockingError_013() {
 #[test]
 fn IndexDispatch_CasExhausted_Ignored_014() {
     let (called_tx, called_rx) = mpsc::channel();
-    let value = run_async(async {
+    let value = tokio::runtime::Runtime::new().unwrap().block_on(async {
         let value = dispatch_indexed_store(
             "fixture",
             || {
                 Ok(IndexedResult {
                     value: 99,
-                    pending_flush: Some(pending_flush_fixture()),
+                    pending_flush: Some(PendingIndexFlush {
+                        base_raw: RawIndexSnapshot::Missing,
+                        delta: SessionNameIndexDelta {
+                            request_compaction: true,
+                            ..SessionNameIndexDelta::default()
+                        },
+                    }),
                     stats: ResolutionStats::default(),
                 })
             },
