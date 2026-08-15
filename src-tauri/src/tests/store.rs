@@ -852,189 +852,102 @@ fn BenchmarkActiveIndex_Real_005() {
     }
 }
 
-fn build_index_near_size(target_bytes: usize) -> Vec<u8> {
-    let mut count = (target_bytes / 180).max(1);
-    let mut closest = Vec::new();
-    for _ in 0..8 {
-        let mut index = SessionNameIndex::empty();
-        let bucket = index.projects.entry("synthetic".to_string()).or_default();
-        for sequence in 0..count {
-            bucket.insert(
-                format!("session-{sequence:08}.jsonl"),
-                SessionNameEntry {
-                    name: format!("Synthetic {sequence:08} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
-                    observed_length: sequence as u64,
-                    modified_secs: 1_700_000_000,
-                    modified_nanos: sequence as u32,
-                    cached_at_ms: sequence as u64,
-                },
-            );
-        }
-        let bytes = serde_json::to_vec(&index).unwrap();
-        if closest.is_empty()
-            || bytes.len().abs_diff(target_bytes) < closest.len().abs_diff(target_bytes)
-        {
-            closest = bytes.clone();
-        }
-        if bytes.len().abs_diff(target_bytes) <= target_bytes / 100 {
-            break;
-        }
-        count = count
-            .saturating_mul(target_bytes)
-            .checked_div(bytes.len().max(1))
-            .unwrap_or(1)
-            .max(1);
-    }
-    closest
-}
-
-fn run_index_worker_if_set() -> bool {
-    let Ok(mode) = std::env::var("CC_DESK_INDEX_WORKER_MODE") else {
-        return false;
-    };
-    let dir = std::path::PathBuf::from(std::env::var("CC_DESK_INDEX_WORKER_DIR").unwrap());
-    let id = std::env::var("CC_DESK_INDEX_WORKER_ID")
-        .unwrap()
-        .parse::<usize>()
-        .unwrap();
-    let request_compaction = std::env::var_os("CC_DESK_INDEX_WORKER_COMPACT").is_some();
-    let paths = SessionNameIndexPaths {
-        data: dir.join("session-name-index.json"),
-        lock: dir.join("session-name-index.json.lock"),
-    };
-    let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
-    let mut store = SessionNameIndexStore::new(
-        paths.clone(),
-        IndexLimits::default(),
-        health,
-        Duration::from_millis(100),
-    );
-    let session_path = dir.join(format!("worker-{id}.jsonl"));
-    std::fs::write(&session_path, format!("worker-{id}")).unwrap();
-    let snapshot = store.read_snapshot();
-    let project_key = "worker-project".to_string();
-    let file_name = if mode == "same" {
-        "same.jsonl".to_string()
-    } else {
-        format!("worker-{id}.jsonl")
-    };
-    let base = snapshot
-        .index
-        .projects
-        .get(&project_key)
-        .and_then(|bucket| bucket.get(&file_name))
-        .cloned();
-    let stamp = FileStamp::read(&session_path).unwrap();
-    let replacement = SessionNameEntry {
-        name: format!("worker-{id}"),
-        observed_length: stamp.observed_length,
-        modified_secs: stamp.modified_secs,
-        modified_nanos: stamp.modified_nanos,
-        cached_at_ms: u64::MAX - id as u64,
-    };
-    let pending = PendingIndexFlush {
-        base_raw: snapshot.raw,
-        delta: SessionNameIndexDelta {
-            mutations: vec![IndexMutation {
-                project_key,
-                file_name,
-                path: session_path,
-                base,
-                replacement,
-            }],
-            request_compaction,
-            ..SessionNameIndexDelta::default()
-        },
-    };
-    if mode == "cas" {
-        let data_path = paths.data.clone();
-        store = store.with_flush_test_config(
-            Duration::from_secs(1),
-            4,
-            None,
-            Some(Arc::new(move |_| {
-                std::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&data_path)
-                    .unwrap()
-                    .write_all(b" ")
-                    .unwrap();
-            })),
-            None,
-        );
-    }
-    std::fs::write(dir.join(format!("ready-{id}")), "1").unwrap();
-    wait_for_file(&dir.join("start-flush"), Duration::from_secs(10));
-    let result = store.flush_pending(pending);
-    let report = match result {
-        Ok(metrics) => serde_json::json!({
-            "ok": true,
-            "exclusiveHoldMs": metrics.exclusive_hold.as_secs_f64() * 1000.0,
-            "attempts": metrics.attempts,
-        }),
-        Err(error) => serde_json::json!({
-            "ok": false,
-            "error": error.to_string(),
-        }),
-    };
-    std::fs::write(
-        dir.join(format!("result-{id}.json")),
-        serde_json::to_vec(&report).unwrap(),
-    )
-    .unwrap();
-    std::process::exit(0);
-}
-
-fn run_four_index_workers(
-    initial: &[u8],
-    mode: &str,
-    compact: bool,
-) -> (tempfile::TempDir, Vec<serde_json::Value>) {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("session-name-index.json"), initial).unwrap();
-    let exe = std::env::current_exe().unwrap();
-    let mut children = Vec::new();
-    for id in 0..4 {
-        let mut command = std::process::Command::new(&exe);
-        command
-            .arg("BenchmarkIndexMultiProcess_Real_006")
-            .arg("--ignored")
-            .arg("--test-threads=1")
-            .env("CC_DESK_INDEX_WORKER_MODE", mode)
-            .env("CC_DESK_INDEX_WORKER_DIR", dir.path())
-            .env("CC_DESK_INDEX_WORKER_ID", id.to_string());
-        if compact {
-            command.env("CC_DESK_INDEX_WORKER_COMPACT", "1");
-        }
-        children.push(command.spawn().unwrap());
-    }
-    for id in 0..4 {
-        wait_for_file(
-            &dir.path().join(format!("ready-{id}")),
-            Duration::from_secs(10),
-        );
-    }
-    std::fs::write(dir.path().join("start-flush"), "1").unwrap();
-    for child in &mut children {
-        wait_for_child(child, Duration::from_secs(30));
-    }
-    let reports = (0..4)
-        .map(|id| {
-            serde_json::from_slice(
-                &std::fs::read(dir.path().join(format!("result-{id}.json"))).unwrap(),
-            )
-            .unwrap()
-        })
-        .collect();
-    (dir, reports)
-}
-
 // 四进程共享临时索引：real/8MiB disjoint、same-key stale base、CAS exhaustion。
 #[test]
 #[ignore = "reads real home for measured index size and runs four child processes"]
 fn BenchmarkIndexMultiProcess_Real_006() {
-    if run_index_worker_if_set() {
-        return;
+    if let Ok(mode) = std::env::var("CC_DESK_INDEX_WORKER_MODE") {
+        let dir = std::path::PathBuf::from(std::env::var("CC_DESK_INDEX_WORKER_DIR").unwrap());
+        let id = std::env::var("CC_DESK_INDEX_WORKER_ID")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        let request_compaction = std::env::var_os("CC_DESK_INDEX_WORKER_COMPACT").is_some();
+        let paths = SessionNameIndexPaths {
+            data: dir.join("session-name-index.json"),
+            lock: dir.join("session-name-index.json.lock"),
+        };
+        let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+        let mut store = SessionNameIndexStore::new(
+            paths.clone(),
+            IndexLimits::default(),
+            health,
+            Duration::from_millis(100),
+        );
+        let session_path = dir.join(format!("worker-{id}.jsonl"));
+        std::fs::write(&session_path, format!("worker-{id}")).unwrap();
+        let snapshot = store.read_snapshot();
+        let project_key = "worker-project".to_string();
+        let file_name = if mode == "same" {
+            "same.jsonl".to_string()
+        } else {
+            format!("worker-{id}.jsonl")
+        };
+        let base = snapshot
+            .index
+            .projects
+            .get(&project_key)
+            .and_then(|bucket| bucket.get(&file_name))
+            .cloned();
+        let stamp = FileStamp::read(&session_path).unwrap();
+        let replacement = SessionNameEntry {
+            name: format!("worker-{id}"),
+            observed_length: stamp.observed_length,
+            modified_secs: stamp.modified_secs,
+            modified_nanos: stamp.modified_nanos,
+            cached_at_ms: u64::MAX - id as u64,
+        };
+        let pending = PendingIndexFlush {
+            base_raw: snapshot.raw,
+            delta: SessionNameIndexDelta {
+                mutations: vec![IndexMutation {
+                    project_key,
+                    file_name,
+                    path: session_path,
+                    base,
+                    replacement,
+                }],
+                request_compaction,
+                ..SessionNameIndexDelta::default()
+            },
+        };
+        if mode == "cas" {
+            let data_path = paths.data.clone();
+            store = store.with_flush_test_config(
+                Duration::from_secs(1),
+                4,
+                None,
+                Some(Arc::new(move |_| {
+                    std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&data_path)
+                        .unwrap()
+                        .write_all(b" ")
+                        .unwrap();
+                })),
+                None,
+            );
+        }
+        std::fs::write(dir.join(format!("ready-{id}")), "1").unwrap();
+        wait_for_file(&dir.join("start-flush"), Duration::from_secs(10));
+        let result = store.flush_pending(pending);
+        let report = match result {
+            Ok(metrics) => serde_json::json!({
+                "ok": true,
+                "exclusiveHoldMs": metrics.exclusive_hold.as_secs_f64() * 1000.0,
+                "attempts": metrics.attempts,
+            }),
+            Err(error) => serde_json::json!({
+                "ok": false,
+                "error": error.to_string(),
+            }),
+        };
+        std::fs::write(
+            dir.join(format!("result-{id}.json")),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        std::process::exit(0);
     }
     assert_eq!(std::env::var("CC_DESK_BENCH_REAL_HOME").as_deref(), Ok("1"));
     let projects_root = dirs::home_dir().unwrap().join(".claude").join("projects");
@@ -1058,7 +971,42 @@ fn BenchmarkIndexMultiProcess_Real_006() {
         .flush_pending(cold.pending_flush.unwrap())
         .unwrap();
     let real_bytes = std::fs::read(&real_paths.data).unwrap();
-    let eight_mib = build_index_near_size(8 * 1024 * 1024);
+    let eight_mib = {
+        let target_bytes = 8 * 1024 * 1024;
+        let mut count = (target_bytes / 180).max(1);
+        let mut closest = Vec::new();
+        for _ in 0..8 {
+            let mut index = SessionNameIndex::empty();
+            let bucket = index.projects.entry("synthetic".to_string()).or_default();
+            for sequence in 0..count {
+                bucket.insert(
+                    format!("session-{sequence:08}.jsonl"),
+                    SessionNameEntry {
+                        name: format!("Synthetic {sequence:08} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+                        observed_length: sequence as u64,
+                        modified_secs: 1_700_000_000,
+                        modified_nanos: sequence as u32,
+                        cached_at_ms: sequence as u64,
+                    },
+                );
+            }
+            let bytes = serde_json::to_vec(&index).unwrap();
+            if closest.is_empty()
+                || bytes.len().abs_diff(target_bytes) < closest.len().abs_diff(target_bytes)
+            {
+                closest = bytes.clone();
+            }
+            if bytes.len().abs_diff(target_bytes) <= target_bytes / 100 {
+                break;
+            }
+            count = count
+                .saturating_mul(target_bytes)
+                .checked_div(bytes.len().max(1))
+                .unwrap_or(1)
+                .max(1);
+        }
+        closest
+    };
     eprintln!(
         "multi_process_real_input_bytes={}; eight_mib_input_bytes={}",
         real_bytes.len(),
@@ -1070,7 +1018,45 @@ fn BenchmarkIndexMultiProcess_Real_006() {
         ("8mib", eight_mib.as_slice(), true),
     ] {
         for mode in ["disjoint", "same", "cas"] {
-            let (dir, reports) = run_four_index_workers(initial, mode, compact);
+            let (dir, reports): (tempfile::TempDir, Vec<serde_json::Value>) = {
+                let dir = tempfile::tempdir().unwrap();
+                std::fs::write(dir.path().join("session-name-index.json"), initial).unwrap();
+                let exe = std::env::current_exe().unwrap();
+                let mut children = Vec::new();
+                for id in 0..4 {
+                    let mut command = std::process::Command::new(&exe);
+                    command
+                        .arg("BenchmarkIndexMultiProcess_Real_006")
+                        .arg("--ignored")
+                        .arg("--test-threads=1")
+                        .env("CC_DESK_INDEX_WORKER_MODE", mode)
+                        .env("CC_DESK_INDEX_WORKER_DIR", dir.path())
+                        .env("CC_DESK_INDEX_WORKER_ID", id.to_string());
+                    if compact {
+                        command.env("CC_DESK_INDEX_WORKER_COMPACT", "1");
+                    }
+                    children.push(command.spawn().unwrap());
+                }
+                for id in 0..4 {
+                    wait_for_file(
+                        &dir.path().join(format!("ready-{id}")),
+                        Duration::from_secs(10),
+                    );
+                }
+                std::fs::write(dir.path().join("start-flush"), "1").unwrap();
+                for child in &mut children {
+                    wait_for_child(child, Duration::from_secs(30));
+                }
+                let reports = (0..4)
+                    .map(|id| {
+                        serde_json::from_slice(
+                            &std::fs::read(dir.path().join(format!("result-{id}.json"))).unwrap(),
+                        )
+                        .unwrap()
+                    })
+                    .collect();
+                (dir, reports)
+            };
             eprintln!("multi_process_size={label}; mode={mode}; reports={reports:?}");
             assert!(std::fs::read_dir(dir.path())
                 .unwrap()
