@@ -3773,17 +3773,18 @@ fn MappingStrict_RootIsFile_001() {
     assert!(build_project_path_mapping_strict_at(&not_a_dir).is_err());
 }
 
-// 容错映射:一个正常项目 + 一个无有效 cwd 的损坏兄弟目录,映射仍保留正常项目
-// (锁死「局部 IO 错误不清空全部生产映射」修复;若容错版退化为整体失败,此断言红)
+// 容错映射:一个正常项目 + 一个含「s.jsonl 是目录(File::open 失败,真实 IO 错误)」的
+// 损坏兄弟目录,映射仍保留正常项目。若 strict 泄漏回生产(任一目录 IO 错整体空映射),
+// 此断言红——真正锁死「单文件读取失败不能清空正常映射」。
 #[test]
 fn MappingAt_BrokenSibling_KeepsGood_001() {
     let root = tempfile::tempdir().unwrap();
     let good = root.path().join("good");
     std::fs::create_dir_all(&good).unwrap();
     std::fs::write(good.join("s.jsonl"), "{\"cwd\":\"/real/proj\"}\n").unwrap();
+    // 损坏兄弟:把 s.jsonl 做成子目录,File::open 对目录在 Windows/Linux 均失败
     let broken = root.path().join("broken");
-    std::fs::create_dir_all(&broken).unwrap();
-    std::fs::write(broken.join("s.jsonl"), "{\"type\":\"user\"}\n").unwrap();
+    std::fs::create_dir_all(broken.join("s.jsonl")).unwrap();
     let mapping = build_project_path_mapping_at(root.path());
     assert_eq!(mapping.get("/real/proj").map(|d| d.len()), Some(1));
 }
