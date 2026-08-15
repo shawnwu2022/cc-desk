@@ -458,6 +458,25 @@ describe('session store', () => {
       await Promise.all([p1, p2])
       expect(order).toEqual(['first-start', 'second-start'])
     })
+
+    // 删除成功但删除后 force 刷新失败:须清该项目历史缓存,避免已删会话(标记已清)
+    // 作为普通历史重现。用行为断言:缓存被清后,再非 force 加载会重新调 getSessions,
+    // 而非命中仍含 s1 的旧缓存。
+    it('DeleteSessions_ForceReloadFail_InvalidatesCache_004', async () => {
+      const { getProjectsState, deleteSessions, getSessions } = await import('@/api/tauri')
+      const mockLoad = getProjectsState as ReturnType<typeof vi.fn>
+      const mockDelete = deleteSessions as ReturnType<typeof vi.fn>
+      const mockGet = getSessions as ReturnType<typeof vi.fn>
+      mockLoad.mockResolvedValueOnce({ pinnedProjects: [], archivedSessions: { '/p': ['s1'] }, displayNames: {} })
+      mockDelete.mockResolvedValueOnce({ pinnedProjects: [], archivedSessions: {}, displayNames: {} })
+      mockGet.mockClear() // 清跨测试累积计数,只数本用例
+      mockGet.mockRejectedValueOnce(new Error('reload failed')) // 删除后 force 刷新失败
+      mockGet.mockResolvedValueOnce([]) // 缓存被清后,后续非 force 重拉成功
+      const store = useSessionStore()
+      await store.deleteSessions('/p', ['s1'])
+      await store.loadHistoryFor('/p', false)
+      expect(mockGet).toHaveBeenCalledTimes(2) // 二次均真拉(缓存未命中)
+    })
   })
 })
 
