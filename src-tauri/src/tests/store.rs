@@ -6,11 +6,12 @@ use crate::session_name_index::{
     SessionNameIndex, SessionNameIndexDelta, SessionNameIndexPaths, SessionNameIndexStore,
 };
 use crate::store::{
-    acquire_lock, assemble_home_data, canonicalize_state, compute_project_startup_state,
+    acquire_lock, assemble_home_data, build_project_path_mapping_at, canonicalize_state,
+    compute_project_startup_state,
     expand_env_vars, extract_md_description, extract_project_path_from_jsonl, extract_session_name,
     find_valid_plugin_path, get_all_recent_sessions_indexed_at, get_home_data,
     get_home_data_indexed_at, get_projects_state_at, get_sessions_from_dirs,
-    get_sessions_indexed_at, infer_server_type, invalidate_project_path_mapping, merge_json_values,
+    get_sessions_indexed_at, infer_server_type, invalidate_project_path_mapping, lookup_project_dirs, merge_json_values,
     normalize_path_inner, normalize_path_str, parse_agents_list_output, parse_mcp_server_entry,
     parse_skill_description, parse_timestamp, read_projects_state_locked, replace_file_atomic,
     resolve_marketplace_plugin_path_at, scan_home_projects_at, search_session_messages_in_dirs,
@@ -3408,4 +3409,56 @@ fn ValidateSessionIdComponent_AcceptsNormal_005() {
 fn ValidateSessionIdComponent_RejectsAgentPrefix_006() {
     assert!(validate_session_id_component("agent-a1b2").is_err());
     assert!(validate_session_id_component("agent-").is_err());
+}
+
+// 构造一个含 cwd 的假会话文件(与既有 create_indexed_session 同格式)
+fn write_fake_session(project_dir: &std::path::Path, file_name: &str, cwd: &str) {
+    std::fs::create_dir_all(project_dir).unwrap();
+    std::fs::write(
+        project_dir.join(file_name),
+        format!("{{\"cwd\":{}}}\n", serde_json::to_string(cwd).unwrap()),
+    )
+    .unwrap();
+}
+
+// 等价 key 全集合并:两个目录的 cwd 分别是原始大小写与规范化形式,一次查找都命中
+#[test]
+fn LookupProjectDirs_MergesEquivalentKeys_004() {
+    let root = tempfile::tempdir().unwrap();
+    write_fake_session(&root.path().join("a-1"), "s1.jsonl", "E:\\Foo");
+    write_fake_session(&root.path().join("a-2"), "s2.jsonl", "e:/foo");
+    let mapping = build_project_path_mapping_at(root.path()).unwrap();
+    assert_eq!(lookup_project_dirs(&mapping, "E:\\Foo").len(), 2);
+    assert_eq!(lookup_project_dirs(&mapping, "e:/foo").len(), 2);
+}
+
+#[test]
+fn LookupProjectDirs_ExactThenNormalized_001() {
+    let root = tempfile::tempdir().unwrap();
+    // 目录A: cwd 为大写带反斜杠的原始路径 E:\Foo
+    let dir_a = root.path().join("proj-a");
+    write_fake_session(&dir_a, "s1.jsonl", "E:\\Foo");
+    let mapping = build_project_path_mapping_at(root.path()).unwrap();
+    // 精确命中原始路径
+    assert_eq!(lookup_project_dirs(&mapping, "E:\\Foo").len(), 1);
+    // 规范化 key(e:/foo)兜底命中
+    let norm = normalize_path_str("E:\\Foo");
+    assert_eq!(lookup_project_dirs(&mapping, &norm).len(), 1);
+}
+
+#[test]
+fn LookupProjectDirs_MultiDirPerProject_002() {
+    let root = tempfile::tempdir().unwrap();
+    write_fake_session(&root.path().join("a-1"), "s1.jsonl", "E:\\Foo");
+    write_fake_session(&root.path().join("a-2"), "s2.jsonl", "E:\\Foo");
+    let mapping = build_project_path_mapping_at(root.path()).unwrap();
+    assert_eq!(lookup_project_dirs(&mapping, "E:\\Foo").len(), 2);
+}
+
+#[test]
+fn LookupProjectDirs_MissingProject_Empty_003() {
+    let root = tempfile::tempdir().unwrap();
+    write_fake_session(&root.path().join("a"), "s1.jsonl", "E:\\Foo");
+    let mapping = build_project_path_mapping_at(root.path()).unwrap();
+    assert!(lookup_project_dirs(&mapping, "E:\\Bar").is_empty());
 }

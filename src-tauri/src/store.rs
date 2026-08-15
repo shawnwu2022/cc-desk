@@ -226,35 +226,47 @@ fn get_projects_state_path() -> Result<PathBuf> {
     get_gui_config_dir().map(|d| d.join("projects.json"))
 }
 
-/// 扫描 ~/.claude/projects/ 构建真实路径到项目目录的映射
-/// 每个目录通过读取 JSONL 中的 cwd 字段获取真实项目路径
-fn build_project_path_mapping() -> ProjectPathMapping {
-    let claude_dir = match get_claude_dir() {
-        Ok(d) => d,
-        Err(_) => return HashMap::new(),
-    };
-    let projects_dir = claude_dir.join("projects");
-
-    if !projects_dir.exists() {
-        return HashMap::new();
-    }
-
+/// 扫描 projects_root 构建真实路径到项目目录的映射(每个目录读 JSONL 的 cwd;key 为原始字符串)。
+pub(crate) fn build_project_path_mapping_at(projects_root: &Path) -> Result<ProjectPathMapping> {
     let mut mapping = ProjectPathMapping::new();
-
-    if let Ok(entries) = fs::read_dir(&projects_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            if let Some(real_path) = extract_project_path_from_jsonl(&path) {
-                mapping.entry(real_path).or_default().push(path);
-            }
+    // try_exists 区分「真不存在」(Ok(false) → 空映射,合法:全新机器)与「metadata/权限错误」
+    // (Err → 传播;exists() 会把错误折叠成 false,误当不存在走清标记收敛)
+    match projects_root.try_exists() {
+        Ok(true) => {}
+        Ok(false) => return Ok(mapping),
+        Err(e) => return Err(anyhow::anyhow!("check {}: {e}", projects_root.display())),
+    }
+    let entries = fs::read_dir(projects_root)
+        .with_context(|| format!("Failed to read {}", projects_root.display()))?;
+    for entry in entries {
+        // 单条目读取失败 → 整体 Err(删除路径宁可不执行,不可静默漏目录后误清标记;
+        // 生产扫描入口 build_project_path_mapping 对 Result 做 unwrap_or_default 回退旧行为)
+        let entry = entry?;
+        let path = entry.path();
+        // file_type() 来自 readdir 数据(不额外打 metadata),错误同样传播而非折叠成「非目录」
+        let file_type = entry.file_type().with_context(|| {
+            format!("file_type {}: {}", path.display(), projects_root.display())
+        })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        if let Some(real_path) = extract_project_path_from_jsonl(&path) {
+            mapping.entry(real_path).or_default().push(path);
         }
     }
+    Ok(mapping)
+}
 
-    mapping
+/// 扫描 ~/.claude/projects/ 建映射(生产入口;扫描失败回退空映射维持旧行为,
+/// delete 路径不经此函数——它直接调 _at 版本并传播错误)。
+fn build_project_path_mapping() -> ProjectPathMapping {
+    build_project_path_mapping_at(&claude_projects_root().unwrap_or_else(|_| PathBuf::new()))
+        .unwrap_or_default()
+}
+
+/// Claude projects 根目录路径。
+pub(crate) fn claude_projects_root() -> Result<PathBuf> {
+    get_claude_dir().map(|d| d.join("projects"))
 }
 
 pub(crate) fn with_project_path_mapping<T>(
@@ -273,13 +285,28 @@ fn get_project_dirs(project_path: &str) -> Vec<PathBuf> {
         if cache.is_none() {
             *cache = Some(build_project_path_mapping());
         }
-
         cache
             .as_ref()
-            .and_then(|mapping| mapping.get(project_path))
-            .cloned()
+            .map(|m| lookup_project_dirs(m, project_path))
             .unwrap_or_default()
     })
+}
+
+/// 根据真实项目路径查目录列表:合并所有「精确相等或规范化等价」的 key 的目录并去重
+/// (mapping key 是原始 cwd,可能同时存在 E:\Foo 与 e:/foo 两个 key;修复 Windows 下规范化 key 查空)。
+pub(crate) fn lookup_project_dirs(
+    mapping: &ProjectPathMapping,
+    project_path: &str,
+) -> Vec<PathBuf> {
+    let n = normalize_path_str(project_path);
+    let mut dirs: Vec<PathBuf> = mapping
+        .iter()
+        .filter(|(k, _)| k.as_str() == project_path || normalize_path_str(k) == n)
+        .flat_map(|(_, v)| v.iter().cloned())
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
 
 /// 清除项目路径映射缓存（供外部调用以强制刷新）
