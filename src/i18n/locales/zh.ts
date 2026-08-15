@@ -33,6 +33,13 @@ export default {
   operationFailed: '操作失败，请重试',
   lockTimeout: '操作超时，另一实例可能无响应，请重试',
   loadHistoryFailed: '历史加载失败',
+  deleteSession: '删除会话',
+  batchDelete: '批量删除',
+  cancelBatch: '取消',
+  confirmBatchDelete: '确定删除选中的 {count} 个会话？会话文件将被永久移除，不可恢复。',
+  runningSessionHint: '会话运行中，请先关闭标签页',
+  deleteFailed: '删除失败',
+  noSessionSelected: '请先选择要删除的会话',
 
   // Settings navigation
   appearance: '外观',

@@ -166,8 +166,14 @@
            不依赖 cachedProjects 分页，避免分页外已存档项目漏显示） -->
       <div v-if="hasArchived" class="archived-section">
         <h3>{{ t('archivedSessions') }}</h3>
-        <button v-if="!archivedLoaded" class="load-archived-btn" @click="loadArchived">{{ t('loadArchived') }}</button>
-        <template v-else>
+        <div class="archived-toolbar">
+          <button v-if="!archivedLoaded" class="load-archived-btn" @click="loadArchived">{{ t('loadArchived') }}</button>
+          <template v-else>
+            <button v-if="!batchMode" class="batch-btn" @click="enterBatchMode">{{ t('batchDelete') }}</button>
+            <button v-else class="batch-btn" @click="exitBatchMode">{{ t('cancelBatch') }}</button>
+          </template>
+        </div>
+        <template v-if="archivedLoaded">
           <div v-for="proj in archivedProjects" :key="proj.path" class="archived-project">
             <div class="archived-project-name">{{ proj.name }}</div>
             <!-- 该项目历史加载失败：内联错误 + 重试（不阻塞其他项目展示） -->
@@ -175,20 +181,42 @@
               <span>{{ t('loadHistoryFailed') }}</span>
               <button class="archived-retry-btn" @click="retryArchived(proj.path)">{{ t('retry') }}</button>
             </div>
-            <button
+            <div
               v-for="s in sessionStore.getArchivedSessionInfos(proj.path)"
               :key="s.sessionId"
               class="archived-item"
-              @click="handleRestore(proj.path, s.sessionId, s.name)"
+              :class="{ 'is-running': isSessionRunning(s.sessionId) }"
             >
-              <span class="archived-name">{{ s.name }}</span>
-              <span v-if="s.lastActiveAt > 0" class="archived-time">{{ formatTime(s.lastActiveAt) }}</span>
-            </button>
+              <label v-if="batchMode" class="archived-check">
+                <input
+                  type="checkbox"
+                  :value="s.sessionId"
+                  :disabled="isSessionRunning(s.sessionId)"
+                  v-model="selected[proj.path]"
+                />
+              </label>
+              <button class="archived-restore" @click="handleRestore(proj.path, s.sessionId, s.name)" :disabled="batchMode">
+                <span class="archived-name">{{ s.name }}</span>
+                <span v-if="s.lastActiveAt > 0" class="archived-time">{{ formatTime(s.lastActiveAt) }}</span>
+              </button>
+              <button
+                v-if="!batchMode"
+                class="archived-delete"
+                @click.stop="handleSingleDelete(proj.path, s.sessionId)"
+                :disabled="isSessionRunning(s.sessionId)"
+                :title="isSessionRunning(s.sessionId) ? t('runningSessionHint') : t('deleteSession')"
+              >{{ t('deleteSession') }}</button>
+            </div>
           </div>
           <!-- 任一项目加载失败时整体提示（可重新加载全部） -->
           <div v-if="archivedErrors.size > 0" class="archived-global-error">
             <span>{{ t('loadArchivedFailed') }}</span>
             <button class="archived-retry-btn" @click="loadArchived">{{ t('retry') }}</button>
+          </div>
+          <div v-if="batchMode" class="archived-batch-footer">
+            <span>{{ t('confirmBatchDelete', { count: selectedCount }) }}</span>
+            <button class="batch-confirm" :disabled="selectedCount === 0" @click="handleBatchDelete">{{ t('confirmBtn') }}</button>
+            <button class="batch-cancel" @click="exitBatchMode">{{ t('cancelBatch') }}</button>
           </div>
         </template>
       </div>
@@ -205,6 +233,7 @@ import { useSidebarStore } from '@/stores/sidebar'
 import { ctrl } from '@/utils/platform'
 import { sameProjectPath } from '@/utils/path'
 import { matchProjectQuery, editReducer, validateDisplayName, type EditState } from '@/utils/displayName'
+import { filterDeletable, groupByProject } from '@/stores/session'
 
 const { t } = useI18n()
 
@@ -510,6 +539,63 @@ const archivedProjects = computed(() => {
       emit('resumeSession', projectPath, sessionId, sessionName)
     }).catch(() => { manageError.value = t('operationFailed') })
   }
+
+// ---- 已存档删除(单删 + 跨项目批量) ----
+const batchMode = ref(false)
+// 每项目的勾选数组。reactive + 逐项目初始化空数组:key 不存在时 v-model 会按布尔
+// checkbox 处理(破坏 string[] 语义),且非 reactive 时 selectedCount 不会重算。
+const selected = reactive<Record<string, string[]>>({})
+for (const proj of archivedProjects.value) selected[proj.path] = []
+const selectedCount = computed(() => Object.values(selected).reduce((n, arr) => n + arr.length, 0))
+
+function isSessionRunning(sessionId: string): boolean {
+  return sessionStore.claimedSessionIds.has(sessionId)
+}
+
+function enterBatchMode() {
+  batchMode.value = true
+  for (const k of Object.keys(selected)) delete selected[k]
+  for (const proj of archivedProjects.value) selected[proj.path] = []
+}
+function exitBatchMode() {
+  batchMode.value = false
+  for (const k of Object.keys(selected)) delete selected[k]
+}
+
+/** 单删:确认后删单项目单个会话;确认前重查运行态(TOCTOU 的 UX 缓解) */
+async function handleSingleDelete(projectPath: string, sessionId: string) {
+  if (isSessionRunning(sessionId)) return
+  if (!window.confirm(t('confirmBatchDelete', { count: 1 }))) return
+  if (isSessionRunning(sessionId)) return
+  try {
+    await sessionStore.deleteSessions(projectPath, [sessionId])
+  } catch {
+    window.alert(t('deleteFailed'))
+  }
+}
+
+/** 批量删除:跨项目分组,逐项目串行调用,失败不中断其余组;每组再 filterDeletable 兜底滤运行中 */
+async function handleBatchDelete() {
+  if (selectedCount.value === 0) { window.alert(t('noSessionSelected')); return }
+  const items: { projectPath: string; sessionId: string }[] = []
+  for (const [path, ids] of Object.entries(selected)) {
+    for (const id of ids) items.push({ projectPath: path, sessionId: id })
+  }
+  if (!window.confirm(t('confirmBatchDelete', { count: items.length }))) return
+  const grouped = groupByProject(items)
+  let failed = 0
+  for (const [path, ids] of grouped) {
+    const deletable = filterDeletable(ids, sessionStore.claimedSessionIds)
+    if (deletable.length === 0) continue // 全被运行态滤除:不发空请求
+    try {
+      await sessionStore.deleteSessions(path, deletable)
+    } catch {
+      failed += deletable.length
+    }
+  }
+  if (failed > 0) { window.alert(t('deleteFailed')) }
+  exitBatchMode()
+}
 
 function formatTime(ts: number): string {
   if (!ts) return ''
@@ -970,6 +1056,137 @@ function formatTime(ts: number): string {
   font-size: 11px;
   color: var(--text-tertiary);
   flex-shrink: 0;
+}
+
+.archived-toolbar {
+  margin-bottom: 8px;
+}
+
+.batch-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.batch-btn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.archived-check {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.archived-check input {
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.archived-check input:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.archived-restore {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.archived-restore:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.archived-restore:disabled {
+  cursor: default;
+}
+
+.archived-delete {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--status-error);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.archived-delete:hover:not(:disabled) {
+  border-color: var(--status-error);
+  background: var(--hover-bg);
+}
+
+.archived-delete:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.archived-item.is-running .archived-name {
+  color: var(--status-success);
+}
+
+.archived-batch-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 4px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.batch-confirm,
+.batch-cancel {
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.batch-confirm {
+  border: 1px solid var(--status-error);
+  background: var(--status-error);
+  color: #fff;
+}
+
+.batch-confirm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.batch-confirm:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.batch-cancel {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.batch-cancel:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
 }
 
 /* 已存档历史加载失败（逐项目 + 全局提示）+ 操作失败 banner（v6 codex batch2 #9） */

@@ -33,6 +33,13 @@ export default {
   operationFailed: 'Operation failed, please retry',
   lockTimeout: 'Operation timed out — another instance may be unresponsive. Please retry.',
   loadHistoryFailed: 'Failed to load history',
+  deleteSession: 'Delete session',
+  batchDelete: 'Batch delete',
+  cancelBatch: 'Cancel',
+  confirmBatchDelete: 'Delete the selected {count} sessions? Session files will be permanently removed and cannot be recovered.',
+  runningSessionHint: 'Session is running, close its tab first',
+  deleteFailed: 'Delete failed',
+  noSessionSelected: 'Select sessions to delete first',
 
   // Settings navigation
   appearance: 'Appearance',
