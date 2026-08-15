@@ -736,6 +736,36 @@ pub(crate) fn normalize_path_str(p: &str) -> String {
     normalize_path_inner(p, cfg!(target_os = "linux"))
 }
 
+/// 校验会话 ID 可作为单个文件名组件(防路径逃逸)。拒绝空、路径分隔符、冒号、
+/// NUL、`.`/`..`、Windows 保留设备名。合法返回 Ok(())，否则 Err(reason)。
+pub(crate) fn validate_session_id_component(id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("session id is empty".to_string());
+    }
+    if id.contains('/') || id.contains('\\') || id.contains(':') || id.contains('\0') {
+        return Err(format!("session id has path separators or special chars: {id}"));
+    }
+    if id == "." || id == ".." {
+        return Err(format!("session id is dot path: {id}"));
+    }
+    // Windows 保留设备名(大小写不敏感);取扩展名前的主干比较
+    let stem = id.split('.').next().unwrap_or(id);
+    let upper = stem.to_ascii_uppercase();
+    let reserved = [
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if reserved.contains(&upper.as_str()) {
+        return Err(format!("session id is a windows reserved name: {id}"));
+    }
+    // agent- 前缀是子代理文件,不是用户会话(与 enumerate_session_entries 排除规则一致)
+    if id.starts_with("agent-") {
+        return Err(format!("session id is agent-prefixed: {id}"));
+    }
+    Ok(())
+}
+
 /// 平台感知规范化核心（注入 case_sensitive，便于单元测试在任意宿主验证两支）：
 /// - case_sensitive=true（Linux）：保留大小写身份
 /// - case_sensitive=false（Windows/macOS）：lower 后合并等价身份

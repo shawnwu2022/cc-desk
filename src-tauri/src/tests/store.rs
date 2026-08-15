@@ -15,7 +15,8 @@ use crate::store::{
     parse_skill_description, parse_timestamp, read_projects_state_locked, replace_file_atomic,
     resolve_marketplace_plugin_path_at, scan_home_projects_at, search_session_messages_in_dirs,
     set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,
-    with_project_path_mapping, with_projects_state_locked, write_json_atomic, AgentInfo, AppConfig,
+    validate_session_id_component, with_project_path_mapping, with_projects_state_locked,
+    write_json_atomic, AgentInfo, AppConfig,
     Project, ProjectPathMapping, ProjectsState, SessionInfo,
 };
 
@@ -3366,4 +3367,45 @@ fn AcquireLock_Timeout_001() {
         err.to_string().contains("lock timeout"),
         "实际错误: {err:#}"
     );
+}
+
+// ==================== validate_session_id_component ====================
+
+#[test]
+fn ValidateSessionIdComponent_RejectsEmpty_001() {
+    assert!(validate_session_id_component("").is_err());
+}
+
+#[test]
+fn ValidateSessionIdComponent_RejectsSeparators_002() {
+    assert!(validate_session_id_component("a/b").is_err());
+    assert!(validate_session_id_component("a\\b").is_err());
+    assert!(validate_session_id_component("a:b").is_err()); // Windows 冒号/ADS
+    assert!(validate_session_id_component("a\0b").is_err());
+}
+
+#[test]
+fn ValidateSessionIdComponent_RejectsDot_003() {
+    assert!(validate_session_id_component(".").is_err());
+    assert!(validate_session_id_component("..").is_err());
+}
+
+#[test]
+fn ValidateSessionIdComponent_RejectsWindowsReserved_004() {
+    for name in ["CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "com1", "con"] {
+        assert!(validate_session_id_component(name).is_err(), "{} should be rejected", name);
+    }
+    assert!(validate_session_id_component("CON.txt").is_err()); // 保留名 + 扩展
+}
+
+#[test]
+fn ValidateSessionIdComponent_AcceptsNormal_005() {
+    assert!(validate_session_id_component("abc123").is_ok());
+    assert!(validate_session_id_component("a-b_c.2026").is_ok());
+}
+
+#[test]
+fn ValidateSessionIdComponent_RejectsAgentPrefix_006() {
+    assert!(validate_session_id_component("agent-a1b2").is_err());
+    assert!(validate_session_id_component("agent-").is_err());
 }
