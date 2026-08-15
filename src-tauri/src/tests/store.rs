@@ -3472,6 +3472,21 @@ fn MappingStrict_RootIsFile_001() {
     assert!(build_project_path_mapping_strict_at(&not_a_dir).is_err());
 }
 
+// 容错映射:一个正常项目 + 一个无有效 cwd 的损坏兄弟目录,映射仍保留正常项目
+// (锁死「局部 IO 错误不清空全部生产映射」修复;若容错版退化为整体失败,此断言红)
+#[test]
+fn MappingAt_BrokenSibling_KeepsGood_001() {
+    let root = tempfile::tempdir().unwrap();
+    let good = root.path().join("good");
+    std::fs::create_dir_all(&good).unwrap();
+    std::fs::write(good.join("s.jsonl"), "{\"cwd\":\"/real/proj\"}\n").unwrap();
+    let broken = root.path().join("broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("s.jsonl"), "{\"type\":\"user\"}\n").unwrap();
+    let mapping = build_project_path_mapping_at(root.path());
+    assert_eq!(mapping.get("/real/proj").map(|d| d.len()), Some(1));
+}
+
 // 检查精确原始路径命中,规范化 key 兜底也能命中
 #[test]
 fn LookupDirs_ExactAndNorm_001() {
