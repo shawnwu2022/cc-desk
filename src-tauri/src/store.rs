@@ -250,7 +250,7 @@ pub(crate) fn build_project_path_mapping_at(projects_root: &Path) -> Result<Proj
         if !file_type.is_dir() {
             continue;
         }
-        if let Some(real_path) = extract_project_path_from_jsonl(&path) {
+        if let Some(real_path) = extract_project_path_from_jsonl_strict(&path)? {
             mapping.entry(real_path).or_default().push(path);
         }
     }
@@ -348,6 +348,42 @@ pub(crate) fn extract_project_path_from_jsonl(project_dir: &Path) -> Option<Stri
     }
 
     None
+}
+
+/// 从 JSONL 提取真实项目路径(错误可传播版,供删除路径用)。
+/// Ok(None)=目录不存在或无 cwd;Err=目录枚举/文件打开/读取失败。
+/// 与吞错版不同,strict 版不把 IO 错误折叠成「无此项目」——否则 delete_sessions
+/// 会把读取失败误判为项目消失而清标记、遗留文件。
+pub(crate) fn extract_project_path_from_jsonl_strict(project_dir: &Path) -> Result<Option<String>> {
+    match project_dir.try_exists() {
+        Ok(true) => {}
+        Ok(false) => return Ok(None),
+        Err(e) => return Err(anyhow::anyhow!("check {}: {e}", project_dir.display())),
+    }
+    for entry in fs::read_dir(project_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if (ext == "jsonl" || ext == "txt")
+            && !path
+                .file_name()
+                .map(|n| n.to_str().unwrap_or("").starts_with("agent-"))
+                .unwrap_or(false)
+        {
+            let mut found = None;
+            visit_jsonl_values(&path, |json| {
+                if let Some(cwd) = json.get("cwd").and_then(|v| v.as_str()) {
+                    found = Some(cwd.to_string());
+                    return true;
+                }
+                false
+            })?; // 打开/读取错误传播
+            if found.is_some() {
+                return Ok(found);
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn visit_jsonl_values<F>(path: &Path, mut visit: F) -> io::Result<()>
@@ -3725,10 +3761,8 @@ where
 /// (已删文件不恢复;重试靠「文件不存在视为已删」与「目录消失仍清标记」双路径收敛)。
 /// 失败收敛的两种残留状态:①文件已删但标记未清(状态写失败)→ 重试时目录可能已消失,
 /// 命中「目录消失仍清标记」收敛;②部分删失败 → 重试时已删文件不存在,跳过后删剩余。
-/// 已知残余风险:extract_project_path_from_jsonl 内部用 ok()? 早退、忽略 JSONL 内容
-/// 读取错误——项目目录里**任一**条目读取失败(权限等)即让该目录从 mapping 消失
-/// (即便后续条目本可读出 cwd),此时 delete 会清标记但文件残留。为修复它需改动该
-/// 生产函数签名并波及 3 个调用方(251/371/663),收益不抵;接受并如实记录。
+/// 注:目录枚举/文件打开/读取错误经 build_project_path_mapping_at 的 strict 提取传播为 Err,
+/// 不折叠成「项目消失」清标记(见 extract_project_path_from_jsonl_strict)。
 pub(crate) fn delete_sessions_inner(
     data_path: &Path,
     lock_path: &Path,
