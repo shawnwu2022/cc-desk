@@ -634,6 +634,7 @@ pub fn get_home_data_indexed(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn get_home_data_indexed_at(
     projects_dir: &Path,
     project_limit: usize,
