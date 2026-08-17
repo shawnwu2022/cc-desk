@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.0] - 2026-08-17
+
+### Features
+- Add permanent deletion for archived sessions across projects
+- Add persistent session-name indexing to speed up startup and history loading
+
+### Fixed
+- Fix long-paste rendering so carriage returns no longer hide earlier text
+- Preserve project visibility and error details when session scans encounter invalid paths or I/O failures
+- Keep cache state consistent after forced reloads fail
+
 ## [0.15.0] - 2026-07-21
 
 ### Features

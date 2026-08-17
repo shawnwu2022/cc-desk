@@ -15,6 +15,8 @@ const DEFAULT_FLUSH_BUDGET: Duration = Duration::from_secs(1);
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PRODUCTION_INDEX_HEALTH: OnceLock<Arc<IndexHealth>> = OnceLock::new();
 
+type ReplaceFileFn = dyn Fn(&Path, &Path) -> io::Result<()> + Send + Sync;
+
 pub(crate) const SESSION_NAME_INDEX_SCHEMA_VERSION: u32 = 1;
 pub(crate) const SESSION_NAME_PARSER_VERSION: u32 = 1;
 
@@ -271,7 +273,7 @@ pub(crate) struct SessionNameIndexStore {
     flush_attempts: usize,
     probe: Option<Arc<dyn Fn(FlushStage, bool) + Send + Sync>>,
     before_exclusive: Option<Arc<dyn Fn(usize) + Send + Sync>>,
-    replace: Arc<dyn Fn(&Path, &Path) -> io::Result<()> + Send + Sync>,
+    replace: Arc<ReplaceFileFn>,
     snapshot_read_counter: Option<Arc<AtomicU64>>,
 }
 
@@ -305,7 +307,7 @@ impl SessionNameIndexStore {
         flush_attempts: usize,
         probe: Option<Arc<dyn Fn(FlushStage, bool) + Send + Sync>>,
         before_exclusive: Option<Arc<dyn Fn(usize) + Send + Sync>>,
-        replace: Option<Arc<dyn Fn(&Path, &Path) -> io::Result<()> + Send + Sync>>,
+        replace: Option<Arc<ReplaceFileFn>>,
     ) -> Self {
         self.flush_budget = flush_budget;
         self.flush_attempts = flush_attempts;
@@ -876,7 +878,7 @@ impl FlushStage {
     }
 
     /// 指回该阶段在 metrics 里的累计 Duration 字段（消除 add_stage / 镜像的两处 switch）。
-    pub(crate) fn field_mut<'a>(self, metrics: &'a mut FlushMetrics) -> &'a mut Duration {
+    pub(crate) fn field_mut(self, metrics: &mut FlushMetrics) -> &mut Duration {
         match self {
             FlushStage::Revalidate => &mut metrics.revalidate,
             FlushStage::RawRead => &mut metrics.raw_read,

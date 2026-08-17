@@ -303,7 +303,9 @@ fn profile_home_data_at(
     Ok((home, timings))
 }
 
-fn normalize_home_profile(home: &HomeData) -> (Vec<String>, Vec<(String, String, String, u64)>) {
+type HomeProfileSnapshot = (Vec<String>, Vec<(String, String, String, u64)>);
+
+fn normalize_home_profile(home: &HomeData) -> HomeProfileSnapshot {
     let projects = home
         .projects
         .iter()

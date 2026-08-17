@@ -1225,7 +1225,7 @@ fn HomeIndex_ReadsOnce_020() {
     std::fs::create_dir_all(&real_one).unwrap();
     std::fs::create_dir_all(&real_two).unwrap();
     {
-        std::fs::create_dir_all(&projects_root.join("encoded-one")).unwrap();
+        std::fs::create_dir_all(projects_root.join("encoded-one")).unwrap();
         let path = projects_root.join("encoded-one").join("one.jsonl");
         std::fs::write(
             &path,
@@ -1238,7 +1238,7 @@ fn HomeIndex_ReadsOnce_020() {
         .unwrap();
     }
     {
-        std::fs::create_dir_all(&projects_root.join("encoded-two")).unwrap();
+        std::fs::create_dir_all(projects_root.join("encoded-two")).unwrap();
         let path = projects_root.join("encoded-two").join("two.jsonl");
         std::fs::write(
             &path,
@@ -1296,7 +1296,7 @@ fn HomeIndex_SkipFailedProject_022() {
         .unwrap();
     }
     {
-        std::fs::create_dir_all(&projects_root.join("encoded-two")).unwrap();
+        std::fs::create_dir_all(projects_root.join("encoded-two")).unwrap();
         let path = projects_root.join("encoded-two").join("two.jsonl");
         std::fs::write(
             &path,
@@ -1384,7 +1384,7 @@ fn AllRecentIndex_SkipFailedProject_023() {
         .unwrap();
     }
     {
-        std::fs::create_dir_all(&projects_root.join("encoded-two")).unwrap();
+        std::fs::create_dir_all(projects_root.join("encoded-two")).unwrap();
         let path = projects_root.join("encoded-two").join("two.jsonl");
         std::fs::write(
             &path,
@@ -1611,21 +1611,20 @@ fn SessionsIndex_AppendFullRebuild_023() {
     .with_snapshot_read_counter(Arc::clone(&reads));
     {
         let mut seed_index = SessionNameIndex::empty();
-        for (project_dir, path, name) in [(&encoded, &path, "Old cached")] {
-            let stamp = FileStamp::read(path).unwrap();
-            let project_key = normalize_path_str(&project_dir.to_string_lossy());
-            let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
-            seed_index.projects.entry(project_key).or_default().insert(
-                file_name,
-                SessionNameEntry {
-                    name: (*name).to_string(),
-                    observed_length: stamp.observed_length,
-                    modified_secs: stamp.modified_secs,
-                    modified_nanos: stamp.modified_nanos,
-                    cached_at_ms: 1_000,
-                },
-            );
-        }
+        let (project_dir, path, name) = (&encoded, &path, "Old cached");
+        let stamp = FileStamp::read(path).unwrap();
+        let project_key = normalize_path_str(&project_dir.to_string_lossy());
+        let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+        seed_index.projects.entry(project_key).or_default().insert(
+            file_name,
+            SessionNameEntry {
+                name: (*name).to_string(),
+                observed_length: stamp.observed_length,
+                modified_secs: stamp.modified_secs,
+                modified_nanos: stamp.modified_nanos,
+                cached_at_ms: 1_000,
+            },
+        );
         std::fs::write(&paths.data, serde_json::to_vec(&seed_index).unwrap()).unwrap();
     }
     std::fs::OpenOptions::new()
@@ -1729,7 +1728,7 @@ fn AllRecentIndex_OneResolver_025() {
         let real = root.path().join(format!("real-{sequence}"));
         std::fs::create_dir_all(&real).unwrap();
         {
-            std::fs::create_dir_all(&projects_root.join(format!("encoded-{sequence}"))).unwrap();
+            std::fs::create_dir_all(projects_root.join(format!("encoded-{sequence}"))).unwrap();
             let path = projects_root
                 .join(format!("encoded-{sequence}"))
                 .join(format!("session-{sequence}.jsonl"));
@@ -3877,7 +3876,7 @@ fn Delete_MultiDirBothExt_001() {
     .unwrap();
     let data = dir.path().join("projects.json");
     let mut archived = serde_json::Map::new();
-    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1", "s2"]));
+    archived.insert(normalize_path_str("E:\\Foo"), json!(["s1", "s2"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
 
@@ -3911,7 +3910,7 @@ fn Delete_MissingFile_002() {
     .unwrap();
     let data = dir.path().join("projects.json");
     let mut archived = serde_json::Map::new();
-    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1", "ghost"]));
+    archived.insert(normalize_path_str("E:\\Foo"), json!(["s1", "ghost"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     // ghost 文件不存在 -> 容错跳过,仍清两标记
@@ -3943,7 +3942,7 @@ fn Delete_NotArchived_003() {
     .unwrap();
     let data = dir.path().join("projects.json");
     let mut archived = serde_json::Map::new();
-    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    archived.insert(normalize_path_str("E:\\Foo"), json!(["s1"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     // s2 未存档 -> 整体 Err,projects.json 不变,s1 文件不动
@@ -3970,7 +3969,7 @@ fn Delete_InvalidId_004() {
     .unwrap();
     let data = dir.path().join("projects.json");
     let mut archived = serde_json::Map::new();
-    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    archived.insert(normalize_path_str("E:\\Foo"), json!(["s1"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     for bad in ["../evil", "a/b", "a\\b", "C:evil", "CON"] {
@@ -3988,7 +3987,7 @@ fn Delete_ProjectGone_005() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("projects.json");
     let mut archived = serde_json::Map::new();
-    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    archived.insert(normalize_path_str("E:\\Foo"), json!(["s1"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &["s1".into()]).unwrap();
@@ -4001,7 +4000,7 @@ fn Delete_RootScanErr_008() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("projects.json");
     let mut archived = serde_json::Map::new();
-    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    archived.insert(normalize_path_str("E:\\Foo"), json!(["s1"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     // root 路径是个文件(非目录)→ read_dir 失败 → Err 不动状态,不误清标记
@@ -4018,7 +4017,7 @@ fn Delete_RootMissing_009() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("projects.json");
     let mut archived = serde_json::Map::new();
-    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    archived.insert(normalize_path_str("E:\\Foo"), json!(["s1"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     // root 整个不存在(全新机器/目录被移走)→ 无处可删,清标记收敛;
@@ -4045,7 +4044,7 @@ fn Delete_NormPath_006() {
     .unwrap();
     let data = dir.path().join("projects.json");
     let mut archived = serde_json::Map::new();
-    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    archived.insert(normalize_path_str("E:\\Foo"), json!(["s1"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     // 传规范化 key e:/foo 也能命中目录并删除
@@ -4067,7 +4066,7 @@ fn Delete_EmptyList_007() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("projects.json");
     let mut archived = serde_json::Map::new();
-    archived.insert(normalize_path_str("E:\\Foo").into(), json!(["s1"]));
+    archived.insert(normalize_path_str("E:\\Foo"), json!(["s1"]));
     std::fs::write(&data, json!({ "archivedSessions": archived }).to_string()).unwrap();
     let lock = dir.path().join("projects.json.lock");
     let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &[]).unwrap();
