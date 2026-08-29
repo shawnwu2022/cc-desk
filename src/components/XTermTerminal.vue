@@ -409,7 +409,8 @@ function createTerminal(tabId: string): Terminal {
       // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
       // 触发光标回行首、后续覆盖前面（表现为"只显尾部"）。这里用 commitPaste 走完整
       // 流程：capture ptyId → readText → isPasteStale 复核（防 restart 重建后写到新 PTY）
-      // → 构造 payload（规范化 LF + bracketed 包装）→ 写 PTY（见 utils/pasteText.ts）。
+      // → 构造 payload（JSON 压缩单行 + 规范化 LF + bracketed 包装，见 utils/pasteText.ts；
+      // 压缩是为绕开 ConPTY 吞标记后 Claude 对大段多行 burst 的间歇截断）。
       // 剪贴板无文本（截图场景 readText reject）时经 imageFallback 转发 CLI 图片粘贴键
       // 字节，由 CLI 自行读剪贴板插 [Image #N]（键位契约见 docs/interaction.md）。
       commitPaste(

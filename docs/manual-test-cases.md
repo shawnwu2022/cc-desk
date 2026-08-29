@@ -2187,6 +2187,39 @@
 
 ---
 
+## JSON 粘贴压缩（ConPTY 截断绕行）
+
+### JsonPaste-DevTools对象压缩
+
+**目标**：DevTools 复制的多行 JSON 粘贴进 Claude 输入框内容完整（背景：Windows ConPTY 吞 bracketed paste 标记，Claude Code 对大段多行无标记 burst 会间歇截断，上游 #49673/#49337 不修；app 对合法 JSON 压缩单行后再写 PTY）
+
+**前置条件**：Windows，终端内有运行中的 Claude Code 会话；Chrome/Edge DevTools Console 可用
+
+**操作步骤**：
+1. DevTools Console 中执行一段返回对象的代码，右键对象选「Copy object」
+2. 聚焦终端按 Ctrl+V
+3. 检查输入框：内容应为单行 JSON（或折叠为粘贴芯片提示 paste again to expand）
+4. 按 Enter 发送，让 Claude 复述 JSON 的第一个和最后一个键名
+5. 换一个大对象（数千行）重复 1-4
+
+**预期结果**：
+- 输入框呈现单行 JSON 或粘贴芯片，不再出现「只剩尾部/头部几行」的截断
+- Claude 复述的首尾键名与原对象一致
+- 已知残余：压缩后仍超约 4KB 的内容在 Claude 识别失败时仍可能截尾（上游未修），建议超大对象改用 @文件 引用
+
+### JsonPaste-非JSON不压缩
+
+**目标**：非 JSON 多行文本粘贴行为不变（不被误压缩）
+
+**前置条件**：同上
+
+**操作步骤**：
+1. 复制一段多行代码或普通文本（非合法 JSON，如带尾逗号的对象字面量）
+2. 聚焦终端按 Ctrl+V
+
+**预期结果**：
+- 内容按原样多行粘贴（保持换行），格式不被改写
+
 ## 剪贴板图片粘贴（Ctrl+V 智能分流）
 
 ### 图片粘贴-截图分流

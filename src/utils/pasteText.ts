@@ -16,6 +16,29 @@ export function preparePasteText(text: string): string {
 }
 
 /**
+ * 多行 JSON 压缩成单行（语义无损），非 JSON 原样返回。
+ *
+ * 为什么：Windows ConPTY 输入解析器会吞掉 `ESC[200~`/`ESC[201~` bracketed paste
+ * 标记（CSI 序列不透传给子进程），Claude Code 只能靠 burst 启发式识别粘贴；对
+ * 大段多行无标记 burst 识别会间歇性失败，按逐键处理时输入编辑器会静默丢弃头部
+ * 或尾部（上游 anthropics/claude-code#49673、#49337，已关闭不修）。e2e 实测：
+ * 单行大 burst 稳定触发 chip 识别或完整进入编辑器，两种形态内容均不丢。
+ *
+ * 无损性依据：合法 JSON 的裸换行只会出现在 token 之间（字符串内部的换行必须是
+ * `\n` 转义序列），因此移除「换行 + 后续缩进空白」不影响任何值；配合 JSON.parse
+ * 先行校验。刻意不用 parse+stringify 往返——那会把超出 2^53 的整数 ID 静默取整。
+ */
+export function compactJsonForPaste(text: string): string {
+  if (!text.includes('\n')) return text
+  try {
+    JSON.parse(text)
+  } catch {
+    return text
+  }
+  return text.replace(/\r?\n\s*/g, '')
+}
+
+/**
  * 生成最终写入 PTY 的粘贴 payload：规范化正文 + 按 bracketed paste 模式包装。
  *
  * Claude CLI 开启 bracketed paste 时用 `ESC[200~…ESC[201~` 包裹多行文本，使其作为
@@ -34,7 +57,7 @@ export function bracketPasteText(
 }
 
 /**
- * 构造最终写入 PTY 的粘贴 payload：规范化 LF 换行 + 按 bracketed paste 模式包装。
+ * 构造最终写入 PTY 的粘贴 payload：合法 JSON 压缩单行 + 规范化 LF + bracketed 包装。
  * 组件粘贴链路唯一入口，测试据此锁死"剪贴板文本 → 最终写 PTY 字节"的完整行为。
  */
 export function buildPastePayload(
@@ -42,7 +65,8 @@ export function buildPastePayload(
   bracketedPasteMode: boolean,
   ignoreBracketedPasteMode: boolean,
 ): string {
-  const prepared = preparePasteText(text)
+  const compacted = compactJsonForPaste(text)
+  const prepared = preparePasteText(compacted)
   // 空正文不包装，让调用方跳过发送，避免空 bracketed 标记。
   if (!prepared) return ''
   return bracketPasteText(prepared, bracketedPasteMode, ignoreBracketedPasteMode)

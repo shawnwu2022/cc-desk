@@ -169,6 +169,16 @@ term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 
 `commitPaste` 的核心竞态守卫：`readText()` 是异步的，等待期间 restartTab 可能重建同 tabId 的新 PTY；实现先同步捕获按键瞬间的 ptyId，完成后复核当前实例仍是同一 ptyId（`isPasteStale`），否则丢弃过期粘贴，避免旧 bracketed 模式落到新实例。详见 `src/utils/pasteText.ts`。
 
+### JSON 粘贴压缩
+
+`buildPastePayload` 在规范化 LF 之前先经 `compactJsonForPaste`：剪贴板文本是**合法多行 JSON** 时压缩成单行，非 JSON 原样保留。
+
+为什么需要：Windows ConPTY 输入解析器会吞掉 `ESC[200~`/`ESC[201~` bracketed paste 标记（CSI 序列不透传子进程），Claude Code 只能靠 burst 启发式识别粘贴；大段多行无标记 burst 识别会间歇性失败，按逐键处理时输入编辑器静默丢弃头部或尾部（上游 [claude-code#49673](https://github.com/anthropics/claude-code/issues/49673)、[#49337](https://github.com/anthropics/claude-code/issues/49337)，官方关闭不修）。实测单行 burst 丢失率显著更低，且小中型 JSON 压缩后整体可靠。
+
+无损性：合法 JSON 的裸换行只会出现在 token 之间（字符串内部换行必须是 `\n` 转义），移除「换行 + 后续缩进空白」不影响任何值；JSON.parse 仅做校验，刻意不用 parse+stringify 往返——超出 2^53 的整数 ID 会被静默取整。
+
+残余风险：压缩后仍超约 4KB 的大段粘贴在 Claude 识别失败时仍可能截尾（上游未修，带内无 100% 可靠方案）；超大内容建议让 Claude 读文件（`@路径`）或用 CLI 的 `Ctrl+G` 外部编辑器。src-tauri/tests/paste_claude_e2e.rs（`#[ignore]`，真实 claude CLI 端到端）可人工监测上游行为变化。
+
 ### 图片粘贴分流
 
 剪贴板**无文本**时（`readText()` 返回空串或 reject——剪贴板只有截图时插件底层 arboard 返回错误，实际走 reject），`commitPaste` 经 `imageFallback` 向 PTY 转发 CLI 图片粘贴键字节，由 Claude CLI 自行读系统剪贴板、插入 `[Image #N]` 芯片，GUI 全程不接触图片数据：

@@ -1,5 +1,59 @@
 import { describe, expect, it, vi } from 'vitest'
-import { preparePasteText, bracketPasteText, buildPastePayload, isPasteStale, commitPaste, imagePasteBytes } from '@/utils/pasteText'
+import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, imagePasteBytes } from '@/utils/pasteText'
+
+describe('compactJsonForPaste', () => {
+  // 多行 pretty JSON 压缩成单行：结构性换行与缩进移除，token 不粘连。
+  // 背景：Windows ConPTY 会吞掉 bracketed paste 标记，Claude Code 收到大段多行
+  // 无标记 burst 时会间歇性丢弃头部或尾部（上游 #49673/#49337，不修）；
+  // 单行 burst 稳定触发 chip 识别或完整进入编辑器（e2e 实测 3/3 安全）。
+  it('PasteJson_PrettyMultiline_Compacted_001', () => {
+    const pretty = '{\n  "a": 1,\n  "b": [\n    true,\n    null\n  ]\n}'
+    expect(compactJsonForPaste(pretty)).toBe('{"a": 1,"b": [true,null]}')
+  })
+
+  // 压缩走正则而非 JSON.parse+stringify：字符串值内部的多空格原样保留。
+  it('PasteJson_StringSpaces_Preserved_002', () => {
+    const pretty = '{\n  "msg": "hello  world  ok",\n  "n": 2\n}'
+    expect(compactJsonForPaste(pretty)).toBe('{"msg": "hello  world  ok","n": 2}')
+  })
+
+  // 大整数只存在于原文文本中，禁止 parse 往返（会丢精度），压缩后数字逐字不变。
+  it('PasteJson_BigNumberDigits_Unchanged_003', () => {
+    const pretty = '{\n  "id": 12345678901234567890,\n  "k": "v"\n}'
+    const out = compactJsonForPaste(pretty)
+    expect(out).toContain('12345678901234567890')
+    expect(out).toBe('{"id": 12345678901234567890,"k": "v"}')
+  })
+
+  // CRLF 行尾的 pretty JSON 同样压缩。
+  it('PasteJson_CrlfMultiline_Compacted_004', () => {
+    const pretty = '{\r\n  "a": 1,\r\n  "b": 2\r\n}'
+    expect(compactJsonForPaste(pretty)).toBe('{"a": 1,"b": 2}')
+  })
+
+  // 非 JSON 文本原样返回（不得破坏多行 prose/代码）。
+  it('PasteJson_NonJson_Unchanged_005', () => {
+    const text = 'def foo():\n    return bar\n'
+    expect(compactJsonForPaste(text)).toBe(text)
+  })
+
+  // 语法非法的 JSON 形状（尾逗号）原样返回，不做部分压缩。
+  it('PasteJson_TrailingComma_Unchanged_006', () => {
+    const text = '{\n  "a": 1,\n}'
+    expect(compactJsonForPaste(text)).toBe(text)
+  })
+
+  // 已是单行的 JSON 原样返回（同一字符串，不做无谓替换）。
+  it('PasteJson_SingleLine_Identity_007', () => {
+    const text = '{"a": 1}'
+    expect(compactJsonForPaste(text)).toBe(text)
+  })
+
+  // 空串原样返回。
+  it('PasteJson_Empty_Identity_008', () => {
+    expect(compactJsonForPaste('')).toBe('')
+  })
+})
 
 describe('preparePasteText', () => {
   // CRLF 规范成 LF：Windows 剪贴板多行文本粘贴给 Claude 不再产生 \r 行首覆盖。
@@ -62,6 +116,18 @@ describe('preparePasteText', () => {
   // 空正文在 bracketed 包装前返回空串，调用方据此跳过 PTY 写入。
   it('PasteText_BuildPayload_Empty_012', () => {
     expect(buildPastePayload('', true, false)).toBe('')
+  })
+
+  // buildPastePayload 集成 JSON 压缩：多行 pretty JSON 进，单行 + bracketed 包装出。
+  it('PasteText_BuildPayload_JsonCompacted_013', () => {
+    const pretty = '{\n  "a": 1,\n  "b": 2\n}'
+    expect(buildPastePayload(pretty, true, false)).toBe('\x1b[200~{"a": 1,"b": 2}\x1b[201~')
+  })
+
+  // buildPastePayload 对非 JSON 多行文本保持原行为：仅 LF 规范化 + 包装。
+  it('PasteText_BuildPayload_NonJsonUntouched_014', () => {
+    expect(buildPastePayload('a\r\nb\r\nc', true, false))
+      .toBe('\x1b[200~a\nb\nc\x1b[201~')
   })
 })
 
