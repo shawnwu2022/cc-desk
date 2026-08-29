@@ -2280,5 +2280,18 @@
 **预期结果**：
 - 出现「粘贴剪贴板图片（终端内）」条目，键位显示 Alt+V
 
+### 图片粘贴-macOS/Linux 真机
+
+**目标**：验证非 Windows 平台的图片分流键位（macOS/Linux 发送 \x16，对应官方 chat:imagePaste 默认 Ctrl+V）
+
+**前置条件**：macOS 或 Linux 真机，终端内有运行中的 Claude Code 会话
+
+**操作步骤**：
+1. 截图或复制任意图片
+2. 终端聚焦按 Ctrl+V
+
+**预期结果**：
+- CLI 插入 [Image #N] 芯片。当前仅 Windows 真机验证过（\x1bv/Alt+V），macOS/Linux 分支按官方键位文档实现未实测；首个包含此功能的版本发布说明须如实标注该验证缺口
+
 
 
