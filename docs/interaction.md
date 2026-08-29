@@ -99,26 +99,89 @@ Tauri 无特殊绑定，xterm.js 原生处理：用户按 Ctrl+W → `term.onDat
 ```typescript
 // src/components/XTermTerminal.vue
 term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-  if (event.ctrlKey && event.key === 'v') {
+  if (event.type !== 'keydown') return true
+
+  // Cmd+C (macOS) 复制选中内容
+  if (event.metaKey && !event.ctrlKey && event.key === 'c') {
+    const selection = term.getSelection()
+    if (selection) {
+      event.preventDefault()
+      writeText(selection).catch(() => {})
+      return false
+    }
+    return true
+  }
+
+  // Ctrl+C 复制（有选中）或 SIGINT（无选中）
+  if (event.ctrlKey && !event.metaKey && event.key === 'c' && !event.shiftKey) {
+    const selection = term.getSelection()
+    if (selection) {
+      event.preventDefault()
+      writeText(selection).catch(() => {})
+      return false
+    }
+    return true
+  }
+
+  // Ctrl+Shift+C 强制复制
+  if (event.ctrlKey && event.shiftKey && event.key === 'C') {
+    event.preventDefault()
+    const selection = term.getSelection()
+    if (selection) {
+      writeText(selection).catch(() => {})
+    }
+    return false
+  }
+
+  // Ctrl+V / Cmd+V 粘贴
+  if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
     event.preventDefault()
     // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
     // 触发光标回行首、后续覆盖前面。commitPaste 走完整流程：同步捕获 ptyId →
     // readText() → isPasteStale 复核（防 restart 重建后把旧粘贴写到新 PTY）→
     // 构造 payload（规范化 LF + bracketed 包装）→ 写 PTY。
+    // 剪贴板无文本（截图场景 readText reject）时经 imageFallback 转发 CLI 图片
+    // 粘贴键字节，由 CLI 自行读剪贴板插 [Image #N]。
     // 依赖注入，便于测试"重启重建后不写新 PTY"的竞态行为。
     commitPaste(
       readText,
       () => terminalInstances.get(tabId),
       text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
       ptyInput,
+      () => imagePasteBytes(platform),
     ).catch(() => {})
     return false
   }
+
+  // Shift+Enter => 插入换行（模拟 \ + Enter）
+  if (event.shiftKey && event.key === 'Enter') {
+    event.preventDefault()
+    const instance = terminalInstances.get(tabId)
+    if (instance) {
+      ptyInput(instance.ptyId, '\\\r')
+    }
+    return false
+  }
+
   return true
 })
 ```
 
 `commitPaste` 的核心竞态守卫：`readText()` 是异步的，等待期间 restartTab 可能重建同 tabId 的新 PTY；实现先同步捕获按键瞬间的 ptyId，完成后复核当前实例仍是同一 ptyId（`isPasteStale`），否则丢弃过期粘贴，避免旧 bracketed 模式落到新实例。详见 `src/utils/pasteText.ts`。
+
+### 图片粘贴分流
+
+剪贴板**无文本**时（`readText()` 返回空串或 reject——剪贴板只有截图时插件底层 arboard 返回错误，实际走 reject），`commitPaste` 经 `imageFallback` 向 PTY 转发 CLI 图片粘贴键字节，由 Claude CLI 自行读系统剪贴板、插入 `[Image #N]` 芯片，GUI 全程不接触图片数据：
+
+| 平台 | 转发字节 | 对应键位（`chat:imagePaste` 官方默认） |
+|---|---|---|
+| Windows | `\x1bv` | `Alt+V`（Windows/WSL 专用绑定） |
+| macOS / Linux | `\x16` | `Ctrl+V` |
+
+- `Alt+V` 未被应用拦截，经 xterm.js 编码 `\x1bv` 直传 PTY，与分流路径等价；macOS `Cmd+V` 已被 `metaKey` 条件拦截进 `commitPaste`，分流行为同 `Ctrl+V`。
+- 文本优先：剪贴板同时有文本和图片时贴文本，与 CLI 原生 `Ctrl+V`/`Alt+V` 职责分离一致。
+- **键位契约**：分流按 CLI **默认键位**硬编码，不解析 `~/.claude/keybindings.json`（该文件可重绑/解绑 `chat:imagePaste` 且热加载）。用户重绑后分流可能失效或触发重绑后的其他动作——此为已知限制，原生键盘路径不受影响。
+- 语义为 best effort：GUI 读文本判定与 CLI 读图是两次独立剪贴板访问，不保证同一快照。
 
 ### 中文 IME Shift 切换中英文（搜狗等）
 

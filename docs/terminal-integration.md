@@ -190,26 +190,79 @@ term.onResize(({ cols, rows }) => { ptyResize(instance.ptyId, cols, rows) })
 ### Ctrl+V 粘贴处理
 
 ```typescript
+// src/components/XTermTerminal.vue
 term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-  if (event.ctrlKey && event.key === 'v') {
+  if (event.type !== 'keydown') return true
+
+  // Cmd+C (macOS) 复制选中内容
+  if (event.metaKey && !event.ctrlKey && event.key === 'c') {
+    const selection = term.getSelection()
+    if (selection) {
+      event.preventDefault()
+      writeText(selection).catch(() => {})
+      return false
+    }
+    return true
+  }
+
+  // Ctrl+C 复制（有选中）或 SIGINT（无选中）
+  if (event.ctrlKey && !event.metaKey && event.key === 'c' && !event.shiftKey) {
+    const selection = term.getSelection()
+    if (selection) {
+      event.preventDefault()
+      writeText(selection).catch(() => {})
+      return false
+    }
+    return true
+  }
+
+  // Ctrl+Shift+C 强制复制
+  if (event.ctrlKey && event.shiftKey && event.key === 'C') {
+    event.preventDefault()
+    const selection = term.getSelection()
+    if (selection) {
+      writeText(selection).catch(() => {})
+    }
+    return false
+  }
+
+  // Ctrl+V / Cmd+V 粘贴
+  if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
     event.preventDefault()
     // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
     // 触发光标回行首、后续覆盖前面。commitPaste 走完整流程：同步捕获 ptyId →
     // readText() → isPasteStale 复核（防 restart 重建后把旧粘贴写到新 PTY）→
     // 构造 payload（规范化 LF + bracketed 包装）→ 写 PTY。
+    // 剪贴板无文本（截图场景 readText reject）时经 imageFallback 转发 CLI 图片
+    // 粘贴键字节，由 CLI 自行读剪贴板插 [Image #N]。
+    // 依赖注入，便于测试"重启重建后不写新 PTY"的竞态行为。
     commitPaste(
       readText,
       () => terminalInstances.get(tabId),
       text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
       ptyInput,
+      () => imagePasteBytes(platform),
     ).catch(() => {})
     return false
   }
+
+  // Shift+Enter => 插入换行（模拟 \ + Enter）
+  if (event.shiftKey && event.key === 'Enter') {
+    event.preventDefault()
+    const instance = terminalInstances.get(tabId)
+    if (instance) {
+      ptyInput(instance.ptyId, '\\\r')
+    }
+    return false
+  }
+
   return true
 })
 ```
 
 `commitPaste` 的核心竞态守卫：`readText()` 是异步的，等待期间 restartTab 可能重建同 tabId 的新 PTY；实现先同步捕获按键瞬间的 ptyId，完成后复核当前实例仍是同一 ptyId（`isPasteStale`），否则丢弃过期粘贴。详见 `src/utils/pasteText.ts`。
+
+剪贴板无文本（截图场景）时 `commitPaste` 经第 5 参 `imageFallback` 转发 CLI 图片粘贴键字节（Windows `\x1bv`、其余 `\x16`），详见 [docs/interaction.md](interaction.md) 的「图片粘贴分流」。
 
 ## 终端缩放与布局刷新
 
