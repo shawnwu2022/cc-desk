@@ -9,6 +9,8 @@
  * 仅把 CRLF / 单独 CR 规范成 LF（Claude 期望的行尾）。其他剪贴板内容原样保留，
  * 避免终端层擅自改写用户输入。
  */
+import type { Platform } from './platform'
+
 export function preparePasteText(text: string): string {
   return text.replace(/\r\n?/g, '\n')
 }
@@ -77,4 +79,13 @@ export async function commitPaste(
     if (!payload) return // 正文为空：跳过发送，避免产生空 bracketed-paste 标记
     await write(instance.ptyId, payload)
   }
+}
+
+/**
+ * 平台对应的 CLI 图片粘贴键字节(chat:imagePaste 官方默认键位):
+ * Windows/WSL 为 Alt+V(\x1bv),其余平台默认 Ctrl+V(\x16)。
+ * 这是按键序列不是粘贴文本,调用方不得再包 bracketed paste 标记。
+ */
+export function imagePasteBytes(platform: Platform): string {
+  return platform === 'windows' ? '\x1bv' : '\x16'
 }

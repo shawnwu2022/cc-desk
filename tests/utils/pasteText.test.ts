@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { preparePasteText, bracketPasteText, buildPastePayload, isPasteStale, commitPaste } from '@/utils/pasteText'
+import { preparePasteText, bracketPasteText, buildPastePayload, isPasteStale, commitPaste, imagePasteBytes } from '@/utils/pasteText'
 
 describe('preparePasteText', () => {
   // CRLF 规范成 LF：Windows 剪贴板多行文本粘贴给 Claude 不再产生 \r 行首覆盖。
@@ -139,5 +139,16 @@ describe('commitPaste', () => {
     current = undefined
     await p
     expect(write).not.toHaveBeenCalled()
+  })
+})
+
+describe('imagePasteBytes', () => {
+  // 平台键位字节(chat:imagePaste 官方默认):仅 Windows/WSL 绑 Alt+V(\x1bv),
+  // 其余平台默认 Ctrl+V(\x16);unknown 按官方默认兜底。
+  it('ClipboardImage_FallbackBytes_001', () => {
+    expect(imagePasteBytes('windows')).toBe('\x1bv')
+    expect(imagePasteBytes('macos')).toBe('\x16')
+    expect(imagePasteBytes('linux')).toBe('\x16')
+    expect(imagePasteBytes('unknown')).toBe('\x16')
   })
 })
