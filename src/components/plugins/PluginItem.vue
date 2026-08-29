@@ -1,7 +1,14 @@
 <template>
   <div class="plugin-item" :class="{ expanded: isExpanded, disabled: isDisabled }">
     <!-- Plugin Header -->
-    <div class="plugin-header" @click="toggleExpand">
+    <div
+      class="plugin-header"
+      role="button"
+      tabindex="0"
+      @click="toggleExpand"
+      @keydown.enter.self.prevent="toggleExpand"
+      @keydown.space.self.prevent="toggleExpand"
+    >
       <img
         class="expand-icon"
         :class="{ expanded: isExpanded }"
@@ -42,7 +49,14 @@
       <div v-if="plugin.skills?.length" class="component-section">
         <div class="section-title">{{ t('skills') }}</div>
         <div v-for="skill in plugin.skills" :key="skill.name" class="component-item" :class="{ expanded: expandedSkills[skill.name] }">
-          <div class="item-header" @click="toggleSkillDetail(skill.name)">
+          <div
+            class="item-header"
+            role="button"
+            tabindex="0"
+            @click="toggleSkillDetail(skill.name)"
+            @keydown.enter.self.prevent="toggleSkillDetail(skill.name)"
+            @keydown.space.self.prevent="toggleSkillDetail(skill.name)"
+          >
             <img class="item-expand-icon" :class="{ expanded: expandedSkills[skill.name] }" src="@/assets/icons/chevron.svg" alt="Toggle" />
             <span class="item-name">{{ skill.name }}</span>
             <button class="item-use-btn" @click.stop="useSkill(skill.invokeFormat)" :title="t('useThisSkill')">
@@ -64,7 +78,14 @@
       <div v-if="plugin.agents?.length" class="component-section">
         <div class="section-title">{{ t('agents') }}</div>
         <div v-for="agent in plugin.agents" :key="agent.name" class="component-item" :class="{ expanded: expandedAgents[agent.name] }">
-          <div class="item-header" @click="toggleAgentDetail(agent.name)">
+          <div
+            class="item-header"
+            role="button"
+            tabindex="0"
+            @click="toggleAgentDetail(agent.name)"
+            @keydown.enter.self.prevent="toggleAgentDetail(agent.name)"
+            @keydown.space.self.prevent="toggleAgentDetail(agent.name)"
+          >
             <img class="item-expand-icon" :class="{ expanded: expandedAgents[agent.name] }" src="@/assets/icons/chevron.svg" alt="Toggle" />
             <span class="item-name">{{ agent.name }}</span>
             <button class="item-use-btn" @click.stop="useAgent(agent.invokeFormat)" :title="t('useThisAgent')">
@@ -238,18 +259,18 @@ async function onToggle(newValue: boolean) {
 }
 
 .component-tag.mcp {
-  background: #e3f2fd;
-  color: #1565c0;
+  background: var(--tag-mcp-bg);
+  color: var(--tag-mcp-text);
 }
 
 .component-tag.skills {
-  background: #fff3e0;
-  color: #e65100;
+  background: var(--tag-skill-bg);
+  color: var(--tag-skill-text);
 }
 
 .component-tag.agents {
-  background: #f3e5f5;
-  color: #7b1fa2;
+  background: var(--tag-agent-bg);
+  color: var(--tag-agent-text);
 }
 
 /* Expanded styles */

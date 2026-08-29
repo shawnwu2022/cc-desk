@@ -680,11 +680,11 @@ async function autoInstall() {
 }
 
 .check-item.passed {
-  border-left: 3px solid var(--status-success, #4caf50);
+  border-left: 3px solid var(--status-success, #3d8c6e);
 }
 
 .check-item.failed {
-  border-left: 3px solid var(--status-error, #ef5350);
+  border-left: 3px solid var(--status-error, #c45c4a);
 }
 
 .check-status-icon {
@@ -699,11 +699,11 @@ async function autoInstall() {
 }
 
 .check-item.passed .check-status-icon {
-  color: var(--status-success, #4caf50);
+  color: var(--status-success, #3d8c6e);
 }
 
 .check-item.failed .check-status-icon {
-  color: var(--status-error, #ef5350);
+  color: var(--status-error, #c45c4a);
 }
 
 .check-detail {
@@ -750,7 +750,7 @@ async function autoInstall() {
 .check-auto-btn {
   flex: 1;
   padding: 10px;
-  background: var(--status-success, #4caf50);
+  background: var(--status-success, #3d8c6e);
   color: var(--text-inverse);
   border: none;
   border-radius: var(--radius-md);

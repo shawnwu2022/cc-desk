@@ -397,7 +397,7 @@ onUnmounted(() => {
   cursor: pointer;
   border-radius: 4px;
   font-size: 12px;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .state-retry-btn:hover {
@@ -429,7 +429,7 @@ onUnmounted(() => {
   cursor: pointer;
   border-radius: 6px;
   font-size: 13px;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .action-btn img {

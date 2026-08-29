@@ -383,7 +383,7 @@ async function handleImportCcSwitch() {
 .btn-danger {
   padding: 7px 18px;
   background: var(--status-error);
-  color: #fff;
+  color: var(--text-on-accent);
   border: none;
   border-radius: var(--radius-md);
   font-size: 13px;
@@ -392,6 +392,6 @@ async function handleImportCcSwitch() {
 }
 .btn-danger:hover { opacity: 0.9; }
 
-.test-success { color: var(--status-success, #22c55e); }
-.test-fail { color: var(--status-error, #ef4444); }
+.test-success { color: var(--status-success, #3d8c6e); }
+.test-fail { color: var(--status-error, #c45c4a); }
 </style>

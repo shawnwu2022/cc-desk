@@ -228,19 +228,19 @@ function handleSave() {
   cursor: pointer;
   font-family: var(--font-sans);
 }
-.btn-extract:hover { background: var(--accent-color); color: #fff; }
+.btn-extract:hover { background: var(--accent-color); color: var(--text-on-accent); }
 
 .json-editor-wrap {
   flex-shrink: 0;
   overflow: hidden;
   border-bottom: 2px solid transparent;
 }
-.json-editor-wrap.has-error { border-bottom-color: var(--error-color, #c0392b); }
+.json-editor-wrap.has-error { border-bottom-color: var(--error-color, #c45c4a); }
 
 .json-status {
   font-size: 11px;
   padding: 4px 16px;
-  color: var(--error-color, #c0392b);
+  color: var(--error-color, #c45c4a);
   flex-shrink: 0;
 }
 
@@ -266,7 +266,7 @@ function handleSave() {
 .btn-save {
   padding: 8px 20px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   border: none;
   border-radius: 6px;
   font-size: 13px;

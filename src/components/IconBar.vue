@@ -157,7 +157,7 @@ function handleSettingsClick() {
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: var(--radius-md);
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .icon-btn img {
@@ -179,7 +179,7 @@ function handleSettingsClick() {
 
 .icon-btn.active {
   background: var(--selected-bg);
-  color: var(--accent-gold);
+  color: var(--accent-gold-text);
 }
 
 .icon-btn.active img {

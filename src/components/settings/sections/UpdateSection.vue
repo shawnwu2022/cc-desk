@@ -896,7 +896,7 @@ onUnmounted(() => {
 .confirm-actions .btn-primary {
   padding: 7px 18px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--text-on-accent);
   border: none;
   border-radius: var(--radius-md);
   font-size: 13px;

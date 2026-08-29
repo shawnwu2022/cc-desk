@@ -1,7 +1,14 @@
 <template>
   <div class="mcp-item" :class="{ expanded: isExpanded, disabled: isDisabled }">
     <!-- Server Header -->
-    <div class="server-header" @click="handleClick">
+    <div
+      class="server-header"
+      role="button"
+      tabindex="0"
+      @click="handleClick"
+      @keydown.enter.self.prevent="handleClick"
+      @keydown.space.self.prevent="handleClick"
+    >
       <span class="server-name">{{ server.displayName }}</span>
       <ToggleSwitch
         v-if="server.sourceType === 'user'"

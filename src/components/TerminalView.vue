@@ -598,12 +598,12 @@ function handlePtyStarted(tabId: string, _ptyId: string) {
   padding: 12px 24px;
   border: 1px solid var(--accent-primary);
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   cursor: pointer;
   border-radius: var(--radius-lg);
   font-size: 14px;
   font-weight: 500;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   box-shadow: var(--shadow-md);
 }
 
@@ -628,7 +628,7 @@ function handlePtyStarted(tabId: string, _ptyId: string) {
   padding: 8px 14px;
   border-radius: var(--radius-md);
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   font-size: 12px;
   font-weight: 500;
   box-shadow: var(--shadow-md);

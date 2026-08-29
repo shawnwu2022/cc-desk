@@ -131,6 +131,11 @@ sessionStore（tabs + historySessions）→ buildProjectGroups（分组+孤儿�
 - **多实例并发安全**：projects.json 写走后端独立 `projects.json.lock`（std `File::lock`）跨进程排他锁 + apply 增量操作（pin/unpin/archive/restore/setDisplayName 各一 async command，`spawn_blocking` 内锁定读最新 → canonicalize → 校验应用 → 原子写 → 返回最新）；Windows 已有文件通过 `ReplaceFileW` 原子覆盖。前端 `session.ts` 的 `opLock` 串行完整 action/reload request + apply；窗口聚焦 reload 共享锁读。config.json 的 hiddenProjects/lastOpened 暂未纳入（同 pattern 可扩展）。升级时须先关闭旧版本实例（见 spec §8 迁移风险）
 - 详细架构 → [docs/components.md](docs/components.md)
 
+## 设计系统
+
+- **[DESIGN.md](DESIGN.md)** 是视觉系统唯一规范：「工匠终端 (Artisan Terminal)」主题、双主题 token、命名规则（Quiet Chrome / Amber Activation / Warm Neutral / 14px Baseline / Flat-First）。UI 改动须遵循其 Do's and Don'ts；`.impeccable/` 仅为本地设计工具状态，不纳入公开仓库
+- 色彩/字体/圆角/阴影 token 一律引用 `src/styles/global.css` 的 CSS 自定义属性，浅色/暗色两套值成对修改；终端层主题独立（`--terminal-*`）
+
 详细架构 → [docs/terminal-integration.md](docs/terminal-integration.md)
 
 ## 开发命令
@@ -250,3 +255,5 @@ npm run release -- --oss-only v0.5.1
 - **什么不测**：getter/setter、类型定义、简单 props 传递、第三方库能力
 - **树形项目会话管理测试**：`tests/stores/sessionTree.test.ts`（分组/排序/过滤/展开/多项目历史选择器 getHistoryFor）+ `tests/composables/projectTreeNavigation.test.ts`（resolveSwitchAction 切换语义 noop/activate/resume/new，D/E 纯函数参数直传无竞态）
 - **焦点队列测试**：`tests/composables/attentionQueue.test.ts`（attentionFromEvent 事件→关注项分类，含 codex 反驳 SessionStart 不报完成/PostToolUseFailure 不算 error；severityRank/buildAttentionQueue 去重排序）+ `tests/stores/attention.test.ts`（store ingestEvent upsert、ackPty/clearPty、queue getter）+ `tests/stores/session.test.ts` PtyExit_ClearPending（codex pending 泄漏回归）
+- **设计 token 对比度回归**：`tests/designTokens.test.ts`（直接解析 `global.css`，断言 tertiary/secondary/primary/琥珀文字 token 对三档背景双主题 WCAG AA ≥4.5:1、主文字 AAA，tag token 双主题成对存在；调色必须先过此测试）
+- **侧边栏键盘事件回归**：`tests/sidebarKeyboardHandlers.test.ts`（折叠头包含嵌套 ToggleSwitch/操作按钮时，Enter/Space 仅由当前折叠头处理，不拦截子控件默认行为）

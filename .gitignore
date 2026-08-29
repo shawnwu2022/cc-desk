@@ -51,3 +51,6 @@ releases/
 
 # Local agent skills
 .agents/
+
+# Impeccable design-tool state (local cache, not part of the public project)
+.impeccable/

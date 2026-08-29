@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.17.0] - 2026-08-30
+
+### Features
+- Add image paste forwarding when the clipboard contains no text, using the Claude CLI platform shortcut
+- Add a shared design token system for consistent light and dark themes
+
+### Fixed
+- Normalize pasted annotation punctuation for consistent display
+- Keep nested sidebar controls keyboard-accessible without toggling their parent item
+
+### Changed
+- Document the CC Desk visual system and product direction
+- Add contrast and sidebar keyboard regression coverage
+
 ## [0.16.0] - 2026-08-17
 
 ### Features

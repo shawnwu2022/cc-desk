@@ -27,7 +27,7 @@ const sidebarStore = useSidebarStore()
 
 .slide-fade-enter-active,
 .slide-fade-leave-active {
-  transition: all 0.25s ease;
+  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease, opacity 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
 }
 
 .slide-fade-enter-from,

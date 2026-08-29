@@ -2295,3 +2295,45 @@
 
 
 
+
+---
+
+## 可达性与视觉回归
+
+### A11y_SidebarKeyboardNav_001 — 侧边栏折叠头键盘可达
+
+**目标**：验证侧边栏所有分组/条目折叠头可通过键盘操作（2026-08 可达性修复：div 加 role="button" + tabindex + Enter/Space）
+
+**前置条件**：应用已启动，打开任一项目进入终端视图
+
+**操作步骤**：
+1. 打开侧边栏 Sessions/Skills/Agents/MCP Servers/Plugins 面板
+2. 用 Tab 键在面板内移动焦点
+3. 焦点落在分组头（如 Skills 分组标题）或条目头（如某个 Skill 项）时，分别按 Enter 和 Space
+4. 焦点落在项目树的 `project-main` 行时按 Enter
+5. 在项目别名编辑态（rename input）内按 Enter/方向键
+
+**预期结果**：
+- 折叠头获得焦点时显示 2px 墨蓝焦点环（[role="button"]:focus-visible）
+- 按 Enter 或 Space 均触发展开/折叠，与鼠标点击一致
+- Tab 序列合理：分组头 → 条目头 → 条目内 ToggleSwitch/使用按钮
+- rename input 内按键不触发折叠头的 Enter/Space 行为（keydown.stop 隔离），Enter 提交别名、Escape 取消
+
+### Visual_ContrastBothThemes_002 — 双主题文字对比目测
+
+**目标**：验证 tertiary 文字与琥珀激活文字在浅色/暗色主题下均清晰可读（token 已调值：tertiary light #69645e / dark #9c9788，琥珀文字新 token accent-gold-text）
+
+**前置条件**：应用已启动；侧边栏有若干会话/条目；设置中有已激活 Provider
+
+**操作步骤**：
+1. 浅色主题下检查：侧边栏副文字（版本号、完整名、时间戳）、Provider 卡「已激活」徽标、IconBar 激活图标颜色
+2. 切到暗色主题（设置 > 外观）重复检查同样元素
+3. 检查终端区渲染不受影响（终端主题独立）
+
+**预期结果**：
+- 浅色下琥珀激活文字呈深琥珀（#7a5c3a 级），非浅金；对比清晰
+- 暗色下琥珀文字保持明亮（#f0d4a8）
+- tertiary 副文字在两套主题下均可辨读，不感觉比之前突兀
+- 终端内容颜色与光标（琥珀金）不受 GUI 主题切换影响
+
+**回归锁**：token 对比度由 `tests/designTokens.test.ts`（9 用例，WCAG AA ≥4.5:1）自动守护；本条目仅覆盖视觉观感主观确认
