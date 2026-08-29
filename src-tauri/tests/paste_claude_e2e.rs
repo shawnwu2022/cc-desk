@@ -205,10 +205,9 @@ impl Drop for ClaudeSession {
 }
 
 /// 核心探针：粘贴后判定内容完整性。
-/// 判定基于累积 VT 流（append-only，渲染过即留存）：全流含头/中/尾三哨兵 = 内容
-/// 曾完整进入编辑器；终屏缺首部仅是滚出视口，不算丢失。chip 识别接管时内容折叠
-/// 不渲染，三哨兵必然缺失，属安全路径。仅「尾部在而头部缺」的旧断言有假绿：
-/// 整段丢失 / 尾部丢失 / 中段损坏都会漏判——这里一并堵上。
+/// 判定绑定本次粘贴的输出增量（基线 = 写入前已收集长度）：哨兵与 chip 只在增量内
+/// 查找，排除启动/既往输出干扰；三哨兵要求在增量内按 head→middle→tail 顺序出现
+/// （缺失或乱序都算失败）。chip 识别接管时内容折叠不渲染，属安全路径单独放行。
 fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     println!("=== [{}] payload {} 字节，chunk={} delay={}ms ===", case, payload.len(), chunk_size, delay_ms);
     let mut session = spawn_claude("E:/source/github/cc-box");
@@ -216,6 +215,7 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     // spawn_claude 已等待就绪标记；这里再留一点稳定时间
     std::thread::sleep(Duration::from_millis(1500));
 
+    let baseline_len = session.snapshot_all().len();
     session.write_chunked(payload, chunk_size, delay_ms);
     session.wait_quiet(1200, Duration::from_secs(20));
 
@@ -230,33 +230,68 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     println!("---- end ----");
 
     let full = session.snapshot_all();
-    let chip = full.contains("Pasted text") || full.contains("paste again to expand");
-    let full_head = full.contains("key_0");
-    let full_middle = full.contains(&middle_key);
-    let full_tail = full.contains(&last_key);
+    let increment = &full[baseline_len..];
+    let chip = increment.contains("Pasted text") || increment.contains("paste again to expand");
+    // 有序哨兵：head/middle/tail 必须依序出现在增量内
+    let ordered_sentinels = ["key_0", middle_key.as_str(), last_key.as_str()];
+    let mut search_from = 0usize;
+    let mut missing: Option<&str> = None;
+    for k in ordered_sentinels {
+        match increment[search_from..].find(k) {
+            Some(p) => search_from += p + k.len(),
+            None => {
+                missing = Some(k);
+                break;
+            }
+        }
+    }
     println!(
-        "[{}] 结果: chip={} | 全流 head={} middle({})={} tail({})={}",
-        case, chip, full_head, middle_key, full_middle, last_key, full_tail
+        "[{}] 结果: 基线={}B 增量={}B chip={} 首个异常哨兵={}",
+        case,
+        baseline_len,
+        increment.len(),
+        chip,
+        missing.unwrap_or("无（三哨兵有序俱在）")
     );
 
     if chip {
         println!("[SAFE] {} 粘贴被 chip 识别接管（内容折叠保存，不渲染属预期）", case);
         return;
     }
-    // 非 chip 路径：三哨兵必须全部出现在累积流里，缺任何一环 = 真截断
-    if !full_head && !full_tail {
-        panic!("[RED] {} 头尾全流均缺失：整段内容丢失", case);
+    match missing {
+        None => println!("[SAFE] {} 增量内三哨兵有序俱在，内容完整", case),
+        Some("key_0") => panic!("[RED] {} 复现用户症状：头部丢失（截头留尾）", case),
+        Some(k) if k == last_key => panic!("[RED] {} 尾部丢失（截尾留头，对应上游 #49337）", case),
+        Some(k) => panic!("[RED] {} 哨兵 {} 缺失或乱序：内容损坏", case, k),
     }
-    if !full_head {
-        panic!("[RED] {} 复现用户症状：头部丢失（截头留尾）", case);
+}
+
+/// 与生产 TS compactJsonForPaste 等价的压缩：移除 (\r\n | \r | \n) 及后继 [ \t]*。
+/// 与 paste_transport.rs 中同名函数同算法；二者与 TS 的逐字节等价由共享 fixture
+/// （tests/fixtures/paste_sample.*）上的 production_pipeline_fixture_shape 与
+/// PasteJson_ProductionEquivalence_012 双向锁定。
+fn compact_json_like_production(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                while matches!(chars.peek(), Some(' ') | Some('\t')) {
+                    chars.next();
+                }
+            }
+            '\n' => {
+                while matches!(chars.peek(), Some(' ') | Some('\t')) {
+                    chars.next();
+                }
+            }
+            _ => out.push(c),
+        }
     }
-    if !full_tail {
-        panic!("[RED] {} 尾部丢失（截尾留头，对应上游 #49337）", case);
-    }
-    if !full_middle {
-        panic!("[RED] {} 中段哨兵 {} 缺失：中段损坏", case, middle_key);
-    }
-    println!("[SAFE] {} 全流三哨兵俱在，内容完整", case);
+    out
 }
 
 /// 取 payload 中最后一个 key_N（全流完整性判定的尾部标记）。
@@ -300,28 +335,34 @@ fn claude_json_singleline_paste_monitor() {
     // 未修，Win10 ConPTY 又吞掉 bracketed 标记，带内无 100% 可靠方案。本测试 RED =
     // 上游仍不可靠的信号；上游修复（或换用可透传标记的系统 conhost）后应转绿。
     let pretty = devtools_style_json(8 * 1024);
-    // serde_json 的 minify 与生产 TS compactJsonForPaste 的等价性由
-    // tests/utils/pasteText.test.ts 的 PasteJson_ProductionEquivalence 桥接用例锁定
-    // （同一样本两种压缩产出逐字节一致）；本探针按该形态验证 Claude 端行为。
-    let value: serde_json::Value = serde_json::from_str(&pretty).expect("payload 必须是合法 JSON");
-    let payload = serde_json::to_string(&value).expect("minify");
-    assert!(!payload.contains('\n'), "minify 后必须单行");
+    // payload 用与生产逐字节等价的方式构造：compact_json_like_production 与 TS
+    // compactJsonForPaste 是同一算法，二者在共享 fixture
+    // tests/fixtures/paste_sample.* 上的输出逐字节一致（transport 套件
+    // production_pipeline_fixture_shape 与 TS 用例 PasteJson_ProductionEquivalence_012
+    // 双向锁定），因此本 payload 即生产 buildPastePayload 的正文形态。
+    serde_json::from_str::<serde_json::Value>(&pretty).expect("payload 必须是合法 JSON");
+    let payload = compact_json_like_production(&pretty);
+    assert!(!payload.contains('\n'), "压缩后必须单行");
     let tail_key = last_key_of(&payload);
     for rep in 1..=3 {
         let mut session = spawn_claude("E:/source/github/cc-box");
         std::thread::sleep(Duration::from_millis(1500));
+        // 增量绑定：只在本轮粘贴之后的输出里判定 chip 与哨兵
+        let baseline_len = session.snapshot_all().len();
         session.write_chunked(&payload, 0, 0);
         session.wait_quiet(1200, Duration::from_secs(20));
         let full = session.snapshot_all();
-        let chip = full.contains("Pasted text") || full.contains("paste again to expand");
-        // 单行未折叠时光标在末尾，尾部必在渲染区（key_0 会折行滚出视口，不能用）；
-        // tail_key 缺失 = 尾部真丢失。chip=true = 粘贴被识别接管，内容由 chip 保存。
-        let tail_ok = full.contains(&tail_key);
+        let increment = &full[baseline_len..];
+        let chip = increment.contains("Pasted text") || increment.contains("paste again to expand");
+        // 单行未折叠时光标在末尾，尾部必在渲染区（key_0 与中段会折行滚出视口，
+        // 物理上不可用作哨兵）；tail_key 缺失 = 尾部真丢失。
+        let tail_ok = increment.contains(&tail_key);
         println!(
-            "[minified-rep-{}] chip={} head={} tail={}",
+            "[minified-rep-{}] 基线={}B 增量={}B chip={} tail={}",
             rep,
+            baseline_len,
+            increment.len(),
             chip,
-            full.contains("key_0"),
             tail_ok
         );
         assert!(

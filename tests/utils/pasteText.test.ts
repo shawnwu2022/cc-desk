@@ -74,20 +74,25 @@ describe('compactJsonForPaste', () => {
     expect(compactJsonForPaste('')).toBe('')
   })
 
-  // 跨层桥接：DevTools 风格样本上，regex 压缩与 JSON.stringify 压缩语义等价
-  // （解析结果 deep-equal）且同为单行。二者空白风格不同（regex 保留冒号后空格），
-  // 故比较解析结果而非字节。Rust e2e 探针（paste_claude_e2e.rs）用 serde minify
-  // 生成同形态 payload，其对 Claude 端行为的结论借此用例传导回生产 TS 管线。
+  // 跨层桥接（共享 fixture）：TS compactJsonForPaste 对仓库共享样本的压缩输出
+  // 必须与黄金文件逐字节一致；Rust 侧 paste_transport.rs 的
+  // compact_json_like_production 读同一对 fixture 做相同断言，两层压缩算法由此贯通，
+  // Rust e2e 探针据此使用与生产 buildPastePayload 逐字节一致的 payload 形态。
   it('PasteJson_ProductionEquivalence_012', () => {
-    const pairs: Array<[string, string]> = [
-      ['"key_0"', '"AAAA"'],
-      ['"key_1"', '"BBBB"'],
-      ['"key_2"', '"CCCC"'],
-    ]
-    const pretty = '{\n  ' + pairs.map(([k, v]) => `${k}: ${v}`).join(',\n  ') + '\n}'
+    const { readFileSync } = require('node:fs')
+    const { resolve } = require('node:path')
+    const pretty = readFileSync(
+      resolve(__dirname, '../../src-tauri/tests/fixtures/paste_sample.pretty.json'),
+      'utf8',
+    )
+    const golden = readFileSync(
+      resolve(__dirname, '../../src-tauri/tests/fixtures/paste_sample.compacted.txt'),
+      'utf8',
+    )
     const compacted = compactJsonForPaste(pretty)
+    expect(compacted).toBe(golden)
     expect(compacted).not.toContain('\n')
-    expect(JSON.parse(compacted)).toEqual(JSON.parse(JSON.stringify(JSON.parse(pretty))))
+    expect(JSON.parse(compacted)).toEqual(JSON.parse(pretty))
   })
 })
 

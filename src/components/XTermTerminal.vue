@@ -118,16 +118,18 @@ function handleNativeCopy(e: ClipboardEvent) {
 }
 
 // 原生 DOM paste 事件（Shift+Insert / 编辑菜单粘贴等，非 Ctrl+V 键路径）：
-// xterm 在 textarea 上有自己的 paste 监听，直接 triggerDataEvent 绕过
-// commitPaste/buildPastePayload，导致 JSON 压缩与 LF 规范化失效。此处用容器
+// xterm 在 textarea 和终端 element 上都有自带 paste 监听，直接 triggerDataEvent
+// 绕过 commitPaste/buildPastePayload，导致 JSON 压缩与 LF 规范化失效。此处用容器
 // 捕获阶段监听抢先拦截（capture 先于 target 阶段），统一收编进完整粘贴链路。
 function handleNativePaste(e: ClipboardEvent) {
   const tabId = currentDisplayTabId.value
   if (!tabId) return
   const instance = terminalInstances.get(tabId)
   if (!instance) return
-  // 仅接管指向当前终端 textarea 的粘贴事件，其余放行
-  if (instance.term.textarea && e.target !== instance.term.textarea) return
+  // 仅接管落在当前终端元素范围内（含 textarea）的粘贴事件，其余放行
+  const target = e.target as Node | null
+  const el = instance.term.element
+  if (!target || !el || !el.contains(target)) return
   e.preventDefault()
   e.stopPropagation()
   const text = e.clipboardData?.getData('text/plain') ?? ''
@@ -463,12 +465,13 @@ function createTerminal(tabId: string): Terminal {
 }
 
 onMounted(async () => {
+  // 捕获阶段拦截原生 DOM paste，抢在 xterm 的 textarea/element 粘贴监听之前；
+  // 注册必须先于任何 await，消除启动窗口期漏拦
+  containerRef.value?.addEventListener('paste', handleNativePaste, true)
   await setupEventListeners()
   window.addEventListener('copy', handleNativeCopy)
 
   if (containerRef.value) {
-    // 捕获阶段拦截原生 DOM paste，抢在 xterm 的 textarea 粘贴监听之前
-    containerRef.value.addEventListener('paste', handleNativePaste, true)
     resizeObserver = new ResizeObserver(() => fitCurrentTerminal())
     resizeObserver.observe(containerRef.value)
   }

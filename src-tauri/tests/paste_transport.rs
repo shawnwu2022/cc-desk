@@ -27,6 +27,7 @@ const BRACKET_CLOSE: &str = "\u{1b}[201~";
 const NODE_SCRIPT: &str = r#"
 if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
 process.stdin.setEncoding('utf8');
+process.stderr.write('RAW:' + (process.stdin.isRaw ? 1 : 0) + '\n');
 let acc = '';
 process.stdin.on('data', (c) => {
   acc += c;
@@ -94,7 +95,21 @@ fn devtools_style_json(total_len: usize) -> String {
         body.push(line);
         n += 1;
     }
-    format!("{{\n{},\n}}", body.join(",\n"))
+    format!("{{\n{}\n}}", body.join(",\n"))
+}
+
+#[cfg(test)]
+mod generator_guards {
+    // 生成器合法性内建校验：历史上曾产出尾逗号非法 JSON（上轮对抗审查发现），
+    // 这里在每个尺寸冒烟锁定 serde 解析通过
+    #[test]
+    fn devtools_generator_is_valid_json() {
+        for size in [256, 1024, 8 * 1024, 128 * 1024] {
+            let json = super::devtools_style_json(size);
+            serde_json::from_str::<serde_json::Value>(&json)
+                .unwrap_or_else(|e| panic!("size {size} 生成了非法 JSON: {e}"));
+        }
+    }
 }
 
 /// 对齐生产管线 compactJsonForPaste：合法 JSON 压缩单行——移除结构性换行
@@ -126,6 +141,7 @@ fn compact_json_like_production(text: &str) -> String {
 struct PasteResult {
     received_len: Option<usize>,
     received_hash: Option<u32>,
+    raw: Option<u32>,
     head: String,
     tail: String,
     output_tail: String,
@@ -182,6 +198,7 @@ fn run_paste_case(payload: &str) -> PasteResult {
     // 等 RECV 回报或 node 超时标记
     let mut received_len = None;
     let mut received_hash = None;
+    let mut raw = None;
     while start.elapsed() < Duration::from_secs(15) {
         let done = {
             let text = collected.lock().unwrap();
@@ -205,6 +222,7 @@ fn run_paste_case(payload: &str) -> PasteResult {
     };
     received_len = value_after("RECV:").and_then(|d| d.parse::<usize>().ok());
     received_hash = value_after("HASH:").and_then(|d| d.parse::<u32>().ok());
+    raw = value_after("RAW:").and_then(|d| d.parse::<u32>().ok());
     let head = text
         .lines()
         .find(|l| l.contains("HEAD:"))
@@ -219,6 +237,7 @@ fn run_paste_case(payload: &str) -> PasteResult {
     PasteResult {
         received_len,
         received_hash,
+        raw,
         head,
         tail,
         output_tail,
@@ -230,6 +249,8 @@ fn assert_paste_intact(case: &str, expected_body: &str, payload: &str) {
     let expected_len = expected_body.len();
     let expected_hash = fnv1a(expected_body.as_bytes());
     let result = run_paste_case(payload);
+    // 探针必须运行在 raw mode：cooked 行模式攒行不吐数据，测的不是 Claude 实际输入路径
+    assert_eq!(result.raw, Some(1), "{} 探针未运行在 raw mode", case);
     match (result.received_len, result.received_hash) {
         (Some(n), Some(h)) if n == expected_len && h == expected_hash => {
             println!("[PASS] {:<28} {} bytes, hash {:#010x}", case, expected_len, expected_hash);
@@ -265,6 +286,23 @@ fn devtools_json_compact_singleline_8k() {
     let json = devtools_style_json(8 * 1024);
     let compact = compact_json_like_production(&json);
     assert_paste_intact("json-compact-8k", &compact, &compact);
+}
+
+#[test]
+fn production_pipeline_fixture_shape() {
+    // 共享 fixture 贯通：compact_json_like_production 对仓库样本的压缩输出必须与
+    // 黄金文件逐字节一致（TS 侧 PasteJson_ProductionEquivalence_012 对同一样本断言
+    // compactJsonForPaste 输出 === 同一黄金文件），Rust 构造的 payload 由此与生产
+    // buildPastePayload 的正文逐字节一致，传输保真结论直接覆盖生产字节形态
+    let pretty =
+        std::fs::read_to_string("tests/fixtures/paste_sample.pretty.json").expect("read fixture");
+    let golden =
+        std::fs::read_to_string("tests/fixtures/paste_sample.compacted.txt").expect("read golden");
+    serde_json::from_str::<serde_json::Value>(&pretty).expect("fixture 必须是合法 JSON");
+    assert!(!golden.contains('\n'), "黄金压缩输出必须单行");
+    let compact = compact_json_like_production(&pretty);
+    assert_eq!(compact, golden, "Rust 压缩与黄金文件不一致");
+    assert_paste_intact("json-fixture-compact", &compact, &compact);
 }
 
 #[test]
