@@ -24,7 +24,7 @@ import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useHookStore } from '@/stores/hook'
 import { useAttentionStore } from '@/stores/attention'
-import { isMac } from '@/utils/platform'
+import { isMac, platform } from '@/utils/platform'
 import { getTerminalTheme } from '@/config/terminalThemes'
 import {
   ptySpawn,
@@ -40,7 +40,7 @@ import { safeDispose } from '@/utils/dispose'
 import { relativizePath } from '@/utils/path'
 import { PtyIndex } from '@/utils/ptyIndex'
 import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
-import { buildPastePayload, commitPaste } from '@/utils/pasteText'
+import { buildPastePayload, commitPaste, imagePasteBytes } from '@/utils/pasteText'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -410,11 +410,14 @@ function createTerminal(tabId: string): Terminal {
       // 触发光标回行首、后续覆盖前面（表现为"只显尾部"）。这里用 commitPaste 走完整
       // 流程：capture ptyId → readText → isPasteStale 复核（防 restart 重建后写到新 PTY）
       // → 构造 payload（规范化 LF + bracketed 包装）→ 写 PTY（见 utils/pasteText.ts）。
+      // 剪贴板无文本（截图场景 readText reject）时经 imageFallback 转发 CLI 图片粘贴键
+      // 字节，由 CLI 自行读剪贴板插 [Image #N]（键位契约见 docs/interaction.md）。
       commitPaste(
         readText,
         () => terminalInstances.get(tabId),
         text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
         ptyInput,
+        () => imagePasteBytes(platform),
       ).catch(() => {})
       return false
     }
