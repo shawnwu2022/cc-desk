@@ -140,6 +140,95 @@ describe('commitPaste', () => {
     await p
     expect(write).not.toHaveBeenCalled()
   })
+
+  // ===== 剪贴板图片分流(剪贴板无文本时转发 CLI 图片粘贴键字节) =====
+
+  // 非空文本优先:走 buildPayload,注入的 fallback 完全不参与。
+  it('ClipboardImage_NonEmptyStillText_002', async () => {
+    const current: { ptyId: string } | undefined = { ptyId: 'pty-1' }
+    const write = vi.fn()
+    const fallback = vi.fn(() => '\x1bv')
+    await commitPaste(async () => 'a\r\nb', () => current, t => t, write, fallback)
+    expect(fallback).not.toHaveBeenCalled()
+    expect(write).toHaveBeenCalledWith('pty-1', 'a\r\nb')
+  })
+
+  // resolve 空串 + 注入 fallback → 写入键字节,无 bracketed 标记。
+  it('ClipboardImage_EmptyTextFallback_004', async () => {
+    const current: { ptyId: string } | undefined = { ptyId: 'pty-1' }
+    const write = vi.fn()
+    await commitPaste(async () => '', () => current, t => t, write, () => '\x1bv')
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith('pty-1', '\x1bv')
+  })
+
+  // resolve 空串 + 等待期间 ptyId 变更 → 过期丢弃(restart 竞态对分流路径同样生效)。
+  it('ClipboardImage_FallbackStale_006', async () => {
+    let resolveRead: (t: string) => void = () => {}
+    const readTextMock = () => new Promise<string>(res => { resolveRead = res })
+    let current: { ptyId: string } | undefined = { ptyId: 'pty-1' }
+    const write = vi.fn()
+    const p = commitPaste(readTextMock, () => current, t => t, write, () => '\x1bv')
+    current = { ptyId: 'pty-2' }
+    resolveRead('')
+    await p
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  // resolve 空串 + fallback 返回空串 → 不写。
+  it('ClipboardImage_EmptyFallbackNoWrite_008', async () => {
+    const current: { ptyId: string } | undefined = { ptyId: 'pty-1' }
+    const write = vi.fn()
+    await commitPaste(async () => '', () => current, t => t, write, () => '')
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  // 主场景:截图剪贴板使 readText reject,注入 fallback 后仍写入键字节。
+  it('ClipboardImage_RejectFallback_010', async () => {
+    const current: { ptyId: string } | undefined = { ptyId: 'pty-1' }
+    const write = vi.fn()
+    await commitPaste(
+      async () => { throw new Error('ContentNotAvailable') },
+      () => current, t => t, write, () => '\x1bv',
+    )
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith('pty-1', '\x1bv')
+  })
+
+  // reject + 未注入 fallback → 原异常向上传播(handler .catch 吞掉),不写。
+  it('ClipboardImage_RejectNoFallback_012', async () => {
+    const current: { ptyId: string } | undefined = { ptyId: 'pty-1' }
+    const write = vi.fn()
+    const boom = new Error('ContentNotAvailable')
+    await expect(
+      commitPaste(async () => { throw boom }, () => current, t => t, write),
+    ).rejects.toThrow(boom)
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  // reject + 等待期间 ptyId 变更 → 过期丢弃(reject 路径同样进 stale 复核)。
+  it('ClipboardImage_RejectStale_014', async () => {
+    let rejectRead: (e: unknown) => void = () => {}
+    const readTextMock = () => new Promise<string>((_, rej) => { rejectRead = rej })
+    let current: { ptyId: string } | undefined = { ptyId: 'pty-1' }
+    const write = vi.fn()
+    const p = commitPaste(readTextMock, () => current, t => t, write, () => '\x1bv')
+    current = { ptyId: 'pty-2' }
+    rejectRead(new Error('ContentNotAvailable'))
+    await p
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  // reject + fallback 返回空串 → 传播原异常、不写(与 resolve 空串的静默跳过区分)。
+  it('ClipboardImage_RejectEmptyFallback_016', async () => {
+    const current: { ptyId: string } | undefined = { ptyId: 'pty-1' }
+    const write = vi.fn()
+    const boom = new Error('ContentNotAvailable')
+    await expect(
+      commitPaste(async () => { throw boom }, () => current, t => t, write, () => ''),
+    ).rejects.toThrow(boom)
+    expect(write).not.toHaveBeenCalled()
+  })
 })
 
 describe('imagePasteBytes', () => {

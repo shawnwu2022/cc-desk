@@ -69,10 +69,31 @@ export async function commitPaste(
   getInstance: () => PasteInstance | undefined,
   buildPayload: (text: string) => string,
   write: (ptyId: string, payload: string) => Promise<unknown>,
+  imageFallback?: () => string,
 ): Promise<void> {
   const capturedPtyId = getInstance()?.ptyId
-  const text = await readTextAsync()
-  if (!text) return
+  // "无文本"= resolve 空串或 reject(剪贴板只有截图时插件底层 arboard 返回错误,
+  // readText 是 reject 不是空串)。两者汇合到同一分流分支;reject 在无 fallback 可用
+  // 时保持现状向上抛,空串保持现状静默跳过。{ error } 包装防止捕获值恰为 undefined。
+  let rejection: { error: unknown } | undefined
+  let text = ''
+  try {
+    text = await readTextAsync()
+  } catch (error) {
+    rejection = { error }
+  }
+  if (!text) {
+    const bytes = imageFallback?.()
+    if (!bytes) {
+      if (rejection) throw rejection.error
+      return
+    }
+    const instance = getInstance()
+    if (instance?.ptyId && !isPasteStale(capturedPtyId, instance.ptyId)) {
+      await write(instance.ptyId, bytes)
+    }
+    return
+  }
   const instance = getInstance()
   if (instance?.ptyId && !isPasteStale(capturedPtyId, instance.ptyId)) {
     const payload = buildPayload(text)
