@@ -204,10 +204,31 @@ impl Drop for ClaudeSession {
     }
 }
 
+/// 增量完整性共享判定（run_case 与监测探针同强度使用）：
+/// chip 识别接管（内容折叠保存，不渲染属预期）→ SAFE；
+/// 否则三哨兵 key_0/middle/tail 必须在增量内按顺序出现，返回首个异常哨兵。
+/// 单行折行渲染同样会把全部哨兵写入累积流，缺失即真截断，不存在视口豁免。
+fn verify_increment(increment: &str, payload: &str) -> Result<(), String> {
+    let chip = increment.contains("Pasted text") || increment.contains("paste again to expand");
+    if chip {
+        return Ok(());
+    }
+    let last_key = last_key_of(payload);
+    let middle_key = middle_key_of(payload);
+    let mut search_from = 0usize;
+    for k in ["key_0", middle_key.as_str(), last_key.as_str()] {
+        match increment[search_from..].find(k) {
+            Some(p) => search_from += p + k.len(),
+            None => return Err(k.to_string()),
+        }
+    }
+    Ok(())
+}
+
 /// 核心探针：粘贴后判定内容完整性。
 /// 判定绑定本次粘贴的输出增量（基线 = 写入前已收集长度）：哨兵与 chip 只在增量内
 /// 查找，排除启动/既往输出干扰；三哨兵要求在增量内按 head→middle→tail 顺序出现
-/// （缺失或乱序都算失败）。chip 识别接管时内容折叠不渲染，属安全路径单独放行。
+/// （缺失或乱序都算失败）。
 fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     println!("=== [{}] payload {} 字节，chunk={} delay={}ms ===", case, payload.len(), chunk_size, delay_ms);
     let mut session = spawn_claude("E:/source/github/cc-box");
@@ -219,9 +240,6 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     session.write_chunked(payload, chunk_size, delay_ms);
     session.wait_quiet(1200, Duration::from_secs(20));
 
-    let last_key = last_key_of(payload);
-    let middle_key = middle_key_of(payload);
-
     // 打最终屏幕快照（剥离 ESC），供人工读取编辑器内容
     let tail = session.snapshot_tail(14000);
     let visible: String = tail.chars().filter(|c| *c != '\u{1b}').collect();
@@ -232,37 +250,26 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     let full = session.snapshot_all();
     let increment = &full[baseline_len..];
     let chip = increment.contains("Pasted text") || increment.contains("paste again to expand");
-    // 有序哨兵：head/middle/tail 必须依序出现在增量内
-    let ordered_sentinels = ["key_0", middle_key.as_str(), last_key.as_str()];
-    let mut search_from = 0usize;
-    let mut missing: Option<&str> = None;
-    for k in ordered_sentinels {
-        match increment[search_from..].find(k) {
-            Some(p) => search_from += p + k.len(),
-            None => {
-                missing = Some(k);
-                break;
-            }
-        }
-    }
+    let verdict = verify_increment(increment, payload);
     println!(
-        "[{}] 结果: 基线={}B 增量={}B chip={} 首个异常哨兵={}",
+        "[{}] 结果: 基线={}B 增量={}B chip={} 判定={}",
         case,
         baseline_len,
         increment.len(),
         chip,
-        missing.unwrap_or("无（三哨兵有序俱在）")
+        if verdict.is_ok() { "SAFE" } else { "RED" }
     );
 
-    if chip {
-        println!("[SAFE] {} 粘贴被 chip 识别接管（内容折叠保存，不渲染属预期）", case);
-        return;
-    }
-    match missing {
-        None => println!("[SAFE] {} 增量内三哨兵有序俱在，内容完整", case),
-        Some("key_0") => panic!("[RED] {} 复现用户症状：头部丢失（截头留尾）", case),
-        Some(k) if k == last_key => panic!("[RED] {} 尾部丢失（截尾留头，对应上游 #49337）", case),
-        Some(k) => panic!("[RED] {} 哨兵 {} 缺失或乱序：内容损坏", case, k),
+    match verdict {
+        Ok(()) if chip => println!("[SAFE] {} 粘贴被 chip 识别接管（内容折叠保存）", case),
+        Ok(()) => println!("[SAFE] {} 增量内三哨兵有序俱在，内容完整", case),
+        Err(missing) => match missing.as_str() {
+            "key_0" => panic!("[RED] {} 复现用户症状：头部丢失（截头留尾）", case),
+            k if k == last_key_of(payload) => {
+                panic!("[RED] {} 尾部丢失（截尾留头，对应上游 #49337）", case)
+            }
+            k => panic!("[RED] {} 哨兵 {} 缺失或乱序：内容损坏", case, k),
+        },
     }
 }
 
@@ -343,7 +350,6 @@ fn claude_json_singleline_paste_monitor() {
     serde_json::from_str::<serde_json::Value>(&pretty).expect("payload 必须是合法 JSON");
     let payload = compact_json_like_production(&pretty);
     assert!(!payload.contains('\n'), "压缩后必须单行");
-    let tail_key = last_key_of(&payload);
     for rep in 1..=3 {
         let mut session = spawn_claude("E:/source/github/cc-box");
         std::thread::sleep(Duration::from_millis(1500));
@@ -354,22 +360,18 @@ fn claude_json_singleline_paste_monitor() {
         let full = session.snapshot_all();
         let increment = &full[baseline_len..];
         let chip = increment.contains("Pasted text") || increment.contains("paste again to expand");
-        // 单行未折叠时光标在末尾，尾部必在渲染区（key_0 与中段会折行滚出视口，
-        // 物理上不可用作哨兵）；tail_key 缺失 = 尾部真丢失。
-        let tail_ok = increment.contains(&tail_key);
+        let verdict = verify_increment(increment, &payload);
         println!(
-            "[minified-rep-{}] 基线={}B 增量={}B chip={} tail={}",
+            "[minified-rep-{}] 基线={}B 增量={}B chip={} 判定={}",
             rep,
             baseline_len,
             increment.len(),
             chip,
-            tail_ok
+            if verdict.is_ok() { "SAFE" } else { "RED" }
         );
-        assert!(
-            chip || tail_ok,
-            "[RED] minified-rep-{} 尾部丢失且未被 chip 识别",
-            rep
-        );
+        if let Err(missing) = verdict {
+            panic!("[RED] minified-rep-{} 哨兵 {} 缺失或乱序：内容损坏", rep, missing);
+        }
     }
 }
 
