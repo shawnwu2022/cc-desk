@@ -72,9 +72,9 @@ export async function commitPaste(
   imageFallback?: () => string,
 ): Promise<void> {
   const capturedPtyId = getInstance()?.ptyId
-  // "无文本"= resolve 空串或 reject(剪贴板只有截图时插件底层 arboard 返回错误,
-  // readText 是 reject 不是空串)。两者汇合到同一分流分支;reject 在无 fallback 可用
-  // 时保持现状向上抛,空串保持现状静默跳过。{ error } 包装防止捕获值恰为 undefined。
+  // "无文本"定义为 resolve 空串或 reject（剪贴板只有截图时插件底层 arboard 返回错误，
+  // readText 是 reject 不是空串）。两者汇合到同一分流分支；reject 在无 fallback 可用
+  // 时保持现状向上抛，空串保持现状静默跳过。{ error } 包装防止捕获值恰为 undefined。
   let rejection: { error: unknown } | undefined
   let text = ''
   try {
@@ -103,9 +103,9 @@ export async function commitPaste(
 }
 
 /**
- * 平台对应的 CLI 图片粘贴键字节(chat:imagePaste 官方默认键位):
- * Windows/WSL 为 Alt+V(\x1bv),其余平台默认 Ctrl+V(\x16)。
- * 这是按键序列不是粘贴文本,调用方不得再包 bracketed paste 标记。
+ * 平台对应的 CLI 图片粘贴键字节（chat:imagePaste 官方默认键位）：
+ * Windows/WSL 为 Alt+V（\x1bv），其余平台默认 Ctrl+V（\x16）。
+ * 这是按键序列不是粘贴文本，调用方不得再包 bracketed paste 标记。
  */
 export function imagePasteBytes(platform: Platform): string {
   return platform === 'windows' ? '\x1bv' : '\x16'
