@@ -651,7 +651,7 @@ function formatTime(ts: number): string {
   border-radius: var(--radius-md);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .back-btn:hover:not(:disabled) {
@@ -685,7 +685,7 @@ function formatTime(ts: number): string {
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: 6px;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .update-badge {
@@ -859,7 +859,7 @@ function formatTime(ts: number): string {
   border-radius: var(--radius-sm);
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   flex-shrink: 0;
 }
 
@@ -941,7 +941,7 @@ function formatTime(ts: number): string {
   color: var(--text-secondary);
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .load-more-btn:hover {
@@ -975,7 +975,7 @@ function formatTime(ts: number): string {
   color: var(--text-secondary);
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .add-btn:hover {
@@ -1007,7 +1007,7 @@ function formatTime(ts: number): string {
   border-radius: var(--radius-md);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .load-archived-btn:hover {
@@ -1072,7 +1072,7 @@ function formatTime(ts: number): string {
   border-radius: var(--radius-sm);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .batch-btn:hover {
@@ -1129,7 +1129,7 @@ function formatTime(ts: number): string {
   border-radius: var(--radius-sm);
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .archived-delete:hover:not(:disabled) {
@@ -1162,13 +1162,13 @@ function formatTime(ts: number): string {
   border-radius: var(--radius-sm);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .batch-confirm {
   border: 1px solid var(--status-error);
   background: var(--status-error);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 .batch-confirm:disabled {
@@ -1210,7 +1210,7 @@ function formatTime(ts: number): string {
   cursor: pointer;
   border-radius: var(--radius-sm);
   font-size: 11px;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   flex-shrink: 0;
 }
 .archived-retry-btn:hover {

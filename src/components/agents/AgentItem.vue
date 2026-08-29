@@ -1,7 +1,14 @@
 <template>
   <div class="agent-item" :class="{ expanded: isExpanded, disabled: isDisabled }">
     <!-- Agent Header -->
-    <div class="agent-header" @click="toggleExpand">
+    <div
+      class="agent-header"
+      role="button"
+      tabindex="0"
+      @click="toggleExpand"
+      @keydown.enter.self.prevent="toggleExpand"
+      @keydown.space.self.prevent="toggleExpand"
+    >
       <img
         class="expand-icon"
         :class="{ expanded: isExpanded }"
@@ -145,8 +152,8 @@ async function onToggle(newValue: boolean) {
   font-size: 10px;
   padding: 2px 6px;
   border-radius: 4px;
-  background: #e3f2fd;
-  color: #1565c0;
+  background: var(--tag-mcp-bg);
+  color: var(--tag-mcp-text);
   flex-shrink: 0;
 }
 

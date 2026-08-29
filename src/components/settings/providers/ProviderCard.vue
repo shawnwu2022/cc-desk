@@ -153,7 +153,8 @@ function getIconChar(icon?: string): string {
   transition: opacity 0.15s;
 }
 .provider-card:hover .card-actions,
-.provider-card.active .card-actions {
+.provider-card.active .card-actions,
+.provider-card:focus-within .card-actions {
   opacity: 1;
 }
 
@@ -166,7 +167,7 @@ function getIconChar(icon?: string): string {
   font-size: 12px;
   cursor: pointer;
   font-family: var(--font-sans);
-  transition: all 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 .action-btn:hover {
   background: var(--hover-bg);
@@ -178,7 +179,7 @@ function getIconChar(icon?: string): string {
 }
 .action-btn.primary:hover {
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 .action-btn.danger {
@@ -190,7 +191,7 @@ function getIconChar(icon?: string): string {
 
 .active-badge {
   font-size: 12px;
-  color: var(--accent-gold-dark);
+  color: var(--accent-gold-text);
   font-weight: 600;
   padding: 4px 12px;
 }

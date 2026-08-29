@@ -1,7 +1,14 @@
 <template>
   <div class="mcp-sub-item" :class="{ expanded: isExpanded }">
     <!-- Item Header -->
-    <div class="sub-header" @click="toggleExpand">
+    <div
+      class="sub-header"
+      role="button"
+      tabindex="0"
+      @click="toggleExpand"
+      @keydown.enter.prevent="toggleExpand"
+      @keydown.space.prevent="toggleExpand"
+    >
       <img
         class="expand-icon"
         :class="{ expanded: isExpanded }"
@@ -181,7 +188,7 @@ function toggleExpand() {
 }
 
 .arg-type {
-  font-size: 9px;
+  font-size: 10px;
   padding: 1px 4px;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -222,9 +229,9 @@ function toggleExpand() {
 }
 
 .arg-required {
-  font-size: 9px;
+  font-size: 10px;
   padding: 1px 4px;
-  background: var(--accent-bg);
+  background: var(--accent-light);
   color: var(--accent-color);
   border-radius: 3px;
 }

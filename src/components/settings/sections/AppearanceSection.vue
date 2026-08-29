@@ -228,7 +228,7 @@ function decreaseFontSize() { appStore.setFontSize(fontSize.value - 1) }
   cursor: pointer;
   border-radius: 6px;
   font-size: 16px;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .size-btn:hover:not(:disabled) {
@@ -265,7 +265,7 @@ function decreaseFontSize() { appStore.setFontSize(fontSize.value - 1) }
   border: 2px solid var(--border-color);
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   width: 120px;
 }
 
@@ -305,14 +305,15 @@ function decreaseFontSize() { appStore.setFontSize(fontSize.value - 1) }
   flex-direction: column;
 }
 
+/* 预览卡为固定色样本（展示目标主题外观），不随当前主题切换，取真实主题 token 值 */
 .light-preview {
-  background: #f7f8fa;
-  border: 1px solid #e5e7eb;
+  background: #faf9f6;
+  border: 1px solid #d9d5cc;
 }
 
 .dark-preview {
-  background: #1a1a2e;
-  border: 1px solid #2d2d44;
+  background: #1c1a17;
+  border: 1px solid #3a3734;
 }
 
 .preview-bar {
@@ -330,13 +331,13 @@ function decreaseFontSize() { appStore.setFontSize(fontSize.value - 1) }
 
 .light-preview .preview-line {
   height: 3px;
-  background: #d1d5db;
+  background: #b5b0a8;
   border-radius: 1px;
 }
 
 .dark-preview .preview-line {
   height: 3px;
-  background: #4a4a6a;
+  background: #4a4640;
   border-radius: 1px;
 }
 

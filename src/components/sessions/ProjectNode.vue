@@ -15,7 +15,14 @@
       </button>
 
       <!-- 项目名区：整行点击展开/折叠 -->
-      <div class="project-main" @click="onToggle">
+      <div
+        class="project-main"
+        role="button"
+        tabindex="0"
+        @click="onToggle"
+        @keydown.enter.prevent="onToggle"
+        @keydown.space.prevent="onToggle"
+      >
         <input
           v-if="editState !== 'idle'"
           ref="renameInputRef"
@@ -25,6 +32,7 @@
           :disabled="editState === 'submitting'"
           :placeholder="t('aliasPlaceholder')"
           @click.stop
+          @keydown.stop
           @keyup.enter="onRenameSubmit"
           @keyup.escape="onRenameCancel"
           @blur="onRenameSubmit"
@@ -474,7 +482,7 @@ function onSessionSwitch(id: string) {
   cursor: pointer;
   border-radius: 4px;
   font-size: 11px;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 .history-error-retry:hover {
   border-color: var(--accent-color);

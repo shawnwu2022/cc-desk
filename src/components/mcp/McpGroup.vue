@@ -1,7 +1,14 @@
 <template>
   <div class="mcp-group">
     <!-- Group Header -->
-    <div class="group-header" @click="$emit('toggle')">
+    <div
+      class="group-header"
+      role="button"
+      tabindex="0"
+      @click="$emit('toggle')"
+      @keydown.enter.prevent="$emit('toggle')"
+      @keydown.space.prevent="$emit('toggle')"
+    >
       <img
         class="expand-icon"
         :class="{ expanded }"

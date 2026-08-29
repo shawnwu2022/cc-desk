@@ -1,7 +1,14 @@
 <template>
   <div class="skill-item" :class="{ expanded: isExpanded, disabled: isDisabled }">
     <!-- Skill Header -->
-    <div class="skill-header" @click="toggleExpand">
+    <div
+      class="skill-header"
+      role="button"
+      tabindex="0"
+      @click="toggleExpand"
+      @keydown.enter.self.prevent="toggleExpand"
+      @keydown.space.self.prevent="toggleExpand"
+    >
       <img
         class="expand-icon"
         :class="{ expanded: isExpanded }"

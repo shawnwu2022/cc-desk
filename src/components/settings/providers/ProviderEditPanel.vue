@@ -533,7 +533,7 @@ function handleSave() {
 .btn-link {
   padding: 4px 12px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   border: none;
   border-radius: 4px;
   font-size: 12px;
@@ -554,7 +554,7 @@ function handleSave() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.env-required { color: var(--error-color, #c0392b); margin-left: 2px; }
+.env-required { color: var(--error-color, #c45c4a); margin-left: 2px; }
 .env-input-wrap {
   flex: 1;
   display: flex;
@@ -591,7 +591,7 @@ function handleSave() {
 .btn-remove {
   padding: 5px 10px;
   background: transparent;
-  color: var(--error-color, #c0392b);
+  color: var(--error-color, #c45c4a);
   border: 1px solid var(--border-color);
   border-radius: 4px;
   font-size: 13px;
@@ -682,13 +682,13 @@ function handleSave() {
   border-radius: 6px;
 }
 .json-editor-wrap.has-error {
-  border-color: var(--error-color, #c0392b);
+  border-color: var(--error-color, #c45c4a);
 }
 
 .json-status {
   font-size: 12px;
   padding: 6px 0 0 0;
-  color: var(--error-color, #c0392b);
+  color: var(--error-color, #c45c4a);
   flex-shrink: 0;
 }
 
@@ -714,7 +714,7 @@ function handleSave() {
 .btn-save {
   padding: 8px 20px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   border: none;
   border-radius: 6px;
   font-size: 13px;

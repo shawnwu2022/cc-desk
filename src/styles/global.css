@@ -20,7 +20,7 @@
   /* 文字层级 */
   --text-primary: #1a1816;     /* 主文字：深炭灰 */
   --text-secondary: #5a5550;   /* 次级文字：中灰 */
-  --text-tertiary: #8a8680;    /* 辅助文字：浅灰 */
+  --text-tertiary: #69645e;    /* 辅助文字：暖深灰（对 bg-primary/secondary/tertiary 均满足 WCAG AA 4.5:1） */
   --text-inverse: #faf9f6;     /* 反色文字 */
 
   /* 边框系统 */
@@ -34,6 +34,7 @@
   --accent-gold: #d4a574;      /* 琥珀金 */
   --accent-gold-light: #e8c9a8;/* 浅琥珀 */
   --accent-gold-dark: #b8956a; /* 深琥珀 */
+  --accent-gold-text: #7a5c3a; /* 琥珀文字：浅色主题下作正文字色可达 WCAG AA（#d4a574 在米灰底仅 ~2:1，只作装饰/填充，不作文字） */
 
   /* 交互状态 */
   --hover-bg: rgba(30, 58, 95, 0.06);  /* 墨蓝悬浮 */
@@ -50,6 +51,17 @@
   --status-warning: #c4964a;   /* 警告：琥珀 */
   --status-error: #c45c4a;     /* 错误：赭红 */
   --status-info: #2a5082;      /* 信息：墨蓝 */
+
+  /* 类型标签（MCP/Skill/Agent 淡底 + 同系深字） */
+  --tag-mcp-bg: #e3f2fd;
+  --tag-mcp-text: #1565c0;
+  --tag-skill-bg: #fff3e0;
+  --tag-skill-text: #bf360c;
+  --tag-agent-bg: #f3e5f5;
+  --tag-agent-text: #7b1fa2;
+
+  /* 强调底色上的文字（主按钮等）；dark 主按钮 4.49:1 为 8bit 色值舍入边缘，实测可接受 */
+  --text-on-accent: #ffffff;
 
   /* 旧变量兼容（逐步迁移） */
   --accent-color: var(--accent-primary);
@@ -96,7 +108,7 @@
   /* 文字层级 — 温暖浅色系列 */
   --text-primary: #f8f6f3;     /* 主文字：温暖米白 */
   --text-secondary: #c4c0b8;   /* 次级文字：暖灰 */
-  --text-tertiary: #7a7568;    /* 辅助文字：暗暖灰 */
+  --text-tertiary: #9c9788;    /* 辅助文字：暖灰（对 bg-primary/secondary/tertiary 均满足 WCAG AA 4.5:1） */
   --text-inverse: #1c1a17;     /* 反色文字 */
 
   /* 边框系统 */
@@ -110,6 +122,7 @@
   --accent-gold: #f0d4a8;      /* 琥珀金：璀璨 */
   --accent-gold-light: #fce8d0;/* 浅琥珀：温暖奶色 */
   --accent-gold-dark: #d4b890; /* 深琥珀：稳重 */
+  --accent-gold-text: #f0d4a8; /* 琥珀文字：暗色底上 #f0d4a8 已达 AA */
 
   /* 交互状态 */
   --hover-bg: rgba(74, 122, 173, 0.12);  /* 墨蓝悬浮 */
@@ -126,6 +139,16 @@
   --status-warning: #f0b460;   /* 警告：明亮琥珀 */
   --status-error: #e8705a;     /* 错误：温暖赭红 */
   --status-info: #6a9acd;      /* 信息：明亮墨蓝 */
+
+  /* 类型标签（暗色：半透明底 + 亮字） */
+  --tag-mcp-bg: rgba(74, 122, 173, 0.2);
+  --tag-mcp-text: #6a9acd;
+  --tag-skill-bg: rgba(240, 180, 96, 0.2);
+  --tag-skill-text: #f0b460;
+  --tag-agent-bg: rgba(160, 100, 200, 0.2);
+  --tag-agent-text: #c490e0;
+
+  --text-on-accent: #ffffff;
 
   /* 阴影系统 */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
@@ -169,24 +192,6 @@
   filter: invert(0.65);
 }
 
-/* 暗色主题：类型标签适配（浅色背景 → 暗色半透明） */
-[data-theme="dark"] .agent-model {
-  background: rgba(74, 122, 173, 0.2);
-  color: var(--accent-secondary);
-}
-[data-theme="dark"] .component-tag.mcp {
-  background: rgba(74, 122, 173, 0.2);
-  color: var(--accent-secondary);
-}
-[data-theme="dark"] .component-tag.skills {
-  background: rgba(240, 180, 96, 0.2);
-  color: var(--status-warning);
-}
-[data-theme="dark"] .component-tag.agents {
-  background: rgba(160, 100, 200, 0.2);
-  color: #c490e0;
-}
-
 * {
   margin: 0;
   padding: 0;
@@ -225,12 +230,19 @@ body {
 button {
   font-family: inherit;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+/* 语义按钮化的非 button 元素（侧边栏折叠头等）键盘焦点可见 */
+[role="button"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 /* 代码字体 */
@@ -269,4 +281,14 @@ a:hover {
 button:disabled, input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 减弱动态效果：停用常驻动画（徽标脉冲、加载旋转），
+   保留 0.15s 状态过渡作为必要反馈 */
+@media (prefers-reduced-motion: reduce) {
+  .icon-badge,
+  .spinning,
+  .spinning * {
+    animation: none;
+  }
 }
