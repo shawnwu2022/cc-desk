@@ -189,6 +189,7 @@ export default {
   shortcut_deleteToEnd: '删除到行尾',
   shortcut_deleteToStart: '删除从光标到行首',
   shortcut_pasteDeleted: '粘贴已删除文本',
+  shortcut_imagePaste: '粘贴剪贴板图片（终端内）',
   shortcut_moveBackWord: '光标向后移动一个单词',
   shortcut_moveForwardWord: '光标向前移动一个单词',
   shortcut_insertNewline: '插入换行',

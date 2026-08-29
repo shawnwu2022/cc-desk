@@ -189,6 +189,7 @@ export default {
   shortcut_deleteToEnd: 'Delete to end of line',
   shortcut_deleteToStart: 'Delete from cursor to start of line',
   shortcut_pasteDeleted: 'Paste deleted text',
+  shortcut_imagePaste: 'Paste image from clipboard (in terminal)',
   shortcut_moveBackWord: 'Move cursor back one word',
   shortcut_moveForwardWord: 'Move cursor forward one word',
   shortcut_insertNewline: 'Insert newline',

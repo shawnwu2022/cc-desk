@@ -18,7 +18,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ctrl, alt, cmd, isMac } from '@/utils/platform'
+import { ctrl, alt, cmd, isMac, isWindows } from '@/utils/platform'
 
 const { t } = useI18n()
 
@@ -66,6 +66,7 @@ const filteredGroups = computed(() => [
       { key: `${ctrl}+B`, desc: t('shortcut_backgroundTask') },
       { key: `${ctrl}+T`, desc: t('shortcut_toggleTaskList') },
       { key: 'Esc Esc', desc: t('shortcut_rewind') },
+      { key: isWindows ? `${alt}+V` : `${ctrl}+V`, desc: t('shortcut_imagePaste') },
     ]
   },
   {
