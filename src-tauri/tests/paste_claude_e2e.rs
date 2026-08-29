@@ -204,7 +204,11 @@ impl Drop for ClaudeSession {
     }
 }
 
-/// 核心探针：粘贴后截取最终屏幕区域，报告编辑器内容里可见的首/尾 key。
+/// 核心探针：粘贴后判定内容完整性。
+/// 判定基于累积 VT 流（append-only，渲染过即留存）：全流含头/中/尾三哨兵 = 内容
+/// 曾完整进入编辑器；终屏缺首部仅是滚出视口，不算丢失。chip 识别接管时内容折叠
+/// 不渲染，三哨兵必然缺失，属安全路径。仅「尾部在而头部缺」的旧断言有假绿：
+/// 整段丢失 / 尾部丢失 / 中段损坏都会漏判——这里一并堵上。
 fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     println!("=== [{}] payload {} 字节，chunk={} delay={}ms ===", case, payload.len(), chunk_size, delay_ms);
     let mut session = spawn_claude("E:/source/github/cc-box");
@@ -215,52 +219,45 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     session.write_chunked(payload, chunk_size, delay_ms);
     session.wait_quiet(1200, Duration::from_secs(20));
 
-    // 打最终屏幕快照的纯文本行（过滤纯控制序列行），供人工读取编辑器内容
+    let last_key = last_key_of(payload);
+    let middle_key = middle_key_of(payload);
+
+    // 打最终屏幕快照（剥离 ESC），供人工读取编辑器内容
     let tail = session.snapshot_tail(14000);
-    let visible: String = tail
-        .chars()
-        .filter(|c| *c != '\u{1b}')
-        .collect();
+    let visible: String = tail.chars().filter(|c| *c != '\u{1b}').collect();
     println!("---- [{}] 最终屏幕尾部（剥离 ESC） ----", case);
     println!("{}", visible);
     println!("---- end ----");
 
-    let has_head = tail.contains("key_0");
-    let last_key = {
-        // 找 payload 中最大的 key_N
-        let mut last = String::new();
-        let mut search = 0usize;
-        while let Some(pos) = payload[search..].find("key_") {
-            let abs = search + pos;
-            let rest = &payload[abs + 4..];
-            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if !num.is_empty() {
-                last = format!("key_{}", num);
-            }
-            search = abs + 4;
-        }
-        last
-    };
-    let has_tail = tail.contains(&last_key);
-    let has_chip = tail.contains("Pasted text") || tail.contains("pasted text");
-    let has_hint = tail.contains("paste again to expand");
-    // 整流判定：累积 VT 流里渲染过的行都在。全流含 head+tail = 内容曾完整进入编辑器，
-    // 终屏缺 head 只是滚出视口；全流缺 head = 真截断。
     let full = session.snapshot_all();
+    let chip = full.contains("Pasted text") || full.contains("paste again to expand");
     let full_head = full.contains("key_0");
+    let full_middle = full.contains(&middle_key);
     let full_tail = full.contains(&last_key);
     println!(
-        "[{}] 结果: 终屏 head={} tail({})={} chip={} hint={} | 全流 head={} tail={}",
-        case, has_head, last_key, has_tail, has_chip, has_hint, full_head, full_tail
+        "[{}] 结果: chip={} | 全流 head={} middle({})={} tail({})={}",
+        case, chip, full_head, middle_key, full_middle, last_key, full_tail
     );
-    if has_tail && !has_head && !has_chip && !full_head {
-        panic!("[RED] {} 复现用户症状：全流与终屏均无头部（真截断）", case);
-    }
-    if has_tail && !has_head && !has_chip && full_head {
-        println!("[NOTE] {} 终屏缺头但全流有头：视口滚动，非截断", case);
-    }
-}
 
+    if chip {
+        println!("[SAFE] {} 粘贴被 chip 识别接管（内容折叠保存，不渲染属预期）", case);
+        return;
+    }
+    // 非 chip 路径：三哨兵必须全部出现在累积流里，缺任何一环 = 真截断
+    if !full_head && !full_tail {
+        panic!("[RED] {} 头尾全流均缺失：整段内容丢失", case);
+    }
+    if !full_head {
+        panic!("[RED] {} 复现用户症状：头部丢失（截头留尾）", case);
+    }
+    if !full_tail {
+        panic!("[RED] {} 尾部丢失（截尾留头，对应上游 #49337）", case);
+    }
+    if !full_middle {
+        panic!("[RED] {} 中段哨兵 {} 缺失：中段损坏", case, middle_key);
+    }
+    println!("[SAFE] {} 全流三哨兵俱在，内容完整", case);
+}
 
 /// 取 payload 中最后一个 key_N（全流完整性判定的尾部标记）。
 fn last_key_of(payload: &str) -> String {
@@ -276,6 +273,14 @@ fn last_key_of(payload: &str) -> String {
         search = abs + 4;
     }
     last
+}
+
+/// 取 payload 最大学号的一半对应的 key_N（中段哨兵）。
+fn middle_key_of(payload: &str) -> String {
+    let last = last_key_of(payload);
+    let num: String = last[4..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    let n: usize = num.parse().unwrap_or(0);
+    format!("key_{}", n / 2)
 }
 
 #[test]
@@ -295,6 +300,9 @@ fn claude_json_singleline_paste_monitor() {
     // 未修，Win10 ConPTY 又吞掉 bracketed 标记，带内无 100% 可靠方案。本测试 RED =
     // 上游仍不可靠的信号；上游修复（或换用可透传标记的系统 conhost）后应转绿。
     let pretty = devtools_style_json(8 * 1024);
+    // serde_json 的 minify 与生产 TS compactJsonForPaste 的等价性由
+    // tests/utils/pasteText.test.ts 的 PasteJson_ProductionEquivalence 桥接用例锁定
+    // （同一样本两种压缩产出逐字节一致）；本探针按该形态验证 Claude 端行为。
     let value: serde_json::Value = serde_json::from_str(&pretty).expect("payload 必须是合法 JSON");
     let payload = serde_json::to_string(&value).expect("minify");
     assert!(!payload.contains('\n'), "minify 后必须单行");

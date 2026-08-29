@@ -21,21 +21,31 @@ export function preparePasteText(text: string): string {
  * 为什么：Windows ConPTY 输入解析器会吞掉 `ESC[200~`/`ESC[201~` bracketed paste
  * 标记（CSI 序列不透传给子进程），Claude Code 只能靠 burst 启发式识别粘贴；对
  * 大段多行无标记 burst 识别会间歇性失败，按逐键处理时输入编辑器会静默丢弃头部
- * 或尾部（上游 anthropics/claude-code#49673、#49337，已关闭不修）。e2e 实测：
- * 单行大 burst 稳定触发 chip 识别或完整进入编辑器，两种形态内容均不丢。
+ * 或尾部（上游 anthropics/claude-code#49673、#49337，已关闭不修）。压缩降低
+ * 换行驱动的失败面并缩减 payload；小中型 JSON 压缩后整体可靠。
  *
- * 无损性依据：合法 JSON 的裸换行只会出现在 token 之间（字符串内部的换行必须是
- * `\n` 转义序列），因此移除「换行 + 后续缩进空白」不影响任何值；配合 JSON.parse
- * 先行校验。刻意不用 parse+stringify 往返——那会把超出 2^53 的整数 ID 静默取整。
+ * 无损性依据：合法 JSON 的裸换行/裸 CR 只会出现在 token 之间（字符串内部的换行、
+ * 回车必须是 `\n`/`\r` 转义序列，控制字符禁止裸出现），因此移除「换行 + 后续
+ * 缩进空白」不影响任何值；配合 JSON.parse 先行校验。刻意不用 parse+stringify
+ * 往返——那会把超出 2^53 的整数 ID 静默取整。
+ *
+ * 边界处理：前导 BOM 会让 JSON.parse 失败，校验时跳过但保留原字符（交由下游
+ * 消化）；超过 COMPACT_MAX_LENGTH 的文本跳过压缩，避免同步 JSON.parse/正则
+ * 在 UI 线程造成可感知卡顿。
  */
+const COMPACT_MAX_LENGTH = 2 * 1024 * 1024
+
 export function compactJsonForPaste(text: string): string {
-  if (!text.includes('\n')) return text
+  if (text.length > COMPACT_MAX_LENGTH) return text
+  if (!/[\n\r]/.test(text)) return text
+  // 剪贴板文本可能带 BOM；仅为通过校验而跳过，压缩结果保留原 BOM
+  const validation = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
   try {
-    JSON.parse(text)
+    JSON.parse(validation)
   } catch {
     return text
   }
-  return text.replace(/\r?\n\s*/g, '')
+  return text.replace(/(\r\n|\r|\n)[ \t]*/g, '')
 }
 
 /**

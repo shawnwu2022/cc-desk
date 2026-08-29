@@ -31,6 +31,26 @@ describe('compactJsonForPaste', () => {
     expect(compactJsonForPaste(pretty)).toBe('{"a": 1,"b": 2}')
   })
 
+  // 仅 CR 行尾的 pretty JSON 同样压缩（先于 LF 规范化，不能漏）。
+  it('PasteJson_CrOnlyMultiline_Compacted_009', () => {
+    const pretty = '{\r  "a": 1,\r  "b": 2\r}'
+    expect(compactJsonForPaste(pretty)).toBe('{"a": 1,"b": 2}')
+  })
+
+  // 前导 BOM 不阻断校验：BOM 保留在压缩结果开头，JSON 主体被压缩。
+  it('PasteJson_BomPrefix_CompactedKeepBom_010', () => {
+    const pretty = '﻿{\n  "a": 1\n}'
+    const out = compactJsonForPaste(pretty)
+    expect(out.charCodeAt(0)).toBe(0xfeff)
+    expect(out.slice(1)).toBe('{"a": 1}')
+  })
+
+  // 超过尺寸上限的文本跳过压缩（防 UI 线程同步解析大文本卡顿），原样返回。
+  it('PasteJson_Oversize_SkipCompaction_011', () => {
+    const big = '{\n  "a": "' + 'x'.repeat(2 * 1024 * 1024 + 1) + '"\n}'
+    expect(compactJsonForPaste(big)).toBe(big)
+  })
+
   // 非 JSON 文本原样返回（不得破坏多行 prose/代码）。
   it('PasteJson_NonJson_Unchanged_005', () => {
     const text = 'def foo():\n    return bar\n'
@@ -52,6 +72,22 @@ describe('compactJsonForPaste', () => {
   // 空串原样返回。
   it('PasteJson_Empty_Identity_008', () => {
     expect(compactJsonForPaste('')).toBe('')
+  })
+
+  // 跨层桥接：DevTools 风格样本上，regex 压缩与 JSON.stringify 压缩语义等价
+  // （解析结果 deep-equal）且同为单行。二者空白风格不同（regex 保留冒号后空格），
+  // 故比较解析结果而非字节。Rust e2e 探针（paste_claude_e2e.rs）用 serde minify
+  // 生成同形态 payload，其对 Claude 端行为的结论借此用例传导回生产 TS 管线。
+  it('PasteJson_ProductionEquivalence_012', () => {
+    const pairs: Array<[string, string]> = [
+      ['"key_0"', '"AAAA"'],
+      ['"key_1"', '"BBBB"'],
+      ['"key_2"', '"CCCC"'],
+    ]
+    const pretty = '{\n  ' + pairs.map(([k, v]) => `${k}: ${v}`).join(',\n  ') + '\n}'
+    const compacted = compactJsonForPaste(pretty)
+    expect(compacted).not.toContain('\n')
+    expect(JSON.parse(compacted)).toEqual(JSON.parse(JSON.stringify(JSON.parse(pretty))))
   })
 })
 
