@@ -8,6 +8,7 @@
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -42,12 +43,12 @@ struct ClaudeSession {
     reader_dead: Arc<std::sync::atomic::AtomicBool>,
 }
 
-fn spawn_claude(_cwd: &str) -> ClaudeSession {
+fn spawn_claude(_cwd: &str, dump_out: &str) -> ClaudeSession {
     // 重试式 spawn：本机 conhost 资源紧张时新会话可能秒死（reader 立即 EOF），
     // 丢弃死会话重试，用就绪标记确认拿到健康实例。
     for attempt in 1..=8 {
         println!("[e2e] 第 {} 次尝试 spawn claude", attempt);
-        let session = spawn_claude_once();
+        let session = spawn_claude_once(dump_out);
         // 快速探活：3s 内 reader EOF = 会话秒死，立即弃；否则给足渲染时间
         let dead = session.wait_for_dead(Duration::from_secs(3));
         if dead {
@@ -68,7 +69,24 @@ fn spawn_claude(_cwd: &str) -> ClaudeSession {
     panic!("[e2e] 连续 5 次 spawn 均未就绪");
 }
 
-fn spawn_claude_once() -> ClaudeSession {
+/// 显式解析 node.exe（EDITER 转储助手需要），与 paste_transport.rs 同逻辑。
+fn node_program() -> OsString {
+    let mut cmd_name = OsString::from("node");
+    if let Some(path) = std::env::var_os("PATH") {
+        'outer: for dir in std::env::split_paths(&path) {
+            for name in ["node.exe", "node.cmd", "node"] {
+                let candidate = PathBuf::from(&dir).join(name);
+                if candidate.is_file() {
+                    cmd_name = candidate.into_os_string();
+                    break 'outer;
+                }
+            }
+        }
+    }
+    cmd_name
+}
+
+fn spawn_claude_once(dump_out: &str) -> ClaudeSession {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -84,6 +102,15 @@ fn spawn_claude_once() -> ClaudeSession {
     println!("[e2e] 使用 claude 程序: {:?}", program);
     let mut cmd = CommandBuilder::new(program);
     cmd.cwd("E:/source/github/cc-box");
+    // EDITOR 指向转储助手：Ctrl+G 触发外部编辑器时，助手把编辑器缓冲原样落盘后退出，
+    // 探针据此回读真实编辑器内容做逐字节判定（排除 VT 渲染流视口/批处理失真）
+    let helper = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dump_editor.js"
+    );
+    let node = node_program().to_string_lossy().to_string();
+    cmd.env("EDITOR", format!("\"{}\" \"{}\"", node, helper));
+    cmd.env("CC_DUMP_OUT", dump_out);
     let child = pair.slave.spawn_command(cmd).expect("spawn claude");
     drop(pair.slave);
 
@@ -226,12 +253,19 @@ fn verify_increment(increment: &str, payload: &str) -> Result<(), String> {
 }
 
 /// 核心探针：粘贴后判定内容完整性。
-/// 判定绑定本次粘贴的输出增量（基线 = 写入前已收集长度）：哨兵与 chip 只在增量内
-/// 查找，排除启动/既往输出干扰；三哨兵要求在增量内按 head→middle→tail 顺序出现
-/// （缺失或乱序都算失败）。
+/// 主判定 = 回读编辑器缓冲：Ctrl+G 触发 EDITOR 转储助手，把 Claude 输入编辑器的
+/// 真实内容落盘，与 payload 逐字节比对（只容忍末尾换行）——渲染层彻底出局，
+/// 哨兵缺失不再可能是视口/批处理假象。chip 识别接管（内容折叠）时跳过回读。
+/// 次判定 = 输出增量内的有序三哨兵（保留上游行为画像）。
 fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     println!("=== [{}] payload {} 字节，chunk={} delay={}ms ===", case, payload.len(), chunk_size, delay_ms);
-    let mut session = spawn_claude("E:/source/github/cc-box");
+    let dump_out = std::env::temp_dir().join(format!(
+        "cc_desk_paste_dump_{}_{}.txt",
+        case,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&dump_out);
+    let mut session = spawn_claude("E:/source/github/cc-box", &dump_out.to_string_lossy());
 
     // spawn_claude 已等待就绪标记；这里再留一点稳定时间
     std::thread::sleep(Duration::from_millis(1500));
@@ -252,7 +286,7 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     let chip = increment.contains("Pasted text") || increment.contains("paste again to expand");
     let verdict = verify_increment(increment, payload);
     println!(
-        "[{}] 结果: 基线={}B 增量={}B chip={} 判定={}",
+        "[{}] 结果: 基线={}B 增量={}B chip={} 哨兵判定={}",
         case,
         baseline_len,
         increment.len(),
@@ -260,16 +294,38 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
         if verdict.is_ok() { "SAFE" } else { "RED" }
     );
 
-    match verdict {
-        Ok(()) if chip => println!("[SAFE] {} 粘贴被 chip 识别接管（内容折叠保存）", case),
-        Ok(()) => println!("[SAFE] {} 增量内三哨兵有序俱在，内容完整", case),
-        Err(missing) => match missing.as_str() {
-            "key_0" => panic!("[RED] {} 复现用户症状：头部丢失（截头留尾）", case),
-            k if k == last_key_of(payload) => {
-                panic!("[RED] {} 尾部丢失（截尾留头，对应上游 #49337）", case)
+    if chip {
+        println!("[SAFE] {} 粘贴被 chip 识别接管（内容折叠保存，不回读）", case);
+        return;
+    }
+
+    // 主判定：Ctrl+G（\x07）回读编辑器真实缓冲
+    session.write_all("\u{7}");
+    let mut dumped = None;
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(12) {
+        if let Ok(content) = std::fs::read_to_string(&dump_out) {
+            dumped = Some(content);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    match dumped {
+        Some(content) => {
+            // 编辑器可能补一个末尾换行；其余字节必须与 payload 完全一致
+            let normalized = content.trim_end_matches(['\n', '\r']);
+            if normalized == payload {
+                println!("[SAFE] {} 编辑器缓冲逐字节一致（{} 字节）", case, normalized.len());
+            } else {
+                panic!(
+                    "[RED] {} 编辑器缓冲与 payload 不一致：缓冲 {} 字节 / 期望 {} 字节（已排除渲染失真，实为内容丢失）",
+                    case,
+                    normalized.len(),
+                    payload.len()
+                );
             }
-            k => panic!("[RED] {} 哨兵 {} 缺失或乱序：内容损坏", case, k),
-        },
+        }
+        None => panic!("[RED] {} Ctrl+G 转储超时：EDITOR 助手未生效或会话异常", case),
     }
 }
 
@@ -351,7 +407,13 @@ fn claude_json_singleline_paste_monitor() {
     let payload = compact_json_like_production(&pretty);
     assert!(!payload.contains('\n'), "压缩后必须单行");
     for rep in 1..=3 {
-        let mut session = spawn_claude("E:/source/github/cc-box");
+        let dump_out = std::env::temp_dir().join(format!(
+            "cc_desk_paste_dump_monitor_rep{}_{}.txt",
+            rep,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&dump_out);
+        let mut session = spawn_claude("E:/source/github/cc-box", &dump_out.to_string_lossy());
         std::thread::sleep(Duration::from_millis(1500));
         // 增量绑定：只在本轮粘贴之后的输出里判定 chip 与哨兵
         let baseline_len = session.snapshot_all().len();
@@ -362,15 +424,43 @@ fn claude_json_singleline_paste_monitor() {
         let chip = increment.contains("Pasted text") || increment.contains("paste again to expand");
         let verdict = verify_increment(increment, &payload);
         println!(
-            "[minified-rep-{}] 基线={}B 增量={}B chip={} 判定={}",
+            "[minified-rep-{}] 基线={}B 增量={}B chip={} 哨兵判定={}",
             rep,
             baseline_len,
             increment.len(),
             chip,
             if verdict.is_ok() { "SAFE" } else { "RED" }
         );
-        if let Err(missing) = verdict {
-            panic!("[RED] minified-rep-{} 哨兵 {} 缺失或乱序：内容损坏", rep, missing);
+        if chip {
+            println!("[SAFE] minified-rep-{} 粘贴被 chip 识别接管（内容折叠保存，不回读）", rep);
+            continue;
+        }
+        // 主判定：Ctrl+G 回读编辑器真实缓冲（与 run_case 同强度）
+        session.write_all("\u{7}");
+        let mut dumped = None;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(12) {
+            if let Ok(content) = std::fs::read_to_string(&dump_out) {
+                dumped = Some(content);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        match dumped {
+            Some(content) => {
+                let normalized = content.trim_end_matches(['\n', '\r']);
+                if normalized == payload {
+                    println!("[SAFE] minified-rep-{} 编辑器缓冲逐字节一致（{} 字节）", rep, normalized.len());
+                } else {
+                    panic!(
+                        "[RED] minified-rep-{} 编辑器缓冲与 payload 不一致：缓冲 {} 字节 / 期望 {} 字节（已排除渲染失真）",
+                        rep,
+                        normalized.len(),
+                        payload.len()
+                    );
+                }
+            }
+            None => panic!("[RED] minified-rep-{} Ctrl+G 转储超时", rep),
         }
     }
 }
