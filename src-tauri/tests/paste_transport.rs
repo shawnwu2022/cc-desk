@@ -22,6 +22,7 @@ const BRACKET_OPEN: &str = "\u{1b}[200~";
 const BRACKET_CLOSE: &str = "\u{1b}[201~";
 const PTY_TEST_WRITE_CHUNK_SIZE: usize = 4 * 1024;
 const PTY_TEST_WRITE_CHUNK_DELAY: Duration = Duration::from_millis(1);
+const PASTE_RESULT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// node 子进程脚本：累积 stdin 到 sentinel，回报长度、FNV-1a 哈希与首尾片段。
 /// 若检测到 bracketed 标记（可能被 ConPTY 剥除，也可能被透传）先剥除再计算，
@@ -48,7 +49,7 @@ process.stdin.on('data', (c) => {
     process.exit(0);
   }
 });
-setTimeout(() => { process.stderr.write('NODE_TIMEOUT len=' + acc.length + '\n'); process.exit(2); }, 8000);
+setTimeout(() => { process.stderr.write('NODE_TIMEOUT len=' + acc.length + '\n'); process.exit(2); }, 40000);
 "#;
 
 /// FNV-1a 32 位（字节域），与 NODE_SCRIPT 内实现一致。
@@ -213,8 +214,9 @@ fn run_paste_case(payload: &str) -> PasteResult {
     writer.write_all(b"\r").expect("write terminator");
     writer.flush().expect("flush");
 
-    // 等 RECV 回报或 node 超时标记
-    while start.elapsed() < Duration::from_secs(15) {
+    // GitHub Windows runner 处理 128 KiB ConPTY 输入可能超过 15 秒，等待窗口需覆盖慢机。
+    // 小 payload 收到回报后仍会立即退出，不增加常规用例耗时。
+    while start.elapsed() < PASTE_RESULT_TIMEOUT {
         let done = {
             let text = collected.lock().unwrap();
             (text.contains("RECV:") && text.contains("HASH:")) || text.contains("NODE_TIMEOUT")
