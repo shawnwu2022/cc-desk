@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.17.1] - 2026-08-30
+
+### Fixed
+- Fix native paste interception while terminal elements are still initializing
+- Prevent valid multiline JSON from being truncated through Windows ConPTY
+- Preserve non-JSON multiline paste content and avoid duplicate paste dispatch
+
+### Tests
+- Add transport and Claude CLI paste regression coverage with shared fixtures
+
 ## [0.17.0] - 2026-08-30
 
 ### Features

@@ -74,6 +74,34 @@ describe('bindNativePaste', () => {
     expect(xtermPaste).toHaveBeenCalledOnce()
     expect(write).not.toHaveBeenCalled()
   })
+
+  it('PasteNative_MissingElement_DoesNotCapture_004', () => {
+    const container = document.createElement('div')
+    const textarea = document.createElement('textarea')
+    container.append(textarea)
+    const write = vi.fn(async () => {})
+    const unbind = bindNativePaste({
+      container,
+      getTabId: () => 'tab-1',
+      getInstance: () => ({
+        ptyId: 'pty-4',
+        term: {
+          element: undefined,
+          modes: { bracketedPasteMode: false },
+          options: { ignoreBracketedPasteMode: false },
+        },
+      }),
+      write,
+      imageFallback: () => '\x1bv',
+    })
+
+    const event = pasteEvent('plain text')
+    textarea.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(write).not.toHaveBeenCalled()
+    unbind()
+  })
 })
 
 describe('compactJsonForPaste', () => {
