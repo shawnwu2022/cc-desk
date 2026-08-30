@@ -12,7 +12,7 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -147,8 +147,14 @@ struct PasteResult {
     output_tail: String,
 }
 
+static PASTE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
 /// 跑一次粘贴：spawn node PTY → 写 payload+sentinel → 等回报。
 fn run_paste_case(payload: &str) -> PasteResult {
+    let _guard = PASTE_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("paste transport test lock poisoned");
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
