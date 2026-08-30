@@ -15,6 +15,19 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
+// Windows ConPTY 对超大单次写入存在截断风险；分块保持每次写入有界，避免大粘贴丢字节。
+pub(crate) const PTY_WRITE_CHUNK_SIZE: usize = 16 * 1024;
+
+pub(crate) fn write_pty_data<W: Write + ?Sized>(
+    writer: &mut W,
+    data: &[u8],
+) -> std::io::Result<()> {
+    for chunk in data.chunks(PTY_WRITE_CHUNK_SIZE) {
+        writer.write_all(chunk)?;
+    }
+    Ok(())
+}
+
 /// PTY 实例信息
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PtyInfo {
@@ -595,8 +608,7 @@ impl PtyManager {
             anyhow!("{}", err)
         })?;
 
-        writer
-            .write_all(data.as_bytes())
+        write_pty_data(writer.as_mut(), data.as_bytes())
             .with_context(|| format!("Failed to write {} bytes to PTY {}", data.len(), id))?;
 
         writer
