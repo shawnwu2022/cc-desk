@@ -89,7 +89,10 @@ fn spawn_claude(cwd: &Path, dump_out: &str) -> ClaudeSession {
             return session;
         }
         let len = session.collected.lock().unwrap().len();
-        println!("[e2e] 第 {} 次会话存活但未就绪（len={}），重试", attempt, len);
+        println!(
+            "[e2e] 第 {} 次会话存活但未就绪（len={}），重试",
+            attempt, len
+        );
     }
     panic!("[e2e] 连续 5 次 spawn 均未就绪");
 }
@@ -128,10 +131,7 @@ fn spawn_claude_once(cwd: &Path, dump_out: &str) -> ClaudeSession {
     cmd.cwd(cwd);
     // EDITOR 指向转储助手：Ctrl+G 触发外部编辑器时，助手把编辑器缓冲原样落盘后退出，
     // 探针据此回读真实编辑器内容做逐字节判定（排除 VT 渲染流视口/批处理失真）
-    let helper = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/dump_editor.js"
-    );
+    let helper = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dump_editor.js");
     let node = node_program().to_string_lossy().to_string();
     cmd.env("EDITOR", format!("\"{}\" \"{}\"", node, helper));
     cmd.env("CC_DUMP_OUT", dump_out);
@@ -241,7 +241,13 @@ impl ClaudeSession {
 
     fn snapshot_tail(&self, n: usize) -> String {
         let text = self.collected.lock().unwrap().clone();
-        text.chars().rev().take(n).collect::<Vec<_>>().into_iter().rev().collect()
+        text.chars()
+            .rev()
+            .take(n)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
     }
 
     fn snapshot_all(&self) -> String {
@@ -282,7 +288,13 @@ fn verify_increment(increment: &str, payload: &str) -> Result<(), String> {
 /// 哨兵缺失不再可能是视口/批处理假象。chip 识别接管（内容折叠）时跳过回读。
 /// 次判定 = 输出增量内的有序三哨兵（保留上游行为画像）。
 fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
-    println!("=== [{}] payload {} 字节，chunk={} delay={}ms ===", case, payload.len(), chunk_size, delay_ms);
+    println!(
+        "=== [{}] payload {} 字节，chunk={} delay={}ms ===",
+        case,
+        payload.len(),
+        chunk_size,
+        delay_ms
+    );
     let dump_out = std::env::temp_dir().join(format!(
         "cc_desk_paste_dump_{}_{}.txt",
         case,
@@ -320,7 +332,10 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
     );
 
     if chip {
-        println!("[SAFE] {} 粘贴被 chip 识别接管（内容折叠保存，不回读）", case);
+        println!(
+            "[SAFE] {} 粘贴被 chip 识别接管（内容折叠保存，不回读）",
+            case
+        );
         return;
     }
 
@@ -340,7 +355,11 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
             // 编辑器可能补一个末尾换行；其余字节必须与 payload 完全一致
             let normalized = content.trim_end_matches(['\n', '\r']);
             if normalized == payload {
-                println!("[SAFE] {} 编辑器缓冲逐字节一致（{} 字节）", case, normalized.len());
+                println!(
+                    "[SAFE] {} 编辑器缓冲逐字节一致（{} 字节）",
+                    case,
+                    normalized.len()
+                );
             } else {
                 panic!(
                     "[RED] {} 编辑器缓冲与 payload 不一致：缓冲 {} 字节 / 期望 {} 字节（已排除渲染失真，实为内容丢失）",
@@ -350,7 +369,10 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
                 );
             }
         }
-        None => panic!("[RED] {} Ctrl+G 转储超时：EDITOR 助手未生效或会话异常", case),
+        None => panic!(
+            "[RED] {} Ctrl+G 转储超时：EDITOR 助手未生效或会话异常",
+            case
+        ),
     }
 }
 
@@ -401,7 +423,10 @@ fn last_key_of(payload: &str) -> String {
 /// 取 payload 最大学号的一半对应的 key_N（中段哨兵）。
 fn middle_key_of(payload: &str) -> String {
     let last = last_key_of(payload);
-    let num: String = last[4..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    let num: String = last[4..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     let n: usize = num.parse().unwrap_or(0);
     format!("key_{}", n / 2)
 }
@@ -458,7 +483,10 @@ fn claude_json_singleline_paste_monitor() {
             if verdict.is_ok() { "SAFE" } else { "RED" }
         );
         if chip {
-            println!("[SAFE] minified-rep-{} 粘贴被 chip 识别接管（内容折叠保存，不回读）", rep);
+            println!(
+                "[SAFE] minified-rep-{} 粘贴被 chip 识别接管（内容折叠保存，不回读）",
+                rep
+            );
             continue;
         }
         // 主判定：Ctrl+G 回读编辑器真实缓冲（与 run_case 同强度）
@@ -476,7 +504,11 @@ fn claude_json_singleline_paste_monitor() {
             Some(content) => {
                 let normalized = content.trim_end_matches(['\n', '\r']);
                 if normalized == payload {
-                    println!("[SAFE] minified-rep-{} 编辑器缓冲逐字节一致（{} 字节）", rep, normalized.len());
+                    println!(
+                        "[SAFE] minified-rep-{} 编辑器缓冲逐字节一致（{} 字节）",
+                        rep,
+                        normalized.len()
+                    );
                 } else {
                     panic!(
                         "[RED] minified-rep-{} 编辑器缓冲与 payload 不一致：缓冲 {} 字节 / 期望 {} 字节（已排除渲染失真）",

@@ -196,9 +196,6 @@ fn run_paste_case(payload: &str) -> PasteResult {
     writer.flush().expect("flush");
 
     // 等 RECV 回报或 node 超时标记
-    let mut received_len = None;
-    let mut received_hash = None;
-    let mut raw = None;
     while start.elapsed() < Duration::from_secs(15) {
         let done = {
             let text = collected.lock().unwrap();
@@ -218,11 +215,15 @@ fn run_paste_case(payload: &str) -> PasteResult {
         let pos = text.find(marker)?;
         let rest = &text[pos + marker.len()..];
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if digits.is_empty() { None } else { Some(digits) }
+        if digits.is_empty() {
+            None
+        } else {
+            Some(digits)
+        }
     };
-    received_len = value_after("RECV:").and_then(|d| d.parse::<usize>().ok());
-    received_hash = value_after("HASH:").and_then(|d| d.parse::<u32>().ok());
-    raw = value_after("RAW:").and_then(|d| d.parse::<u32>().ok());
+    let received_len = value_after("RECV:").and_then(|d| d.parse::<usize>().ok());
+    let received_hash = value_after("HASH:").and_then(|d| d.parse::<u32>().ok());
+    let raw = value_after("RAW:").and_then(|d| d.parse::<u32>().ok());
     let head = text
         .lines()
         .find(|l| l.contains("HEAD:"))
@@ -233,7 +234,14 @@ fn run_paste_case(payload: &str) -> PasteResult {
         .find(|l| l.contains("TAIL:"))
         .unwrap_or("")
         .to_string();
-    let output_tail = text.chars().rev().take(400).collect::<Vec<_>>().into_iter().rev().collect();
+    let output_tail = text
+        .chars()
+        .rev()
+        .take(400)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     PasteResult {
         received_len,
         received_hash,

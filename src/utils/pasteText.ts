@@ -138,7 +138,7 @@ export async function commitPaste(
 
 type NativePasteInstance = PasteInstance & {
   term: {
-    element: HTMLElement | null
+    element: HTMLElement | null | undefined
     modes: { bracketedPasteMode: boolean }
     options: { ignoreBracketedPasteMode?: boolean }
   }
