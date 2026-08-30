@@ -2,9 +2,12 @@
 //! portable-pty/ConPTY 路径里，复现「DevTools JSON 粘贴到输入框只显尾部」。
 //!
 //! 运行：cargo test --test paste_claude_e2e -- --ignored --test-threads=1 --nocapture
+//! 默认从 PATH 查找 claude；需要指定其他二进制时设置 CC_E2E_CLAUDE_PATH。
 //!
 //! 安全护栏：探针自身不发送 Enter；真实 Claude Code 多行粘贴不会逐行自动提交
 //! （用户症状即输入框截断而非消息被发出），故裸配置（用户真实 provider）下运行无请求风险。
+
+#![allow(non_snake_case)]
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -13,6 +16,28 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+
+fn workspace_root(manifest_dir: &Path) -> PathBuf {
+    manifest_dir.parent().unwrap_or(manifest_dir).to_path_buf()
+}
+
+fn claude_program(override_path: Option<OsString>) -> OsString {
+    override_path.unwrap_or_else(|| OsString::from("claude"))
+}
+
+#[test]
+fn E2eLaunchConfig_WorkspaceFromManifest_001() {
+    let manifest_dir = Path::new("D:/work/cc-desk/src-tauri");
+    assert_eq!(
+        workspace_root(manifest_dir),
+        PathBuf::from("D:/work/cc-desk")
+    );
+}
+
+#[test]
+fn E2eLaunchConfig_ClaudeDefaultsToPath_002() {
+    assert_eq!(claude_program(None), OsString::from("claude"));
+}
 
 /// 生成 DevTools「Copy object」风格的多行 JSON：每行 `  "key_N": "AAAA…",`，LF 换行。
 fn devtools_style_json(total_len: usize) -> String {
@@ -43,12 +68,12 @@ struct ClaudeSession {
     reader_dead: Arc<std::sync::atomic::AtomicBool>,
 }
 
-fn spawn_claude(_cwd: &str, dump_out: &str) -> ClaudeSession {
+fn spawn_claude(cwd: &Path, dump_out: &str) -> ClaudeSession {
     // 重试式 spawn：本机 conhost 资源紧张时新会话可能秒死（reader 立即 EOF），
     // 丢弃死会话重试，用就绪标记确认拿到健康实例。
     for attempt in 1..=8 {
         println!("[e2e] 第 {} 次尝试 spawn claude", attempt);
-        let session = spawn_claude_once(dump_out);
+        let session = spawn_claude_once(cwd, dump_out);
         // 快速探活：3s 内 reader EOF = 会话秒死，立即弃；否则给足渲染时间
         let dead = session.wait_for_dead(Duration::from_secs(3));
         if dead {
@@ -86,7 +111,7 @@ fn node_program() -> OsString {
     cmd_name
 }
 
-fn spawn_claude_once(dump_out: &str) -> ClaudeSession {
+fn spawn_claude_once(cwd: &Path, dump_out: &str) -> ClaudeSession {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -97,11 +122,10 @@ fn spawn_claude_once(dump_out: &str) -> ClaudeSession {
         })
         .expect("openpty");
 
-    let program = std::env::var_os("CC_E2E_CLAUDE_PATH")
-        .unwrap_or_else(|| OsString::from("C:/Users/wusha/.local/bin/claude.exe"));
+    let program = claude_program(std::env::var_os("CC_E2E_CLAUDE_PATH"));
     println!("[e2e] 使用 claude 程序: {:?}", program);
     let mut cmd = CommandBuilder::new(program);
-    cmd.cwd("E:/source/github/cc-box");
+    cmd.cwd(cwd);
     // EDITOR 指向转储助手：Ctrl+G 触发外部编辑器时，助手把编辑器缓冲原样落盘后退出，
     // 探针据此回读真实编辑器内容做逐字节判定（排除 VT 渲染流视口/批处理失真）
     let helper = concat!(
@@ -265,7 +289,8 @@ fn run_case(case: &str, payload: &str, chunk_size: usize, delay_ms: u64) {
         std::process::id()
     ));
     let _ = std::fs::remove_file(&dump_out);
-    let mut session = spawn_claude("E:/source/github/cc-box", &dump_out.to_string_lossy());
+    let cwd = workspace_root(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let mut session = spawn_claude(&cwd, &dump_out.to_string_lossy());
 
     // spawn_claude 已等待就绪标记；这里再留一点稳定时间
     std::thread::sleep(Duration::from_millis(1500));
@@ -406,6 +431,7 @@ fn claude_json_singleline_paste_monitor() {
     serde_json::from_str::<serde_json::Value>(&pretty).expect("payload 必须是合法 JSON");
     let payload = compact_json_like_production(&pretty);
     assert!(!payload.contains('\n'), "压缩后必须单行");
+    let cwd = workspace_root(Path::new(env!("CARGO_MANIFEST_DIR")));
     for rep in 1..=3 {
         let dump_out = std::env::temp_dir().join(format!(
             "cc_desk_paste_dump_monitor_rep{}_{}.txt",
@@ -413,7 +439,7 @@ fn claude_json_singleline_paste_monitor() {
             std::process::id()
         ));
         let _ = std::fs::remove_file(&dump_out);
-        let mut session = spawn_claude("E:/source/github/cc-box", &dump_out.to_string_lossy());
+        let mut session = spawn_claude(&cwd, &dump_out.to_string_lossy());
         std::thread::sleep(Duration::from_millis(1500));
         // 增量绑定：只在本轮粘贴之后的输出里判定 chip 与哨兵
         let baseline_len = session.snapshot_all().len();

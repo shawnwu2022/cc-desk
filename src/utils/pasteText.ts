@@ -136,6 +136,57 @@ export async function commitPaste(
   }
 }
 
+type NativePasteInstance = PasteInstance & {
+  term: {
+    element: HTMLElement | null
+    modes: { bracketedPasteMode: boolean }
+    options: { ignoreBracketedPasteMode?: boolean }
+  }
+}
+
+type NativePasteOptions = {
+  container: HTMLElement
+  getTabId: () => string | null
+  getInstance: (tabId: string) => NativePasteInstance | undefined
+  write: (ptyId: string, payload: string) => Promise<unknown>
+  imageFallback: () => string
+}
+
+/**
+ * 在终端容器捕获阶段统一接管原生 paste 事件，并返回解绑函数。
+ * 这样 Shift+Insert、系统编辑菜单与 xterm 自带 paste 监听都复用 commitPaste 链路，
+ * 避免同一份剪贴板内容被 xterm 再发送一次。
+ */
+export function bindNativePaste(options: NativePasteOptions): () => void {
+  const handlePaste = (event: ClipboardEvent) => {
+    const tabId = options.getTabId()
+    if (!tabId) return
+    const instance = options.getInstance(tabId)
+    if (!instance) return
+    const target = event.target as Node | null
+    const element = instance.term.element
+    if (!target || !element || !element.contains(target)) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    const text = event.clipboardData?.getData('text/plain') ?? ''
+    commitPaste(
+      async () => text,
+      () => options.getInstance(tabId),
+      value => buildPastePayload(
+        value,
+        instance.term.modes.bracketedPasteMode,
+        instance.term.options.ignoreBracketedPasteMode ?? false,
+      ),
+      options.write,
+      options.imageFallback,
+    ).catch(() => {})
+  }
+
+  options.container.addEventListener('paste', handlePaste, true)
+  return () => options.container.removeEventListener('paste', handlePaste, true)
+}
+
 /**
  * 平台对应的 CLI 图片粘贴键字节（chat:imagePaste 官方默认键位）：
  * Windows/WSL 为 Alt+V（\x1bv），其余平台默认 Ctrl+V（\x16）。

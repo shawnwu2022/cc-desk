@@ -1,5 +1,80 @@
 import { describe, expect, it, vi } from 'vitest'
-import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, imagePasteBytes } from '@/utils/pasteText'
+import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, imagePasteBytes, bindNativePaste } from '@/utils/pasteText'
+
+function pasteEvent(text: string): ClipboardEvent {
+  const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+  Object.defineProperty(event, 'clipboardData', {
+    value: { getData: (type: string) => type === 'text/plain' ? text : '' },
+  })
+  return event
+}
+
+function nativePasteFixture(ptyId: string, bracketedPasteMode: boolean) {
+  const container = document.createElement('div')
+  const terminal = document.createElement('div')
+  const textarea = document.createElement('textarea')
+  terminal.append(textarea)
+  container.append(terminal)
+  const xtermPaste = vi.fn()
+  textarea.addEventListener('paste', xtermPaste)
+  const write = vi.fn(async () => {})
+  const instance = {
+    ptyId,
+    term: {
+      element: terminal,
+      modes: { bracketedPasteMode },
+      options: { ignoreBracketedPasteMode: false },
+    },
+  }
+  const unbind = bindNativePaste({
+    container,
+    getTabId: () => 'tab-1',
+    getInstance: () => instance,
+    write,
+    imageFallback: () => '\x1bv',
+  })
+  return { textarea, write, xtermPaste, unbind }
+}
+
+describe('bindNativePaste', () => {
+  it('PasteNative_Text_CaptureAndSendOnce_001', async () => {
+    const { textarea, write, xtermPaste, unbind } = nativePasteFixture('pty-1', true)
+
+    const event = pasteEvent('{\n  "a": 1\n}')
+    textarea.dispatchEvent(event)
+
+    await vi.waitFor(() => {
+      expect(write).toHaveBeenCalledExactlyOnceWith('pty-1', '\x1b[200~{"a": 1}\x1b[201~')
+    })
+    expect(event.defaultPrevented).toBe(true)
+    expect(xtermPaste).not.toHaveBeenCalled()
+    unbind()
+  })
+
+  it('PasteNative_EmptyText_RoutesImageFallback_002', async () => {
+    const { textarea, write, unbind } = nativePasteFixture('pty-2', false)
+
+    textarea.dispatchEvent(pasteEvent(''))
+
+    await vi.waitFor(() => {
+      expect(write).toHaveBeenCalledExactlyOnceWith('pty-2', '\x1bv')
+    })
+    unbind()
+  })
+
+  it('PasteNative_Unbind_ReleasesCaptureListener_003', async () => {
+    const { textarea, write, xtermPaste, unbind } = nativePasteFixture('pty-3', false)
+    unbind()
+
+    const event = pasteEvent('plain text')
+    textarea.dispatchEvent(event)
+    await Promise.resolve()
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(xtermPaste).toHaveBeenCalledOnce()
+    expect(write).not.toHaveBeenCalled()
+  })
+})
 
 describe('compactJsonForPaste', () => {
   // 多行 pretty JSON 压缩成单行：结构性换行与缩进移除，token 不粘连。
