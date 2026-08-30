@@ -7,6 +7,47 @@
 // utf8_complete_boundary / utf8_seq_len 已被 PtyDecoder 替代，
 // 边界与跨 read 行为由 tests/pty_decoder.rs 覆盖。
 
+use std::io::{self, Write};
+
+struct ChunkRecorder {
+    chunks: Vec<Vec<u8>>,
+    flush_count: usize,
+}
+
+impl Write for ChunkRecorder {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.chunks.push(buf.to_vec());
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_count += 1;
+        Ok(())
+    }
+}
+
+#[test]
+fn PtyWrite_LargePayload_ChunkedWithoutMutation_001() {
+    let payload: Vec<u8> = (0..(crate::pty::PTY_WRITE_CHUNK_SIZE * 2 + 7))
+        .map(|index| (index % 251) as u8)
+        .collect();
+    let mut recorder = ChunkRecorder {
+        chunks: Vec::new(),
+        flush_count: 0,
+    };
+
+    crate::pty::write_pty_data(&mut recorder, &payload).expect("chunked write");
+
+    let written: Vec<u8> = recorder.chunks.iter().flatten().copied().collect();
+    assert_eq!(written, payload);
+    assert_eq!(recorder.chunks.len(), 3);
+    assert_eq!(recorder.flush_count, 3);
+    assert!(recorder
+        .chunks
+        .iter()
+        .all(|chunk| chunk.len() <= crate::pty::PTY_WRITE_CHUNK_SIZE));
+}
+
 // 复现旧 bug：from_utf8_lossy 把 GBK 字节 "你好" 替换为 U+FFFD
 #[cfg(target_os = "windows")]
 #[test]
