@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.2] - 2026-08-30
+
+### Fixed
+- Pace large PTY writes on Windows to prevent ConPTY input loss during sustained paste bursts
+
+### Tests
+- Allow slow Windows runners enough time to verify 128 KiB paste transport integrity
+
 ## [0.17.1] - 2026-08-30
 
 ### Fixed
