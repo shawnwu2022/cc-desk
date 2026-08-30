@@ -11,6 +11,7 @@ use std::io::{self, Write};
 
 struct ChunkRecorder {
     chunks: Vec<Vec<u8>>,
+    flush_count: usize,
 }
 
 impl Write for ChunkRecorder {
@@ -20,6 +21,7 @@ impl Write for ChunkRecorder {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.flush_count += 1;
         Ok(())
     }
 }
@@ -29,13 +31,17 @@ fn PtyWrite_LargePayload_ChunkedWithoutMutation_001() {
     let payload: Vec<u8> = (0..(crate::pty::PTY_WRITE_CHUNK_SIZE * 2 + 7))
         .map(|index| (index % 251) as u8)
         .collect();
-    let mut recorder = ChunkRecorder { chunks: Vec::new() };
+    let mut recorder = ChunkRecorder {
+        chunks: Vec::new(),
+        flush_count: 0,
+    };
 
     crate::pty::write_pty_data(&mut recorder, &payload).expect("chunked write");
 
     let written: Vec<u8> = recorder.chunks.iter().flatten().copied().collect();
     assert_eq!(written, payload);
     assert_eq!(recorder.chunks.len(), 3);
+    assert_eq!(recorder.flush_count, 3);
     assert!(recorder
         .chunks
         .iter()

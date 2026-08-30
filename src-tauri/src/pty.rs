@@ -15,15 +15,25 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
-// Windows ConPTY 对超大单次写入存在截断风险；分块保持每次写入有界，避免大粘贴丢字节。
-pub(crate) const PTY_WRITE_CHUNK_SIZE: usize = 16 * 1024;
+// Windows ConPTY 对连续突发写入存在截断风险；小块刷新并短暂让出时间，避免大粘贴丢字节。
+pub(crate) const PTY_WRITE_CHUNK_SIZE: usize = 4 * 1024;
+const PTY_WRITE_CHUNK_DELAY: Duration = Duration::from_millis(1);
 
 pub(crate) fn write_pty_data<W: Write + ?Sized>(
     writer: &mut W,
     data: &[u8],
 ) -> std::io::Result<()> {
-    for chunk in data.chunks(PTY_WRITE_CHUNK_SIZE) {
+    let mut chunks = data.chunks(PTY_WRITE_CHUNK_SIZE).peekable();
+    if chunks.peek().is_none() {
+        return writer.flush();
+    }
+
+    while let Some(chunk) = chunks.next() {
         writer.write_all(chunk)?;
+        writer.flush()?;
+        if chunks.peek().is_some() {
+            thread::sleep(PTY_WRITE_CHUNK_DELAY);
+        }
     }
     Ok(())
 }
@@ -608,12 +618,13 @@ impl PtyManager {
             anyhow!("{}", err)
         })?;
 
-        write_pty_data(writer.as_mut(), data.as_bytes())
-            .with_context(|| format!("Failed to write {} bytes to PTY {}", data.len(), id))?;
-
-        writer
-            .flush()
-            .with_context(|| format!("Failed to flush PTY {}", id))?;
+        write_pty_data(writer.as_mut(), data.as_bytes()).with_context(|| {
+            format!(
+                "Failed to write or flush {} bytes to PTY {}",
+                data.len(),
+                id
+            )
+        })?;
 
         log::trace!("[{}] Write successful", id);
         Ok(())

@@ -20,7 +20,8 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 const SENTINEL: &str = "__PASTE_END__";
 const BRACKET_OPEN: &str = "\u{1b}[200~";
 const BRACKET_CLOSE: &str = "\u{1b}[201~";
-const PTY_TEST_WRITE_CHUNK_SIZE: usize = 16 * 1024;
+const PTY_TEST_WRITE_CHUNK_SIZE: usize = 4 * 1024;
+const PTY_TEST_WRITE_CHUNK_DELAY: Duration = Duration::from_millis(1);
 
 /// node 子进程脚本：累积 stdin 到 sentinel，回报长度、FNV-1a 哈希与首尾片段。
 /// 若检测到 bracketed 标记（可能被 ConPTY 剥除，也可能被透传）先剥除再计算，
@@ -193,8 +194,16 @@ fn run_paste_case(payload: &str) -> PasteResult {
 
     let start = Instant::now();
     let mut writer = pair.master.take_writer().expect("take writer");
-    for chunk in payload.as_bytes().chunks(PTY_TEST_WRITE_CHUNK_SIZE) {
+    let mut chunks = payload
+        .as_bytes()
+        .chunks(PTY_TEST_WRITE_CHUNK_SIZE)
+        .peekable();
+    while let Some(chunk) = chunks.next() {
         writer.write_all(chunk).expect("write payload");
+        writer.flush().expect("flush payload chunk");
+        if chunks.peek().is_some() {
+            std::thread::sleep(PTY_TEST_WRITE_CHUNK_DELAY);
+        }
     }
     writer
         .write_all(SENTINEL.as_bytes())
