@@ -3659,4 +3659,3 @@ pub(crate) fn read_projects_state_locked(
     let _ = lock_file.unlock();
     state
 }
-

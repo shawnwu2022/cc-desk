@@ -4,8 +4,7 @@
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use portable_pty::{
-    native_pty_system, Child, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtyPair,
-    PtySize,
+    native_pty_system, Child, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize,
 };
 use std::collections::HashMap;
 use std::env;
@@ -131,10 +130,7 @@ impl PtyWriterEntry {
 
 pub(crate) type PtyWriterRegistry = Mutex<HashMap<String, Arc<PtyWriterEntry>>>;
 
-pub(crate) fn lookup_writer(
-    writers: &PtyWriterRegistry,
-    id: &str,
-) -> Option<Arc<PtyWriterEntry>> {
+pub(crate) fn lookup_writer(writers: &PtyWriterRegistry, id: &str) -> Option<Arc<PtyWriterEntry>> {
     writers.lock().get(id).cloned()
 }
 
@@ -198,7 +194,10 @@ impl PtyManager {
         let reader_app = self.app_handle.clone();
         let reader_manager: Weak<Self> = Arc::downgrade(self);
         let reader_thread = thread::Builder::new()
-            .name(format!("pty-reader-{}", &reader_id[..8.min(reader_id.len())]))
+            .name(format!(
+                "pty-reader-{}",
+                &reader_id[..8.min(reader_id.len())]
+            ))
             .spawn(move || {
                 log::debug!("[{}] {} reader thread started", reader_id, reader_label);
                 let failure = Self::read_output_loop(reader_id.clone(), reader, reader_app);
@@ -226,7 +225,10 @@ impl PtyManager {
         let waiter_id = id.clone();
         let waiter_manager: Weak<Self> = Arc::downgrade(self);
         let waiter_thread = thread::Builder::new()
-            .name(format!("pty-waiter-{}", &waiter_id[..8.min(waiter_id.len())]))
+            .name(format!(
+                "pty-waiter-{}",
+                &waiter_id[..8.min(waiter_id.len())]
+            ))
             .spawn(move || {
                 let mut child = waiter_child
                     .lock()
@@ -525,15 +527,7 @@ impl PtyManager {
         }
 
         log::debug!("Shell command: {:?}", claude_cmd);
-        self.spawn_command(
-            id,
-            cwd,
-            cols,
-            rows,
-            "claude",
-            cmd,
-            "Claude shell command",
-        )
+        self.spawn_command(id, cwd, cols, rows, "claude", cmd, "Claude shell command")
     }
 
     /// 启动普通 Shell
@@ -565,7 +559,15 @@ impl PtyManager {
         cmd.cwd(cwd);
         Self::apply_common_environment(&mut cmd, false);
 
-        self.spawn_command(id, cwd, cols, rows, "shell", cmd, &format!("shell '{program}'"))
+        self.spawn_command(
+            id,
+            cwd,
+            cols,
+            rows,
+            "shell",
+            cmd,
+            &format!("shell '{program}'"),
+        )
     }
 
     /// 输出读取循环。退出事件由 child waiter 统一发送，保证真实 exit code 与 exactly-once。
@@ -720,8 +722,7 @@ impl PtyManager {
 
     /// 杀掉所有 PTY。先释放全局 maps，再逐个发信号；不与阻塞 writer 形成锁环。
     pub fn kill_all(&self) {
-        let instances: Vec<(String, PtyInstanceData)> =
-            self.instances.lock().drain().collect();
+        let instances: Vec<(String, PtyInstanceData)> = self.instances.lock().drain().collect();
         self.writers.lock().clear();
 
         for (id, mut instance) in instances {
@@ -733,8 +734,7 @@ impl PtyManager {
 }
 
 /// 全局 PTY 管理器存储
-static PTY_MANAGER: LazyLock<Mutex<Option<Arc<PtyManager>>>> =
-    LazyLock::new(|| Mutex::new(None));
+static PTY_MANAGER: LazyLock<Mutex<Option<Arc<PtyManager>>>> = LazyLock::new(|| Mutex::new(None));
 
 /// 初始化 PTY 管理器
 pub fn init_pty_manager(app_handle: AppHandle) {
