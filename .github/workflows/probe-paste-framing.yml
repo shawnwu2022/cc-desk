@@ -1,4 +1,4 @@
-name: Probe ConPTY internal read boundaries
+name: Probe ConPTY input token boundaries
 on:
   push:
     branches: [codex/fix-devtools-paste]
@@ -14,7 +14,7 @@ jobs:
         with:
           node-version: 20
       - uses: dtolnay/rust-toolchain@stable
-      - name: Isolate the existing native regression from the GUI build
+      - name: Isolate existing native tests and collect generated fixture diagnostics
         shell: python
         run: |
           from pathlib import Path
@@ -25,7 +25,6 @@ jobs:
           shutil.copy('src-tauri/tests/fixtures/devtools-paste-framing.json', root / 'tests/fixtures/devtools-paste-framing.json')
           text = Path('src-tauri/src/tests/paste_framing.rs').read_text(encoding='utf-8')
           marker = '        assert_native_frames("split-escape-sequence", &[payload]);'
-          assert text.count(marker) == 1
           text = text.replace(marker, marker + r'''
                   for padding in 4060..4098 {
                       let payload = format!("{OPEN}{}\x1b[31m中文🎉\nTAIL{CLOSE}", "x".repeat(padding));
@@ -34,6 +33,9 @@ jobs:
                   let payload = format!("{OPEN}{}{CLOSE}", "\x1b[31m色\x1b[0m\n".repeat(400));
                   assert_native_frames("dense-literal-escapes", &[payload]);
           ''')
+          text = text.replace("  console.log('PASTE_RAW:'", "  console.log('GENERATED_TAIL:' + Buffer.from(value.slice(-64)).toString('hex') + ':');\n  console.log('PASTE_RAW:'")
+          marker = '        assert_eq!(field(&output, "PASTE_RAW:")'
+          text = text.replace(marker, '        if field(&output, "PASTE_HASH:") != Some(u64::from(hash(expected.as_bytes()))) { println!("GENERATED FIXTURE DIAGNOSTIC: {output:?}"); }\n' + marker)
           (root / 'src/tests/paste_framing.rs').write_text(text, encoding='utf-8')
           (root / 'Cargo.toml').write_text('''[package]
           name = "paste-boundary-probe"
@@ -44,37 +46,39 @@ jobs:
           serde = { version = "1", features = ["derive"] }
           serde_json = "1"
           ''', encoding='utf-8')
-          (root / 'src/lib.rs').write_text('mod pty;\n#[cfg(test)] mod tests { mod paste_framing; }\n', encoding='utf-8')
+          (root / 'src/lib.rs').write_text('#![allow(non_snake_case)]\nmod pty;\n#[cfg(test)] mod tests { mod paste_framing; }\n', encoding='utf-8')
           (root / 'src/pty.rs').write_text(r'''
           use std::io::{self, Write};
           pub(crate) fn write_pty_data<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
-              let c1 = std::env::var("PROBE_C1").unwrap() == "1";
-              let escape: &[u8] = if c1 { b"\xc2\x9b0;0;27;1;0;1_" } else { b"\x1b[0;0;27;1;0;1_" };
-              let mut wire = Vec::new();
-              for b in data {
-                  if *b == 0x1b { wire.extend_from_slice(escape); } else { wire.push(*b); }
+              let strategy = std::env::var("PROBE_STRATEGY").unwrap();
+              let csi = if strategy.starts_with("c1") { "\u{9b}" } else { "\x1b[" };
+              let all = strategy.ends_with("all");
+              let limit: usize = std::env::var("PROBE_CHUNK").unwrap().parse().unwrap();
+              let mut chunk = Vec::with_capacity(limit);
+              for c in std::str::from_utf8(data).unwrap().chars() {
+                  let encoded = if all || c == '\x1b' {
+                      c.encode_utf16(&mut [0; 2]).iter().map(|u| format!("{csi}0;0;{u};1;0;1_")).collect::<String>()
+                  } else { c.to_string() };
+                  if chunk.len() + encoded.len() > limit {
+                      writer.write_all(&chunk)?; writer.flush()?; chunk.clear();
+                      std::thread::sleep(std::time::Duration::from_millis(1));
+                  }
+                  chunk.extend_from_slice(encoded.as_bytes());
               }
-              let size: usize = std::env::var("PROBE_CHUNK").unwrap().parse().unwrap();
-              for chunk in wire.chunks(size) {
-                  writer.write_all(chunk)?;
-                  writer.flush()?;
-                  std::thread::sleep(std::time::Duration::from_millis(1));
-              }
-              Ok(())
+              writer.write_all(&chunk)?;
+              writer.flush()
           }
           ''', encoding='utf-8')
-      - name: Compare ESC and C1 introducers with actual ConPTY
+      - name: Test indivisible Unicode tokens rather than byte cuts
         working-directory: .paste-probe
         shell: pwsh
         run: |
-          $env:PROBE_C1 = '0'
-          $env:PROBE_CHUNK = '4096'
-          cargo test --lib PtyPaste_NativeChunkBoundary_005 -- --nocapture
-          Write-Output "ESC_BASELINE_EXIT=$LASTEXITCODE"
-          $env:PROBE_C1 = '1'
-          foreach ($size in @('4096', '512', '127')) {
-            $env:PROBE_CHUNK = $size
-            cargo test --lib PtyPaste_Native -- --nocapture
-            Write-Output "C1_CHUNK_${size}_EXIT=$LASTEXITCODE"
+          foreach ($strategy in @('esc-esc', 'c1-esc', 'c1-all')) {
+            foreach ($size in @('4096', '512')) {
+              $env:PROBE_STRATEGY = $strategy
+              $env:PROBE_CHUNK = $size
+              cargo test --lib PtyPaste_Native -- --nocapture
+              Write-Output "STRATEGY_${strategy}_CHUNK_${size}_EXIT=$LASTEXITCODE"
+            }
           }
           $global:LASTEXITCODE = 0
