@@ -1,0 +1,143 @@
+name: Build DevTools paste Windows package
+
+on:
+  push:
+    branches:
+      - codex/fix-devtools-paste
+    paths:
+      - '.github/workflows/build-devtools-paste.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-devtools-paste-windows
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Install Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure Rust linker
+        shell: pwsh
+        run: |
+          $link = Get-Command link -CommandType Application |
+            Where-Object { $_.Source -notlike '*Git*' } |
+            Select-Object -First 1 -ExpandProperty Source
+          if (-not $link) { throw 'MSVC link.exe not found' }
+          $escaped = $link.Replace('\', '\\')
+          New-Item -ItemType Directory -Force src-tauri/.cargo | Out-Null
+          @"
+          [target.x86_64-pc-windows-msvc]
+          linker = "$escaped"
+          "@ | Set-Content -Encoding utf8NoBOM src-tauri/.cargo/config.toml
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify updater signing secrets
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) -or
+              [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            throw 'Missing CC Desk updater signing secrets'
+          }
+
+      - name: Verify paste regression and source quality
+        shell: pwsh
+        run: |
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx vitest run tests/utils/devtoolsPaste.test.ts tests/utils/pasteText.test.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Push-Location src-tauri
+          cargo fmt --all --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --lib paste_framing -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+
+      - name: Build signed Windows installer
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
+
+      - name: Stage package and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          $files = Get-ChildItem src-tauri/target/release/bundle/nsis -File |
+            Where-Object { $_.Extension -in '.exe', '.sig' }
+          if (-not $files) { throw 'No NSIS installer artifacts found' }
+          foreach ($file in $files) {
+            Copy-Item $file.FullName artifacts/windows/
+          }
+          $sourceCommit = git rev-parse HEAD
+          $sourceTree = git rev-parse HEAD^{tree}
+          @(
+            "workflow_commit=$sourceCommit"
+            "source_parent=$(git rev-parse HEAD^)"
+            "source_tree=$sourceTree"
+            "runner=windows-2022"
+            "built_at_utc=$([DateTime]::UtcNow.ToString('o'))"
+          ) | Set-Content -Encoding utf8NoBOM artifacts/windows/build-info.txt
+          Get-ChildItem artifacts/windows -File |
+            Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash *$($_.Name)"
+            } | Set-Content -Encoding ascii artifacts/windows/SHA256SUMS.txt
+          Get-ChildItem artifacts/windows -File | Format-Table Name, Length
+          Get-Content artifacts/windows/SHA256SUMS.txt
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-devtools-paste-windows-${{ github.sha }}
+          path: artifacts/windows/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary build workflow
+        if: success()
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/build-devtools-paste.yml
+          git commit -m 'chore: remove temporary Windows package workflow'
+          git push origin HEAD:codex/fix-devtools-paste
