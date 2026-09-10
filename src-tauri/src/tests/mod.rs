@@ -15,8 +15,6 @@ mod mcp;
 #[cfg(test)]
 mod platform;
 #[cfg(test)]
-mod providers;
-#[cfg(test)]
 mod pty;
 #[cfg(test)]
 mod pty_decoder;

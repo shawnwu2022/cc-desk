@@ -29,7 +29,6 @@
     <div class="settings-content">
       <AppearanceSection v-if="sidebarStore.activeSettingsSection === 'appearance'" />
       <StartupSection v-if="sidebarStore.activeSettingsSection === 'startup'" />
-      <ProvidersSection v-if="sidebarStore.activeSettingsSection === 'providers'" />
       <ShortcutsSection v-if="sidebarStore.activeSettingsSection === 'shortcuts'" />
       <UpdateSection v-if="sidebarStore.activeSettingsSection === 'update'" />
       <AboutSection v-if="sidebarStore.activeSettingsSection === 'about'" />
@@ -40,10 +39,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useSidebarStore } from '@/stores/sidebar'
+import { useSidebarStore, type SettingsSection } from '@/stores/sidebar'
 import AppearanceSection from './sections/AppearanceSection.vue'
 import StartupSection from './sections/StartupSection.vue'
-import ProvidersSection from './sections/ProvidersSection.vue'
 import ShortcutsSection from './sections/ShortcutsSection.vue'
 import UpdateSection from './sections/UpdateSection.vue'
 import AboutSection from './sections/AboutSection.vue'
@@ -55,10 +53,9 @@ defineEmits<{ close: [] }>()
 
 const sidebarStore = useSidebarStore()
 
-const navItems = computed(() => [
+const navItems = computed<Array<{ id: SettingsSection; label: string }>>(() => [
   { id: 'appearance', label: t('appearance') },
   { id: 'startup', label: t('startup') },
-  { id: 'providers', label: t('providers') },
   { id: 'shortcuts', label: t('shortcuts') },
   { id: 'update', label: t('update') },
   { id: 'about', label: t('about') },

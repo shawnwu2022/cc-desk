@@ -6,9 +6,6 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::checks::CheckResult;
-use crate::providers::{
-    ImportResult, Provider, ProviderMeta, ProvidersConfig, TestConnectionResult,
-};
 use crate::pty::get_pty_manager;
 use crate::store::{
     AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project, ProjectConfig,
@@ -575,101 +572,4 @@ pub fn spawn_new_instance() -> Result<(), String> {
     let mut cmd = crate::platform::new_command(&app_path.to_string_lossy());
     cmd.spawn().map_err(|e| e.to_string())?;
     Ok(())
-}
-
-// ==================== Provider Commands ====================
-
-/// 获取 Provider 配置
-#[tauri::command]
-pub async fn get_providers_config() -> Result<ProvidersConfig, String> {
-    crate::providers::get_providers_config().map_err(|e| e.to_string())
-}
-
-/// 保存 Provider 配置
-#[tauri::command]
-pub async fn save_providers_config(config: ProvidersConfig) -> Result<(), String> {
-    crate::providers::save_providers_config(&config).map_err(|e| e.to_string())
-}
-
-/// 激活 Provider
-#[tauri::command]
-pub async fn activate_provider(provider_id: String) -> Result<(), String> {
-    crate::providers::activate_provider(&provider_id).map_err(|e| e.to_string())
-}
-
-/// 创建 Provider
-#[tauri::command]
-pub async fn create_provider(
-    name: String,
-    settings_config: serde_json::Value,
-    website_url: Option<String>,
-    category: Option<String>,
-    icon: Option<String>,
-    icon_color: Option<String>,
-    meta: Option<ProviderMeta>,
-) -> Result<Provider, String> {
-    crate::providers::create_provider(
-        name,
-        settings_config,
-        website_url,
-        category,
-        icon,
-        icon_color,
-        meta,
-    )
-    .map_err(|e| e.to_string())
-}
-
-/// 更新 Provider
-#[tauri::command]
-pub async fn update_provider(
-    id: String,
-    name: Option<String>,
-    settings_config: Option<serde_json::Value>,
-    notes: Option<String>,
-    meta: Option<ProviderMeta>,
-) -> Result<Provider, String> {
-    crate::providers::update_provider(&id, name, settings_config, notes, meta)
-        .map_err(|e| e.to_string())
-}
-
-/// 删除 Provider
-#[tauri::command]
-pub async fn delete_provider(id: String) -> Result<(), String> {
-    crate::providers::delete_provider(&id).map_err(|e| e.to_string())
-}
-
-/// 更新 Provider 排序
-#[tauri::command]
-pub async fn update_provider_sort_order(provider_ids: Vec<String>) -> Result<(), String> {
-    crate::providers::update_provider_sort_order(provider_ids).map_err(|e| e.to_string())
-}
-
-/// 更新通用配置
-#[tauri::command]
-pub async fn update_common_config(
-    enabled: bool,
-    settings: serde_json::Value,
-) -> Result<(), String> {
-    crate::providers::update_common_config(enabled, settings).map_err(|e| e.to_string())
-}
-
-/// 检测 cc-switch 数据库是否存在
-#[tauri::command]
-pub async fn check_cc_switch_db_exists() -> Result<bool, String> {
-    Ok(crate::providers::check_cc_switch_db_exists())
-}
-
-/// 从 cc-switch 数据库导入 Provider
-#[tauri::command]
-pub async fn import_from_cc_switch() -> Result<ImportResult, String> {
-    crate::providers::import_from_cc_switch().map_err(|e| e.to_string())
-}
-
-/// 测试 Provider 连接
-#[tauri::command]
-pub async fn test_provider_connection(provider_id: String) -> Result<TestConnectionResult, String> {
-    crate::providers::test_provider_connection(&provider_id)
-        .await
-        .map_err(|e| e.to_string())
 }

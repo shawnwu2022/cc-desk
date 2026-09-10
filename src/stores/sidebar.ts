@@ -4,6 +4,15 @@ import { getAllAgents, getAllSkills, getAllMcpServers, getAllPlugins, setSkillEn
 import type { AgentInfo, SkillInfo, McpServerInfo, PluginInfo, UpdateInfo, ClaudeCliUpdateInfo } from '@/types'
 
 export type SidebarPanelType = 'sessions' | 'skills' | 'agents' | 'mcp' | 'plugins' | null
+export type SettingsSection = 'appearance' | 'startup' | 'shortcuts' | 'update' | 'about'
+
+const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'appearance', 'startup', 'shortcuts', 'update', 'about'
+]
+
+function isSettingsSection(value: string): value is SettingsSection {
+  return SETTINGS_SECTIONS.includes(value as SettingsSection)
+}
 
 export const useSidebarStore = defineStore('sidebar', () => {
   const activePanel = ref<SidebarPanelType>(null)
@@ -11,7 +20,7 @@ export const useSidebarStore = defineStore('sidebar', () => {
 
   // 设置模式
   const showSettings = ref(false)
-  const activeSettingsSection = ref<string>('appearance')
+  const activeSettingsSection = ref<SettingsSection>('appearance')
   const updateInfo = ref<UpdateInfo | null>(null)
   const claudeCliUpdateInfo = ref<ClaudeCliUpdateInfo | null>(null)
   const updateAvailable = computed(() => {
@@ -219,7 +228,9 @@ export const useSidebarStore = defineStore('sidebar', () => {
     panelVisible.value = false
     activePanel.value = null
     showSettings.value = true
-    if (section) activeSettingsSection.value = section
+    if (section) {
+      activeSettingsSection.value = isSettingsSection(section) ? section : 'appearance'
+    }
   }
 
   function closeSettings() {
