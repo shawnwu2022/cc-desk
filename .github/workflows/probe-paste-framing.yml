@@ -54,42 +54,78 @@ jobs:
           text = p.read_text(encoding='utf-8')
           marker = 'pub(crate) fn write_pty_data<W: Write + ?Sized>('
           assert text.count(marker) == 1
-          helper = r'''/// ConPTY parses ordinary CSI input instead of forwarding unknown keys.
-          /// In particular it consumes bracketed-paste delimiters for ReadConsoleInputW
-          /// clients (including Node raw stdin). Encode literal ESC as a Unicode key
-          /// event so the client receives the original ESC, not a consumed CSI sequence.
-          /// Only complete paste frames take this path; ordinary keys and responses
-          /// retain their existing interpretation. Unix PTYs never use this encoding.
+          helper = r'''/// ConPTY consumes ordinary bracketed-paste CSI sequences for clients using
+          /// ReadConsoleInputW (including Node raw stdin). Encode literal ESC as a
+          /// Unicode key event so the client receives the original character.
+          /// A generated input sequence must stay in ONE write chunk: ConPTY can
+          /// flush a lone ESC at a read boundary instead of awaiting its CSI tail.
+          /// Streaming into a fixed-size buffer also avoids a full expanded copy.
           /// Protocol: microsoft/terminal, doc/specs/#4999 - Improved keyboard handling in Conpty.md.
           #[cfg(windows)]
-          fn conpty_paste_input(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-              if !data.starts_with(b"\x1b[200~") || !data.ends_with(b"\x1b[201~") {
-                  return std::borrow::Cow::Borrowed(data);
-              }
-              let mut wire = Vec::with_capacity(data.len());
-              for &byte in data {
-                  if byte == 0x1b {
-                      // Vk=0, Sc=0, Unicode=ESC, key-down, no modifiers, repeat=1.
-                      wire.extend_from_slice(b"\x1b[0;0;27;1;0;1_");
+          fn write_conpty_paste<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
+              // Vk=0, Sc=0, Unicode=ESC, key-down, no modifiers, repeat=1.
+              const LITERAL_ESCAPE: &[u8] = b"\x1b[0;0;27;1;0;1_";
+              let mut chunk = [0u8; PTY_WRITE_CHUNK_SIZE];
+              let mut used = 0;
+              for byte in data {
+                  let encoded = if *byte == 0x1b {
+                      LITERAL_ESCAPE
                   } else {
-                      wire.push(byte);
+                      std::slice::from_ref(byte)
+                  };
+                  if used + encoded.len() > chunk.len() {
+                      writer.write_all(&chunk[..used])?;
+                      writer.flush()?;
+                      thread::sleep(PTY_WRITE_CHUNK_DELAY);
+                      used = 0;
                   }
+                  chunk[used..used + encoded.len()].copy_from_slice(encoded);
+                  used += encoded.len();
               }
-              std::borrow::Cow::Owned(wire)
+              writer.write_all(&chunk[..used])?;
+              writer.flush()
           }
 
           '''
           text = text.replace(marker, helper + marker, 1)
           needle = '    let mut chunks = data.chunks(PTY_WRITE_CHUNK_SIZE).peekable();'
           assert text.count(needle) == 1
-          text = text.replace(needle, '    #[cfg(windows)]\n    let data = conpty_paste_input(data);\n\n' + needle, 1)
+          prefix = r'''    // Only complete paste frames use Windows input encoding. Keep ordinary
+              // keys, image-paste shortcuts, terminal responses and Unix input unchanged.
+              #[cfg(windows)]
+              if data.starts_with(b"\x1b[200~") && data.ends_with(b"\x1b[201~") {
+                  return write_conpty_paste(writer, data);
+              }
+
+          '''
+          text = text.replace(needle, prefix + needle, 1)
           old = '// Windows ConPTY 对连续突发写入存在截断风险；小块刷新并短暂让出时间，避免大粘贴丢字节。'
           assert text.count(old) == 1
-          text = text.replace(old, '// 分块让出写入时间；粘贴帧的可靠性由下方 ConPTY 编码保证，不能靠延时替代起止标记。')
+          text = text.replace(old, '// 分块让出写入时间；粘贴边界由 ConPTY 输入编码保护，不能用延时替代起止标记。')
+          p.write_text(text, encoding='utf-8', newline='\n')
+          p = Path('src-tauri/src/tests/paste_framing.rs')
+          text = p.read_text(encoding='utf-8')
+          needle = '        assert_native_frames("split-escape-sequence", &[payload]);'
+          assert text.count(needle) == 1
+          more = r'''
+                  // 覆盖生成序列的开头、中间和末尾接近 4 KiB 写块边界。
+                  for padding in [4062, 4068, 4074, 4076, 4095] {
+                      let payload = format!("{OPEN}{}\x1b[31m中文🎉\nTAIL{CLOSE}", "x".repeat(padding));
+                      assert_native_frames(&format!("escape-offset-{padding}"), &[payload]);
+                  }
+                  // 一个粘贴帧内有 800 个字面 ESC，不能仅保护最外层标记。
+                  let payload = format!("{OPEN}{}{CLOSE}", "\x1b[31m色\x1b[0m\n".repeat(400));
+                  assert_native_frames("dense-literal-escapes", &[payload]);
+          '''
+          text = text.replace(needle, needle + '\n' + more, 1)
           p.write_text(text, encoding='utf-8', newline='\n')
           p = Path('AGENTS.md')
           text = p.read_text(encoding='utf-8')
-          text += '\n### Windows 粘贴帧传输\n\n- 完整 bracketed paste 在 `pty.rs::write_pty_data` 内将 ESC 编码为 ConPTY Unicode 按键事件，避免起止标记被 Windows 吞掉；普通按键、图片粘贴快捷键、Unix 输入不改。\n- `paste_framing` 使用生产 writer、真 ConPTY、Node raw stdin 校验包含标记的 UTF-8 长度与哈希；严禁剥除或容忍标记丢失。前后端共享 `devtools-paste-framing.json` 黄金样本。\n- 传输通过不等于真实 Claude 编辑器已验收；详见 `docs/paste-framing.md`。\n'
+          text += '\n### Windows 粘贴帧传输\n\n- 完整 bracketed paste 在 `pty.rs::write_pty_data` 内将 ESC 编码为 ConPTY Unicode 按键事件，避免起止标记被 Windows 吞掉；普通按键、图片粘贴快捷键、Unix 输入不改。\n- 使用固定 4 KiB 缓冲流式编码，单个 Unicode 按键序列不得跨写块拆分；禁止先展开整个 payload 再按固定字节切块。\n- `paste_framing` 使用生产 writer、真 ConPTY、Node raw stdin 校验包含标记的 UTF-8 长度与哈希；严禁剥除或容忍标记丢失。前后端共享 `devtools-paste-framing.json` 黄金样本。\n- 传输通过不等于真实 Claude 编辑器已验收；详见 `docs/paste-framing.md`。\n'
+          p.write_text(text, encoding='utf-8', newline='\n')
+          p = Path('docs/paste-framing.md')
+          text = p.read_text(encoding='utf-8')
+          text += '\n## 写块边界\n\n第二轮真实生产 writer 回归发现：先将 ESC 展开为 15 字节输入序列、再按 4096 字节切块，会在 ESC 恰位于块尾时把后续 14 字节当作正文交付（期望 4107 字节，实收 4121）。因此最终实现使用固定 4 KiB 缓冲流式编码，加入一个完整编码单元之前检查剩余容量，不允许生成的控制序列跨写块拆开。原始失败用例保留，另覆盖多个临界位置及包含 800 个 ESC 的粘贴帧。\n'
           p.write_text(text, encoding='utf-8', newline='\n')
       - name: Format and check Rust
         working-directory: src-tauri
@@ -118,7 +154,7 @@ jobs:
           Remove-Item .github/workflows/probe-paste-framing.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src-tauri/src/pty.rs src-tauri/src/tests/mod.rs src-tauri/src/tests/paste_framing.rs AGENTS.md .github/workflows/probe-paste-framing.yml
+          git add src-tauri/src/pty.rs src-tauri/src/tests/mod.rs src-tauri/src/tests/paste_framing.rs AGENTS.md docs/paste-framing.md .github/workflows/probe-paste-framing.yml
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git commit -m 'fix: preserve bracketed paste through Windows ConPTY'
