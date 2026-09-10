@@ -37,7 +37,7 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
 
-      - name: Add Win10 marker-boundary regression before production change
+      - name: Add the marker-write regression before changing production code
         shell: python
         run: |
           from pathlib import Path
@@ -69,7 +69,7 @@ jobs:
               }
 
               const ESCAPE_EVENT: &[u8] = b"\x1b[0;0;27;1;0;1_";
-              let payload = format!("{OPEN}{{\n  \\"ok\\": true\n}}{CLOSE}");
+              let payload = format!("{OPEN}body{CLOSE}");
               let mut writer = RecordingWriter::default();
               write_pty_data(&mut writer, payload.as_bytes()).unwrap();
 
@@ -111,55 +111,26 @@ jobs:
           }
           $global:LASTEXITCODE = 0
 
-      - name: Keep each encoded marker in one ConPTY pipe write
+      - name: Make the encoded opening and closing delimiters atomic
         shell: python
         run: |
           from pathlib import Path
 
           p = Path('src-tauri/src/pty.rs')
           text = p.read_text(encoding='utf-8')
-          old = r'''/// Preserve complete bracketed paste frames for Windows ReadConsoleInputW
-          /// clients. A Unicode ESC event is written separately from surrounding text,
-          /// and the ConPTY input pipe is drained at each boundary. Neither an arbitrary
-          /// sleep nor preserving only our own 4 KiB write boundaries is sufficient.
-          #[cfg(windows)]
-          fn write_conpty_paste<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
-              const LITERAL_ESCAPE: &[u8] = b"\x1b[0;0;27;1;0;1_";
-              let text = std::str::from_utf8(data)
-                  .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-              writer.flush()?;
-              let mut segments = text.split('\x1b').peekable();
-              while let Some(mut segment) = segments.next() {
-                  while !segment.is_empty() {
-                      let mut end = segment.len().min(PTY_WRITE_CHUNK_SIZE);
-                      while !segment.is_char_boundary(end) {
-                          end -= 1;
-                      }
-                      writer.write_all(&segment.as_bytes()[..end])?;
-                      writer.flush()?;
-                      segment = &segment[end..];
-                  }
-                  if segments.peek().is_some() {
-                      // Vk=0, scan=0, Unicode=ESC, key-down, modifiers=0, repeat=1.
-                      // Keep this event alone in the drained pipe, not in a text chunk.
-                      writer.write_all(LITERAL_ESCAPE)?;
-                      writer.flush()?;
-                  }
-              }
-              Ok(())
-          }
-          '''.replace('          ', '')
-          if text.count(old) != 1:
-              raise SystemExit(f'expected exactly one old write_conpty_paste block, got {text.count(old)}')
-          new = r'''/// Preserve complete bracketed-paste frames for Windows ReadConsoleInputW
+          start_marker = '/// Preserve complete bracketed paste frames for Windows ReadConsoleInputW'
+          end_marker = 'pub(crate) fn write_pty_data<W: Write + ?Sized>('
+          assert text.count(start_marker) == 1
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          replacement = r'''/// Preserve complete bracketed-paste frames for Windows ReadConsoleInputW
           /// clients. ConPTY filters ordinary paste CSI delimiters when VT input is
           /// disabled, so literal ESC is represented as a Unicode input event.
           ///
-          /// Windows 10 build 19045 exposed a second constraint: draining the pipe
-          /// immediately after that ESC event lets the TUI consume it as a standalone
-          /// Escape key before `[200~` / `[201~` arrives. Each encoded delimiter must
-          /// therefore be contained in one small pipe write and drained only after the
-          /// complete delimiter has been written.
+          /// Windows 10 build 19045 exposed an additional timing constraint: draining
+          /// immediately after the generated ESC event lets the TUI observe a standalone
+          /// Escape key before `[200~` / `[201~` arrives. Keep each encoded delimiter in
+          /// one small pipe write and drain only after that whole delimiter is queued.
           #[cfg(windows)]
           fn write_conpty_paste<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
               const OPEN: &[u8] = b"\x1b[200~";
@@ -176,96 +147,134 @@ jobs:
                   ));
               }
 
-              let body = &data[OPEN.len()..data.len() - CLOSE.len()];
-              let body = std::str::from_utf8(body)
-                  .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-              let mut chunk = Vec::with_capacity(PTY_WRITE_CHUNK_SIZE);
-
-              let drain = |writer: &mut W, chunk: &mut Vec<u8>| -> io::Result<()> {
+              fn drain<W: Write + ?Sized>(
+                  writer: &mut W,
+                  chunk: &mut Vec<u8>,
+              ) -> io::Result<()> {
                   if !chunk.is_empty() {
                       writer.write_all(chunk)?;
                       writer.flush()?;
                       chunk.clear();
                   }
                   Ok(())
-              };
-              let append_atomic =
-                  |writer: &mut W, chunk: &mut Vec<u8>, unit: &[u8]| -> io::Result<()> {
-                      if chunk.len() + unit.len() > PTY_WRITE_CHUNK_SIZE {
-                          drain(writer, chunk)?;
-                      }
-                      chunk.extend_from_slice(unit);
-                      Ok(())
-                  };
+              }
 
-              // Keep the generated ESC event and the marker tail in the same write.
-              chunk.extend_from_slice(LITERAL_ESCAPE);
-              chunk.extend_from_slice(b"[200~");
+              fn append_atomic<W: Write + ?Sized>(
+                  writer: &mut W,
+                  chunk: &mut Vec<u8>,
+                  unit: &[u8],
+              ) -> io::Result<()> {
+                  if chunk.len() + unit.len() > PTY_WRITE_CHUNK_SIZE {
+                      drain(writer, chunk)?;
+                  }
+                  chunk.extend_from_slice(unit);
+                  Ok(())
+              }
 
+              let body = &data[OPEN.len()..data.len() - CLOSE.len()];
+              let body = std::str::from_utf8(body)
+                  .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+
+              let mut opening = Vec::with_capacity(LITERAL_ESCAPE.len() + 5);
+              opening.extend_from_slice(LITERAL_ESCAPE);
+              opening.extend_from_slice(b"[200~");
+              writer.write_all(&opening)?;
+              writer.flush()?;
+
+              let mut chunk = Vec::with_capacity(PTY_WRITE_CHUNK_SIZE);
               for ch in body.chars() {
                   if ch == '\x1b' {
-                      // Reserve room for the next UTF-8 scalar so an ANSI-like body
-                      // sequence does not repeat the Win10 standalone-ESC failure.
-                      if chunk.len() + LITERAL_ESCAPE.len() + 4 > PTY_WRITE_CHUNK_SIZE {
-                          drain(writer, &mut chunk)?;
-                      }
-                      chunk.extend_from_slice(LITERAL_ESCAPE);
+                      append_atomic(writer, &mut chunk, LITERAL_ESCAPE)?;
                   } else {
                       let mut utf8 = [0; 4];
-                      append_atomic(writer, &mut chunk, ch.encode_utf8(&mut utf8).as_bytes())?;
+                      append_atomic(
+                          writer,
+                          &mut chunk,
+                          ch.encode_utf8(&mut utf8).as_bytes(),
+                      )?;
                   }
               }
+              drain(writer, &mut chunk)?;
 
               let mut closing = Vec::with_capacity(LITERAL_ESCAPE.len() + 5);
               closing.extend_from_slice(LITERAL_ESCAPE);
               closing.extend_from_slice(b"[201~");
-              append_atomic(writer, &mut chunk, &closing)?;
-              drain(writer, &mut chunk)
+              writer.write_all(&closing)?;
+              writer.flush()
           }
-          '''.replace('          ', '')
-          p.write_text(text.replace(old, new, 1).replace('"windows-conpty-protected"', '"windows-conpty-atomic-markers"'), encoding='utf-8', newline='\n')
 
-          # Add a privacy-safe synthetic shape matching the reported real sample:
-          # 106002 normalized UTF-8 bytes and 3578 LF, without copying user fields.
+          '''
+          text = text[:start] + replacement + text[end:]
+          assert text.count('"windows-conpty-protected"') == 1
+          text = text.replace(
+              '"windows-conpty-protected"',
+              '"windows-conpty-atomic-markers"',
+              1,
+          )
+          p.write_text(text, encoding='utf-8', newline='\n')
+
           p = Path('src-tauri/src/tests/paste_framing.rs')
           text = p.read_text(encoding='utf-8')
-          needle = '    #[test]\n    fn PtyPaste_NativeConsecutiveFrames_006() {'
-          assert text.count(needle) == 1
-          extra = r'''    #[test]
-              fn PtyPaste_NativeWin10ReportedShape_008() {
-                  let mut lines = vec!["{".to_string(), "\"items\":[".to_string()];
-                  lines.extend((0..3574).map(|_| "0,".to_string()));
-                  lines.push("0".to_string());
-                  lines.push("],".to_string());
-                  lines.push("\"tail\":\"\"}".to_string());
-                  let base = lines.join("\n");
-                  let filler = 106_002usize
-                      .checked_sub(base.len())
-                      .expect("synthetic JSON base exceeds reported sample size");
-                  *lines.last_mut().unwrap() = format!("\"tail\":\"{}\"}}", "x".repeat(filler));
-                  let body = lines.join("\n");
-                  assert_eq!(body.len(), 106_002);
-                  assert_eq!(body.bytes().filter(|byte| *byte == b'\n').count(), 3_578);
-                  serde_json::from_str::<serde_json::Value>(&body).unwrap();
-                  let payload = format!("{OPEN}{body}{CLOSE}");
-                  assert_native_frames("win10-19045-reported-shape", &[payload]);
-              }
+          marker = '    #[test]\n    fn PtyPaste_NativeConsecutiveFrames_006() {'
+          assert text.count(marker) == 1
+          test = r'''    #[test]
+          fn PtyPaste_NativeWin10ReportedShape_008() {
+              let mut lines = vec!["{".to_string(), "\"items\":[".to_string()];
+              lines.extend((0..3574).map(|_| "0,".to_string()));
+              lines.push("0".to_string());
+              lines.push("],".to_string());
+              lines.push("\"tail\":\"\"}".to_string());
 
-          '''.replace('              ', '    ')
-          p.write_text(text.replace(needle, extra + needle, 1), encoding='utf-8', newline='\n')
+              let base = lines.join("\n");
+              let filler = 106_002usize
+                  .checked_sub(base.len())
+                  .expect("synthetic JSON base exceeds reported sample size");
+              *lines.last_mut().unwrap() =
+                  format!("\"tail\":\"{}\"}}", "x".repeat(filler));
 
-          def replace_once(path, old, new):
+              let body = lines.join("\n");
+              assert_eq!(body.len(), 106_002);
+              assert_eq!(
+                  body.bytes().filter(|byte| *byte == b'\n').count(),
+                  3_578
+              );
+              serde_json::from_str::<serde_json::Value>(&body).unwrap();
+
+              let payload = format!("{OPEN}{body}{CLOSE}");
+              assert_native_frames("win10-19045-reported-shape", &[payload]);
+          }
+
+          '''
+          p.write_text(text.replace(marker, test + marker, 1), encoding='utf-8', newline='\n')
+
+          def replace_once(path: str, old: str, new: str) -> None:
               q = Path(path)
               value = q.read_text(encoding='utf-8')
               if value.count(old) != 1:
-                  raise SystemExit(f'{path}: expected one version match, got {value.count(old)}')
+                  raise SystemExit(f'{path}: expected one match, got {value.count(old)}')
               q.write_text(value.replace(old, new, 1), encoding='utf-8', newline='\n')
 
           replace_once('package.json', '"version": "0.17.3"', '"version": "0.17.4"')
-          replace_once('package-lock.json', '"name": "cc-desk",\n  "version": "0.17.3"', '"name": "cc-desk",\n  "version": "0.17.4"')
-          replace_once('package-lock.json', '"": {\n      "name": "cc-desk",\n      "version": "0.17.3"', '"": {\n      "name": "cc-desk",\n      "version": "0.17.4"')
-          replace_once('src-tauri/Cargo.toml', 'name = "cc-desk"\nversion = "0.17.3"', 'name = "cc-desk"\nversion = "0.17.4"')
-          replace_once('src-tauri/tauri.conf.json', '"version": "0.17.3"', '"version": "0.17.4"')
+          replace_once(
+              'package-lock.json',
+              '"name": "cc-desk",\n  "version": "0.17.3"',
+              '"name": "cc-desk",\n  "version": "0.17.4"',
+          )
+          replace_once(
+              'package-lock.json',
+              '"": {\n      "name": "cc-desk",\n      "version": "0.17.3"',
+              '"": {\n      "name": "cc-desk",\n      "version": "0.17.4"',
+          )
+          replace_once(
+              'src-tauri/Cargo.toml',
+              'name = "cc-desk"\nversion = "0.17.3"',
+              'name = "cc-desk"\nversion = "0.17.4"',
+          )
+          replace_once(
+              'src-tauri/tauri.conf.json',
+              '"version": "0.17.3"',
+              '"version": "0.17.4"',
+          )
 
           p = Path('docs/paste-framing.md')
           text = p.read_text(encoding='utf-8')
@@ -273,20 +282,19 @@ jobs:
 
           ## Windows 10 build 19045 实机证据与第二阶段修复
 
-          0.17.3 实机日志确认：原始剪贴板经 CRLF -> LF 后为 106002 UTF-8 bytes、
-          105002 characters、3578 LF；加两端标记后，Rust 入口精确收到 106014 bytes，
-          opener offset 0、closer offset 106008、完整帧、writer 返回成功。用户使用的是
-          native claude.exe 2.1.267，Windows 10 10.0.19045；Node 不在该执行链路中。
+          0.17.3 实机日志确认：规范化后的原始剪贴板为 106002 UTF-8 bytes、
+          105002 characters、3578 LF。加两端标记后，Rust 入口精确收到 106014
+          bytes，opener offset 0、closer offset 106008、完整帧，writer 返回成功。
+          环境为 native claude.exe 2.1.267、Windows 10 10.0.19045；Node 不在执行链路。
 
-          但界面仍泄漏字面 `[201~`。0.17.3 将生成的 Unicode ESC input event 单独写入
-          并立即 FlushFileBuffers；这会在 Windows 10 上把 ESC 暴露为独立按键，再让
-          marker tail 晚到。0.17.4 保持原有 ConPTY workaround，但把 ESC event 与
-          `[200~` / `[201~` 分别放进同一次小写入，只在完整 delimiter 后排空。正文仍
-          按 UTF-8 边界流式处理，不记录或提交用户原始业务 JSON。
+          界面仍泄漏字面 `[201~`。0.17.3 把 Unicode ESC input event 单独写入并
+          立即 FlushFileBuffers，这会给较旧 ConPTY/TUI 组合留下把 ESC 当作独立按键
+          消费的时机。0.17.4 保留 ConPTY ESC 事件 workaround，但让 ESC event 与
+          `[200~` / `[201~` 各自在同一次小写入中排队，只在完整 delimiter 后排空。
 
-          自动化新增写调用边界回归，以及一个完全脱敏、但精确匹配 106002 bytes / 3578 LF
-          的合法 JSON。Windows Server 测试只能证明回归契约；Windows 10 的最终结论仍以
-          用户对 0.17.4 的同样本复测为准。
+          自动化新增写调用边界 RED/GREEN 回归，并使用完全脱敏、但精确匹配
+          106002 bytes / 3578 LF 的合法 JSON 做真实 ConPTY 验证。Windows Server
+          runner 不能替代 Windows 10 19045 的最终验收，结论仍以用户复测为准。
           '''
           p.write_text(text, encoding='utf-8', newline='\n')
 
@@ -296,9 +304,11 @@ jobs:
 
           ### Windows 10 粘贴标记时序
 
-          - ConPTY 的 literal ESC input event 不得单独 write + drain；必须和 `[200~` 或 `[201~` tail 在同一小写入中，再执行 pipe drain。
-          - `PtyPaste_Win10MarkersAreNeverFlushedAsStandaloneEscape_007` 锁定写调用边界；只有正文哈希正确不足以证明粘贴事务正确。
-          - 实机原始文本只用于本地度量，仓库测试必须使用脱敏且等尺寸/等换行的生成 JSON。
+          - ConPTY literal ESC input event 不得单独 write + drain；必须与 `[200~`
+            或 `[201~` tail 在同一次小写入中排队，再执行 pipe drain。
+          - `PtyPaste_Win10MarkersAreNeverFlushedAsStandaloneEscape_007` 锁定写调用
+            边界；只有正文哈希正确不足以证明粘贴事务正确。
+          - 实机原始文本只用于本地度量；仓库回归使用脱敏且等尺寸、等换行的生成 JSON。
           '''
           p.write_text(text, encoding='utf-8', newline='\n')
 
@@ -365,7 +375,9 @@ jobs:
           Get-ChildItem src-tauri/target/release/bundle/nsis -File |
             Where-Object { $_.Extension -in '.exe', '.sig' } |
             ForEach-Object { Copy-Item $_.FullName artifacts/windows/ }
-          if (-not (Get-ChildItem artifacts/windows -Filter '*.exe' -File)) { throw 'No installer generated' }
+          if (-not (Get-ChildItem artifacts/windows -Filter '*.exe' -File)) {
+            throw 'No installer generated'
+          }
           @(
             "version=0.17.4"
             "source_commit=$env:FIX_SOURCE_SHA"
@@ -389,7 +401,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Remove the temporary repair/build workflow
+      - name: Remove the temporary repair and build workflow
         shell: pwsh
         run: |
           Remove-Item .github/workflows/repair-win10-19045-paste.yml
