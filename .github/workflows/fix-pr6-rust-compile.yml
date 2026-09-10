@@ -169,19 +169,9 @@ jobs:
               "    // 解析 headers，展开环境变量值\n",
               "    // 推断 server type\n",
           )
-          replace_count(
-              store,
-              "        env,\n        headers,\n",
-              "",
-          )
+          replace_count(store, "        env,\n        headers,\n", "")
 
           frontend_config = Path("src/types/config.ts")
-          replace_count(
-              frontend_config,
-              "  env?: Record<string, string>  // stdio server environment variables\n"
-              "  headers?: Record<string, string>  // HTTP headers for authentication\n",
-              "",
-          )
 
           forbidden = {
               pty: [
