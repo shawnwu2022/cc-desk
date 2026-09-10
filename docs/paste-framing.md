@@ -44,3 +44,11 @@ Windows 10/11 不同构建、WSL/SSH 嵌套链路、原始 U+009B 等特殊控�
 
 Microsoft 协议：microsoft/terminal 的 #4999 Improved keyboard handling in Conpty。
 FlushFileBuffers 语义：Microsoft Learn /windows/win32/api/fileapi/nf-fileapi-flushfilebuffers。
+
+## 真实 Claude 提交正文验收
+
+- Windows Server 2022，Claude Code npm 包版本 `2.1.267`，Actions run `34456569102`。
+- 使用真实 `buildPastePayload` 输出、生产 Rust writer、真实 Claude 交互输入框。
+- 隔离的 UserPromptSubmit hook 捕获完整提交正文并阻止模型处理；dummy key + loopback endpoint 双重避免使用用户凭据和真实模型请求。
+- 对 64/256/800 个嵌套对象的 JSON 逐字节比对全文，不允许折叠标签、只有首尾或只有长度一致代替验收。
+- 此结果仍不覆盖用户自己的 Chrome 剪贴板和不同 Windows/Claude 版本；原始失败样本需要在同一构建上复核。

@@ -52,7 +52,13 @@ process.stdin.on('end', () => {
 
 fn tail(output: &Arc<Mutex<String>>) -> String {
     let text = output.lock().unwrap();
-    text.chars().rev().take(2000).collect::<Vec<_>>().into_iter().rev().collect()
+    text.chars()
+        .rev()
+        .take(2000)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 fn run_case(program: &Path, case: &Case) {
@@ -66,15 +72,24 @@ fn run_case(program: &Path, case: &Case) {
     let capture = temp.path().join("submitted.txt");
     let helper = temp.path().join("capture.cjs");
     std::fs::write(&helper, CAPTURE_HOOK).unwrap();
-    let hook_command = format!("\"{}\" \"{}\"", node_path().display(), helper.display());
+    let hook_command = format!(
+        "\"{}\" \"{}\"",
+        node_path().to_string_lossy().replace('\\', "/"),
+        helper.to_string_lossy().replace('\\', "/")
+    );
     let settings = serde_json::json!({
         "hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": hook_command, "timeout": 10}]}]},
         "enableAllProjectMcpServers": false
     });
-    std::fs::write(config.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+    std::fs::write(
+        config.join("settings.json"),
+        serde_json::to_vec_pretty(&settings).unwrap(),
+    )
+    .unwrap();
     let key = "cc-desk-ci-only-not-a-real-api-key-00000000000000000000";
     let mut projects = serde_json::Map::new();
-    let trusted = serde_json::json!({"hasTrustDialogAccepted": true, "hasCompletedProjectOnboarding": true});
+    let trusted =
+        serde_json::json!({"hasTrustDialogAccepted": true, "hasCompletedProjectOnboarding": true});
     projects.insert(project.to_string_lossy().into_owned(), trusted.clone());
     projects.insert(project.to_string_lossy().replace('\\', "/"), trusted);
     let global = serde_json::json!({
@@ -82,11 +97,22 @@ fn run_case(program: &Path, case: &Case) {
         "customApiKeyResponses": {"approved": [&key[key.len()-20..]], "rejected": []},
         "projects": projects
     });
-    for path in [config.join(".claude.json"), home.join(".claude.json"), temp.path().join(".claude.json")] {
+    for path in [
+        config.join(".claude.json"),
+        home.join(".claude.json"),
+        temp.path().join(".claude.json"),
+    ] {
         std::fs::write(path, serde_json::to_vec_pretty(&global).unwrap()).unwrap();
     }
 
-    let pair = native_pty_system().openpty(PtySize { rows: 35, cols: 160, pixel_width: 0, pixel_height: 0 }).unwrap();
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 35,
+            cols: 160,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
     let mut cmd = if program.extension().is_some_and(|ext| ext == "js") {
         let mut command = CommandBuilder::new(node_path());
         command.arg(program);
@@ -96,17 +122,27 @@ fn run_case(program: &Path, case: &Case) {
     };
     cmd.cwd(&project);
     for (name, value) in [
-        ("TERM", "xterm-256color"), ("COLORTERM", "truecolor"), ("CI", ""),
-        ("ANTHROPIC_API_KEY", key), ("ANTHROPIC_AUTH_TOKEN", ""), ("CLAUDE_CODE_OAUTH_TOKEN", ""),
+        ("TERM", "xterm-256color"),
+        ("COLORTERM", "truecolor"),
+        ("CI", ""),
+        ("ANTHROPIC_API_KEY", key),
+        ("ANTHROPIC_AUTH_TOKEN", ""),
+        ("CLAUDE_CODE_OAUTH_TOKEN", ""),
         ("ANTHROPIC_BASE_URL", "http://127.0.0.1:9"),
-        ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"), ("DISABLE_AUTOUPDATER", "1"),
-    ] { cmd.env(name, value); }
+        ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
+        ("DISABLE_AUTOUPDATER", "1"),
+    ] {
+        cmd.env(name, value);
+    }
     cmd.env("CLAUDE_CONFIG_DIR", &config);
     cmd.env("HOME", &home);
     cmd.env("USERPROFILE", &home);
     cmd.env("CC_PASTE_CAPTURE", &capture);
     if Path::new("C:/Program Files/Git/bin/bash.exe").is_file() {
-        cmd.env("CLAUDE_CODE_GIT_BASH_PATH", "C:/Program Files/Git/bin/bash.exe");
+        cmd.env(
+            "CLAUDE_CODE_GIT_BASH_PATH",
+            "C:/Program Files/Git/bin/bash.exe",
+        );
     }
     let mut child = pair.slave.spawn_command(cmd).unwrap();
     drop(pair.slave);
@@ -117,15 +153,22 @@ fn run_case(program: &Path, case: &Case) {
     let reader_thread = std::thread::spawn(move || {
         let mut buf = [0; 8192];
         while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             let mut text = collected.lock().unwrap();
-            if text.len() < 4 * 1024 * 1024 { text.push_str(&String::from_utf8_lossy(&buf[..n])); }
+            if text.len() < 4 * 1024 * 1024 {
+                text.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
         }
     });
     let (done, receiver) = mpsc::channel::<()>();
     let mut killer = child.clone_killer();
     let watchdog = std::thread::spawn(move || {
-        if matches!(receiver.recv_timeout(Duration::from_secs(120)), Err(mpsc::RecvTimeoutError::Timeout)) {
+        if matches!(
+            receiver.recv_timeout(Duration::from_secs(120)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ) {
             let _ = killer.kill();
         }
     });
@@ -135,7 +178,12 @@ fn run_case(program: &Path, case: &Case) {
         let mut key_once = false;
         loop {
             let text = output.lock().unwrap().clone();
-            if text.contains("shift+tab") || text.contains("? for shortcuts") || text.contains("alt+m") { break; }
+            if text.contains("shift+tab")
+                || text.contains("? for shortcuts")
+                || text.contains("alt+m")
+            {
+                break;
+            }
             let lower = text.to_lowercase();
             if !trusted_once && lower.contains("yes, i trust this folder") {
                 writer.write_all(b"1\r").map_err(|e| e.to_string())?;
@@ -147,27 +195,46 @@ fn run_case(program: &Path, case: &Case) {
                 writer.flush().map_err(|e| e.to_string())?;
                 key_once = true;
             }
-            if start.elapsed() > Duration::from_secs(45) { return Err("Claude did not reach its interactive prompt".into()); }
+            if start.elapsed() > Duration::from_secs(45) {
+                return Err("Claude did not reach its interactive prompt".into());
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
         // Real frontend wire, actual application writer; no hand-built transport.
         write_pty_data(&mut *writer, case.wire.as_bytes()).map_err(|e| e.to_string())?;
         std::thread::sleep(Duration::from_millis(1000));
-        if capture.exists() { return Err("Paste submitted before the explicit Enter key".into()); }
+        if capture.exists() {
+            return Err("Paste submitted before the explicit Enter key".into());
+        }
         writer.write_all(b"\r").map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())?;
         let start = Instant::now();
         while !capture.exists() {
-            if start.elapsed() > Duration::from_secs(45) { return Err("No complete UserPromptSubmit capture".into()); }
+            if start.elapsed() > Duration::from_secs(45) {
+                return Err("No complete UserPromptSubmit capture".into());
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
         let actual = std::fs::read_to_string(&capture).map_err(|e| e.to_string())?;
         if actual != case.expected {
-            let mismatch = actual.as_bytes().iter().zip(case.expected.as_bytes()).position(|(a, b)| a != b);
-            return Err(format!("submitted JSON differs: expected {} bytes, got {}, first mismatch {mismatch:?}", case.expected.len(), actual.len()));
+            let mismatch = actual
+                .as_bytes()
+                .iter()
+                .zip(case.expected.as_bytes())
+                .position(|(a, b)| a != b);
+            return Err(format!(
+                "submitted JSON differs: expected {} bytes, got {}, first mismatch {mismatch:?}",
+                case.expected.len(),
+                actual.len()
+            ));
         }
-        serde_json::from_str::<serde_json::Value>(&actual).map_err(|e| format!("submitted JSON is invalid: {e}"))?;
-        println!("[PASS real Claude] {}: {} UTF-8 bytes, exact submitted JSON including all formatting", case.name, actual.len());
+        serde_json::from_str::<serde_json::Value>(&actual)
+            .map_err(|e| format!("submitted JSON is invalid: {e}"))?;
+        println!(
+            "[PASS real Claude] {}: {} UTF-8 bytes, exact submitted JSON including all formatting",
+            case.name,
+            actual.len()
+        );
         Ok(())
     })();
     let _ = done.send(());
@@ -178,16 +245,27 @@ fn run_case(program: &Path, case: &Case) {
     let _ = reader_thread.join();
     let _ = watchdog.join();
     if let Err(error) = result {
-        panic!("{}: {error}\nSynthetic-session output tail: {}", case.name, tail(&output));
+        panic!(
+            "{}: {error}\nSynthetic-session output tail: {}",
+            case.name,
+            tail(&output)
+        );
     }
 }
 
 #[test]
 #[ignore = "requires explicit disposable Claude CLI acceptance environment"]
 fn RealClaude_DevtoolsJsonSubmittedCompletely_001() {
-    let program = PathBuf::from(std::env::var_os("CC_E2E_CLAUDE_PATH").expect("set CC_E2E_CLAUDE_PATH"));
-    let file = std::env::var_os("CC_PASTE_PAYLOAD_FILE").expect("set CC_PASTE_PAYLOAD_FILE to real buildPastePayload fixtures");
+    let program =
+        PathBuf::from(std::env::var_os("CC_E2E_CLAUDE_PATH").expect("set CC_E2E_CLAUDE_PATH"));
+    let file = std::env::var_os("CC_PASTE_PAYLOAD_FILE")
+        .expect("set CC_PASTE_PAYLOAD_FILE to real buildPastePayload fixtures");
     let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
-    assert!(!cases.is_empty(), "acceptance cases must not silently be empty");
-    for case in cases { run_case(&program, &case); }
+    assert!(
+        !cases.is_empty(),
+        "acceptance cases must not silently be empty"
+    );
+    for case in cases {
+        run_case(&program, &case);
+    }
 }

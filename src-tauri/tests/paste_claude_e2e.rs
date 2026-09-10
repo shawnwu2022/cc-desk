@@ -4,8 +4,9 @@
 //! 运行：cargo test --test paste_claude_e2e -- --ignored --test-threads=1 --nocapture
 //! 默认从 PATH 查找 claude；需要指定其他二进制时设置 CC_E2E_CLAUDE_PATH。
 //!
-//! 安全护栏：探针自身不发送 Enter；真实 Claude Code 多行粘贴不会逐行自动提交
-//! （用户症状即输入框截断而非消息被发出），故裸配置（用户真实 provider）下运行无请求风险。
+//! 历史诊断，不作为完整性验收：折叠标签不证明正文完整。
+//! 不发送显式 Enter 也不能保证未提交；只能在隔离配置、dummy key、loopback API 环境运行。
+//! 当前验收使用 tests::paste_cli_submit 的 UserPromptSubmit 全文捕获，禁止用真实用户凭据。
 
 #![allow(non_snake_case)]
 

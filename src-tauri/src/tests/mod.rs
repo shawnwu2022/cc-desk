@@ -21,7 +21,7 @@ mod store;
 #[cfg(test)]
 mod store_profiling;
 
-#[cfg(test)]
-mod paste_framing;
 #[cfg(all(test, windows))]
 mod paste_cli_submit;
+#[cfg(test)]
+mod paste_framing;
