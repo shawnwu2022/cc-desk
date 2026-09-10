@@ -262,3 +262,10 @@ npm run release -- --oss-only v0.5.1
 - 实际粘贴不再自动压缩 JSON；只规范行尾。
 - Windows 完整粘贴帧使用独立 ESC Unicode 事件与真实 ConPTY input pipe drain；具体补丁在 vendor/portable-pty/CC_DESK_PATCH.md。禁止用 sleep 或单行化代替完整性保证。
 - 前端各入口与生产 Rust writer 共享黄金样本；必须验证包含起止标记的完整正文。出现 Pasted text 折叠标签不算真实编辑器验收。见 docs/paste-framing.md。
+
+
+### 粘贴诊断构建
+
+- 0.17.3 诊断包通过 `paste_diag` 仅记录入口来源、UTF-8 字节数、字符数、LF 数、起止标记位置、writer 路径和耗时；严禁记录剪贴板正文。
+- 日志位于 `~/.cc-box/logs/YYYY-MM-DD.log`，并包含版本与构建 SHA。用户复现后应截取 `Build identity` 和 `paste_diag` 行定位边界。
+- 诊断包不得被表述为已修复版本；结果用于区分 WebView/IPC 未形成完整帧，与特定 Windows/Claude 对完整帧处理失败。

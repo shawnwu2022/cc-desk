@@ -12,7 +12,7 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::{mpsc, Arc, LazyLock, Weak};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
@@ -694,15 +694,63 @@ impl PtyManager {
     }
 
     /// 写入输入到 PTY。全局 map 锁在取得 Arc 后立即释放。
-    pub fn write(&self, id: &str, data: &str) -> Result<()> {
+    /// 粘贴诊断只记录来源、尺寸、标记位置和耗时，绝不记录剪贴板正文。
+    pub fn write(&self, id: &str, data: &str, source: Option<&str>) -> Result<()> {
         let entry = lookup_writer(&self.writers, id).ok_or_else(|| {
             let error = format!("PTY writer not found for id: {id}");
             log::warn!("{}", error);
             anyhow!(error)
         })?;
 
+        let bytes = data.as_bytes();
+        let open = data.find("\x1b[200~");
+        let close = data.rfind("\x1b[201~");
+        let complete_frame = data.starts_with("\x1b[200~") && data.ends_with("\x1b[201~");
+        let source = source
+            .unwrap_or("unknown")
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':'))
+            .take(48)
+            .collect::<String>();
+        let paste_like = source.contains("paste") || open.is_some() || close.is_some();
+        let transport = if cfg!(windows) && complete_frame {
+            "windows-conpty-protected"
+        } else {
+            "generic"
+        };
+        let short_id = &id[..id.len().min(8)];
+        if paste_like {
+            log::info!(
+                target: "paste_diag",
+                "input build={} version={} pty={} source={} utf8_bytes={} chars={} lf={} open_at={:?} close_at={:?} complete={} transport={}",
+                env!("CC_DESK_BUILD_SHA"),
+                env!("APP_VERSION"),
+                short_id,
+                source,
+                bytes.len(),
+                data.chars().count(),
+                bytes.iter().filter(|byte| **byte == b'\n').count(),
+                open,
+                close,
+                complete_frame,
+                transport
+            );
+        }
+
+        let started = Instant::now();
         let mut writer = entry.writer.lock();
-        write_pty_data(writer.as_mut(), data.as_bytes()).with_context(|| {
+        let result = write_pty_data(writer.as_mut(), bytes);
+        if paste_like {
+            log::info!(
+                target: "paste_diag",
+                "write pty={} source={} success={} elapsed_ms={}",
+                short_id,
+                source,
+                result.is_ok(),
+                started.elapsed().as_millis()
+            );
+        }
+        result.with_context(|| {
             format!("Failed to write or flush {} bytes to PTY {id}", data.len())
         })?;
         Ok(())

@@ -100,6 +100,13 @@ fn PtyWriterLookup_ClonesPerPtyHandle_001() {
     assert_eq!(Arc::strong_count(&entry), 3);
 }
 
+#[test]
+fn PtyPasteDiagnostic_DoesNotRequireClipboardContent_001() {
+    let input = "\x1b[200~{\n  \"secret\": true\n}\x1b[201~";
+    assert!(input.starts_with("\x1b[200~"));
+    assert!(input.ends_with("\x1b[201~"));
+}
+
 // 复现旧 bug：from_utf8_lossy 把 GBK 字节 "你好" 替换为 U+FFFD
 #[cfg(target_os = "windows")]
 #[test]

@@ -70,8 +70,19 @@ export const ptySpawn = async (options: PtySpawnOptions): Promise<PtySpawnResult
   return invoke<PtySpawnResult | null>('pty_spawn', { options });
 };
 
-export const ptyInput = async (id: string, data: string): Promise<boolean> => {
-  return invoke<boolean>('pty_input', { id, data });
+export type PtyInputSource =
+  | 'terminal-ondata'
+  | 'xterm-ondata-paste'
+  | 'clipboard-keyboard'
+  | 'clipboard-dom'
+  | 'other'
+
+export const ptyInput = async (
+  id: string,
+  data: string,
+  source: PtyInputSource = 'other',
+): Promise<boolean> => {
+  return invoke<boolean>('pty_input', { id, data, source });
 };
 
 export const ptyResize = async (id: string, cols: number, rows: number): Promise<boolean> => {

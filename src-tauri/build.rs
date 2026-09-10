@@ -14,5 +14,12 @@ fn main() {
         println!("cargo:rustc-env=APP_VERSION={}", version);
     }
 
+    let build_sha = std::env::var("CC_DESK_BUILD_SHA")
+        .or_else(|_| std::env::var("GITHUB_SHA"))
+        .unwrap_or_else(|_| "local".to_string());
+    println!("cargo:rerun-if-env-changed=CC_DESK_BUILD_SHA");
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    println!("cargo:rustc-env=CC_DESK_BUILD_SHA={build_sha}");
+
     tauri_build::build()
 }

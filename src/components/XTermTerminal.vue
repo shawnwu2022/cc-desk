@@ -355,7 +355,10 @@ function createTerminal(tabId: string): Terminal {
     const instance = terminalInstances.get(tabId)
     if (instance) {
       // ptyId 空（fit 在 spawn 前发生）时跳过发送；Escape 仍清 working 状态
-      if (instance.ptyId) ptyInput(instance.ptyId, data)
+      if (instance.ptyId) {
+      const pasteLike = data.includes('\x1b[200~') || data.includes('\x1b[201~')
+      ptyInput(instance.ptyId, data, pasteLike ? 'xterm-ondata-paste' : 'terminal-ondata')
+    }
 
       // Escape 按键：Claude 的 Stop hook 不在用户中断时触发，立即清除 working
       if (data === '\x1b') {
@@ -423,7 +426,7 @@ function createTerminal(tabId: string): Terminal {
         readText,
         () => terminalInstances.get(tabId),
         text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
-        ptyInput,
+        (id, payload) => ptyInput(id, payload, 'clipboard-keyboard'),
         () => imagePasteBytes(platform),
       ).catch(() => {})
       return false
@@ -453,7 +456,7 @@ onMounted(async () => {
       container: containerRef.value,
       getTabId: () => currentDisplayTabId.value,
       getInstance: tabId => terminalInstances.get(tabId),
-      write: ptyInput,
+      write: (id, payload) => ptyInput(id, payload, 'clipboard-dom'),
       imageFallback: () => imagePasteBytes(platform),
     })
   }
