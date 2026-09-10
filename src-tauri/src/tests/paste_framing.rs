@@ -58,6 +58,55 @@ fn PtyPaste_WriteFailurePropagates_003() {
 }
 
 #[cfg(windows)]
+#[test]
+fn PtyPaste_Win10MarkersAreNeverFlushedAsStandaloneEscape_007() {
+    #[derive(Default)]
+    struct RecordingWriter {
+        writes: Vec<Vec<u8>>,
+    }
+
+    impl std::io::Write for RecordingWriter {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.writes.push(data.to_vec());
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    const ESCAPE_EVENT: &[u8] = b"\x1b[0;0;27;1;0;1_";
+    let payload = format!("{OPEN}body{CLOSE}");
+    let mut writer = RecordingWriter::default();
+    write_pty_data(&mut writer, payload.as_bytes()).unwrap();
+
+    assert!(
+        !writer.writes.iter().any(|write| write == ESCAPE_EVENT),
+        "opening/closing ESC must not be drained as a standalone key event"
+    );
+
+    let mut opening = ESCAPE_EVENT.to_vec();
+    opening.extend_from_slice(b"[200~");
+    let mut closing = ESCAPE_EVENT.to_vec();
+    closing.extend_from_slice(b"[201~");
+    assert!(
+        writer
+            .writes
+            .first()
+            .is_some_and(|write| write.starts_with(&opening)),
+        "opening marker must be present in one pipe write"
+    );
+    assert!(
+        writer
+            .writes
+            .last()
+            .is_some_and(|write| write.ends_with(&closing)),
+        "closing marker must be present in one pipe write"
+    );
+}
+
+#[cfg(windows)]
 mod native {
     use super::{write_pty_data, CLOSE, OPEN};
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -272,6 +321,28 @@ setTimeout(() => process.exit(2), 85000);
         }
         let payload = format!("{OPEN}{}{CLOSE}", "\x1b[31m色\x1b[0m\n".repeat(400));
         assert_native_frames("dense-literal-escapes", &[payload]);
+    }
+
+    #[test]
+    fn PtyPaste_NativeWin10ReportedShape_008() {
+        let mut lines = vec!["{".to_string(), "\"items\":[".to_string()];
+        lines.extend((0..3574).map(|_| "0,".to_string()));
+        lines.push("0".to_string());
+        lines.push("],".to_string());
+        lines.push("\"tail\":\"\"}".to_string());
+
+        let base = lines.join("\n");
+        let filler = 106_002usize
+            .checked_sub(base.len())
+            .expect("synthetic JSON base exceeds reported sample size");
+        *lines.last_mut().unwrap() = format!("\"tail\":\"{}\"}}", "x".repeat(filler));
+
+        let body = lines.join("\n");
+        assert_eq!(body.len(), 106_002);
+        assert_eq!(body.bytes().filter(|byte| *byte == b'\n').count(), 3_578);
+        serde_json::from_str::<serde_json::Value>(&body).unwrap();
+        let payload = format!("{OPEN}{body}{CLOSE}");
+        assert_native_frames("win10-19045-reported-shape", &[payload]);
     }
 
     #[test]

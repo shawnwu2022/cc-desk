@@ -1,6 +1,6 @@
 [package]
 name = "cc-desk"
-version = "0.17.3"
+version = "0.17.4"
 description = "CC Desk - a multi-project, multi-session desktop workspace for Claude Code"
 authors = ["shawnwu2022"]
 license = "MIT"
