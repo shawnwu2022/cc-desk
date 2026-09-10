@@ -1,0 +1,146 @@
+name: PR6 one-shot Rust compile repair
+
+on:
+  push:
+    branches:
+      - codex/focus-claude-workspace
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-verify:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v5
+        with:
+          ref: codex/focus-claude-workspace
+          fetch-depth: 0
+
+      - name: Install Rust tooling
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Apply deterministic compile repair
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{path}: expected one match, found {count}: {old[:80]!r}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+
+          def remove_between(path: Path, start_marker: str, end_marker: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              start_count = text.count(start_marker)
+              if start_count != 1:
+                  raise RuntimeError(f"{path}: expected one start marker, found {start_count}: {start_marker!r}")
+              start = text.index(start_marker)
+              end = text.find(end_marker, start)
+              if end < 0:
+                  raise RuntimeError(f"{path}: end marker not found after {start_marker!r}")
+              path.write_text(text[:start] + text[end:], encoding="utf-8", newline="\n")
+
+          pty = Path("src-tauri/src/pty.rs")
+          replace_once(
+              pty,
+              "        signal: status.signal().map(ToString::to_string),\n",
+              "        // portable-pty 0.8.x exposes the portable exit code but keeps the\n"
+              "        // optional signal private. Do not infer it from Display text.\n"
+              "        signal: None,\n",
+          )
+
+          pty_tests = Path("src-tauri/src/tests/pty.rs")
+          replace_once(
+              pty_tests,
+              "#[test]\n"
+              "fn PtyExitPayload_PreservesSignal_001() {\n"
+              "    let status = ExitStatus::with_signal(\"SIGTERM\");\n"
+              "    let payload = crate::pty::exit_payload(\"pty-2\", &status);\n\n"
+              "    assert_eq!(payload.id, \"pty-2\");\n"
+              "    assert_eq!(payload.exit_code, 1);\n"
+              "    assert_eq!(payload.signal.as_deref(), Some(\"SIGTERM\"));\n"
+              "}\n",
+              "#[test]\n"
+              "fn PtyExitPayload_SignalStatusUsesPortableExitCode_001() {\n"
+              "    let status = ExitStatus::with_signal(\"SIGTERM\");\n"
+              "    let payload = crate::pty::exit_payload(\"pty-2\", &status);\n\n"
+              "    assert_eq!(payload.id, \"pty-2\");\n"
+              "    assert_eq!(payload.exit_code, 1);\n"
+              "    assert_eq!(payload.signal, None);\n"
+              "}\n",
+          )
+
+          store_tests = Path("src-tauri/src/tests/store.rs")
+          replace_once(
+              store_tests,
+              "    set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,\n",
+              "",
+          )
+
+          store = Path("src-tauri/src/store.rs")
+          remove_between(
+              store,
+              "    // 3. 从 disabled 备份目录读取用户级 agents（原位灰显）\n",
+              "    Ok(agents)\n",
+          )
+          remove_between(
+              store,
+              "    // 2b. 从 disabled 备份目录读取用户级 skills（原位灰显）\n",
+              "    // 3. 从 plugins 获取 skills",
+          )
+          remove_between(
+              store,
+              "    // 5. 从 disabled 备份目录读取用户级 MCP servers（原位灰显）\n",
+              "    Ok(servers)\n",
+          )
+
+          checks = {
+              "src-tauri/src/pty.rs": ["status.signal()"],
+              "src-tauri/src/store.rs": ["get_disabled_subdir("],
+              "src-tauri/src/tests/store.rs": [
+                  "set_agent_enabled_in",
+                  "set_mcp_server_enabled_in",
+                  "set_skill_enabled_in",
+              ],
+          }
+          for name, forbidden in checks.items():
+              text = Path(name).read_text(encoding="utf-8")
+              leftovers = [token for token in forbidden if token in text]
+              if leftovers:
+                  raise RuntimeError(f"{name}: stale symbols remain: {leftovers}")
+
+      - name: Format Rust
+        working-directory: src-tauri
+        run: cargo fmt --all
+
+      - name: Verify formatting
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
+      - name: Verify Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Verify Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Commit verified repair and remove one-shot workflow
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/fix-pr6-rust-compile.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if (git diff --cached --quiet) {
+            Write-Error "Expected tracked compile-repair changes"
+            exit 1
+          }
+          git commit -m "fix: restore Rust checks after scope cleanup [rust-fix-bot]"
+          git push origin HEAD:codex/focus-claude-workspace
