@@ -32,5 +32,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "refactor: remove downstream provider management [refocus-bot]"
+          git commit -m "refactor: apply Claude workspace boundary [refocus-bot]"
           git push origin HEAD:codex/focus-claude-workspace
