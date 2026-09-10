@@ -1,163 +1,80 @@
-name: Repair and verify Windows paste framing
+name: Probe ConPTY internal read boundaries
 on:
   push:
     branches: [codex/fix-devtools-paste]
 permissions:
-  contents: write
-concurrency:
-  group: repair-devtools-paste
-  cancel-in-progress: false
+  contents: read
 jobs:
-  repair:
+  probe:
     runs-on: windows-2022
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.sha }}
       - uses: actions/setup-node@v5
         with:
           node-version: 20
-          cache: npm
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - run: npm ci
-      - name: Register regression tests before the fix
+      - name: Isolate the existing native regression from the GUI build
         shell: python
         run: |
           from pathlib import Path
-          p = Path('src-tauri/src/tests/mod.rs')
-          text = p.read_text(encoding='utf-8')
-          assert 'mod paste_framing;' not in text
-          p.write_text(text + '#[cfg(test)]\nmod paste_framing;\n', encoding='utf-8', newline='\n')
-      - name: Format regression tests
-        working-directory: src-tauri
-        run: cargo fmt --all
-      - name: Confirm RED through the actual production writer
-        working-directory: src-tauri
-        shell: pwsh
-        run: |
-          $output = cargo test --lib PtyPaste_NativeFrames_004 -- --nocapture 2>&1
-          $code = $LASTEXITCODE
-          $output | Write-Output
-          if ($code -eq 0) { throw 'Expected the unpatched production transport to fail' }
-          if (($output -join "`n") -notmatch 'paste frame byte length mismatch') {
-            throw 'RED failed for a different reason; do not apply a speculative fix'
-          }
-          $global:LASTEXITCODE = 0
-      - name: Repair only framed Windows ConPTY input
-        shell: python
-        run: |
-          from pathlib import Path
-          p = Path('src-tauri/src/pty.rs')
-          text = p.read_text(encoding='utf-8')
-          marker = 'pub(crate) fn write_pty_data<W: Write + ?Sized>('
+          import shutil
+          root = Path('.paste-probe')
+          (root / 'src/tests').mkdir(parents=True)
+          (root / 'tests/fixtures').mkdir(parents=True)
+          shutil.copy('src-tauri/tests/fixtures/devtools-paste-framing.json', root / 'tests/fixtures/devtools-paste-framing.json')
+          text = Path('src-tauri/src/tests/paste_framing.rs').read_text(encoding='utf-8')
+          marker = '        assert_native_frames("split-escape-sequence", &[payload]);'
           assert text.count(marker) == 1
-          helper = r'''/// ConPTY consumes ordinary bracketed-paste CSI sequences for clients using
-          /// ReadConsoleInputW (including Node raw stdin). Encode literal ESC as a
-          /// Unicode key event so the client receives the original character.
-          /// A generated input sequence must stay in ONE write chunk: ConPTY can
-          /// flush a lone ESC at a read boundary instead of awaiting its CSI tail.
-          /// Streaming into a fixed-size buffer also avoids a full expanded copy.
-          /// Protocol: microsoft/terminal, doc/specs/#4999 - Improved keyboard handling in Conpty.md.
-          #[cfg(windows)]
-          fn write_conpty_paste<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
-              // Vk=0, Sc=0, Unicode=ESC, key-down, no modifiers, repeat=1.
-              const LITERAL_ESCAPE: &[u8] = b"\x1b[0;0;27;1;0;1_";
-              let mut chunk = [0u8; PTY_WRITE_CHUNK_SIZE];
-              let mut used = 0;
-              for byte in data {
-                  let encoded = if *byte == 0x1b {
-                      LITERAL_ESCAPE
-                  } else {
-                      std::slice::from_ref(byte)
-                  };
-                  if used + encoded.len() > chunk.len() {
-                      writer.write_all(&chunk[..used])?;
-                      writer.flush()?;
-                      thread::sleep(PTY_WRITE_CHUNK_DELAY);
-                      used = 0;
-                  }
-                  chunk[used..used + encoded.len()].copy_from_slice(encoded);
-                  used += encoded.len();
-              }
-              writer.write_all(&chunk[..used])?;
-              writer.flush()
-          }
-
-          '''
-          text = text.replace(marker, helper + marker, 1)
-          needle = '    let mut chunks = data.chunks(PTY_WRITE_CHUNK_SIZE).peekable();'
-          assert text.count(needle) == 1
-          prefix = r'''    // Only complete paste frames use Windows input encoding. Keep ordinary
-              // keys, image-paste shortcuts, terminal responses and Unix input unchanged.
-              #[cfg(windows)]
-              if data.starts_with(b"\x1b[200~") && data.ends_with(b"\x1b[201~") {
-                  return write_conpty_paste(writer, data);
-              }
-
-          '''
-          text = text.replace(needle, prefix + needle, 1)
-          old = '// Windows ConPTY 对连续突发写入存在截断风险；小块刷新并短暂让出时间，避免大粘贴丢字节。'
-          assert text.count(old) == 1
-          text = text.replace(old, '// 分块让出写入时间；粘贴边界由 ConPTY 输入编码保护，不能用延时替代起止标记。')
-          p.write_text(text, encoding='utf-8', newline='\n')
-          p = Path('src-tauri/src/tests/paste_framing.rs')
-          text = p.read_text(encoding='utf-8')
-          needle = '        assert_native_frames("split-escape-sequence", &[payload]);'
-          assert text.count(needle) == 1
-          more = r'''
-                  // 覆盖生成序列的开头、中间和末尾接近 4 KiB 写块边界。
-                  for padding in [4062, 4068, 4074, 4076, 4095] {
+          text = text.replace(marker, marker + r'''
+                  for padding in 4060..4098 {
                       let payload = format!("{OPEN}{}\x1b[31m中文🎉\nTAIL{CLOSE}", "x".repeat(padding));
                       assert_native_frames(&format!("escape-offset-{padding}"), &[payload]);
                   }
-                  // 一个粘贴帧内有 800 个字面 ESC，不能仅保护最外层标记。
                   let payload = format!("{OPEN}{}{CLOSE}", "\x1b[31m色\x1b[0m\n".repeat(400));
                   assert_native_frames("dense-literal-escapes", &[payload]);
-          '''
-          text = text.replace(needle, needle + '\n' + more, 1)
-          p.write_text(text, encoding='utf-8', newline='\n')
-          p = Path('AGENTS.md')
-          text = p.read_text(encoding='utf-8')
-          text += '\n### Windows 粘贴帧传输\n\n- 完整 bracketed paste 在 `pty.rs::write_pty_data` 内将 ESC 编码为 ConPTY Unicode 按键事件，避免起止标记被 Windows 吞掉；普通按键、图片粘贴快捷键、Unix 输入不改。\n- 使用固定 4 KiB 缓冲流式编码，单个 Unicode 按键序列不得跨写块拆分；禁止先展开整个 payload 再按固定字节切块。\n- `paste_framing` 使用生产 writer、真 ConPTY、Node raw stdin 校验包含标记的 UTF-8 长度与哈希；严禁剥除或容忍标记丢失。前后端共享 `devtools-paste-framing.json` 黄金样本。\n- 传输通过不等于真实 Claude 编辑器已验收；详见 `docs/paste-framing.md`。\n'
-          p.write_text(text, encoding='utf-8', newline='\n')
-          p = Path('docs/paste-framing.md')
-          text = p.read_text(encoding='utf-8')
-          text += '\n## 写块边界\n\n第二轮真实生产 writer 回归发现：先将 ESC 展开为 15 字节输入序列、再按 4096 字节切块，会在 ESC 恰位于块尾时把后续 14 字节当作正文交付（期望 4107 字节，实收 4121）。因此最终实现使用固定 4 KiB 缓冲流式编码，加入一个完整编码单元之前检查剩余容量，不允许生成的控制序列跨写块拆开。原始失败用例保留，另覆盖多个临界位置及包含 800 个 ESC 的粘贴帧。\n'
-          p.write_text(text, encoding='utf-8', newline='\n')
-      - name: Format and check Rust
-        working-directory: src-tauri
-        run: |
-          cargo fmt --all
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo fmt --all --check
-      - name: Verify native framing is GREEN
-        working-directory: src-tauri
-        run: cargo test --lib paste_framing -- --nocapture
-      - name: Verify strict Clippy
-        working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Verify all Rust tests
-        working-directory: src-tauri
-        run: cargo test
-      - name: Verify frontend types
-        run: npm run typecheck
-      - name: Verify all frontend tests
-        run: npm run test:ci
-      - name: Verify production frontend build
-        run: npm run build
-      - name: Commit verified source and remove this repair workflow
+          ''')
+          (root / 'src/tests/paste_framing.rs').write_text(text, encoding='utf-8')
+          (root / 'Cargo.toml').write_text('''[package]
+          name = "paste-boundary-probe"
+          version = "0.0.0"
+          edition = "2021"
+          [dependencies]
+          portable-pty = "=0.8.1"
+          serde = { version = "1", features = ["derive"] }
+          serde_json = "1"
+          ''', encoding='utf-8')
+          (root / 'src/lib.rs').write_text('mod pty;\n#[cfg(test)] mod tests { mod paste_framing; }\n', encoding='utf-8')
+          (root / 'src/pty.rs').write_text(r'''
+          use std::io::{self, Write};
+          pub(crate) fn write_pty_data<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
+              let c1 = std::env::var("PROBE_C1").unwrap() == "1";
+              let escape: &[u8] = if c1 { b"\xc2\x9b0;0;27;1;0;1_" } else { b"\x1b[0;0;27;1;0;1_" };
+              let mut wire = Vec::new();
+              for b in data {
+                  if *b == 0x1b { wire.extend_from_slice(escape); } else { wire.push(*b); }
+              }
+              let size: usize = std::env::var("PROBE_CHUNK").unwrap().parse().unwrap();
+              for chunk in wire.chunks(size) {
+                  writer.write_all(chunk)?;
+                  writer.flush()?;
+                  std::thread::sleep(std::time::Duration::from_millis(1));
+              }
+              Ok(())
+          }
+          ''', encoding='utf-8')
+      - name: Compare ESC and C1 introducers with actual ConPTY
+        working-directory: .paste-probe
         shell: pwsh
         run: |
-          Remove-Item .github/workflows/probe-paste-framing.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src-tauri/src/pty.rs src-tauri/src/tests/mod.rs src-tauri/src/tests/paste_framing.rs AGENTS.md docs/paste-framing.md .github/workflows/probe-paste-framing.yml
-          git diff --cached --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git commit -m 'fix: preserve bracketed paste through Windows ConPTY'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git push origin HEAD:codex/fix-devtools-paste
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PROBE_C1 = '0'
+          $env:PROBE_CHUNK = '4096'
+          cargo test --lib PtyPaste_NativeChunkBoundary_005 -- --nocapture
+          Write-Output "ESC_BASELINE_EXIT=$LASTEXITCODE"
+          $env:PROBE_C1 = '1'
+          foreach ($size in @('4096', '512', '127')) {
+            $env:PROBE_CHUNK = $size
+            cargo test --lib PtyPaste_Native -- --nocapture
+            Write-Output "C1_CHUNK_${size}_EXIT=$LASTEXITCODE"
+          }
+          $global:LASTEXITCODE = 0
