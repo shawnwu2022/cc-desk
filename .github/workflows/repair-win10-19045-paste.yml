@@ -1,0 +1,399 @@
+name: Repair Win10 19045 paste marker timing
+
+on:
+  push:
+    branches: [codex/fix-devtools-paste]
+    paths:
+      - .github/workflows/repair-win10-19045-paste.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-win10-19045-paste
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: windows-2022
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+
+      - name: Add Win10 marker-boundary regression before production change
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('src-tauri/src/tests/paste_framing.rs')
+          text = p.read_text(encoding='utf-8')
+          marker = '#[cfg(windows)]\nmod native {'
+          assert text.count(marker) == 1
+          test = r'''
+          #[cfg(windows)]
+          #[test]
+          fn PtyPaste_Win10MarkersAreNeverFlushedAsStandaloneEscape_007() {
+              #[derive(Default)]
+              struct RecordingWriter {
+                  writes: Vec<Vec<u8>>,
+                  flushes: usize,
+              }
+
+              impl std::io::Write for RecordingWriter {
+                  fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                      self.writes.push(data.to_vec());
+                      Ok(data.len())
+                  }
+
+                  fn flush(&mut self) -> std::io::Result<()> {
+                      self.flushes += 1;
+                      Ok(())
+                  }
+              }
+
+              const ESCAPE_EVENT: &[u8] = b"\x1b[0;0;27;1;0;1_";
+              let payload = format!("{OPEN}{{\n  \\"ok\\": true\n}}{CLOSE}");
+              let mut writer = RecordingWriter::default();
+              write_pty_data(&mut writer, payload.as_bytes()).unwrap();
+
+              assert!(
+                  !writer.writes.iter().any(|write| write == ESCAPE_EVENT),
+                  "opening/closing ESC must not be drained as a standalone key event"
+              );
+              let mut opening = ESCAPE_EVENT.to_vec();
+              opening.extend_from_slice(b"[200~");
+              let mut closing = ESCAPE_EVENT.to_vec();
+              closing.extend_from_slice(b"[201~");
+              assert!(
+                  writer.writes.first().is_some_and(|write| write.starts_with(&opening)),
+                  "opening marker must be present in one pipe write"
+              );
+              assert!(
+                  writer.writes.last().is_some_and(|write| write.ends_with(&closing)),
+                  "closing marker must be present in one pipe write"
+              );
+          }
+
+          '''
+          p.write_text(text.replace(marker, test + marker, 1), encoding='utf-8', newline='\n')
+
+      - name: Format the regression test
+        working-directory: src-tauri
+        run: cargo fmt --all
+
+      - name: Confirm RED against the standalone-ESC implementation
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $output = cargo test --lib PtyPaste_Win10MarkersAreNeverFlushedAsStandaloneEscape_007 -- --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | Write-Output
+          if ($code -eq 0) { throw 'Expected current standalone-ESC implementation to fail the new regression' }
+          if (($output -join "`n") -notmatch 'must not be drained as a standalone key event') {
+            throw 'RED failed for an unrelated reason; refusing to patch production code'
+          }
+          $global:LASTEXITCODE = 0
+
+      - name: Keep each encoded marker in one ConPTY pipe write
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('src-tauri/src/pty.rs')
+          text = p.read_text(encoding='utf-8')
+          old = r'''/// Preserve complete bracketed paste frames for Windows ReadConsoleInputW
+          /// clients. A Unicode ESC event is written separately from surrounding text,
+          /// and the ConPTY input pipe is drained at each boundary. Neither an arbitrary
+          /// sleep nor preserving only our own 4 KiB write boundaries is sufficient.
+          #[cfg(windows)]
+          fn write_conpty_paste<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
+              const LITERAL_ESCAPE: &[u8] = b"\x1b[0;0;27;1;0;1_";
+              let text = std::str::from_utf8(data)
+                  .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+              writer.flush()?;
+              let mut segments = text.split('\x1b').peekable();
+              while let Some(mut segment) = segments.next() {
+                  while !segment.is_empty() {
+                      let mut end = segment.len().min(PTY_WRITE_CHUNK_SIZE);
+                      while !segment.is_char_boundary(end) {
+                          end -= 1;
+                      }
+                      writer.write_all(&segment.as_bytes()[..end])?;
+                      writer.flush()?;
+                      segment = &segment[end..];
+                  }
+                  if segments.peek().is_some() {
+                      // Vk=0, scan=0, Unicode=ESC, key-down, modifiers=0, repeat=1.
+                      // Keep this event alone in the drained pipe, not in a text chunk.
+                      writer.write_all(LITERAL_ESCAPE)?;
+                      writer.flush()?;
+                  }
+              }
+              Ok(())
+          }
+          '''.replace('          ', '')
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one old write_conpty_paste block, got {text.count(old)}')
+          new = r'''/// Preserve complete bracketed-paste frames for Windows ReadConsoleInputW
+          /// clients. ConPTY filters ordinary paste CSI delimiters when VT input is
+          /// disabled, so literal ESC is represented as a Unicode input event.
+          ///
+          /// Windows 10 build 19045 exposed a second constraint: draining the pipe
+          /// immediately after that ESC event lets the TUI consume it as a standalone
+          /// Escape key before `[200~` / `[201~` arrives. Each encoded delimiter must
+          /// therefore be contained in one small pipe write and drained only after the
+          /// complete delimiter has been written.
+          #[cfg(windows)]
+          fn write_conpty_paste<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
+              const OPEN: &[u8] = b"\x1b[200~";
+              const CLOSE: &[u8] = b"\x1b[201~";
+              const LITERAL_ESCAPE: &[u8] = b"\x1b[0;0;27;1;0;1_";
+
+              if data.len() < OPEN.len() + CLOSE.len()
+                  || !data.starts_with(OPEN)
+                  || !data.ends_with(CLOSE)
+              {
+                  return Err(io::Error::new(
+                      io::ErrorKind::InvalidInput,
+                      "expected one complete bracketed-paste frame",
+                  ));
+              }
+
+              let body = &data[OPEN.len()..data.len() - CLOSE.len()];
+              let body = std::str::from_utf8(body)
+                  .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+              let mut chunk = Vec::with_capacity(PTY_WRITE_CHUNK_SIZE);
+
+              let drain = |writer: &mut W, chunk: &mut Vec<u8>| -> io::Result<()> {
+                  if !chunk.is_empty() {
+                      writer.write_all(chunk)?;
+                      writer.flush()?;
+                      chunk.clear();
+                  }
+                  Ok(())
+              };
+              let append_atomic =
+                  |writer: &mut W, chunk: &mut Vec<u8>, unit: &[u8]| -> io::Result<()> {
+                      if chunk.len() + unit.len() > PTY_WRITE_CHUNK_SIZE {
+                          drain(writer, chunk)?;
+                      }
+                      chunk.extend_from_slice(unit);
+                      Ok(())
+                  };
+
+              // Keep the generated ESC event and the marker tail in the same write.
+              chunk.extend_from_slice(LITERAL_ESCAPE);
+              chunk.extend_from_slice(b"[200~");
+
+              for ch in body.chars() {
+                  if ch == '\x1b' {
+                      // Reserve room for the next UTF-8 scalar so an ANSI-like body
+                      // sequence does not repeat the Win10 standalone-ESC failure.
+                      if chunk.len() + LITERAL_ESCAPE.len() + 4 > PTY_WRITE_CHUNK_SIZE {
+                          drain(writer, &mut chunk)?;
+                      }
+                      chunk.extend_from_slice(LITERAL_ESCAPE);
+                  } else {
+                      let mut utf8 = [0; 4];
+                      append_atomic(writer, &mut chunk, ch.encode_utf8(&mut utf8).as_bytes())?;
+                  }
+              }
+
+              let mut closing = Vec::with_capacity(LITERAL_ESCAPE.len() + 5);
+              closing.extend_from_slice(LITERAL_ESCAPE);
+              closing.extend_from_slice(b"[201~");
+              append_atomic(writer, &mut chunk, &closing)?;
+              drain(writer, &mut chunk)
+          }
+          '''.replace('          ', '')
+          p.write_text(text.replace(old, new, 1).replace('"windows-conpty-protected"', '"windows-conpty-atomic-markers"'), encoding='utf-8', newline='\n')
+
+          # Add a privacy-safe synthetic shape matching the reported real sample:
+          # 106002 normalized UTF-8 bytes and 3578 LF, without copying user fields.
+          p = Path('src-tauri/src/tests/paste_framing.rs')
+          text = p.read_text(encoding='utf-8')
+          needle = '    #[test]\n    fn PtyPaste_NativeConsecutiveFrames_006() {'
+          assert text.count(needle) == 1
+          extra = r'''    #[test]
+              fn PtyPaste_NativeWin10ReportedShape_008() {
+                  let mut lines = vec!["{".to_string(), "\"items\":[".to_string()];
+                  lines.extend((0..3574).map(|_| "0,".to_string()));
+                  lines.push("0".to_string());
+                  lines.push("],".to_string());
+                  lines.push("\"tail\":\"\"}".to_string());
+                  let base = lines.join("\n");
+                  let filler = 106_002usize
+                      .checked_sub(base.len())
+                      .expect("synthetic JSON base exceeds reported sample size");
+                  *lines.last_mut().unwrap() = format!("\"tail\":\"{}\"}}", "x".repeat(filler));
+                  let body = lines.join("\n");
+                  assert_eq!(body.len(), 106_002);
+                  assert_eq!(body.bytes().filter(|byte| *byte == b'\n').count(), 3_578);
+                  serde_json::from_str::<serde_json::Value>(&body).unwrap();
+                  let payload = format!("{OPEN}{body}{CLOSE}");
+                  assert_native_frames("win10-19045-reported-shape", &[payload]);
+              }
+
+          '''.replace('              ', '    ')
+          p.write_text(text.replace(needle, extra + needle, 1), encoding='utf-8', newline='\n')
+
+          def replace_once(path, old, new):
+              q = Path(path)
+              value = q.read_text(encoding='utf-8')
+              if value.count(old) != 1:
+                  raise SystemExit(f'{path}: expected one version match, got {value.count(old)}')
+              q.write_text(value.replace(old, new, 1), encoding='utf-8', newline='\n')
+
+          replace_once('package.json', '"version": "0.17.3"', '"version": "0.17.4"')
+          replace_once('package-lock.json', '"name": "cc-desk",\n  "version": "0.17.3"', '"name": "cc-desk",\n  "version": "0.17.4"')
+          replace_once('package-lock.json', '"": {\n      "name": "cc-desk",\n      "version": "0.17.3"', '"": {\n      "name": "cc-desk",\n      "version": "0.17.4"')
+          replace_once('src-tauri/Cargo.toml', 'name = "cc-desk"\nversion = "0.17.3"', 'name = "cc-desk"\nversion = "0.17.4"')
+          replace_once('src-tauri/tauri.conf.json', '"version": "0.17.3"', '"version": "0.17.4"')
+
+          p = Path('docs/paste-framing.md')
+          text = p.read_text(encoding='utf-8')
+          text += '''
+
+          ## Windows 10 build 19045 实机证据与第二阶段修复
+
+          0.17.3 实机日志确认：原始剪贴板经 CRLF -> LF 后为 106002 UTF-8 bytes、
+          105002 characters、3578 LF；加两端标记后，Rust 入口精确收到 106014 bytes，
+          opener offset 0、closer offset 106008、完整帧、writer 返回成功。用户使用的是
+          native claude.exe 2.1.267，Windows 10 10.0.19045；Node 不在该执行链路中。
+
+          但界面仍泄漏字面 `[201~`。0.17.3 将生成的 Unicode ESC input event 单独写入
+          并立即 FlushFileBuffers；这会在 Windows 10 上把 ESC 暴露为独立按键，再让
+          marker tail 晚到。0.17.4 保持原有 ConPTY workaround，但把 ESC event 与
+          `[200~` / `[201~` 分别放进同一次小写入，只在完整 delimiter 后排空。正文仍
+          按 UTF-8 边界流式处理，不记录或提交用户原始业务 JSON。
+
+          自动化新增写调用边界回归，以及一个完全脱敏、但精确匹配 106002 bytes / 3578 LF
+          的合法 JSON。Windows Server 测试只能证明回归契约；Windows 10 的最终结论仍以
+          用户对 0.17.4 的同样本复测为准。
+          '''
+          p.write_text(text, encoding='utf-8', newline='\n')
+
+          p = Path('AGENTS.md')
+          text = p.read_text(encoding='utf-8')
+          text += '''
+
+          ### Windows 10 粘贴标记时序
+
+          - ConPTY 的 literal ESC input event 不得单独 write + drain；必须和 `[200~` 或 `[201~` tail 在同一小写入中，再执行 pipe drain。
+          - `PtyPaste_Win10MarkersAreNeverFlushedAsStandaloneEscape_007` 锁定写调用边界；只有正文哈希正确不足以证明粘贴事务正确。
+          - 实机原始文本只用于本地度量，仓库测试必须使用脱敏且等尺寸/等换行的生成 JSON。
+          '''
+          p.write_text(text, encoding='utf-8', newline='\n')
+
+      - name: Format and verify the focused fix
+        env:
+          CC_DESK_BUILD_SHA: win10-atomic-marker-source
+        shell: pwsh
+        run: |
+          Push-Location src-tauri
+          cargo fmt --all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --all --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --lib PtyPaste_Win10MarkersAreNeverFlushedAsStandaloneEscape_007 -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --lib paste_framing -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+
+      - name: Commit verified 0.17.4 source
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json src-tauri/src/pty.rs src-tauri/src/tests/paste_framing.rs docs/paste-framing.md AGENTS.md
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git commit -m 'fix: keep ConPTY paste delimiters atomic on Windows 10'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:codex/fix-devtools-paste
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "FIX_SOURCE_SHA=$(git rev-parse HEAD)" >> $env:GITHUB_ENV
+          "CC_DESK_BUILD_SHA=$(git rev-parse HEAD)" >> $env:GITHUB_ENV
+
+      - name: Verify updater signing secrets
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) -or [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            throw 'Missing updater signing secrets'
+          }
+
+      - name: Build signed Windows 0.17.4 installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
+
+      - name: Stage 0.17.4 test package and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          Get-ChildItem src-tauri/target/release/bundle/nsis -File |
+            Where-Object { $_.Extension -in '.exe', '.sig' } |
+            ForEach-Object { Copy-Item $_.FullName artifacts/windows/ }
+          if (-not (Get-ChildItem artifacts/windows -Filter '*.exe' -File)) { throw 'No installer generated' }
+          @(
+            "version=0.17.4"
+            "source_commit=$env:FIX_SOURCE_SHA"
+            "build_identity=$env:CC_DESK_BUILD_SHA"
+            "target_repro=Windows 10 10.0.19045 native Claude Code 2.1.267"
+            "sample_shape=106002 normalized UTF-8 bytes; 105002 chars; 3578 LF"
+            "transport=windows-conpty-atomic-markers"
+            "status=test-build-requires-user-reproduction"
+          ) | Set-Content -Encoding utf8NoBOM artifacts/windows/build-info.txt
+          Get-ChildItem artifacts/windows -File |
+            Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash *$($_.Name)"
+            } | Set-Content -Encoding utf8NoBOM artifacts/windows/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-win10-paste-0.17.4-${{ env.FIX_SOURCE_SHA }}
+          path: artifacts/windows
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove the temporary repair/build workflow
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/repair-win10-19045-paste.yml
+          git add .github/workflows/repair-win10-19045-paste.yml
+          git commit -m 'chore: remove temporary Win10 paste repair workflow'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:codex/fix-devtools-paste
