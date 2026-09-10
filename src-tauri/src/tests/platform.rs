@@ -151,28 +151,6 @@ fn FindAllExe_NotFound_001() {
     assert!(results.is_empty());
 }
 
-// ---- get_platform_id ----
-
-// 返回的平台字符串包含已知前缀
-#[test]
-fn GetPlatformId_Prefix_001() {
-    let platform = get_platform_id();
-    let valid = platform.starts_with("win32-")
-        || platform.starts_with("darwin-")
-        || platform.starts_with("linux-");
-    assert!(
-        valid,
-        "Platform '{}' should start with known prefix",
-        platform
-    );
-}
-
-// 多次调用返回相同结果
-#[test]
-fn GetPlatformId_Consistent_001() {
-    assert_eq!(get_platform_id(), get_platform_id());
-}
-
 // ---- get_default_shell ----
 
 // 返回非空程序名

@@ -2046,35 +2046,6 @@ fn read_agents_from_filesystem(project_path: &str) -> Result<Vec<AgentInfo>> {
         }
     }
 
-    // 3. 从 disabled 备份目录读取用户级 agents（原位灰显）
-    if let Ok(disabled_agents_dir) = get_disabled_subdir("agents") {
-        if disabled_agents_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&disabled_agents_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map(|e| e == "md").unwrap_or(false) {
-                        let name = path
-                            .file_stem()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        let (parsed_name, description, model) = parse_agent_frontmatter(&path)
-                            .unwrap_or_else(|| (name.clone(), extract_md_description(&path), None));
-                        agents.push(AgentInfo {
-                            name: parsed_name.clone(),
-                            display_name: parsed_name.clone(),
-                            description,
-                            source_type: "user".to_string(),
-                            source_label: "User (Disabled)".to_string(),
-                            model,
-                            invoke_format: format!("@\"{} (agent)\"", parsed_name),
-                            enabled: false,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
     Ok(agents)
 }
 
@@ -2392,12 +2363,6 @@ pub struct McpServerInfo {
     pub command: Option<String>,
     /// 命令参数（stdio server）
     pub args: Option<Vec<String>>,
-    /// 环境变量仅供原生配置解析，不序列化到 WebView。
-    #[serde(skip_serializing)]
-    pub env: Option<HashMap<String, String>>,
-    /// HTTP Headers 可能包含凭据，不序列化到 WebView。
-    #[serde(skip_serializing)]
-    pub headers: Option<HashMap<String, String>>,
     /// 可用的 prompts 列表
     pub prompts: Vec<McpPromptInfo>,
     /// 是否启用（仅 user 源可能为 false；其他始终 true）
@@ -2503,32 +2468,6 @@ pub fn get_all_skills(project_path: &str) -> Result<Vec<SkillInfo>> {
                             invoke_format: format!("/{}", name),
                             enabled: true,
                         });
-                    }
-                }
-            }
-        }
-    }
-
-    // 2b. 从 disabled 备份目录读取用户级 skills（原位灰显）
-    if let Ok(disabled_skills_dir) = get_disabled_subdir("skills") {
-        if disabled_skills_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&disabled_skills_dir) {
-                for entry in entries.flatten() {
-                    if entry.path().is_dir() {
-                        let skill_file = entry.path().join("SKILL.md");
-                        if skill_file.exists() {
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            let description = parse_skill_description(&skill_file);
-                            skills.push(SkillInfo {
-                                name: name.clone(),
-                                display_name: name.clone(),
-                                description,
-                                source_type: "user".to_string(),
-                                source_label: "User (Disabled)".to_string(),
-                                invoke_format: format!("/{}", name),
-                                enabled: false,
-                            });
-                        }
                     }
                 }
             }
@@ -2648,37 +2587,6 @@ pub fn get_all_mcp_servers(project_path: &str) -> Result<Vec<McpServerInfo>> {
         }
     }
 
-    // 5. 从 disabled 备份目录读取用户级 MCP servers（原位灰显）
-    if let Ok(disabled_mcp_dir) = get_disabled_subdir("mcp") {
-        if disabled_mcp_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&disabled_mcp_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map(|e| e == "json").unwrap_or(false) {
-                        let name = path
-                            .file_stem()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        if let Ok(content) = fs::read_to_string(&path) {
-                            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
-                            {
-                                if let Some(mut info) =
-                                    parse_mcp_server_entry(&name, &config, "user", None)
-                                {
-                                    info.enabled = false;
-                                    info.source_label = "User (Disabled)".to_string();
-                                    if seen_names.insert(name.clone()) {
-                                        servers.push(info);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     Ok(servers)
 }
 
@@ -2784,31 +2692,11 @@ pub(crate) fn parse_mcp_server_entry(
             .collect()
     });
 
-    // 解析 env（对象），展开环境变量值
-    let env = obj.get("env").and_then(|v| v.as_object()).map(|obj| {
-        obj.iter()
-            .filter_map(|(k, v)| {
-                v.as_str()
-                    .map(|s| (k.clone(), expand_env_vars(s, extra_env)))
-            })
-            .collect()
-    });
-
     // 解析 url，展开环境变量
     let url = obj
         .get("url")
         .and_then(|v| v.as_str())
         .map(|s| expand_env_vars(s, extra_env));
-
-    // 解析 headers，展开环境变量值
-    let headers = obj.get("headers").and_then(|v| v.as_object()).map(|obj| {
-        obj.iter()
-            .filter_map(|(k, v)| {
-                v.as_str()
-                    .map(|s| (k.clone(), expand_env_vars(s, extra_env)))
-            })
-            .collect()
-    });
 
     // 推断 server type
     let server_type = infer_server_type(config);
@@ -2830,8 +2718,6 @@ pub(crate) fn parse_mcp_server_entry(
         url,
         command,
         args,
-        env,
-        headers,
         prompts: Vec::new(),
         enabled: true,
     })
@@ -2911,46 +2797,6 @@ fn run_claude_command(args: &str) -> Result<String> {
     } else {
         // 即使失败也返回输出，可能包含有用信息
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    }
-}
-
-/// 严格版的 claude 命令执行：exit code != 0 时返回 Err（含 stderr）
-/// 用于 plugin enable/disable 等需要明确成败判断的场景
-fn run_claude_command_strict(args: &str) -> Result<String> {
-    let mut cmd = std::process::Command::new("claude");
-    cmd.args(args.split_whitespace());
-
-    if cfg!(target_os = "windows") {
-        if let Ok(git_bash_path) = std::env::var("CLAUDE_CODE_GIT_BASH_PATH") {
-            if Path::new(&git_bash_path).exists() {
-                cmd.env("CLAUDE_CODE_GIT_BASH_PATH", git_bash_path);
-            }
-        } else {
-            let git_bash_path = detect_git_bash_path();
-            if let Some(path) = git_bash_path {
-                cmd.env("CLAUDE_CODE_GIT_BASH_PATH", path);
-            }
-        }
-    }
-
-    crate::platform::configure_command(&mut cmd);
-
-    let output = cmd.output().context("Failed to run claude command")?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        bail!(
-            "claude {} failed (exit {:?}): {}",
-            args,
-            output.status.code(),
-            if stderr.is_empty() {
-                stdout.trim()
-            } else {
-                stderr.trim()
-            }
-        );
     }
 }
 

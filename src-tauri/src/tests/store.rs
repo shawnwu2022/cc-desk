@@ -16,7 +16,6 @@ use crate::store::{
     normalize_path_str, parse_agents_list_output, parse_mcp_server_entry, parse_skill_description,
     parse_timestamp, read_projects_state_locked, replace_file_atomic,
     resolve_marketplace_plugin_path_at, scan_home_projects_at, search_session_messages_in_dirs,
-    set_agent_enabled_in, set_mcp_server_enabled_in, set_skill_enabled_in,
     validate_session_id_component, with_project_path_mapping, with_projects_state_locked,
     write_json_atomic, AgentInfo, AppConfig, Project, ProjectPathMapping, ProjectsState,
     SessionInfo,
@@ -98,10 +97,6 @@ fn ParseMcpEntry_StdioServer_001() {
     assert_eq!(info.command.as_deref(), Some("npx"));
     assert_eq!(info.args.as_ref().unwrap().len(), 2);
     assert_eq!(info.args.as_ref().unwrap()[0], "-y");
-    assert_eq!(
-        info.env.as_ref().unwrap().get("CHROME_PATH").unwrap(),
-        "/usr/bin/chrome"
-    );
     assert_eq!(info.server_type.as_deref(), Some("stdio"));
     assert_eq!(info.source_type, "user");
     assert!(info.url.is_none());
@@ -121,10 +116,6 @@ fn ParseMcpEntry_HttpServer_001() {
     assert_eq!(info.name, "zread");
     assert_eq!(info.url.as_deref(), Some("https://api.example.com/mcp"));
     assert_eq!(info.server_type.as_deref(), Some("http"));
-    assert_eq!(
-        info.headers.as_ref().unwrap().get("Authorization").unwrap(),
-        "Bearer token123"
-    );
     assert!(info.command.is_none());
 }
 

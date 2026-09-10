@@ -77,13 +77,13 @@ fn PtyExitPayload_PreservesExitCode_001() {
 }
 
 #[test]
-fn PtyExitPayload_PreservesSignal_001() {
+fn PtyExitPayload_SignalStatusUsesPortableExitCode_001() {
     let status = ExitStatus::with_signal("SIGTERM");
     let payload = crate::pty::exit_payload("pty-2", &status);
 
     assert_eq!(payload.id, "pty-2");
     assert_eq!(payload.exit_code, 1);
-    assert_eq!(payload.signal.as_deref(), Some("SIGTERM"));
+    assert_eq!(payload.signal, None);
 }
 
 #[test]

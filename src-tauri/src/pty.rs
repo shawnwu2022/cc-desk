@@ -95,7 +95,9 @@ pub(crate) fn exit_payload(id: &str, status: &ExitStatus) -> PtyExitPayload {
     PtyExitPayload {
         id: id.to_string(),
         exit_code: i32::try_from(status.exit_code()).unwrap_or(i32::MAX),
-        signal: status.signal().map(ToString::to_string),
+        // portable-pty 0.8.x exposes a portable exit code but no public
+        // signal accessor. Do not infer a signal from formatted text.
+        signal: None,
     }
 }
 
@@ -455,9 +457,8 @@ impl PtyManager {
         rows: u16,
         args: Option<Vec<String>>,
     ) -> Result<PtyInfo> {
-        self.validate_spawn_request(&id, cwd).map_err(|error| {
+        self.validate_spawn_request(&id, cwd).inspect_err(|error| {
             self.emit_error(&id, &error.to_string(), "validation");
-            error
         })?;
 
         log::info!(
@@ -538,9 +539,8 @@ impl PtyManager {
         cols: u16,
         rows: u16,
     ) -> Result<PtyInfo> {
-        self.validate_spawn_request(&id, cwd).map_err(|error| {
+        self.validate_spawn_request(&id, cwd).inspect_err(|error| {
             self.emit_error(&id, &error.to_string(), "validation");
-            error
         })?;
 
         log::info!(
