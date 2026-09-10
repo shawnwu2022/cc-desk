@@ -229,6 +229,7 @@ export default {
 
   // sessionStart transaction（v6 P1.2/P1.5）
   claudeStarting: 'Claude 启动中...',
+  monitoringUnavailable: 'Claude 正在运行，但详细活动状态暂不可用。',
   claudeStartTimeout: 'Claude 启动超时，请检查 Claude CLI 是否正确安装后重试。',
   claudeStartFailed: 'Claude 启动失败，请检查 Claude CLI 是否正确安装后重试。',
   // v6 codex batch1 #2：sessionStart 成功但 lastOpened 持久化失败的提示（Claude 已跑，不重 spawn）
