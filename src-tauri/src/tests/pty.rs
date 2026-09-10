@@ -7,7 +7,12 @@
 // utf8_complete_boundary / utf8_seq_len 已被 PtyDecoder 替代，
 // 边界与跨 read 行为由 tests/pty_decoder.rs 覆盖。
 
+use std::collections::HashMap;
 use std::io::{self, Write};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+use portable_pty::ExitStatus;
 
 struct ChunkRecorder {
     chunks: Vec<Vec<u8>>,
@@ -46,6 +51,53 @@ fn PtyWrite_LargePayload_ChunkedWithoutMutation_001() {
         .chunks
         .iter()
         .all(|chunk| chunk.len() <= crate::pty::PTY_WRITE_CHUNK_SIZE));
+}
+
+#[test]
+fn PtyId_ValidUuidAccepted_001() {
+    crate::pty::validate_pty_id("550e8400-e29b-41d4-a716-446655440000")
+        .expect("valid frontend-allocated UUID");
+}
+
+#[test]
+fn PtyId_ArbitraryTextRejected_001() {
+    assert!(crate::pty::validate_pty_id("../../session").is_err());
+    assert!(crate::pty::validate_pty_id("").is_err());
+    assert!(crate::pty::validate_pty_id("not-a-uuid").is_err());
+}
+
+#[test]
+fn PtyExitPayload_PreservesExitCode_001() {
+    let status = ExitStatus::with_exit_code(42);
+    let payload = crate::pty::exit_payload("pty-1", &status);
+
+    assert_eq!(payload.id, "pty-1");
+    assert_eq!(payload.exit_code, 42);
+    assert_eq!(payload.signal, None);
+}
+
+#[test]
+fn PtyExitPayload_PreservesSignal_001() {
+    let status = ExitStatus::with_signal("SIGTERM");
+    let payload = crate::pty::exit_payload("pty-2", &status);
+
+    assert_eq!(payload.id, "pty-2");
+    assert_eq!(payload.exit_code, 1);
+    assert_eq!(payload.signal.as_deref(), Some("SIGTERM"));
+}
+
+#[test]
+fn PtyWriterLookup_ClonesPerPtyHandle_001() {
+    let entry = Arc::new(crate::pty::PtyWriterEntry::new(Box::new(ChunkRecorder {
+        chunks: Vec::new(),
+        flush_count: 0,
+    })));
+    let registry = Mutex::new(HashMap::from([("pty-1".to_string(), entry.clone())]));
+
+    let found = crate::pty::lookup_writer(&registry, "pty-1").expect("writer entry");
+
+    assert!(Arc::ptr_eq(&entry, &found));
+    assert_eq!(Arc::strong_count(&entry), 3);
 }
 
 // 复现旧 bug：from_utf8_lossy 把 GBK 字节 "你好" 替换为 U+FFFD
