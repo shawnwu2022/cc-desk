@@ -1,0 +1,105 @@
+name: Diagnose production Git Bash paste path
+
+on:
+  push:
+    branches: [codex/fix-devtools-paste]
+    paths:
+      - .github/workflows/diagnose-git-bash-paste.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-git-bash-paste
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Install the already-verified Claude Code build
+        run: npm install --engine-strict --prefix .ci-claude --no-save "@anthropic-ai/claude-code@2.1.267"
+      - name: Generate one real frontend JSON payload
+        shell: node {0}
+        run: |
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const ts = require('./node_modules/typescript');
+          const js = ts.transpileModule(fs.readFileSync('src/utils/pasteText.ts', 'utf8'), {
+            compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}
+          }).outputText;
+          fs.writeFileSync('.ci-claude/pasteText.cjs', js);
+          const {buildPastePayload} = require('./.ci-claude/pasteText.cjs');
+          const fixture = JSON.parse(fs.readFileSync('src-tauri/tests/fixtures/devtools-paste-framing.json', 'utf8')).find(f => f.name === 'devtools-json-nested-64');
+          if (!fixture) throw new Error('missing JSON fixture');
+          const source = (fixture.prefix || '') + Array(fixture.repeat).fill(fixture.source).join(fixture.separator || '') + (fixture.suffix || '');
+          JSON.parse(source);
+          const cases = [{name: 'production-git-bash-control', wire: buildPastePayload(source, true, false), expected: source.replace(/\r\n?/g, '\n')}];
+          const payloadFile = path.resolve('.ci-claude/git-bash-payload.json');
+          fs.writeFileSync(payloadFile, JSON.stringify(cases));
+          const pkgDir = path.resolve('.ci-claude/node_modules/@anthropic-ai/claude-code');
+          const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+          const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin.claude;
+          const cli = path.resolve(pkgDir, bin);
+          const gitBash = 'C:/Program Files/Git/bin/bash.exe';
+          if (!fs.existsSync(cli) || !fs.existsSync(gitBash)) throw new Error('required executable missing');
+          fs.appendFileSync(process.env.GITHUB_ENV, `CC_E2E_CLAUDE_PATH=${cli}\nCC_PASTE_PAYLOAD_FILE=${payloadFile}\nCC_E2E_GIT_BASH_PATH=${gitBash}\n`);
+          console.log('fixture UTF-8 bytes:', Buffer.byteLength(cases[0].expected));
+      - name: Direct Claude control must pass
+        working-directory: src-tauri
+        run: cargo test --locked --lib RealClaude_DevtoolsJsonSubmittedCompletely_001 -- --ignored --test-threads=1 --nocapture
+      - name: Patch only the test launcher to match current CC Desk Git Bash wrapping
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src-tauri/src/tests/paste_cli_submit.rs')
+          text = p.read_text(encoding='utf-8')
+          old = '''    let mut cmd = if program.extension().is_some_and(|ext| ext == "js") {
+                  let mut command = CommandBuilder::new(node_path());
+                  command.arg(program);
+                  command
+              } else {
+                  CommandBuilder::new(program)
+              };'''
+          if old not in text:
+              raise SystemExit('test launcher block changed unexpectedly')
+          new = '''    let git_bash = PathBuf::from(
+                  std::env::var_os("CC_E2E_GIT_BASH_PATH").expect("set CC_E2E_GIT_BASH_PATH"),
+              );
+              let command_line = format!("\\\"{}\\\"", program.to_string_lossy().replace('\\\\', "/"));
+              let mut cmd = CommandBuilder::new(git_bash);
+              cmd.arg("-c");
+              cmd.arg(command_line);'''
+          p.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+      - name: Confirm the production-style outer Git Bash is the failing boundary
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          cargo fmt --all
+          $output = cargo test --locked --lib RealClaude_DevtoolsJsonSubmittedCompletely_001 -- --ignored --test-threads=1 --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | Write-Output
+          if ($code -eq 0) {
+            throw 'Git Bash wrapped control unexpectedly passed; launcher hypothesis is rejected'
+          }
+          $text = $output -join "`n"
+          if ($text -notmatch 'No complete UserPromptSubmit capture|submitted JSON differs|201~|Paste submitted before') {
+            throw 'Git Bash path failed for an unrelated reason'
+          }
+          "Confirmed: direct Claude passes, current outer Git Bash path corrupts or fails the same paste transaction." >> $env:GITHUB_STEP_SUMMARY
+          $global:LASTEXITCODE = 0
