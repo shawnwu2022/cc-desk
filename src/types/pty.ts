@@ -14,4 +14,5 @@ export interface PtyOutputPayload {
 export interface PtyExitPayload {
   id: string
   exitCode: number
+  signal?: string | null
 }

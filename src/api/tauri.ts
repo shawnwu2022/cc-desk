@@ -58,6 +58,7 @@ export type {
 // ============================================
 
 interface PtySpawnOptions {
+  id: string
   cwd: string
   cols: number
   rows: number
@@ -65,8 +66,8 @@ interface PtySpawnOptions {
   args?: string[]
 }
 
-export const ptySpawn = async (options: PtySpawnOptions): Promise<PtySpawnResult> => {
-  return invoke<PtySpawnResult>('pty_spawn', { options });
+export const ptySpawn = async (options: PtySpawnOptions): Promise<PtySpawnResult | null> => {
+  return invoke<PtySpawnResult | null>('pty_spawn', { options });
 };
 
 export const ptyInput = async (id: string, data: string): Promise<boolean> => {

@@ -16,6 +16,7 @@ use crate::store::{
 
 #[derive(Debug, Deserialize)]
 pub struct PtySpawnOptions {
+    id: String,
     cwd: String,
     #[serde(rename = "type")]
     pty_type: String, // "claude" | "shell"
@@ -32,31 +33,39 @@ pub struct PtySpawnResult {
     cwd: String,
 }
 
-/// 启动 PTY
+/// 启动 PTY。ID 由前端预分配，使事件路由在子进程启动前就绪。
 #[tauri::command]
 pub async fn pty_spawn(
     options: PtySpawnOptions,
     _app_handle: AppHandle,
 ) -> Result<Option<PtySpawnResult>, String> {
-    let cols = options.cols.unwrap_or(80);
-    let rows = options.rows.unwrap_or(24);
+    let PtySpawnOptions {
+        id,
+        cwd,
+        pty_type,
+        cols,
+        rows,
+        args,
+    } = options;
+    let cols = cols.unwrap_or(80);
+    let rows = rows.unwrap_or(24);
 
     let manager = get_pty_manager().ok_or_else(|| "PTY manager not initialized".to_string())?;
-
-    let result = if options.pty_type == "shell" {
-        manager.spawn_shell(&options.cwd, cols, rows)
+    let result = if pty_type == "shell" {
+        manager.spawn_shell(id, &cwd, cols, rows)
     } else {
-        manager.spawn_claude(&options.cwd, cols, rows, options.args)
+        manager.spawn_claude(id, &cwd, cols, rows, args)
     };
 
-    match result {
-        Ok(info) => Ok(Some(PtySpawnResult {
-            id: info.id,
-            pty_type: info.pty_type,
-            cwd: info.cwd,
-        })),
-        Err(e) => Err(e.to_string()),
-    }
+    result
+        .map(|info| {
+            Some(PtySpawnResult {
+                id: info.id,
+                pty_type: info.pty_type,
+                cwd: info.cwd,
+            })
+        })
+        .map_err(|error| error.to_string())
 }
 
 /// 写入 PTY 输入
