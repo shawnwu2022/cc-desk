@@ -256,3 +256,9 @@ npm run release -- --oss-only v0.5.1
 - **什么要测**：纯函数、数据转换、解析逻辑、状态管理、边界条件和错误路径
 - **什么不测**：getter/setter、类型定义、简单 props 传递、第三方库能力
 - **树形项目会话管理测试**：`tests/stores/sessionTree.test.ts`（分组/排序/过滤/展开/多项目历史选择器 getHistoryFor）+ `tests/composables/projectTreeNavigation.test.ts`（resolveSwitchAction 切换语义 noop/activate/resume/new，D/E 纯函数参数直传无竞态）
+
+### DevTools JSON 粘贴
+
+- 实际粘贴不再自动压缩 JSON；只规范行尾。
+- Windows 完整粘贴帧使用独立 ESC Unicode 事件与真实 ConPTY input pipe drain；具体补丁在 vendor/portable-pty/CC_DESK_PATCH.md。禁止用 sleep 或单行化代替完整性保证。
+- 前端各入口与生产 Rust writer 共享黄金样本；必须验证包含起止标记的完整正文。出现 Pasted text 折叠标签不算真实编辑器验收。见 docs/paste-framing.md。

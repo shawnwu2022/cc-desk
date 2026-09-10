@@ -20,3 +20,6 @@ mod session_name_index;
 mod store;
 #[cfg(test)]
 mod store_profiling;
+
+#[cfg(test)]
+mod paste_framing;

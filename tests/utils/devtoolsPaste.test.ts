@@ -8,26 +8,32 @@ interface PasteFixture {
   source: string
   prepared: string
   repeat: number
+  prefix?: string
+  suffix?: string
+  separator?: string
+  isJson?: boolean
 }
 
 const fixtures: PasteFixture[] = JSON.parse(readFileSync(
   resolve(__dirname, '../../src-tauri/tests/fixtures/devtools-paste-framing.json'), 'utf8',
 ))
+const compose = (fixture: PasteFixture, text: string) =>
+  (fixture.prefix ?? '') + Array(fixture.repeat).fill(text).join(fixture.separator ?? '') + (fixture.suffix ?? '')
 const expectedPayload = (fixture: PasteFixture) =>
-  '\x1b[200~' + fixture.prepared.repeat(fixture.repeat) + '\x1b[201~'
+  '\x1b[200~' + compose(fixture, fixture.prepared) + '\x1b[201~'
 
 describe('DevTools paste framing contract', () => {
   // 同一黄金样本用于 Rust 真 ConPTY 测试；禁止把标记丢失当成传输成功。
   it.each(fixtures)('DevtoolsPayload_Golden_001 $name', fixture => {
-    const source = fixture.source.repeat(fixture.repeat)
+    const source = compose(fixture, fixture.source)
+    if (fixture.isJson) expect(() => JSON.parse(source)).not.toThrow()
     expect(buildPastePayload(source, true, false)).toBe(expectedPayload(fixture))
   })
 
-  it('DevtoolsPaste_KeyboardCommit_002', async () => {
-    const fixture = fixtures[0]!
+  it.each(fixtures)('DevtoolsPaste_KeyboardCommit_002 $name', async fixture => {
     const delivered: string[] = []
     await commitPaste(
-      async () => fixture.source.repeat(fixture.repeat),
+      async () => compose(fixture, fixture.source),
       () => ({ ptyId: 'same-pty' }),
       text => buildPastePayload(text, true, false),
       async (id, payload) => { delivered.push(id, payload) },
@@ -35,8 +41,7 @@ describe('DevTools paste framing contract', () => {
     expect(delivered).toEqual(['same-pty', expectedPayload(fixture)])
   })
 
-  it('DevtoolsPaste_NativeMenu_003', async () => {
-    const fixture = fixtures[0]!
+  it.each(fixtures)('DevtoolsPaste_NativeMenu_003 $name', async fixture => {
     const container = document.createElement('div')
     const terminal = document.createElement('div')
     const textarea = document.createElement('textarea')
@@ -57,7 +62,7 @@ describe('DevTools paste framing contract', () => {
     try {
       const event = new Event('paste', { bubbles: true, cancelable: true })
       Object.defineProperty(event, 'clipboardData', {
-        value: { getData: () => fixture.source.repeat(fixture.repeat) },
+        value: { getData: () => compose(fixture, fixture.source) },
       })
       textarea.dispatchEvent(event)
       await vi.waitFor(() => expect(delivered).toEqual(['same-pty', expectedPayload(fixture)]))

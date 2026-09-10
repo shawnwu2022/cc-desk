@@ -16,15 +16,51 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
-// Windows ConPTY 对连续突发写入存在截断风险；小块刷新并短暂让出时间，避免大粘贴丢字节。
+// 普通输入保留既有分块策略；Windows 完整粘贴帧走下方独立编码与真实管道排空。
 pub(crate) const PTY_WRITE_CHUNK_SIZE: usize = 4 * 1024;
 const PTY_WRITE_CHUNK_DELAY: Duration = Duration::from_millis(1);
 const PTY_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Preserve complete bracketed paste frames for Windows ReadConsoleInputW
+/// clients. A Unicode ESC event is written separately from surrounding text,
+/// and the ConPTY input pipe is drained at each boundary. Neither an arbitrary
+/// sleep nor preserving only our own 4 KiB write boundaries is sufficient.
+#[cfg(windows)]
+fn write_conpty_paste<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
+    const LITERAL_ESCAPE: &[u8] = b"\x1b[0;0;27;1;0;1_";
+    let text = std::str::from_utf8(data)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    writer.flush()?;
+    let mut segments = text.split('\x1b').peekable();
+    while let Some(mut segment) = segments.next() {
+        while !segment.is_empty() {
+            let mut end = segment.len().min(PTY_WRITE_CHUNK_SIZE);
+            while !segment.is_char_boundary(end) {
+                end -= 1;
+            }
+            writer.write_all(&segment.as_bytes()[..end])?;
+            writer.flush()?;
+            segment = &segment[end..];
+        }
+        if segments.peek().is_some() {
+            // Vk=0, scan=0, Unicode=ESC, key-down, modifiers=0, repeat=1.
+            // Keep this event alone in the drained pipe, not in a text chunk.
+            writer.write_all(LITERAL_ESCAPE)?;
+            writer.flush()?;
+        }
+    }
+    Ok(())
+}
 
 pub(crate) fn write_pty_data<W: Write + ?Sized>(
     writer: &mut W,
     data: &[u8],
 ) -> std::io::Result<()> {
+    #[cfg(windows)]
+    if data.starts_with(b"\x1b[200~") && data.ends_with(b"\x1b[201~") {
+        return write_conpty_paste(writer, data);
+    }
+
     let mut chunks = data.chunks(PTY_WRITE_CHUNK_SIZE).peekable();
     if chunks.peek().is_none() {
         return writer.flush();
