@@ -1,4 +1,4 @@
-name: Probe complete ConPTY paste records
+name: Diagnose ConPTY receiver bytes
 on:
   push:
     branches: [codex/fix-devtools-paste]
@@ -7,7 +7,7 @@ permissions:
 jobs:
   probe:
     runs-on: windows-2022
-    timeout-minutes: 12
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -24,16 +24,8 @@ jobs:
           (root / 'tests/fixtures').mkdir(parents=True)
           shutil.copy('src-tauri/tests/fixtures/devtools-paste-framing.json', root / 'tests/fixtures/devtools-paste-framing.json')
           text = Path('src-tauri/src/tests/paste_framing.rs').read_text(encoding='utf-8')
-          marker = '        assert_native_frames("split-escape-sequence", &[payload]);'
-          assert text.count(marker) == 1
-          text = text.replace(marker, marker + r'''
-                  for padding in 4060..4098 {
-                      let payload = format!("{OPEN}{}\x1b[31m中文🎉\nTAIL{CLOSE}", "x".repeat(padding));
-                      assert_native_frames(&format!("escape-offset-{padding}"), &[payload]);
-                  }
-                  let payload = format!("{OPEN}{}{CLOSE}", "\x1b[31m色\x1b[0m\n".repeat(400));
-                  assert_native_frames("dense-literal-escapes", &[payload]);
-          ''')
+          text = text.replace("  console.log('PASTE_BYTES:' + bytes.length + ':');", "  console.log('GENERATED_HEX:' + bytes.toString('hex').slice(0, 500) + ':');\n  console.log('PASTE_BYTES:' + bytes.length + ':');")
+          text = text.replace('        let expected = payloads.concat();', '        let expected = payloads.concat();\n        println!("GENERATED_RECEIVER: {:?}", output);')
           (root / 'src/tests/paste_framing.rs').write_text(text, encoding='utf-8')
           (root / 'Cargo.toml').write_text('''[package]
           name = "paste-record-probe"
@@ -65,6 +57,11 @@ jobs:
               writer.flush()
           }
           ''', encoding='utf-8')
-      - name: Verify all native framing cases without modified dependencies
+      - name: Capture generated receiver sample (failure expected for current hypothesis)
         working-directory: .paste-probe
-        run: cargo test --lib PtyPaste_Native -- --nocapture
+        shell: pwsh
+        run: |
+          cargo test --lib PtyPaste_NativeConsecutive -- --nocapture *> receiver.log
+          $result = $LASTEXITCODE
+          Get-Content receiver.log -Tail 40
+          exit $result
