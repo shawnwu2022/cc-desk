@@ -5,14 +5,21 @@ on:
     paths:
       - .github/workflows/paste-cli-acceptance.yml
       - src-tauri/src/tests/paste_cli_submit.rs
+      - src-tauri/src/pty.rs
+      - src-tauri/vendor/portable-pty/**
+      - src-tauri/tests/fixtures/devtools-paste-framing.json
+      - src/utils/pasteText.ts
   workflow_dispatch:
     inputs:
       claude_version:
         description: Claude Code version to test (exact version or npm dist-tag)
-        default: latest
+        default: '2.1.267'
         required: true
 permissions:
-  contents: write
+  contents: read
+concurrency:
+  group: paste-cli-acceptance-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   acceptance:
     runs-on: windows-2022
@@ -20,10 +27,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -34,14 +41,13 @@ jobs:
       - run: npm ci
       - name: Install a disposable real Claude CLI without user credentials
         env:
-          CLAUDE_TEST_VERSION: ${{ inputs.claude_version || 'latest' }}
-        shell: pwsh
-        run: npm install --prefix .ci-claude --no-save "@anthropic-ai/claude-code@$env:CLAUDE_TEST_VERSION"
+          CLAUDE_TEST_VERSION: ${{ inputs.claude_version || '2.1.267' }}
+        run: npm install --engine-strict --prefix .ci-claude --no-save "@anthropic-ai/claude-code@$env:CLAUDE_TEST_VERSION"
       - name: Generate real frontend payloads and resolve the CLI package entry
         shell: node {0}
         run: |
-          const fs = require('fs');
-          const path = require('path');
+          const fs = require('node:fs');
+          const path = require('node:path');
           const root = process.cwd();
           const ts = require(root + '/node_modules/typescript');
           const js = ts.transpileModule(fs.readFileSync('src/utils/pasteText.ts', 'utf8'), {
@@ -64,43 +70,22 @@ jobs:
           const cli = path.resolve(pkgDir, bin);
           if (!fs.existsSync(cli)) throw new Error('CLI entry does not exist: ' + cli);
           fs.appendFileSync(process.env.GITHUB_ENV, 'CC_E2E_CLAUDE_PATH=' + cli + '\nCC_PASTE_PAYLOAD_FILE=' + file + '\nCC_TESTED_CLAUDE_VERSION=' + pkg.version + '\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '## Real Claude JSON paste inputs\n\nCLI package: `' + pkg.version + '`\n\n| Case | Expected UTF-8 bytes |\n|---|---:|\n' + cases.map(c => '| ' + c.name + ' | ' + Buffer.byteLength(c.expected) + ' |').join('\n') + '\n');
           console.log('Actual Claude package version:', pkg.version);
           for (const c of cases) console.log('JSON case:', c.name, 'UTF-8 bytes:', Buffer.byteLength(c.expected));
-      - name: Normalize test formatting and hook path quoting
-        shell: python
-        run: |
-          from pathlib import Path
-          p = Path('src-tauri/src/tests/paste_cli_submit.rs')
-          text = p.read_text(encoding='utf-8')
-          text = text.replace('node_path().display(), helper.display()', 'node_path().to_string_lossy().replace(\'\\\\\', "/"), helper.to_string_lossy().replace(\'\\\\\', "/")')
-          p.write_text(text, encoding='utf-8', newline='\n')
-      - name: Format test module
+      - name: Check committed formatting without modifying source
         working-directory: src-tauri
-        run: cargo fmt --all
+        run: cargo fmt --all --check
       - name: Verify actual submitted JSON, not a chip or terminal screenshot
         working-directory: src-tauri
-        run: cargo test --lib RealClaude_DevtoolsJsonSubmittedCompletely_001 -- --ignored --test-threads=1 --nocapture
+        run: cargo test --locked --lib RealClaude_DevtoolsJsonSubmittedCompletely_001 -- --ignored --test-threads=1 --nocapture
       - name: Verify strict checks with the real-CLI acceptance module
         working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Record exact verified version and commit formatting
-        shell: python
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Check that verification did not rewrite tracked files
+        run: git diff --exit-code
+      - name: Record the acceptance result without writing to the repository
+        shell: pwsh
         run: |
-          from pathlib import Path
-          import os, subprocess
-          p = Path('docs/paste-framing.md')
-          text = p.read_text(encoding='utf-8')
-          text += '\n## 真实 Claude 提交正文验收\n\n- Windows Server 2022，Claude Code npm 包版本 `' + os.environ['CC_TESTED_CLAUDE_VERSION'] + '`，Actions run `' + os.environ['GITHUB_RUN_ID'] + '`。\n- 使用真实 `buildPastePayload` 输出、生产 Rust writer、真实 Claude 交互输入框。\n- 隔离的 UserPromptSubmit hook 捕获完整提交正文并阻止模型处理；dummy key + loopback endpoint 双重避免使用用户凭据和真实模型请求。\n- 对 64/256/800 个嵌套对象的 JSON 逐字节比对全文，不允许折叠标签、只有首尾或只有长度一致代替验收。\n- 此结果仍不覆盖用户自己的 Chrome 剪贴板和不同 Windows/Claude 版本；原始失败样本需要在同一构建上复核。\n'
-          p.write_text(text, encoding='utf-8', newline='\n')
-          p = Path('src-tauri/tests/paste_claude_e2e.rs')
-          text = p.read_text(encoding='utf-8')
-          start = text.index('//! 安全护栏：')
-          end = text.index('\n\n', start)
-          text = text[:start] + '//! 历史诊断，不作为完整性验收：折叠标签不证明正文完整。\n//! 不发送显式 Enter 也不能保证未提交；只能在隔离配置、dummy key、loopback API 环境运行。\n//! 当前验收使用 tests::paste_cli_submit 的 UserPromptSubmit 全文捕获，禁止用真实用户凭据。' + text[end:]
-          p.write_text(text, encoding='utf-8', newline='\n')
-          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
-          subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
-          subprocess.run(['git', 'add', 'src-tauri/src/tests/paste_cli_submit.rs', 'src-tauri/src/tests/mod.rs', 'src-tauri/tests/paste_claude_e2e.rs', 'docs/paste-framing.md'], check=True)
-          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
-          subprocess.run(['git', 'commit', '-m', 'test: verify complete JSON through real Claude input and submit hooks'], check=True)
-          subprocess.run(['git', 'push', 'origin', 'HEAD:codex/fix-devtools-paste'], check=True)
+          'Verified exact submitted JSON through the production writer and real Claude UserPromptSubmit hook. No model processing or user credentials were used.' >> $env:GITHUB_STEP_SUMMARY
+          'This does not cover the original user clipboard sample or other Windows/Claude versions.' >> $env:GITHUB_STEP_SUMMARY
