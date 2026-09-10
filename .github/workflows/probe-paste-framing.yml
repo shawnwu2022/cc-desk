@@ -1,135 +1,127 @@
-name: Paste framing probe
+name: Repair and verify Windows paste framing
 on:
   push:
     branches: [codex/fix-devtools-paste]
 permissions:
-  contents: read
+  contents: write
+concurrency:
+  group: repair-devtools-paste
+  cancel-in-progress: false
 jobs:
-  framing:
+  repair:
     runs-on: windows-2022
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - run: npm ci
-      - name: Generate current production paste and candidate wires
-        shell: node {0}
-        run: |
-          const fs = require('fs');
-          const ts = require(process.cwd() + '/node_modules/typescript');
-          fs.mkdirSync('.paste-probe/src', {recursive: true});
-          const source = fs.readFileSync('src/utils/pasteText.ts', 'utf8');
-          const compiled = ts.transpileModule(source, {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText;
-          fs.writeFileSync('.paste-probe/pasteText.cjs', compiled);
-          const {buildPastePayload} = require(process.cwd() + '/.paste-probe/pasteText.cjs');
-          const body = 'DEVTOOLS_HEAD\n' + 'Error: request failed 中文🎉\n    at refresh (app.js:42:7)\n'.repeat(200) + 'DEVTOOLS_TAIL';
-          const expected = '\x1b[200~' + body + '\x1b[201~';
-          const current = buildPastePayload(body, true, false);
-          const candidate = current.replace(/\x1b/g, '\x1b[0;0;27;1;0;1_');
-          fs.writeFileSync('.paste-probe/cases.json', JSON.stringify([{name:'current_production',wire:current,expected}, {name:'win32_escape_candidate',wire:candidate,expected}]));
-      - name: Create isolated native transport probe
+      - name: Register regression tests before the fix
         shell: python
         run: |
           from pathlib import Path
-          Path('.paste-probe/Cargo.toml').write_text('''[package]
-          name = "paste-framing-probe"
-          version = "0.0.0"
-          edition = "2021"
-          [dependencies]
-          portable-pty = "=0.8.1"
-          serde_json = "1"
-          ''', encoding='utf-8')
-          Path('.paste-probe/src/main.rs').write_text(r'''
-          use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-          use std::io::{Read, Write};
-          use std::sync::{Arc, Mutex};
-          use std::time::{Duration, Instant};
-          const SCRIPT: &str = r#"
-          process.stdin.setRawMode(true);
-          process.stdin.setEncoding('utf8');
-          let input = '';
-          process.stdin.on('data', chunk => {
-            input += chunk;
-            const end = input.indexOf('__CC_DESK_FRAME_END__');
-            if (end < 0) return;
-            const value = input.slice(0, end);
-            const b = Buffer.from(value, 'utf8');
-            let hash = 2166136261 >>> 0;
-            for (const byte of b) { hash ^= byte; hash = Math.imul(hash, 16777619) >>> 0; }
-            console.log('FRAME_BYTES:' + b.length + ':');
-            console.log('FRAME_HASH:' + hash + ':');
-            console.log('FRAME_OPEN:' + Number(value.startsWith('\x1b[200~')) + ':');
-            console.log('FRAME_CLOSE:' + Number(value.endsWith('\x1b[201~')) + ':');
-            console.log('FRAME_DONE');
-            process.exit(0);
-          });
-          process.stdout.write('\x1b[?2004hFRAME_READY\r\n');
-          setTimeout(() => process.exit(2), 45000);
-          "#;
-          fn hash(bytes: &[u8]) -> u32 {
-              bytes.iter().fold(2166136261u32, |h, b| (h ^ u32::from(*b)).wrapping_mul(16777619))
+          p = Path('src-tauri/src/tests/mod.rs')
+          text = p.read_text(encoding='utf-8')
+          assert 'mod paste_framing;' not in text
+          p.write_text(text + '#[cfg(test)]\nmod paste_framing;\n', encoding='utf-8', newline='\n')
+      - name: Format regression tests
+        working-directory: src-tauri
+        run: cargo fmt --all
+      - name: Confirm RED through the actual production writer
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $output = cargo test --lib PtyPaste_NativeFrames_004 -- --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | Write-Output
+          if ($code -eq 0) { throw 'Expected the unpatched production transport to fail' }
+          if (($output -join "`n") -notmatch 'paste frame byte length mismatch') {
+            throw 'RED failed for a different reason; do not apply a speculative fix'
           }
-          fn field(output: &str, key: &str) -> Option<u64> {
-              let after = output.split_once(key)?.1;
-              after.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()
-          }
-          fn wait_for(output: &Arc<Mutex<String>>, marker: &str) {
-              let start = Instant::now();
-              while start.elapsed() < Duration::from_secs(50) {
-                  if output.lock().unwrap().contains(marker) { return; }
-                  std::thread::sleep(Duration::from_millis(10));
+          $global:LASTEXITCODE = 0
+      - name: Repair only framed Windows ConPTY input
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src-tauri/src/pty.rs')
+          text = p.read_text(encoding='utf-8')
+          marker = 'pub(crate) fn write_pty_data<W: Write + ?Sized>('
+          assert text.count(marker) == 1
+          helper = r'''/// ConPTY parses ordinary CSI input instead of forwarding unknown keys.
+          /// In particular it consumes bracketed-paste delimiters for ReadConsoleInputW
+          /// clients (including Node raw stdin). Encode literal ESC as a Unicode key
+          /// event so the client receives the original ESC, not a consumed CSI sequence.
+          /// Only complete paste frames take this path; ordinary keys and responses
+          /// retain their existing interpretation. Unix PTYs never use this encoding.
+          /// Protocol: microsoft/terminal, doc/specs/#4999 - Improved keyboard handling in Conpty.md.
+          #[cfg(windows)]
+          fn conpty_paste_input(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+              if !data.starts_with(b"\x1b[200~") || !data.ends_with(b"\x1b[201~") {
+                  return std::borrow::Cow::Borrowed(data);
               }
-              panic!("probe timed out waiting for {marker}");
-          }
-          fn main() {
-              let cases: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("cases.json").unwrap()).unwrap();
-              let mut failures = 0;
-              for case in cases.as_array().unwrap() {
-                  let pair = native_pty_system().openpty(PtySize { rows: 30, cols: 180, pixel_width: 0, pixel_height: 0 }).unwrap();
-                  let node = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-                      .map(|p| p.join("node.exe")).find(|p| p.is_file()).unwrap();
-                  let mut cmd = CommandBuilder::new(node);
-                  cmd.arg("-e"); cmd.arg(SCRIPT);
-                  let mut child = pair.slave.spawn_command(cmd).unwrap();
-                  drop(pair.slave);
-                  let mut reader = pair.master.try_clone_reader().unwrap();
-                  let output = Arc::new(Mutex::new(String::new()));
-                  let capture = output.clone();
-                  let reader_thread = std::thread::spawn(move || {
-                      let mut buf = [0u8; 8192];
-                      while let Ok(n) = reader.read(&mut buf) {
-                          if n == 0 { break; }
-                          capture.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
-                      }
-                  });
-                  wait_for(&output, "FRAME_READY");
-                  let mut writer = pair.master.take_writer().unwrap();
-                  let wire = case["wire"].as_str().unwrap();
-                  for chunk in wire.as_bytes().chunks(4096) {
-                      writer.write_all(chunk).unwrap(); writer.flush().unwrap();
-                      std::thread::sleep(Duration::from_millis(1));
+              let mut wire = Vec::with_capacity(data.len());
+              for &byte in data {
+                  if byte == 0x1b {
+                      // Vk=0, Sc=0, Unicode=ESC, key-down, no modifiers, repeat=1.
+                      wire.extend_from_slice(b"\x1b[0;0;27;1;0;1_");
+                  } else {
+                      wire.push(byte);
                   }
-                  writer.write_all(b"__CC_DESK_FRAME_END__").unwrap(); writer.flush().unwrap();
-                  wait_for(&output, "FRAME_DONE");
-                  let _ = child.kill(); let _ = child.wait();
-                  drop(writer); drop(pair.master); let _ = reader_thread.join();
-                  let output = output.lock().unwrap();
-                  let expected = case["expected"].as_str().unwrap();
-                  let bytes = field(&output, "FRAME_BYTES:");
-                  let received_hash = field(&output, "FRAME_HASH:");
-                  let open = field(&output, "FRAME_OPEN:");
-                  let close = field(&output, "FRAME_CLOSE:");
-                  let ok = bytes == Some(expected.len() as u64) && received_hash == Some(hash(expected.as_bytes()) as u64) && open == Some(1) && close == Some(1);
-                  println!("CASE={} PASS={} EXPECTED_BYTES={} RECEIVED_BYTES={:?} OPEN={:?} CLOSE={:?} WIN32_REQUEST={}", case["name"], ok, expected.len(), bytes, open, close, output.contains("\x1b[?9001h"));
-                  if !ok { failures += 1; }
               }
-              assert_eq!(failures, 0, "paste must preserve both delimiters and complete UTF-8 body");
+              std::borrow::Cow::Owned(wire)
           }
-          ''', encoding='utf-8')
-      - name: Require intact paste framing and body
-        working-directory: .paste-probe
-        run: cargo run
+
+          '''
+          text = text.replace(marker, helper + marker, 1)
+          needle = '    let mut chunks = data.chunks(PTY_WRITE_CHUNK_SIZE).peekable();'
+          assert text.count(needle) == 1
+          text = text.replace(needle, '    #[cfg(windows)]\n    let data = conpty_paste_input(data);\n\n' + needle, 1)
+          old = '// Windows ConPTY 对连续突发写入存在截断风险；小块刷新并短暂让出时间，避免大粘贴丢字节。'
+          assert text.count(old) == 1
+          text = text.replace(old, '// 分块让出写入时间；粘贴帧的可靠性由下方 ConPTY 编码保证，不能靠延时替代起止标记。')
+          p.write_text(text, encoding='utf-8', newline='\n')
+          p = Path('AGENTS.md')
+          text = p.read_text(encoding='utf-8')
+          text += '\n### Windows 粘贴帧传输\n\n- 完整 bracketed paste 在 `pty.rs::write_pty_data` 内将 ESC 编码为 ConPTY Unicode 按键事件，避免起止标记被 Windows 吞掉；普通按键、图片粘贴快捷键、Unix 输入不改。\n- `paste_framing` 使用生产 writer、真 ConPTY、Node raw stdin 校验包含标记的 UTF-8 长度与哈希；严禁剥除或容忍标记丢失。前后端共享 `devtools-paste-framing.json` 黄金样本。\n- 传输通过不等于真实 Claude 编辑器已验收；详见 `docs/paste-framing.md`。\n'
+          p.write_text(text, encoding='utf-8', newline='\n')
+      - name: Format and check Rust
+        working-directory: src-tauri
+        run: |
+          cargo fmt --all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --all --check
+      - name: Verify native framing is GREEN
+        working-directory: src-tauri
+        run: cargo test --lib paste_framing -- --nocapture
+      - name: Verify strict Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Verify all Rust tests
+        working-directory: src-tauri
+        run: cargo test
+      - name: Verify frontend types
+        run: npm run typecheck
+      - name: Verify all frontend tests
+        run: npm run test:ci
+      - name: Verify production frontend build
+        run: npm run build
+      - name: Commit verified source and remove this repair workflow
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/probe-paste-framing.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src-tauri/src/pty.rs src-tauri/src/tests/mod.rs src-tauri/src/tests/paste_framing.rs AGENTS.md .github/workflows/probe-paste-framing.yml
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git commit -m 'fix: preserve bracketed paste through Windows ConPTY'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:codex/fix-devtools-paste
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

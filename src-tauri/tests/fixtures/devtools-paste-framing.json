@@ -1,0 +1,32 @@
+[
+  {
+    "name": "devtools-console-unicode",
+    "source": "VM128:42 [network] Error: 请求失败 🎉\r\n\tat refresh (app.js:42:7)\r\n",
+    "prepared": "VM128:42 [network] Error: 请求失败 🎉\n\tat refresh (app.js:42:7)\n",
+    "repeat": 200
+  },
+  {
+    "name": "devtools-non-json-object",
+    "source": "{userId: 18446744073709551615, name: '测试', nested: {ok: true}}\r\nPromise {<pending>}\r\n",
+    "prepared": "{userId: 18446744073709551615, name: '测试', nested: {ok: true}}\nPromise {<pending>}\n",
+    "repeat": 1
+  },
+  {
+    "name": "devtools-json-big-integer",
+    "source": "{\r\n  \"id\": 18446744073709551615,\r\n  \"message\": \"错误  details\",\r\n  \"stack\": \"first\\nsecond\"\r\n}",
+    "prepared": "{\"id\": 18446744073709551615,\"message\": \"错误  details\",\"stack\": \"first\\nsecond\"}",
+    "repeat": 1
+  },
+  {
+    "name": "console-ansi-literals",
+    "source": "head\u001b[31mred\u001b[0m\n\ttrace\u001b]0;title\u0007tail",
+    "prepared": "head\u001b[31mred\u001b[0m\n\ttrace\u001b]0;title\u0007tail",
+    "repeat": 1
+  },
+  {
+    "name": "console-multiline-over-128k",
+    "source": "stack: 01234567890123456789012345678901234567890123456789\n",
+    "prepared": "stack: 01234567890123456789012345678901234567890123456789\n",
+    "repeat": 2500
+  }
+]
