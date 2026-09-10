@@ -26,12 +26,13 @@ jobs:
           import zlib
           from pathlib import Path
 
-          payload = Path('scripts/migrate_pty_lifecycle.py.zb64').read_text().strip()
-          Path('/tmp/migrate_pty_lifecycle.py').write_bytes(
-              zlib.decompress(base64.b64decode(payload))
+          payload_path = Path('scripts/migrate_pty_lifecycle.py.zb64')
+          script_path = Path('scripts/migrate_pty_lifecycle.py')
+          script_path.write_bytes(
+              zlib.decompress(base64.b64decode(payload_path.read_text().strip()))
           )
           PY
-          python3 /tmp/migrate_pty_lifecycle.py
+          python3 scripts/migrate_pty_lifecycle.py
 
       - name: Commit migration result
         shell: bash
