@@ -1,4 +1,4 @@
-name: Probe native ConPTY pipe drainage
+name: Probe isolated ConPTY Escape events
 on:
   push:
     branches: [codex/fix-devtools-paste]
@@ -7,7 +7,7 @@ permissions:
 jobs:
   probe:
     runs-on: windows-2022
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -48,25 +48,37 @@ jobs:
           (root / 'src/lib.rs').write_text('#![allow(non_snake_case)]\nmod pty;\n#[cfg(test)] mod tests { mod paste_framing; }\n', encoding='utf-8')
           (root / 'src/pty.rs').write_text(r'''
           use std::io::{self, Write};
+          fn send<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
+              if data.is_empty() { return Ok(()); }
+              writer.write_all(data)?;
+              writer.flush()?;
+              Ok(())
+          }
           pub(crate) fn write_pty_data<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
               let limit: usize = std::env::var("PROBE_CHUNK").unwrap().parse().unwrap();
               let mut chunk = Vec::with_capacity(limit);
               writer.flush()?;
               for c in std::str::from_utf8(data).unwrap().chars() {
-                  let encoded = if c == '\x1b' { "\x1b[0;0;27;1;0;1_".to_string() } else { c.to_string() };
-                  if chunk.len() + encoded.len() > limit {
-                      writer.write_all(&chunk)?; writer.flush()?; chunk.clear();
+                  if c == '\x1b' {
+                      send(writer, &chunk)?;
+                      chunk.clear();
+                      send(writer, b"\x1b[0;0;27;1;0;1_")?;
+                  } else {
+                      let mut utf8 = [0; 4];
+                      let bytes = c.encode_utf8(&mut utf8).as_bytes();
+                      if chunk.len() + bytes.len() > limit {
+                          send(writer, &chunk)?;
+                          chunk.clear();
+                      }
+                      chunk.extend_from_slice(bytes);
                   }
-                  chunk.extend_from_slice(encoded.as_bytes());
               }
-              writer.write_all(&chunk)?;
-              writer.flush()
+              send(writer, &chunk)
           }
           ''', encoding='utf-8')
-      - name: Fetch locked descriptor implementation for diagnostic-only patch
-        working-directory: .paste-probe
+      - working-directory: .paste-probe
         run: cargo fetch
-      - name: Replace no-op descriptor flush in isolated probe only
+      - name: Add actual drain in diagnostic descriptor only
         working-directory: .paste-probe
         shell: python
         run: |
@@ -80,9 +92,9 @@ jobs:
           pattern = r'fn flush\(&mut self\) -> (?:std::)?io::Result<\(\)> \{\s*Ok\(\(\)\)\s*\}'
           assert len(re.findall(pattern, text)) == 1
           replacement = '''fn flush(&mut self) -> std::io::Result<()> {
+              if std::env::var("PROBE_DRAIN").unwrap() != "1" { return Ok(()); }
               #[link(name = "kernel32")]
               extern "system" { fn FlushFileBuffers(handle: *mut std::ffi::c_void) -> i32; }
-              // Probe exclusively owns ConPTY input pipes. Do not commit this global descriptor patch.
               if unsafe { FlushFileBuffers(self.as_raw_handle()) } == 0 {
                   return Err(std::io::Error::last_os_error());
               }
@@ -92,13 +104,16 @@ jobs:
           p.write_text(text, encoding='utf-8')
           p = Path('Cargo.toml')
           p.write_text(p.read_text(encoding='utf-8') + '\n[patch.crates-io]\nfiledescriptor = { path = "vendor/filedescriptor" }\n', encoding='utf-8')
-      - name: Require intact frames and payload with actual pipe flush
+      - name: Compare isolated Escape events with and without drain
         working-directory: .paste-probe
         shell: pwsh
         run: |
-          foreach ($size in @('512', '4096')) {
-            $env:PROBE_CHUNK = $size
-            cargo test --lib PtyPaste_Native -- --nocapture
-            Write-Output "DRAIN_CHUNK_${size}_EXIT=$LASTEXITCODE"
+          foreach ($drain in @('1', '0')) {
+            foreach ($size in @('512', '4096')) {
+              $env:PROBE_CHUNK = $size
+              $env:PROBE_DRAIN = $drain
+              cargo test --lib PtyPaste_Native -- --nocapture
+              Write-Output "ISOLATED_DRAIN_${drain}_CHUNK_${size}_EXIT=$LASTEXITCODE"
+            }
           }
           $global:LASTEXITCODE = 0
