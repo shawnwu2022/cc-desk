@@ -20,7 +20,7 @@ jobs:
         shell: node {0}
         run: |
           const fs = require('fs');
-          const ts = require('typescript');
+          const ts = require(process.cwd() + '/node_modules/typescript');
           fs.mkdirSync('.paste-probe/src', {recursive: true});
           const source = fs.readFileSync('src/utils/pasteText.ts', 'utf8');
           const compiled = ts.transpileModule(source, {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText;
