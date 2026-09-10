@@ -3,7 +3,6 @@ mod commands;
 mod hook_config;
 mod hook_events;
 mod hook_server;
-mod installer;
 mod logger;
 mod mcp;
 mod platform;
@@ -182,19 +181,6 @@ pub fn run(initial_dir: Option<String>) {
             commands::get_app_path,
             commands::spawn_new_instance,
             commands::log_message,
-            installer::get_latest_versions,
-            installer::check_installed_versions,
-            installer::check_claude_cli_update,
-            installer::check_claude_running,
-            installer::kill_claude_processes,
-            installer::download_and_install_claude,
-            installer::get_installed_claude_version,
-            installer::list_claude_versions,
-            installer::download_claude_version,
-            installer::cancel_claude_download,
-            installer::install_claude_version,
-            #[cfg(target_os = "windows")]
-            installer::download_and_install_git,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

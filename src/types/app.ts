@@ -74,34 +74,6 @@ export interface DownloadProgress {
   percent: number
 }
 
-// Claude CLI 更新信息
-export interface ClaudeCliUpdateInfo {
-  installedVersion: string | null
-  latestVersion: string
-  hasUpdate: boolean
-  notInstalled: boolean
-}
-
-// Claude CLI 单个历史版本条目
-export interface ClaudeVersionEntry {
-  version: string
-  releaseDate: string
-  platforms: Record<string, ClaudePlatformInfo>
-}
-
-// Claude CLI 版本的平台产物信息
-export interface ClaudePlatformInfo {
-  url: string
-  checksum: string
-  size: number
-}
-
-// versions.json 顶层结构
-export interface ClaudeVersions {
-  latest: string
-  updatedAt: string
-  versions: ClaudeVersionEntry[]
-}
 
 /// 启动摘要：单个项目信息（供前端缓存）
 export interface ProjectInfo {

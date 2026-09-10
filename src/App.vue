@@ -21,28 +21,8 @@
           </div>
         </div>
       </div>
-
-      <!-- 安装进度显示（多任务） -->
-      <div v-if="isInstalling" class="install-progress-section">
-        <div class="install-tasks">
-          <div v-for="task in installTasks" :key="task.name" class="install-task">
-            <div class="install-task-header">
-              <span class="install-task-name">{{ task.name }}</span>
-              <span class="install-task-status">{{ task.status }}</span>
-            </div>
-            <div class="install-task-progress-bar">
-              <div class="install-task-progress-fill" :style="{ width: task.progress + '%' }"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 按钮：Auto Install 和 Retry -->
       <div class="check-btn-row">
-        <button class="check-auto-btn" @click="autoInstall" :disabled="isInstalling">
-          {{ isInstalling ? t('installing') : t('autoInstall') }}
-        </button>
-        <button class="check-retry-btn" @click="retryChecks" :disabled="isInstalling">
+        <button class="check-retry-btn" @click="retryChecks">
           {{ t('retry') }}
         </button>
       </div>
@@ -122,10 +102,6 @@ import {
   onConfigFontSize,
   onTerminalRestart,
   checkForUpdates,
-  getInstalledClaudeVersion,
-  downloadAndInstallClaude,
-  downloadAndInstallGit,
-  onInstallProgress,
   onOpenDirectory
 } from '@/api/tauri'
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
@@ -172,20 +148,7 @@ const projectSpawnError = ref<{ path: string; msg: string; persistFailed: boolea
 // setTheme（设置页实时切换）也会触发它，保证两条路径都生效。
 watch(() => appStore.theme, (newTheme) => applyThemeToDom(newTheme))
 
-// 自动安装状态
-const isInstalling = ref(false)
 
-// 多任务进度跟踪
-interface InstallTask {
-  name: string       // "Claude CLI" | "Git"
-  status: string     // "waiting" | "fetching" | "downloading" | "extracting" | "done" | "error"
-  progress: number   // 0-100
-  message: string
-}
-
-const installTasks = ref<InstallTask[]>([])
-
-let unlistenInstallProgress: (() => void) | null = null
 let unlistenOpenDir: (() => void) | null = null
 
 // Unlisten functions for cleanup
@@ -220,7 +183,6 @@ onUnmounted(() => {
   unlistenShortcuts?.()
   unlistenFontSize?.()
   unlistenRestart?.()
-  unlistenInstallProgress?.()
   unlistenOpenDir?.()
   unlistenFocusReload?.()
   shortcutUnlisteners.forEach(fn => fn())
@@ -427,10 +389,6 @@ function initAfterChecks() {
     }
   }).catch(() => {})
 
-  // 启动只读本地 Claude CLI 版本号，不发 HTTP 请求对比 OSS
-  getInstalledClaudeVersion().then(version => {
-    updateStore.setInstalledClaudeVersion(version)
-  }).catch(() => {})
 
   // 监听右键菜单传入的目录
   // v6 codex batch1 #3/#10：setCwd 改 setCurrentProject(persist:true) 可等待；隐藏项目拒绝成 cwd。
@@ -507,105 +465,6 @@ async function initStartup() {
   }
 }
 
-// 自动安装（并发执行）
-async function autoInstall() {
-  isInstalling.value = true
-
-  // 初始化任务列表
-  installTasks.value = []
-
-  // 根据检查结果添加任务
-  for (const check of appStore.checkResults) {
-    if (!check.passed) {
-      installTasks.value.push({
-        name: check.name,
-        status: 'waiting',
-        progress: 0,
-        message: t('installWaiting')
-      })
-    }
-  }
-
-  // 监听进度事件
-  onInstallProgress((progress) => {
-    const taskName = progress.item === 'claude' ? 'Claude CLI' : 'Git Bash'
-    const task = installTasks.value.find(t => t.name === taskName)
-    if (task) {
-      task.status = progress.stage
-      task.progress = progress.progress
-      task.message = progress.message
-    }
-  }).then(fn => { unlistenInstallProgress = fn })
-
-  try {
-    // 并发安装所有缺失项
-    const installPromises: Promise<void>[] = []
-
-    const needsClaude = appStore.checkResults.some(c => c.name === 'Claude CLI' && !c.passed)
-    if (needsClaude) {
-      installPromises.push(
-        downloadAndInstallClaude().then(() => {
-          const task = installTasks.value.find(item => item.name === 'Claude CLI')
-          if (task) {
-            task.status = 'done'
-            task.progress = 100
-            task.message = t('installComplete')
-          }
-        })
-      )
-    }
-
-    const needsGit = appStore.checkResults.some(c => c.name === 'Git Bash' && !c.passed)
-    if (needsGit) {
-      installPromises.push(
-        downloadAndInstallGit().then(() => {
-          const task = installTasks.value.find(item => item.name === 'Git Bash')
-          if (task) {
-            task.status = 'done'
-            task.progress = 100
-            task.message = t('installComplete')
-          }
-        })
-      )
-    }
-
-    // 等待所有安装完成
-    await Promise.all(installPromises)
-
-    // 延迟一秒后重新检查
-    await new Promise(r => setTimeout(r, 1000))
-
-    // 重新运行检查（会自动添加 PATH）
-    await appStore.runChecks(true)
-
-    // 检查是否全部通过
-    if (!appStore.checkFailed) {
-      initAfterChecks()
-      await initStartup()
-    } else {
-      // 如果仍有失败项，更新错误信息
-      for (const task of installTasks.value) {
-        if (task.status !== 'done') {
-          task.status = 'error'
-          task.message = t('installVerifyFailed')
-        }
-      }
-    }
-  } catch (e) {
-    // 更新错误状态
-    for (const task of installTasks.value) {
-      if (task.status !== 'done') {
-        task.status = 'error'
-        task.message = t('installFailed', { error: String(e) })
-      }
-    }
-    console.error('Auto install failed:', e)
-  } finally {
-    isInstalling.value = false
-    unlistenInstallProgress?.()
-    unlistenInstallProgress = null
-  }
-}
 </script>
 
 <style scoped>

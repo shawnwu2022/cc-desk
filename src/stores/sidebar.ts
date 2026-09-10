@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getAllAgents, getAllSkills, getAllMcpServers, getAllPlugins, setSkillEnabled, setAgentEnabled, setMcpServerEnabled, setPluginEnabled } from '@/api/tauri'
-import type { AgentInfo, SkillInfo, McpServerInfo, PluginInfo, UpdateInfo, ClaudeCliUpdateInfo } from '@/types'
+import type { AgentInfo, SkillInfo, McpServerInfo, PluginInfo, UpdateInfo } from '@/types'
 
 export type SidebarPanelType = 'sessions' | 'skills' | 'agents' | 'mcp' | 'plugins' | null
 export type SettingsSection = 'appearance' | 'startup' | 'shortcuts' | 'update' | 'about'
@@ -22,7 +22,6 @@ export const useSidebarStore = defineStore('sidebar', () => {
   const showSettings = ref(false)
   const activeSettingsSection = ref<SettingsSection>('appearance')
   const updateInfo = ref<UpdateInfo | null>(null)
-  const claudeCliUpdateInfo = ref<ClaudeCliUpdateInfo | null>(null)
   const updateAvailable = computed(() => {
     // 仅由 CC Desk 自身更新驱动（启动不再检测 Claude CLI 更新）
     return updateInfo.value?.hasUpdate ?? false
@@ -32,9 +31,6 @@ export const useSidebarStore = defineStore('sidebar', () => {
     updateInfo.value = info
   }
 
-  function setClaudeCliUpdateInfo(info: ClaudeCliUpdateInfo) {
-    claudeCliUpdateInfo.value = info
-  }
 
   // Skills 面板折叠状态（按来源分组）
   const skillsExpandedGroups = ref({
@@ -279,10 +275,8 @@ export const useSidebarStore = defineStore('sidebar', () => {
     showSettings,
     activeSettingsSection,
     updateInfo,
-    claudeCliUpdateInfo,
     updateAvailable,
     setUpdateInfo,
-    setClaudeCliUpdateInfo,
     skillsExpandedGroups,
     agentsExpandedGroups,
     mcpExpandedGroups,
