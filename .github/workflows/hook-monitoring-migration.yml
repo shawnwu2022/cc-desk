@@ -1,0 +1,36 @@
+name: Hook monitoring migration
+
+on:
+  push:
+    branches:
+      - codex/focus-claude-workspace
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: ${{ !contains(github.event.head_commit.message, '[hook-migration-bot]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout migration branch
+        uses: actions/checkout@v5
+        with:
+          ref: codex/focus-claude-workspace
+          fetch-depth: 0
+
+      - name: Apply optional monitoring migration
+        run: python3 scripts/migrate_hook_monitoring.py
+
+      - name: Commit migration result
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No monitoring changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: treat hook monitoring as optional [hook-migration-bot]"
+          git push origin HEAD:codex/focus-claude-workspace
