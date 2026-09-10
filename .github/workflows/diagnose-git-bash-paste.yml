@@ -39,12 +39,13 @@ jobs:
         run: |
           const fs = require('node:fs');
           const path = require('node:path');
-          const ts = require('./node_modules/typescript');
+          const root = process.cwd();
+          const ts = require(path.join(root, 'node_modules/typescript'));
           const js = ts.transpileModule(fs.readFileSync('src/utils/pasteText.ts', 'utf8'), {
             compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}
           }).outputText;
           fs.writeFileSync('.ci-claude/pasteText.cjs', js);
-          const {buildPastePayload} = require('./.ci-claude/pasteText.cjs');
+          const {buildPastePayload} = require(path.join(root, '.ci-claude/pasteText.cjs'));
           const fixture = JSON.parse(fs.readFileSync('src-tauri/tests/fixtures/devtools-paste-framing.json', 'utf8')).find(f => f.name === 'devtools-json-nested-64');
           if (!fixture) throw new Error('missing JSON fixture');
           const source = (fixture.prefix || '') + Array(fixture.repeat).fill(fixture.source).join(fixture.separator || '') + (fixture.suffix || '');
