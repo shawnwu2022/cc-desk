@@ -1,13 +1,17 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import { getAllAgents, getAllSkills, getAllMcpServers, getAllPlugins, setSkillEnabled, setAgentEnabled, setMcpServerEnabled, setPluginEnabled } from '@/api/tauri'
-import type { AgentInfo, SkillInfo, McpServerInfo, PluginInfo, UpdateInfo } from '@/types'
+import { computed, ref } from 'vue'
+import { getAllAgents, getAllMcpServers, getAllPlugins, getAllSkills } from '@/api/tauri'
+import type { AgentInfo, McpServerInfo, PluginInfo, SkillInfo, UpdateInfo } from '@/types'
 
 export type SidebarPanelType = 'sessions' | 'skills' | 'agents' | 'mcp' | 'plugins' | null
 export type SettingsSection = 'appearance' | 'startup' | 'shortcuts' | 'update' | 'about'
 
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
-  'appearance', 'startup', 'shortcuts', 'update', 'about'
+  'appearance',
+  'startup',
+  'shortcuts',
+  'update',
+  'about',
 ]
 
 function isSettingsSection(value: string): value is SettingsSection {
@@ -18,72 +22,54 @@ export const useSidebarStore = defineStore('sidebar', () => {
   const activePanel = ref<SidebarPanelType>(null)
   const panelVisible = ref(false)
 
-  // 设置模式
   const showSettings = ref(false)
   const activeSettingsSection = ref<SettingsSection>('appearance')
   const updateInfo = ref<UpdateInfo | null>(null)
-  const updateAvailable = computed(() => {
-    // 仅由 CC Desk 自身更新驱动（启动不再检测 Claude CLI 更新）
-    return updateInfo.value?.hasUpdate ?? false
-  })
+  const updateAvailable = computed(() => updateInfo.value?.hasUpdate ?? false)
 
   function setUpdateInfo(info: UpdateInfo) {
     updateInfo.value = info
   }
 
-
-  // Skills 面板折叠状态（按来源分组）
   const skillsExpandedGroups = ref({
     project: true,
     user: true,
-    plugin: true
+    plugin: true,
   })
 
-  // Agents 面板折叠状态
   const agentsExpandedGroups = ref({
     builtin: true,
     plugin: true,
     user: true,
-    project: true
+    project: true,
   })
 
-  // MCP 面板折叠状态
   const mcpExpandedGroups = ref({
     plugin: true,
     user: true,
-    project: true
+    project: true,
   })
 
-  // Plugins 面板折叠状态
   const pluginsExpandedGroups = ref({
     user: true,
-    project: true
+    project: true,
   })
 
-  // ========== 预加载数据 ==========
-
-  // 数据
   const skills = ref<SkillInfo[]>([])
   const agents = ref<AgentInfo[]>([])
   const mcpServers = ref<McpServerInfo[]>([])
   const plugins = ref<PluginInfo[]>([])
 
-  // 加载状态
   const skillsLoading = ref(false)
   const agentsLoading = ref(false)
   const mcpServersLoading = ref(false)
   const pluginsLoading = ref(false)
-
-  // 已加载的 cwd（用于判断是否需要重新加载）
   const loadedCwd = ref<string | null>(null)
 
-  // 加载所有 sidebar 数据
   async function loadAllSidebarData(cwd: string) {
-    if (loadedCwd.value === cwd) return // 已加载过
+    if (loadedCwd.value === cwd) return
 
     loadedCwd.value = cwd
-
-    // 并行加载所有数据
     await Promise.all([
       loadSkills(cwd),
       loadAgents(cwd),
@@ -96,8 +82,8 @@ export const useSidebarStore = defineStore('sidebar', () => {
     skillsLoading.value = true
     try {
       skills.value = await getAllSkills(cwd)
-    } catch (err) {
-      console.error('[SidebarStore] Failed to load skills:', err)
+    } catch (error) {
+      console.error('[SidebarStore] Failed to load skills:', error)
     } finally {
       skillsLoading.value = false
     }
@@ -107,8 +93,8 @@ export const useSidebarStore = defineStore('sidebar', () => {
     agentsLoading.value = true
     try {
       agents.value = await getAllAgents(cwd)
-    } catch (err) {
-      console.error('[SidebarStore] Failed to load agents:', err)
+    } catch (error) {
+      console.error('[SidebarStore] Failed to load agents:', error)
     } finally {
       agentsLoading.value = false
     }
@@ -118,8 +104,8 @@ export const useSidebarStore = defineStore('sidebar', () => {
     mcpServersLoading.value = true
     try {
       mcpServers.value = await getAllMcpServers(cwd)
-    } catch (err) {
-      console.error('[SidebarStore] Failed to load mcp servers:', err)
+    } catch (error) {
+      console.error('[SidebarStore] Failed to load MCP servers:', error)
     } finally {
       mcpServersLoading.value = false
     }
@@ -129,81 +115,14 @@ export const useSidebarStore = defineStore('sidebar', () => {
     pluginsLoading.value = true
     try {
       plugins.value = await getAllPlugins(cwd)
-    } catch (err) {
-      console.error('[SidebarStore] Failed to load plugins:', err)
+    } catch (error) {
+      console.error('[SidebarStore] Failed to load plugins:', error)
     } finally {
       pluginsLoading.value = false
     }
   }
 
-  // ========== 用户级资源开关 ==========
-  // 设计要点：
-  // - 多窗口之间不同步（不监听焦点、不调 loadXxx），避免效率低/闪烁/延迟
-  // - 乐观更新：直接改 store 中对应项的 enabled 字段，Vue 响应式刷新单项 ToggleSwitch 视觉
-  // - 失败回滚：API 失败时还原 enabled，错误向上抛由组件 catch（仅 console.error）
-  // - 数据安全由后端原子操作 + 冲突检测保证（同名检测、路径穿越防御）
-  // - 多窗口 stale 场景：B 操作已被 A 改过的项时后端返回错误，store 回滚，B 的 UI 短暂闪回原状态
-
-  async function toggleSkillEnabled(name: string, enabled: boolean) {
-    const idx = skills.value.findIndex(s => s.name === name)
-    const old = idx >= 0 ? { ...skills.value[idx] } : null
-    if (idx >= 0) skills.value[idx] = { ...skills.value[idx], enabled }
-    try {
-      await setSkillEnabled(name, enabled)
-    } catch (err) {
-      if (idx >= 0 && old) skills.value[idx] = old
-      throw err
-    }
-  }
-
-  async function toggleAgentEnabled(name: string, enabled: boolean) {
-    const idx = agents.value.findIndex(a => a.name === name)
-    const old = idx >= 0 ? { ...agents.value[idx] } : null
-    if (idx >= 0) agents.value[idx] = { ...agents.value[idx], enabled }
-    try {
-      await setAgentEnabled(name, enabled)
-    } catch (err) {
-      if (idx >= 0 && old) agents.value[idx] = old
-      throw err
-    }
-  }
-
-  async function toggleMcpServerEnabled(name: string, enabled: boolean) {
-    const idx = mcpServers.value.findIndex(m => m.name === name)
-    const old = idx >= 0 ? { ...mcpServers.value[idx] } : null
-    if (idx >= 0) mcpServers.value[idx] = { ...mcpServers.value[idx], enabled }
-    try {
-      await setMcpServerEnabled(name, enabled)
-    } catch (err) {
-      if (idx >= 0 && old) mcpServers.value[idx] = old
-      throw err
-    }
-  }
-
-  async function togglePluginEnabled(pluginId: string, enabled: boolean) {
-    const idx = plugins.value.findIndex(p => p.id === pluginId)
-    const old = idx >= 0 ? { ...plugins.value[idx] } : null
-    if (idx >= 0) plugins.value[idx] = { ...plugins.value[idx], enabled }
-    try {
-      await setPluginEnabled(pluginId, enabled)
-      // 禁用/启用 plugin 影响其 skills/agents/mcp 是否展示，后端已按 plugin.enabled 过滤。
-      // 这里乐观更新只动了 plugins，需 reload 子项让侧边栏立即同步（不阻塞 toggle 主流程）。
-      if (loadedCwd.value) {
-        await Promise.all([
-          loadSkills(loadedCwd.value),
-          loadAgents(loadedCwd.value),
-          loadMcpServers(loadedCwd.value),
-        ])
-      }
-    } catch (err) {
-      if (idx >= 0 && old) plugins.value[idx] = old
-      throw err
-    }
-  }
-
-  // 切换面板
   function togglePanel(panel: SidebarPanelType) {
-    // 如果设置打开，先关闭设置再打开面板
     if (showSettings.value) {
       showSettings.value = false
       activePanel.value = panel
@@ -219,7 +138,6 @@ export const useSidebarStore = defineStore('sidebar', () => {
     }
   }
 
-  // 设置模式
   function openSettings(section?: string) {
     panelVisible.value = false
     activePanel.value = null
@@ -241,7 +159,6 @@ export const useSidebarStore = defineStore('sidebar', () => {
     }
   }
 
-  // 关闭面板
   function closePanel() {
     panelVisible.value = false
     setTimeout(() => {
@@ -249,22 +166,18 @@ export const useSidebarStore = defineStore('sidebar', () => {
     }, 250)
   }
 
-  // 切换 Skill 分组折叠
   function toggleSkillGroup(group: keyof typeof skillsExpandedGroups.value) {
     skillsExpandedGroups.value[group] = !skillsExpandedGroups.value[group]
   }
 
-  // 切换 Agent 分组折叠
   function toggleAgentGroup(group: keyof typeof agentsExpandedGroups.value) {
     agentsExpandedGroups.value[group] = !agentsExpandedGroups.value[group]
   }
 
-  // 切换 MCP 分组折叠
   function toggleMcpGroup(group: keyof typeof mcpExpandedGroups.value) {
     mcpExpandedGroups.value[group] = !mcpExpandedGroups.value[group]
   }
 
-  // 切换 Plugin 分组折叠
   function togglePluginGroup(group: keyof typeof pluginsExpandedGroups.value) {
     pluginsExpandedGroups.value[group] = !pluginsExpandedGroups.value[group]
   }
@@ -281,7 +194,6 @@ export const useSidebarStore = defineStore('sidebar', () => {
     agentsExpandedGroups,
     mcpExpandedGroups,
     pluginsExpandedGroups,
-    // 预加载数据
     skills,
     agents,
     mcpServers,
@@ -296,7 +208,6 @@ export const useSidebarStore = defineStore('sidebar', () => {
     loadAgents,
     loadMcpServers,
     loadPlugins,
-    // 操作函数
     togglePanel,
     closePanel,
     openSettings,
@@ -306,10 +217,5 @@ export const useSidebarStore = defineStore('sidebar', () => {
     toggleAgentGroup,
     toggleMcpGroup,
     togglePluginGroup,
-    // 用户级资源开关
-    toggleSkillEnabled,
-    toggleAgentEnabled,
-    toggleMcpServerEnabled,
-    togglePluginEnabled
   }
 })

@@ -1,145 +1,104 @@
 <template>
   <div class="mcp-panel">
-    <!-- Header -->
     <PanelHeader :title="t('mcpServers')" @close="$emit('close')">
       <template #actions>
-        <button class="action-btn" @click="handleRefresh" :title="t('refreshMcp')">
+        <button class="action-btn" :title="t('refreshMcp')" @click="handleRefresh">
           <img src="@/assets/icons/refresh.svg" :alt="t('refreshMcp')" />
         </button>
       </template>
     </PanelHeader>
 
     <div class="panel-content">
-      <!-- Concept Description -->
       <div class="panel-desc">{{ t('mcpDesc') }}</div>
 
-      <!-- Loading -->
       <div v-if="loading" class="loading-state">
         <span class="loading-text">{{ t('loadingMcp') }}</span>
       </div>
 
-      <!-- Error -->
-      <div v-else-if="error" class="error-state">
-        <span class="error-text">{{ error }}</span>
-      </div>
-
-      <!-- Empty -->
       <div v-else-if="allServers.length === 0" class="empty-state">
         <span class="empty-text">{{ t('noMcpConfigured') }}</span>
         <span class="empty-hint">{{ t('addMcpHint') }}</span>
       </div>
 
-      <!-- Servers List -->
       <div v-else class="servers-list">
-      <!-- Project Servers -->
-      <McpGroup
-        v-if="projectServers.length > 0"
-        :title="t('project')"
-        :expanded="sidebarStore.mcpExpandedGroups.project"
-        :count="projectServers.length"
-        :servers="projectServers"
-        @toggle="sidebarStore.toggleMcpGroup('project')"
-      />
-
-      <!-- User Servers -->
-      <McpGroup
-        v-if="userServers.length > 0"
-        :title="t('user')"
-        :expanded="sidebarStore.mcpExpandedGroups.user"
-        :count="userServers.length"
-        :servers="userServers"
-        @toggle="sidebarStore.toggleMcpGroup('user')"
-      />
-
-      <!-- Plugin Servers -->
-      <McpGroup
-        v-if="pluginServers.length > 0"
-        :title="t('plugin')"
-        :expanded="sidebarStore.mcpExpandedGroups.plugin"
-        :count="pluginServers.length"
-        :servers="pluginServers"
-        @toggle="sidebarStore.toggleMcpGroup('plugin')"
-      />
-    </div>
+        <McpGroup
+          v-if="projectServers.length > 0"
+          :title="t('project')"
+          :expanded="sidebarStore.mcpExpandedGroups.project"
+          :count="projectServers.length"
+          :servers="projectServers"
+          @toggle="sidebarStore.toggleMcpGroup('project')"
+        />
+        <McpGroup
+          v-if="userServers.length > 0"
+          :title="t('user')"
+          :expanded="sidebarStore.mcpExpandedGroups.user"
+          :count="userServers.length"
+          :servers="userServers"
+          @toggle="sidebarStore.toggleMcpGroup('user')"
+        />
+        <McpGroup
+          v-if="pluginServers.length > 0"
+          :title="t('plugin')"
+          :expanded="sidebarStore.mcpExpandedGroups.plugin"
+          :count="pluginServers.length"
+          :servers="pluginServers"
+          @toggle="sidebarStore.toggleMcpGroup('plugin')"
+        />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, provide } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useSidebarStore } from '@/stores/sidebar'
 import { useAppStore } from '@/stores/app'
-
-const { t } = useI18n()
-import type { McpServerDetail } from '@/types'
+import { useSidebarStore } from '@/stores/sidebar'
 import McpGroup from './McpGroup.vue'
 import PanelHeader from '../sidebar/PanelHeader.vue'
 
+const { t } = useI18n()
 const sidebarStore = useSidebarStore()
 const appStore = useAppStore()
 
-const error = ref<string | null>(null)
-
-// MCP Detail 缓存（提供给子组件）
-const detailCache = new Map<string, McpServerDetail>()
-provide('mcpDetailCache', detailCache)
-
-// 使用 sidebar store 的数据（已预加载）
 const servers = computed(() => sidebarStore.mcpServers)
 const loading = computed(() => sidebarStore.mcpServersLoading)
-
-// 所有 servers
 const allServers = computed(() => servers.value)
-
-// 按 sourceType 分组
-const pluginServers = computed(() =>
-  servers.value.filter(s => s.sourceType === 'plugin')
-)
-
-const userServers = computed(() =>
-  servers.value.filter(s => s.sourceType === 'user')
-)
-
-const projectServers = computed(() =>
-  servers.value.filter(s => s.sourceType === 'project')
-)
+const pluginServers = computed(() => servers.value.filter(server => server.sourceType === 'plugin'))
+const userServers = computed(() => servers.value.filter(server => server.sourceType === 'user'))
+const projectServers = computed(() => servers.value.filter(server => server.sourceType === 'project'))
 
 function handleRefresh() {
-  if (appStore.cwd) {
-    error.value = null
-    sidebarStore.loadMcpServers(appStore.cwd)
-  }
+  if (appStore.cwd) void sidebarStore.loadMcpServers(appStore.cwd)
 }
 
 onMounted(() => {
-  // 如果 sidebar store 还没有数据，触发加载
   if (appStore.cwd && sidebarStore.mcpServers.length === 0) {
-    sidebarStore.loadMcpServers(appStore.cwd)
+    void sidebarStore.loadMcpServers(appStore.cwd)
   }
 })
 </script>
 
 <style scoped>
 .mcp-panel {
-  height: 100%;
   display: flex;
+  height: 100%;
   flex-direction: column;
   background: var(--bg-secondary);
 }
 
-/* action-btn slot 样式 */
 .mcp-panel :deep(.action-btn) {
   display: flex;
-  align-items: center;
-  justify-content: center;
   width: 24px;
   height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  padding: 0;
 }
 
 .mcp-panel :deep(.action-btn img) {
@@ -151,45 +110,39 @@ onMounted(() => {
   color: var(--text-primary);
 }
 
-.panel-desc {
-  padding: 8px 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-secondary);
+.panel-content {
+  display: flex;
+  overflow-y: auto;
+  flex: 1;
+  flex-direction: column;
 }
 
-.panel-content {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
+.panel-desc {
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .loading-state,
-.error-state,
 .empty-state {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  flex-direction: column;
   gap: 8px;
+  padding: 24px;
 }
 
 .loading-text,
-.error-text,
 .empty-text {
-  font-size: 13px;
   color: var(--text-secondary);
-}
-
-.error-text {
-  color: var(--error-color);
+  font-size: 13px;
 }
 
 .empty-hint {
-  font-size: 12px;
   color: var(--text-tertiary);
+  font-size: 12px;
 }
 
 .servers-list {
