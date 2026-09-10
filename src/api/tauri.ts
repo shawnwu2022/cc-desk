@@ -19,7 +19,6 @@ import type {
   ProjectConfigResult,
   AgentInfo,
   McpServerInfo,
-  McpServerDetail,
   PluginInfo,
   SkillInfo,
   UpdateInfo,
@@ -46,7 +45,6 @@ export type {
   ProjectConfigResult,
   AgentInfo,
   McpServerInfo,
-  McpServerDetail,
   PluginInfo,
   SkillInfo,
   UpdateInfo,
@@ -214,25 +212,6 @@ export const getAllMcpServers = (projectPath: string): Promise<McpServerInfo[]> 
 export const getAllPlugins = (projectPath: string): Promise<PluginInfo[]> =>
   invoke<PluginInfo[]>('get_all_plugins', { projectPath });
 
-// 切换用户级 skill/agent/mcp/plugin 启用状态
-export const setSkillEnabled = (name: string, enabled: boolean): Promise<void> =>
-  invoke<void>('set_skill_enabled', { name, enabled });
-
-export const setAgentEnabled = (name: string, enabled: boolean): Promise<void> =>
-  invoke<void>('set_agent_enabled', { name, enabled });
-
-export const setMcpServerEnabled = (name: string, enabled: boolean): Promise<void> =>
-  invoke<void>('set_mcp_server_enabled', { name, enabled });
-
-export const setPluginEnabled = (pluginId: string, enabled: boolean): Promise<void> =>
-  invoke<void>('set_plugin_enabled', { pluginId, enabled });
-
-export const getMcpServerDetail = (
-  projectPath: string,
-  serverName: string,
-  forceRefresh: boolean = false
-): Promise<McpServerDetail | null> =>
-  invoke<McpServerDetail | null>('get_mcp_server_detail', { projectPath, serverName, forceRefresh });
 
 // ============================================
 // File Management

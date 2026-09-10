@@ -4,7 +4,6 @@ mod hook_config;
 mod hook_events;
 mod hook_server;
 mod logger;
-mod mcp;
 mod platform;
 mod pty;
 mod pty_decoder;
@@ -172,11 +171,6 @@ pub fn run(initial_dir: Option<String>) {
             commands::get_all_skills,
             commands::get_all_mcp_servers,
             commands::get_all_plugins,
-            commands::set_skill_enabled,
-            commands::set_agent_enabled,
-            commands::set_mcp_server_enabled,
-            commands::set_plugin_enabled,
-            commands::get_mcp_server_detail,
             commands::test_communication,
             commands::get_app_path,
             commands::spawn_new_instance,

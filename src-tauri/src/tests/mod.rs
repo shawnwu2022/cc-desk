@@ -9,8 +9,6 @@ mod env;
 #[cfg(test)]
 mod hook_events;
 #[cfg(test)]
-mod mcp;
-#[cfg(test)]
 mod platform;
 #[cfg(test)]
 mod pty;

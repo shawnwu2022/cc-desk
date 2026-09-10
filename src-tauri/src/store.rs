@@ -2392,9 +2392,11 @@ pub struct McpServerInfo {
     pub command: Option<String>,
     /// 命令参数（stdio server）
     pub args: Option<Vec<String>>,
-    /// 环境变量（stdio server）
+    /// 环境变量仅供原生配置解析，不序列化到 WebView。
+    #[serde(skip_serializing)]
     pub env: Option<HashMap<String, String>>,
-    /// HTTP Headers（用于认证）
+    /// HTTP Headers 可能包含凭据，不序列化到 WebView。
+    #[serde(skip_serializing)]
     pub headers: Option<HashMap<String, String>>,
     /// 可用的 prompts 列表
     pub prompts: Vec<McpPromptInfo>,
