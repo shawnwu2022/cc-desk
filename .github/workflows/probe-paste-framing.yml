@@ -1,4 +1,4 @@
-name: Probe ConPTY input token boundaries
+name: Probe native ConPTY pipe drainage
 on:
   push:
     branches: [codex/fix-devtools-paste]
@@ -14,7 +14,7 @@ jobs:
         with:
           node-version: 20
       - uses: dtolnay/rust-toolchain@stable
-      - name: Isolate existing native tests and collect generated fixture diagnostics
+      - name: Prepare isolated native transport regression
         shell: python
         run: |
           from pathlib import Path
@@ -25,6 +25,7 @@ jobs:
           shutil.copy('src-tauri/tests/fixtures/devtools-paste-framing.json', root / 'tests/fixtures/devtools-paste-framing.json')
           text = Path('src-tauri/src/tests/paste_framing.rs').read_text(encoding='utf-8')
           marker = '        assert_native_frames("split-escape-sequence", &[payload]);'
+          assert text.count(marker) == 1
           text = text.replace(marker, marker + r'''
                   for padding in 4060..4098 {
                       let payload = format!("{OPEN}{}\x1b[31m中文🎉\nTAIL{CLOSE}", "x".repeat(padding));
@@ -33,16 +34,14 @@ jobs:
                   let payload = format!("{OPEN}{}{CLOSE}", "\x1b[31m色\x1b[0m\n".repeat(400));
                   assert_native_frames("dense-literal-escapes", &[payload]);
           ''')
-          text = text.replace("  console.log('PASTE_RAW:'", "  console.log('GENERATED_TAIL:' + Buffer.from(value.slice(-64)).toString('hex') + ':');\n  console.log('PASTE_RAW:'")
-          marker = '        assert_eq!(field(&output, "PASTE_RAW:")'
-          text = text.replace(marker, '        if field(&output, "PASTE_HASH:") != Some(u64::from(hash(expected.as_bytes()))) { println!("GENERATED FIXTURE DIAGNOSTIC: {output:?}"); }\n' + marker)
           (root / 'src/tests/paste_framing.rs').write_text(text, encoding='utf-8')
           (root / 'Cargo.toml').write_text('''[package]
-          name = "paste-boundary-probe"
+          name = "paste-drain-probe"
           version = "0.0.0"
           edition = "2021"
           [dependencies]
           portable-pty = "=0.8.1"
+          filedescriptor = "=0.8.3"
           serde = { version = "1", features = ["derive"] }
           serde_json = "1"
           ''', encoding='utf-8')
@@ -50,18 +49,13 @@ jobs:
           (root / 'src/pty.rs').write_text(r'''
           use std::io::{self, Write};
           pub(crate) fn write_pty_data<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
-              let strategy = std::env::var("PROBE_STRATEGY").unwrap();
-              let csi = if strategy.starts_with("c1") { "\u{9b}" } else { "\x1b[" };
-              let all = strategy.ends_with("all");
               let limit: usize = std::env::var("PROBE_CHUNK").unwrap().parse().unwrap();
               let mut chunk = Vec::with_capacity(limit);
+              writer.flush()?;
               for c in std::str::from_utf8(data).unwrap().chars() {
-                  let encoded = if all || c == '\x1b' {
-                      c.encode_utf16(&mut [0; 2]).iter().map(|u| format!("{csi}0;0;{u};1;0;1_")).collect::<String>()
-                  } else { c.to_string() };
+                  let encoded = if c == '\x1b' { "\x1b[0;0;27;1;0;1_".to_string() } else { c.to_string() };
                   if chunk.len() + encoded.len() > limit {
                       writer.write_all(&chunk)?; writer.flush()?; chunk.clear();
-                      std::thread::sleep(std::time::Duration::from_millis(1));
                   }
                   chunk.extend_from_slice(encoded.as_bytes());
               }
@@ -69,16 +63,42 @@ jobs:
               writer.flush()
           }
           ''', encoding='utf-8')
-      - name: Test indivisible Unicode tokens rather than byte cuts
+      - name: Fetch locked descriptor implementation for diagnostic-only patch
+        working-directory: .paste-probe
+        run: cargo fetch
+      - name: Replace no-op descriptor flush in isolated probe only
+        working-directory: .paste-probe
+        shell: python
+        run: |
+          from pathlib import Path
+          import json, re, shutil, subprocess
+          metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--format-version', '1'], text=True))
+          manifest = next(p['manifest_path'] for p in metadata['packages'] if p['name'] == 'filedescriptor')
+          shutil.copytree(Path(manifest).parent, Path('vendor/filedescriptor'))
+          p = Path('vendor/filedescriptor/src/windows.rs')
+          text = p.read_text(encoding='utf-8')
+          pattern = r'fn flush\(&mut self\) -> (?:std::)?io::Result<\(\)> \{\s*Ok\(\(\)\)\s*\}'
+          assert len(re.findall(pattern, text)) == 1
+          replacement = '''fn flush(&mut self) -> std::io::Result<()> {
+              #[link(name = "kernel32")]
+              extern "system" { fn FlushFileBuffers(handle: *mut std::ffi::c_void) -> i32; }
+              // Probe exclusively owns ConPTY input pipes. Do not commit this global descriptor patch.
+              if unsafe { FlushFileBuffers(self.as_raw_handle()) } == 0 {
+                  return Err(std::io::Error::last_os_error());
+              }
+              Ok(())
+          }'''
+          text = re.sub(pattern, lambda _: replacement, text)
+          p.write_text(text, encoding='utf-8')
+          p = Path('Cargo.toml')
+          p.write_text(p.read_text(encoding='utf-8') + '\n[patch.crates-io]\nfiledescriptor = { path = "vendor/filedescriptor" }\n', encoding='utf-8')
+      - name: Require intact frames and payload with actual pipe flush
         working-directory: .paste-probe
         shell: pwsh
         run: |
-          foreach ($strategy in @('esc-esc', 'c1-esc', 'c1-all')) {
-            foreach ($size in @('4096', '512')) {
-              $env:PROBE_STRATEGY = $strategy
-              $env:PROBE_CHUNK = $size
-              cargo test --lib PtyPaste_Native -- --nocapture
-              Write-Output "STRATEGY_${strategy}_CHUNK_${size}_EXIT=$LASTEXITCODE"
-            }
+          foreach ($size in @('512', '4096')) {
+            $env:PROBE_CHUNK = $size
+            cargo test --lib PtyPaste_Native -- --nocapture
+            Write-Output "DRAIN_CHUNK_${size}_EXIT=$LASTEXITCODE"
           }
           $global:LASTEXITCODE = 0
