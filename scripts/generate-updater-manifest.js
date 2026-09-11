@@ -19,6 +19,9 @@ function toPublishedAssetName(name) {
 
 function buildUpdaterManifest({ repository, tag, assets, notes = '', pubDate = new Date().toISOString() }) {
   if (!repository || !tag) throw new Error('repository and tag are required')
+  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(tag)) {
+    throw new Error(`invalid release tag: ${tag}`)
+  }
 
   const platforms = {}
   for (const [platform, matcher] of Object.entries(PLATFORM_MATCHERS)) {
@@ -65,7 +68,7 @@ function main() {
   const artifactsDir = path.resolve(process.argv[2] || 'artifacts')
   const outputPath = path.resolve(process.argv[3] || 'latest.json')
   const repository = process.env.GITHUB_REPOSITORY
-  const tag = process.env.GITHUB_REF_NAME
+  const tag = process.argv[4]
   const manifest = buildUpdaterManifest({
     repository,
     tag,

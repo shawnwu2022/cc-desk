@@ -174,36 +174,14 @@ npm run tauri:build        # 生产构建
 - `~/.cc-box/`、`CC_BOX_*` 与 `cc-box-light` / `cc-box-dark` 暂作为兼容标识保留，避免旧用户配置和插件协议失效
 - 发布默认只面向 CC Desk 的 GitHub Releases，不再自动同步或发布到原项目的 Gitee / OSS 渠道
 - 首次发布前必须换用 CC Desk 自有 Tauri updater 密钥；私钥只存 GitHub Secrets，禁止提交到仓库
-### 版本发布（全自动）
+### 版本发布（main 驱动）
 
-**一句话发布**：
-```bash
-npm run release -- --bump patch --notes "### Features\n- Add feature"
-```
+1. 同步更新 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/tauri.conf.json` 和 `CHANGELOG.md`。
+2. 通过 PR 合入 `main`，并等待前端与 Rust CI 全部通过。
+3. `package.json` 变更触发 `.github/workflows/release.yml`：工作流从版本号解析唯一标签，将标签显式传给 updater manifest 生成器，构建签名产物并发布为 GitHub Latest Release。
+4. 发布完成后必须验证 GitHub `releases/latest` 指向本次标签、`latest.json.version` 与本次版本一致，并逐个请求 manifest 内的平台资产链接。
 
-脚本自动完成：更新版本号 → 更新 CHANGELOG → 提交推送 → 创建标签 → 监控 CI → 发布 GitHub Release；CI 同时生成并上传 `latest.json` updater manifest。
-
-**参数说明**：
-| 参数 | 说明 |
-|------|------|
-| `--bump <type>` | 版本类型：`major` / `minor` / `patch`（与 `--exact` 二选一） |
-| `--exact` | 使用当前版本发布，不 bump 版本号（适用于重新发布） |
-| `--notes "<text>"` | Release notes，`\n` 表示换行（必填），必须用英文写 |
-| `--skip-ci` | 跳过 CI 监控（标签已构建时用） |
-| `--oss-only <ver>` | 可选镜像工具：仅上传到自行配置的 OSS，不属于默认发布链 |
-
-**常用示例**：
-```bash
-# 新版本发布
-npm run release -- --bump patch --notes "### Fixed\n- Fix copy issue"
-npm run release -- --bump minor --notes "### Features\n- Add feature"
-
-# 重新发布当前版本（CI 已构建）
-npm run release -- --exact --notes "### Fixed\n- Fix issue" --skip-ci
-
-# 可选：上传到自行配置的 OSS 镜像
-npm run release -- --oss-only v0.5.1
-```
+禁止在较新版本发布后再发布旧草稿；旧 Release 会抢占 Latest 更新入口。`npm run release -- --oss-only <ver>` 仅用于维护者自行配置的可选 OSS 镜像，不属于默认发布链。
 
 详细流程 → [docs/release-process.md](docs/release-process.md)
 

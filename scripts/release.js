@@ -298,7 +298,7 @@ function publishRelease(version, releaseNotes) {
 function verifyPublishedUpdaterManifest(version) {
   logStep('验证 updater 资产链接...')
   const manifestUrl = `https://github.com/shawnwu2022/cc-desk/releases/download/v${version}/latest.json`
-  execWithProxyRetry(`node scripts/verify-updater-manifest.js "${manifestUrl}"`)
+  execWithProxyRetry(`node scripts/verify-updater-manifest.js "${manifestUrl}" "${version}"`)
   logSuccess('updater 资产链接可用')
 }
 // ============================================
