@@ -1,4 +1,8 @@
 import { createRequire } from 'node:module'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 
 type UpdaterAsset = {
@@ -22,6 +26,7 @@ type BuildUpdaterManifest = (input: {
 }) => UpdaterManifest
 
 const requireModule = createRequire(import.meta.url)
+const scriptPath = resolve(process.cwd(), 'scripts/generate-updater-manifest.js')
 const { buildUpdaterManifest } = requireModule('../../scripts/generate-updater-manifest.js') as {
   buildUpdaterManifest: BuildUpdaterManifest
 }
@@ -76,5 +81,55 @@ describe('generate updater manifest', () => {
         assets: assets.slice(0, 2),
       }),
     ).toThrow(/missing updater asset for linux-x86_64/)
+  })
+
+  it('UpdaterManifest_RejectsBranchNameAsVersion_004', () => {
+    expect(() =>
+      buildUpdaterManifest({
+        repository: 'shawnwu2022/cc-desk',
+        tag: 'main',
+        assets,
+      }),
+    ).toThrow(/release tag/i)
+  })
+
+  it('UpdaterManifest_CliUsesExplicitReleaseTag_005', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cc-desk-updater-manifest-'))
+    const artifactsDir = join(root, 'artifacts')
+    const outputPath = join(root, 'latest.json')
+    const fixtures = [
+      ['windows/CC Desk_1.2.3_x64-setup.exe', 'win-sig'],
+      ['macos/CC Desk.app.tar.gz', 'mac-sig'],
+      ['linux/CC Desk_1.2.3_amd64.AppImage', 'linux-sig'],
+    ] as const
+
+    try {
+      for (const [relativePath, signature] of fixtures) {
+        const assetPath = join(artifactsDir, relativePath)
+        mkdirSync(dirname(assetPath), { recursive: true })
+        writeFileSync(assetPath, '')
+        writeFileSync(`${assetPath}.sig`, signature)
+      }
+
+      const result = spawnSync(
+        process.execPath,
+        [scriptPath, artifactsDir, outputPath, 'v1.2.3'],
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            GITHUB_REPOSITORY: 'shawnwu2022/cc-desk',
+            GITHUB_REF_NAME: 'main',
+          },
+        },
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      const manifest = JSON.parse(readFileSync(outputPath, 'utf8')) as UpdaterManifest
+      expect(manifest.version).toBe('1.2.3')
+      expect(manifest.platforms['windows-x86_64'].url).toContain('/releases/download/v1.2.3/')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

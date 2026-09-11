@@ -3,7 +3,8 @@ import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
 
 type VerifyUpdaterManifestUrls = (
-  manifest: { platforms: Record<string, { url: string }> },
+  manifest: { version?: string; platforms: Record<string, { url: string }> },
+  expectedVersion?: string,
 ) => Promise<void>
 
 const requireModule = createRequire(import.meta.url)
@@ -42,5 +43,17 @@ describe('release manifest URL verification', () => {
     } finally {
       await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())))
     }
+  })
+
+  it('ReleaseManifestUrls_RejectsUnexpectedVersion_003', async () => {
+    await expect(
+      verifyUpdaterManifestUrls(
+        {
+          version: '0.17.5',
+          platforms: {},
+        },
+        '0.17.6',
+      ),
+    ).rejects.toThrow(/expected updater version 0\.17\.6, received 0\.17\.5/)
   })
 })

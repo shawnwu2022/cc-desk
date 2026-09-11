@@ -13,7 +13,11 @@ function readManifest(source) {
   return Promise.resolve(JSON.parse(fs.readFileSync(source, 'utf8')))
 }
 
-async function verifyUpdaterManifestUrls(manifest, request = fetch) {
+async function verifyUpdaterManifestUrls(manifest, expectedVersion, request = fetch) {
+  if (expectedVersion && manifest?.version !== expectedVersion) {
+    throw new Error(`expected updater version ${expectedVersion}, received ${manifest?.version ?? 'missing'}`)
+  }
+
   const platforms = manifest?.platforms
   if (!platforms || typeof platforms !== 'object') throw new Error('updater manifest has no platforms')
 
@@ -29,10 +33,11 @@ async function verifyUpdaterManifestUrls(manifest, request = fetch) {
 
 async function main() {
   const source = process.argv[2]
-  if (!source) throw new Error('usage: verify-updater-manifest.js <manifest-file-or-url>')
+  const expectedVersion = process.argv[3]
+  if (!source) throw new Error('usage: verify-updater-manifest.js <manifest-file-or-url> [expected-version]')
   const manifest = await readManifest(source)
-  await verifyUpdaterManifestUrls(manifest)
-  console.log('Verified updater asset URLs')
+  await verifyUpdaterManifestUrls(manifest, expectedVersion)
+  console.log(`Verified updater manifest${expectedVersion ? ` ${expectedVersion}` : ''} and asset URLs`)
 }
 
 module.exports = { readManifest, verifyUpdaterManifestUrls }

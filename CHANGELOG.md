@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.17.6] - 2026-09-11
+
+### Fixed
+- Generate updater manifests from the resolved release tag instead of the triggering branch
+- Reject invalid updater manifest tags before publishing release assets
+- Mark each stable GitHub Release as the latest update source
+
+### Tests
+- Add CLI regression coverage for main-branch release builds
+
 ## [0.17.2] - 2026-08-30
 
 ### Fixed

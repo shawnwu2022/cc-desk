@@ -11,62 +11,15 @@
 
 ## 自动化发布（推荐）
 
-使用 `scripts/release.js` 脚本全自动发布：
+稳定版由受保护的 `main` 分支驱动发布：
 
-```bash
-# 设置代理（GitHub 访问需要）
-export HTTP_PROXY=http://127.0.0.1:33210
-export HTTPS_PROXY=http://127.0.0.1:33210
+1. 按语义化版本确定新版本，并同步更新所有版本文件与 `CHANGELOG.md`。
+2. 创建发布 PR，等待前端与 Rust CI 全部通过后合入 `main`。
+3. `package.json` 的版本变更触发 `.github/workflows/release.yml`。
+4. 工作流解析 `v<package.version>`，把该标签显式传给 `scripts/generate-updater-manifest.js`，构建三端签名产物并发布稳定 GitHub Release。
+5. Release 明确设置为 Latest；工作流发布后立即校验 Latest manifest 的版本和各平台资产链接，任一不一致都会让发布任务失败。
 
-# 使用 npm 命令
-npm run release -- --bump patch --notes "### Fixed\n- Fix terminal copy issue"
-
-# 或直接运行脚本
-node scripts/release.js --bump minor --notes "### Features\n- Add sidebar panel\n\n### Fixed\n- Memory leak"
-```
-
-### 参数说明
-
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `--bump` | ✓* | 版本更新类型：`major` / `minor` / `patch`（与 `--exact` 二选一） |
-| `--exact` | ✓* | 使用当前版本发布，不 bump 版本号（用于重新发布） |
-| `--notes` | ✓ | Release notes 内容，用 `\n` 表示换行 |
-| `--skip-ci` |  | 跳过 CI 监控（用于已构建的标签） |
-| `--oss-only` |  | 可选镜像：仅上传到自行配置的 OSS，不属于默认发布链 |
-
-### 执行流程
-
-脚本自动执行以下步骤：
-1. 更新版本号（Cargo.toml, package.json, tauri.conf.json）
-2. 更新 CHANGELOG.md
-3. Git 提交并推送（自动使用代理）
-4. 创建并推送标签
-5. 监控 CI 构建
-6. 发布 GitHub Release
-7. CI 生成 `latest.json` updater manifest，并与安装包一起上传到 GitHub Release
-8. 发布脚本请求 manifest 中每个平台资产链接；任一链接返回 404 或不可用状态时发布失败
-
-### Release Notes 格式
-
-```bash
-# 多行格式示例（用 \n 表示换行）
---notes "### Bug Fixes\n- Fix issue A\n- Fix issue B\n\n### Features\n- Add feature X"
-```
-
-### 常用示例
-
-```bash
-# 新版本发布
-npm run release -- --bump patch --notes "### Fixed\n- Fix copy issue"
-npm run release -- --bump minor --notes "### Features\n- Add sidebar panel"
-
-# 重新发布当前版本（CI 已构建）
-npm run release -- --exact --notes "### Fixed\n- Fix issue" --skip-ci
-
-# 可选：上传到自行配置的 OSS 镜像
-npm run release -- --oss-only v0.5.1
-```
+Release notes 与 `CHANGELOG.md` 必须使用英文，并以动词开头描述用户可观察的变化。不要在新版本之后重新发布旧草稿，否则 GitHub Latest 可能被旧版本抢占。
 
 ## 可选 OSS 镜像
 
@@ -102,12 +55,14 @@ cp scripts/oss-config.example.json scripts/oss-config.json
 
 ## 版本号更新位置
 
-三个文件的版本号必须保持一致：
+以下版本号必须保持一致：
 
 | 文件 | 路径 |
 |------|------|
 | Cargo.toml | `src-tauri/Cargo.toml` → `version` |
+| Cargo.lock | `src-tauri/Cargo.lock` → `cc-desk` package `version` |
 | package.json | `package.json` → `version` |
+| package-lock.json | `package-lock.json` → 根包 `version` |
 | tauri.conf.json | `src-tauri/tauri.conf.json` → `version` |
 
 ## 手动发布（备用）
@@ -115,37 +70,33 @@ cp scripts/oss-config.example.json scripts/oss-config.json
 ```bash
 # 1. 更新版本号（编辑三个文件）
 
-# 2. 提交并推送（需要代理）
-export HTTP_PROXY=http://127.0.0.1:33210
-git add -A && git commit -m "Release v0.2.5"
-git push origin main
+# 2. 创建发布分支、提交并发起 PR
+git switch -c codex/release-v0.2.5
+git add <release-files>
+git commit -m "Release v0.2.5"
+git push origin codex/release-v0.2.5
 
-# 3. 创建并推送标签（触发 CI 构建）
-git tag -a v0.2.5 -m "Release v0.2.5"
-git push origin v0.2.5
+# 3. PR 的前端与 Rust CI 通过后合入 main；main 自动触发发布工作流
 
-# 4. 监控 CI 构建
+# 4. 监控 Release workflow
 gh run watch <run-id> --exit-status
 # 或访问 https://github.com/shawnwu2022/cc-desk/actions
 
-# 5. 发布 Release
-gh release edit v0.2.5 --draft=false --notes "## What's Changed\n\n..."
-
-# 6. 可选：上传到自行配置的 OSS 镜像（无需代理）
+# 5. 可选：上传到自行配置的 OSS 镜像（无需代理）
 node scripts/release.js --oss-only v0.2.5
 ```
 
 ## Updater manifest
 
-`.github/workflows/release.yml` 在汇总三端产物后运行 `scripts/generate-updater-manifest.js`，校验每个平台的签名文件并生成 `latest.json`。该文件会作为 GitHub Release 附件发布，对应应用配置中的：
+`.github/workflows/release.yml` 在汇总三端产物后，将解析出的精确发布标签显式传给 `scripts/generate-updater-manifest.js`，校验标签和每个平台的签名文件并生成 `latest.json`。分支名或其他非版本标签会导致工作流失败。该文件会作为 GitHub Release 附件发布，对应应用配置中的：
 
 ```text
 https://github.com/shawnwu2022/cc-desk/releases/latest/download/latest.json
 ```
 
-manifest 缺少任一平台产物或 `.sig` 时 CI 直接失败，避免发布一个无法自动更新的版本。
+manifest 缺少任一平台产物或 `.sig` 时 CI 直接失败，避免发布一个无法自动更新的版本。稳定 Release 使用 `make_latest: true`，确保 `/releases/latest/` 更新入口指向本次版本。
 
-GitHub Release 对带空格的产物名按点号发布（例如 `CC Desk_0.15.0_x64-setup.exe` 发布为 `CC.Desk_0.15.0_x64-setup.exe`）；生成 manifest 时必须使用该已发布资产名。发布验收还应请求 `latest.json` 中每个平台的 `url`，确认均不返回 404。
+GitHub Release 对带空格的产物名按点号发布（例如 `CC Desk_0.15.0_x64-setup.exe` 发布为 `CC.Desk_0.15.0_x64-setup.exe`）；生成 manifest 时必须使用该已发布资产名。发布验收必须确认 GitHub Latest 的 `tag_name` 是本次标签、`/releases/latest/download/latest.json` 的 `version` 是本次版本，并请求其中每个平台的 `url`，确认均不返回 404。
 ## 构建产物
 
 CI 自动构建并上传：
