@@ -52,3 +52,19 @@ FlushFileBuffers 语义：Microsoft Learn /windows/win32/api/fileapi/nf-fileapi-
 - 隔离的 UserPromptSubmit hook 捕获完整提交正文并阻止模型处理；dummy key + loopback endpoint 双重避免使用用户凭据和真实模型请求。
 - 对 64/256/800 个嵌套对象的 JSON 逐字节比对全文，不允许折叠标签、只有首尾或只有长度一致代替验收。
 - 此结果仍不覆盖用户自己的 Chrome 剪贴板和不同 Windows/Claude 版本；原始失败样本需要在同一构建上复核。
+
+
+## 0.17.5 架构修正：停止模拟 Win32 键盘事件
+
+同一类大 JSON 在 Windows Terminal、Windows 10 build 19045、native Claude Code
+2.1.267/2.1.268 中会被正确识别为 `Pasted text`；CC Desk 0.17.3 和 0.17.4
+则泄漏字面 `[201~`。诊断证明完整原文与两端标记在进入 Rust 前均未丢失，
+因此故障来自 CC Desk 自行改写 ConPTY 输入协议。
+
+0.17.5 删除 Win32 INPUT_RECORD ESC 编码、逐段 FlushFileBuffers 以及 portable-pty
+本地 flush fork。Windows 粘贴与 Windows Terminal 对齐：将
+`ESC[200~ + body + ESC[201~` 作为一个未经改写的逻辑 write_all 提交。
+
+旧 Node raw-stdin 探针没有启用 Claude Code 的控制台输入模式，保留为 ignored
+诊断而不再充当发布门禁。正式门禁使用真实 Claude Code、隔离配置和
+UserPromptSubmit 全文捕获，对提交正文逐字节比较。

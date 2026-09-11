@@ -269,3 +269,13 @@ npm run release -- --oss-only v0.5.1
 - 0.17.3 诊断包通过 `paste_diag` 仅记录入口来源、UTF-8 字节数、字符数、LF 数、起止标记位置、writer 路径和耗时；严禁记录剪贴板正文。
 - 日志位于 `~/.cc-box/logs/YYYY-MM-DD.log`，并包含版本与构建 SHA。用户复现后应截取 `Build identity` 和 `paste_diag` 行定位边界。
 - 诊断包不得被表述为已修复版本；结果用于区分 WebView/IPC 未形成完整帧，与特定 Windows/Claude 对完整帧处理失败。
+
+
+### Windows 粘贴架构约束
+
+- 禁止把 bracketed-paste 的 ESC 改写为 Win32 INPUT_RECORD 序列；该协议要求
+  `CSI ? 9001 h` 协商，不能由应用猜测。
+- Windows 粘贴必须与 Windows Terminal 一致：完整、未经改写的 frame 通过
+  一次逻辑 write_all 提交，不在 marker 或正文中插入 FlushFileBuffers 边界。
+- Node raw stdin 不等价于 Claude Code 的控制台输入模式；发布门禁必须使用
+  `paste_cli_submit` 捕获真实 UserPromptSubmit 正文。

@@ -31,11 +31,7 @@ fn PtyPaste_PlatformWire_002() {
     let input = format!("{OPEN}日志\n\x1b[31mred{CLOSE}");
     let mut wire = Vec::new();
     write_pty_data(&mut wire, input.as_bytes()).unwrap();
-    #[cfg(windows)]
-    let expected = "\x1b[0;0;27;1;0;1_[200~日志\n\x1b[0;0;27;1;0;1_[31mred\x1b[0;0;27;1;0;1_[201~";
-    #[cfg(not(windows))]
-    let expected = input.as_str();
-    assert_eq!(wire, expected.as_bytes());
+    assert_eq!(wire, input.as_bytes());
 }
 
 // 下层失败必须上报；不得静默继续或自动重发已经写入的前缀。
@@ -59,10 +55,11 @@ fn PtyPaste_WriteFailurePropagates_003() {
 
 #[cfg(windows)]
 #[test]
-fn PtyPaste_Win10MarkersAreNeverFlushedAsStandaloneEscape_007() {
+fn PtyPaste_WindowsMatchesWindowsTerminalRawWrite_009() {
     #[derive(Default)]
     struct RecordingWriter {
         writes: Vec<Vec<u8>>,
+        flushes: usize,
     }
 
     impl std::io::Write for RecordingWriter {
@@ -72,37 +69,23 @@ fn PtyPaste_Win10MarkersAreNeverFlushedAsStandaloneEscape_007() {
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes += 1;
             Ok(())
         }
     }
 
-    const ESCAPE_EVENT: &[u8] = b"\x1b[0;0;27;1;0;1_";
-    let payload = format!("{OPEN}body{CLOSE}");
+    let payload = format!("{OPEN}{{\n  \"ok\": true,\n  \"text\": \"中文🎉\"\n}}{CLOSE}");
     let mut writer = RecordingWriter::default();
     write_pty_data(&mut writer, payload.as_bytes()).unwrap();
 
-    assert!(
-        !writer.writes.iter().any(|write| write == ESCAPE_EVENT),
-        "opening/closing ESC must not be drained as a standalone key event"
+    assert_eq!(
+        writer.writes,
+        vec![payload.into_bytes()],
+        "Windows paste must use one unmodified raw bracketed-paste write"
     );
-
-    let mut opening = ESCAPE_EVENT.to_vec();
-    opening.extend_from_slice(b"[200~");
-    let mut closing = ESCAPE_EVENT.to_vec();
-    closing.extend_from_slice(b"[201~");
-    assert!(
-        writer
-            .writes
-            .first()
-            .is_some_and(|write| write.starts_with(&opening)),
-        "opening marker must be present in one pipe write"
-    );
-    assert!(
-        writer
-            .writes
-            .last()
-            .is_some_and(|write| write.ends_with(&closing)),
-        "closing marker must be present in one pipe write"
+    assert_eq!(
+        writer.flushes, 0,
+        "the raw paste path must not inject FlushFileBuffers boundaries"
     );
 }
 
@@ -298,6 +281,7 @@ setTimeout(() => process.exit(2), 85000);
     }
 
     #[test]
+    #[ignore = "ReadConsoleInputW probe does not model Claude Code VT input; use paste_cli_submit"]
     fn PtyPaste_NativeFrames_004() {
         let fixtures: Vec<Fixture> = serde_json::from_str(include_str!(
             "../../tests/fixtures/devtools-paste-framing.json"
@@ -311,6 +295,7 @@ setTimeout(() => process.exit(2), 85000);
     }
 
     #[test]
+    #[ignore = "ReadConsoleInputW probe does not model Claude Code VT input; use paste_cli_submit"]
     fn PtyPaste_NativeChunkBoundary_005() {
         // ESC 位于一个 4 KiB 写块的最后一字节，下一块才有 CSI 参数。
         let payload = format!("{OPEN}{}\x1b[31m中文🎉\nTAIL{CLOSE}", "x".repeat(4075));
@@ -324,6 +309,7 @@ setTimeout(() => process.exit(2), 85000);
     }
 
     #[test]
+    #[ignore = "ReadConsoleInputW probe does not model Claude Code VT input; use paste_cli_submit"]
     fn PtyPaste_NativeWin10ReportedShape_008() {
         let mut lines = vec!["{".to_string(), "\"items\":[".to_string()];
         lines.extend((0..3574).map(|_| "0,".to_string()));
@@ -346,6 +332,7 @@ setTimeout(() => process.exit(2), 85000);
     }
 
     #[test]
+    #[ignore = "ReadConsoleInputW probe does not model Claude Code VT input; use paste_cli_submit"]
     fn PtyPaste_NativeConsecutiveFrames_006() {
         let payloads = [
             format!("{OPEN}first\n一{CLOSE}"),

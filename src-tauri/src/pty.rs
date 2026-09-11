@@ -21,61 +21,17 @@ pub(crate) const PTY_WRITE_CHUNK_SIZE: usize = 4 * 1024;
 const PTY_WRITE_CHUNK_DELAY: Duration = Duration::from_millis(1);
 const PTY_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Preserve complete bracketed-paste frames for Windows ReadConsoleInputW
-/// clients. ConPTY filters ordinary paste CSI delimiters when VT input is
-/// disabled, so literal ESC is represented as a Unicode input event.
+/// Match Windows Terminal paste semantics on Windows: submit the complete,
+/// unmodified bracketed-paste frame through one logical pipe write.
 ///
-/// Windows 10 build 19045 exposed an additional timing constraint: draining
-/// immediately after the generated ESC event lets the TUI observe a standalone
-/// Escape key before `[200~` / `[201~` arrives. Keep each outer delimiter in
-/// one small pipe write and drain only after the whole delimiter is queued.
+/// Earlier CC Desk builds rewrote ESC into Win32 INPUT_RECORD encodings and
+/// inserted FlushFileBuffers boundaries. That protocol is only valid after
+/// win32-input-mode negotiation and leaked `[201~` on Windows 10 build 19045.
+/// Claude Code already enables the input mode it requires; the terminal host
+/// must preserve the frame instead of inventing a second keyboard protocol.
 #[cfg(windows)]
 fn write_conpty_paste<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
-    const OPEN: &[u8] = b"\x1b[200~";
-    const CLOSE: &[u8] = b"\x1b[201~";
-    const LITERAL_ESCAPE: &[u8] = b"\x1b[0;0;27;1;0;1_";
-
-    if data.len() < OPEN.len() + CLOSE.len() || !data.starts_with(OPEN) || !data.ends_with(CLOSE) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "expected one complete bracketed-paste frame",
-        ));
-    }
-
-    let body = &data[OPEN.len()..data.len() - CLOSE.len()];
-    let body = std::str::from_utf8(body)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-
-    let mut opening = Vec::with_capacity(LITERAL_ESCAPE.len() + 5);
-    opening.extend_from_slice(LITERAL_ESCAPE);
-    opening.extend_from_slice(b"[200~");
-    writer.write_all(&opening)?;
-    writer.flush()?;
-
-    // Preserve the previously verified body behavior. Only the two outer
-    // delimiters need the Win10 atomic-write rule.
-    let mut segments = body.split('\x1b').peekable();
-    while let Some(mut segment) = segments.next() {
-        while !segment.is_empty() {
-            let mut end = segment.len().min(PTY_WRITE_CHUNK_SIZE);
-            while !segment.is_char_boundary(end) {
-                end -= 1;
-            }
-            writer.write_all(&segment.as_bytes()[..end])?;
-            writer.flush()?;
-            segment = &segment[end..];
-        }
-        if segments.peek().is_some() {
-            writer.write_all(LITERAL_ESCAPE)?;
-            writer.flush()?;
-        }
-    }
-
-    let mut closing = Vec::with_capacity(LITERAL_ESCAPE.len() + 5);
-    closing.extend_from_slice(LITERAL_ESCAPE);
-    closing.extend_from_slice(b"[201~");
-    writer.write_all(&closing)?;
-    writer.flush()
+    writer.write_all(data)
 }
 
 pub(crate) fn write_pty_data<W: Write + ?Sized>(
@@ -740,7 +696,7 @@ impl PtyManager {
             .collect::<String>();
         let paste_like = source.contains("paste") || open.is_some() || close.is_some();
         let transport = if cfg!(windows) && complete_frame {
-            "windows-conpty-atomic-markers"
+            "windows-conpty-raw-frame"
         } else {
             "generic"
         };
