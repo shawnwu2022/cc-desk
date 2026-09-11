@@ -355,7 +355,10 @@ function createTerminal(tabId: string): Terminal {
     const instance = terminalInstances.get(tabId)
     if (instance) {
       // ptyId 空（fit 在 spawn 前发生）时跳过发送；Escape 仍清 working 状态
-      if (instance.ptyId) ptyInput(instance.ptyId, data)
+      if (instance.ptyId) {
+      const pasteLike = data.includes('\x1b[200~') || data.includes('\x1b[201~')
+      ptyInput(instance.ptyId, data, pasteLike ? 'xterm-ondata-paste' : 'terminal-ondata')
+    }
 
       // Escape 按键：Claude 的 Stop hook 不在用户中断时触发，立即清除 working
       if (data === '\x1b') {
@@ -415,15 +418,15 @@ function createTerminal(tabId: string): Terminal {
       // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
       // 触发光标回行首、后续覆盖前面（表现为"只显尾部"）。这里用 commitPaste 走完整
       // 流程：capture ptyId → readText → isPasteStale 复核（防 restart 重建后写到新 PTY）
-      // → 构造 payload（JSON 压缩单行 + 规范化 LF + bracketed 包装，见 utils/pasteText.ts；
-      // 压缩是为绕开 ConPTY 吞标记后 Claude 对大段多行 burst 的间歇截断）。
+      // → 构造 payload（原文规范化 LF + bracketed 包装，见 utils/pasteText.ts）。
+      // JSON 不再自动压缩；Windows 粘贴帧由 Rust 生产 writer 保护。
       // 剪贴板无文本（截图场景 readText reject）时经 imageFallback 转发 CLI 图片粘贴键
       // 字节，由 CLI 自行读剪贴板插 [Image #N]（键位契约见 docs/interaction.md）。
       commitPaste(
         readText,
         () => terminalInstances.get(tabId),
         text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
-        ptyInput,
+        (id, payload) => ptyInput(id, payload, 'clipboard-keyboard'),
         () => imagePasteBytes(platform),
       ).catch(() => {})
       return false
@@ -453,7 +456,7 @@ onMounted(async () => {
       container: containerRef.value,
       getTabId: () => currentDisplayTabId.value,
       getInstance: tabId => terminalInstances.get(tabId),
-      write: ptyInput,
+      write: (id, payload) => ptyInput(id, payload, 'clipboard-dom'),
       imageFallback: () => imagePasteBytes(platform),
     })
   }

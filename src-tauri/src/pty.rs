@@ -12,19 +12,37 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::{mpsc, Arc, LazyLock, Weak};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
-// Windows ConPTY 对连续突发写入存在截断风险；小块刷新并短暂让出时间，避免大粘贴丢字节。
+// 普通输入保留既有分块策略；Windows 完整粘贴帧走下方独立编码与真实管道排空。
 pub(crate) const PTY_WRITE_CHUNK_SIZE: usize = 4 * 1024;
 const PTY_WRITE_CHUNK_DELAY: Duration = Duration::from_millis(1);
 const PTY_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Match Windows Terminal paste semantics on Windows: submit the complete,
+/// unmodified bracketed-paste frame through one logical pipe write.
+///
+/// Earlier CC Desk builds rewrote ESC into Win32 INPUT_RECORD encodings and
+/// inserted FlushFileBuffers boundaries. That protocol is only valid after
+/// win32-input-mode negotiation and leaked `[201~` on Windows 10 build 19045.
+/// Claude Code already enables the input mode it requires; the terminal host
+/// must preserve the frame instead of inventing a second keyboard protocol.
+#[cfg(windows)]
+fn write_conpty_paste<W: Write + ?Sized>(writer: &mut W, data: &[u8]) -> io::Result<()> {
+    writer.write_all(data)
+}
 
 pub(crate) fn write_pty_data<W: Write + ?Sized>(
     writer: &mut W,
     data: &[u8],
 ) -> std::io::Result<()> {
+    #[cfg(windows)]
+    if data.starts_with(b"\x1b[200~") && data.ends_with(b"\x1b[201~") {
+        return write_conpty_paste(writer, data);
+    }
+
     let mut chunks = data.chunks(PTY_WRITE_CHUNK_SIZE).peekable();
     if chunks.peek().is_none() {
         return writer.flush();
@@ -658,15 +676,63 @@ impl PtyManager {
     }
 
     /// 写入输入到 PTY。全局 map 锁在取得 Arc 后立即释放。
-    pub fn write(&self, id: &str, data: &str) -> Result<()> {
+    /// 粘贴诊断只记录来源、尺寸、标记位置和耗时，绝不记录剪贴板正文。
+    pub fn write(&self, id: &str, data: &str, source: Option<&str>) -> Result<()> {
         let entry = lookup_writer(&self.writers, id).ok_or_else(|| {
             let error = format!("PTY writer not found for id: {id}");
             log::warn!("{}", error);
             anyhow!(error)
         })?;
 
+        let bytes = data.as_bytes();
+        let open = data.find("\x1b[200~");
+        let close = data.rfind("\x1b[201~");
+        let complete_frame = data.starts_with("\x1b[200~") && data.ends_with("\x1b[201~");
+        let source = source
+            .unwrap_or("unknown")
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':'))
+            .take(48)
+            .collect::<String>();
+        let paste_like = source.contains("paste") || open.is_some() || close.is_some();
+        let transport = if cfg!(windows) && complete_frame {
+            "windows-conpty-raw-frame"
+        } else {
+            "generic"
+        };
+        let short_id = &id[..id.len().min(8)];
+        if paste_like {
+            log::info!(
+                target: "paste_diag",
+                "input build={} version={} pty={} source={} utf8_bytes={} chars={} lf={} open_at={:?} close_at={:?} complete={} transport={}",
+                env!("CC_DESK_BUILD_SHA"),
+                env!("APP_VERSION"),
+                short_id,
+                source,
+                bytes.len(),
+                data.chars().count(),
+                bytes.iter().filter(|byte| **byte == b'\n').count(),
+                open,
+                close,
+                complete_frame,
+                transport
+            );
+        }
+
+        let started = Instant::now();
         let mut writer = entry.writer.lock();
-        write_pty_data(writer.as_mut(), data.as_bytes()).with_context(|| {
+        let result = write_pty_data(writer.as_mut(), bytes);
+        if paste_like {
+            log::info!(
+                target: "paste_diag",
+                "write pty={} source={} success={} elapsed_ms={}",
+                short_id,
+                source,
+                result.is_ok(),
+                started.elapsed().as_millis()
+            );
+        }
+        result.with_context(|| {
             format!("Failed to write or flush {} bytes to PTY {id}", data.len())
         })?;
         Ok(())

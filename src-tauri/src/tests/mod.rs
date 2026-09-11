@@ -20,3 +20,8 @@ mod session_name_index;
 mod store;
 #[cfg(test)]
 mod store_profiling;
+
+#[cfg(all(test, windows))]
+mod paste_cli_submit;
+#[cfg(test)]
+mod paste_framing;

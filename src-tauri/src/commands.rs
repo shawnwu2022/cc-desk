@@ -70,11 +70,11 @@ pub async fn pty_spawn(
 
 /// 写入 PTY 输入
 #[tauri::command]
-pub async fn pty_input(id: String, data: String) -> Result<bool, String> {
+pub async fn pty_input(id: String, data: String, source: Option<String>) -> Result<bool, String> {
     let manager = get_pty_manager().ok_or_else(|| "PTY manager not initialized".to_string())?;
 
     manager
-        .write(&id, &data)
+        .write(&id, &data, source.as_deref())
         .map(|_| true)
         .map_err(|e| e.to_string())
 }

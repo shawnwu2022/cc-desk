@@ -167,6 +167,11 @@ pub fn init() {
     }
 
     log::info!("=== CC Desk started ===");
+    log::info!(
+        "Build identity: version={} sha={}",
+        env!("APP_VERSION"),
+        env!("CC_DESK_BUILD_SHA")
+    );
     if let Some(dir) = log_dir() {
         log::info!("Log directory: {}", dir.display());
     }
