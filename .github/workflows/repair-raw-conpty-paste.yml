@@ -70,15 +70,47 @@ jobs:
       - name: Apply architecture correction
         run: python .github/scripts/repair_raw_paste.py apply
 
-      - name: Restore registry dependency metadata
-        working-directory: src-tauri
-        run: cargo update -p portable-pty --precise 0.8.1
+      - name: Restore exact crates.io portable-pty lock entry
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          import subprocess
+
+          subprocess.run(
+              ['git', 'fetch', 'origin', 'codex/focus-claude-workspace', '--depth=1'],
+              check=True,
+          )
+          base = subprocess.check_output(
+              ['git', 'show', 'FETCH_HEAD:src-tauri/Cargo.lock'],
+              text=True,
+              encoding='utf-8',
+          )
+          lock_path = Path('src-tauri/Cargo.lock')
+          current = lock_path.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r'^\[\[package\]\]\nname = "portable-pty"\n.*?(?=^\[\[package\]\]|\Z)',
+              re.MULTILINE | re.DOTALL,
+          )
+          base_match = pattern.search(base)
+          current_match = pattern.search(current)
+          if base_match is None or current_match is None:
+              raise SystemExit('portable-pty lock entry not found in base/current lockfile')
+          base_block = base_match.group(0)
+          if 'source = "registry+' not in base_block or 'checksum = ' not in base_block:
+              raise SystemExit('base portable-pty entry is not a registry package')
+          current = current[:current_match.start()] + base_block + current[current_match.end():]
+          old_version = 'name = "cc-desk"\nversion = "0.17.4"'
+          if current.count(old_version) != 1:
+              raise SystemExit('cc-desk lock version entry was not uniquely found')
+          current = current.replace(old_version, 'name = "cc-desk"\nversion = "0.17.5"', 1)
+          lock_path.write_text(current, encoding='utf-8', newline='\n')
 
       - name: Verify focused raw-frame contract
         working-directory: src-tauri
         run: |
           cargo fmt --all
-          cargo test --lib PtyPaste_WindowsMatchesWindowsTerminalRawWrite_009 -- --nocapture
+          cargo test --locked --lib PtyPaste_WindowsMatchesWindowsTerminalRawWrite_009 -- --nocapture
 
       - name: Install isolated Claude Code 2.1.268
         run: npm install --engine-strict --prefix .ci-claude --no-save "@anthropic-ai/claude-code@2.1.268"
@@ -88,14 +120,14 @@ jobs:
 
       - name: Verify exact submitted JSON through real Claude
         working-directory: src-tauri
-        run: cargo test --lib RealClaude_DevtoolsJsonSubmittedCompletely_001 -- --ignored --test-threads=1 --nocapture
+        run: cargo test --locked --lib RealClaude_DevtoolsJsonSubmittedCompletely_001 -- --ignored --test-threads=1 --nocapture
 
       - name: Verify Rust
         working-directory: src-tauri
         run: |
           cargo fmt --all --check
-          cargo clippy --all-targets -- -D warnings
-          cargo test
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
 
       - name: Verify frontend
         run: |
