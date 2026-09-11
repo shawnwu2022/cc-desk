@@ -103,6 +103,11 @@ const currentDisplayTabId = ref<string | null>(null)
 // 是否正在启动 PTY（防止并发）
 const isPtyStarting = ref<boolean>(false)
 
+// PTY ID 由前端预分配，使 ptyId -> tabId 路由在后端启动进程前就绪。
+function createPtyId(): string {
+  return crypto.randomUUID()
+}
+
 // macOS 原生 Copy 事件：Tauri MenuBuilder 注册了 Copy 菜单项后，
 // Cmd+C 会派发 copy 事件到 WebView，此处将 xterm 选中文本写入剪贴板
 function handleNativeCopy(e: ClipboardEvent) {
@@ -350,7 +355,10 @@ function createTerminal(tabId: string): Terminal {
     const instance = terminalInstances.get(tabId)
     if (instance) {
       // ptyId 空（fit 在 spawn 前发生）时跳过发送；Escape 仍清 working 状态
-      if (instance.ptyId) ptyInput(instance.ptyId, data)
+      if (instance.ptyId) {
+      const pasteLike = data.includes('\x1b[200~') || data.includes('\x1b[201~')
+      ptyInput(instance.ptyId, data, pasteLike ? 'xterm-ondata-paste' : 'terminal-ondata')
+    }
 
       // Escape 按键：Claude 的 Stop hook 不在用户中断时触发，立即清除 working
       if (data === '\x1b') {
@@ -410,15 +418,15 @@ function createTerminal(tabId: string): Terminal {
       // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
       // 触发光标回行首、后续覆盖前面（表现为"只显尾部"）。这里用 commitPaste 走完整
       // 流程：capture ptyId → readText → isPasteStale 复核（防 restart 重建后写到新 PTY）
-      // → 构造 payload（JSON 压缩单行 + 规范化 LF + bracketed 包装，见 utils/pasteText.ts；
-      // 压缩是为绕开 ConPTY 吞标记后 Claude 对大段多行 burst 的间歇截断）。
+      // → 构造 payload（原文规范化 LF + bracketed 包装，见 utils/pasteText.ts）。
+      // JSON 不再自动压缩；Windows 粘贴帧由 Rust 生产 writer 保护。
       // 剪贴板无文本（截图场景 readText reject）时经 imageFallback 转发 CLI 图片粘贴键
       // 字节，由 CLI 自行读剪贴板插 [Image #N]（键位契约见 docs/interaction.md）。
       commitPaste(
         readText,
         () => terminalInstances.get(tabId),
         text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
-        ptyInput,
+        (id, payload) => ptyInput(id, payload, 'clipboard-keyboard'),
         () => imagePasteBytes(platform),
       ).catch(() => {})
       return false
@@ -448,7 +456,7 @@ onMounted(async () => {
       container: containerRef.value,
       getTabId: () => currentDisplayTabId.value,
       getInstance: tabId => terminalInstances.get(tabId),
-      write: ptyInput,
+      write: (id, payload) => ptyInput(id, payload, 'clipboard-dom'),
       imageFallback: () => imagePasteBytes(platform),
     })
   }
@@ -516,25 +524,21 @@ async function setupEventListeners() {
     if (instance) instance.term.write(data)
   })
 
-  // PTY 退出 → 更新 Tab 状态（不删除 Tab）；ptyToTab 反查 tabId
+  // PTY 退出 → 先按 ptyId 收敛 store，再清理仍属于该 ID 的终端实例。
+  // 旧 PTY 的迟到事件不得销毁同一 tab 上已重启的新终端。
   unlistenPtyExit = await onPtyExit(({ id }) => {
     const tabId = ptyToTab.get(id)
-    if (!tabId) return
-    const instance = terminalInstances.get(tabId)
-    if (!instance) return
-
-    // 更新 store（Tab 保留，状态变 stopped）
     sessionStore.handlePtyExit(id)
-
-    // 清理 hook 状态（防止残留旧数据）
     hookStore.clearSession(id)
 
-    // 销毁 Terminal 实例（释放资源）
-    void disposeTerminal(instance.term, `onPtyExit(tabId=${tabId})`)
-    terminalInstances.delete(tabId)
-    terminalEls.delete(tabId)
+    if (!tabId) return
+    const instance = terminalInstances.get(tabId)
+    if (instance?.ptyId === id) {
+      void disposeTerminal(instance.term, `onPtyExit(tabId=${tabId})`)
+      terminalInstances.delete(tabId)
+      terminalEls.delete(tabId)
+    }
     ptyToTab.unlink(id)
-    // 通知 TerminalView settle sessionStart waiter（PTY 退出）
     emit('ptyExited', tabId, id)
   })
 }
@@ -640,7 +644,6 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
     return { ok: false, error: 'blocked by isPtyStarting' }
   }
 
-  // 已有运行中的 PTY
   if (tab.ptyId && tab.status === 'running') {
     if (!terminalInstances.has(tabId)) {
       await createTerminalForTab(tabId, tab.ptyId)
@@ -653,14 +656,15 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
   try {
     const args = buildClaudeArgs(tab)
     const cwd = tab.projectPath
-
+    const ptyId = createPtyId()
     const term = createTerminal(tabId)
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
 
-    // 先注册实例（ptyId 暂空）+ open + fit 拿实际 cols/rows，再 spawn，
-    // 避免 Claude CLI 按 80 列输出 resume 历史、实际窗口更宽导致历史挤左
-    terminalInstances.set(tabId, { term, fitAddon, ptyId: '' })
+    // 先注册路由和 store，再启动后端进程。即使 CLI 立即输出或退出，事件也能定位 tab。
+    terminalInstances.set(tabId, { term, fitAddon, ptyId })
+    sessionStore.setTabPty(tabId, ptyId)
+    ptyToTab.link(ptyId, tabId)
     sessionStore.setActiveTab(tabId)
     currentDisplayTabId.value = tabId
 
@@ -676,6 +680,7 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
     }
 
     const info = await ptySpawn({
+      id: ptyId,
       cwd,
       cols,
       rows,
@@ -683,22 +688,27 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
       args,
     })
 
-    if (info) {
-      const instance = terminalInstances.get(tabId)
-      if (instance) instance.ptyId = info.id
-      sessionStore.setTabPty(tabId, info.id)
-      ptyToTab.link(info.id, tabId)
-      emit('ptyStarted', tabId, info.id)
-      return { ok: true }
+    if (!info || info.id !== ptyId) {
+      throw new Error('PTY spawn returned an unexpected identifier')
     }
-    // info==null：统一清理（P2.7 修复：原仅 delete terminalInstances，tab 残留）
-    discardUnstartedTab(tabId)
-    return { ok: false, error: 'no pty info' }
+
+    const liveInstance = terminalInstances.get(tabId)
+    const liveTab = sessionStore.tabs.get(tabId)
+    if (
+      liveInstance?.ptyId !== ptyId ||
+      liveTab?.ptyId !== ptyId ||
+      liveTab.status !== 'running'
+    ) {
+      discardUnstartedTab(tabId)
+      return { ok: false, error: 'PTY exited during startup' }
+    }
+
+    emit('ptyStarted', tabId, ptyId)
+    return { ok: true }
   } catch (err) {
-    // 异常统一清理（P2.7 修复：原裸 terminalInstances.delete 绕过 disposeTerminal）
     discardUnstartedTab(tabId)
     console.error('[XTerm] startTab ERROR:', err)
-    logMessage('error', `startTab failed, tabId=${tabId}: ${err}`)
+    void logMessage('error', `startTab failed, tabId=${tabId}: ${err}`)
     return { ok: false, error: String(err) }
   } finally {
     isPtyStarting.value = false
@@ -712,6 +722,13 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
  */
 function discardUnstartedTab(tabId: string) {
   const instance = terminalInstances.get(tabId)
+  const ptyId = instance?.ptyId ?? sessionStore.tabs.get(tabId)?.ptyId ?? null
+  if (ptyId) {
+    ptyToTab.unlink(ptyId)
+    hookStore.clearSession(ptyId)
+    useAttentionStore().clearPty(ptyId)
+    void ptyKill(ptyId).catch(() => {})
+  }
   if (instance) {
     void disposeTerminal(instance.term, `discardUnstartedTab(tabId=${tabId})`)
     terminalInstances.delete(tabId)
@@ -744,21 +761,21 @@ async function restartTab(tabId: string) {
   if (!tab || isPtyStarting.value) return
 
   isPtyStarting.value = true
+  let startingPtyId: string | null = null
 
   try {
-    // 如果有旧 PTY 在运行，先 kill
-    if (tab.ptyId) {
-      // 重启退役旧 PTY：clearPty 清焦点队列关注项 + 标 tombstone，
-      // 防 pty-exit 晚于 ptyToTab unlink 导致退出处理 return（不走 handlePtyExit）漏清（codex P2）
-      useAttentionStore().clearPty(tab.ptyId)
-      try { await ptyKill(tab.ptyId) } catch {}
-      hookStore.clearSession(tab.ptyId)
+    const oldPtyId = tab.ptyId
+    if (oldPtyId) {
+      // 先取消旧事件路由，防止迟到退出事件误删随后创建的新终端。
+      ptyToTab.unlink(oldPtyId)
+      useAttentionStore().clearPty(oldPtyId)
+      try { await ptyKill(oldPtyId) } catch {}
+      sessionStore.handlePtyExit(oldPtyId)
+      hookStore.clearSession(oldPtyId)
     }
 
-    // 清理旧 Terminal 实例（dispose 失败不阻断重启流程，仍需清理 Map 引用）
     const oldInstance = terminalInstances.get(tabId)
     if (oldInstance) {
-      if (oldInstance.ptyId) ptyToTab.unlink(oldInstance.ptyId)
       await disposeTerminal(oldInstance.term, `restartTab(old term, tabId=${tabId})`)
       terminalInstances.delete(tabId)
       terminalEls.delete(tabId)
@@ -766,14 +783,15 @@ async function restartTab(tabId: string) {
 
     const args = buildClaudeArgs(tab)
     const cwd = tab.projectPath
-
+    const ptyId = createPtyId()
+    startingPtyId = ptyId
     const term = createTerminal(tabId)
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
 
-    // 先注册实例（ptyId 暂空）+ open + fit 拿实际 cols/rows，再 spawn，
-    // 避免 Claude CLI 按 80 列输出 resume 历史、实际窗口更宽导致历史挤左
-    terminalInstances.set(tabId, { term, fitAddon, ptyId: '' })
+    terminalInstances.set(tabId, { term, fitAddon, ptyId })
+    sessionStore.setTabPty(tabId, ptyId)
+    ptyToTab.link(ptyId, tabId)
     sessionStore.setActiveTab(tabId)
     currentDisplayTabId.value = tabId
 
@@ -789,6 +807,7 @@ async function restartTab(tabId: string) {
     }
 
     const info = await ptySpawn({
+      id: ptyId,
       cwd,
       cols,
       rows,
@@ -796,21 +815,39 @@ async function restartTab(tabId: string) {
       args,
     })
 
-    if (info) {
-      const instance = terminalInstances.get(tabId)
-      if (instance) instance.ptyId = info.id
-      sessionStore.setTabPty(tabId, info.id)
-      ptyToTab.link(info.id, tabId)
-      emit('ptyStarted', tabId, info.id)
-    } else {
-      terminalInstances.delete(tabId)
+    if (!info || info.id !== ptyId) {
+      throw new Error('PTY restart returned an unexpected identifier')
     }
 
+    const liveInstance = terminalInstances.get(tabId)
+    const liveTab = sessionStore.tabs.get(tabId)
+    if (
+      liveInstance?.ptyId !== ptyId ||
+      liveTab?.ptyId !== ptyId ||
+      liveTab.status !== 'running'
+    ) {
+      return
+    }
+
+    emit('ptyStarted', tabId, ptyId)
+    startingPtyId = null
     appStore.resetClaudeOptions()
   } catch (err) {
-    terminalInstances.delete(tabId)
+    if (startingPtyId) {
+      const failedInstance = terminalInstances.get(tabId)
+      if (failedInstance?.ptyId === startingPtyId) {
+        await disposeTerminal(failedInstance.term, `restartTab(failed term, tabId=${tabId})`)
+        terminalInstances.delete(tabId)
+        terminalEls.delete(tabId)
+      }
+      ptyToTab.unlink(startingPtyId)
+      hookStore.clearSession(startingPtyId)
+      useAttentionStore().clearPty(startingPtyId)
+      sessionStore.handlePtyExit(startingPtyId)
+      void ptyKill(startingPtyId).catch(() => {})
+    }
     console.error('[XTerm] restartTab ERROR:', err)
-    logMessage('error', `restartTab failed, tabId=${tabId}: ${err}`)
+    void logMessage('error', `restartTab failed, tabId=${tabId}: ${err}`)
   } finally {
     isPtyStarting.value = false
   }
@@ -887,8 +924,8 @@ function sendText(text: string) {
   const tabId = currentDisplayTabId.value
   if (!tabId) return
   const instance = terminalInstances.get(tabId)
-  if (instance) {
-    ptyInput(instance.ptyId, text)
+  if (instance?.ptyId) {
+    void ptyInput(instance.ptyId, text)
     instance.term.focus()
   }
 }

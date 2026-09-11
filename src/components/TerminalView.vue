@@ -58,8 +58,11 @@
           @pty-started="handlePtyStarted"
           @pty-exited="handlePtyExited"
         />
-        <!-- sessionStart 事务进行中提示（非阻塞，允许终端交互） -->
+        <!-- Hook 监控是可选增强；不可用时终端仍保持运行。 -->
         <div v-if="sessionStarting" class="session-starting-hint">{{ t('claudeStarting') }}</div>
+        <div v-else-if="showMonitoringUnavailable" class="session-starting-hint">
+          {{ t('monitoringUnavailable') }}
+        </div>
       </div>
     </div>
   </div>
@@ -73,14 +76,14 @@ import { computeTerminalSurfaceVars, getTerminalTheme } from '@/config/terminalT
 import { useSessionStore } from '@/stores/session'
 import { useSidebarStore, type SidebarPanelType } from '@/stores/sidebar'
 import { useConfigStore } from '@/stores/config'
-import { openInFileManager, logMessage, ptyKill } from '@/api/tauri'
+import { openInFileManager, logMessage } from '@/api/tauri'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
 import { useWindowAttention } from '@/composables/useWindowAttention'
 import { useStatusMonitor } from '@/composables/useStatusMonitor'
 import { resolveSwitchAction } from '@/composables/useProjectTreeNavigation'
 import { sameProjectPath } from '@/utils/path'
 import { resolveWindowTitle } from '@/utils/displayName'
-import { reduceWaiter, isTimeoutError, STARTUP_TIMEOUT_CODE, type WaiterStatus, type WaiterEvent } from '@/composables/useSessionStartWaiter'
+import { reduceWaiter, PERSIST_FAILED_CODE, type WaiterStatus, type WaiterEvent } from '@/composables/useSessionStartWaiter'
 import { useHookStore, type HookEventHandler } from '@/stores/hook'
 import type { HookEventPayload } from '@/types/hook'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -140,71 +143,91 @@ async function startResumeSession(projectPath: string, sessionId: string, sessio
   }
 }
 
-// ==================== sessionStart 事务（v6 P1.2/P1.5）====================
-// per-tabId waiter：spawn 前 register，sessionStart hook 到达 / 超时 / PTY 提前退出 / spawn 失败 / unmount 统一 settle。
-// 抽 reduceWaiter 纯函数（见 useSessionStartWaiter）便于单测；终态吸收后续事件，避免重复 settle。
+// ==================== optional SessionStart monitoring ====================
+// PTY spawn success is the process-start authority. SessionStart hooks only enrich
+// activity state. A missing hook resolves to "unavailable" and never kills a live PTY.
+type MonitoringResult = 'monitored' | 'unavailable'
+
 interface WaiterEntry {
   status: WaiterStatus
-  resolve: () => void
-  reject: (e: Error) => void
+  resolve: (result: MonitoringResult) => void
+  reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout> | null
 }
+
 const sessionStartWaiters = new Map<string, WaiterEntry>()
 const SESSION_START_TIMEOUT_MS = 30000
-/** 事务进行中（pending UI 用，非阻塞——允许用户与终端交互） */
 const sessionStarting = ref(false)
+const monitoringUnavailableTabs = ref<Set<string>>(new Set())
 
-/** 统一 settle：清 timer/Map + 据状态机结果 resolve/reject（超时/提前退出/spawn 失败/unmount 统一入口） */
+const showMonitoringUnavailable = computed(() => {
+  const tabId = sessionStore.activeTabId
+  return tabId !== null && monitoringUnavailableTabs.value.has(tabId)
+})
+
+function setMonitoringUnavailable(tabId: string, unavailable: boolean) {
+  const next = new Set(monitoringUnavailableTabs.value)
+  if (unavailable) next.add(tabId)
+  else next.delete(tabId)
+  monitoringUnavailableTabs.value = next
+}
+
 function settleWaiter(tabId: string, event: WaiterEvent) {
   const entry = sessionStartWaiters.get(tabId)
   if (!entry) return
+
   const next = reduceWaiter(entry.status, event)
-  if (next === entry.status) return // 无转换（终态吸收）
+  if (next === entry.status) return
+
   entry.status = next
-  if (entry.timer) { clearTimeout(entry.timer); entry.timer = null }
+  if (entry.timer) clearTimeout(entry.timer)
+  entry.timer = null
   sessionStartWaiters.delete(tabId)
+
   switch (next) {
-    case 'started': entry.resolve(); break
-    case 'timeout': {
-      // tag code 供 catch 精确区分 timeout（i18n 无关），见 isTimeoutError
-      const err = new Error(t('claudeStartTimeout')) as Error & { code: typeof STARTUP_TIMEOUT_CODE }
-      err.code = STARTUP_TIMEOUT_CODE
-      entry.reject(err)
+    case 'started':
+      entry.resolve('monitored')
       break
-    }
-    case 'exited': entry.reject(new Error(t('claudeStartFailed'))); break
-    case 'failed': entry.reject(new Error(t('claudeStartFailed'))); break
-    case 'cancelled': entry.reject(new Error('cancelled')); break
+    case 'unavailable':
+      entry.resolve('unavailable')
+      break
+    case 'exited':
+    case 'failed':
+      entry.reject(new Error(t('claudeStartFailed')))
+      break
+    case 'cancelled':
+      entry.reject(new Error('cancelled'))
+      break
   }
 }
 
-/**
- * 注册 waiter（spawn 前调，避免 hook 先到 waiter 后建丢事件）。
- * 注册后立即检查 tab.sessionId 兜底：若 useStatusMonitor 已通过 sessionStart hook 设过 sessionId，直接 resolve。
- */
-function registerWaiter(tabId: string): Promise<void> {
+function registerWaiter(tabId: string): Promise<MonitoringResult> {
   const tab = sessionStore.tabs.get(tabId)
-  if (tab?.sessionId) return Promise.resolve() // 事件先到，直接 resolve
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => settleWaiter(tabId, { type: 'timeout' }), SESSION_START_TIMEOUT_MS)
-    sessionStartWaiters.set(tabId, { status: 'waiting', resolve, reject, timer })
+  if (tab?.sessionId) return Promise.resolve('monitored')
+
+  return new Promise<MonitoringResult>((resolve, reject) => {
+    const timer = setTimeout(
+      () => settleWaiter(tabId, { type: 'timeout' }),
+      SESSION_START_TIMEOUT_MS
+    )
+    sessionStartWaiters.set(tabId, {
+      status: 'waiting',
+      resolve,
+      reject,
+      timer,
+    })
   })
 }
 
 /**
- * 添加项目 = 进入目录 + 创建首会话（v6 P1.2 sessionStart 事务）。
- * 1. createTab + setActiveTab
- * 2. registerWaiter（spawn 前，避免丢事件）
- * 3. startTab（PTY spawn）
- * 4. spawn 成功后：setCwdLocal + pending UI（暂不持久化 lastOpened）
- * 5. await waiter（sessionStart hook）
- * 6. sessionStart 到达 -> setCurrentProject(persist:true) 持久化 lastOpened
- * - 超时/提前退出/spawn 失败：settleWaiter 统一 reject，不持久化，错误传播给调用方
+ * Add a project and start its first Claude process.
+ * The PTY result decides whether launch succeeded. Hook monitoring may become
+ * unavailable without changing process state or triggering another launch.
  */
 async function startProjectSession(path: string): Promise<void> {
   const tabId = sessionStore.createTab(path)
   sessionStore.setActiveTab(tabId)
-  // spawn 前注册 waiter（避免 hook 先到 waiter 后建丢事件）
+  setMonitoringUnavailable(tabId, false)
   const waiter = registerWaiter(tabId)
 
   let spawnError: Error | null = null
@@ -212,74 +235,70 @@ async function startProjectSession(path: string): Promise<void> {
     if (!terminalRef.value) throw new Error('terminal not ready')
     const result = await terminalRef.value.startTab(tabId)
     if (!result.ok) throw new Error(result.error)
-    // spawn 成功后切 cwd（spec：spawn 后切，非 spawn 前）+ pending
     appStore.setCwdLocal(path)
     sessionStarting.value = true
-  } catch (e) {
-    spawnError = e instanceof Error ? e : new Error(String(e))
+  } catch (error) {
+    spawnError = error instanceof Error ? error : new Error(String(error))
     settleWaiter(tabId, { type: 'spawnFail' })
   }
 
-  // 等 waiter（spawn 失败时 waiter 已 reject，await 立即抛出）
+  let monitoringResult: MonitoringResult
   try {
-    await waiter
-  } catch (e) {
+    monitoringResult = await waiter
+  } catch (error) {
     sessionStarting.value = false
-    if (isTimeoutError(e)) {
-      // timeout：spawn 已成功但 sessionStart hook 30s 未到 -> PTY 可能活。
-      // kill PTY（防泄漏 + 防 retry 起重复 Claude 进程）+ 清 terminal instance（onPtyExit 亦会清，此处幂等兜底）。
-      // 保留 tab（不 removeTab）：tab 结构留作上下文（贴 spec §4.4 step 8）。
-      // retry 起新 tab（App.vue retryProjectSpawn -> startProjectSession -> createTab 新 id）。
-      //
-      // v6 codex batch1 #1：ptyKill 后显式调 sessionStore.handlePtyExit(ptyId) 清 tab 状态
-      // （status=stopped + ptyId=null + working=false）再 disposeTabInstance。原因：PTY kill 后
-      // exit 事件可能不再触发，或到达时 XTermTerminal.onPtyExit 只对仍存在 terminalInstances 的实例
-      // handlePtyExit（disposeTabInstance 先清实例则 onPtyExit 找不到实例 -> 不调 store.handlePtyExit），
-      // 导致 tab 仍 status=running ptyId 非空 -> getRunningTabForProject 误判 -> retry 创建第二个 tab。
-      // 此处先抓 ptyId（handlePtyExit 会置 null），ptyKill + handlePtyExit 双保险清状态，再 dispose 实例。
-      const tab = sessionStore.tabs.get(tabId)
-      const ptyId = tab?.ptyId ?? null
-      if (ptyId) {
-        ptyKill(ptyId).catch(() => {}) // PTY 已退则 kill no-op，catch 吞错
-        sessionStore.handlePtyExit(ptyId) // 显式清 tab 状态（PTY kill 后 exit 可能不再触发或找不到实例）
-      }
-      terminalRef.value?.disposeTabInstance?.(tabId)
-    } else {
-      // ptyExit/spawnFail：清脏 tab。
-      // spawnFail 路径 startTab 内 discardUnstartedTab 已 removeTab（幂等，再调无害）；
-      // ptyExit 路径 PTY 已退、Terminal 实例已被 onPtyExit 销毁，但 tab（status=stopped）残留，此处 removeTab 清脏 tab。
-      sessionStore.removeTab(tabId)
-    }
-    throw spawnError ?? e
+    setMonitoringUnavailable(tabId, false)
+    sessionStore.removeTab(tabId)
+    throw spawnError ?? error
   }
 
-  // sessionStart 到达 -> 持久化 lastOpened（cwd 已在 spawn 后切，此处仅持久化）
+  sessionStarting.value = false
+
+  // The process can still exit in the small interval after monitoring settles.
+  // Do not persist a successful startup for a tab that is no longer running.
+  const liveTab = sessionStore.tabs.get(tabId)
+  if (!liveTab || liveTab.status !== 'running') {
+    setMonitoringUnavailable(tabId, false)
+    sessionStore.removeTab(tabId)
+    throw new Error(t('claudeStartFailed'))
+  }
+
+  const monitoringUnavailable = monitoringResult === 'unavailable'
+  setMonitoringUnavailable(tabId, monitoringUnavailable)
+  if (monitoringUnavailable) {
+    void logMessage(
+      'warn',
+      `SessionStart hook unavailable for tab ${tabId}; Claude PTY remains running`
+    )
+  }
+
   try {
     await appStore.setCurrentProject(path, { persist: true })
-  } catch (e) {
-    sessionStarting.value = false
-    // v6 codex batch1 #2：sessionStart 已成功（Claude 已跑），persist 失败不应误判启动失败重 spawn。
-    // 抛带 code='persist_failed' 的错误，让 App.vue catch 区分（isPersistFailedError）：
-    // persist 失败保留 tab（Claude 已跑）+ 重试只重 persist（非重 spawn）。
-    const err = new Error('persist_failed') as Error & { code: string; cause?: unknown }
-    err.code = 'persist_failed'
-    err.cause = e instanceof Error ? e : undefined
-    throw err
+  } catch (error) {
+    const persistError = new Error(PERSIST_FAILED_CODE) as Error & {
+      code: typeof PERSIST_FAILED_CODE
+      cause?: unknown
+    }
+    persistError.code = PERSIST_FAILED_CODE
+    persistError.cause = error instanceof Error ? error : undefined
+    throw persistError
   }
-  sessionStarting.value = false
 }
 
-// PTY 提前退出 -> settle waiter（未 sessionStart 退出 = 启动失败）
 function handlePtyExited(tabId: string, _ptyId: string) {
+  setMonitoringUnavailable(tabId, false)
   settleWaiter(tabId, { type: 'ptyExit' })
 }
 
-// sessionStart hook -> settle waiter（与 useStatusMonitor 并行，各自处理；hookStore 支持多订阅者）
 const sessionStartHandler: HookEventHandler = (payload: HookEventPayload) => {
   const ptyId = payload.ptyId
   if (!ptyId) return
+
   const tab = sessionStore.getTabByPtyId(ptyId)
-  if (tab) settleWaiter(tab.tabId, { type: 'sessionStart' })
+  if (!tab) return
+
+  setMonitoringUnavailable(tab.tabId, false)
+  settleWaiter(tab.tabId, { type: 'sessionStart' })
 }
 let unsubscribeSessionStart: (() => void) | null = null
 

@@ -1,6 +1,5 @@
 <template>
   <div class="skill-item" :class="{ expanded: isExpanded, disabled: isDisabled }">
-    <!-- Skill Header -->
     <div
       class="skill-header"
       role="button"
@@ -19,18 +18,16 @@
         <span class="skill-name">{{ skill.displayName }}</span>
         <span v-if="skill.sourceType === 'plugin'" class="skill-full-name">{{ skill.name }}</span>
       </div>
-      <ToggleSwitch
-        v-if="skill.sourceType === 'user'"
-        :modelValue="!isDisabled"
-        :title="isDisabled ? t('enable') : t('disable')"
-        @update:modelValue="onToggle"
-      />
-      <button class="use-btn" :disabled="isDisabled" @click.stop="emitUseSkill" :title="t('useThisSkill')">
+      <button
+        class="use-btn"
+        :disabled="isDisabled"
+        :title="t('useThisSkill')"
+        @click.stop="emitUseSkill"
+      >
         <img src="@/assets/icons/use.svg" :alt="t('useBtn')" />
       </button>
     </div>
 
-    <!-- Skill Details (expanded) -->
     <div v-if="isExpanded" class="skill-details">
       <div v-if="skill.description" class="skill-description-full">
         {{ skill.description }}
@@ -47,19 +44,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SkillInfo } from '@/types'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
-import { useSidebarStore } from '@/stores/sidebar'
-import ToggleSwitch from '@/components/common/ToggleSwitch.vue'
 
 const { t } = useI18n()
 const props = defineProps<{
   skill: SkillInfo
 }>()
-
-const sidebarStore = useSidebarStore()
 
 const isExpanded = ref(false)
 const isDisabled = computed(() => props.skill.enabled === false)
@@ -72,21 +65,13 @@ function emitUseSkill() {
   if (isDisabled.value) return
   sendTerminalCommand(props.skill.invokeFormat)
 }
-
-async function onToggle(newValue: boolean) {
-  try {
-    await sidebarStore.toggleSkillEnabled(props.skill.name, newValue)
-  } catch (err) {
-    console.error('[SkillItem] toggle failed:', err)
-  }
-}
 </script>
 
 <style scoped>
 .skill-item {
-  background: var(--bg-primary);
-  border-radius: 8px;
   padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-primary);
   transition: background 0.15s ease;
 }
 
@@ -99,13 +84,8 @@ async function onToggle(newValue: boolean) {
 }
 
 .skill-item.disabled .skill-name {
-  text-decoration: line-through;
   color: var(--text-tertiary);
-}
-
-.skill-item.disabled .use-btn {
-  pointer-events: none;
-  opacity: 0.4;
+  text-decoration: line-through;
 }
 
 .skill-header {
@@ -119,8 +99,8 @@ async function onToggle(newValue: boolean) {
 .expand-icon {
   width: 12px;
   height: 12px;
-  color: var(--text-secondary);
   flex-shrink: 0;
+  color: var(--text-secondary);
   transition: transform 0.15s ease;
 }
 
@@ -129,46 +109,51 @@ async function onToggle(newValue: boolean) {
 }
 
 .skill-info {
-  flex: 1;
   min-width: 0;
+  flex: 1;
 }
 
 .skill-name {
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary);
 }
 
 .skill-full-name {
   display: block;
-  font-size: 11px;
+  margin-top: 2px;
   color: var(--text-tertiary);
   font-family: var(--font-mono);
-  margin-top: 2px;
+  font-size: 11px;
 }
 
 .use-btn {
   display: flex;
-  align-items: center;
-  justify-content: center;
   width: 24px;
   height: 24px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
   border: none;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  border-radius: 4px;
-  flex-shrink: 0;
+}
+
+.use-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.use-btn:not(:disabled):hover {
+  background: var(--bg-tertiary);
+  color: var(--accent-color);
 }
 
 .use-btn img {
   width: 14px;
   height: 14px;
-}
-
-.use-btn:hover {
-  color: var(--accent-color);
-  background: var(--bg-tertiary);
 }
 
 .skill-details {
@@ -178,24 +163,24 @@ async function onToggle(newValue: boolean) {
 }
 
 .skill-description-full {
-  font-size: 12px;
+  overflow-wrap: break-word;
   color: var(--text-secondary);
+  font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
-  overflow-wrap: break-word;
   word-break: break-word;
 }
 
 .skill-description-empty {
-  font-size: 12px;
   color: var(--text-tertiary);
+  font-size: 12px;
   font-style: italic;
 }
 
 .skill-invoke-format {
-  margin-top: 8px;
   display: flex;
   gap: 6px;
+  margin-top: 8px;
   font-size: 11px;
 }
 
@@ -204,10 +189,10 @@ async function onToggle(newValue: boolean) {
 }
 
 .invoke-value {
-  font-family: var(--font-mono);
-  color: var(--text-primary);
-  background: var(--bg-tertiary);
   padding: 2px 6px;
   border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
 }
 </style>

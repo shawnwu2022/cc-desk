@@ -1,6 +1,5 @@
 <template>
   <div class="plugin-item" :class="{ expanded: isExpanded, disabled: isDisabled }">
-    <!-- Plugin Header -->
     <div
       class="plugin-header"
       role="button"
@@ -16,21 +15,12 @@
         alt="Toggle"
       />
       <span class="plugin-name">{{ plugin.name }}</span>
-      <ToggleSwitch
-        v-if="plugin.scope === 'user'"
-        :modelValue="!isDisabled"
-        :title="isDisabled ? t('enable') : t('disable')"
-        @update:modelValue="onToggle"
-      />
+      <span class="plugin-state">{{ isDisabled ? t('disabled') : t('enabled') }}</span>
     </div>
 
-    <!-- Plugin Version -->
     <div class="plugin-version">v{{ plugin.version }}</div>
-
-    <!-- Plugin ID -->
     <div class="plugin-id">{{ plugin.id }}</div>
 
-    <!-- Plugin Components Tags (collapsed view) -->
     <div v-if="!isExpanded && hasComponents" class="plugin-components">
       <span v-if="plugin.skills?.length" class="component-tag skills">
         {{ plugin.skills.length }} Skills
@@ -38,17 +28,15 @@
       <span v-if="plugin.agents?.length" class="component-tag agents">
         {{ plugin.agents.length }} Agents
       </span>
-      <span v-if="plugin.mcpServers && Object.keys(plugin.mcpServers).length > 0" class="component-tag mcp">
-        {{ Object.keys(plugin.mcpServers).length }} MCP
+      <span v-if="mcpCount > 0" class="component-tag mcp">
+        {{ mcpCount }} MCP
       </span>
     </div>
 
-    <!-- Expanded Components List -->
     <div v-if="isExpanded" class="plugin-expanded">
-      <!-- Skills -->
       <div v-if="plugin.skills?.length" class="component-section">
         <div class="section-title">{{ t('skills') }}</div>
-        <div v-for="skill in plugin.skills" :key="skill.name" class="component-item" :class="{ expanded: expandedSkills[skill.name] }">
+        <div v-for="skill in plugin.skills" :key="skill.name" class="component-item">
           <div
             class="item-header"
             role="button"
@@ -57,9 +45,19 @@
             @keydown.enter.self.prevent="toggleSkillDetail(skill.name)"
             @keydown.space.self.prevent="toggleSkillDetail(skill.name)"
           >
-            <img class="item-expand-icon" :class="{ expanded: expandedSkills[skill.name] }" src="@/assets/icons/chevron.svg" alt="Toggle" />
+            <img
+              class="item-expand-icon"
+              :class="{ expanded: expandedSkills[skill.name] }"
+              src="@/assets/icons/chevron.svg"
+              alt="Toggle"
+            />
             <span class="item-name">{{ skill.name }}</span>
-            <button class="item-use-btn" @click.stop="useSkill(skill.invokeFormat)" :title="t('useThisSkill')">
+            <button
+              class="item-use-btn"
+              :disabled="isDisabled"
+              :title="t('useThisSkill')"
+              @click.stop="useSkill(skill.invokeFormat)"
+            >
               <img src="@/assets/icons/skills.svg" :alt="t('skills')" class="item-icon" />
             </button>
           </div>
@@ -74,10 +72,9 @@
         </div>
       </div>
 
-      <!-- Agents -->
       <div v-if="plugin.agents?.length" class="component-section">
         <div class="section-title">{{ t('agents') }}</div>
-        <div v-for="agent in plugin.agents" :key="agent.name" class="component-item" :class="{ expanded: expandedAgents[agent.name] }">
+        <div v-for="agent in plugin.agents" :key="agent.name" class="component-item">
           <div
             class="item-header"
             role="button"
@@ -86,9 +83,19 @@
             @keydown.enter.self.prevent="toggleAgentDetail(agent.name)"
             @keydown.space.self.prevent="toggleAgentDetail(agent.name)"
           >
-            <img class="item-expand-icon" :class="{ expanded: expandedAgents[agent.name] }" src="@/assets/icons/chevron.svg" alt="Toggle" />
+            <img
+              class="item-expand-icon"
+              :class="{ expanded: expandedAgents[agent.name] }"
+              src="@/assets/icons/chevron.svg"
+              alt="Toggle"
+            />
             <span class="item-name">{{ agent.name }}</span>
-            <button class="item-use-btn" @click.stop="useAgent(agent.invokeFormat)" :title="t('useThisAgent')">
+            <button
+              class="item-use-btn"
+              :disabled="isDisabled"
+              :title="t('useThisAgent')"
+              @click.stop="useAgent(agent.invokeFormat)"
+            >
               <img src="@/assets/icons/agents.svg" :alt="t('agents')" class="item-icon" />
             </button>
           </div>
@@ -103,16 +110,18 @@
         </div>
       </div>
 
-      <!-- MCP Servers -->
-      <div v-if="plugin.mcpServers && Object.keys(plugin.mcpServers).length > 0" class="component-section">
+      <div v-if="mcpCount > 0" class="component-section">
         <div class="section-title">{{ t('mcpServers') }}</div>
-        <div v-for="(serverConfig, serverName) in plugin.mcpServers" :key="serverName" class="component-item mcp-server">
+        <div
+          v-for="(serverConfig, serverName) in plugin.mcpServers"
+          :key="serverName"
+          class="component-item mcp-server"
+        >
           <span class="item-name">{{ serverName }}</span>
           <span v-if="serverConfig.type" class="item-type">{{ serverConfig.type }}</span>
         </div>
       </div>
 
-      <!-- Empty state -->
       <div v-if="!hasComponents" class="no-components">
         {{ t('noDescription') }}
       </div>
@@ -121,31 +130,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PluginInfo } from '@/types'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
-import { useSidebarStore } from '@/stores/sidebar'
-import ToggleSwitch from '@/components/common/ToggleSwitch.vue'
 
 const { t } = useI18n()
 const props = defineProps<{
   plugin: PluginInfo
 }>()
 
-const sidebarStore = useSidebarStore()
-
 const isExpanded = ref(false)
 const expandedSkills = ref<Record<string, boolean>>({})
 const expandedAgents = ref<Record<string, boolean>>({})
 
 const isDisabled = computed(() => props.plugin.enabled === false)
-
-const hasComponents = computed(() => {
-  return (props.plugin.skills && props.plugin.skills.length > 0) ||
-    (props.plugin.agents && props.plugin.agents.length > 0) ||
-    (props.plugin.mcpServers && Object.keys(props.plugin.mcpServers).length > 0)
-})
+const mcpCount = computed(() => Object.keys(props.plugin.mcpServers ?? {}).length)
+const hasComponents = computed(() =>
+  Boolean(props.plugin.skills?.length || props.plugin.agents?.length || mcpCount.value)
+)
 
 function toggleExpand() {
   isExpanded.value = !isExpanded.value
@@ -160,29 +163,19 @@ function toggleAgentDetail(name: string) {
 }
 
 function useSkill(invokeFormat: string) {
-  if (isDisabled.value) return
-  sendTerminalCommand(invokeFormat)
+  if (!isDisabled.value) sendTerminalCommand(invokeFormat)
 }
 
 function useAgent(invokeFormat: string) {
-  if (isDisabled.value) return
-  sendTerminalCommand(invokeFormat)
-}
-
-async function onToggle(newValue: boolean) {
-  try {
-    await sidebarStore.togglePluginEnabled(props.plugin.id, newValue)
-  } catch (err) {
-    console.error('[PluginItem] toggle failed:', err)
-  }
+  if (!isDisabled.value) sendTerminalCommand(invokeFormat)
 }
 </script>
 
 <style scoped>
 .plugin-item {
-  background: var(--bg-primary);
-  border-radius: 8px;
   padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-primary);
   transition: background 0.15s ease;
 }
 
@@ -195,72 +188,93 @@ async function onToggle(newValue: boolean) {
 }
 
 .plugin-item.disabled .plugin-name {
-  text-decoration: line-through;
   color: var(--text-tertiary);
+  text-decoration: line-through;
 }
 
-.plugin-item.disabled .item-use-btn {
-  pointer-events: none;
-  opacity: 0.4;
-}
-
-.plugin-header {
+.plugin-header,
+.item-header,
+.plugin-components,
+.item-invoke-format {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.plugin-header,
+.item-header {
   cursor: pointer;
   user-select: none;
+}
+
+.expand-icon,
+.item-expand-icon {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
 }
 
 .expand-icon {
   width: 14px;
   height: 14px;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  transition: transform 0.15s ease;
 }
 
-.expand-icon.expanded {
+.item-expand-icon {
+  width: 10px;
+  height: 10px;
+}
+
+.expand-icon.expanded,
+.item-expand-icon.expanded {
   transform: rotate(90deg);
+}
+
+.plugin-name,
+.item-name {
+  min-width: 0;
+  flex: 1;
+  color: var(--text-primary);
+  font-weight: 500;
 }
 
 .plugin-name {
   font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
-  flex: 1;
-  min-width: 0;
-  line-height: 1;
 }
 
-.plugin-version {
-  margin-top: 4px;
-  font-size: 11px;
+.item-name {
+  font-size: 12px;
+}
+
+.plugin-state,
+.plugin-version,
+.plugin-id,
+.item-type {
   color: var(--text-tertiary);
+  font-size: 11px;
 }
 
+.plugin-state {
+  flex-shrink: 0;
+}
+
+.plugin-version,
 .plugin-id {
   margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-tertiary);
+}
+
+.plugin-id,
+.invoke-value {
   font-family: var(--font-mono);
 }
 
 .plugin-components {
   margin-top: 8px;
-  display: flex;
   gap: 6px;
 }
 
 .component-tag {
-  font-size: 10px;
   padding: 2px 6px;
   border-radius: 4px;
-}
-
-.component-tag.mcp {
-  background: var(--tag-mcp-bg);
-  color: var(--tag-mcp-text);
+  font-size: 10px;
 }
 
 .component-tag.skills {
@@ -273,7 +287,11 @@ async function onToggle(newValue: boolean) {
   color: var(--tag-agent-text);
 }
 
-/* Expanded styles */
+.component-tag.mcp {
+  background: var(--tag-mcp-bg);
+  color: var(--tag-mcp-text);
+}
+
 .plugin-expanded {
   margin-top: 12px;
   padding-top: 8px;
@@ -285,62 +303,42 @@ async function onToggle(newValue: boolean) {
 }
 
 .section-title {
+  margin-bottom: 6px;
+  color: var(--text-secondary);
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
 }
 
 .component-item {
-  background: var(--bg-secondary);
-  border-radius: 6px;
   margin-bottom: 4px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
 }
 
-.item-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.item-header,
+.component-item.mcp-server {
   padding: 8px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.item-expand-icon {
-  width: 10px;
-  height: 10px;
-  color: var(--text-tertiary);
-  flex-shrink: 0;
-  transition: transform 0.15s ease;
-}
-
-.item-expand-icon.expanded {
-  transform: rotate(90deg);
-}
-
-.item-name {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-primary);
-  flex: 1;
 }
 
 .item-use-btn {
   display: flex;
-  align-items: center;
-  justify-content: center;
   width: 20px;
   height: 20px;
-  border: none;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  border-radius: 4px;
   flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
 }
 
-.item-use-btn:hover {
-  color: var(--accent-color);
+.item-use-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.item-use-btn:not(:disabled):hover {
   background: var(--bg-tertiary);
 }
 
@@ -350,28 +348,27 @@ async function onToggle(newValue: boolean) {
 }
 
 .item-detail {
-  padding: 8px;
-  padding-top: 0;
   margin-top: 6px;
+  padding: 0 8px 8px;
   border-top: 1px solid var(--border-color);
 }
 
-.item-desc-full {
-  font-size: 11px;
+.item-desc-full,
+.item-desc-empty {
+  padding-top: 8px;
   color: var(--text-secondary);
+  font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
 }
 
 .item-desc-empty {
-  font-size: 11px;
   color: var(--text-tertiary);
   font-style: italic;
 }
 
 .item-invoke-format {
   margin-top: 6px;
-  display: flex;
   gap: 4px;
   font-size: 10px;
 }
@@ -381,33 +378,21 @@ async function onToggle(newValue: boolean) {
 }
 
 .invoke-value {
-  font-family: var(--font-mono);
-  color: var(--text-primary);
-  background: var(--bg-tertiary);
   padding: 1px 4px;
   border-radius: 3px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
-/* MCP Server styles */
 .component-item.mcp-server {
-  padding: 8px;
-  cursor: default;
-}
-
-.component-item.mcp-server:hover {
-  background: var(--bg-secondary);
-}
-
-.item-type {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  margin-left: 8px;
+  display: flex;
+  align-items: center;
 }
 
 .no-components {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  text-align: center;
   padding: 12px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
 }
 </style>

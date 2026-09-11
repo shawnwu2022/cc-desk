@@ -44,7 +44,7 @@ describe('bindNativePaste', () => {
     textarea.dispatchEvent(event)
 
     await vi.waitFor(() => {
-      expect(write).toHaveBeenCalledExactlyOnceWith('pty-1', '\x1b[200~{"a": 1}\x1b[201~')
+      expect(write).toHaveBeenCalledExactlyOnceWith('pty-1', '\x1b[200~{\n  "a": 1\n}\x1b[201~')
     })
     expect(event.defaultPrevented).toBe(true)
     expect(xtermPaste).not.toHaveBeenCalled()
@@ -262,10 +262,10 @@ describe('preparePasteText', () => {
     expect(buildPastePayload('', true, false)).toBe('')
   })
 
-  // buildPastePayload 集成 JSON 压缩：多行 pretty JSON 进，单行 + bracketed 包装出。
-  it('PasteText_BuildPayload_JsonCompacted_013', () => {
+  // 生产粘贴保留 JSON 的换行、缩进和数字原文，不再依赖压缩规避。
+  it('PasteText_BuildPayload_JsonFormattingPreserved_013', () => {
     const pretty = '{\n  "a": 1,\n  "b": 2\n}'
-    expect(buildPastePayload(pretty, true, false)).toBe('\x1b[200~{"a": 1,"b": 2}\x1b[201~')
+    expect(buildPastePayload(pretty, true, false)).toBe('\x1b[200~' + pretty + '\x1b[201~')
   })
 
   // buildPastePayload 对非 JSON 多行文本保持原行为：仅 LF 规范化 + 包装。

@@ -3,11 +3,8 @@ mod commands;
 mod hook_config;
 mod hook_events;
 mod hook_server;
-mod installer;
 mod logger;
-mod mcp;
 mod platform;
-mod providers;
 mod pty;
 mod pty_decoder;
 mod session_name_index;
@@ -174,40 +171,10 @@ pub fn run(initial_dir: Option<String>) {
             commands::get_all_skills,
             commands::get_all_mcp_servers,
             commands::get_all_plugins,
-            commands::set_skill_enabled,
-            commands::set_agent_enabled,
-            commands::set_mcp_server_enabled,
-            commands::set_plugin_enabled,
-            commands::get_mcp_server_detail,
             commands::test_communication,
             commands::get_app_path,
             commands::spawn_new_instance,
             commands::log_message,
-            installer::get_latest_versions,
-            installer::check_installed_versions,
-            installer::check_claude_cli_update,
-            installer::check_claude_running,
-            installer::kill_claude_processes,
-            installer::download_and_install_claude,
-            installer::get_installed_claude_version,
-            installer::list_claude_versions,
-            installer::download_claude_version,
-            installer::cancel_claude_download,
-            installer::install_claude_version,
-            #[cfg(target_os = "windows")]
-            installer::download_and_install_git,
-            // Provider Commands
-            commands::get_providers_config,
-            commands::save_providers_config,
-            commands::activate_provider,
-            commands::create_provider,
-            commands::update_provider,
-            commands::delete_provider,
-            commands::update_provider_sort_order,
-            commands::update_common_config,
-            commands::check_cc_switch_db_exists,
-            commands::import_from_cc_switch,
-            commands::test_provider_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

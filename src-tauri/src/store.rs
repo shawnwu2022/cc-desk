@@ -2046,35 +2046,6 @@ fn read_agents_from_filesystem(project_path: &str) -> Result<Vec<AgentInfo>> {
         }
     }
 
-    // 3. 从 disabled 备份目录读取用户级 agents（原位灰显）
-    if let Ok(disabled_agents_dir) = get_disabled_subdir("agents") {
-        if disabled_agents_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&disabled_agents_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map(|e| e == "md").unwrap_or(false) {
-                        let name = path
-                            .file_stem()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        let (parsed_name, description, model) = parse_agent_frontmatter(&path)
-                            .unwrap_or_else(|| (name.clone(), extract_md_description(&path), None));
-                        agents.push(AgentInfo {
-                            name: parsed_name.clone(),
-                            display_name: parsed_name.clone(),
-                            description,
-                            source_type: "user".to_string(),
-                            source_label: "User (Disabled)".to_string(),
-                            model,
-                            invoke_format: format!("@\"{} (agent)\"", parsed_name),
-                            enabled: false,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
     Ok(agents)
 }
 
@@ -2392,10 +2363,6 @@ pub struct McpServerInfo {
     pub command: Option<String>,
     /// 命令参数（stdio server）
     pub args: Option<Vec<String>>,
-    /// 环境变量（stdio server）
-    pub env: Option<HashMap<String, String>>,
-    /// HTTP Headers（用于认证）
-    pub headers: Option<HashMap<String, String>>,
     /// 可用的 prompts 列表
     pub prompts: Vec<McpPromptInfo>,
     /// 是否启用（仅 user 源可能为 false；其他始终 true）
@@ -2501,32 +2468,6 @@ pub fn get_all_skills(project_path: &str) -> Result<Vec<SkillInfo>> {
                             invoke_format: format!("/{}", name),
                             enabled: true,
                         });
-                    }
-                }
-            }
-        }
-    }
-
-    // 2b. 从 disabled 备份目录读取用户级 skills（原位灰显）
-    if let Ok(disabled_skills_dir) = get_disabled_subdir("skills") {
-        if disabled_skills_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&disabled_skills_dir) {
-                for entry in entries.flatten() {
-                    if entry.path().is_dir() {
-                        let skill_file = entry.path().join("SKILL.md");
-                        if skill_file.exists() {
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            let description = parse_skill_description(&skill_file);
-                            skills.push(SkillInfo {
-                                name: name.clone(),
-                                display_name: name.clone(),
-                                description,
-                                source_type: "user".to_string(),
-                                source_label: "User (Disabled)".to_string(),
-                                invoke_format: format!("/{}", name),
-                                enabled: false,
-                            });
-                        }
                     }
                 }
             }
@@ -2646,37 +2587,6 @@ pub fn get_all_mcp_servers(project_path: &str) -> Result<Vec<McpServerInfo>> {
         }
     }
 
-    // 5. 从 disabled 备份目录读取用户级 MCP servers（原位灰显）
-    if let Ok(disabled_mcp_dir) = get_disabled_subdir("mcp") {
-        if disabled_mcp_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&disabled_mcp_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map(|e| e == "json").unwrap_or(false) {
-                        let name = path
-                            .file_stem()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        if let Ok(content) = fs::read_to_string(&path) {
-                            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
-                            {
-                                if let Some(mut info) =
-                                    parse_mcp_server_entry(&name, &config, "user", None)
-                                {
-                                    info.enabled = false;
-                                    info.source_label = "User (Disabled)".to_string();
-                                    if seen_names.insert(name.clone()) {
-                                        servers.push(info);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     Ok(servers)
 }
 
@@ -2782,31 +2692,11 @@ pub(crate) fn parse_mcp_server_entry(
             .collect()
     });
 
-    // 解析 env（对象），展开环境变量值
-    let env = obj.get("env").and_then(|v| v.as_object()).map(|obj| {
-        obj.iter()
-            .filter_map(|(k, v)| {
-                v.as_str()
-                    .map(|s| (k.clone(), expand_env_vars(s, extra_env)))
-            })
-            .collect()
-    });
-
     // 解析 url，展开环境变量
     let url = obj
         .get("url")
         .and_then(|v| v.as_str())
         .map(|s| expand_env_vars(s, extra_env));
-
-    // 解析 headers，展开环境变量值
-    let headers = obj.get("headers").and_then(|v| v.as_object()).map(|obj| {
-        obj.iter()
-            .filter_map(|(k, v)| {
-                v.as_str()
-                    .map(|s| (k.clone(), expand_env_vars(s, extra_env)))
-            })
-            .collect()
-    });
 
     // 推断 server type
     let server_type = infer_server_type(config);
@@ -2828,8 +2718,6 @@ pub(crate) fn parse_mcp_server_entry(
         url,
         command,
         args,
-        env,
-        headers,
         prompts: Vec::new(),
         enabled: true,
     })
@@ -2909,46 +2797,6 @@ fn run_claude_command(args: &str) -> Result<String> {
     } else {
         // 即使失败也返回输出，可能包含有用信息
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    }
-}
-
-/// 严格版的 claude 命令执行：exit code != 0 时返回 Err（含 stderr）
-/// 用于 plugin enable/disable 等需要明确成败判断的场景
-fn run_claude_command_strict(args: &str) -> Result<String> {
-    let mut cmd = std::process::Command::new("claude");
-    cmd.args(args.split_whitespace());
-
-    if cfg!(target_os = "windows") {
-        if let Ok(git_bash_path) = std::env::var("CLAUDE_CODE_GIT_BASH_PATH") {
-            if Path::new(&git_bash_path).exists() {
-                cmd.env("CLAUDE_CODE_GIT_BASH_PATH", git_bash_path);
-            }
-        } else {
-            let git_bash_path = detect_git_bash_path();
-            if let Some(path) = git_bash_path {
-                cmd.env("CLAUDE_CODE_GIT_BASH_PATH", path);
-            }
-        }
-    }
-
-    crate::platform::configure_command(&mut cmd);
-
-    let output = cmd.output().context("Failed to run claude command")?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        bail!(
-            "claude {} failed (exit {:?}): {}",
-            args,
-            output.status.code(),
-            if stderr.is_empty() {
-                stdout.trim()
-            } else {
-                stderr.trim()
-            }
-        );
     }
 }
 
@@ -3354,239 +3202,6 @@ fn parse_plugin_agents(install_path: &str, plugin_name: &str) -> Option<Vec<Plug
     }
 }
 
-// ==================== 用户级资源开关 ====================
-
-/// 获取（必要时创建）disabled 备份目录：~/.cc-box/disabled/<category>
-pub fn get_disabled_subdir(category: &str) -> Result<PathBuf> {
-    let dir = get_gui_config_dir()?.join("disabled").join(category);
-    if !dir.exists() {
-        fs::create_dir_all(&dir)?;
-    }
-    Ok(dir)
-}
-
-/// 校验名称不含路径穿越字符
-fn validate_simple_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.contains('/')
-        || name.contains('\\')
-        || name.contains("..")
-        || name.contains('\0')
-    {
-        bail!("Invalid name: {:?}", name);
-    }
-    Ok(())
-}
-
-// ---------- Skill（目录移动）----------
-
-/// 切换用户级 skill 启用状态（公开 API）
-pub fn set_skill_enabled(name: &str, enabled: bool) -> Result<()> {
-    let home = dirs::home_dir().context("Home directory not found")?;
-    let claude_skills = home.join(".claude").join("skills");
-    let disabled_skills = get_disabled_subdir("skills")?;
-    set_skill_enabled_in(&claude_skills, &disabled_skills, name, enabled)
-}
-
-/// 内部实现（注入 base 路径，便于单元测试）
-pub(crate) fn set_skill_enabled_in(
-    claude_base: &Path,
-    disabled_base: &Path,
-    name: &str,
-    enabled: bool,
-) -> Result<()> {
-    validate_simple_name(name)?;
-    let src = claude_base.join(name);
-    let dst = disabled_base.join(name);
-
-    let (from, to, op) = if enabled {
-        if !dst.exists() {
-            bail!("Skill '{}' is not disabled (no backup found)", name);
-        }
-        if src.exists() {
-            bail!(
-                "Skill '{}' already exists in active directory (conflict)",
-                name
-            );
-        }
-        (dst, src, "enable")
-    } else {
-        if !src.exists() {
-            bail!("Skill '{}' not found in active directory", name);
-        }
-        if dst.exists() {
-            bail!("Skill '{}' already disabled (backup exists)", name);
-        }
-        (src, dst, "disable")
-    };
-
-    if let Err(e) = fs::rename(&from, &to) {
-        // 跨卷时 rename 可能失败，回退到 copy + remove
-        if e.raw_os_error() == Some(17) || e.raw_os_error() == Some(18) {
-            copy_dir_recursive(&from, &to)
-                .with_context(|| format!("Failed to {} skill '{}'", op, name))?;
-            if from.is_dir() {
-                fs::remove_dir_all(&from)
-                    .with_context(|| format!("Failed to {} skill '{}'", op, name))?;
-            } else {
-                fs::remove_file(&from)
-                    .with_context(|| format!("Failed to {} skill '{}'", op, name))?;
-            }
-        } else {
-            return Err(e).with_context(|| format!("Failed to {} skill '{}'", op, name));
-        }
-    }
-    Ok(())
-}
-
-/// 递归复制目录（用于跨卷 fallback）
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    if src.is_dir() {
-        fs::create_dir_all(dst)?;
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            let from = entry.path();
-            let to = dst.join(entry.file_name());
-            copy_dir_recursive(&from, &to)?;
-        }
-    } else {
-        fs::copy(src, dst)?;
-    }
-    Ok(())
-}
-
-// ---------- Agent（文件移动）----------
-
-/// 切换用户级 agent 启用状态（公开 API）
-pub fn set_agent_enabled(name: &str, enabled: bool) -> Result<()> {
-    let home = dirs::home_dir().context("Home directory not found")?;
-    let claude_agents = home.join(".claude").join("agents");
-    let disabled_agents = get_disabled_subdir("agents")?;
-    set_agent_enabled_in(&claude_agents, &disabled_agents, name, enabled)
-}
-
-pub(crate) fn set_agent_enabled_in(
-    claude_base: &Path,
-    disabled_base: &Path,
-    name: &str,
-    enabled: bool,
-) -> Result<()> {
-    validate_simple_name(name)?;
-    let filename = format!("{}.md", name);
-    let src = claude_base.join(&filename);
-    let dst = disabled_base.join(&filename);
-
-    let (from, to, op) = if enabled {
-        if !dst.exists() {
-            bail!("Agent '{}' is not disabled", name);
-        }
-        if src.exists() {
-            bail!("Agent '{}' already exists (conflict)", name);
-        }
-        (dst, src, "enable")
-    } else {
-        if !src.exists() {
-            bail!("Agent '{}' not found", name);
-        }
-        if dst.exists() {
-            bail!("Agent '{}' already disabled", name);
-        }
-        (src, dst, "disable")
-    };
-
-    fs::rename(&from, &to).with_context(|| format!("Failed to {} agent '{}'", op, name))?;
-    Ok(())
-}
-
-// ---------- MCP（JSON 剪切/粘贴）----------
-
-/// 切换用户级 MCP server 启用状态（公开 API）
-pub fn set_mcp_server_enabled(name: &str, enabled: bool) -> Result<()> {
-    let home = dirs::home_dir().context("Home directory not found")?;
-    let claude_json = home.join(".claude.json");
-    let disabled_dir = get_disabled_subdir("mcp")?;
-    set_mcp_server_enabled_in(&claude_json, &disabled_dir, name, enabled)
-}
-
-pub(crate) fn set_mcp_server_enabled_in(
-    claude_json: &Path,
-    disabled_dir: &Path,
-    name: &str,
-    enabled: bool,
-) -> Result<()> {
-    validate_simple_name(name)?;
-    let backup_file = disabled_dir.join(format!("{}.json", name));
-
-    if enabled {
-        // backup → mcpServers.<name>
-        if !backup_file.exists() {
-            bail!("MCP server '{}' is not disabled", name);
-        }
-        let entry_content = fs::read_to_string(&backup_file)
-            .with_context(|| format!("Failed to read backup for '{}'", name))?;
-        let entry: serde_json::Value = serde_json::from_str(&entry_content)
-            .with_context(|| format!("Invalid JSON in backup for '{}'", name))?;
-
-        let mut root: serde_json::Value = if claude_json.exists() {
-            let raw =
-                fs::read_to_string(claude_json).with_context(|| "Failed to read .claude.json")?;
-            serde_json::from_str(&raw).with_context(|| "Failed to parse .claude.json")?
-        } else {
-            serde_json::json!({})
-        };
-
-        let root_obj = root
-            .as_object_mut()
-            .context(".claude.json root is not an object")?;
-        let mcp_field = root_obj
-            .entry("mcpServers".to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        let mcp_obj = mcp_field
-            .as_object_mut()
-            .context("mcpServers is not an object")?;
-
-        if mcp_obj.contains_key(name) {
-            bail!(
-                "MCP server '{}' already exists in active config (conflict)",
-                name
-            );
-        }
-        mcp_obj.insert(name.to_string(), entry);
-
-        write_json_atomic(claude_json, &root)?;
-        fs::remove_file(&backup_file)
-            .with_context(|| format!("Failed to remove backup for '{}'", name))?;
-    } else {
-        // mcpServers.<name> → backup
-        if !claude_json.exists() {
-            bail!(".claude.json not found, cannot disable '{}'", name);
-        }
-        if backup_file.exists() {
-            bail!("MCP server '{}' already disabled", name);
-        }
-        let raw = fs::read_to_string(claude_json).with_context(|| "Failed to read .claude.json")?;
-        let mut root: serde_json::Value =
-            serde_json::from_str(&raw).with_context(|| "Failed to parse .claude.json")?;
-
-        let mcp_obj = root
-            .get_mut("mcpServers")
-            .and_then(|v| v.as_object_mut())
-            .context("mcpServers not found or not an object")?;
-
-        let entry = mcp_obj
-            .remove(name)
-            .with_context(|| format!("MCP server '{}' not found in active config", name))?;
-
-        fs::create_dir_all(disabled_dir)?;
-        let pretty = serde_json::to_string_pretty(&entry)?;
-        fs::write(&backup_file, pretty)
-            .with_context(|| format!("Failed to write backup for '{}'", name))?;
-
-        write_json_atomic(claude_json, &root)?;
-    }
-    Ok(())
-}
-
 /// 原子写 JSON：先完整写入并 flush `.tmp`，再原子替换目标（pub(crate) 供测试导入）。
 /// Windows 使用 `ReplaceFileW`，POSIX 使用覆盖语义的 `rename`；替换失败时保留原目标。
 pub(crate) fn write_json_atomic(path: &Path, value: &serde_json::Value) -> Result<()> {
@@ -3889,20 +3504,4 @@ pub(crate) fn read_projects_state_locked(
     }); // 不存在 -> default；返回前 canonicalize legacy 等价键
     let _ = lock_file.unlock();
     state
-}
-
-// ---------- Plugin（CLI 调用）----------
-
-/// 切换 plugin 启用状态（调用 claude plugin enable/disable）
-pub fn set_plugin_enabled(plugin_id: &str, enabled: bool) -> Result<()> {
-    validate_simple_name(plugin_id).context("Invalid plugin id")?;
-    // plugin_id 可能含 @（如 paper-tool@orczh），允许这个字符
-    if plugin_id.contains('/') || plugin_id.contains('\\') || plugin_id.contains("..") {
-        bail!("Invalid plugin id: {:?}", plugin_id);
-    }
-    let action = if enabled { "enable" } else { "disable" };
-    let args = format!("plugin {} {}", action, plugin_id);
-    run_claude_command_strict(&args)
-        .with_context(|| format!("Failed to {} plugin '{}'", action, plugin_id))?;
-    Ok(())
 }

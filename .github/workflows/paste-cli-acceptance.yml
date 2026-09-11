@@ -1,0 +1,91 @@
+name: Real Claude JSON paste acceptance
+on:
+  push:
+    branches: [codex/fix-devtools-paste]
+    paths:
+      - .github/workflows/paste-cli-acceptance.yml
+      - src-tauri/src/tests/paste_cli_submit.rs
+      - src-tauri/src/pty.rs
+      - src-tauri/vendor/portable-pty/**
+      - src-tauri/tests/fixtures/devtools-paste-framing.json
+      - src/utils/pasteText.ts
+  workflow_dispatch:
+    inputs:
+      claude_version:
+        description: Claude Code version to test (exact version or npm dist-tag)
+        default: '2.1.267'
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: paste-cli-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  acceptance:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Install a disposable real Claude CLI without user credentials
+        env:
+          CLAUDE_TEST_VERSION: ${{ inputs.claude_version || '2.1.267' }}
+        run: npm install --engine-strict --prefix .ci-claude --no-save "@anthropic-ai/claude-code@$env:CLAUDE_TEST_VERSION"
+      - name: Generate real frontend payloads and resolve the CLI package entry
+        shell: node {0}
+        run: |
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = process.cwd();
+          const ts = require(root + '/node_modules/typescript');
+          const js = ts.transpileModule(fs.readFileSync('src/utils/pasteText.ts', 'utf8'), {
+            compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}
+          }).outputText;
+          fs.writeFileSync('.ci-claude/pasteText.cjs', js);
+          const {buildPastePayload} = require(root + '/.ci-claude/pasteText.cjs');
+          const fixtures = JSON.parse(fs.readFileSync('src-tauri/tests/fixtures/devtools-paste-framing.json', 'utf8'));
+          const cases = fixtures.filter(f => f.isJson).map(f => {
+            const source = (f.prefix || '') + Array(f.repeat).fill(f.source).join(f.separator || '') + (f.suffix || '');
+            JSON.parse(source);
+            return {name: f.name, wire: buildPastePayload(source, true, false), expected: source.replace(/\r\n?/g, '\n')};
+          });
+          if (!cases.length) throw new Error('No actual JSON acceptance fixtures');
+          const file = path.resolve('.ci-claude/payloads.json');
+          fs.writeFileSync(file, JSON.stringify(cases));
+          const pkgDir = path.resolve('.ci-claude/node_modules/@anthropic-ai/claude-code');
+          const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+          const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin.claude;
+          const cli = path.resolve(pkgDir, bin);
+          if (!fs.existsSync(cli)) throw new Error('CLI entry does not exist: ' + cli);
+          fs.appendFileSync(process.env.GITHUB_ENV, 'CC_E2E_CLAUDE_PATH=' + cli + '\nCC_PASTE_PAYLOAD_FILE=' + file + '\nCC_TESTED_CLAUDE_VERSION=' + pkg.version + '\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '## Real Claude JSON paste inputs\n\nCLI package: `' + pkg.version + '`\n\n| Case | Expected UTF-8 bytes |\n|---|---:|\n' + cases.map(c => '| ' + c.name + ' | ' + Buffer.byteLength(c.expected) + ' |').join('\n') + '\n');
+          console.log('Actual Claude package version:', pkg.version);
+          for (const c of cases) console.log('JSON case:', c.name, 'UTF-8 bytes:', Buffer.byteLength(c.expected));
+      - name: Check committed formatting without modifying source
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+      - name: Verify actual submitted JSON, not a chip or terminal screenshot
+        working-directory: src-tauri
+        run: cargo test --locked --lib RealClaude_DevtoolsJsonSubmittedCompletely_001 -- --ignored --test-threads=1 --nocapture
+      - name: Verify strict checks with the real-CLI acceptance module
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Check that verification did not rewrite tracked files
+        run: git diff --exit-code
+      - name: Record the acceptance result without writing to the repository
+        shell: pwsh
+        run: |
+          'Verified exact submitted JSON through the production writer and real Claude UserPromptSubmit hook. No model processing or user credentials were used.' >> $env:GITHUB_STEP_SUMMARY
+          'This does not cover the original user clipboard sample or other Windows/Claude versions.' >> $env:GITHUB_STEP_SUMMARY

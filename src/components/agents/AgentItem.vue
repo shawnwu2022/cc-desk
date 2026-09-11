@@ -1,6 +1,5 @@
 <template>
   <div class="agent-item" :class="{ expanded: isExpanded, disabled: isDisabled }">
-    <!-- Agent Header -->
     <div
       class="agent-header"
       role="button"
@@ -20,18 +19,16 @@
         <span v-if="agent.sourceType === 'plugin'" class="agent-full-name">{{ agent.name }}</span>
       </div>
       <span v-if="agent.model" class="agent-model">{{ agent.model }}</span>
-      <ToggleSwitch
-        v-if="agent.sourceType === 'user'"
-        :modelValue="!isDisabled"
-        :title="isDisabled ? t('enable') : t('disable')"
-        @update:modelValue="onToggle"
-      />
-      <button class="use-btn" :disabled="isDisabled" @click.stop="emitUseAgent" :title="t('useThisAgent')">
+      <button
+        class="use-btn"
+        :disabled="isDisabled"
+        :title="t('useThisAgent')"
+        @click.stop="emitUseAgent"
+      >
         <img src="@/assets/icons/use.svg" :alt="t('useBtn')" />
       </button>
     </div>
 
-    <!-- Agent Details (expanded) -->
     <div v-if="isExpanded" class="agent-details">
       <div v-if="agent.description" class="agent-description-full">
         {{ agent.description }}
@@ -48,19 +45,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AgentInfo } from '@/types'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
-import { useSidebarStore } from '@/stores/sidebar'
-import ToggleSwitch from '@/components/common/ToggleSwitch.vue'
 
 const { t } = useI18n()
 const props = defineProps<{
   agent: AgentInfo
 }>()
-
-const sidebarStore = useSidebarStore()
 
 const isExpanded = ref(false)
 const isDisabled = computed(() => props.agent.enabled === false)
@@ -73,21 +66,13 @@ function emitUseAgent() {
   if (isDisabled.value) return
   sendTerminalCommand(props.agent.invokeFormat)
 }
-
-async function onToggle(newValue: boolean) {
-  try {
-    await sidebarStore.toggleAgentEnabled(props.agent.name, newValue)
-  } catch (err) {
-    console.error('[AgentItem] toggle failed:', err)
-  }
-}
 </script>
 
 <style scoped>
 .agent-item {
-  background: var(--bg-primary);
-  border-radius: 8px;
   padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-primary);
   transition: background 0.15s ease;
 }
 
@@ -100,13 +85,8 @@ async function onToggle(newValue: boolean) {
 }
 
 .agent-item.disabled .agent-name {
-  text-decoration: line-through;
   color: var(--text-tertiary);
-}
-
-.agent-item.disabled .use-btn {
-  pointer-events: none;
-  opacity: 0.4;
+  text-decoration: line-through;
 }
 
 .agent-header {
@@ -120,8 +100,8 @@ async function onToggle(newValue: boolean) {
 .expand-icon {
   width: 12px;
   height: 12px;
-  color: var(--text-secondary);
   flex-shrink: 0;
+  color: var(--text-secondary);
   transition: transform 0.15s ease;
 }
 
@@ -130,55 +110,60 @@ async function onToggle(newValue: boolean) {
 }
 
 .agent-info {
-  flex: 1;
   min-width: 0;
+  flex: 1;
 }
 
 .agent-name {
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary);
 }
 
 .agent-full-name {
   display: block;
-  font-size: 11px;
+  margin-top: 2px;
   color: var(--text-tertiary);
   font-family: var(--font-mono);
-  margin-top: 2px;
+  font-size: 11px;
 }
 
 .agent-model {
-  font-size: 10px;
+  flex-shrink: 0;
   padding: 2px 6px;
   border-radius: 4px;
   background: var(--tag-mcp-bg);
   color: var(--tag-mcp-text);
-  flex-shrink: 0;
+  font-size: 10px;
 }
 
 .use-btn {
   display: flex;
-  align-items: center;
-  justify-content: center;
   width: 24px;
   height: 24px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
   border: none;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  border-radius: 4px;
-  flex-shrink: 0;
+}
+
+.use-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.use-btn:not(:disabled):hover {
+  background: var(--bg-tertiary);
+  color: var(--accent-color);
 }
 
 .use-btn img {
   width: 14px;
   height: 14px;
-}
-
-.use-btn:hover {
-  color: var(--accent-color);
-  background: var(--bg-tertiary);
 }
 
 .agent-details {
@@ -188,24 +173,24 @@ async function onToggle(newValue: boolean) {
 }
 
 .agent-description-full {
-  font-size: 12px;
+  overflow-wrap: break-word;
   color: var(--text-secondary);
+  font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
-  overflow-wrap: break-word;
   word-break: break-word;
 }
 
 .agent-description-empty {
-  font-size: 12px;
   color: var(--text-tertiary);
+  font-size: 12px;
   font-style: italic;
 }
 
 .agent-invoke-format {
-  margin-top: 8px;
   display: flex;
   gap: 6px;
+  margin-top: 8px;
   font-size: 11px;
 }
 
@@ -214,10 +199,10 @@ async function onToggle(newValue: boolean) {
 }
 
 .invoke-value {
-  font-family: var(--font-mono);
-  color: var(--text-primary);
-  background: var(--bg-tertiary);
   padding: 2px 6px;
   border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
 }
 </style>
