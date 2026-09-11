@@ -39,6 +39,17 @@ jobs:
       - name: Add raw-frame regression
         run: python .github/scripts/repair_raw_paste.py add-test
 
+      - name: Correct temporary Rust string escaping
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src-tauri/src/tests/paste_framing.rs')
+          text = p.read_text(encoding='utf-8')
+          old = r'''    let payload = format!("{OPEN}{{\n  \\"ok\\": true,\n  \\"text\\": \\"中文🎉\\"\n}}{CLOSE}");'''
+          new = r'''    let payload = format!("{OPEN}{{\n  \"ok\": true,\n  \"text\": \"中文🎉\"\n}}{CLOSE}");'''
+          assert text.count(old) == 1, text[text.index('fn PtyPaste_WindowsMatches'):text.index('fn PtyPaste_WindowsMatches') + 900]
+          p.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+
       - name: Format regression
         working-directory: src-tauri
         run: cargo fmt --all
