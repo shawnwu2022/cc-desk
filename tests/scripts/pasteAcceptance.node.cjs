@@ -98,3 +98,12 @@ test('PasteAcceptance_DefaultLaunchIsDirect_006', t => {
 test('PasteAcceptance_RejectUnknownLaunch_007', t => {
   assert.throws(() => generate(t, fixtures, 'not-a-launch-mode'), /Invalid CC_PASTE_LAUNCH_MODE/);
 });
+
+// 只上传合成验收的指标 JSON；隐藏的 .ci-claude 目录必须显式允许。
+test('PasteAcceptance_MetadataArtifactIsNotSilentlyOmitted_008', () => {
+  const workflow = fs.readFileSync(path.join(repo, '.github/workflows/paste-cli-acceptance.yml'), 'utf8');
+  const step = workflow.split('- name: Upload result metadata only')[1]?.split('\n      - name:')[0];
+  assert.ok(step, 'Expected the dedicated metadata-only artifact step');
+  assert.match(step, /path: \.ci-claude\/acceptance-\*\.json/);
+  assert.match(step, /include-hidden-files: true/, 'The metadata directory is hidden and upload-artifact excludes it by default');
+});
