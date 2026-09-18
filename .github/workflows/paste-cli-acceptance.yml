@@ -1,13 +1,14 @@
 name: Real Claude paste acceptance
 on:
   push:
-    branches: [main, codex/fix-devtools-text-paste]
+    branches: [main]
     paths: &paste_paths
       - .github/workflows/paste-cli-acceptance.yml
       - .github/scripts/generate_paste_acceptance.cjs
       - tests/scripts/pasteAcceptance.node.cjs
       - src-tauri/src/tests/paste_cli_submit.rs
       - src-tauri/src/pty.rs
+      - src-tauri/src/platform.rs
       - src-tauri/tests/fixtures/devtools-paste-framing.json
       - src/utils/pasteText.ts
   pull_request:
@@ -22,15 +23,16 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: paste-cli-acceptance-${{ github.ref }}
+  group: paste-cli-acceptance-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   acceptance:
-    name: Real CLI (${{ matrix.claude_version }})
+    name: Real CLI (${{ matrix.claude_version }}, direct + production-shell)
     runs-on: windows-2022
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         claude_version: ${{ fromJSON(inputs.claude_versions || '["2.1.268","2.1.274"]') }}
     env:
@@ -51,7 +53,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - run: npm ci
+          cache-on-failure: true
+      - id: deps
+        run: npm ci
       - name: Verify generator regression contracts
         run: node --test tests/scripts/pasteAcceptance.node.cjs
       - name: Install a disposable pinned Claude CLI without user credentials
@@ -60,32 +64,62 @@ jobs:
           if ($env:CLAUDE_TEST_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'An exact version is required' }
           npm install --engine-strict --prefix .ci-claude --no-save "@anthropic-ai/claude-code@$env:CLAUDE_TEST_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Generate JSON and non-JSON payloads using the production frontend
+      - name: Generate unchanged payloads with explicit launch metadata
         run: node .github/scripts/generate_paste_acceptance.cjs
-      - name: Record actual executable and Windows build
+      - name: Record executable identity, launch modes and Windows build
         shell: pwsh
         run: |
           $cli = $env:CC_E2E_CLAUDE_PATH
           $version = if ([IO.Path]::GetExtension($cli) -eq '.js') { & node $cli --version } else { & $cli --version }
           if ($LASTEXITCODE -ne 0) { throw 'Cannot execute the resolved CLI' }
           if (($version -join ' ') -notmatch ([regex]::Escape($env:CLAUDE_TEST_VERSION) + '(\s|$)')) { throw "Unexpected CLI version: $version" }
-          "Executable: $cli; version: $version"
+          "Executable: $cli; version: $version; launch modes: direct, production-shell"
           Get-FileHash -Algorithm SHA256 -LiteralPath $cli
+          & 'C:/Program Files/Git/bin/bash.exe' --version
+          if ($LASTEXITCODE -ne 0) { throw 'Production-shell control requires Git Bash' }
           [Environment]::OSVersion.VersionString
-          'This hosted runner is not the reported Windows 10 build 19045.' >> $env:GITHUB_STEP_SUMMARY
+          'Hosted Windows Server 2022 is not Windows 10 build 19045. Shell selection is covered, WebView and user plugins are not.' >> $env:GITHUB_STEP_SUMMARY
       - name: Check committed Rust formatting
         working-directory: src-tauri
         run: cargo fmt --all --check
-      - name: Capture actual submitted prompts through the production writer
+      - name: Run Windows prompt-comparison and launch unit tests
         working-directory: src-tauri
-        run: cargo test --locked --lib RealClaude_DevtoolsJsonSubmittedCompletely_001 -- --ignored --test-threads=1 --nocapture
-      - name: Strict Rust checks
+        run: cargo test --locked --lib PasteAcceptance_ -- --nocapture
+      - name: Compare direct and production-shell launches using the same build
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($mode in @('direct', 'production-shell')) {
+            $env:CC_PASTE_LAUNCH_MODE = $mode
+            node .github/scripts/generate_paste_acceptance.cjs
+            if ($LASTEXITCODE -ne 0) { $failed = $true; continue }
+            $env:CC_PASTE_RESULT_FILE = Join-Path $env:GITHUB_WORKSPACE ".ci-claude/acceptance-$mode.json"
+            Push-Location src-tauri
+            try {
+              cargo test --locked --lib RealClaude_DevtoolsJsonSubmittedCompletely_001 -- --ignored --test-threads=1 --nocapture
+              if ($LASTEXITCODE -ne 0) { $failed = $true }
+            } finally {
+              Pop-Location
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Upload result metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paste-launch-${{ matrix.claude_version }}
+          path: .ci-claude/acceptance-*.json
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Strict Rust checks even after acceptance failure
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         working-directory: src-tauri
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Ensure verification did not rewrite tracked files
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: git diff --exit-code
       - name: Record result boundaries
         if: always()
         shell: pwsh
         run: |
-          'Compare the real UserPromptSubmit prompt, not a paste chip or successful pipe write. Synthetic fixtures only; no user clipboard or credentials.' >> $env:GITHUB_STEP_SUMMARY
+          'Strict prompt differences remain failures; classify them before attributing truncation. No user clipboard or credentials. Do not infer full CC Desk or Win10 coverage.' >> $env:GITHUB_STEP_SUMMARY

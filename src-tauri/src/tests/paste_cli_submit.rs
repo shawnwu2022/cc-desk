@@ -19,6 +19,108 @@ struct Case {
     expected: String,
     #[serde(default, rename = "isJson")]
     is_json: bool,
+    #[serde(default, rename = "launchMode")]
+    launch_mode: LaunchMode,
+}
+
+// Launch selection is explicit; unknown modes cannot silently test the control.
+#[derive(Clone, Copy, Debug, Default, Deserialize, serde::Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum LaunchMode {
+    #[default]
+    Direct,
+    ProductionShell,
+}
+
+const CI_GIT_BASH: &str = "C:/Program Files/Git/bin/bash.exe";
+
+fn quoted_ci_path(path: &Path) -> Result<String, String> {
+    let path = path.to_str().ok_or("CLI path must be Unicode")?;
+    if path
+        .chars()
+        .any(|ch| matches!(ch, '"' | '$' | '`' | '\r' | '\n' | '\0'))
+    {
+        return Err("Unsupported shell metacharacter in CI executable path".into());
+    }
+    Ok(format!("\"{}\"", path.replace('\\', "/")))
+}
+
+fn launch_command(program: &Path, mode: LaunchMode) -> Result<CommandBuilder, String> {
+    if mode == LaunchMode::Direct {
+        return Ok(if program.extension().is_some_and(|ext| ext == "js") {
+            let mut command = CommandBuilder::new(node_path());
+            command.arg(program);
+            command
+        } else {
+            CommandBuilder::new(program)
+        });
+    }
+    if !Path::new(CI_GIT_BASH).is_file() {
+        return Err("production-shell acceptance requires CI Git Bash; no fallback".into());
+    }
+    let cli_command = if program.extension().is_some_and(|ext| ext == "js") {
+        format!(
+            "{} {}",
+            quoted_ci_path(&node_path())?,
+            quoted_ci_path(program)?
+        )
+    } else {
+        quoted_ci_path(program)?
+    };
+    // Same selector/arguments as PtyManager::spawn_claude, not a hand-built bash -c.
+    // User plugin/config injection and the WebView remain outside this test.
+    let (shell, args) = crate::platform::get_claude_shell(&cli_command, Some(CI_GIT_BASH));
+    let mut command = CommandBuilder::new(shell);
+    for arg in args {
+        command.arg(arg);
+    }
+    Ok(command)
+}
+
+// A shell may keep its native child alive. Only terminate the process tree
+// rooted at the PID returned by this test's spawn; never search by image name.
+fn terminate_case_tree(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        let _ = crate::platform::new_command("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
+    }
+}
+
+#[test]
+fn PasteAcceptance_LaunchModeIsExplicit_004() {
+    let case: Case = serde_json::from_str(
+        r#"{"name":"probe","wire":"text","expected":"text","launchMode":"production-shell"}"#,
+    )
+    .unwrap();
+    assert_eq!(case.launch_mode, LaunchMode::ProductionShell);
+    let case: Case =
+        serde_json::from_str(r#"{"name":"probe","wire":"text","expected":"text"}"#).unwrap();
+    assert_eq!(case.launch_mode, LaunchMode::Direct);
+}
+
+#[test]
+fn PasteAcceptance_UnknownLaunchFails_005() {
+    assert!(serde_json::from_str::<Case>(
+        r#"{"name":"probe","wire":"text","expected":"text","launchMode":"invalid"}"#,
+    )
+    .is_err());
+}
+
+#[test]
+fn PasteAcceptance_ShellPathIsData_006() {
+    assert_eq!(
+        quoted_ci_path(Path::new(r"C:\Program Files\claude.exe")).unwrap(),
+        "\"C:/Program Files/claude.exe\""
+    );
+    for path in [
+        "C:/$(command)/cli.exe",
+        "C:/`command`/cli.exe",
+        "C:/\"/cli.exe",
+        "C:/\n/cli.exe",
+    ] {
+        assert!(quoted_ci_path(Path::new(path)).is_err());
+    }
 }
 
 fn node_path() -> PathBuf {
@@ -169,13 +271,7 @@ fn run_case(program: &Path, case: &Case) -> Result<(), String> {
             pixel_height: 0,
         })
         .unwrap();
-    let mut cmd = if program.extension().is_some_and(|ext| ext == "js") {
-        let mut command = CommandBuilder::new(node_path());
-        command.arg(program);
-        command
-    } else {
-        CommandBuilder::new(program)
-    };
+    let mut cmd = launch_command(program, case.launch_mode)?;
     cmd.cwd(&project);
     for (name, value) in [
         ("TERM", "xterm-256color"),
@@ -201,6 +297,7 @@ fn run_case(program: &Path, case: &Case) -> Result<(), String> {
         );
     }
     let mut child = pair.slave.spawn_command(cmd).unwrap();
+    let child_pid = child.process_id();
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().unwrap();
     let mut writer = pair.master.take_writer().unwrap();
@@ -225,6 +322,7 @@ fn run_case(program: &Path, case: &Case) -> Result<(), String> {
             receiver.recv_timeout(Duration::from_secs(120)),
             Err(mpsc::RecvTimeoutError::Timeout)
         ) {
+            terminate_case_tree(child_pid);
             let _ = killer.kill();
         }
     });
@@ -278,6 +376,7 @@ fn run_case(program: &Path, case: &Case) -> Result<(), String> {
         compare_prompt(&actual, &case.expected, case.is_json)
     })();
     let _ = done.send(());
+    terminate_case_tree(child_pid);
     let _ = child.kill();
     let _ = child.wait();
     drop(writer);
@@ -301,8 +400,23 @@ fn RealClaude_DevtoolsJsonSubmittedCompletely_001() {
         "acceptance cases must not silently be empty"
     );
     let mut failures = Vec::new();
+    let mut results = Vec::new();
     for case in cases {
-        match run_case(&program, &case) {
+        let outcome = run_case(&program, &case);
+        let detail = match outcome.as_ref() {
+            Ok(()) => "exact submitted text".to_string(),
+            Err(error) if error.starts_with("prompt differs:") => error.clone(),
+            Err(_) => "launch-or-capture-error; see isolated CI log".to_string(),
+        };
+        results.push(serde_json::json!({
+            "name": case.name,
+            "launchMode": case.launch_mode,
+            "expectedBytes": case.expected.len(),
+            "passed": outcome.is_ok(),
+            "detail": detail
+        }));
+        println!("[launch {:?}] {}", case.launch_mode, case.name);
+        match outcome {
             Ok(()) => println!(
                 "[PASS real Claude] {}: {} UTF-8 bytes, exact submitted text",
                 case.name,
@@ -313,6 +427,9 @@ fn RealClaude_DevtoolsJsonSubmittedCompletely_001() {
                 failures.push(case.name);
             }
         }
+    }
+    if let Some(file) = std::env::var_os("CC_PASTE_RESULT_FILE") {
+        std::fs::write(file, serde_json::to_vec_pretty(&results).unwrap()).unwrap();
     }
     assert!(failures.is_empty(), "Failed cases: {}", failures.join(", "));
 }

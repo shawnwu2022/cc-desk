@@ -13,7 +13,7 @@ const fixtures = [
     cliAcceptance: false, cliSkipReason: 'Transport preservation test, not a literal CLI editor contract' },
 ];
 
-function generate(t, customFixtures = fixtures) {
+function generate(t, customFixtures = fixtures, launchMode = '') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-paste-generator-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.cpSync(path.join(repo, '.github/scripts'), path.join(root, '.github/scripts'), { recursive: true });
@@ -30,7 +30,7 @@ function generate(t, customFixtures = fixtures) {
   fs.writeFileSync(path.join(pkg, 'cli.js'), 'throw new Error("not a real CLI");');
   const run = spawnSync(process.execPath, [path.join(root, '.github/scripts/generate_paste_acceptance.cjs')], {
     cwd: root, encoding: 'utf8', timeout: 20000,
-    env: { ...process.env, CC_PASTE_CLI_KIND: 'npm', GITHUB_ENV: path.join(root, 'env'), GITHUB_STEP_SUMMARY: path.join(root, 'summary') },
+    env: { ...process.env, CC_PASTE_CLI_KIND: 'npm', CC_PASTE_NATIVE_CLI: '', CC_PASTE_LAUNCH_MODE: launchMode, GITHUB_ENV: path.join(root, 'env'), GITHUB_STEP_SUMMARY: path.join(root, 'summary') },
   });
   assert.equal(run.status, 0, run.stderr);
   return JSON.parse(fs.readFileSync(path.join(root, '.ci-claude/payloads.json'), 'utf8'));
@@ -76,4 +76,25 @@ test('PasteAcceptance_ChunkBoundaryOffsets_004', t => {
     assert.ok(actual, `Missing boundary fixture: ${boundary}`);
     assert.equal(Buffer.byteLength(actual.wire.split('__BOUNDARY__')[0]), boundary);
   }
+});
+
+// 启动方式可以变化，但送给 writer 的正文和帧不能随之变化。
+test('PasteAcceptance_LaunchModePreservesWire_005', t => {
+  const direct = generate(t, fixtures, 'direct');
+  const shell = generate(t, fixtures, 'production-shell');
+  assert.equal(shell.length, direct.length);
+  for (let index = 0; index < direct.length; index += 1) {
+    assert.equal(direct[index].launchMode, 'direct');
+    assert.equal(shell[index].launchMode, 'production-shell');
+    assert.deepEqual({ ...shell[index], launchMode: 'direct' }, direct[index]);
+  }
+});
+
+test('PasteAcceptance_DefaultLaunchIsDirect_006', t => {
+  const cases = generate(t);
+  assert.ok(cases.every(c => c.launchMode === 'direct'));
+});
+
+test('PasteAcceptance_RejectUnknownLaunch_007', t => {
+  assert.throws(() => generate(t, fixtures, 'not-a-launch-mode'), /Invalid CC_PASTE_LAUNCH_MODE/);
 });

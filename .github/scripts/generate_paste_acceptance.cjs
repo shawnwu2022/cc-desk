@@ -11,11 +11,13 @@ const compiledPath = path.join(root, '.ci-claude/pasteText.cjs');
 fs.writeFileSync(compiledPath, compiled);
 const { buildPastePayload } = require(compiledPath);
 const fixtures = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri/tests/fixtures/devtools-paste-framing.json'), 'utf8'));
+const launchMode = process.env.CC_PASTE_LAUNCH_MODE || 'direct';
+if (!['direct', 'production-shell'].includes(launchMode)) throw new Error('Invalid CC_PASTE_LAUNCH_MODE');
 const cases = [];
 function add(name, source, isJson = false) {
   if (cases.some(c => c.name === name)) throw new Error(`Duplicate acceptance case: ${name}`);
   if (isJson) JSON.parse(source); // Never parse/stringify the text being transported.
-  cases.push({ name, wire: buildPastePayload(source, true, false), expected: source.replace(/\r\n?/g, '\n'), isJson });
+  cases.push({ name, wire: buildPastePayload(source, true, false), expected: source.replace(/\r\n?/g, '\n'), isJson, launchMode });
 }
 for (const fixture of fixtures) {
   if (fixture.cliAcceptance === false) {
@@ -72,9 +74,9 @@ const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin.claude;
 const cli = process.env.CC_PASTE_NATIVE_CLI || path.resolve(packageDir, bin);
 if (!fs.existsSync(cli)) throw new Error(`Claude CLI entry missing: ${cli}`);
 fs.appendFileSync(process.env.GITHUB_ENV, `CC_E2E_CLAUDE_PATH=${cli}\nCC_PASTE_PAYLOAD_FILE=${payloadFile}\nCC_TESTED_CLAUDE_VERSION=${pkg.version}\n`);
-console.log('Installed package:', pkg.version, 'entry:', cli);
+console.log('Installed package:', pkg.version, 'entry:', cli, 'launch:', launchMode);
 for (const c of cases) console.log(c.name, 'body_bytes=' + Buffer.byteLength(c.expected), 'lf=' + (c.expected.split('\n').length - 1), 'isJson=' + c.isJson);
 if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-  '## Paste acceptance inputs\n\nPackage: `' + pkg.version + '`\n\n| Case | Body bytes | JSON |\n|---|---:|---|\n' +
+  '## Paste acceptance inputs\n\nPackage: `' + pkg.version + '`; launch: `' + launchMode + '`\n\n| Case | Body bytes | JSON |\n|---|---:|---|\n' +
   cases.map(c => `| ${c.name} | ${Buffer.byteLength(c.expected)} | ${c.isJson} |`).join('\n') +
   '\n\nShapes are synthetic. This job does not reproduce Windows 10 build 19045 or read any user clipboard.\n');
