@@ -252,7 +252,10 @@ fn run_case(program: &Path, case: &Case) -> Result<(), String> {
                 key_once = true;
             }
             if start.elapsed() > Duration::from_secs(45) {
-                return Err(format!("Claude did not reach its prompt: {}", tail(&output)));
+                return Err(format!(
+                    "Claude did not reach its prompt: {}",
+                    tail(&output)
+                ));
             }
             std::thread::sleep(Duration::from_millis(50));
         }
