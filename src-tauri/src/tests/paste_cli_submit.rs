@@ -17,6 +17,8 @@ struct Case {
     name: String,
     wire: String,
     expected: String,
+    #[serde(default, rename = "isJson")]
+    is_json: bool,
 }
 
 fn node_path() -> PathBuf {
@@ -61,7 +63,61 @@ fn tail(output: &Arc<Mutex<String>>) -> String {
         .collect()
 }
 
-fn run_case(program: &Path, case: &Case) {
+fn compare_prompt(actual: &str, expected: &str, is_json: bool) -> Result<(), String> {
+    if actual != expected {
+        let prefix = actual
+            .as_bytes()
+            .iter()
+            .zip(expected.as_bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let suffix = actual
+            .as_bytes()
+            .iter()
+            .rev()
+            .zip(expected.as_bytes().iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        // Classification only: tab expansion still fails strict equality.
+        let tabs_only = actual == expected.replace('\t', "    ");
+        return Err(format!(
+            "prompt differs: expected_bytes={} actual_bytes={} first_mismatch={} common_suffix={} tab_expansion_only={}",
+            expected.len(),
+            actual.len(),
+            prefix,
+            suffix,
+            tabs_only
+        ));
+    }
+    if is_json {
+        serde_json::from_str::<serde_json::Value>(actual)
+            .map_err(|e| format!("submitted JSON is invalid: {e}"))?;
+    }
+    Ok(())
+}
+
+#[test]
+fn PasteAcceptance_PlainTextIsNotJson_001() {
+    let text = "Error: value\n\tat Widget.refresh\n(匿名) @ Item.ts:128";
+    assert!(compare_prompt(text, text, false).is_ok());
+    assert!(compare_prompt(text, text, true).is_err());
+}
+
+#[test]
+fn PasteAcceptance_MissingSuffixHasOffset_002() {
+    let error = compare_prompt("head", "head\ntail", false).unwrap_err();
+    assert!(error.contains("first_mismatch=4"));
+}
+
+#[test]
+fn PasteAcceptance_ClassifyTabsWithoutHidingLoss_003() {
+    let error = compare_prompt("head\n    tail", "head\n\ttail", false).unwrap_err();
+    assert!(error.contains("tab_expansion_only=true"));
+    let error = compare_prompt("tail", "head\n\ttail", false).unwrap_err();
+    assert!(error.contains("tab_expansion_only=false"));
+}
+
+fn run_case(program: &Path, case: &Case) -> Result<(), String> {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let config = temp.path().join("config");
@@ -196,7 +252,7 @@ fn run_case(program: &Path, case: &Case) {
                 key_once = true;
             }
             if start.elapsed() > Duration::from_secs(45) {
-                return Err("Claude did not reach its interactive prompt".into());
+                return Err(format!("Claude did not reach its prompt: {}", tail(&output)));
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -211,31 +267,12 @@ fn run_case(program: &Path, case: &Case) {
         let start = Instant::now();
         while !capture.exists() {
             if start.elapsed() > Duration::from_secs(45) {
-                return Err("No complete UserPromptSubmit capture".into());
+                return Err(format!("No UserPromptSubmit capture: {}", tail(&output)));
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         let actual = std::fs::read_to_string(&capture).map_err(|e| e.to_string())?;
-        if actual != case.expected {
-            let mismatch = actual
-                .as_bytes()
-                .iter()
-                .zip(case.expected.as_bytes())
-                .position(|(a, b)| a != b);
-            return Err(format!(
-                "submitted JSON differs: expected {} bytes, got {}, first mismatch {mismatch:?}",
-                case.expected.len(),
-                actual.len()
-            ));
-        }
-        serde_json::from_str::<serde_json::Value>(&actual)
-            .map_err(|e| format!("submitted JSON is invalid: {e}"))?;
-        println!(
-            "[PASS real Claude] {}: {} UTF-8 bytes, exact submitted JSON including all formatting",
-            case.name,
-            actual.len()
-        );
-        Ok(())
+        compare_prompt(&actual, &case.expected, case.is_json)
     })();
     let _ = done.send(());
     let _ = child.kill();
@@ -244,18 +281,13 @@ fn run_case(program: &Path, case: &Case) {
     drop(pair.master);
     let _ = reader_thread.join();
     let _ = watchdog.join();
-    if let Err(error) = result {
-        panic!(
-            "{}: {error}\nSynthetic-session output tail: {}",
-            case.name,
-            tail(&output)
-        );
-    }
+    result
 }
 
 #[test]
 #[ignore = "requires explicit disposable Claude CLI acceptance environment"]
 fn RealClaude_DevtoolsJsonSubmittedCompletely_001() {
+    // Retain the old test name for existing callers; run text and JSON alike.
     let program =
         PathBuf::from(std::env::var_os("CC_E2E_CLAUDE_PATH").expect("set CC_E2E_CLAUDE_PATH"));
     let file = std::env::var_os("CC_PASTE_PAYLOAD_FILE")
@@ -265,7 +297,19 @@ fn RealClaude_DevtoolsJsonSubmittedCompletely_001() {
         !cases.is_empty(),
         "acceptance cases must not silently be empty"
     );
+    let mut failures = Vec::new();
     for case in cases {
-        run_case(&program, &case);
+        match run_case(&program, &case) {
+            Ok(()) => println!(
+                "[PASS real Claude] {}: {} UTF-8 bytes, exact submitted text",
+                case.name,
+                case.expected.len()
+            ),
+            Err(error) => {
+                println!("[FAIL real Claude] {}: {error}", case.name);
+                failures.push(case.name);
+            }
+        }
     }
+    assert!(failures.is_empty(), "Failed cases: {}", failures.join(", "));
 }
