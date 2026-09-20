@@ -76,7 +76,7 @@ cc-desk/
 │   │   ├── sessions/           # 会话面板（SessionsPanel 组装 ProjectNode 全局树 > SessionItem > SessionStatus）
 │   │   ├── skills/             # Skills 面板（SkillsPanel > SkillGroup > SkillItem）
 │   │   ├── agents/             # Agents 面板（AgentsPanel > AgentGroup > AgentItem）
-│   │   ├── mcp/                # MCP 面板（McpPanel > McpGroup > McpItem > McpSubItem）
+│   │   ├── mcp/                # MCP 面板（McpPanel > McpGroup > McpSubItem）
 │   │   ├── plugins/            # Plugins 面板（PluginsPanel > PluginGroup > PluginItem）
 │   │   ├── sidebar/            # 侧边栏容器（SidebarPanel > PanelHeader）
 │   │   └── settings/           # 设置（SettingsOverlay > SettingsView + sections/）
@@ -238,7 +238,7 @@ npm run tauri:build        # 生产构建
 ### DevTools JSON 粘贴
 
 - 实际粘贴不再自动压缩 JSON；只规范行尾。
-- Windows 完整粘贴帧使用独立 ESC Unicode 事件与真实 ConPTY input pipe drain；具体补丁在 vendor/portable-pty/CC_DESK_PATCH.md。禁止用 sleep 或单行化代替完整性保证。
+- Windows 完整粘贴帧保持原始 `ESC[200~…ESC[201~` 字节，通过一次逻辑 `write_all` 提交；不再使用旧版 ESC INPUT_RECORD 改写或 pipe drain 补丁。禁止用 sleep 或单行化代替完整性保证。
 - 前端各入口与生产 Rust writer 共享黄金样本；必须验证包含起止标记的完整正文。出现 Pasted text 折叠标签不算真实编辑器验收。见 docs/paste-framing.md。
 
 
@@ -257,3 +257,10 @@ npm run tauri:build        # 生产构建
   一次逻辑 write_all 提交，不在 marker 或正文中插入 FlushFileBuffers 边界。
 - Node raw stdin 不等价于 Claude Code 的控制台输入模式；发布门禁必须使用
   `paste_cli_submit` 捕获真实 UserPromptSubmit 正文。
+
+### 实际窗口粘贴追踪（默认关闭）
+
+- `pasteText.commitPaste` 在异步读取前分配事务编号；`api/tauri.ts` 在原有 `pty_input` 调用附加可选元数据；`paste_trace::pty_input` 包装器仍委托原 `commands::pty_input`，不改 payload、分块、shell 或重试行为。
+- 仅诊断构建同时启用 `VITE_CC_DESK_PASTE_TRACE=1` 与 `CC_DESK_PASTE_TRACE=1`；首次粘贴后最多 60 秒、256 个输入事件、32 个前端 PTY 上下文。普通构建不附加参考正文。
+- 规范化剪贴板参考文本只随同一次本地 IPC 在 Rust 内存中严格比较，不写日志；参考不超过 2 MiB 时提供 `exact` 与首次差异偏移，超出只标未知、不截断输入。日志只含编号、计数、布尔值，见 `docs/paste-runtime-trace.md`。
+- `send_seq` / `recv_seq` 是 IPC 投递/接收顺序，不是 writer 锁获取顺序；诊断不是修复，仍需在受影响 Windows 环境定位，不能以发送成功替代真实草稿/提交完整性。

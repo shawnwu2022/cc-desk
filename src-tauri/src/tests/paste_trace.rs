@@ -30,7 +30,10 @@ fn PasteTrace_SameLengthCorruptionIsDetected_003() {
 
 #[test]
 fn PasteTrace_UnframedTextAndMissingMarker_004() {
-    assert_eq!(summarize("head\ntail", Some("head\ntail")).exact, Some(true));
+    assert_eq!(
+        summarize("head\ntail", Some("head\ntail")).exact,
+        Some(true)
+    );
     let result = summarize("\x1b[200~head", Some("head"));
     assert!(!result.complete);
     assert_eq!(result.exact, Some(false));
