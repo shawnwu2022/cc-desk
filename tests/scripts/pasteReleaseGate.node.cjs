@@ -82,4 +82,9 @@ test('PasteReleaseGate_WorkflowRunsGateBeforeCharacterization_003', () => {
   assert.ok(gate >= 0, 'missing exact release gate step');
   assert.ok(characterization > gate, 'historical characterization must run after the blocking release gate');
   assert.match(workflow, /payloads-gate\.json/);
+  assert.match(
+    workflow,
+    /if \(\$infraFailed\) \{ exit 1 \}\r?\n\s+exit 0/,
+    'expected strict characterization failures must not leak a native cargo exit code into the job result',
+  );
 });
