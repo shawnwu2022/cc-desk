@@ -1,0 +1,46 @@
+name: Paste ConPTY backend comparison
+on:
+  push:
+    branches: [codex/fix-devtools-text-paste]
+    paths:
+      - .github/workflows/paste-conpty-comparison.yml
+      - .github/scripts/prepare-conpty-comparison.ps1
+      - docs/paste-conpty-comparison.md
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: paste-conpty-comparison-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Retrieve the exact existing diagnostic executable
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-paste-runtime-diagnostic
+          run-id: 35484408655
+          github-token: ${{ github.token }}
+          path: source-diagnostic
+      - name: Validate pinned Microsoft runtime and exercise its API
+        shell: pwsh
+        run: .github/scripts/prepare-conpty-comparison.ps1
+      - name: Verify no tracked files changed
+        run: git diff --exit-code
+      - name: Upload isolated comparison package, not a release
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-conpty-comparison
+          path: conpty-comparison/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Record limits
+        shell: pwsh
+        run: |
+          'Same 0be6078 executable, official ConPTY pair is the only runtime change. DLL exports and console create/resize/close tested on Server 2022, not a Win10/Claude prompt-loss reproduction. No user config, clipboard or credentials used in CI.' >> $env:GITHUB_STEP_SUMMARY
