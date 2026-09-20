@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $exeHash = '461B34E747E007D0288F53B23F7452C4D090A818A8BB25CFF730766593EA3DBD'
 $packageHash = '9382AD7BECB7E4D84E300578D8E4F4DF28F43D979D9055D978C42913C47E0E9D'
 $url = 'https://github.com/microsoft/terminal/releases/download/v1.24.11911.0/Microsoft.Windows.Console.ConPTY.1.24.260710001.nupkg'
+$licenseUrl = 'https://github.com/microsoft/terminal/blob/v1.24.11911.0/LICENSE'
 $source = Join-Path $PWD 'source-diagnostic/cc-desk-paste-trace.exe'
 if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $exeHash) { throw 'Unexpected base executable; refusing to change the experiment' }
 if ((Get-Content source-diagnostic/BUILD.txt -Raw) -notmatch 'build=0be6078480865bb3bd75bd4810c659876c6f5408') { throw 'Wrong base build' }
@@ -29,9 +30,9 @@ try {
     Copy-Item -LiteralPath $hostExe -Destination $out
     Copy-Item docs/paste-conpty-comparison.md (Join-Path $out 'README.md')
     Copy-Item source-diagnostic/BUILD.txt (Join-Path $out 'BASE-BUILD.txt')
-    $licenses = @(Get-ChildItem (Join-Path $temp 'runtime') -Recurse -File | Where-Object { $_.Name -match '^LICENSE(\.(txt|md))?$' })
-    if ($licenses.Count -lt 1) { throw 'Missing Microsoft license in pinned package' }
-    Copy-Item -LiteralPath $licenses[0].FullName -Destination (Join-Path $out 'LICENSE-Microsoft-ConPTY.txt')
+    # This nupkg refers to its MIT license but does not contain a LICENSE file.
+    # Preserve the complete copyright and license from its pinned upstream tag.
+    Copy-Item docs/licenses/Microsoft-ConPTY-LICENSE.txt (Join-Path $out 'LICENSE-Microsoft-ConPTY.txt')
 
     # ABI/host-lifecycle check using portable-pty 0.8.1 export names and flags.
     # This is not a Claude input acceptance or a Windows 10 field reproduction.
@@ -43,7 +44,7 @@ public static class ConptyCompatibilityProbe {
     public short X; public short Y;
     public Coord(short x, short y) { X=x; Y=y; }
   }
-  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
   static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
   [DllImport("kernel32.dll", CharSet=CharSet.Ansi, ExactSpelling=true)]
   static extern IntPtr GetProcAddress(IntPtr module, string name);
@@ -90,7 +91,7 @@ public static class ConptyCompatibilityProbe {
     }
     [ordered]@{
         baseBuild='0be6078480865bb3bd75bd4810c659876c6f5408'; packagingBuild=$env:GITHUB_SHA;
-        microsoftPackage=$url; microsoftPackageSha256=$packageHash;
+        microsoftPackage=$url; microsoftPackageSha256=$packageHash; licenseSource=$licenseUrl;
         validation='Legacy exports and host lifecycle only; NOT a verified fix';
         runnerOs=[Environment]::OSVersion.VersionString; files=$entries
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $out 'MANIFEST.json') -Encoding utf8
