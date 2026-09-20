@@ -8,6 +8,7 @@ on:
       - .github/scripts/generate-bundled-paste.cjs
       - scripts/prepare-conpty.mjs
       - tests/scripts/pasteAcceptance.node.cjs
+      - tests/scripts/pasteReleaseGate.node.cjs
       - src-tauri/src/tests/paste_cli_submit.rs
       - src-tauri/src/conpty_runtime.rs
       - src-tauri/conpty/**
@@ -63,7 +64,7 @@ jobs:
         run: npm ci
       - run: node scripts/prepare-conpty.mjs
       - name: Verify generator regression contracts
-        run: node --test tests/scripts/pasteAcceptance.node.cjs tests/scripts/conptyBundle.node.cjs
+        run: node --test tests/scripts/pasteAcceptance.node.cjs tests/scripts/conptyBundle.node.cjs tests/scripts/pasteReleaseGate.node.cjs
       - name: Install a disposable pinned Claude CLI without user credentials
         shell: pwsh
         run: |
