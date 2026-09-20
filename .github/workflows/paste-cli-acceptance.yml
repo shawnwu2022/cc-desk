@@ -130,12 +130,12 @@ jobs:
             $rows = @(Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json)
             $infra = @($rows | Where-Object { $_.detail -eq 'launch-or-capture-error; see isolated CI log' })
             if ($infra.Count -gt 0) {
-              Write-Error "Characterization infrastructure failure for $mode: $($infra.name -join ', ')"
+              Write-Error "Characterization infrastructure failure for ${mode}: $($infra.name -join ', ')"
               $infraFailed = $true
             }
             $exact = @($rows | Where-Object passed).Count
             $strict = @($rows | Where-Object { -not $_.passed }).Count
-            "Characterization $mode: exact=$exact strict-differences=$strict process-exit=$strictExit" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            "Characterization ${mode}: exact=$exact strict-differences=$strict process-exit=$strictExit" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
           }
           if ($infraFailed) { exit 1 }
       - name: Upload result metadata only
