@@ -5,7 +5,10 @@ fn main() {
     if package_json_path.exists() {
         let content = std::fs::read_to_string(&package_json_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
-        println!("cargo:rustc-env=APP_VERSION={}", json["version"].as_str().unwrap());
+        println!(
+            "cargo:rustc-env=APP_VERSION={}",
+            json["version"].as_str().unwrap()
+        );
     }
     let build_sha = std::env::var("CC_DESK_BUILD_SHA")
         .or_else(|_| std::env::var("GITHUB_SHA"))
@@ -14,10 +17,15 @@ fn main() {
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
     println!("cargo:rustc-env=CC_DESK_BUILD_SHA={build_sha}");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        assert_eq!(std::env::var("CARGO_CFG_TARGET_ARCH").unwrap(), "x86_64", "Bundled ConPTY currently supports Windows x64 only");
+        assert_eq!(
+            std::env::var("CARGO_CFG_TARGET_ARCH").unwrap(),
+            "x86_64",
+            "Bundled ConPTY currently supports Windows x64 only"
+        );
         let manifest = manifest_dir.join("conpty/manifest.json");
         println!("cargo:rerun-if-changed={}", manifest.display());
-        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
         let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
         let profile = out.ancestors().nth(3).expect("Cargo profile directory");
         // tauri dev, --no-bundle, normal binaries and library test executables.

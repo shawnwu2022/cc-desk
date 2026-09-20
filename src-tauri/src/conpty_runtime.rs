@@ -76,14 +76,23 @@ fn hash(data: &[u8]) -> Result<String, String> {
     let mut provider = null_mut();
     let algorithm = wide(OsStr::new("SHA256"));
     // BCryptHash is supported from Windows 10, below this app's ConPTY minimum.
-    let status = unsafe { BCryptOpenAlgorithmProvider(&mut provider, algorithm.as_ptr(), null(), 0) };
+    let status =
+        unsafe { BCryptOpenAlgorithmProvider(&mut provider, algorithm.as_ptr(), null(), 0) };
     if status < 0 {
         return Err(format!("Cannot open SHA-256 provider: {status:#x}"));
     }
     let mut out = [0u8; 32];
     // Microsoft documents pbInput as read-only despite its mutable C pointer.
     let status = unsafe {
-        BCryptHash(provider, null_mut(), 0, data.as_ptr().cast_mut(), len, out.as_mut_ptr(), 32)
+        BCryptHash(
+            provider,
+            null_mut(),
+            0,
+            data.as_ptr().cast_mut(),
+            len,
+            out.as_mut_ptr(),
+            32,
+        )
     };
     unsafe { BCryptCloseAlgorithmProvider(provider, 0) };
     if status < 0 {
@@ -93,11 +102,19 @@ fn hash(data: &[u8]) -> Result<String, String> {
 }
 fn verify_file(dir: &Path, expected: &PinnedFile) -> Result<File, String> {
     let path = dir.join(&expected.name);
-    let canonical = path.canonicalize().map_err(|e| format!("Missing {}: {e}", expected.name))?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("Missing {}: {e}", expected.name))?;
     if canonical != path {
-        return Err(format!("Runtime file must be in the application directory: {}", expected.name));
+        return Err(format!(
+            "Runtime file must be in the application directory: {}",
+            expected.name
+        ));
     }
-    let mut file = OpenOptions::new().read(true).share_mode(1).open(&path)
+    let mut file = OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&path)
         .map_err(|e| format!("Cannot lock {} for verification: {e}", expected.name))?;
     let size = file.metadata().map_err(|e| e.to_string())?.len();
     if size != expected.bytes || size > 4 * 1024 * 1024 {
@@ -109,8 +126,11 @@ fn verify_file(dir: &Path, expected: &PinnedFile) -> Result<File, String> {
         return Err(format!("SHA-256 mismatch: {}", expected.name));
     }
     if expected.name.ends_with(".dll") || expected.name.ends_with(".exe") {
-        let offset = bytes.get(60..64).map(|p| u32::from_le_bytes(p.try_into().unwrap()) as usize);
-        let valid = offset.and_then(|off| bytes.get(off..off.checked_add(6)?))
+        let offset = bytes
+            .get(60..64)
+            .map(|p| u32::from_le_bytes(p.try_into().unwrap()) as usize);
+        let valid = offset
+            .and_then(|off| bytes.get(off..off.checked_add(6)?))
             .is_some_and(|header| &header[..4] == b"PE\0\0" && header[4..] == [0x64, 0x86]);
         if !bytes.starts_with(b"MZ") || !valid {
             return Err(format!("Not an x64 PE file: {}", expected.name));
@@ -124,31 +144,47 @@ fn module_path(module: *mut c_void) -> Result<PathBuf, String> {
     if size == 0 || size >= name.len() {
         return Err("Cannot establish loaded ConPTY path".into());
     }
-    PathBuf::from(OsString::from_wide(&name[..size])).canonicalize().map_err(|e| e.to_string())
+    PathBuf::from(OsString::from_wide(&name[..size]))
+        .canonicalize()
+        .map_err(|e| e.to_string())
 }
 fn load_from(directory: &Path) -> Result<Runtime, String> {
     if !cfg!(target_arch = "x86_64") {
         return Err("Bundled ConPTY supports Windows x64 only".into());
     }
     let directory = directory.canonicalize().map_err(|e| e.to_string())?;
-    let manifest: Manifest = serde_json::from_str(include_str!("../conpty/manifest.json"))
-        .map_err(|e| e.to_string())?;
-    let files = manifest.files.iter().map(|file| verify_file(&directory, file)).collect::<Result<Vec<_>, _>>()?;
+    let manifest: Manifest =
+        serde_json::from_str(include_str!("../conpty/manifest.json")).map_err(|e| e.to_string())?;
+    let files = manifest
+        .files
+        .iter()
+        .map(|file| verify_file(&directory, file))
+        .collect::<Result<Vec<_>, _>>()?;
     let dll = directory.join("conpty.dll");
     let basename = wide(OsStr::new("conpty.dll"));
     let prior = unsafe { GetModuleHandleW(basename.as_ptr()) };
     if !prior.is_null() && module_path(prior)? != dll {
-        return Err("An unexpected ConPTY module is already loaded; restart from the installed application".into());
+        return Err(
+            "An unexpected ConPTY module is already loaded; restart from the installed application"
+                .into(),
+        );
     }
     let absolute = wide(dll.as_os_str());
     // Absolute DLL path + only its directory and System32 for dependencies.
     // Do not change the process-wide DLL search policy (WebView compatibility).
     let handle = unsafe { LoadLibraryExW(absolute.as_ptr(), null_mut(), 0x100 | 0x1000) };
     if handle.is_null() {
-        return Err(format!("Cannot load bundled ConPTY: {}", std::io::Error::last_os_error()));
+        return Err(format!(
+            "Cannot load bundled ConPTY: {}",
+            std::io::Error::last_os_error()
+        ));
     }
     let module = Module(handle as usize);
-    for export in [b"CreatePseudoConsole\0".as_slice(), b"ResizePseudoConsole\0", b"ClosePseudoConsole\0"] {
+    for export in [
+        b"CreatePseudoConsole\0".as_slice(),
+        b"ResizePseudoConsole\0",
+        b"ClosePseudoConsole\0",
+    ] {
         if unsafe { GetProcAddress(handle, export.as_ptr()) }.is_null() {
             return Err("Bundled ConPTY is missing a required export".into());
         }
@@ -157,13 +193,21 @@ fn load_from(directory: &Path) -> Result<Runtime, String> {
     if unsafe { GetModuleHandleW(basename.as_ptr()) } != handle || module_path(handle)? != dll {
         return Err("ConPTY loader resolved an unexpected module".into());
     }
-    Ok(Runtime { module, _files: files, directory, version: manifest.version })
+    Ok(Runtime {
+        module,
+        _files: files,
+        directory,
+        version: manifest.version,
+    })
 }
 fn runtime() -> Result<&'static Runtime, String> {
-    RUNTIME.get_or_init(|| {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        load_from(exe.parent().ok_or("No application directory")?)
-    }).as_ref().map_err(Clone::clone)
+    RUNTIME
+        .get_or_init(|| {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            load_from(exe.parent().ok_or("No application directory")?)
+        })
+        .as_ref()
+        .map_err(Clone::clone)
 }
 pub fn initialize() -> Result<(), String> {
     runtime().map(|_| ())
@@ -180,19 +224,38 @@ pub fn check_report(destination: &Path) -> i32 {
     let result = (|| -> Result<serde_json::Value, String> {
         let runtime = runtime()?;
         use portable_pty::{native_pty_system, PtySize};
-        let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .map_err(|e| e.to_string())?;
-        pair.master.resize(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())?;
+        pair.master
+            .resize(PtySize {
+                rows: 30,
+                cols: 100,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
         drop(pair);
         let actual = module_path(runtime.module.0 as *mut c_void)?;
-        if actual != runtime.directory.join("conpty.dll") { return Err("ConPTY identity changed".into()); }
-        Ok(serde_json::json!({"ok":true,"backend":"bundled","version":runtime.version,
+        if actual != runtime.directory.join("conpty.dll") {
+            return Err("ConPTY identity changed".into());
+        }
+        Ok(
+            serde_json::json!({"ok":true,"backend":"bundled","version":runtime.version,
             "dll":actual,"host":runtime.directory.join("OpenConsole.exe"),
-            "build":env!("CC_DESK_BUILD_SHA"),"ptyLifecycle":true}))
+            "build":env!("CC_DESK_BUILD_SHA"),"ptyLifecycle":true}),
+        )
     })();
     let code = if result.is_ok() { 0 } else { 2 };
     let report = result.unwrap_or_else(|error| serde_json::json!({"ok":false,"error":error}));
-    if std::fs::write(destination, serde_json::to_vec_pretty(&report).unwrap()).is_err() { return 3; }
+    if std::fs::write(destination, serde_json::to_vec_pretty(&report).unwrap()).is_err() {
+        return 3;
+    }
     code
 }
 

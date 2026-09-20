@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-// The same secure bootstrap as the production executable. The opt-in is for
-// historical system-backend controls only; normal application startup is strict.
+// Use the same secure bootstrap as the production executable. Disabling this
+// test option alone does not establish a system-backend control: Cargo also
+// stages app-local runtime files beside the test executable.
 #[allow(dead_code)]
 #[path = "../conpty_runtime.rs"]
 mod bundled_runtime;
@@ -31,7 +32,9 @@ struct Case {
     copies: usize,
 }
 
-fn one_copy() -> usize { 1 }
+fn one_copy() -> usize {
+    1
+}
 
 // Launch selection is explicit; unknown modes cannot silently test the control.
 #[derive(Clone, Copy, Debug, Default, Deserialize, serde::Serialize, PartialEq)]
@@ -234,7 +237,9 @@ fn run_case(program: &Path, case: &Case) -> Result<(), String> {
     if std::env::var("CC_PASTE_BUNDLED_RUNTIME").as_deref() == Ok("1") {
         bundled_runtime::initialize()?;
     }
-    if !(1..=3).contains(&case.copies) { return Err("copies must be between 1 and 3".into()); }
+    if !(1..=3).contains(&case.copies) {
+        return Err("copies must be between 1 and 3".into());
+    }
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let config = temp.path().join("config");
@@ -391,8 +396,13 @@ fn run_case(program: &Path, case: &Case) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(50));
         }
         std::thread::sleep(Duration::from_millis(250));
-        let count = std::fs::read_to_string(&events).map_err(|e| e.to_string())?.lines().count();
-        if count != 1 { return Err(format!("Expected one submit, got {count}")); }
+        let count = std::fs::read_to_string(&events)
+            .map_err(|e| e.to_string())?
+            .lines()
+            .count();
+        if count != 1 {
+            return Err(format!("Expected one submit, got {count}"));
+        }
         let actual = std::fs::read_to_string(&capture).map_err(|e| e.to_string())?;
         compare_prompt(&actual, &case.expected.repeat(case.copies), case.is_json)
     })();
