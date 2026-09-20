@@ -1,0 +1,86 @@
+name: Paste runtime diagnostic executable
+on:
+  push:
+    branches: [codex/fix-devtools-text-paste]
+    paths:
+      - .github/workflows/paste-runtime-trace.yml
+      - src/utils/pasteText.ts
+      - src/utils/pasteTrace.ts
+      - src/api/tauri.ts
+      - src-tauri/src/lib.rs
+      - src-tauri/src/commands.rs
+      - src-tauri/src/paste_trace.rs
+      - src-tauri/src/tests/paste_trace.rs
+      - tests/scripts/pasteTrace.node.cjs
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: paste-runtime-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  diagnostic:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+      - run: npm ci
+      - run: node scripts/prepare-conpty.mjs
+      - run: npm run typecheck
+      - run: npm test
+      - name: Runtime observation contracts
+        run: node --test tests/scripts/pasteTrace.node.cjs
+      - name: Rust formatting
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+      - name: Rust boundary tests (ordinary build)
+        working-directory: src-tauri
+        run: cargo test --locked --lib PasteTrace_ -- --nocapture
+      - name: Rust boundary tests (diagnostic build)
+        working-directory: src-tauri
+        env:
+          CC_DESK_PASTE_TRACE: '1'
+        run: cargo test --locked --lib PasteTrace_ -- --nocapture
+      - name: Rust lint
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Build standalone diagnostic, not an installer or release
+        env:
+          VITE_CC_DESK_PASTE_TRACE: '1'
+          CC_DESK_PASTE_TRACE: '1'
+          CARGO_PROFILE_RELEASE_LTO: 'false'
+        run: npm run tauri -- build --no-bundle
+      - name: Package executable with identity and limitations
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force paste-runtime-diagnostic | Out-Null
+          Copy-Item src-tauri/target/release/cc-desk.exe paste-runtime-diagnostic/cc-desk-paste-trace.exe
+          Copy-Item src-tauri/conpty/runtime/* paste-runtime-diagnostic/
+          Copy-Item docs/paste-runtime-trace.md paste-runtime-diagnostic/README.md
+          "build=$env:GITHUB_SHA" | Set-Content paste-runtime-diagnostic/BUILD.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content paste-runtime-diagnostic/BUILD.txt
+          $hash = (Get-FileHash paste-runtime-diagnostic/cc-desk-paste-trace.exe -Algorithm SHA256).Hash
+          "$hash  cc-desk-paste-trace.exe" | Set-Content paste-runtime-diagnostic/SHA256SUMS.txt
+          Get-Item paste-runtime-diagnostic/cc-desk-paste-trace.exe | Select-Object Name, Length
+          Get-Content paste-runtime-diagnostic/SHA256SUMS.txt
+      - name: Verify tracked files unchanged
+        run: git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-paste-runtime-diagnostic
+          path: paste-runtime-diagnostic/
+          if-no-files-found: error
+          retention-days: 7

@@ -4,6 +4,7 @@ mod hook_config;
 mod hook_events;
 mod hook_server;
 mod logger;
+mod paste_trace;
 mod platform;
 mod pty;
 mod pty_decoder;
@@ -142,7 +143,7 @@ pub fn run(initial_dir: Option<String>) {
             commands::get_check_results,
             commands::run_checks,
             commands::pty_spawn,
-            commands::pty_input,
+            paste_trace::pty_input,
             commands::pty_resize,
             commands::pty_kill,
             commands::pty_kill_all,

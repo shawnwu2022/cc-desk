@@ -79,6 +79,14 @@ export function isPasteStale(capturedPtyId: string | undefined, currentPtyId: st
 
 type PasteInstance = { ptyId: string }
 
+type PasteObservation = (id: string, expected: string, send: () => Promise<unknown>) => Promise<unknown>
+let pasteObserver: ((id: string | undefined) => PasteObservation | undefined) | undefined
+
+/** Optional diagnostic hook. Ordinary builds never register an observer. */
+export function setPasteObserver(observer: typeof pasteObserver): void {
+  pasteObserver = observer
+}
+
 /**
  * 一次粘贴的完整异步流程：同步读取键按瞬间的实例 → 异步 readText → 复核当前实例仍是
  * 同一 ptyId（否则视为过期丢弃）→ 构造 payload → 写 PTY。依赖（readText / 取实例 /
@@ -92,6 +100,7 @@ export async function commitPaste(
   imageFallback?: () => string,
 ): Promise<void> {
   const capturedPtyId = getInstance()?.ptyId
+  const observe = pasteObserver?.(capturedPtyId)
   // "无文本"定义为 resolve 空串或 reject（剪贴板只有截图时插件底层 arboard 返回错误，
   // readText 是 reject 不是空串）。两者汇合到同一分流分支；reject 在无 fallback 可用
   // 时保持现状向上抛，空串保持现状静默跳过。{ error } 包装防止捕获值恰为 undefined。
@@ -118,7 +127,11 @@ export async function commitPaste(
   if (instance?.ptyId && !isPasteStale(capturedPtyId, instance.ptyId)) {
     const payload = buildPayload(text)
     if (!payload) return // 正文为空：跳过发送，避免产生空 bracketed-paste 标记
-    await write(instance.ptyId, payload)
+    if (observe) {
+      await observe(instance.ptyId, preparePasteText(text), () => write(instance.ptyId, payload))
+    } else {
+      await write(instance.ptyId, payload)
+    }
   }
 }
 

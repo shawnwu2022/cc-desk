@@ -1,0 +1,12 @@
+{
+  "version": "1.24.2607.10001",
+  "architecture": "x64",
+  "packageUrl": "https://github.com/microsoft/terminal/releases/download/v1.24.11911.0/Microsoft.Windows.Console.ConPTY.1.24.260710001.nupkg",
+  "packageSha256": "9382ad7becb7e4d84e300578d8e4f4df28f43d979d9055d978c42913c47e0e9d",
+  "licenseUrl": "https://raw.githubusercontent.com/microsoft/terminal/v1.24.11911.0/LICENSE",
+  "files": [
+    {"name":"conpty.dll","bytes":109920,"sha256":"39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8"},
+    {"name":"OpenConsole.exe","bytes":1066296,"sha256":"b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160"},
+    {"name":"LICENSE-Microsoft-ConPTY.txt","bytes":1116,"sha256":"5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b"}
+  ]
+}
