@@ -3,6 +3,19 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { pasteTrace } from '@/utils/pasteTrace';
+import { setPasteObserver } from '@/utils/pasteText';
+
+// Diagnostic executable only. No user settings, hooks or clipboard are persisted.
+if (import.meta.env.VITE_CC_DESK_PASTE_TRACE === '1') {
+  pasteTrace.setEnabled(true);
+  setPasteObserver(id => {
+    const ticket = pasteTrace.begin(id);
+    return ticket
+      ? (target, expected, send) => pasteTrace.observe(ticket, target, expected, send)
+      : undefined;
+  });
+}
 
 // 从统一类型目录导入
 import type {
@@ -82,7 +95,8 @@ export const ptyInput = async (
   data: string,
   source: PtyInputSource = 'other',
 ): Promise<boolean> => {
-  return invoke<boolean>('pty_input', { id, data, source });
+  const trace = pasteTrace.input(id, data);
+  return invoke<boolean>('pty_input', trace ? { id, data, source, trace } : { id, data, source });
 };
 
 export const ptyResize = async (id: string, cols: number, rows: number): Promise<boolean> => {
