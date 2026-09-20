@@ -14,11 +14,13 @@ try {
     Invoke-WebRequest -Uri $url -OutFile $zip
     if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $packageHash) { throw 'Microsoft release asset digest mismatch' }
     Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $temp 'runtime')
+    # NuGet places the DLL and host in different trees. Select each by architecture
+    # within this one hash-verified package; never mix versions or architectures.
     $dlls = @(Get-ChildItem (Join-Path $temp 'runtime') -Recurse -File -Filter 'conpty.dll' | Where-Object { $_.FullName -match '[\\/](win-)?x64[\\/]' })
-    if ($dlls.Count -ne 1) { throw "Expected exactly one x64 conpty.dll, found $($dlls.Count)" }
+    $hosts = @(Get-ChildItem (Join-Path $temp 'runtime') -Recurse -File -Filter 'OpenConsole.exe' | Where-Object { $_.FullName -match '[\\/](win-)?x64[\\/]' })
+    if ($dlls.Count -ne 1 -or $hosts.Count -ne 1) { throw "Expected one x64 pair; DLL=$($dlls.Count), host=$($hosts.Count)" }
     $dll = $dlls[0]
-    $hostExe = Join-Path $dll.DirectoryName 'OpenConsole.exe'
-    if (!(Test-Path -LiteralPath $hostExe -PathType Leaf)) { throw 'Missing matching OpenConsole.exe' }
+    $hostExe = $hosts[0].FullName
     $out = Join-Path $PWD 'conpty-comparison'
     if (Test-Path -LiteralPath $out) { throw 'Output directory already exists' }
     New-Item -ItemType Directory $out | Out-Null
@@ -27,14 +29,12 @@ try {
     Copy-Item -LiteralPath $hostExe -Destination $out
     Copy-Item docs/paste-conpty-comparison.md (Join-Path $out 'README.md')
     Copy-Item source-diagnostic/BUILD.txt (Join-Path $out 'BASE-BUILD.txt')
-    # The MIT license in the package is distributed with the two unmodified files.
     $licenses = @(Get-ChildItem (Join-Path $temp 'runtime') -Recurse -File | Where-Object { $_.Name -match '^LICENSE(\.(txt|md))?$' })
     if ($licenses.Count -lt 1) { throw 'Missing Microsoft license in pinned package' }
     Copy-Item -LiteralPath $licenses[0].FullName -Destination (Join-Path $out 'LICENSE-Microsoft-ConPTY.txt')
 
-    # portable-pty 0.8.1 resolves these legacy export names. Check all three,
-    # then create/resize/close a real host using its exact flags (0x2 | 0x4).
-    # This is an ABI/host-lifecycle check, NOT Claude input acceptance.
+    # ABI/host-lifecycle check using portable-pty 0.8.1 export names and flags.
+    # This is not a Claude input acceptance or a Windows 10 field reproduction.
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -61,7 +61,7 @@ public static class ConptyCompatibilityProbe {
     return Marshal.GetDelegateForFunctionPointer<T>(p);
   }
   public static void Run(string path) {
-    IntPtr lib=IntPtr.Zero, ir=IntPtr.Zero, iw=IntPtr.Zero, or=IntPtr.Zero, ow=IntPtr.Zero, pc=IntPtr.Zero;
+    IntPtr lib=IntPtr.Zero, ir=IntPtr.Zero, iw=IntPtr.Zero, outputRead=IntPtr.Zero, ow=IntPtr.Zero, pc=IntPtr.Zero;
     Close close=null;
     try {
       lib=LoadLibraryExW(path,IntPtr.Zero,0x1100);
@@ -69,14 +69,14 @@ public static class ConptyCompatibilityProbe {
       var create=Function<Create>(lib,"CreatePseudoConsole");
       var resize=Function<Resize>(lib,"ResizePseudoConsole");
       close=Function<Close>(lib,"ClosePseudoConsole");
-      if(!CreatePipe(out ir,out iw,IntPtr.Zero,4096) || !CreatePipe(out or,out ow,IntPtr.Zero,4096)) throw new Exception("CreatePipe failed");
+      if(!CreatePipe(out ir,out iw,IntPtr.Zero,4096) || !CreatePipe(out outputRead,out ow,IntPtr.Zero,4096)) throw new Exception("CreatePipe failed");
       int hr=create(new Coord(80,24),ir,ow,6,out pc);
       if(hr!=0) Marshal.ThrowExceptionForHR(hr);
       hr=resize(pc,new Coord(100,30));
       if(hr!=0) Marshal.ThrowExceptionForHR(hr);
     } finally {
       if(pc!=IntPtr.Zero && close!=null) close(pc);
-      foreach(var h in new[]{ir,iw,or,ow}) if(h!=IntPtr.Zero) CloseHandle(h);
+      foreach(var h in new[]{ir,iw,outputRead,ow}) if(h!=IntPtr.Zero) CloseHandle(h);
       if(lib!=IntPtr.Zero) FreeLibrary(lib);
     }
   }
@@ -96,8 +96,7 @@ public static class ConptyCompatibilityProbe {
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $out 'MANIFEST.json') -Encoding utf8
     $entries | ForEach-Object { "$($_.sha256)  $($_.name)" } | Set-Content -LiteralPath (Join-Path $out 'SHA256SUMS.txt') -Encoding utf8
     if ((Get-FileHash -LiteralPath (Join-Path $out 'cc-desk-paste-trace.exe')).Hash -ne $exeHash) { throw 'Application changed unexpectedly' }
-    # Executed by the user only while the app is running. No script-policy change,
-    # process termination, console-mode change, clipboard read, or prompt logging.
+    # User invokes while app is running. No policy or system configuration changes.
     $check = @'
 @echo off
 cd /d "%~dp0"
