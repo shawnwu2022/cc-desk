@@ -36,9 +36,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: runtime-trace-v2
           cache-on-failure: true
       - run: npm ci
+      - run: node scripts/prepare-conpty.mjs
       - run: npm run typecheck
       - run: npm test
       - name: Runtime observation contracts
@@ -68,6 +68,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force paste-runtime-diagnostic | Out-Null
           Copy-Item src-tauri/target/release/cc-desk.exe paste-runtime-diagnostic/cc-desk-paste-trace.exe
+          Copy-Item src-tauri/conpty/runtime/* paste-runtime-diagnostic/
           Copy-Item docs/paste-runtime-trace.md paste-runtime-diagnostic/README.md
           "build=$env:GITHUB_SHA" | Set-Content paste-runtime-diagnostic/BUILD.txt
           "os=$([Environment]::OSVersion.VersionString)" | Add-Content paste-runtime-diagnostic/BUILD.txt

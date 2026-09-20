@@ -12,6 +12,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
+// The same secure bootstrap as the production executable. The opt-in is for
+// historical system-backend controls only; normal application startup is strict.
+#[allow(dead_code)]
+#[path = "../conpty_runtime.rs"]
+mod bundled_runtime;
+
 #[derive(Deserialize)]
 struct Case {
     name: String,
@@ -21,7 +27,11 @@ struct Case {
     is_json: bool,
     #[serde(default, rename = "launchMode")]
     launch_mode: LaunchMode,
+    #[serde(default = "one_copy")]
+    copies: usize,
 }
+
+fn one_copy() -> usize { 1 }
 
 // Launch selection is explicit; unknown modes cannot silently test the control.
 #[derive(Clone, Copy, Debug, Default, Deserialize, serde::Serialize, PartialEq)]
@@ -144,6 +154,7 @@ process.stdin.on('end', () => {
       throw new Error('expected UserPromptSubmit text');
     }
     const dest = process.env.CC_PASTE_CAPTURE;
+    fs.appendFileSync(dest + '.events', 'submit\n');
     fs.writeFileSync(dest + '.tmp', event.prompt, 'utf8');
     fs.renameSync(dest + '.tmp', dest);
     process.stdout.write(JSON.stringify({decision: 'block', reason: 'CC_DESK_CI_CAPTURED'}));
@@ -220,6 +231,10 @@ fn PasteAcceptance_ClassifyTabsWithoutHidingLoss_003() {
 }
 
 fn run_case(program: &Path, case: &Case) -> Result<(), String> {
+    if std::env::var("CC_PASTE_BUNDLED_RUNTIME").as_deref() == Ok("1") {
+        bundled_runtime::initialize()?;
+    }
+    if !(1..=3).contains(&case.copies) { return Err("copies must be between 1 and 3".into()); }
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let config = temp.path().join("config");
@@ -228,6 +243,7 @@ fn run_case(program: &Path, case: &Case) -> Result<(), String> {
         std::fs::create_dir_all(dir).unwrap();
     }
     let capture = temp.path().join("submitted.txt");
+    let events = temp.path().join("submitted.txt.events");
     let helper = temp.path().join("capture.cjs");
     std::fs::write(&helper, CAPTURE_HOOK).unwrap();
     let hook_command = format!(
@@ -357,11 +373,13 @@ fn run_case(program: &Path, case: &Case) -> Result<(), String> {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        // Real frontend wire, actual application writer; no hand-built transport.
-        write_pty_data(&mut *writer, case.wire.as_bytes()).map_err(|e| e.to_string())?;
-        std::thread::sleep(Duration::from_millis(1000));
-        if capture.exists() {
-            return Err("Paste submitted before the explicit Enter key".into());
+        // Separate actual writes for consecutive paste, not one concatenated frame.
+        for _ in 0..case.copies {
+            write_pty_data(&mut *writer, case.wire.as_bytes()).map_err(|e| e.to_string())?;
+            std::thread::sleep(Duration::from_millis(1000));
+            if capture.exists() || events.exists() {
+                return Err("Paste submitted before the explicit Enter key".into());
+            }
         }
         writer.write_all(b"\r").map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())?;
@@ -372,8 +390,11 @@ fn run_case(program: &Path, case: &Case) -> Result<(), String> {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+        std::thread::sleep(Duration::from_millis(250));
+        let count = std::fs::read_to_string(&events).map_err(|e| e.to_string())?.lines().count();
+        if count != 1 { return Err(format!("Expected one submit, got {count}")); }
         let actual = std::fs::read_to_string(&capture).map_err(|e| e.to_string())?;
-        compare_prompt(&actual, &case.expected, case.is_json)
+        compare_prompt(&actual, &case.expected.repeat(case.copies), case.is_json)
     })();
     let _ = done.send(());
     terminate_case_tree(child_pid);
@@ -411,7 +432,7 @@ fn RealClaude_DevtoolsJsonSubmittedCompletely_001() {
         results.push(serde_json::json!({
             "name": case.name,
             "launchMode": case.launch_mode,
-            "expectedBytes": case.expected.len(),
+            "expectedBytes": case.expected.len() * case.copies,
             "passed": outcome.is_ok(),
             "detail": detail
         }));
@@ -420,7 +441,7 @@ fn RealClaude_DevtoolsJsonSubmittedCompletely_001() {
             Ok(()) => println!(
                 "[PASS real Claude] {}: {} UTF-8 bytes, exact submitted text",
                 case.name,
-                case.expected.len()
+                case.expected.len() * case.copies
             ),
             Err(error) => {
                 println!("[FAIL real Claude] {}: {error}", case.name);

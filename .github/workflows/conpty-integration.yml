@@ -25,9 +25,31 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: bundled-conpty-${{ github.ref }}
+  group: bundled-conpty-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
+  formatting:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Verify formatting and retain any diff
+        working-directory: src-tauri
+        run: |
+          cargo fmt --all
+          git diff --output=../conpty-format.patch
+          git diff --exit-code
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conpty-format-diff
+          path: conpty-format.patch
+          retention-days: 3
   installer:
     runs-on: windows-2022
     timeout-minutes: 40
@@ -47,7 +69,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: bundled-conpty-v1
           cache-on-failure: true
       - run: npm ci
       - run: node scripts/prepare-conpty.mjs
@@ -71,14 +92,8 @@ jobs:
           $installers = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe)
           if ($installers.Count -ne 1) { throw 'Expected one NSIS installer' }
           ./scripts/test-conpty-install.ps1 -Installer $installers[0].FullName
-      - name: Capture source formatting diff for review
-        if: always()
-        shell: pwsh
-        working-directory: src-tauri
-        run: |
-          cargo fmt --all
-          git diff --output=../conpty-format.patch
-          git diff --exit-code
+      - name: Verify tracked files unchanged
+        run: git diff --exit-code
       - name: Upload verification artifacts, never a GitHub release
         if: always()
         uses: actions/upload-artifact@v4
@@ -86,7 +101,6 @@ jobs:
           name: conpty-installer-verification
           path: |
             conpty-install-results.json
-            conpty-format.patch
             src-tauri/target/release/bundle/nsis/*.exe
           retention-days: 7
           if-no-files-found: warn

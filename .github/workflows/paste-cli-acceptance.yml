@@ -5,8 +5,12 @@ on:
     paths: &paste_paths
       - .github/workflows/paste-cli-acceptance.yml
       - .github/scripts/generate_paste_acceptance.cjs
+      - .github/scripts/generate-bundled-paste.cjs
+      - scripts/prepare-conpty.mjs
       - tests/scripts/pasteAcceptance.node.cjs
       - src-tauri/src/tests/paste_cli_submit.rs
+      - src-tauri/src/conpty_runtime.rs
+      - src-tauri/conpty/**
       - src-tauri/src/pty.rs
       - src-tauri/src/platform.rs
       - src-tauri/tests/fixtures/devtools-paste-framing.json
@@ -27,7 +31,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   acceptance:
-    name: Real CLI (${{ matrix.claude_version }}, direct + production-shell)
+    name: Real CLI (${{ matrix.claude_version }}, bundled ConPTY)
     runs-on: windows-2022
     timeout-minutes: 30
     strategy:
@@ -37,6 +41,7 @@ jobs:
         claude_version: ${{ fromJSON(inputs.claude_versions || '["2.1.268","2.1.274"]') }}
     env:
       CLAUDE_TEST_VERSION: ${{ matrix.claude_version }}
+      CC_PASTE_BUNDLED_RUNTIME: '1'
       DISABLE_AUTOUPDATER: '1'
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
     steps:
@@ -56,16 +61,17 @@ jobs:
           cache-on-failure: true
       - id: deps
         run: npm ci
+      - run: node scripts/prepare-conpty.mjs
       - name: Verify generator regression contracts
-        run: node --test tests/scripts/pasteAcceptance.node.cjs
+        run: node --test tests/scripts/pasteAcceptance.node.cjs tests/scripts/conptyBundle.node.cjs
       - name: Install a disposable pinned Claude CLI without user credentials
         shell: pwsh
         run: |
           if ($env:CLAUDE_TEST_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'An exact version is required' }
           npm install --engine-strict --prefix .ci-claude --no-save "@anthropic-ai/claude-code@$env:CLAUDE_TEST_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Generate unchanged payloads with explicit launch metadata
-        run: node .github/scripts/generate_paste_acceptance.cjs
+      - name: Generate unchanged historical plus separately labelled field shapes
+        run: node .github/scripts/generate-bundled-paste.cjs
       - name: Record executable identity, launch modes and Windows build
         shell: pwsh
         run: |
@@ -73,15 +79,11 @@ jobs:
           $version = if ([IO.Path]::GetExtension($cli) -eq '.js') { & node $cli --version } else { & $cli --version }
           if ($LASTEXITCODE -ne 0) { throw 'Cannot execute the resolved CLI' }
           if (($version -join ' ') -notmatch ([regex]::Escape($env:CLAUDE_TEST_VERSION) + '(\s|$)')) { throw "Unexpected CLI version: $version" }
-          "Executable: $cli; version: $version; launch modes: direct, production-shell"
+          "Executable: $cli; version: $version; backend: bundled; launch modes: direct, production-shell"
           Get-FileHash -Algorithm SHA256 -LiteralPath $cli
           & 'C:/Program Files/Git/bin/bash.exe' --version
           if ($LASTEXITCODE -ne 0) { throw 'Production-shell control requires Git Bash' }
           [Environment]::OSVersion.VersionString
-          'Hosted Windows Server 2022 is not Windows 10 build 19045. Shell selection is covered, WebView and user plugins are not.' >> $env:GITHUB_STEP_SUMMARY
-      - name: Check committed Rust formatting
-        working-directory: src-tauri
-        run: cargo fmt --all --check
       - name: Run Windows prompt-comparison and launch unit tests
         working-directory: src-tauri
         run: cargo test --locked --lib PasteAcceptance_ -- --nocapture
@@ -91,16 +93,14 @@ jobs:
           $failed = $false
           foreach ($mode in @('direct', 'production-shell')) {
             $env:CC_PASTE_LAUNCH_MODE = $mode
-            node .github/scripts/generate_paste_acceptance.cjs
+            node .github/scripts/generate-bundled-paste.cjs
             if ($LASTEXITCODE -ne 0) { $failed = $true; continue }
             $env:CC_PASTE_RESULT_FILE = Join-Path $env:GITHUB_WORKSPACE ".ci-claude/acceptance-$mode.json"
             Push-Location src-tauri
             try {
               cargo test --locked --lib RealClaude_DevtoolsJsonSubmittedCompletely_001 -- --ignored --test-threads=1 --nocapture
               if ($LASTEXITCODE -ne 0) { $failed = $true }
-            } finally {
-              Pop-Location
-            }
+            } finally { Pop-Location }
           }
           if ($failed) { exit 1 }
       - name: Upload result metadata only
@@ -112,6 +112,10 @@ jobs:
           include-hidden-files: true
           retention-days: 7
           if-no-files-found: warn
+      - name: Check committed Rust formatting
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        working-directory: src-tauri
+        run: cargo fmt --all --check
       - name: Strict Rust checks even after acceptance failure
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         working-directory: src-tauri
@@ -123,4 +127,4 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          'Strict prompt differences remain failures; classify them before attributing truncation. No user clipboard or credentials. Do not infer full CC Desk or Win10 coverage.' >> $env:GITHUB_STEP_SUMMARY
+          'Bundled runtime with strict bootstrap; all historical differences remain failures. Hosted Server 2022, not Win10 or full WebView acceptance. No user clipboard or credentials.' >> $env:GITHUB_STEP_SUMMARY

@@ -42,10 +42,10 @@ try {
     $relocated = Join-Path $root '移动后的 CC Desk'
     Copy-Item -LiteralPath $installed -Destination $relocated -Recurse
     Run-Probe $relocated $true 'relocated'
-    $host = Join-Path $relocated 'OpenConsole.exe'
-    Move-Item -LiteralPath $host -Destination ($host + '.saved')
+    $hostPath = Join-Path $relocated 'OpenConsole.exe'
+    Move-Item -LiteralPath $hostPath -Destination ($hostPath + '.saved')
     Run-Probe $relocated $false 'missing-host'
-    Move-Item -LiteralPath ($host + '.saved') -Destination $host
+    Move-Item -LiteralPath ($hostPath + '.saved') -Destination $hostPath
     $dll = Join-Path $relocated 'conpty.dll'
     $bytes = [IO.File]::ReadAllBytes($dll); $bytes[$bytes.Length-1] = $bytes[$bytes.Length-1] -bxor 1
     [IO.File]::WriteAllBytes($dll, $bytes)
