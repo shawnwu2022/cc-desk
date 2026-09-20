@@ -1,0 +1,95 @@
+name: Prepare release v0.17.7
+
+on:
+  push:
+    branches:
+      - codex/release-v0.17.7
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Update release metadata
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const version = '0.17.7'
+          const date = '2026-09-20'
+
+          function read(path) { return fs.readFileSync(path, 'utf8') }
+          function write(path, value) { fs.writeFileSync(path, value) }
+
+          const pkg = JSON.parse(read('package.json'))
+          if (pkg.version !== '0.17.6') throw new Error(`Unexpected package.json version: ${pkg.version}`)
+          pkg.version = version
+          write('package.json', JSON.stringify(pkg, null, 2) + '\n')
+
+          const packageLock = JSON.parse(read('package-lock.json'))
+          if (packageLock.version !== '0.17.6' || packageLock.packages?.['']?.version !== '0.17.6') {
+            throw new Error('Unexpected package-lock.json root version')
+          }
+          packageLock.version = version
+          packageLock.packages[''].version = version
+          write('package-lock.json', JSON.stringify(packageLock, null, 2) + '\n')
+
+          let cargoToml = read('src-tauri/Cargo.toml')
+          const cargoTomlMatches = cargoToml.match(/^version\s*=\s*"0\.17\.6"$/gm) || []
+          if (cargoTomlMatches.length !== 1) throw new Error(`Expected one Cargo.toml package version, found ${cargoTomlMatches.length}`)
+          cargoToml = cargoToml.replace(/^version\s*=\s*"0\.17\.6"$/m, `version = "${version}"`)
+          write('src-tauri/Cargo.toml', cargoToml)
+
+          let cargoLock = read('src-tauri/Cargo.lock')
+          const cargoLockPattern = /(\[\[package\]\]\nname = "cc-desk"\nversion = ")0\.17\.6("\n)/g
+          const cargoLockMatches = [...cargoLock.matchAll(cargoLockPattern)]
+          if (cargoLockMatches.length !== 1) throw new Error(`Expected one Cargo.lock cc-desk entry, found ${cargoLockMatches.length}`)
+          cargoLock = cargoLock.replace(cargoLockPattern, `$1${version}$2`)
+          write('src-tauri/Cargo.lock', cargoLock)
+
+          const tauri = JSON.parse(read('src-tauri/tauri.conf.json'))
+          if (tauri.version !== '0.17.6') throw new Error(`Unexpected tauri.conf.json version: ${tauri.version}`)
+          tauri.version = version
+          write('src-tauri/tauri.conf.json', JSON.stringify(tauri, null, 2) + '\n')
+
+          const notes = `## [${version}] - ${date}\n\n### Fixed\n- Preserve complete pasted prompts on affected Windows systems by bundling a verified app-local Microsoft ConPTY runtime\n- Stop startup instead of silently falling back when the bundled console runtime is missing or invalid\n\n### Tests\n- Add real Claude prompt-integrity coverage for large plaintext, JSON, consecutive pastes, and direct and production-shell launches\n- Add installer, relocation, and fail-closed validation for the bundled runtime\n\n`
+          let changelog = read('CHANGELOG.md')
+          if (!changelog.startsWith('# Changelog\n')) throw new Error('Unexpected CHANGELOG.md header')
+          if (changelog.includes(`## [${version}]`)) throw new Error(`CHANGELOG already contains ${version}`)
+          changelog = '# Changelog\n\n' + notes + changelog.slice('# Changelog\n'.length).replace(/^\n+/, '')
+          write('CHANGELOG.md', changelog)
+
+          const checks = [
+            JSON.parse(read('package.json')).version,
+            JSON.parse(read('package-lock.json')).version,
+            JSON.parse(read('package-lock.json')).packages[''].version,
+            JSON.parse(read('src-tauri/tauri.conf.json')).version,
+            (read('src-tauri/Cargo.toml').match(/^version\s*=\s*"([^"]+)"$/m) || [])[1],
+            (read('src-tauri/Cargo.lock').match(/\[\[package\]\]\nname = "cc-desk"\nversion = "([^"]+)"/) || [])[1],
+          ]
+          if (checks.some(value => value !== version)) throw new Error(`Version mismatch: ${checks.join(', ')}`)
+          NODE
+
+      - name: Remove one-shot workflow and commit release metadata
+        shell: bash
+        run: |
+          rm .github/workflows/prepare-release-v0.17.7.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json CHANGELOG.md .github/workflows/prepare-release-v0.17.7.yml
+          git diff --cached --check
+          git commit -m "Release v0.17.7"
+          git push origin HEAD:codex/release-v0.17.7
