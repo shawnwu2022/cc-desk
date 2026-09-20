@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.17.7] - 2026-09-20
+
+### Fixed
+- Preserve complete pasted prompts on affected Windows systems by bundling a verified app-local Microsoft ConPTY runtime
+- Stop startup instead of silently falling back when the bundled console runtime is missing or invalid
+
+### Tests
+- Add real Claude prompt-integrity coverage for large plaintext, JSON, consecutive pastes, and direct and production-shell launches
+- Add installer, relocation, and fail-closed validation for the bundled runtime
+
 ## [0.17.6] - 2026-09-11
 
 ### Fixed
