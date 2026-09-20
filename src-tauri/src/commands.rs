@@ -68,8 +68,7 @@ pub async fn pty_spawn(
         .map_err(|error| error.to_string())
 }
 
-/// 写入 PTY 输入
-#[tauri::command]
+/// 写入 PTY 输入；IPC 入口由 paste_trace 包装器注册，避免重复导出命令宏。
 pub async fn pty_input(id: String, data: String, source: Option<String>) -> Result<bool, String> {
     let manager = get_pty_manager().ok_or_else(|| "PTY manager not initialized".to_string())?;
 

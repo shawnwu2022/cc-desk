@@ -8,6 +8,7 @@ on:
       - src/utils/pasteTrace.ts
       - src/api/tauri.ts
       - src-tauri/src/lib.rs
+      - src-tauri/src/commands.rs
       - src-tauri/src/paste_trace.rs
       - src-tauri/src/tests/paste_trace.rs
       - tests/scripts/pasteTrace.node.cjs
@@ -35,6 +36,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: runtime-trace-v2
           cache-on-failure: true
       - run: npm ci
       - run: npm run typecheck
