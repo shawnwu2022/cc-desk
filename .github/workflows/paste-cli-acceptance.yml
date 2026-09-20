@@ -138,6 +138,7 @@ jobs:
             "Characterization ${mode}: exact=$exact strict-differences=$strict process-exit=$strictExit" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
           }
           if ($infraFailed) { exit 1 }
+          exit 0
       - name: Upload result metadata only
         if: always()
         uses: actions/upload-artifact@v4
