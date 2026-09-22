@@ -111,18 +111,44 @@ describe('native CLI probe contract', () => {
     expect(readReport(report).capturedBase64).toBe(input.toString('base64'))
   })
 
-  it('D03_Probe_WritesReportBeforeConfiguredNonzeroExit_05', () => {
+  it('D03_Probe_FramesOutputBeforeConfiguredNonzeroExit_05', () => {
     const root = makeRoot('cc-desk-probe-exit-')
     const report = join(root, 'exit.json')
+    const marker = 'node-contract-05'
     const result = spawnSync(
       process.execPath,
-      [probePath, '--report', report, '--output-bytes', '257', '--exit-code', '7'],
+      [
+        probePath,
+        '--report', report,
+        '--output-bytes', '257',
+        '--output-marker', marker,
+        '--exit-code', '7',
+      ],
       { env: fixtureEnv(root) },
     )
 
+    const expected = Buffer.concat([
+      Buffer.from(`<<CC_DESK_PROBE_OUTPUT_BEGIN:${marker}>>`, 'ascii'),
+      Buffer.alloc(257, 0x78),
+      Buffer.from(`<<CC_DESK_PROBE_OUTPUT_END:${marker}>>`, 'ascii'),
+    ])
     expect(result.status).toBe(7)
-    expect(result.stdout).toHaveLength(257)
+    expect(result.stdout).toEqual(expected)
     expect(existsSync(report)).toBe(true)
     expect(readReport(report).requestedExitCode).toBe(7)
+  })
+
+  it('D03_Probe_OutputRequiresSafeMarker_06', () => {
+    const root = makeRoot('cc-desk-probe-marker-')
+    const report = join(root, 'marker.json')
+    const result = spawnSync(
+      process.execPath,
+      [probePath, '--report', report, '--output-bytes', '1'],
+      { env: fixtureEnv(root), encoding: 'utf8' },
+    )
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('--output-bytes requires --output-marker')
+    expect(existsSync(report)).toBe(false)
   })
 })
