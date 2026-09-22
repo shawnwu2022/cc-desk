@@ -3,6 +3,7 @@
 
 use super::profiles::{error, Profile};
 use super::types::{SafeError, WireU64};
+use super::workspace::RegisteredProject;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -20,6 +21,8 @@ pub(crate) struct WorkspaceDocument {
     pub(crate) schema_version: u32,
     pub(crate) revision: WireU64,
     pub(crate) profiles: BTreeMap<String, Profile>,
+    #[serde(default)]
+    pub(crate) registered_projects: BTreeMap<String, RegisteredProject>,
     #[serde(flatten)]
     pub(crate) extra: Map<String, Value>,
 }
@@ -30,6 +33,7 @@ impl Default for WorkspaceDocument {
             schema_version: 1,
             revision: WireU64::parse("0").expect("canonical zero"),
             profiles: BTreeMap::new(),
+            registered_projects: BTreeMap::new(),
             extra: Map::new(),
         }
     }
@@ -145,7 +149,48 @@ impl WorkspaceRepository {
             }
             profile.validate().map_err(|_| error("WORKSPACE_INVALID"))?;
         }
+        for (id, project) in &document.registered_projects {
+            if id != &project.project_id {
+                return Err(error("WORKSPACE_INVALID"));
+            }
+            project.validate().map_err(|_| error("WORKSPACE_INVALID"))?;
+        }
         Ok(document)
+    }
+
+    /// A narrow, lock-held transaction; callers may mutate project records, never profile data.
+    pub(crate) fn transact_projects<T>(
+        &self,
+        expected_revision: Option<WireU64>,
+        update: impl FnOnce(&mut BTreeMap<String, RegisteredProject>) -> Result<(T, bool), SafeError>,
+    ) -> Result<T, SafeError> {
+        let _lock = self.lock()?;
+        let mut document = self.read_locked()?;
+        if expected_revision.is_some_and(|revision| revision != document.revision) {
+            return Err(error("REVISION_CONFLICT"));
+        }
+        let (result, changed) = update(&mut document.registered_projects)?;
+        if !changed {
+            return Ok(result);
+        }
+        for (id, project) in &document.registered_projects {
+            if id != &project.project_id {
+                return Err(error("PROJECT_INVALID"));
+            }
+            project.validate()?;
+        }
+        let next = document
+            .revision
+            .get()
+            .checked_add(1)
+            .ok_or_else(|| error("REVISION_EXHAUSTED"))?;
+        document.revision = WireU64::parse(&next.to_string())?;
+        let bytes = serde_json::to_vec_pretty(&document).map_err(|_| error("SERIALIZE_FAILED"))?;
+        if bytes.len() as u64 > MAX_FILE_BYTES {
+            return Err(error("WORKSPACE_TOO_LARGE"));
+        }
+        self.write_atomic(&bytes, |_| Ok(()))?;
+        Ok(result)
     }
 
     pub(crate) fn apply(
