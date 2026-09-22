@@ -41,7 +41,7 @@ fn D05_Wire_U64CanonicalBoundaries_001() {
         let error = WireU64::parse(&value).expect_err("invalid u64 string");
         assert_eq!(error.code, "INVALID_REQUEST");
         assert_eq!(error.field.as_deref(), Some("u64"));
-        assert!(!error.to_string().contains(&value));
+        assert_eq!(error.to_string(), "INVALID_REQUEST:u64");
     }
 }
 
