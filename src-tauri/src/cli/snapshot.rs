@@ -117,7 +117,10 @@ pub(crate) struct Availability {
     pub(crate) certified: bool,
 }
 
-fn configured_program(profile: &Profile, legacy: Option<&Value>) -> Result<PathBuf, SafeError> {
+pub(crate) fn configured_program(
+    profile: &Profile,
+    legacy: Option<&Value>,
+) -> Result<PathBuf, SafeError> {
     let selected = match &profile.program_path {
         Override::Set(path) => Some(path.as_str()),
         Override::Inherit if profile.is_legacy_claude() => legacy
@@ -139,7 +142,7 @@ fn configured_program(profile: &Profile, legacy: Option<&Value>) -> Result<PathB
     Ok(path.to_path_buf())
 }
 
-fn configured_runner(profile: &Profile) -> Result<Option<PathBuf>, SafeError> {
+pub(crate) fn configured_runner(profile: &Profile) -> Result<Option<PathBuf>, SafeError> {
     let selected = match &profile.launcher {
         Launcher::Native => return Ok(None),
         Launcher::Shell { program, .. } => program,

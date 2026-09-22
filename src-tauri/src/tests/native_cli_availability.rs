@@ -26,7 +26,10 @@ fn put(repository: &WorkspaceRepository, id: &str, cli: CliKind) -> Profile {
     let mut profile = Profile::new(id, cli);
     profile.program_path = Override::Set(std::env::current_exe().unwrap().to_str().unwrap().into());
     let document = repository
-        .apply(repository.read().unwrap().revision, Patch::Create { profile })
+        .apply(
+            repository.read().unwrap().revision,
+            Patch::Create { profile },
+        )
         .unwrap();
     document.profiles[id].clone()
 }
@@ -49,7 +52,9 @@ fn D08_Availability_StrictSafeRequest_01() {
         json!({"profileId":"../private-secret","expectedRevision":"0"}),
         json!({"profileId":"codex","expectedRevision":"1","path":"private-secret"}),
     ] {
-        let error = parse_request(value).err().expect("must reject invalid input");
+        let error = parse_request(value)
+            .err()
+            .expect("must reject invalid input");
         assert_eq!(error.code, "INVALID_REQUEST");
         assert!(!format!("{error:?}").contains("private-secret"));
     }
@@ -94,7 +99,10 @@ fn D08_Availability_ProfileRevisionNotWorkspaceRevision_03() {
     assert_eq!(result.availability.state, "available-unverified");
     assert!(!result.availability.certified);
     assert!(result.issue.is_none());
-    assert_eq!(fs::read(temp.path().join("desk/cli-workspace.v1.json")).unwrap(), before);
+    assert_eq!(
+        fs::read(temp.path().join("desk/cli-workspace.v1.json")).unwrap(),
+        before
+    );
 }
 
 #[test]
@@ -130,7 +138,10 @@ fn D08_Availability_CorruptLegacyDoesNotBlockCodex_05() {
     })
     .unwrap();
     assert_eq!(good.availability.state, "available-unverified");
-    assert_eq!(fs::read_to_string(legacy_path).unwrap(), "{broken-private-secret");
+    assert_eq!(
+        fs::read_to_string(legacy_path).unwrap(),
+        "{broken-private-secret"
+    );
 }
 
 #[test]
@@ -150,9 +161,13 @@ fn D08_Availability_MissingProgramAndNoSilentPathFallback_06() {
         )
         .unwrap();
     let host = EnvMap::from([("PATH".into(), std::env::var_os("PATH").unwrap_or_default())]);
-    let result = get_availability(&repo, "main", &request(&updated.profiles["codex"]), &host, || {
-        HostStatus::Available
-    })
+    let result = get_availability(
+        &repo,
+        "main",
+        &request(&updated.profiles["codex"]),
+        &host,
+        || HostStatus::Available,
+    )
     .unwrap();
     assert_eq!(result.availability.state, "unavailable");
     assert_eq!(result.issue.unwrap().code, "PROGRAM_UNAVAILABLE");
@@ -181,10 +196,14 @@ fn D08_Availability_ResolvedSecretsNeverEnterReport_08() {
     profile.program_path = Override::Set(std::env::current_exe().unwrap().to_str().unwrap().into());
     profile.env.insert(
         "TOKEN".into(),
-        Override::Set(EnvValue::HostRef { name: "SOURCE".into() }),
+        Override::Set(EnvValue::HostRef {
+            name: "SOURCE".into(),
+        }),
     );
     profile.default_args = Override::Set(vec!["opaque-secret-argument".into()]);
-    let document = repo.apply(revision("0"), Patch::Create { profile }).unwrap();
+    let document = repo
+        .apply(revision("0"), Patch::Create { profile })
+        .unwrap();
     let inherited = EnvMap::from([("SOURCE".into(), "private-host-token".into())]);
     let result = get_availability(
         &repo,
@@ -195,7 +214,12 @@ fn D08_Availability_ResolvedSecretsNeverEnterReport_08() {
     )
     .unwrap();
     let wire = serde_json::to_string(&result).unwrap();
-    for secret in ["private-host-token", "opaque-secret-argument", "SOURCE", "TOKEN"] {
+    for secret in [
+        "private-host-token",
+        "opaque-secret-argument",
+        "SOURCE",
+        "TOKEN",
+    ] {
         assert!(!wire.contains(secret));
     }
     let value: serde_json::Value = serde_json::from_str(&wire).unwrap();
@@ -203,7 +227,10 @@ fn D08_Availability_ResolvedSecretsNeverEnterReport_08() {
     assert!(value.get("programPath").is_none());
     assert!(value.get("argv").is_none());
     assert_eq!(value["profileRevision"], "1");
-    assert_eq!(inherited.get(std::ffi::OsStr::new("SOURCE")).unwrap(), "private-host-token");
+    assert_eq!(
+        inherited.get(std::ffi::OsStr::new("SOURCE")).unwrap(),
+        "private-host-token"
+    );
 }
 
 #[test]
@@ -214,9 +241,13 @@ fn D08_Availability_MissingHostReferenceIsProfileFailure_09() {
     profile.program_path = Override::Set(std::env::current_exe().unwrap().to_str().unwrap().into());
     profile.env.insert(
         "TOKEN".into(),
-        Override::Set(EnvValue::HostRef { name: "missing-private-source".into() }),
+        Override::Set(EnvValue::HostRef {
+            name: "missing-private-source".into(),
+        }),
     );
-    let document = repo.apply(revision("0"), Patch::Create { profile }).unwrap();
+    let document = repo
+        .apply(revision("0"), Patch::Create { profile })
+        .unwrap();
     let result = get_availability(
         &repo,
         "main",
@@ -227,7 +258,9 @@ fn D08_Availability_MissingHostReferenceIsProfileFailure_09() {
     .unwrap();
     assert_eq!(result.availability.state, "unavailable");
     assert_eq!(result.issue.as_ref().unwrap().code, "ENV_SOURCE_MISSING");
-    assert!(!serde_json::to_string(&result).unwrap().contains("missing-private-source"));
+    assert!(!serde_json::to_string(&result)
+        .unwrap()
+        .contains("missing-private-source"));
 }
 
 #[test]
@@ -237,10 +270,17 @@ fn D08_Availability_RunnerFailureAndUnselectedProgram_10() {
     let mut profile = Profile::new("runner", CliKind::Codex);
     profile.program_path = Override::Set(std::env::current_exe().unwrap().to_str().unwrap().into());
     profile.launcher = Launcher::Shim {
-        runner: temp.path().join("missing-runner.exe").to_str().unwrap().into(),
+        runner: temp
+            .path()
+            .join("missing-runner.exe")
+            .to_str()
+            .unwrap()
+            .into(),
         dialect: Dialect::Cmd,
     };
-    let document = repo.apply(revision("0"), Patch::Create { profile }).unwrap();
+    let document = repo
+        .apply(revision("0"), Patch::Create { profile })
+        .unwrap();
     let result = get_availability(
         &repo,
         "main",
@@ -251,7 +291,12 @@ fn D08_Availability_RunnerFailureAndUnselectedProgram_10() {
     .unwrap();
     assert_eq!(result.issue.unwrap().code, "RUNNER_UNAVAILABLE");
     let document = repo
-        .apply(document.revision, Patch::Create { profile: Profile::new("unselected", CliKind::Codex) })
+        .apply(
+            document.revision,
+            Patch::Create {
+                profile: Profile::new("unselected", CliKind::Codex),
+            },
+        )
         .unwrap();
     let result = get_availability(
         &repo,
