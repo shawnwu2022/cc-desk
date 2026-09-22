@@ -1,0 +1,111 @@
+{
+  "validU64": [
+    "0",
+    "4294967295",
+    "9007199254740991",
+    "9007199254740992",
+    "9007199254740993",
+    "18446744073709551615"
+  ],
+  "invalidU64": [
+    "",
+    "00",
+    "01",
+    "-1",
+    "+1",
+    "1.0",
+    " 1",
+    "1 ",
+    "18446744073709551616"
+  ],
+  "validLaunchRequests": [
+    {
+      "name": "claude-new",
+      "value": {
+        "requestId": "req-claude-new",
+        "tabId": "tab-claude",
+        "runId": "run-claude-1",
+        "generation": 0,
+        "profileId": "profile-claude",
+        "expectedProfileRevision": "9007199254740993",
+        "cli": "claude",
+        "launchCwd": "/tmp/项目 one",
+        "action": { "kind": "new" },
+        "extraArgs": ["--future", "a b", ""],
+        "cols": 160,
+        "rows": 40
+      }
+    },
+    {
+      "name": "codex-picker-all",
+      "value": {
+        "requestId": "req-codex-picker",
+        "tabId": "tab-codex",
+        "runId": "run-codex-1",
+        "generation": 4294967295,
+        "profileId": "profile-codex",
+        "expectedProfileRevision": "18446744073709551615",
+        "cli": "codex",
+        "launchCwd": "C:\\repo\\中文",
+        "action": { "kind": "resume-picker", "scope": "all" },
+        "extraArgs": [],
+        "cols": 1,
+        "rows": 65535
+      }
+    },
+    {
+      "name": "codex-resume-id",
+      "value": {
+        "requestId": "req-codex-resume",
+        "tabId": "tab-codex-resume",
+        "runId": "run-codex-2",
+        "generation": 7,
+        "profileId": "profile-codex",
+        "expectedProfileRevision": "42",
+        "cli": "codex",
+        "launchCwd": "/repo",
+        "action": { "kind": "resume-id", "nativeSessionId": "thr_fixture_123" },
+        "extraArgs": ["--future-flag"],
+        "cols": 80,
+        "rows": 24
+      }
+    },
+    {
+      "name": "shell-raw",
+      "value": {
+        "requestId": "req-shell-raw",
+        "tabId": "tab-shell",
+        "runId": "run-shell-1",
+        "generation": 3,
+        "profileId": "profile-shell",
+        "expectedProfileRevision": "0",
+        "cli": "shell",
+        "launchCwd": "/repo",
+        "action": { "kind": "raw", "argv": ["--future", "a b", "", "|", "--", "-literal"] },
+        "extraArgs": [],
+        "cols": 120,
+        "rows": 35
+      }
+    }
+  ],
+  "nativeSessionRefs": [
+    {
+      "hostId": "local",
+      "cli": "claude",
+      "sourceRootKey": "unix:dev=1:ino=2",
+      "nativeSessionId": "same-id"
+    },
+    {
+      "hostId": "local",
+      "cli": "codex",
+      "sourceRootKey": "unix:dev=1:ino=2",
+      "nativeSessionId": "same-id"
+    },
+    {
+      "hostId": "local",
+      "cli": "codex",
+      "sourceRootKey": "win:volume=A:file=7",
+      "nativeSessionId": "same-id"
+    }
+  ]
+}

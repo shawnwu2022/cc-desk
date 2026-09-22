@@ -1,4 +1,5 @@
 mod checks;
+mod cli;
 mod commands;
 mod hook_config;
 mod hook_events;
