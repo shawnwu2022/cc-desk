@@ -28,11 +28,15 @@ fn D06_ProfileApi_RejectsOtherWindowBeforeIo_01() {
 fn D06_ProfileApi_DoesNotReturnWorkspaceExtras_02() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("workspace.json");
-    let raw = json!({"schemaVersion":1,"revision":"0","profiles":{},"futureSecret":"synthetic-only"});
+    let raw =
+        json!({"schemaVersion":1,"revision":"0","profiles":{},"futureSecret":"synthetic-only"});
     std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
     let repo = WorkspaceRepository::open(path.clone()).unwrap();
     let list = list_profiles(&repo, "main").unwrap();
-    assert_eq!(serde_json::to_value(list).unwrap(), json!({"revision":"0","profiles":[]}));
+    assert_eq!(
+        serde_json::to_value(list).unwrap(),
+        json!({"revision":"0","profiles":[]})
+    );
     let next = patch_profile(
         &repo,
         "main",
@@ -43,7 +47,9 @@ fn D06_ProfileApi_DoesNotReturnWorkspaceExtras_02() {
     )
     .unwrap();
     assert_eq!(next.revision.get(), 1);
-    assert!(!serde_json::to_string(&next).unwrap().contains("synthetic-only"));
+    assert!(!serde_json::to_string(&next)
+        .unwrap()
+        .contains("synthetic-only"));
     let disk = std::fs::read_to_string(path).unwrap();
     assert!(disk.contains("synthetic-only"));
 }

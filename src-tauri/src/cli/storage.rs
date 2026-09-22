@@ -38,9 +38,16 @@ impl Default for WorkspaceDocument {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum Patch {
-    Create { profile: Profile },
-    Update { id: String, changes: Map<String, Value> },
-    Delete { id: String },
+    Create {
+        profile: Profile,
+    },
+    Update {
+        id: String,
+        changes: Map<String, Value>,
+    },
+    Delete {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -103,18 +110,26 @@ impl WorkspaceRepository {
     }
 
     pub(crate) fn get_profile(&self, id: &str) -> Result<Profile, SafeError> {
-        self.read()?.profiles.get(id).cloned().ok_or_else(|| error("PROFILE_NOT_FOUND"))
+        self.read()?
+            .profiles
+            .get(id)
+            .cloned()
+            .ok_or_else(|| error("PROFILE_NOT_FOUND"))
     }
 
     fn read_locked(&self) -> Result<WorkspaceDocument, SafeError> {
         check_regular_or_missing(&self.path)?;
         let file = match File::open(&self.path) {
             Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(WorkspaceDocument::default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(WorkspaceDocument::default())
+            }
             Err(_) => return Err(error("STORAGE_IO")),
         };
         let mut bytes = Vec::new();
-        file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes).map_err(|_| error("STORAGE_IO"))?;
+        file.take(MAX_FILE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| error("STORAGE_IO"))?;
         if bytes.len() as u64 > MAX_FILE_BYTES {
             return Err(error("WORKSPACE_TOO_LARGE"));
         }
@@ -122,7 +137,8 @@ impl WorkspaceRepository {
         if raw.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
             return Err(error("UNSUPPORTED_SCHEMA"));
         }
-        let document: WorkspaceDocument = serde_json::from_value(raw).map_err(|_| error("WORKSPACE_INVALID"))?;
+        let document: WorkspaceDocument =
+            serde_json::from_value(raw).map_err(|_| error("WORKSPACE_INVALID"))?;
         for (id, profile) in &document.profiles {
             if id != &profile.id || profile.revision.get() > document.revision.get() {
                 return Err(error("WORKSPACE_INVALID"));
@@ -132,24 +148,46 @@ impl WorkspaceRepository {
         Ok(document)
     }
 
-    pub(crate) fn apply(&self, expected_revision: WireU64, patch: Patch) -> Result<WorkspaceDocument, SafeError> {
+    pub(crate) fn apply(
+        &self,
+        expected_revision: WireU64,
+        patch: Patch,
+    ) -> Result<WorkspaceDocument, SafeError> {
         self.apply_observed(expected_revision, patch, |_| Ok(()))
     }
 
     #[cfg(test)]
-    pub(crate) fn apply_with_fault(&self, expected_revision: WireU64, patch: Patch, at: WriteStage) -> Result<WorkspaceDocument, SafeError> {
+    pub(crate) fn apply_with_fault(
+        &self,
+        expected_revision: WireU64,
+        patch: Patch,
+        at: WriteStage,
+    ) -> Result<WorkspaceDocument, SafeError> {
         self.apply_observed(expected_revision, patch, |stage| {
-            if stage == at { Err(std::io::Error::other("synthetic fault")) } else { Ok(()) }
+            if stage == at {
+                Err(std::io::Error::other("synthetic fault"))
+            } else {
+                Ok(())
+            }
         })
     }
 
-    fn apply_observed(&self, expected_revision: WireU64, patch: Patch, observe: impl Fn(WriteStage) -> std::io::Result<()>) -> Result<WorkspaceDocument, SafeError> {
+    fn apply_observed(
+        &self,
+        expected_revision: WireU64,
+        patch: Patch,
+        observe: impl Fn(WriteStage) -> std::io::Result<()>,
+    ) -> Result<WorkspaceDocument, SafeError> {
         let _lock = self.lock()?;
         let mut document = self.read_locked()?;
         if document.revision != expected_revision {
             return Err(error("REVISION_CONFLICT"));
         }
-        let next = document.revision.get().checked_add(1).ok_or_else(|| error("REVISION_EXHAUSTED"))?;
+        let next = document
+            .revision
+            .get()
+            .checked_add(1)
+            .ok_or_else(|| error("REVISION_EXHAUSTED"))?;
         let next = WireU64::parse(&next.to_string())?;
         match patch {
             Patch::Create { mut profile } => {
@@ -164,7 +202,10 @@ impl WorkspaceRepository {
                 document.profiles.insert(profile.id.clone(), profile);
             }
             Patch::Update { id, changes } => {
-                let old = document.profiles.get(&id).ok_or_else(|| error("PROFILE_NOT_FOUND"))?;
+                let old = document
+                    .profiles
+                    .get(&id)
+                    .ok_or_else(|| error("PROFILE_NOT_FOUND"))?;
                 let mut profile = old.patched(&changes)?;
                 profile.revision = next;
                 document.profiles.insert(id, profile);
@@ -184,7 +225,11 @@ impl WorkspaceRepository {
         Ok(document)
     }
 
-    fn write_atomic(&self, bytes: &[u8], observe: impl Fn(WriteStage) -> std::io::Result<()>) -> Result<(), SafeError> {
+    fn write_atomic(
+        &self,
+        bytes: &[u8],
+        observe: impl Fn(WriteStage) -> std::io::Result<()>,
+    ) -> Result<(), SafeError> {
         let parent = self.path.parent().ok_or_else(|| error("INVALID_PATH"))?;
         let temporary = parent.join(format!(".cli-workspace-{}.tmp", Uuid::new_v4()));
         let mut options = OpenOptions::new();
@@ -205,7 +250,9 @@ impl WorkspaceRepository {
         replace(&temporary, &self.path).map_err(|_| error("COMMIT_STATE_UNKNOWN"))?;
         observe(WriteStage::AfterReplace).map_err(|_| error("COMMIT_STATE_UNKNOWN"))?;
         #[cfg(unix)]
-        File::open(parent).and_then(|dir| dir.sync_all()).map_err(|_| error("COMMIT_STATE_UNKNOWN"))?;
+        File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|_| error("COMMIT_STATE_UNKNOWN"))?;
         Ok(())
     }
 }
@@ -244,6 +291,14 @@ fn replace(from: &Path, to: &Path) -> std::io::Result<()> {
     let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
     // Both NUL-terminated buffers live until the synchronous call returns.
     unsafe {
-        ReplaceFileW(PCWSTR(to.as_ptr()), PCWSTR(from.as_ptr()), PCWSTR::null(), REPLACE_FILE_FLAGS(0), None, None)
-    }.map_err(std::io::Error::other)
+        ReplaceFileW(
+            PCWSTR(to.as_ptr()),
+            PCWSTR(from.as_ptr()),
+            PCWSTR::null(),
+            REPLACE_FILE_FLAGS(0),
+            None,
+            None,
+        )
+    }
+    .map_err(std::io::Error::other)
 }

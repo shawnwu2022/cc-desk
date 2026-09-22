@@ -27,7 +27,10 @@ fn D06_Legacy_CodexIgnoresCorruptFile_06() {
     let error = claude.read_legacy(&path).unwrap_err();
     assert_eq!(error.code, "LEGACY_INVALID");
     assert!(!error.to_string().contains("synthetic-secret"));
-    assert_eq!(fs::read_to_string(path).unwrap(), "{broken-synthetic-secret");
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "{broken-synthetic-secret"
+    );
 }
 
 #[test]

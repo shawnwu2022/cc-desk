@@ -182,8 +182,7 @@ impl Profile {
         if bytes.len() > 1024 * 1024 {
             return Err(error("LEGACY_TOO_LARGE"));
         }
-        let value: Value =
-            serde_json::from_slice(&bytes).map_err(|_| error("LEGACY_INVALID"))?;
+        let value: Value = serde_json::from_slice(&bytes).map_err(|_| error("LEGACY_INVALID"))?;
         if !value.is_object() {
             return Err(error("LEGACY_INVALID"));
         }
@@ -201,9 +200,7 @@ impl Profile {
         if self.is_legacy_claude() {
             if let Some(values) = legacy.and_then(|v| v.get("claudeEnvVars")) {
                 if !values.is_null() {
-                    let values = values
-                        .as_object()
-                        .ok_or_else(|| error("LEGACY_INVALID"))?;
+                    let values = values.as_object().ok_or_else(|| error("LEGACY_INVALID"))?;
                     for (key, value) in values {
                         validate_env_name(key)?;
                         let value = value.as_str().ok_or_else(|| error("LEGACY_INVALID"))?;
@@ -223,9 +220,7 @@ impl Profile {
                     result.insert(key.clone(), Some(value.clone()));
                 }
                 Override::Set(EnvValue::HostRef { name }) => {
-                    let value = host
-                        .get(name)
-                        .ok_or_else(|| error("ENV_SOURCE_MISSING"))?;
+                    let value = host.get(name).ok_or_else(|| error("ENV_SOURCE_MISSING"))?;
                     result.insert(key.clone(), Some(value.clone()));
                 }
             }
@@ -253,9 +248,7 @@ impl Profile {
                 return Err(SafeError::invalid("changes"));
             }
             if key == "env" {
-                let patch = next
-                    .as_object()
-                    .ok_or_else(|| SafeError::invalid("env"))?;
+                let patch = next.as_object().ok_or_else(|| SafeError::invalid("env"))?;
                 let target = object
                     .get_mut("env")
                     .and_then(Value::as_object_mut)

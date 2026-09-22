@@ -140,6 +140,8 @@ pub fn run(initial_dir: Option<String>) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            cli::commands::cli_list_profiles,
+            cli::commands::cli_patch_profile,
             commands::get_home_data,
             commands::get_check_results,
             commands::run_checks,
