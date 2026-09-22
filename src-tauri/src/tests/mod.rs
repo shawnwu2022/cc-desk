@@ -19,6 +19,8 @@ mod native_cli_profile_edges;
 #[cfg(test)]
 mod native_cli_profiles;
 #[cfg(test)]
+mod native_cli_snapshot;
+#[cfg(test)]
 mod native_cli_storage;
 #[cfg(test)]
 mod native_cli_wire;
