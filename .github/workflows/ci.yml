@@ -32,6 +32,9 @@ jobs:
       - name: Run frontend tests
         run: npm run test:ci
 
+      - name: Run Node policy tests
+        run: node --test tests/scripts/nativeReleasePolicy.node.mjs
+
   rust:
     name: Rust checks
     runs-on: windows-2022
