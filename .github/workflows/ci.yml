@@ -35,14 +35,6 @@ jobs:
       - name: Run Node policy tests
         run: node --test tests/scripts/nativeReleasePolicy.node.mjs
 
-      - name: Upload PTY source snapshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: d03-pty-source
-          path: src-tauri/src/pty.rs
-          if-no-files-found: error
-          retention-days: 1
-
   rust:
     name: Rust checks
     runs-on: windows-2022
