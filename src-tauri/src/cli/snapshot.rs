@@ -225,7 +225,10 @@ pub(crate) fn freeze_launch(
         && profile.is_legacy_claude()
         && matches!(profile.default_args, Override::Inherit)
     {
-        match context.legacy.and_then(|value| value.get("defaultCustomArgs")) {
+        match context
+            .legacy
+            .and_then(|value| value.get("defaultCustomArgs"))
+        {
             None | Some(Value::Null) => None,
             Some(Value::String(value)) if !value.contains('\0') => Some(value.clone()),
             _ => return Err(error("LEGACY_INVALID")),
