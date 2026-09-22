@@ -1,14 +1,14 @@
 use portable_pty::CommandBuilder;
 use serde::Deserialize;
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 #[cfg(windows)]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::duplicate_mod)]
 #[path = "../conpty_runtime.rs"]
 mod bundled_runtime;
 
