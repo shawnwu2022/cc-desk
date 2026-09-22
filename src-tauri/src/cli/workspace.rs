@@ -84,7 +84,15 @@ pub(crate) fn register_project(
     repo: &WorkspaceRepository,
     selected_path: &Path,
 ) -> Result<RegisteredProject, SafeError> {
-    // Resolve outside the file lock. Recheck existing aliases before using a persisted file ID.
+    register_project_observed(repo, selected_path, || {})
+}
+
+/// The probe only observes the read/commit boundary; production supplies a no-op.
+pub(crate) fn register_project_observed(
+    repo: &WorkspaceRepository,
+    selected_path: &Path,
+    after_first_snapshot: impl FnOnce(),
+) -> Result<RegisteredProject, SafeError> {
     let selected = resolve_path_key(selected_path)?;
     let candidates = list_registered_projects(repo)?;
     let verified_aliases: Vec<String> = candidates
@@ -97,6 +105,7 @@ pub(crate) fn register_project(
         })
         .map(|project| project.project_id.clone())
         .collect();
+    after_first_snapshot();
     repo.transact_projects(None, move |projects| {
         if let Some(existing) = projects.values().find(|project| {
             (project.source_path_key == selected.key
@@ -106,7 +115,6 @@ pub(crate) fn register_project(
                 || (project.selected_path == selected.selected_path
                     && !is_verified_key(&project.source_path_key))
         }) {
-            // Unknown -> verified identity is refreshed only on the same explicitly selected path.
             if existing.source_path_key != selected.key {
                 let mut promoted = existing.clone();
                 promoted.source_path_key = selected.key;

@@ -116,12 +116,12 @@ fn D07_Workspace_RejectsIdentityMutationAndUnsafeMetadata_06() {
         json!({"selectedPath": "synthetic-secret"}),
         json!({"sourcePathKey": "spoofed"}),
         json!({"alias": null}),
-        json!({"alias": {"mode": "set", "value": "bad\u0000value"}}),
+        json!({"alias": {"mode": "set", "value": "bad\0value"}}),
         json!({"pinned": {"mode": "set", "value": "yes"}}),
         json!({"archivedSessions": ["same-id"]}),
     ] {
-        let error = patch_project(&repo, revision("1"), &project.project_id, changes)
-            .unwrap_err();
+        let error =
+            patch_project(&repo, revision("1"), &project.project_id, changes).unwrap_err();
         assert!(!error.to_string().contains("synthetic-secret"));
         assert_eq!(fs::read(&path).unwrap(), before);
     }
@@ -236,4 +236,94 @@ fn D07_Workspace_LegacyOverrideDefaults_12() {
     assert_eq!(project.alias, Override::Inherit);
     assert_eq!(project.pinned, Override::Inherit);
     assert_eq!(project.hidden, Override::Inherit);
+}
+
+#[test]
+fn D07_Workspace_ConcurrentAliasesMustShareOneRegistration_13() {
+    use crate::cli::workspace::register_project_observed;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("workspace.json");
+    let actual = tmp.path().join("actual");
+    fs::create_dir_all(actual.join("child")).unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles: Vec<_> = [actual.clone(), actual.join("child/..")]
+        .into_iter()
+        .map(|selected| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let repo = WorkspaceRepository::open(path).unwrap();
+                register_project_observed(&repo, &selected, || {
+                    barrier.wait();
+                })
+                .unwrap()
+                .project_id
+            })
+        })
+        .collect();
+    let ids: Vec<_> = handles.into_iter().map(|handle| handle.join().unwrap()).collect();
+    assert_eq!(ids[0], ids[1]);
+    let repo = WorkspaceRepository::open(path).unwrap();
+    assert_eq!(list_registered_projects(&repo).unwrap().len(), 1);
+}
+
+#[test]
+fn D07_ProjectApi_LegacyMetadataReadOnlyAndNoSessionBroadcast_14() {
+    use crate::cli::project_service::list_projects;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("workspace.json");
+    let repo = WorkspaceRepository::open(path).unwrap();
+    let project = register_project(&repo, tmp.path()).unwrap();
+    let selected = tmp.path().to_str().unwrap();
+    let projects = json!({
+        "displayNames": {selected: "Old project name"},
+        "pinnedProjects": [selected],
+        "archivedSessions": {selected: ["claude-only-session"]}
+    });
+    let config = json!({
+        "hiddenProjects": [selected],
+        "claudeEnvVars": {"TOKEN": "synthetic-secret"}
+    });
+    let projects_bytes = serde_json::to_vec(&projects).unwrap();
+    let config_bytes = serde_json::to_vec(&config).unwrap();
+    fs::write(tmp.path().join("projects.json"), &projects_bytes).unwrap();
+    fs::write(tmp.path().join("config.json"), &config_bytes).unwrap();
+    let list = list_projects(&repo, "main").unwrap();
+    let resolved = &list.metadata[&project.project_id];
+    assert_eq!(resolved.alias.as_deref(), Some("Old project name"));
+    assert_eq!(resolved.pinned, Some(true));
+    assert_eq!(resolved.hidden, Some(true));
+    let wire = serde_json::to_string(&list).unwrap();
+    assert!(!wire.contains("claude-only-session"));
+    assert!(!wire.contains("synthetic-secret"));
+    patch_project(
+        &repo,
+        revision("1"),
+        &project.project_id,
+        json!({"pinned": {"mode": "set", "value": false}, "alias": {"mode": "unset"}}),
+    )
+    .unwrap();
+    let next = list_projects(&repo, "main").unwrap();
+    assert_eq!(next.metadata[&project.project_id].pinned, Some(false));
+    assert_eq!(next.metadata[&project.project_id].alias, None);
+    assert_eq!(fs::read(tmp.path().join("projects.json")).unwrap(), projects_bytes);
+    assert_eq!(fs::read(tmp.path().join("config.json")).unwrap(), config_bytes);
+}
+
+#[test]
+fn D07_ProjectApi_RejectCallerBeforeIoAndFilterUnknownFields_15() {
+    use crate::cli::project_service::{list_projects, register};
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("not-created/workspace.json");
+    let repo = WorkspaceRepository::open(path.clone()).unwrap();
+    assert_eq!(list_projects(&repo, "untrusted").unwrap_err().code, "FORBIDDEN");
+    assert_eq!(register(&repo, "untrusted", tmp.path()).unwrap_err().code, "FORBIDDEN");
+    assert!(!path.parent().unwrap().exists());
+    let project = register_project(&repo, tmp.path()).unwrap();
+    let mut raw: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    raw["registeredProjects"][&project.project_id]["futureSecret"] = json!("fixture-secret");
+    fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+    let response = list_projects(&repo, "main").unwrap();
+    assert!(!serde_json::to_string(&response).unwrap().contains("fixture-secret"));
+    assert!(fs::read_to_string(path).unwrap().contains("fixture-secret"));
 }
