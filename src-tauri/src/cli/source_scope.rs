@@ -30,7 +30,9 @@ pub(crate) fn resolve_path_key(path: &Path) -> Result<ResolvedPathKey, SafeError
         // Unavailable paths remain explicit records; no lexical alias guesses.
         Err(_) => None,
     };
-    let identity = metadata.as_ref().and_then(|value| directory_identity(path, value));
+    let identity = metadata
+        .as_ref()
+        .and_then(|value| directory_identity(path, value));
     let canonical_path = identity.as_ref().and_then(|key| {
         let canonical = fs::canonicalize(path).ok()?;
         validate_selected_path(&canonical).ok()?;

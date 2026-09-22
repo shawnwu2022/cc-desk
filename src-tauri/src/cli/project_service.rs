@@ -1,6 +1,7 @@
 //! Project IPC operations. Public responses never expose unknown persisted fields.
 use super::profile_service::authorize_profile_window;
 use super::profiles::error;
+use super::project_legacy;
 use super::storage::WorkspaceRepository;
 use super::types::{SafeError, WireU64};
 use super::workspace::{self, LegacyMetadata, RegisteredProject};
@@ -15,6 +16,7 @@ pub(crate) struct ProjectList {
     pub(crate) revision: WireU64,
     pub(crate) projects: Vec<RegisteredProject>,
     pub(crate) metadata: BTreeMap<String, LegacyMetadata>,
+    pub(crate) warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) project_id: Option<String>,
 }
@@ -25,23 +27,17 @@ pub(crate) fn list_projects(
 ) -> Result<ProjectList, SafeError> {
     authorize_profile_window(caller)?;
     let document = repository.read()?;
-    let mut metadata = BTreeMap::new();
-    let projects = document
-        .registered_projects
-        .into_values()
-        .map(|mut project| {
-            metadata.insert(
-                project.project_id.clone(),
-                project.resolve_metadata(&LegacyMetadata::default()),
-            );
-            project.extra.clear();
-            project
-        })
-        .collect();
+    let mut projects: Vec<_> = document.registered_projects.into_values().collect();
+    let (metadata, warnings) =
+        project_legacy::resolve_metadata(repository.metadata_directory(), &projects);
+    for project in &mut projects {
+        project.extra.clear();
+    }
     Ok(ProjectList {
         revision: document.revision,
         projects,
         metadata,
+        warnings,
         project_id: None,
     })
 }

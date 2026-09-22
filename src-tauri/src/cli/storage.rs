@@ -74,6 +74,10 @@ impl WorkspaceRepository {
         Ok(Self { path })
     }
 
+    pub(crate) fn metadata_directory(&self) -> &Path {
+        self.path.parent().expect("validated workspace parent")
+    }
+
     pub(crate) fn production() -> Result<Self, SafeError> {
         let home = dirs::home_dir().ok_or_else(|| error("HOME_UNAVAILABLE"))?;
         Self::open(home.join(".cc-box").join("cli-workspace.v1.json"))

@@ -119,9 +119,13 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
   const load = () => execute(listRegisteredProjects)
 
   async function register(selectedPath: string): Promise<string> {
-    const result = await mutate(() => registerProject(selectedPath))
-    if (!result.projectId) return invalid()
-    return result.projectId
+    const result = await mutate(async () => {
+      const receipt = validateList(await registerProject(selectedPath))
+      // Validate operation-specific receipt fields before execute adopts any returned state.
+      if (!receipt.projectId) return invalid()
+      return receipt
+    })
+    return result.projectId!
   }
 
   function patch(projectId: string, changes: ProjectChanges): Promise<ProjectList> {

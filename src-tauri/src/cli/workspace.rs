@@ -87,50 +87,63 @@ pub(crate) fn register_project(
     register_project_observed(repo, selected_path, || {})
 }
 
-/// The probe only observes the read/commit boundary; production supplies a no-op.
+/// A no-op in production; the test probe exposes a deterministic read/commit interleaving.
 pub(crate) fn register_project_observed(
     repo: &WorkspaceRepository,
     selected_path: &Path,
     after_first_snapshot: impl FnOnce(),
 ) -> Result<RegisteredProject, SafeError> {
-    let selected = resolve_path_key(selected_path)?;
-    let candidates = list_registered_projects(repo)?;
-    let verified_aliases: Vec<String> = candidates
-        .iter()
-        .filter(|project| {
-            project.source_path_key == selected.key
-                && is_verified_key(&selected.key)
-                && resolve_path_key(&project.selected_path)
-                    .is_ok_and(|current| current.key == selected.key)
-        })
-        .map(|project| project.project_id.clone())
-        .collect();
-    after_first_snapshot();
-    repo.transact_projects(None, move |projects| {
-        if let Some(existing) = projects.values().find(|project| {
-            (project.source_path_key == selected.key
-                && (!is_verified_key(&selected.key)
-                    || verified_aliases.contains(&project.project_id)
-                    || project.selected_path == selected.selected_path))
-                || (project.selected_path == selected.selected_path
-                    && !is_verified_key(&project.source_path_key))
-        }) {
-            if existing.source_path_key != selected.key {
-                let mut promoted = existing.clone();
-                promoted.source_path_key = selected.key;
-                promoted.canonical_path = selected.canonical_path;
-                projects.insert(promoted.project_id.clone(), promoted.clone());
-                return Ok((promoted, true));
-            }
-            return Ok((existing.clone(), false));
+    let mut probe = Some(after_first_snapshot);
+    for _ in 0..16 {
+        let selected = resolve_path_key(selected_path)?;
+        let snapshot = repo.read()?;
+        let verified_aliases: Vec<String> = snapshot
+            .registered_projects
+            .values()
+            .filter(|project| {
+                project.source_path_key == selected.key
+                    && is_verified_key(&selected.key)
+                    && resolve_path_key(&project.selected_path)
+                        .is_ok_and(|current| current.key == selected.key)
+            })
+            .map(|project| project.project_id.clone())
+            .collect();
+        if let Some(probe) = probe.take() {
+            probe();
         }
-        let project = RegisteredProject::from_path(selected);
-        project.validate()?;
-        projects.insert(project.project_id.clone(), project.clone());
-        Ok((project, true))
-    })
+        let result = repo.transact_projects(Some(snapshot.revision), move |projects| {
+            if let Some(existing) = projects.values().find(|project| {
+                (project.source_path_key == selected.key
+                    && (!is_verified_key(&selected.key)
+                        || verified_aliases.contains(&project.project_id)))
+                    || (project.selected_path == selected.selected_path
+                        && !is_verified_key(&project.source_path_key))
+            }) {
+                if existing.source_path_key != selected.key {
+                    let mut promoted = existing.clone();
+                    promoted.source_path_key = selected.key;
+                    promoted.canonical_path = selected.canonical_path;
+                    projects.insert(promoted.project_id.clone(), promoted.clone());
+                    return Ok((promoted, true));
+                }
+                return Ok((existing.clone(), false));
+            }
+            let project = RegisteredProject::from_path(selected);
+            project.validate()?;
+            projects.insert(project.project_id.clone(), project.clone());
+            Ok((project, true))
+        });
+        match result {
+            // Only a definitely-not-written CAS conflict retries this idempotent registration.
+            Err(error) if error.code == "REVISION_CONFLICT" => continue,
+            result => return result,
+        }
+    }
+    Err(error("STORAGE_BUSY"))
 }
 
+// Tests inspect private records; production lists the sanitized, revisioned project_service DTO.
+#[cfg(test)]
 pub(crate) fn list_registered_projects(
     repo: &WorkspaceRepository,
 ) -> Result<Vec<RegisteredProject>, SafeError> {

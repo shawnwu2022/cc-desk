@@ -75,7 +75,10 @@ fn D07_Workspace_RemoveDoesNotDeleteDirectoriesOrTranscripts_04() {
     let project = register_project(&repo, &folder).unwrap();
     remove_project(&repo, revision("1"), &project.project_id).unwrap();
     assert!(list_registered_projects(&repo).unwrap().is_empty());
-    assert_eq!(fs::read_to_string(transcript).unwrap(), "synthetic-original");
+    assert_eq!(
+        fs::read_to_string(transcript).unwrap(),
+        "synthetic-original"
+    );
 }
 
 #[test]
@@ -120,8 +123,7 @@ fn D07_Workspace_RejectsIdentityMutationAndUnsafeMetadata_06() {
         json!({"pinned": {"mode": "set", "value": "yes"}}),
         json!({"archivedSessions": ["same-id"]}),
     ] {
-        let error =
-            patch_project(&repo, revision("1"), &project.project_id, changes).unwrap_err();
+        let error = patch_project(&repo, revision("1"), &project.project_id, changes).unwrap_err();
         assert!(!error.to_string().contains("synthetic-secret"));
         assert_eq!(fs::read(&path).unwrap(), before);
     }
@@ -261,7 +263,10 @@ fn D07_Workspace_ConcurrentAliasesMustShareOneRegistration_13() {
             })
         })
         .collect();
-    let ids: Vec<_> = handles.into_iter().map(|handle| handle.join().unwrap()).collect();
+    let ids: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
     assert_eq!(ids[0], ids[1]);
     let repo = WorkspaceRepository::open(path).unwrap();
     assert_eq!(list_registered_projects(&repo).unwrap().len(), 1);
@@ -306,8 +311,14 @@ fn D07_ProjectApi_LegacyMetadataReadOnlyAndNoSessionBroadcast_14() {
     let next = list_projects(&repo, "main").unwrap();
     assert_eq!(next.metadata[&project.project_id].pinned, Some(false));
     assert_eq!(next.metadata[&project.project_id].alias, None);
-    assert_eq!(fs::read(tmp.path().join("projects.json")).unwrap(), projects_bytes);
-    assert_eq!(fs::read(tmp.path().join("config.json")).unwrap(), config_bytes);
+    assert_eq!(
+        fs::read(tmp.path().join("projects.json")).unwrap(),
+        projects_bytes
+    );
+    assert_eq!(
+        fs::read(tmp.path().join("config.json")).unwrap(),
+        config_bytes
+    );
 }
 
 #[test]
@@ -316,14 +327,22 @@ fn D07_ProjectApi_RejectCallerBeforeIoAndFilterUnknownFields_15() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("not-created/workspace.json");
     let repo = WorkspaceRepository::open(path.clone()).unwrap();
-    assert_eq!(list_projects(&repo, "untrusted").unwrap_err().code, "FORBIDDEN");
-    assert_eq!(register(&repo, "untrusted", tmp.path()).unwrap_err().code, "FORBIDDEN");
+    assert_eq!(
+        list_projects(&repo, "untrusted").unwrap_err().code,
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        register(&repo, "untrusted", tmp.path()).unwrap_err().code,
+        "FORBIDDEN"
+    );
     assert!(!path.parent().unwrap().exists());
     let project = register_project(&repo, tmp.path()).unwrap();
     let mut raw: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     raw["registeredProjects"][&project.project_id]["futureSecret"] = json!("fixture-secret");
     fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
     let response = list_projects(&repo, "main").unwrap();
-    assert!(!serde_json::to_string(&response).unwrap().contains("fixture-secret"));
+    assert!(!serde_json::to_string(&response)
+        .unwrap()
+        .contains("fixture-secret"));
     assert!(fs::read_to_string(path).unwrap().contains("fixture-secret"));
 }

@@ -2,6 +2,7 @@ pub(crate) mod commands;
 pub(crate) mod profile_service;
 pub(crate) mod profiles;
 pub(crate) mod project_commands;
+pub(crate) mod project_legacy;
 pub(crate) mod project_service;
 pub(crate) mod source_scope;
 pub(crate) mod storage;

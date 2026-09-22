@@ -59,12 +59,13 @@ fn D06_Storage_CreatePatchDeleteAndConflict_01() {
 fn D06_Storage_PreservesUnknownWorkspaceFields_02() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("cli-workspace.v1.json");
-    fs::write(&path, serde_json::to_vec(&json!({"schemaVersion":1,"revision":"0","profiles":{},"registeredProjects":{"kept":true},"future":{"nested":[1,2,3]}})).unwrap()).unwrap();
+    // registeredProjects is a validated D07 field, no longer an unknown extension.
+    fs::write(&path, serde_json::to_vec(&json!({"schemaVersion":1,"revision":"0","profiles":{},"futureProjectExtensions":{"kept":true},"future":{"nested":[1,2,3]}})).unwrap()).unwrap();
     let repo = WorkspaceRepository::open(path.clone()).unwrap();
     repo.apply(revision("0"), create("one")).unwrap();
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["future"], json!({"nested":[1,2,3]}));
-    assert_eq!(saved["registeredProjects"], json!({"kept":true}));
+    assert_eq!(saved["futureProjectExtensions"], json!({"kept":true}));
 }
 
 #[test]
