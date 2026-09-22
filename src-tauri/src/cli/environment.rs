@@ -103,7 +103,9 @@ fn merge(values: &mut EnvMap, layer: &EnvMap) {
 }
 
 fn permitted(name: &OsStr, names: &[&str]) -> bool {
-    names.iter().any(|allowed| same_name(name, OsStr::new(allowed)))
+    names
+        .iter()
+        .any(|allowed| same_name(name, OsStr::new(allowed)))
 }
 
 pub(crate) fn observer_enabled(profile: &Profile) -> bool {
@@ -122,7 +124,10 @@ pub(crate) fn build_environment(
     let mut result = original.clone();
     let terminal = validated_layer(terminal, false)?;
     for name in terminal.keys() {
-        if !permitted(name, &["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"]) {
+        if !permitted(
+            name,
+            &["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"],
+        ) {
             return Err(SafeError::invalid("terminal.environment"));
         }
     }
