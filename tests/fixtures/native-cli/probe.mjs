@@ -7,6 +7,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 const MAX_CAPTURE_BYTES = 16 * 1024 * 1024
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 const MAX_DELAY_MS = 60_000
+const OUTPUT_MARKER_PATTERN = /^[A-Za-z0-9._-]{1,64}$/
 
 function fail(message) {
   throw new Error(message)
@@ -31,6 +32,7 @@ function parseArgs(argv) {
     captureInput: false,
     captureBytes: null,
     outputBytes: 0,
+    outputMarker: null,
     exitCode: 0,
     delayReadMs: 0,
     holdSlaveMs: 0,
@@ -73,6 +75,10 @@ function parseArgs(argv) {
           MAX_OUTPUT_BYTES,
         )
         break
+      case '--output-marker':
+        if (parsed.outputMarker !== null) fail('duplicate --output-marker')
+        parsed.outputMarker = nextValue()
+        break
       case '--exit-code':
         parsed.exitCode = parseInteger(nextValue(), 'exit code', 0, 255)
         break
@@ -110,6 +116,18 @@ function parseArgs(argv) {
   }
   if (!parsed.captureInput && parsed.readyFile !== null) {
     fail('--ready-file requires --capture-input')
+  }
+  if (parsed.outputBytes > 0 && parsed.outputMarker === null) {
+    fail('--output-bytes requires --output-marker')
+  }
+  if (parsed.outputBytes === 0 && parsed.outputMarker !== null) {
+    fail('--output-marker requires --output-bytes')
+  }
+  if (
+    parsed.outputMarker !== null
+    && !OUTPUT_MARKER_PATTERN.test(parsed.outputMarker)
+  ) {
+    fail('invalid output marker')
   }
 
   return parsed
@@ -198,7 +216,16 @@ function main() {
     }
 
     if (options.outputBytes > 0) {
-      process.stdout.write(Buffer.alloc(options.outputBytes, 0x78))
+      const begin = Buffer.from(
+        `<<CC_DESK_PROBE_OUTPUT_BEGIN:${options.outputMarker}>>`,
+        'ascii',
+      )
+      const payload = Buffer.alloc(options.outputBytes, 0x78)
+      const end = Buffer.from(
+        `<<CC_DESK_PROBE_OUTPUT_END:${options.outputMarker}>>`,
+        'ascii',
+      )
+      process.stdout.write(Buffer.concat([begin, payload, end]))
     }
     process.exitCode = options.exitCode
   }
