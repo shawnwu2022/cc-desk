@@ -9,7 +9,12 @@ use std::io::Read;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(tag = "mode", content = "value", rename_all = "lowercase", deny_unknown_fields)]
+#[serde(
+    tag = "mode",
+    content = "value",
+    rename_all = "lowercase",
+    deny_unknown_fields
+)]
 pub(crate) enum Override<T> {
     #[default]
     Inherit,
@@ -17,9 +22,12 @@ pub(crate) enum Override<T> {
     Unset,
 }
 
-pub(crate) fn resolve_override<T>(_value: Override<T>, legacy: Option<T>) -> Option<T> {
-    // Initial inheritance-only implementation: explicit set/unset remain RED.
-    legacy
+pub(crate) fn resolve_override<T>(value: Override<T>, legacy: Option<T>) -> Option<T> {
+    match value {
+        Override::Inherit => legacy,
+        Override::Set(value) => Some(value),
+        Override::Unset => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,7 +38,9 @@ pub(crate) enum EnvValue {
         #[serde(rename = "nonSecret")]
         non_secret: bool,
     },
-    HostRef { name: String },
+    HostRef {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -38,8 +48,14 @@ pub(crate) enum EnvValue {
 pub(crate) enum Launcher {
     #[default]
     Native,
-    Shell { program: String, dialect: Dialect },
-    Shim { runner: String, dialect: Dialect },
+    Shell {
+        program: String,
+        dialect: Dialect,
+    },
+    Shim {
+        runner: String,
+        dialect: Dialect,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,7 +110,10 @@ impl Profile {
     pub(crate) fn validate(&self) -> Result<(), SafeError> {
         if self.id.is_empty()
             || self.id.len() > 128
-            || !self.id.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+            || !self
+                .id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
             || (self.id == "legacyClaude" && self.cli != CliKind::Claude)
         {
             return Err(SafeError::invalid("profileId"));
@@ -137,7 +156,9 @@ impl Profile {
             return None;
         }
         let inherited = if self.is_legacy_claude() {
-            legacy.and_then(|v| v.get("defaultSkipPermissions")).and_then(Value::as_bool)
+            legacy
+                .and_then(|v| v.get("defaultSkipPermissions"))
+                .and_then(Value::as_bool)
         } else {
             None
         };
@@ -161,7 +182,8 @@ impl Profile {
         if bytes.len() > 1024 * 1024 {
             return Err(error("LEGACY_TOO_LARGE"));
         }
-        let value: Value = serde_json::from_slice(&bytes).map_err(|_| error("LEGACY_INVALID"))?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|_| error("LEGACY_INVALID"))?;
         if !value.is_object() {
             return Err(error("LEGACY_INVALID"));
         }
@@ -179,7 +201,9 @@ impl Profile {
         if self.is_legacy_claude() {
             if let Some(values) = legacy.and_then(|v| v.get("claudeEnvVars")) {
                 if !values.is_null() {
-                    let values = values.as_object().ok_or_else(|| error("LEGACY_INVALID"))?;
+                    let values = values
+                        .as_object()
+                        .ok_or_else(|| error("LEGACY_INVALID"))?;
                     for (key, value) in values {
                         validate_env_name(key)?;
                         let value = value.as_str().ok_or_else(|| error("LEGACY_INVALID"))?;
@@ -199,7 +223,9 @@ impl Profile {
                     result.insert(key.clone(), Some(value.clone()));
                 }
                 Override::Set(EnvValue::HostRef { name }) => {
-                    let value = host.get(name).ok_or_else(|| error("ENV_SOURCE_MISSING"))?;
+                    let value = host
+                        .get(name)
+                        .ok_or_else(|| error("ENV_SOURCE_MISSING"))?;
                     result.insert(key.clone(), Some(value.clone()));
                 }
             }
@@ -209,14 +235,31 @@ impl Profile {
 
     pub(crate) fn patched(&self, changes: &Map<String, Value>) -> Result<Self, SafeError> {
         let mut value = serde_json::to_value(self).map_err(|_| error("SERIALIZE_FAILED"))?;
-        let object = value.as_object_mut().ok_or_else(|| error("SERIALIZE_FAILED"))?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| error("SERIALIZE_FAILED"))?;
         for (key, next) in changes {
-            if !matches!(key.as_str(), "name" | "launcher" | "programPath" | "defaultArgs" | "skipPermissions" | "observer" | "env") || next.is_null() {
+            if !matches!(
+                key.as_str(),
+                "name"
+                    | "launcher"
+                    | "programPath"
+                    | "defaultArgs"
+                    | "skipPermissions"
+                    | "observer"
+                    | "env"
+            ) || next.is_null()
+            {
                 return Err(SafeError::invalid("changes"));
             }
             if key == "env" {
-                let patch = next.as_object().ok_or_else(|| SafeError::invalid("env"))?;
-                let target = object.get_mut("env").and_then(Value::as_object_mut).ok_or_else(|| SafeError::invalid("env"))?;
+                let patch = next
+                    .as_object()
+                    .ok_or_else(|| SafeError::invalid("env"))?;
+                let target = object
+                    .get_mut("env")
+                    .and_then(Value::as_object_mut)
+                    .ok_or_else(|| SafeError::invalid("env"))?;
                 for (name, entry) in patch {
                     target.insert(name.clone(), entry.clone());
                 }
@@ -224,7 +267,8 @@ impl Profile {
                 object.insert(key.clone(), next.clone());
             }
         }
-        let profile: Self = serde_json::from_value(value).map_err(|_| SafeError::invalid("changes"))?;
+        let profile: Self =
+            serde_json::from_value(value).map_err(|_| SafeError::invalid("changes"))?;
         profile.validate()?;
         Ok(profile)
     }
