@@ -1,11 +1,9 @@
 import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-const scriptPath = fileURLToPath(
-  new URL('../../scripts/native-cli/record-baseline.mjs', import.meta.url),
-)
+const scriptPath = resolve(process.cwd(), 'scripts/native-cli/record-baseline.mjs')
 
 async function loadModule() {
   expect(existsSync(scriptPath), 'record-baseline.mjs must exist').toBe(true)
