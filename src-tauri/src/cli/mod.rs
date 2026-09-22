@@ -1,4 +1,5 @@
 pub(crate) mod commands;
+pub(crate) mod environment;
 pub(crate) mod profile_service;
 pub(crate) mod profiles;
 pub(crate) mod project_commands;
