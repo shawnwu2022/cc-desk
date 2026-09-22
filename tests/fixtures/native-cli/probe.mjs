@@ -27,6 +27,7 @@ function parseArgs(argv) {
   const rawArgv = separator === -1 ? [] : argv.slice(separator + 1)
   const parsed = {
     report: null,
+    readyFile: null,
     captureInput: false,
     captureBytes: null,
     outputBytes: 0,
@@ -48,6 +49,10 @@ function parseArgs(argv) {
       case '--report':
         if (parsed.report !== null) fail('duplicate --report')
         parsed.report = nextValue()
+        break
+      case '--ready-file':
+        if (parsed.readyFile !== null) fail('duplicate --ready-file')
+        parsed.readyFile = nextValue()
         break
       case '--capture-input':
         parsed.captureInput = true
@@ -94,29 +99,35 @@ function parseArgs(argv) {
 
   if (parsed.report === null) fail('missing --report')
   if (!isAbsolute(parsed.report)) fail('report path must be absolute')
+  if (parsed.readyFile !== null && !isAbsolute(parsed.readyFile)) {
+    fail('ready file path must be absolute')
+  }
   if (parsed.captureInput && parsed.captureBytes === null) {
     fail('--capture-input requires --capture-bytes')
   }
   if (!parsed.captureInput && parsed.captureBytes !== null) {
     fail('--capture-bytes requires --capture-input')
   }
+  if (!parsed.captureInput && parsed.readyFile !== null) {
+    fail('--ready-file requires --capture-input')
+  }
 
   return parsed
 }
 
-function validateReportPath(reportPath) {
+function validateTestPath(outputPath, label) {
   const rootValue = process.env.CC_DESK_TEST_ROOT
   if (!rootValue || !isAbsolute(rootValue)) {
     fail('missing absolute CC_DESK_TEST_ROOT')
   }
 
   const root = realpathSync(rootValue)
-  const parent = realpathSync(dirname(reportPath))
+  const parent = realpathSync(dirname(outputPath))
   const fromRoot = relative(root, parent)
   if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
-    fail('report path outside test root')
+    fail(`${label} outside test root`)
   }
-  return resolve(reportPath)
+  return resolve(outputPath)
 }
 
 function writeReport(reportPath, value) {
@@ -137,10 +148,20 @@ function reportFailure(error) {
 
 function main() {
   const options = parseArgs(process.argv.slice(2))
-  const reportPath = validateReportPath(options.report)
+  const reportPath = validateTestPath(options.report, 'report path')
+  const readyPath = options.readyFile === null
+    ? null
+    : validateTestPath(options.readyFile, 'ready file path')
   const captured = []
   let capturedLength = 0
   let finished = false
+  let ready = false
+
+  const announceReady = () => {
+    if (ready || readyPath === null) return
+    writeFileSync(readyPath, '', { encoding: 'utf8', flag: 'wx' })
+    ready = true
+  }
 
   const finish = () => {
     if (finished) return
@@ -213,9 +234,11 @@ function main() {
         reportFailure(new Error('input ended before --capture-bytes'))
       }
     })
+    announceReady()
   }
 
   if (options.captureBytes === 0) {
+    announceReady()
     finish()
   } else if (options.delayReadMs > 0) {
     setTimeout(startReading, options.delayReadMs)
