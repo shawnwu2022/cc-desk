@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "status": "NOT_RUN",
+  "generatedFrom": {
+    "deskBaseline": "77707e3b03187aa2ed96f5ab780f62f14c1e4ffc",
+    "note": "Host-capability inventory only. No real CLI or installed-package result is implied."
+  },
+  "features": [
+    {
+      "id": "shared-interactive-terminal",
+      "cli": "shared",
+      "category": "interactive",
+      "nativeEntry": "interactive TUI, slash commands, custom key bindings",
+      "hostDependencies": ["PTY", "xterm parser", "keyboard input", "resize"],
+      "caseIds": ["NATIVE-14", "NATIVE-19", "NATIVE-28"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "claude-interactive-commands",
+      "cli": "claude",
+      "category": "interactive",
+      "nativeEntry": "Claude Code interactive and slash commands",
+      "hostDependencies": ["Claude executable", "PTY", "raw keyboard forwarding"],
+      "caseIds": ["NATIVE-01", "NATIVE-14"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "codex-interactive-commands",
+      "cli": "codex",
+      "category": "interactive",
+      "nativeEntry": "Codex CLI interactive and slash commands",
+      "hostDependencies": ["Codex executable", "PTY", "raw keyboard forwarding"],
+      "caseIds": ["NATIVE-01", "NATIVE-14"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "shared-terminal-editor",
+      "cli": "shared",
+      "category": "editor",
+      "nativeEntry": "terminal editor launched from the CLI",
+      "hostDependencies": ["VISUAL or EDITOR", "same PTY", "alternate screen", "keyboard protocol"],
+      "caseIds": ["NATIVE-17", "NATIVE-20", "NATIVE-27"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "shared-gui-editor-wait",
+      "cli": "shared",
+      "category": "editor",
+      "nativeEntry": "GUI editor wait mode and return to the CLI",
+      "hostDependencies": ["process environment", "desktop process launch", "wait semantics"],
+      "caseIds": ["NATIVE-18"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "claude-image-input",
+      "cli": "claude",
+      "category": "image",
+      "nativeEntry": "Claude Code native image paste or attachment flow",
+      "hostDependencies": ["system clipboard", "native key binding", "WebView focus"],
+      "caseIds": ["NATIVE-24"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "codex-image-input",
+      "cli": "codex",
+      "category": "image",
+      "nativeEntry": "Codex CLI native image paste or attachment flow",
+      "hostDependencies": ["system clipboard", "native key binding", "WebView focus"],
+      "caseIds": ["NATIVE-24"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "claude-mcp-runtime",
+      "cli": "claude",
+      "category": "mcp",
+      "nativeEntry": "Claude Code native MCP runtime",
+      "hostDependencies": ["Claude configuration root", "child process or network access", "PTY prompts"],
+      "caseIds": ["NATIVE-16", "NATIVE-58"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "codex-mcp-runtime",
+      "cli": "codex",
+      "category": "mcp",
+      "nativeEntry": "Codex CLI native MCP runtime",
+      "hostDependencies": ["Codex configuration root", "child process or network access", "PTY prompts"],
+      "caseIds": ["NATIVE-16", "NATIVE-58"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "claude-native-extensions",
+      "cli": "claude",
+      "category": "extensions",
+      "nativeEntry": "skills, agents, plugins and hooks",
+      "hostDependencies": ["Claude configuration root", "filesystem", "optional observer isolation"],
+      "caseIds": ["NATIVE-16", "NATIVE-34", "NATIVE-35"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "codex-native-extensions",
+      "cli": "codex",
+      "category": "extensions",
+      "nativeEntry": "skills, agents, hooks and supported extensions",
+      "hostDependencies": ["Codex configuration root", "filesystem", "optional observer isolation"],
+      "caseIds": ["NATIVE-16", "NATIVE-34", "NATIVE-35"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "shared-permission-prompts",
+      "cli": "shared",
+      "category": "permissions",
+      "nativeEntry": "native approval, sandbox and permission prompts",
+      "hostDependencies": ["interactive input", "terminal rendering", "no Desk auto-confirmation"],
+      "caseIds": ["NATIVE-15", "NATIVE-08"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "shared-authentication",
+      "cli": "shared",
+      "category": "authentication",
+      "nativeEntry": "login, browser callback and system keychain",
+      "hostDependencies": ["browser launch", "loopback callback", "OS credential store"],
+      "caseIds": ["NATIVE-37"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "shared-alternate-screen",
+      "cli": "shared",
+      "category": "terminal-protocol",
+      "nativeEntry": "main and alternate screen switching",
+      "hostDependencies": ["xterm parser", "terminal state retention", "hidden tab parsing"],
+      "caseIds": ["NATIVE-27", "NATIVE-47", "NATIVE-48"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "shared-terminal-queries",
+      "cli": "shared",
+      "category": "terminal-protocol",
+      "nativeEntry": "DSR, DA, focus, mouse and negotiated keyboard replies",
+      "hostDependencies": ["xterm parser reply source", "binary input path", "input scheduling"],
+      "caseIds": ["NATIVE-29", "NATIVE-30", "NATIVE-44"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "shared-unicode-ime",
+      "cli": "shared",
+      "category": "terminal-protocol",
+      "nativeEntry": "Unicode width, emoji and IME composition",
+      "hostDependencies": ["WebView IME", "xterm Unicode addon", "font fallback"],
+      "caseIds": ["NATIVE-21"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "shared-background-processes",
+      "cli": "shared",
+      "category": "background-process",
+      "nativeEntry": "child, broker, sandbox and detached background processes",
+      "hostDependencies": ["process ownership", "PTY slave lifecycle", "platform stop semantics"],
+      "caseIds": ["NATIVE-33", "NATIVE-61"],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "shared-session-resume",
+      "cli": "shared",
+      "category": "interactive",
+      "nativeEntry": "native resume picker, explicit session locator and fork flow",
+      "hostDependencies": ["CLI adapter", "argv preservation", "unknown identity handling"],
+      "caseIds": ["NATIVE-11", "NATIVE-12", "NATIVE-13", "NATIVE-52"],
+      "status": "NOT_RUN"
+    }
+  ]
+}
