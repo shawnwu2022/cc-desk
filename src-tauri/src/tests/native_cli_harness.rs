@@ -235,7 +235,10 @@ fn NativeCliHarness_PtyCapturesRawBytes_002() {
     .expect("raw input through PTY");
 
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(execution.report.captured_base64.as_deref(), Some("ABt/gP8="));
+    assert_eq!(
+        execution.report.captured_base64.as_deref(),
+        Some("ABt/gP8=")
+    );
 }
 
 #[test]
@@ -284,5 +287,8 @@ fn NativeCliHarness_PtyBuffersInputBeforeDelayedRead_004() {
     .expect("delayed read through PTY");
 
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(execution.report.captured_base64.as_deref(), Some("bGF0ZQ=="));
+    assert_eq!(
+        execution.report.captured_base64.as_deref(),
+        Some("bGF0ZQ==")
+    );
 }
