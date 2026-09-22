@@ -1,3 +1,4 @@
+pub(crate) mod availability;
 pub(crate) mod commands;
 pub(crate) mod environment;
 pub(crate) mod profile_service;
