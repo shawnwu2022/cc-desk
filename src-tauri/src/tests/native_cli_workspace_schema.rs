@@ -1,6 +1,9 @@
 use crate::cli::storage::{WorkspaceDocument, WorkspaceRepository};
 use serde_json::json;
 
+#[path = "native_cli_workspace.rs"]
+mod behavior;
+
 #[test]
 fn D07_Workspace_DefaultHasIndependentProjectRegistry_01() {
     let value = serde_json::to_value(WorkspaceDocument::default()).unwrap();
@@ -21,7 +24,10 @@ fn D07_Workspace_RejectsMalformedRegistryWithoutOverwriting_02() {
         });
         let bytes = serde_json::to_vec(&raw).unwrap();
         std::fs::write(&path, &bytes).unwrap();
-        assert!(repo.read().is_err(), "invalid project registry must not be accepted");
+        assert!(
+            repo.read().is_err(),
+            "invalid project registry must not be accepted"
+        );
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 }
