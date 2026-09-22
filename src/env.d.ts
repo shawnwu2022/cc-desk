@@ -37,4 +37,9 @@ declare module '@tauri-apps/plugin-dialog' {
   }
 
   export function open(options?: OpenOptions): Promise<string | string[] | null>
+  // Only the option subset used here is declared; dialog results are not interpreted by Desk.
+  export function message(
+    message: string,
+    options?: string | { title?: string; kind?: 'info' | 'warning' | 'error' },
+  ): Promise<unknown>
 }
