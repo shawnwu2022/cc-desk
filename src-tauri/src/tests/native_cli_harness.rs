@@ -62,7 +62,7 @@ fn wait_for_probe_ready(path: &Path) -> Result<(), String> {
             return Ok(());
         }
         if started.elapsed() >= PROBE_READY_TIMEOUT {
-            return Err("probe did not become ready for raw input".to_string());
+            return Err("probe did not become ready for terminal input".to_string());
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -185,23 +185,47 @@ pub(crate) fn spawn_probe(
     write_result?;
     reader_result?;
     let status = status?;
-
-    let report_text = std::fs::read_to_string(report_path).map_err(|error| error.to_string())?;
-    let report = serde_json::from_str(&report_text).map_err(|error| error.to_string())?;
+    let exit_code = status.exit_code();
     let stdout = output
         .lock()
         .map_err(|_| "output lock poisoned".to_string())?
         .clone();
 
+    let report_text = std::fs::read_to_string(report_path).map_err(|error| {
+        let preview_len = stdout.len().min(512);
+        format!(
+            "failed to read probe report after exit {exit_code}: {error}; stdout={:?}",
+            String::from_utf8_lossy(&stdout[..preview_len])
+        )
+    })?;
+    let report = serde_json::from_str(&report_text).map_err(|error| error.to_string())?;
+
     Ok(ProbeExecution {
         report,
         stdout,
-        exit_code: status.exit_code(),
+        exit_code,
     })
 }
 
 fn strings(values: &[&str]) -> Vec<OsString> {
     values.iter().map(OsString::from).collect()
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+fn extract_marked_output(output: &[u8], marker: &str) -> Result<Vec<u8>, String> {
+    let begin = format!("<<CC_DESK_PROBE_OUTPUT_BEGIN:{marker}>>").into_bytes();
+    let end = format!("<<CC_DESK_PROBE_OUTPUT_END:{marker}>>").into_bytes();
+    let begin_at = find_subslice(output, &begin).ok_or_else(|| "output begin marker missing".to_string())?;
+    let payload_at = begin_at + begin.len();
+    let end_relative = find_subslice(&output[payload_at..], &end)
+        .ok_or_else(|| "output end marker missing".to_string())?;
+    Ok(output[payload_at..payload_at + end_relative].to_vec())
 }
 
 #[test]
@@ -248,10 +272,12 @@ fn NativeCliHarness_PtyPreservesIdentityAndArgv_001() {
 }
 
 #[test]
-fn NativeCliHarness_PtyCapturesRawBytes_002() {
+fn NativeCliHarness_PtyCapturesTerminalBytes_002() {
     let temp = tempfile::tempdir().expect("tempdir");
     let report = temp.path().join("capture.json");
-    let input = [0x00, 0x1b, 0x7f, 0x80, 0xff];
+    // ESC [ A, DEL, and printable input are valid terminal byte sequences.
+    // Arbitrary invalid UTF-8 bytes are tested before the OS PTY boundary in W4/W5.
+    let input = [0x1b, 0x5b, 0x41, 0x7f, 0x78];
     let arguments = strings(&["--capture-input", "--capture-bytes", "5"]);
 
     let execution = spawn_probe(
@@ -262,12 +288,12 @@ fn NativeCliHarness_PtyCapturesRawBytes_002() {
         Some(&input),
         &report,
     )
-    .expect("raw input through PTY");
+    .expect("terminal input through PTY");
 
     assert_eq!(execution.exit_code, 0);
     assert_eq!(
         execution.report.captured_base64.as_deref(),
-        Some("ABt/gP8=")
+        Some("G1tBf3g=")
     );
 }
 
@@ -275,7 +301,15 @@ fn NativeCliHarness_PtyCapturesRawBytes_002() {
 fn NativeCliHarness_PtyReportsNonzeroExitAndTailOutput_003() {
     let temp = tempfile::tempdir().expect("tempdir");
     let report = temp.path().join("exit.json");
-    let arguments = strings(&["--output-bytes", "257", "--exit-code", "7"]);
+    let marker = "d03-tail-003";
+    let arguments = strings(&[
+        "--output-bytes",
+        "257",
+        "--output-marker",
+        marker,
+        "--exit-code",
+        "7",
+    ]);
 
     let execution = spawn_probe(
         temp.path(),
@@ -287,10 +321,11 @@ fn NativeCliHarness_PtyReportsNonzeroExitAndTailOutput_003() {
     )
     .expect("nonzero probe through PTY");
 
+    let payload = extract_marked_output(&execution.stdout, marker).expect("marked probe output");
     assert_eq!(execution.exit_code, 7);
     assert_eq!(execution.report.requested_exit_code, 7);
-    assert_eq!(execution.stdout.len(), 257);
-    assert!(execution.stdout.iter().all(|byte| *byte == b'x'));
+    assert_eq!(payload.len(), 257);
+    assert!(payload.iter().all(|byte| *byte == b'x'));
 }
 
 #[test]
