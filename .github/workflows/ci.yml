@@ -65,14 +65,17 @@ jobs:
           cache-on-failure: true
 
       - name: Prepare verified Windows runtime before direct cargo commands
+        id: runtime
         working-directory: .
         run: node scripts/prepare-conpty.mjs
 
+      - name: Run Rust tests
+        run: cargo test --locked
+
       - name: Check formatting
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: cargo fmt --check
 
       - name: Lint
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: cargo clippy --locked --all-targets -- -D warnings
-
-      - name: Run Rust tests
-        run: cargo test --locked
