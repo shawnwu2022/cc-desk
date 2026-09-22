@@ -5,6 +5,7 @@ import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { pasteTrace } from '@/utils/pasteTrace';
 import { setPasteObserver } from '@/utils/pasteText';
+import { persistProjectRegistration, registerSelectedDirectory } from './projectRegistration';
 
 // Diagnostic executable only. No user settings, hooks or clipboard are persisted.
 if (import.meta.env.VITE_CC_DESK_PASTE_TRACE === '1') {
@@ -220,8 +221,10 @@ export const getDefaultClaudeOptions = (): Promise<DefaultClaudeOptions> =>
 export const saveDefaultClaudeOptions = (options: Partial<DefaultClaudeOptions>): Promise<void> =>
   invoke<void>('save_default_claude_options', { options });
 
-export const saveLastProject = (path: string): Promise<void> =>
-  invoke<void>('save_last_project', { path });
+export const saveLastProject = async (path: string): Promise<void> => {
+  await persistProjectRegistration(path);
+  await invoke<void>('save_last_project', { path });
+};
 
 export const getProjectConfig = (projectPath: string): Promise<ProjectConfigResult> =>
   invoke<ProjectConfigResult>('get_project_config', { projectPath });
@@ -302,7 +305,7 @@ export const selectDirectory = async (): Promise<{ path: string } | null> => {
     multiple: false,
     title: 'Select Project Directory'
   } as any);
-  if (result && typeof result === 'string') {
+  if (result && typeof result === 'string' && await registerSelectedDirectory(result)) {
     return { path: result };
   }
   return null;

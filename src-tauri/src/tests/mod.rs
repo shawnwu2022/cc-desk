@@ -21,6 +21,8 @@ mod native_cli_storage;
 #[cfg(test)]
 mod native_cli_wire;
 #[cfg(test)]
+mod native_cli_workspace_schema;
+#[cfg(test)]
 mod platform;
 #[cfg(test)]
 mod pty;
