@@ -215,13 +215,16 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
     }
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn extract_marked_output(output: &[u8], marker: &str) -> Result<Vec<u8>, String> {
     let begin = format!("<<CC_DESK_PROBE_OUTPUT_BEGIN:{marker}>>").into_bytes();
     let end = format!("<<CC_DESK_PROBE_OUTPUT_END:{marker}>>").into_bytes();
-    let begin_at = find_subslice(output, &begin).ok_or_else(|| "output begin marker missing".to_string())?;
+    let begin_at =
+        find_subslice(output, &begin).ok_or_else(|| "output begin marker missing".to_string())?;
     let payload_at = begin_at + begin.len();
     let end_relative = find_subslice(&output[payload_at..], &end)
         .ok_or_else(|| "output end marker missing".to_string())?;
