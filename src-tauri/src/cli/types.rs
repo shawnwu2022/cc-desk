@@ -234,13 +234,8 @@ pub(crate) enum ResolutionSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub(crate) enum Resolution<T> {
-    Known {
-        value: T,
-        source: ResolutionSource,
-    },
-    Unknown {
-        reason: String,
-    },
+    Known { value: T, source: ResolutionSource },
+    Unknown { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
