@@ -5,7 +5,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 #[allow(dead_code, clippy::duplicate_mod)]
@@ -14,6 +14,7 @@ mod bundled_runtime;
 
 const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+const PROBE_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -26,7 +27,9 @@ pub(crate) struct ProbeEnvironment {
 pub(crate) struct ProbeReport {
     pub(crate) argv: Vec<String>,
     pub(crate) cwd: String,
+    #[serde(rename = "stdinIsTTY")]
     pub(crate) stdin_is_tty: bool,
+    #[serde(rename = "stdoutIsTTY")]
     pub(crate) stdout_is_tty: bool,
     pub(crate) env: ProbeEnvironment,
     pub(crate) captured_base64: Option<String>,
@@ -52,6 +55,19 @@ fn probe_path() -> PathBuf {
         .join("tests/fixtures/native-cli/probe.mjs")
 }
 
+fn wait_for_probe_ready(path: &Path) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        if path.exists() {
+            return Ok(());
+        }
+        if started.elapsed() >= PROBE_READY_TIMEOUT {
+            return Err("probe did not become ready for raw input".to_string());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 pub(crate) fn spawn_probe(
     test_root: &Path,
     cwd: &Path,
@@ -63,10 +79,15 @@ pub(crate) fn spawn_probe(
     #[cfg(windows)]
     bundled_runtime::initialize()?;
 
+    let ready_path = report_path.with_extension("ready");
     let mut command = CommandBuilder::new(node_path()?);
     command.arg(probe_path());
     command.arg("--report");
     command.arg(report_path);
+    if input.is_some() {
+        command.arg("--ready-file");
+        command.arg(&ready_path);
+    }
     for arg in probe_args {
         command.arg(arg);
     }
@@ -140,7 +161,9 @@ pub(crate) fn spawn_probe(
     });
 
     let write_result = if let Some(bytes) = input {
-        crate::pty::write_pty_data(&mut *writer, bytes).map_err(|error| error.to_string())
+        wait_for_probe_ready(&ready_path).and_then(|()| {
+            crate::pty::write_pty_data(&mut *writer, bytes).map_err(|error| error.to_string())
+        })
     } else {
         Ok(())
     };
