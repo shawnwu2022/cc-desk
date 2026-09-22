@@ -81,7 +81,11 @@ fn D05_Wire_RejectsInvalidGenerationDimensionsAndNul_004() {
         assert!(serde_json::from_value::<LaunchRequest>(value).is_err());
     }
 
-    for (field, number) in [("cols", json!(0)), ("cols", json!(65_536)), ("rows", json!(1.5))] {
+    for (field, number) in [
+        ("cols", json!(0)),
+        ("cols", json!(65_536)),
+        ("rows", json!(1.5)),
+    ] {
         let mut value = goldens().valid_launch_requests[0].value.clone();
         value[field] = number;
         let request = serde_json::from_value::<LaunchRequest>(value);
@@ -118,7 +122,10 @@ fn D05_Identity_CliAndRootProduceDifferentKeys_006() {
         .into_iter()
         .map(|value| serde_json::from_value(value).expect("native session ref"))
         .collect();
-    let keys: HashSet<String> = references.iter().map(NativeSessionRef::stable_key).collect();
+    let keys: HashSet<String> = references
+        .iter()
+        .map(NativeSessionRef::stable_key)
+        .collect();
     assert_eq!(keys.len(), references.len());
     assert_eq!(
         references[0].stable_key(),
@@ -136,7 +143,10 @@ fn D05_Identity_CliAndRootProduceDifferentKeys_006() {
 fn D05_Wire_BytesAreStrictOctets_007() {
     let bytes: WireBytes = serde_json::from_value(json!([0, 1, 127, 128, 255])).unwrap();
     assert_eq!(bytes.as_slice(), &[0, 1, 127, 128, 255]);
-    assert_eq!(serde_json::to_value(bytes).unwrap(), json!([0, 1, 127, 128, 255]));
+    assert_eq!(
+        serde_json::to_value(bytes).unwrap(),
+        json!([0, 1, 127, 128, 255])
+    );
 
     for invalid in [json!([-1]), json!([256]), json!([1.5]), json!(["1"])] {
         assert!(serde_json::from_value::<WireBytes>(invalid).is_err());
