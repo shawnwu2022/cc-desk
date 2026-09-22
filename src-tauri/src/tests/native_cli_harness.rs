@@ -1,4 +1,4 @@
-use portable_pty::CommandBuilder;
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Deserialize;
 use std::ffi::OsString;
 use std::io::{self, Read};
@@ -81,7 +81,14 @@ pub(crate) fn spawn_probe(
         command.env(name, value);
     }
 
-    let pair = crate::pty::open_pty(160, 35).map_err(|error| error.to_string())?;
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 35,
+            cols: 160,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|error| error.to_string())?;
     let mut child = pair
         .slave
         .spawn_command(command)
