@@ -142,7 +142,10 @@ pub(crate) fn resolve_metadata(
                 &mut warnings,
             );
         }
-        result.insert(project.project_id.clone(), project.resolve_metadata(&legacy));
+        result.insert(
+            project.project_id.clone(),
+            project.resolve_metadata(&legacy),
+        );
     }
     warnings.sort();
     warnings.dedup();

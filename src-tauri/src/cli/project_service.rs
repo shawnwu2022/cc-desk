@@ -49,7 +49,8 @@ pub(crate) fn register(
 ) -> Result<ProjectList, SafeError> {
     authorize_profile_window(caller)?;
     let project = workspace::register_project(repository, selected_path)?;
-    let mut result = list_projects(repository, caller).map_err(|_| error("COMMIT_STATE_UNKNOWN"))?;
+    let mut result =
+        list_projects(repository, caller).map_err(|_| error("COMMIT_STATE_UNKNOWN"))?;
     result.project_id = Some(project.project_id);
     Ok(result)
 }

@@ -4,9 +4,12 @@ import { beforeEach, describe, it, expect } from 'vitest'
 import { useAppStore } from '@/stores/app'
 import i18n from '@/i18n'
 
+// D07 adds registration before last-opened persistence; these tests still exercise the real facade.
+const registrationReceipt = () => ({ revision: '1', projects: [], projectId: 'fixture-project' })
+
 beforeEach(() => {
   setActivePinia(createPinia())
-  mockIPC(() => {})
+  mockIPC((cmd) => cmd === 'cli_register_project' ? registrationReceipt() : undefined)
 })
 
 describe('getClaudeArgs', () => {
@@ -297,6 +300,7 @@ describe('app store - 启动状态源 + setCwd 拆分 + setHidden opLock', () =>
   it('SetCurrentProject_PersistSuccess_001', async () => {
     const calls: string[] = []
     mockIPC((cmd, args) => {
+      if (cmd === 'cli_register_project') return registrationReceipt()
       if (cmd === 'save_last_project') { calls.push((args as { path: string }).path); return null }
       return null
     })
@@ -309,6 +313,7 @@ describe('app store - 启动状态源 + setCwd 拆分 + setHidden opLock', () =>
   // setCurrentProject persist 失败：saveLastProject reject -> 抛错 + cwd 不变（persist-first）
   it('SetCurrentProject_PersistFail_NoCwdChange_001', async () => {
     mockIPC((cmd) => {
+      if (cmd === 'cli_register_project') return registrationReceipt()
       if (cmd === 'save_last_project') throw new Error('persist failed')
       return null
     })
@@ -415,12 +420,18 @@ describe('app store - 启动状态源 + setCwd 拆分 + setHidden opLock', () =>
     const calls: string[] = []
     let resolveA!: () => void
     const slowA = new Promise<void>(r => { resolveA = r })
+    let startedA!: () => void
+    const aEnteredPersistence = new Promise<void>(r => { startedA = r })
     mockIPC((cmd, args) => {
+      if (cmd === 'cli_register_project') return registrationReceipt()
       if (cmd === 'save_last_project') {
         const path = (args as { path: string }).path
         calls.push(path)
         // A 慢：返回一个等 resolveA 的 Promise；B 快：直接 resolve
-        if (path === '/p-a') return slowA.then(() => null)
+        if (path === '/p-a') {
+          startedA()
+          return slowA.then(() => null)
+        }
         return null
       }
       return null
@@ -429,8 +440,9 @@ describe('app store - 启动状态源 + setCwd 拆分 + setHidden opLock', () =>
     // 同时发起 A、B（A 先调但慢，B 后调但快）。无 opLock 则 B 先写完、A 后写完 -> 磁盘留 A（错）。
     const pA = store.setCurrentProject('/p-a', { persist: true })
     const pB = store.setCurrentProject('/p-b', { persist: true })
-    // 让 B 有机会在 A resolve 前排队（验证 B 不抢跑）
-    await Promise.resolve()
+    // 等待真实进入 A 的持久化边界，而不是假设一个 microtask 就能跨过新增登记调用。
+    await aEnteredPersistence
+    expect(calls).toEqual(['/p-a'])
     resolveA() // A 的 saveLastProject 现在完成
     await Promise.all([pA, pB])
     expect(calls).toEqual(['/p-a', '/p-b']) // 顺序：A 先 B 后（opLock 串行）

@@ -1,6 +1,8 @@
 //! CLI-independent project registration. Native history is never the source of project existence.
 use super::profiles::{error, resolve_override, Override};
-use super::source_scope::{is_verified_key, resolve_path_key, validate_selected_path, ResolvedPathKey};
+use super::source_scope::{
+    is_verified_key, resolve_path_key, validate_selected_path, ResolvedPathKey,
+};
 use super::storage::WorkspaceRepository;
 use super::types::{SafeError, WireU64};
 use serde::{Deserialize, Serialize};
