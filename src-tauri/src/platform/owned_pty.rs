@@ -5,10 +5,21 @@ use super::launch::ProcessLaunchSpec;
 use crate::cli::profiles::error;
 use crate::cli::types::SafeError;
 use parking_lot::Mutex;
+#[cfg(not(windows))]
+use portable_pty::ChildKiller;
 use portable_pty::{
-    native_pty_system, Child, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize,
+    native_pty_system, Child, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize,
 };
 use std::io::{self, Read, Write};
+#[cfg(windows)]
+use std::sync::atomic::{AtomicPtr, Ordering};
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    #[link_name = "TerminateProcess"]
+    fn terminate_process(handle: *mut std::ffi::c_void, exit_code: u32) -> i32;
+}
 
 struct ChildState {
     child: Box<dyn Child + Send + Sync>,
@@ -24,7 +35,13 @@ pub(crate) struct OwnedPty {
     reader: Mutex<Option<Box<dyn Read + Send>>>,
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<ChildState>,
+    #[cfg(not(windows))]
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    // Borrowed from the private child, which is never replaced or extracted.
+    // AtomicPtr transports the immutable opaque Windows handle across threads;
+    // it does not own it. Every use borrows Self and therefore pins its owner.
+    #[cfg(windows)]
+    process_handle: AtomicPtr<std::ffi::c_void>,
 }
 
 impl std::fmt::Debug for OwnedPty {
@@ -62,7 +79,14 @@ impl OwnedPty {
             .slave
             .spawn_command(command)
             .map_err(|_| error("PROCESS_START_FAILED"))?;
+        #[cfg(not(windows))]
         let killer = child.clone_killer();
+        // portable-pty 0.8.1's WinChildKiller inverts TerminateProcess's BOOL.
+        // Keep the already-owned native handle, not that incorrect wrapper.
+        // Capturing it adds no fallible handle duplication after child creation.
+        #[cfg(windows)]
+        let process_handle =
+            AtomicPtr::new(child.as_raw_handle().unwrap_or(std::ptr::null_mut()));
         // Do not retain the parent's slave endpoint and prevent stream EOF.
         drop(pair.slave);
         Ok(Self {
@@ -73,7 +97,10 @@ impl OwnedPty {
                 child,
                 status: None,
             }),
+            #[cfg(not(windows))]
             killer: Mutex::new(killer),
+            #[cfg(windows)]
+            process_handle,
         })
     }
 
@@ -121,9 +148,29 @@ impl OwnedPty {
         Ok(status)
     }
 
-    /// Signal only the retained child killer, never a process-name/PID search.
-    /// This lock is independent of blocking reads, writes, resize and wait.
+    /// Signal only this retained child, never a process-name/PID search. Success
+    /// means termination was accepted, not that wait/reap or output drain ended.
+    /// Failure is not silently reclassified as success for an exited process.
     pub(crate) fn terminate_root(&self) -> Result<(), SafeError> {
+        #[cfg(windows)]
+        {
+            let handle = self.process_handle.load(Ordering::Relaxed);
+            if handle.is_null() {
+                return Err(error("PROCESS_CONTROL_UNAVAILABLE"));
+            }
+            // SAFETY: the native Child retains this process handle for its whole
+            // lifetime, including after wait(). The private child field is not
+            // removed/replaced, and &self keeps it alive throughout this call.
+            // No pointer is dereferenced here; Windows validates the opaque HANDLE.
+            // Wait uses the same kernel object safely without taking our writer
+            // or master lock. Do not replace the child without revisiting this.
+            if unsafe { terminate_process(handle, 1) } == 0 {
+                Err(error("PROCESS_TERMINATE_FAILED"))
+            } else {
+                Ok(())
+            }
+        }
+        #[cfg(not(windows))]
         self.killer
             .lock()
             .kill()
