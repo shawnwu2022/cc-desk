@@ -1,6 +1,7 @@
 //! Application-owned document/launch composition. Never deserialized authority.
-use super::document::{native::build_main, DocumentBinding};
+use super::document::{native::build_main, DocumentBinding, DOCUMENT_HEADER};
 use super::launch_service::{LaunchService, NativeRun, RunAccess};
+use super::output_route::{parse_channel, CHANNEL_HEADER};
 use super::profiles::error;
 use super::run_registry::{LaunchStatus, RunKey};
 use super::storage::WorkspaceRepository;
@@ -61,17 +62,39 @@ impl NativeRuntime {
     }
     pub(crate) async fn start<T: Runtime>(
         &self,
-        _webview: Webview<T>,
-        _request: Request<'_>,
+        webview: Webview<T>,
+        request: Request<'_>,
     ) -> Result<LaunchStatus, SafeError> {
-        Err(error("NATIVE_ENDPOINT_NOT_IMPLEMENTED"))
+        let binding = self.binding()?;
+        let (caller, launch) = binding.start_native(&webview, &request)?;
+        let descriptor = parse_channel(request.headers());
+        let proof = request.headers()[DOCUMENT_HEADER].clone();
+        let service = self.service.clone();
+        // Keep only validated routing metadata, not the raw body or arbitrary
+        // request headers. A replay never evaluates the connect closure.
+        tauri::async_runtime::spawn_blocking(move || {
+            service.start(&caller, &launch, |_| {
+                let id = descriptor?;
+                let mut headers = HeaderMap::new();
+                headers.insert(DOCUMENT_HEADER, proof);
+                headers.insert(
+                    CHANNEL_HEADER,
+                    format!("__CHANNEL__:{id}")
+                        .parse()
+                        .map_err(|_| SafeError::invalid("outputChannel"))?,
+                );
+                binding.channel_native::<_, serde_json::Value>(&webview, &headers)
+            })
+        })
+        .await
+        .map_err(|_| error("LAUNCH_STATE_UNKNOWN"))?
     }
     pub(crate) fn status<T: Runtime>(
         &self,
-        _webview: &Webview<T>,
-        _request: &Request<'_>,
+        webview: &Webview<T>,
+        request: &Request<'_>,
     ) -> Result<LaunchStatus, SafeError> {
-        Err(error("NATIVE_ENDPOINT_NOT_IMPLEMENTED"))
+        self.binding()?.query_native(webview, request)
     }
     /// Shared native admission for later input/resize/stop/snapshot adapters.
     /// An acquired access rechecks caller/run ownership again at each operation.
@@ -172,7 +195,7 @@ fn expected_main_url(config: &Config, window: &WindowConfig, dev: bool) -> Resul
 mod tests {
     use super::*;
     #[test]
-    fn D11_Startup_ConfigPreserved_001() {
+    fn d11_startup_config_preserved_001() {
         let mut config: Config = serde_json::from_value(serde_json::json!({"identifier":"d11.test","app":{"windows":[{"label":"main","width":987,"title":"same"},{"label":"peer"}]}})).unwrap();
         let original = serde_json::to_value(&config.app.windows[0]).unwrap();
         let main = take_main_config(&mut config).unwrap();
@@ -181,7 +204,7 @@ mod tests {
         assert!(config.app.windows[1].create);
     }
     #[test]
-    fn D11_Startup_DesktopUrlParity_002() {
+    fn d11_startup_desktop_url_parity_002() {
         let mut config: Config = serde_json::from_value(serde_json::json!({"identifier":"d11.test","build":{"devUrl":"http://localhost:1420/sub/"}})).unwrap();
         let mut window = WindowConfig::default();
         assert_eq!(

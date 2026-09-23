@@ -336,3 +336,6 @@ fn D11_Service_HandoffFailureKeepsOwnedProcess_007() {
     assert_eq!(f.consumer.calls.load(Ordering::SeqCst), 1);
     assert_eq!(f.children(), 1);
 }
+
+#[path = "native_cli_launch_edges.rs"]
+mod edges;

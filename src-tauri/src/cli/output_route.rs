@@ -201,3 +201,35 @@ impl<T: IpcResponse + Send + Sync> OutputRoute<T> {
         result
     }
 }
+
+#[cfg(test)]
+mod cleanup_race {
+    use super::*;
+    use serde_json::Value;
+
+    // 撤权未取得忙锁时，下一次发送的拒绝分支也必须清理宿主引用。
+    #[test]
+    fn d11_lifetime_revoked_before_send_drops_native_owners_006() {
+        let routes = OutputRoutes::new(1);
+        let host = Arc::new(());
+        let weak = Arc::downgrade(&host);
+        let route = routes
+            .bind(
+                1,
+                Box::new(move || {
+                    let _ = &host;
+                    Ok(())
+                }),
+                || Ok(Channel::<Value>::new(|_| panic!("revoked dispatch"))),
+            )
+            .unwrap();
+        let busy = route.core.active.lock();
+        routes.revoke();
+        drop(busy);
+        assert_eq!(route.send(Value::Null).unwrap_err().code, "FORBIDDEN");
+        assert!(
+            weak.upgrade().is_none(),
+            "early denial retained native owner"
+        );
+    }
+}
