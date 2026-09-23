@@ -122,7 +122,8 @@ fn D11_Edges_ReceiptHasInstanceAndMonotoneRevision_03() {
                 Ok(())
             },
             |_| {
-                let value = serde_json::to_value(registry.status(&caller, "edge-request")?).unwrap();
+                let value =
+                    serde_json::to_value(registry.status(&caller, "edge-request")?).unwrap();
                 assert_eq!(value["revision"], "1");
                 Ok(1)
             },
@@ -221,7 +222,10 @@ fn D11_Edges_PrepareFailureDoesNotHideConcurrentWinner_06() {
         )
         .unwrap();
     assert_eq!(status.phase, LaunchPhase::Running);
-    assert_eq!(*driver.registry().resource(&caller, &status.run).unwrap(), 42);
+    assert_eq!(
+        *driver.registry().resource(&caller, &status.run).unwrap(),
+        42
+    );
 }
 
 #[test]

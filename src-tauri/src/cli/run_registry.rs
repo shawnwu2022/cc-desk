@@ -3,13 +3,12 @@
 
 use super::profile_service::authorize_profile_window;
 use super::profiles::error;
+use super::request_fingerprint::{validate_routing_id, Fingerprint, RequestFingerprinter};
 use super::snapshot::CallerIdentity;
 use super::types::{LaunchRequest, SafeError, WireU64};
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
-use std::hash::BuildHasher;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -43,14 +42,15 @@ pub(crate) enum LaunchFailure {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LaunchStatus {
+    pub(crate) instance_id: String,
     pub(crate) request_id: String,
     pub(crate) run: RunKey,
+    pub(crate) revision: WireU64,
     pub(crate) phase: LaunchPhase,
     pub(crate) failure: Option<LaunchFailure>,
 }
 
 type RequestKey = (u64, String);
-type Fingerprint = [u64; 2];
 
 struct Record<R> {
     owner: CallerIdentity,
@@ -59,6 +59,26 @@ struct Record<R> {
     resource: Option<Arc<R>>,
     in_flight: bool,
     retired: bool,
+}
+
+impl<R> Record<R> {
+    fn transition(&mut self, phase: LaunchPhase, failure: Option<LaunchFailure>) {
+        if self.status.phase == phase && self.status.failure == failure {
+            return;
+        }
+        // Records start at zero and the private, acyclic state graph has at
+        // most three changes. Repeated exit/retire never consume a revision.
+        let revision = self
+            .status
+            .revision
+            .get()
+            .checked_add(1)
+            .expect("finite launch state graph");
+        self.status.revision =
+            WireU64::parse(&revision.to_string()).expect("canonical internal revision");
+        self.status.phase = phase;
+        self.status.failure = failure;
+    }
 }
 
 struct RegistryState<R> {
@@ -72,7 +92,7 @@ struct RegistryState<R> {
 pub(crate) struct RunRegistry<R> {
     instance_id: String,
     capacity: usize,
-    fingerprints: [RandomState; 2],
+    fingerprints: RequestFingerprinter,
     state: Mutex<RegistryState<R>>,
 }
 
@@ -100,7 +120,7 @@ impl<R> RunRegistry<R> {
         Self {
             instance_id: uuid::Uuid::new_v4().to_string(),
             capacity,
-            fingerprints: [RandomState::new(), RandomState::new()],
+            fingerprints: RequestFingerprinter::new(),
             state: Mutex::new(RegistryState {
                 epoch: 0,
                 active: false,
@@ -152,24 +172,13 @@ impl<R> RunRegistry<R> {
         Ok(())
     }
 
-    /// Private change detector, NOT an authentication token or cryptographic API.
-    /// Two independent process-keyed hashes avoid retaining raw argv in tombstones.
-    /// Owner authorization is performed separately and never trusts this digest.
-    fn fingerprint(&self, request: &LaunchRequest) -> Result<Fingerprint, SafeError> {
-        let bytes = serde_json::to_vec(request).map_err(|_| SafeError::invalid("request"))?;
-        Ok(self
-            .fingerprints
-            .each_ref()
-            .map(|state| state.hash_one(&bytes)))
-    }
-
     pub(super) fn existing(
         &self,
         caller: &CallerIdentity,
         request: &LaunchRequest,
     ) -> Result<Option<LaunchStatus>, SafeError> {
         self.authorize(&self.state.lock(), caller)?;
-        let fingerprint = self.fingerprint(request)?;
+        let fingerprint = self.fingerprints.fingerprint(request)?;
         let state = self.state.lock();
         self.authorize(&state, caller)?;
         let key = (caller.webview_epoch.get(), request.request_id.clone());
@@ -196,7 +205,8 @@ impl<R> RunRegistry<R> {
         caller: &CallerIdentity,
         request: &LaunchRequest,
     ) -> Result<Reservation<'_, R>, SafeError> {
-        let fingerprint = self.fingerprint(request)?;
+        self.authorize(&self.state.lock(), caller)?;
+        let fingerprint = self.fingerprints.fingerprint(request)?;
         let key = (caller.webview_epoch.get(), request.request_id.clone());
         let tab = (caller.webview_epoch.get(), request.tab_id.clone());
         let mut state = self.state.lock();
@@ -219,11 +229,13 @@ impl<R> RunRegistry<R> {
             }
         }
         let status = LaunchStatus {
+            instance_id: self.instance_id.clone(),
             request_id: request.request_id.clone(),
             run: RunKey {
                 run_id: request.run_id.clone(),
                 generation: request.generation,
             },
+            revision: WireU64::parse("0")?,
             phase: LaunchPhase::Reserved,
             failure: None,
         };
@@ -254,6 +266,7 @@ impl<R> RunRegistry<R> {
     ) -> Result<LaunchStatus, SafeError> {
         let state = self.state.lock();
         self.authorize(&state, caller)?;
+        validate_routing_id("requestId", request_id)?;
         let record = state
             .records
             .get(&(caller.webview_epoch.get(), request_id.into()))
@@ -302,8 +315,7 @@ impl<R> RunRegistry<R> {
         }
         match record.status.phase {
             LaunchPhase::Starting | LaunchPhase::Running | LaunchPhase::Indeterminate => {
-                record.status.phase = LaunchPhase::Exited;
-                record.status.failure = None;
+                record.transition(LaunchPhase::Exited, None);
             }
             LaunchPhase::Exited => {}
             _ => return Err(error("RUN_STATE_CONFLICT")),
@@ -357,13 +369,13 @@ impl<R> Ticket<'_, R> {
             .get_mut(&self.key)
             .expect("ticket owns retained record");
         if !authorized {
-            record.status.phase = LaunchPhase::Cancelled;
+            record.transition(LaunchPhase::Cancelled, None);
             record.in_flight = false;
             record.retired = true;
             self.finished = true;
             return false;
         }
-        record.status.phase = LaunchPhase::Starting;
+        record.transition(LaunchPhase::Starting, None);
         true
     }
 
@@ -374,8 +386,7 @@ impl<R> Ticket<'_, R> {
             .get_mut(&self.key)
             .expect("ticket owns retained record");
         if record.status.phase != LaunchPhase::Exited {
-            record.status.phase = LaunchPhase::Failed;
-            record.status.failure = Some(failure);
+            record.transition(LaunchPhase::Failed, Some(failure));
             record.retired = true;
         }
         record.in_flight = false;
@@ -393,7 +404,7 @@ impl<R> Ticket<'_, R> {
         record.resource = Some(resource);
         record.in_flight = false;
         if record.status.phase == LaunchPhase::Starting {
-            record.status.phase = LaunchPhase::Running;
+            record.transition(LaunchPhase::Running, None);
         }
         self.finished = true;
         record.status.clone()
@@ -413,13 +424,11 @@ impl<R> Drop for Ticket<'_, R> {
         record.in_flight = false;
         match record.status.phase {
             LaunchPhase::Reserved => {
-                record.status.phase = LaunchPhase::Failed;
-                record.status.failure = Some(LaunchFailure::Aborted);
+                record.transition(LaunchPhase::Failed, Some(LaunchFailure::Aborted));
                 record.retired = true;
             }
             LaunchPhase::Starting => {
-                record.status.phase = LaunchPhase::Indeterminate;
-                record.status.failure = Some(LaunchFailure::OutcomeUnknown);
+                record.transition(LaunchPhase::Indeterminate, Some(LaunchFailure::OutcomeUnknown));
             }
             _ => {}
         }

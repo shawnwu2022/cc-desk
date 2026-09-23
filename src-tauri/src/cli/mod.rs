@@ -10,6 +10,7 @@ pub(crate) mod profiles;
 pub(crate) mod project_commands;
 pub(crate) mod project_legacy;
 pub(crate) mod project_service;
+mod request_fingerprint;
 pub(crate) mod run_registry;
 pub(crate) mod shell;
 pub(crate) mod snapshot;

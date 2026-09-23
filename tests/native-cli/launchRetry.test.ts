@@ -30,7 +30,11 @@ describe('D11 frontend launch attempt', () => {
     const transport = { start: vi.fn(async () => receipt()), status: vi.fn() }
     const attempt = createLaunchAttempt(request(), 'backend-one', transport)
     const first = attempt.start()
-    expect(attempt.start()).toBe(first)
+    const second = attempt.start()
+    // Keep RED controlled even when promise identity is the first failed assertion.
+    void first.catch(() => undefined)
+    void second.catch(() => undefined)
+    expect(second).toBe(first)
     const results = await Promise.all(Array.from({ length: 100 }, () => attempt.start()))
     expect(transport.start).toHaveBeenCalledTimes(1)
     expect(results.every((value) => value.phase === 'running')).toBe(true)
@@ -90,6 +94,7 @@ describe('D11 frontend launch attempt', () => {
     }
     const attempt = createLaunchAttempt(request(), 'backend-one', transport)
     const starting = attempt.start()
+    void starting.catch(() => undefined)
     expect(await attempt.recover()).toEqual(exit)
     startReply.resolve(receipt())
     expect(await starting).toEqual(exit)
