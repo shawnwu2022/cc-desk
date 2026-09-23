@@ -13,6 +13,8 @@ mod native_cli_availability;
 #[cfg(test)]
 mod native_cli_document;
 #[cfg(test)]
+mod native_cli_document_edges;
+#[cfg(test)]
 mod native_cli_environment;
 #[cfg(test)]
 pub(crate) mod native_cli_harness;
