@@ -41,7 +41,7 @@ where
     let loading = authority.clone();
     let destroy_listener = Once::new();
     let built = builder
-        .initialization_script(&authority.bootstrap())
+        .initialization_script(authority.bootstrap())
         .on_navigation(move |url| navigation.navigation(url))
         .on_page_load(move |window, payload| {
             // Install before a page can become Ready, including page events
@@ -92,9 +92,11 @@ impl<R> DocumentBinding<R> {
             webview_label: webview.label(),
             url: &url,
         };
-        // The real injected Webview's table supplies the witness. Its lock is
-        // released on return, before any typed JSON decode or registry work.
-        self.admit(&webview.resources_table(), &context, headers)
+        // The real injected Webview's table supplies the witness. The temporary
+        // guard ends at this statement, before registry access or typed decode.
+        let caller = self.admit_witness(&webview.resources_table(), &context, headers)?;
+        self.authority.registry.check_caller(&caller)?;
+        Ok(caller)
     }
 
     pub(crate) fn start_native<T: Runtime>(

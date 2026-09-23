@@ -129,8 +129,7 @@ impl<R> DocumentAuthority<R> {
 
     pub(crate) fn started(&self, url: &Url) {
         let mut state = self.state.lock();
-        if matches!(state.phase, Phase::Created | Phase::Navigating)
-            && self.same_document_url(url)
+        if matches!(state.phase, Phase::Created | Phase::Navigating) && self.same_document_url(url)
         {
             state.phase = Phase::Loading;
             return;
@@ -201,6 +200,19 @@ impl<R> DocumentBinding<R> {
     /// Admission is not a reusable capability. The coordinator/registry must
     /// revalidate the returned identity before launch effects or status access.
     pub(crate) fn admit(
+        &self,
+        table: &ResourceTable,
+        context: &NativeContext<'_>,
+        headers: &HeaderMap,
+    ) -> Result<CallerIdentity, SafeError> {
+        let caller = self.admit_witness(table, context, headers)?;
+        self.authority.registry.check_caller(&caller)?;
+        Ok(caller)
+    }
+
+    /// Check native identity without taking the registry lock. The native
+    /// adapter releases its resource-table guard before checking the epoch.
+    fn admit_witness(
         &self,
         table: &ResourceTable,
         context: &NativeContext<'_>,

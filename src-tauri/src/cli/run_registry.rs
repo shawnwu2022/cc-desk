@@ -163,6 +163,12 @@ impl<R> RunRegistry<R> {
         Ok(())
     }
 
+    /// Check current authority without reserving or reading a launch record.
+    /// Effectful callers still revalidate at their existing commit points.
+    pub(crate) fn check_caller(&self, caller: &CallerIdentity) -> Result<(), SafeError> {
+        self.authorize(&self.state.lock(), caller)
+    }
+
     pub(crate) fn revoke_window(&self, caller: &CallerIdentity) -> Result<(), SafeError> {
         let mut state = self.state.lock();
         self.authorize(&state, caller)?;

@@ -60,7 +60,9 @@ fn D11_Document_EpochInvalidationPrecedesTypedDecode_16() {
         if replacement {
             d.registry.activate_window("main").unwrap();
         } else {
-            d.registry.revoke_window(&d.authority.test_caller()).unwrap();
+            d.registry
+                .revoke_window(&d.authority.test_caller())
+                .unwrap();
         }
         // Deliberately do NOT deliver a document/navigation/destroy callback.
         // The original gate still says Ready, but the registry already revoked
