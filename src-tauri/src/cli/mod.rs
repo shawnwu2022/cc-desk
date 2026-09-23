@@ -6,6 +6,7 @@ pub(crate) mod document;
 pub(crate) mod environment;
 pub(crate) mod invocation;
 pub(crate) mod launch;
+pub(crate) mod output_route;
 pub(crate) mod profile_service;
 pub(crate) mod profiles;
 pub(crate) mod project_commands;
