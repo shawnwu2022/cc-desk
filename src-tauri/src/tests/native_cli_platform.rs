@@ -20,9 +20,24 @@ use std::time::{Duration, Instant};
 mod bundled_runtime;
 
 const PAYLOAD: &[&str] = &[
-    "a b", "", "中文", "quote\"inside", "single'inside", "$HOME", "%TEMP%", "!x!",
-    "^", "&", "|", "C:\\tail\\", "line\nbreak", "$(echo should-not-run)", "/opaque/path",
-    "--future", "--", "",
+    "a b",
+    "",
+    "中文",
+    "quote\"inside",
+    "single'inside",
+    "$HOME",
+    "%TEMP%",
+    "!x!",
+    "^",
+    "&",
+    "|",
+    "C:\\tail\\",
+    "line\nbreak",
+    "$(echo should-not-run)",
+    "/opaque/path",
+    "--future",
+    "--",
+    "",
 ];
 
 struct Fixture {
@@ -43,50 +58,102 @@ impl Fixture {
         let report = temp.path().join("report.json");
         let node = crate::platform::find_executable("node").expect("Node.js is required");
         let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent().unwrap().join("tests/fixtures/native-cli/probe.mjs");
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/native-cli/probe.mjs");
         let mut argv = vec![
-            probe.to_str().unwrap().into(), "--report".into(),
-            report.to_str().unwrap().into(), "--".into(),
+            probe.to_str().unwrap().into(),
+            "--report".into(),
+            report.to_str().unwrap().into(),
+            "--".into(),
         ];
         argv.extend(payload.iter().map(|s| (*s).to_string()));
         let mut profile = Profile::new("platform-test", CliKind::Codex);
         profile.program_path = Override::Set(node.clone());
         let request = LaunchRequest {
-            request_id: "request".into(), tab_id: "tab".into(), run_id: "run".into(),
-            generation: 1, profile_id: profile.id.clone(),
-            expected_profile_revision: profile.revision, cli: CliKind::Codex,
-            launch_cwd: cwd.to_str().unwrap().into(), action: LaunchAction::Raw { argv },
-            extra_args: vec![], cols: 100, rows: 30,
+            request_id: "request".into(),
+            tab_id: "tab".into(),
+            run_id: "run".into(),
+            generation: 1,
+            profile_id: profile.id.clone(),
+            expected_profile_revision: profile.revision,
+            cli: CliKind::Codex,
+            launch_cwd: cwd.to_str().unwrap().into(),
+            action: LaunchAction::Raw { argv },
+            extra_args: vec![],
+            cols: 100,
+            rows: 30,
         };
         let mut inherited: EnvMap = std::env::vars_os().collect();
-        inherited.insert("CC_DESK_TEST_ROOT".into(), temp.path().as_os_str().to_owned());
-        Self { temp, cwd, report, node, profile, request, inherited }
+        inherited.insert(
+            "CC_DESK_TEST_ROOT".into(),
+            temp.path().as_os_str().to_owned(),
+        );
+        Self {
+            temp,
+            cwd,
+            report,
+            node,
+            profile,
+            request,
+            inherited,
+        }
     }
 
     fn resolve(&self) -> Result<ProcessLaunchSpec, crate::cli::types::SafeError> {
         let empty = EnvMap::new();
         let owner = CallerIdentity {
-            instance_id: "test-instance".into(), window_label: "main".into(),
+            instance_id: "test-instance".into(),
+            window_label: "main".into(),
             webview_epoch: WireU64::parse("1").unwrap(),
         };
-        let snapshot = freeze_launch(&self.request, &self.profile, &owner, &FreezeContext {
-            inherited: &self.inherited, terminal: &empty, legacy: None, observer: None,
-        })?;
+        let snapshot = freeze_launch(
+            &self.request,
+            &self.profile,
+            &owner,
+            &FreezeContext {
+                inherited: &self.inherited,
+                terminal: &empty,
+                legacy: None,
+                observer: None,
+            },
+        )?;
         resolve_process(&build_invocation(&self.request, &snapshot)?)
     }
 
     fn runner(&mut self, dialect: Dialect, shim: bool) {
         let runner = runner_path(&dialect);
         self.profile.launcher = if shim {
-            Launcher::Shim { runner: runner.clone(), dialect: dialect.clone() }
+            Launcher::Shim {
+                runner: runner.clone(),
+                dialect: dialect.clone(),
+            }
         } else {
-            Launcher::Shell { program: runner, dialect: dialect.clone() }
+            Launcher::Shell {
+                program: runner,
+                dialect: dialect.clone(),
+            }
         };
         if shim {
             let (name, source) = match dialect {
-                Dialect::Bash => ("probe.sh", format!("exec '{}' \"$@\"\n", self.node.replace('\\', "/").replace('\'', "'\\''"))),
-                Dialect::PowerShell => ("probe.ps1", format!("& '{}' @args\nexit $LASTEXITCODE\n", self.node.replace('\'', "''"))),
-                Dialect::Cmd => ("probe.cmd", format!("@echo off\r\n\"{}\" %*\r\n", self.node)),
+                Dialect::Bash => (
+                    "probe.sh",
+                    format!(
+                        "exec '{}' \"$@\"\n",
+                        self.node.replace('\\', "/").replace('\'', "'\\''")
+                    ),
+                ),
+                Dialect::PowerShell => (
+                    "probe.ps1",
+                    format!(
+                        "& '{}' @args\nexit $LASTEXITCODE\n",
+                        self.node.replace('\'', "''")
+                    ),
+                ),
+                Dialect::Cmd => (
+                    "probe.cmd",
+                    format!("@echo off\r\n\"{}\" %*\r\n", self.node),
+                ),
             };
             let path = self.temp.path().join(name);
             fs::write(&path, source).unwrap();
@@ -107,15 +174,24 @@ fn runner_path(dialect: &Dialect) -> String {
                 path.to_str().unwrap().into()
             }
             #[cfg(unix)]
-            { "/bin/bash".into() }
+            {
+                "/bin/bash".into()
+            }
         }
-        Dialect::PowerShell => crate::platform::find_executable("pwsh").expect("PowerShell 7 is required"),
+        Dialect::PowerShell => {
+            crate::platform::find_executable("pwsh").expect("PowerShell 7 is required")
+        }
         Dialect::Cmd => std::env::var("COMSPEC").expect("Windows cmd is required"),
     }
 }
 
 fn size() -> PtySize {
-    PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 }
+    PtySize {
+        rows: 30,
+        cols: 100,
+        pixel_width: 0,
+        pixel_height: 0,
+    }
 }
 
 // Uses the production resolver, command builder and PTY spawn. The receiving
@@ -133,7 +209,12 @@ fn execute(spec: &ProcessLaunchSpec) -> u32 {
         let result = loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break true,
-                Ok(n) => { total += n; if total > 4 * 1024 * 1024 { break false; } }
+                Ok(n) => {
+                    total += n;
+                    if total > 4 * 1024 * 1024 {
+                        break false;
+                    }
+                }
                 Err(e) if crate::pty::is_pty_stream_end(&e) => break true,
                 Err(_) => break false,
             }
@@ -142,7 +223,9 @@ fn execute(spec: &ProcessLaunchSpec) -> u32 {
     });
     let started = Instant::now();
     let status = loop {
-        if let Some(status) = process.child.try_wait().unwrap() { break status; }
+        if let Some(status) = process.child.try_wait().unwrap() {
+            break status;
+        }
         if started.elapsed() > Duration::from_secs(25) {
             let _ = process.child.kill();
             let _ = process.child.wait();
@@ -152,7 +235,9 @@ fn execute(spec: &ProcessLaunchSpec) -> u32 {
     };
     drop(writer);
     drop(process.master);
-    assert!(rx.recv_timeout(Duration::from_secs(5)).expect("PTY reader drain"));
+    assert!(rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("PTY reader drain"));
     status.exit_code()
 }
 
@@ -161,7 +246,10 @@ fn roundtrip(fixture: &Fixture, expected: &[&str]) -> ProbeReport {
     let report: ProbeReport = serde_json::from_slice(&fs::read(&fixture.report).unwrap()).unwrap();
     assert_eq!(report.argv, expected);
     assert!(report.stdin_is_tty && report.stdout_is_tty);
-    assert_eq!(fs::canonicalize(&report.cwd).unwrap(), fs::canonicalize(&fixture.cwd).unwrap());
+    assert_eq!(
+        fs::canonicalize(&report.cwd).unwrap(),
+        fs::canonicalize(&fixture.cwd).unwrap()
+    );
     report
 }
 
@@ -198,13 +286,19 @@ fn D10_Cwd_DisappearsWithoutHomeFallback_04() {
     let fixture = Fixture::new(&[]);
     let spec = fixture.resolve().unwrap();
     fs::remove_dir(&fixture.cwd).unwrap();
-    assert_eq!(spec.command().unwrap_err().code, "WORKING_DIRECTORY_UNAVAILABLE");
+    assert_eq!(
+        spec.command().unwrap_err().code,
+        "WORKING_DIRECTORY_UNAVAILABLE"
+    );
 }
 
 #[test]
 fn D10_Debug_RedactsProcessValues_05() {
     let fixture = Fixture::new(&["private-test-token"]);
-    assert_eq!(format!("{:?}", fixture.resolve().unwrap()), "ProcessLaunchSpec(<redacted>)");
+    assert_eq!(
+        format!("{:?}", fixture.resolve().unwrap()),
+        "ProcessLaunchSpec(<redacted>)"
+    );
 }
 
 #[test]
@@ -213,7 +307,10 @@ fn D10_Size_RejectsZeroBeforeAllocation_06() {
     let spec = fixture.resolve().unwrap();
     let mut bad_size = size();
     bad_size.rows = 0;
-    assert_eq!(spawn_process(&spec, bad_size).err().unwrap().code, "INVALID_REQUEST");
+    assert_eq!(
+        spawn_process(&spec, bad_size).err().unwrap().code,
+        "INVALID_REQUEST"
+    );
 }
 
 #[test]
@@ -238,7 +335,16 @@ fn D10_PowerShell_ShellAndShimRoundTrip_08() {
 #[cfg(windows)]
 #[test]
 fn D10_Cmd_SafeShellAndShimRoundTrip_09() {
-    let args = &["a b", "", "中文", "single'inside", "C:\\tail\\", "--future", "--", ""];
+    let args = &[
+        "a b",
+        "",
+        "中文",
+        "single'inside",
+        "C:\\tail\\",
+        "--future",
+        "--",
+        "",
+    ];
     for shim in [false, true] {
         let mut fixture = Fixture::new(args);
         fixture.runner(Dialect::Cmd, shim);
@@ -249,7 +355,9 @@ fn D10_Cmd_SafeShellAndShimRoundTrip_09() {
 #[cfg(windows)]
 #[test]
 fn D10_Cmd_UnsafeInputIsNotRewritten_10() {
-    for value in ["%TEMP%", "!x!", "^", "&", "|", "<", ">", "\"", "\n", "(echo x)"] {
+    for value in [
+        "%TEMP%", "!x!", "^", "&", "|", "<", ">", "\"", "\n", "(echo x)",
+    ] {
         let mut fixture = Fixture::new(&[value]);
         fixture.runner(Dialect::Cmd, false);
         let error = fixture.resolve().unwrap_err();
@@ -271,8 +379,12 @@ fn D10_Native_DoesNotImplicitlyExecuteBatchFiles_11() {
 #[test]
 fn D10_PowerShell_OldParserFailsBeforeAgent_12() {
     let mut fixture = Fixture::new(PAYLOAD);
-    let runner = crate::platform::find_executable("powershell.exe").expect("Windows PowerShell 5.1");
-    fixture.profile.launcher = Launcher::Shell { program: runner, dialect: Dialect::PowerShell };
+    let runner =
+        crate::platform::find_executable("powershell.exe").expect("Windows PowerShell 5.1");
+    fixture.profile.launcher = Launcher::Shell {
+        program: runner,
+        dialect: Dialect::PowerShell,
+    };
     assert_eq!(execute(&fixture.resolve().unwrap()), 125);
     assert!(!fixture.report.exists());
 }
@@ -280,10 +392,15 @@ fn D10_PowerShell_OldParserFailsBeforeAgent_12() {
 #[test]
 fn D10_Environment_RemovalReachesRealChild_13() {
     let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--ignored", "--exact", "tests::native_cli_platform::D10_Environment_Worker_99"])
+        .args([
+            "--ignored",
+            "--exact",
+            "tests::native_cli_platform::D10_Environment_Worker_99",
+        ])
         .env("CC_DESK_FIXTURE_VALUE", "parent-only-fixture")
         .env("CC_DESK_D10_WORKER", "1")
-        .status().unwrap();
+        .status()
+        .unwrap();
     assert!(status.success());
 }
 
@@ -292,8 +409,17 @@ fn D10_Environment_RemovalReachesRealChild_13() {
 fn D10_Environment_Worker_99() {
     assert_eq!(std::env::var("CC_DESK_D10_WORKER").unwrap(), "1");
     let mut fixture = Fixture::new(&[]);
-    assert_eq!(fixture.inherited.get(OsStr::new("CC_DESK_FIXTURE_VALUE")).unwrap(), "parent-only-fixture");
-    fixture.profile.env.insert("CC_DESK_FIXTURE_VALUE".into(), Override::Unset);
+    assert_eq!(
+        fixture
+            .inherited
+            .get(OsStr::new("CC_DESK_FIXTURE_VALUE"))
+            .unwrap(),
+        "parent-only-fixture"
+    );
+    fixture
+        .profile
+        .env
+        .insert("CC_DESK_FIXTURE_VALUE".into(), Override::Unset);
     let report = roundtrip(&fixture, &[]);
     assert!(report.env.cc_desk_fixture_value.is_none());
 }
