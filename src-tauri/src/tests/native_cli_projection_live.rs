@@ -57,6 +57,7 @@ fn d12_record(app: AppHandle, name: String, state: State<'_, Arc<Probe>>) -> Res
         state.fail(&app);
         return Err("CASE_ORDER".into());
     }
+    eprintln!("D12_STAGE {}", CASES[r.len()]);
     r.push(name);
     Ok(())
 }
@@ -103,12 +104,14 @@ fn d12_change_profile(state: State<'_, Arc<Probe>>) -> Result<(), String> {
     Ok(())
 }
 #[tauri::command]
-fn d12_peer(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), String> {
+async fn d12_peer(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), String> {
+    eprintln!("D12_STAGE peer-build-start");
     WebviewWindowBuilder::new(&app, "peer", WebviewUrl::App("probe.html".into()))
         .visible(false)
         .data_directory(state.root.join("peer-view"))
         .build()
         .map_err(|_| "PEER_FAILED".to_string())?;
+    eprintln!("D12_STAGE peer-built");
     Ok(())
 }
 #[tauri::command]
@@ -155,7 +158,7 @@ fn D12_Webview_FormalCommands_001() {
         if Instant::now() > deadline {
             child.kill().unwrap();
             child.wait().unwrap();
-            panic!("D12 worker timeout");
+            panic!("D12 worker timeout: {}", safe_trace(&t.path().join("log")));
         }
         std::thread::sleep(Duration::from_millis(20));
     };
@@ -176,6 +179,7 @@ fn D12_Webview_FormalCommands_001() {
 #[test]
 #[ignore = "isolated worker explicitly executed by D12_Webview_FormalCommands_001"]
 fn D12_Webview_Worker_099() {
+    eprintln!("D12_STAGE worker-start");
     let root = PathBuf::from(std::env::var_os("CC_DESK_D12_LIVE_ROOT").unwrap());
     let repo = WorkspaceRepository::open(root.join("metadata/workspace.json")).unwrap();
     let mut targets = vec![];
@@ -230,9 +234,10 @@ fn D12_Webview_Worker_099() {
     let pages = probe.clone();
     let app=tauri::Builder::default().any_thread().manage(runtime).manage(probe.clone())
         .invoke_handler(tauri::generate_handler![crate::commands::native_get_scope,crate::commands::native_list_resources,d12_record,d12_save,d12_change_profile,d12_peer,d12_reload,d12_end,d12_abort])
-        .setup(move|app|{setup.initialize_main(app,&main)?;Ok(())})
+        .setup(move|app|{eprintln!("D12_STAGE main-build-start");setup.initialize_main(app,&main)?;eprintln!("D12_STAGE main-built");Ok(())})
         .on_page_load(move|webview,payload|{
             if !matches!(payload.event(),PageLoadEvent::Finished){return;}
+            eprintln!("D12_STAGE page-finished");
             let script=if webview.label()=="main" && !pages.loaded.swap(true,Ordering::SeqCst){
                 format!("{}\nrunProjection({});",include_str!("fixtures/document/projection.js"),json!(pages.targets))
             }else{
@@ -242,7 +247,9 @@ fn D12_Webview_Worker_099() {
             };
             if webview.eval(script).is_err(){pages.fail(webview.app_handle());}
         }).build(context).unwrap();
+    eprintln!("D12_STAGE event-loop-start");
     let exit = app.run_return(|_, _| {});
+    eprintln!("D12_STAGE event-loop-exit");
     let report = json!({"engineVersion":tauri::webview_version().unwrap(),"observations":probe.records.lock().clone(),"failure":probe.failure.lock().clone()});
     fs::write(
         root.join("report.json"),
@@ -251,4 +258,21 @@ fn D12_Webview_Worker_099() {
     .unwrap();
     assert_eq!(exit, 0);
     assert_eq!(report["observations"], json!(CASES));
+}
+
+fn safe_trace(path: &std::path::Path) -> String {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    if let Ok(file) = fs::File::open(path) {
+        let _ = file.take(65536).read_to_end(&mut bytes);
+    }
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .filter_map(|line| line.strip_prefix("D12_STAGE "))
+        .filter(|stage| {
+            stage.len() <= 64 && stage.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+        })
+        .take(32)
+        .collect::<Vec<_>>()
+        .join(",")
 }
