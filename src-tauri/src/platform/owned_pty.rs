@@ -85,8 +85,7 @@ impl OwnedPty {
         // Keep the already-owned native handle, not that incorrect wrapper.
         // Capturing it adds no fallible handle duplication after child creation.
         #[cfg(windows)]
-        let process_handle =
-            AtomicPtr::new(child.as_raw_handle().unwrap_or(std::ptr::null_mut()));
+        let process_handle = AtomicPtr::new(child.as_raw_handle().unwrap_or(std::ptr::null_mut()));
         // Do not retain the parent's slave endpoint and prevent stream EOF.
         drop(pair.slave);
         Ok(Self {
