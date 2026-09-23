@@ -1,0 +1,90 @@
+name: D12 reviewed source materialization
+on:
+  push:
+    branches: [feat/native-cli-source-scope]
+    paths: [.github/workflows/d12-apply.yml]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply exact reviewed patch and remove temporary workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYTHON'
+          import os,base64,gzip,hashlib,subprocess,json,urllib.request
+          from pathlib import Path
+          assert os.environ['GITHUB_REPOSITORY']=='shawnwu2022/cc-desk'
+          assert os.environ['GITHUB_REF']=='refs/heads/feat/native-cli-source-scope'
+          chunks=[]
+          for sha in ['ee8ad94ebd60e405469287c5f3e2d167e952c7fa','f3ce490eeb4c38cbc7cf8799b65ad3c8697a272d','1fb379c1ee11a6c8e4e2f74e89c296fd8a7c322b']:
+              req=urllib.request.Request('https://api.github.com/repos/shawnwu2022/cc-desk/git/blobs/'+sha,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(req,timeout=60) as response:
+                  blob=json.load(response)
+              assert blob['sha']==sha and blob['encoding']=='base64'
+              chunks.append(base64.b64decode(blob['content']))
+          patch=gzip.decompress(b''.join(chunks))
+          assert hashlib.sha256(patch).hexdigest()=='9a5b8d0b68d77f8d5629c3f0a8d0ab0836bf68bb9324c0fa9ca91367a3d129f0'
+          subprocess.run(['git','apply','--check','-'],input=patch,check=True)
+          subprocess.run(['git','apply','-'],input=patch,check=True)
+          for p in ['.github/workflows/d12-apply.yml','.github/workflows/d12-workspace-export.yml']:
+              Path(p).unlink(missing_ok=True)
+          PYTHON
+          cd src-tauri
+          cargo fmt
+      - name: Create exact Git objects without moving any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYTHON'
+          import os,json,subprocess,urllib.request
+          from pathlib import Path
+          def git(*args):
+              return subprocess.check_output(['git',*args]).decode().strip()
+          parent=git('rev-parse','HEAD')
+          assert parent==os.environ['GITHUB_SHA']
+          base='https://api.github.com/repos/shawnwu2022/cc-desk'
+          def api(route,data=None):
+              request=urllib.request.Request(base+route,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'},data=None if data is None else json.dumps(data).encode(),method='GET' if data is None else 'POST')
+              with urllib.request.urlopen(request,timeout=60) as response:
+                  return json.load(response)
+          current=api('/git/ref/heads/feat/native-cli-source-scope')
+          assert current['object']['sha']==parent,'branch advanced; refusing stale materialization'
+          subprocess.run(['git','add','-A'],check=True)
+          paths=subprocess.check_output(['git','diff','--cached','--name-only','-z']).decode().split('\0')
+          entries=[]
+          for p in filter(None,paths):
+              assert p.startswith(('src/','src-tauri/src/','tests/','docs/')) or p in ['AGENTS.md','.github/workflows/d12-apply.yml','.github/workflows/d12-workspace-export.yml'],p
+              if not Path(p).exists():
+                  entries.append({'path':p,'mode':'100644','type':'blob','sha':None})
+                  continue
+              text=Path(p).read_bytes().decode('utf-8')
+              blob=api('/git/blobs',{'content':text,'encoding':'utf-8'})['sha']
+              assert blob==git('hash-object',p)
+              mode=git('ls-files','--stage',p).split()[0]
+              entries.append({'path':p,'mode':mode,'type':'blob','sha':blob})
+          tree=api('/git/trees',{'base_tree':git('rev-parse','HEAD^{tree}'),'tree':entries})['sha']
+          assert tree==git('write-tree')
+          author={'name':'CC Desk development','email':'41898282+github-actions[bot]@users.noreply.github.com'}
+          commit=api('/git/commits',{'message':'fix(d12): isolate source cache identities and stale panel requests','tree':tree,'parents':[parent],'author':author,'committer':author})['sha']
+          out=Path('/tmp/d12-result');out.mkdir()
+          (out/'commit.json').write_text(json.dumps({'parent':parent,'commit':commit,'tree':tree,'patchSha256':'9a5b8d0b68d77f8d5629c3f0a8d0ab0836bf68bb9324c0fa9ca91367a3d129f0'},indent=2))
+          subprocess.run(['git','archive','--format=tar',tree,'-o',str(out/'source.tar')],check=True)
+          print('D12_MATERIALIZED_COMMIT='+commit)
+          print('D12_MATERIALIZED_TREE='+tree)
+          PYTHON
+      - uses: actions/upload-artifact@v4
+        with:
+          name: d12-reviewed-source
+          path: /tmp/d12-result
+          retention-days: 2
+          if-no-files-found: error
