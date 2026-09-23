@@ -13,25 +13,30 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Materialize exact reviewed source and remove temporary workflows
+      - name: Materialize exact tree in one API write without moving refs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PYTHON'
-          import base64,hashlib,json,lzma,os,subprocess,urllib.request
+          import base64,hashlib,json,lzma,os,subprocess,urllib.request,urllib.error
           from pathlib import Path
           assert os.environ['GITHUB_REPOSITORY']=='shawnwu2022/cc-desk'
           assert os.environ['GITHUB_REF']=='refs/heads/feat/native-cli-source-scope'
           api_root='https://api.github.com/repos/shawnwu2022/cc-desk'
           def api(route,data=None):
               request=urllib.request.Request(api_root+route,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'},data=None if data is None else json.dumps(data).encode(),method='GET' if data is None else 'POST')
-              with urllib.request.urlopen(request,timeout=60) as response:
-                  return json.load(response)
+              try:
+                  with urllib.request.urlopen(request,timeout=60) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as e:
+                  print('API_REJECTION',route,e.code,'retry-after',e.headers.get('Retry-After'),'remaining',e.headers.get('X-RateLimit-Remaining'))
+                  print(e.read(4096).decode('utf-8','replace'))
+                  raise
           def git(*args):
               return subprocess.check_output(['git',*args]).decode().strip()
           parent=git('rev-parse','HEAD')
           assert parent==os.environ['GITHUB_SHA']
-          assert api('/git/commits/'+parent)['parents'][0]['sha']=='b231c4a1e4daa97b01ce49ead0a038136e86d7dc'
+          assert api('/git/commits/'+parent)['parents'][0]['sha']=='52ce4b73e8ceb1faac56d6973a310bcb80bb01bd'
           assert api('/git/ref/heads/feat/native-cli-source-scope')['object']['sha']==parent,'branch advanced'
           chunks=[]
           for sha in ['b4746467aaddf2c3b19e0651c1fff3d06ad06e56','bc3a5c9b3497ccfba90ac61ab2bb02df9363b0bd','d7c1983d2ad49557028ba8c247c031a91a8e3431','694cf6f55f8bfa923fe2eec8c947f99c807f575e','3ccfd984e9725085913117102825a172b22cba27','b2f998ea02bdcf42c0364e32d00bcc80bdcbd9b3','74ce17b4bec5443092e833eda02e7ff6134f32df','c14ed7554b48e4f5ba2a7299e04fc2cbaf7b7316','26561fab6017f80367faa2c7041a3508ad4e5a90']:
@@ -58,10 +63,8 @@ jobs:
               if not Path(p).exists():
                   entries.append({'path':p,'mode':'100644','type':'blob','sha':None})
                   continue
-              blob=api('/git/blobs',{'content':Path(p).read_bytes().decode('utf-8'),'encoding':'utf-8'})['sha']
-              assert blob==git('hash-object',p)
               mode=git('ls-files','--stage',p).split()[0]
-              entries.append({'path':p,'mode':mode,'type':'blob','sha':blob})
+              entries.append({'path':p,'mode':mode,'type':'blob','content':Path(p).read_bytes().decode('utf-8')})
           tree=api('/git/trees',{'base_tree':git('rev-parse','HEAD^{tree}'),'tree':entries})['sha']
           assert tree==expected
           author={'name':'CC Desk development','email':'41898282+github-actions[bot]@users.noreply.github.com'}
