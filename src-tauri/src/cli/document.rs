@@ -49,7 +49,10 @@ impl<R> std::fmt::Debug for DocumentBinding<R> {
 }
 
 impl<R> DocumentAuthority<R> {
-    pub(crate) fn new(registry: Arc<RunRegistry<R>>, expected_url: Url) -> Result<Arc<Self>, SafeError> {
+    pub(crate) fn new(
+        registry: Arc<RunRegistry<R>>,
+        expected_url: Url,
+    ) -> Result<Arc<Self>, SafeError> {
         let caller = registry.activate_window("main")?;
         Ok(Arc::new(Self {
             registry,
@@ -69,10 +72,17 @@ impl<R> DocumentAuthority<R> {
 
     pub(crate) fn revoke(&self) {}
 
-    pub(crate) fn attach(self: &Arc<Self>, table: &mut ResourceTable) -> Result<DocumentBinding<R>, SafeError> {
+    pub(crate) fn attach(
+        self: &Arc<Self>,
+        table: &mut ResourceTable,
+    ) -> Result<DocumentBinding<R>, SafeError> {
         let witness = Arc::new(DocumentWitness);
         let witness_id = table.add_arc(witness.clone());
-        Ok(DocumentBinding { authority: self.clone(), witness, witness_id })
+        Ok(DocumentBinding {
+            authority: self.clone(),
+            witness,
+            witness_id,
+        })
     }
 
     pub(crate) fn bootstrap(&self) -> String {
@@ -93,15 +103,32 @@ impl<R> DocumentAuthority<R> {
 }
 
 impl<R> DocumentBinding<R> {
-    pub(crate) fn admit(&self, _table: &ResourceTable, _context: &NativeContext<'_>, _headers: &HeaderMap) -> Result<CallerIdentity, SafeError> {
+    pub(crate) fn admit(
+        &self,
+        _table: &ResourceTable,
+        _context: &NativeContext<'_>,
+        _headers: &HeaderMap,
+    ) -> Result<CallerIdentity, SafeError> {
         Err(error("DOCUMENT_BINDING_NOT_IMPLEMENTED"))
     }
 
-    pub(crate) fn start_request(&self, _table: &ResourceTable, _context: &NativeContext<'_>, _headers: &HeaderMap, _body: &InvokeBody) -> Result<(CallerIdentity, LaunchRequest), SafeError> {
+    pub(crate) fn start_request(
+        &self,
+        _table: &ResourceTable,
+        _context: &NativeContext<'_>,
+        _headers: &HeaderMap,
+        _body: &InvokeBody,
+    ) -> Result<(CallerIdentity, LaunchRequest), SafeError> {
         Err(error("DOCUMENT_BINDING_NOT_IMPLEMENTED"))
     }
 
-    pub(crate) fn query_status(&self, _table: &ResourceTable, _context: &NativeContext<'_>, _headers: &HeaderMap, _body: &InvokeBody) -> Result<LaunchStatus, SafeError> {
+    pub(crate) fn query_status(
+        &self,
+        _table: &ResourceTable,
+        _context: &NativeContext<'_>,
+        _headers: &HeaderMap,
+        _body: &InvokeBody,
+    ) -> Result<LaunchStatus, SafeError> {
         Err(error("DOCUMENT_BINDING_NOT_IMPLEMENTED"))
     }
 
