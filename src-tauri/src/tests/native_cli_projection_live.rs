@@ -3,6 +3,7 @@ use crate::cli::document::DOCUMENT_HEADER;
 use crate::cli::launch_service::LaunchService;
 use crate::cli::native_runtime::{take_main_config, NativeRuntime};
 use crate::cli::profiles::{EnvValue, Override, Profile};
+use crate::cli::snapshot::CallerIdentity;
 use crate::cli::storage::{Patch, WorkspaceRepository};
 use crate::cli::types::CliKind;
 use parking_lot::Mutex;
@@ -35,6 +36,8 @@ const CASES: &[&str] = &[
 struct Probe {
     root: PathBuf,
     runtime: Arc<NativeRuntime>,
+    service: Arc<LaunchService>,
+    caller: Mutex<Option<CallerIdentity>>,
     repo: WorkspaceRepository,
     targets: Vec<Value>,
     proof: Mutex<Option<String>>,
@@ -42,6 +45,7 @@ struct Probe {
     records: Mutex<Vec<String>>,
     failure: Mutex<Option<String>>,
     loaded: AtomicBool,
+    peer_loaded: AtomicBool,
 }
 impl Probe {
     fn fail(&self, app: &AppHandle) {
@@ -62,12 +66,12 @@ fn d12_record(app: AppHandle, name: String, state: State<'_, Arc<Probe>>) -> Res
     Ok(())
 }
 #[tauri::command]
-fn d12_save(
+async fn d12_save(
     webview: Webview,
     request: Request<'_>,
     state: State<'_, Arc<Probe>>,
 ) -> Result<String, String> {
-    state
+    let caller = state
         .runtime
         .binding()
         .map_err(|e| e.code)?
@@ -84,6 +88,7 @@ fn d12_save(
         .to_str()
         .map_err(|_| "PROOF".to_string())?
         .to_owned();
+    *state.caller.lock() = Some(caller);
     *state.source.lock() = Some(value);
     *state.proof.lock() = Some(proof.clone());
     Ok(proof)
@@ -115,11 +120,46 @@ async fn d12_peer(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), St
     Ok(())
 }
 #[tauri::command]
-fn d12_reload(app: AppHandle) -> Result<(), String> {
-    app.get_webview_window("main")
-        .ok_or("MAIN_MISSING")?
+async fn d12_reload(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), String> {
+    let caller = state.caller.lock().clone().ok_or("NO_CALLER")?;
+    if state.records.lock().len() != 8 || state.service.registry().check_caller(&caller).is_err() {
+        return Err("RELOAD_OUT_OF_ORDER".into());
+    }
+    let window = app.get_webview_window("main").ok_or("MAIN_MISSING")?;
+    window
         .eval("location.reload()")
-        .map_err(|_| "RELOAD_FAILED".into())
+        .map_err(|_| "RELOAD_FAILED")?;
+    let state = state.inner().clone();
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            // A rejected navigation may never emit Finished. Observe the actual
+            // registry revocation; never invoke authority.revoke() in this fixture.
+            if state.service.registry().check_caller(&caller).is_err() {
+                eprintln!("D12_STAGE actual-reload-revoked");
+                if window
+                    .eval(rejection_script(&state, "reload-rejected", "d12_end"))
+                    .is_err()
+                {
+                    state.fail(&app);
+                }
+                break;
+            }
+            if Instant::now() >= deadline {
+                eprintln!("D12_STAGE reload-revocation-timeout");
+                state.fail(&app);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    Ok(())
+}
+fn rejection_script(probe: &Probe, case: &str, next: &str) -> String {
+    let proof = serde_json::to_string(&*probe.proof.lock()).unwrap();
+    let source = serde_json::to_string(&*probe.source.lock()).unwrap();
+    let target = probe.targets[0].to_string();
+    format!("(async()=>{{const n=window.__TAURI_INTERNALS__,h={{headers:{{'x-cc-desk-document':{proof}}}}},b=x=>new TextEncoder().encode(JSON.stringify(x));for(const [cmd,q] of [['native_get_scope',{target}],['native_list_resources',{{source:{source},resourceKind:'history',requestEpoch:'1'}}]]){{const e=await n.invoke(cmd,b(q),h).then(()=>null,e=>e.code);if(e!=='FORBIDDEN')throw Error();}}await n.invoke('d12_record',{{name:'{case}'}});await n.invoke('{next}');}})().catch(()=>window.__TAURI_INTERNALS__.invoke('d12_abort'));")
 }
 #[tauri::command]
 fn d12_end(app: AppHandle, state: State<'_, Arc<Probe>>) {
@@ -209,10 +249,12 @@ fn D12_Webview_Worker_099() {
         Some(Default::default()),
         None,
     ));
-    let runtime = Arc::new(NativeRuntime::new(launch));
+    let runtime = Arc::new(NativeRuntime::new(launch.clone()));
     let probe = Arc::new(Probe {
         root: root.clone(),
         runtime: runtime.clone(),
+        service: launch,
+        caller: Mutex::new(None),
         repo,
         targets,
         proof: Mutex::new(None),
@@ -220,6 +262,7 @@ fn D12_Webview_Worker_099() {
         records: Mutex::new(vec![]),
         failure: Mutex::new(None),
         loaded: AtomicBool::new(false),
+        peer_loaded: AtomicBool::new(false),
     });
     let mut context = tauri::generate_context!("src/tests/fixtures/document/tauri.conf.json");
     context.config_mut().app.windows.push(WindowConfig {
@@ -232,21 +275,50 @@ fn D12_Webview_Worker_099() {
     let main = take_main_config(context.config_mut()).unwrap();
     let setup = runtime.clone();
     let pages = probe.clone();
-    let app=tauri::Builder::default().any_thread().manage(runtime).manage(probe.clone())
-        .invoke_handler(tauri::generate_handler![crate::commands::native_get_scope,crate::commands::native_list_resources,d12_record,d12_save,d12_change_profile,d12_peer,d12_reload,d12_end,d12_abort])
-        .setup(move|app|{eprintln!("D12_STAGE main-build-start");setup.initialize_main(app,&main)?;eprintln!("D12_STAGE main-built");Ok(())})
-        .on_page_load(move|webview,payload|{
-            if !matches!(payload.event(),PageLoadEvent::Finished){return;}
+    let app = tauri::Builder::default()
+        .any_thread()
+        .manage(runtime)
+        .manage(probe.clone())
+        .invoke_handler(tauri::generate_handler![
+            crate::commands::native_get_scope,
+            crate::commands::native_list_resources,
+            d12_record,
+            d12_save,
+            d12_change_profile,
+            d12_peer,
+            d12_reload,
+            d12_end,
+            d12_abort
+        ])
+        .setup(move |app| {
+            eprintln!("D12_STAGE main-build-start");
+            setup.initialize_main(app, &main)?;
+            eprintln!("D12_STAGE main-built");
+            Ok(())
+        })
+        .on_page_load(move |webview, payload| {
+            if !matches!(payload.event(), PageLoadEvent::Finished) {
+                return;
+            }
             eprintln!("D12_STAGE page-finished");
-            let script=if webview.label()=="main" && !pages.loaded.swap(true,Ordering::SeqCst){
-                format!("{}\nrunProjection({});",include_str!("fixtures/document/projection.js"),json!(pages.targets))
-            }else{
-                let proof=serde_json::to_string(&*pages.proof.lock()).unwrap();let source=serde_json::to_string(&*pages.source.lock()).unwrap();let target=pages.targets[0].to_string();
-                let case=if webview.label()=="peer"{"peer-rejected"}else{"reload-rejected"};let end=if webview.label()=="peer"{"d12_reload"}else{"d12_end"};
-                format!("(async()=>{{const n=window.__TAURI_INTERNALS__,h={{headers:{{'x-cc-desk-document':{proof}}}}},b=x=>new TextEncoder().encode(JSON.stringify(x));for(const [cmd,q] of [['native_get_scope',{target}],['native_list_resources',{{source:{source},resourceKind:'history',requestEpoch:'1'}}]]){{const e=await n.invoke(cmd,b(q),h).then(()=>null,e=>e.code);if(e!=='FORBIDDEN')throw Error();}}await n.invoke('d12_record',{{name:'{case}'}});await n.invoke('{end}');}})().catch(()=>window.__TAURI_INTERNALS__.invoke('d12_abort'));")
+            let script = if webview.label() == "main" && !pages.loaded.swap(true, Ordering::SeqCst)
+            {
+                format!(
+                    "{}\nrunProjection({});",
+                    include_str!("fixtures/document/projection.js"),
+                    json!(pages.targets)
+                )
+            } else if webview.label() == "peer" && !pages.peer_loaded.swap(true, Ordering::SeqCst) {
+                rejection_script(&pages, "peer-rejected", "d12_reload")
+            } else {
+                return;
             };
-            if webview.eval(script).is_err(){pages.fail(webview.app_handle());}
-        }).build(context).unwrap();
+            if webview.eval(script).is_err() {
+                pages.fail(webview.app_handle());
+            }
+        })
+        .build(context)
+        .unwrap();
     eprintln!("D12_STAGE event-loop-start");
     let exit = app.run_return(|_, _| {});
     eprintln!("D12_STAGE event-loop-exit");
