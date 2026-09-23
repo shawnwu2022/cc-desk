@@ -81,3 +81,8 @@ mod native_cli_route_lifetime;
 mod native_cli_launch_live;
 
 mod native_cli_scope;
+
+mod native_cli_projection_service;
+
+#[cfg(windows)]
+mod native_cli_projection_live;

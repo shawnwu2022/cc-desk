@@ -151,6 +151,8 @@ pub fn run(initial_dir: Option<String>) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::native_get_scope,
+            commands::native_list_resources,
             cli::commands::cli_start,
             cli::commands::cli_get_launch_status,
             cli::commands::cli_list_profiles,

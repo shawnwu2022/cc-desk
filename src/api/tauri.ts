@@ -1,3 +1,4 @@
+import { createProjectionClient } from './nativeProjection'
 import { createLaunchAttempt } from './cliLaunchAttempt';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -358,4 +359,14 @@ export function createCliLaunchAttempt<E>(
     start: (frozen) => bridge.invoke('cli_start', frozen, channel),
     status: (requestId) => bridge.invoke('cli_get_launch_status', { requestId }),
   });
+}
+
+export function createNativeProjectionClient(): import('./nativeProjection').ProjectionClient {
+  return createProjectionClient(nativeDocumentBridge());
+}
+export async function nativeGetScope(target: import('@/types/nativeProjection').ScopeTarget): Promise<import('@/types/nativeProjection').SourceRef> {
+  return createNativeProjectionClient().scope(target);
+}
+export async function nativeListResources(request: import('@/types/nativeProjection').ReadRequest): Promise<import('@/types/nativeProjection').ProjectionResult> {
+  return createNativeProjectionClient().read(request);
 }

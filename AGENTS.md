@@ -272,3 +272,11 @@ npm run tauri:build        # 生产构建
 - 配置面板请求用本地选择所有权拒绝迟到的成功/失败/finally；清空与切换立即隐藏旧配置，不记录原始异常载荷。
 - `SourcePartition` 只是缓存身份，不是授权 SourceScope / 文件系统沙箱；`native_get_scope`、`native_list_resources` 与全量资源读取迁移仍未完成。不得让新双 CLI UI 借道旧默认根读取。
 - D11 的 `NATIVE_RUNTIME_NOT_READY` 保持关闭，详见 `docs/superpowers/execution/D12.md`。
+
+### D12 authenticated native projections
+
+- New native reads go through `native_get_scope` / `native_list_resources`, D11 document admission, and `cli/native_projection` held directory capabilities. A frontend path/owner or an opaque scope ID alone never authorizes a read.
+- `SourceRef.basis` is an observation source, not effective CLI state. Keep shell/raw/unknown-argument roots unknown. Never authorize transcript cwd or plugin install paths outside a granted root.
+- Return only the kind-specific projection DTO; do not add raw config/env/argv/headers to resource items or error logs. Scan failure must not remove registered projects.
+- Existing Claude UI is legacy-only until D22-D24. New dual-CLI code must use the authenticated API/store and must not fall back to legacy root/delete commands.
+- Run the committed `tests/native-cli/scope-core` harness (actual production sources), frontend tests/build, and Windows production/live WebView tests. Headless core success is not real CLI or package certification.

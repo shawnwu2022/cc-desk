@@ -50,6 +50,15 @@ impl LaunchService {
             supervisor,
         }
     }
+    /// Backend-only source admission uses the same workspace and host environment as launch.
+    pub(crate) fn repository(&self) -> &WorkspaceRepository {
+        &self.repository
+    }
+    pub(crate) fn inherited_environment(&self) -> EnvMap {
+        self.inherited
+            .clone()
+            .unwrap_or_else(|| std::env::vars_os().collect())
+    }
     pub(crate) fn registry(&self) -> &Arc<RunRegistry<NativeRun>> {
         self.coordinator.registry()
     }

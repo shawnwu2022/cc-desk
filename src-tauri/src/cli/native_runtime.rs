@@ -17,12 +17,16 @@ use tauri::{Manager, Runtime, Url, Webview, WebviewUrl, WebviewWindow};
 
 pub(crate) struct NativeRuntime {
     service: Arc<LaunchService>,
+    projections: Arc<super::native_projection::service::ProjectionService>,
     binding: Mutex<Option<Arc<DocumentBinding<NativeRun>>>>,
     initialized: AtomicBool,
 }
 impl NativeRuntime {
     pub(crate) fn new(service: Arc<LaunchService>) -> Self {
         Self {
+            projections: Arc::new(super::native_projection::service::ProjectionService::new(
+                service.clone(),
+            )),
             service,
             binding: Mutex::new(None),
             initialized: AtomicBool::new(false),
@@ -95,6 +99,40 @@ impl NativeRuntime {
         request: &Request<'_>,
     ) -> Result<LaunchStatus, SafeError> {
         self.binding()?.query_native(webview, request)
+    }
+    pub(crate) async fn projection_scope<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::native_projection::wire::SourceRef, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let target: super::native_projection::wire::ScopeTarget =
+            decode_projection(request.body(), 4096)?;
+        target.validate()?;
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let value = tauri::async_runtime::spawn_blocking(move || service.scope(&admitted, &target))
+            .await
+            .map_err(|_| error("SOURCE_TASK_FAILED"))??;
+        self.projections.check_caller(&caller)?;
+        Ok(value)
+    }
+    pub(crate) async fn projection_read<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::native_projection::wire::ProjectionResult, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query: super::native_projection::wire::ReadRequest =
+            decode_projection(request.body(), 16384)?;
+        query.validate()?;
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let value = tauri::async_runtime::spawn_blocking(move || service.read(&admitted, &query))
+            .await
+            .map_err(|_| error("SOURCE_TASK_FAILED"))??;
+        self.projections.check_caller(&caller)?;
+        Ok(value)
     }
     /// Shared native admission for later input/resize/stop/snapshot adapters.
     /// An acquired access rechecks caller/run ownership again at each operation.
@@ -189,6 +227,20 @@ fn expected_main_url(config: &Config, window: &WindowConfig, dev: bool) -> Resul
         base.join(&path.to_string_lossy())
             .map_err(|_| error("FORBIDDEN"))
     }
+}
+
+/// Called only after trusted native document admission. Parse errors never echo supplied values.
+fn decode_projection<T: serde::de::DeserializeOwned>(
+    body: &InvokeBody,
+    limit: usize,
+) -> Result<T, SafeError> {
+    let InvokeBody::Raw(bytes) = body else {
+        return Err(error("RAW_BODY_REQUIRED"));
+    };
+    if bytes.len() > limit {
+        return Err(error("REQUEST_TOO_LARGE"));
+    }
+    serde_json::from_slice(bytes).map_err(|_| error("INVALID_REQUEST"))
 }
 
 #[cfg(test)]

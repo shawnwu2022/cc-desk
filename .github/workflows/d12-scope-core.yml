@@ -1,11 +1,11 @@
 name: D12 retained directory core
 on:
-  push:
-    branches: [feat/native-cli-source-scope]
+  pull_request:
     paths:
-      - 'src-tauri/src/cli/native_projection/**'
+      - 'src-tauri/src/cli/**'
+      - 'src-tauri/src/tests/native_cli_projection_*.rs'
       - 'src-tauri/src/tests/native_cli_scoped_fs.rs'
-      - 'src-tauri/src/tests/native_cli_projection_reader.rs'
+      - 'tests/native-cli/scope-core/**'
       - '.github/workflows/d12-scope-core.yml'
 permissions:
   contents: read
@@ -22,27 +22,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - name: Compile actual production reader modules without a WebView
-        shell: bash
-        run: |
-          mkdir -p .scope-core/src
-          python3 - <<'PY'
-          from pathlib import Path
-          root = Path('src-tauri/src/cli').resolve().as_posix()
-          Path('.scope-core/src/lib.rs').write_text('#![allow(dead_code)]\nmod cli {\n#[path="'+root+'/types.rs"] pub mod types;\npub mod native_projection {\n'+''.join('#[path="'+root+'/native_projection/'+name+'.rs"] pub mod '+name+';\n' for name in ['scoped_fs','wire','catalog'])+'}}\n')
-          Path('.scope-core/Cargo.toml').write_text('''[package]
-          name = "d12-scope-core"
-          version = "0.0.0"
-          edition = "2021"
-          [dependencies]
-          cap-std = "=4.0.3"
-          libc = "=0.2.186"
-          tempfile = "=3.27.0"
-          serde = { version = "=1.0.228", features = ["derive"] }
-          serde_json = "1"
-          toml = "=0.9.12"
-          [target.'cfg(windows)'.dependencies]
-          windows = { version = "=0.61.3", features = ["Win32_Storage_FileSystem"] }
-          ''')
-          PY
-          cargo test --manifest-path .scope-core/Cargo.toml -- --nocapture
+        with:
+          components: rustfmt, clippy
+      - name: Test actual production reader modules with locked dependencies
+        run: cargo test --locked --manifest-path tests/native-cli/scope-core/Cargo.toml
+      - name: Lint actual production reader modules
+        run: cargo clippy --locked --manifest-path tests/native-cli/scope-core/Cargo.toml --all-targets -- -D warnings

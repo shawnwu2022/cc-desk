@@ -1,3 +1,6 @@
+import { createNativeProjectionClient } from '@/api/tauri'
+import { projectionErrorCode } from '@/api/nativeProjection'
+import type { ProjectionResult } from '@/types/nativeProjection'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { listRegisteredProjects, registerProject, patchProject, removeProject } from '@/api/workspace'
@@ -82,14 +85,16 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
   let epoch = 0
   let initialized = false
   let mutationTail: Promise<void> = Promise.resolve()
+  let homeOwner: object = {}
 
-  async function execute(operation: () => Promise<ProjectList>): Promise<ProjectList> {
+  async function execute(operation: () => Promise<ProjectList>, relevant: () => boolean = () => true): Promise<ProjectList> {
     const current = ++epoch
     status.value = 'loading'
     try {
       const next = validateList(await operation())
       // An older list reply must never erase a more recent acknowledged mutation.
-      if (!initialized || parseU64(next.revision) >= parseU64(revision.value)) {
+      if (relevant() && (!initialized || parseU64(next.revision) >= parseU64(revision.value))) {
+        clearEnrichment()
         projects.value = next.projects
         revision.value = next.revision
         metadata.value = next.metadata ?? {}
@@ -111,12 +116,13 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
   }
 
   function mutate(operation: () => Promise<ProjectList>): Promise<ProjectList> {
+    homeOwner = {}
     const next = mutationTail.then(() => execute(operation))
     mutationTail = next.then(() => undefined, () => undefined)
     return next
   }
 
-  const load = () => execute(listRegisteredProjects)
+  const load = () => { homeOwner = {}; return execute(listRegisteredProjects) }
 
   async function register(selectedPath: string): Promise<string> {
     const result = await mutate(async () => {
@@ -142,5 +148,45 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
     })
   }
 
-  return { projects, revision, metadata, warnings, status, lastError, load, register, patch, remove }
+  // The registry is authoritative. Native reads add observations and never alter projects.
+  const enrichment = ref<Record<string, { state: 'loading' | 'ready' | 'unavailable'; result: ProjectionResult | null; reason: string | null }>>({})
+  let enrichmentOwner: object = {}
+  let enrichmentEpoch = BigInt(0)
+  function clearEnrichment() { enrichmentOwner = {}; enrichment.value = {} }
+  async function enrich(profile: { profileId: string; revision: string } | null) {
+    homeOwner = {}
+    clearEnrichment()
+    if (!profile) return
+    const selected = enrichmentOwner
+    const frozen = { ...profile }
+    if (enrichmentEpoch === BigInt('18446744073709551615')) return
+    const epoch = (++enrichmentEpoch).toString()
+    const rows = projects.value.map(p => ({ ...p }))
+    const currentRevision = revision.value
+    const current = () => selected === enrichmentOwner && revision.value === currentRevision
+    for (const row of rows) enrichment.value[row.projectId] = { state: 'loading', result: null, reason: null }
+    const enrichOne = async (project: RegisteredProject) => {
+      if (!current()) return
+      try {
+        const client = createNativeProjectionClient()
+        const source = await client.scope({ kind: 'profile', profileId: frozen.profileId, expectedProfileRevision: frozen.revision, projectId: project.projectId })
+        if (!current()) return
+        const result = await client.read({ source, resourceKind: 'history', requestEpoch: epoch, limit: 1, offset: 0 })
+        if (current()) enrichment.value[project.projectId] = { state: result.state, result, reason: result.reason }
+      } catch (failure) {
+        if (current()) enrichment.value[project.projectId] = { state: 'unavailable', result: null, reason: projectionErrorCode(failure) }
+      }
+    }
+    // Match the backend's two-reader budget; don't queue thousands of IPC/file scans.
+    for (let i = 0; i < rows.length && current(); i += 2) await Promise.all(rows.slice(i, i + 2).map(enrichOne))
+  }
+  async function loadNativeHome(profile: { profileId: string; revision: string } | null) {
+    const selected = {}
+    const frozen = profile ? { ...profile } : null
+    homeOwner = selected
+    clearEnrichment()
+    await execute(listRegisteredProjects, () => homeOwner === selected)
+    if (homeOwner === selected) await enrich(frozen)
+  }
+  return { projects, revision, metadata, warnings, status, lastError, load, register, patch, remove, enrichment, enrich, loadNativeHome }
 })

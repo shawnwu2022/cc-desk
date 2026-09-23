@@ -14,7 +14,11 @@ pub(crate) struct Limits {
 }
 impl Default for Limits {
     fn default() -> Self {
-        Self { file_bytes: 2 * 1024 * 1024, total_bytes: 16 * 1024 * 1024, entries: 4096 }
+        Self {
+            file_bytes: 2 * 1024 * 1024,
+            total_bytes: 16 * 1024 * 1024,
+            entries: 4096,
+        }
     }
 }
 pub(crate) struct Budget {
@@ -35,12 +39,17 @@ impl Budget {
     }
     pub(crate) fn checkpoint(&self) -> ReadResult<()> {
         // Cooperative deadline between operations; not a promise to interrupt OS filesystem I/O.
-        if self.started.elapsed() > Duration::from_secs(5) { return Err("SOURCE_BUDGET_EXCEEDED"); }
+        if self.started.elapsed() > Duration::from_secs(5) {
+            return Err("SOURCE_BUDGET_EXCEEDED");
+        }
         Ok(())
     }
     fn entry(&mut self) -> ReadResult<()> {
         self.checkpoint()?;
-        self.entries_left = self.entries_left.checked_sub(1).ok_or("SOURCE_TOO_MANY_ENTRIES")?;
+        self.entries_left = self
+            .entries_left
+            .checked_sub(1)
+            .ok_or("SOURCE_TOO_MANY_ENTRIES")?;
         Ok(())
     }
 }
@@ -50,7 +59,9 @@ pub(crate) struct Root {
     identity: String,
 }
 impl std::fmt::Debug for Root {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("Root(<redacted>)") }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Root(<redacted>)")
+    }
 }
 pub(crate) struct Entry {
     pub name: String,
@@ -60,17 +71,45 @@ pub(crate) struct Entry {
 impl Root {
     pub(crate) fn open(path: &Path) -> ReadResult<Self> {
         let text = path.to_str().ok_or("SOURCE_INVALID_TEXT")?;
-        if !path.is_absolute() || text.len() > 32768 || text.contains('\0') { return Err("SCOPE_UNKNOWN"); }
-        let dir = Dir::open_ambient_dir(path, cap_std::ambient_authority()).map_err(|_| "SCOPE_UNKNOWN")?;
+        if !path.is_absolute() || text.len() > 32768 || text.contains('\0') {
+            return Err("SCOPE_UNKNOWN");
+        }
+        let dir = Dir::open_ambient_dir(path, cap_std::ambient_authority())
+            .map_err(|_| "SCOPE_UNKNOWN")?;
         let identity = directory_key(&dir)?;
-        let root = Self { dir, selected: path.to_owned(), identity };
+        let root = Self {
+            dir,
+            selected: path.to_owned(),
+            identity,
+        };
         root.current()?;
         Ok(root)
     }
-    pub(crate) fn key(&self) -> &str { &self.identity }
+    pub(crate) fn key(&self) -> &str {
+        &self.identity
+    }
+    pub(crate) fn descendant(&self, path: &Path) -> ReadResult<String> {
+        let path = path
+            .strip_prefix(&self.selected)
+            .map_err(|_| "SOURCE_PATH_REJECTED")?;
+        let components = path
+            .components()
+            .map(|part| match part {
+                Component::Normal(name) => name.to_str().ok_or("SOURCE_INVALID_TEXT"),
+                _ => Err("SOURCE_PATH_REJECTED"),
+            })
+            .collect::<ReadResult<Vec<_>>>()?;
+        let relative_path = components.join("/");
+        relative(Path::new(&relative_path), false)?;
+        Ok(relative_path)
+    }
+
     pub(crate) fn current(&self) -> ReadResult<()> {
-        let now = Dir::open_ambient_dir(&self.selected, cap_std::ambient_authority()).map_err(|_| "SOURCE_CHANGED")?;
-        if directory_key(&now)? != self.identity { return Err("SOURCE_CHANGED"); }
+        let now = Dir::open_ambient_dir(&self.selected, cap_std::ambient_authority())
+            .map_err(|_| "SOURCE_CHANGED")?;
+        if directory_key(&now)? != self.identity {
+            return Err("SOURCE_CHANGED");
+        }
         Ok(())
     }
     pub(crate) fn read(&self, path: &Path, budget: &mut Budget) -> ReadResult<Option<Vec<u8>>> {
@@ -82,9 +121,13 @@ impl Root {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(read_error(e)),
         };
-        if !metadata.is_file() || metadata.file_type().is_symlink() { return Err("SOURCE_NOT_REGULAR"); }
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("SOURCE_NOT_REGULAR");
+        }
         let cap = budget.file_bytes.min(budget.bytes_left);
-        if metadata.len() > cap as u64 { return Err("SOURCE_TOO_LARGE"); }
+        if metadata.len() > cap as u64 {
+            return Err("SOURCE_TOO_LARGE");
+        }
         let mut options = OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
@@ -95,13 +138,25 @@ impl Root {
         }
         let file = self.dir.open_with(path, &options).map_err(read_error)?;
         let before = file.metadata().map_err(read_error)?;
-        if !before.is_file() { return Err("SOURCE_NOT_REGULAR"); }
-        if before.len() > cap as u64 { return Err("SOURCE_TOO_LARGE"); }
+        if !before.is_file() {
+            return Err("SOURCE_NOT_REGULAR");
+        }
+        if before.len() > cap as u64 {
+            return Err("SOURCE_TOO_LARGE");
+        }
         let mut bytes = Vec::new();
-        (&file).take(cap as u64 + 1).read_to_end(&mut bytes).map_err(read_error)?;
-        if bytes.len() > cap { return Err("SOURCE_TOO_LARGE"); }
+        (&file)
+            .take(cap as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(read_error)?;
+        if bytes.len() > cap {
+            return Err("SOURCE_TOO_LARGE");
+        }
         let after = file.metadata().map_err(read_error)?;
-        if before.len() != after.len() || before.modified().ok() != after.modified().ok() || bytes.len() as u64 != after.len() {
+        if before.len() != after.len()
+            || before.modified().ok() != after.modified().ok()
+            || bytes.len() as u64 != after.len()
+        {
             return Err("SOURCE_CHANGED");
         }
         budget.bytes_left -= bytes.len();
@@ -113,7 +168,11 @@ impl Root {
         relative(path, true)?;
         budget.checkpoint()?;
         self.current()?;
-        let path = if path.as_os_str().is_empty() { Path::new(".") } else { path };
+        let path = if path.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            path
+        };
         let entries = match self.dir.read_dir(path) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -123,10 +182,17 @@ impl Root {
         for entry in entries {
             budget.entry()?;
             let entry = entry.map_err(read_error)?;
-            let name = entry.file_name().into_string().map_err(|_| "SOURCE_INVALID_TEXT")?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| "SOURCE_INVALID_TEXT")?;
             relative(Path::new(&name), false)?;
             let kind = entry.file_type().map_err(read_error)?;
-            result.push(Entry { name, is_dir: kind.is_dir() && !kind.is_symlink(), is_file: kind.is_file() && !kind.is_symlink() });
+            result.push(Entry {
+                name,
+                is_dir: kind.is_dir() && !kind.is_symlink(),
+                is_file: kind.is_file() && !kind.is_symlink(),
+            });
         }
         result.sort_by(|a, b| a.name.cmp(&b.name));
         self.current()?;
@@ -135,8 +201,13 @@ impl Root {
 }
 fn relative(path: &Path, allow_empty: bool) -> ReadResult<()> {
     let text = path.to_str().ok_or("SOURCE_INVALID_TEXT")?;
-    if text.len() > 4096 || text.contains(['\0', ':', '\\']) || (!allow_empty && text.is_empty())
-        || path.components().any(|c| !matches!(c, Component::Normal(_))) {
+    if text.len() > 4096
+        || text.contains(['\0', ':', '\\'])
+        || (!allow_empty && text.is_empty())
+        || path
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
         return Err("SOURCE_PATH_REJECTED");
     }
     Ok(())
@@ -159,15 +230,26 @@ fn directory_key(dir: &Dir) -> ReadResult<String> {
     {
         use std::os::windows::io::AsRawHandle;
         use windows::Win32::Foundation::HANDLE;
-        use windows::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+        use windows::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
         let mut info = BY_HANDLE_FILE_INFORMATION::default();
         // The owned directory handle and output buffer remain live for this synchronous call.
-        unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }.map_err(|_| "SCOPE_UNKNOWN")?;
-        if info.nFileIndexHigh == 0 && info.nFileIndexLow == 0 { return Err("SCOPE_UNKNOWN"); }
-        Ok(format!("local:windows:{}:{}:{}", info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow))
+        unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
+            .map_err(|_| "SCOPE_UNKNOWN")?;
+        if info.nFileIndexHigh == 0 && info.nFileIndexLow == 0 {
+            return Err("SCOPE_UNKNOWN");
+        }
+        Ok(format!(
+            "local:windows:{}:{}:{}",
+            info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
+        ))
     }
     #[cfg(not(any(unix, windows)))]
-    { let _ = file; Err("SOURCE_UNSUPPORTED") }
+    {
+        let _ = file;
+        Err("SOURCE_UNSUPPORTED")
+    }
 }
 #[cfg(test)]
 #[path = "../../tests/native_cli_scoped_fs.rs"]
