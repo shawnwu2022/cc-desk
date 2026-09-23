@@ -26,9 +26,12 @@ fn write_session(root: &Path, name: &str, modified: SystemTime) -> PathBuf {
     let project = root.join("projects/encoded");
     fs::create_dir_all(&project).unwrap();
     let path = project.join("same-id.jsonl");
+    let cwd = root.parent().unwrap().join("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let cwd = serde_json::to_string(cwd.to_str().unwrap()).unwrap();
     fs::write(
         &path,
-        format!("{{\"cwd\":\"/fixture/project\"}}\n{{\"type\":\"custom-title\",\"customTitle\":\"{name}\"}}\n"),
+        format!("{{\"cwd\":{cwd}}}\n{{\"type\":\"custom-title\",\"customTitle\":\"{name}\"}}\n"),
     ).unwrap();
     File::options().write(true).open(path).unwrap()
         .set_times(FileTimes::new().set_modified(modified)).unwrap();
