@@ -14,7 +14,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - run: |
+      - name: Export exact continuation including scoped-reader scaffolding
+        run: |
           mkdir -p /tmp/d12-source
           git bundle create /tmp/d12-source/repo.bundle HEAD
           git rev-parse HEAD > /tmp/d12-source/source.sha
