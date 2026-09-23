@@ -89,9 +89,7 @@ fn has_extension(path: &Path, names: &[&str]) -> bool {
 }
 
 fn text(value: &OsStr) -> Result<&str, SafeError> {
-    value
-        .to_str()
-        .ok_or_else(|| error("ARG_NOT_REPRESENTABLE"))
+    value.to_str().ok_or_else(|| error("ARG_NOT_REPRESENTABLE"))
 }
 
 /// Normalize only a selected executable/script path for the Bash interpreter.
@@ -108,26 +106,49 @@ fn bash_path(path: &Path) -> Result<OsString, SafeError> {
     }
 }
 
+/// Only hex bytes occur inside the ANSI-C literal. MSYS's incoming single-quote
+/// parser never sees a caller apostrophe; decoded bytes remain one shell word.
+fn bash_literal(value: &OsStr) -> Result<String, SafeError> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut literal = String::from("$'");
+    for byte in text(value)?.bytes() {
+        literal.push_str("\\x");
+        literal.push(HEX[(byte >> 4) as usize] as char);
+        literal.push(HEX[(byte & 15) as usize] as char);
+    }
+    literal.push('\'');
+    Ok(literal)
+}
+
 fn bash_args(
     invocation: &CliInvocation<'_>,
     runner: &Path,
     shim: bool,
 ) -> Result<Vec<OsString>, SafeError> {
-    let script = if cfg!(windows) {
-        "export MSYS2_ARG_CONV_EXCL='*'; exec \"$@\""
-    } else {
-        "exec \"$@\""
-    };
-    let mut args: Vec<OsString> = ["--noprofile", "--norc", "-c", script, "cc-desk"]
+    let mut forwarded = Vec::new();
+    if shim {
+        forwarded.push(bash_path(runner)?);
+        forwarded.extend(["--noprofile".into(), "--norc".into()]);
+    }
+    forwarded.push(bash_path(invocation.program())?);
+    forwarded.extend_from_slice(invocation.args());
+    let mut args: Vec<OsString> = ["--noprofile", "--norc", "-c"]
         .into_iter()
         .map(OsString::from)
         .collect();
-    if shim {
-        args.push(bash_path(runner)?);
-        args.extend(["--noprofile".into(), "--norc".into()]);
+    if cfg!(windows) {
+        // CRT quoting alone is not MSYS argv quoting. Encode each word without
+        // eval or external decoders; never expose caller bytes as shell syntax.
+        let mut script = String::from("export MSYS2_ARG_CONV_EXCL='*'; exec");
+        for value in &forwarded {
+            script.push(' ');
+            script.push_str(&bash_literal(value)?);
+        }
+        args.push(script.into());
+    } else {
+        args.extend(["exec \"$@\"".into(), "cc-desk".into()]);
+        args.extend(forwarded);
     }
-    args.push(bash_path(invocation.program())?);
-    args.extend_from_slice(invocation.args());
     Ok(args)
 }
 
@@ -240,7 +261,11 @@ pub(crate) fn resolve_process(
                 Dialect::PowerShell => powershell_args(invocation)?,
                 Dialect::Cmd => cmd_args(invocation)?,
             };
-            (runner.to_owned(), args, Some(invocation.program().to_owned()))
+            (
+                runner.to_owned(),
+                args,
+                Some(invocation.program().to_owned()),
+            )
         }
     };
     Ok(ProcessLaunchSpec {

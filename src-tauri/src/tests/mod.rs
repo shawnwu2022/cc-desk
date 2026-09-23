@@ -18,6 +18,8 @@ pub(crate) mod native_cli_harness;
 mod native_cli_invocation;
 #[cfg(test)]
 mod native_cli_platform;
+#[cfg(all(test, windows))]
+mod native_cli_platform_limits;
 #[cfg(test)]
 mod native_cli_profile_api;
 #[cfg(test)]
