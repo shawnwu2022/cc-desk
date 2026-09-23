@@ -45,7 +45,7 @@ fn D11_Channel_ReplayKeepsLease_013() {
             &f.caller,
             &f.request,
             || f.freeze(),
-            |_| routes.bind(3, Box::new(|| Ok(())), || Ok(Channel::new(|_| Ok(())))) ,
+            |_| routes.bind(3, Box::new(|| Ok(())), || Ok(Channel::new(|_| Ok(())))),
             |_| Ok(7),
         )
         .unwrap();
@@ -62,12 +62,18 @@ fn D11_Channel_ReplayKeepsLease_013() {
     assert_eq!(status, replay);
     driver.registry().mark_exited(&status.run).unwrap();
     assert_eq!(
-        routes.bind::<Value>(3, Box::new(|| Ok(())), || panic!("early release"))
-            .unwrap_err().code,
+        routes
+            .bind::<Value>(3, Box::new(|| Ok(())), || panic!("early release"))
+            .unwrap_err()
+            .code,
         "OUTPUT_CHANNEL_BUSY"
     );
     driver.registry().retire(&status.run).unwrap();
-    assert!(routes.bind(3, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(|_| Ok(())))).is_ok());
+    assert!(routes
+        .bind(3, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(
+            |_| Ok(())
+        )))
+        .is_ok());
 }
 
 // 检查启动失败释放已分配路由，但失败回执仍阻止重建与重新启动。
@@ -82,12 +88,16 @@ fn D11_Channel_FailureKeepsReceipt_014() {
             &f.caller,
             &f.request,
             || f.freeze(),
-            |_| routes.bind(3, Box::new(|| Ok(())), || Ok(Channel::new(|_| Ok(())))) ,
+            |_| routes.bind(3, Box::new(|| Ok(())), || Ok(Channel::new(|_| Ok(())))),
             |_| Err(error("SYNTHETIC_START_FAILURE")),
         )
         .unwrap();
     assert_eq!(status.phase, LaunchPhase::Failed);
-    let next = routes.bind(3, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(|_| Ok(())))).unwrap();
+    let next = routes
+        .bind(3, Box::new(|| Ok(())), || {
+            Ok(Channel::<Value>::new(|_| Ok(())))
+        })
+        .unwrap();
     let replay = driver
         .start_routed(
             &f.caller,
@@ -98,5 +108,6 @@ fn D11_Channel_FailureKeepsReceipt_014() {
         )
         .unwrap();
     assert_eq!(status, replay);
-    next.send(json!("independent route remains usable")).unwrap();
+    next.send(json!("independent route remains usable"))
+        .unwrap();
 }

@@ -107,16 +107,23 @@ impl OutputRoutes {
 
 impl<T: IpcResponse> OutputRoute<T> {
     pub(crate) fn send(&self, value: T) -> Result<(), SafeError> {
+        // Declare the pending owner before the lock guard so unwinding drops
+        // the guard first. Take the Channel out before external code: a panic
+        // leaves the route closed, rather than permitting a later frame.
+        let mut pending = None;
         let mut slot = self.channel.lock();
-        let channel = slot.as_ref().ok_or_else(|| error("OUTPUT_ROUTE_CLOSED"))?;
-        let result = (self.authorize)().and_then(|()| {
-            channel.send(value).map_err(|_| error("OUTPUT_ROUTE_LOST"))
-        });
-        if result.is_err() {
-            let retired = slot.take();
-            drop(slot);
-            drop(retired);
+        std::mem::swap(&mut *slot, &mut pending);
+        let channel = pending
+            .as_ref()
+            .ok_or_else(|| error("OUTPUT_ROUTE_CLOSED"))?;
+        let result = (self.authorize)()
+            .and_then(|()| channel.send(value).map_err(|_| error("OUTPUT_ROUTE_LOST")));
+        if result.is_ok() {
+            *slot = pending.take();
         }
+        drop(slot);
+        // Failure drops the Channel here, outside both route and table locks.
+        // Panic propagates unchanged; no retry or replacement is authorized.
         result
     }
 }

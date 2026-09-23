@@ -4,6 +4,7 @@
 #[path = "document_tauri.rs"]
 pub(crate) mod native;
 
+use super::output_route::OutputRoutes;
 use super::profiles::error;
 use super::run_registry::{LaunchStatus, RunRegistry};
 use super::snapshot::CallerIdentity;
@@ -57,6 +58,7 @@ pub(crate) struct DocumentBinding<R> {
     authority: Arc<DocumentAuthority<R>>,
     witness: Arc<DocumentWitness>,
     witness_id: ResourceId,
+    output_routes: OutputRoutes,
 }
 
 impl<R> std::fmt::Debug for DocumentAuthority<R> {
@@ -170,6 +172,7 @@ impl<R> DocumentAuthority<R> {
             authority: self.clone(),
             witness,
             witness_id,
+            output_routes: OutputRoutes::new(128),
         })
     }
 

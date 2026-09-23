@@ -16,7 +16,15 @@ fn D11_Channel_Descriptor_001() {
         headers.insert(CHANNEL_HEADER, text.parse().unwrap());
         assert_eq!(parse_channel(&headers).unwrap(), id);
     }
-    for text in ["", "0", "__CHANNEL__:01", "__CHANNEL__:+1", "__CHANNEL__:4294967296", "__CHANNEL__:1, __CHANNEL__:2", "private-value"] {
+    for text in [
+        "",
+        "0",
+        "__CHANNEL__:01",
+        "__CHANNEL__:+1",
+        "__CHANNEL__:4294967296",
+        "__CHANNEL__:1, __CHANNEL__:2",
+        "private-value",
+    ] {
         let mut headers = HeaderMap::new();
         headers.insert(CHANNEL_HEADER, text.parse().unwrap());
         let failure = parse_channel(&headers).unwrap_err();
@@ -34,34 +42,75 @@ fn D11_Channel_Descriptor_001() {
 #[test]
 fn D11_Channel_AuthBeforeFactory_002() {
     let routes = OutputRoutes::new(1);
-    let result = routes.bind::<Value>(0, Box::new(|| Err(error("FORBIDDEN"))), || panic!("unauthorized factory"));
+    let result = routes.bind::<Value>(0, Box::new(|| Err(error("FORBIDDEN"))), || {
+        panic!("unauthorized factory")
+    });
     assert_eq!(result.unwrap_err().code, "FORBIDDEN");
-    assert!(routes.bind(0, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(|_| Ok(())))).is_ok());
+    assert!(routes
+        .bind(0, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(
+            |_| Ok(())
+        )))
+        .is_ok());
 }
 
 // 检查回调独占、容量拒绝及最后一个路由引用释放后的回收。
 #[test]
 fn D11_Channel_LeaseAndCapacity_003() {
     let routes = OutputRoutes::new(1);
-    let route = Arc::new(routes.bind(7, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(|_| Ok(())))).unwrap());
-    assert_eq!(routes.bind::<Value>(7, Box::new(|| Ok(())), || panic!("duplicate factory")).unwrap_err().code, "OUTPUT_CHANNEL_BUSY");
-    assert_eq!(routes.bind::<Value>(8, Box::new(|| Ok(())), || panic!("capacity factory")).unwrap_err().code, "OUTPUT_ROUTE_CAPACITY");
+    let route = Arc::new(
+        routes
+            .bind(7, Box::new(|| Ok(())), || {
+                Ok(Channel::<Value>::new(|_| Ok(())))
+            })
+            .unwrap(),
+    );
+    assert_eq!(
+        routes
+            .bind::<Value>(7, Box::new(|| Ok(())), || panic!("duplicate factory"))
+            .unwrap_err()
+            .code,
+        "OUTPUT_CHANNEL_BUSY"
+    );
+    assert_eq!(
+        routes
+            .bind::<Value>(8, Box::new(|| Ok(())), || panic!("capacity factory"))
+            .unwrap_err()
+            .code,
+        "OUTPUT_ROUTE_CAPACITY"
+    );
     let reader_reference = route.clone();
     drop(route);
-    assert!(routes.bind::<Value>(7, Box::new(|| Ok(())), || panic!("live reader factory")).is_err());
+    assert!(routes
+        .bind::<Value>(7, Box::new(|| Ok(())), || panic!("live reader factory"))
+        .is_err());
     drop(reader_reference);
-    assert!(routes.bind(8, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(|_| Ok(())))).is_ok());
+    assert!(routes
+        .bind(8, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(
+            |_| Ok(())
+        )))
+        .is_ok());
 }
 
 // 检查 Channel 构造失败或展开异常都会释放未提交的路由租约。
 #[test]
 fn D11_Channel_FactoryRollback_004() {
     let routes = OutputRoutes::new(1);
-    assert_eq!(routes.bind::<Value>(3, Box::new(|| Ok(())), || Err(error("FACTORY_FAILED"))).unwrap_err().code, "FACTORY_FAILED");
+    assert_eq!(
+        routes
+            .bind::<Value>(3, Box::new(|| Ok(())), || Err(error("FACTORY_FAILED")))
+            .unwrap_err()
+            .code,
+        "FACTORY_FAILED"
+    );
     assert!(catch_unwind(AssertUnwindSafe(|| {
         let _ = routes.bind::<Value>(3, Box::new(|| Ok(())), || panic!("factory panic"));
-    })).is_err());
-    assert!(routes.bind(3, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(|_| Ok(())))).is_ok());
+    }))
+    .is_err());
+    assert!(routes
+        .bind(3, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(
+            |_| Ok(())
+        )))
+        .is_ok());
 }
 
 // 检查构造 Channel 时身份失效，不返回可发送的路由。
@@ -70,14 +119,28 @@ fn D11_Channel_RevokeDuringBind_005() {
     let routes = OutputRoutes::new(1);
     let active = Arc::new(AtomicBool::new(true));
     let checked = active.clone();
-    let failure = routes.bind(1, Box::new(move || {
-        if checked.load(Ordering::SeqCst) { Ok(()) } else { Err(error("FORBIDDEN")) }
-    }), || {
-        active.store(false, Ordering::SeqCst);
-        Ok(Channel::<Value>::new(|_| panic!("revoked route sent")))
-    }).unwrap_err();
+    let failure = routes
+        .bind(
+            1,
+            Box::new(move || {
+                if checked.load(Ordering::SeqCst) {
+                    Ok(())
+                } else {
+                    Err(error("FORBIDDEN"))
+                }
+            }),
+            || {
+                active.store(false, Ordering::SeqCst);
+                Ok(Channel::<Value>::new(|_| panic!("revoked route sent")))
+            },
+        )
+        .unwrap_err();
     assert_eq!(failure.code, "FORBIDDEN");
-    assert!(routes.bind(2, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(|_| Ok(())))).is_ok());
+    assert!(routes
+        .bind(2, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(
+            |_| Ok(())
+        )))
+        .is_ok());
 }
 
 // 检查每次发送重新鉴权，撤权后正文不进入 Channel。
@@ -88,12 +151,30 @@ fn D11_Channel_RevokeStopsSend_006() {
     let checked = active.clone();
     let calls = Arc::new(AtomicUsize::new(0));
     let sent = calls.clone();
-    let route = routes.bind(1, Box::new(move || {
-        if checked.load(Ordering::SeqCst) { Ok(()) } else { Err(error("FORBIDDEN")) }
-    }), || Ok(Channel::new(move |_| { sent.fetch_add(1, Ordering::SeqCst); Ok(()) }))).unwrap();
+    let route = routes
+        .bind(
+            1,
+            Box::new(move || {
+                if checked.load(Ordering::SeqCst) {
+                    Ok(())
+                } else {
+                    Err(error("FORBIDDEN"))
+                }
+            }),
+            || {
+                Ok(Channel::new(move |_| {
+                    sent.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }))
+            },
+        )
+        .unwrap();
     route.send(json!({"bytes":[0,255,27]})).unwrap();
     active.store(false, Ordering::SeqCst);
-    assert_eq!(route.send(json!("not-delivered")).unwrap_err().code, "FORBIDDEN");
+    assert_eq!(
+        route.send(json!("not-delivered")).unwrap_err().code,
+        "FORBIDDEN"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
@@ -102,13 +183,20 @@ fn D11_Channel_RevokeStopsSend_006() {
 fn D11_Channel_SendFailureIsFinal_007() {
     let calls = Arc::new(AtomicUsize::new(0));
     let sent = calls.clone();
-    let route = OutputRoutes::new(1).bind(1, Box::new(|| Ok(())), || Ok(Channel::new(move |_| {
-        sent.fetch_add(1, Ordering::SeqCst);
-        Err(std::io::Error::other("private-transport-error").into())
-    }))).unwrap();
+    let route = OutputRoutes::new(1)
+        .bind(1, Box::new(|| Ok(())), || {
+            Ok(Channel::new(move |_| {
+                sent.fetch_add(1, Ordering::SeqCst);
+                Err(std::io::Error::other("private-transport-error").into())
+            }))
+        })
+        .unwrap();
     let failure = route.send(json!("private-body")).unwrap_err();
     assert_eq!(failure.code, "OUTPUT_ROUTE_LOST");
-    assert_eq!(route.send(json!("later")).unwrap_err().code, "OUTPUT_ROUTE_CLOSED");
+    assert_eq!(
+        route.send(json!("later")).unwrap_err().code,
+        "OUTPUT_ROUTE_CLOSED"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(!format!("{failure:?}{route:?}").contains("private"));
 }
@@ -118,11 +206,17 @@ fn D11_Channel_SendFailureIsFinal_007() {
 fn D11_Channel_ExactWireBytes_008() {
     let received = Arc::new(Mutex::new(Vec::<Value>::new()));
     let sink = received.clone();
-    let route = OutputRoutes::new(1).bind(9, Box::new(|| Ok(())), || Ok(Channel::new(move |body| {
-        let InvokeResponseBody::Json(text) = body else { panic!("JSON event expected"); };
-        sink.lock().push(serde_json::from_str(&text).unwrap());
-        Ok(())
-    }))).unwrap();
+    let route = OutputRoutes::new(1)
+        .bind(9, Box::new(|| Ok(())), || {
+            Ok(Channel::new(move |body| {
+                let InvokeResponseBody::Json(text) = body else {
+                    panic!("JSON event expected");
+                };
+                sink.lock().push(serde_json::from_str(&text).unwrap());
+                Ok(())
+            }))
+        })
+        .unwrap();
     let event = json!({"runId":"run","generation":7,"offset":"9007199254740993","bytes":[0,255,27,91,50,48,48,126,228,184,173]});
     route.send(event.clone()).unwrap();
     assert_eq!(*received.lock(), vec![event]);
@@ -132,11 +226,15 @@ fn D11_Channel_ExactWireBytes_008() {
 #[test]
 fn D11_Channel_FactoryOutsideLock_009() {
     let routes = OutputRoutes::new(2);
-    let route = routes.bind(1, Box::new(|| Ok(())), || {
-        let other = routes.bind(2, Box::new(|| Ok(())), || Ok(Channel::<Value>::new(|_| Ok(()))))?;
-        other.send(json!("other"))?;
-        Ok(Channel::<Value>::new(|_| Ok(())))
-    }).unwrap();
+    let route = routes
+        .bind(1, Box::new(|| Ok(())), || {
+            let other = routes.bind(2, Box::new(|| Ok(())), || {
+                Ok(Channel::<Value>::new(|_| Ok(())))
+            })?;
+            other.send(json!("other"))?;
+            Ok(Channel::<Value>::new(|_| Ok(())))
+        })
+        .unwrap();
     route.send(json!("first")).unwrap();
 }
 
@@ -155,7 +253,9 @@ fn D11_Channel_ConcurrentBind_010() {
                     calls.fetch_add(1, Ordering::SeqCst);
                     Ok(Channel::<Value>::new(|_| Ok(())))
                 });
-                if let Ok(route) = result { retained.lock().push(route); }
+                if let Ok(route) = result {
+                    retained.lock().push(route);
+                }
             });
         }
     });

@@ -1,14 +1,14 @@
 //! Compiled native adapter. Not installed into the application startup or IPC.
 
-use super::{decode_start, DocumentAuthority, DocumentBinding, NativeContext};
-use crate::cli::output_route::OutputRoute;
+use super::{decode_start, DocumentAuthority, DocumentBinding, NativeContext, DOCUMENT_HEADER};
+use crate::cli::output_route::{parse_channel, OutputRoute};
 use crate::cli::profiles::error;
 use crate::cli::run_registry::{LaunchStatus, RunRegistry};
 use crate::cli::snapshot::CallerIdentity;
 use crate::cli::types::{LaunchRequest, SafeError};
 use std::sync::{Arc, Once};
 use tauri::http::HeaderMap;
-use tauri::ipc::Request;
+use tauri::ipc::{JavaScriptChannelId, Request};
 use tauri::utils::config::WindowConfig;
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, Runtime, Url, Webview, WebviewWindow, WebviewWindowBuilder, WindowEvent};
@@ -118,12 +118,37 @@ impl<R> DocumentBinding<R> {
         self.query_after_admission(&caller, request.body())
     }
 
-    /// Behavioral scaffold: actual native factory must be observed failing first.
+    /// Call only from the reservation winner's connect callback. A replay must
+    /// return its retained status without constructing or dropping any Channel.
     pub(crate) fn channel_native<T: Runtime, E>(
-        &self,
-        _webview: &Webview<T>,
-        _headers: &HeaderMap,
-    ) -> Result<OutputRoute<E>, SafeError> {
-        Err(error("NATIVE_CHANNEL_NOT_IMPLEMENTED"))
+        self: &Arc<Self>,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+    ) -> Result<OutputRoute<E>, SafeError>
+    where
+        R: Send + Sync + 'static,
+    {
+        self.admit_native(webview, headers)?;
+        let id = parse_channel(headers)?;
+        let binding = Arc::downgrade(self);
+        let target = webview.clone();
+        // Retain only the validated proof, not arbitrary caller-supplied headers.
+        let mut proof_headers = HeaderMap::new();
+        proof_headers.insert(DOCUMENT_HEADER, headers[DOCUMENT_HEADER].clone());
+        self.output_routes.bind(
+            id,
+            Box::new(move || {
+                // A route must not keep its document/registry alive. Reuse the
+                // same native admission predicate for every subsequent send.
+                let binding = binding.upgrade().ok_or_else(|| error("FORBIDDEN"))?;
+                binding.admit_native(&target, &proof_headers).map(|_| ())
+            }),
+            || {
+                let descriptor: JavaScriptChannelId = format!("__CHANNEL__:{id}")
+                    .parse()
+                    .map_err(|_| SafeError::invalid("outputChannel"))?;
+                Ok(descriptor.channel_on(webview.clone()))
+            },
+        )
     }
 }

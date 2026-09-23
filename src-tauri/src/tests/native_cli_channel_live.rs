@@ -216,13 +216,19 @@ fn D11_Channel_Native_011() {
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    assert!(status.success(), "{}", fs::read_to_string(log_path).unwrap());
+    assert!(
+        status.success(),
+        "{}",
+        fs::read_to_string(log_path).unwrap()
+    );
     let path = directory.path().join("channel-report.json");
     assert!(fs::metadata(&path).unwrap().len() <= 65536);
     let report: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-    assert_eq!(report["observations"], json!(OBSERVATIONS));
+    assert_eq!(report["observations"], json!(OBSERVATIONS), "{report}");
     assert_eq!(report["failure"], Value::Null);
-    assert!(report["engineVersion"].as_str().is_some_and(|v| !v.is_empty()));
+    assert!(report["engineVersion"]
+        .as_str()
+        .is_some_and(|v| !v.is_empty()));
     writeln!(std::io::stdout().lock(), "D11_CHANNEL_EVIDENCE {report}").unwrap();
 }
 
@@ -330,8 +336,12 @@ fn D11_Channel_Worker_099() {
         "observations":probe.observations.lock().clone(),
         "failure":probe.failure.lock().clone(),
     });
-    fs::write(root.join("channel-report.json"), serde_json::to_vec(&report).unwrap()).unwrap();
+    fs::write(
+        root.join("channel-report.json"),
+        serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
     assert_eq!(exit, 0, "{report}");
-    assert_eq!(report["observations"], json!(OBSERVATIONS));
+    assert_eq!(report["observations"], json!(OBSERVATIONS), "{report}");
     assert_eq!(report["failure"], Value::Null);
 }
