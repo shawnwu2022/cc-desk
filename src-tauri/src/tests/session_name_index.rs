@@ -614,6 +614,7 @@ fn Resolver_Unstable_NoDelta_022() {
 fn Resolver_Dirs_PruneComplete_023() {
     let dir = tempfile::tempdir().unwrap();
     let project_dir = dir.path().join("-e-source-project");
+    std::fs::create_dir_all(&project_dir).unwrap();
     let project_key =
         crate::session_name_index::legacy_project_index_key(project_dir.as_ref()).unwrap();
     let stamp = FileStamp {

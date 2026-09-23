@@ -777,8 +777,7 @@ fn BenchmarkActiveIndex_Real_005() {
             for (project_dir, path, name) in &seed_refs {
                 let stamp = FileStamp::read(path).unwrap();
                 let project_key =
-                    crate::session_name_index::legacy_project_index_key(project_dir.as_ref())
-                        .unwrap();
+                    crate::session_name_index::legacy_project_index_key(project_dir).unwrap();
                 let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
                 seed_index.projects.entry(project_key).or_default().insert(
                     file_name,
