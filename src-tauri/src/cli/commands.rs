@@ -1,13 +1,17 @@
 //! Tauri boundary for Desk profiles and preflight. No caller-supplied filesystem paths.
 use super::availability::{get_availability, parse_request, probe_host, ProfileAvailability};
+use super::native_runtime::NativeRuntime;
 use super::profile_service::{
     authorize_profile_window, list_profiles, parse_patch, patch_profile, ProfileList,
 };
 use super::profiles::error;
+use super::run_registry::LaunchStatus;
 use super::storage::WorkspaceRepository;
 use super::types::SafeError;
 use serde_json::Value;
-use tauri::WebviewWindow;
+use std::sync::Arc;
+use tauri::ipc::Request;
+use tauri::{State, Webview, WebviewWindow};
 
 #[tauri::command]
 pub(crate) async fn cli_list_profiles(window: WebviewWindow) -> Result<ProfileList, SafeError> {
@@ -53,4 +57,23 @@ pub(crate) async fn cli_get_availability(
     })
     .await
     .map_err(|_| error("AVAILABILITY_TASK_FAILED"))?
+}
+
+// Raw document-authenticated launch boundary. No wire owner fields.
+#[tauri::command]
+pub(crate) async fn cli_start(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<LaunchStatus, SafeError> {
+    runtime.start(webview, request).await
+}
+
+#[tauri::command]
+pub(crate) async fn cli_get_launch_status(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<LaunchStatus, SafeError> {
+    runtime.status(&webview, &request)
 }

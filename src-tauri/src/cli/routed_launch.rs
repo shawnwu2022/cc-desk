@@ -19,6 +19,13 @@ pub(crate) struct RoutedResource<P, L> {
     route: Arc<L>,
 }
 
+impl<P, L> RoutedResource<P, L> {
+    /// Pin only the guarded route in a reader; do not keep its master PTY alive.
+    pub(crate) fn route(&self) -> Arc<L> {
+        self.route.clone()
+    }
+}
+
 impl<P, L> std::fmt::Debug for RoutedResource<P, L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("RoutedResource(<redacted>)")

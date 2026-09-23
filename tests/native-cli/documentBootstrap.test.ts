@@ -9,6 +9,7 @@ const proof = '1234567890abcdef1234567890abcdef'
 const script = (token = proof) => template
   .replace('__CC_DESK_DOCUMENT_URL__', JSON.stringify(expectedUrl))
   .replace('__CC_DESK_DOCUMENT_PROOF__', JSON.stringify(token))
+  .replace('__CC_DESK_DOCUMENT_INSTANCE__', JSON.stringify('backend-bootstrap'))
 
 function realm(url = expectedUrl, iframe = false) {
   const calls: { command: string; body: Uint8Array; options: { headers: Record<string, string> } }[] = []
@@ -32,6 +33,8 @@ describe('D11 document-scoped bootstrap', () => {
     expect(calls[0].command).toBe('cli_start')
     expect(Array.from(calls[0].body)).toEqual(Array.from(new TextEncoder().encode(JSON.stringify(payload))))
     expect(calls[0].options.headers['x-cc-desk-document']).toBe(proof)
+    expect(context.__CC_DESK_DOCUMENT__.instanceId).toBe('backend-bootstrap')
+    expect(Object.getOwnPropertyDescriptor(context.__CC_DESK_DOCUMENT__, 'instanceId')?.writable).toBe(false)
     expect(Object.keys(context.__CC_DESK_DOCUMENT__)).toEqual(['invoke'])
     expect(JSON.stringify(context.__CC_DESK_DOCUMENT__)).not.toContain(proof)
   })

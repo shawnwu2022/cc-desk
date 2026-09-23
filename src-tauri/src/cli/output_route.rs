@@ -4,8 +4,9 @@
 use super::profiles::error;
 use super::types::SafeError;
 use parking_lot::Mutex;
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use tauri::http::HeaderMap;
 use tauri::ipc::{Channel, IpcResponse};
 
@@ -33,30 +34,53 @@ pub(crate) fn parse_channel(headers: &HeaderMap) -> Result<u32, SafeError> {
     number.parse().map_err(|_| invalid())
 }
 
+trait Revoke: Send + Sync {
+    fn revoke(&self);
+}
+
+enum Entry {
+    Reserved,
+    Bound(Weak<dyn Revoke>),
+}
+
+#[derive(Default)]
+struct RouteTable {
+    revoked: bool,
+    entries: HashMap<u32, Entry>,
+}
+
 pub(crate) struct OutputRoutes {
     capacity: usize,
-    active: Arc<Mutex<HashSet<u32>>>,
+    table: Arc<Mutex<RouteTable>>,
 }
 
 struct CallbackLease {
     id: u32,
-    active: Arc<Mutex<HashSet<u32>>>,
+    table: Arc<Mutex<RouteTable>>,
 }
-
 impl Drop for CallbackLease {
     fn drop(&mut self) {
-        self.active.lock().remove(&self.id);
+        self.table.lock().entries.remove(&self.id);
     }
 }
 
-/// Never expose the underlying Channel: every dispatch must pass the same guard.
-/// Keep the lease until the last route/reader owner is dropped, even after loss.
-pub(crate) struct OutputRoute<T> {
-    channel: Mutex<Option<Channel<T>>>,
+struct Active<T> {
+    channel: Channel<T>,
     authorize: AuthorityCheck,
+}
+struct RouteCore<T> {
+    active: Mutex<Option<Active<T>>>,
+    revoked: AtomicBool,
+    // Must outlive Active and every temporary revocation reference. Reusing an
+    // ID before the native Channel destructor runs can end the next callback.
     _lease: CallbackLease,
 }
 
+/// No raw Channel escape hatch. A reader retains the lease, not native owners
+/// after revocation. Only D14/D15 may decide when the run itself can retire.
+pub(crate) struct OutputRoute<T> {
+    core: Arc<RouteCore<T>>,
+}
 impl<T> std::fmt::Debug for OutputRoute<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("OutputRoute(<redacted>)")
@@ -67,11 +91,11 @@ impl OutputRoutes {
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            active: Arc::new(Mutex::new(HashSet::new())),
+            table: Arc::new(Mutex::new(RouteTable::default())),
         }
     }
 
-    pub(crate) fn bind<T>(
+    pub(crate) fn bind<T: Send + Sync + 'static>(
         &self,
         id: u32,
         authorize: AuthorityCheck,
@@ -79,51 +103,101 @@ impl OutputRoutes {
     ) -> Result<OutputRoute<T>, SafeError> {
         authorize()?;
         let lease = {
-            let mut active = self.active.lock();
-            if active.contains(&id) {
+            let mut table = self.table.lock();
+            if table.revoked {
+                return Err(error("FORBIDDEN"));
+            }
+            if table.entries.contains_key(&id) {
                 return Err(error("OUTPUT_CHANNEL_BUSY"));
             }
-            if active.len() >= self.capacity {
+            if table.entries.len() >= self.capacity {
                 return Err(error("OUTPUT_ROUTE_CAPACITY"));
             }
-            active.insert(id);
+            table.entries.insert(id, Entry::Reserved);
             CallbackLease {
                 id,
-                active: self.active.clone(),
+                table: self.table.clone(),
             }
         };
-        // Construct only after winning the callback lease. Dropping a rejected
-        // duplicate Tauri Channel would otherwise end the original JS callback.
-        // Both fallible work and RAII rollback run outside the table lock.
+        // Reserve before construction; rejecting a duplicate must not construct
+        // then drop a Channel which would end the original renderer callback.
         let channel = create()?;
         authorize()?;
-        Ok(OutputRoute {
-            channel: Mutex::new(Some(channel)),
-            authorize,
+        let core = Arc::new(RouteCore {
+            active: Mutex::new(Some(Active { channel, authorize })),
+            revoked: AtomicBool::new(false),
             _lease: lease,
-        })
+        });
+        let erased: Arc<dyn Revoke> = core.clone();
+        {
+            let mut table = self.table.lock();
+            if table.revoked {
+                return Err(error("FORBIDDEN"));
+            }
+            table
+                .entries
+                .insert(id, Entry::Bound(Arc::downgrade(&erased)));
+        }
+        Ok(OutputRoute { core })
+    }
+
+    pub(crate) fn revoke(&self) {
+        let routes: Vec<_> = {
+            let mut table = self.table.lock();
+            table.revoked = true;
+            table
+                .entries
+                .values()
+                .filter_map(|entry| match entry {
+                    Entry::Reserved => None,
+                    Entry::Bound(route) => route.upgrade(),
+                })
+                .collect()
+        };
+        // Never run native destructors or wait for sends under the table lock.
+        for route in routes {
+            route.revoke();
+        }
     }
 }
 
-impl<T: IpcResponse> OutputRoute<T> {
+impl<T: Send + Sync> Revoke for RouteCore<T> {
+    fn revoke(&self) {
+        self.revoked.store(true, Ordering::SeqCst);
+        // The native UI may revoke while a sender awaits a UI URL query.
+        // Waiting here would deadlock that UI. The sender also checks after
+        // unlocking, closing the restore-vs-revoke race without waiting here.
+        let retired = self.active.try_lock().and_then(|mut slot| slot.take());
+        drop(retired);
+    }
+}
+
+impl<T: IpcResponse + Send + Sync> OutputRoute<T> {
     pub(crate) fn send(&self, value: T) -> Result<(), SafeError> {
-        // Declare the pending owner before the lock guard so unwinding drops
-        // the guard first. Take the Channel out before external code: a panic
-        // leaves the route closed, rather than permitting a later frame.
-        let mut pending = None;
-        let mut slot = self.channel.lock();
+        let mut pending = None; // On unwind the guard must drop before Active.
+        let mut slot = self.core.active.lock();
+        if self.core.revoked.load(Ordering::SeqCst) {
+            return Err(error("FORBIDDEN"));
+        }
         std::mem::swap(&mut *slot, &mut pending);
-        let channel = pending
+        let active = pending
             .as_ref()
             .ok_or_else(|| error("OUTPUT_ROUTE_CLOSED"))?;
-        let result = (self.authorize)()
-            .and_then(|()| channel.send(value).map_err(|_| error("OUTPUT_ROUTE_LOST")));
-        if result.is_ok() {
+        let result = (active.authorize)().and_then(|()| {
+            active
+                .channel
+                .send(value)
+                .map_err(|_| error("OUTPUT_ROUTE_LOST"))
+        });
+        if result.is_ok() && !self.core.revoked.load(Ordering::SeqCst) {
             *slot = pending.take();
         }
         drop(slot);
-        // Failure drops the Channel here, outside both route and table locks.
-        // Panic propagates unchanged; no retry or replacement is authorized.
+        if self.core.revoked.load(Ordering::SeqCst) {
+            self.core.revoke();
+        }
+        // Both native Channel and admission captures retire outside locks on
+        // failure/unwind. Already accepted frames cannot be recalled.
         result
     }
 }

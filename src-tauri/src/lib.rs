@@ -54,7 +54,15 @@ pub fn rerun_checks() -> Vec<checks::CheckResult> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(initial_dir: Option<String>) {
+    let mut context = tauri::generate_context!();
+    let main_config = cli::native_runtime::take_main_config(context.config_mut())
+        .expect("main window configuration unavailable");
+    let native_runtime = std::sync::Arc::new(
+        cli::native_runtime::NativeRuntime::production().expect("native workspace unavailable"),
+    );
+    let native_setup = native_runtime.clone();
     tauri::Builder::default()
+        .manage(native_runtime)
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -68,8 +76,11 @@ pub fn run(initial_dir: Option<String>) {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             logger::init();
+            // Mint and retain document authority before loading the main page.
+            // The original window configuration and legacy PTY behavior remain.
+            native_setup.initialize_main(app, &main_config)?;
 
             // macOS: 注册原生 Copy 菜单项，使 Cmd+C 在 WebView 中生效
             #[cfg(target_os = "macos")]
@@ -140,6 +151,8 @@ pub fn run(initial_dir: Option<String>) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            cli::commands::cli_start,
+            cli::commands::cli_get_launch_status,
             cli::commands::cli_list_profiles,
             cli::commands::cli_patch_profile,
             cli::commands::cli_get_availability,
@@ -185,6 +198,6 @@ pub fn run(initial_dir: Option<String>) {
             commands::spawn_new_instance,
             commands::log_message,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

@@ -81,7 +81,7 @@ where
 }
 
 impl<R> DocumentBinding<R> {
-    fn admit_native<T: Runtime>(
+    pub(crate) fn admit_native<T: Runtime>(
         &self,
         webview: &Webview<T>,
         headers: &HeaderMap,
@@ -127,6 +127,7 @@ impl<R> DocumentBinding<R> {
     ) -> Result<OutputRoute<E>, SafeError>
     where
         R: Send + Sync + 'static,
+        E: Send + Sync + 'static,
     {
         self.admit_native(webview, headers)?;
         let id = parse_channel(headers)?;
@@ -135,7 +136,7 @@ impl<R> DocumentBinding<R> {
         // Retain only the validated proof, not arbitrary caller-supplied headers.
         let mut proof_headers = HeaderMap::new();
         proof_headers.insert(DOCUMENT_HEADER, headers[DOCUMENT_HEADER].clone());
-        self.output_routes.bind(
+        self.authority.output_routes.bind(
             id,
             Box::new(move || {
                 // A route must not keep its document/registry alive. Reuse the

@@ -307,6 +307,24 @@ impl<R> RunRegistry<R> {
             .ok_or_else(|| error("RUN_NOT_READY"))
     }
 
+    /// Backend lifecycle adoption must survive document revocation. Never expose
+    /// this method to a wire command: use resource(caller, run) for caller access.
+    pub(crate) fn retained_resource(&self, run: &RunKey) -> Result<Arc<R>, SafeError> {
+        let state = self.state.lock();
+        let key = state
+            .runs
+            .get(&run.run_id)
+            .ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        let record = state.records.get(key).expect("run index is retained");
+        if record.status.run != *run {
+            return Err(error("STALE_GENERATION"));
+        }
+        record
+            .resource
+            .clone()
+            .ok_or_else(|| error("RUN_NOT_READY"))
+    }
+
     /// Called by a backend waiter, never directly by a WebView.
     pub(crate) fn mark_exited(&self, run: &RunKey) -> Result<(), SafeError> {
         let mut state = self.state.lock();

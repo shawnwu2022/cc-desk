@@ -51,6 +51,7 @@ pub(crate) struct DocumentAuthority<R> {
     expected_url: Url,
     proof: String,
     state: Mutex<DocumentState>,
+    output_routes: OutputRoutes,
 }
 
 /// Non-cloneable owner; dropping it revokes authority but not owned processes.
@@ -58,7 +59,6 @@ pub(crate) struct DocumentBinding<R> {
     authority: Arc<DocumentAuthority<R>>,
     witness: Arc<DocumentWitness>,
     witness_id: ResourceId,
-    output_routes: OutputRoutes,
 }
 
 impl<R> std::fmt::Debug for DocumentAuthority<R> {
@@ -104,6 +104,7 @@ impl<R> DocumentAuthority<R> {
             caller,
             expected_url,
             proof,
+            output_routes: OutputRoutes::new(128),
             state: Mutex::new(DocumentState {
                 phase: Phase::Created,
                 attached: false,
@@ -155,6 +156,7 @@ impl<R> DocumentAuthority<R> {
         // Only this exact epoch can be revoked. A late old-window callback
         // cannot revoke a newer main window. No resource is retired or killed.
         let _ = self.registry.revoke_window(&self.caller);
+        self.output_routes.revoke();
     }
 
     pub(crate) fn attach(
@@ -172,7 +174,6 @@ impl<R> DocumentAuthority<R> {
             authority: self.clone(),
             witness,
             witness_id,
-            output_routes: OutputRoutes::new(128),
         })
     }
 
@@ -181,7 +182,10 @@ impl<R> DocumentAuthority<R> {
         // is data and must not undergo a second template expansion.
         let proof = serde_json::to_string(&self.proof).expect("string serialization");
         let url = serde_json::to_string(self.expected_url.as_str()).expect("string serialization");
+        let instance =
+            serde_json::to_string(&self.caller.instance_id).expect("string serialization");
         include_str!("document_bootstrap.js")
+            .replace("__CC_DESK_DOCUMENT_INSTANCE__", &instance)
             .replace("__CC_DESK_DOCUMENT_PROOF__", &proof)
             .replace("__CC_DESK_DOCUMENT_URL__", &url)
     }

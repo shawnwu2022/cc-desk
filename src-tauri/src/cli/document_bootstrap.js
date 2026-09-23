@@ -7,7 +7,7 @@
   if (actualUrl.href !== __CC_DESK_DOCUMENT_URL__) return
   const proof = __CC_DESK_DOCUMENT_PROOF__
   const encoder = new TextEncoder()
-  const bridge = Object.freeze({
+  const bridge = {
     async invoke(command, payload, channel) {
       let body
       const headers = { 'x-cc-desk-document': proof }
@@ -32,7 +32,9 @@
       // No retry/fallback. Channel metadata does not alter the frozen request.
       return internals.invoke(command, body, { headers })
     }
-  })
+  }
+  Object.defineProperty(bridge, 'instanceId', { value: __CC_DESK_DOCUMENT_INSTANCE__ })
+  Object.freeze(bridge)
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', {
     value: bridge,
     enumerable: false,

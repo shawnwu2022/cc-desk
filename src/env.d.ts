@@ -10,9 +10,7 @@ declare module '*.vue' {
 }
 
 // Tauri API 类型声明（由 @tauri-apps/api 提供，此处仅作补充）
-declare module '@tauri-apps/api/core' {
-  export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>
-}
+// Use the installed core declarations; an ambient replacement hid Channel.
 
 declare module '@tauri-apps/api/event' {
   export type UnlistenFn = () => void

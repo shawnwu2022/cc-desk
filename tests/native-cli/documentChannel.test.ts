@@ -15,7 +15,7 @@ function realm(fail = false) {
     calls.push({ command, body, options })
     return fail ? Promise.reject({ code: 'TRANSPORT_LOST' }) : Promise.resolve('receipt')
   } })
-  runInNewContext(template.replace('__CC_DESK_DOCUMENT_PROOF__', JSON.stringify('1234567890abcdef1234567890abcdef')).replace('__CC_DESK_DOCUMENT_URL__', JSON.stringify(context.location.href)), context)
+  runInNewContext(template.replace('__CC_DESK_DOCUMENT_PROOF__', JSON.stringify('1234567890abcdef1234567890abcdef')).replace('__CC_DESK_DOCUMENT_INSTANCE__', JSON.stringify('backend-channel')).replace('__CC_DESK_DOCUMENT_URL__', JSON.stringify(context.location.href)), context)
   return { bridge: context.__CC_DESK_DOCUMENT__, calls }
 }
 

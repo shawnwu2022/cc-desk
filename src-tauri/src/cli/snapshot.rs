@@ -28,6 +28,7 @@ pub(crate) struct FreezeContext<'a> {
 
 /// Values and launch intent are frozen, not the executable's on-disk bytes.
 /// D10 must use these selected paths; D11 supplies validated caller lifetime.
+#[derive(Clone)]
 pub(crate) struct LaunchSnapshot {
     request: LaunchRequest,
     profile: Profile,

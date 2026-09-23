@@ -177,11 +177,20 @@ impl OwnedPty {
     }
 
     pub(crate) fn resize(&self, size: PtySize) -> Result<(), SafeError> {
+        self.resize_checked(size, || Ok(()))
+    }
+
+    /// Revalidate a caller after waiting for the master lock, immediately before
+    /// the native effect. Internal lifecycle users use resize with no wire owner.
+    pub(crate) fn resize_checked(
+        &self,
+        size: PtySize,
+        authorize: impl FnOnce() -> Result<(), SafeError>,
+    ) -> Result<(), SafeError> {
         validate_size(size)?;
-        self.master
-            .lock()
-            .resize(size)
-            .map_err(|_| error("HOST_RESIZE_FAILED"))
+        let master = self.master.lock();
+        authorize()?;
+        master.resize(size).map_err(|_| error("HOST_RESIZE_FAILED"))
     }
 }
 
