@@ -6,7 +6,6 @@ use crate::cli::types::{CliKind, LaunchAction, LaunchRequest, ResumeScope, WireU
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::path::Path;
 
 const LOCATOR: &str = "11111111-2222-4333-8444-555555555555";
 
@@ -96,9 +95,21 @@ fn D09_Golden_AllSupportedActions_001() {
         (CliKind::Claude, LaunchAction::New, vec![]),
         (CliKind::Codex, LaunchAction::New, vec![]),
         (CliKind::Shell, LaunchAction::New, vec![]),
-        (CliKind::Claude, picker(ResumeScope::CurrentProject), vec!["--resume"]),
-        (CliKind::Codex, picker(ResumeScope::CurrentProject), vec!["resume"]),
-        (CliKind::Codex, picker(ResumeScope::All), vec!["resume", "--all"]),
+        (
+            CliKind::Claude,
+            picker(ResumeScope::CurrentProject),
+            vec!["--resume"],
+        ),
+        (
+            CliKind::Codex,
+            picker(ResumeScope::CurrentProject),
+            vec!["resume"],
+        ),
+        (
+            CliKind::Codex,
+            picker(ResumeScope::All),
+            vec!["resume", "--all"],
+        ),
         (CliKind::Claude, resume(LOCATOR), vec!["--resume", LOCATOR]),
         (CliKind::Codex, resume(LOCATOR), vec!["resume", LOCATOR]),
     ];
@@ -131,13 +142,32 @@ fn D09_Unsupported_ShellResumeAndClaudeAll_002() {
 #[test]
 fn D09_Raw_LosslessWithoutDeskAdditions_003() {
     let argv = [
-        "--future", "a b", "", "中文", "\"", "'", "\n", "tail\\", "$HOME",
-        "%TEMP%", "!x!", "^", "`", "$(echo x)", "&", "|", ">", "--", "-literal",
+        "--future",
+        "a b",
+        "",
+        "中文",
+        "\"",
+        "'",
+        "\n",
+        "tail\\",
+        "$HOME",
+        "%TEMP%",
+        "!x!",
+        "^",
+        "`",
+        "$(echo x)",
+        "&",
+        "|",
+        ">",
+        "--",
+        "-literal",
     ];
     for cli in [CliKind::Claude, CliKind::Codex, CliKind::Shell] {
         let mut fixture = Fixture::new(
             cli,
-            LaunchAction::Raw { argv: argv.iter().map(|s| (*s).into()).collect() },
+            LaunchAction::Raw {
+                argv: argv.iter().map(|s| (*s).into()).collect(),
+            },
         );
         fixture.profile.default_args = Override::Set(vec!["--model".into(), "desk-default".into()]);
         fixture.profile.observer = Override::Set(true);
@@ -147,12 +177,22 @@ fn D09_Raw_LosslessWithoutDeskAdditions_003() {
         fixture.observer = Some(ObserverEnv {
             values: EnvMap::from([("CC_BOX_SESSION_ID".into(), "observer-only".into())]),
         });
-        fixture.inherited.insert("USER_OWNED".into(), "keep-me".into());
+        fixture
+            .inherited
+            .insert("USER_OWNED".into(), "keep-me".into());
         let snapshot = fixture.freeze();
         let invocation = build_invocation(&fixture.request, &snapshot).unwrap();
         assert_eq!(invocation.args(), words(&argv));
-        assert_eq!(invocation.environment().get(OsStr::new("USER_OWNED")).unwrap(), "keep-me");
-        assert!(!invocation.environment().contains_key(OsStr::new("CC_BOX_SESSION_ID")));
+        assert_eq!(
+            invocation
+                .environment()
+                .get(OsStr::new("USER_OWNED"))
+                .unwrap(),
+            "keep-me"
+        );
+        assert!(!invocation
+            .environment()
+            .contains_key(OsStr::new("CC_BOX_SESSION_ID")));
     }
 }
 
@@ -164,19 +204,35 @@ fn D09_Arguments_ExplicitDefaultsThenExtras_004() {
         fixture.request.extra_args = vec!["--future".into(), "a b".into(), "".into(), "--".into()];
         let snapshot = fixture.freeze();
         let invocation = build_invocation(&fixture.request, &snapshot).unwrap();
-        assert_eq!(invocation.args(), words(&["--model", "chosen", "--future", "a b", "", "--"]));
+        assert_eq!(
+            invocation.args(),
+            words(&["--model", "chosen", "--future", "a b", "", "--"])
+        );
     }
     let mut fixture = Fixture::new(CliKind::Codex, resume(LOCATOR));
     fixture.profile.default_args = Override::Set(vec!["--model".into(), "chosen".into()]);
     fixture.request.extra_args = vec!["--future".into()];
     let snapshot = fixture.freeze();
-    assert_eq!(build_invocation(&fixture.request, &snapshot).unwrap().args(), words(&["resume", LOCATOR, "--model", "chosen", "--future"]));
+    assert_eq!(
+        build_invocation(&fixture.request, &snapshot)
+            .unwrap()
+            .args(),
+        words(&["resume", LOCATOR, "--model", "chosen", "--future"])
+    );
 }
 
 #[test]
 fn D09_Locator_RejectsOptionsAndControls_005() {
     for cli in [CliKind::Claude, CliKind::Codex] {
-        for locator in ["--last", "--dangerously-skip-permissions", "-", "\nsecret", "\tsecret", "secret\r", "   "] {
+        for locator in [
+            "--last",
+            "--dangerously-skip-permissions",
+            "-",
+            "\nsecret",
+            "\tsecret",
+            "secret\r",
+            "   ",
+        ] {
             let fixture = Fixture::new(cli, resume(locator));
             let snapshot = fixture.freeze();
             let error = build_invocation(&fixture.request, &snapshot).unwrap_err();
@@ -257,11 +313,18 @@ fn D09_Environment_UsesFrozenValuesAndDeletions_008() {
     fixture.profile.env.insert("DELETE".into(), Override::Unset);
     let snapshot = fixture.freeze();
     fixture.inherited.insert("KEEP".into(), "changed".into());
-    fixture.profile.env.insert("NEW".into(), Override::Set(EnvValue::Literal {
-        value: "late-overlay".into(), non_secret: true,
-    }));
+    fixture.profile.env.insert(
+        "NEW".into(),
+        Override::Set(EnvValue::Literal {
+            value: "late-overlay".into(),
+            non_secret: true,
+        }),
+    );
     let invocation = build_invocation(&fixture.request, &snapshot).unwrap();
-    assert_eq!(invocation.environment(), &EnvMap::from([("KEEP".into(), "original".into())]));
+    assert_eq!(
+        invocation.environment(),
+        &EnvMap::from([("KEEP".into(), "original".into())])
+    );
 }
 
 #[test]
@@ -290,9 +353,16 @@ fn D09_Legacy_OpaqueTextRequiresExplicitMigration_010() {
     let error = build_invocation(&fixture.request, &snapshot).unwrap_err();
     assert_eq!(error.code, "LEGACY_ARGUMENTS_REQUIRE_MIGRATION");
     assert!(!error.to_string().contains("private"));
-    fixture.request.action = LaunchAction::Raw { argv: vec!["--help".into()] };
+    fixture.request.action = LaunchAction::Raw {
+        argv: vec!["--help".into()],
+    };
     let snapshot = fixture.freeze();
-    assert_eq!(build_invocation(&fixture.request, &snapshot).unwrap().args(), words(&["--help"]));
+    assert_eq!(
+        build_invocation(&fixture.request, &snapshot)
+            .unwrap()
+            .args(),
+        words(&["--help"])
+    );
 }
 
 #[test]
@@ -302,17 +372,28 @@ fn D09_Legacy_EmptyUnsetAndExplicitArray_011() {
         fixture.legacy("private shell text");
         fixture.profile.default_args = override_value;
         let snapshot = fixture.freeze();
-        assert!(build_invocation(&fixture.request, &snapshot).unwrap().args().is_empty());
+        assert!(build_invocation(&fixture.request, &snapshot)
+            .unwrap()
+            .args()
+            .is_empty());
     }
     let mut fixture = Fixture::new(CliKind::Claude, LaunchAction::New);
     fixture.legacy("");
     let snapshot = fixture.freeze();
-    assert!(build_invocation(&fixture.request, &snapshot).unwrap().args().is_empty());
+    assert!(build_invocation(&fixture.request, &snapshot)
+        .unwrap()
+        .args()
+        .is_empty());
 }
 
 #[test]
 fn D09_Permissions_OnlyExplicitClaudeSetting_012() {
-    for setting in [Override::Inherit, Override::Unset, Override::Set(false), Override::Set(true)] {
+    for setting in [
+        Override::Inherit,
+        Override::Unset,
+        Override::Set(false),
+        Override::Set(true),
+    ] {
         let mut fixture = Fixture::new(CliKind::Claude, LaunchAction::New);
         let expected = if setting == Override::Set(true) {
             words(&["--dangerously-skip-permissions"])
@@ -321,20 +402,34 @@ fn D09_Permissions_OnlyExplicitClaudeSetting_012() {
         };
         fixture.profile.skip_permissions = setting;
         let snapshot = fixture.freeze();
-        assert_eq!(build_invocation(&fixture.request, &snapshot).unwrap().args(), expected);
+        assert_eq!(
+            build_invocation(&fixture.request, &snapshot)
+                .unwrap()
+                .args(),
+            expected
+        );
     }
     for cli in [CliKind::Codex, CliKind::Shell] {
         let mut fixture = Fixture::new(cli, LaunchAction::New);
-        fixture.legacy = Some(json!({"defaultSkipPermissions":true,"defaultCustomArgs":"--model claude-only","claudeEnvVars":false}));
+        fixture.legacy = Some(
+            json!({"defaultSkipPermissions":true,"defaultCustomArgs":"--model claude-only","claudeEnvVars":false}),
+        );
         let snapshot = fixture.freeze();
-        assert!(build_invocation(&fixture.request, &snapshot).unwrap().args().is_empty());
+        assert!(build_invocation(&fixture.request, &snapshot)
+            .unwrap()
+            .args()
+            .is_empty());
     }
 }
 
 #[test]
 fn D09_Identity_LocatorAndOverridesAreNotVerified_013() {
     let mut fixture = Fixture::new(CliKind::Codex, resume(LOCATOR));
-    fixture.request.extra_args = vec!["--cd".into(), "opaque-other-directory".into(), "--future".into()];
+    fixture.request.extra_args = vec![
+        "--cd".into(),
+        "opaque-other-directory".into(),
+        "--future".into(),
+    ];
     let snapshot = fixture.freeze();
     let invocation = build_invocation(&fixture.request, &snapshot).unwrap();
     let identity = serde_json::to_value(invocation.initial_identity()).unwrap();
@@ -367,8 +462,15 @@ fn D09_Launcher_RunnerAndDialectStayFrozen_014() {
 
 #[test]
 fn D09_Debug_RedactsAllLaunchValues_015() {
-    let mut fixture = Fixture::new(CliKind::Codex, LaunchAction::Raw { argv: vec!["private-argument".into()] });
-    fixture.inherited.insert("PRIVATE_TOKEN".into(), "private-token".into());
+    let mut fixture = Fixture::new(
+        CliKind::Codex,
+        LaunchAction::Raw {
+            argv: vec!["private-argument".into()],
+        },
+    );
+    fixture
+        .inherited
+        .insert("PRIVATE_TOKEN".into(), "private-token".into());
     let snapshot = fixture.freeze();
     let invocation = build_invocation(&fixture.request, &snapshot).unwrap();
     assert_eq!(format!("{invocation:?}"), "CliInvocation(<redacted>)");
@@ -387,9 +489,19 @@ fn D09_Raw_EmptyDoesNotBecomeDefaultNewSession_016() {
 #[test]
 fn D09_Raw_OptionLikeLocatorsRemainNativeEscapeHatch_017() {
     for cli in [CliKind::Claude, CliKind::Codex, CliKind::Shell] {
-        let fixture = Fixture::new(cli, LaunchAction::Raw { argv: vec!["resume".into(), "--future-locator".into()] });
+        let fixture = Fixture::new(
+            cli,
+            LaunchAction::Raw {
+                argv: vec!["resume".into(), "--future-locator".into()],
+            },
+        );
         let snapshot = fixture.freeze();
-        assert_eq!(build_invocation(&fixture.request, &snapshot).unwrap().args(), words(&["resume", "--future-locator"]));
+        assert_eq!(
+            build_invocation(&fixture.request, &snapshot)
+                .unwrap()
+                .args(),
+            words(&["resume", "--future-locator"])
+        );
     }
 }
 
@@ -398,9 +510,11 @@ fn D09_Raw_OptionLikeLocatorsRemainNativeEscapeHatch_017() {
 fn D09_Environment_NonUnicodeOsValuesSurvive_018() {
     use std::os::unix::ffi::OsStringExt;
     let mut fixture = Fixture::new(CliKind::Codex, LaunchAction::New);
-    fixture.inherited.insert("BYTES".into(), OsString::from_vec(vec![0xff, 0xfe]));
+    fixture
+        .inherited
+        .insert("BYTES".into(), OsString::from_vec(vec![0xff, 0xfe]));
     let snapshot = fixture.freeze();
     let invocation = build_invocation(&fixture.request, &snapshot).unwrap();
     assert_eq!(invocation.environment(), &fixture.inherited);
-    assert!(invocation.cwd() == Path::new(&fixture.request.launch_cwd));
+    assert!(invocation.cwd() == std::path::Path::new(&fixture.request.launch_cwd));
 }

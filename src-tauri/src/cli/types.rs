@@ -250,6 +250,24 @@ pub(crate) struct RunPublicIdentity {
     native_session_id: Resolution<String>,
 }
 
+impl RunPublicIdentity {
+    /// Launch intent cannot verify the CLI's eventual directory, root or session.
+    pub(crate) fn unverified_launch(request: &LaunchRequest) -> Self {
+        let unknown = || Resolution::Unknown {
+            reason: "NATIVE_RUNTIME_NOT_OBSERVED".into(),
+        };
+        Self {
+            run_id: request.run_id.clone(),
+            generation: request.generation,
+            cli: request.cli,
+            launch_cwd: request.launch_cwd.clone(),
+            effective_cwd: unknown(),
+            effective_config_root: unknown(),
+            native_session_id: unknown(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct NativeSessionRef {
