@@ -264,3 +264,11 @@ npm run tauri:build        # 生产构建
 - 仅诊断构建同时启用 `VITE_CC_DESK_PASTE_TRACE=1` 与 `CC_DESK_PASTE_TRACE=1`；首次粘贴后最多 60 秒、256 个输入事件、32 个前端 PTY 上下文。普通构建不附加参考正文。
 - 规范化剪贴板参考文本只随同一次本地 IPC 在 Rust 内存中严格比较，不写日志；参考不超过 2 MiB 时提供 `exact` 与首次差异偏移，超出只标未知、不截断输入。日志只含编号、计数、布尔值，见 `docs/paste-runtime-trace.md`。
 - `send_seq` / `recv_seq` 是 IPC 投递/接收顺序，不是 writer 锁获取顺序；诊断不是修复，仍需在受影响 Windows 环境定位，不能以发送成功替代真实草稿/提交完整性。
+
+### D12 来源隔离（首个增量，任务未完成）
+
+- 派生名称索引 schema v2 使用 CLI、已验证 sourceRootKey、identityEpoch 和项目目录身份组成的缓存键；旧 v1 缓存重建，不跨根命中。未知目录身份跳过缓存，不猜测默认根。
+- 旧 Claude 项目映射按来源根与路径分区，最多保留 64 个派生分区；显式根扫描不得覆盖默认根，失效操作清空所有分区。
+- 配置面板请求用本地选择所有权拒绝迟到的成功/失败/finally；清空与切换立即隐藏旧配置，不记录原始异常载荷。
+- `SourcePartition` 只是缓存身份，不是授权 SourceScope / 文件系统沙箱；`native_get_scope`、`native_list_resources` 与全量资源读取迁移仍未完成。不得让新双 CLI UI 借道旧默认根读取。
+- D11 的 `NATIVE_RUNTIME_NOT_READY` 保持关闭，详见 `docs/superpowers/execution/D12.md`。

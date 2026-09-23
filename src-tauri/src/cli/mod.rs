@@ -14,6 +14,7 @@ pub(crate) mod profiles;
 pub(crate) mod project_commands;
 pub(crate) mod project_legacy;
 pub(crate) mod project_service;
+pub(crate) mod projection;
 mod request_fingerprint;
 pub(crate) mod routed_launch;
 pub(crate) mod run_registry;

@@ -243,7 +243,7 @@ fn Index_SchemaVersion_Empty_011() {
     };
     std::fs::write(
         &paths.data,
-        r#"{"schemaVersion":2,"parserVersion":1,"projects":{"p":{"s.jsonl":{"name":"stale","observedLength":1,"modifiedSecs":1,"modifiedNanos":1,"cachedAtMs":1}}}}"#,
+        r#"{"schemaVersion":999,"parserVersion":1,"projects":{"p":{"s.jsonl":{"name":"stale","observedLength":1,"modifiedSecs":1,"modifiedNanos":1,"cachedAtMs":1}}}}"#,
     )
     .unwrap();
     let now_ms = Arc::new(AtomicU64::new(1_000));
@@ -278,7 +278,7 @@ fn Index_ParserVersion_Empty_012() {
     };
     std::fs::write(
         &paths.data,
-        r#"{"schemaVersion":1,"parserVersion":0,"projects":{"p":{"s.jsonl":{"name":"stale","observedLength":1,"modifiedSecs":1,"modifiedNanos":1,"cachedAtMs":1}}}}"#,
+        r#"{"schemaVersion":2,"parserVersion":0,"projects":{"p":{"s.jsonl":{"name":"stale","observedLength":1,"modifiedSecs":1,"modifiedNanos":1,"cachedAtMs":1}}}}"#,
     )
     .unwrap();
     let now_ms = Arc::new(AtomicU64::new(1_000));
@@ -468,7 +468,8 @@ fn Resolver_ExactHit_NoDelta_020() {
     )
     .unwrap();
     let stamp = FileStamp::read(&path).unwrap();
-    let project_key = crate::store::normalize_path_str(&project_dir.to_string_lossy());
+    let project_key =
+        crate::session_name_index::legacy_project_index_key(project_dir.as_ref()).unwrap();
     let mut projects = BTreeMap::new();
     projects.insert(
         project_key,
@@ -532,7 +533,8 @@ fn Resolver_Miss_CreatesStableDelta_021() {
         modified_nanos: stale_stamp.modified_nanos,
         cached_at_ms: 1_000,
     };
-    let project_key = crate::store::normalize_path_str(&project_dir.to_string_lossy());
+    let project_key =
+        crate::session_name_index::legacy_project_index_key(project_dir.as_ref()).unwrap();
     let mut projects = BTreeMap::new();
     projects.insert(
         project_key.clone(),
@@ -612,7 +614,8 @@ fn Resolver_Unstable_NoDelta_022() {
 fn Resolver_Dirs_PruneComplete_023() {
     let dir = tempfile::tempdir().unwrap();
     let project_dir = dir.path().join("-e-source-project");
-    let project_key = crate::store::normalize_path_str(&project_dir.to_string_lossy());
+    let project_key =
+        crate::session_name_index::legacy_project_index_key(project_dir.as_ref()).unwrap();
     let stamp = FileStamp {
         observed_length: 1,
         modified_secs: 1,
