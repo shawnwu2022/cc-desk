@@ -126,7 +126,7 @@ fn bash_args(
     shim: bool,
 ) -> Result<Vec<OsString>, SafeError> {
     let mut forwarded = Vec::new();
-    if shim {
+    if shim && !cfg!(windows) {
         forwarded.push(bash_path(runner)?);
         forwarded.extend(["--noprofile".into(), "--norc".into()]);
     }
@@ -139,7 +139,21 @@ fn bash_args(
     if cfg!(windows) {
         // CRT quoting alone is not MSYS argv quoting. Encode each word without
         // eval or external decoders; never expose caller bytes as shell syntax.
-        let mut script = String::from("export MSYS2_ARG_CONV_EXCL='*'; exec");
+        let mut script = String::from("export MSYS2_ARG_CONV_EXCL='*'; ");
+        if shim {
+            // Re-enter the interpreter already launched by the selected runner.
+            // Re-executing Git's native bin/bash.exe redirector would serialize
+            // decoded argv through Windows/MSYS again and lose apostrophes.
+            // This is Bash's own interpreter identity, not PATH rediscovery or
+            // substitution of an independently selected installation.
+            script.push_str(
+                "if [[ $BASH != /* && $BASH != [A-Za-z]:/* ]]; then \
+                 printf '%s\\n' RUNNER_UNAVAILABLE >&2; exit 125; fi; \
+                 exec \"$BASH\" --noprofile --norc --",
+            );
+        } else {
+            script.push_str("exec");
+        }
         for value in &forwarded {
             script.push(' ');
             script.push_str(&bash_literal(value)?);
@@ -270,8 +284,13 @@ pub(crate) fn resolve_process(
     };
     let cmd = matches!(
         invocation.launcher(),
-        Launcher::Shell { dialect: Dialect::Cmd, .. }
-            | Launcher::Shim { dialect: Dialect::Cmd, .. }
+        Launcher::Shell {
+            dialect: Dialect::Cmd,
+            ..
+        } | Launcher::Shim {
+            dialect: Dialect::Cmd,
+            ..
+        }
     );
     super::launch_limits::validate(&program, &args, invocation.environment(), cmd)?;
     Ok(ProcessLaunchSpec {
