@@ -1,0 +1,35 @@
+name: D12 isolated workspace export
+on:
+  push:
+    branches: [feat/native-cli-source-scope]
+    paths: [.github/workflows/d12-workspace-export.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Export exact tracked source and Linux test dependencies
+        shell: bash
+        run: |
+          mkdir -p /tmp/d12-workspace
+          git archive --format=tar HEAD -o /tmp/d12-workspace/source.tar
+          git rev-parse HEAD > /tmp/d12-workspace/source.sha
+          tar -czf /tmp/d12-workspace/node_modules.tar.gz node_modules
+          cd /tmp/d12-workspace
+          sha256sum source.tar node_modules.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: d12-isolated-workspace
+          path: /tmp/d12-workspace
+          retention-days: 2
+          if-no-files-found: error
