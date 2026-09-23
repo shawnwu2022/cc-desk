@@ -27,6 +27,9 @@ jobs:
           git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/d11-workspace/source.tar.gz"
           tar -czf "$RUNNER_TEMP/d11-workspace/node_modules.tar.gz" node_modules
           cp "$(rustup which rustfmt)" "$RUNNER_TEMP/d11-workspace/rustfmt"
+          toolchain_lib="$(dirname "$(rustup which rustfmt)")/../lib"
+          cp "$toolchain_lib"/librustc_driver-*.so "$RUNNER_TEMP/d11-workspace/"
+          cp "$toolchain_lib"/libLLVM.so.* "$RUNNER_TEMP/d11-workspace/"
           rustfmt --version > "$RUNNER_TEMP/d11-workspace/TOOLCHAIN"
           ldd "$(rustup which rustfmt)" >> "$RUNNER_TEMP/d11-workspace/TOOLCHAIN"
       - uses: actions/upload-artifact@v4

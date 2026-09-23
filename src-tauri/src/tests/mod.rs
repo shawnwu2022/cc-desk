@@ -73,3 +73,5 @@ mod store_profiling;
 mod paste_cli_submit;
 #[cfg(test)]
 mod paste_framing;
+
+mod native_cli_route_lifetime;
