@@ -164,12 +164,11 @@ fn D11_Document_RemoteBootstrapCannotRotateRegistry_04() {
             DocumentAuthority::new(h.f.driver.registry().clone(), url.parse().unwrap()).is_err()
         );
     }
-    let failure = h
-        .f
-        .driver
-        .registry()
-        .status(&h.f.caller, "owned-request")
-        .unwrap_err();
+    let failure =
+        h.f.driver
+            .registry()
+            .status(&h.f.caller, "owned-request")
+            .unwrap_err();
     assert_eq!(failure.code, "LAUNCH_NOT_FOUND");
 }
 
@@ -181,12 +180,11 @@ fn D11_Document_ReloadAndLateFinishNeverReauthorize_05() {
     h.authority.finished(&h.url);
     h.authority.finished(&h.url);
     assert_eq!(h.query().unwrap_err().code, "FORBIDDEN");
-    let failure = h
-        .f
-        .driver
-        .registry()
-        .resource(&h.f.caller, &status.run)
-        .unwrap_err();
+    let failure =
+        h.f.driver
+            .registry()
+            .resource(&h.f.caller, &status.run)
+            .unwrap_err();
     assert_eq!(failure.code, "FORBIDDEN");
     assert_eq!(h.f.drops.load(Ordering::SeqCst), 0);
 }
@@ -236,7 +234,10 @@ fn D11_Document_RawStartPreservesRequestAndRejectsForgedOwner_09() {
     let mut forged = serde_json::to_value(&h.f.request).unwrap();
     forged["ownerWindowId"] = "main".into();
     let body = InvokeBody::Raw(serde_json::to_vec(&forged).unwrap());
-    let failure = rejected(h.binding.start_request(&h.table, &h.context(), &h.headers, &body));
+    let failure = rejected(
+        h.binding
+            .start_request(&h.table, &h.context(), &h.headers, &body),
+    );
     assert_eq!(failure.code, "INVALID_REQUEST");
 }
 
@@ -244,17 +245,22 @@ fn D11_Document_RawStartPreservesRequestAndRejectsForgedOwner_09() {
 fn D11_Document_AuthenticatesBeforeBoundedRawDecode_10() {
     let h = Harness::new(true);
     let body = InvokeBody::Raw(vec![b' '; MAX_LAUNCH_WIRE_BYTES + 1]);
-    let failure = rejected(h.binding.start_request(
-        &h.table,
-        &h.context(),
-        &HeaderMap::new(),
-        &body,
-    ));
+    let failure =
+        rejected(
+            h.binding
+                .start_request(&h.table, &h.context(), &HeaderMap::new(), &body),
+        );
     assert_eq!(failure.code, "FORBIDDEN");
-    let failure = rejected(h.binding.start_request(&h.table, &h.context(), &h.headers, &body));
+    let failure = rejected(
+        h.binding
+            .start_request(&h.table, &h.context(), &h.headers, &body),
+    );
     assert_eq!(failure.code, "REQUEST_TOO_LARGE");
     let json = InvokeBody::Json(serde_json::to_value(&h.f.request).unwrap());
-    let failure = rejected(h.binding.start_request(&h.table, &h.context(), &h.headers, &json));
+    let failure = rejected(
+        h.binding
+            .start_request(&h.table, &h.context(), &h.headers, &json),
+    );
     assert_eq!(failure.code, "RAW_BODY_REQUIRED");
     let query = InvokeBody::Raw(vec![b' '; MAX_QUERY_WIRE_BYTES + 1]);
     let failure = h
@@ -284,20 +290,19 @@ fn D11_Document_QueryOnlyReturnsOriginalRetainedResult_11() {
 fn D11_Document_RevokeDuringRoutePreventsSpawn_12() {
     let h = Harness::new(true);
     let caller = h.binding.admit(&h.table, &h.context(), &h.headers).unwrap();
-    let result = h
-        .f
-        .driver
-        .start_routed(
-            &caller,
-            &h.f.request,
-            || h.f.freeze(),
-            |_| {
-                h.authority.revoke();
-                Ok(h.f.lease())
-            },
-            |_| panic!("revoked document must not spawn"),
-        )
-        .unwrap();
+    let result =
+        h.f.driver
+            .start_routed(
+                &caller,
+                &h.f.request,
+                || h.f.freeze(),
+                |_| {
+                    h.authority.revoke();
+                    Ok(h.f.lease())
+                },
+                |_| panic!("revoked document must not spawn"),
+            )
+            .unwrap();
     assert_eq!(result.phase, LaunchPhase::Cancelled);
     assert_eq!(h.f.drops.load(Ordering::SeqCst), 1);
 }
@@ -306,19 +311,17 @@ fn D11_Document_RevokeDuringRoutePreventsSpawn_12() {
 fn D11_Document_DropRevokesWithoutDiscardingOwnedRun_13() {
     let h = Harness::new(true);
     let status = h.start();
-    let resource = h
-        .f
-        .driver
-        .registry()
-        .resource(&h.f.caller, &status.run)
-        .unwrap();
+    let resource =
+        h.f.driver
+            .registry()
+            .resource(&h.f.caller, &status.run)
+            .unwrap();
     drop(h.binding);
-    let failure = h
-        .f
-        .driver
-        .registry()
-        .status(&h.f.caller, "owned-request")
-        .unwrap_err();
+    let failure =
+        h.f.driver
+            .registry()
+            .status(&h.f.caller, "owned-request")
+            .unwrap_err();
     assert_eq!(failure.code, "FORBIDDEN");
     assert_eq!(h.f.drops.load(Ordering::SeqCst), 0);
     h.f.driver.registry().mark_exited(&status.run).unwrap();
