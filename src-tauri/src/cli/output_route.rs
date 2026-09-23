@@ -176,10 +176,12 @@ impl<T: IpcResponse + Send + Sync> OutputRoute<T> {
     pub(crate) fn send(&self, value: T) -> Result<(), SafeError> {
         let mut pending = None; // On unwind the guard must drop before Active.
         let mut slot = self.core.active.lock();
+        // Take native owners even on early denial; revocation may have missed
+        // this busy slot. Declaration order releases the lock before cleanup.
+        std::mem::swap(&mut *slot, &mut pending);
         if self.core.revoked.load(Ordering::SeqCst) {
             return Err(error("FORBIDDEN"));
         }
-        std::mem::swap(&mut *slot, &mut pending);
         let active = pending
             .as_ref()
             .ok_or_else(|| error("OUTPUT_ROUTE_CLOSED"))?;
