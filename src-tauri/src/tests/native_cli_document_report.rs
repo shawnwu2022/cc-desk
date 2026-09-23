@@ -29,8 +29,41 @@ pub(super) fn expected(mode: &str) -> Vec<(&str, &str)> {
     ]
 }
 
-// RED scaffold: negative cases below must fail before this verifier is filled.
-pub(super) fn verify(_report: &Evidence, _mode: &str) -> Result<(), &'static str> {
+pub(super) fn verify(report: &Evidence, mode: &str) -> Result<(), &'static str> {
+    if !matches!(mode, "reload" | "destroy")
+        || report.schema != 1
+        || report.mode != mode
+        || report.target != "windows-x86_64"
+        || report.engine != "tauri-wry-webview2"
+        || report.engine_version.is_empty()
+        || report.engine_version.len() > 128
+        || report.engine_version.trim() != report.engine_version
+    {
+        return Err("EVIDENCE_IDENTITY");
+    }
+    if report.failure.is_some() {
+        return Err("EVIDENCE_FAILED");
+    }
+    if !(2..=128).contains(&report.events.len())
+        || report.events[0] != "started"
+        || report.events[1] != "finished"
+        || report
+            .events
+            .iter()
+            .any(|event| !matches!(event.as_str(), "started" | "finished"))
+    {
+        return Err("EVIDENCE_PAGE_EVENTS");
+    }
+    let expected = expected(mode);
+    if report.observations.len() != expected.len()
+        || report
+            .observations
+            .iter()
+            .zip(expected)
+            .any(|((name, result), (required, outcome))| name != required || result != outcome)
+    {
+        return Err("EVIDENCE_CASES");
+    }
     Ok(())
 }
 

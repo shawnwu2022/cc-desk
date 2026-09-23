@@ -6,6 +6,7 @@ use crate::cli::snapshot::CallerIdentity;
 use crate::cli::types::{CliKind, LaunchAction, LaunchRequest, WireU64};
 use parking_lot::Mutex;
 use std::fs::{self, File};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,7 +38,10 @@ struct Probe {
 
 impl Probe {
     fn fail(&self, app: &AppHandle, code: &str) {
-        self.report.lock().failure.get_or_insert_with(|| code.into());
+        self.report
+            .lock()
+            .failure
+            .get_or_insert_with(|| code.into());
         app.exit(1);
     }
 
@@ -61,12 +65,14 @@ async fn d11_probe(
     webview: Webview,
     request: Request<'_>,
     state: State<'_, Arc<Probe>>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
+    // The production bridge does not add test headers and Tauri's invoke is
+    // read-only. Only the first required observation can use this default.
     let case = request
         .headers()
         .get(CASE_HEADER)
         .and_then(|value| value.to_str().ok())
-        .unwrap_or("missing-case");
+        .unwrap_or("start");
     let binding = state.binding.lock().clone().ok_or("BINDING_NOT_ATTACHED")?;
     let actual = if matches!(
         case,
@@ -100,7 +106,14 @@ async fn d11_probe(
         state.fail(&app, &failure);
         return Err(failure);
     }
-    Ok(())
+    // Deliberately disclose the admitted proof to this disposable fixture so
+    // the peer and stale-page cases attack with a valid token. Test-only IPC;
+    // no production endpoint returns document proofs or installs this handler.
+    Ok(if case == "start" {
+        state.proof.lock().clone()
+    } else {
+        None
+    })
 }
 
 #[tauri::command]
@@ -122,9 +135,7 @@ async fn d11_peer(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), St
 
 #[tauri::command]
 async fn d11_end(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), String> {
-    if state.report.lock().observations.len() != 10
-        || state.ending.swap(true, Ordering::SeqCst)
-    {
+    if state.report.lock().observations.len() != 10 || state.ending.swap(true, Ordering::SeqCst) {
         state.fail(&app, "LIFECYCLE_OUT_OF_ORDER");
         return Err("LIFECYCLE_OUT_OF_ORDER".into());
     }
@@ -199,7 +210,13 @@ fn D11_Webview_Live_001() {
         let log_path = directory.path().join("worker.log");
         let log = File::create(&log_path).unwrap();
         let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", WORKER, "--ignored", "--nocapture", "--test-threads=1"])
+            .args([
+                "--exact",
+                WORKER,
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
             .env("CC_DESK_D11_NATIVE_ROOT", directory.path())
             .env("CC_DESK_D11_NATIVE_MODE", mode)
             .stdout(Stdio::from(log.try_clone().unwrap()))
@@ -224,7 +241,13 @@ fn D11_Webview_Live_001() {
         assert!(fs::metadata(&path).unwrap().len() <= 65536);
         let report: Evidence = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(verify(&report, mode), Ok(()), "{report:?}");
-        println!("D11_NATIVE_EVIDENCE {}", serde_json::to_string(&report).unwrap());
+        // Bypass libtest's passing-test capture for safe structured CI evidence.
+        writeln!(
+            std::io::stdout().lock(),
+            "D11_NATIVE_EVIDENCE {}",
+            serde_json::to_string(&report).unwrap()
+        )
+        .unwrap();
     }
 }
 
@@ -351,7 +374,11 @@ fn D11_Webview_Worker_099() {
         .expect("disposable Tauri test application");
     let exit = app.run_return(|_, _| {});
     let report = state.report.lock().clone();
-    fs::write(root.join("report.json"), serde_json::to_vec(&report).unwrap()).unwrap();
+    fs::write(
+        root.join("report.json"),
+        serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
     assert_eq!(exit, 0, "{report:?}");
     assert_eq!(verify(&report, &mode), Ok(()), "{report:?}");
 }

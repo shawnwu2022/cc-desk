@@ -1,20 +1,13 @@
 async function runD11(request) {
-  const internals = window.__TAURI_INTERNALS__
-  const original = internals.invoke.bind(internals)
+  'use strict'
+  const invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__)
   const encode = (value) => new TextEncoder().encode(JSON.stringify(value))
-  let proof
-  // Observe, do not mock, the bridge's outgoing headers. The native transport
-  // still executes every call. Intentional disclosure to the peer is adversarial.
-  internals.invoke = (command, body, options) => {
-    proof = options.headers['x-cc-desk-document']
-    return original(command, body, {
-      headers: { ...options.headers, 'x-cc-desk-test-case': 'start' }
-    })
-  }
   try {
-    await window.__CC_DESK_DOCUMENT__.invoke('d11_probe', request)
-    internals.invoke = original
-    const call = (name, body, token = proof) => original('d11_probe', body, {
+    // This test-only native handler returns the validated proof so later cases
+    // can intentionally reuse it. Never replace or mock Tauri's frozen invoke.
+    const proof = await window.__CC_DESK_DOCUMENT__.invoke('d11_probe', request)
+    if (typeof proof !== 'string' || !/^[0-9a-f]{32}$/.test(proof)) throw new Error()
+    const call = (name, body, token = proof) => invoke('d11_probe', body, {
       headers: {
         'x-cc-desk-test-case': name,
         ...(token === null ? {} : { 'x-cc-desk-document': token })
@@ -31,9 +24,8 @@ async function runD11(request) {
     boundary.set(encode(query))
     await call('query-boundary', boundary)
     await call('query-overflow', new Uint8Array(1025).fill(32))
-    await original('d11_peer')
+    await invoke('d11_peer')
   } catch {
-    internals.invoke = original
-    await original('d11_abort')
+    await invoke('d11_abort')
   }
 }

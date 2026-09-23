@@ -70,12 +70,7 @@ jobs:
         run: node scripts/prepare-conpty.mjs
 
       - name: Run Rust tests
-        id: rust_tests
         run: cargo test --locked
-
-      - name: Diagnose test executable imports after failure
-        if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' }}
-        run: ../scripts/diagnose-windows-loader.ps1 -Directory target/debug/deps
 
       - name: Check formatting
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
@@ -84,3 +79,31 @@ jobs:
       - name: Lint
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Build and check actual Windows application loader
+        run: |
+          cargo build --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $report = Join-Path ([IO.Path]::GetTempPath()) ("ccdesk-loader-" + [guid]::NewGuid() + ".json")
+          $start = [Diagnostics.ProcessStartInfo]::new((Resolve-Path 'target/debug/cc-desk.exe').Path)
+          $start.UseShellExecute = $false
+          $start.ArgumentList.Add('--check-conpty')
+          $start.ArgumentList.Add($report)
+          $process = [Diagnostics.Process]::Start($start)
+          try {
+            if (!$process.WaitForExit(30000)) {
+              $process.Kill()
+              $process.WaitForExit()
+              throw 'Application loader probe timed out'
+            }
+            if ($process.ExitCode -ne 0) { throw "Application loader failed: $($process.ExitCode)" }
+            if ((Get-Item -LiteralPath $report).Length -gt 65536) { throw 'Loader report too large' }
+            $value = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+            if ($value.ok -ne $true -or $value.ptyLifecycle -ne $true -or $value.backend -ne 'bundled') {
+              throw 'Application loader report did not pass'
+            }
+            Write-Output "D11_APPLICATION_LOADER ok=true backend=bundled ptyLifecycle=true"
+          } finally {
+            $process.Dispose()
+            if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
+          }
