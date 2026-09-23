@@ -107,5 +107,8 @@ fn D10_Limits_CmdRestrictionDoesNotTruncateNativeEnvironment_05() {
     let environment = EnvMap::from([("LARGE_FIXTURE".into(), value.clone().into())]);
     let spec = resolve(&temp, None, Vec::new(), &environment).unwrap();
     let command = spec.command().unwrap();
-    assert_eq!(command.get_env("LARGE_FIXTURE"), Some(std::ffi::OsStr::new(&value)));
+    assert_eq!(
+        command.get_env("LARGE_FIXTURE"),
+        Some(std::ffi::OsStr::new(&value))
+    );
 }

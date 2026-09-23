@@ -316,6 +316,7 @@ fn D10_Size_RejectsZeroBeforeAllocation_06() {
 #[test]
 fn D10_Bash_ShellAndShimRoundTrip_07() {
     for shim in [false, true] {
+        eprintln!("D10_BASH_VARIANT shim={shim}");
         let mut fixture = Fixture::new(PAYLOAD);
         fixture.runner(Dialect::Bash, shim);
         roundtrip(&fixture, PAYLOAD);

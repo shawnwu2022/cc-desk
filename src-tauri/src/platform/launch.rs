@@ -268,6 +268,12 @@ pub(crate) fn resolve_process(
             )
         }
     };
+    let cmd = matches!(
+        invocation.launcher(),
+        Launcher::Shell { dialect: Dialect::Cmd, .. }
+            | Launcher::Shim { dialect: Dialect::Cmd, .. }
+    );
+    super::launch_limits::validate(&program, &args, invocation.environment(), cmd)?;
     Ok(ProcessLaunchSpec {
         program,
         args,
