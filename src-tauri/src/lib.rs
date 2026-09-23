@@ -142,6 +142,7 @@ pub fn run(initial_dir: Option<String>) {
         .invoke_handler(tauri::generate_handler![
             cli::commands::cli_list_profiles,
             cli::commands::cli_patch_profile,
+            cli::commands::cli_get_availability,
             cli::project_commands::cli_list_projects,
             cli::project_commands::cli_register_project,
             cli::project_commands::cli_patch_project,

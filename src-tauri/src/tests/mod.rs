@@ -9,13 +9,21 @@ mod env;
 #[cfg(test)]
 mod hook_events;
 #[cfg(test)]
+mod native_cli_availability;
+#[cfg(test)]
+mod native_cli_environment;
+#[cfg(test)]
 pub(crate) mod native_cli_harness;
+#[cfg(test)]
+mod native_cli_invocation;
 #[cfg(test)]
 mod native_cli_profile_api;
 #[cfg(test)]
 mod native_cli_profile_edges;
 #[cfg(test)]
 mod native_cli_profiles;
+#[cfg(test)]
+mod native_cli_snapshot;
 #[cfg(test)]
 mod native_cli_storage;
 #[cfg(test)]

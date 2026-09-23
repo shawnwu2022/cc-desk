@@ -161,18 +161,18 @@ pub(crate) enum LaunchAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct LaunchRequest {
-    request_id: String,
-    tab_id: String,
-    run_id: String,
-    generation: u32,
-    profile_id: String,
-    expected_profile_revision: WireU64,
-    cli: CliKind,
-    launch_cwd: String,
-    action: LaunchAction,
-    extra_args: Vec<String>,
-    cols: u16,
-    rows: u16,
+    pub(crate) request_id: String,
+    pub(crate) tab_id: String,
+    pub(crate) run_id: String,
+    pub(crate) generation: u32,
+    pub(crate) profile_id: String,
+    pub(crate) expected_profile_revision: WireU64,
+    pub(crate) cli: CliKind,
+    pub(crate) launch_cwd: String,
+    pub(crate) action: LaunchAction,
+    pub(crate) extra_args: Vec<String>,
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
 }
 
 impl LaunchRequest {
@@ -248,6 +248,24 @@ pub(crate) struct RunPublicIdentity {
     effective_cwd: Resolution<String>,
     effective_config_root: Resolution<String>,
     native_session_id: Resolution<String>,
+}
+
+impl RunPublicIdentity {
+    /// Launch intent cannot verify the CLI's eventual directory, root or session.
+    pub(crate) fn unverified_launch(request: &LaunchRequest) -> Self {
+        let unknown = || Resolution::Unknown {
+            reason: "NATIVE_RUNTIME_NOT_OBSERVED".into(),
+        };
+        Self {
+            run_id: request.run_id.clone(),
+            generation: request.generation,
+            cli: request.cli,
+            launch_cwd: request.launch_cwd.clone(),
+            effective_cwd: unknown(),
+            effective_config_root: unknown(),
+            native_session_id: unknown(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
