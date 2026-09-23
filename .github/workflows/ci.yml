@@ -70,7 +70,12 @@ jobs:
         run: node scripts/prepare-conpty.mjs
 
       - name: Run Rust tests
+        id: rust_tests
         run: cargo test --locked
+
+      - name: Diagnose test executable imports after failure
+        if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' }}
+        run: ../scripts/diagnose-windows-loader.ps1 -Directory target/debug/deps
 
       - name: Check formatting
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
