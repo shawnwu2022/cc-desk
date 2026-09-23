@@ -2,6 +2,7 @@ pub(crate) mod availability;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod commands;
+pub(crate) mod document;
 pub(crate) mod environment;
 pub(crate) mod invocation;
 pub(crate) mod launch;
