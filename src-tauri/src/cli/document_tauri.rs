@@ -1,6 +1,7 @@
 //! Compiled native adapter. Not installed into the application startup or IPC.
 
 use super::{decode_start, DocumentAuthority, DocumentBinding, NativeContext};
+use crate::cli::output_route::OutputRoute;
 use crate::cli::profiles::error;
 use crate::cli::run_registry::{LaunchStatus, RunRegistry};
 use crate::cli::snapshot::CallerIdentity;
@@ -115,5 +116,14 @@ impl<R> DocumentBinding<R> {
     ) -> Result<LaunchStatus, SafeError> {
         let caller = self.admit_native(webview, request.headers())?;
         self.query_after_admission(&caller, request.body())
+    }
+
+    /// Behavioral scaffold: actual native factory must be observed failing first.
+    pub(crate) fn channel_native<T: Runtime, E>(
+        &self,
+        _webview: &Webview<T>,
+        _headers: &HeaderMap,
+    ) -> Result<OutputRoute<E>, SafeError> {
+        Err(error("NATIVE_CHANNEL_NOT_IMPLEMENTED"))
     }
 }

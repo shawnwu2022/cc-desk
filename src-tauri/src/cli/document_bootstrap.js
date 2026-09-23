@@ -1,8 +1,6 @@
 (() => {
   'use strict'
-  // Static initialization scripts also run on navigation and, on Windows,
-  // subframes. Only the original top-level document gets this bridge; the
-  // backend permanently revokes the proof on any subsequent document load.
+  // A new native document needs new authority; this bridge cannot reauthorize it.
   if (window.top !== window || Object.prototype.hasOwnProperty.call(window, '__CC_DESK_DOCUMENT__')) return
   const actualUrl = new URL(window.location.href)
   actualUrl.hash = ''
@@ -10,12 +8,20 @@
   const proof = __CC_DESK_DOCUMENT_PROOF__
   const encoder = new TextEncoder()
   const bridge = Object.freeze({
-    async invoke(command, payload) {
+    async invoke(command, payload, channel) {
       let body
+      const headers = { 'x-cc-desk-document': proof }
       try {
         const json = JSON.stringify(payload)
         if (typeof json !== 'string') throw new Error()
         body = encoder.encode(json)
+        if (channel !== undefined) {
+          const descriptor = channel.toJSON()
+          if (typeof descriptor !== 'string' ||
+              !/^__CHANNEL__:(0|[1-9][0-9]{0,9})$/.test(descriptor) ||
+              Number(descriptor.slice(12)) > 4294967295) throw new Error()
+          headers['x-cc-desk-output-channel'] = descriptor
+        }
       } catch {
         throw { code: 'INVALID_REQUEST' }
       }
@@ -23,11 +29,8 @@
       if (!internals || typeof internals.invoke !== 'function') {
         throw { code: 'DOCUMENT_BRIDGE_UNAVAILABLE' }
       }
-      // Preserve the original request and error; never retry or fall back to
-      // an invoke without document admission. No caller-supplied options.
-      return internals.invoke(command, body, {
-        headers: { 'x-cc-desk-document': proof }
-      })
+      // No retry/fallback. Channel metadata does not alter the frozen request.
+      return internals.invoke(command, body, { headers })
     }
   })
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', {
