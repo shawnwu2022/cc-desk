@@ -43,5 +43,23 @@ fn main() {
             }
         }
     }
-    tauri_build::build()
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        // Tauri's resource archive does not reach the library unit-test EXE.
+        // Embed its unchanged Common Controls v6 declaration at link time for
+        // all MSVC executables, including that target. Do not embed it twice.
+        let attributes = tauri_build::Attributes::new()
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+        tauri_build::try_build(attributes).expect("failed to build Tauri resources");
+        let manifest = manifest_dir.join("windows-app-manifest.xml");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+        // The original Tauri default declares no UAC policy. Do not synthesize
+        // a new privilege declaration while relocating manifest embedding.
+        println!("cargo:rustc-link-arg=/MANIFESTUAC:NO");
+    } else {
+        tauri_build::build();
+    }
 }

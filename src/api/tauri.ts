@@ -1,3 +1,4 @@
+import { createLaunchAttempt } from './cliLaunchAttempt';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -315,3 +316,46 @@ export const selectDirectory = async (): Promise<{ path: string } | null> => {
 // 右键菜单打开目录
 export const onOpenDirectory = (callback: (dir: string) => void): Promise<UnlistenFn> =>
   listen<string>('open-directory', (event) => callback(event.payload));
+
+// The native document bridge owns the proof and raw transport. Never fall back
+// to an unguarded invoke when this document has no authenticated bridge.
+interface NativeDocumentBridge {
+  readonly instanceId: string;
+  invoke(command: string, payload: unknown, channel?: unknown): Promise<unknown>;
+}
+
+function nativeDocumentBridge(): NativeDocumentBridge {
+  const bridge = (window as Window & { __CC_DESK_DOCUMENT__?: NativeDocumentBridge }).__CC_DESK_DOCUMENT__;
+  if (!bridge || typeof bridge.invoke !== 'function') {
+    throw { code: 'DOCUMENT_BRIDGE_UNAVAILABLE' };
+  }
+  return bridge;
+}
+
+export async function cliStart<E>(
+  request: import('@/types/cli').LaunchRequest,
+  channel: import('@tauri-apps/api/core').Channel<E>,
+): Promise<unknown> {
+  return nativeDocumentBridge().invoke('cli_start', request, channel);
+}
+
+export async function cliGetLaunchStatus(requestId: string): Promise<unknown> {
+  return nativeDocumentBridge().invoke('cli_get_launch_status', { requestId });
+}
+
+
+export function createCliLaunchAttempt<E>(
+  request: import('@/types/cli').LaunchRequest,
+  channel: import('@tauri-apps/api/core').Channel<E>,
+): import('./cliLaunchAttempt').LaunchAttempt {
+  const bridge = nativeDocumentBridge();
+  if (typeof bridge.instanceId !== 'string' || !bridge.instanceId) {
+    throw new Error('DOCUMENT_BRIDGE_UNAVAILABLE');
+  }
+  // Keep the original bridge as well as the original Channel. A new document
+  // or backend cannot silently inherit and restart an uncertain old attempt.
+  return createLaunchAttempt(request, bridge.instanceId, {
+    start: (frozen) => bridge.invoke('cli_start', frozen, channel),
+    status: (requestId) => bridge.invoke('cli_get_launch_status', { requestId }),
+  });
+}

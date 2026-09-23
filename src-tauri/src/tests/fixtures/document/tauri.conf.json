@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CC Desk D11 Native Test",
+  "version": "0.0.0",
+  "identifier": "io.github.shawnwu2022.ccdesk.d11test",
+  "build": { "frontendDist": "assets" },
+  "app": { "windows": [], "security": { "csp": null, "capabilities": [] } },
+  "bundle": { "active": false, "icon": ["../../../../icons/icon.ico"] }
+}
