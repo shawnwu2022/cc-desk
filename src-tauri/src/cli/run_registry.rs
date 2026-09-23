@@ -128,7 +128,11 @@ impl<R> RunRegistry<R> {
         })
     }
 
-    fn authorize(&self, state: &RegistryState<R>, caller: &CallerIdentity) -> Result<(), SafeError> {
+    fn authorize(
+        &self,
+        state: &RegistryState<R>,
+        caller: &CallerIdentity,
+    ) -> Result<(), SafeError> {
         if caller.instance_id != self.instance_id
             || caller.window_label != "main"
             || !state.active
@@ -153,7 +157,10 @@ impl<R> RunRegistry<R> {
     /// Owner authorization is performed separately and never trusts this digest.
     fn fingerprint(&self, request: &LaunchRequest) -> Result<Fingerprint, SafeError> {
         let bytes = serde_json::to_vec(request).map_err(|_| SafeError::invalid("request"))?;
-        Ok(self.fingerprints.each_ref().map(|state| state.hash_one(&bytes)))
+        Ok(self
+            .fingerprints
+            .each_ref()
+            .map(|state| state.hash_one(&bytes)))
     }
 
     pub(super) fn existing(
@@ -264,7 +271,10 @@ impl<R> RunRegistry<R> {
     ) -> Result<Arc<R>, SafeError> {
         let state = self.state.lock();
         self.authorize(&state, caller)?;
-        let key = state.runs.get(&run.run_id).ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        let key = state
+            .runs
+            .get(&run.run_id)
+            .ok_or_else(|| error("RUN_NOT_FOUND"))?;
         let record = state.records.get(key).expect("run index is retained");
         if record.owner != *caller {
             return Err(error("FORBIDDEN"));
@@ -272,13 +282,20 @@ impl<R> RunRegistry<R> {
         if record.status.run != *run {
             return Err(error("STALE_GENERATION"));
         }
-        record.resource.clone().ok_or_else(|| error("RUN_NOT_READY"))
+        record
+            .resource
+            .clone()
+            .ok_or_else(|| error("RUN_NOT_READY"))
     }
 
     /// Called by a backend waiter, never directly by a WebView.
     pub(crate) fn mark_exited(&self, run: &RunKey) -> Result<(), SafeError> {
         let mut state = self.state.lock();
-        let key = state.runs.get(&run.run_id).cloned().ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        let key = state
+            .runs
+            .get(&run.run_id)
+            .cloned()
+            .ok_or_else(|| error("RUN_NOT_FOUND"))?;
         let record = state.records.get_mut(&key).expect("run index is retained");
         if record.status.run != *run {
             return Err(error("STALE_GENERATION"));
@@ -299,13 +316,20 @@ impl<R> RunRegistry<R> {
     pub(crate) fn retire(&self, run: &RunKey) -> Result<(), SafeError> {
         let resource = {
             let mut state = self.state.lock();
-            let key = state.runs.get(&run.run_id).cloned().ok_or_else(|| error("RUN_NOT_FOUND"))?;
+            let key = state
+                .runs
+                .get(&run.run_id)
+                .cloned()
+                .ok_or_else(|| error("RUN_NOT_FOUND"))?;
             let record = state.records.get_mut(&key).expect("run index is retained");
             if record.status.run != *run {
                 return Err(error("STALE_GENERATION"));
             }
             if record.in_flight
-                || !matches!(record.status.phase, LaunchPhase::Exited | LaunchPhase::Failed | LaunchPhase::Cancelled)
+                || !matches!(
+                    record.status.phase,
+                    LaunchPhase::Exited | LaunchPhase::Failed | LaunchPhase::Cancelled
+                )
             {
                 return Err(error("RUN_NOT_READY"));
             }
@@ -328,7 +352,10 @@ impl<R> Ticket<'_, R> {
         let mut state = self.registry.state.lock();
         let owner = state.records[&self.key].owner.clone();
         let authorized = self.registry.authorize(&state, &owner).is_ok();
-        let record = state.records.get_mut(&self.key).expect("ticket owns retained record");
+        let record = state
+            .records
+            .get_mut(&self.key)
+            .expect("ticket owns retained record");
         if !authorized {
             record.status.phase = LaunchPhase::Cancelled;
             record.in_flight = false;
@@ -342,7 +369,10 @@ impl<R> Ticket<'_, R> {
 
     pub(super) fn fail(mut self, failure: LaunchFailure) -> LaunchStatus {
         let mut state = self.registry.state.lock();
-        let record = state.records.get_mut(&self.key).expect("ticket owns retained record");
+        let record = state
+            .records
+            .get_mut(&self.key)
+            .expect("ticket owns retained record");
         if record.status.phase != LaunchPhase::Exited {
             record.status.phase = LaunchPhase::Failed;
             record.status.failure = Some(failure);
@@ -356,7 +386,10 @@ impl<R> Ticket<'_, R> {
     pub(super) fn complete(mut self, resource: R) -> LaunchStatus {
         let resource = Arc::new(resource);
         let mut state = self.registry.state.lock();
-        let record = state.records.get_mut(&self.key).expect("ticket owns retained record");
+        let record = state
+            .records
+            .get_mut(&self.key)
+            .expect("ticket owns retained record");
         record.resource = Some(resource);
         record.in_flight = false;
         if record.status.phase == LaunchPhase::Starting {
@@ -373,7 +406,10 @@ impl<R> Drop for Ticket<'_, R> {
             return;
         }
         let mut state = self.registry.state.lock();
-        let record = state.records.get_mut(&self.key).expect("ticket owns retained record");
+        let record = state
+            .records
+            .get_mut(&self.key)
+            .expect("ticket owns retained record");
         record.in_flight = false;
         match record.status.phase {
             LaunchPhase::Reserved => {
