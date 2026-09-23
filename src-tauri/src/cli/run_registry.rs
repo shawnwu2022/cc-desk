@@ -428,7 +428,10 @@ impl<R> Drop for Ticket<'_, R> {
                 record.retired = true;
             }
             LaunchPhase::Starting => {
-                record.transition(LaunchPhase::Indeterminate, Some(LaunchFailure::OutcomeUnknown));
+                record.transition(
+                    LaunchPhase::Indeterminate,
+                    Some(LaunchFailure::OutcomeUnknown),
+                );
             }
             _ => {}
         }
