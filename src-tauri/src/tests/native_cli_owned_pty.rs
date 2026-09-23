@@ -298,3 +298,18 @@ fn D11_Owned_WrongOwnerCannotReachRealSpawn_06() {
     assert_eq!(result.unwrap_err().code, "FORBIDDEN");
     assert!(probe.reports().is_empty());
 }
+
+#[cfg(windows)]
+#[test]
+fn D11_Owned_WindowsTerminateFailureMustNotSucceed_07() {
+    let probe = Probe::new("exit");
+    let status = probe.start();
+    let resource = probe.resource(&status);
+    probe.ready();
+    assert_eq!(probe.exit(&resource.process), 17);
+    // Windows rejects TerminateProcess on an already terminated process even
+    // while its retained handle is valid. Do not invert or swallow that failure.
+    let failure = resource.process.terminate_root().unwrap_err();
+    assert_eq!(failure.code, "PROCESS_TERMINATE_FAILED");
+    assert_eq!(resource.process.wait().unwrap().exit_code(), 17);
+}
