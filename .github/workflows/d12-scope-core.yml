@@ -1,0 +1,44 @@
+name: D12 retained directory core
+on:
+  push:
+    branches: [feat/native-cli-source-scope]
+    paths:
+      - 'src-tauri/src/cli/native_projection/**'
+      - 'src-tauri/src/tests/native_cli_scoped_fs.rs'
+      - '.github/workflows/d12-scope-core.yml'
+permissions:
+  contents: read
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile the actual production filesystem module without a WebView
+        shell: bash
+        run: |
+          mkdir -p .scope-core/src
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src-tauri/src/cli/native_projection/scoped_fs.rs').resolve().as_posix()
+          Path('.scope-core/src/lib.rs').write_text('#![allow(dead_code)]\n#[path = "'+p+'"]\nmod scoped_fs;\n')
+          Path('.scope-core/Cargo.toml').write_text('''[package]
+          name = "d12-scope-core"
+          version = "0.0.0"
+          edition = "2021"
+          [dependencies]
+          cap-std = "=4.0.3"
+          libc = "=0.2.186"
+          tempfile = "=3.27.0"
+          [target.'cfg(windows)'.dependencies]
+          windows = { version = "=0.61.3", features = ["Win32_Storage_FileSystem"] }
+          ''')
+          PY
+          cargo test --manifest-path .scope-core/Cargo.toml -- --nocapture
