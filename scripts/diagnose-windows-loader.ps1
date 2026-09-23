@@ -1,7 +1,8 @@
-# Read-only diagnostic for repository-built PE executables. This runs in its
-# own PowerShell process after a failed test and never changes test outcomes.
+# Diagnose repository-built executables without modifying Cargo's output.
+# The original test step remains failed. The manifest experiment uses a copy.
 param([Parameter(Mandatory = $true)][string]$Directory)
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -61,7 +62,10 @@ public static class DeskLoaderProbe {
           symbols.Add("#"+(item & 0xffff));
         else symbols.Add(Text(data,offset(checked((uint)item))+2));
       }
-      result.Add(dll,symbols);
+      // The linker may emit several import descriptors for the same DLL.
+      List<string> prior;
+      if(result.TryGetValue(dll,out prior)) prior.AddRange(symbols);
+      else result.Add(dll,symbols);
     }
     throw new InvalidDataException("PE descriptor limit");
   }
@@ -69,16 +73,18 @@ public static class DeskLoaderProbe {
 '@
 $executables = @(Get-ChildItem -LiteralPath $Directory -Filter 'cc_desk-*.exe' -File)
 if ($executables.Count -eq 0) { throw 'No repository test executable found' }
+$candidate = $null
 foreach ($exe in $executables) {
     Write-Output "LOADER_PROBE executable=$($exe.Name)"
     $imports = [DeskLoaderProbe]::Imports($exe.FullName)
+    if ($imports.ContainsKey('comctl32.dll')) { $candidate = $exe }
     foreach ($entry in $imports.GetEnumerator()) {
         $sibling = Join-Path $exe.DirectoryName $entry.Key
         $name = $entry.Key
-        [uint32]$flags = 0x800 # System32, including Windows API-set resolution.
+        [uint32]$flags = 0x800
         if (Test-Path -LiteralPath $sibling -PathType Leaf) {
             $name = $sibling
-            $flags = 0x1100 # Explicit app-local path and its normal dependencies.
+            $flags = 0x1100
         }
         $module = [DeskLoaderProbe]::LoadLibraryExW($name, [IntPtr]::Zero, $flags)
         if ($module -eq [IntPtr]::Zero) {
@@ -105,3 +111,35 @@ foreach ($exe in $executables) {
         }
     }
 }
+if ($null -eq $candidate) { throw 'No Common Controls importing test executable' }
+$mt = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/mt.exe" |
+    Sort-Object FullName -Descending | Select-Object -First 1
+if ($null -eq $mt) { throw 'Windows SDK manifest tool unavailable' }
+$temporary = Join-Path ([IO.Path]::GetTempPath()) ("ccdesk-loader-" + [guid]::NewGuid())
+[void](New-Item -ItemType Directory -Path $temporary)
+$originalHash = (Get-FileHash -LiteralPath $candidate.FullName).Hash
+try {
+    & $mt.FullName -nologo "-inputresource:$($candidate.FullName);#1" "-out:$temporary/original.manifest"
+    Write-Output "LOADER_PROBE original_manifest_exit=$LASTEXITCODE"
+    if (Test-Path "$temporary/original.manifest") { Get-Content "$temporary/original.manifest" }
+    $copy = Join-Path $temporary 'native-test-copy.exe'
+    Copy-Item -LiteralPath $candidate.FullName -Destination $copy
+    $manifest = Join-Path $PSScriptRoot '../src-tauri/windows-app-manifest.xml'
+    & $mt.FullName -nologo -manifest $manifest "-outputresource:$copy;#1"
+    if ($LASTEXITCODE -ne 0) { throw 'Manifest-copy experiment failed to embed' }
+    & $copy --list | Select-String 'D11_Webview|D11_Evidence|tests, '
+    $listExit = $LASTEXITCODE
+    Write-Output "LOADER_PROBE manifest_copy_list_exit=$listExit"
+    if ($listExit -ne 0) { throw 'Manifest-copy experiment did not fix loader' }
+    & $copy native_cli_document_report --nocapture
+    Write-Output "LOADER_PROBE verifier_test_exit=$LASTEXITCODE"
+    & $copy --exact tests::native_cli_document_live::D11_Webview_Live_001 --nocapture
+    Write-Output "LOADER_PROBE native_test_exit=$LASTEXITCODE"
+} finally {
+    if ((Get-FileHash -LiteralPath $candidate.FullName).Hash -ne $originalHash) {
+        throw 'Diagnostic modified the original Cargo executable'
+    }
+    Remove-Item -LiteralPath $temporary -Recurse -Force
+}
+# This diagnostic cannot change the earlier cargo-test step's failure.
+exit 0
