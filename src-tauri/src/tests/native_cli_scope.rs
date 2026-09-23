@@ -47,7 +47,7 @@ fn D12_Index_RootReplacementInvalidatesExactStamp_001() {
     let store = index_at(temp.path());
     let left = get_sessions_indexed_at("/fixture/project", std::slice::from_ref(&project), 20, 0, &store, 1, None).unwrap();
     assert_eq!(left.value[0].name, "LEFT-name");
-    store.flush(left.pending_flush.unwrap()).unwrap();
+    store.flush_pending(left.pending_flush.unwrap()).unwrap();
     fs::rename(&active, temp.path().join("retired")).unwrap();
     fs::rename(&next, &active).unwrap();
     let right = get_sessions_indexed_at("/fixture/project", &[project], 20, 0, &store, 2, None).unwrap();
