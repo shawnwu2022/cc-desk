@@ -1,0 +1,80 @@
+name: D12 verified scope materialization
+on:
+  push:
+    branches: [feat/native-cli-source-scope]
+    paths: [.github/workflows/d12-apply.yml]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Materialize exact reviewed source and remove temporary workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYTHON'
+          import base64,hashlib,json,lzma,os,subprocess,urllib.request
+          from pathlib import Path
+          assert os.environ['GITHUB_REPOSITORY']=='shawnwu2022/cc-desk'
+          assert os.environ['GITHUB_REF']=='refs/heads/feat/native-cli-source-scope'
+          api_root='https://api.github.com/repos/shawnwu2022/cc-desk'
+          def api(route,data=None):
+              request=urllib.request.Request(api_root+route,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'},data=None if data is None else json.dumps(data).encode(),method='GET' if data is None else 'POST')
+              with urllib.request.urlopen(request,timeout=60) as response:
+                  return json.load(response)
+          def git(*args):
+              return subprocess.check_output(['git',*args]).decode().strip()
+          parent=git('rev-parse','HEAD')
+          assert parent==os.environ['GITHUB_SHA']
+          assert api('/git/commits/'+parent)['parents'][0]['sha']=='b231c4a1e4daa97b01ce49ead0a038136e86d7dc'
+          assert api('/git/ref/heads/feat/native-cli-source-scope')['object']['sha']==parent,'branch advanced'
+          chunks=[]
+          for sha in ['b4746467aaddf2c3b19e0651c1fff3d06ad06e56','bc3a5c9b3497ccfba90ac61ab2bb02df9363b0bd','d7c1983d2ad49557028ba8c247c031a91a8e3431','694cf6f55f8bfa923fe2eec8c947f99c807f575e','3ccfd984e9725085913117102825a172b22cba27','b2f998ea02bdcf42c0364e32d00bcc80bdcbd9b3','74ce17b4bec5443092e833eda02e7ff6134f32df','c14ed7554b48e4f5ba2a7299e04fc2cbaf7b7316','26561fab6017f80367faa2c7041a3508ad4e5a90']:
+              blob=api('/git/blobs/'+sha)
+              assert blob['sha']==sha and blob['encoding']=='base64'
+              data=base64.b64decode(blob['content'])
+              assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==sha
+              chunks.append(data)
+          patch=lzma.decompress(b''.join(chunks))
+          assert len(patch)==235751
+          assert hashlib.sha256(patch).hexdigest()=='e1fda23c53cace46f8d36cecf22e2cdcbc7ead5fe9a27ace158be3e0e3bc91eb'
+          subprocess.run(['git','apply','--check','-'],input=patch,check=True)
+          subprocess.run(['git','apply','-'],input=patch,check=True)
+          Path('.github/workflows/d12-apply.yml').unlink()
+          subprocess.run(['git','add','-A'],check=True)
+          subprocess.run(['git','diff','--cached','--check'],check=True)
+          expected='4c6ddf7a2fddd1bb437050e3d2076d410802223a'
+          assert git('write-tree')==expected
+          paths=filter(None,subprocess.check_output(['git','diff','--cached','--name-only','-z']).decode().split('\0'))
+          entries=[]
+          workflows={'.github/workflows/d12-apply.yml','.github/workflows/d12-core-vendor.yml','.github/workflows/d12-dev-tools.yml','.github/workflows/d12-source-export.yml','.github/workflows/d12-scope-core.yml'}
+          for p in paths:
+              assert p.startswith(('src/','src-tauri/','tests/','docs/')) or p=='AGENTS.md' or p in workflows,p
+              if not Path(p).exists():
+                  entries.append({'path':p,'mode':'100644','type':'blob','sha':None})
+                  continue
+              blob=api('/git/blobs',{'content':Path(p).read_bytes().decode('utf-8'),'encoding':'utf-8'})['sha']
+              assert blob==git('hash-object',p)
+              mode=git('ls-files','--stage',p).split()[0]
+              entries.append({'path':p,'mode':mode,'type':'blob','sha':blob})
+          tree=api('/git/trees',{'base_tree':git('rev-parse','HEAD^{tree}'),'tree':entries})['sha']
+          assert tree==expected
+          author={'name':'CC Desk development','email':'41898282+github-actions[bot]@users.noreply.github.com'}
+          created=api('/git/commits',{'message':'feat(d12): authorize and confine native projection reads','tree':tree,'parents':[parent],'author':author,'committer':author})
+          out=Path('/tmp/d12-result');out.mkdir()
+          (out/'commit.json').write_text(json.dumps({'parent':parent,'commit':created['sha'],'tree':tree,'gitCommit':created,'patchSha256':hashlib.sha256(patch).hexdigest()},indent=2))
+          subprocess.run(['git','archive','--format=tar',tree,'-o',str(out/'source.tar')],check=True)
+          print('D12_IMPLEMENTATION_COMMIT='+created['sha'])
+          print('D12_IMPLEMENTATION_TREE='+tree)
+          PYTHON
+      - uses: actions/upload-artifact@v4
+        with:
+          name: d12-complete-source
+          path: /tmp/d12-result
+          retention-days: 2
+          if-no-files-found: error
