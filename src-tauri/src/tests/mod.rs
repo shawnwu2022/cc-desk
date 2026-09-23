@@ -14,6 +14,10 @@ mod native_cli_availability;
 mod native_cli_document;
 #[cfg(test)]
 mod native_cli_document_edges;
+#[cfg(all(test, windows))]
+mod native_cli_document_live;
+#[cfg(test)]
+mod native_cli_document_report;
 #[cfg(test)]
 mod native_cli_environment;
 #[cfg(test)]
