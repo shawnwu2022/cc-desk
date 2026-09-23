@@ -1,0 +1,37 @@
+name: D11 verification workspace
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/d11-workspace.yml'
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+      - run: npm ci
+      - name: Export only tracked source and installed verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/d11-workspace"
+          git rev-parse HEAD > "$RUNNER_TEMP/d11-workspace/SOURCE_HEAD"
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/d11-workspace/source.tar.gz"
+          tar -czf "$RUNNER_TEMP/d11-workspace/node_modules.tar.gz" node_modules
+          cp "$(rustup which rustfmt)" "$RUNNER_TEMP/d11-workspace/rustfmt"
+          rustfmt --version > "$RUNNER_TEMP/d11-workspace/TOOLCHAIN"
+          ldd "$(rustup which rustfmt)" >> "$RUNNER_TEMP/d11-workspace/TOOLCHAIN"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: d11-verification-workspace
+          path: ${{ runner.temp }}/d11-workspace/
+          retention-days: 1
+          if-no-files-found: error
