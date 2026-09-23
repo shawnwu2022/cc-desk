@@ -28,11 +28,12 @@ impl Probe {
         #[cfg(windows)]
         bundled_runtime::initialize().unwrap();
         let mut f = Fixture::new();
-        f.profile.program_path = Override::Set(
-            crate::platform::find_executable("node").expect("Node.js is required"),
-        );
+        f.profile.program_path =
+            Override::Set(crate::platform::find_executable("node").expect("Node.js is required"));
         let script = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent().unwrap().join("tests/fixtures/native-cli/owned-probe.mjs");
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/native-cli/owned-probe.mjs");
         f.request.action = LaunchAction::Raw {
             argv: vec![
                 script.to_str().unwrap().into(),
@@ -48,28 +49,40 @@ impl Probe {
     }
 
     fn start(&self) -> LaunchStatus {
-        self.0.driver.start_pty(
-            &self.0.caller,
-            &self.0.request,
-            || self.0.freeze(),
-            |_| Ok(self.0.lease()),
-        ).unwrap()
+        self.0
+            .driver
+            .start_pty(
+                &self.0.caller,
+                &self.0.request,
+                || self.0.freeze(),
+                |_| Ok(self.0.lease()),
+            )
+            .unwrap()
     }
 
     fn resource(&self, status: &LaunchStatus) -> Arc<RoutedResource<OwnedPty, Lease>> {
         assert_eq!(status.phase, LaunchPhase::Running, "actual PTY must start");
-        self.0.driver.registry().resource(&self.0.caller, &status.run).unwrap()
+        self.0
+            .driver
+            .registry()
+            .resource(&self.0.caller, &status.run)
+            .unwrap()
     }
 
     fn reports(&self) -> Vec<Value> {
-        fs::read_dir(self.0.root()).unwrap().filter_map(|entry| {
-            let path = entry.unwrap().path();
-            if path.extension().is_some_and(|ext| ext == "json") {
-                fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            } else {
-                None
-            }
-        }).collect()
+        fs::read_dir(self.0.root())
+            .unwrap()
+            .filter_map(|entry| {
+                let path = entry.unwrap().path();
+                if path.extension().is_some_and(|ext| ext == "json") {
+                    fs::read(path)
+                        .ok()
+                        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn ready(&self) {
@@ -106,7 +119,12 @@ impl Drop for Probe {
 }
 
 fn size() -> PtySize {
-    PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }
+    PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    }
 }
 
 #[test]
@@ -120,17 +138,32 @@ fn D11_Owned_ConcurrentRequestsCreateOneRealProcess_01() {
             scope.spawn(move || {
                 barrier.wait();
                 let status = probe.start();
-                assert!(matches!(status.phase, LaunchPhase::Reserved | LaunchPhase::Starting | LaunchPhase::Running));
+                assert!(matches!(
+                    status.phase,
+                    LaunchPhase::Reserved | LaunchPhase::Starting | LaunchPhase::Running
+                ));
             });
         }
     });
-    let status = probe.0.driver.registry().status(&probe.0.caller, "owned-request").unwrap();
+    let status = probe
+        .0
+        .driver
+        .registry()
+        .status(&probe.0.caller, "owned-request")
+        .unwrap();
     let resource = probe.resource(&status);
     probe.ready();
     assert_eq!(probe.exit(&resource.process), 17);
     let reports = probe.reports();
-    assert_eq!(reports.len(), 1, "count actual child-created files, not callback calls");
-    assert_eq!(reports[0]["argv"], serde_json::json!(["a b", "", "中文", "--future", "$HOME"]));
+    assert_eq!(
+        reports.len(),
+        1,
+        "count actual child-created files, not callback calls"
+    );
+    assert_eq!(
+        reports[0]["argv"],
+        serde_json::json!(["a b", "", "中文", "--future", "$HOME"])
+    );
     assert_eq!(reports[0]["stdinIsTTY"], true);
     assert_eq!(reports[0]["stdoutIsTTY"], true);
     assert_eq!(probe.0.drops.load(Ordering::SeqCst), 0);
@@ -166,9 +199,13 @@ fn D11_Owned_ReaderPinsRouteButNotMaster_02() {
     assert_eq!(probe.0.drops.load(Ordering::SeqCst), 0);
     probe.0.driver.registry().retire(&status.run).unwrap();
     drop(resource);
-    let bytes = rx.recv_timeout(Duration::from_secs(10)).expect("master close must not be pinned by reader");
+    let bytes = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("master close must not be pinned by reader");
     worker.join().unwrap();
-    assert!(bytes.windows(b"OWNED_TAIL".len()).any(|part| part == b"OWNED_TAIL"));
+    assert!(bytes
+        .windows(b"OWNED_TAIL".len())
+        .any(|part| part == b"OWNED_TAIL"));
     assert_eq!(probe.0.drops.load(Ordering::SeqCst), 1);
 }
 
@@ -194,11 +231,14 @@ fn D11_Owned_RootControlDoesNotWaitForWriterOrWaiter_04() {
     let (release_tx, release_rx) = mpsc::channel();
     let writer_resource = resource.clone();
     let writer = thread::spawn(move || {
-        writer_resource.process.with_writer(|_| {
-            locked_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-            Ok(())
-        }).unwrap();
+        writer_resource
+            .process
+            .with_writer(|_| {
+                locked_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+            .unwrap();
     });
     locked_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let waiting_resource = resource.clone();
@@ -210,7 +250,9 @@ fn D11_Owned_RootControlDoesNotWaitForWriterOrWaiter_04() {
     let killer_resource = resource.clone();
     let (kill_tx, kill_rx) = mpsc::channel();
     let killer = thread::spawn(move || {
-        kill_tx.send(killer_resource.process.terminate_root().is_ok()).unwrap();
+        kill_tx
+            .send(killer_resource.process.terminate_root().is_ok())
+            .unwrap();
     });
     let independent = kill_rx.recv_timeout(Duration::from_secs(5));
     release_tx.send(()).unwrap();
@@ -227,10 +269,19 @@ fn D11_Owned_WriterReachesRealRawStdin_05() {
     let status = probe.start();
     let resource = probe.resource(&status);
     probe.ready();
-    resource.process.with_writer(|writer| writer.write_all(b"abcdef")).unwrap();
+    resource
+        .process
+        .with_writer(|writer| writer.write_all(b"abcdef"))
+        .unwrap();
     assert_eq!(probe.exit(&resource.process), 17);
-    assert_eq!(probe.reports()[0]["input"], serde_json::json!([97, 98, 99, 100, 101, 102]));
-    resource.process.resize(PtySize { rows: 0, ..size() }).unwrap_err();
+    assert_eq!(
+        probe.reports()[0]["input"],
+        serde_json::json!([97, 98, 99, 100, 101, 102])
+    );
+    resource
+        .process
+        .resize(PtySize { rows: 0, ..size() })
+        .unwrap_err();
 }
 
 #[test]

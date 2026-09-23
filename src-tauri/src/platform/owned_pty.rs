@@ -1,13 +1,31 @@
-//! Complete PTY resource interface for D11. Behavioral scaffold.
-#![allow(dead_code)]
+//! Owned PTY handles with independent blocking domains, not a stop/drain policy.
+#![allow(dead_code)] // Connected to staged D11; not exposed through live IPC yet.
 
 use super::launch::ProcessLaunchSpec;
 use crate::cli::profiles::error;
 use crate::cli::types::SafeError;
-use portable_pty::{CommandBuilder, ExitStatus, PtyPair, PtySize};
+use parking_lot::Mutex;
+use portable_pty::{
+    native_pty_system, Child, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize,
+};
 use std::io::{self, Read, Write};
 
-pub(crate) struct OwnedPty;
+struct ChildState {
+    child: Box<dyn Child + Send + Sync>,
+    status: Option<ExitStatus>,
+}
+
+/// Backend-only resource. Revoking a window does not drop it or kill its child.
+/// Its lifecycle owner must wait/reap and decide when master closure is safe;
+/// D14/D15 supply autonomous waiting, output draining and explicit stop policy.
+/// In particular, releasing these handles is not a claim that output was parsed.
+pub(crate) struct OwnedPty {
+    master: Mutex<Box<dyn MasterPty + Send>>,
+    reader: Mutex<Option<Box<dyn Read + Send>>>,
+    writer: Mutex<Box<dyn Write + Send>>,
+    child: Mutex<ChildState>,
+    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+}
 
 impl std::fmt::Debug for OwnedPty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -16,41 +34,114 @@ impl std::fmt::Debug for OwnedPty {
 }
 
 impl OwnedPty {
-    pub(crate) fn spawn(_spec: &ProcessLaunchSpec, _size: PtySize) -> Result<Self, SafeError> {
-        Err(error("OWNED_PTY_NOT_IMPLEMENTED"))
+    pub(crate) fn spawn(spec: &ProcessLaunchSpec, size: PtySize) -> Result<Self, SafeError> {
+        validate_size(size)?;
+        let command = spec.command()?;
+        let pair = native_pty_system()
+            .openpty(size)
+            .map_err(|_| error("HOST_PTY_UNAVAILABLE"))?;
+        Self::attach_and_spawn(pair, command)
     }
 
+    /// Acquire both I/O handles before starting a child. There is no fallible
+    /// reader/writer initialization after spawn succeeds, so an I/O setup failure
+    /// cannot return Err while leaving a newly created child without an owner.
     pub(crate) fn attach_and_spawn(
-        _pair: PtyPair,
-        _command: CommandBuilder,
+        pair: PtyPair,
+        command: CommandBuilder,
     ) -> Result<Self, SafeError> {
-        Err(error("OWNED_PTY_NOT_IMPLEMENTED"))
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|_| error("HOST_READER_UNAVAILABLE"))?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|_| error("HOST_WRITER_UNAVAILABLE"))?;
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .map_err(|_| error("PROCESS_START_FAILED"))?;
+        let killer = child.clone_killer();
+        // Do not retain the parent's slave endpoint and prevent stream EOF.
+        drop(pair.slave);
+        Ok(Self {
+            master: Mutex::new(pair.master),
+            reader: Mutex::new(Some(reader)),
+            writer: Mutex::new(writer),
+            child: Mutex::new(ChildState {
+                child,
+                status: None,
+            }),
+            killer: Mutex::new(killer),
+        })
     }
 
     pub(crate) fn take_reader(&self) -> Result<Box<dyn Read + Send>, SafeError> {
-        Err(error("OWNED_PTY_NOT_IMPLEMENTED"))
+        self.reader
+            .lock()
+            .take()
+            .ok_or_else(|| error("HOST_READER_ALREADY_TAKEN"))
     }
 
     pub(crate) fn with_writer<T>(
         &self,
-        _operation: impl FnOnce(&mut (dyn Write + Send)) -> io::Result<T>,
+        operation: impl FnOnce(&mut (dyn Write + Send)) -> io::Result<T>,
     ) -> io::Result<T> {
-        Err(io::Error::other("OWNED_PTY_NOT_IMPLEMENTED"))
+        operation(self.writer.lock().as_mut())
     }
 
     pub(crate) fn try_wait(&self) -> Result<Option<ExitStatus>, SafeError> {
-        Err(error("OWNED_PTY_NOT_IMPLEMENTED"))
+        // Another thread may already be in blocking wait(). Do not block this
+        // nonblocking observation behind that thread's child handle lock.
+        let Some(mut state) = self.child.try_lock() else {
+            return Ok(None);
+        };
+        if let Some(status) = &state.status {
+            return Ok(Some(status.clone()));
+        }
+        let status = state
+            .child
+            .try_wait()
+            .map_err(|_| error("PROCESS_WAIT_FAILED"))?;
+        state.status = status.clone();
+        Ok(status)
     }
 
     pub(crate) fn wait(&self) -> Result<ExitStatus, SafeError> {
-        Err(error("OWNED_PTY_NOT_IMPLEMENTED"))
+        let mut state = self.child.lock();
+        if let Some(status) = &state.status {
+            return Ok(status.clone());
+        }
+        let status = state
+            .child
+            .wait()
+            .map_err(|_| error("PROCESS_WAIT_FAILED"))?;
+        state.status = Some(status.clone());
+        Ok(status)
     }
 
+    /// Signal only the retained child killer, never a process-name/PID search.
+    /// This lock is independent of blocking reads, writes, resize and wait.
     pub(crate) fn terminate_root(&self) -> Result<(), SafeError> {
-        Err(error("OWNED_PTY_NOT_IMPLEMENTED"))
+        self.killer
+            .lock()
+            .kill()
+            .map_err(|_| error("PROCESS_TERMINATE_FAILED"))
     }
 
-    pub(crate) fn resize(&self, _size: PtySize) -> Result<(), SafeError> {
-        Err(error("OWNED_PTY_NOT_IMPLEMENTED"))
+    pub(crate) fn resize(&self, size: PtySize) -> Result<(), SafeError> {
+        validate_size(size)?;
+        self.master
+            .lock()
+            .resize(size)
+            .map_err(|_| error("HOST_RESIZE_FAILED"))
     }
+}
+
+fn validate_size(size: PtySize) -> Result<(), SafeError> {
+    if size.rows == 0 || size.cols == 0 {
+        return Err(SafeError::invalid("terminalSize"));
+    }
+    Ok(())
 }

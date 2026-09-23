@@ -73,7 +73,10 @@ impl<P> Fixture<P> {
 
     pub(super) fn freeze(&self) -> Result<LaunchSnapshot, SafeError> {
         let mut inherited: EnvMap = std::env::vars_os().collect();
-        inherited.insert("CC_DESK_TEST_ROOT".into(), self.root().as_os_str().to_owned());
+        inherited.insert(
+            "CC_DESK_TEST_ROOT".into(),
+            self.root().as_os_str().to_owned(),
+        );
         let empty = EnvMap::new();
         freeze_launch(
             &self.request,
@@ -99,19 +102,26 @@ impl<P> Fixture<P> {
 #[test]
 fn D11_Route_LeaseLivesThroughSpawnAndExit_01() {
     let f = Fixture::<usize>::new();
-    let status = f.driver.start_routed(
-        &f.caller,
-        &f.request,
-        || f.freeze(),
-        |_| Ok(f.lease()),
-        |_| {
-            assert_eq!(f.drops.load(Ordering::SeqCst), 0, "route died before spawn");
-            Ok(42)
-        },
-    ).unwrap();
+    let status = f
+        .driver
+        .start_routed(
+            &f.caller,
+            &f.request,
+            || f.freeze(),
+            |_| Ok(f.lease()),
+            |_| {
+                assert_eq!(f.drops.load(Ordering::SeqCst), 0, "route died before spawn");
+                Ok(42)
+            },
+        )
+        .unwrap();
     assert_eq!(status.phase, LaunchPhase::Running);
     f.driver.registry().mark_exited(&status.run).unwrap();
-    assert_eq!(f.drops.load(Ordering::SeqCst), 0, "root exit is not route retirement");
+    assert_eq!(
+        f.drops.load(Ordering::SeqCst),
+        0,
+        "root exit is not route retirement"
+    );
     f.driver.registry().retire(&status.run).unwrap();
     assert_eq!(f.drops.load(Ordering::SeqCst), 1);
 }
@@ -130,13 +140,16 @@ fn D11_Route_FailedSpawnReleasesAfterStatusOutsideLock_02() {
             );
         })),
     };
-    let status = f.driver.start_routed(
-        &f.caller,
-        &f.request,
-        || f.freeze(),
-        |_| Ok(lease),
-        |_| Err(error("synthetic-failure")),
-    ).unwrap();
+    let status = f
+        .driver
+        .start_routed(
+            &f.caller,
+            &f.request,
+            || f.freeze(),
+            |_| Ok(lease),
+            |_| Err(error("synthetic-failure")),
+        )
+        .unwrap();
     assert_eq!(status.phase, LaunchPhase::Failed);
     assert_eq!(f.drops.load(Ordering::SeqCst), 1);
 }
@@ -144,16 +157,19 @@ fn D11_Route_FailedSpawnReleasesAfterStatusOutsideLock_02() {
 #[test]
 fn D11_Route_RevokeBeforeSpawnDropsLease_03() {
     let f = Fixture::<usize>::new();
-    let status = f.driver.start_routed(
-        &f.caller,
-        &f.request,
-        || f.freeze(),
-        |_| {
-            f.driver.registry().revoke_window(&f.caller)?;
-            Ok(f.lease())
-        },
-        |_| panic!("revoked attempt must not spawn"),
-    ).unwrap();
+    let status = f
+        .driver
+        .start_routed(
+            &f.caller,
+            &f.request,
+            || f.freeze(),
+            |_| {
+                f.driver.registry().revoke_window(&f.caller)?;
+                Ok(f.lease())
+            },
+            |_| panic!("revoked attempt must not spawn"),
+        )
+        .unwrap();
     assert_eq!(status.phase, LaunchPhase::Cancelled);
     assert_eq!(f.drops.load(Ordering::SeqCst), 1);
 }
@@ -173,14 +189,18 @@ fn D11_Route_SpawnPanicDropsLeaseWithoutReplay_04() {
                 panic!("synthetic pre-child panic");
             },
         );
-    })).is_err());
-    let replay = f.driver.start_routed(
-        &f.caller,
-        &f.request,
-        || panic!("replay must not prepare"),
-        |_| panic!("replay must not connect"),
-        |_| panic!("replay must not spawn"),
-    ).unwrap();
+    }))
+    .is_err());
+    let replay = f
+        .driver
+        .start_routed(
+            &f.caller,
+            &f.request,
+            || panic!("replay must not prepare"),
+            |_| panic!("replay must not connect"),
+            |_| panic!("replay must not spawn"),
+        )
+        .unwrap();
     assert_eq!(replay.phase, LaunchPhase::Indeterminate);
     assert_eq!(f.drops.load(Ordering::SeqCst), 1);
     assert!(alive_at_spawn.load(Ordering::SeqCst));
@@ -189,14 +209,21 @@ fn D11_Route_SpawnPanicDropsLeaseWithoutReplay_04() {
 #[test]
 fn D11_Route_ExternalResourceLeaseSurvivesRetirement_05() {
     let f = Fixture::<usize>::new();
-    let status = f.driver.start_routed(
-        &f.caller,
-        &f.request,
-        || f.freeze(),
-        |_| Ok(f.lease()),
-        |_| Ok(42),
-    ).unwrap();
-    let held = f.driver.registry().resource(&f.caller, &status.run).unwrap();
+    let status = f
+        .driver
+        .start_routed(
+            &f.caller,
+            &f.request,
+            || f.freeze(),
+            |_| Ok(f.lease()),
+            |_| Ok(42),
+        )
+        .unwrap();
+    let held = f
+        .driver
+        .registry()
+        .resource(&f.caller, &status.run)
+        .unwrap();
     f.driver.registry().mark_exited(&status.run).unwrap();
     f.driver.registry().retire(&status.run).unwrap();
     assert_eq!(held.process, 42);
@@ -208,16 +235,19 @@ fn D11_Route_ExternalResourceLeaseSurvivesRetirement_05() {
 #[test]
 fn D11_Route_ConnectFailureNeverSpawns_06() {
     let f = Fixture::<usize>::new();
-    let status = f.driver.start_routed(
-        &f.caller,
-        &f.request,
-        || f.freeze(),
-        |_| {
-            let _partial_route = f.lease();
-            Err(error("synthetic-route-failure"))
-        },
-        |_| panic!("failed route must not spawn"),
-    ).unwrap();
+    let status = f
+        .driver
+        .start_routed(
+            &f.caller,
+            &f.request,
+            || f.freeze(),
+            |_| {
+                let _partial_route = f.lease();
+                Err(error("synthetic-route-failure"))
+            },
+            |_| panic!("failed route must not spawn"),
+        )
+        .unwrap();
     assert_eq!(status.phase, LaunchPhase::Failed);
     assert_eq!(f.drops.load(Ordering::SeqCst), 1);
 }
