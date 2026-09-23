@@ -17,6 +17,8 @@ pub(crate) mod native_cli_harness;
 #[cfg(test)]
 mod native_cli_invocation;
 #[cfg(test)]
+mod native_cli_owned_pty;
+#[cfg(test)]
 mod native_cli_platform;
 #[cfg(all(test, windows))]
 mod native_cli_platform_limits;
@@ -30,6 +32,8 @@ mod native_cli_profiles;
 mod native_cli_registry;
 #[cfg(test)]
 mod native_cli_registry_edges;
+#[cfg(test)]
+mod native_cli_routed_launch;
 #[cfg(test)]
 mod native_cli_snapshot;
 #[cfg(test)]
