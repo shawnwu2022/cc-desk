@@ -118,7 +118,12 @@ fn held_root_cannot_silently_follow_replacement() {
             panic!("unexpected rename denial: {e}");
             #[cfg(windows)]
             {
-                assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+                // Delete-sharing denial can surface as ERROR_SHARING_VIOLATION
+                // rather than Rust's PermissionDenied classification.
+                assert!(
+                    matches!(e.raw_os_error(), Some(5 | 32)),
+                    "unexpected rename error: {e:?}"
+                );
                 assert_eq!(
                     r.read(Path::new("x"), &mut budget()).unwrap(),
                     Some(b"old".to_vec())
@@ -129,8 +134,8 @@ fn held_root_cannot_silently_follow_replacement() {
 }
 #[cfg(unix)]
 #[test]
-fn symlink_escape_and_invalid_unicode_are_rejected() {
-    use std::os::unix::{ffi::OsStringExt, fs::symlink};
+fn symlink_escape_is_rejected() {
+    use std::os::unix::fs::symlink;
     let t = tempfile::tempdir().unwrap();
     let inside = t.path().join("inside");
     fs::create_dir(&inside).unwrap();
@@ -138,15 +143,35 @@ fn symlink_escape_and_invalid_unicode_are_rejected() {
     symlink(t.path().join("secret"), inside.join("escape")).unwrap();
     let r = Root::open(&inside).unwrap();
     assert!(r.read(Path::new("escape"), &mut budget()).is_err());
-    fs::write(
-        inside.join(std::ffi::OsString::from_vec(vec![255])),
-        b"bad-name",
-    )
-    .unwrap();
+}
+#[cfg(unix)]
+#[test]
+fn invalid_unicode_paths_and_stored_names_are_rejected() {
+    use std::os::unix::ffi::OsStringExt;
+    let t = tempfile::tempdir().unwrap();
+    let r = Root::open(t.path()).unwrap();
+    let name = std::ffi::OsString::from_vec(vec![255]);
+    // This exercises production rejection even when the filesystem itself
+    // rejects creating the filename (observed as EILSEQ on the macOS runner).
     assert_eq!(
-        r.list(Path::new(""), &mut budget()).err(),
+        r.read(Path::new(&name), &mut budget()).err(),
         Some("SOURCE_INVALID_TEXT")
     );
+    match fs::write(t.path().join(&name), b"bad-name") {
+        Ok(()) => assert_eq!(
+            r.list(Path::new(""), &mut budget()).err(),
+            Some("SOURCE_INVALID_TEXT")
+        ),
+        Err(error) => {
+            #[cfg(target_os = "macos")]
+            {
+                assert_eq!(error.raw_os_error(), Some(libc::EILSEQ));
+                assert!(r.list(Path::new(""), &mut budget()).unwrap().is_empty());
+            }
+            #[cfg(not(target_os = "macos"))]
+            panic!("unexpected invalid-name fixture failure: {error}");
+        }
+    }
 }
 #[cfg(windows)]
 #[test]

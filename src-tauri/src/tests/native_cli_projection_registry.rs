@@ -195,7 +195,12 @@ fn replaced_root_is_unavailable_not_an_empty_ready_projection() {
             panic!("unexpected rename denial: {e}");
             #[cfg(windows)]
             {
-                assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+                // Delete-sharing denial can surface as ERROR_SHARING_VIOLATION
+                // rather than Rust's PermissionDenied classification.
+                assert!(
+                    matches!(e.raw_os_error(), Some(5 | 32)),
+                    "unexpected rename error: {e:?}"
+                );
                 let r = registry.read(&owner(), &request(source)).unwrap();
                 assert_eq!(r.state, ProjectionState::Ready);
                 assert!(matches!(&r.items[0],ResourceItem::Session{title,..} if title=="old"));

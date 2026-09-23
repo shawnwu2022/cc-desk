@@ -104,3 +104,7 @@ fn child(parent: &str, name: &str) -> String {
 #[cfg(test)]
 #[path = "../../tests/native_cli_projection_reader.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/native_cli_projection_metadata_edges.rs"]
+mod metadata_edges;

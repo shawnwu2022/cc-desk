@@ -120,9 +120,9 @@ pub(super) fn read(
                 let global = json(c, c.root, "settings.json", b)?;
                 settings(&global, kind, "global", &mut out)?;
                 if kind == ResourceKind::Mcp {
-                    settings(
+                    claude_user_mcp(
+                        c,
                         &json(c, c.root, ".claude.json", b)?,
-                        kind,
                         "root-user-config",
                         &mut out,
                     )?;
@@ -130,14 +130,7 @@ pub(super) fn read(
                     settings(&mcps, kind, "global", &mut out)?;
                     if let Some(user) = c.user_config {
                         let config = json(c, user, ".claude.json", b)?;
-                        settings(&config, kind, "user-config", &mut out)?;
-                        if let Some(projects) = object_field(&config, "projects")? {
-                            for path in c.project_paths {
-                                if let Some(p) = path.to_str().and_then(|key| projects.get(key)) {
-                                    settings(p, kind, "project-local", &mut out)?;
-                                }
-                            }
-                        }
+                        claude_user_mcp(c, &config, "user-config", &mut out)?;
                     }
                 }
                 if let Some(project) = c.project {
@@ -180,6 +173,24 @@ pub(super) fn read(
     }
     Ok(out)
 }
+// Project keys are filter data, never a source of filesystem authority.
+fn claude_user_mcp(
+    c: &Catalog<'_>,
+    config: &Value,
+    origin: &str,
+    out: &mut Vec<ResourceItem>,
+) -> ReadResult<()> {
+    settings(config, ResourceKind::Mcp, origin, out)?;
+    if let Some(projects) = object_field(config, "projects")? {
+        for path in c.project_paths {
+            if let Some(project) = path.to_str().and_then(|key| projects.get(key)) {
+                settings(project, ResourceKind::Mcp, "project-local", out)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn json(c: &Catalog<'_>, r: &Root, path: &str, b: &mut Budget) -> ReadResult<Value> {
     let Some(bytes) = c.bytes(r, path, b)? else {
         return Ok(Value::Object(Map::new()));
@@ -463,6 +474,11 @@ fn installed(c: &Catalog<'_>, b: &mut Budget) -> ReadResult<Vec<(String, Value)>
                     continue;
                 }
             }
+            // The DTO has one observation per plugin ID. Do not invent precedence
+            // between multiple matching installations or merge their resources.
+            if out.iter().any(|(existing, _)| existing == id) {
+                return Err("SOURCE_AMBIGUOUS");
+            }
             out.push((id.clone(), record.clone()));
         }
     }
@@ -479,6 +495,26 @@ fn plugin_resources(
             return Err("SOURCE_INVALID");
         };
         let relative = c.root.descendant(Path::new(path))?;
+        let manifest = json(
+            c,
+            c.root,
+            &child(&relative, ".claude-plugin/plugin.json"),
+            b,
+        )?;
+        let resource_fields: &[&str] = match kind {
+            ResourceKind::Skills => &["skills", "commands"],
+            ResourceKind::Agents => &["agents"],
+            ResourceKind::Mcp => &["mcpServers"],
+            _ => &[],
+        };
+        if resource_fields
+            .iter()
+            .any(|field| manifest.get(*field).is_some())
+        {
+            // Only the default layout is supported here. An explicit custom layout
+            // cannot be reported as an empty or complete default-layout observation.
+            return Err("SOURCE_UNSUPPORTED");
+        }
         let origin = format!("plugin:{}", bounded(&id, 256).0);
         match kind {
             ResourceKind::Skills => {
