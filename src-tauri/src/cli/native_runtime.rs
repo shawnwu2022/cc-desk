@@ -4,6 +4,7 @@ use super::launch_service::{LaunchService, NativeRun, RunAccess};
 use super::output_route::{parse_channel, CHANNEL_HEADER};
 use super::profiles::error;
 use super::run_registry::{LaunchStatus, RunKey};
+use super::snapshot::CallerIdentity;
 use super::storage::WorkspaceRepository;
 use super::types::SafeError;
 use crate::run_supervisor::NativeRunSupervisor;
@@ -172,12 +173,12 @@ impl NativeRuntime {
         self.projections.check_caller(&caller)?;
         Ok(value)
     }
-    fn admit_run<T: Runtime>(
+    fn admit_run_key<T: Runtime>(
         &self,
         webview: &Webview<T>,
         headers: &HeaderMap,
         body: &InvokeBody,
-    ) -> Result<(RunKey, RunAccess), SafeError> {
+    ) -> Result<(CallerIdentity, RunKey), SafeError> {
         let binding = self.binding()?;
         let caller = binding.admit_native(webview, headers)?;
         let InvokeBody::Raw(bytes) = body else {
@@ -200,8 +201,8 @@ impl NativeRuntime {
             run_id: query.run_id,
             generation: query.generation,
         };
-        let access = self.service.access(&caller, &run)?;
-        Ok((run, access))
+        self.service.registry().check_run(&caller, &run)?;
+        Ok((caller, run))
     }
 
     /// Shared native admission for later input/resize/snapshot adapters.
@@ -213,7 +214,8 @@ impl NativeRuntime {
         headers: &HeaderMap,
         body: &InvokeBody,
     ) -> Result<RunAccess, SafeError> {
-        self.admit_run(webview, headers, body).map(|(_, access)| access)
+        let (caller, run) = self.admit_run_key(webview, headers, body)?;
+        self.service.access(&caller, &run)
     }
 
     pub(crate) fn stop<T: Runtime>(
@@ -221,7 +223,7 @@ impl NativeRuntime {
         webview: &Webview<T>,
         request: &Request<'_>,
     ) -> Result<(), SafeError> {
-        let (run, _access) = self.admit_run(webview, request.headers(), request.body())?;
+        let (_caller, run) = self.admit_run_key(webview, request.headers(), request.body())?;
         self.supervisor
             .as_ref()
             .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
