@@ -2,9 +2,7 @@ use crate::cli::output_route::{OutputRoute, OutputRoutes};
 use crate::cli::run_registry::RunKey;
 use crate::cli::snapshot::CallerIdentity;
 use crate::cli::types::WireU64;
-use crate::terminal_transport::{
-    OutputAck, OutputFrame, TerminalTransports, TransportLimits,
-};
+use crate::terminal_transport::{OutputAck, OutputFrame, TerminalTransports, TransportLimits};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::io::{self, Read};
@@ -38,9 +36,7 @@ fn ack(run_id: &str, generation: u32, stream_epoch: &str, through: &str) -> Outp
     .unwrap()
 }
 
-fn collecting_route(
-    events: Arc<Mutex<Vec<Value>>>,
-) -> Arc<OutputRoute<OutputFrame>> {
+fn collecting_route(events: Arc<Mutex<Vec<Value>>>) -> Arc<OutputRoute<OutputFrame>> {
     Arc::new(
         OutputRoutes::new(1)
             .bind(1, Box::new(|| Ok(())), || {
@@ -155,10 +151,18 @@ fn D14_Transport_BackpressureHappensBeforeReadAndPeerKeepsProgress_003() {
     let a_events = Arc::new(Mutex::new(Vec::new()));
     let b_events = Arc::new(Mutex::new(Vec::new()));
     let a = hub
-        .attach(owner.clone(), run("run-a", 1), collecting_route(a_events.clone()))
+        .attach(
+            owner.clone(),
+            run("run-a", 1),
+            collecting_route(a_events.clone()),
+        )
         .unwrap();
     let b = hub
-        .attach(owner.clone(), run("run-b", 1), collecting_route(b_events.clone()))
+        .attach(
+            owner.clone(),
+            run("run-b", 1),
+            collecting_route(b_events.clone()),
+        )
         .unwrap();
 
     a.send(&[1, 1, 1, 1]).unwrap();
@@ -213,7 +217,10 @@ fn D14_Transport_LostChannelIsFinalAndReleasesBudget_004() {
     let hub = TerminalTransports::with_limits(TransportLimits::new(4, 8, 4, 8).unwrap());
     let stream = hub.attach(caller(), run("run-a", 1), failing).unwrap();
 
-    assert_eq!(stream.send(&[1, 2, 3, 4]).unwrap_err().code, "OUTPUT_ROUTE_LOST");
+    assert_eq!(
+        stream.send(&[1, 2, 3, 4]).unwrap_err().code,
+        "OUTPUT_ROUTE_LOST"
+    );
     assert_eq!(
         stream.send(&[5]).unwrap_err().code,
         "OUTPUT_STREAM_DEGRADED"
