@@ -241,8 +241,7 @@ fn D15_Supervisor_RouteLossIsDegradedAndDoesNotRestartRun_002() {
         std::thread::sleep(Duration::from_millis(10));
     }
     fixture.routes.revoke();
-    let degraded =
-        fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Degraded);
+    let degraded = fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Degraded);
     assert_eq!(degraded.process(), ProcessLifecycle::Running);
     assert_eq!(fixture.child_reports(), 1, "route loss restarted the child");
 
@@ -311,7 +310,11 @@ fn D15_Supervisor_ExplicitStopIsIncompleteAndDoesNotRestart_004() {
     let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
     assert_eq!(exited.output(), OutputLifecycle::Incomplete);
     assert!(!exited.can_retire_as_complete());
-    assert_eq!(fixture.child_reports(), 1, "explicit stop restarted the child");
+    assert_eq!(
+        fixture.child_reports(),
+        1,
+        "explicit stop restarted the child"
+    );
 }
 
 
