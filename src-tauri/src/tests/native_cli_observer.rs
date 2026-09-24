@@ -1,7 +1,10 @@
+use crate::hook_config::deployment_id;
+use crate::hook_events::HookPayload;
 use crate::hook_server::{
-    ObserverAccept, ObserverBinding, ObserverRegistry, ObserverRun, ObserverSource,
-    MAX_OBSERVER_PAYLOAD,
+    parse_observer_headers, ObserverAccept, ObserverBinding, ObserverRegistry, ObserverRun,
+    ObserverSource, MAX_OBSERVER_PAYLOAD,
 };
+use axum::http::HeaderMap;
 
 fn run(id: &str, generation: u32) -> ObserverRun {
     ObserverRun {
@@ -182,4 +185,99 @@ fn D13_Observer_AttachRequiresStrongOpaqueCapabilityAndBoundedReplayTable_004() 
             .code,
         "OBSERVER_EVENT_CAPACITY"
     );
+}
+
+
+#[test]
+fn D13_Observer_HeadersBindExactRunCapabilitySourceAndEvent_005() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-cc-desk-run", "run-current".parse().unwrap());
+    headers.insert("x-cc-desk-generation", "7".parse().unwrap());
+    headers.insert(
+        "x-cc-desk-capability",
+        "0123456789abcdef0123456789abcdef".parse().unwrap(),
+    );
+    headers.insert("x-cc-desk-event", "event-7".parse().unwrap());
+    headers.insert("x-cc-desk-observer-source", "claude-hook".parse().unwrap());
+
+    let (binding, event_id) = parse_observer_headers(&headers).unwrap();
+    assert_eq!(binding.run, run("run-current", 7));
+    assert_eq!(
+        binding.capability,
+        "0123456789abcdef0123456789abcdef"
+    );
+    assert_eq!(binding.source, ObserverSource::ClaudeHook);
+    assert_eq!(event_id, "event-7");
+
+    headers.insert("x-cc-desk-generation", "07".parse().unwrap());
+    assert_eq!(
+        parse_observer_headers(&headers).unwrap_err().code,
+        "INVALID_REQUEST"
+    );
+}
+
+#[test]
+fn D13_Observer_MintedCapabilitiesAreOpaquePerRun_006() {
+    let registry = ObserverRegistry::new();
+    let first = registry
+        .mint(run("first", 1), ObserverSource::ClaudeHook)
+        .unwrap();
+    let second = registry
+        .mint(run("second", 1), ObserverSource::ClaudeHook)
+        .unwrap();
+
+    assert_eq!(first.capability.len(), 32);
+    assert_eq!(second.capability.len(), 32);
+    assert_ne!(first.capability, second.capability);
+    assert!(first
+        .capability
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit()));
+    assert!(second
+        .capability
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit()));
+}
+
+#[test]
+fn D13_Observer_ValidatedHookPayloadNeverPublishesGuessedActivity_007() {
+    let registry = ObserverRegistry::new();
+    let binding = registry
+        .attach(
+            run("run-current", 4),
+            "0123456789abcdef0123456789abcdef".to_string(),
+            ObserverSource::ClaudeHook,
+        )
+        .unwrap();
+    let ObserverAccept::Accepted(event) = registry
+        .accept_event(&binding, "event-4", &payload("UserPromptSubmit"))
+        .unwrap()
+    else {
+        panic!("first event must be accepted");
+    };
+
+    let payload = HookPayload::from_validated(event);
+    assert_eq!(payload.run_id.as_deref(), Some("run-current"));
+    assert_eq!(payload.generation, Some(4));
+    assert_eq!(payload.event_id.as_deref(), Some("event-4"));
+    assert_eq!(payload.observer_source.as_deref(), Some("claude-hook"));
+    assert_eq!(payload.state, "unknown");
+    assert!(payload.pty_id.is_none());
+}
+
+#[test]
+fn D13_Observer_PluginDeploymentTracksScriptAndReporterStaysBounded_008() {
+    assert_ne!(
+        deployment_id("plugin", "hooks", "report-a"),
+        deployment_id("plugin", "hooks", "report-b")
+    );
+
+    const SCRIPT: &str = include_str!("../../plugin/scripts/report-hook.sh");
+    assert!(SCRIPT.contains("/observer"));
+    assert!(SCRIPT.contains("CC_DESK_OBSERVER_CAPABILITY"));
+    assert!(SCRIPT.contains("CC_DESK_OBSERVER_RUN"));
+    assert!(SCRIPT.contains("CC_DESK_OBSERVER_GENERATION"));
+    assert!(SCRIPT.contains("--max-time 3"));
+    assert!(SCRIPT.contains("-H @<("));
+    assert!(!SCRIPT.contains("-H \"X-CC-Desk-Capability:"));
 }
