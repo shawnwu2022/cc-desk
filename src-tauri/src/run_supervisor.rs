@@ -38,6 +38,7 @@ impl NativeRunSupervisor {
         }
     }
 
+    #[allow(dead_code)] // D15 test/diagnostic observation; not a wire command.
     pub(crate) fn snapshot(&self, run: &RunKey) -> Option<LifecycleRecord> {
         let key = identity(run);
         if let Some(state) = self.core.active.lock().get(&key).cloned() {
