@@ -5,7 +5,7 @@ use crate::cli::terminal_transport::{
 };
 use crate::cli::types::WireU64;
 
-fn run(id: &str, generation: u32) -> RunKey {
+fn run_key(id: &str, generation: u32) -> RunKey {
     RunKey { run_id: id.into(), generation }
 }
 
@@ -21,7 +21,7 @@ fn ack(run: &RunKey, epoch: &str, through: usize) -> OutputAck {
 #[test]
 fn D14_Transport_FrameBoundariesAndExactBytes_001() {
     let budget = TransportBudget::new(APPLICATION_PAYLOAD_BUDGET);
-    let run = run("bytes-run", 3);
+    let run = run_key("bytes-run", 3);
     let flow = RunOutputFlow::new(run.clone(), WireU64::parse("11").unwrap(), budget.clone());
     let payload = vec![0, 255, 27, 91, 50, 48, 48, 126, 0xf0, 0x9f, 0x98, 0x80];
 
@@ -41,7 +41,7 @@ fn D14_Transport_FrameBoundariesAndExactBytes_001() {
 #[test]
 fn D14_Transport_AckDuplicateRegressionOverflowAndBoundary_002() {
     let budget = TransportBudget::new(APPLICATION_PAYLOAD_BUDGET);
-    let run = run("ack-run", 1);
+    let run = run_key("ack-run", 1);
     let flow = RunOutputFlow::new(run.clone(), WireU64::parse("7").unwrap(), budget.clone());
 
     let first = flow.try_reserve().unwrap().commit(vec![1; 7]).unwrap();
@@ -68,14 +68,14 @@ fn D14_Transport_AckDuplicateRegressionOverflowAndBoundary_002() {
 #[test]
 fn D14_Transport_OldEpochAndWrongRunRejected_003() {
     let budget = TransportBudget::new(APPLICATION_PAYLOAD_BUDGET);
-    let run = run("owner-run", 2);
+    let run = run_key("owner-run", 2);
     let flow = RunOutputFlow::new(run.clone(), WireU64::parse("19").unwrap(), budget);
     flow.try_reserve().unwrap().commit(vec![1, 2, 3]).unwrap();
 
     assert_eq!(flow.ack(&ack(&run, "18", 3)).unwrap_err().code, "STALE_STREAM_EPOCH");
-    let other = run("other-run", 2);
+    let other = run_key("other-run", 2);
     assert_eq!(flow.ack(&ack(&other, "19", 3)).unwrap_err().code, "FORBIDDEN");
-    let stale_generation = run("owner-run", 1);
+    let stale_generation = run_key("owner-run", 1);
     assert_eq!(flow.ack(&ack(&stale_generation, "19", 3)).unwrap_err().code, "STALE_GENERATION");
     assert_eq!(flow.outstanding_bytes(), 3);
 }
@@ -84,7 +84,7 @@ fn D14_Transport_OldEpochAndWrongRunRejected_003() {
 fn D14_Transport_HighLowWatermarkResumesOnlyAtLow_004() {
     assert_eq!(RUN_HIGH_WATERMARK % MAX_FRAME_BYTES, 0);
     let budget = TransportBudget::new(APPLICATION_PAYLOAD_BUDGET);
-    let run = run("pressure-run", 1);
+    let run = run_key("pressure-run", 1);
     let flow = RunOutputFlow::new(run.clone(), WireU64::parse("2").unwrap(), budget);
 
     for _ in 0..(RUN_HIGH_WATERMARK / MAX_FRAME_BYTES) {
@@ -104,8 +104,8 @@ fn D14_Transport_HighLowWatermarkResumesOnlyAtLow_004() {
 #[test]
 fn D14_Transport_GlobalBudgetAndPermitRollback_005() {
     let budget = TransportBudget::new(MAX_FRAME_BYTES);
-    let a = RunOutputFlow::new(run("a", 1), WireU64::parse("1").unwrap(), budget.clone());
-    let b = RunOutputFlow::new(run("b", 1), WireU64::parse("2").unwrap(), budget.clone());
+    let a = RunOutputFlow::new(run_key("a", 1), WireU64::parse("1").unwrap(), budget.clone());
+    let b = RunOutputFlow::new(run_key("b", 1), WireU64::parse("2").unwrap(), budget.clone());
 
     let held = a.try_reserve().unwrap();
     assert_eq!(budget.reserved_bytes(), MAX_FRAME_BYTES);
@@ -121,7 +121,7 @@ fn D14_Transport_GlobalBudgetAndPermitRollback_005() {
 #[test]
 fn D14_Transport_DegradedReleasesPayloadAndNeverReopens_006() {
     let budget = TransportBudget::new(APPLICATION_PAYLOAD_BUDGET);
-    let flow = RunOutputFlow::new(run("lost", 1), WireU64::parse("8").unwrap(), budget.clone());
+    let flow = RunOutputFlow::new(run_key("lost", 1), WireU64::parse("8").unwrap(), budget.clone());
     flow.try_reserve().unwrap().commit(vec![7; 100]).unwrap();
     assert_eq!(budget.reserved_bytes(), 100);
 
@@ -135,8 +135,8 @@ fn D14_Transport_DegradedReleasesPayloadAndNeverReopens_006() {
 #[test]
 fn D14_Transport_TwoRunsDoNotShareCreditOrOffsets_007() {
     let budget = TransportBudget::new(APPLICATION_PAYLOAD_BUDGET);
-    let a_run = run("run-a", 1);
-    let b_run = run("run-b", 1);
+    let a_run = run_key("run-a", 1);
+    let b_run = run_key("run-b", 1);
     let a = RunOutputFlow::new(a_run.clone(), WireU64::parse("3").unwrap(), budget.clone());
     let b = RunOutputFlow::new(b_run.clone(), WireU64::parse("4").unwrap(), budget.clone());
 
