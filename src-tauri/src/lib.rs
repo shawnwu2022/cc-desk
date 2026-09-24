@@ -67,6 +67,7 @@ pub fn run(initial_dir: Option<String>) {
         cli::native_runtime::NativeRuntime::production().expect("native workspace unavailable"),
     );
     let native_setup = native_runtime.clone();
+    let native_shutdown = native_runtime.clone();
     tauri::Builder::default()
         .manage(native_runtime)
         .plugin(tauri_plugin_shell::init())
@@ -74,9 +75,12 @@ pub fn run(initial_dir: Option<String>) {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .on_window_event(|_window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                log::info!("Window close requested, cleaning up PTYs...");
+        .on_window_event(move |window, event| {
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                log::info!("Main window close requested, cleaning up PTYs...");
+                native_shutdown.shutdown();
                 if let Some(manager) = pty::get_pty_manager() {
                     manager.kill_all();
                 }
@@ -162,6 +166,7 @@ pub fn run(initial_dir: Option<String>) {
             cli::commands::cli_start,
             cli::commands::cli_get_launch_status,
             cli::commands::cli_ack_output,
+            cli::commands::cli_stop,
             cli::commands::cli_list_profiles,
             cli::commands::cli_patch_profile,
             cli::commands::cli_get_availability,
