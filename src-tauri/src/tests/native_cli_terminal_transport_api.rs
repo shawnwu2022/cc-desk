@@ -9,7 +9,6 @@ fn D14_Ack_FormalCommandIsRegisteredAtTheNativeBoundary_001() {
     );
 }
 
-
 #[test]
 fn D15_Stop_FormalCommandIsRegisteredAtTheNativeBoundary_002() {
     let _ = cli_stop;
