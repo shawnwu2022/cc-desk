@@ -2,9 +2,23 @@ import type { U64String } from '@/types/cli'
 
 const MAX_U64 = (1n << 64n) - 1n
 
+export const INPUT_ACTION_BYTES_MAX = 8 * 1024 * 1024
+export const INPUT_RUN_QUEUE_BYTES_MAX = 16 * 1024 * 1024
+
 export type UserInputSource = 'user-text' | 'user-paste'
-export type InputPauseReason = 'producer-failed' | 'mode-changed' | 'send-failed'
+export type InputPauseReason =
+  | 'producer-failed'
+  | 'mode-changed'
+  | 'target-changed'
+  | 'budget-exceeded'
+  | 'send-failed'
 export type InputRecovery = 'continue' | 'cancel'
+
+export interface InputTarget {
+  runId: string
+  generation: number
+  modeEpoch: U64String
+}
 
 export interface InputIntent {
   runId: string
@@ -25,6 +39,7 @@ export interface ProtocolInput {
 export interface InputQueueSnapshot {
   state: 'open' | 'paused'
   queued: number
+  queuedBytes: number
   blockedSeq?: U64String
   reason?: InputPauseReason
 }
@@ -54,7 +69,11 @@ export interface InputIntentQueue {
 export interface InputIntentQueueOptions {
   runId: string
   generation: number
-  currentModeEpoch: () => U64String
+  currentTarget: () => InputTarget
+  limits?: {
+    actionBytes?: number
+    queuedBytes?: number
+  }
   send: (intent: InputIntent) => Promise<unknown> | unknown
   sendProtocol?: (input: ProtocolInput) => Promise<unknown> | unknown
 }
@@ -66,6 +85,7 @@ interface QueueItem {
   modeEpoch: U64String
   source: UserInputSource
   state: ItemState
+  failure?: InputPauseReason
   bytes?: Uint8Array
 }
 
@@ -85,20 +105,41 @@ function copyBytes(value: Uint8Array): Uint8Array {
   return new Uint8Array(value)
 }
 
+function validateLimit(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`INVALID_${field}`)
+  return value
+}
+
 export function createInputIntentQueue(options: InputIntentQueueOptions): InputIntentQueue {
   if (!options.runId || options.runId.includes('\0')) throw new Error('INVALID_RUN_ID')
   if (!Number.isInteger(options.generation) || options.generation <= 0) {
     throw new Error('INVALID_GENERATION')
   }
 
+  const actionBytesMax = validateLimit(
+    options.limits?.actionBytes ?? INPUT_ACTION_BYTES_MAX,
+    'INPUT_ACTION_BYTES',
+  )
+  const queuedBytesMax = validateLimit(
+    options.limits?.queuedBytes ?? INPUT_RUN_QUEUE_BYTES_MAX,
+    'INPUT_QUEUE_BYTES',
+  )
+  if (queuedBytesMax < actionBytesMax) {
+    // Smaller queue budgets are useful in tests and explicit configuration, but
+    // they still need to be positive. An action may therefore fit the action
+    // cap and still be rejected by the queue cap.
+  }
+
   let nextSeq = 1n
+  let queuedBytes = 0
   const items: QueueItem[] = []
   let pause: Pause | undefined
   let flushInFlight: Promise<void> | null = null
 
-  // FIFO mutex around each actual host dispatch. A protocol event submitted
-  // while a user frame is in flight queues immediately behind that frame; the
-  // next user frame then queues behind the protocol event.
+  // FIFO mutex around each actual host dispatch. Protocol traffic can bypass an
+  // unresolved clipboard reservation because no dispatch is active yet. If a
+  // user frame is already being dispatched, protocol waits for that frame and
+  // is ordered before any later user frame that has not started.
   let dispatchTail: Promise<void> = Promise.resolve()
   const dispatchExclusive = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = dispatchTail
@@ -125,19 +166,56 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
     if (parseU64(value, 'MODE_EPOCH') === 0n) throw new Error('INVALID_MODE_EPOCH')
   }
 
+  const currentTarget = (): InputTarget => {
+    const target = options.currentTarget()
+    if (!target.runId || target.runId.includes('\0')) throw new Error('INVALID_CURRENT_RUN_ID')
+    if (!Number.isInteger(target.generation) || target.generation <= 0) {
+      throw new Error('INVALID_CURRENT_GENERATION')
+    }
+    validateModeEpoch(target.modeEpoch)
+    return target
+  }
+
+  const checkBytes = (value: Uint8Array) => {
+    if (value.byteLength > actionBytesMax) throw new Error('INPUT_ACTION_TOO_LARGE')
+    if (queuedBytes + value.byteLength > queuedBytesMax) throw new Error('INPUT_QUEUE_BUDGET')
+  }
+
+  const account = (value: Uint8Array) => {
+    checkBytes(value)
+    queuedBytes += value.byteLength
+  }
+
+  const releaseItemBytes = (item: QueueItem) => {
+    if (!item.bytes) return
+    queuedBytes -= item.bytes.byteLength
+    if (queuedBytes < 0) {
+      queuedBytes = 0
+      throw new Error('INPUT_QUEUE_ACCOUNTING')
+    }
+  }
+
+  const pauseFor = (item: QueueItem, reason: InputPauseReason) => {
+    item.failure = reason
+    pause = { blockedSeq: item.inputSeq, reason }
+  }
+
   const pushReady = (
     source: UserInputSource,
     modeEpoch: U64String,
     bytes: Uint8Array,
   ): { inputSeq: U64String } => {
     validateModeEpoch(modeEpoch)
+    checkBytes(bytes)
     const inputSeq = allocateSeq()
+    const stored = copyBytes(bytes)
+    queuedBytes += stored.byteLength
     items.push({
       inputSeq,
       modeEpoch,
       source,
       state: 'ready',
-      bytes: copyBytes(bytes),
+      bytes: stored,
     })
     return { inputSeq }
   }
@@ -147,11 +225,17 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
       const head = items[0]
       if (!head || head.state === 'pending') return
       if (head.state === 'failed') {
-        pause = { blockedSeq: head.inputSeq, reason: 'producer-failed' }
+        pauseFor(head, head.failure ?? 'producer-failed')
         return
       }
-      if (options.currentModeEpoch() !== head.modeEpoch) {
-        pause = { blockedSeq: head.inputSeq, reason: 'mode-changed' }
+
+      const target = currentTarget()
+      if (target.runId !== options.runId || target.generation !== options.generation) {
+        pauseFor(head, 'target-changed')
+        return
+      }
+      if (target.modeEpoch !== head.modeEpoch) {
+        pauseFor(head, 'mode-changed')
         return
       }
 
@@ -170,10 +254,12 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
         })
       } catch {
         head.state = 'failed'
-        pause = { blockedSeq: head.inputSeq, reason: 'send-failed' }
+        pauseFor(head, 'send-failed')
         return
       }
+
       items.shift()
+      releaseItemBytes(head)
     }
   }
 
@@ -206,14 +292,29 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
         .then(
           value => {
             if (item.state !== 'pending') return
-            item.bytes = copyBytes(value)
-            item.state = 'ready'
+            try {
+              account(value)
+              item.bytes = copyBytes(value)
+              item.state = 'ready'
+            } catch (error) {
+              item.state = 'failed'
+              item.failure = error instanceof Error && (
+                error.message === 'INPUT_ACTION_TOO_LARGE'
+                || error.message === 'INPUT_QUEUE_BUDGET'
+              )
+                ? 'budget-exceeded'
+                : 'producer-failed'
+              if (items[0] === item && !pause) {
+                pauseFor(item, item.failure)
+              }
+            }
           },
           () => {
             if (item.state !== 'pending') return
             item.state = 'failed'
+            item.failure = 'producer-failed'
             if (items[0] === item && !pause) {
-              pause = { blockedSeq: item.inputSeq, reason: 'producer-failed' }
+              pauseFor(item, 'producer-failed')
             }
           },
         )
@@ -226,13 +327,15 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
     async sendProtocol(bytes) {
       const send = options.sendProtocol
       if (!send) throw new Error('PROTOCOL_SENDER_UNAVAILABLE')
-      const modeEpoch = options.currentModeEpoch()
-      validateModeEpoch(modeEpoch)
+      const target = currentTarget()
+      if (target.runId !== options.runId || target.generation !== options.generation) {
+        throw new Error('STALE_INPUT_TARGET')
+      }
       await dispatchExclusive(async () => {
         await send({
           runId: options.runId,
           generation: options.generation,
-          modeEpoch,
+          modeEpoch: target.modeEpoch,
           bytes: copyBytes(bytes),
         })
       })
@@ -245,15 +348,17 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
 
       if (action === 'cancel') {
         items.length = 0
+        queuedBytes = 0
         pause = undefined
         return true
       }
 
-      // Continue is explicit permission to discard the failed action and retain
-      // later user intents. A mode change is different: silently rebasing bytes
-      // captured under an older terminal mode would violate the epoch contract.
-      if (pause.reason === 'mode-changed') return false
-      items.splice(index, 1)
+      // Continue explicitly discards a failed action and retains later intents.
+      // Target/mode changes cannot be rebased silently; those require cancellation
+      // and a new user action against the new generation/epoch.
+      if (pause.reason === 'mode-changed' || pause.reason === 'target-changed') return false
+      const [removed] = items.splice(index, 1)
+      releaseItemBytes(removed)
       pause = undefined
       return true
     },
@@ -262,6 +367,7 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
       return {
         state: pause ? 'paused' : 'open',
         queued: items.length,
+        queuedBytes,
         ...(pause ? { blockedSeq: pause.blockedSeq, reason: pause.reason } : {}),
       }
     },
