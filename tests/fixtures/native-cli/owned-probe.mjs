@@ -37,7 +37,9 @@ if (mode === 'descendant') {
     stdio: ['ignore', 'inherit', 'inherit'],
     windowsHide: true,
   })
-  child.unref()
-  process.stdout.write('ROOT_EXIT\n', () => process.exit(23))
+  child.once('spawn', () => {
+    child.unref()
+    process.stdout.write('ROOT_EXIT\n', () => process.exit(23))
+  })
 }
 if (mode === 'hold') setInterval(() => {}, 1000)
