@@ -280,6 +280,30 @@ impl<R> RunRegistry<R> {
         Ok(record.status.clone())
     }
 
+    /// Validate that the current authenticated document owns this exact run.
+    /// Unlike resource(), this remains valid after process handles are retired so
+    /// a still-active document can explicitly abort an output drain.
+    pub(crate) fn check_run(
+        &self,
+        caller: &CallerIdentity,
+        run: &RunKey,
+    ) -> Result<(), SafeError> {
+        let state = self.state.lock();
+        self.authorize(&state, caller)?;
+        let key = state
+            .runs
+            .get(&run.run_id)
+            .ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        let record = state.records.get(key).expect("run index is retained");
+        if record.owner != *caller {
+            return Err(error("FORBIDDEN"));
+        }
+        if record.status.run != *run {
+            return Err(error("STALE_GENERATION"));
+        }
+        Ok(())
+    }
+
     /// Backend-only handle acquisition. A returned Arc is not a wire capability;
     /// each later external operation must be admitted against its own caller/run.
     /// Exited resources remain available for drain until explicit retirement.
