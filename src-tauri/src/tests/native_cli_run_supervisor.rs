@@ -257,7 +257,6 @@ fn D15_Supervisor_RouteLossIsDegradedAndDoesNotRestartRun_002() {
     assert_eq!(fixture.child_reports(), 1, "degraded run was replayed");
 }
 
-
 #[test]
 fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
     let fixture = Fixture::new("descendant");
@@ -313,4 +312,24 @@ fn D15_Supervisor_ExplicitStopIsIncompleteAndDoesNotRestart_004() {
     assert_eq!(exited.output(), OutputLifecycle::Incomplete);
     assert!(!exited.can_retire_as_complete());
     assert_eq!(fixture.child_reports(), 1, "explicit stop restarted the child");
+}
+
+
+#[test]
+fn D15_Supervisor_ApplicationShutdownIsIncomplete_005() {
+    let fixture = Fixture::new("hold");
+    let status = fixture.start();
+    assert_eq!(status.phase, LaunchPhase::Running);
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < deadline, "hold probe never became ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    fixture.supervisor.shutdown();
+    fixture.supervisor.shutdown();
+    let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    assert_eq!(exited.output(), OutputLifecycle::Incomplete);
+    assert!(!exited.can_retire_as_complete());
 }
