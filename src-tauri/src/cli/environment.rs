@@ -109,7 +109,16 @@ fn permitted(name: &OsStr, names: &[&str]) -> bool {
 }
 
 pub(crate) fn observer_enabled(profile: &Profile) -> bool {
-    profile.cli == CliKind::Claude && matches!(profile.observer, Override::Set(true))
+    if profile.cli != CliKind::Claude {
+        return false;
+    }
+    match &profile.observer {
+        Override::Set(enabled) => *enabled,
+        Override::Unset => false,
+        // The legacy Claude path historically installed the Desk hook monitor.
+        // Inherit preserves that behavior; independent profiles remain off.
+        Override::Inherit => profile.is_legacy_claude(),
+    }
 }
 
 pub(crate) fn build_environment(
@@ -173,7 +182,16 @@ pub(crate) fn build_environment(
         if let Some(observer) = observer {
             let layer = validated_layer(&observer.values, false)?;
             for name in layer.keys() {
-                if !permitted(name, &["CC_BOX_HOOK_PORT", "CC_BOX_SESSION_ID"]) {
+                if !permitted(
+                    name,
+                    &[
+                        "CC_BOX_HOOK_PORT",
+                        "CC_BOX_SESSION_ID",
+                        "CC_DESK_OBSERVER_CAPABILITY",
+                        "CC_DESK_OBSERVER_RUN",
+                        "CC_DESK_OBSERVER_GENERATION",
+                    ],
+                ) {
                     return Err(SafeError::invalid("observer.environment"));
                 }
             }
