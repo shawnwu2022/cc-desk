@@ -200,3 +200,9 @@ fn validate_size(size: PtySize) -> Result<(), SafeError> {
     }
     Ok(())
 }
+
+// Native test preconditions live outside production classes and do not expose
+// process handles or synchronization operations in application builds.
+#[cfg(all(test, windows))]
+#[path = "../tests/native_cli_owned_pty_barrier.rs"]
+pub(crate) mod test_barrier;
