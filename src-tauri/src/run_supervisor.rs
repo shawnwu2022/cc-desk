@@ -271,12 +271,16 @@ impl SupervisedRun {
     }
 
     fn request_stop(&self) -> Result<(), SafeError> {
-        {
+        let exited = {
             let mut lifecycle = self.lifecycle.lock();
-            if lifecycle.process() == crate::run_lifecycle::ProcessLifecycle::Exited {
-                return Err(error("RUN_NOT_READY"));
-            }
+            let exited = lifecycle.process() == crate::run_lifecycle::ProcessLifecycle::Exited;
             lifecycle.mark_incomplete()?;
+            exited
+        };
+        if exited {
+            self.release_resource_if_transport_terminal();
+            self.finish_if_terminal();
+            return Ok(());
         }
         let resource = self
             .resource
