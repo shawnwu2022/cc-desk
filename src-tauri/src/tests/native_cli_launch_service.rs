@@ -347,3 +347,33 @@ mod edges;
 
 #[path = "native_cli_observer_service.rs"]
 mod observer;
+
+
+#[test]
+fn D15_Service_ShutdownGateRejectsNewLaunchButKeepsReceipt_012() {
+    let f = Fixture::new(false);
+    let status = f.start().unwrap();
+    f.ready();
+
+    f.service.begin_shutdown();
+
+    let replay = f
+        .service
+        .start(&f.caller, &f.request, |_| panic!("replay must not rebuild route"))
+        .unwrap();
+    assert_eq!(replay, status);
+
+    let mut next = f.request.clone();
+    next.request_id = "service-after-shutdown".into();
+    next.tab_id = "service-after-shutdown-tab".into();
+    next.run_id = "service-after-shutdown-run".into();
+    assert_eq!(
+        f.service
+            .start(&f.caller, &next, |_| panic!("shutdown launch must not bind route"))
+            .unwrap_err()
+            .code,
+        "RUN_SUPERVISOR_STOPPING"
+    );
+    assert_eq!(f.children(), 1, "shutdown gate created another child");
+    assert_eq!(f.consumer.calls.load(Ordering::SeqCst), 1);
+}
