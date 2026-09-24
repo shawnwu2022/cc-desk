@@ -281,7 +281,45 @@ fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
     let terminal = fixture.wait_lifecycle(|state| {
         state.final_offset().is_some() || state.output() == OutputLifecycle::Incomplete
     });
-    let events = fixture.events.lock().clone();
+    let descendant_start = fs::read_to_string(
+        fixture.root.path().join("work/descendant-start.json"),
+    )
+    .expect("descendant never completed its startup handshake");
+    let marker = fixture
+        .root
+        .path()
+        .join("work/descendant-after-root.marker");
+    let marker_deadline = Instant::now() + Duration::from_secs(2);
+    while !marker.exists() && Instant::now() < marker_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        marker.exists(),
+        "descendant did not survive root exit; startup={descendant_start}"
+    );
+
+    let tail_deadline = Instant::now() + Duration::from_secs(1);
+    let events = loop {
+        let events = fixture.events.lock().clone();
+        let bytes: Vec<u8> = events
+            .iter()
+            .flat_map(|event| {
+                event["bytes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_u64().unwrap() as u8)
+            })
+            .collect();
+        if bytes
+            .windows(b"DESCENDANT_TAIL".len())
+            .any(|window| window == b"DESCENDANT_TAIL")
+            || Instant::now() >= tail_deadline
+        {
+            break events;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     let bytes: Vec<u8> = events
         .iter()
         .flat_map(|event| {
@@ -292,18 +330,6 @@ fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
                 .map(|value| value.as_u64().unwrap() as u8)
         })
         .collect();
-    let descendant_start = fs::read_to_string(
-        fixture.root.path().join("work/descendant-start.json"),
-    )
-    .expect("descendant never completed its startup handshake");
-    assert!(
-        fixture
-            .root
-            .path()
-            .join("work/descendant-after-root.marker")
-            .exists(),
-        "descendant did not survive root exit; startup={descendant_start}"
-    );
     assert!(
         bytes
             .windows(b"DESCENDANT_TAIL".len())
