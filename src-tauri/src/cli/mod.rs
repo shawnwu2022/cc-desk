@@ -23,5 +23,6 @@ pub(crate) mod shell;
 pub(crate) mod snapshot;
 pub(crate) mod source_scope;
 pub(crate) mod storage;
+pub(crate) mod terminal_transport;
 pub(crate) mod types;
 pub(crate) mod workspace;
