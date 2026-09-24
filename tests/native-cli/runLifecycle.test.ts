@@ -47,6 +47,22 @@ describe('D15 run lifecycle', () => {
     expect(lifecycle.snapshot().output).toBe('open')
   })
 
+  it('D15_Frontend_IncompleteMayPrecedeOutputStream_004', () => {
+    const lifecycle = createRunLifecycle({ runId: 'pre-stream', generation: 1, cli: 'codex' })
+
+    lifecycle.processRunning()
+    lifecycle.incomplete()
+    lifecycle.processExited()
+
+    expect(lifecycle.snapshot()).toMatchObject({
+      process: 'exited',
+      output: 'incomplete',
+      parsedThrough: '0',
+      sentThrough: '0',
+    })
+    expect(lifecycle.snapshot().streamEpoch).toBeUndefined()
+  })
+
   it('D15_Frontend_DegradedOrIncompleteIsFinalNotDrained_003', () => {
     const degraded = createRunLifecycle({ runId: 'a', generation: 1, cli: 'codex' })
     degraded.processRunning()
