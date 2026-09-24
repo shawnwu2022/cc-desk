@@ -6,7 +6,7 @@ use super::profiles::error;
 use super::run_registry::{LaunchStatus, RunKey};
 use super::storage::WorkspaceRepository;
 use super::types::SafeError;
-use crate::terminal_transport::{OutputAck, TerminalTransports};
+use crate::terminal_transport::{OutputAck, OutputFrame, TerminalTransports};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,7 +90,7 @@ impl NativeRuntime {
                         .parse()
                         .map_err(|_| SafeError::invalid("outputChannel"))?,
                 );
-                binding.channel_native::<_, serde_json::Value>(&webview, &headers)
+                binding.channel_native::<_, OutputFrame>(&webview, &headers)
             })
         })
         .await

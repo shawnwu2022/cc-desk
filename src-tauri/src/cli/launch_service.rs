@@ -11,9 +11,9 @@ use super::snapshot::{freeze_launch, CallerIdentity, FreezeContext, LaunchSnapsh
 use super::storage::WorkspaceRepository;
 use super::types::{LaunchRequest, SafeError};
 use crate::platform::launch::resolve_process;
+use crate::terminal_transport::OutputFrame;
 use crate::platform::owned_pty::OwnedPty;
 use portable_pty::PtySize;
-use serde_json::Value;
 use std::cell::Cell;
 use std::io::{self, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -24,7 +24,7 @@ pub(crate) struct FrozenPty {
     pub(crate) snapshot: Arc<LaunchSnapshot>,
     pub(crate) observer: Option<crate::observer_registry::ObserverLease>,
 }
-pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<Value>>;
+pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<OutputFrame>>;
 
 /// D14/D15 supply a backend consumer. It must retain/reap its owned run and
 /// implement bounded output/drain policy. This interface is never deserialized.
@@ -73,7 +73,7 @@ impl LaunchService {
         &self,
         caller: &CallerIdentity,
         request: &LaunchRequest,
-        connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<Value>, SafeError>,
+        connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<OutputFrame>, SafeError>,
     ) -> Result<LaunchStatus, SafeError> {
         let spawned = Cell::new(false);
         let status = self.coordinator.start_routed(
