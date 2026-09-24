@@ -147,4 +147,64 @@ describe('useHookStore', () => {
 
     expect(handler).not.toHaveBeenCalled()
   })
+
+  it('D13_HookStore_AuthenticatedObservationBypassesLegacyPtySubscribers_001', () => {
+    const store = useHookStore()
+    store.init()
+
+    const legacyHandler = vi.fn()
+    const observationHandler = vi.fn()
+    store.subscribe(['userPromptSubmit'], legacyHandler)
+    store.subscribeObservation(observationHandler)
+
+    capturedOnHookEventCallback!({
+      ptyId: 'legacy-looking-pty',
+      sessionId: 'native-session',
+      eventName: 'UserPromptSubmit',
+      state: 'thinking',
+      timestamp: 1,
+      runId: 'run-claude',
+      generation: 3,
+      eventId: 'event-1',
+      observerSource: 'claude-hook',
+      detail: { type: 'userPromptSubmit', data: { prompt: 'must-not-route-by-pty' } },
+    })
+
+    expect(observationHandler).toHaveBeenCalledOnce()
+    expect(observationHandler).toHaveBeenCalledWith({
+      kind: 'working',
+      runId: 'run-claude',
+      generation: 3,
+      eventId: 'event-1',
+    })
+    expect(legacyHandler).not.toHaveBeenCalled()
+  })
+
+  it('D13_HookStore_ObservationUnsubscribeStopsOnlyObservationStream_002', () => {
+    const store = useHookStore()
+    store.init()
+
+    const handler = vi.fn()
+    const unsubscribe = store.subscribeObservation(handler)
+    unsubscribe()
+
+    capturedOnHookEventCallback!({
+      ptyId: null,
+      sessionId: null,
+      eventName: 'Notification',
+      state: 'waiting_permission',
+      timestamp: 1,
+      runId: 'run-claude',
+      generation: 3,
+      eventId: 'event-2',
+      observerSource: 'claude-hook',
+      detail: {
+        type: 'notification',
+        data: { notificationType: 'permission_prompt' },
+      },
+    })
+
+    expect(handler).not.toHaveBeenCalled()
+  })
+
 })
