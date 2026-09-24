@@ -26,7 +26,7 @@ describe('D16 ordered input intent queue', () => {
     const queue = createInputIntentQueue({
       runId: 'run-a',
       generation: 2,
-      currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch }),
+      currentTarget: () => ({ runId: 'run-a', generation: 2, modeEpoch }),
       send: async intent => {
         sent.push({ seq: intent.inputSeq, text: new TextDecoder().decode(intent.bytes) })
       },
