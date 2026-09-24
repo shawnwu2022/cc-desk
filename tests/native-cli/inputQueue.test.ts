@@ -26,7 +26,7 @@ describe('D16 ordered input intent queue', () => {
     const queue = createInputIntentQueue({
       runId: 'run-a',
       generation: 2,
-      currentModeEpoch: () => modeEpoch,
+      currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch }),
       send: async intent => {
         sent.push({ seq: intent.inputSeq, text: new TextDecoder().decode(intent.bytes) })
       },
@@ -65,7 +65,7 @@ describe('D16 ordered input intent queue', () => {
     const queue = createInputIntentQueue({
       runId: 'run-a',
       generation: 1,
-      currentModeEpoch: () => '1',
+      currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch: '1' }),
       send: async intent => sent.push(new TextDecoder().decode(intent.bytes)),
     })
 
@@ -97,7 +97,7 @@ describe('D16 ordered input intent queue', () => {
     const queue = createInputIntentQueue({
       runId: 'run-a',
       generation: 1,
-      currentModeEpoch: () => '3',
+      currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch: '3' }),
       send: async intent => seqs.push(intent.inputSeq),
     })
 
@@ -114,7 +114,7 @@ describe('D16 ordered input intent queue', () => {
     const queue = createInputIntentQueue({
       runId: 'run-a',
       generation: 4,
-      currentModeEpoch: () => modeEpoch,
+      currentTarget: () => ({ runId: 'run-a', generation: 4, modeEpoch }),
       send: async intent => sent.push(intent.inputSeq),
     })
 
@@ -136,7 +136,7 @@ describe('D16 ordered input intent queue', () => {
     const queue = createInputIntentQueue({
       runId: 'run-a',
       generation: 1,
-      currentModeEpoch: () => '1',
+      currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch: '1' }),
       send: async intent => {
         events.push(`user:${intent.inputSeq}`)
         if (intent.inputSeq === '1') await releaseSend.promise
@@ -174,6 +174,59 @@ describe('D16 ordered input intent queue', () => {
       'user:1',
       'protocol:27,91,49,110',
     ])
+  })
+
+  it('D16_Input_RunGenerationChangePausesOldQueue_009', async () => {
+    const sent: string[] = []
+    let generation = 5
+    const queue = createInputIntentQueue({
+      runId: 'run-a',
+      generation: 5,
+      currentTarget: () => ({ runId: 'run-a', generation, modeEpoch: '1' }),
+      send: async intent => sent.push(intent.inputSeq),
+    })
+
+    queue.enqueue({ source: 'user-text', modeEpoch: '1', bytes: utf8('x') })
+    generation = 6
+    await queue.flush()
+
+    expect(sent).toEqual([])
+    expect(queue.snapshot()).toMatchObject({
+      state: 'paused',
+      reason: 'target-changed',
+      blockedSeq: '1',
+    })
+  })
+
+  it('D16_Input_BudgetsRejectWithoutTruncatingOrReordering_010', async () => {
+    const sent: number[] = []
+    const queue = createInputIntentQueue({
+      runId: 'run-a',
+      generation: 1,
+      currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch: '1' }),
+      limits: {
+        actionBytes: 4,
+        queuedBytes: 6,
+      },
+      send: async intent => sent.push(intent.bytes.length),
+    })
+
+    queue.enqueue({ source: 'user-paste', modeEpoch: '1', bytes: bytes(1, 2, 3, 4) })
+    expect(() => queue.enqueue({
+      source: 'user-text',
+      modeEpoch: '1',
+      bytes: bytes(5, 6, 7),
+    })).toThrow('INPUT_QUEUE_BUDGET')
+
+    await queue.flush()
+    expect(sent).toEqual([4])
+    expect(queue.snapshot().queuedBytes).toBe(0)
+
+    expect(() => queue.enqueue({
+      source: 'user-paste',
+      modeEpoch: '1',
+      bytes: bytes(1, 2, 3, 4, 5),
+    })).toThrow('INPUT_ACTION_TOO_LARGE')
   })
 })
 
