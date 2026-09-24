@@ -283,11 +283,7 @@ impl<R> RunRegistry<R> {
     /// Validate that the current authenticated document owns this exact run.
     /// Unlike resource(), this remains valid after process handles are retired so
     /// a still-active document can explicitly abort an output drain.
-    pub(crate) fn check_run(
-        &self,
-        caller: &CallerIdentity,
-        run: &RunKey,
-    ) -> Result<(), SafeError> {
+    pub(crate) fn check_run(&self, caller: &CallerIdentity, run: &RunKey) -> Result<(), SafeError> {
         let state = self.state.lock();
         self.authorize(&state, caller)?;
         let key = state
