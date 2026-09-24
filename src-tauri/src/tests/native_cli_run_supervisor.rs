@@ -358,3 +358,27 @@ fn D15_Supervisor_ShutdownDuringExitedDrainStaysIncomplete_006() {
     assert_eq!(stable.output(), OutputLifecycle::Incomplete);
     assert!(!stable.can_retire_as_complete());
 }
+
+
+#[test]
+fn D15_Supervisor_ShutdownBeforeAdoptStillOwnsAndReaps_007() {
+    let fixture = Fixture::new("hold");
+    fixture.supervisor.shutdown();
+
+    let status = fixture.start();
+    assert_eq!(status.phase, LaunchPhase::Running);
+
+    let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    assert_eq!(exited.output(), OutputLifecycle::Incomplete);
+    assert!(exited.can_retire());
+    assert!(!exited.can_retire_as_complete());
+    assert_eq!(
+        fixture
+            .service
+            .registry()
+            .status(&fixture.caller, &fixture.request.request_id)
+            .unwrap()
+            .phase,
+        LaunchPhase::Exited
+    );
+}
