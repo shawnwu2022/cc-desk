@@ -44,3 +44,19 @@ it('D14_Api_AckNeverFallsBackWithoutDocumentAuthority_002', async () => {
     code: 'DOCUMENT_BRIDGE_UNAVAILABLE',
   })
 })
+
+
+it('D15_Api_StopUsesAuthenticatedDocumentBridge_003', async () => {
+  const invoke = vi.fn(async () => undefined)
+  bridge(invoke)
+
+  await api.cliStop({ runId: 'run-a', generation: 2 })
+
+  expect(invoke.mock.calls).toEqual([['cli_stop', { runId: 'run-a', generation: 2 }]])
+})
+
+it('D15_Api_StopNeverFallsBackWithoutDocumentAuthority_004', async () => {
+  await expect(api.cliStop({ runId: 'run-a', generation: 2 })).rejects.toMatchObject({
+    code: 'DOCUMENT_BRIDGE_UNAVAILABLE',
+  })
+})
