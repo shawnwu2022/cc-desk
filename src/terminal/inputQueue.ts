@@ -291,6 +291,14 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
         .then(
           value => {
             if (item.state !== 'pending') return
+            if (item.source === 'user-paste' && value.byteLength === 0) {
+              item.state = 'failed'
+              item.failure = 'producer-failed'
+              if (items[0] === item && !pause) {
+                pauseFor(item, 'producer-failed')
+              }
+              return
+            }
             try {
               account(value)
               item.bytes = copyBytes(value)
