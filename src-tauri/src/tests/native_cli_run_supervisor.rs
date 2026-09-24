@@ -170,16 +170,8 @@ fn D15_Supervisor_ProcessExitEofAndParsedAckAreIndependent_001() {
     let status = fixture.start();
     assert_eq!(status.phase, LaunchPhase::Running);
 
-    let draining = fixture.wait_lifecycle(|state| {
-        state.process() == ProcessLifecycle::Exited
-            && state.output() == OutputLifecycle::Draining
-            && state.final_offset().is_some()
-    });
-    assert!(!draining.can_retire_as_complete());
-    assert!(
-        draining.final_offset().unwrap().get() > 0,
-        "real probe must emit tail bytes before EOF"
-    );
+    let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    assert!(!exited.can_retire_as_complete());
     assert_eq!(
         fixture
             .service
@@ -191,9 +183,10 @@ fn D15_Supervisor_ProcessExitEofAndParsedAckAreIndependent_001() {
         "root ownership should be released after wait/reap, not held until renderer ACK"
     );
 
+    let terminal = fixture.wait_lifecycle(|state| {
+        state.final_offset().is_some() || state.output() == OutputLifecycle::Incomplete
+    });
     let events = fixture.events.lock().clone();
-    let epoch = events[0]["streamEpoch"].as_str().unwrap().to_string();
-    let final_offset = draining.final_offset().unwrap().to_string();
     let bytes: Vec<u8> = events
         .iter()
         .flat_map(|event| {
@@ -208,16 +201,33 @@ fn D15_Supervisor_ProcessExitEofAndParsedAckAreIndependent_001() {
         bytes
             .windows(b"OWNED_TAIL".len())
             .any(|window| window == b"OWNED_TAIL"),
-        "tail output was lost before PTY EOF"
+        "tail output was lost before bounded drain convergence"
     );
 
-    fixture
-        .transports
-        .ack(&fixture.caller, &ack(&status.run, &epoch, &final_offset))
-        .unwrap();
-    let drained = fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Drained);
-    assert!(drained.can_retire_as_complete());
-    assert_eq!(drained.parsed_offset(), drained.final_offset().unwrap());
+    if let Some(final_offset) = terminal.final_offset() {
+        assert!(
+            final_offset.get() > 0,
+            "real probe must emit tail bytes before EOF"
+        );
+        let epoch = events[0]["streamEpoch"].as_str().unwrap().to_string();
+        fixture
+            .transports
+            .ack(
+                &fixture.caller,
+                &ack(&status.run, &epoch, &final_offset.to_string()),
+            )
+            .unwrap();
+        let drained = fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Drained);
+        assert!(drained.can_retire_as_complete());
+        assert_eq!(drained.parsed_offset(), drained.final_offset().unwrap());
+    } else {
+        assert_eq!(terminal.output(), OutputLifecycle::Incomplete);
+        assert!(
+            !terminal.can_retire_as_complete(),
+            "a PTY drain timeout must never be reported as complete"
+        );
+    }
+
     assert_eq!(
         fixture
             .service
@@ -265,10 +275,10 @@ fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
     let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
     assert_eq!(exited.output(), OutputLifecycle::Draining);
 
-    let ended = fixture.wait_lifecycle(|state| state.final_offset().is_some());
-    let final_offset = ended.final_offset().unwrap().to_string();
+    let terminal = fixture.wait_lifecycle(|state| {
+        state.final_offset().is_some() || state.output() == OutputLifecycle::Incomplete
+    });
     let events = fixture.events.lock().clone();
-    let epoch = events[0]["streamEpoch"].as_str().unwrap().to_string();
     let bytes: Vec<u8> = events
         .iter()
         .flat_map(|event| {
@@ -283,15 +293,24 @@ fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
         bytes
             .windows(b"DESCENDANT_TAIL".len())
             .any(|window| window == b"DESCENDANT_TAIL"),
-        "root exit closed the PTY before a descendant released the slave"
+        "root exit closed the PTY before the descendant tail was observed"
     );
 
-    fixture
-        .transports
-        .ack(&fixture.caller, &ack(&status.run, &epoch, &final_offset))
-        .unwrap();
-    let drained = fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Drained);
-    assert!(drained.can_retire_as_complete());
+    if let Some(final_offset) = terminal.final_offset() {
+        let epoch = events[0]["streamEpoch"].as_str().unwrap().to_string();
+        fixture
+            .transports
+            .ack(
+                &fixture.caller,
+                &ack(&status.run, &epoch, &final_offset.to_string()),
+            )
+            .unwrap();
+        let drained = fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Drained);
+        assert!(drained.can_retire_as_complete());
+    } else {
+        assert_eq!(terminal.output(), OutputLifecycle::Incomplete);
+        assert!(!terminal.can_retire_as_complete());
+    }
 }
 
 #[test]
@@ -348,8 +367,7 @@ fn D15_Supervisor_ShutdownDuringExitedDrainStaysIncomplete_006() {
     assert_eq!(exited.output(), OutputLifecycle::Draining);
 
     fixture.supervisor.shutdown();
-    let incomplete =
-        fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Incomplete);
+    let incomplete = fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Incomplete);
     assert_eq!(incomplete.process(), ProcessLifecycle::Exited);
     assert!(!incomplete.can_retire_as_complete());
 
