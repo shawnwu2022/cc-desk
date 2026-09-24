@@ -68,7 +68,8 @@ pub fn run(initial_dir: Option<String>) {
     );
     let native_setup = native_runtime.clone();
     let native_shutdown = native_runtime.clone();
-    tauri::Builder::default()
+    let native_exit_shutdown = native_runtime.clone();
+    let app = tauri::Builder::default()
         .manage(native_runtime)
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -212,6 +213,14 @@ pub fn run(initial_dir: Option<String>) {
             commands::spawn_new_instance,
             commands::log_message,
         ])
-        .run(context)
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application");
+    app.run(move |_app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            native_exit_shutdown.shutdown();
+        }
+    });
 }
