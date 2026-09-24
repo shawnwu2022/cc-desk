@@ -465,3 +465,62 @@ fn D15_Supervisor_ShutdownBeforeAdoptStillOwnsAndReaps_007() {
         LaunchPhase::Exited
     );
 }
+
+
+#[test]
+fn D15_Supervisor_AttachFailureAfterSpawnStillStopsAndReaps_008() {
+    let fixture = Fixture::new("hold");
+    let run = RunKey {
+        run_id: fixture.request.run_id.clone(),
+        generation: fixture.request.generation,
+    };
+
+    let occupied_route = Arc::new(
+        fixture
+            .routes
+            .bind(2, Box::new(|| Ok(())), || {
+                Ok(Channel::new(|_body| Ok(())))
+            })
+            .unwrap(),
+    );
+    let _occupied = fixture
+        .transports
+        .attach(fixture.caller.clone(), run.clone(), occupied_route)
+        .unwrap();
+
+    let events = fixture.events.clone();
+    let failure = fixture
+        .service
+        .start(&fixture.caller, &fixture.request, |_| {
+            fixture.routes.bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    let InvokeResponseBody::Json(text) = body else {
+                        panic!("json output frame expected");
+                    };
+                    events.lock().push(serde_json::from_str(&text).unwrap());
+                    Ok(())
+                }))
+            })
+        })
+        .unwrap_err();
+    assert_eq!(failure.code, "RUN_HANDOFF_FAILED");
+
+    let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    assert_eq!(exited.output(), OutputLifecycle::Incomplete);
+    assert!(exited.can_retire());
+    assert!(!exited.can_retire_as_complete());
+    assert_eq!(
+        fixture
+            .service
+            .registry()
+            .status(&fixture.caller, &fixture.request.request_id)
+            .unwrap()
+            .phase,
+        LaunchPhase::Exited
+    );
+    assert_eq!(
+        fixture.child_reports(),
+        1,
+        "handoff failure must not replay or orphan a second child"
+    );
+}
