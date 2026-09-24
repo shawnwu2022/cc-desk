@@ -204,7 +204,10 @@ fn D15_Supervisor_ProcessExitEofAndParsedAckAreIndependent_001() {
         "tail output was lost before bounded drain convergence"
     );
 
-    if let Some(final_offset) = terminal.final_offset() {
+    if terminal.output() == OutputLifecycle::Draining {
+        let final_offset = terminal
+            .final_offset()
+            .expect("draining terminal with observed EOF must retain final offset");
         assert!(
             final_offset.get() > 0,
             "real probe must emit tail bytes before EOF"
@@ -309,7 +312,10 @@ fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
         String::from_utf8_lossy(&bytes)
     );
 
-    if let Some(final_offset) = terminal.final_offset() {
+    if terminal.output() == OutputLifecycle::Draining {
+        let final_offset = terminal
+            .final_offset()
+            .expect("draining descendant stream must retain final offset");
         let epoch = events[0]["streamEpoch"].as_str().unwrap().to_string();
         fixture
             .transports
