@@ -27,12 +27,9 @@ pub(crate) struct NativeRuntime {
     supervisor: Option<Arc<NativeRunSupervisor>>,
 }
 impl NativeRuntime {
+    #[allow(dead_code)] // Staged native WebView harnesses construct isolated runtimes.
     pub(crate) fn new(service: Arc<LaunchService>) -> Self {
-        Self::with_components(
-            service,
-            Arc::new(TerminalTransports::new()),
-            None,
-        )
+        Self::with_components(service, Arc::new(TerminalTransports::new()), None)
     }
 
     fn with_components(
