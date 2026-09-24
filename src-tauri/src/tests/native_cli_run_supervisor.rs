@@ -520,3 +520,27 @@ fn D15_Supervisor_AttachFailureAfterSpawnStillStopsAndReaps_008() {
         "handoff failure must not replay or orphan a second child"
     );
 }
+
+
+#[test]
+fn D15_Supervisor_RouteLossThenShutdownKeepsDegraded_009() {
+    let fixture = Fixture::new("hold");
+    let status = fixture.start();
+    assert_eq!(status.phase, LaunchPhase::Running);
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < deadline, "hold probe never became ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    fixture.routes.revoke();
+    let degraded = fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Degraded);
+    assert_eq!(degraded.process(), ProcessLifecycle::Running);
+
+    fixture.supervisor.shutdown();
+    let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    assert_eq!(exited.output(), OutputLifecycle::Degraded);
+    assert!(!exited.can_retire_as_complete());
+    assert_eq!(fixture.child_reports(), 1, "shutdown restarted degraded run");
+}
