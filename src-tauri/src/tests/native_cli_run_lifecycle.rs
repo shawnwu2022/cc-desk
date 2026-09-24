@@ -112,7 +112,6 @@ fn D15_Lifecycle_HandoffFailureBeforeStreamCanRetireIncomplete_005() {
     assert!(!state.can_retire_as_complete());
 }
 
-
 #[test]
 fn D15_Lifecycle_FinalFailureReasonIsOrderStable_006() {
     let mut degraded_first = LifecycleRecord::new(run("run-a", 1));
