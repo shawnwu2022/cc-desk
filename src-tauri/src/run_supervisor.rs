@@ -11,7 +11,7 @@ use parking_lot::{Condvar, Mutex};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 type RunIdentity = (String, u32);
 
@@ -20,6 +20,7 @@ struct SupervisorCore {
     active: Mutex<HashMap<RunIdentity, Arc<SupervisedRun>>>,
     completed: Mutex<HashMap<RunIdentity, LifecycleRecord>>,
     shutting_down: AtomicBool,
+    settled: Condvar,
 }
 
 pub(crate) struct NativeRunSupervisor {
@@ -34,6 +35,7 @@ impl NativeRunSupervisor {
                 active: Mutex::new(HashMap::new()),
                 completed: Mutex::new(HashMap::new()),
                 shutting_down: AtomicBool::new(false),
+                settled: Condvar::new(),
             }),
         }
     }
@@ -59,19 +61,38 @@ impl NativeRunSupervisor {
     }
 
     pub(crate) fn shutdown(&self) {
-        if self.core.shutting_down.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        let active: Vec<_> = self.core.active.lock().values().cloned().collect();
-        for state in active {
-            if let Err(failure) = state.request_stop() {
-                log::warn!(
-                    "native run shutdown control failed for {}:{}: {}",
-                    state.run.run_id,
-                    state.run.generation,
-                    failure.code
-                );
+        const SHUTDOWN_REAP_TIMEOUT: Duration = Duration::from_secs(5);
+
+        let first = !self.core.shutting_down.swap(true, Ordering::SeqCst);
+        if first {
+            let active: Vec<_> = self.core.active.lock().values().cloned().collect();
+            for state in active {
+                if let Err(failure) = state.request_stop() {
+                    log::warn!(
+                        "native run shutdown control failed for {}:{}: {}",
+                        state.run.run_id,
+                        state.run.generation,
+                        failure.code
+                    );
+                }
             }
+        }
+
+        // begin_shutdown() on LaunchService prevents future handoffs before this
+        // production path calls us. Waiting here makes app exit observe waiter
+        // reaping instead of treating an accepted terminate signal as completion.
+        let started = Instant::now();
+        let mut active = self.core.active.lock();
+        while !active.is_empty() {
+            let remaining = SHUTDOWN_REAP_TIMEOUT.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                log::warn!(
+                    "native run shutdown timed out with {} supervised run(s) still active",
+                    active.len()
+                );
+                break;
+            }
+            self.core.settled.wait_for(&mut active, remaining);
         }
     }
 }
@@ -387,6 +408,7 @@ impl SupervisedRun {
         let key = identity(&self.run);
         core.completed.lock().insert(key.clone(), snapshot);
         core.active.lock().remove(&key);
+        core.settled.notify_all();
         // TerminalTransports stores only a Weak. Keep this strong reference
         // through EOF and the final parsed ACK, then release exact credit/route.
         self.stream.lock().take();
