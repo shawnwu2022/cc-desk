@@ -11,7 +11,7 @@ use parking_lot::{Condvar, Mutex};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::Read;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 pub(crate) const OUTPUT_FRAME_BYTES_MAX: usize = 16 * 1024;
@@ -81,6 +81,15 @@ pub(crate) struct OutputAck {
     through_offset: WireU64,
 }
 
+/// Backend-only lifecycle sink. Dispatch acceptance advances sent bytes; only a
+/// renderer parser ACK advances parsed bytes. Revocation is terminal for this
+/// output stream and must wake blocked credit waiters.
+pub(crate) trait OutputProgress: Send + Sync {
+    fn sent_through(&self, stream_epoch: WireU64, through: WireU64);
+    fn parsed_through(&self, stream_epoch: WireU64, through: WireU64);
+    fn degraded(&self, stream_epoch: WireU64);
+}
+
 #[derive(Default)]
 struct BudgetState {
     used: usize,
@@ -103,13 +112,25 @@ impl PayloadBudget {
         }
     }
 
-    fn reserve(&self, stream: u64, amount: usize) -> Result<(), SafeError> {
+    fn reserve(
+        &self,
+        stream: u64,
+        amount: usize,
+        degraded: &AtomicBool,
+    ) -> Result<(), SafeError> {
         if amount == 0 || amount > self.limit {
             return Err(error("OUTPUT_APP_BUDGET"));
         }
         let mut state = self.state.lock();
         let mut queued = false;
         loop {
+            if degraded.load(Ordering::SeqCst) {
+                if queued {
+                    state.waiters.retain(|candidate| *candidate != stream);
+                    self.changed.notify_all();
+                }
+                return Err(error("OUTPUT_STREAM_DEGRADED"));
+            }
             let fits = state
                 .used
                 .checked_add(amount)
@@ -143,7 +164,7 @@ impl PayloadBudget {
         }
         let mut state = self.state.lock();
         let Some(current) = state.per_stream.get_mut(&stream) else {
-            debug_assert!(false, "release without reservation");
+            // Concurrent revocation may already have released the reservation.
             return;
         };
         debug_assert!(*current >= amount);
@@ -175,7 +196,6 @@ struct StreamState {
     acked: u64,
     frame_ends: VecDeque<u64>,
     throttled: bool,
-    degraded: bool,
 }
 
 struct TransportCore {
@@ -217,6 +237,26 @@ impl TerminalTransports {
         run: RunKey,
         route: Arc<OutputRoute<OutputFrame>>,
     ) -> Result<Arc<TerminalStream>, SafeError> {
+        self.attach_inner(owner, run, route, None)
+    }
+
+    pub(crate) fn attach_observed(
+        &self,
+        owner: CallerIdentity,
+        run: RunKey,
+        route: Arc<OutputRoute<OutputFrame>>,
+        progress: Arc<dyn OutputProgress>,
+    ) -> Result<Arc<TerminalStream>, SafeError> {
+        self.attach_inner(owner, run, route, Some(Arc::downgrade(&progress)))
+    }
+
+    fn attach_inner(
+        &self,
+        owner: CallerIdentity,
+        run: RunKey,
+        route: Arc<OutputRoute<OutputFrame>>,
+        progress: Option<Weak<dyn OutputProgress>>,
+    ) -> Result<Arc<TerminalStream>, SafeError> {
         if run.run_id.is_empty() || run.run_id.contains('\0') || run.generation == 0 {
             return Err(SafeError::invalid("run"));
         }
@@ -243,6 +283,7 @@ impl TerminalTransports {
             run,
             stream_epoch,
             route,
+            progress,
             core: Arc::downgrade(&self.core),
             send_gate: Mutex::new(()),
             state: Mutex::new(StreamState {
@@ -250,11 +291,19 @@ impl TerminalTransports {
                 acked: 0,
                 frame_ends: VecDeque::new(),
                 throttled: false,
-                degraded: false,
             }),
+            degraded: AtomicBool::new(false),
             changed: Condvar::new(),
         });
         streams.insert(key, Arc::downgrade(&stream));
+        drop(streams);
+
+        let weak = Arc::downgrade(&stream);
+        stream.route.on_revoke(Arc::new(move || {
+            if let Some(stream) = weak.upgrade() {
+                stream.on_route_revoked();
+            }
+        }));
         Ok(stream)
     }
 
@@ -291,9 +340,11 @@ pub(crate) struct TerminalStream {
     run: RunKey,
     stream_epoch: WireU64,
     route: Arc<OutputRoute<OutputFrame>>,
+    progress: Option<Weak<dyn OutputProgress>>,
     core: Weak<TransportCore>,
     send_gate: Mutex<()>,
     state: Mutex<StreamState>,
+    degraded: AtomicBool,
     changed: Condvar,
 }
 
@@ -308,6 +359,14 @@ impl TerminalStream {
         self.stream_epoch
     }
 
+    pub(crate) fn sent_offset(&self) -> WireU64 {
+        wire(self.state.lock().sent)
+    }
+
+    fn progress(&self) -> Option<Arc<dyn OutputProgress>> {
+        self.progress.as_ref().and_then(Weak::upgrade)
+    }
+
     fn core(&self) -> Result<Arc<TransportCore>, SafeError> {
         self.core
             .upgrade()
@@ -317,7 +376,7 @@ impl TerminalStream {
     fn wait_local_capacity(&self, core: &TransportCore, amount: usize) -> Result<(), SafeError> {
         let mut state = self.state.lock();
         loop {
-            if state.degraded {
+            if self.degraded.load(Ordering::SeqCst) {
                 return Err(error("OUTPUT_STREAM_DEGRADED"));
             }
             let outstanding = state.sent.saturating_sub(state.acked) as usize;
@@ -342,14 +401,28 @@ impl TerminalStream {
     }
 
     fn mark_degraded(&self, core: &TransportCore) {
+        if self.degraded.swap(true, Ordering::SeqCst) {
+            return;
+        }
         {
             let mut state = self.state.lock();
-            state.degraded = true;
             state.throttled = false;
             state.frame_ends.clear();
             self.changed.notify_all();
         }
         core.budget.remove_stream(self.id);
+        if let Some(progress) = self.progress() {
+            progress.degraded(self.stream_epoch);
+        }
+    }
+
+    fn on_route_revoked(&self) {
+        if let Ok(core) = self.core() {
+            self.mark_degraded(&core);
+        } else {
+            self.degraded.store(true, Ordering::SeqCst);
+            self.changed.notify_all();
+        }
     }
 
     fn dispatch_reserved(
@@ -361,9 +434,7 @@ impl TerminalStream {
         debug_assert_eq!(bytes.len(), reserved);
         let (offset, end) = {
             let mut state = self.state.lock();
-            if state.degraded {
-                drop(state);
-                core.budget.release(self.id, reserved);
+            if self.degraded.load(Ordering::SeqCst) {
                 return Err(error("OUTPUT_STREAM_DEGRADED"));
             }
             let offset = state.sent;
@@ -386,6 +457,9 @@ impl TerminalStream {
         match self.route.send(frame) {
             Ok(()) => {
                 debug_assert!(end >= offset);
+                if let Some(progress) = self.progress() {
+                    progress.sent_through(self.stream_epoch, wire(end));
+                }
                 Ok(())
             }
             Err(failure) => {
@@ -405,7 +479,7 @@ impl TerminalStream {
         }
         let _gate = self.send_gate.lock();
         self.wait_local_capacity(&core, bytes.len())?;
-        core.budget.reserve(self.id, bytes.len())?;
+        core.budget.reserve(self.id, bytes.len(), &self.degraded)?;
         self.dispatch_reserved(&core, bytes, bytes.len())
     }
 
@@ -416,7 +490,7 @@ impl TerminalStream {
         let _gate = self.send_gate.lock();
         let capacity = core.limits.frame_bytes;
         self.wait_local_capacity(&core, capacity)?;
-        core.budget.reserve(self.id, capacity)?;
+        core.budget.reserve(self.id, capacity, &self.degraded)?;
 
         let mut bytes = vec![0_u8; capacity];
         let count = match reader.read(&mut bytes) {
@@ -442,7 +516,7 @@ impl TerminalStream {
         let core = self.core()?;
         let released = {
             let mut state = self.state.lock();
-            if state.degraded {
+            if self.degraded.load(Ordering::SeqCst) {
                 return Err(error("OUTPUT_STREAM_DEGRADED"));
             }
             if through < state.acked {
@@ -476,8 +550,15 @@ impl TerminalStream {
         };
         let amount = usize::try_from(released).expect("unacked output is bounded by usize limits");
         core.budget.release(self.id, amount);
+        if let Some(progress) = self.progress() {
+            progress.parsed_through(self.stream_epoch, wire(through));
+        }
         Ok(released)
     }
+}
+
+fn wire(value: u64) -> WireU64 {
+    WireU64::parse(&value.to_string()).expect("internal output offset is canonical")
 }
 
 impl Drop for TerminalStream {
