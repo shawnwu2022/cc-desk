@@ -2,7 +2,10 @@ use crate::cli::run_registry::RunKey;
 use crate::run_lifecycle::{LifecycleRecord, OutputLifecycle, ProcessLifecycle};
 
 fn run(id: &str, generation: u32) -> RunKey {
-    RunKey { run_id: id.into(), generation }
+    RunKey {
+        run_id: id.into(),
+        generation,
+    }
 }
 
 #[test]
@@ -37,12 +40,24 @@ fn D15_Lifecycle_OutputEndCannotInventBytesOrMoveBackward_002() {
     state.output_started("3").unwrap();
     state.sent_through("12").unwrap();
 
-    assert_eq!(state.output_end("13").unwrap_err().code, "OUTPUT_END_BEYOND_SENT");
-    assert_eq!(state.parsed_through("13").unwrap_err().code, "OUTPUT_ACK_BEYOND_SENT");
+    assert_eq!(
+        state.output_end("13").unwrap_err().code,
+        "OUTPUT_END_BEYOND_SENT"
+    );
+    assert_eq!(
+        state.parsed_through("13").unwrap_err().code,
+        "OUTPUT_ACK_BEYOND_SENT"
+    );
     state.parsed_through("8").unwrap();
-    assert_eq!(state.parsed_through("7").unwrap_err().code, "OUTPUT_ACK_BACKWARD");
+    assert_eq!(
+        state.parsed_through("7").unwrap_err().code,
+        "OUTPUT_ACK_BACKWARD"
+    );
     state.output_end("12").unwrap();
-    assert_eq!(state.output_end("11").unwrap_err().code, "OUTPUT_END_CONFLICT");
+    assert_eq!(
+        state.output_end("11").unwrap_err().code,
+        "OUTPUT_END_CONFLICT"
+    );
 }
 
 #[test]

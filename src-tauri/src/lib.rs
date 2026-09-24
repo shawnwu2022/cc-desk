@@ -12,10 +12,10 @@ mod paste_trace;
 mod platform;
 mod pty;
 mod pty_decoder;
+mod run_lifecycle;
 mod session_name_index;
 mod store;
 mod terminal_transport;
-mod run_lifecycle;
 #[cfg(test)]
 mod tests;
 

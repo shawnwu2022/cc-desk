@@ -51,13 +51,13 @@ mod native_cli_registry_edges;
 #[cfg(test)]
 mod native_cli_routed_launch;
 #[cfg(test)]
+mod native_cli_run_lifecycle;
+#[cfg(test)]
 mod native_cli_snapshot;
 #[cfg(test)]
 mod native_cli_storage;
 #[cfg(test)]
 mod native_cli_terminal_transport;
-#[cfg(test)]
-mod native_cli_run_lifecycle;
 #[cfg(test)]
 mod native_cli_terminal_transport_api;
 #[cfg(test)]

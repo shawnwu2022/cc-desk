@@ -1,4 +1,5 @@
 //! Process/output lifecycle state independent from PTY transport ownership.
+#![allow(dead_code)] // D15 supervisor wiring follows this state-machine checkpoint.
 
 use crate::cli::profiles::error;
 use crate::cli::run_registry::RunKey;
@@ -223,7 +224,10 @@ impl LifecycleRecord {
         ) {
             return;
         }
-        if self.final_offset.is_some_and(|final_offset| self.parsed == final_offset) {
+        if self
+            .final_offset
+            .is_some_and(|final_offset| self.parsed == final_offset)
+        {
             self.output = OutputLifecycle::Drained;
         } else if self.final_offset.is_some() || self.process == ProcessLifecycle::Exited {
             self.output = OutputLifecycle::Draining;
