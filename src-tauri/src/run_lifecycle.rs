@@ -187,7 +187,6 @@ impl LifecycleRecord {
     }
 
     pub(crate) fn mark_incomplete(&mut self) -> Result<(), SafeError> {
-        self.require_stream()?;
         self.output = OutputLifecycle::Incomplete;
         Ok(())
     }
