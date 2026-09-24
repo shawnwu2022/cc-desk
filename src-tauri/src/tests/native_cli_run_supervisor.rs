@@ -521,7 +521,6 @@ fn D15_Supervisor_AttachFailureAfterSpawnStillStopsAndReaps_008() {
     );
 }
 
-
 #[test]
 fn D15_Supervisor_RouteLossThenShutdownKeepsDegraded_009() {
     let fixture = Fixture::new("hold");
