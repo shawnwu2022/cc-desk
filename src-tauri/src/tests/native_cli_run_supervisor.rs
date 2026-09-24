@@ -7,7 +7,7 @@ use crate::cli::storage::{Patch, WorkspaceRepository};
 use crate::cli::types::{CliKind, LaunchAction, LaunchRequest, WireU64};
 use crate::run_lifecycle::{OutputLifecycle, ProcessLifecycle};
 use crate::run_supervisor::NativeRunSupervisor;
-use crate::terminal_transport::{OutputAck, OutputFrame, TerminalTransports};
+use crate::terminal_transport::{OutputAck, TerminalTransports};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::fs;
