@@ -12,6 +12,7 @@ use tauri::ipc::{Channel, IpcResponse};
 
 pub(crate) const CHANNEL_HEADER: &str = "x-cc-desk-output-channel";
 pub(crate) type AuthorityCheck = Box<dyn Fn() -> Result<(), SafeError> + Send + Sync>;
+type RevokeHook = Arc<dyn Fn() + Send + Sync>;
 
 pub(crate) fn parse_channel(headers: &HeaderMap) -> Result<u32, SafeError> {
     let invalid = || SafeError::invalid("outputChannel");
@@ -71,6 +72,7 @@ struct Active<T> {
 struct RouteCore<T> {
     active: Mutex<Option<Active<T>>>,
     revoked: AtomicBool,
+    revoke_hooks: Mutex<Vec<RevokeHook>>,
     // Must outlive Active and every temporary revocation reference. Reusing an
     // ID before the native Channel destructor runs can end the next callback.
     _lease: CallbackLease,
@@ -126,6 +128,7 @@ impl OutputRoutes {
         let core = Arc::new(RouteCore {
             active: Mutex::new(Some(Active { channel, authorize })),
             revoked: AtomicBool::new(false),
+            revoke_hooks: Mutex::new(Vec::new()),
             _lease: lease,
         });
         let erased: Arc<dyn Revoke> = core.clone();
@@ -163,12 +166,39 @@ impl OutputRoutes {
 
 impl<T: Send + Sync> Revoke for RouteCore<T> {
     fn revoke(&self) {
-        self.revoked.store(true, Ordering::SeqCst);
+        let first = !self.revoked.swap(true, Ordering::SeqCst);
+        let hooks = if first {
+            std::mem::take(&mut *self.revoke_hooks.lock())
+        } else {
+            Vec::new()
+        };
         // The native UI may revoke while a sender awaits a UI URL query.
         // Waiting here would deadlock that UI. The sender also checks after
         // unlocking, closing the restore-vs-revoke race without waiting here.
         let retired = self.active.try_lock().and_then(|mut slot| slot.take());
         drop(retired);
+        // Hooks are backend cancellation signals only. Run them after every
+        // route/native lock is released so they may wake transport waiters.
+        for hook in hooks {
+            hook();
+        }
+    }
+}
+
+impl<T> OutputRoute<T> {
+    pub(crate) fn on_revoke(&self, hook: RevokeHook) {
+        let mut pending = Some(hook);
+        {
+            let mut hooks = self.core.revoke_hooks.lock();
+            if !self.core.revoked.load(Ordering::SeqCst) {
+                hooks.push(pending.take().expect("pending revoke hook"));
+            }
+        }
+        // Close the registration-vs-revoke race: if revocation won before this
+        // hook entered the list, execute it immediately outside the hook lock.
+        if let Some(hook) = pending {
+            hook();
+        }
     }
 }
 

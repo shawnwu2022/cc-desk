@@ -1,0 +1,29 @@
+name: D14 output transport core
+on:
+  pull_request:
+    paths:
+      - 'src-tauri/src/terminal_transport.rs'
+      - 'src-tauri/src/cli/types.rs'
+      - 'tests/native-cli/transport-core/**'
+      - '.github/workflows/d14-transport-core.yml'
+permissions:
+  contents: read
+jobs:
+  transport:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Test actual production output transport
+        run: cargo test --locked --manifest-path tests/native-cli/transport-core/Cargo.toml
+      - name: Strict output transport lint
+        run: cargo clippy --locked --manifest-path tests/native-cli/transport-core/Cargo.toml --all-targets -- -D warnings

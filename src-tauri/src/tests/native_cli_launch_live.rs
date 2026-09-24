@@ -3,9 +3,10 @@ use crate::cli::document::DOCUMENT_HEADER;
 use crate::cli::launch_service::{LaunchService, NativeRun, RunAccess, RunSupervisor};
 use crate::cli::native_runtime::{take_main_config, NativeRuntime};
 use crate::cli::profiles::{error, Override, Profile};
-use crate::cli::run_registry::{LaunchPhase, RunKey};
+use crate::cli::run_registry::{LaunchPhase, RunKey, RunRegistry};
 use crate::cli::storage::{Patch, WorkspaceRepository};
 use crate::cli::types::{CliKind, LaunchAction, LaunchRequest, SafeError, WireU64};
+use crate::terminal_transport::OutputFrame;
 use parking_lot::Mutex;
 use portable_pty::PtySize;
 use serde_json::{json, Value};
@@ -46,7 +47,12 @@ struct Consumer {
     failed: Arc<AtomicBool>,
 }
 impl RunSupervisor for Consumer {
-    fn adopt(&self, run: &RunKey, resource: Arc<NativeRun>) -> Result<(), SafeError> {
+    fn adopt(
+        &self,
+        _registry: Arc<RunRegistry<NativeRun>>,
+        run: &RunKey,
+        resource: Arc<NativeRun>,
+    ) -> Result<(), SafeError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.runs.lock().push((run.clone(), resource.clone()));
         let mut reader = resource.process.pty.take_reader()?;
@@ -55,18 +61,44 @@ impl RunSupervisor for Consumer {
         let failed = self.failed.clone();
         let run = run.clone();
         // Test-only bounded small-frame consumer. Not the D14 event/ACK protocol.
-        let thread = std::thread::Builder::new().name("d11-fixture-reader".into()).spawn(move || {
-            let mut total=0usize;
-            let mut buffer=[0u8;128];
-            loop {
-                let length=match reader.read(&mut buffer) { Ok(0)=>break, Ok(n)=>n, Err(_)=>break };
-                total+=length;
-                if total>32768 { failed.store(true,Ordering::SeqCst); break; }
-                let event=json!({"runId":run.run_id,"generation":run.generation,"offset":(total-length).to_string(),"bytes":buffer[..length]});
-                packets.lock().push(event.clone());
-                if route.send(event).is_err() { break; }
-            }
-        }).map_err(|_| error("TEST_READER_FAILED"))?;
+        let thread = std::thread::Builder::new()
+            .name("d11-fixture-reader".into())
+            .spawn(move || {
+                let mut total = 0usize;
+                let mut buffer = [0u8; 128];
+                loop {
+                    let length = match reader.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => break,
+                    };
+                    total += length;
+                    if total > 32768 {
+                        failed.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    let offset = total - length;
+                    let event = json!({
+                        "runId": run.run_id,
+                        "generation": run.generation,
+                        "streamEpoch": "1",
+                        "offset": offset.to_string(),
+                        "bytes": buffer[..length],
+                    });
+                    packets.lock().push(event);
+                    let frame = OutputFrame {
+                        run_id: run.run_id.clone(),
+                        generation: run.generation,
+                        stream_epoch: WireU64::parse("1").unwrap(),
+                        offset: WireU64::parse(&offset.to_string()).unwrap(),
+                        bytes: buffer[..length].to_vec(),
+                    };
+                    if route.send(frame).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|_| error("TEST_READER_FAILED"))?;
         self.readers.lock().push(thread);
         Ok(())
     }

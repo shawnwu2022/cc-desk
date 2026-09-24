@@ -2,7 +2,7 @@ use crate::cli::environment::EnvMap;
 use crate::cli::launch_service::{LaunchService, NativeRun, RunSupervisor};
 use crate::cli::output_route::OutputRoutes;
 use crate::cli::profiles::{error, Override, Profile};
-use crate::cli::run_registry::{LaunchPhase, RunKey};
+use crate::cli::run_registry::{LaunchPhase, RunKey, RunRegistry};
 use crate::cli::snapshot::CallerIdentity;
 use crate::cli::storage::{Patch, WorkspaceRepository};
 use crate::cli::types::{CliKind, LaunchAction, LaunchRequest, SafeError, WireU64};
@@ -27,7 +27,12 @@ struct Consumer {
     fail: bool,
 }
 impl RunSupervisor for Consumer {
-    fn adopt(&self, _run: &RunKey, resource: Arc<NativeRun>) -> Result<(), SafeError> {
+    fn adopt(
+        &self,
+        _registry: Arc<RunRegistry<NativeRun>>,
+        _run: &RunKey,
+        resource: Arc<NativeRun>,
+    ) -> Result<(), SafeError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.runs.lock().push(resource);
         if self.fail {
@@ -342,3 +347,36 @@ mod edges;
 
 #[path = "native_cli_observer_service.rs"]
 mod observer;
+
+#[test]
+fn D15_Service_ShutdownGateRejectsNewLaunchButKeepsReceipt_012() {
+    let f = Fixture::new(false);
+    let status = f.start().unwrap();
+    f.ready();
+
+    f.service.begin_shutdown();
+
+    let replay = f
+        .service
+        .start(&f.caller, &f.request, |_| {
+            panic!("replay must not rebuild route")
+        })
+        .unwrap();
+    assert_eq!(replay, status);
+
+    let mut next = f.request.clone();
+    next.request_id = "service-after-shutdown".into();
+    next.tab_id = "service-after-shutdown-tab".into();
+    next.run_id = "service-after-shutdown-run".into();
+    assert_eq!(
+        f.service
+            .start(&f.caller, &next, |_| panic!(
+                "shutdown launch must not bind route"
+            ))
+            .unwrap_err()
+            .code,
+        "RUN_SUPERVISOR_STOPPING"
+    );
+    assert_eq!(f.children(), 1, "shutdown gate created another child");
+    assert_eq!(f.consumer.calls.load(Ordering::SeqCst), 1);
+}

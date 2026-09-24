@@ -4,8 +4,11 @@ use super::launch_service::{LaunchService, NativeRun, RunAccess};
 use super::output_route::{parse_channel, CHANNEL_HEADER};
 use super::profiles::error;
 use super::run_registry::{LaunchStatus, RunKey};
+use super::snapshot::CallerIdentity;
 use super::storage::WorkspaceRepository;
 use super::types::SafeError;
+use crate::run_supervisor::NativeRunSupervisor;
+use crate::terminal_transport::{OutputAck, OutputFrame, TerminalTransports};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,9 +23,20 @@ pub(crate) struct NativeRuntime {
     projections: Arc<super::native_projection::service::ProjectionService>,
     binding: Mutex<Option<Arc<DocumentBinding<NativeRun>>>>,
     initialized: AtomicBool,
+    transports: Arc<TerminalTransports>,
+    supervisor: Option<Arc<NativeRunSupervisor>>,
 }
 impl NativeRuntime {
+    #[allow(dead_code)] // Staged native WebView harnesses construct isolated runtimes.
     pub(crate) fn new(service: Arc<LaunchService>) -> Self {
+        Self::with_components(service, Arc::new(TerminalTransports::new()), None)
+    }
+
+    fn with_components(
+        service: Arc<LaunchService>,
+        transports: Arc<TerminalTransports>,
+        supervisor: Option<Arc<NativeRunSupervisor>>,
+    ) -> Self {
         Self {
             projections: Arc::new(super::native_projection::service::ProjectionService::new(
                 service.clone(),
@@ -30,16 +44,27 @@ impl NativeRuntime {
             service,
             binding: Mutex::new(None),
             initialized: AtomicBool::new(false),
+            transports,
+            supervisor,
         }
     }
+
     pub(crate) fn production() -> Result<Self, SafeError> {
-        // D14/D15 install the backend supervisor with bounded output/reaping.
-        // Until then the service rejects before I/O/spawn, not a discard pump.
-        let mut service = LaunchService::new(WorkspaceRepository::production()?, None, None);
+        let transports = Arc::new(TerminalTransports::new());
+        let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+        let mut service = LaunchService::new(
+            WorkspaceRepository::production()?,
+            None,
+            Some(supervisor.clone()),
+        );
         if let Some(observer) = crate::hook_server::observer_host() {
             service = service.with_observer(observer);
         }
-        Ok(Self::new(Arc::new(service)))
+        Ok(Self::with_components(
+            Arc::new(service),
+            transports,
+            Some(supervisor),
+        ))
     }
     pub(crate) fn initialize_main<T: Runtime, M: Manager<T>>(
         &self,
@@ -87,7 +112,7 @@ impl NativeRuntime {
                         .parse()
                         .map_err(|_| SafeError::invalid("outputChannel"))?,
                 );
-                binding.channel_native::<_, serde_json::Value>(&webview, &headers)
+                binding.channel_native::<_, OutputFrame>(&webview, &headers)
             })
         })
         .await
@@ -100,6 +125,17 @@ impl NativeRuntime {
     ) -> Result<LaunchStatus, SafeError> {
         self.binding()?.query_native(webview, request)
     }
+    pub(crate) fn ack_output<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let ack: OutputAck = decode_projection(request.body(), 1024)?;
+        self.transports.ack(&caller, &ack)?;
+        Ok(())
+    }
+
     pub(crate) async fn projection_scope<T: Runtime>(
         &self,
         webview: &Webview<T>,
@@ -134,15 +170,12 @@ impl NativeRuntime {
         self.projections.check_caller(&caller)?;
         Ok(value)
     }
-    /// Shared native admission for later input/resize/stop/snapshot adapters.
-    /// An acquired access rechecks caller/run ownership again at each operation.
-    #[allow(dead_code)] // D15/D17 operation adapters use this authenticated port.
-    pub(crate) fn access<T: Runtime>(
+    fn admit_run_key<T: Runtime>(
         &self,
         webview: &Webview<T>,
         headers: &HeaderMap,
         body: &InvokeBody,
-    ) -> Result<RunAccess, SafeError> {
+    ) -> Result<(CallerIdentity, RunKey), SafeError> {
         let binding = self.binding()?;
         let caller = binding.admit_native(webview, headers)?;
         let InvokeBody::Raw(bytes) = body else {
@@ -161,13 +194,50 @@ impl NativeRuntime {
         if query.generation == 0 {
             return Err(SafeError::invalid("generation"));
         }
-        self.service.access(
-            &caller,
-            &RunKey {
-                run_id: query.run_id,
-                generation: query.generation,
-            },
-        )
+        let run = RunKey {
+            run_id: query.run_id,
+            generation: query.generation,
+        };
+        self.service.registry().check_run(&caller, &run)?;
+        Ok((caller, run))
+    }
+
+    /// Shared native admission for later input/resize/snapshot adapters.
+    /// An acquired access rechecks caller/run ownership again at each operation.
+    #[allow(dead_code)] // D17 operation adapters use this authenticated port.
+    pub(crate) fn access<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<RunAccess, SafeError> {
+        let (caller, run) = self.admit_run_key(webview, headers, body)?;
+        self.service.access(&caller, &run)
+    }
+
+    pub(crate) fn stop<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let (_caller, run) = self.admit_run_key(webview, request.headers(), request.body())?;
+        self.supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .stop(&run)
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.service.begin_shutdown();
+        // Revoke document/output authority before waiting for process reaping.
+        // A closing main-thread WebView must not be required to service new
+        // url/resource-table getters from an output sender while shutdown waits.
+        if let Some(binding) = self.binding.lock().as_ref().cloned() {
+            binding.revoke();
+        }
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.shutdown();
+        }
     }
 }
 

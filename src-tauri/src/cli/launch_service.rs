@@ -12,9 +12,10 @@ use super::storage::WorkspaceRepository;
 use super::types::{LaunchRequest, SafeError};
 use crate::platform::launch::resolve_process;
 use crate::platform::owned_pty::OwnedPty;
+use crate::terminal_transport::OutputFrame;
+use parking_lot::RwLock;
 use portable_pty::PtySize;
-use serde_json::Value;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io::{self, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
@@ -24,12 +25,17 @@ pub(crate) struct FrozenPty {
     pub(crate) snapshot: Arc<LaunchSnapshot>,
     pub(crate) observer: Option<crate::observer_registry::ObserverLease>,
 }
-pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<Value>>;
+pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<OutputFrame>>;
 
 /// D14/D15 supply a backend consumer. It must retain/reap its owned run and
 /// implement bounded output/drain policy. This interface is never deserialized.
 pub(crate) trait RunSupervisor: Send + Sync {
-    fn adopt(&self, run: &RunKey, resource: Arc<NativeRun>) -> Result<(), SafeError>;
+    fn adopt(
+        &self,
+        registry: Arc<RunRegistry<NativeRun>>,
+        run: &RunKey,
+        resource: Arc<NativeRun>,
+    ) -> Result<(), SafeError>;
 }
 
 pub(crate) struct LaunchService {
@@ -38,6 +44,7 @@ pub(crate) struct LaunchService {
     inherited: Option<EnvMap>,
     supervisor: Option<Arc<dyn RunSupervisor>>,
     observer: Option<Arc<crate::observer_host::ObserverHost>>,
+    shutting_down: RwLock<bool>,
 }
 impl LaunchService {
     pub(crate) fn new(
@@ -51,6 +58,7 @@ impl LaunchService {
             inherited,
             supervisor,
             observer: None,
+            shutting_down: RwLock::new(false),
         }
     }
     pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
@@ -73,8 +81,12 @@ impl LaunchService {
         &self,
         caller: &CallerIdentity,
         request: &LaunchRequest,
-        connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<Value>, SafeError>,
+        connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<OutputFrame>, SafeError>,
     ) -> Result<LaunchStatus, SafeError> {
+        // The long-lived read guard is acquired only immediately before process
+        // construction. Channel/document admission happens before it and may
+        // synchronously round-trip through the Tauri main event loop.
+        let handoff_guard = RefCell::new(None);
         let spawned = Cell::new(false);
         let status = self.coordinator.start_routed(
             caller,
@@ -82,6 +94,9 @@ impl LaunchService {
             || {
                 // Checked inside prepare, so an existing receipt still wins before
                 // this readiness gate, profile I/O or any route construction.
+                if *self.shutting_down.read() {
+                    return Err(error("RUN_SUPERVISOR_STOPPING"));
+                }
                 self.supervisor
                     .as_ref()
                     .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?;
@@ -157,6 +172,12 @@ impl LaunchService {
                     }
                     None => (snapshot.clone(), None),
                 };
+                let shutdown = self.shutting_down.read();
+                if *shutdown {
+                    return Err(error("RUN_SUPERVISOR_STOPPING"));
+                }
+                *handoff_guard.borrow_mut() = Some(shutdown);
+
                 let frozen = Arc::new(snapshot);
                 let invocation = build_invocation(frozen.request(), &frozen)?;
                 let spec = resolve_process(&invocation)?;
@@ -185,13 +206,20 @@ impl LaunchService {
                 .supervisor
                 .as_ref()
                 .expect("prepare required supervisor");
-            let adopted =
-                catch_unwind(AssertUnwindSafe(|| supervisor.adopt(&status.run, resource)));
+            let registry = self.registry().clone();
+            let adopted = catch_unwind(AssertUnwindSafe(|| {
+                supervisor.adopt(registry, &status.run, resource)
+            }));
             if !matches!(adopted, Ok(Ok(()))) {
                 return Err(error("RUN_HANDOFF_FAILED"));
             }
         }
+        handoff_guard.borrow_mut().take();
         Ok(status)
+    }
+
+    pub(crate) fn begin_shutdown(&self) {
+        *self.shutting_down.write() = true;
     }
 
     pub(crate) fn access(
