@@ -333,3 +333,25 @@ fn D15_Supervisor_ApplicationShutdownIsIncomplete_005() {
     assert_eq!(exited.output(), OutputLifecycle::Incomplete);
     assert!(!exited.can_retire_as_complete());
 }
+
+
+#[test]
+fn D15_Supervisor_ShutdownDuringExitedDrainStaysIncomplete_006() {
+    let fixture = Fixture::new("descendant");
+    let status = fixture.start();
+    assert_eq!(status.phase, LaunchPhase::Running);
+
+    let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    assert_eq!(exited.output(), OutputLifecycle::Draining);
+
+    fixture.supervisor.shutdown();
+    let incomplete =
+        fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Incomplete);
+    assert_eq!(incomplete.process(), ProcessLifecycle::Exited);
+    assert!(!incomplete.can_retire_as_complete());
+
+    std::thread::sleep(Duration::from_millis(500));
+    let stable = fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Incomplete);
+    assert_eq!(stable.output(), OutputLifecycle::Incomplete);
+    assert!(!stable.can_retire_as_complete());
+}
