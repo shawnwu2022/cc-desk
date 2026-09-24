@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   applyObservation,
-  createObservationReducer,
+  createObservationReducer as productionReducer,
   createObservationRegistry,
   type ObservationEvent,
   type RunRef,
 } from '@/integrations/registry'
 import { fromClaudeHook } from '@/integrations/claudeObserver'
+
+// Test-only forbidden-port adapter. Production never receives a stop handle.
+function createObservationReducer(run: RunRef, _forbiddenStopSpy?: () => unknown) {
+  return productionReducer(run)
+}
 
 const current: RunRef = { runId: 'current', generation: 2 }
 
@@ -172,4 +177,50 @@ describe('D13 observer isolation', () => {
     ).toEqual({ observation: 'active', activity: 'working' })
   })
 
+})
+
+it('D13_Observer_ExplicitOffRejectsLateEvents_08', () => {
+  const reducer = createObservationReducer(current)
+  reducer.accept({ kind: 'off', ...current })
+  reducer.accept({ kind: 'working', ...current, eventId: 'late', sourceSequence: '1' })
+  expect(reducer.state()).toEqual({ observation: 'off', activity: 'unknown' })
+})
+it('D13_Observer_DetachRevokesPreviouslyAcquiredReducer_09', () => {
+  const registry = createObservationRegistry()
+  const reducer = registry.attach(current)
+  registry.detach(current)
+  reducer.accept({ kind: 'working', ...current, eventId: 'late', sourceSequence: '1' })
+  expect(reducer.state()).toEqual({ observation: 'off', activity: 'unknown' })
+})
+it('D13_Observer_MalformedWireCannotThrowThroughSubscribers_10', () => {
+  const base = { runId: 'current', generation: 2, eventId: 'e', observerSource: 'claude-hook', detail: null }
+  for (const bad of [null, [], base, { ...base, detail: { type: 'notification', data: null } }, { ...base, generation: 4294967296 }]) {
+    expect(() => fromClaudeHook(bad as never)).not.toThrow()
+    expect(fromClaudeHook(bad as never)).toBeNull()
+  }
+})
+it('D13_Observer_MissingEventIdCannotInventWorking_11', () => {
+  const reducer = createObservationReducer(current)
+  reducer.accept({ kind: 'working', ...current, sourceSequence: '1' })
+  expect(reducer.state().activity).toBe('unknown')
+})
+it('D13_Observer_ReplayBudgetFailsClosed_12', () => {
+  const reducer = createObservationReducer(current)
+  for (let i = 0; i < 1025; i++) reducer.accept({ kind: 'working', ...current, eventId: `e${i}`, sourceSequence: String(i) })
+  expect(reducer.state()).toEqual({ observation: 'unavailable', activity: 'unknown' })
+})
+it('D13_Observer_ReattachingRunPreservesDedupeAndState_13', () => {
+  const registry = createObservationRegistry()
+  const first = registry.attach(current)
+  first.accept({ kind: 'working', ...current, eventId: 'a', sourceSequence: '1' })
+  expect(registry.attach(current)).toBe(first)
+  expect(registry.get(current)?.state().activity).toBe('working')
+})
+it('D13_Observer_RunMutationCannotRetargetExistingBinding_14', () => {
+  const run = { ...current }
+  const registry = createObservationRegistry()
+  const first = registry.attach(run)
+  run.runId = 'foreign'
+  first.accept({ kind: 'working', ...run, eventId: 'a', sourceSequence: '1' })
+  expect(first.state().activity).toBe('unknown')
 })

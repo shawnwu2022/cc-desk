@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::hook_server::{ObserverSource, ValidatedObserverEvent};
+use crate::observer_registry::{ObserverSource, ValidatedObserverEvent};
 
 /// 发送给前端的完整 hook 事件 payload
 #[derive(Debug, Clone, Serialize)]
@@ -164,6 +164,7 @@ impl HookPayload {
         }
     }
 
+    #[cfg(test)]
     pub fn from_raw(pty_id: Option<String>, event: Value) -> Self {
         let event_name = event
             .get("hook_event_name")
@@ -256,6 +257,7 @@ pub(crate) fn extract_detail(event_name: &str, event: &Value) -> HookEventDetail
     }
 }
 
+#[cfg(test)]
 pub(crate) fn derive_state(event_name: &str, event: &Value) -> String {
     match event_name {
         "UserPromptSubmit" => "thinking".into(),

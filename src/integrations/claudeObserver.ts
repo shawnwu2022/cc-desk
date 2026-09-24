@@ -10,12 +10,15 @@ function validAuthenticatedMetadata(
   observerSource: 'claude-hook'
 } {
   return (
+    payload !== null && typeof payload === 'object' && !Array.isArray(payload) &&
+    payload.detail !== null && typeof payload.detail === 'object' &&
+    payload.detail.data !== null && typeof payload.detail.data === 'object' && !Array.isArray(payload.detail.data) &&
     payload.observerSource === 'claude-hook' &&
     typeof payload.runId === 'string' &&
-    payload.runId.length > 0 &&
+    payload.runId.length > 0 && payload.runId.length <= 128 &&
     !/[\u0000-\u001f\u007f]/.test(payload.runId) &&
     Number.isInteger(payload.generation) &&
-    payload.generation! > 0 &&
+    payload.generation! > 0 && payload.generation! <= 0xffffffff &&
     typeof payload.eventId === 'string' &&
     payload.eventId.length > 0 &&
     payload.eventId.length <= 128 &&

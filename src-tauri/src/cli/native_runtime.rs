@@ -35,11 +35,11 @@ impl NativeRuntime {
     pub(crate) fn production() -> Result<Self, SafeError> {
         // D14/D15 install the backend supervisor with bounded output/reaping.
         // Until then the service rejects before I/O/spawn, not a discard pump.
-        Ok(Self::new(Arc::new(LaunchService::new(
-            WorkspaceRepository::production()?,
-            None,
-            None,
-        ))))
+        let mut service = LaunchService::new(WorkspaceRepository::production()?, None, None);
+        if let Some(observer) = crate::hook_server::observer_host() {
+            service = service.with_observer(observer);
+        }
+        Ok(Self::new(Arc::new(service)))
     }
     pub(crate) fn initialize_main<T: Runtime, M: Manager<T>>(
         &self,

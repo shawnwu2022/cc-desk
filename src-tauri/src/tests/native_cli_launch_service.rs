@@ -339,3 +339,6 @@ fn D11_Service_HandoffFailureKeepsOwnedProcess_007() {
 
 #[path = "native_cli_launch_edges.rs"]
 mod edges;
+
+#[path = "native_cli_observer_service.rs"]
+mod observer;

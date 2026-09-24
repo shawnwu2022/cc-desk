@@ -1,6 +1,6 @@
 use crate::hook_config::deployment_id;
 use crate::hook_events::HookPayload;
-use crate::hook_server::{
+use crate::observer_registry::{
     parse_observer_headers, ObserverAccept, ObserverBinding, ObserverRegistry, ObserverRun,
     ObserverSource, MAX_OBSERVER_PAYLOAD,
 };
@@ -25,7 +25,11 @@ fn D13_Observer_CapabilityRunReplayAndPayloadBoundary_001() {
     let registry = ObserverRegistry::new();
     let current = run("run-current", 2);
     let binding = registry
-        .attach(current.clone(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), ObserverSource::ClaudeHook)
+        .attach(
+            current.clone(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            ObserverSource::ClaudeHook,
+        )
         .unwrap();
 
     let accepted = registry
@@ -80,10 +84,18 @@ fn D13_Observer_ReattachRevokesOldCapabilityAndSourcesAreExplicit_002() {
     let registry = ObserverRegistry::new();
     let current = run("run-current", 7);
     let old = registry
-        .attach(current.clone(), "cccccccccccccccccccccccccccccccc".to_string(), ObserverSource::ClaudeHook)
+        .attach(
+            current.clone(),
+            "cccccccccccccccccccccccccccccccc".to_string(),
+            ObserverSource::ClaudeHook,
+        )
         .unwrap();
     let next = registry
-        .attach(current.clone(), "dddddddddddddddddddddddddddddddd".to_string(), ObserverSource::ClaudeHook)
+        .attach(
+            current.clone(),
+            "dddddddddddddddddddddddddddddddd".to_string(),
+            ObserverSource::ClaudeHook,
+        )
         .unwrap();
 
     assert_eq!(
@@ -128,8 +140,14 @@ fn D13_Observer_InvalidEventAndIdentifiersFailClosedWithoutRawContent_003() {
     for (event_id, body) in [
         ("", br#"{"hook_event_name":"Stop"}"#.as_slice()),
         ("bad\nevent", br#"{"hook_event_name":"Stop"}"#.as_slice()),
-        ("event-json", br#"{"hook_event_name":"Stop","secret":"private-value""#.as_slice()),
-        ("event-name", br#"{"hook_event_name":"MadeUp","secret":"private-value"}"#.as_slice()),
+        (
+            "event-json",
+            br#"{"hook_event_name":"Stop","secret":"private-value""#.as_slice(),
+        ),
+        (
+            "event-name",
+            br#"{"hook_event_name":"MadeUp","secret":"private-value"}"#.as_slice(),
+        ),
     ] {
         let error = registry.accept_event(&binding, event_id, body).unwrap_err();
         assert!(
@@ -187,7 +205,6 @@ fn D13_Observer_AttachRequiresStrongOpaqueCapabilityAndBoundedReplayTable_004() 
     );
 }
 
-
 #[test]
 fn D13_Observer_HeadersBindExactRunCapabilitySourceAndEvent_005() {
     let mut headers = HeaderMap::new();
@@ -202,10 +219,7 @@ fn D13_Observer_HeadersBindExactRunCapabilitySourceAndEvent_005() {
 
     let (binding, event_id) = parse_observer_headers(&headers).unwrap();
     assert_eq!(binding.run, run("run-current", 7));
-    assert_eq!(
-        binding.capability,
-        "0123456789abcdef0123456789abcdef"
-    );
+    assert_eq!(binding.capability, "0123456789abcdef0123456789abcdef");
     assert_eq!(binding.source, ObserverSource::ClaudeHook);
     assert_eq!(event_id, "event-7");
 
@@ -280,4 +294,245 @@ fn D13_Observer_PluginDeploymentTracksScriptAndReporterStaysBounded_008() {
     assert!(SCRIPT.contains("--max-time 3"));
     assert!(SCRIPT.contains("-H @<("));
     assert!(!SCRIPT.contains("-H \"X-CC-Desk-Capability:"));
+}
+
+#[test]
+fn D13_Observer_ReattachingSameCapabilityMustNotResetReplay_009() {
+    let registry = ObserverRegistry::new();
+    let first = registry
+        .mint(run("same", 1), ObserverSource::ClaudeHook)
+        .unwrap();
+    registry
+        .accept_event(&first, "once", &payload("Stop"))
+        .unwrap();
+    let again = registry
+        .attach(first.run.clone(), first.capability.clone(), first.source)
+        .unwrap();
+    assert_eq!(
+        registry
+            .accept_event(&again, "once", &payload("Stop"))
+            .unwrap(),
+        ObserverAccept::Duplicate
+    );
+}
+
+#[test]
+fn D13_Observer_DuplicateHeadersAreRejected_010() {
+    let mut headers = HeaderMap::new();
+    for (key, val) in [
+        ("x-cc-desk-run", "run"),
+        ("x-cc-desk-generation", "1"),
+        ("x-cc-desk-capability", "0123456789abcdef0123456789abcdef"),
+        ("x-cc-desk-event", "event"),
+        ("x-cc-desk-observer-source", "claude-hook"),
+    ] {
+        headers.insert(key, val.parse().unwrap());
+    }
+    headers.append(
+        "x-cc-desk-capability",
+        "ffffffffffffffffffffffffffffffff".parse().unwrap(),
+    );
+    assert!(parse_observer_headers(&headers).is_err());
+}
+
+#[test]
+fn D13_Observer_PromptAndErrorBodyNeverReachFrontend_011() {
+    let registry = ObserverRegistry::new();
+    let binding = registry
+        .mint(run("redaction", 1), ObserverSource::ClaudeHook)
+        .unwrap();
+    for (i, name) in [
+        "UserPromptSubmit",
+        "Stop",
+        "StopFailure",
+        "PostToolUseFailure",
+        "Notification",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let body = serde_json::to_vec(&serde_json::json!({"hook_event_name":name, "session_id":"sid", "prompt":"fixture-secret", "last_assistant_message":"fixture-secret", "error":"fixture-secret", "message":"fixture-secret", "title":"fixture-secret", "env":{"TOKEN":"fixture-secret"}})).unwrap();
+        let ObserverAccept::Accepted(event) = registry
+            .accept_event(&binding, &format!("e{i}"), &body)
+            .unwrap()
+        else {
+            panic!("new event");
+        };
+        assert!(!serde_json::to_string(&HookPayload::from_validated(event))
+            .unwrap()
+            .contains("fixture-secret"));
+    }
+}
+
+#[test]
+fn D13_Observer_MalformedIdentityIsNotAcceptedAsAnOfficialEvent_012() {
+    let registry = ObserverRegistry::new();
+    let binding = registry
+        .mint(run("invalid", 1), ObserverSource::ClaudeHook)
+        .unwrap();
+    for (i, body) in [
+        r#"{"hook_event_name":"SessionStart","session_id":7}"#,
+        r#"{"hook_event_name":"SessionStart","cwd":"/bad\u0000path"}"#,
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert!(registry
+            .accept_event(&binding, &format!("e{i}"), body.as_bytes())
+            .is_err());
+    }
+}
+
+#[test]
+fn D13_Observer_LeaseRevokesAndOldDropCannotRevokeReplacement_013() {
+    use crate::observer_registry::ObserverDelivery;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let registry = Arc::new(ObserverRegistry::with_capacity(2));
+    let alive = Arc::new(AtomicBool::new(true));
+    let guard = alive.clone();
+    let first = registry
+        .lease(
+            run("leased", 1),
+            ObserverDelivery::native("main"),
+            Arc::new(move || guard.load(Ordering::SeqCst)),
+        )
+        .unwrap();
+    assert!(registry
+        .accept_event(first.binding(), "before", &payload("Stop"))
+        .is_ok());
+    alive.store(false, Ordering::SeqCst);
+    assert_eq!(
+        registry
+            .accept_event(first.binding(), "after", &payload("Stop"))
+            .unwrap_err()
+            .code,
+        "OBSERVER_FORBIDDEN"
+    );
+    let second = registry
+        .lease(
+            run("leased", 1),
+            ObserverDelivery::native("main"),
+            Arc::new(|| true),
+        )
+        .unwrap();
+    drop(first);
+    assert!(registry
+        .accept_event(second.binding(), "replacement", &payload("Stop"))
+        .is_ok());
+    let binding = second.binding().clone();
+    drop(second);
+    assert!(registry
+        .accept_event(&binding, "late", &payload("Stop"))
+        .is_err());
+}
+
+#[test]
+fn D13_Observer_LeaseCapacityAndPublicationRecheck_014() {
+    use crate::observer_registry::ObserverDelivery;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let registry = Arc::new(ObserverRegistry::with_capacity(1));
+    let alive = Arc::new(AtomicBool::new(true));
+    let guard = alive.clone();
+    let lease = registry
+        .lease(
+            run("a", 1),
+            ObserverDelivery::native("main"),
+            Arc::new(move || guard.load(Ordering::SeqCst)),
+        )
+        .unwrap();
+    assert!(registry
+        .lease(
+            run("b", 1),
+            ObserverDelivery::native("main"),
+            Arc::new(|| true)
+        )
+        .is_err());
+    let _accepted = registry
+        .accept_event(lease.binding(), "before", &payload("SessionStart"))
+        .unwrap();
+    alive.store(false, Ordering::SeqCst);
+    assert!(
+        registry.delivery(lease.binding()).is_err(),
+        "revocation after parse must prevent publication"
+    );
+    drop(lease);
+    assert!(registry
+        .lease(
+            run("b", 1),
+            ObserverDelivery::native("main"),
+            Arc::new(|| true)
+        )
+        .is_ok());
+}
+
+#[test]
+fn D13_Observer_HostPreparesOnlyVerifiedPluginAndDropsAuthority_015() {
+    use crate::observer_host::ObserverHost;
+    use crate::observer_registry::ObserverDelivery;
+    use std::sync::Arc;
+    let root = tempfile::tempdir().unwrap();
+    let registry = Arc::new(ObserverRegistry::new());
+    let host = ObserverHost::new(
+        registry.clone(),
+        root.path().to_path_buf(),
+        Arc::new(|| Some(12345)),
+    );
+    assert!(host
+        .prepare(
+            run("prepared", 1),
+            ObserverDelivery::native("main"),
+            Arc::new(|| true)
+        )
+        .is_err());
+    crate::hook_config::ensure_plugin_files_at(root.path()).unwrap();
+    let prepared = host
+        .prepare(
+            run("prepared", 1),
+            ObserverDelivery::native("main"),
+            Arc::new(|| true),
+        )
+        .unwrap();
+    let binding = prepared.lease.binding().clone();
+    assert_eq!(
+        prepared.environment.values[std::ffi::OsStr::new("CC_DESK_OBSERVER_RUN")],
+        "prepared"
+    );
+    assert_eq!(
+        prepared.environment.values[std::ffi::OsStr::new("CC_DESK_OBSERVER_GENERATION")],
+        "1"
+    );
+    assert_eq!(
+        prepared.environment.values[std::ffi::OsStr::new("CC_DESK_OBSERVER_CAPABILITY")],
+        binding.capability.as_str()
+    );
+    assert_eq!(prepared.plugin_dir, root.path());
+    assert!(registry.check_binding(&binding).is_ok());
+    drop(prepared);
+    assert!(registry.check_binding(&binding).is_err());
+    std::fs::write(
+        root.path().join("scripts/report-hook.sh"),
+        b"wrong reporter",
+    )
+    .unwrap();
+    assert!(host
+        .prepare(
+            run("prepared", 2),
+            ObserverDelivery::native("main"),
+            Arc::new(|| true)
+        )
+        .is_err());
+    crate::hook_config::ensure_plugin_files_at(root.path()).unwrap();
+    assert!(host
+        .prepare(
+            run("prepared", 3),
+            ObserverDelivery::native("main"),
+            Arc::new(|| true)
+        )
+        .is_ok());
 }

@@ -7,6 +7,14 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 
+pub(crate) const OBSERVER_ENV_NAMES: &[&str] = &[
+    "CC_BOX_HOOK_PORT",
+    "CC_BOX_SESSION_ID",
+    "CC_DESK_OBSERVER_CAPABILITY",
+    "CC_DESK_OBSERVER_RUN",
+    "CC_DESK_OBSERVER_GENERATION",
+];
+
 pub(crate) type EnvMap = BTreeMap<OsString, OsString>;
 
 /// Internal observer data, not an IPC type and deliberately not Debug/Serialize.
@@ -178,6 +186,9 @@ pub(crate) fn build_environment(
         }
     }
 
+    // These names are Desk-issued capabilities, not user CLI credentials. Never
+    // inherit an ancestor Desk run's observer authority into a new run.
+    result.retain(|name, _| !permitted(name, OBSERVER_ENV_NAMES));
     if observer_enabled(profile) {
         if let Some(observer) = observer {
             let layer = validated_layer(&observer.values, false)?;
@@ -199,4 +210,28 @@ pub(crate) fn build_environment(
         }
     }
     Ok(result)
+}
+
+/// Add only backend-owned observer values to an already-frozen environment.
+pub(crate) fn overlay_observer(
+    frozen: &EnvMap,
+    observer: &ObserverEnv,
+) -> Result<EnvMap, SafeError> {
+    let layer = validated_layer(&observer.values, false)?;
+    for name in layer.keys() {
+        if !permitted(
+            name,
+            &[
+                "CC_BOX_HOOK_PORT",
+                "CC_DESK_OBSERVER_CAPABILITY",
+                "CC_DESK_OBSERVER_RUN",
+                "CC_DESK_OBSERVER_GENERATION",
+            ],
+        ) {
+            return Err(SafeError::invalid("observer.environment"));
+        }
+    }
+    let mut next = frozen.clone();
+    merge(&mut next, &layer);
+    Ok(next)
 }

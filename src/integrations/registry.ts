@@ -49,6 +49,7 @@ class RunObservationReducer implements ObservationReducer {
   private current: ObservationState = { observation: 'off', activity: 'unknown' }
   private readonly seen = new Set<string>()
   private lastSourceSequence: string | null = null
+  private closed = false
 
   constructor(private readonly run: RunRef) {}
 
@@ -56,11 +57,13 @@ class RunObservationReducer implements ObservationReducer {
     if (!sameRun(this.run, event)) return
 
     if (event.kind === 'off') {
+      this.closed = true
       this.current = { observation: 'off', activity: 'unknown' }
       this.seen.clear()
       this.lastSourceSequence = null
       return
     }
+    if (this.closed) return
     if (event.kind === 'connecting') {
       this.current = { observation: 'connecting', activity: 'unknown' }
       return
@@ -70,10 +73,14 @@ class RunObservationReducer implements ObservationReducer {
       return
     }
 
-    if (event.eventId) {
-      if (this.seen.has(event.eventId)) return
-      this.seen.add(event.eventId)
+    if (!event.eventId || event.eventId.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(event.eventId)) return
+    if (this.seen.has(event.eventId)) return
+    if (this.seen.size >= 1024) {
+      this.current = { observation: 'unavailable', activity: 'unknown' }
+      this.closed = true
+      return
     }
+    this.seen.add(event.eventId)
 
     this.current.observation = 'active'
 
@@ -96,15 +103,12 @@ class RunObservationReducer implements ObservationReducer {
   }
 }
 
-/**
- * The second argument exists only as a test guard: the reducer deliberately
- * has no process-control dependency, so observer failure can never stop a run.
- */
-export function createObservationReducer(
-  run: RunRef,
-  forbiddenStopSpy?: () => unknown,
-): ObservationReducer {
-  void forbiddenStopSpy
+/** Pure projection; deliberately has no terminal/process-control dependency. */
+export function createObservationReducer(run: RunRef): ObservationReducer {
+  if (!run.runId || run.runId.length > 128 || /[\u0000-\u001f\u007f]/.test(run.runId) ||
+      !Number.isInteger(run.generation) || run.generation < 1 || run.generation > 0xffffffff) {
+    throw new Error('INVALID_OBSERVER_RUN')
+  }
   return new RunObservationReducer({ ...run })
 }
 
@@ -122,6 +126,9 @@ export function createObservationRegistry(): ObservationRegistry {
   const reducers = new Map<string, ObservationReducer>()
   return {
     attach(run) {
+      const existing = reducers.get(runKey(run))
+      if (existing) return existing
+      if (reducers.size >= 256) throw new Error('OBSERVER_CAPACITY')
       const reducer = createObservationReducer(run)
       reducers.set(runKey(run), reducer)
       return reducer
@@ -130,7 +137,15 @@ export function createObservationRegistry(): ObservationRegistry {
       return reducers.get(runKey(run))
     },
     detach(run) {
+      reducers.get(runKey(run))?.accept({ kind: 'off', ...run })
       reducers.delete(runKey(run))
     },
   }
+}
+
+/** One-shot projection. Stateful streams must retain one reducer per binding. */
+export function applyObservation(run: RunRef, event: ObservationEvent): ObservationState {
+  const reducer = createObservationReducer(run)
+  reducer.accept(event)
+  return reducer.state()
 }

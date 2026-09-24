@@ -280,3 +280,12 @@ npm run tauri:build        # 生产构建
 - Return only the kind-specific projection DTO; do not add raw config/env/argv/headers to resource items or error logs. Scan failure must not remove registered projects.
 - Existing Claude UI is legacy-only until D22-D24. New dual-CLI code must use the authenticated API/store and must not fall back to legacy root/delete commands.
 - Run the committed `tests/native-cli/scope-core` harness (actual production sources), frontend tests/build, and Windows production/live WebView tests. Headless core success is not real CLI or package certification.
+
+### D13 observer isolation
+
+- `observer_registry`/`observer_http`/`observer_host` own a bounded, authenticated optional side channel. `/hook` is no longer an unauthenticated compatibility path; legacy Claude launches also mint per-PTY leases.
+- The native reservation winner adds verified observer plugin assets and a fresh capability to the frozen launch only when enabled. New profiles default off; raw/Codex/Shell never receive the Claude overlay. Strip only Desk capability environment names from ambient inputs, never user API credentials.
+- Observer leases follow exact run/document lifetime, never own process control. Dropping/invalidating a lease cannot kill or restart a CLI. The `NATIVE_RUNTIME_NOT_READY` gate is unchanged.
+- Only bounded allowlisted metadata reaches the owner WebView; prompt/assistant/error/env bodies and capabilities are not published. No sequence is invented for parallel Claude hooks: activity remains unknown even while the process runs.
+- New UI consumers use exact-run `subscribeObservation(target, handler)` and its projected state, not raw event kind as a current activity claim. The native and legacy event topics are separate. Full dual-CLI UI adoption remains D22-D24.
+- Verification, recovery history and limitations: `docs/superpowers/execution/D13.md`; final-head CI evidence belongs in PR #20.

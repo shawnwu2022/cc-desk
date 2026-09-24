@@ -104,6 +104,10 @@ pub(crate) fn build_invocation<'a>(
     // No quoting, parsing or deduplication. Explicit caller flags and positionals
     // retain native parser semantics; raw provides exact full-command ordering.
     args.extend_from_slice(snapshot.default_args());
+    if let Some(plugin) = snapshot.observer_plugin() {
+        args.push("--plugin-dir".into());
+        args.push(plugin.as_os_str().to_owned());
+    }
     args.extend_from_slice(snapshot.extra_args());
     Ok(CliInvocation { snapshot, args })
 }

@@ -88,3 +88,5 @@ mod native_cli_projection_service;
 
 #[cfg(windows)]
 mod native_cli_projection_live;
+
+mod native_cli_observer_http;

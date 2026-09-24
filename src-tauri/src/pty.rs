@@ -132,6 +132,7 @@ pub struct PtyErrorPayload {
 struct PtyInstanceData {
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    _observer: Option<crate::observer_registry::ObserverLease>,
 }
 
 /// 每个 PTY 独立的 writer 锁。全局 registry 锁只用于 O(1) 查找，
@@ -200,11 +201,17 @@ impl PtyManager {
         writer: Box<dyn Write + Send>,
         reader: Box<dyn Read + Send>,
         reader_label: &'static str,
+        observer: Option<crate::observer_registry::ObserverLease>,
     ) -> Result<()> {
         let killer = child.clone_killer();
-        self.instances
-            .lock()
-            .insert(id.clone(), PtyInstanceData { master, killer });
+        self.instances.lock().insert(
+            id.clone(),
+            PtyInstanceData {
+                master,
+                killer,
+                _observer: observer,
+            },
+        );
         self.writers
             .lock()
             .insert(id.clone(), Arc::new(PtyWriterEntry::new(writer)));
@@ -391,6 +398,11 @@ impl PtyManager {
                 }
             }
         }
+        // Strip only this application's capability namespace, never provider
+        // credentials. A fresh legacy Claude lease is applied after this step.
+        for name in crate::cli::environment::OBSERVER_ENV_NAMES {
+            cmd.env_remove(name);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -403,6 +415,7 @@ impl PtyManager {
         pty_type: &str,
         cmd: CommandBuilder,
         description: &str,
+        observer: Option<crate::observer_registry::ObserverLease>,
     ) -> Result<PtyInfo> {
         let pty_system = native_pty_system();
         let PtyPair { master, slave } = pty_system
@@ -457,6 +470,7 @@ impl PtyManager {
             } else {
                 "Shell output"
             },
+            observer,
         )?;
 
         Ok(PtyInfo {
@@ -512,9 +526,15 @@ impl PtyManager {
             "claude".to_string()
         };
 
-        let plugin_dir = crate::hook_config::plugin_dir();
-        let claude_cmd = if plugin_dir.exists() {
-            format!("{} --plugin-dir \"{}\"", claude_cmd, plugin_dir.display())
+        // Preserve the legacy Claude observer preference, but never enable an
+        // unauthenticated fallback. This lease follows this exact spawned PTY.
+        let prepared = crate::hook_server::prepare_legacy(&self.app_handle, &id);
+        let claude_cmd = if let Some(observer) = &prepared {
+            format!(
+                "{} --plugin-dir \"{}\"",
+                claude_cmd,
+                observer.plugin_dir.display()
+            )
         } else {
             claude_cmd
         };
@@ -534,9 +554,10 @@ impl PtyManager {
         cmd.cwd(cwd);
         Self::apply_common_environment(&mut cmd, true);
 
-        if let Some(hook_port) = crate::hook_server::get_port() {
-            cmd.env("CC_BOX_HOOK_PORT", hook_port.to_string());
-            cmd.env("CC_BOX_SESSION_ID", &id);
+        if let Some(observer) = &prepared {
+            for (name, value) in &observer.environment.values {
+                cmd.env(name, value);
+            }
         }
 
         if cfg!(target_os = "windows") {
@@ -545,8 +566,16 @@ impl PtyManager {
             }
         }
 
-        log::debug!("Shell command: {:?}", claude_cmd);
-        self.spawn_command(id, cwd, cols, rows, "claude", cmd, "Claude shell command")
+        self.spawn_command(
+            id,
+            cwd,
+            cols,
+            rows,
+            "claude",
+            cmd,
+            "Claude shell command",
+            prepared.map(|prepared| prepared.lease),
+        )
     }
 
     /// 启动普通 Shell
@@ -585,6 +614,7 @@ impl PtyManager {
             "shell",
             cmd,
             &format!("shell '{program}'"),
+            None,
         )
     }
 

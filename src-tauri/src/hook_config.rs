@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -38,13 +39,16 @@ pub fn plugin_dir() -> PathBuf {
 
 /// 确保 plugin 文件存在于目标路径
 pub fn ensure_plugin_files() -> Result<()> {
-    let dir = plugin_dir();
+    ensure_plugin_files_at(&plugin_dir())
+}
+
+pub(crate) fn ensure_plugin_files_at(dir: &Path) -> Result<()> {
     let version_file = dir.join(".version");
 
     // 版本匹配时跳过
     if version_file.exists() {
         if let Ok(existing_version) = fs::read_to_string(&version_file) {
-            if existing_version.trim() == *PLUGIN_DEPLOYMENT_ID {
+            if existing_version.trim() == *PLUGIN_DEPLOYMENT_ID && plugin_ready(dir) {
                 log::info!(
                     "Plugin deployment {} matches, skipping deployment",
                     *PLUGIN_DEPLOYMENT_ID
@@ -64,7 +68,7 @@ pub fn ensure_plugin_files() -> Result<()> {
     write_file(dir.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON)?;
     write_file(dir.join("hooks").join("hooks.json"), HOOKS_JSON)?;
     write_executable(dir.join("scripts").join("report-hook.sh"), REPORT_HOOK_SH)?;
-    write_file(version_file, &PLUGIN_VERSION)?;
+    write_file(version_file, &PLUGIN_DEPLOYMENT_ID)?;
 
     log::info!("Plugin deployed successfully");
     Ok(())
@@ -83,4 +87,25 @@ fn write_executable(path: PathBuf, content: &str) -> Result<()> {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
 
     Ok(())
+}
+
+/// Validate the small, application-owned observer assets before adding an optional
+/// plugin argument. A stale/missing plugin must not break the native CLI launch.
+pub(crate) fn plugin_ready(dir: &Path) -> bool {
+    [
+        (".claude-plugin/plugin.json", PLUGIN_JSON),
+        ("hooks/hooks.json", HOOKS_JSON),
+        ("scripts/report-hook.sh", REPORT_HOOK_SH),
+    ]
+    .into_iter()
+    .all(|(path, expected)| {
+        let Ok(file) = fs::File::open(dir.join(path)) else {
+            return false;
+        };
+        let mut bytes = Vec::new();
+        file.take(expected.len() as u64 + 1)
+            .read_to_end(&mut bytes)
+            .is_ok()
+            && bytes == expected.as_bytes()
+    })
 }
