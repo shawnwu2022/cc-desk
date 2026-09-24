@@ -86,3 +86,12 @@ pub(crate) async fn cli_ack_output(
 ) -> Result<(), SafeError> {
     runtime.ack_output(&webview, &request)
 }
+
+#[tauri::command]
+pub(crate) async fn cli_stop(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<(), SafeError> {
+    runtime.stop(&webview, &request)
+}
