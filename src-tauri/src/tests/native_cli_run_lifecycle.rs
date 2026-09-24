@@ -111,3 +111,21 @@ fn D15_Lifecycle_HandoffFailureBeforeStreamCanRetireIncomplete_005() {
     assert!(state.can_retire());
     assert!(!state.can_retire_as_complete());
 }
+
+
+#[test]
+fn D15_Lifecycle_FinalFailureReasonIsOrderStable_006() {
+    let mut degraded_first = LifecycleRecord::new(run("run-a", 1));
+    degraded_first.process_running().unwrap();
+    degraded_first.output_started("1").unwrap();
+    degraded_first.mark_degraded().unwrap();
+    degraded_first.mark_incomplete().unwrap();
+    assert_eq!(degraded_first.output(), OutputLifecycle::Degraded);
+
+    let mut incomplete_first = LifecycleRecord::new(run("run-b", 1));
+    incomplete_first.process_running().unwrap();
+    incomplete_first.mark_incomplete().unwrap();
+    incomplete_first.output_started("2").unwrap();
+    incomplete_first.mark_degraded().unwrap();
+    assert_eq!(incomplete_first.output(), OutputLifecycle::Incomplete);
+}
