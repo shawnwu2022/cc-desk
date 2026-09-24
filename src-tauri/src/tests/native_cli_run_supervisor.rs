@@ -541,5 +541,9 @@ fn D15_Supervisor_RouteLossThenShutdownKeepsDegraded_009() {
     let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
     assert_eq!(exited.output(), OutputLifecycle::Degraded);
     assert!(!exited.can_retire_as_complete());
-    assert_eq!(fixture.child_reports(), 1, "shutdown restarted degraded run");
+    assert_eq!(
+        fixture.child_reports(),
+        1,
+        "shutdown restarted degraded run"
+    );
 }
