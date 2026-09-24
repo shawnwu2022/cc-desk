@@ -264,6 +264,33 @@ describe('D16 ordered input intent queue', () => {
       blockedSeq: '2',
     })
   })
+
+  it('D16_Input_EmptyPastePausesLaterEnter_012', async () => {
+    const sent: string[] = []
+    const queue = createInputIntentQueue({
+      runId: 'run-a',
+      generation: 1,
+      currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch: '1' }),
+      send: async intent => sent.push(new TextDecoder().decode(intent.bytes)),
+    })
+
+    const paste = queue.reserveAsync({
+      source: 'user-paste',
+      modeEpoch: '1',
+      produce: async () => new Uint8Array(),
+    })
+    queue.enqueue({ source: 'user-text', modeEpoch: '1', bytes: utf8('\r') })
+    await paste.settled
+    await queue.flush()
+
+    expect(sent).toEqual([])
+    expect(queue.snapshot()).toMatchObject({
+      state: 'paused',
+      reason: 'producer-failed',
+      blockedSeq: '1',
+      queued: 2,
+    })
+  })
 })
 
 describe('D16 terminal host source classification', () => {
