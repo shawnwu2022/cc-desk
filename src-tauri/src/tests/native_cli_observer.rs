@@ -292,7 +292,8 @@ fn D13_Observer_PluginDeploymentTracksScriptAndReporterStaysBounded_008() {
     assert!(SCRIPT.contains("CC_DESK_OBSERVER_RUN"));
     assert!(SCRIPT.contains("CC_DESK_OBSERVER_GENERATION"));
     assert!(SCRIPT.contains("--max-time 3"));
-    assert!(SCRIPT.contains("-H @<("));
+    assert!(SCRIPT.contains("--config -"));
+    assert!(!SCRIPT.contains("-H @<("));
     assert!(!SCRIPT.contains("-H \"X-CC-Desk-Capability:"));
 }
 
