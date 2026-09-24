@@ -27,6 +27,8 @@ pub(crate) mod native_cli_harness;
 #[cfg(test)]
 mod native_cli_invocation;
 #[cfg(test)]
+mod native_cli_observer;
+#[cfg(test)]
 mod native_cli_output_edges;
 #[cfg(test)]
 mod native_cli_output_route;
