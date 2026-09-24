@@ -140,11 +140,11 @@ export function createRunLifecycle(input: {
 
     degraded() {
       requireEpoch()
-      output = 'degraded'
+      if (output !== 'incomplete') output = 'degraded'
     },
 
     incomplete() {
-      output = 'incomplete'
+      if (output !== 'degraded') output = 'incomplete'
     },
   }
 
