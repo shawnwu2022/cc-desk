@@ -11,8 +11,8 @@ use super::snapshot::{freeze_launch, CallerIdentity, FreezeContext, LaunchSnapsh
 use super::storage::WorkspaceRepository;
 use super::types::{LaunchRequest, SafeError};
 use crate::platform::launch::resolve_process;
-use crate::terminal_transport::OutputFrame;
 use crate::platform::owned_pty::OwnedPty;
+use crate::terminal_transport::OutputFrame;
 use portable_pty::PtySize;
 use std::cell::Cell;
 use std::io::{self, Write};

@@ -114,9 +114,6 @@ impl NativeRuntime {
         Ok(())
     }
 
-    pub(crate) fn transports(&self) -> Arc<TerminalTransports> {
-        self.transports.clone()
-    }
     pub(crate) async fn projection_scope<T: Runtime>(
         &self,
         webview: &Webview<T>,

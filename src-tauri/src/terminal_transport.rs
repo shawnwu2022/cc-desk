@@ -1,5 +1,6 @@
 //! Run-scoped ordered terminal bytes with application credit and parsed acknowledgments.
 //! This module owns transport accounting only; D15 owns process exit and drain lifecycle.
+#![allow(dead_code)] // D15 wires the producer/pump into the production supervisor.
 
 use crate::cli::output_route::OutputRoute;
 use crate::cli::profiles::error;
@@ -64,11 +65,11 @@ impl Default for TransportLimits {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OutputFrame {
-    run_id: String,
-    generation: u32,
-    stream_epoch: WireU64,
-    offset: WireU64,
-    bytes: Vec<u8>,
+    pub(crate) run_id: String,
+    pub(crate) generation: u32,
+    pub(crate) stream_epoch: WireU64,
+    pub(crate) offset: WireU64,
+    pub(crate) bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
