@@ -10,7 +10,7 @@ use crate::cli::types::{SafeError, WireU64};
 use parking_lot::{Condvar, Mutex};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::io::Read;
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -486,6 +486,14 @@ impl TerminalStream {
     /// Reserve a whole frame before reading. A short read releases the unused
     /// reservation before dispatch; EOF/error releases it all.
     pub(crate) fn pump_once(&self, reader: &mut dyn Read) -> Result<usize, SafeError> {
+        self.pump_once_with_end(reader, |_| false)
+    }
+
+    pub(crate) fn pump_once_with_end(
+        &self,
+        reader: &mut dyn Read,
+        is_stream_end: impl Fn(&io::Error) -> bool,
+    ) -> Result<usize, SafeError> {
         let core = self.core()?;
         let _gate = self.send_gate.lock();
         let capacity = core.limits.frame_bytes;
@@ -495,8 +503,11 @@ impl TerminalStream {
         let mut bytes = vec![0_u8; capacity];
         let count = match reader.read(&mut bytes) {
             Ok(count) => count,
-            Err(_) => {
+            Err(failure) => {
                 core.budget.release(self.id, capacity);
+                if is_stream_end(&failure) {
+                    return Ok(0);
+                }
                 return Err(error("OUTPUT_READ_FAILED"));
             }
         };

@@ -13,6 +13,7 @@ mod platform;
 mod pty;
 mod pty_decoder;
 mod run_lifecycle;
+mod run_supervisor;
 mod session_name_index;
 mod store;
 mod terminal_transport;

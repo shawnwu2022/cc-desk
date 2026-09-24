@@ -3,7 +3,7 @@ use crate::cli::document::DOCUMENT_HEADER;
 use crate::cli::launch_service::{LaunchService, NativeRun, RunAccess, RunSupervisor};
 use crate::cli::native_runtime::{take_main_config, NativeRuntime};
 use crate::cli::profiles::{error, Override, Profile};
-use crate::cli::run_registry::{LaunchPhase, RunKey};
+use crate::cli::run_registry::{LaunchPhase, RunKey, RunRegistry};
 use crate::cli::storage::{Patch, WorkspaceRepository};
 use crate::cli::types::{CliKind, LaunchAction, LaunchRequest, SafeError, WireU64};
 use crate::terminal_transport::OutputFrame;
@@ -47,7 +47,12 @@ struct Consumer {
     failed: Arc<AtomicBool>,
 }
 impl RunSupervisor for Consumer {
-    fn adopt(&self, run: &RunKey, resource: Arc<NativeRun>) -> Result<(), SafeError> {
+    fn adopt(
+        &self,
+        _registry: Arc<RunRegistry<NativeRun>>,
+        run: &RunKey,
+        resource: Arc<NativeRun>,
+    ) -> Result<(), SafeError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.runs.lock().push((run.clone(), resource.clone()));
         let mut reader = resource.process.pty.take_reader()?;

@@ -29,7 +29,12 @@ pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<OutputFrame>>;
 /// D14/D15 supply a backend consumer. It must retain/reap its owned run and
 /// implement bounded output/drain policy. This interface is never deserialized.
 pub(crate) trait RunSupervisor: Send + Sync {
-    fn adopt(&self, run: &RunKey, resource: Arc<NativeRun>) -> Result<(), SafeError>;
+    fn adopt(
+        &self,
+        registry: Arc<RunRegistry<NativeRun>>,
+        run: &RunKey,
+        resource: Arc<NativeRun>,
+    ) -> Result<(), SafeError>;
 }
 
 pub(crate) struct LaunchService {
@@ -185,8 +190,10 @@ impl LaunchService {
                 .supervisor
                 .as_ref()
                 .expect("prepare required supervisor");
-            let adopted =
-                catch_unwind(AssertUnwindSafe(|| supervisor.adopt(&status.run, resource)));
+            let registry = self.registry().clone();
+            let adopted = catch_unwind(AssertUnwindSafe(|| {
+                supervisor.adopt(registry, &status.run, resource)
+            }));
             if !matches!(adopted, Ok(Ok(()))) {
                 return Err(error("RUN_HANDOFF_FAILED"));
             }

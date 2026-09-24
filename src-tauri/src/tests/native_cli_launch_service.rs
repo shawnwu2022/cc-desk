@@ -2,7 +2,7 @@ use crate::cli::environment::EnvMap;
 use crate::cli::launch_service::{LaunchService, NativeRun, RunSupervisor};
 use crate::cli::output_route::OutputRoutes;
 use crate::cli::profiles::{error, Override, Profile};
-use crate::cli::run_registry::{LaunchPhase, RunKey};
+use crate::cli::run_registry::{LaunchPhase, RunKey, RunRegistry};
 use crate::cli::snapshot::CallerIdentity;
 use crate::cli::storage::{Patch, WorkspaceRepository};
 use crate::cli::types::{CliKind, LaunchAction, LaunchRequest, SafeError, WireU64};
@@ -27,7 +27,12 @@ struct Consumer {
     fail: bool,
 }
 impl RunSupervisor for Consumer {
-    fn adopt(&self, _run: &RunKey, resource: Arc<NativeRun>) -> Result<(), SafeError> {
+    fn adopt(
+        &self,
+        _registry: Arc<RunRegistry<NativeRun>>,
+        _run: &RunKey,
+        resource: Arc<NativeRun>,
+    ) -> Result<(), SafeError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.runs.lock().push(resource);
         if self.fail {
