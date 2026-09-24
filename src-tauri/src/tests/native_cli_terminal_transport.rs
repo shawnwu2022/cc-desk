@@ -230,7 +230,6 @@ fn D14_Transport_LostChannelIsFinalAndReleasesBudget_004() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(hub.budgeted_bytes(), 0);
 }
-
 #[derive(Default)]
 struct ProgressProbe {
     events: Mutex<Vec<String>>,
