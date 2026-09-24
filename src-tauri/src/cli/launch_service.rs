@@ -15,7 +15,7 @@ use crate::platform::owned_pty::OwnedPty;
 use crate::terminal_transport::OutputFrame;
 use parking_lot::RwLock;
 use portable_pty::PtySize;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io::{self, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
@@ -83,10 +83,10 @@ impl LaunchService {
         request: &LaunchRequest,
         connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<OutputFrame>, SafeError>,
     ) -> Result<LaunchStatus, SafeError> {
-        // A read guard spans prepare, spawn, publication and supervisor handoff.
-        // Shutdown takes the write side, so it cannot miss an already-started
-        // launch and no new child can begin after shutdown is committed.
-        let shutdown = self.shutting_down.read();
+        // The long-lived read guard is acquired only immediately before process
+        // construction. Channel/document admission happens before it and may
+        // synchronously round-trip through the Tauri main event loop.
+        let handoff_guard = RefCell::new(None);
         let spawned = Cell::new(false);
         let status = self.coordinator.start_routed(
             caller,
@@ -94,7 +94,7 @@ impl LaunchService {
             || {
                 // Checked inside prepare, so an existing receipt still wins before
                 // this readiness gate, profile I/O or any route construction.
-                if *shutdown {
+                if *self.shutting_down.read() {
                     return Err(error("RUN_SUPERVISOR_STOPPING"));
                 }
                 self.supervisor
@@ -172,6 +172,12 @@ impl LaunchService {
                     }
                     None => (snapshot.clone(), None),
                 };
+                let shutdown = self.shutting_down.read();
+                if *shutdown {
+                    return Err(error("RUN_SUPERVISOR_STOPPING"));
+                }
+                *handoff_guard.borrow_mut() = Some(shutdown);
+
                 let frozen = Arc::new(snapshot);
                 let invocation = build_invocation(frozen.request(), &frozen)?;
                 let spec = resolve_process(&invocation)?;
@@ -208,6 +214,7 @@ impl LaunchService {
                 return Err(error("RUN_HANDOFF_FAILED"));
             }
         }
+        handoff_guard.borrow_mut().take();
         Ok(status)
     }
 
