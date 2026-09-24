@@ -112,12 +112,7 @@ impl PayloadBudget {
         }
     }
 
-    fn reserve(
-        &self,
-        stream: u64,
-        amount: usize,
-        degraded: &AtomicBool,
-    ) -> Result<(), SafeError> {
+    fn reserve(&self, stream: u64, amount: usize, degraded: &AtomicBool) -> Result<(), SafeError> {
         if amount == 0 || amount > self.limit {
             return Err(error("OUTPUT_APP_BUDGET"));
         }
