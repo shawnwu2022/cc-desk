@@ -348,7 +348,6 @@ mod edges;
 #[path = "native_cli_observer_service.rs"]
 mod observer;
 
-
 #[test]
 fn D15_Service_ShutdownGateRejectsNewLaunchButKeepsReceipt_012() {
     let f = Fixture::new(false);
