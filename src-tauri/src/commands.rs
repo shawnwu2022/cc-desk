@@ -490,3 +490,25 @@ pub fn spawn_new_instance() -> Result<(), String> {
     cmd.spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
+
+// ==================== Authenticated native observations (D12) ====================
+#[tauri::command]
+pub(crate) async fn native_get_scope(
+    webview: tauri::Webview,
+    request: tauri::ipc::Request<'_>,
+    runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,
+) -> std::result::Result<crate::cli::native_projection::wire::SourceRef, crate::cli::types::SafeError>
+{
+    runtime.projection_scope(&webview, &request).await
+}
+#[tauri::command]
+pub(crate) async fn native_list_resources(
+    webview: tauri::Webview,
+    request: tauri::ipc::Request<'_>,
+    runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,
+) -> std::result::Result<
+    crate::cli::native_projection::wire::ProjectionResult,
+    crate::cli::types::SafeError,
+> {
+    runtime.projection_read(&webview, &request).await
+}

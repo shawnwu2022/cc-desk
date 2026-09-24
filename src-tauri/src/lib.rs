@@ -5,6 +5,9 @@ mod hook_config;
 mod hook_events;
 mod hook_server;
 mod logger;
+mod observer_host;
+mod observer_http;
+mod observer_registry;
 mod paste_trace;
 mod platform;
 mod pty;
@@ -151,6 +154,8 @@ pub fn run(initial_dir: Option<String>) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::native_get_scope,
+            commands::native_list_resources,
             cli::commands::cli_start,
             cli::commands::cli_get_launch_status,
             cli::commands::cli_list_profiles,

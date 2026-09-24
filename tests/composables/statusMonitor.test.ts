@@ -696,3 +696,18 @@ describe('useStatusMonitor', () => {
     })
   })
 })
+
+it('D13_StatusMonitor_RealUnorderedObserverDoesNotGuessActivityOrRetitleFromPrompt', () => {
+  setActivePinia(createPinia()); mountedCbs = []; unmountedCbs = []
+  const id = createRunningTab('observed-pty')
+  const tab = useSessionStore().tabs.get(id)!
+  const originalName = tab.name
+  mountMonitor()
+  emit(makePayload('userPromptSubmit', 'observed-pty', {
+    runId: 'observed-pty', generation: 1, eventId: 'observed-event', observerSource: 'claude-hook', state: 'unknown',
+    detail: { type: 'userPromptSubmit', data: { prompt: 'private prompt' } },
+  }))
+  expect(tab.status).toBe('running')
+  expect(tab.working).toBe(false)
+  expect(tab.name).toBe(originalName)
+})

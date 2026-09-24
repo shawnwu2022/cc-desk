@@ -360,10 +360,10 @@ function createTerminal(tabId: string): Terminal {
       ptyInput(instance.ptyId, data, pasteLike ? 'xterm-ondata-paste' : 'terminal-ondata')
     }
 
-      // Escape 按键：Claude 的 Stop hook 不在用户中断时触发，立即清除 working
+      // A local Escape invalidates an activity hint; it does not prove CLI idle/exit.
       if (data === '\x1b') {
         const tab = sessionStore.tabs.get(tabId)
-        if (tab?.working) tab.working = false
+        if (tab) { tab.working = false; tab.activity = 'unknown' }
       }
     }
   })

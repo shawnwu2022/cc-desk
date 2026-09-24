@@ -6,7 +6,7 @@ use super::launch::LaunchCoordinator;
 use super::output_route::OutputRoute;
 use super::profiles::error;
 use super::routed_launch::RoutedResource;
-use super::run_registry::{LaunchStatus, RunKey, RunRegistry};
+use super::run_registry::{LaunchPhase, LaunchStatus, RunKey, RunRegistry};
 use super::snapshot::{freeze_launch, CallerIdentity, FreezeContext, LaunchSnapshot};
 use super::storage::WorkspaceRepository;
 use super::types::{LaunchRequest, SafeError};
@@ -22,6 +22,7 @@ use std::sync::Arc;
 pub(crate) struct FrozenPty {
     pub(crate) pty: OwnedPty,
     pub(crate) snapshot: Arc<LaunchSnapshot>,
+    pub(crate) observer: Option<crate::observer_registry::ObserverLease>,
 }
 pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<Value>>;
 
@@ -36,6 +37,7 @@ pub(crate) struct LaunchService {
     repository: WorkspaceRepository,
     inherited: Option<EnvMap>,
     supervisor: Option<Arc<dyn RunSupervisor>>,
+    observer: Option<Arc<crate::observer_host::ObserverHost>>,
 }
 impl LaunchService {
     pub(crate) fn new(
@@ -48,7 +50,21 @@ impl LaunchService {
             repository,
             inherited,
             supervisor,
+            observer: None,
         }
+    }
+    pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
+        self.observer = Some(host);
+        self
+    }
+    /// Backend-only source admission uses the same workspace and host environment as launch.
+    pub(crate) fn repository(&self) -> &WorkspaceRepository {
+        &self.repository
+    }
+    pub(crate) fn inherited_environment(&self) -> EnvMap {
+        self.inherited
+            .clone()
+            .unwrap_or_else(|| std::env::vars_os().collect())
     }
     pub(crate) fn registry(&self) -> &Arc<RunRegistry<NativeRun>> {
         self.coordinator.registry()
@@ -90,8 +106,59 @@ impl LaunchService {
             },
             connect,
             |snapshot| {
-                let frozen = Arc::new(snapshot.clone());
-                let invocation = build_invocation(snapshot.request(), snapshot)?;
+                // Observer failure never fails preparation or creates another child.
+                // Only the reservation winner can mint this per-run capability.
+                let prepared = self
+                    .observer
+                    .as_ref()
+                    .filter(|_| snapshot.observer_requested())
+                    .and_then(|host| {
+                        let registry = Arc::downgrade(self.registry());
+                        let owner = caller.clone();
+                        let request_id = request.request_id.clone();
+                        let expected = RunKey {
+                            run_id: request.run_id.clone(),
+                            generation: request.generation,
+                        };
+                        let authorize = Arc::new(move || {
+                            registry.upgrade().is_some_and(|registry| {
+                                registry.status(&owner, &request_id).is_ok_and(|status| {
+                                    status.run == expected
+                                        && matches!(
+                                            status.phase,
+                                            LaunchPhase::Starting | LaunchPhase::Running
+                                        )
+                                })
+                            })
+                        });
+                        match host.prepare(
+                            crate::observer_registry::ObserverRun {
+                                run_id: request.run_id.clone(),
+                                generation: request.generation,
+                            },
+                            crate::observer_registry::ObserverDelivery::native(
+                                &caller.window_label,
+                            ),
+                            authorize,
+                        ) {
+                            Ok(prepared) => Some(prepared),
+                            Err(_) => {
+                                log::warn!("Observer unavailable; native launch unchanged");
+                                None
+                            }
+                        }
+                    });
+                let (snapshot, observer) = match prepared {
+                    Some(prepared) => {
+                        match snapshot.with_observer(&prepared.environment, &prepared.plugin_dir) {
+                            Ok(next) => (next, Some(prepared.lease)),
+                            Err(_) => (snapshot.clone(), None),
+                        }
+                    }
+                    None => (snapshot.clone(), None),
+                };
+                let frozen = Arc::new(snapshot);
+                let invocation = build_invocation(frozen.request(), &frozen)?;
                 let spec = resolve_process(&invocation)?;
                 let pty = OwnedPty::spawn(
                     &spec,
@@ -106,6 +173,7 @@ impl LaunchService {
                 Ok(FrozenPty {
                     pty,
                     snapshot: frozen,
+                    observer,
                 })
             },
         )?;

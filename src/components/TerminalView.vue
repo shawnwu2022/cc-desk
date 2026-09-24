@@ -83,7 +83,7 @@ import { useStatusMonitor } from '@/composables/useStatusMonitor'
 import { resolveSwitchAction } from '@/composables/useProjectTreeNavigation'
 import { sameProjectPath } from '@/utils/path'
 import { resolveWindowTitle } from '@/utils/displayName'
-import { reduceWaiter, PERSIST_FAILED_CODE, type WaiterStatus, type WaiterEvent } from '@/composables/useSessionStartWaiter'
+import { reduceWaiter, shouldRegisterSessionStartWaiter, PERSIST_FAILED_CODE, type WaiterStatus, type WaiterEvent } from '@/composables/useSessionStartWaiter'
 import { useHookStore, type HookEventHandler } from '@/stores/hook'
 import type { HookEventPayload } from '@/types/hook'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -146,7 +146,7 @@ async function startResumeSession(projectPath: string, sessionId: string, sessio
 // ==================== optional SessionStart monitoring ====================
 // PTY spawn success is the process-start authority. SessionStart hooks only enrich
 // activity state. A missing hook resolves to "unavailable" and never kills a live PTY.
-type MonitoringResult = 'monitored' | 'unavailable'
+type MonitoringResult = 'monitored' | 'unavailable' | 'off'
 
 interface WaiterEntry {
   status: WaiterStatus
@@ -203,7 +203,8 @@ function settleWaiter(tabId: string, event: WaiterEvent) {
 
 function registerWaiter(tabId: string): Promise<MonitoringResult> {
   const tab = sessionStore.tabs.get(tabId)
-  if (tab?.sessionId) return Promise.resolve('monitored')
+  if (!tab || !shouldRegisterSessionStartWaiter(tab.cli ?? 'claude', tab.observerEnabled !== false)) return Promise.resolve('off')
+  if (tab.sessionId) return Promise.resolve('monitored')
 
   return new Promise<MonitoringResult>((resolve, reject) => {
     const timer = setTimeout(

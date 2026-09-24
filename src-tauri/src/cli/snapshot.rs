@@ -1,7 +1,9 @@
 //! Backend-only immutable launch inputs. No shell execution or global environment mutation.
 #![allow(dead_code)]
 
-use super::environment::{build_environment, lookup, same_name, EnvMap, ObserverEnv};
+use super::environment::{
+    build_environment, lookup, observer_enabled, overlay_observer, same_name, EnvMap, ObserverEnv,
+};
 use super::profile_service::authorize_profile_window;
 use super::profiles::{error, Launcher, Override, Profile};
 use super::types::{CliKind, LaunchAction, LaunchRequest, SafeError, WireU64};
@@ -41,6 +43,8 @@ pub(crate) struct LaunchSnapshot {
     legacy_default_args: Option<String>,
     extra_args: Vec<OsString>,
     skip_permissions: Option<bool>,
+    observer_requested: bool,
+    observer_plugin: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for LaunchSnapshot {
@@ -50,6 +54,27 @@ impl std::fmt::Debug for LaunchSnapshot {
 }
 
 impl LaunchSnapshot {
+    pub(crate) fn observer_requested(&self) -> bool {
+        self.observer_requested
+    }
+    pub(crate) fn observer_plugin(&self) -> Option<&Path> {
+        self.observer_plugin.as_deref()
+    }
+    /// Called only by the reservation winner with a backend-minted lease.
+    pub(crate) fn with_observer(
+        &self,
+        observer: &ObserverEnv,
+        plugin: &Path,
+    ) -> Result<Self, SafeError> {
+        if !self.observer_requested || !plugin.is_absolute() {
+            return Err(error("OBSERVER_UNAVAILABLE"));
+        }
+        let mut next = self.clone();
+        next.environment = overlay_observer(&self.environment, observer)?;
+        next.observer_plugin = Some(plugin.to_path_buf());
+        Ok(next)
+    }
+
     pub(crate) fn environment(&self) -> &EnvMap {
         &self.environment
     }
@@ -221,7 +246,7 @@ pub(crate) fn freeze_launch(
         context.legacy,
         if raw { None } else { context.observer },
     )?;
-    let default_args = match (&profile.default_args, raw) {
+    let default_args: Vec<OsString> = match (&profile.default_args, raw) {
         (Override::Set(args), false) => args.iter().map(OsString::from).collect(),
         _ => Vec::new(),
     };
@@ -241,6 +266,11 @@ pub(crate) fn freeze_launch(
         None
     };
     Ok(LaunchSnapshot {
+        observer_requested: !raw
+            && observer_enabled(profile)
+            && !default_args.iter().any(|arg| arg == "--")
+            && !request.extra_args.iter().any(|arg| arg == "--"),
+        observer_plugin: None,
         request: request.clone(),
         profile: profile.clone(),
         owner: caller.clone(),

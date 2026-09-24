@@ -233,7 +233,7 @@ npm run tauri:build        # 生产构建
 - **命名规范**：英文函数名 `Feature_SubFeature_SeqNum` 格式，中文注释描述目标
 - **什么要测**：纯函数、数据转换、解析逻辑、状态管理、边界条件和错误路径
 - **什么不测**：getter/setter、类型定义、简单 props 传递、第三方库能力
-- **树形项目会话管理测试**：`tests/stores/sessionTree.test.ts`（分组/排序/过滤/展开/多项目历史选择器 getHistoryFor）+ `tests/composables/projectTreeNavigation.test.ts`（resolveSwitchAction 切换语义 noop/activate/resume/new，D/E 纯函数参数直传无竞态）
+- **树形项目会话管理测试**：`tests/stores/sessionTree.test.ts`（分组/排序/过滤/展开/多项目历史选择器 getHistoryFor）+ `tests/composables/projectTreeNavigation.test.ts`（resolveSwitchAction 切换语义 noop/activate/resume/new，D/E 参数直传无竞态）
 
 ### DevTools JSON 粘贴
 
@@ -264,3 +264,28 @@ npm run tauri:build        # 生产构建
 - 仅诊断构建同时启用 `VITE_CC_DESK_PASTE_TRACE=1` 与 `CC_DESK_PASTE_TRACE=1`；首次粘贴后最多 60 秒、256 个输入事件、32 个前端 PTY 上下文。普通构建不附加参考正文。
 - 规范化剪贴板参考文本只随同一次本地 IPC 在 Rust 内存中严格比较，不写日志；参考不超过 2 MiB 时提供 `exact` 与首次差异偏移，超出只标未知、不截断输入。日志只含编号、计数、布尔值，见 `docs/paste-runtime-trace.md`。
 - `send_seq` / `recv_seq` 是 IPC 投递/接收顺序，不是 writer 锁获取顺序；诊断不是修复，仍需在受影响 Windows 环境定位，不能以发送成功替代真实草稿/提交完整性。
+
+### D12 来源隔离（派生缓存基础）
+
+- 派生名称索引 schema v2 使用 CLI、已验证 sourceRootKey、identityEpoch 和项目目录身份组成的缓存键；旧 v1 缓存重建，不跨根命中。未知目录身份跳过缓存，不猜测默认根。
+- 旧 Claude 项目映射按来源根与路径分区，最多保留 64 个派生分区；显式根扫描不得覆盖默认根，失效操作清空所有分区。
+- 配置面板请求用本地选择所有权拒绝迟到的成功/失败/finally；清空与切换立即隐藏旧配置，不记录原始异常载荷。
+- `SourcePartition` 只是缓存身份，不是授权 SourceScope / 文件系统沙箱。鉴权读取已由下节 `native_get_scope`、`native_list_resources` 与 `cli/native_projection` 实现；不要重复实现或让新双 CLI UI 借道旧默认根读取。
+- D11 的 `NATIVE_RUNTIME_NOT_READY` 保持关闭，详见 `docs/superpowers/execution/D12.md`。
+
+### D12 authenticated native projections
+
+- New native reads go through `native_get_scope` / `native_list_resources`, D11 document admission, and `cli/native_projection` held directory capabilities. A frontend path/owner or an opaque scope ID alone never authorizes a read.
+- `SourceRef.basis` is an observation source, not effective CLI state. Keep shell/raw/unknown-argument roots unknown. Never authorize transcript cwd or plugin install paths outside a granted root.
+- Return only the kind-specific projection DTO; do not add raw config/env/argv/headers to resource items or error logs. Scan failure must not remove registered projects.
+- Existing Claude UI is legacy-only until D22-D24. New dual-CLI code must use the authenticated API/store and must not fall back to legacy root/delete commands.
+- Run the committed `tests/native-cli/scope-core` harness (actual production sources), frontend tests/build, and Windows production/live WebView tests. Headless core success is not real CLI or package certification.
+
+### D13 observer isolation
+
+- `observer_registry`/`observer_http`/`observer_host` own a bounded, authenticated optional side channel. `/hook` is no longer an unauthenticated compatibility path; legacy Claude launches also mint per-PTY leases.
+- The native reservation winner adds verified observer plugin assets and a fresh capability to the frozen launch only when enabled. New profiles default off; raw/Codex/Shell never receive the Claude overlay. Strip only Desk capability environment names from ambient inputs, never user API credentials.
+- Observer leases follow exact run/document lifetime, never own process control. Dropping/invalidating a lease cannot kill or restart a CLI. The `NATIVE_RUNTIME_NOT_READY` gate is unchanged.
+- Only bounded allowlisted metadata reaches the owner WebView; prompt/assistant/error/env bodies and capabilities are not published. No sequence is invented for parallel Claude hooks: activity remains unknown even while the process runs.
+- New UI consumers use exact-run `subscribeObservation(target, handler)` and its projected state, not raw event kind as a current activity claim. The native and legacy event topics are separate. Full dual-CLI UI adoption remains D22-D24.
+- Verification, recovery history and limitations: `docs/superpowers/execution/D13.md`; final-head CI evidence belongs in PR #20.

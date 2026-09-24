@@ -776,7 +776,8 @@ fn BenchmarkActiveIndex_Real_005() {
             let mut seed_index = SessionNameIndex::empty();
             for (project_dir, path, name) in &seed_refs {
                 let stamp = FileStamp::read(path).unwrap();
-                let project_key = normalize_path_str(&project_dir.to_string_lossy());
+                let project_key =
+                    crate::session_name_index::legacy_project_index_key(project_dir).unwrap();
                 let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
                 seed_index.projects.entry(project_key).or_default().insert(
                     file_name,
@@ -1532,7 +1533,8 @@ fn SessionsIndex_WarmPage_022() {
             (&encoded, &second, "Cached second"),
         ] {
             let stamp = FileStamp::read(path).unwrap();
-            let project_key = normalize_path_str(&project_dir.to_string_lossy());
+            let project_key =
+                crate::session_name_index::legacy_project_index_key(project_dir.as_ref()).unwrap();
             let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
             seed_index.projects.entry(project_key).or_default().insert(
                 file_name,
@@ -1604,7 +1606,8 @@ fn SessionsIndex_AppendFullRebuild_023() {
         let mut seed_index = SessionNameIndex::empty();
         let (project_dir, path, name) = (&encoded, &path, "Old cached");
         let stamp = FileStamp::read(path).unwrap();
-        let project_key = normalize_path_str(&project_dir.to_string_lossy());
+        let project_key =
+            crate::session_name_index::legacy_project_index_key(project_dir.as_ref()).unwrap();
         let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
         seed_index.projects.entry(project_key).or_default().insert(
             file_name,

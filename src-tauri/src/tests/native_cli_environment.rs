@@ -251,3 +251,92 @@ fn D08_Environment_UnixPreservesCaseAndNonUnicodeValues_11() {
     .unwrap();
     assert_eq!(result, inherited);
 }
+
+#[test]
+fn D13_Observer_LegacyInheritanceNewDefaultAndCodexIsolation_012() {
+    let observer = ObserverEnv {
+        values: env(&[
+            ("CC_BOX_HOOK_PORT", "43123"),
+            (
+                "CC_DESK_OBSERVER_CAPABILITY",
+                "0123456789abcdef0123456789abcdef",
+            ),
+            ("CC_DESK_OBSERVER_RUN", "run-current"),
+            ("CC_DESK_OBSERVER_GENERATION", "2"),
+        ]),
+    };
+
+    let legacy = Profile::new("legacyClaude", CliKind::Claude);
+    let inherited = build_environment(
+        &EnvMap::new(),
+        &EnvMap::new(),
+        &legacy,
+        None,
+        Some(&observer),
+    )
+    .unwrap();
+    assert_eq!(
+        inherited
+            .get(OsStr::new("CC_DESK_OBSERVER_CAPABILITY"))
+            .unwrap(),
+        "0123456789abcdef0123456789abcdef"
+    );
+
+    let fresh = Profile::new("fresh-claude", CliKind::Claude);
+    let off = build_environment(
+        &EnvMap::new(),
+        &EnvMap::new(),
+        &fresh,
+        None,
+        Some(&observer),
+    )
+    .unwrap();
+    assert!(!off.contains_key(OsStr::new("CC_DESK_OBSERVER_CAPABILITY")));
+
+    let mut explicit = fresh;
+    explicit.observer = Override::Set(true);
+    let on = build_environment(
+        &EnvMap::new(),
+        &EnvMap::new(),
+        &explicit,
+        None,
+        Some(&observer),
+    )
+    .unwrap();
+    assert_eq!(
+        on.get(OsStr::new("CC_DESK_OBSERVER_RUN")).unwrap(),
+        "run-current"
+    );
+
+    let mut codex = Profile::new("codex", CliKind::Codex);
+    codex.observer = Override::Set(true);
+    let isolated = build_environment(
+        &EnvMap::new(),
+        &EnvMap::new(),
+        &codex,
+        None,
+        Some(&observer),
+    )
+    .unwrap();
+    assert!(!isolated.contains_key(OsStr::new("CC_DESK_OBSERVER_CAPABILITY")));
+}
+
+#[test]
+fn D13_Observer_ParentCapabilityNeverLeaksIntoAnotherRun_013() {
+    let inherited = env(&[
+        ("CC_DESK_OBSERVER_CAPABILITY", "private-parent"),
+        ("CC_DESK_OBSERVER_RUN", "parent"),
+        ("CC_DESK_OBSERVER_GENERATION", "1"),
+        ("CC_BOX_HOOK_PORT", "4321"),
+        ("OPENAI_API_KEY", "user-owned"),
+        ("KEEP", "yes"),
+    ]);
+    for cli in [CliKind::Claude, CliKind::Codex, CliKind::Shell] {
+        let profile = Profile::new("new", cli);
+        let result = build_environment(&inherited, &EnvMap::new(), &profile, None, None).unwrap();
+        assert!(!result.contains_key(OsStr::new("CC_DESK_OBSERVER_CAPABILITY")));
+        assert!(!result.contains_key(OsStr::new("CC_BOX_HOOK_PORT")));
+        assert_eq!(result[OsStr::new("OPENAI_API_KEY")], "user-owned");
+        assert_eq!(result[OsStr::new("KEEP")], "yes");
+    }
+}

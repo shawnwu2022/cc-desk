@@ -118,6 +118,11 @@ export interface HookEventPayload {
   eventName: string
   state: ClaudeState
   timestamp: number
+  /** Present only for backend-authenticated D13 observer envelopes. */
+  runId?: string
+  generation?: number
+  eventId?: string
+  observerSource?: 'claude-hook'
   detail: HookEventDetail
 }
 

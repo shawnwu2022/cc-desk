@@ -1,5 +1,6 @@
 //! 会话名称派生索引。
 
+pub(crate) use crate::cli::projection::legacy_project_index_key;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -17,7 +18,7 @@ static PRODUCTION_INDEX_HEALTH: OnceLock<Arc<IndexHealth>> = OnceLock::new();
 
 type ReplaceFileFn = dyn Fn(&Path, &Path) -> io::Result<()> + Send + Sync;
 
-pub(crate) const SESSION_NAME_INDEX_SCHEMA_VERSION: u32 = 1;
+pub(crate) const SESSION_NAME_INDEX_SCHEMA_VERSION: u32 = 2;
 pub(crate) const SESSION_NAME_PARSER_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1076,16 +1077,14 @@ impl SessionNameResolver {
         path: &Path,
         initial_stamp: FileStamp,
     ) -> NameResolution {
-        let project_key = normalized_project_key(project_dir);
+        let project_key = legacy_project_index_key(project_dir);
         let file_name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let base = self
-            .snapshot
-            .index
-            .projects
-            .get(&project_key)
+        let base = project_key
+            .as_ref()
+            .and_then(|key| self.snapshot.index.projects.get(key))
             .and_then(|bucket| bucket.get(&file_name))
             .cloned();
         let resolution =
@@ -1104,7 +1103,9 @@ impl SessionNameResolver {
             .jsonl_bytes_read
             .saturating_add(resolution.jsonl_bytes_read);
 
-        if let Some(replacement) = resolution.replacement.clone() {
+        if let (Some(project_key), Some(replacement)) =
+            (project_key, resolution.replacement.clone())
+        {
             self.delta.mutations.push(IndexMutation {
                 project_key,
                 file_name,
@@ -1125,7 +1126,9 @@ impl SessionNameResolver {
         if !complete {
             return;
         }
-        let project_key = normalized_project_key(project_dir);
+        let Some(project_key) = legacy_project_index_key(project_dir) else {
+            return;
+        };
         let Some(base_bucket) = self.snapshot.index.projects.get(&project_key) else {
             return;
         };
@@ -1155,10 +1158,6 @@ impl SessionNameResolver {
             delta: self.delta,
         })
     }
-}
-
-fn normalized_project_key(project_dir: &Path) -> String {
-    crate::store::normalize_path_str(&project_dir.to_string_lossy())
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -307,6 +307,14 @@ fn D11_Owned_WindowsTerminateFailureMustNotSucceed_07() {
     let resource = probe.resource(&status);
     probe.ready();
     assert_eq!(probe.exit(&resource.process), 17);
+    // portable-pty 0.8.1 try_wait only reads GetExitCodeProcess. An exit code
+    // can be observed before the kernel process object becomes signalled.
+    // Establish real termination before asserting TerminateProcess must fail.
+    assert_eq!(
+        crate::platform::owned_pty::test_barrier::wait_for_exit(&resource.process),
+        0,
+        "the retained process handle never reached WAIT_OBJECT_0"
+    );
     // Windows rejects TerminateProcess on an already terminated process even
     // while its retained handle is valid. Do not invert or swallow that failure.
     let failure = resource.process.terminate_root().unwrap_err();

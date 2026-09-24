@@ -4,6 +4,7 @@ import {
   isPersistFailedError,
   isStartupFailure,
   reduceWaiter,
+  shouldRegisterSessionStartWaiter,
 } from '@/composables/useSessionStartWaiter'
 
 describe('reduceWaiter', () => {
@@ -61,5 +62,15 @@ describe('isPersistFailedError', () => {
     expect(isPersistFailedError(undefined)).toBe(false)
     expect(isPersistFailedError('persist_failed')).toBe(false)
     expect(isPersistFailedError({ code: 'other' })).toBe(false)
+  })
+})
+
+
+describe('shouldRegisterSessionStartWaiter', () => {
+  it('D13_Waiter_OnlyEnabledClaudeRegisters_001', () => {
+    expect(shouldRegisterSessionStartWaiter('claude', true)).toBe(true)
+    expect(shouldRegisterSessionStartWaiter('claude', false)).toBe(false)
+    expect(shouldRegisterSessionStartWaiter('codex', true)).toBe(false)
+    expect(shouldRegisterSessionStartWaiter('shell', true)).toBe(false)
   })
 })

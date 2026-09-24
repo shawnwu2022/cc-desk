@@ -193,7 +193,11 @@ pub(crate) struct HomeProjectScan {
     pub(crate) mapping: ProjectPathMapping,
 }
 
-pub(crate) static PROJECT_PATH_MAPPING: Mutex<Option<ProjectPathMapping>> = Mutex::new(None);
+// Derived mappings are partitioned by physical root identity and selected path.
+// Bound the retained cache; eviction only costs a rescan, never drops user data.
+const MAX_MAPPING_PARTITIONS: usize = 64;
+static PROJECT_PATH_MAPPINGS: Mutex<BTreeMap<String, Option<ProjectPathMapping>>> =
+    Mutex::new(BTreeMap::new());
 
 // ==================== 辅助函数 ====================
 
@@ -298,10 +302,29 @@ pub(crate) fn claude_projects_root() -> Result<PathBuf> {
 pub(crate) fn with_project_path_mapping<T>(
     f: impl FnOnce(&mut Option<ProjectPathMapping>) -> T,
 ) -> T {
-    let mut cache = PROJECT_PATH_MAPPING
+    match claude_projects_root() {
+        Ok(root) => with_project_path_mapping_at(&root, f),
+        Err(_) => f(&mut None),
+    }
+}
+
+pub(crate) fn with_project_path_mapping_at<T>(
+    projects_root: &Path,
+    f: impl FnOnce(&mut Option<ProjectPathMapping>) -> T,
+) -> T {
+    let mut caches = PROJECT_PATH_MAPPINGS
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    f(&mut cache)
+    let Some(key) = crate::cli::projection::legacy_mapping_key(projects_root) else {
+        drop(caches);
+        return f(&mut None);
+    };
+    if !caches.contains_key(&key) && caches.len() >= MAX_MAPPING_PARTITIONS {
+        caches.pop_first();
+    }
+    // Retain the legacy scan/invalidation lock ordering; no stale queued scan can
+    // overwrite another root, and explicit invalidation clears all partitions.
+    f(caches.entry(key).or_default())
 }
 
 /// 根据真实项目路径查找对应的 Claude 项目目录列表
@@ -337,7 +360,10 @@ pub(crate) fn lookup_project_dirs(
 
 /// 清除项目路径映射缓存（供外部调用以强制刷新）
 pub fn invalidate_project_path_mapping() {
-    with_project_path_mapping(|cache| *cache = None);
+    PROJECT_PATH_MAPPINGS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clear();
 }
 
 /// 从 JSONL 文件提取真实项目路径
@@ -567,7 +593,7 @@ pub fn get_home_data(
         ));
     }
 
-    let scan = with_project_path_mapping(|cache| -> Result<HomeProjectScan> {
+    let scan = with_project_path_mapping_at(&projects_dir, |cache| -> Result<HomeProjectScan> {
         let scan = scan_home_projects_at(&projects_dir)?;
         *cache = Some(scan.mapping.clone());
         Ok(scan)
@@ -661,7 +687,7 @@ pub(crate) fn get_home_data_indexed_at(
         ));
     }
 
-    let scan = with_project_path_mapping(|cache| -> Result<HomeProjectScan> {
+    let scan = with_project_path_mapping_at(projects_dir, |cache| -> Result<HomeProjectScan> {
         let scan = scan_home_projects_at(projects_dir)?;
         *cache = Some(scan.mapping.clone());
         Ok(scan)

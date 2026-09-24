@@ -204,6 +204,17 @@ impl<R> DocumentAuthority<R> {
 }
 
 impl<R> DocumentBinding<R> {
+    /// Liveness only for a backend-created legacy observer. This exposes no proof,
+    /// caller identity, filesystem capability or terminal control operation.
+    pub(crate) fn observation_alive(&self) -> bool {
+        self.authority.state.lock().phase == Phase::Ready
+            && self
+                .authority
+                .registry
+                .check_caller(&self.authority.caller)
+                .is_ok()
+    }
+
     /// Admission is not a reusable capability. The coordinator/registry must
     /// revalidate the returned identity before launch effects or status access.
     pub(crate) fn admit(

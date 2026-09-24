@@ -72,6 +72,10 @@ export function stringMapEqual(m: Map<string, string>, o: Record<string, string>
  * - 无 sessionId 的 stopped Tab 重启时作为新会话
  */
 export interface TerminalTab {
+  cli?: import('@/types/cli').CliKind
+  observerEnabled?: boolean
+  activity?: import('@/types/terminal').ActivityState
+  observation?: import('@/types/terminal').ObservationState
   tabId: string
   projectPath: string
   ptyId: string | null

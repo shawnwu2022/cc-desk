@@ -27,6 +27,8 @@ pub(crate) mod native_cli_harness;
 #[cfg(test)]
 mod native_cli_invocation;
 #[cfg(test)]
+mod native_cli_observer;
+#[cfg(test)]
 mod native_cli_output_edges;
 #[cfg(test)]
 mod native_cli_output_route;
@@ -79,3 +81,12 @@ mod native_cli_route_lifetime;
 
 #[cfg(windows)]
 mod native_cli_launch_live;
+
+mod native_cli_scope;
+
+mod native_cli_projection_service;
+
+#[cfg(windows)]
+mod native_cli_projection_live;
+
+mod native_cli_observer_http;
