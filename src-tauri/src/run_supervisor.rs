@@ -85,11 +85,7 @@ impl RunSupervisor for NativeRunSupervisor {
             return Err(error("RUN_SUPERVISOR_STOPPING"));
         }
         let mut reader = resource.process.pty.take_reader()?;
-        let state = SupervisedRun::new(
-            Arc::downgrade(&self.core),
-            run.clone(),
-            resource.clone(),
-        )?;
+        let state = SupervisedRun::new(Arc::downgrade(&self.core), run.clone(), resource.clone())?;
         {
             let mut active = self.core.active.lock();
             if active.contains_key(&identity(run)) {
@@ -224,11 +220,9 @@ impl SupervisedRun {
     fn output_end(&self, epoch: WireU64, final_offset: WireU64) {
         {
             let mut lifecycle = self.lifecycle.lock();
-            let result = lifecycle
-                .output_started(&epoch.to_string())
-                .and_then(|()| {
-                    lifecycle.output_end_for(&epoch.to_string(), &final_offset.to_string())
-                });
+            let result = lifecycle.output_started(&epoch.to_string()).and_then(|()| {
+                lifecycle.output_end_for(&epoch.to_string(), &final_offset.to_string())
+            });
             if let Err(failure) = result {
                 log::error!("native lifecycle output-end conflict: {}", failure.code);
                 let _ = lifecycle.mark_degraded();
