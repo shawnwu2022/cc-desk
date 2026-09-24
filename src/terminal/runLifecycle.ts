@@ -7,7 +7,7 @@ export type RunLifecycleEvent =
   | { type: 'process-exited'; runId: string; generation: number }
   | { type: 'output-end'; runId: string; generation: number; streamEpoch: U64String; finalOffset: U64String }
   | { type: 'degraded'; runId: string; generation: number; streamEpoch: U64String }
-  | { type: 'incomplete'; runId: string; generation: number; streamEpoch: U64String }
+  | { type: 'incomplete'; runId: string; generation: number }
 
 export interface RunLifecycleSnapshot extends RunState {
   streamEpoch?: U64String
@@ -144,7 +144,6 @@ export function createRunLifecycle(input: {
     },
 
     incomplete() {
-      requireEpoch()
       output = 'incomplete'
     },
   }
