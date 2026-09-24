@@ -15,6 +15,7 @@ mod pty_decoder;
 mod session_name_index;
 mod store;
 mod terminal_transport;
+mod run_lifecycle;
 #[cfg(test)]
 mod tests;
 
