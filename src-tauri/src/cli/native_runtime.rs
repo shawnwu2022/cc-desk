@@ -6,6 +6,7 @@ use super::profiles::error;
 use super::run_registry::{LaunchStatus, RunKey};
 use super::storage::WorkspaceRepository;
 use super::types::SafeError;
+use crate::terminal_transport::{OutputAck, TerminalTransports};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +21,7 @@ pub(crate) struct NativeRuntime {
     projections: Arc<super::native_projection::service::ProjectionService>,
     binding: Mutex<Option<Arc<DocumentBinding<NativeRun>>>>,
     initialized: AtomicBool,
+    transports: Arc<TerminalTransports>,
 }
 impl NativeRuntime {
     pub(crate) fn new(service: Arc<LaunchService>) -> Self {
@@ -30,6 +32,7 @@ impl NativeRuntime {
             service,
             binding: Mutex::new(None),
             initialized: AtomicBool::new(false),
+            transports: Arc::new(TerminalTransports::new()),
         }
     }
     pub(crate) fn production() -> Result<Self, SafeError> {
@@ -99,6 +102,20 @@ impl NativeRuntime {
         request: &Request<'_>,
     ) -> Result<LaunchStatus, SafeError> {
         self.binding()?.query_native(webview, request)
+    }
+    pub(crate) fn ack_output<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let ack: OutputAck = decode_projection(request.body(), 1024)?;
+        self.transports.ack(&caller, &ack)?;
+        Ok(())
+    }
+
+    pub(crate) fn transports(&self) -> Arc<TerminalTransports> {
+        self.transports.clone()
     }
     pub(crate) async fn projection_scope<T: Runtime>(
         &self,

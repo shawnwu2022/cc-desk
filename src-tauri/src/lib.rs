@@ -159,6 +159,7 @@ pub fn run(initial_dir: Option<String>) {
             commands::native_list_resources,
             cli::commands::cli_start,
             cli::commands::cli_get_launch_status,
+            cli::commands::cli_ack_output,
             cli::commands::cli_list_profiles,
             cli::commands::cli_patch_profile,
             cli::commands::cli_get_availability,

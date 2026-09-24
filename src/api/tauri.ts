@@ -344,6 +344,12 @@ export async function cliGetLaunchStatus(requestId: string): Promise<unknown> {
   return nativeDocumentBridge().invoke('cli_get_launch_status', { requestId });
 }
 
+export async function cliAckOutput(
+  ack: import('@/types/terminal').OutputAck,
+): Promise<void> {
+  await nativeDocumentBridge().invoke('cli_ack_output', ack)
+}
+
 
 export function createCliLaunchAttempt<E>(
   request: import('@/types/cli').LaunchRequest,

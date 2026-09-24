@@ -257,11 +257,7 @@ impl TerminalTransports {
         Ok(stream)
     }
 
-    pub(crate) fn ack(
-        &self,
-        caller: &CallerIdentity,
-        ack: &OutputAck,
-    ) -> Result<u64, SafeError> {
+    pub(crate) fn ack(&self, caller: &CallerIdentity, ack: &OutputAck) -> Result<u64, SafeError> {
         let key = (ack.run_id.clone(), ack.generation);
         let stream = {
             let streams = self.core.streams.lock();
@@ -317,11 +313,7 @@ impl TerminalStream {
             .ok_or_else(|| error("OUTPUT_STREAM_DEGRADED"))
     }
 
-    fn wait_local_capacity(
-        &self,
-        core: &TransportCore,
-        amount: usize,
-    ) -> Result<(), SafeError> {
+    fn wait_local_capacity(&self, core: &TransportCore, amount: usize) -> Result<(), SafeError> {
         let mut state = self.state.lock();
         loop {
             if state.degraded {
