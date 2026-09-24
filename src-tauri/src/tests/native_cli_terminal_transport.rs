@@ -2,12 +2,14 @@ use crate::cli::output_route::{OutputRoute, OutputRoutes};
 use crate::cli::run_registry::RunKey;
 use crate::cli::snapshot::CallerIdentity;
 use crate::cli::types::WireU64;
-use crate::terminal_transport::{OutputAck, OutputFrame, TerminalTransports, TransportLimits};
+use crate::terminal_transport::{
+    OutputAck, OutputFrame, OutputProgress, TerminalTransports, TransportLimits,
+};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier};
+use std::sync::{mpsc, Arc, Barrier};
 use std::time::Duration;
 use tauri::ipc::{Channel, InvokeResponseBody};
 
@@ -226,5 +228,129 @@ fn D14_Transport_LostChannelIsFinalAndReleasesBudget_004() {
         "OUTPUT_STREAM_DEGRADED"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(hub.budgeted_bytes(), 0);
+}
+
+
+#[derive(Default)]
+struct ProgressProbe {
+    events: Mutex<Vec<String>>,
+}
+
+impl OutputProgress for ProgressProbe {
+    fn sent_through(&self, stream_epoch: WireU64, through: WireU64) {
+        self.events
+            .lock()
+            .push(format!("sent:{stream_epoch}:{through}"));
+    }
+
+    fn parsed_through(&self, stream_epoch: WireU64, through: WireU64) {
+        self.events
+            .lock()
+            .push(format!("parsed:{stream_epoch}:{through}"));
+    }
+
+    fn degraded(&self, stream_epoch: WireU64) {
+        self.events.lock().push(format!("degraded:{stream_epoch}"));
+    }
+}
+
+fn revocable_route(
+    events: Arc<Mutex<Vec<Value>>>,
+) -> (Arc<OutputRoutes>, Arc<OutputRoute<OutputFrame>>) {
+    let routes = Arc::new(OutputRoutes::new(1));
+    let route = Arc::new(
+        routes
+            .bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    let InvokeResponseBody::Json(text) = body else {
+                        panic!("json output frame expected");
+                    };
+                    events.lock().push(serde_json::from_str(&text).unwrap());
+                    Ok(())
+                }))
+            })
+            .unwrap(),
+    );
+    (routes, route)
+}
+
+#[test]
+fn D15_Transport_ProgressFollowsAcceptedSendParsedAckAndRevocation_005() {
+    let owner = caller();
+    let hub = TerminalTransports::with_limits(limits());
+    let probe = Arc::new(ProgressProbe::default());
+    let (routes, route) = revocable_route(Arc::new(Mutex::new(Vec::new())));
+    let stream = hub
+        .attach_observed(
+            owner.clone(),
+            run("run-a", 1),
+            route,
+            probe.clone(),
+        )
+        .unwrap();
+    let epoch = stream.stream_epoch().to_string();
+
+    stream.send(&[1, 2, 3, 4]).unwrap();
+    assert_eq!(
+        *probe.events.lock(),
+        vec![format!("sent:{epoch}:4")],
+        "lifecycle sent offset must advance only after the frame was accepted"
+    );
+
+    hub.ack(&owner, &ack("run-a", 1, &epoch, "4")).unwrap();
+    assert_eq!(
+        *probe.events.lock(),
+        vec![format!("sent:{epoch}:4"), format!("parsed:{epoch}:4")]
+    );
+
+    routes.revoke();
+    assert_eq!(
+        *probe.events.lock(),
+        vec![
+            format!("sent:{epoch}:4"),
+            format!("parsed:{epoch}:4"),
+            format!("degraded:{epoch}"),
+        ]
+    );
+}
+
+#[test]
+fn D15_Transport_RevokeWakesProducerBlockedOnRunCredit_006() {
+    let owner = caller();
+    let hub = Arc::new(TerminalTransports::with_limits(limits()));
+    let probe = Arc::new(ProgressProbe::default());
+    let (routes, route) = revocable_route(Arc::new(Mutex::new(Vec::new())));
+    let stream = hub
+        .attach_observed(owner, run("run-a", 1), route, probe.clone())
+        .unwrap();
+
+    stream.send(&[1, 1, 1, 1]).unwrap();
+    stream.send(&[2, 2, 2, 2]).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    let blocked = stream.clone();
+    let worker = std::thread::spawn(move || {
+        let result = blocked.send(&[3, 3, 3, 3]).map_err(|failure| failure.code);
+        tx.send(result).unwrap();
+    });
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        rx.try_recv().is_err(),
+        "producer unexpectedly crossed the high-water mark"
+    );
+
+    routes.revoke();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        Err("OUTPUT_STREAM_DEGRADED".into()),
+        "document/channel loss must wake a producer already blocked on credit"
+    );
+    worker.join().unwrap();
+    assert!(probe
+        .events
+        .lock()
+        .iter()
+        .any(|event| event.starts_with("degraded:")));
     assert_eq!(hub.budgeted_bytes(), 0);
 }
