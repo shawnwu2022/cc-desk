@@ -56,7 +56,8 @@ export function createTerminalOutputTransport(
   let nextOffset = 0n
   let parsedThrough = 0n
   const pending: PendingFrame[] = []
-  let ackChain: Promise<unknown> = Promise.resolve()
+  const pendingAcks: OutputAck[] = []
+  let ackInFlight = false
 
   const fail = (reason: string): false => {
     if (!degraded && !disposed) {
@@ -66,23 +67,45 @@ export function createTerminalOutputTransport(
     return false
   }
 
+  const pumpAcks = () => {
+    if (ackInFlight || disposed || degraded) return
+    const value = pendingAcks.shift()
+    if (!value) return
+    ackInFlight = true
+
+    let request: Promise<unknown>
+    try {
+      request = options.ack(value)
+    } catch {
+      ackInFlight = false
+      pendingAcks.length = 0
+      fail('OUTPUT_ACK_FAILED')
+      return
+    }
+
+    Promise.resolve(request).then(
+      () => {
+        ackInFlight = false
+        pumpAcks()
+      },
+      () => {
+        ackInFlight = false
+        pendingAcks.length = 0
+        fail('OUTPUT_ACK_FAILED')
+      },
+    )
+  }
+
   const enqueueAck = (through: bigint) => {
     const epoch = streamEpoch
     if (!epoch || disposed || degraded) return
-    const value: OutputAck = {
+    pendingAcks.push({
       runId: options.runId,
       generation: options.generation,
       streamEpoch: epoch,
       throughOffset: through.toString(),
-    }
-    ackChain = ackChain
-      .then(() => {
-        if (disposed || degraded) return
-        return options.ack(value)
-      })
-      .catch(() => {
-        fail('OUTPUT_ACK_FAILED')
-      })
+    })
+    pumpAcks()
   }
 
   const parsed = (entry: PendingFrame) => {
@@ -135,6 +158,7 @@ export function createTerminalOutputTransport(
     dispose() {
       disposed = true
       pending.length = 0
+      pendingAcks.length = 0
     },
   }
 }
