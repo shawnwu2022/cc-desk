@@ -139,8 +139,9 @@ impl RunSupervisor for NativeRunSupervisor {
                     }
                     // Registry retirement removes caller control immediately after
                     // wait/reap. SupervisedRun retains its own Arc until PTY EOF (or
-                    // an incomplete/degraded terminal state), so descendants that
-                    // still hold the slave can finish their tail output.
+                    // an incomplete/degraded terminal state), so any client that
+                    // remains attached after root exit can finish its tail output.
+                    // This retention does not make an OS-terminated descendant live.
                     drop(waiter_resource);
                     waiter_state.await_real_output_end();
                 }
