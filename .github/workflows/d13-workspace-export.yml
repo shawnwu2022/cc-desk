@@ -1,0 +1,31 @@
+name: D13 exact workspace export
+on:
+  push:
+    branches: [feat/native-cli-source-scope]
+    paths: [.github/workflows/d13-workspace-export.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export tracked source and Git history
+        run: |
+          mkdir -p /tmp/d13-source
+          git archive --format=tar HEAD -o /tmp/d13-source/source.tar
+          git rev-parse HEAD > /tmp/d13-source/source.sha
+          git rev-parse HEAD^{tree} > /tmp/d13-source/tree.sha
+          git bundle create /tmp/d13-source/repo.bundle HEAD
+          cd /tmp/d13-source
+          sha256sum source.tar repo.bundle > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: d13-exact-source
+          path: /tmp/d13-source
+          retention-days: 2
+          if-no-files-found: error
