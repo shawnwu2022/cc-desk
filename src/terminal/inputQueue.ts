@@ -124,12 +124,6 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
     options.limits?.queuedBytes ?? INPUT_RUN_QUEUE_BYTES_MAX,
     'INPUT_QUEUE_BYTES',
   )
-  if (queuedBytesMax < actionBytesMax) {
-    // Smaller queue budgets are useful in tests and explicit configuration, but
-    // they still need to be positive. An action may therefore fit the action
-    // cap and still be rejected by the queue cap.
-  }
-
   let nextSeq = 1n
   let queuedBytes = 0
   const items: QueueItem[] = []
@@ -229,20 +223,21 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
         return
       }
 
-      const target = currentTarget()
-      if (target.runId !== options.runId || target.generation !== options.generation) {
-        pauseFor(head, 'target-changed')
-        return
-      }
-      if (target.modeEpoch !== head.modeEpoch) {
-        pauseFor(head, 'mode-changed')
-        return
-      }
-
       const bytes = head.bytes
       if (!bytes) throw new Error('INPUT_BYTES_MISSING')
+
+      let gateFailure: InputPauseReason | undefined
       try {
         await dispatchExclusive(async () => {
+          const target = currentTarget()
+          if (target.runId !== options.runId || target.generation !== options.generation) {
+            gateFailure = 'target-changed'
+            return
+          }
+          if (target.modeEpoch !== head.modeEpoch) {
+            gateFailure = 'mode-changed'
+            return
+          }
           await options.send({
             runId: options.runId,
             generation: options.generation,
@@ -258,6 +253,10 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
         return
       }
 
+      if (gateFailure) {
+        pauseFor(head, gateFailure)
+        return
+      }
       items.shift()
       releaseItemBytes(head)
     }
@@ -327,11 +326,11 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
     async sendProtocol(bytes) {
       const send = options.sendProtocol
       if (!send) throw new Error('PROTOCOL_SENDER_UNAVAILABLE')
-      const target = currentTarget()
-      if (target.runId !== options.runId || target.generation !== options.generation) {
-        throw new Error('STALE_INPUT_TARGET')
-      }
       await dispatchExclusive(async () => {
+        const target = currentTarget()
+        if (target.runId !== options.runId || target.generation !== options.generation) {
+          throw new Error('STALE_INPUT_TARGET')
+        }
         await send({
           runId: options.runId,
           generation: options.generation,
