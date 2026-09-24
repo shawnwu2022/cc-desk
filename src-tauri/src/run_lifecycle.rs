@@ -182,12 +182,16 @@ impl LifecycleRecord {
 
     pub(crate) fn mark_degraded(&mut self) -> Result<(), SafeError> {
         self.require_stream()?;
-        self.output = OutputLifecycle::Degraded;
+        if self.output != OutputLifecycle::Incomplete {
+            self.output = OutputLifecycle::Degraded;
+        }
         Ok(())
     }
 
     pub(crate) fn mark_incomplete(&mut self) -> Result<(), SafeError> {
-        self.output = OutputLifecycle::Incomplete;
+        if self.output != OutputLifecycle::Degraded {
+            self.output = OutputLifecycle::Incomplete;
+        }
         Ok(())
     }
 
