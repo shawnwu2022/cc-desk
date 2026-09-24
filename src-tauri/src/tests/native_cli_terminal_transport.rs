@@ -25,11 +25,7 @@ fn ack(run: &RunKey, epoch: &str, through: usize) -> OutputAck {
 fn D14_Transport_FrameBoundariesAndExactBytes_001() {
     let budget = TransportBudget::new(APPLICATION_PAYLOAD_BUDGET);
     let run = run_key("bytes-run", 3);
-    let flow = RunOutputFlow::new(
-        run.clone(),
-        WireU64::parse("11").unwrap(),
-        budget.clone(),
-    );
+    let flow = RunOutputFlow::new(run.clone(), WireU64::parse("11").unwrap(), budget.clone());
     let payload = vec![0, 255, 27, 91, 50, 48, 48, 126, 0xf0, 0x9f, 0x98, 0x80];
 
     let permit = flow.try_reserve().unwrap();
@@ -49,11 +45,7 @@ fn D14_Transport_FrameBoundariesAndExactBytes_001() {
 fn D14_Transport_AckDuplicateRegressionOverflowAndBoundary_002() {
     let budget = TransportBudget::new(APPLICATION_PAYLOAD_BUDGET);
     let run = run_key("ack-run", 1);
-    let flow = RunOutputFlow::new(
-        run.clone(),
-        WireU64::parse("7").unwrap(),
-        budget.clone(),
-    );
+    let flow = RunOutputFlow::new(run.clone(), WireU64::parse("7").unwrap(), budget.clone());
 
     let first = flow.try_reserve().unwrap().commit(vec![1; 7]).unwrap();
     let second = flow.try_reserve().unwrap().commit(vec![2; 5]).unwrap();
@@ -94,10 +86,7 @@ fn D14_Transport_OldEpochAndWrongRunRejected_003() {
     let budget = TransportBudget::new(APPLICATION_PAYLOAD_BUDGET);
     let run = run_key("owner-run", 2);
     let flow = RunOutputFlow::new(run.clone(), WireU64::parse("19").unwrap(), budget);
-    flow.try_reserve()
-        .unwrap()
-        .commit(vec![1, 2, 3])
-        .unwrap();
+    flow.try_reserve().unwrap().commit(vec![1, 2, 3]).unwrap();
 
     assert_eq!(
         flow.ack(&ack(&run, "18", 3)).unwrap_err().code,
@@ -110,9 +99,7 @@ fn D14_Transport_OldEpochAndWrongRunRejected_003() {
     );
     let stale_generation = run_key("owner-run", 1);
     assert_eq!(
-        flow.ack(&ack(&stale_generation, "19", 3))
-            .unwrap_err()
-            .code,
+        flow.ack(&ack(&stale_generation, "19", 3)).unwrap_err().code,
         "STALE_GENERATION"
     );
     assert_eq!(flow.outstanding_bytes(), 3);
@@ -133,10 +120,7 @@ fn D14_Transport_HighLowWatermarkResumesOnlyAtLow_004() {
     }
     assert_eq!(flow.outstanding_bytes(), RUN_HIGH_WATERMARK);
     assert!(flow.is_paused(), "reaching high watermark must latch pause");
-    assert_eq!(
-        flow.try_reserve().unwrap_err().code,
-        "OUTPUT_BACKPRESSURE"
-    );
+    assert_eq!(flow.try_reserve().unwrap_err().code, "OUTPUT_BACKPRESSURE");
 
     flow.ack(&ack(&run, "2", MAX_FRAME_BYTES)).unwrap();
     assert_eq!(
@@ -168,10 +152,7 @@ fn D14_Transport_GlobalBudgetAndPermitRollback_005() {
 
     let held = a.try_reserve().unwrap();
     assert_eq!(budget.reserved_bytes(), MAX_FRAME_BYTES);
-    assert_eq!(
-        b.try_reserve().unwrap_err().code,
-        "OUTPUT_BUDGET_EXHAUSTED"
-    );
+    assert_eq!(b.try_reserve().unwrap_err().code, "OUTPUT_BUDGET_EXHAUSTED");
 
     drop(held);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -203,16 +184,8 @@ fn D14_Transport_TwoRunsDoNotShareCreditOrOffsets_007() {
     let budget = TransportBudget::new(APPLICATION_PAYLOAD_BUDGET);
     let a_run = run_key("run-a", 1);
     let b_run = run_key("run-b", 1);
-    let a = RunOutputFlow::new(
-        a_run.clone(),
-        WireU64::parse("3").unwrap(),
-        budget.clone(),
-    );
-    let b = RunOutputFlow::new(
-        b_run.clone(),
-        WireU64::parse("4").unwrap(),
-        budget.clone(),
-    );
+    let a = RunOutputFlow::new(a_run.clone(), WireU64::parse("3").unwrap(), budget.clone());
+    let b = RunOutputFlow::new(b_run.clone(), WireU64::parse("4").unwrap(), budget.clone());
 
     let af = a.try_reserve().unwrap().commit(vec![1; 10]).unwrap();
     let bf = b.try_reserve().unwrap().commit(vec![2; 6]).unwrap();
