@@ -7,10 +7,11 @@ use crate::cli::run_registry::{RunKey, RunRegistry};
 use crate::cli::types::{SafeError, WireU64};
 use crate::run_lifecycle::{LifecycleRecord, OutputLifecycle};
 use crate::terminal_transport::{OutputProgress, TerminalStream, TerminalTransports};
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
+use std::time::Instant;
 
 type RunIdentity = (String, u32);
 
@@ -119,6 +120,7 @@ impl RunSupervisor for NativeRunSupervisor {
                     // an incomplete/degraded terminal state), so descendants that
                     // still hold the slave can finish their tail output.
                     drop(waiter_resource);
+                    waiter_state.await_real_output_end();
                 }
                 Err(_) => {
                     log::error!("native run waiter failed");
@@ -202,6 +204,7 @@ struct SupervisedRun {
     stream: Mutex<Option<Arc<TerminalStream>>>,
     resource: Mutex<Option<Arc<NativeRun>>>,
     stop_requested: AtomicBool,
+    changed: Condvar,
 }
 
 impl SupervisedRun {
@@ -219,6 +222,7 @@ impl SupervisedRun {
             stream: Mutex::new(None),
             resource: Mutex::new(Some(resource)),
             stop_requested: AtomicBool::new(false),
+            changed: Condvar::new(),
         }))
     }
 
@@ -235,12 +239,14 @@ impl SupervisedRun {
         if let Err(failure) = result {
             log::error!("native lifecycle exit conflict: {}", failure.code);
         }
+        self.changed.notify_all();
         self.release_resource_if_transport_terminal();
         self.finish_if_terminal();
     }
 
     fn process_failed(&self) {
         self.lifecycle.lock().process_failed();
+        self.changed.notify_all();
     }
 
     fn output_end(&self, epoch: WireU64, final_offset: WireU64) {
@@ -254,6 +260,7 @@ impl SupervisedRun {
                 let _ = lifecycle.mark_degraded();
             }
         }
+        self.changed.notify_all();
         self.release_resource_if_transport_terminal();
         self.finish_if_terminal();
     }
@@ -267,6 +274,7 @@ impl SupervisedRun {
                 }
             }
         }
+        self.changed.notify_all();
         self.release_resource_if_transport_terminal();
         self.finish_if_terminal();
     }
@@ -286,6 +294,7 @@ impl SupervisedRun {
                 let _ = lifecycle.mark_degraded();
             }
         }
+        self.changed.notify_all();
         self.release_resource_if_transport_terminal();
         self.finish_if_terminal();
     }
@@ -300,6 +309,7 @@ impl SupervisedRun {
             lifecycle.mark_incomplete()?;
             exited
         };
+        self.changed.notify_all();
         if exited {
             self.release_resource_if_transport_terminal();
             self.finish_if_terminal();
@@ -311,6 +321,40 @@ impl SupervisedRun {
             .clone()
             .ok_or_else(|| error("RUN_NOT_READY"))?;
         resource.process.pty.terminate_root()
+    }
+
+    fn await_real_output_end(&self) {
+        let started = Instant::now();
+        let mut lifecycle = self.lifecycle.lock();
+        while lifecycle.process() == crate::run_lifecycle::ProcessLifecycle::Exited
+            && lifecycle.output() == OutputLifecycle::Draining
+            && lifecycle.final_offset().is_none()
+        {
+            let remaining = crate::pty::PTY_OUTPUT_DRAIN_TIMEOUT.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            self.changed.wait_for(&mut lifecycle, remaining);
+        }
+
+        let timed_out = lifecycle.process() == crate::run_lifecycle::ProcessLifecycle::Exited
+            && lifecycle.output() == OutputLifecycle::Draining
+            && lifecycle.final_offset().is_none();
+        if timed_out {
+            if let Err(failure) = lifecycle.mark_incomplete() {
+                log::error!("native lifecycle drain timeout conflict: {}", failure.code);
+            }
+        }
+        drop(lifecycle);
+
+        if timed_out {
+            // ConPTY can keep its output pipe open after the root process exits.
+            // Closing the owned PTY is the bounded convergence action. We do not
+            // manufacture output-end/finalOffset, so this run remains incomplete.
+            self.resource.lock().take();
+            self.changed.notify_all();
+            self.finish_if_terminal();
+        }
     }
 
     fn release_resource_if_transport_terminal(&self) {
