@@ -88,11 +88,21 @@ fn D14_Transport_HighLowWatermarkResumesOnlyAtLow_004() {
     let flow = RunOutputFlow::new(run.clone(), WireU64::parse("2").unwrap(), budget);
 
     for _ in 0..(RUN_HIGH_WATERMARK / MAX_FRAME_BYTES) {
-        flow.try_reserve().unwrap().commit(vec![9; MAX_FRAME_BYTES]).unwrap();
+        flow.try_reserve()
+            .unwrap()
+            .commit(vec![9; MAX_FRAME_BYTES])
+            .unwrap();
     }
     assert_eq!(flow.outstanding_bytes(), RUN_HIGH_WATERMARK);
+    assert!(flow.is_paused(), "reaching high watermark must latch pause");
     assert_eq!(flow.try_reserve().unwrap_err().code, "OUTPUT_BACKPRESSURE");
-    assert!(flow.is_paused());
+
+    flow.ack(&ack(&run, "2", MAX_FRAME_BYTES)).unwrap();
+    assert_eq!(
+        flow.try_reserve().unwrap_err().code,
+        "OUTPUT_BACKPRESSURE",
+        "small ACK must not bypass low-water hysteresis"
+    );
 
     let through = RUN_HIGH_WATERMARK - RUN_LOW_WATERMARK;
     flow.ack(&ack(&run, "2", through)).unwrap();
