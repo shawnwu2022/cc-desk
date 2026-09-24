@@ -13,6 +13,7 @@ use super::types::{LaunchRequest, SafeError};
 use crate::platform::launch::resolve_process;
 use crate::platform::owned_pty::OwnedPty;
 use crate::terminal_transport::OutputFrame;
+use parking_lot::RwLock;
 use portable_pty::PtySize;
 use std::cell::Cell;
 use std::io::{self, Write};
@@ -43,6 +44,7 @@ pub(crate) struct LaunchService {
     inherited: Option<EnvMap>,
     supervisor: Option<Arc<dyn RunSupervisor>>,
     observer: Option<Arc<crate::observer_host::ObserverHost>>,
+    shutting_down: RwLock<bool>,
 }
 impl LaunchService {
     pub(crate) fn new(
@@ -56,6 +58,7 @@ impl LaunchService {
             inherited,
             supervisor,
             observer: None,
+            shutting_down: RwLock::new(false),
         }
     }
     pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
@@ -80,6 +83,10 @@ impl LaunchService {
         request: &LaunchRequest,
         connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<OutputFrame>, SafeError>,
     ) -> Result<LaunchStatus, SafeError> {
+        // A read guard spans prepare, spawn, publication and supervisor handoff.
+        // Shutdown takes the write side, so it cannot miss an already-started
+        // launch and no new child can begin after shutdown is committed.
+        let shutdown = self.shutting_down.read();
         let spawned = Cell::new(false);
         let status = self.coordinator.start_routed(
             caller,
@@ -87,6 +94,9 @@ impl LaunchService {
             || {
                 // Checked inside prepare, so an existing receipt still wins before
                 // this readiness gate, profile I/O or any route construction.
+                if *shutdown {
+                    return Err(error("RUN_SUPERVISOR_STOPPING"));
+                }
                 self.supervisor
                     .as_ref()
                     .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?;
@@ -199,6 +209,10 @@ impl LaunchService {
             }
         }
         Ok(status)
+    }
+
+    pub(crate) fn begin_shutdown(&self) {
+        *self.shutting_down.write() = true;
     }
 
     pub(crate) fn access(
