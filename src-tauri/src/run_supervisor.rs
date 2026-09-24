@@ -41,6 +41,31 @@ impl NativeRunSupervisor {
         }
         self.core.completed.lock().get(&key).cloned()
     }
+
+    pub(crate) fn stop(&self, run: &RunKey) -> Result<(), SafeError> {
+        let state = self
+            .core
+            .active
+            .lock()
+            .get(&identity(run))
+            .cloned()
+            .ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        state.request_stop()
+    }
+
+    pub(crate) fn shutdown(&self) {
+        let active: Vec<_> = self.core.active.lock().values().cloned().collect();
+        for state in active {
+            if let Err(failure) = state.request_stop() {
+                log::warn!(
+                    "native run shutdown control failed for {}:{}: {}",
+                    state.run.run_id,
+                    state.run.generation,
+                    failure.code
+                );
+            }
+        }
+    }
 }
 
 impl RunSupervisor for NativeRunSupervisor {
@@ -51,7 +76,11 @@ impl RunSupervisor for NativeRunSupervisor {
         resource: Arc<NativeRun>,
     ) -> Result<(), SafeError> {
         let mut reader = resource.process.pty.take_reader()?;
-        let state = SupervisedRun::new(Arc::downgrade(&self.core), run.clone())?;
+        let state = SupervisedRun::new(
+            Arc::downgrade(&self.core),
+            run.clone(),
+            resource.clone(),
+        )?;
         {
             let mut active = self.core.active.lock();
             if active.contains_key(&identity(run)) {
@@ -99,9 +128,10 @@ impl RunSupervisor for NativeRunSupervisor {
                         waiter_state.reader_failed();
                         return;
                     }
-                    // Registry retirement removes its Arc. Releasing this waiter
-                    // Arc closes the PTY master while the independent reader,
-                    // route and TerminalStream remain alive for tail drain.
+                    // Registry retirement removes caller control immediately after
+                    // wait/reap. SupervisedRun retains its own Arc until PTY EOF (or
+                    // an incomplete/degraded terminal state), so descendants that
+                    // still hold the slave can finish their tail output.
                     drop(waiter_resource);
                 }
                 Err(_) => {
@@ -141,10 +171,15 @@ struct SupervisedRun {
     run: RunKey,
     lifecycle: Mutex<LifecycleRecord>,
     stream: Mutex<Option<Arc<TerminalStream>>>,
+    resource: Mutex<Option<Arc<NativeRun>>>,
 }
 
 impl SupervisedRun {
-    fn new(core: Weak<SupervisorCore>, run: RunKey) -> Result<Arc<Self>, SafeError> {
+    fn new(
+        core: Weak<SupervisorCore>,
+        run: RunKey,
+        resource: Arc<NativeRun>,
+    ) -> Result<Arc<Self>, SafeError> {
         let mut lifecycle = LifecycleRecord::new(run.clone());
         lifecycle.process_running()?;
         Ok(Arc::new(Self {
@@ -152,6 +187,7 @@ impl SupervisedRun {
             run,
             lifecycle: Mutex::new(lifecycle),
             stream: Mutex::new(None),
+            resource: Mutex::new(Some(resource)),
         }))
     }
 
@@ -168,6 +204,7 @@ impl SupervisedRun {
         if let Err(failure) = result {
             log::error!("native lifecycle exit conflict: {}", failure.code);
         }
+        self.release_resource_if_transport_terminal();
         self.finish_if_terminal();
     }
 
@@ -188,6 +225,7 @@ impl SupervisedRun {
                 let _ = lifecycle.mark_degraded();
             }
         }
+        self.release_resource_if_transport_terminal();
         self.finish_if_terminal();
     }
 
@@ -200,6 +238,7 @@ impl SupervisedRun {
                 }
             }
         }
+        self.release_resource_if_transport_terminal();
         self.finish_if_terminal();
     }
 
@@ -218,7 +257,39 @@ impl SupervisedRun {
                 let _ = lifecycle.mark_degraded();
             }
         }
+        self.release_resource_if_transport_terminal();
         self.finish_if_terminal();
+    }
+
+    fn request_stop(&self) -> Result<(), SafeError> {
+        {
+            let mut lifecycle = self.lifecycle.lock();
+            if lifecycle.process() == crate::run_lifecycle::ProcessLifecycle::Exited {
+                return Err(error("RUN_NOT_READY"));
+            }
+            lifecycle.mark_incomplete()?;
+        }
+        let resource = self
+            .resource
+            .lock()
+            .clone()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        resource.process.pty.terminate_root()
+    }
+
+    fn release_resource_if_transport_terminal(&self) {
+        let release = {
+            let lifecycle = self.lifecycle.lock();
+            lifecycle.process() == crate::run_lifecycle::ProcessLifecycle::Exited
+                && (lifecycle.final_offset().is_some()
+                    || matches!(
+                        lifecycle.output(),
+                        OutputLifecycle::Degraded | OutputLifecycle::Incomplete
+                    ))
+        };
+        if release {
+            self.resource.lock().take();
+        }
     }
 
     fn finish_if_terminal(&self) {
@@ -238,6 +309,7 @@ impl SupervisedRun {
         // TerminalTransports stores only a Weak. Keep this strong reference
         // through EOF and the final parsed ACK, then release exact credit/route.
         self.stream.lock().take();
+        self.resource.lock().take();
     }
 }
 
