@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  applyObservation,
   createObservationReducer,
   createObservationRegistry,
   type ObservationEvent,
@@ -140,4 +141,35 @@ describe('D13 observer isolation', () => {
     for (const event of events) reducer.accept(event)
     expect(reducer.state()).toEqual({ observation: 'active', activity: 'unknown' })
   })
+
+  it('D13_Observer_ApplyObservationIsRunScoped_07', () => {
+    expect(
+      applyObservation(current, {
+        kind: 'timeout',
+        runId: 'current',
+        generation: 2,
+      }),
+    ).toEqual({ observation: 'unavailable', activity: 'unknown' })
+
+    expect(
+      applyObservation(current, {
+        kind: 'working',
+        runId: 'foreign',
+        generation: 2,
+        eventId: 'foreign-1',
+        sourceSequence: '1',
+      }),
+    ).toEqual({ observation: 'off', activity: 'unknown' })
+
+    expect(
+      applyObservation(current, {
+        kind: 'working',
+        runId: 'current',
+        generation: 2,
+        eventId: 'current-1',
+        sourceSequence: '1',
+      }),
+    ).toEqual({ observation: 'active', activity: 'working' })
+  })
+
 })
