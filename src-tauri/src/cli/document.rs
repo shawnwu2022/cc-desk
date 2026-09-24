@@ -204,6 +204,12 @@ impl<R> DocumentAuthority<R> {
 }
 
 impl<R> DocumentBinding<R> {
+    /// Backend lifecycle revocation. This invalidates the document epoch and
+    /// output routes without waiting for the WebView or dropping owned runs.
+    pub(crate) fn revoke(&self) {
+        self.authority.revoke();
+    }
+
     /// Liveness only for a backend-created legacy observer. This exposes no proof,
     /// caller identity, filesystem capability or terminal control operation.
     pub(crate) fn observation_alive(&self) -> bool {
