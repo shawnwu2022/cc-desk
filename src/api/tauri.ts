@@ -350,6 +350,12 @@ export async function cliAckOutput(
   await nativeDocumentBridge().invoke('cli_ack_output', ack)
 }
 
+export async function cliStop(
+  run: import('@/types/terminal').RunKey,
+): Promise<void> {
+  await nativeDocumentBridge().invoke('cli_stop', run)
+}
+
 
 export function createCliLaunchAttempt<E>(
   request: import('@/types/cli').LaunchRequest,
