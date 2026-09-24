@@ -336,7 +336,6 @@ fn D15_Supervisor_ExplicitStopIsIncompleteAndDoesNotRestart_004() {
     );
 }
 
-
 #[test]
 fn D15_Supervisor_ApplicationShutdownIsIncomplete_005() {
     let fixture = Fixture::new("hold");
@@ -355,7 +354,6 @@ fn D15_Supervisor_ApplicationShutdownIsIncomplete_005() {
     assert_eq!(exited.output(), OutputLifecycle::Incomplete);
     assert!(!exited.can_retire_as_complete());
 }
-
 
 #[test]
 fn D15_Supervisor_ShutdownDuringExitedDrainStaysIncomplete_006() {
@@ -376,7 +374,6 @@ fn D15_Supervisor_ShutdownDuringExitedDrainStaysIncomplete_006() {
     assert_eq!(stable.output(), OutputLifecycle::Incomplete);
     assert!(!stable.can_retire_as_complete());
 }
-
 
 #[test]
 fn D15_Supervisor_ShutdownBeforeAdoptStillOwnsAndReaps_007() {
