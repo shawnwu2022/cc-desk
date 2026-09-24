@@ -33,6 +33,8 @@ mod native_cli_output_edges;
 #[cfg(test)]
 mod native_cli_output_route;
 #[cfg(test)]
+mod native_cli_terminal_transport;
+#[cfg(test)]
 mod native_cli_owned_pty;
 #[cfg(test)]
 mod native_cli_platform;
