@@ -559,3 +559,36 @@ fn D11_Registry_DifferentRunCanStartWhileFirstIsBlocked_17() {
     release_tx.send(()).unwrap();
     assert!(worker.join().unwrap().is_ok());
 }
+
+
+#[test]
+fn D15_Registry_RunAuthoritySurvivesResourceRetirement_18() {
+    let fixture = Fixture::new(8);
+    let status = fixture.start(&fixture.request).unwrap();
+    let registry = fixture.driver.registry();
+
+    registry.mark_exited(&status.run).unwrap();
+    registry.retire(&status.run).unwrap();
+
+    registry.check_run(&fixture.caller, &status.run).unwrap();
+    assert_eq!(
+        registry
+            .resource(&fixture.caller, &status.run)
+            .unwrap_err()
+            .code,
+        "RUN_NOT_READY"
+    );
+
+    let mut stale = status.run.clone();
+    stale.generation += 1;
+    assert_eq!(
+        registry.check_run(&fixture.caller, &stale).unwrap_err().code,
+        "STALE_GENERATION"
+    );
+
+    let next_caller = registry.activate_window("main").unwrap();
+    assert_eq!(
+        registry.check_run(&next_caller, &status.run).unwrap_err().code,
+        "FORBIDDEN"
+    );
+}
