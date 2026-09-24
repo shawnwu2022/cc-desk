@@ -100,7 +100,6 @@ fn D15_Lifecycle_StaleStreamEpochCannotFinishNewStream_004() {
     assert_eq!(state.output(), OutputLifecycle::Open);
 }
 
-
 #[test]
 fn D15_Lifecycle_HandoffFailureBeforeStreamCanRetireIncomplete_005() {
     let mut state = LifecycleRecord::new(run("run-a", 1));
