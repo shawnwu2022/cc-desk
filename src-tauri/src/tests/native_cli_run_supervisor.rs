@@ -349,8 +349,7 @@ fn D15_Supervisor_RootExitDrainsAttachedTailWithoutAssumingChildSurvival_003() {
         {
             let startup: Value = serde_json::from_str(&descendant_start).unwrap();
             assert_eq!(
-                startup["stdoutIsTTY"],
-                true,
+                startup["stdoutIsTTY"], true,
                 "fixture child must have been attached before root exit"
             );
             assert!(
