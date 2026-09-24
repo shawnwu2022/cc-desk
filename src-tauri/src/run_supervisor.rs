@@ -81,10 +81,6 @@ impl RunSupervisor for NativeRunSupervisor {
         run: &RunKey,
         resource: Arc<NativeRun>,
     ) -> Result<(), SafeError> {
-        if self.core.shutting_down.load(Ordering::SeqCst) {
-            return Err(error("RUN_SUPERVISOR_STOPPING"));
-        }
-        let mut reader = resource.process.pty.take_reader()?;
         let state = SupervisedRun::new(Arc::downgrade(&self.core), run.clone(), resource.clone())?;
         {
             let mut active = self.core.active.lock();
@@ -94,28 +90,13 @@ impl RunSupervisor for NativeRunSupervisor {
             active.insert(identity(run), state.clone());
         }
 
-        let progress: Arc<dyn OutputProgress> = state.clone();
-        let stream = match self.core.transports.attach_observed(
-            resource.process.snapshot.owner().clone(),
-            run.clone(),
-            resource.route(),
-            progress,
-        ) {
-            Ok(stream) => stream,
-            Err(failure) => {
-                self.core.active.lock().remove(&identity(run));
-                return Err(failure);
-            }
-        };
-        state.set_stream(stream.clone())?;
-
-        // Reap ownership is installed before the reader thread. If the second
-        // thread cannot be created, the run still has a waiter and a truthful
-        // incomplete output state instead of an orphaned child.
+        // Install the reap owner before any transport setup that can fail. Once
+        // spawn has published a NativeRun, an attach/setup failure must still
+        // terminate and reap that exact creation-owned child.
         let waiter_state = state.clone();
         let waiter_run = run.clone();
         let waiter_resource = resource.clone();
-        std::thread::Builder::new()
+        if std::thread::Builder::new()
             .name("native-run-waiter".into())
             .spawn(move || match waiter_resource.process.pty.wait() {
                 Ok(_) => {
@@ -144,7 +125,41 @@ impl RunSupervisor for NativeRunSupervisor {
                     waiter_state.process_failed();
                 }
             })
-            .map_err(|_| error("RUN_SUPERVISOR_FAILED"))?;
+            .is_err()
+        {
+            state.reader_failed();
+            let _ = state.request_stop();
+            return Err(error("RUN_SUPERVISOR_FAILED"));
+        }
+
+        let mut reader = match resource.process.pty.take_reader() {
+            Ok(reader) => reader,
+            Err(failure) => {
+                state.reader_failed();
+                let _ = state.request_stop();
+                return Err(failure);
+            }
+        };
+
+        let progress: Arc<dyn OutputProgress> = state.clone();
+        let stream = match self.core.transports.attach_observed(
+            resource.process.snapshot.owner().clone(),
+            run.clone(),
+            resource.route(),
+            progress,
+        ) {
+            Ok(stream) => stream,
+            Err(failure) => {
+                state.reader_failed();
+                let _ = state.request_stop();
+                return Err(failure);
+            }
+        };
+        if let Err(failure) = state.set_stream(stream.clone()) {
+            state.reader_failed();
+            let _ = state.request_stop();
+            return Err(failure);
+        }
 
         let reader_state = state.clone();
         if std::thread::Builder::new()
@@ -165,6 +180,15 @@ impl RunSupervisor for NativeRunSupervisor {
             .is_err()
         {
             state.reader_failed();
+            let _ = state.request_stop();
+            return Err(error("RUN_SUPERVISOR_FAILED"));
+        }
+
+        // Close the shutdown-vs-adopt race. shutdown() may have taken its active
+        // snapshot before this state was inserted; a post-install check makes the
+        // newly adopted run incomplete and stops it without a second spawn.
+        if self.core.shutting_down.load(Ordering::SeqCst) {
+            state.request_stop()?;
         }
 
         Ok(())
@@ -177,6 +201,7 @@ struct SupervisedRun {
     lifecycle: Mutex<LifecycleRecord>,
     stream: Mutex<Option<Arc<TerminalStream>>>,
     resource: Mutex<Option<Arc<NativeRun>>>,
+    stop_requested: AtomicBool,
 }
 
 impl SupervisedRun {
@@ -193,6 +218,7 @@ impl SupervisedRun {
             lifecycle: Mutex::new(lifecycle),
             stream: Mutex::new(None),
             resource: Mutex::new(Some(resource)),
+            stop_requested: AtomicBool::new(false),
         }))
     }
 
@@ -265,6 +291,9 @@ impl SupervisedRun {
     }
 
     fn request_stop(&self) -> Result<(), SafeError> {
+        if self.stop_requested.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
         let exited = {
             let mut lifecycle = self.lifecycle.lock();
             let exited = lifecycle.process() == crate::run_lifecycle::ProcessLifecycle::Exited;
