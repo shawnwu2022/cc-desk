@@ -29,16 +29,25 @@ writeFileSync(report, JSON.stringify(value), { flag: 'wx' })
 process.stdout.write('OWNED_READY\n')
 if (mode === 'exit') process.stdout.write('OWNED_TAIL\n', () => process.exit(17))
 if (mode === 'descendant') {
-  const child = spawn(process.execPath, [
-    '-e',
-    "setTimeout(() => process.stdout.write('DESCENDANT_TAIL\\n', () => process.exit(0)), 350)",
-  ], {
+  const started = join(root, 'descendant-start.json')
+  const marker = join(root, 'descendant-after-root.marker')
+  const childScript = [
+    "const { writeFileSync } = require('node:fs')",
+    "if (process.send) process.send({ pid: process.pid, stdoutIsTTY: !!process.stdout.isTTY })",
+    `setTimeout(() => {
+      writeFileSync(${JSON.stringify(marker)}, 'alive-after-root', { flag: 'wx' })
+      process.stdout.write('DESCENDANT_TAIL\\n', () => process.exit(0))
+    }, 350)`,
+  ].join('\\n')
+  const child = spawn(process.execPath, ['-e', childScript], {
     cwd: process.cwd(),
-    stdio: ['ignore', 'inherit', 'inherit'],
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
   })
-  child.once('spawn', () => {
+  child.once('message', (message) => {
+    writeFileSync(started, JSON.stringify(message), { flag: 'wx' })
+    child.disconnect()
     child.unref()
-    process.stdout.write('ROOT_EXIT\n', () => process.exit(23))
+    process.stdout.write('ROOT_EXIT\\n', () => process.exit(23))
   })
 }
 if (mode === 'hold') setInterval(() => {}, 1000)
