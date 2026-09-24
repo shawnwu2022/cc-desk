@@ -35,7 +35,6 @@ if (mode === 'descendant') {
   ], {
     cwd: process.cwd(),
     stdio: ['ignore', 'inherit', 'inherit'],
-    windowsHide: true,
   })
   child.once('spawn', () => {
     child.unref()
