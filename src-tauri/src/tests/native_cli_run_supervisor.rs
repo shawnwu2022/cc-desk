@@ -281,10 +281,9 @@ fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
     let terminal = fixture.wait_lifecycle(|state| {
         state.final_offset().is_some() || state.output() == OutputLifecycle::Incomplete
     });
-    let descendant_start = fs::read_to_string(
-        fixture.root.path().join("work/descendant-start.json"),
-    )
-    .expect("descendant never completed its startup handshake");
+    let descendant_start =
+        fs::read_to_string(fixture.root.path().join("work/descendant-start.json"))
+            .expect("descendant never completed its startup handshake");
     let marker = fixture
         .root
         .path()
