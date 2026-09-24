@@ -289,11 +289,24 @@ fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
                 .map(|value| value.as_u64().unwrap() as u8)
         })
         .collect();
+    let descendant_start = fs::read_to_string(
+        fixture.root.path().join("work/descendant-start.json"),
+    )
+    .expect("descendant never completed its startup handshake");
+    assert!(
+        fixture
+            .root
+            .path()
+            .join("work/descendant-after-root.marker")
+            .exists(),
+        "descendant did not survive root exit; startup={descendant_start}"
+    );
     assert!(
         bytes
             .windows(b"DESCENDANT_TAIL".len())
             .any(|window| window == b"DESCENDANT_TAIL"),
-        "root exit closed the PTY before the descendant tail was observed"
+        "descendant survived root exit but its PTY tail was lost; startup={descendant_start}; observed={:?}",
+        String::from_utf8_lossy(&bytes)
     );
 
     if let Some(final_offset) = terminal.final_offset() {
