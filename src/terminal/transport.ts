@@ -56,7 +56,7 @@ export function createTerminalOutputTransport(
   let nextOffset = 0n
   let parsedThrough = 0n
   const pending: PendingFrame[] = []
-  let ackChain = Promise.resolve()
+  let ackChain: Promise<unknown> = Promise.resolve()
 
   const fail = (reason: string): false => {
     if (!degraded && !disposed) {
