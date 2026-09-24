@@ -78,4 +78,20 @@ describe('D15 run lifecycle', () => {
     incomplete.processExited()
     expect(incomplete.snapshot().output).toBe('incomplete')
   })
+
+  it('D15_Frontend_FinalFailureReasonIsOrderStable_004', () => {
+    const degradedFirst = createRunLifecycle({ runId: 'a', generation: 1, cli: 'codex' })
+    degradedFirst.processRunning()
+    degradedFirst.outputStarted('1')
+    degradedFirst.degraded()
+    degradedFirst.incomplete()
+    expect(degradedFirst.snapshot().output).toBe('degraded')
+
+    const incompleteFirst = createRunLifecycle({ runId: 'b', generation: 1, cli: 'claude' })
+    incompleteFirst.processRunning()
+    incompleteFirst.outputStarted('2')
+    incompleteFirst.incomplete()
+    incompleteFirst.degraded()
+    expect(incompleteFirst.snapshot().output).toBe('incomplete')
+  })
 })
