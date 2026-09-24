@@ -6,6 +6,7 @@ use super::profiles::error;
 use super::run_registry::{LaunchStatus, RunKey};
 use super::storage::WorkspaceRepository;
 use super::types::SafeError;
+use crate::run_supervisor::NativeRunSupervisor;
 use crate::terminal_transport::{OutputAck, OutputFrame, TerminalTransports};
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -22,9 +23,22 @@ pub(crate) struct NativeRuntime {
     binding: Mutex<Option<Arc<DocumentBinding<NativeRun>>>>,
     initialized: AtomicBool,
     transports: Arc<TerminalTransports>,
+    supervisor: Option<Arc<NativeRunSupervisor>>,
 }
 impl NativeRuntime {
     pub(crate) fn new(service: Arc<LaunchService>) -> Self {
+        Self::with_components(
+            service,
+            Arc::new(TerminalTransports::new()),
+            None,
+        )
+    }
+
+    fn with_components(
+        service: Arc<LaunchService>,
+        transports: Arc<TerminalTransports>,
+        supervisor: Option<Arc<NativeRunSupervisor>>,
+    ) -> Self {
         Self {
             projections: Arc::new(super::native_projection::service::ProjectionService::new(
                 service.clone(),
@@ -32,17 +46,27 @@ impl NativeRuntime {
             service,
             binding: Mutex::new(None),
             initialized: AtomicBool::new(false),
-            transports: Arc::new(TerminalTransports::new()),
+            transports,
+            supervisor,
         }
     }
+
     pub(crate) fn production() -> Result<Self, SafeError> {
-        // D14/D15 install the backend supervisor with bounded output/reaping.
-        // Until then the service rejects before I/O/spawn, not a discard pump.
-        let mut service = LaunchService::new(WorkspaceRepository::production()?, None, None);
+        let transports = Arc::new(TerminalTransports::new());
+        let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+        let mut service = LaunchService::new(
+            WorkspaceRepository::production()?,
+            None,
+            Some(supervisor.clone()),
+        );
         if let Some(observer) = crate::hook_server::observer_host() {
             service = service.with_observer(observer);
         }
-        Ok(Self::new(Arc::new(service)))
+        Ok(Self::with_components(
+            Arc::new(service),
+            transports,
+            Some(supervisor),
+        ))
     }
     pub(crate) fn initialize_main<T: Runtime, M: Manager<T>>(
         &self,
@@ -148,15 +172,12 @@ impl NativeRuntime {
         self.projections.check_caller(&caller)?;
         Ok(value)
     }
-    /// Shared native admission for later input/resize/stop/snapshot adapters.
-    /// An acquired access rechecks caller/run ownership again at each operation.
-    #[allow(dead_code)] // D15/D17 operation adapters use this authenticated port.
-    pub(crate) fn access<T: Runtime>(
+    fn admit_run<T: Runtime>(
         &self,
         webview: &Webview<T>,
         headers: &HeaderMap,
         body: &InvokeBody,
-    ) -> Result<RunAccess, SafeError> {
+    ) -> Result<(RunKey, RunAccess), SafeError> {
         let binding = self.binding()?;
         let caller = binding.admit_native(webview, headers)?;
         let InvokeBody::Raw(bytes) = body else {
@@ -175,13 +196,42 @@ impl NativeRuntime {
         if query.generation == 0 {
             return Err(SafeError::invalid("generation"));
         }
-        self.service.access(
-            &caller,
-            &RunKey {
-                run_id: query.run_id,
-                generation: query.generation,
-            },
-        )
+        let run = RunKey {
+            run_id: query.run_id,
+            generation: query.generation,
+        };
+        let access = self.service.access(&caller, &run)?;
+        Ok((run, access))
+    }
+
+    /// Shared native admission for later input/resize/snapshot adapters.
+    /// An acquired access rechecks caller/run ownership again at each operation.
+    #[allow(dead_code)] // D17 operation adapters use this authenticated port.
+    pub(crate) fn access<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<RunAccess, SafeError> {
+        self.admit_run(webview, headers, body).map(|(_, access)| access)
+    }
+
+    pub(crate) fn stop<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let (run, _access) = self.admit_run(webview, request.headers(), request.body())?;
+        self.supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .stop(&run)
+    }
+
+    pub(crate) fn shutdown(&self) {
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.shutdown();
+        }
     }
 }
 
