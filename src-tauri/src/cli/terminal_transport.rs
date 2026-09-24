@@ -211,9 +211,7 @@ impl RunOutputFlow {
         state.outstanding -= released;
         state.frame_ends.retain(|end| *end > through);
         self.inner.budget.release(released);
-        if state.paused
-            && state.reserved.saturating_add(state.outstanding) <= RUN_LOW_WATERMARK
-        {
+        if state.paused && state.reserved.saturating_add(state.outstanding) <= RUN_LOW_WATERMARK {
             state.paused = false;
         }
         Ok(())
@@ -289,6 +287,9 @@ impl OutputPermit {
             .outstanding
             .checked_add(bytes.len())
             .ok_or_else(|| error("OUTPUT_STATE_INVALID"))?;
+        if state.reserved.saturating_add(state.outstanding) >= RUN_HIGH_WATERMARK {
+            state.paused = true;
+        }
         state.sent_offset = end;
         state.frame_ends.insert(end);
 
