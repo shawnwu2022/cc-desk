@@ -44,10 +44,16 @@ mod cli {
 
     pub(crate) mod output_route {
         use crate::types::SafeError;
+        use parking_lot::Mutex;
+        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
+
+        type RevokeHook = Arc<dyn Fn() + Send + Sync>;
 
         pub(crate) struct OutputRoute<T> {
             sink: Arc<dyn Fn(T) -> Result<(), SafeError> + Send + Sync>,
+            revoked: AtomicBool,
+            revoke_hooks: Mutex<Vec<RevokeHook>>,
         }
 
         impl<T> OutputRoute<T> {
@@ -56,11 +62,44 @@ mod cli {
             ) -> Self {
                 Self {
                     sink: Arc::new(sink),
+                    revoked: AtomicBool::new(false),
+                    revoke_hooks: Mutex::new(Vec::new()),
                 }
             }
 
             pub(crate) fn send(&self, value: T) -> Result<(), SafeError> {
+                if self.revoked.load(Ordering::SeqCst) {
+                    return Err(SafeError {
+                        code: "OUTPUT_ROUTE_LOST".into(),
+                        field: None,
+                        index: None,
+                        retryable: false,
+                    });
+                }
                 (self.sink)(value)
+            }
+
+            pub(crate) fn on_revoke(&self, hook: RevokeHook) {
+                let mut pending = Some(hook);
+                {
+                    let mut hooks = self.revoke_hooks.lock();
+                    if !self.revoked.load(Ordering::SeqCst) {
+                        hooks.push(pending.take().expect("pending revoke hook"));
+                    }
+                }
+                if let Some(hook) = pending {
+                    hook();
+                }
+            }
+
+            pub(crate) fn revoke(&self) {
+                if self.revoked.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                let hooks = std::mem::take(&mut *self.revoke_hooks.lock());
+                for hook in hooks {
+                    hook();
+                }
             }
         }
     }
