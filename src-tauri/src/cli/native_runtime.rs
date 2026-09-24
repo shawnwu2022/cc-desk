@@ -228,6 +228,7 @@ impl NativeRuntime {
     }
 
     pub(crate) fn shutdown(&self) {
+        self.service.begin_shutdown();
         if let Some(supervisor) = &self.supervisor {
             supervisor.shutdown();
         }
