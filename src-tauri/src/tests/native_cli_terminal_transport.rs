@@ -231,7 +231,6 @@ fn D14_Transport_LostChannelIsFinalAndReleasesBudget_004() {
     assert_eq!(hub.budgeted_bytes(), 0);
 }
 
-
 #[derive(Default)]
 struct ProgressProbe {
     events: Mutex<Vec<String>>,
@@ -282,12 +281,7 @@ fn D15_Transport_ProgressFollowsAcceptedSendParsedAckAndRevocation_005() {
     let probe = Arc::new(ProgressProbe::default());
     let (routes, route) = revocable_route(Arc::new(Mutex::new(Vec::new())));
     let stream = hub
-        .attach_observed(
-            owner.clone(),
-            run("run-a", 1),
-            route,
-            probe.clone(),
-        )
+        .attach_observed(owner.clone(), run("run-a", 1), route, probe.clone())
         .unwrap();
     let epoch = stream.stream_epoch().to_string();
 
