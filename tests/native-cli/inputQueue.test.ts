@@ -228,6 +228,42 @@ describe('D16 ordered input intent queue', () => {
       bytes: bytes(1, 2, 3, 4, 5),
     })).toThrow('INPUT_ACTION_TOO_LARGE')
   })
+
+  it('D16_Input_RechecksTargetAfterWaitingForDispatchGate_011', async () => {
+    const events: string[] = []
+    const releaseFirst = deferred<void>()
+    let generation = 1
+    const queue = createInputIntentQueue({
+      runId: 'run-a',
+      generation: 1,
+      currentTarget: () => ({ runId: 'run-a', generation, modeEpoch: '1' }),
+      send: async intent => {
+        events.push(`user:${intent.inputSeq}`)
+        if (intent.inputSeq === '1') await releaseFirst.promise
+      },
+      sendProtocol: async () => {
+        events.push('protocol')
+      },
+    })
+
+    queue.enqueue({ source: 'user-text', modeEpoch: '1', bytes: utf8('a') })
+    queue.enqueue({ source: 'user-text', modeEpoch: '1', bytes: utf8('b') })
+    const flushing = queue.flush()
+    await Promise.resolve()
+
+    const protocol = queue.sendProtocol(bytes(27, 91, 53, 110))
+    generation = 2
+    releaseFirst.resolve()
+
+    await flushing
+    await expect(protocol).rejects.toThrow('STALE_INPUT_TARGET')
+    expect(events).toEqual(['user:1'])
+    expect(queue.snapshot()).toMatchObject({
+      state: 'paused',
+      reason: 'target-changed',
+      blockedSeq: '2',
+    })
+  })
 })
 
 describe('D16 terminal host source classification', () => {
