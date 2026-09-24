@@ -9,6 +9,7 @@ use crate::run_lifecycle::{LifecycleRecord, OutputLifecycle};
 use crate::terminal_transport::{OutputProgress, TerminalStream, TerminalTransports};
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 type RunIdentity = (String, u32);
@@ -17,6 +18,7 @@ struct SupervisorCore {
     transports: Arc<TerminalTransports>,
     active: Mutex<HashMap<RunIdentity, Arc<SupervisedRun>>>,
     completed: Mutex<HashMap<RunIdentity, LifecycleRecord>>,
+    shutting_down: AtomicBool,
 }
 
 pub(crate) struct NativeRunSupervisor {
@@ -30,6 +32,7 @@ impl NativeRunSupervisor {
                 transports,
                 active: Mutex::new(HashMap::new()),
                 completed: Mutex::new(HashMap::new()),
+                shutting_down: AtomicBool::new(false),
             }),
         }
     }
@@ -54,6 +57,9 @@ impl NativeRunSupervisor {
     }
 
     pub(crate) fn shutdown(&self) {
+        if self.core.shutting_down.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let active: Vec<_> = self.core.active.lock().values().cloned().collect();
         for state in active {
             if let Err(failure) = state.request_stop() {
@@ -75,6 +81,9 @@ impl RunSupervisor for NativeRunSupervisor {
         run: &RunKey,
         resource: Arc<NativeRun>,
     ) -> Result<(), SafeError> {
+        if self.core.shutting_down.load(Ordering::SeqCst) {
+            return Err(error("RUN_SUPERVISOR_STOPPING"));
+        }
         let mut reader = resource.process.pty.take_reader()?;
         let state = SupervisedRun::new(
             Arc::downgrade(&self.core),
