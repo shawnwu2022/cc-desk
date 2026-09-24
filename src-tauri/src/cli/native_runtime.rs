@@ -229,6 +229,12 @@ impl NativeRuntime {
 
     pub(crate) fn shutdown(&self) {
         self.service.begin_shutdown();
+        // Revoke document/output authority before waiting for process reaping.
+        // A closing main-thread WebView must not be required to service new
+        // url/resource-table getters from an output sender while shutdown waits.
+        if let Some(binding) = self.binding.lock().as_ref().cloned() {
+            binding.revoke();
+        }
         if let Some(supervisor) = &self.supervisor {
             supervisor.shutdown();
         }
