@@ -38,7 +38,7 @@ if (mode === 'descendant') {
       writeFileSync(${JSON.stringify(marker)}, 'alive-after-root', { flag: 'wx' })
       process.stdout.write('DESCENDANT_TAIL\\n', () => process.exit(0))
     }, 350)`,
-  ].join('\\n')
+  ].join('\n')
   const child = spawn(process.execPath, ['-e', childScript], {
     cwd: process.cwd(),
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
@@ -47,7 +47,7 @@ if (mode === 'descendant') {
     writeFileSync(started, JSON.stringify(message), { flag: 'wx' })
     child.disconnect()
     child.unref()
-    process.stdout.write('ROOT_EXIT\\n', () => process.exit(23))
+    process.stdout.write('ROOT_EXIT\n', () => process.exit(23))
   })
 }
 if (mode === 'hold') setInterval(() => {}, 1000)
