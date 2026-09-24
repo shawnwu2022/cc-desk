@@ -1,5 +1,5 @@
 use axum::body::Bytes;
-use axum::extract::Json;
+use axum::extract::{DefaultBodyLimit, Json};
 use axum::http::HeaderMap;
 use axum::{routing::post, Router};
 use serde_json::{json, Value};
@@ -19,7 +19,7 @@ use crate::store::invalidate_project_path_mapping;
 
 pub(crate) const MAX_OBSERVER_PAYLOAD: usize = 64 * 1024;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ObserverRun {
     pub(crate) run_id: String,
     pub(crate) generation: u32,
@@ -81,6 +81,15 @@ impl ObserverRegistry {
         Self {
             slots: SyncMutex::new(HashMap::new()),
         }
+    }
+
+    #[allow(dead_code)] // D14/D15 mint the binding when the native supervisor is enabled.
+    pub(crate) fn mint(
+        &self,
+        run: ObserverRun,
+        source: ObserverSource,
+    ) -> Result<ObserverBinding, SafeError> {
+        self.attach(run, uuid::Uuid::new_v4().simple().to_string(), source)
     }
 
     pub(crate) fn attach(
@@ -172,6 +181,52 @@ impl ObserverRegistry {
     }
 }
 
+pub(crate) fn parse_observer_headers(
+    headers: &HeaderMap,
+) -> Result<(ObserverBinding, String), SafeError> {
+    let run_id = observer_header(headers, "x-cc-desk-run")?.to_string();
+    let generation_text = observer_header(headers, "x-cc-desk-generation")?;
+    let generation = generation_text
+        .parse::<u32>()
+        .map_err(|_| SafeError::invalid("generation"))?;
+    if generation == 0 || generation.to_string() != generation_text {
+        return Err(SafeError::invalid("generation"));
+    }
+    let capability = observer_header(headers, "x-cc-desk-capability")?.to_string();
+    let event_id = observer_header(headers, "x-cc-desk-event")?.to_string();
+    let source = match observer_header(headers, "x-cc-desk-observer-source")? {
+        "claude-hook" => ObserverSource::ClaudeHook,
+        _ => ObserverSource::Unknown,
+    };
+    if source == ObserverSource::Unknown {
+        return Err(error("OBSERVER_SOURCE_UNSUPPORTED"));
+    }
+
+    let run = ObserverRun { run_id, generation };
+    validate_observer_run(&run)?;
+    validate_capability(&capability)?;
+    validate_event_id(&event_id)?;
+    Ok((
+        ObserverBinding {
+            run,
+            capability,
+            source,
+        },
+        event_id,
+    ))
+}
+
+fn observer_header<'a>(
+    headers: &'a HeaderMap,
+    name: &'static str,
+) -> Result<&'a str, SafeError> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| SafeError::invalid("observerHeaders"))
+}
+
 const SUPPORTED_OBSERVER_EVENTS: [&str; 13] = [
     "SessionStart",
     "SessionEnd",
@@ -232,6 +287,9 @@ static HOOK_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 static SESSIONS: once_cell::sync::Lazy<SessionMap> =
     once_cell::sync::Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 
+pub(crate) static OBSERVERS: once_cell::sync::Lazy<ObserverRegistry> =
+    once_cell::sync::Lazy::new(ObserverRegistry::new);
+
 pub async fn init(app_handle: AppHandle) {
     match start_server(app_handle).await {
         Ok(port) => {
@@ -250,6 +308,10 @@ pub async fn init(app_handle: AppHandle) {
 async fn start_server(app_handle: AppHandle) -> Result<u16, String> {
     let app = Router::new()
         .route("/hook", post(handle_hook))
+        .route(
+            "/observer",
+            post(handle_observer).layer(DefaultBodyLimit::max(MAX_OBSERVER_PAYLOAD + 1)),
+        )
         .layer(ServiceBuilder::new());
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 0));
@@ -274,6 +336,38 @@ async fn start_server(app_handle: AppHandle) -> Result<u16, String> {
 
 pub fn get_port() -> Option<u16> {
     HOOK_PORT.get().copied()
+}
+
+async fn handle_observer(
+    headers: HeaderMap,
+    axum::extract::Extension(app_handle): axum::extract::Extension<AppHandle>,
+    body: Bytes,
+) -> Json<Value> {
+    let (binding, event_id) = match parse_observer_headers(&headers) {
+        Ok(value) => value,
+        Err(error) => {
+            log::warn!("[hook-server] observer rejected: {}", error.code);
+            return Json(json!({"ok": false, "code": error.code}));
+        }
+    };
+
+    match OBSERVERS.accept_event(&binding, &event_id, &body) {
+        Ok(ObserverAccept::Duplicate) => Json(json!({"ok": true, "duplicate": true})),
+        Ok(ObserverAccept::Accepted(event)) => {
+            let payload = HookPayload::from_validated(event);
+            if payload.event_name == "SessionStart" {
+                invalidate_project_path_mapping();
+            }
+            if let Err(error) = app_handle.emit("hook-event", &payload) {
+                log::warn!("[hook-server] observer emit failed: {}", error);
+            }
+            Json(json!({"ok": true}))
+        }
+        Err(error) => {
+            log::warn!("[hook-server] observer rejected: {}", error.code);
+            Json(json!({"ok": false, "code": error.code}))
+        }
+    }
 }
 
 async fn handle_hook(
