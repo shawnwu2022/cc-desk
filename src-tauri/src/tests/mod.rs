@@ -53,6 +53,8 @@ mod native_cli_routed_launch;
 #[cfg(test)]
 mod native_cli_run_lifecycle;
 #[cfg(test)]
+mod native_cli_run_supervisor;
+#[cfg(test)]
 mod native_cli_snapshot;
 #[cfg(test)]
 mod native_cli_storage;
