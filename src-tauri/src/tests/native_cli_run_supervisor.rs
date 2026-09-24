@@ -256,3 +256,61 @@ fn D15_Supervisor_RouteLossIsDegradedAndDoesNotRestartRun_002() {
     assert_eq!(exited.output(), OutputLifecycle::Degraded);
     assert_eq!(fixture.child_reports(), 1, "degraded run was replayed");
 }
+
+
+#[test]
+fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
+    let fixture = Fixture::new("descendant");
+    let status = fixture.start();
+    assert_eq!(status.phase, LaunchPhase::Running);
+
+    let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    assert_eq!(exited.output(), OutputLifecycle::Draining);
+
+    let ended = fixture.wait_lifecycle(|state| state.final_offset().is_some());
+    let final_offset = ended.final_offset().unwrap().to_string();
+    let events = fixture.events.lock().clone();
+    let epoch = events[0]["streamEpoch"].as_str().unwrap().to_string();
+    let bytes: Vec<u8> = events
+        .iter()
+        .flat_map(|event| {
+            event["bytes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_u64().unwrap() as u8)
+        })
+        .collect();
+    assert!(
+        bytes
+            .windows(b"DESCENDANT_TAIL".len())
+            .any(|window| window == b"DESCENDANT_TAIL"),
+        "root exit closed the PTY before a descendant released the slave"
+    );
+
+    fixture
+        .transports
+        .ack(&fixture.caller, &ack(&status.run, &epoch, &final_offset))
+        .unwrap();
+    let drained = fixture.wait_lifecycle(|state| state.output() == OutputLifecycle::Drained);
+    assert!(drained.can_retire_as_complete());
+}
+
+#[test]
+fn D15_Supervisor_ExplicitStopIsIncompleteAndDoesNotRestart_004() {
+    let fixture = Fixture::new("hold");
+    let status = fixture.start();
+    assert_eq!(status.phase, LaunchPhase::Running);
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < deadline, "hold probe never became ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    fixture.supervisor.stop(&status.run).unwrap();
+    let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    assert_eq!(exited.output(), OutputLifecycle::Incomplete);
+    assert!(!exited.can_retire_as_complete());
+    assert_eq!(fixture.child_reports(), 1, "explicit stop restarted the child");
+}
