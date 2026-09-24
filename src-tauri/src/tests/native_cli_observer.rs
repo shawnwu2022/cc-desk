@@ -22,7 +22,7 @@ fn D13_Observer_CapabilityRunReplayAndPayloadBoundary_001() {
     let registry = ObserverRegistry::new();
     let current = run("run-current", 2);
     let binding = registry
-        .attach(current.clone(), "cap-current".to_string(), ObserverSource::ClaudeHook)
+        .attach(current.clone(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), ObserverSource::ClaudeHook)
         .unwrap();
 
     let accepted = registry
@@ -37,7 +37,7 @@ fn D13_Observer_CapabilityRunReplayAndPayloadBoundary_001() {
 
     let forged = ObserverBinding {
         run: current.clone(),
-        capability: "cap-forged".to_string(),
+        capability: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
         source: ObserverSource::ClaudeHook,
     };
     assert_eq!(
@@ -50,7 +50,7 @@ fn D13_Observer_CapabilityRunReplayAndPayloadBoundary_001() {
 
     let stale = ObserverBinding {
         run: run("run-current", 1),
-        capability: "cap-current".to_string(),
+        capability: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
         source: ObserverSource::ClaudeHook,
     };
     assert_eq!(
@@ -77,10 +77,10 @@ fn D13_Observer_ReattachRevokesOldCapabilityAndSourcesAreExplicit_002() {
     let registry = ObserverRegistry::new();
     let current = run("run-current", 7);
     let old = registry
-        .attach(current.clone(), "cap-old".to_string(), ObserverSource::ClaudeHook)
+        .attach(current.clone(), "cccccccccccccccccccccccccccccccc".to_string(), ObserverSource::ClaudeHook)
         .unwrap();
     let next = registry
-        .attach(current.clone(), "cap-next".to_string(), ObserverSource::ClaudeHook)
+        .attach(current.clone(), "dddddddddddddddddddddddddddddddd".to_string(), ObserverSource::ClaudeHook)
         .unwrap();
 
     assert_eq!(
@@ -99,7 +99,7 @@ fn D13_Observer_ReattachRevokesOldCapabilityAndSourcesAreExplicit_002() {
 
     let wrong_source = ObserverBinding {
         run: current,
-        capability: "cap-next".to_string(),
+        capability: "dddddddddddddddddddddddddddddddd".to_string(),
         source: ObserverSource::Unknown,
     };
     assert_eq!(
@@ -117,7 +117,7 @@ fn D13_Observer_InvalidEventAndIdentifiersFailClosedWithoutRawContent_003() {
     let binding = registry
         .attach(
             run("run-current", 3),
-            "cap-current".to_string(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             ObserverSource::ClaudeHook,
         )
         .unwrap();
