@@ -219,7 +219,7 @@ fn D12_Production_UnknownRunAndUnsafeProfileNeverFallBack_005() {
 fn D12_Production_RunSnapshotSurvivesProfileDeleteButNotDocumentRevoke_006() {
     use crate::cli::launch_service::{NativeRun, RunSupervisor};
     use crate::cli::output_route::OutputRoutes;
-    use crate::cli::run_registry::RunKey;
+    use crate::cli::run_registry::{RunKey, RunRegistry};
     use crate::cli::types::{LaunchAction, LaunchRequest, SafeError};
     use parking_lot::Mutex;
     #[cfg(windows)]
@@ -227,7 +227,7 @@ fn D12_Production_RunSnapshotSurvivesProfileDeleteButNotDocumentRevoke_006() {
     #[derive(Default)]
     struct Consumer(Mutex<Vec<Arc<NativeRun>>>);
     impl RunSupervisor for Consumer {
-        fn adopt(&self, _run: &RunKey, r: Arc<NativeRun>) -> Result<(), SafeError> {
+        fn adopt(\n            &self,\n            _registry: Arc<RunRegistry<NativeRun>>,\n            _run: &RunKey,\n            r: Arc<NativeRun>,\n        ) -> Result<(), SafeError> {
             self.0.lock().push(r);
             Ok(())
         }
