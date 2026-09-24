@@ -19,7 +19,7 @@ use uuid::Uuid;
 // 普通输入保留既有分块策略；Windows 完整粘贴帧走下方独立编码与真实管道排空。
 pub(crate) const PTY_WRITE_CHUNK_SIZE: usize = 4 * 1024;
 const PTY_WRITE_CHUNK_DELAY: Duration = Duration::from_millis(1);
-const PTY_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const PTY_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Match Windows Terminal paste semantics on Windows: submit the complete,
 /// unmodified bracketed-paste frame through one logical pipe write.
