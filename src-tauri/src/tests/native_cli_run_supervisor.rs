@@ -270,7 +270,7 @@ fn D15_Supervisor_RouteLossIsDegradedAndDoesNotRestartRun_002() {
 }
 
 #[test]
-fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
+fn D15_Supervisor_RootExitDrainsAttachedTailWithoutAssumingChildSurvival_003() {
     let fixture = Fixture::new("descendant");
     let status = fixture.start();
     assert_eq!(status.phase, LaunchPhase::Running);
@@ -292,32 +292,38 @@ fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
     while !marker.exists() && Instant::now() < marker_deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
+    let descendant_survived = marker.exists();
+    #[cfg(not(windows))]
     assert!(
-        marker.exists(),
-        "descendant did not survive root exit; startup={descendant_start}"
+        descendant_survived,
+        "attached descendant unexpectedly died with root; startup={descendant_start}"
     );
 
     let tail_deadline = Instant::now() + Duration::from_secs(1);
-    let events = loop {
-        let events = fixture.events.lock().clone();
-        let bytes: Vec<u8> = events
-            .iter()
-            .flat_map(|event| {
-                event["bytes"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|value| value.as_u64().unwrap() as u8)
-            })
-            .collect();
-        if bytes
-            .windows(b"DESCENDANT_TAIL".len())
-            .any(|window| window == b"DESCENDANT_TAIL")
-            || Instant::now() >= tail_deadline
-        {
-            break events;
+    let events = if descendant_survived {
+        loop {
+            let events = fixture.events.lock().clone();
+            let bytes: Vec<u8> = events
+                .iter()
+                .flat_map(|event| {
+                    event["bytes"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|value| value.as_u64().unwrap() as u8)
+                })
+                .collect();
+            if bytes
+                .windows(b"DESCENDANT_TAIL".len())
+                .any(|window| window == b"DESCENDANT_TAIL")
+                || Instant::now() >= tail_deadline
+            {
+                break events;
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
-        std::thread::sleep(Duration::from_millis(10));
+    } else {
+        fixture.events.lock().clone()
     };
     let bytes: Vec<u8> = events
         .iter()
@@ -329,13 +335,32 @@ fn D15_Supervisor_RootExitDoesNotCloseDescendantPtyBeforeEof_003() {
                 .map(|value| value.as_u64().unwrap() as u8)
         })
         .collect();
-    assert!(
-        bytes
-            .windows(b"DESCENDANT_TAIL".len())
-            .any(|window| window == b"DESCENDANT_TAIL"),
-        "descendant survived root exit but its PTY tail was lost; startup={descendant_start}; observed={:?}",
-        String::from_utf8_lossy(&bytes)
-    );
+
+    if descendant_survived {
+        assert!(
+            bytes
+                .windows(b"DESCENDANT_TAIL".len())
+                .any(|window| window == b"DESCENDANT_TAIL"),
+            "surviving attached descendant lost its PTY tail; startup={descendant_start}; observed={:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+    } else {
+        #[cfg(windows)]
+        {
+            let startup: Value = serde_json::from_str(&descendant_start).unwrap();
+            assert_eq!(
+                startup["stdoutIsTTY"],
+                true,
+                "fixture child must have been attached before root exit"
+            );
+            assert!(
+                !bytes
+                    .windows(b"DESCENDANT_TAIL".len())
+                    .any(|window| window == b"DESCENDANT_TAIL"),
+                "tail cannot precede the descendant's after-root marker"
+            );
+        }
+    }
 
     if terminal.output() == OutputLifecycle::Draining {
         let final_offset = terminal
