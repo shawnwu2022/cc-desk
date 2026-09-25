@@ -28,3 +28,24 @@ export interface RunState extends RunKey {
   activity: ActivityState
   observation: ObservationState
 }
+
+
+export type InputWriteState = 'host-written' | 'partial-or-unknown'
+
+export interface NativeInputFrame extends RunKey {
+  inputSeq: U64String
+  modeEpoch: U64String
+  bytes: Uint8Array
+}
+
+export interface InputWriteReceipt extends RunKey {
+  inputSeq: U64String
+  modeEpoch: U64String
+  state: InputWriteState
+  confirmedBytes: U64String
+}
+
+export interface ProtocolWriteReceipt {
+  state: InputWriteState
+  confirmedBytes: U64String
+}
