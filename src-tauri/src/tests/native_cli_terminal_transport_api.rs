@@ -21,7 +21,6 @@ fn D15_Stop_FormalCommandIsRegisteredAtTheNativeBoundary_002() {
     );
 }
 
-
 #[test]
 fn D17_Input_FormalCommandsAreRegisteredAtTheNativeBoundary_003() {
     let _ = (
@@ -39,6 +38,9 @@ fn D17_Input_FormalCommandsAreRegisteredAtTheNativeBoundary_003() {
         "cli::commands::cli_input_abort,",
         "cli::commands::cli_input_protocol,",
     ] {
-        assert!(source.contains(command), "missing formal input command: {command}");
+        assert!(
+            source.contains(command),
+            "missing formal input command: {command}"
+        );
     }
 }
