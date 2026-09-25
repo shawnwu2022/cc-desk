@@ -315,7 +315,6 @@ impl NativeRuntime {
         if let Some(binding) = self.binding.lock().as_ref().cloned() {
             binding.revoke();
         }
-        self.inputs.clear_all();
         if let Some(supervisor) = &self.supervisor {
             supervisor.shutdown();
         }
