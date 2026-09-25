@@ -11,6 +11,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Write};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 pub(crate) const INPUT_UPLOAD_CHUNK_MAX: usize = 64 * 1024;
 pub(crate) const INPUT_ACTION_BYTES_MAX: usize = 8 * 1024 * 1024;
@@ -377,9 +378,9 @@ impl InputStager {
             (stage.mode_epoch, std::mem::take(&mut stage.bytes))
         };
 
-        let write_result = match write(&payload) {
-            Ok(result) => result,
-            Err(failure) => {
+        let write_result = match catch_unwind(AssertUnwindSafe(|| write(&payload))) {
+            Ok(Ok(result)) => result,
+            Ok(Err(failure)) => {
                 let mut runs = self.runs.lock();
                 if let Some(stage) = runs
                     .get_mut(&key)
@@ -391,6 +392,10 @@ impl InputStager {
                 }
                 return Err(failure);
             }
+            Err(_) => HostWriteResult {
+                state: InputWriteState::PartialOrUnknown,
+                confirmed_bytes: 0,
+            },
         };
 
         if write_result.confirmed_bytes > payload.len() as u64
@@ -451,10 +456,6 @@ impl InputStager {
             return Err(error("INPUT_CHUNK_TOO_LARGE"));
         }
         Ok(())
-    }
-
-    pub(crate) fn clear_all(&self) {
-        self.runs.lock().clear();
     }
 }
 
