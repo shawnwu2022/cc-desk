@@ -178,7 +178,6 @@ export function bindNativePaste(options: NativePasteOptions): () => void {
         instance.term.options.ignoreBracketedPasteMode ?? false,
       ),
       options.write,
-      options.imageFallback,
     ).catch(() => {})
   }
 
