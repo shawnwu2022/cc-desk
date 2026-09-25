@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Terminal } from '@xterm/xterm'
-import { createNativeTerminalInputHost } from '@/terminal/nativeInputHost'
+import { createNativeTerminalInputHost, createNativeTerminalRunHost } from '@/terminal/nativeInputHost'
 import type { InputWriteReceipt, ProtocolWriteReceipt } from '@/types/terminal'
 
 function hostWritten(input: {
@@ -163,6 +163,82 @@ describe('D19 native terminal input host', () => {
 
     expect(writeUser).not.toHaveBeenCalled()
     expect(writeProtocol).not.toHaveBeenCalled()
+    term.dispose()
+  })
+})
+
+
+describe('D19 native terminal run host identity and mode binding', () => {
+  it('D19_RunHost_PendingPasteCannotCrossModeEpoch_018', async () => {
+    const term = new Terminal()
+    const writeUser = vi.fn(async input => hostWritten(input))
+    let resolvePaste!: (value: Uint8Array) => void
+    const paste = new Promise<Uint8Array>(resolve => { resolvePaste = resolve })
+
+    const host = createNativeTerminalRunHost({
+      terminal: term,
+      runId: 'run-a',
+      generation: 1,
+      currentRun: () => ({ runId: 'run-a', generation: 1 }),
+      writeUser,
+      writeProtocol: async (_run, bytes) => ({
+        state: 'host-written',
+        confirmedBytes: String(bytes.byteLength),
+      }),
+    })
+
+    const reservation = host.reservePaste(() => paste)
+    await new Promise<void>(resolve => term.write('\x1b[?2004h', resolve))
+    expect(term.modes.bracketedPasteMode).toBe(true)
+
+    resolvePaste(new TextEncoder().encode('old-mode-paste'))
+    await reservation.settled
+    await host.flush()
+
+    expect(writeUser).not.toHaveBeenCalled()
+    expect(host.snapshot()).toMatchObject({
+      state: 'paused',
+      blockedSeq: '1',
+      reason: 'mode-changed',
+    })
+
+    host.dispose()
+    term.dispose()
+  })
+
+  it('D19_RunHost_PendingPasteCannotRetargetReplacementRun_019', async () => {
+    const term = new Terminal()
+    const writeUser = vi.fn(async input => hostWritten(input))
+    let currentRun = { runId: 'run-a', generation: 1 }
+    let resolvePaste!: (value: Uint8Array) => void
+    const paste = new Promise<Uint8Array>(resolve => { resolvePaste = resolve })
+
+    const host = createNativeTerminalRunHost({
+      terminal: term,
+      runId: 'run-a',
+      generation: 1,
+      currentRun: () => currentRun,
+      writeUser,
+      writeProtocol: async (_run, bytes) => ({
+        state: 'host-written',
+        confirmedBytes: String(bytes.byteLength),
+      }),
+    })
+
+    const reservation = host.reservePaste(() => paste)
+    currentRun = { runId: 'run-b', generation: 2 }
+    resolvePaste(new TextEncoder().encode('old-run-paste'))
+    await reservation.settled
+    await host.flush()
+
+    expect(writeUser).not.toHaveBeenCalled()
+    expect(host.snapshot()).toMatchObject({
+      state: 'paused',
+      blockedSeq: '1',
+      reason: 'target-changed',
+    })
+
+    host.dispose()
     term.dispose()
   })
 })
