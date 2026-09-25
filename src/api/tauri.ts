@@ -357,6 +357,65 @@ export async function cliStop(
 }
 
 
+export const NATIVE_INPUT_UPLOAD_CHUNK_BYTES = 64 * 1024
+
+export async function cliWriteInput(
+  input: import('@/types/terminal').NativeInputFrame,
+): Promise<import('@/types/terminal').InputWriteReceipt> {
+  const bridge = nativeDocumentBridge()
+  const key = {
+    runId: input.runId,
+    generation: input.generation,
+    inputSeq: input.inputSeq,
+  }
+
+  try {
+    await bridge.invoke('cli_input_begin', {
+      ...key,
+      modeEpoch: input.modeEpoch,
+      totalBytes: String(input.bytes.byteLength),
+    })
+
+    for (let offset = 0; offset < input.bytes.byteLength; offset += NATIVE_INPUT_UPLOAD_CHUNK_BYTES) {
+      const chunk = input.bytes.subarray(
+        offset,
+        Math.min(offset + NATIVE_INPUT_UPLOAD_CHUNK_BYTES, input.bytes.byteLength),
+      )
+      await bridge.invoke('cli_input_chunk', {
+        ...key,
+        offset: String(offset),
+        bytes: Array.from(chunk),
+      })
+    }
+  } catch (failure) {
+    try {
+      await bridge.invoke('cli_input_abort', key)
+    } catch {
+      // Staging-only cleanup is best effort. Never hide or replace the original
+      // transport failure and never retry the user payload automatically.
+    }
+    throw failure
+  }
+
+  return bridge.invoke('cli_input_commit', key) as Promise<
+    import('@/types/terminal').InputWriteReceipt
+  >
+}
+
+export async function cliWriteProtocol(
+  run: import('@/types/terminal').RunKey,
+  bytes: Uint8Array,
+): Promise<import('@/types/terminal').ProtocolWriteReceipt> {
+  if (bytes.byteLength === 0 || bytes.byteLength > NATIVE_INPUT_UPLOAD_CHUNK_BYTES) {
+    throw new Error('INVALID_PROTOCOL_INPUT_SIZE')
+  }
+  return nativeDocumentBridge().invoke('cli_input_protocol', {
+    ...run,
+    bytes: Array.from(bytes),
+  }) as Promise<import('@/types/terminal').ProtocolWriteReceipt>
+}
+
+
 export function createCliLaunchAttempt<E>(
   request: import('@/types/cli').LaunchRequest,
   channel: import('@tauri-apps/api/core').Channel<E>,
