@@ -24,7 +24,7 @@ import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useHookStore } from '@/stores/hook'
 import { useAttentionStore } from '@/stores/attention'
-import { isMac, platform } from '@/utils/platform'
+import { isMac } from '@/utils/platform'
 import { getTerminalTheme } from '@/config/terminalThemes'
 import {
   ptySpawn,
@@ -40,8 +40,13 @@ import { safeDispose } from '@/utils/dispose'
 import { relativizePath } from '@/utils/path'
 import { PtyIndex } from '@/utils/ptyIndex'
 import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
-import { bindNativePaste, buildPastePayload, commitPaste, imagePasteBytes } from '@/utils/pasteText'
-import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
+import { bindNativePaste } from '@/utils/pasteText'
+import {
+  decideTerminalKey,
+  shouldSupplementImeInput,
+  type PasteRisk,
+} from '@/terminal/inputPolicy'
+import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 
@@ -314,8 +319,8 @@ function attachImeInputFix(term: Terminal) {
     // 且 xterm 自己没通过 onData 发送过。普通字母 xterm keydown 已发 onData（dataSeen=true）→不补，
     // 避免搜狗英文状态 Shift+I 出现 "II" 重复；搜狗中文 Shift 切换提交拼音时 xterm 因 IME 拦截
     // keydown 未发 onData（dataSeen=false）→ 补，修复拼音丢失。
-    if (ie.inputType === 'insertText' && ie.composed && ie.data && state.keyDownSeen && !state.compositionSeen && !state.dataSeen) {
-      term.input(ie.data)
+    if (shouldSupplementImeInput(ie, state)) {
+      term.input(ie.data!)
     }
   }
   ta.addEventListener('keydown', onKeyDown)
@@ -331,6 +336,26 @@ function attachImeInputFix(term: Terminal) {
     onDataDisp.dispose()
   }
   imeFixStates.set(ta, state)
+}
+
+function confirmRiskyTerminalPaste(risks: PasteRisk[]): boolean {
+  const labels: Record<PasteRisk, string> = {
+    multiline: 'multiple lines',
+    escape: 'escape/control sequences',
+    'paste-end': 'an embedded bracketed-paste terminator',
+  }
+  const reasons = risks.map(risk => labels[risk]).join(', ')
+  return window.confirm(
+    'Bracketed paste is not active. This clipboard text contains ' + reasons + '. '
+    + 'Send the clipboard bytes exactly as copied? Cancel writes nothing.',
+  )
+}
+
+function confirmMixedClipboardText(): boolean {
+  return window.confirm(
+    'The clipboard contains both text and an image. Paste the text only? '
+    + "Cancel writes nothing; use the CLI's own configured image-paste shortcut for the image.",
+  )
 }
 
 // 创建新的 Terminal 实例
@@ -376,69 +401,24 @@ function createTerminal(tabId: string): Terminal {
     }
   })
 
-  // 复制粘贴处理
+  // Terminal-local copy/paste ownership. Clipboard paste gestures stop xterm key
+  // emission but keep the browser default action, so the single capture-phase paste
+  // handler below owns text arbitration. Other terminal keys, including Shift+Enter,
+  // pass through unchanged to xterm/CLI.
   term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-    if (event.type !== 'keydown') return true
+    const selection = term.getSelection()
+    const decision = decideTerminalKey(event, Boolean(selection))
 
-    // Cmd+C (macOS) 复制选中内容
-    if (event.metaKey && !event.ctrlKey && event.key === 'c') {
-      const selection = term.getSelection()
-      if (selection) {
-        event.preventDefault()
-        writeText(selection).catch(() => {})
-        return false
-      }
-      return true
-    }
-
-    // Ctrl+C 复制（有选中）或 SIGINT（无选中）
-    if (event.ctrlKey && !event.metaKey && event.key === 'c' && !event.shiftKey) {
-      const selection = term.getSelection()
-      if (selection) {
-        event.preventDefault()
-        writeText(selection).catch(() => {})
-        return false
-      }
-      return true
-    }
-
-    // Ctrl+Shift+C 强制复制
-    if (event.ctrlKey && event.shiftKey && event.key === 'C') {
+    if (decision === 'copy-selection') {
       event.preventDefault()
-      const selection = term.getSelection()
       if (selection) {
         writeText(selection).catch(() => {})
       }
       return false
     }
 
-    // Ctrl+V / Cmd+V 粘贴
-    if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
-      event.preventDefault()
-      // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
-      // 触发光标回行首、后续覆盖前面（表现为"只显尾部"）。这里用 commitPaste 走完整
-      // 流程：capture ptyId → readText → isPasteStale 复核（防 restart 重建后写到新 PTY）
-      // → 构造 payload（原文规范化 LF + bracketed 包装，见 utils/pasteText.ts）。
-      // JSON 不再自动压缩；Windows 粘贴帧由 Rust 生产 writer 保护。
-      // 剪贴板无文本（截图场景 readText reject）时经 imageFallback 转发 CLI 图片粘贴键
-      // 字节，由 CLI 自行读剪贴板插 [Image #N]（键位契约见 docs/interaction.md）。
-      commitPaste(
-        readText,
-        () => terminalInstances.get(tabId),
-        text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
-        (id, payload) => ptyInput(id, payload, 'clipboard-keyboard'),
-        () => imagePasteBytes(platform),
-      ).catch(() => {})
-      return false
-    }
-
-    // Shift+Enter => 插入换行（模拟 \ + Enter）
-    if (event.shiftKey && event.key === 'Enter') {
-      event.preventDefault()
-      const instance = terminalInstances.get(tabId)
-      if (instance) {
-        ptyInput(instance.ptyId, '\\\r')
-      }
+    if (decision === 'defer-to-paste-event') {
+      // Deliberately do not preventDefault: the browser must still emit a paste event.
       return false
     }
 
@@ -457,7 +437,8 @@ onMounted(async () => {
       getTabId: () => currentDisplayTabId.value,
       getInstance: tabId => terminalInstances.get(tabId),
       write: (id, payload) => ptyInput(id, payload, 'clipboard-dom'),
-      imageFallback: () => imagePasteBytes(platform),
+      confirmText: (_payload, risks) => confirmRiskyTerminalPaste(risks),
+      chooseMixedText: () => confirmMixedClipboardText(),
     })
   }
   await setupEventListeners()
