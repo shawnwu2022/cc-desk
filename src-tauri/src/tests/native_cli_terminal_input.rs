@@ -329,3 +329,30 @@ fn D17_Staging_StaleSequenceCannotBeReopenedAfterFinalization_010() {
         "INPUT_SEQ_STALE"
     );
 }
+
+
+#[test]
+fn D17_Staging_WriterPanicFreezesWithoutReplay_011() {
+    let stager = InputStager::new();
+    let owner = caller("doc-a", 1);
+    stager.begin(&owner, &begin(1, 3)).unwrap();
+    stager.chunk(&owner, &chunk(1, 0, vec![1, 2, 3])).unwrap();
+
+    let receipt = stager
+        .commit(&owner, &commit(1), |_bytes| -> Result<HostWriteResult, crate::cli::types::SafeError> {
+            panic!("injected writer panic after ownership transfer")
+        })
+        .unwrap();
+    assert_eq!(receipt.state, InputWriteState::PartialOrUnknown);
+    assert_eq!(receipt.confirmed_bytes, "0");
+    assert_eq!(
+        stager.begin(&owner, &begin(2, 1)).unwrap_err().code,
+        "INPUT_FROZEN"
+    );
+    assert_eq!(
+        stager
+            .commit(&owner, &commit(1), |_bytes| panic!("panic receipt replayed writer"))
+            .unwrap(),
+        receipt
+    );
+}
