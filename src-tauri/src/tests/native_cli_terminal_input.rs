@@ -68,7 +68,10 @@ impl FaultWriter {
 
 impl Write for FaultWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.fail_after.is_some_and(|limit| self.written.len() >= limit) {
+        if self
+            .fail_after
+            .is_some_and(|limit| self.written.len() >= limit)
+        {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "injected"));
         }
         let remaining_before_failure = self
@@ -135,7 +138,9 @@ fn D17_Staging_ExactChunksCommitOnceAndDuplicateCommitDoesNotReplay_004() {
         .map(|index| (index % 251) as u8)
         .collect();
 
-    stager.begin(&owner, &begin(1, payload.len() as u64)).unwrap();
+    stager
+        .begin(&owner, &begin(1, payload.len() as u64))
+        .unwrap();
     stager
         .chunk(
             &owner,
@@ -183,7 +188,10 @@ fn D17_Staging_IncompleteOrOversizeRejectsBeforeWriter_005() {
     let owner = caller("doc-a", 1);
 
     let oversized = begin(1, (INPUT_ACTION_BYTES_MAX + 1) as u64);
-    assert_eq!(stager.begin(&owner, &oversized).unwrap_err().code, "INPUT_TOO_LARGE");
+    assert_eq!(
+        stager.begin(&owner, &oversized).unwrap_err().code,
+        "INPUT_TOO_LARGE"
+    );
 
     stager.begin(&owner, &begin(2, 4)).unwrap();
     stager.chunk(&owner, &chunk(2, 0, vec![1, 2])).unwrap();
@@ -273,7 +281,9 @@ fn D17_Staging_PartialReceiptFreezesLaterUserInput_008() {
     );
 
     let replay = stager
-        .commit(&owner, &commit(1), |_bytes| panic!("partial commit replayed"))
+        .commit(&owner, &commit(1), |_bytes| {
+            panic!("partial commit replayed")
+        })
         .unwrap();
     assert_eq!(replay, receipt);
 }
@@ -330,7 +340,6 @@ fn D17_Staging_StaleSequenceCannotBeReopenedAfterFinalization_010() {
     );
 }
 
-
 #[test]
 fn D17_Staging_WriterPanicFreezesWithoutReplay_011() {
     let stager = InputStager::new();
@@ -339,9 +348,13 @@ fn D17_Staging_WriterPanicFreezesWithoutReplay_011() {
     stager.chunk(&owner, &chunk(1, 0, vec![1, 2, 3])).unwrap();
 
     let receipt = stager
-        .commit(&owner, &commit(1), |_bytes| -> Result<HostWriteResult, crate::cli::types::SafeError> {
-            panic!("injected writer panic after ownership transfer")
-        })
+        .commit(
+            &owner,
+            &commit(1),
+            |_bytes| -> Result<HostWriteResult, crate::cli::types::SafeError> {
+                panic!("injected writer panic after ownership transfer")
+            },
+        )
         .unwrap();
     assert_eq!(receipt.state, InputWriteState::PartialOrUnknown);
     assert_eq!(receipt.confirmed_bytes, "0");
@@ -351,7 +364,9 @@ fn D17_Staging_WriterPanicFreezesWithoutReplay_011() {
     );
     assert_eq!(
         stager
-            .commit(&owner, &commit(1), |_bytes| panic!("panic receipt replayed writer"))
+            .commit(&owner, &commit(1), |_bytes| panic!(
+                "panic receipt replayed writer"
+            ))
             .unwrap(),
         receipt
     );
