@@ -98,3 +98,6 @@ mod native_cli_projection_service;
 mod native_cli_projection_live;
 
 mod native_cli_observer_http;
+
+#[cfg(test)]
+mod native_cli_terminal_input;

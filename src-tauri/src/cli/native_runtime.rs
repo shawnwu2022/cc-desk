@@ -8,6 +8,10 @@ use super::snapshot::CallerIdentity;
 use super::storage::WorkspaceRepository;
 use super::types::SafeError;
 use crate::run_supervisor::NativeRunSupervisor;
+use crate::terminal_input::{
+    write_host_frame, InputAbortRequest, InputBeginRequest, InputChunkRequest, InputCommitRequest,
+    InputStager, InputWriteReceipt, ProtocolInputRequest, ProtocolWriteReceipt,
+};
 use crate::terminal_transport::{OutputAck, OutputFrame, TerminalTransports};
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -24,6 +28,7 @@ pub(crate) struct NativeRuntime {
     binding: Mutex<Option<Arc<DocumentBinding<NativeRun>>>>,
     initialized: AtomicBool,
     transports: Arc<TerminalTransports>,
+    inputs: Arc<InputStager>,
     supervisor: Option<Arc<NativeRunSupervisor>>,
 }
 impl NativeRuntime {
@@ -45,6 +50,7 @@ impl NativeRuntime {
             binding: Mutex::new(None),
             initialized: AtomicBool::new(false),
             transports,
+            inputs: Arc::new(InputStager::new()),
             supervisor,
         }
     }
@@ -215,6 +221,80 @@ impl NativeRuntime {
         self.service.access(&caller, &run)
     }
 
+    pub(crate) fn input_begin<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: InputBeginRequest = decode_projection(request.body(), 4096)?;
+        let run = input_run_key(&input.run_id, input.generation)?;
+        let _access = self.service.access(&caller, &run)?;
+        self.inputs.begin(&caller, &input)
+    }
+
+    pub(crate) fn input_chunk<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: InputChunkRequest = decode_projection(request.body(), 512 * 1024)?;
+        let run = input_run_key(&input.run_id, input.generation)?;
+        let _access = self.service.access(&caller, &run)?;
+        self.inputs.chunk(&caller, &input)
+    }
+
+    pub(crate) fn input_abort<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: InputAbortRequest = decode_projection(request.body(), 4096)?;
+        let run = input_run_key(&input.run_id, input.generation)?;
+        self.service.registry().check_run(&caller, &run)?;
+        self.inputs.abort(&caller, &input)
+    }
+
+    pub(crate) async fn input_commit<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<InputWriteReceipt, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: InputCommitRequest = decode_projection(request.body(), 4096)?;
+        let run = input_run_key(&input.run_id, input.generation)?;
+        let access = self.service.access(&caller, &run)?;
+        let inputs = self.inputs.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            inputs.commit(&caller, &input, |bytes| {
+                let result = access.with_writer(|writer| Ok(write_host_frame(writer, bytes)))?;
+                Ok(result)
+            })
+        })
+        .await
+        .map_err(|_| error("INPUT_TASK_FAILED"))?
+    }
+
+    pub(crate) async fn input_protocol<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<ProtocolWriteReceipt, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: ProtocolInputRequest = decode_projection(request.body(), 512 * 1024)?;
+        self.inputs.validate_protocol(&caller, &input)?;
+        let run = input_run_key(&input.run_id, input.generation)?;
+        let access = self.service.access(&caller, &run)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let result = access.with_writer(|writer| Ok(write_host_frame(writer, &input.bytes)))?;
+            Ok(ProtocolWriteReceipt::from_host(result))
+        })
+        .await
+        .map_err(|_| error("INPUT_TASK_FAILED"))?
+    }
+
     pub(crate) fn stop<T: Runtime>(
         &self,
         webview: &Webview<T>,
@@ -239,6 +319,19 @@ impl NativeRuntime {
             supervisor.shutdown();
         }
     }
+}
+
+fn input_run_key(run_id: &str, generation: u32) -> Result<RunKey, SafeError> {
+    if run_id.is_empty() || run_id.contains('\0') {
+        return Err(SafeError::invalid("runId"));
+    }
+    if generation == 0 {
+        return Err(SafeError::invalid("generation"));
+    }
+    Ok(RunKey {
+        run_id: run_id.to_string(),
+        generation,
+    })
 }
 
 /// Suppress only the automatic main window; preserve every other configuration.
