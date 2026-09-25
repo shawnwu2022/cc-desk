@@ -12,6 +12,7 @@ import {
   type InputReservation,
   type InputTarget,
 } from './inputQueue'
+import { createXtermModeEpoch } from './modeEpoch'
 import {
   bindTerminalProtocolHost,
   bindXterm55DataProvenance,
@@ -180,6 +181,64 @@ export function createNativeTerminalInputHost(
       disposed = true
       binary.dispose()
       provenance.dispose()
+    },
+  }
+}
+
+
+export interface NativeTerminalRunHostOptions
+  extends Omit<NativeTerminalInputHostOptions, 'currentTarget'> {
+  currentRun: () => RunKey
+}
+
+/**
+ * Production-oriented D19 host. Run/generation identity comes from the owning
+ * workspace, while modeEpoch is derived from the same xterm instance after
+ * parsed output. This prevents a reserved user action from crossing either a
+ * run replacement or a terminal-mode transition.
+ */
+export function createNativeTerminalRunHost(
+  options: NativeTerminalRunHostOptions,
+): NativeTerminalInputHost {
+  const modes = createXtermModeEpoch(
+    options.terminal as Parameters<typeof createXtermModeEpoch>[0],
+  )
+
+  let input: NativeTerminalInputHost
+  try {
+    input = createNativeTerminalInputHost({
+      terminal: options.terminal,
+      runId: options.runId,
+      generation: options.generation,
+      currentTarget: () => {
+        const run = options.currentRun()
+        return {
+          runId: run.runId,
+          generation: run.generation,
+          modeEpoch: modes.current(),
+        }
+      },
+      writeUser: options.writeUser,
+      writeProtocol: options.writeProtocol,
+      onInputError: options.onInputError,
+      onProtocolError: options.onProtocolError,
+    })
+  } catch (error) {
+    modes.dispose()
+    throw error
+  }
+
+  let disposed = false
+  return {
+    reservePaste: input.reservePaste,
+    flush: input.flush,
+    recover: input.recover,
+    snapshot: input.snapshot,
+    dispose() {
+      if (disposed) return
+      disposed = true
+      input.dispose()
+      modes.dispose()
     },
   }
 }
