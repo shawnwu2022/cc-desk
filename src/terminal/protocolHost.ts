@@ -46,3 +46,71 @@ export function bindTerminalProtocolHost(
     },
   }
 }
+
+
+export interface Xterm55DataHandlers {
+  userData(data: string): void
+  protocolData(data: string): void
+}
+
+interface Xterm55CoreServiceLike {
+  onUserInput(handler: () => void): Disposable
+}
+
+interface Xterm55CoreLike {
+  coreService?: Xterm55CoreServiceLike
+}
+
+interface Xterm55PublicLike {
+  onData?(handler: (data: string) => void): Disposable
+  _core?: Xterm55CoreLike
+}
+
+/**
+ * Recover the source bit that xterm 5.5 keeps internally but drops from its
+ * public onData callback.
+ *
+ * Exact 5.5 CoreService semantics are:
+ *   wasUserInput=true -> onUserInput.fire() -> onData.fire(data)
+ *   wasUserInput=false ->                    onData.fire(data)
+ *
+ * The marker is consumed by the immediately following synchronous onData event.
+ * If the locked private shape is unavailable, fail closed. Never classify by
+ * escape-sequence contents.
+ */
+export function bindXterm55DataProvenance(
+  terminal: unknown,
+  handlers: Xterm55DataHandlers,
+): Disposable {
+  const candidate = terminal as Xterm55PublicLike
+  const onData = candidate?.onData
+  const onUserInput = candidate?._core?.coreService?.onUserInput
+  if (typeof onData !== 'function' || typeof onUserInput !== 'function') {
+    throw new Error('XTERM_55_PROVENANCE_UNAVAILABLE')
+  }
+
+  let disposed = false
+  let nextDataIsUser = false
+
+  const userInputSub = onUserInput.call(candidate._core!.coreService, () => {
+    if (!disposed) nextDataIsUser = true
+  })
+
+  const dataSub = onData.call(candidate, data => {
+    if (disposed) return
+    const isUser = nextDataIsUser
+    nextDataIsUser = false
+    if (isUser) handlers.userData(data)
+    else handlers.protocolData(data)
+  })
+
+  return {
+    dispose() {
+      if (disposed) return
+      disposed = true
+      nextDataIsUser = false
+      dataSub.dispose()
+      userInputSub.dispose()
+    },
+  }
+}
