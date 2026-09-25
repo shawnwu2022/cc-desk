@@ -1,15 +1,27 @@
 import { describe, expect, it, vi } from 'vitest'
 import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, imagePasteBytes, bindNativePaste } from '@/utils/pasteText'
 
-function pasteEvent(text: string): ClipboardEvent {
+function pasteEvent(
+  text: string,
+  types: string[] = ['text/plain'],
+  files: Array<{ type: string }> = [],
+): ClipboardEvent {
   const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
   Object.defineProperty(event, 'clipboardData', {
-    value: { getData: (type: string) => type === 'text/plain' ? text : '' },
+    value: {
+      types,
+      files,
+      getData: (type: string) => type === 'text/plain' ? text : '',
+    },
   })
   return event
 }
 
-function nativePasteFixture(ptyId: string, bracketedPasteMode: boolean) {
+function nativePasteFixture(
+  ptyId: string,
+  bracketedPasteMode: boolean,
+  policyOptions: Record<string, unknown> = {},
+) {
   const container = document.createElement('div')
   const terminal = document.createElement('div')
   const textarea = document.createElement('textarea')
@@ -26,13 +38,15 @@ function nativePasteFixture(ptyId: string, bracketedPasteMode: boolean) {
       options: { ignoreBracketedPasteMode: false },
     },
   }
-  const unbind = bindNativePaste({
+  const options = {
     container,
     getTabId: () => 'tab-1',
     getInstance: () => instance,
     write,
     imageFallback: () => '\x1bv',
-  })
+    ...policyOptions,
+  }
+  const unbind = bindNativePaste(options)
   return { textarea, write, xtermPaste, unbind }
 }
 
@@ -60,6 +74,119 @@ describe('bindNativePaste', () => {
 
     expect(event.defaultPrevented).toBe(true)
     expect(xtermPaste).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+    unbind()
+  })
+
+
+  it('D18_PasteNative_ImageOnly_LeavesNativeCliPathUncaptured_005', async () => {
+    const { textarea, write, xtermPaste, unbind } = nativePasteFixture('pty-image', false)
+
+    const event = pasteEvent('', ['image/png'])
+    textarea.dispatchEvent(event)
+    await Promise.resolve()
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(xtermPaste).toHaveBeenCalledOnce()
+    expect(write).not.toHaveBeenCalled()
+    unbind()
+  })
+
+  it('D18_PasteNative_MixedRequiresExplicitTextChoice_006', async () => {
+    const chooseMixedText = vi.fn(async () => false)
+    const { textarea, write, xtermPaste, unbind } = nativePasteFixture(
+      'pty-mixed',
+      true,
+      { chooseMixedText },
+    )
+
+    const event = pasteEvent('caption\r\nline', ['text/plain', 'image/png'])
+    textarea.dispatchEvent(event)
+
+    await vi.waitFor(() => {
+      expect(chooseMixedText).toHaveBeenCalledExactlyOnceWith(
+        '\x1b[200~caption\nline\x1b[201~',
+        [],
+      )
+    })
+    expect(event.defaultPrevented).toBe(true)
+    expect(xtermPaste).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+    unbind()
+  })
+
+  it('D18_PasteNative_RiskyNonBracketedRejectIsZeroWrite_007', async () => {
+    const confirmText = vi.fn(async () => false)
+    const { textarea, write, xtermPaste, unbind } = nativePasteFixture(
+      'pty-risk-reject',
+      false,
+      { confirmText },
+    )
+
+    const event = pasteEvent('first\r\nsecond')
+    textarea.dispatchEvent(event)
+
+    await vi.waitFor(() => {
+      expect(confirmText).toHaveBeenCalledExactlyOnceWith('first\r\nsecond', ['multiline'])
+    })
+    expect(event.defaultPrevented).toBe(true)
+    expect(xtermPaste).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+    unbind()
+  })
+
+  it('D18_PasteNative_RiskyNonBracketedConfirmPreservesExactBytes_008', async () => {
+    const confirmText = vi.fn(async () => true)
+    const { textarea, write, unbind } = nativePasteFixture(
+      'pty-risk-confirm',
+      false,
+      { confirmText },
+    )
+
+    textarea.dispatchEvent(pasteEvent('first\r\nsecond'))
+
+    await vi.waitFor(() => {
+      expect(write).toHaveBeenCalledExactlyOnceWith('pty-risk-confirm', 'first\r\nsecond')
+    })
+    expect(confirmText).toHaveBeenCalledExactlyOnceWith('first\r\nsecond', ['multiline'])
+    unbind()
+  })
+
+  it('D18_PasteNative_RestartWhileAwaitingConfirmationNeverRetargets_009', async () => {
+    const container = document.createElement('div')
+    const terminal = document.createElement('div')
+    const textarea = document.createElement('textarea')
+    terminal.append(textarea)
+    container.append(terminal)
+    const write = vi.fn(async () => {})
+    let current = {
+      ptyId: 'pty-old',
+      term: {
+        element: terminal,
+        modes: { bracketedPasteMode: false },
+        options: { ignoreBracketedPasteMode: false },
+      },
+    }
+    let resolveConfirm: (value: boolean) => void = () => {}
+    const confirmText = vi.fn(() => new Promise<boolean>(resolve => { resolveConfirm = resolve }))
+    const options = {
+      container,
+      getTabId: () => 'tab-1',
+      getInstance: () => current,
+      write,
+      imageFallback: () => '\x1bv',
+      confirmText,
+    }
+    const unbind = bindNativePaste(options)
+
+    textarea.dispatchEvent(pasteEvent('first\nsecond'))
+    await vi.waitFor(() => expect(confirmText).toHaveBeenCalledOnce())
+
+    current = { ...current, ptyId: 'pty-new' }
+    resolveConfirm(true)
+    await Promise.resolve()
+    await Promise.resolve()
+
     expect(write).not.toHaveBeenCalled()
     unbind()
   })
