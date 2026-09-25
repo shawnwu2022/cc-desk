@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { Terminal } from '@xterm/xterm'
 import { bindXterm55DataProvenance } from '@/terminal/protocolHost'
@@ -89,4 +91,13 @@ describe('D19 xterm 5.5 trusted data provenance', () => {
       { userData: () => {}, protocolData: () => {} },
     )).toThrow('XTERM_55_PROVENANCE_UNAVAILABLE')
   })
+})
+
+
+it('D19_Xterm_PrivateProvenanceContractIsPinnedTo550_020', () => {
+  const lockPath = fileURLToPath(new URL('../../package-lock.json', import.meta.url))
+  const lock = JSON.parse(readFileSync(lockPath, 'utf8')) as {
+    packages?: Record<string, { version?: string }>
+  }
+  expect(lock.packages?.['node_modules/@xterm/xterm']?.version).toBe('5.5.0')
 })
