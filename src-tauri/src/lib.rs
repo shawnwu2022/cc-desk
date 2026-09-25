@@ -17,6 +17,7 @@ mod run_supervisor;
 mod session_name_index;
 mod store;
 mod terminal_transport;
+mod terminal_input;
 #[cfg(test)]
 mod tests;
 
