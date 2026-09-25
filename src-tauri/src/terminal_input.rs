@@ -53,7 +53,6 @@ pub(crate) struct InputAbortRequest {
     pub(crate) input_seq: WireU64,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProtocolInputRequest {
@@ -80,7 +79,6 @@ pub(crate) struct InputWriteReceipt {
     pub(crate) confirmed_bytes: String,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProtocolWriteReceipt {
@@ -105,10 +103,7 @@ pub(crate) struct HostWriteResult {
 
 /// Write one logical frame without allowing another writer user to interleave.
 /// The caller owns the outer per-PTY writer lock for this entire function.
-pub(crate) fn write_host_frame(
-    writer: &mut (dyn Write + Send),
-    bytes: &[u8],
-) -> HostWriteResult {
+pub(crate) fn write_host_frame(writer: &mut (dyn Write + Send), bytes: &[u8]) -> HostWriteResult {
     let mut confirmed = 0usize;
     while confirmed < bytes.len() {
         match writer.write(&bytes[confirmed..]) {
@@ -166,11 +161,7 @@ struct OwnerRunKey {
 }
 
 impl OwnerRunKey {
-    fn new(
-        caller: &CallerIdentity,
-        run_id: &str,
-        generation: u32,
-    ) -> Result<Self, SafeError> {
+    fn new(caller: &CallerIdentity, run_id: &str, generation: u32) -> Result<Self, SafeError> {
         validate_run(run_id, generation)?;
         Ok(Self {
             instance_id: caller.instance_id.clone(),
@@ -216,8 +207,8 @@ impl InputStager {
         let key = OwnerRunKey::new(caller, &request.run_id, request.generation)?;
         let seq = validate_positive(request.input_seq, "inputSeq")?;
         let mode_epoch = validate_positive(request.mode_epoch, "modeEpoch")?;
-        let total_bytes = usize::try_from(request.total_bytes.get())
-            .map_err(|_| error("INPUT_TOO_LARGE"))?;
+        let total_bytes =
+            usize::try_from(request.total_bytes.get()).map_err(|_| error("INPUT_TOO_LARGE"))?;
         if total_bytes == 0 {
             return Err(error("INPUT_EMPTY"));
         }
@@ -263,8 +254,8 @@ impl InputStager {
     ) -> Result<(), SafeError> {
         let key = OwnerRunKey::new(caller, &request.run_id, request.generation)?;
         let seq = validate_positive(request.input_seq, "inputSeq")?;
-        let offset = usize::try_from(request.offset.get())
-            .map_err(|_| error("INPUT_OFFSET_MISMATCH"))?;
+        let offset =
+            usize::try_from(request.offset.get()).map_err(|_| error("INPUT_OFFSET_MISMATCH"))?;
         if request.bytes.is_empty() {
             return Err(error("INPUT_CHUNK_EMPTY"));
         }
@@ -273,7 +264,9 @@ impl InputStager {
         }
 
         let mut runs = self.runs.lock();
-        let state = runs.get_mut(&key).ok_or_else(|| error("INPUT_UPLOAD_NOT_FOUND"))?;
+        let state = runs
+            .get_mut(&key)
+            .ok_or_else(|| error("INPUT_UPLOAD_NOT_FOUND"))?;
         if state.frozen {
             return Err(error("INPUT_FROZEN"));
         }
@@ -322,7 +315,9 @@ impl InputStager {
         let key = OwnerRunKey::new(caller, &request.run_id, request.generation)?;
         let seq = validate_positive(request.input_seq, "inputSeq")?;
         let mut runs = self.runs.lock();
-        let state = runs.get_mut(&key).ok_or_else(|| error("INPUT_UPLOAD_NOT_FOUND"))?;
+        let state = runs
+            .get_mut(&key)
+            .ok_or_else(|| error("INPUT_UPLOAD_NOT_FOUND"))?;
         if state.frozen {
             return Err(error("INPUT_FROZEN"));
         }
@@ -350,7 +345,9 @@ impl InputStager {
 
         let (mode_epoch, payload) = {
             let mut runs = self.runs.lock();
-            let state = runs.get_mut(&key).ok_or_else(|| error("INPUT_UPLOAD_NOT_FOUND"))?;
+            let state = runs
+            .get_mut(&key)
+            .ok_or_else(|| error("INPUT_UPLOAD_NOT_FOUND"))?;
             if let Some(receipt) = &state.last_receipt {
                 if receipt.input_seq == seq.to_string() {
                     return Ok(receipt.clone());
@@ -424,7 +421,9 @@ impl InputStager {
         };
 
         let mut runs = self.runs.lock();
-        let state = runs.get_mut(&key).ok_or_else(|| error("INPUT_UPLOAD_NOT_FOUND"))?;
+        let state = runs
+            .get_mut(&key)
+            .ok_or_else(|| error("INPUT_UPLOAD_NOT_FOUND"))?;
         let matches = state
             .stage
             .as_ref()
@@ -440,7 +439,6 @@ impl InputStager {
         }
         Ok(receipt)
     }
-
 
 
     pub(crate) fn validate_protocol(
