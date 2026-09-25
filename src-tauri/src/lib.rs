@@ -16,8 +16,8 @@ mod run_lifecycle;
 mod run_supervisor;
 mod session_name_index;
 mod store;
-mod terminal_transport;
 mod terminal_input;
+mod terminal_transport;
 #[cfg(test)]
 mod tests;
 
