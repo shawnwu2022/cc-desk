@@ -174,4 +174,61 @@ mod tests {
         assert_eq!(receipt.state, InputWriteState::PartialOrUnknown);
         assert_eq!(stager.begin(&a, &begin(2, 1)).unwrap_err().code, "INPUT_FROZEN");
     }
+
+    #[test]
+    fn D17_Core_Native42LargeChunkedPastePartialWriteIsNotReplayed_005() {
+        let stager = InputStager::new();
+        let a = owner("a");
+        let payload: Vec<u8> = (0..(INPUT_UPLOAD_CHUNK_MAX + 17))
+            .map(|index| (index % 251) as u8)
+            .collect();
+
+        stager
+            .begin(&a, &begin(1, payload.len() as u64))
+            .unwrap();
+        stager
+            .chunk(
+                &a,
+                &chunk(1, 0, payload[..INPUT_UPLOAD_CHUNK_MAX].to_vec()),
+            )
+            .unwrap();
+        stager
+            .chunk(
+                &a,
+                &chunk(
+                    1,
+                    INPUT_UPLOAD_CHUNK_MAX as u64,
+                    payload[INPUT_UPLOAD_CHUNK_MAX..].to_vec(),
+                ),
+            )
+            .unwrap();
+
+        let fail_after = INPUT_UPLOAD_CHUNK_MAX + 3;
+        let mut writer = PartialWriter {
+            bytes: Vec::new(),
+            fail_after,
+        };
+        let calls = AtomicUsize::new(0);
+        let receipt = stager
+            .commit(&a, &commit(1), |bytes| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(write_host_frame(&mut writer, bytes))
+            })
+            .unwrap();
+
+        assert_eq!(receipt.state, InputWriteState::PartialOrUnknown);
+        assert_eq!(receipt.confirmed_bytes, fail_after.to_string());
+        assert_eq!(writer.bytes, payload[..fail_after]);
+        assert_eq!(stager.begin(&a, &begin(2, 1)).unwrap_err().code, "INPUT_FROZEN");
+
+        let replay = stager
+            .commit(&a, &commit(1), |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                panic!("NATIVE-42 payload replayed")
+            })
+            .unwrap();
+        assert_eq!(replay, receipt);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
 }
