@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Terminal } from '@xterm/xterm'
+import { bindXterm55DataProvenance } from '@/terminal/protocolHost'
 
 function write(term: Terminal, data: string): Promise<void> {
   return new Promise(resolve => term.write(data, resolve))
@@ -40,5 +41,52 @@ describe('D19 xterm 5.5 protocol source characterization', () => {
     dataSub.dispose()
     binarySub.dispose()
     term.dispose()
+  })
+})
+
+
+describe('D19 xterm 5.5 trusted data provenance', () => {
+  it('D19_Xterm_UserInputSignalMarksOnlyTheImmediatelyFollowingData_007', async () => {
+    const term = new Terminal()
+    const user = vi.fn<(value: string) => void>()
+    const protocol = vi.fn<(value: string) => void>()
+    const binding = bindXterm55DataProvenance(term, {
+      userData: user,
+      protocolData: protocol,
+    })
+
+    term.input('user', true)
+    term.input('protocol', false)
+
+    expect(user).toHaveBeenCalledExactlyOnceWith('user')
+    expect(protocol).toHaveBeenCalledExactlyOnceWith('protocol')
+
+    binding.dispose()
+    term.dispose()
+  })
+
+  it('D19_Xterm_DsrReplyIsTrustedProtocolWithoutByteGuessing_008', async () => {
+    const term = new Terminal()
+    const user = vi.fn<(value: string) => void>()
+    const protocol = vi.fn<(value: string) => void>()
+    const binding = bindXterm55DataProvenance(term, {
+      userData: user,
+      protocolData: protocol,
+    })
+
+    await write(term, '\x1b[5n')
+
+    expect(protocol).toHaveBeenCalledExactlyOnceWith('\x1b[0n')
+    expect(user).not.toHaveBeenCalled()
+
+    binding.dispose()
+    term.dispose()
+  })
+
+  it('D19_Xterm_UnsupportedPrivateShapeFailsClosed_009', () => {
+    expect(() => bindXterm55DataProvenance(
+      { onData: () => ({ dispose() {} }) },
+      { userData: () => {}, protocolData: () => {} },
+    )).toThrow('XTERM_55_PROVENANCE_UNAVAILABLE')
   })
 })
