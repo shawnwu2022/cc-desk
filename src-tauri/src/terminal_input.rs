@@ -52,6 +52,15 @@ pub(crate) struct InputAbortRequest {
     pub(crate) input_seq: WireU64,
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProtocolInputRequest {
+    pub(crate) run_id: String,
+    pub(crate) generation: u32,
+    pub(crate) bytes: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum InputWriteState {
@@ -68,6 +77,23 @@ pub(crate) struct InputWriteReceipt {
     pub(crate) mode_epoch: String,
     pub(crate) state: InputWriteState,
     pub(crate) confirmed_bytes: String,
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProtocolWriteReceipt {
+    pub(crate) state: InputWriteState,
+    pub(crate) confirmed_bytes: String,
+}
+
+impl ProtocolWriteReceipt {
+    pub(crate) fn from_host(result: HostWriteResult) -> Self {
+        Self {
+            state: result.state,
+            confirmed_bytes: result.confirmed_bytes.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -408,6 +434,23 @@ impl InputStager {
             state.frozen = true;
         }
         Ok(receipt)
+    }
+
+
+
+    pub(crate) fn validate_protocol(
+        &self,
+        caller: &CallerIdentity,
+        request: &ProtocolInputRequest,
+    ) -> Result<(), SafeError> {
+        let _key = OwnerRunKey::new(caller, &request.run_id, request.generation)?;
+        if request.bytes.is_empty() {
+            return Err(error("INPUT_CHUNK_EMPTY"));
+        }
+        if request.bytes.len() > INPUT_UPLOAD_CHUNK_MAX {
+            return Err(error("INPUT_CHUNK_TOO_LARGE"));
+        }
+        Ok(())
     }
 
     pub(crate) fn clear_all(&self) {
