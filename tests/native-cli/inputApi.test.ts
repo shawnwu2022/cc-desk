@@ -27,7 +27,8 @@ it('D17_Api_InputStagesIn64KiBChunksAndCommitsOnce_001', async () => {
     state: 'host-written',
     confirmedBytes: String(api.NATIVE_INPUT_UPLOAD_CHUNK_BYTES + 7),
   }
-  const invoke = vi.fn(async (command: string) => {
+  const invoke = vi.fn(async (...args: any[]) => {
+    const command = args[0] as string
     if (command === 'cli_input_commit') return receipt
     return undefined
   })
@@ -72,7 +73,8 @@ it('D17_Api_InputStagesIn64KiBChunksAndCommitsOnce_001', async () => {
 
 it('D17_Api_StagingFailureAbortsWithoutRetryOrCommit_002', async () => {
   const failure = { code: 'WIRE_FAILED' }
-  const invoke = vi.fn(async (command: string) => {
+  const invoke = vi.fn(async (...args: any[]) => {
+    const command = args[0] as string
     if (command === 'cli_input_chunk') throw failure
     return undefined
   })
@@ -102,7 +104,8 @@ it('D17_Api_PartialReceiptIsReturnedWithoutAutomaticReplay_003', async () => {
     state: 'partial-or-unknown',
     confirmedBytes: '2',
   }
-  const invoke = vi.fn(async (command: string) => {
+  const invoke = vi.fn(async (...args: any[]) => {
+    const command = args[0] as string
     if (command === 'cli_input_commit') return receipt
     return undefined
   })
@@ -122,7 +125,7 @@ it('D17_Api_PartialReceiptIsReturnedWithoutAutomaticReplay_003', async () => {
 })
 
 it('D17_Api_ProtocolUsesAuthenticatedDirectWriterCommand_004', async () => {
-  const invoke = vi.fn(async () => ({
+  const invoke = vi.fn(async (..._args: any[]) => ({
     state: 'host-written',
     confirmedBytes: '4',
   }))
