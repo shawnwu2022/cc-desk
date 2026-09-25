@@ -346,8 +346,8 @@ impl InputStager {
         let (mode_epoch, payload) = {
             let mut runs = self.runs.lock();
             let state = runs
-            .get_mut(&key)
-            .ok_or_else(|| error("INPUT_UPLOAD_NOT_FOUND"))?;
+                .get_mut(&key)
+                .ok_or_else(|| error("INPUT_UPLOAD_NOT_FOUND"))?;
             if let Some(receipt) = &state.last_receipt {
                 if receipt.input_seq == seq.to_string() {
                     return Ok(receipt.clone());
@@ -439,7 +439,6 @@ impl InputStager {
         }
         Ok(receipt)
     }
-
 
     pub(crate) fn validate_protocol(
         &self,
