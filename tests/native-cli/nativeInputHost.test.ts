@@ -82,7 +82,7 @@ describe('D19 native terminal input host', () => {
     await vi.waitFor(() => expect(events).toEqual(['protocol:\x1b[0n']))
 
     resolvePaste(new TextEncoder().encode('payload'))
-    await host.flush()
+    const activeFlush = host.flush()
     await vi.waitFor(() => expect(events).toContain('user-start'))
 
     await new Promise<void>(resolve => term.write('\x1b[5n', resolve))
@@ -90,7 +90,7 @@ describe('D19 native terminal input host', () => {
     expect(events).toEqual(['protocol:\x1b[0n', 'user-start'])
 
     releaseUser()
-    await host.flush()
+    await activeFlush
     await vi.waitFor(() => expect(events).toEqual([
       'protocol:\x1b[0n',
       'user-start',
