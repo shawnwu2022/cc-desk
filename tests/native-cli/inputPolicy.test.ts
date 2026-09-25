@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   decideTerminalKey,
+  observeClipboardData,
   planClipboardPaste,
   shouldSupplementImeInput,
   type ClipboardObservation,
@@ -121,5 +122,33 @@ describe('D18 input policy', () => {
       { inputType: 'insertCompositionText', composed: true, data: 'ni' },
       { keyDownSeen: true, compositionSeen: false, dataSeen: false },
     )).toBe(false)
+  })
+
+  it('D18_ClipboardData_MissingIsUnavailable_013', () => {
+    expect(observeClipboardData(null)).toEqual({ status: 'unavailable' })
+  })
+
+  it('D18_ClipboardData_TextOnlyIsNotImage_014', () => {
+    expect(observeClipboardData({
+      types: ['text/plain'],
+      getData: type => type === 'text/plain' ? 'hello' : '',
+      files: [],
+    })).toEqual({ status: 'available', text: 'hello', hasImage: false })
+  })
+
+  it('D18_ClipboardData_ImageMimeIsImageOnly_015', () => {
+    expect(observeClipboardData({
+      types: ['image/png'],
+      getData: () => '',
+      files: [],
+    })).toEqual({ status: 'available', text: '', hasImage: true })
+  })
+
+  it('D18_ClipboardData_MixedTextAndImageFileIsExplicitlyMixed_016', () => {
+    expect(observeClipboardData({
+      types: ['text/plain', 'Files'],
+      getData: type => type === 'text/plain' ? 'caption' : '',
+      files: [{ type: 'image/png' }],
+    })).toEqual({ status: 'available', text: 'caption', hasImage: true })
   })
 })
