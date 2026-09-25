@@ -10,6 +10,11 @@
  * 避免终端层擅自改写用户输入。
  */
 import type { Platform } from './platform'
+import {
+  observeClipboardData,
+  planClipboardPaste,
+  type PasteRisk,
+} from '@/terminal/inputPolicy'
 
 export function preparePasteText(text: string): string {
   return text.replace(/\r\n?/g, '\n')
@@ -143,12 +148,31 @@ type NativePasteInstance = PasteInstance & {
   }
 }
 
+type NativePasteDecision = (
+  payload: string,
+  risks: PasteRisk[],
+) => boolean | Promise<boolean>
+
 type NativePasteOptions = {
   container: HTMLElement
   getTabId: () => string | null
   getInstance: (tabId: string) => NativePasteInstance | undefined
   write: (ptyId: string, payload: string) => Promise<unknown>
-  imageFallback: () => string
+  /**
+   * Explicit approval for risky non-bracketed text. Missing/error/false means zero write.
+   */
+  confirmText?: NativePasteDecision
+  /**
+   * Clipboard carries both text and image. true explicitly chooses the text payload.
+   * false/missing/error performs no PTY write; the user may invoke the CLI's own
+   * image-paste binding separately.
+   */
+  chooseMixedText?: NativePasteDecision
+  /**
+   * @deprecated D18 no longer infers image paste from empty text and never calls this.
+   * Kept temporarily so stacked callers can migrate without an unrelated type-only edit.
+   */
+  imageFallback?: () => string
 }
 
 /**
@@ -157,6 +181,24 @@ type NativePasteOptions = {
  * 避免同一份剪贴板内容被 xterm 再发送一次。
  */
 export function bindNativePaste(options: NativePasteOptions): () => void {
+  const sameTarget = (tabId: string, capturedPtyId: string): NativePasteInstance | undefined => {
+    const current = options.getInstance(tabId)
+    return current?.ptyId === capturedPtyId ? current : undefined
+  }
+
+  const decide = async (
+    decision: NativePasteDecision | undefined,
+    payload: string,
+    risks: PasteRisk[],
+  ): Promise<boolean> => {
+    if (!decision) return false
+    try {
+      return await decision(payload, risks)
+    } catch {
+      return false
+    }
+  }
+
   const handlePaste = (event: ClipboardEvent) => {
     const tabId = options.getTabId()
     if (!tabId) return
@@ -166,19 +208,45 @@ export function bindNativePaste(options: NativePasteOptions): () => void {
     const element = instance.term.element
     if (!target || !element || !element.contains(target)) return
 
+    const observation = observeClipboardData(event.clipboardData)
+    const plan = planClipboardPaste(observation, {
+      bracketedPasteMode: instance.term.modes.bracketedPasteMode,
+      ignoreBracketedPasteMode: instance.term.options.ignoreBracketedPasteMode ?? false,
+    })
+
+    // Image-only data stays on the terminal/CLI-native path. D18 must not synthesize
+    // a hardcoded image shortcut from an empty text result.
+    if (plan.kind === 'image-only') return
+
     event.preventDefault()
     event.stopPropagation()
-    const text = event.clipboardData?.getData('text/plain') ?? ''
-    commitPaste(
-      async () => text,
-      () => options.getInstance(tabId),
-      value => buildPastePayload(
-        value,
-        instance.term.modes.bracketedPasteMode,
-        instance.term.options.ignoreBracketedPasteMode ?? false,
-      ),
-      options.write,
-    ).catch(() => {})
+
+    const capturedPtyId = instance.ptyId
+    const send = async (payload: string): Promise<void> => {
+      const current = sameTarget(tabId, capturedPtyId)
+      if (!current) return
+      await options.write(current.ptyId, payload)
+    }
+
+    if (plan.kind === 'hold') return
+
+    if (plan.kind === 'send-text') {
+      void send(plan.payload).catch(() => {})
+      return
+    }
+
+    if (plan.kind === 'confirm-text') {
+      void (async () => {
+        if (!await decide(options.confirmText, plan.payload, plan.risks)) return
+        await send(plan.payload)
+      })().catch(() => {})
+      return
+    }
+
+    void (async () => {
+      if (!await decide(options.chooseMixedText, plan.textPayload, plan.risks)) return
+      await send(plan.textPayload)
+    })().catch(() => {})
   }
 
   options.container.addEventListener('paste', handlePaste, true)
