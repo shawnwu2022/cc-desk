@@ -8,6 +8,12 @@ export type ClipboardObservation =
       status: 'unavailable'
     }
 
+export interface ClipboardDataLike {
+  types?: ArrayLike<string>
+  getData: (type: string) => string
+  files?: ArrayLike<{ type?: string }>
+}
+
 export type PasteRisk = 'multiline' | 'escape' | 'paste-end'
 
 export type PastePlan =
@@ -94,6 +100,30 @@ function planTextPayload(text: string, mode: PasteModeSnapshot): {
   return {
     payload: text,
     risks: collectNonBracketedRisks(text),
+  }
+}
+
+export function observeClipboardData(
+  data: ClipboardDataLike | null | undefined,
+): ClipboardObservation {
+  if (!data) return { status: 'unavailable' }
+
+  let text: string
+  try {
+    text = data.getData('text/plain')
+  } catch {
+    return { status: 'unavailable' }
+  }
+
+  const types = Array.from(data.types ?? [], value => String(value).toLowerCase())
+  const files = Array.from(data.files ?? [])
+  const hasImage = types.some(type => type.startsWith('image/'))
+    || files.some(file => String(file.type ?? '').toLowerCase().startsWith('image/'))
+
+  return {
+    status: 'available',
+    text,
+    hasImage,
   }
 }
 
