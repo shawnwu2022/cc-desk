@@ -51,14 +51,16 @@ describe('bindNativePaste', () => {
     unbind()
   })
 
-  it('PasteNative_EmptyText_RoutesImageFallback_002', async () => {
-    const { textarea, write, unbind } = nativePasteFixture('pty-2', false)
+  it('D18_PasteNative_EmptyText_HoldsWithoutSynthesizingImageShortcut_002', async () => {
+    const { textarea, write, xtermPaste, unbind } = nativePasteFixture('pty-2', false)
 
-    textarea.dispatchEvent(pasteEvent(''))
+    const event = pasteEvent('')
+    textarea.dispatchEvent(event)
+    await Promise.resolve()
 
-    await vi.waitFor(() => {
-      expect(write).toHaveBeenCalledExactlyOnceWith('pty-2', '\x1bv')
-    })
+    expect(event.defaultPrevented).toBe(true)
+    expect(xtermPaste).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
     unbind()
   })
 
