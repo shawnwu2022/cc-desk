@@ -3,6 +3,7 @@ import {
   classifyClipboardSnapshot,
   createImeInputPolicy,
   isPasteShortcut,
+  readClipboardSnapshot,
 } from '@/terminal/inputPolicy'
 
 describe('D18 clipboard arbitration', () => {
@@ -34,7 +35,24 @@ describe('D18 clipboard arbitration', () => {
     })).toEqual({ kind: 'image' })
   })
 
-  it('D18_Keyboard_OnlyCanonicalPasteShortcutIsIntercepted_005', () => {
+  it('D18_Clipboard_AsyncProbeNeedsPositiveImageEvidence_005', async () => {
+    await expect(readClipboardSnapshot(
+      async () => '',
+      async () => { throw new Error('no image') },
+    )).resolves.toEqual({ kind: 'empty' })
+
+    await expect(readClipboardSnapshot(
+      async () => { throw new Error('text denied') },
+      async () => ({ width: 1, height: 1 }),
+    )).resolves.toEqual({ kind: 'image' })
+
+    await expect(readClipboardSnapshot(
+      async () => { throw new Error('text denied') },
+      async () => { throw new Error('no image') },
+    )).resolves.toEqual({ kind: 'unavailable' })
+  })
+
+  it('D18_Keyboard_OnlyCanonicalPasteShortcutIsIntercepted_006', () => {
     expect(isPasteShortcut({ key: 'v', ctrlKey: true, metaKey: false, altKey: false })).toBe(true)
     expect(isPasteShortcut({ key: 'V', ctrlKey: false, metaKey: true, altKey: false })).toBe(true)
     expect(isPasteShortcut({ key: 'v', ctrlKey: false, metaKey: false, altKey: false })).toBe(false)
@@ -44,7 +62,7 @@ describe('D18 clipboard arbitration', () => {
 })
 
 describe('D18 IME provenance policy', () => {
-  it('D18_IME_ComposedLeakIsForwardedExactlyOnceAsExplicitUserText_006', () => {
+  it('D18_IME_ComposedLeakIsForwardedExactlyOnceAsExplicitUserText_007', () => {
     const policy = createImeInputPolicy()
     policy.keyDown()
     expect(policy.input({
@@ -59,7 +77,7 @@ describe('D18 IME provenance policy', () => {
     })).toBeUndefined()
   })
 
-  it('D18_IME_XtermDataSuppressesFallbackDuplicate_007', () => {
+  it('D18_IME_XtermDataSuppressesFallbackDuplicate_008', () => {
     const policy = createImeInputPolicy()
     policy.keyDown()
     policy.xtermData()
@@ -70,7 +88,7 @@ describe('D18 IME provenance policy', () => {
     })).toBeUndefined()
   })
 
-  it('D18_IME_RealCompositionLifecycleStaysWithXterm_008', () => {
+  it('D18_IME_RealCompositionLifecycleStaysWithXterm_009', () => {
     const policy = createImeInputPolicy()
     policy.keyDown()
     policy.compositionStart()
