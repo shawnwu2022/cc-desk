@@ -331,6 +331,15 @@ export function executeD20Matrix(plan, options = {}) {
     return executionBlocked(plan.cli, 'REAL_CLI_BINARY_NOT_ISOLATED')
   }
 
+  let actualBinarySha256
+  try {
+    actualBinarySha256 = createHash('sha256')
+      .update(readFileSync(first.binaryPath))
+      .digest('hex')
+  } catch {
+    return executionBlocked(plan.cli, 'REAL_CLI_BINARY_UNAVAILABLE')
+  }
+
   for (const run of plan.runs) {
     if (!regularFile(run.driverPath)) {
       return executionBlocked(plan.cli, 'REAL_CLI_DRIVER_UNAVAILABLE')
@@ -389,6 +398,12 @@ export function executeD20Matrix(plan, options = {}) {
     const record = evidence.record
     if (!recordMatchesCell(record, plan, run)) {
       return executionFailure('REAL_CLI_RECORD_PROVENANCE_MISMATCH', run.runId)
+    }
+    if (
+      record.status === 'PASS'
+      && record.target?.cli?.binarySha256?.toLowerCase() !== actualBinarySha256
+    ) {
+      return executionFailure('REAL_CLI_BINARY_HASH_MISMATCH', run.runId)
     }
     const validation = validateRealCliRun(record)
     if (!validation.valid) {
