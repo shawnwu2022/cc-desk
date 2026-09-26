@@ -110,4 +110,19 @@ describe('D19 xterm provenance bridge', () => {
     expect(xterm.binary.size()).toBe(0)
     expect(xterm.user.size()).toBe(0)
   })
+  it('D19_Xterm_AsyncRouteFailureRemainsObservableAtDrain_013', async () => {
+    const xterm = fakeXterm()
+    const binding = bindXtermInputProvenance(xterm.term, {
+      user: async () => { throw new Error('native writer failed') },
+      protocol: async () => {},
+      binary: async () => {},
+    })
+
+    xterm.user.fire()
+    xterm.data.fire('x')
+    await Promise.resolve()
+    await expect(binding.drain()).rejects.toThrow('native writer failed')
+    binding.dispose()
+  })
+
 })
