@@ -51,13 +51,24 @@ describe('bindNativePaste', () => {
     unbind()
   })
 
-  it('PasteNative_EmptyText_RoutesImageFallback_002', async () => {
+  it('PasteNative_EmptyText_DoesNotGuessImage_002', async () => {
     const { textarea, write, unbind } = nativePasteFixture('pty-2', false)
 
     textarea.dispatchEvent(pasteEvent(''))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(write).not.toHaveBeenCalled()
+    unbind()
+  })
+
+  it('PasteNative_ExplicitImageMime_RoutesImageFallback_005', async () => {
+    const { textarea, write, unbind } = nativePasteFixture('pty-image', false)
+
+    textarea.dispatchEvent(pasteEvent('', ['image/png']))
 
     await vi.waitFor(() => {
-      expect(write).toHaveBeenCalledExactlyOnceWith('pty-2', '\x1bv')
+      expect(write).toHaveBeenCalledExactlyOnceWith('pty-image', '\x1bv')
     })
     unbind()
   })
