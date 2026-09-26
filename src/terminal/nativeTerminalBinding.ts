@@ -47,19 +47,27 @@ export function createNativeTerminalBinding(
   const provenance = bindXtermInputProvenance(options.term, {
     user: async data => {
       const leave = host.beginUserEvent()
+      let operation: Promise<void>
       try {
-        await host.handleData(data)
+        // Provenance is a property of this synchronous xterm emission, not of
+        // the potentially long host write. Release it before awaiting so a
+        // protocol reply can queue behind the active frame without becoming
+        // spuriously "conflicting" source context.
+        operation = host.handleData(data)
       } finally {
         leave()
       }
+      await operation
     },
     protocol: async data => {
       const leave = host.beginParserOutput()
+      let operation: Promise<void>
       try {
-        await host.handleData(data)
+        operation = host.handleData(data)
       } finally {
         leave()
       }
+      await operation
     },
     binary: data => host.handleBinary(data),
   })
