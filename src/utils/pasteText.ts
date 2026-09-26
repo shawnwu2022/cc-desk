@@ -10,6 +10,7 @@
  * 避免终端层擅自改写用户输入。
  */
 import type { Platform } from './platform'
+import { classifyClipboardSnapshot, readClipboardSnapshot } from '@/terminal/inputPolicy'
 
 export function preparePasteText(text: string): string {
   return text.replace(/\r\n?/g, '\n')
@@ -135,6 +136,44 @@ export async function commitPaste(
   }
 }
 
+
+
+/**
+ * Evidence-based paste path used by production input arbitration.
+ * Empty/failed text reads do not imply an image; a successful image probe is
+ * required before the CLI image-paste key is emitted.
+ */
+export async function commitPasteWithEvidence(
+  readTextAsync: () => Promise<string>,
+  readImageAsync: (() => Promise<unknown>) | undefined,
+  getInstance: () => PasteInstance | undefined,
+  buildPayload: (text: string) => string,
+  write: (ptyId: string, payload: string) => Promise<unknown>,
+  imageFallback?: () => string,
+): Promise<void> {
+  const capturedPtyId = getInstance()?.ptyId
+  const classification = await readClipboardSnapshot(readTextAsync, readImageAsync)
+  const instance = getInstance()
+  if (!instance?.ptyId || isPasteStale(capturedPtyId, instance.ptyId)) return
+
+  if (classification.kind === 'text') {
+    const payload = buildPayload(classification.text)
+    if (!payload) return
+    await write(instance.ptyId, payload)
+    return
+  }
+
+  if (classification.kind === 'image') {
+    const bytes = imageFallback?.()
+    if (bytes) await write(instance.ptyId, bytes)
+    return
+  }
+
+  if (classification.kind === 'unavailable') {
+    throw new Error('CLIPBOARD_UNAVAILABLE')
+  }
+}
+
 type NativePasteInstance = PasteInstance & {
   term: {
     element: HTMLElement | null | undefined
@@ -169,8 +208,11 @@ export function bindNativePaste(options: NativePasteOptions): () => void {
     event.preventDefault()
     event.stopPropagation()
     const text = event.clipboardData?.getData('text/plain') ?? ''
-    commitPaste(
-      async () => text,
+    const types = Array.from(event.clipboardData?.types ?? [])
+    const snapshot = classifyClipboardSnapshot({ text, types })
+    commitPasteWithEvidence(
+      async () => snapshot.kind === 'text' ? snapshot.text : '',
+      snapshot.kind === 'image' ? async () => true : undefined,
       () => options.getInstance(tabId),
       value => buildPastePayload(
         value,
