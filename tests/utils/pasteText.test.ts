@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, imagePasteBytes, bindNativePaste } from '@/utils/pasteText'
+import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, commitPasteWithEvidence, imagePasteBytes, bindNativePaste } from '@/utils/pasteText'
 
 function pasteEvent(text: string, types: string[] = ['text/plain']): ClipboardEvent {
   const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
@@ -438,6 +438,47 @@ describe('commitPaste', () => {
       commitPaste(async () => { throw boom }, () => current, t => t, write, () => ''),
     ).rejects.toThrow(boom)
     expect(write).not.toHaveBeenCalled()
+  })
+})
+
+describe('commitPasteWithEvidence', () => {
+  it('D18_Paste_EmptyTextWithoutImageEvidenceWritesNothing_010', async () => {
+    const write = vi.fn()
+    await commitPasteWithEvidence(
+      async () => '',
+      async () => { throw new Error('no image') },
+      () => ({ ptyId: 'pty-evidence' }),
+      text => text,
+      write,
+      () => '\\x1bv',
+    )
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('D18_Paste_PermissionFailureIsNotImage_011', async () => {
+    const write = vi.fn()
+    await expect(commitPasteWithEvidence(
+      async () => { throw new Error('text denied') },
+      async () => { throw new Error('image denied') },
+      () => ({ ptyId: 'pty-evidence' }),
+      text => text,
+      write,
+      () => '\\x1bv',
+    )).rejects.toThrow('CLIPBOARD_UNAVAILABLE')
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('D18_Paste_PositiveImageProbeUsesNativeImageKeyOnce_012', async () => {
+    const write = vi.fn(async () => {})
+    await commitPasteWithEvidence(
+      async () => '',
+      async () => ({ width: 1, height: 1 }),
+      () => ({ ptyId: 'pty-evidence' }),
+      text => text,
+      write,
+      () => '\\x1bv',
+    )
+    expect(write).toHaveBeenCalledExactlyOnceWith('pty-evidence', '\\x1bv')
   })
 })
 
