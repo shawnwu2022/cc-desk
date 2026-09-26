@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, imagePasteBytes, bindNativePaste } from '@/utils/pasteText'
 
-function pasteEvent(text: string): ClipboardEvent {
+function pasteEvent(text: string, types: string[] = ['text/plain']): ClipboardEvent {
   const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
   Object.defineProperty(event, 'clipboardData', {
-    value: { getData: (type: string) => type === 'text/plain' ? text : '' },
+    value: { types, getData: (type: string) => type === 'text/plain' ? text : '' },
   })
   return event
 }
