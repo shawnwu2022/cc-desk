@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -88,6 +89,43 @@ function blockedDriver(reason = 'SYNTHETIC_TEST_DRIVER_BLOCKED') {
     "    homeInsideTestRoot: process.env.HOME?.startsWith(process.env.CC_DESK_TEST_ROOT ?? '') ?? false,",
     "  },",
     "}), { flag: 'wx' })",
+  ].join('\n')
+}
+
+
+function passDriver(binaryHashExpression: string) {
+  return [
+    "import { createHash } from 'node:crypto'",
+    "import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'",
+    "import { dirname } from 'node:path'",
+    "const args = Object.fromEntries(process.argv.slice(2).reduce((rows, item, index, all) => {",
+    "  if (item.startsWith('--')) rows.push([item.slice(2), all[index + 1]])",
+    "  return rows",
+    "}, []))",
+    "const fixture = JSON.parse(readFileSync(args.fixture, 'utf8'))",
+    "const payload = Buffer.from(fixture.hostPayloadBase64, 'base64')",
+    "const payloadSha256 = createHash('sha256').update(payload).digest('hex')",
+    "const binarySha256 = " + binaryHashExpression,
+    "const target = {",
+    "  targetId: 'd20-fixture-target', os: 'fixture-os', osBuild: 'fixture-build', arch: 'fixture-arch',",
+    "  cli: { kind: fixture.cli, version: 'codex-fixture-1', binarySha256 },",
+    "}",
+    "const host = fixture.lane === 'cc-desk'",
+    "  ? { kind: 'cc-desk', deskCommit: 'c'.repeat(40), xtermVersion: '5.5.0', webviewRuntime: 'fixture-webview', renderer: 'webgl' }",
+    "  : { kind: 'system-terminal', terminalProgram: 'fixture-terminal' }",
+    "const hostPayloadEvidence = fixture.lane === 'cc-desk'",
+    "  ? { kind: 'native-input-frame', bytesBase64: fixture.hostPayloadBase64, sha256: payloadSha256, frame: { runId: fixture.runId, generation: 1, inputSeq: '1', modeEpoch: '1' } }",
+    "  : { kind: 'terminal-driver-write', bytesBase64: fixture.hostPayloadBase64, sha256: payloadSha256, driver: 'd20-system-terminal-driver-v1', writeSeq: '1' }",
+    "const prompt = payload.toString('utf8')",
+    "const rawEnvelope = { session_id: 'd20-session', turn_id: 'd20-turn', cwd: fixture.expectedCwd, hook_event_name: 'UserPromptSubmit', prompt }",
+    "const record = {",
+    "  schemaVersion: 1, caseId: 'NATIVE-63', evidenceLayer: 'C', status: 'PASS',",
+    "  runId: fixture.runId, lane: fixture.lane, observer: fixture.observer, target, host, hostPayloadEvidence,",
+    "  fixture: { fixtureSha256: fixture.fixtureSha256, nonce: fixture.nonce, originalText: fixture.originalText, hostPayloadBase64: fixture.hostPayloadBase64, transformId: fixture.transformId },",
+    "  oracle: { kind: 'real-user-prompt-submit', schemaVersion: 1, cli: fixture.cli, runId: fixture.runId, lane: fixture.lane, observer: fixture.observer, transformId: fixture.transformId, validation: { valid: true }, sessionId: 'd20-session', turnId: 'd20-turn', cwd: fixture.expectedCwd, rawEnvelope },",
+    "}",
+    "mkdirSync(dirname(args.report), { recursive: true })",
+    "writeFileSync(args.report, JSON.stringify(record), { flag: 'wx' })",
   ].join('\n')
 }
 
@@ -315,5 +353,45 @@ describe('D20 real CLI matrix runner', () => {
       })
     },
   )
+
+
+  it('D20_Runner_AcceptsPassWhenEvidenceMatchesActualBinaryHash_12', async () => {
+    const { executeD20Matrix, prepareD20Matrix } = await loadRunner()
+    const value = config()
+    materializeBinary(value.testRoot)
+    value.drivers = materializeDriver(
+      value.testRoot,
+      passDriver("createHash('sha256').update(readFileSync(args.binary)).digest('hex')"),
+    )
+    const result = executeD20Matrix(prepareD20Matrix(value))
+
+    expect(result).toEqual({
+      status: 'PASS',
+      cli: 'codex',
+      caseId: 'NATIVE-63',
+      recordPaths: expect.arrayContaining([
+        join(value.testRoot, 'runs', 'codex', 'cc-desk-off', 'evidence.json'),
+        join(value.testRoot, 'runs', 'codex', 'cc-desk-on', 'evidence.json'),
+        join(value.testRoot, 'runs', 'codex', 'system-terminal-off', 'evidence.json'),
+        join(value.testRoot, 'runs', 'codex', 'system-terminal-on', 'evidence.json'),
+      ]),
+    })
+  })
+
+  it('D20_Runner_RejectsForgedBinaryIdentityEvenWhenFourRecordsAgree_13', async () => {
+    const { executeD20Matrix, prepareD20Matrix } = await loadRunner()
+    const value = config()
+    const binaryPath = materializeBinary(value.testRoot)
+    const actualHash = createHash('sha256').update(readFileSync(binaryPath)).digest('hex')
+    expect(actualHash).not.toBe('a'.repeat(64))
+    value.drivers = materializeDriver(value.testRoot, passDriver("'a'.repeat(64)"))
+    const result = executeD20Matrix(prepareD20Matrix(value))
+
+    expect(result).toEqual({
+      status: 'FAIL',
+      reason: 'REAL_CLI_BINARY_HASH_MISMATCH',
+      failedRunId: 'codex-cc-desk-off-d20-runner-nonce-123',
+    })
+  })
 
 })
