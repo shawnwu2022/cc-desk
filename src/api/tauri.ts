@@ -91,6 +91,7 @@ export type PtyInputSource =
   | 'xterm-ondata-paste'
   | 'clipboard-keyboard'
   | 'clipboard-dom'
+  | 'ime-fallback'
   | 'other'
 
 export const ptyInput = async (
