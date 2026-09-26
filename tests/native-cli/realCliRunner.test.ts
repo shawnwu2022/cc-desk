@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -45,6 +45,50 @@ function config(overrides: Record<string, unknown> = {}) {
     originalText: 'd20-runner-nonce-123\n你好\n<pasted_content id="literal">keep literal</pasted_content id="literal">\n',
     ...overrides,
   }
+}
+
+
+function materializeBinary(testRoot: string) {
+  const path = join(testRoot, 'bin', 'codex')
+  mkdirSync(join(testRoot, 'bin'), { recursive: true })
+  writeFileSync(path, 'fixture binary identity only', 'utf8')
+  return path
+}
+
+function materializeDriver(testRoot: string, body: string) {
+  const dir = join(testRoot, 'drivers')
+  mkdirSync(dir, { recursive: true })
+  for (const name of ['cc-desk-driver.mjs', 'system-terminal-driver.mjs']) {
+    writeFileSync(join(dir, name), body, 'utf8')
+  }
+  return {
+    ccDesk: join(dir, 'cc-desk-driver.mjs'),
+    systemTerminal: join(dir, 'system-terminal-driver.mjs'),
+  }
+}
+
+function blockedDriver(reason = 'SYNTHETIC_TEST_DRIVER_BLOCKED') {
+  return [
+    "import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'",
+    "import { dirname } from 'node:path'",
+    "const args = Object.fromEntries(process.argv.slice(2).reduce((rows, item, index, all) => {",
+    "  if (item.startsWith('--')) rows.push([item.slice(2), all[index + 1]])",
+    "  return rows",
+    "}, []))",
+    "const fixture = JSON.parse(readFileSync(args.fixture, 'utf8'))",
+    "mkdirSync(dirname(args.report), { recursive: true })",
+    "writeFileSync(args.report, JSON.stringify({",
+    "  schemaVersion: 1, caseId: 'NATIVE-63', evidenceLayer: 'C', status: 'BLOCKED',",
+    "  runId: fixture.runId, cli: fixture.cli, reason: " + JSON.stringify(reason) + ",",
+    "  environmentProbe: {",
+    "    hasOpenAi: Object.hasOwn(process.env, 'OPENAI_API_KEY'),",
+    "    hasAnthropic: Object.hasOwn(process.env, 'ANTHROPIC_API_KEY'),",
+    "    hasClaudeOauth: Object.hasOwn(process.env, 'CLAUDE_CODE_OAUTH_TOKEN'),",
+    "    hasExplicitTestToken: Object.hasOwn(process.env, 'D20_TEST_ACCOUNT_TOKEN'),",
+    "    homeInsideTestRoot: process.env.HOME?.startsWith(process.env.CC_DESK_TEST_ROOT ?? '') ?? false,",
+    "  },",
+    "}), { flag: 'wx' })",
+  ].join('\n')
 }
 
 afterEach(() => {
@@ -153,4 +197,123 @@ describe('D20 real CLI matrix runner', () => {
       runs: [],
     })
   })
+
+  it('D20_Runner_ExecutionMissingBinaryIsBlocked_06', async () => {
+    const { executeD20Matrix, prepareD20Matrix } = await loadRunner()
+    const value = config()
+    value.drivers = materializeDriver(value.testRoot, blockedDriver())
+    const plan = prepareD20Matrix(value)
+
+    expect(executeD20Matrix(plan)).toEqual({
+      status: 'BLOCKED',
+      cli: 'codex',
+      reason: 'REAL_CLI_BINARY_UNAVAILABLE',
+      recordPaths: [],
+    })
+  })
+
+  it('D20_Runner_ExecutionMissingDriverIsBlocked_07', async () => {
+    const { executeD20Matrix, prepareD20Matrix } = await loadRunner()
+    const value = config()
+    materializeBinary(value.testRoot)
+    const plan = prepareD20Matrix(value)
+
+    expect(executeD20Matrix(plan)).toEqual({
+      status: 'BLOCKED',
+      cli: 'codex',
+      reason: 'REAL_CLI_DRIVER_UNAVAILABLE',
+      recordPaths: [],
+    })
+  })
+
+  it('D20_Runner_ExecutesFourCellsWithoutProductionCredentialLeak_08', async () => {
+    const { executeD20Matrix, prepareD20Matrix } = await loadRunner()
+    const value = config()
+    materializeBinary(value.testRoot)
+    value.drivers = materializeDriver(value.testRoot, blockedDriver())
+    const plan = prepareD20Matrix(value)
+    const result = executeD20Matrix(plan)
+
+    expect(result.status).toBe('BLOCKED')
+    expect(result.reason).toBe('INCOMPLETE_REAL_CLI_EVIDENCE')
+    expect(result.recordPaths).toHaveLength(4)
+    expect(result.recordPaths).toEqual(plan.runs.map((run: any) => run.reportPath))
+
+    for (const recordPath of result.recordPaths) {
+      const record = JSON.parse(readFileSync(recordPath, 'utf8'))
+      expect(record.status).toBe('BLOCKED')
+      expect(record.environmentProbe).toEqual({
+        hasOpenAi: false,
+        hasAnthropic: false,
+        hasClaudeOauth: false,
+        hasExplicitTestToken: true,
+        homeInsideTestRoot: true,
+      })
+    }
+  })
+
+  it('D20_Runner_RejectsMalformedPassBeforeComparison_09', async () => {
+    const { executeD20Matrix, prepareD20Matrix } = await loadRunner()
+    const value = config()
+    materializeBinary(value.testRoot)
+    value.drivers = materializeDriver(value.testRoot, [
+      "import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'",
+      "import { dirname } from 'node:path'",
+      "const args = Object.fromEntries(process.argv.slice(2).reduce((rows, item, index, all) => {",
+      "  if (item.startsWith('--')) rows.push([item.slice(2), all[index + 1]])",
+      "  return rows",
+      "}, []))",
+      "const fixture = JSON.parse(readFileSync(args.fixture, 'utf8'))",
+      "mkdirSync(dirname(args.report), { recursive: true })",
+      "writeFileSync(args.report, JSON.stringify({",
+      "  schemaVersion: 1, caseId: 'NATIVE-63', evidenceLayer: 'C', status: 'PASS',",
+      "  runId: fixture.runId, lane: fixture.lane, observer: fixture.observer, target: null,",
+      "}), { flag: 'wx' })",
+    ].join('\n'))
+    const result = executeD20Matrix(prepareD20Matrix(value))
+
+    expect(result.status).toBe('FAIL')
+    expect(result.reason).toBe('INVALID_REAL_CLI_EVIDENCE:TARGET_IDENTITY_REQUIRED')
+    expect(result.failedRunId).toBe('codex-cc-desk-off-d20-runner-nonce-123')
+    expect(JSON.stringify(result)).not.toContain('explicit-authorized-test-token')
+    expect(JSON.stringify(result)).not.toContain('keep literal')
+  })
+
+  it('D20_Runner_DriverStdoutIsFailureAndNeverEchoed_10', async () => {
+    const { executeD20Matrix, prepareD20Matrix } = await loadRunner()
+    const value = config()
+    materializeBinary(value.testRoot)
+    value.drivers = materializeDriver(value.testRoot, [
+      "process.stdout.write('driver-secret-output-must-not-escape')",
+      blockedDriver(),
+    ].join('\n'))
+    const result = executeD20Matrix(prepareD20Matrix(value))
+
+    expect(result.status).toBe('FAIL')
+    expect(result.reason).toBe('REAL_CLI_DRIVER_STDOUT_FORBIDDEN')
+    expect(JSON.stringify(result)).not.toContain('driver-secret-output-must-not-escape')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'D20_Runner_ExecutionRejectsSymlinkEscape_11',
+    async () => {
+      const { executeD20Matrix, prepareD20Matrix } = await loadRunner()
+      const value = config()
+      const outside = root()
+      const outsideBinary = join(outside, 'codex')
+      writeFileSync(outsideBinary, 'outside binary', 'utf8')
+      mkdirSync(join(value.testRoot, 'bin'), { recursive: true })
+      symlinkSync(outsideBinary, value.binaryPath)
+      value.drivers = materializeDriver(value.testRoot, blockedDriver())
+      const result = executeD20Matrix(prepareD20Matrix(value))
+
+      expect(result).toEqual({
+        status: 'BLOCKED',
+        cli: 'codex',
+        reason: 'REAL_CLI_BINARY_NOT_ISOLATED',
+        recordPaths: [],
+      })
+    },
+  )
+
 })
