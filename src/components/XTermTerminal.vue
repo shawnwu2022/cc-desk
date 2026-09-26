@@ -40,8 +40,9 @@ import { safeDispose } from '@/utils/dispose'
 import { relativizePath } from '@/utils/path'
 import { PtyIndex } from '@/utils/ptyIndex'
 import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
-import { bindNativePaste, buildPastePayload, commitPaste, imagePasteBytes } from '@/utils/pasteText'
-import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
+import { bindNativePaste, buildPastePayload, commitPasteWithEvidence, imagePasteBytes } from '@/utils/pasteText'
+import { createImeInputPolicy, isPasteShortcut } from '@/terminal/inputPolicy'
+import { readImage, readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 
@@ -289,9 +290,6 @@ async function disposeTerminal(term: Terminal, context: string) {
 // _keyDownSeen，只在精确漏发分支（composed=true && keyDownSeen=true）补发，绝不与 xterm 重复；
 // 并排除走了真实 composition 生命周期的输入（微软拼音等，由 xterm 原生 composition 路径处理）。
 interface ImeFixState {
-  keyDownSeen: boolean      // 镜像 xterm _keyDownSeen：keydown 置 true，keyup 置 false
-  compositionSeen: boolean  // 本次输入周期见过 compositionstart（走 composition 的 IME），不补发
-  dataSeen: boolean         // 本次 keydown 后 xterm 是否已通过 onData 发送（普通字母已发→不补；IME 漏发→补）
   dispose: () => void
 }
 const imeFixStates = new WeakMap<HTMLTextAreaElement, ImeFixState>()
@@ -303,26 +301,35 @@ function attachImeInputFix(term: Terminal) {
   // 用 textarea（DOM 元素，不被 Vue reactive proxy）作 key，避免 proxy term 与原始 term
   // 视为不同 key 导致重复绑定（setTerminalEl 的 instance.term 是 proxy，startTab 的 term 是原始）
   if (imeFixStates.has(ta)) return
-  const state: ImeFixState = { keyDownSeen: false, compositionSeen: false, dataSeen: false, dispose: () => {} }
+  const policy = createImeInputPolicy()
+  const state: ImeFixState = { dispose: () => {} }
 
-  const onKeyDown = () => { state.keyDownSeen = true; state.compositionSeen = false; state.dataSeen = false }
-  const onKeyUp = () => { state.keyDownSeen = false }
-  const onCompositionStart = () => { state.compositionSeen = true }
+  const onKeyDown = () => policy.keyDown()
+  const onKeyUp = () => policy.keyUp()
+  const onCompositionStart = () => policy.compositionStart()
   const onInput = (e: Event) => {
     const ie = e as InputEvent
-    // 仅补发 xterm 真正漏发的：composed insertText、本次 keydown 后、未见 composition、
-    // 且 xterm 自己没通过 onData 发送过。普通字母 xterm keydown 已发 onData（dataSeen=true）→不补，
-    // 避免搜狗英文状态 Shift+I 出现 "II" 重复；搜狗中文 Shift 切换提交拼音时 xterm 因 IME 拦截
-    // keydown 未发 onData（dataSeen=false）→ 补，修复拼音丢失。
-    if (ie.inputType === 'insertText' && ie.composed && ie.data && state.keyDownSeen && !state.compositionSeen && !state.dataSeen) {
-      term.input(ie.data)
+    const text = policy.input({
+      inputType: ie.inputType,
+      composed: ie.composed,
+      data: ie.data,
+    })
+    if (!text) return
+
+    // The fallback is a proven user action. Send it directly instead of feeding
+    // it back through term.input(), which would re-emerge as ambiguous onData.
+    for (const instance of terminalInstances.values()) {
+      if (instance.term.textarea === ta && instance.ptyId) {
+        void ptyInput(instance.ptyId, text, 'ime-fallback')
+        return
+      }
     }
   }
   ta.addEventListener('keydown', onKeyDown)
   ta.addEventListener('keyup', onKeyUp)
   ta.addEventListener('compositionstart', onCompositionStart)
   ta.addEventListener('input', onInput)
-  const onDataDisp = term.onData(() => { state.dataSeen = true })
+  const onDataDisp = term.onData(() => policy.xtermData())
   state.dispose = () => {
     ta.removeEventListener('keydown', onKeyDown)
     ta.removeEventListener('keyup', onKeyUp)
@@ -413,7 +420,7 @@ function createTerminal(tabId: string): Terminal {
     }
 
     // Ctrl+V / Cmd+V 粘贴
-    if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
+    if (isPasteShortcut(event)) {
       event.preventDefault()
       // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
       // 触发光标回行首、后续覆盖前面（表现为"只显尾部"）。这里用 commitPaste 走完整
@@ -422,8 +429,9 @@ function createTerminal(tabId: string): Terminal {
       // JSON 不再自动压缩；Windows 粘贴帧由 Rust 生产 writer 保护。
       // 剪贴板无文本（截图场景 readText reject）时经 imageFallback 转发 CLI 图片粘贴键
       // 字节，由 CLI 自行读剪贴板插 [Image #N]（键位契约见 docs/interaction.md）。
-      commitPaste(
+      commitPasteWithEvidence(
         readText,
+        readImage,
         () => terminalInstances.get(tabId),
         text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
         (id, payload) => ptyInput(id, payload, 'clipboard-keyboard'),
