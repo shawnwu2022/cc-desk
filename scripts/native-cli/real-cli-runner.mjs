@@ -399,18 +399,18 @@ export function executeD20Matrix(plan, options = {}) {
     if (!recordMatchesCell(record, plan, run)) {
       return executionFailure('REAL_CLI_RECORD_PROVENANCE_MISMATCH', run.runId)
     }
-    if (
-      record.status === 'PASS'
-      && record.target?.cli?.binarySha256?.toLowerCase() !== actualBinarySha256
-    ) {
-      return executionFailure('REAL_CLI_BINARY_HASH_MISMATCH', run.runId)
-    }
     const validation = validateRealCliRun(record)
     if (!validation.valid) {
       return executionFailure(
         `INVALID_REAL_CLI_EVIDENCE:${validation.reason}`,
         run.runId,
       )
+    }
+    if (
+      record.status === 'PASS'
+      && record.target.cli.binarySha256.toLowerCase() !== actualBinarySha256
+    ) {
+      return executionFailure('REAL_CLI_BINARY_HASH_MISMATCH', run.runId)
     }
     records.push(record)
     recordPaths.push(run.reportPath)
