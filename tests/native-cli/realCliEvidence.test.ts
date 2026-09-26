@@ -52,6 +52,19 @@ function run(
         prompt: payload,
       }
 
+  const transformId = cli === 'codex'
+    ? 'codex-user-prompt-submit-v1-exact'
+    : 'claude-user-prompt-submit-v1-exact'
+  const fixtureIdentity = {
+    nonce: 'd20-nonce-123',
+    originalText: payload,
+    hostPayloadBase64: payloadBase64,
+    transformId,
+  }
+  const fixtureSha256 = createHash('sha256')
+    .update(JSON.stringify(fixtureIdentity), 'utf8')
+    .digest('hex')
+
   return {
     schemaVersion: 1,
     caseId: 'NATIVE-63',
@@ -62,13 +75,8 @@ function run(
     observer,
     target: target(cli),
     fixture: {
-      fixtureSha256: otherSha256,
-      nonce: 'd20-nonce-123',
-      originalText: payload,
-      hostPayloadBase64: payloadBase64,
-      transformId: cli === 'codex'
-        ? 'codex-user-prompt-submit-v1-exact'
-        : 'claude-user-prompt-submit-v1-exact',
+      fixtureSha256,
+      ...fixtureIdentity,
     },
     host: lane === 'cc-desk'
       ? {
@@ -104,6 +112,11 @@ function run(
     oracle: {
       kind: 'real-user-prompt-submit',
       schemaVersion: 1,
+      cli,
+      runId: `${cli}-${lane}-${observer}`,
+      lane,
+      observer,
+      transformId,
       validation: { valid: true },
       sessionId: 'session-d20',
       turnId: cli === 'codex' ? 'turn-d20' : null,
@@ -231,6 +244,44 @@ describe('D20 real CLI certification evidence', () => {
       valid: false,
       reason: 'SYSTEM_TERMINAL_WRITE_EVIDENCE_REQUIRED',
     })
+  })
+
+  it('D20_Evidence_FixtureHashMustMatchCanonicalIdentity_03d', async () => {
+    const { validateRealCliRun } = await loadEvidence()
+
+    const forgedHash = run('codex', 'cc-desk', 'off')
+    ;(forgedHash.fixture as Record<string, unknown>).fixtureSha256 = otherSha256
+    expect(validateRealCliRun(forgedHash)).toEqual({
+      valid: false,
+      reason: 'FIXTURE_HASH_MISMATCH',
+    })
+
+    const mutatedFixture = run('codex', 'cc-desk', 'off')
+    ;(mutatedFixture.fixture as Record<string, unknown>).originalText =
+      `${payload}mutated-after-hash`
+    expect(validateRealCliRun(mutatedFixture)).toEqual({
+      valid: false,
+      reason: 'FIXTURE_HASH_MISMATCH',
+    })
+  })
+
+  it('D20_Evidence_OracleCollectorIdentityMustMatchOuterRun_03e', async () => {
+    const { validateRealCliRun } = await loadEvidence()
+
+    for (const [field, value] of [
+      ['runId', 'different-run'],
+      ['cli', 'claude'],
+      ['lane', 'system-terminal'],
+      ['observer', 'on'],
+      ['transformId', 'claude-user-prompt-submit-v1-exact'],
+    ] as const) {
+      const forged = run('codex', 'cc-desk', 'off')
+      ;(forged.oracle as Record<string, unknown>)[field] = value
+      expect(validateRealCliRun(forged)).toEqual({
+        valid: false,
+        reason: 'ORACLE_PROVENANCE_MISMATCH',
+      })
+    }
   })
 
   it('D20_Evidence_CodexRequiresTurnIdentity_04', async () => {
