@@ -193,7 +193,7 @@ describe('D20 real CLI certification evidence', () => {
     const { validateRealCliRun } = await loadEvidence()
 
     const missing = run('codex', 'cc-desk', 'off')
-    missing.hostPayloadEvidence = null
+    ;(missing as Record<string, unknown>).hostPayloadEvidence = null
     expect(validateRealCliRun(missing)).toEqual({
       valid: false,
       reason: 'HOST_PAYLOAD_PROVENANCE_REQUIRED',
