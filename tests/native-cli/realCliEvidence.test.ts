@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,6 +10,7 @@ const otherSha256 = 'b'.repeat(64)
 const commitSha = 'c'.repeat(40)
 const payload = 'd20-nonce-123\n你好\n<pasted_content id="literal">keep me</pasted_content id="literal">\n'
 const payloadBase64 = Buffer.from(payload, 'utf8').toString('base64')
+const payloadSha256 = createHash('sha256').update(Buffer.from(payloadBase64, 'base64')).digest('hex')
 
 async function loadEvidence() {
   expect(existsSync(evidencePath), 'real-cli-evidence.mjs must exist').toBe(true)
@@ -79,6 +81,25 @@ function run(
       : {
           kind: 'system-terminal',
           terminalProgram: 'fixture-terminal',
+        },
+    hostPayloadEvidence: lane === 'cc-desk'
+      ? {
+          kind: 'native-input-frame',
+          bytesBase64: payloadBase64,
+          sha256: payloadSha256,
+          frame: {
+            runId: `${cli}-native-run-${observer}`,
+            generation: 7,
+            inputSeq: '1',
+            modeEpoch: '3',
+          },
+        }
+      : {
+          kind: 'terminal-driver-write',
+          bytesBase64: payloadBase64,
+          sha256: payloadSha256,
+          driver: 'd20-system-terminal-driver-v1',
+          writeSeq: '1',
         },
     oracle: {
       kind: 'real-user-prompt-submit',
@@ -165,6 +186,50 @@ describe('D20 real CLI certification evidence', () => {
     expect(validateRealCliRun(noPayload)).toEqual({
       valid: false,
       reason: 'HOST_PAYLOAD_REQUIRED',
+    })
+  })
+
+  it('D20_Evidence_PassRequiresRecordedHostPayloadProvenance_03b', async () => {
+    const { validateRealCliRun } = await loadEvidence()
+
+    const missing = run('codex', 'cc-desk', 'off')
+    missing.hostPayloadEvidence = null
+    expect(validateRealCliRun(missing)).toEqual({
+      valid: false,
+      reason: 'HOST_PAYLOAD_PROVENANCE_REQUIRED',
+    })
+
+    const forgedBytes = run('codex', 'cc-desk', 'off')
+    ;(forgedBytes.hostPayloadEvidence as Record<string, unknown>).bytesBase64 =
+      Buffer.from('different', 'utf8').toString('base64')
+    expect(validateRealCliRun(forgedBytes)).toEqual({
+      valid: false,
+      reason: 'HOST_PAYLOAD_EVIDENCE_MISMATCH',
+    })
+
+    const forgedHash = run('codex', 'system-terminal', 'off')
+    ;(forgedHash.hostPayloadEvidence as Record<string, unknown>).sha256 = otherSha256
+    expect(validateRealCliRun(forgedHash)).toEqual({
+      valid: false,
+      reason: 'HOST_PAYLOAD_EVIDENCE_MISMATCH',
+    })
+  })
+
+  it('D20_Evidence_HostPayloadProvenanceIsLaneSpecific_03c', async () => {
+    const { validateRealCliRun } = await loadEvidence()
+
+    const desk = run('codex', 'cc-desk', 'off')
+    ;(desk.hostPayloadEvidence as Record<string, unknown>).kind = 'terminal-driver-write'
+    expect(validateRealCliRun(desk)).toEqual({
+      valid: false,
+      reason: 'DESK_HOST_PAYLOAD_FRAME_REQUIRED',
+    })
+
+    const terminal = run('codex', 'system-terminal', 'off')
+    ;(terminal.hostPayloadEvidence as Record<string, unknown>).kind = 'native-input-frame'
+    expect(validateRealCliRun(terminal)).toEqual({
+      valid: false,
+      reason: 'SYSTEM_TERMINAL_WRITE_EVIDENCE_REQUIRED',
     })
   })
 
