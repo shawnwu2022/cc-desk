@@ -48,7 +48,12 @@ export function bindXtermInputProvenance(
   const track = (operation: Promise<void> | void) => {
     const task = Promise.resolve(operation)
     pending.add(task)
-    void task.finally(() => pending.delete(task))
+    // Do not create a detached rejected promise via finally(). drain() owns
+    // observation of route failures; this completion hook only maintains the set.
+    void task.then(
+      () => pending.delete(task),
+      () => pending.delete(task),
+    )
   }
 
   const userDisposable = onUserInput(() => {
