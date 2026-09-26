@@ -110,3 +110,36 @@ export function createImeInputPolicy(): ImeInputPolicy {
     },
   }
 }
+
+
+/**
+ * Reads text first because mixed text+image clipboards should paste the textual
+ * representation. Only a successful image read counts as positive image evidence.
+ */
+export async function readClipboardSnapshot(
+  readText: () => Promise<string>,
+  readImage?: () => Promise<unknown>,
+): Promise<ClipboardClassification> {
+  let text: string | undefined
+  let textError: unknown
+  try {
+    text = await readText()
+  } catch (error) {
+    textError = error
+  }
+
+  if (text) {
+    return { kind: 'text', text }
+  }
+
+  if (readImage) {
+    try {
+      await readImage()
+      return { kind: 'image' }
+    } catch {
+      // Absence/failure of image probing is not itself image evidence.
+    }
+  }
+
+  return classifyClipboardSnapshot({ text, textError, types: [] })
+}
