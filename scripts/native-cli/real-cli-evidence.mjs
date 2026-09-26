@@ -31,6 +31,19 @@ function canonicalBase64(value) {
   }
 }
 
+export function realCliFixtureSha256(fixture) {
+  if (!isObject(fixture)) return null
+  const identity = {
+    nonce: fixture.nonce,
+    originalText: fixture.originalText,
+    hostPayloadBase64: fixture.hostPayloadBase64,
+    transformId: fixture.transformId,
+  }
+  return createHash('sha256')
+    .update(JSON.stringify(identity), 'utf8')
+    .digest('hex')
+}
+
 function cliKindFrom(record) {
   return record?.target?.cli?.kind ?? record?.cli ?? null
 }
@@ -160,6 +173,13 @@ export function validateRealCliRun(record) {
   }
   const payloadBytes = canonicalBase64(fixture.hostPayloadBase64)
   if (!payloadBytes) return fail('HOST_PAYLOAD_REQUIRED')
+  const fixtureHash = realCliFixtureSha256(fixture)
+  if (
+    fixtureHash === null
+    || fixture.fixtureSha256.toLowerCase() !== fixtureHash
+  ) {
+    return fail('FIXTURE_HASH_MISMATCH')
+  }
   const hostPayload = payloadBytes.toString('utf8')
 
   const provenance = record.hostPayloadEvidence
@@ -227,6 +247,15 @@ export function validateRealCliRun(record) {
   }
   if (oracle.schemaVersion !== 1 || !isObject(oracle.validation) || oracle.validation.valid !== true) {
     return fail('VALID_ORACLE_REQUIRED')
+  }
+  if (
+    oracle.cli !== target.cli.kind
+    || oracle.runId !== record.runId
+    || oracle.lane !== record.lane
+    || oracle.observer !== record.observer
+    || oracle.transformId !== fixture.transformId
+  ) {
+    return fail('ORACLE_PROVENANCE_MISMATCH')
   }
   if (!isObject(oracle.rawEnvelope)) return fail('RAW_ENVELOPE_REQUIRED')
   if (!text(oracle.sessionId) || !text(oracle.cwd)) return fail('ORACLE_IDENTITY_REQUIRED')
