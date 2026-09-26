@@ -44,6 +44,8 @@ export function bindXtermInputProvenance(
   let pendingUserSignals = 0
   let disposed = false
   const pending = new Set<Promise<void>>()
+  let hasFailure = false
+  let firstFailure: unknown
 
   const track = (operation: Promise<void> | void) => {
     const task = Promise.resolve(operation)
@@ -52,7 +54,13 @@ export function bindXtermInputProvenance(
     // observation of route failures; this completion hook only maintains the set.
     void task.then(
       () => pending.delete(task),
-      () => pending.delete(task),
+      error => {
+        pending.delete(task)
+        if (!hasFailure) {
+          hasFailure = true
+          firstFailure = error
+        }
+      },
     )
   }
 
@@ -77,7 +85,13 @@ export function bindXtermInputProvenance(
   return {
     async drain() {
       while (pending.size > 0) {
-        await Promise.all([...pending])
+        await Promise.all([...pending].map(task => task.catch(() => undefined)))
+      }
+      if (hasFailure) {
+        const error = firstFailure
+        hasFailure = false
+        firstFailure = undefined
+        throw error
       }
     },
 
