@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 const SHA256 = /^[0-9a-f]{64}$/i
 const COMMIT_SHA = /^[0-9a-f]{40}$/i
 const EXACT_TRANSFORMS = new Set([
@@ -159,6 +161,43 @@ export function validateRealCliRun(record) {
   const payloadBytes = canonicalBase64(fixture.hostPayloadBase64)
   if (!payloadBytes) return fail('HOST_PAYLOAD_REQUIRED')
   const hostPayload = payloadBytes.toString('utf8')
+
+  const provenance = record.hostPayloadEvidence
+  if (!isObject(provenance)) {
+    return fail('HOST_PAYLOAD_PROVENANCE_REQUIRED')
+  }
+
+  if (record.lane === 'cc-desk') {
+    if (
+      provenance.kind !== 'native-input-frame'
+      || !isObject(provenance.frame)
+      || !text(provenance.frame.runId)
+      || !Number.isInteger(provenance.frame.generation)
+      || provenance.frame.generation < 0
+      || provenance.frame.generation > 0xffffffff
+      || !/^(?:0|[1-9][0-9]*)$/.test(provenance.frame.inputSeq ?? '')
+      || !/^(?:0|[1-9][0-9]*)$/.test(provenance.frame.modeEpoch ?? '')
+    ) {
+      return fail('DESK_HOST_PAYLOAD_FRAME_REQUIRED')
+    }
+  } else if (
+    provenance.kind !== 'terminal-driver-write'
+    || !text(provenance.driver)
+    || !/^(?:0|[1-9][0-9]*)$/.test(provenance.writeSeq ?? '')
+  ) {
+    return fail('SYSTEM_TERMINAL_WRITE_EVIDENCE_REQUIRED')
+  }
+
+  const provenanceBytes = canonicalBase64(provenance.bytesBase64)
+  const actualPayloadHash = createHash('sha256').update(payloadBytes).digest('hex')
+  if (
+    !provenanceBytes
+    || !provenanceBytes.equals(payloadBytes)
+    || !SHA256.test(provenance.sha256 ?? '')
+    || provenance.sha256.toLowerCase() !== actualPayloadHash
+  ) {
+    return fail('HOST_PAYLOAD_EVIDENCE_MISMATCH')
+  }
   if (
     !fixture.originalText.includes(fixture.nonce)
     || !hostPayload.includes(fixture.nonce)
