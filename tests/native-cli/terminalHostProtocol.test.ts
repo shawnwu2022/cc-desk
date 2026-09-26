@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createTerminalHostProtocol } from '@/terminal/nativeHostProtocol'
 
-const utf8 = (value: string) => new TextEncoder().encode(value)
-
 function receipt(
   runId: string,
   generation: number,
