@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const writeInput = vi.fn()
-const writeProtocol = vi.fn()
-const ackOutput = vi.fn()
+const { writeInput, writeProtocol, ackOutput } = vi.hoisted(() => ({
+  writeInput: vi.fn(),
+  writeProtocol: vi.fn(),
+  ackOutput: vi.fn(),
+}))
 
 vi.mock('@/api/tauri', () => ({
   cliWriteInput: writeInput,
