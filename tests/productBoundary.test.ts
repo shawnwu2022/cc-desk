@@ -37,6 +37,23 @@ describe('CC Desk product boundary', () => {
     expect(app).toContain("startupError && currentView !== 'native'")
   })
 
+  test('native workbench DOM and IPC surfaces stay inert and authenticated', () => {
+    const workbench = read('src/components/NativeCliWorkbench.vue')
+    const terminal = read('src/components/NativeCliTerminal.vue')
+    expect(workbench).not.toContain('v-html')
+    expect(terminal).not.toContain('v-html')
+    expect(workbench).not.toContain('innerHTML')
+    expect(terminal).not.toContain('innerHTML')
+
+    const api = read('src/api/tauri.ts')
+    const marker = api.indexOf('// The native document bridge owns the proof')
+    expect(marker).toBeGreaterThan(-1)
+    const nativeSection = api.slice(marker)
+    expect(nativeSection).not.toMatch(/\binvoke\s*\(/)
+    expect(nativeSection).toContain("nativeDocumentBridge().invoke('cli_stop'")
+    expect(nativeSection).toContain("nativeDocumentBridge().invoke('cli_resize'")
+  })
+
   test('native capability panels are projection-only', () => {
     const commands = read('src-tauri/src/lib.rs')
     expect(commands).not.toContain('commands::set_skill_enabled')
