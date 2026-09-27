@@ -42,7 +42,7 @@ let pasteListener: ((event: ClipboardEvent) => void) | null = null
 let imeCleanup: (() => void) | null = null
 let runToken: object = {}
 let observedBracketed = false
-let modeEpoch = 1n
+let modeEpoch = BigInt(1)
 let launched = false
 let inputEnabled = false
 let statusTimer: ReturnType<typeof setInterval> | null = null
@@ -88,7 +88,7 @@ function refreshModeEpoch(): string {
   const current = term.modes.bracketedPasteMode
   if (current !== observedBracketed) {
     observedBracketed = current
-    modeEpoch += 1n
+    modeEpoch += BigInt(1)
   }
   return modeEpoch.toString()
 }
@@ -218,7 +218,7 @@ async function start(): Promise<void> {
   disposeRunBinding()
   runToken = token
   observedBracketed = term.modes.bracketedPasteMode
-  modeEpoch = 1n
+  modeEpoch = BigInt(1)
 
   const runId = tab.runId
   const generation = tab.generation
