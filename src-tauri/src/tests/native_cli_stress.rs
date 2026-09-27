@@ -68,7 +68,11 @@ fn D27_Transport_ThirtyTwoRunsProgressUnderTinyGlobalBudget_001() {
     let mut epochs = Vec::new();
     for index in 0..RUNS {
         let stream = hub
-            .attach(owner.clone(), run(index), notifying_route(index, tx.clone()))
+            .attach(
+                owner.clone(),
+                run(index),
+                notifying_route(index, tx.clone()),
+            )
             .unwrap();
         epochs.push(stream.stream_epoch().to_string());
         streams.push(stream);
@@ -76,9 +80,7 @@ fn D27_Transport_ThirtyTwoRunsProgressUnderTinyGlobalBudget_001() {
 
     let mut workers = Vec::new();
     for (index, stream) in streams.iter().cloned().enumerate() {
-        workers.push(std::thread::spawn(move || {
-            stream.send(&[index as u8; 4])
-        }));
+        workers.push(std::thread::spawn(move || stream.send(&[index as u8; 4])));
     }
 
     let mut seen = HashSet::new();
@@ -146,7 +148,11 @@ fn D27_Transport_QueuedRunsDoNotBypassAppBudget_003() {
     let mut epochs = Vec::new();
     for index in 0..4 {
         let stream = hub
-            .attach(owner.clone(), run(index), notifying_route(index, tx.clone()))
+            .attach(
+                owner.clone(),
+                run(index),
+                notifying_route(index, tx.clone()),
+            )
             .unwrap();
         epochs.push(stream.stream_epoch().to_string());
         streams.push(stream);
