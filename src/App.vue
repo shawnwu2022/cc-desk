@@ -33,7 +33,7 @@
   </div>
 
   <!-- 启动加载/失败门禁 -->
-  <div v-if="startupError" class="startup-error-overlay">
+  <div v-if="startupError && currentView !== 'native'" class="startup-error-overlay">
     <div class="startup-error-card">
       <h2>{{ t('startupFailed') }}</h2>
       <p class="startup-error-msg">{{ startupError }}</p>
@@ -44,7 +44,7 @@
   <!-- 添加项目 spawn 失败提示（独立于启动门禁）。
        v6 codex batch1 #2：persistFailed=true 时标题/语义切换为「保存失败」（Claude 已跑，重试只重 persist）；
        否则 claudeStartFailed（重试=重 spawn 同目录） -->
-  <div v-if="projectSpawnError" class="startup-error-overlay">
+  <div v-if="projectSpawnError && currentView !== 'native'" class="startup-error-overlay">
     <div class="startup-error-card">
       <h2>{{ projectSpawnError.persistFailed ? t('saveLastOpenedFailed') : t('claudeStartFailed') }}</h2>
       <p class="startup-error-msg">{{ projectSpawnError.msg }}</p>
