@@ -6,13 +6,34 @@ import { spawnSync } from 'node:child_process'
 
 const token = '0123456789abcdef0123456789abcdef'
 const script = 'src-tauri/plugin/scripts/report-hook.sh'
+function toBashPath(path: string): string {
+  if (process.platform !== 'win32') return path
+  return path
+    .replace(/^([A-Za-z]):[\\\\/]/, (_match, drive: string) => `/${drive.toLowerCase()}/`)
+    .replace(/\\\\/g, '/')
+}
+
+function bashQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
 function capture(auth: boolean, input: Buffer = Buffer.from('{"hook_event_name":"Stop"}')) {
   const dir = mkdtempSync(join(tmpdir(), 'observer-reporter-'))
   const record = join(dir, 'record.json')
   try {
-    writeFileSync(join(dir, 'curl'), `#!${process.execPath}\nconst parts=[];process.stdin.on('data',b=>parts.push(b));process.stdin.on('end',()=>require('node:fs').writeFileSync(${JSON.stringify(record)},JSON.stringify({config:Buffer.concat(parts).toString(),args:process.argv,secret:process.env.CC_DESK_OBSERVER_CAPABILITY,accidentallyExported:process.env.capability,bodyExported:process.env.payload})));\n`, { mode: 0o700 })
-    const result = spawnSync('bash', [resolve(script)], {
-      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, CC_BOX_HOOK_PORT: '12345', capability: 'preexisting-export', payload: 'preexisting-export', CC_DESK_OBSERVER_RUN: 'run', CC_DESK_OBSERVER_GENERATION: '1', CC_DESK_OBSERVER_CAPABILITY: auth ? token : '' },
+    const captureScript = join(dir, 'capture-curl.cjs')
+    writeFileSync(captureScript, `const parts=[];process.stdin.on('data',b=>parts.push(b));process.stdin.on('end',()=>require('node:fs').writeFileSync(${JSON.stringify(record)},JSON.stringify({config:Buffer.concat(parts).toString(),args:process.argv,secret:process.env.CC_DESK_OBSERVER_CAPABILITY,accidentallyExported:process.env.capability,bodyExported:process.env.payload})));\n`)
+    writeFileSync(
+      join(dir, 'curl'),
+      `#!/bin/bash\nnode "${toBashPath(captureScript)}" "$@"\n`,
+      { mode: 0o700 },
+    )
+    const command = [
+      `export PATH=${bashQuote(toBashPath(dir))}:"$PATH"`,
+      `exec ${bashQuote(toBashPath(resolve(script)))}`,
+    ].join('; ')
+    const result = spawnSync('bash', ['-lc', command], {
+      env: { ...process.env, CC_BOX_HOOK_PORT: '12345', capability: 'preexisting-export', payload: 'preexisting-export', CC_DESK_OBSERVER_RUN: 'run', CC_DESK_OBSERVER_GENERATION: '1', CC_DESK_OBSERVER_CAPABILITY: auth ? token : '' },
       input, timeout: 6000,
     })
     expect(result.status).toBe(0)

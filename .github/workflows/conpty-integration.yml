@@ -13,7 +13,6 @@ on:
       - tests/scripts/conptyBundle.node.cjs
       - .github/workflows/conpty-integration.yml
   pull_request:
-    branches: [main]
     paths:
       - src-tauri/src/main.rs
       - src-tauri/src/conpty_runtime.rs
