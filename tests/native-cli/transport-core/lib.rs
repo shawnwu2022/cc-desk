@@ -261,12 +261,24 @@ mod tests {
             let b = b.clone();
             std::thread::spawn(move || b.send(&[3, 3, 3, 3]))
         };
-        std::thread::sleep(Duration::from_millis(20));
+        for _ in 0..100 {
+            if hub.waiting_streams() == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(hub.waiting_streams(), 1);
         let c_worker = {
             let c_stream = c_stream.clone();
             std::thread::spawn(move || c_stream.send(&[4, 4, 4, 4]))
         };
-        std::thread::sleep(Duration::from_millis(20));
+        for _ in 0..100 {
+            if hub.waiting_streams() == 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(hub.waiting_streams(), 2);
         assert!(b_events.lock().is_empty());
         assert!(c_events.lock().is_empty());
 
@@ -313,7 +325,13 @@ mod tests {
             let b = b.clone();
             std::thread::spawn(move || b.send(&[9, 9, 9, 9]))
         };
-        std::thread::sleep(Duration::from_millis(20));
+        for _ in 0..100 {
+            if hub.waiting_streams() == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(hub.waiting_streams(), 1);
 
         a_route.revoke();
         for _ in 0..100 {
@@ -383,7 +401,13 @@ mod tests {
             let b = b.clone();
             std::thread::spawn(move || b.send(&[2, 2, 2, 2]))
         };
-        std::thread::sleep(Duration::from_millis(20));
+        for _ in 0..100 {
+            if hub.waiting_streams() == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(hub.waiting_streams(), 1);
         assert!(b_events.lock().is_empty());
 
         drop(a);
