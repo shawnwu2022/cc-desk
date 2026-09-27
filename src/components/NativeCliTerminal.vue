@@ -20,6 +20,7 @@ import type { NativeTerminalBinding } from '@/terminal/nativeTerminalBinding'
 import { buildPastePayload, imagePasteBytes } from '@/utils/pasteText'
 import { classifyClipboardSnapshot, createImeInputPolicy } from '@/terminal/inputPolicy'
 import { platform } from '@/utils/platform'
+import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop } from '@/api/tauri'
 import type { OutputFrame } from '@/types/terminal'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
@@ -65,22 +66,7 @@ function currentTab() {
 }
 
 function safeLaunchCode(error: unknown): string {
-  if (error instanceof Error) {
-    if ([
-      'LAUNCH_STATE_UNKNOWN',
-      'CLI_PROFILE_REQUIRED',
-      'PROFILE_CLI_MISMATCH',
-      'LAUNCH_REQUEST_ID_CONFLICT',
-      'LAUNCH_ATTEMPT_NOT_FOUND',
-      'LAUNCH_ATTEMPT_NOT_READY',
-      'XTERM_USER_INPUT_PROVENANCE_UNAVAILABLE',
-    ].includes(error.message)) return error.message
-  }
-  if (error && typeof error === 'object' && 'code' in error) {
-    const code = (error as { code?: unknown }).code
-    if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) return code
-  }
-  return 'NATIVE_LAUNCH_FAILED'
+  return publicNativeErrorCode(error, 'NATIVE_LAUNCH_FAILED')
 }
 
 function refreshModeEpoch(): string {
