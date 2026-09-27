@@ -65,6 +65,45 @@ describe('D22-D24 native workbench state', () => {
     expect(calls).not.toContain('run_checks')
   })
 
+  it('D22_Workbench_EmptyWorkspaceCanExplicitlyCreateCodexProfile_15', async () => {
+    mockIPC((command, args) => {
+      if (command === 'cli_list_profiles') {
+        return { revision: '0', profiles: [] }
+      }
+      if (command === 'cli_patch_profile') {
+        expect(args).toMatchObject({
+          expectedRevision: '0',
+          patch: {
+            op: 'create',
+            profile: {
+              id: 'codexDefault',
+              revision: '0',
+              cli: 'codex',
+              launcher: { kind: 'native' },
+            },
+          },
+        })
+        return {
+          revision: '1',
+          profiles: [profile('codexDefault', 'codex', '1')],
+        }
+      }
+      if (command === 'cli_list_projects') return projects()
+      throw new Error('unexpected:' + command)
+    })
+
+    const store = useNativeWorkbenchStore()
+    await expect(store.initialize('codex')).rejects.toThrow('CLI_PROFILE_REQUIRED')
+
+    const created = await store.createDefaultProfile('codex')
+
+    expect(created.id).toBe('codexDefault')
+    expect(store.profiles.selected.codex?.id).toBe('codexDefault')
+    expect(store.cli).toBe('codex')
+    expect(store.status).toBe('ready')
+    expect(store.selectedProject?.projectId).toBe('project-1')
+  })
+
   it('D23_Workbench_NewAndResumeActionsFreezeExactCliProfileAndProject_15', async () => {
     mockIPC(command => {
       if (command === 'cli_list_profiles') {
