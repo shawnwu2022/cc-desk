@@ -13,13 +13,8 @@ function toBashPath(path: string): string {
     .replace(/\\\\/g, '/')
 }
 
-function bashPath(): string {
-  const result = spawnSync('bash', ['-lc', 'printf %s "$PATH"'], {
-    encoding: 'utf8',
-    env: { ...process.env },
-  })
-  expect(result.status).toBe(0)
-  return result.stdout
+function bashQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 function capture(auth: boolean, input: Buffer = Buffer.from('{"hook_event_name":"Stop"}')) {
@@ -33,8 +28,12 @@ function capture(auth: boolean, input: Buffer = Buffer.from('{"hook_event_name":
       `#!/bin/bash\nnode "${toBashPath(captureScript)}" "$@"\n`,
       { mode: 0o700 },
     )
-    const result = spawnSync('bash', [resolve(script)], {
-      env: { ...process.env, PATH: `${toBashPath(dir)}:${bashPath()}`, CC_BOX_HOOK_PORT: '12345', capability: 'preexisting-export', payload: 'preexisting-export', CC_DESK_OBSERVER_RUN: 'run', CC_DESK_OBSERVER_GENERATION: '1', CC_DESK_OBSERVER_CAPABILITY: auth ? token : '' },
+    const command = [
+      `export PATH=${bashQuote(toBashPath(dir))}:"$PATH"`,
+      `exec ${bashQuote(toBashPath(resolve(script)))}`,
+    ].join('; ')
+    const result = spawnSync('bash', ['-lc', command], {
+      env: { ...process.env, CC_BOX_HOOK_PORT: '12345', capability: 'preexisting-export', payload: 'preexisting-export', CC_DESK_OBSERVER_RUN: 'run', CC_DESK_OBSERVER_GENERATION: '1', CC_DESK_OBSERVER_CAPABILITY: auth ? token : '' },
       input, timeout: 6000,
     })
     expect(result.status).toBe(0)
