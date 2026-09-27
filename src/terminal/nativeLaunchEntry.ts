@@ -35,7 +35,7 @@ export interface NativeLaunchEntry {
 interface OwnedAttempt {
   fingerprint: string
   channel: Channel<unknown>
-  attempt: LaunchAttempt
+  attempt: LaunchAttempt | null
   startPromise: Promise<LaunchStatus>
 }
 
@@ -91,31 +91,45 @@ export function createNativeLaunchEntry(options: NativeLaunchEntryOptions): Nati
         return existing.startPromise
       }
 
+      let resolveStart!: (value: LaunchStatus | PromiseLike<LaunchStatus>) => void
+      let rejectStart!: (reason?: unknown) => void
+      const startPromise = new Promise<LaunchStatus>((resolve, reject) => {
+        resolveStart = resolve
+        rejectStart = reject
+      })
+      const owned: OwnedAttempt = {
+        fingerprint,
+        channel,
+        attempt: null,
+        startPromise,
+      }
+      // Reserve before constructing or starting the attempt. Synchronous re-entry
+      // for the same request must observe this exact promise instead of spawning.
+      attempts.set(request.requestId, owned)
+
       let attempt: LaunchAttempt
       try {
         attempt = makeAttempt(request, channel)
+        owned.attempt = attempt
       } catch (error) {
-        return Promise.reject(error)
+        if (attempts.get(request.requestId) === owned) attempts.delete(request.requestId)
+        rejectStart(error)
+        return startPromise
       }
 
-      const startPromise = asPromise(() => attempt.start())
-      attempts.set(request.requestId, {
-        fingerprint,
-        channel,
-        attempt,
-        startPromise,
-      })
+      asPromise(() => attempt.start()).then(resolveStart, rejectStart)
       return startPromise
     },
 
     recover(requestId: string): Promise<LaunchStatus> {
       const owned = attempts.get(requestId)
       if (!owned) return Promise.reject(new Error('LAUNCH_ATTEMPT_NOT_FOUND'))
-      return asPromise(() => owned.attempt.recover())
+      if (!owned.attempt) return Promise.reject(new Error('LAUNCH_ATTEMPT_NOT_READY'))
+      return asPromise(() => owned.attempt!.recover())
     },
 
     latest(requestId: string): LaunchStatus | undefined {
-      return attempts.get(requestId)?.attempt.latest()
+      return attempts.get(requestId)?.attempt?.latest()
     },
   })
 }
