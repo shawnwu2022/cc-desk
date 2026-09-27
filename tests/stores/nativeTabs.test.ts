@@ -114,4 +114,19 @@ describe('D22 native dual-CLI tab store', () => {
     expect(store.tab(claude.tabId)).toBeUndefined()
     expect(store.tab(codex.tabId)?.cli).toBe('codex')
   })
+
+  it('D24_Tabs_TerminalDegradedDiagnosticDoesNotFakeProcessFailure_14', () => {
+    const store = useNativeTabsStore()
+    const tab = store.create({
+      cli: 'codex', projectId: 'p1', projectPath: '/repo',
+      profileId: 'codex-main', profileRevision: '1', action: { kind: 'new' },
+    })
+    store.applyLaunchStatus(tab.tabId, status(tab, 'running'))
+
+    store.setDiagnostic(tab.tabId, 'NATIVE_OUTPUT_DEGRADED')
+
+    expect(store.tab(tab.tabId)?.status).toBe('running')
+    expect(store.tab(tab.tabId)?.errorCode).toBe('NATIVE_OUTPUT_DEGRADED')
+  })
+
 })
