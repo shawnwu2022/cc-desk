@@ -146,6 +146,7 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
   async function loadResource(
     kind: ResourceKind,
     options: {
+      projectId?: string
       query?: string
       sessionId?: string
       limit?: number
@@ -163,15 +164,23 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
     }
 
     const selectedOwner = owner
+    const projectId = options.projectId
+    if (projectId !== undefined
+      && !projectsStore.projects.some(project => project.projectId === projectId)) {
+      error.value = 'PROJECT_NOT_FOUND'
+      throw new Error('PROJECT_NOT_FOUND')
+    }
+    const { projectId: _projectId, ...readOptions } = options
     error.value = null
     await projection.load(
       {
         kind: 'profile',
         profileId: identity.profileId,
         expectedProfileRevision: identity.revision,
+        ...(projectId === undefined ? {} : { projectId }),
       },
       kind,
-      options,
+      readOptions,
     )
     if (owner !== selectedOwner) return
 
