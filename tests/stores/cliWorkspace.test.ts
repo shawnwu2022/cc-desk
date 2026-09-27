@@ -159,6 +159,7 @@ describe('D24 native resource/error workspace integration', () => {
         kind: 'profile',
         profileId: 'claude-main',
         expectedProfileRevision: '7',
+        projectId: null,
       },
     ])
     expect(invoked[1][0]).toBe('native_list_resources')
