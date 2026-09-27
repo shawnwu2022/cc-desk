@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
@@ -212,4 +213,57 @@ test('D28_Gate_UnplannedEvidenceCannotBeSmuggledIntoCertification_010', () => {
   extra.runId = 'run-extra'
   value.records.push(extra)
   assert.equal(verify(value).reason, 'UNPLANNED_EVIDENCE_RECORD')
+})
+
+
+test('D28_Catalog_ProductionCatalogFreezesExactly64CasesAndCriticalSubcases_011', () => {
+  const production = JSON.parse(readFileSync(
+    new URL('../../docs/testing/native-cli-acceptance-catalog.json', import.meta.url),
+    'utf8',
+  ))
+  assert.equal(production.schemaVersion, 1)
+  assert.equal(production.specVersion, 2)
+  assert.equal(production.cases.length, 64)
+  assert.deepEqual(
+    production.cases.map(entry => entry.caseId),
+    Array.from({ length: 64 }, (_, index) => caseId(index + 1)),
+  )
+  assert.equal(new Set(production.cases.map(entry => entry.caseId)).size, 64)
+  const native63 = production.cases.find(entry => entry.caseId === 'NATIVE-63')
+  assert.deepEqual(native63.requiredSubcaseIds, [
+    'cc_desk_off',
+    'cc_desk_on',
+    'system_terminal_off',
+    'system_terminal_on',
+  ])
+  const native64 = production.cases.find(entry => entry.caseId === 'NATIVE-64')
+  assert.equal(native64.allowNA, false)
+  assert.deepEqual(native64.requiredSubcaseIds, [
+    'missing',
+    'duplicate',
+    'fake_na',
+    'wrong_hash',
+  ])
+})
+
+test('D28_Gate_DeskPackageHashMismatchInRecordIsRejected_012', () => {
+  const value = fixture()
+  value.records[0].deskPackageSha256 = 'f'.repeat(64)
+  assert.equal(verify(value).reason, 'DESK_PACKAGE_HASH_MISMATCH')
+})
+
+test('D28_Gate_LegitimateNaRequiresAndVerifiesBasisFile_013', () => {
+  const value = fixture()
+  const decision = value.plan.targets[0].decisions.find(item => item.caseId === 'NATIVE-40')
+  const basisBytes = Buffer.from('version capability basis')
+  writeFileSync(join(value.evidenceRoot, 'na-basis.txt'), basisBytes)
+  decision.status = 'N_A'
+  delete decision.layers
+  decision.reason = 'upstream capability absent for this target'
+  decision.basis = [{
+    path: 'na-basis.txt',
+    sha256: sha(basisBytes),
+  }]
+  value.records = value.records.filter(record => record.caseId !== 'NATIVE-40')
+  assert.equal(verify(value).status, 'PASS')
 })
