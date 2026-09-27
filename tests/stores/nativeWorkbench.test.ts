@@ -125,8 +125,9 @@ describe('D22-D24 native workbench state', () => {
     const fresh = store.createTab({ kind: 'new' })
     const picker = store.createTab({ kind: 'resume-picker', scope: 'current-project' })
     const known = store.createTab({ kind: 'resume-id', nativeSessionId: 'session-123' })
+    const raw = store.createTab({ kind: 'raw', argv: ['', '中文', '--future'] })
 
-    for (const tab of [fresh, picker, known]) {
+    for (const tab of [fresh, picker, known, raw]) {
       expect(tab.cli).toBe('codex')
       expect(tab.profileId).toBe('codex-main')
       expect(tab.profileRevision).toBe('8')
@@ -135,6 +136,7 @@ describe('D22-D24 native workbench state', () => {
     }
     expect(picker.action).toEqual({ kind: 'resume-picker', scope: 'current-project' })
     expect(known.action).toEqual({ kind: 'resume-id', nativeSessionId: 'session-123' })
+    expect(raw.action).toEqual({ kind: 'raw', argv: ['', '中文', '--future'] })
   })
 
   it('D24_Workbench_DoesNotReflectRawWorkspaceFailureText_16', async () => {
