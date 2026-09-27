@@ -6,7 +6,7 @@ import type {
   ResumeScope,
 } from '@/types/cli'
 
-const MAX_U64 = 18_446_744_073_709_551_615n
+const MAX_U64 = BigInt('18446744073709551615')
 const MAX_U32 = 4_294_967_295
 const MAX_U16 = 65_535
 const U64_PATTERN = /^(?:0|[1-9]\d*)$/
