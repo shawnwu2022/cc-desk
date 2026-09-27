@@ -16,6 +16,19 @@
         </button>
       </div>
 
+      <button
+        v-if="!workbench.profiles.selected.codex"
+        @click="createDefaultProfile('codex')"
+      >
+        + Codex Profile
+      </button>
+      <button
+        v-if="!workbench.profiles.selected.claude"
+        @click="createDefaultProfile('claude')"
+      >
+        + Claude Profile
+      </button>
+
       <select
         class="select"
         :value="workbench.profiles.selected[workbench.cli]?.id ?? ''"
@@ -198,6 +211,10 @@ function projectLabel(project: RegisteredProject): string {
 
 async function switchCli(cli: NativeCliKind) {
   await workbench.selectCli(cli).catch(() => {})
+}
+
+async function createDefaultProfile(cli: NativeCliKind) {
+  await workbench.createDefaultProfile(cli).catch(() => {})
 }
 
 async function changeProfile(event: Event) {
