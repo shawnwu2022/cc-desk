@@ -108,7 +108,7 @@ export const useNativeWorkbenchStore = defineStore('native-cli-workbench', () =>
     let workspaceAttempted = false
 
     try {
-      let adopted = profiles.byCli[nextCli][0]
+      let adopted: CliProfile | undefined = profiles.byCli[nextCli][0]
 
       if (!adopted) {
         const preferredId = nextCli === 'claude' ? 'legacyClaude' : 'codexDefault'
