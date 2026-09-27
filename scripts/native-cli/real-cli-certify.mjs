@@ -23,7 +23,13 @@ function configMismatch() {
   }
 }
 
-function executeProduct(cli, config, options) {
+export function runD20ProductCertification(cli, config, options = {}) {
+  if (!['claude', 'codex'].includes(cli)) {
+    return {
+      status: 'FAIL',
+      reason: 'CLI_KIND_REQUIRED',
+    }
+  }
   if (!isObject(config)) return missingConfig(cli)
   if (config.cli !== cli) return configMismatch()
 
@@ -40,20 +46,24 @@ function executeProduct(cli, config, options) {
   return executeD20Matrix(plan, options)
 }
 
-export function runD20Certification(config, options = {}) {
-  const input = isObject(config) ? config : {}
-  const results = {
-    claude: executeProduct('claude', input.claude, options),
-    codex: executeProduct('codex', input.codex, options),
+export function aggregateD20CertificationResults(results) {
+  const value = isObject(results) ? results : {}
+  const normalized = {
+    claude: isObject(value.claude)
+      ? value.claude
+      : missingConfig('claude'),
+    codex: isObject(value.codex)
+      ? value.codex
+      : missingConfig('codex'),
   }
 
-  const failedClis = Object.entries(results)
+  const failedClis = Object.entries(normalized)
     .filter(([, result]) => result.status === 'FAIL')
     .map(([cli]) => cli)
 
   if (failedClis.length > 0) {
     const configOnly = failedClis.every(
-      cli => results[cli].reason === 'CLI_CONFIG_KIND_MISMATCH',
+      cli => normalized[cli].reason === 'CLI_CONFIG_KIND_MISMATCH',
     )
     return {
       status: 'FAIL',
@@ -61,11 +71,11 @@ export function runD20Certification(config, options = {}) {
         ? 'REAL_CLI_CERTIFICATION_CONFIG_INVALID'
         : 'REAL_CLI_CERTIFICATION_FAILED',
       failedClis,
-      results,
+      results: normalized,
     }
   }
 
-  const blockedClis = Object.entries(results)
+  const blockedClis = Object.entries(normalized)
     .filter(([, result]) => result.status !== 'PASS')
     .map(([cli]) => cli)
 
@@ -74,12 +84,20 @@ export function runD20Certification(config, options = {}) {
       status: 'BLOCKED',
       reason: 'REAL_CLI_EVIDENCE_INCOMPLETE',
       blockedClis,
-      results,
+      results: normalized,
     }
   }
 
   return {
     status: 'PASS',
-    results,
+    results: normalized,
   }
+}
+
+export function runD20Certification(config, options = {}) {
+  const input = isObject(config) ? config : {}
+  return aggregateD20CertificationResults({
+    claude: runD20ProductCertification('claude', input.claude, options),
+    codex: runD20ProductCertification('codex', input.codex, options),
+  })
 }
