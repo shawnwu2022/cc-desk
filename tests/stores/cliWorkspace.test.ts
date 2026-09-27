@@ -240,21 +240,78 @@ describe('D24 native resource/error workspace integration', () => {
     profiles.revision = '1'
     profiles.select('codex', 'codex-main')
 
-    mockIPC((command, args) => {
-      if (command === 'cli_list_projects') return projectList()
-      if (command === 'cli_projection_scope') {
-        expect(args).toMatchObject({
-          projectId: 'project-1',
-        })
-        return source('codex', 'codex-main', '8')
+    mockIPC(command => {
+      if (command === 'cli_list_projects') {
+        return {
+          revision: '1',
+          projects: [{
+            projectId: 'project-1',
+            hostId: 'host-1',
+            sourcePathKey: 'root-1',
+            selectedPath: '/repo',
+            canonicalPath: '/repo',
+            alias: { mode: 'inherit' },
+            pinned: { mode: 'inherit' },
+            hidden: { mode: 'inherit' },
+          }],
+          metadata: {},
+          warnings: [],
+        }
       }
-      if (command === 'cli_projection_read') return readyResult('history')
       throw new Error(command)
+    })
+
+    const invoked: Array<[string, any]> = []
+    Object.defineProperty(window, bridgeKey, {
+      configurable: true,
+      value: {
+        instanceId: 'backend-d24-project',
+        async invoke(command: string, payload: any) {
+          invoked.push([command, payload])
+          if (command === 'native_get_scope') {
+            expect(payload).toEqual({
+              kind: 'profile',
+              profileId: 'codex-main',
+              expectedProfileRevision: '8',
+              projectId: 'project-1',
+            })
+            return {
+              scopeId: 'scope-d24-project',
+              instanceId: 'backend-d24-project',
+              cli: 'codex',
+              sourceRootKey: 'root-d24',
+              identityEpoch: '1',
+              profileId: 'codex-main',
+              profileRevision: '8',
+              target: payload,
+              basis: 'configured-profile',
+            }
+          }
+          if (command === 'native_list_resources') {
+            return {
+              source: payload.source,
+              resourceKind: payload.resourceKind,
+              requestEpoch: payload.requestEpoch,
+              observedAt: '1',
+              state: 'ready',
+              reason: null,
+              items: [],
+              hasMore: false,
+            }
+          }
+          throw new Error(command)
+        },
+      },
     })
 
     const store = useCliWorkspaceStore()
     await store.open('codex')
     await store.loadResource('history', { projectId: 'project-1' })
+
+    expect(invoked.map(([command]) => command)).toEqual([
+      'native_get_scope',
+      'native_list_resources',
+    ])
     expect(store.resource?.state).toBe('ready')
   })
 
