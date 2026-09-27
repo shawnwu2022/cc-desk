@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { LaunchAction, NativeCliKind } from '@/types/cli'
+import type { CliProfile } from '@/types/profile'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useCliWorkspaceStore } from '@/stores/cliWorkspace'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
@@ -72,6 +73,57 @@ export const useNativeWorkbenchStore = defineStore('native-cli-workbench', () =>
     if (cli.value === nextCli) await selectCli(nextCli)
   }
 
+  async function createDefaultProfile(nextCli: NativeCliKind): Promise<CliProfile> {
+    const existing = profiles.byCli[nextCli][0]
+    if (existing) {
+      profiles.select(nextCli, existing.id)
+      cli.value = nextCli
+      await workspace.open(nextCli)
+      reconcileProject()
+      status.value = 'ready'
+      error.value = null
+      return existing
+    }
+
+    const preferredId = nextCli === 'claude' ? 'legacyClaude' : 'codexDefault'
+    const id = profiles.profile(preferredId)
+      ? `${nextCli}-${crypto.randomUUID()}`
+      : preferredId
+    const created: CliProfile = {
+      id,
+      revision: '0',
+      cli: nextCli,
+      name: nextCli === 'claude' ? 'Claude Code' : 'Codex CLI',
+      launcher: { kind: 'native' },
+      programPath: { mode: 'inherit' },
+      defaultArgs: { mode: 'inherit' },
+      skipPermissions: { mode: 'inherit' },
+      observer: { mode: 'inherit' },
+      env: {},
+    }
+
+    status.value = 'loading'
+    error.value = null
+    try {
+      const result = await profiles.patch(profiles.revision, {
+        op: 'create',
+        profile: created,
+      })
+      const adopted = result.profiles.find(item => item.id === id && item.cli === nextCli)
+      if (!adopted) throw new Error('PROFILE_CREATE_NOT_ADOPTED')
+      profiles.select(nextCli, adopted.id)
+      cli.value = nextCli
+      await workspace.open(nextCli)
+      reconcileProject()
+      status.value = 'ready'
+      return adopted
+    } catch (failure) {
+      status.value = 'error'
+      error.value = failure instanceof Error ? failure.message : 'NATIVE_WORKBENCH_UNAVAILABLE'
+      throw failure
+    }
+  }
+
   function selectProject(projectId: string): void {
     if (!workspace.projects.some(item => item.projectId === projectId)) {
       throw new Error('PROJECT_NOT_FOUND')
@@ -131,6 +183,7 @@ export const useNativeWorkbenchStore = defineStore('native-cli-workbench', () =>
     initialize,
     selectCli,
     selectProfile,
+    createDefaultProfile,
     selectProject,
     createTab,
     restartTab,
