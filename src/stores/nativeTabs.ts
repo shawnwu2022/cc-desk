@@ -150,6 +150,12 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.errorCode = text(code, 'ERROR_CODE_REQUIRED')
   }
 
+  function setDiagnostic(tabId: string, code: string): void {
+    const value = tabs.get(tabId)
+    if (!value) throw new Error('TAB_NOT_FOUND')
+    value.errorCode = text(code, 'ERROR_CODE_REQUIRED')
+  }
+
   function applyLaunchStatus(tabId: string, launch: LaunchStatus): boolean {
     const value = tabs.get(tabId)
     if (!value) return false
@@ -220,6 +226,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     markStarting,
     markUnknown,
     markError,
+    setDiagnostic,
     applyLaunchStatus,
     restart,
     close,
