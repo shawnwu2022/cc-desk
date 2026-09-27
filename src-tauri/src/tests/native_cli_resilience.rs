@@ -1,5 +1,6 @@
 use crate::cli::profiles::{EnvValue, Override, Profile};
 use crate::cli::storage::{Patch, WorkspaceRepository, WriteStage};
+use crate::cli::workspace::register_project;
 use crate::cli::types::{CliKind, WireU64};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -134,4 +135,59 @@ fn D25_LegacyLiteralSecretIsNeverCopiedIntoWorkspace_004() {
     let bytes = fs::read_to_string(path).unwrap();
     assert!(!bytes.contains("fixture-secret"));
     assert!(!bytes.contains("host-secret"));
+}
+
+
+#[test]
+fn D25_ConcurrentProfileAndProjectWritesPreserveBothDomains_005() {
+    let dir = TempDir::new().unwrap();
+    let workspace = dir.path().join("cli-workspace.v1.json");
+    let project_path = dir.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+    let profile_worker = {
+        let workspace = workspace.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            let repo = WorkspaceRepository::open(workspace).unwrap();
+            barrier.wait();
+            loop {
+                let revision = repo.read().unwrap().revision;
+                match repo.apply(
+                    revision,
+                    Patch::Create {
+                        profile: Profile::new("codex", CliKind::Codex),
+                    },
+                ) {
+                    Ok(_) => break,
+                    Err(error) if error.code == "REVISION_CONFLICT" => continue,
+                    Err(error) => panic!("unexpected profile write failure: {error}"),
+                }
+            }
+        })
+    };
+
+    let project_worker = {
+        let workspace = workspace.clone();
+        let barrier = barrier.clone();
+        let project_path = project_path.clone();
+        std::thread::spawn(move || {
+            let repo = WorkspaceRepository::open(workspace).unwrap();
+            barrier.wait();
+            register_project(&repo, &project_path).unwrap();
+        })
+    };
+
+    profile_worker.join().unwrap();
+    project_worker.join().unwrap();
+
+    let saved = WorkspaceRepository::open(workspace).unwrap().read().unwrap();
+    assert_eq!(saved.revision.get(), 2);
+    assert!(saved.profiles.contains_key("codex"));
+    assert_eq!(saved.registered_projects.len(), 1);
+    assert_eq!(
+        saved.registered_projects.values().next().unwrap().selected_path,
+        project_path
+    );
 }
