@@ -21,6 +21,22 @@ describe('CC Desk product boundary', () => {
     expect(api).not.toContain('listClaudeVersions')
   })
 
+  test('native dual-CLI workbench never falls back to legacy Claude PTY APIs', () => {
+    const terminal = read('src/components/NativeCliTerminal.vue')
+    expect(terminal).toContain('createNativeLaunchEntry')
+    expect(terminal).toContain('createDeskNativeTerminalBinding')
+    expect(terminal).toContain('cliResize')
+    expect(terminal).toContain('cliStop')
+    expect(terminal).not.toContain('ptySpawn')
+    expect(terminal).not.toContain('ptyInput')
+    expect(terminal).not.toContain('ptyKill')
+    expect(terminal).not.toContain('claudeOptions')
+
+    const app = read('src/App.vue')
+    expect(app).toContain("appStore.checkFailed && currentView !== 'native'")
+    expect(app).toContain("startupError && currentView !== 'native'")
+  })
+
   test('native capability panels are projection-only', () => {
     const commands = read('src-tauri/src/lib.rs')
     expect(commands).not.toContain('commands::set_skill_enabled')
