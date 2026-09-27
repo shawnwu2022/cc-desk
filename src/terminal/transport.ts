@@ -1,7 +1,7 @@
 import type { OutputAck, OutputFrame } from '@/types/terminal'
 
 const MAX_FRAME_BYTES = 16 * 1024
-const MAX_U64 = (1n << 64n) - 1n
+const MAX_U64 = BigInt('18446744073709551615')
 
 type WriteTerminalBytes = (bytes: Uint8Array, parsed: () => void) => void
 type AckOutput = (ack: OutputAck) => Promise<unknown>
@@ -53,8 +53,8 @@ export function createTerminalOutputTransport(
   let disposed = false
   let degraded = false
   let streamEpoch: string | null = null
-  let nextOffset = 0n
-  let parsedThrough = 0n
+  let nextOffset = BigInt(0)
+  let parsedThrough = BigInt(0)
   const pending: PendingFrame[] = []
   const pendingAcks: OutputAck[] = []
   let ackInFlight = false
@@ -134,7 +134,7 @@ export function createTerminalOutputTransport(
 
       const epoch = parseU64(frame.streamEpoch)
       const offset = parseU64(frame.offset)
-      if (epoch === null || epoch === 0n || offset === null || !validBytes(frame.bytes)) {
+      if (epoch === null || epoch === BigInt(0) || offset === null || !validBytes(frame.bytes)) {
         return fail('INVALID_OUTPUT_FRAME')
       }
       if (streamEpoch === null) streamEpoch = frame.streamEpoch
