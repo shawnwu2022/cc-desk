@@ -306,6 +306,9 @@ describe('D24 native resource/error workspace integration', () => {
 
     const store = useCliWorkspaceStore()
     await store.open('codex')
+    // open() performs its own project enrichment read. Isolate the explicit
+    // panel read so this assertion verifies only the user-requested resource.
+    invoked.length = 0
     await store.loadResource('history', { projectId: 'project-1' })
 
     expect(invoked.map(([command]) => command)).toEqual([
