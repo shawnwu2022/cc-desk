@@ -192,4 +192,29 @@ describe('D23 native launch/recovery user entry', () => {
     await expect(entry.recover('missing-request')).rejects.toThrow('LAUNCH_ATTEMPT_NOT_FOUND')
     expect(createAttempt).not.toHaveBeenCalled()
   })
+
+  it('D23_Launch_SynchronousStartReentryCannotCreateSecondAttempt_09', async () => {
+    let entry: ReturnType<typeof createNativeLaunchEntry>
+    let reentered: Promise<LaunchStatus> | undefined
+    const channel = {} as any
+    const start = vi.fn(() => {
+      reentered = entry.start(input(), channel)
+      return Promise.resolve(running('request-1', 'run-1', 1))
+    })
+    const createAttempt = vi.fn(() => ({
+      start,
+      recover: vi.fn(),
+      latest: vi.fn(),
+    }))
+    entry = createNativeLaunchEntry({
+      selectedProfile: () => profile('claude-main', 'claude'),
+      createAttempt,
+    })
+
+    const first = entry.start(input(), channel)
+    await expect(first).resolves.toEqual(running('request-1', 'run-1', 1))
+    expect(reentered).toBe(first)
+    expect(createAttempt).toHaveBeenCalledTimes(1)
+    expect(start).toHaveBeenCalledTimes(1)
+  })
 })
