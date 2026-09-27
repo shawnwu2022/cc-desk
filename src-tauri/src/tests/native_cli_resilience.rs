@@ -103,8 +103,14 @@ fn D25_UnknownWorkspaceExtensionsSurviveProfileAndProjectEraWrites_003() {
     let repo = WorkspaceRepository::open(path.clone()).unwrap();
     repo.apply(
         rev("0"),
-        Patch::Create { profile: Profile::new("codex", CliKind::Codex) },
-    ).unwrap();
+        Patch::Create {
+            profile: Profile::new("codex", CliKind::Codex),
+        },
+    )
+    .unwrap();
+    let project_path = dir.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    register_project(&repo, &project_path).unwrap();
 
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     assert_eq!(
