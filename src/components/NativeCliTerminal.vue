@@ -44,6 +44,7 @@ let runToken: object = {}
 let observedBracketed = false
 let modeEpoch = 1n
 let launched = false
+let inputEnabled = false
 let statusTimer: ReturnType<typeof setInterval> | null = null
 let statusSyncInFlight = false
 
@@ -100,6 +101,7 @@ function stopStatusSync() {
 function disposeRunBinding() {
   runToken = {}
   launched = false
+  inputEnabled = false
   stopStatusSync()
   binding?.dispose()
   binding = null
@@ -227,11 +229,14 @@ async function start(): Promise<void> {
       term: term as any,
       runId,
       generation,
-      currentTarget: () => ({
-        runId,
-        generation,
-        modeEpoch: refreshModeEpoch(),
-      }),
+      currentTarget: () => {
+        if (!inputEnabled) throw new Error('NATIVE_RUN_NOT_WRITABLE')
+        return {
+          runId,
+          generation,
+          modeEpoch: refreshModeEpoch(),
+        }
+      },
       onDegraded: reason => {
         const live = tabs.tab(props.tabId)
         if (runToken === token && live?.runId === runId && live.generation === generation) {
@@ -273,6 +278,7 @@ async function start(): Promise<void> {
     if (runToken !== token) return
     if (!tabs.applyLaunchStatus(props.tabId, result)) return
     launched = result.phase === 'running' || result.phase === 'starting'
+    inputEnabled = launched
     if (launched) {
       await resizeNative(term.cols, term.rows)
       startStatusSync()
@@ -282,6 +288,7 @@ async function start(): Promise<void> {
   } catch (error) {
     if (runToken !== token) return
     const code = safeLaunchCode(error)
+    inputEnabled = false
     if (code === 'LAUNCH_STATE_UNKNOWN') tabs.markUnknown(props.tabId)
     else tabs.markError(props.tabId, code)
   }
@@ -293,10 +300,13 @@ async function recover(): Promise<void> {
     const result = await entry.recover(tab.requestId)
     tabs.applyLaunchStatus(props.tabId, result)
     launched = result.phase === 'running' || result.phase === 'starting'
+    inputEnabled = launched
     if (!launched) stopStatusSync()
+    else if (props.active && !statusTimer && !statusSyncInFlight) startStatusSync()
   } catch (error) {
     const code = safeLaunchCode(error)
     launched = false
+    inputEnabled = false
     stopStatusSync()
     if (code === 'LAUNCH_STATE_UNKNOWN') tabs.markUnknown(props.tabId)
     else tabs.markError(props.tabId, code)
@@ -316,7 +326,6 @@ async function syncStatus(): Promise<void> {
 function startStatusSync() {
   stopStatusSync()
   if (!props.active || !launched) return
-  void syncStatus()
   statusTimer = setInterval(() => {
     void syncStatus()
   }, 1500)
@@ -380,7 +389,10 @@ watch(() => props.active, async active => {
   await nextTick()
   fit?.fit()
   focus()
-  if (launched) startStatusSync()
+  if (launched) {
+    void syncStatus()
+    startStatusSync()
+  }
 })
 
 watch(
