@@ -97,7 +97,7 @@ function disposeRunBinding() {
 
 function markInputFailure() {
   const tab = tabs.tab(props.tabId)
-  if (tab && tab.status !== 'unknown') tabs.markError(props.tabId, 'NATIVE_INPUT_PAUSED')
+  if (tab) tabs.setDiagnostic(props.tabId, 'NATIVE_INPUT_PAUSED')
 }
 
 function bindClipboard() {
@@ -214,7 +214,7 @@ async function start(): Promise<void> {
     onDegraded: reason => {
       const live = tabs.tab(props.tabId)
       if (runToken === token && live?.runId === runId && live.generation === generation) {
-        tabs.markError(props.tabId, reason)
+        tabs.setDiagnostic(props.tabId, reason)
       }
     },
   })
@@ -229,7 +229,7 @@ async function start(): Promise<void> {
       || live.runId !== runId
       || live.generation !== generation
     ) return
-    if (!binding.acceptOutput(frame)) tabs.markError(props.tabId, 'NATIVE_OUTPUT_DEGRADED')
+    if (!binding.acceptOutput(frame)) tabs.setDiagnostic(props.tabId, 'NATIVE_OUTPUT_DEGRADED')
   }
 
   tabs.markStarting(props.tabId)
@@ -277,7 +277,8 @@ async function stop(): Promise<void> {
     await cliStop({ runId: tab.runId, generation: tab.generation })
     await recover()
   } catch (error) {
-    tabs.markError(props.tabId, safeLaunchCode(error))
+    tabs.setDiagnostic(props.tabId, safeLaunchCode(error))
+    throw error
   }
 }
 
