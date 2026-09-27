@@ -137,6 +137,13 @@ impl log::Log for FileLogger {
     }
 }
 
+/// Frontend-originated strings are untrusted and may contain argv, env values,
+/// prompts, clipboard contents, native paths or terminal titles. Normal logs keep
+/// only the byte count; never the content or a guessable digest.
+pub(crate) fn frontend_message_summary(message: &str) -> String {
+    format!("redacted bytes={}", message.len())
+}
+
 /// 初始化日志系统，在 Tauri setup 阶段调用
 pub fn init() {
     let prefix = date_prefix();
