@@ -49,7 +49,7 @@ describe('CC Desk product boundary', () => {
     const marker = api.indexOf('// The native document bridge owns the proof')
     expect(marker).toBeGreaterThan(-1)
     const nativeSection = api.slice(marker)
-    expect(nativeSection).not.toMatch(/\binvoke\s*\(/)
+    expect(nativeSection).not.toMatch(/(^|[^.\w])invoke\s*\(/m)
     expect(nativeSection).toContain("nativeDocumentBridge().invoke('cli_stop'")
     expect(nativeSection).toContain("nativeDocumentBridge().invoke('cli_resize'")
   })
