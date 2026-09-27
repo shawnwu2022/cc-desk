@@ -272,7 +272,12 @@ async function closeTab(tabId: string) {
 }
 
 async function loadResource() {
-  await workbench.workspace.loadResource(resourceKind.value).catch(() => {})
+  const projectId = workbench.selectedProject?.projectId
+  if (!projectId) return
+  await workbench.workspace.loadResource(
+    resourceKind.value,
+    { projectId },
+  ).catch(() => {})
 }
 
 onMounted(async () => {
