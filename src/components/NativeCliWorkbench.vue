@@ -60,6 +60,10 @@
       <button @click="addProject">+ Project</button>
 
       <button :disabled="!canCreate" @click="createNew">New</button>
+      <select v-model="pickerScope" class="select">
+        <option value="current-project">Current project</option>
+        <option value="all" :disabled="workbench.cli === 'claude'">All projects (Codex)</option>
+      </select>
       <button :disabled="!canCreate" @click="createPicker">Resume…</button>
       <input
         v-model="resumeId"
@@ -70,10 +74,18 @@
       <button :disabled="!canCreate || !resumeId.trim()" @click="createKnownResume">
         Resume ID
       </button>
+      <input
+        v-model="rawArgv"
+        class="resume-input"
+        placeholder='Raw argv JSON, e.g. ["--help"]'
+        @keyup.enter="createRaw"
+      />
+      <button :disabled="!canCreate" @click="createRaw">Raw</button>
     </header>
 
     <div v-if="workbench.status === 'loading'" class="state-banner">Loading native workspace…</div>
     <div v-else-if="workbench.error" class="state-banner error">{{ workbench.error }}</div>
+    <div v-else-if="rawArgvError" class="state-banner error">{{ rawArgvError }}</div>
 
     <div class="native-body">
       <main class="terminal-area">
@@ -163,6 +175,7 @@ import type { ResourceKind } from '@/types/nativeProjection'
 import type { RegisteredProject } from '@/types/workspace'
 import { useNativeWorkbenchStore } from '@/stores/nativeWorkbench'
 import NativeCliTerminal from '@/components/NativeCliTerminal.vue'
+import { parseNativeRawArgv } from '@/utils/nativeRawArgv'
 
 defineEmits<{ back: [] }>()
 
@@ -180,6 +193,9 @@ const resourceKinds: ResourceKind[] = [
 const workbench = useNativeWorkbenchStore()
 const resumeId = ref('')
 const resourceKind = ref<ResourceKind>('history')
+const pickerScope = ref<'current-project' | 'all'>('current-project')
+const rawArgv = ref('[]')
+const rawArgvError = ref<string | null>(null)
 const terminalRefs = new Map<string, any>()
 
 const tabList = computed(() => [...workbench.tabs.tabs.values()])
@@ -210,6 +226,9 @@ function projectLabel(project: RegisteredProject): string {
 }
 
 async function switchCli(cli: NativeCliKind) {
+  if (cli === 'claude' && pickerScope.value === 'all') {
+    pickerScope.value = 'current-project'
+  }
   await workbench.selectCli(cli).catch(() => {})
 }
 
@@ -241,7 +260,8 @@ function createNew() {
 }
 
 function createPicker() {
-  workbench.createTab({ kind: 'resume-picker', scope: 'current-project' })
+  const scope = workbench.cli === 'claude' ? 'current-project' : pickerScope.value
+  workbench.createTab({ kind: 'resume-picker', scope })
 }
 
 function createKnownResume() {
@@ -249,6 +269,16 @@ function createKnownResume() {
   if (!id) return
   workbench.createTab({ kind: 'resume-id', nativeSessionId: id })
   resumeId.value = ''
+}
+
+function createRaw() {
+  try {
+    const argv = parseNativeRawArgv(rawArgv.value)
+    workbench.createTab({ kind: 'raw', argv })
+    rawArgvError.value = null
+  } catch {
+    rawArgvError.value = 'INVALID_RAW_ARGV_JSON'
+  }
 }
 
 async function recoverActive() {
