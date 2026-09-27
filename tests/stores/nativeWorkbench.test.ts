@@ -137,6 +137,25 @@ describe('D22-D24 native workbench state', () => {
     expect(known.action).toEqual({ kind: 'resume-id', nativeSessionId: 'session-123' })
   })
 
+  it('D24_Workbench_DoesNotReflectRawWorkspaceFailureText_16', async () => {
+    mockIPC(command => {
+      if (command === 'cli_list_profiles') {
+        return { revision: '1', profiles: [profile('codex-main', 'codex')] }
+      }
+      if (command === 'cli_list_projects') {
+        throw new Error('SECRET C:\\Users\\private\\token.txt')
+      }
+      throw new Error(command)
+    })
+
+    const store = useNativeWorkbenchStore()
+    await expect(store.initialize('codex')).rejects.toThrow()
+
+    expect(store.status).toBe('error')
+    expect(store.error).toBe('NATIVE_WORKSPACE_UNAVAILABLE')
+    expect(store.error).not.toContain('private')
+  })
+
   it('D24_Workbench_ProfileOrProjectAbsenceFailsBeforeCreatingTab_16', async () => {
     mockIPC(command => {
       if (command === 'cli_list_profiles') {
