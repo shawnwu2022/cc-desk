@@ -54,6 +54,26 @@ describe('CC Desk product boundary', () => {
     expect(nativeSection).toContain("nativeDocumentBridge().invoke('cli_resize'")
   })
 
+  test('native security surfaces redact values and do not log user payloads', () => {
+    const workbench = read('src/components/NativeCliWorkbench.vue')
+    const terminal = read('src/components/NativeCliTerminal.vue')
+    for (const source of [workbench, terminal]) {
+      expect(source).not.toContain('console.')
+      expect(source).not.toContain('logMessage(')
+      expect(source).not.toContain('v-html')
+      expect(source).not.toContain('innerHTML')
+    }
+
+    const snapshot = read('src-tauri/src/cli/snapshot.rs')
+    const launch = read('src-tauri/src/cli/launch_service.rs')
+    const document = read('src-tauri/src/cli/document.rs')
+    expect(snapshot).toContain('LaunchSnapshot(<redacted>)')
+    expect(launch).toContain('RunAccess(<redacted>)')
+    expect(document).toContain('DocumentAuthority(<redacted>)')
+    expect(document).toContain('DocumentBinding(<redacted>)')
+    expect(document).not.toContain('serde_json::from_slice(bytes).map_err(|error|')
+  })
+
   test('native capability panels are projection-only', () => {
     const commands = read('src-tauri/src/lib.rs')
     expect(commands).not.toContain('commands::set_skill_enabled')
