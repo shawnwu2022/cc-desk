@@ -103,9 +103,7 @@ fn D27_Transport_ThirtyTwoRunsProgressUnderTinyGlobalBudget_001() {
 #[test]
 fn D27_Transport_BrokenRunReleasesBudgetAndPeerStillProgresses_002() {
     let owner = caller();
-    let hub = TerminalTransports::with_limits(
-        TransportLimits::new(4, 8, 4, 4).unwrap(),
-    );
+    let hub = TerminalTransports::with_limits(TransportLimits::new(4, 4, 4, 4).unwrap());
 
     let failing = Arc::new(
         OutputRoutes::new(1)
@@ -159,8 +157,7 @@ fn D27_Transport_QueuedRunsDoNotBypassAppBudget_003() {
     assert_eq!(hub.budgeted_bytes(), 8);
 
     let mut workers = Vec::new();
-    for index in 2..4 {
-        let stream = streams[index].clone();
+    for (index, stream) in streams.iter().cloned().enumerate().take(4).skip(2) {
         workers.push(std::thread::spawn(move || stream.send(&[index as u8; 4])));
     }
 
