@@ -10,7 +10,7 @@ describe('D21 OS bridge installer certification gate', () => {
   it('D21_Installer_StackedPullRequestsTriggerRuntimeCertification_01', () => {
     expect(existsSync(workflowPath)).toBe(true)
     const workflow = readFileSync(workflowPath, 'utf8')
-    const pullRequestBlock = workflow.match(/\npull_request:\n([\s\S]*?)\n  workflow_dispatch:/)?.[1] ?? ''
+    const pullRequestBlock = workflow.match(/\n  pull_request:\n([\s\S]*?)\n  workflow_dispatch:/)?.[1] ?? ''
 
     expect(pullRequestBlock).not.toMatch(/branches:\s*\[main\]/)
     expect(pullRequestBlock).toContain('src-tauri/src/conpty_runtime.rs')
