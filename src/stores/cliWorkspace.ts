@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type { NativeCliKind } from '@/types/cli'
 import type { ProjectionResult, ResourceKind } from '@/types/nativeProjection'
@@ -73,6 +73,7 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
 
   function invalidate(code: string) {
     clearResource()
+    void projectsStore.enrich(null)
     status.value = 'error'
     error.value = code
   }
@@ -125,6 +126,11 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
         revision: identity.revision,
       })
       if (owner === selectedOwner) {
+        if (!currentSelectionMatches()) {
+          owner = {}
+          invalidate('PROFILE_SELECTION_CHANGED')
+          throw new Error('PROFILE_SELECTION_CHANGED')
+        }
         status.value = 'ready'
         error.value = null
       }
@@ -178,6 +184,21 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
     }
   }
 
+  watch(
+    () => [
+      profiles.selected.claude?.id ?? null,
+      profiles.selected.claude?.revision ?? null,
+      profiles.selected.codex?.id ?? null,
+      profiles.selected.codex?.revision ?? null,
+    ],
+    () => {
+      if (profileIdentity.value && !currentSelectionMatches()) {
+        owner = {}
+        invalidate('PROFILE_SELECTION_CHANGED')
+      }
+    },
+  )
+
   function clear() {
     owner = {}
     cli.value = null
@@ -185,6 +206,7 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
     status.value = 'idle'
     error.value = null
     clearResource()
+    void projectsStore.enrich(null)
   }
 
   return {
