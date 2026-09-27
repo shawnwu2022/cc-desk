@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "products": [
+    {
+      "cli": "claude",
+      "package": "@anthropic-ai/claude-code",
+      "binary": "claude",
+      "pinned": "2.1.236",
+      "stableTag": "stable"
+    },
+    {
+      "cli": "codex",
+      "package": "@openai/codex",
+      "binary": "codex",
+      "pinned": "0.154.0",
+      "stableTag": "latest"
+    }
+  ]
+}
