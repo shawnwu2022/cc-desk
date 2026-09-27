@@ -1,1 +1,2 @@
 src-tauri/plugin/scripts/report-hook.sh text eol=lf
+scripts/native-cli/*.mjs text eol=lf
