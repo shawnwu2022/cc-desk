@@ -78,7 +78,7 @@ function realContained(root, candidate) {
   }
 }
 
-function safeHostEnvironment(hostEnv) {
+export function safeD20HostEnvironment(hostEnv) {
   const source = isObject(hostEnv) ? hostEnv : {}
   const out = {}
   for (const key of HOST_ENV_ALLOWLIST) {
@@ -231,7 +231,7 @@ export function prepareD20Matrix(config) {
     transformId: config.transformId,
   })
 
-  const hostEnv = safeHostEnvironment(config.hostEnv)
+  const hostEnv = safeD20HostEnvironment(config.hostEnv)
   const accountEnv = explicitTestAccountEnvironment(config.testAccountEnv)
 
   const runs = CELLS.map(([lane, observer]) => {
