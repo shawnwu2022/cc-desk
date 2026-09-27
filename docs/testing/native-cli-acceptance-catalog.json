@@ -1,0 +1,523 @@
+{
+  "schemaVersion": 1,
+  "specVersion": 2,
+  "cases": [
+    {
+      "caseId": "NATIVE-01",
+      "owner": "W7",
+      "requiredSubcaseIds": [
+        "new"
+      ]
+    },
+    {
+      "caseId": "NATIVE-02",
+      "owner": "W7",
+      "requiredSubcaseIds": [
+        "codex_only"
+      ]
+    },
+    {
+      "caseId": "NATIVE-03",
+      "owner": "W2",
+      "requiredSubcaseIds": [
+        "unknown_cli"
+      ]
+    },
+    {
+      "caseId": "NATIVE-04",
+      "owner": "W2",
+      "requiredSubcaseIds": [
+        "future_raw_argv"
+      ]
+    },
+    {
+      "caseId": "NATIVE-05",
+      "owner": "W2",
+      "requiredSubcaseIds": [
+        "argv_roundtrip"
+      ]
+    },
+    {
+      "caseId": "NATIVE-06",
+      "owner": "W2",
+      "requiredSubcaseIds": [
+        "launcher_identity"
+      ]
+    },
+    {
+      "caseId": "NATIVE-07",
+      "owner": "W2",
+      "requiredSubcaseIds": [
+        "environment_scope"
+      ]
+    },
+    {
+      "caseId": "NATIVE-08",
+      "owner": "W1",
+      "requiredSubcaseIds": [
+        "legacy_permission_isolation"
+      ]
+    },
+    {
+      "caseId": "NATIVE-09",
+      "owner": "W7",
+      "requiredSubcaseIds": [
+        "dual_cli_concurrency"
+      ]
+    },
+    {
+      "caseId": "NATIVE-10",
+      "owner": "W1",
+      "requiredSubcaseIds": [
+        "session_identity_scope"
+      ]
+    },
+    {
+      "caseId": "NATIVE-11",
+      "owner": "W7",
+      "requiredSubcaseIds": [
+        "resume_picker"
+      ]
+    },
+    {
+      "caseId": "NATIVE-12",
+      "owner": "W7",
+      "requiredSubcaseIds": [
+        "resume_id_cross_cwd"
+      ]
+    },
+    {
+      "caseId": "NATIVE-13",
+      "owner": "W3",
+      "requiredSubcaseIds": [
+        "picker_identity_unknown"
+      ]
+    },
+    {
+      "caseId": "NATIVE-14",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "slash_custom_commands"
+      ]
+    },
+    {
+      "caseId": "NATIVE-15",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "model_permission_interaction"
+      ]
+    },
+    {
+      "caseId": "NATIVE-16",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "native_extensions"
+      ]
+    },
+    {
+      "caseId": "NATIVE-17",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "terminal_editor"
+      ]
+    },
+    {
+      "caseId": "NATIVE-18",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "gui_editor_wait"
+      ]
+    },
+    {
+      "caseId": "NATIVE-19",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "control_keys"
+      ]
+    },
+    {
+      "caseId": "NATIVE-20",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "shift_enter_subprocess"
+      ]
+    },
+    {
+      "caseId": "NATIVE-21",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "ime_unicode"
+      ]
+    },
+    {
+      "caseId": "NATIVE-22",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "text",
+        "multiline",
+        "crlf",
+        "json"
+      ]
+    },
+    {
+      "caseId": "NATIVE-23",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "128k",
+        "1m"
+      ]
+    },
+    {
+      "caseId": "NATIVE-24",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "text",
+        "image",
+        "mixed",
+        "empty"
+      ]
+    },
+    {
+      "caseId": "NATIVE-25",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "switch_tab",
+        "restart_target"
+      ]
+    },
+    {
+      "caseId": "NATIVE-26",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "keyboard",
+        "system_menu",
+        "dom"
+      ]
+    },
+    {
+      "caseId": "NATIVE-27",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "primary_screen",
+        "alternate_screen",
+        "fullscreen",
+        "scroll"
+      ]
+    },
+    {
+      "caseId": "NATIVE-28",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "resize",
+        "minimize_restore"
+      ]
+    },
+    {
+      "caseId": "NATIVE-29",
+      "owner": "W4",
+      "requiredSubcaseIds": [
+        "utf8_split",
+        "binary",
+        "control_sequence"
+      ]
+    },
+    {
+      "caseId": "NATIVE-30",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "dsr",
+        "da",
+        "focus",
+        "mouse",
+        "keyboard_protocol",
+        "sync_output"
+      ]
+    },
+    {
+      "caseId": "NATIVE-31",
+      "owner": "W4",
+      "requiredSubcaseIds": [
+        "immediate_output_exit"
+      ]
+    },
+    {
+      "caseId": "NATIVE-32",
+      "owner": "W4",
+      "requiredSubcaseIds": [
+        "write_block",
+        "high_output",
+        "multi_session"
+      ]
+    },
+    {
+      "caseId": "NATIVE-33",
+      "owner": "W4",
+      "requiredSubcaseIds": [
+        "independent_close",
+        "external_cli",
+        "background_task"
+      ]
+    },
+    {
+      "caseId": "NATIVE-34",
+      "owner": "W3",
+      "requiredSubcaseIds": [
+        "observer_off",
+        "observer_failure",
+        "late_event"
+      ]
+    },
+    {
+      "caseId": "NATIVE-35",
+      "owner": "W3",
+      "requiredSubcaseIds": [
+        "missing_panel",
+        "corrupt_panel",
+        "runtime_switch"
+      ]
+    },
+    {
+      "caseId": "NATIVE-36",
+      "owner": "W8",
+      "requiredSubcaseIds": [
+        "upgrade",
+        "rollback",
+        "two_instance_write"
+      ]
+    },
+    {
+      "caseId": "NATIVE-37",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "login",
+        "browser_callback",
+        "keychain"
+      ]
+    },
+    {
+      "caseId": "NATIVE-38",
+      "owner": "W3",
+      "requiredSubcaseIds": [
+        "osc",
+        "bel",
+        "url",
+        "clipboard"
+      ]
+    },
+    {
+      "caseId": "NATIVE-39",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "windows_bundle_runtime"
+      ]
+    },
+    {
+      "caseId": "NATIVE-40",
+      "owner": "W9",
+      "requiredSubcaseIds": [
+        "pinned",
+        "stable"
+      ]
+    },
+    {
+      "caseId": "NATIVE-41",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "paste_then_enter",
+        "paste_failure_barrier"
+      ]
+    },
+    {
+      "caseId": "NATIVE-42",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "partial_host_write",
+        "frozen_later_input",
+        "duplicate_commit_no_replay"
+      ]
+    },
+    {
+      "caseId": "NATIVE-43",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "equal_payload_twice"
+      ]
+    },
+    {
+      "caseId": "NATIVE-44",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "mode_change_during_clipboard"
+      ]
+    },
+    {
+      "caseId": "NATIVE-45",
+      "owner": "W5",
+      "requiredSubcaseIds": [
+        "non_bracketed_multiline",
+        "embedded_escape"
+      ]
+    },
+    {
+      "caseId": "NATIVE-46",
+      "owner": "W4",
+      "requiredSubcaseIds": [
+        "duplicate_ack",
+        "backward_ack",
+        "out_of_range_ack",
+        "stale_epoch"
+      ]
+    },
+    {
+      "caseId": "NATIVE-47",
+      "owner": "W4",
+      "requiredSubcaseIds": [
+        "hidden_tab",
+        "ui_pause_resume"
+      ]
+    },
+    {
+      "caseId": "NATIVE-48",
+      "owner": "W4",
+      "requiredSubcaseIds": [
+        "exit_before_final_parse"
+      ]
+    },
+    {
+      "caseId": "NATIVE-49",
+      "owner": "W4",
+      "requiredSubcaseIds": [
+        "webview_disconnect"
+      ]
+    },
+    {
+      "caseId": "NATIVE-50",
+      "owner": "W2",
+      "requiredSubcaseIds": [
+        "cli_profile_mismatch"
+      ]
+    },
+    {
+      "caseId": "NATIVE-51",
+      "owner": "W2",
+      "requiredSubcaseIds": [
+        "queued_profile_revision_change"
+      ]
+    },
+    {
+      "caseId": "NATIVE-52",
+      "owner": "W2",
+      "requiredSubcaseIds": [
+        "unknown_semantic_cwd"
+      ]
+    },
+    {
+      "caseId": "NATIVE-53",
+      "owner": "W1",
+      "requiredSubcaseIds": [
+        "config_root_alias",
+        "windows_env_case"
+      ]
+    },
+    {
+      "caseId": "NATIVE-54",
+      "owner": "W4",
+      "requiredSubcaseIds": [
+        "wrong_window_input",
+        "wrong_window_stop",
+        "wrong_window_ack"
+      ]
+    },
+    {
+      "caseId": "NATIVE-55",
+      "owner": "W3",
+      "requiredSubcaseIds": [
+        "forged",
+        "replay",
+        "oversize",
+        "late"
+      ]
+    },
+    {
+      "caseId": "NATIVE-56",
+      "owner": "W8",
+      "requiredSubcaseIds": [
+        "argv_secret",
+        "error_secret",
+        "title_secret"
+      ]
+    },
+    {
+      "caseId": "NATIVE-57",
+      "owner": "W1",
+      "requiredSubcaseIds": [
+        "codex_only_restart"
+      ]
+    },
+    {
+      "caseId": "NATIVE-58",
+      "owner": "W3",
+      "requiredSubcaseIds": [
+        "two_root_mapping",
+        "two_root_index",
+        "two_root_panel"
+      ]
+    },
+    {
+      "caseId": "NATIVE-59",
+      "owner": "W0",
+      "requiredSubcaseIds": [
+        "test_only_harness"
+      ]
+    },
+    {
+      "caseId": "NATIVE-60",
+      "owner": "W2",
+      "requiredSubcaseIds": [
+        "shim",
+        "locator",
+        "picker_scope",
+        "raw_pipe"
+      ]
+    },
+    {
+      "caseId": "NATIVE-61",
+      "owner": "W4",
+      "requiredSubcaseIds": [
+        "duplicate_spawn",
+        "reply_loss",
+        "detached"
+      ]
+    },
+    {
+      "caseId": "NATIVE-62",
+      "owner": "W8",
+      "requiredSubcaseIds": [
+        "unset_no_revive",
+        "old_writeback",
+        "secret_isolation"
+      ]
+    },
+    {
+      "caseId": "NATIVE-63",
+      "owner": "W6",
+      "requiredSubcaseIds": [
+        "cc_desk_off",
+        "cc_desk_on",
+        "system_terminal_off",
+        "system_terminal_on"
+      ]
+    },
+    {
+      "caseId": "NATIVE-64",
+      "owner": "W9",
+      "requiredSubcaseIds": [
+        "missing",
+        "duplicate",
+        "fake_na",
+        "wrong_hash"
+      ],
+      "allowNA": false
+    }
+  ]
+}
