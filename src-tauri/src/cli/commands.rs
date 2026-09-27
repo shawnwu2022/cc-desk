@@ -133,6 +133,15 @@ pub(crate) async fn cli_input_protocol(
 }
 
 #[tauri::command]
+pub(crate) async fn cli_resize(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<(), SafeError> {
+    runtime.resize(&webview, &request)
+}
+
+#[tauri::command]
 pub(crate) async fn cli_stop(
     webview: Webview,
     request: Request<'_>,
