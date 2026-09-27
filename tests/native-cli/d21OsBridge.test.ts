@@ -9,7 +9,7 @@ const installProbePath = resolve(root, 'scripts/test-conpty-install.ps1')
 describe('D21 OS bridge installer certification gate', () => {
   it('D21_Installer_StackedPullRequestsTriggerRuntimeCertification_01', () => {
     expect(existsSync(workflowPath)).toBe(true)
-    const workflow = readFileSync(workflowPath, 'utf8')
+    const workflow = readFileSync(workflowPath, 'utf8').replace(/\r\n/g, '\n')
     const pullRequestBlock = workflow.match(/\n  pull_request:\n([\s\S]*?)\n  workflow_dispatch:/)?.[1] ?? ''
 
     expect(pullRequestBlock).not.toMatch(/branches:\s*\[main\]/)
