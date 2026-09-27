@@ -1,6 +1,8 @@
-use crate::cli::profiles::Profile;
+use crate::cli::environment::{build_environment, EnvMap};
+use crate::cli::profiles::{Override, Profile};
 use crate::cli::storage::{Patch, WorkspaceRepository};
 use crate::cli::types::{CliKind, WireU64};
+use crate::cli::workspace::{patch_project, register_project, LegacyMetadata};
 use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
@@ -156,4 +158,168 @@ fn D06_Storage_DirectoryTargetIsNotRemoved_06() {
         .apply(revision("0"), create("one"))
         .is_err());
     assert!(path.is_dir());
+}
+
+#[test]
+fn D25_Rollback_LegacyWritebackCannotReviveUnsetOrLeakCodex_01() {
+    let dir = TempDir::new().unwrap();
+    let workspace_path = dir.path().join("cli-workspace.v1.json");
+    let repo = WorkspaceRepository::open(workspace_path.clone()).unwrap();
+
+    let mut legacy_claude = Profile::new("legacyClaude", CliKind::Claude);
+    legacy_claude.skip_permissions = Override::Unset;
+    legacy_claude
+        .env
+        .insert("ROLLBACK_SECRET".into(), Override::Unset);
+    repo.apply(
+        revision("0"),
+        Patch::Create {
+            profile: legacy_claude,
+        },
+    )
+    .unwrap();
+    repo.apply(revision("1"), create("codex")).unwrap();
+
+    let project_dir = dir.path().join("project");
+    fs::create_dir(&project_dir).unwrap();
+    let project = register_project(&repo, &project_dir).unwrap();
+    let project = patch_project(
+        &repo,
+        revision("3"),
+        &project.project_id,
+        json!({
+            "alias": {"mode":"unset"},
+            "pinned": {"mode":"set","value":false},
+            "hidden": {"mode":"unset"}
+        }),
+    )
+    .unwrap();
+
+    // Simulate an older package writing only the legacy files it knows about.
+    let legacy = json!({
+        "defaultSkipPermissions": true,
+        "claudeEnvVars": {
+            "ROLLBACK_SECRET": "fixture-secret",
+            "LEGACY_ONLY": "legacy-value"
+        },
+        "unknownOldField": {"keep": true}
+    });
+    let legacy_projects = json!({
+        "displayNames": { project_dir.to_str().unwrap(): "Old alias" },
+        "pinnedProjects": [project_dir.to_str().unwrap()],
+        "hiddenProjects": [project_dir.to_str().unwrap()],
+        "futureOldField": ["keep"]
+    });
+    fs::write(
+        dir.path().join("config.json"),
+        serde_json::to_vec_pretty(&legacy).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("projects.json"),
+        serde_json::to_vec_pretty(&legacy_projects).unwrap(),
+    )
+    .unwrap();
+
+    let reopened = WorkspaceRepository::open(workspace_path).unwrap();
+    let document = reopened.read().unwrap();
+    let claude = &document.profiles["legacyClaude"];
+    let codex = &document.profiles["codex"];
+
+    assert_eq!(claude.resolve_skip_permissions(Some(&legacy)), None);
+    let claude_env =
+        build_environment(&EnvMap::new(), &EnvMap::new(), claude, Some(&legacy), None).unwrap();
+    assert!(!claude_env.contains_key(std::ffi::OsStr::new("ROLLBACK_SECRET")));
+    assert_eq!(
+        claude_env.get(std::ffi::OsStr::new("LEGACY_ONLY")).unwrap(),
+        "legacy-value"
+    );
+
+    let codex_env =
+        build_environment(&EnvMap::new(), &EnvMap::new(), codex, Some(&legacy), None).unwrap();
+    assert!(!codex_env.contains_key(std::ffi::OsStr::new("ROLLBACK_SECRET")));
+    assert!(!codex_env.contains_key(std::ffi::OsStr::new("LEGACY_ONLY")));
+
+    let resolved = project.resolve_metadata(&LegacyMetadata {
+        alias: Some("Old alias".into()),
+        pinned: Some(true),
+        hidden: Some(true),
+    });
+    assert_eq!(resolved.alias, None);
+    assert_eq!(resolved.pinned, Some(false));
+    assert_eq!(resolved.hidden, None);
+}
+
+#[test]
+fn D25_Rollback_NewWorkspaceWritesNeverTouchLegacyFiles_02() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("config.json");
+    let projects_path = dir.path().join("projects.json");
+    let config_bytes = br#"{"legacySecret":"fixture-secret","future":{"x":1}}"#;
+    let projects_bytes = br#"{"displayNames":{},"future":["preserve"]}"#;
+    fs::write(&config_path, config_bytes).unwrap();
+    fs::write(&projects_path, projects_bytes).unwrap();
+
+    let workspace_path = dir.path().join("cli-workspace.v1.json");
+    let repo = WorkspaceRepository::open(workspace_path).unwrap();
+    repo.apply(revision("0"), create("codex")).unwrap();
+    let folder = dir.path().join("project");
+    fs::create_dir(&folder).unwrap();
+    register_project(&repo, &folder).unwrap();
+
+    assert_eq!(fs::read(config_path).unwrap(), config_bytes);
+    assert_eq!(fs::read(projects_path).unwrap(), projects_bytes);
+}
+
+#[test]
+fn D25_Rollback_UnknownWorkspaceExtensionsSurviveMixedVersionWrites_03() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("cli-workspace.v1.json");
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&json!({
+            "schemaVersion": 1,
+            "revision": "0",
+            "profiles": {},
+            "registeredProjects": {},
+            "futureWorkspace": {
+                "writer": "future-version",
+                "opaque": ["a", {"b": 2}]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let repo = WorkspaceRepository::open(path.clone()).unwrap();
+    repo.apply(revision("0"), create("codex")).unwrap();
+
+    // An older package may rewrite its own legacy files between new-version
+    // workspace writes. The next new-version write must still retain extensions.
+    fs::write(
+        dir.path().join("config.json"),
+        br#"{"defaultSkipPermissions":true,"unknown":"old-writer"}"#,
+    )
+    .unwrap();
+
+    repo.apply(
+        revision("1"),
+        Patch::Update {
+            id: "codex".into(),
+            changes: json!({"name":"after-rollback"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        },
+    )
+    .unwrap();
+
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert_eq!(
+        saved["futureWorkspace"],
+        json!({
+            "writer": "future-version",
+            "opaque": ["a", {"b": 2}]
+        })
+    );
 }

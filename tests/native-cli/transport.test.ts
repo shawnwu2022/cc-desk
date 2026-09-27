@@ -117,4 +117,65 @@ describe('D14 native terminal output transport', () => {
     callbacks[1]()
     await Promise.resolve()
   })
+  it('D27_Frontend_HundredsOfParsedCallbacksNeverAckAcrossGap_005', async () => {
+    const callbacks: Array<() => void> = []
+    const acks: string[] = []
+    const transport = createTerminalOutputTransport({
+      runId: 'run-a',
+      generation: 2,
+      write(_bytes, done) { callbacks.push(done) },
+      async ack(value) { acks.push(value.throughOffset) },
+    })
+
+    for (let index = 0; index < 256; index += 1) {
+      expect(transport.accept(frame(String(index), [index & 0xff]))).toBe(true)
+    }
+    for (let index = callbacks.length - 1; index >= 1; index -= 1) {
+      callbacks[index]()
+    }
+    await Promise.resolve()
+    expect(acks).toEqual([])
+
+    callbacks[0]()
+    await Promise.resolve()
+    expect(acks).toEqual(['256'])
+  })
+
+  it('D27_Frontend_OneDegradedRunCannotPoisonPeerTransport_006', async () => {
+    const peerCallbacks: Array<() => void> = []
+    const peerAcks: string[] = []
+    const degraded: string[] = []
+
+    const broken = createTerminalOutputTransport({
+      runId: 'run-a',
+      generation: 2,
+      write(_bytes, done) { done() },
+      async ack() { throw new Error('channel lost') },
+      onDegraded: reason => degraded.push(reason),
+    })
+    const peer = createTerminalOutputTransport({
+      runId: 'run-b',
+      generation: 1,
+      write(_bytes, done) { peerCallbacks.push(done) },
+      async ack(value) { peerAcks.push(value.throughOffset) },
+    })
+
+    expect(broken.accept(frame('0', [1]))).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(degraded).toEqual(['OUTPUT_ACK_FAILED'])
+    expect(broken.accept(frame('1', [2]))).toBe(false)
+
+    expect(peer.accept({
+      runId: 'run-b',
+      generation: 1,
+      streamEpoch: '3',
+      offset: '0',
+      bytes: [9, 8, 7],
+    })).toBe(true)
+    peerCallbacks[0]()
+    await Promise.resolve()
+    expect(peerAcks).toEqual(['3'])
+  })
+
 })

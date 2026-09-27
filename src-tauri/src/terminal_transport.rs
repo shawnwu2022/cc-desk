@@ -184,6 +184,11 @@ impl PayloadBudget {
     fn used(&self) -> usize {
         self.state.lock().used
     }
+
+    #[cfg(test)]
+    fn waiter_count(&self) -> usize {
+        self.state.lock().waiters.len()
+    }
 }
 
 struct StreamState {
@@ -325,6 +330,11 @@ impl TerminalTransports {
 
     pub(crate) fn budgeted_bytes(&self) -> usize {
         self.core.budget.used()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn waiting_streams(&self) -> usize {
+        self.core.budget.waiter_count()
     }
 }
 
