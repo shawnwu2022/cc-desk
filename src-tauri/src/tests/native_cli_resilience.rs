@@ -1,7 +1,7 @@
 use crate::cli::profiles::{EnvValue, Override, Profile};
 use crate::cli::storage::{Patch, WorkspaceRepository, WriteStage};
-use crate::cli::workspace::register_project;
 use crate::cli::types::{CliKind, WireU64};
+use crate::cli::workspace::register_project;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
@@ -21,10 +21,12 @@ fn D25_MixedVersion_LegacyWritebackCannotReviveWorkspaceUnsetOrTouchCodex_001() 
     let mut claude = Profile::new("legacyClaude", CliKind::Claude);
     claude.skip_permissions = Override::Unset;
     claude.env.insert("TOKEN".into(), Override::Unset);
-    repo.apply(rev("0"), Patch::Create { profile: claude }).unwrap();
+    repo.apply(rev("0"), Patch::Create { profile: claude })
+        .unwrap();
 
     let codex = Profile::new("codexDefault", CliKind::Codex);
-    repo.apply(rev("1"), Patch::Create { profile: codex }).unwrap();
+    repo.apply(rev("1"), Patch::Create { profile: codex })
+        .unwrap();
 
     let before = fs::read(&workspace).unwrap();
     fs::write(
@@ -33,8 +35,10 @@ fn D25_MixedVersion_LegacyWritebackCannotReviveWorkspaceUnsetOrTouchCodex_001() 
             "defaultSkipPermissions": true,
             "claudeEnvVars": {"TOKEN": "old-package-secret"},
             "futureLegacyField": {"kept": true}
-        })).unwrap(),
-    ).unwrap();
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 
     let saved = repo.read().unwrap();
     let claude = saved.profiles["legacyClaude"].clone();
@@ -47,7 +51,10 @@ fn D25_MixedVersion_LegacyWritebackCannotReviveWorkspaceUnsetOrTouchCodex_001() 
         None
     );
     assert_eq!(codex.resolve_skip_permissions(Some(&old)), None);
-    assert!(codex.resolve_env(Some(&old), &BTreeMap::new()).unwrap().is_empty());
+    assert!(codex
+        .resolve_env(Some(&old), &BTreeMap::new())
+        .unwrap()
+        .is_empty());
     assert_eq!(fs::read(&workspace).unwrap(), before);
 }
 
@@ -59,14 +66,21 @@ fn D25_CommitUnknown_ReReadWinsAndOldCasCannotReplay_002() {
 
     repo.apply(
         rev("0"),
-        Patch::Create { profile: Profile::new("old", CliKind::Codex) },
-    ).unwrap();
+        Patch::Create {
+            profile: Profile::new("old", CliKind::Codex),
+        },
+    )
+    .unwrap();
 
-    let failure = repo.apply_with_fault(
-        rev("1"),
-        Patch::Create { profile: Profile::new("new", CliKind::Codex) },
-        WriteStage::AfterReplace,
-    ).unwrap_err();
+    let failure = repo
+        .apply_with_fault(
+            rev("1"),
+            Patch::Create {
+                profile: Profile::new("new", CliKind::Codex),
+            },
+            WriteStage::AfterReplace,
+        )
+        .unwrap_err();
     assert_eq!(failure.code, "COMMIT_STATE_UNKNOWN");
     assert!(!failure.retryable);
 
@@ -75,12 +89,19 @@ fn D25_CommitUnknown_ReReadWinsAndOldCasCannotReplay_002() {
     assert!(recovered.profiles.contains_key("new"));
 
     let before = fs::read(dir.path().join("cli-workspace.v1.json")).unwrap();
-    let replay = repo.apply(
-        rev("1"),
-        Patch::Create { profile: Profile::new("new", CliKind::Codex) },
-    ).unwrap_err();
+    let replay = repo
+        .apply(
+            rev("1"),
+            Patch::Create {
+                profile: Profile::new("new", CliKind::Codex),
+            },
+        )
+        .unwrap_err();
     assert_eq!(replay.code, "REVISION_CONFLICT");
-    assert_eq!(fs::read(dir.path().join("cli-workspace.v1.json")).unwrap(), before);
+    assert_eq!(
+        fs::read(dir.path().join("cli-workspace.v1.json")).unwrap(),
+        before
+    );
 }
 
 #[test]
@@ -98,8 +119,10 @@ fn D25_UnknownWorkspaceExtensionsSurviveProfileAndProjectEraWrites_003() {
                 "nested": ["alpha", {"beta": true}],
                 "flag": false
             }
-        })).unwrap(),
-    ).unwrap();
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let repo = WorkspaceRepository::open(path.clone()).unwrap();
     repo.apply(
         rev("0"),
@@ -127,22 +150,27 @@ fn D25_LegacyLiteralSecretIsNeverCopiedIntoWorkspace_004() {
     let mut profile = Profile::new("legacyClaude", CliKind::Claude);
     profile.env.insert(
         "TOKEN".into(),
-        Override::Set(EnvValue::HostRef { name: "CC_TEST_TOKEN".into() }),
+        Override::Set(EnvValue::HostRef {
+            name: "CC_TEST_TOKEN".into(),
+        }),
     );
     assert_eq!(
-        profile.resolve_env(
-            Some(&legacy),
-            &BTreeMap::from([("CC_TEST_TOKEN".into(), "host-secret".into())]),
-        ).unwrap()["TOKEN"],
+        profile
+            .resolve_env(
+                Some(&legacy),
+                &BTreeMap::from([("CC_TEST_TOKEN".into(), "host-secret".into())]),
+            )
+            .unwrap()["TOKEN"],
         Some("host-secret".into())
     );
-    WorkspaceRepository::open(path.clone()).unwrap()
-        .apply(rev("0"), Patch::Create { profile }).unwrap();
+    WorkspaceRepository::open(path.clone())
+        .unwrap()
+        .apply(rev("0"), Patch::Create { profile })
+        .unwrap();
     let bytes = fs::read_to_string(path).unwrap();
     assert!(!bytes.contains("fixture-secret"));
     assert!(!bytes.contains("host-secret"));
 }
-
 
 #[test]
 fn D25_ConcurrentProfileAndProjectWritesPreserveBothDomains_005() {
@@ -188,12 +216,20 @@ fn D25_ConcurrentProfileAndProjectWritesPreserveBothDomains_005() {
     profile_worker.join().unwrap();
     project_worker.join().unwrap();
 
-    let saved = WorkspaceRepository::open(workspace).unwrap().read().unwrap();
+    let saved = WorkspaceRepository::open(workspace)
+        .unwrap()
+        .read()
+        .unwrap();
     assert_eq!(saved.revision.get(), 2);
     assert!(saved.profiles.contains_key("codex"));
     assert_eq!(saved.registered_projects.len(), 1);
     assert_eq!(
-        saved.registered_projects.values().next().unwrap().selected_path,
+        saved
+            .registered_projects
+            .values()
+            .next()
+            .unwrap()
+            .selected_path,
         project_path
     );
 }
