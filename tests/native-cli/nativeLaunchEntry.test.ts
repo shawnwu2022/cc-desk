@@ -54,7 +54,7 @@ describe('D23 native launch/recovery user entry', () => {
       recover: vi.fn(),
       latest: vi.fn(),
     }
-    const createAttempt = vi.fn((request) => {
+    const createAttempt = vi.fn((request: any, _channel: any) => {
       captured = request
       return attempt
     })
