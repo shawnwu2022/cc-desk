@@ -88,7 +88,7 @@ fn D27_Transport_ThirtyTwoRunsProgressUnderTinyGlobalBudget_001() {
             .expect("all runs must eventually receive global budget");
         assert!(seen.insert(index), "a run emitted more than one frame");
         assert_eq!(frame["runId"], format!("stress-run-{index}"));
-        assert_eq!(frame["bytes"], json!([index as u8; 4]));
+        assert_eq!(frame["bytes"], json!(vec![index as u8; 4]));
         assert!(hub.budgeted_bytes() <= 16);
         hub.ack(&owner, &ack(index, &epochs[index])).unwrap();
     }
@@ -171,7 +171,8 @@ fn D27_Transport_QueuedRunsDoNotBypassAppBudget_003() {
     let (first, _) = rx.recv_timeout(Duration::from_secs(1)).unwrap();
     let (second, _) = rx.recv_timeout(Duration::from_secs(1)).unwrap();
     let initial: HashSet<_> = [0usize, 1usize].into_iter().collect();
-    assert_eq!(HashSet::from([first, second]), initial);
+    let observed: HashSet<_> = [first, second].into_iter().collect();
+    assert_eq!(observed, initial);
 
     let (released_index, _) = rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(released_index == 2 || released_index == 3);
