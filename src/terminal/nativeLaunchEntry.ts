@@ -1,6 +1,7 @@
 import { createCliLaunchAttempt } from '@/api/tauri'
 import type { LaunchAttempt, LaunchStatus } from '@/api/cliLaunchAttempt'
 import type { LaunchAction, LaunchRequest, NativeCliKind } from '@/types/cli'
+import type { OutputFrame } from '@/types/terminal'
 import type { CliProfile } from '@/types/profile'
 import { validateLaunchRequest } from '@/utils/nativeIdentity'
 import type { Channel } from '@tauri-apps/api/core'
@@ -22,19 +23,19 @@ export interface NativeLaunchEntryOptions {
   selectedProfile(cli: NativeCliKind): CliProfile | null
   createAttempt?: (
     request: LaunchRequest,
-    channel: Channel<unknown>,
+    channel: Channel<OutputFrame>,
   ) => LaunchAttempt
 }
 
 export interface NativeLaunchEntry {
-  start(input: NativeLaunchEntryInput, channel: Channel<unknown>): Promise<LaunchStatus>
+  start(input: NativeLaunchEntryInput, channel: Channel<OutputFrame>): Promise<LaunchStatus>
   recover(requestId: string): Promise<LaunchStatus>
   latest(requestId: string): LaunchStatus | undefined
 }
 
 interface OwnedAttempt {
   fingerprint: string
-  channel: Channel<unknown>
+  channel: Channel<OutputFrame>
   attempt: LaunchAttempt | null
   startPromise: Promise<LaunchStatus>
 }
@@ -74,7 +75,7 @@ export function createNativeLaunchEntry(options: NativeLaunchEntryOptions): Nati
   }
 
   return Object.freeze({
-    start(input: NativeLaunchEntryInput, channel: Channel<unknown>): Promise<LaunchStatus> {
+    start(input: NativeLaunchEntryInput, channel: Channel<OutputFrame>): Promise<LaunchStatus> {
       let request: LaunchRequest
       try {
         request = build(input)
