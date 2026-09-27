@@ -22,6 +22,8 @@ export interface NativeTerminalHostProtocol {
   beginParserOutput(): () => void
   handleData(data: string): Promise<void>
   handleBinary(data: string): Promise<void>
+  sendUserText(data: string): Promise<void>
+  reserveUserPaste(produce: () => Promise<Uint8Array>): { inputSeq: string; settled: Promise<void> }
   snapshot(): InputQueueSnapshot
 }
 
@@ -134,6 +136,30 @@ export function createTerminalHostProtocol(
     async handleBinary(data) {
       const classified = classifyXtermBinary(data)
       await queue.sendProtocol(classified.bytes)
+    },
+
+    async sendUserText(data) {
+      const classified = classifyExplicitUserText(data)
+      const target = options.currentTarget()
+      queue.enqueue({
+        source: 'user-text',
+        modeEpoch: target.modeEpoch,
+        bytes: classified.bytes,
+      })
+      await queue.flush()
+    },
+
+    reserveUserPaste(produce) {
+      const target = options.currentTarget()
+      const reservation = queue.reserveAsync({
+        source: 'user-paste',
+        modeEpoch: target.modeEpoch,
+        produce,
+      })
+      return {
+        inputSeq: reservation.inputSeq,
+        settled: reservation.settled.then(() => queue.flush()),
+      }
     },
 
     snapshot() {
