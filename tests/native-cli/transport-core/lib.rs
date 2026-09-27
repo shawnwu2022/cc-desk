@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn D27_Core_DroppingBlockedOwnerReleasesBudgetForPeer_009() {
         let hub = Arc::new(TerminalTransports::with_limits(
-            TransportLimits::new(4, 8, 4, 4).unwrap(),
+            TransportLimits::new(4, 4, 0, 4).unwrap(),
         ));
         let a = hub
             .attach(owner(), run("a"), route(Arc::new(Mutex::new(Vec::new()))))
