@@ -345,6 +345,59 @@ mod tests {
     }
 
     #[test]
+    fn D27_Core_WrongOwnerAckCannotReleaseAnotherRunsCredit_008() {
+        let hub = TerminalTransports::with_limits(TransportLimits::new(4, 8, 4, 8).unwrap());
+        let stream = hub
+            .attach(owner(), run("owned"), route(Arc::new(Mutex::new(Vec::new()))))
+            .unwrap();
+        stream.send(&[1, 2, 3, 4]).unwrap();
+        let epoch = stream.stream_epoch().to_string();
+
+        let mut wrong = owner();
+        wrong.instance_id = "other-instance".into();
+        assert_eq!(
+            hub.ack(&wrong, &ack("owned", &epoch, "4"))
+                .unwrap_err()
+                .code,
+            "FORBIDDEN"
+        );
+        assert_eq!(hub.budgeted_bytes(), 4);
+
+        assert_eq!(hub.ack(&owner(), &ack("owned", &epoch, "4")).unwrap(), 4);
+        assert_eq!(hub.budgeted_bytes(), 0);
+    }
+
+    #[test]
+    fn D27_Core_DroppingBlockedOwnerReleasesBudgetForPeer_009() {
+        let hub = Arc::new(TerminalTransports::with_limits(
+            TransportLimits::new(4, 8, 4, 4).unwrap(),
+        ));
+        let a = hub
+            .attach(owner(), run("a"), route(Arc::new(Mutex::new(Vec::new()))))
+            .unwrap();
+        let b_events = Arc::new(Mutex::new(Vec::new()));
+        let b = hub.attach(owner(), run("b"), route(b_events.clone())).unwrap();
+        a.send(&[1, 1, 1, 1]).unwrap();
+
+        let worker = {
+            let b = b.clone();
+            std::thread::spawn(move || b.send(&[2, 2, 2, 2]))
+        };
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(b_events.lock().is_empty());
+
+        drop(a);
+        for _ in 0..100 {
+            if b_events.lock().len() == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(b_events.lock().len(), 1);
+        assert!(worker.join().unwrap().is_ok());
+    }
+
+    #[test]
     fn D14_Core_RouteLossIsFinalAndReleasesPayload_004() {
         let calls = Arc::new(AtomicUsize::new(0));
         let sent = calls.clone();
