@@ -1,5 +1,5 @@
 use crate::cli::environment::{build_environment, EnvMap};
-use crate::cli::profiles::{EnvValue, Override, Profile};
+use crate::cli::profiles::{Override, Profile};
 use crate::cli::storage::{Patch, WorkspaceRepository};
 use crate::cli::types::{CliKind, WireU64};
 use crate::cli::workspace::{patch_project, register_project, LegacyMetadata};
