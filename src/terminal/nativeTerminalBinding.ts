@@ -29,6 +29,8 @@ export interface NativeTerminalBindingOptions extends RunKey {
 
 export interface NativeTerminalBinding {
   acceptOutput(frame: OutputFrame): boolean
+  sendUserText(data: string): Promise<void>
+  reserveUserPaste(produce: () => Promise<Uint8Array>): { inputSeq: string; settled: Promise<void> }
   drainInput(): Promise<void>
   dispose(): void
 }
@@ -87,6 +89,21 @@ export function createNativeTerminalBinding(
     acceptOutput(frame) {
       if (disposed) return false
       return output.accept(frame)
+    },
+
+    sendUserText(data) {
+      if (disposed) return Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED'))
+      return host.sendUserText(data)
+    },
+
+    reserveUserPaste(produce) {
+      if (disposed) {
+        return {
+          inputSeq: '0',
+          settled: Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED')),
+        }
+      }
+      return host.reserveUserPaste(produce)
     },
 
     drainInput() {
