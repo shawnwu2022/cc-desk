@@ -1,9 +1,9 @@
 <template>
 <div class="app-root">
-  <TitleBar />
+  <TitleBar @toggle-native="toggleNativeWorkbench" />
 
   <!-- 环境检查提示 -->
-  <div v-if="appStore.checkFailed" class="check-failed-overlay">
+  <div v-if="appStore.checkFailed && currentView !== 'native'" class="check-failed-overlay">
     <div class="check-failed-card">
       <h2>{{ t('environmentCheck') }}</h2>
       <div class="check-list">
@@ -22,6 +22,9 @@
         </div>
       </div>
       <div class="check-btn-row">
+        <button class="startup-cancel-btn" @click="openNativeWorkbench">
+          Native CLI
+        </button>
         <button class="check-retry-btn" @click="retryChecks">
           {{ t('retry') }}
         </button>
@@ -62,6 +65,12 @@
     :visible="currentView === 'terminal'"
     @back="handleBack"
     @select-project="handleOpenProject"
+  />
+
+  <!-- Native Claude/Codex workbench stays mounted so native Tab/xterm state survives view switches. -->
+  <NativeCliWorkbench
+    v-show="currentView === 'native'"
+    @back="closeNativeWorkbench"
   />
 
   <!-- 覆盖层视图（固定定位叠加在终端之上） -->
@@ -114,8 +123,9 @@ import TitleBar from '@/components/TitleBar.vue'
 
 const TerminalView = defineAsyncComponent(() => import('@/components/TerminalView.vue'))
 const SettingsOverlay = defineAsyncComponent(() => import('@/components/settings/SettingsOverlay.vue'))
+const NativeCliWorkbench = defineAsyncComponent(() => import('@/components/NativeCliWorkbench.vue'))
 
-type ViewType = 'welcome' | 'projects' | 'terminal'
+type ViewType = 'welcome' | 'projects' | 'terminal' | 'native'
 
 const appStore = useAppStore()
 const sessionStore = useSessionStore()
@@ -131,6 +141,7 @@ const { t } = useI18n()
 useAttentionStore().init()
 const { setupShortcutListeners } = useAppShortcuts()
 const currentView = ref<ViewType>('welcome')
+const previousNonNativeView = ref<Exclude<ViewType, 'native'>>('welcome')
 const terminalViewRef = ref()
 
 // 启动加载/失败门禁（v5-T7）：initStartup 中三路并行加载或启动摘要门禁失败时置位，
@@ -324,6 +335,22 @@ async function handleResumeSession(projectPath: string, sessionId: string, sessi
     appStore.setClaudeOptions({ resume: sessionId })
     appStore.setPendingResume(sessionId, sessionName)
   }
+}
+
+function openNativeWorkbench() {
+  if (currentView.value !== 'native') {
+    previousNonNativeView.value = currentView.value
+  }
+  currentView.value = 'native'
+}
+
+function closeNativeWorkbench() {
+  currentView.value = previousNonNativeView.value
+}
+
+function toggleNativeWorkbench() {
+  if (currentView.value === 'native') closeNativeWorkbench()
+  else openNativeWorkbench()
 }
 
 function handleBack() {
