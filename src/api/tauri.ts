@@ -357,6 +357,22 @@ export async function cliStop(
   await nativeDocumentBridge().invoke('cli_stop', run)
 }
 
+export async function cliResize(
+  run: import('@/types/terminal').RunKey,
+  cols: number,
+  rows: number,
+): Promise<void> {
+  if (!Number.isInteger(cols) || cols <= 0 || cols > 65535
+    || !Number.isInteger(rows) || rows <= 0 || rows > 65535) {
+    throw new Error('INVALID_TERMINAL_SIZE')
+  }
+  await nativeDocumentBridge().invoke('cli_resize', {
+    ...run,
+    cols,
+    rows,
+  })
+}
+
 
 export const NATIVE_INPUT_UPLOAD_CHUNK_BYTES = 64 * 1024
 
