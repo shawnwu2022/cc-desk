@@ -6,6 +6,35 @@ import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useCliWorkspaceStore } from '@/stores/cliWorkspace'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 
+const SAFE_WORKBENCH_ERRORS = new Set([
+  'CLI_PROFILE_REQUIRED',
+  'PROFILE_CLI_MISMATCH',
+  'PROFILE_SELECTION_CHANGED',
+  'PROFILE_NOT_FOUND',
+  'PROFILE_EXISTS',
+  'PROFILE_CREATE_NOT_ADOPTED',
+  'PROJECT_REQUIRED',
+  'PROJECT_NOT_FOUND',
+  'REVISION_CONFLICT',
+  'DOCUMENT_BRIDGE_UNAVAILABLE',
+  'BACKEND_INSTANCE_CHANGED',
+])
+
+function safeWorkbenchError(
+  failure: unknown,
+  workspaceError: string | null = null,
+): string {
+  if (workspaceError) return workspaceError
+  if (failure instanceof Error && SAFE_WORKBENCH_ERRORS.has(failure.message)) {
+    return failure.message
+  }
+  if (failure && typeof failure === 'object' && 'code' in failure) {
+    const code = (failure as { code?: unknown }).code
+    if (typeof code === 'string' && SAFE_WORKBENCH_ERRORS.has(code)) return code
+  }
+  return 'NATIVE_WORKBENCH_UNAVAILABLE'
+}
+
 export const useNativeWorkbenchStore = defineStore('native-cli-workbench', () => {
   const profiles = useCliProfilesStore()
   const workspace = useCliWorkspaceStore()
@@ -47,7 +76,7 @@ export const useNativeWorkbenchStore = defineStore('native-cli-workbench', () =>
       status.value = 'ready'
     } catch (failure) {
       status.value = 'error'
-      error.value = failure instanceof Error ? failure.message : 'NATIVE_WORKBENCH_UNAVAILABLE'
+      error.value = safeWorkbenchError(failure, workspace.error)
       throw failure
     }
   }
@@ -63,7 +92,7 @@ export const useNativeWorkbenchStore = defineStore('native-cli-workbench', () =>
       status.value = 'ready'
     } catch (failure) {
       status.value = 'error'
-      error.value = failure instanceof Error ? failure.message : 'NATIVE_WORKBENCH_UNAVAILABLE'
+      error.value = safeWorkbenchError(failure, workspace.error)
       throw failure
     }
   }
@@ -119,7 +148,7 @@ export const useNativeWorkbenchStore = defineStore('native-cli-workbench', () =>
       return adopted
     } catch (failure) {
       status.value = 'error'
-      error.value = failure instanceof Error ? failure.message : 'NATIVE_WORKBENCH_UNAVAILABLE'
+      error.value = safeWorkbenchError(failure, workspace.error)
       throw failure
     }
   }
