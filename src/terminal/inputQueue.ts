@@ -1,6 +1,6 @@
 import type { U64String } from '@/types/cli'
 
-const MAX_U64 = (1n << 64n) - 1n
+const MAX_U64 = BigInt('18446744073709551615')
 
 export const INPUT_ACTION_BYTES_MAX = 8 * 1024 * 1024
 export const INPUT_RUN_QUEUE_BYTES_MAX = 16 * 1024 * 1024
@@ -124,7 +124,7 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
     options.limits?.queuedBytes ?? INPUT_RUN_QUEUE_BYTES_MAX,
     'INPUT_QUEUE_BYTES',
   )
-  let nextSeq = 1n
+  let nextSeq = BigInt(1)
   let queuedBytes = 0
   const items: QueueItem[] = []
   let pause: Pause | undefined
@@ -152,12 +152,12 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
   const allocateSeq = (): U64String => {
     if (nextSeq > MAX_U64) throw new Error('INPUT_SEQ_EXHAUSTED')
     const value = nextSeq.toString() as U64String
-    nextSeq += 1n
+    nextSeq += BigInt(1)
     return value
   }
 
   const validateModeEpoch = (value: U64String) => {
-    if (parseU64(value, 'MODE_EPOCH') === 0n) throw new Error('INVALID_MODE_EPOCH')
+    if (parseU64(value, 'MODE_EPOCH') === BigInt(0)) throw new Error('INVALID_MODE_EPOCH')
   }
 
   const currentTarget = (): InputTarget => {

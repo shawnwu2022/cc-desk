@@ -173,6 +173,7 @@ pub fn run(initial_dir: Option<String>) {
             cli::commands::cli_input_commit,
             cli::commands::cli_input_abort,
             cli::commands::cli_input_protocol,
+            cli::commands::cli_resize,
             cli::commands::cli_stop,
             cli::commands::cli_list_profiles,
             cli::commands::cli_patch_profile,

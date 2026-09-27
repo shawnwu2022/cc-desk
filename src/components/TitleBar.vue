@@ -9,6 +9,10 @@
       <span class="win-app-title">{{ title }}</span>
     </div>
 
+    <button class="native-workbench-toggle" @click.stop="$emit('toggleNative')" @dblclick.stop>
+      Native CLI
+    </button>
+
     <!-- Windows 窗口控制按钮 -->
     <div v-if="isWindows" class="window-controls">
       <button class="win-ctrl-btn" @click.stop="handleMinimize" @dblclick.stop>
@@ -41,6 +45,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isMac, isWindows } from '@/utils/platform'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
+
+defineEmits<{ toggleNative: [] }>()
 
 const appStore = useAppStore()
 const sessionStore = useSessionStore()
@@ -122,6 +128,23 @@ onUnmounted(() => {
 /* ===== Windows 窗口控制 =====
  * 规格: learn.microsoft.com/en-us/windows/apps/design/basics/titlebar-design
  */
+
+.native-workbench-toggle {
+  height: 24px;
+  margin-right: 8px;
+  padding: 0 9px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.native-workbench-toggle:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
 
 .window-controls {
   display: flex;

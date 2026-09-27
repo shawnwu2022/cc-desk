@@ -295,6 +295,26 @@ impl NativeRuntime {
         .map_err(|_| error("INPUT_TASK_FAILED"))?
     }
 
+    pub(crate) fn resize<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: ResizeRequest = decode_projection(request.body(), 4096)?;
+        if input.generation == 0 || input.cols == 0 || input.rows == 0 {
+            return Err(error("INVALID_REQUEST"));
+        }
+        let run = input_run_key(&input.run_id, input.generation)?;
+        let access = self.service.access(&caller, &run)?;
+        access.resize(portable_pty::PtySize {
+            rows: input.rows,
+            cols: input.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+    }
+
     pub(crate) fn stop<T: Runtime>(
         &self,
         webview: &Webview<T>,
@@ -319,6 +339,15 @@ impl NativeRuntime {
             supervisor.shutdown();
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResizeRequest {
+    run_id: String,
+    generation: u32,
+    cols: u16,
+    rows: u16,
 }
 
 fn input_run_key(run_id: &str, generation: u32) -> Result<RunKey, SafeError> {

@@ -157,4 +157,78 @@ describe('D19 native terminal binding', () => {
     expect(events).toEqual(['user', 'protocol:\x1b[0n'])
     binding.dispose()
   })
+
+  it('D23_Binding_ExplicitUserTextUsesSameOrderedWriter_016', async () => {
+    const xterm = fakeXterm()
+    const users: string[] = []
+    const binding = createNativeTerminalBinding({
+      term: xterm.term,
+      runId: 'run-a',
+      generation: 2,
+      currentTarget: () => ({ runId: 'run-a', generation: 2, modeEpoch: '4' }),
+      writeUser: async input => {
+        users.push(input.inputSeq + ':' + new TextDecoder().decode(input.bytes))
+        return {
+          runId: input.runId,
+          generation: input.generation,
+          inputSeq: input.inputSeq,
+          modeEpoch: input.modeEpoch,
+          state: 'host-written',
+          confirmedBytes: String(input.bytes.length),
+        }
+      },
+      writeProtocol: async (_run, bytes) => ({
+        state: 'host-written',
+        confirmedBytes: String(bytes.length),
+      }),
+      ackOutput: async () => {},
+    })
+
+    await binding.sendUserText('中文')
+    expect(users).toEqual(['1:中文'])
+    binding.dispose()
+  })
+
+  it('D23_Binding_AsyncPasteReservesSequenceBeforeLaterEnter_017', async () => {
+    const xterm = fakeXterm()
+    const users: string[] = []
+    let releasePaste!: (value: Uint8Array) => void
+    const paste = new Promise<Uint8Array>(resolve => { releasePaste = resolve })
+    const binding = createNativeTerminalBinding({
+      term: xterm.term,
+      runId: 'run-a',
+      generation: 2,
+      currentTarget: () => ({ runId: 'run-a', generation: 2, modeEpoch: '4' }),
+      writeUser: async input => {
+        users.push(input.inputSeq + ':' + new TextDecoder().decode(input.bytes))
+        return {
+          runId: input.runId,
+          generation: input.generation,
+          inputSeq: input.inputSeq,
+          modeEpoch: input.modeEpoch,
+          state: 'host-written',
+          confirmedBytes: String(input.bytes.length),
+        }
+      },
+      writeProtocol: async (_run, bytes) => ({
+        state: 'host-written',
+        confirmedBytes: String(bytes.length),
+      }),
+      ackOutput: async () => {},
+    })
+
+    const reserved = binding.reserveUserPaste(() => paste)
+    const enter = binding.sendUserText('\r')
+    await Promise.resolve()
+    expect(users).toEqual([])
+
+    releasePaste(new TextEncoder().encode('paste-body'))
+    await reserved.settled
+    await enter
+
+    expect(reserved.inputSeq).toBe('1')
+    expect(users).toEqual(['1:paste-body', '2:\r'])
+    binding.dispose()
+  })
+
 })
