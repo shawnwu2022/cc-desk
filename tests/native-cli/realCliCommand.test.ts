@@ -57,7 +57,7 @@ describe('D20 target-machine certification command', () => {
       OPENAI_API_KEY: 'explicit-test-token',
     })
     expect(resolved.config.hostEnv.PATH).toBe('/safe/path')
-    expect(resolved.config.hostEnv.UNRELATED_SECRET).toBe('must-not-inherit')
+    expect(resolved.config.hostEnv.UNRELATED_SECRET).toBeUndefined()
   })
 
   it('D20_Command_RejectsPlaintextAccountSecrets_02', async () => {
@@ -122,6 +122,24 @@ describe('D20 target-machine certification command', () => {
 
     expect(result.status).toBe('BLOCKED')
     expect(JSON.stringify(result)).not.toContain('explicit-test-token-must-not-escape')
+  })
+
+  it('D20_Command_UnauthorizedAccountBlocksBeforeCredentialReferenceParsing_06', async () => {
+    const { resolveProductCommandConfig } = await loadCommand()
+    const resolved = resolveProductCommandConfig('claude', {
+      cli: 'claude',
+      authorizedTestAccount: false,
+      testAccountEnv: {
+        CLAUDE_CODE_OAUTH_TOKEN: 'plaintext-value-must-not-be-inspected',
+      },
+    }, {})
+
+    expect(resolved).toEqual({
+      status: 'BLOCKED',
+      cli: 'claude',
+      reason: 'AUTHORIZED_TEST_ACCOUNT_UNAVAILABLE',
+      recordPaths: [],
+    })
   })
 
   it('D20_Command_CliUsesExitCode2ForBlockedWithoutStderrNoise_05', () => {
