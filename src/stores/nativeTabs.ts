@@ -57,7 +57,16 @@ function revision(value: string): string {
 }
 
 function copyAction(action: LaunchAction): LaunchAction {
-  return structuredClone(action)
+  switch (action.kind) {
+    case 'new':
+      return { kind: 'new' }
+    case 'resume-picker':
+      return { kind: 'resume-picker', scope: action.scope }
+    case 'resume-id':
+      return { kind: 'resume-id', nativeSessionId: action.nativeSessionId }
+    case 'raw':
+      return { kind: 'raw', argv: [...action.argv] }
+  }
 }
 
 function snapshot(tab: NativeCliTab): NativeCliTab {
