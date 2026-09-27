@@ -44,6 +44,8 @@ let runToken: object = {}
 let observedBracketed = false
 let modeEpoch = 1n
 let launched = false
+let statusTimer: ReturnType<typeof setInterval> | null = null
+let statusSyncInFlight = false
 
 const entry = createNativeLaunchEntry({
   selectedProfile(cli) {
@@ -90,9 +92,15 @@ function refreshModeEpoch(): string {
   return modeEpoch.toString()
 }
 
+function stopStatusSync() {
+  if (statusTimer) clearInterval(statusTimer)
+  statusTimer = null
+}
+
 function disposeRunBinding() {
   runToken = {}
   launched = false
+  stopStatusSync()
   binding?.dispose()
   binding = null
 }
@@ -265,7 +273,12 @@ async function start(): Promise<void> {
     if (runToken !== token) return
     if (!tabs.applyLaunchStatus(props.tabId, result)) return
     launched = result.phase === 'running' || result.phase === 'starting'
-    if (launched) await resizeNative(term.cols, term.rows)
+    if (launched) {
+      await resizeNative(term.cols, term.rows)
+      startStatusSync()
+    } else {
+      stopStatusSync()
+    }
   } catch (error) {
     if (runToken !== token) return
     const code = safeLaunchCode(error)
@@ -280,11 +293,33 @@ async function recover(): Promise<void> {
     const result = await entry.recover(tab.requestId)
     tabs.applyLaunchStatus(props.tabId, result)
     launched = result.phase === 'running' || result.phase === 'starting'
+    if (!launched) stopStatusSync()
   } catch (error) {
     const code = safeLaunchCode(error)
+    launched = false
+    stopStatusSync()
     if (code === 'LAUNCH_STATE_UNKNOWN') tabs.markUnknown(props.tabId)
     else tabs.markError(props.tabId, code)
   }
+}
+
+async function syncStatus(): Promise<void> {
+  if (statusSyncInFlight || !props.active || !launched) return
+  statusSyncInFlight = true
+  try {
+    await recover()
+  } finally {
+    statusSyncInFlight = false
+  }
+}
+
+function startStatusSync() {
+  stopStatusSync()
+  if (!props.active || !launched) return
+  void syncStatus()
+  statusTimer = setInterval(() => {
+    void syncStatus()
+  }, 1500)
 }
 
 async function stop(): Promise<void> {
@@ -338,10 +373,14 @@ onMounted(async () => {
 })
 
 watch(() => props.active, async active => {
-  if (!active) return
+  if (!active) {
+    stopStatusSync()
+    return
+  }
   await nextTick()
   fit?.fit()
   focus()
+  if (launched) startStatusSync()
 })
 
 watch(
@@ -353,6 +392,7 @@ watch(
 )
 
 onUnmounted(() => {
+  stopStatusSync()
   disposeRunBinding()
   imeCleanup?.()
   imeCleanup = null
