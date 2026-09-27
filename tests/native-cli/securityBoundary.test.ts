@@ -59,7 +59,7 @@ describe('D26 native host security boundaries', () => {
     const section = commands.slice(start, end)
     expect(section).toContain('frontend_message_summary(&message)')
     expect(section).not.toContain('{}", message')
-    expect(section).not.toContain('message);')
+    expect(section).not.toMatch(/log::(?:error|warn|info|debug)!\([^\n]*\bmessage\b/)
   })
 
 })
