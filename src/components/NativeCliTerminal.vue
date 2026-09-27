@@ -17,8 +17,9 @@ import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { createNativeLaunchEntry } from '@/terminal/nativeLaunchEntry'
 import { createDeskNativeTerminalBinding } from '@/terminal/deskNativeTerminal'
 import type { NativeTerminalBinding } from '@/terminal/nativeTerminalBinding'
-import { buildPastePayload } from '@/utils/pasteText'
+import { buildPastePayload, imagePasteBytes } from '@/utils/pasteText'
 import { classifyClipboardSnapshot, createImeInputPolicy } from '@/terminal/inputPolicy'
+import { platform } from '@/utils/platform'
 import { cliResize, cliStop } from '@/api/tauri'
 import type { OutputFrame } from '@/types/terminal'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
@@ -69,6 +70,7 @@ function safeLaunchCode(error: unknown): string {
       'LAUNCH_REQUEST_ID_CONFLICT',
       'LAUNCH_ATTEMPT_NOT_FOUND',
       'LAUNCH_ATTEMPT_NOT_READY',
+      'XTERM_USER_INPUT_PROVENANCE_UNAVAILABLE',
     ].includes(error.message)) return error.message
   }
   if (error && typeof error === 'object' && 'code' in error) {
@@ -112,10 +114,18 @@ function bindClipboard() {
       text: event.clipboardData?.getData('text/plain') ?? '',
       types: Array.from(event.clipboardData?.types ?? []),
     })
-    if (snapshot.kind !== 'text') return
+    if (snapshot.kind !== 'text' && snapshot.kind !== 'image') return
 
     event.preventDefault()
     event.stopPropagation()
+
+    if (snapshot.kind === 'image') {
+      // Positive image MIME evidence preserves the CLI's native image-paste
+      // shortcut. Route the key bytes through the same ordered native writer.
+      void binding.sendUserText(imagePasteBytes(platform)).catch(markInputFailure)
+      return
+    }
+
     const payload = buildPastePayload(
       snapshot.text,
       term.modes.bracketedPasteMode,
@@ -202,22 +212,29 @@ async function start(): Promise<void> {
 
   const runId = tab.runId
   const generation = tab.generation
-  binding = createDeskNativeTerminalBinding({
-    term: term as any,
-    runId,
-    generation,
-    currentTarget: () => ({
+  tabs.markStarting(props.tabId)
+
+  try {
+    binding = createDeskNativeTerminalBinding({
+      term: term as any,
       runId,
       generation,
-      modeEpoch: refreshModeEpoch(),
-    }),
-    onDegraded: reason => {
-      const live = tabs.tab(props.tabId)
-      if (runToken === token && live?.runId === runId && live.generation === generation) {
-        tabs.setDiagnostic(props.tabId, reason)
-      }
-    },
-  })
+      currentTarget: () => ({
+        runId,
+        generation,
+        modeEpoch: refreshModeEpoch(),
+      }),
+      onDegraded: reason => {
+        const live = tabs.tab(props.tabId)
+        if (runToken === token && live?.runId === runId && live.generation === generation) {
+          tabs.setDiagnostic(props.tabId, reason)
+        }
+      },
+    })
+  } catch (error) {
+    if (runToken === token) tabs.markError(props.tabId, safeLaunchCode(error))
+    return
+  }
 
   const channel = new Channel<OutputFrame>()
   channel.onmessage = frame => {
@@ -232,7 +249,6 @@ async function start(): Promise<void> {
     if (!binding.acceptOutput(frame)) tabs.setDiagnostic(props.tabId, 'NATIVE_OUTPUT_DEGRADED')
   }
 
-  tabs.markStarting(props.tabId)
   try {
     const result = await entry.start({
       requestId: tab.requestId,
