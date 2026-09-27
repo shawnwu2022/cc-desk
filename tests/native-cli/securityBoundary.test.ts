@@ -40,4 +40,26 @@ describe('D26 native host security boundaries', () => {
     expect(workbenchStore).not.toContain('String(failure)')
     expect(workspaceStore).not.toContain('String(failure)')
   })
+
+  it('D26_Observer_AuthenticatesBeforeBodyAllocationAndBoundsConcurrency_007', () => {
+    const source = read('src-tauri/src/observer_http.rs')
+    const auth = source.indexOf('check_binding(&binding)')
+    const body = source.indexOf('to_bytes(request.into_body(), MAX_OBSERVER_PAYLOAD)')
+    expect(source).toContain('try_acquire()')
+    expect(source).toContain('MAX_OBSERVER_PAYLOAD')
+    expect(source).toContain('accept_event(&binding, &event_id, &body)')
+    expect(auth).toBeGreaterThan(-1)
+    expect(body).toBeGreaterThan(auth)
+  })
+
+  it('D26_Logging_CommandNeverFormatsRawFrontendMessage_008', () => {
+    const commands = read('src-tauri/src/commands.rs')
+    const start = commands.indexOf('pub async fn log_message')
+    const end = commands.indexOf('/// 获取当前应用可执行文件路径', start)
+    const section = commands.slice(start, end)
+    expect(section).toContain('frontend_message_summary(&message)')
+    expect(section).not.toContain('{}", message')
+    expect(section).not.toContain('message);')
+  })
+
 })
