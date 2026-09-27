@@ -5,6 +5,7 @@ import type { CliProfile } from '@/types/profile'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useCliWorkspaceStore } from '@/stores/cliWorkspace'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
+import { createNativeId } from '@/utils/nativeId'
 
 const SAFE_WORKBENCH_ERRORS = new Set([
   'CLI_PROFILE_REQUIRED',
@@ -113,7 +114,7 @@ export const useNativeWorkbenchStore = defineStore('native-cli-workbench', () =>
       if (!adopted) {
         const preferredId = nextCli === 'claude' ? 'legacyClaude' : 'codexDefault'
         const id = profiles.profile(preferredId)
-          ? `${nextCli}-${crypto.randomUUID()}`
+          ? createNativeId(nextCli)
           : preferredId
         const created: CliProfile = {
           id,
