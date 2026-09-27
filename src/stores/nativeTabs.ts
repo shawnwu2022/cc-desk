@@ -3,6 +3,7 @@ import { reactive, ref } from 'vue'
 import type { LaunchStatus } from '@/api/cliLaunchAttempt'
 import type { LaunchAction, NativeCliKind } from '@/types/cli'
 import { parseU64 } from '@/utils/nativeIdentity'
+import { createNativeId } from '@/utils/nativeId'
 
 export type NativeTabStatus =
   | 'stopped'
@@ -38,7 +39,7 @@ export interface NativeTabCreate {
 }
 
 function id(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`
+  return createNativeId(prefix)
 }
 
 function text(value: string, code: string): string {
