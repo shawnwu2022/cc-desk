@@ -464,12 +464,13 @@ pub async fn get_all_plugins(project_path: String) -> Result<Vec<PluginInfo>, St
 /// 前端日志写入
 #[tauri::command]
 pub async fn log_message(level: String, message: String) {
+    let summary = crate::logger::frontend_message_summary(&message);
     match level.as_str() {
-        "error" => log::error!("[Frontend] {}", message),
-        "warn" => log::warn!("[Frontend] {}", message),
-        "info" => log::info!("[Frontend] {}", message),
-        "debug" => log::debug!("[Frontend] {}", message),
-        _ => log::info!("[Frontend] {}", message),
+        "error" => log::error!("[Frontend] {}", summary),
+        "warn" => log::warn!("[Frontend] {}", summary),
+        "info" => log::info!("[Frontend] {}", summary),
+        "debug" => log::debug!("[Frontend] {}", summary),
+        _ => log::info!("[Frontend] {}", summary),
     }
 }
 
