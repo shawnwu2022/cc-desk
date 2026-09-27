@@ -160,7 +160,6 @@ fn D06_Storage_DirectoryTargetIsNotRemoved_06() {
     assert!(path.is_dir());
 }
 
-
 #[test]
 fn D25_Rollback_LegacyWritebackCannotReviveUnsetOrLeakCodex_01() {
     let dir = TempDir::new().unwrap();
@@ -232,9 +231,7 @@ fn D25_Rollback_LegacyWritebackCannotReviveUnsetOrLeakCodex_01() {
         build_environment(&EnvMap::new(), &EnvMap::new(), claude, Some(&legacy), None).unwrap();
     assert!(!claude_env.contains_key(std::ffi::OsStr::new("ROLLBACK_SECRET")));
     assert_eq!(
-        claude_env
-            .get(std::ffi::OsStr::new("LEGACY_ONLY"))
-            .unwrap(),
+        claude_env.get(std::ffi::OsStr::new("LEGACY_ONLY")).unwrap(),
         "legacy-value"
     );
 
@@ -317,8 +314,7 @@ fn D25_Rollback_UnknownWorkspaceExtensionsSurviveMixedVersionWrites_03() {
     )
     .unwrap();
 
-    let saved: serde_json::Value =
-        serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     assert_eq!(
         saved["futureWorkspace"],
         json!({
