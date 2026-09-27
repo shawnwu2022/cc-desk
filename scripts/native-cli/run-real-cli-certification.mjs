@@ -7,6 +7,7 @@ import {
   aggregateD20CertificationResults,
   runD20ProductCertification,
 } from './real-cli-certify.mjs'
+import { safeD20HostEnvironment } from './real-cli-runner.mjs'
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 const ENV_REF = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/
@@ -38,6 +39,9 @@ export function resolveProductCommandConfig(cli, rawConfig, sourceEnv = {}) {
   if (!['claude', 'codex'].includes(cli)) return fail('CLI_KIND_REQUIRED')
   if (!isObject(rawConfig)) return missingConfig(cli)
   if (rawConfig.cli !== cli) return fail('CLI_CONFIG_KIND_MISMATCH')
+  if (rawConfig.authorizedTestAccount !== true) {
+    return blocked(cli, 'AUTHORIZED_TEST_ACCOUNT_UNAVAILABLE')
+  }
 
   const accountSpec = rawConfig.testAccountEnv
   const testAccountEnv = {}
@@ -70,7 +74,7 @@ export function resolveProductCommandConfig(cli, rawConfig, sourceEnv = {}) {
     status: 'READY',
     config: {
       ...rawConfig,
-      hostEnv: isObject(sourceEnv) ? sourceEnv : {},
+      hostEnv: safeD20HostEnvironment(sourceEnv),
       testAccountEnv,
     },
   }
