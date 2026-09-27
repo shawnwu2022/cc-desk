@@ -241,6 +241,110 @@ mod tests {
     }
 
     #[test]
+    fn D27_Core_GlobalBudgetWaitersMakeFifoProgress_005() {
+        let hub = Arc::new(TerminalTransports::with_limits(
+            TransportLimits::new(4, 8, 4, 8).unwrap(),
+        ));
+        let a = hub
+            .attach(owner(), run("a"), route(Arc::new(Mutex::new(Vec::new()))))
+            .unwrap();
+        let b_events = Arc::new(Mutex::new(Vec::new()));
+        let b = hub.attach(owner(), run("b"), route(b_events.clone())).unwrap();
+        let c_events = Arc::new(Mutex::new(Vec::new()));
+        let c_stream = hub.attach(owner(), run("c"), route(c_events.clone())).unwrap();
+
+        a.send(&[1, 1, 1, 1]).unwrap();
+        a.send(&[2, 2, 2, 2]).unwrap();
+        assert_eq!(hub.budgeted_bytes(), 8);
+
+        let b_worker = {
+            let b = b.clone();
+            std::thread::spawn(move || b.send(&[3, 3, 3, 3]))
+        };
+        std::thread::sleep(Duration::from_millis(20));
+        let c_worker = {
+            let c_stream = c_stream.clone();
+            std::thread::spawn(move || c_stream.send(&[4, 4, 4, 4]))
+        };
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(b_events.lock().is_empty());
+        assert!(c_events.lock().is_empty());
+
+        let epoch = a.stream_epoch().to_string();
+        hub.ack(&owner(), &ack("a", &epoch, "4")).unwrap();
+        for _ in 0..100 {
+            if b_events.lock().len() == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(b_events.lock().len(), 1);
+        assert!(c_events.lock().is_empty());
+
+        let b_epoch = b.stream_epoch().to_string();
+        hub.ack(&owner(), &ack("b", &b_epoch, "4")).unwrap();
+        assert!(b_worker.join().unwrap().is_ok());
+        for _ in 0..100 {
+            if c_events.lock().len() == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(c_events.lock().len(), 1);
+        assert!(c_worker.join().unwrap().is_ok());
+    }
+
+    #[test]
+    fn D27_Core_RouteRevocationWakesBlockedSenderAndReleasesBudget_006() {
+        let hub = Arc::new(TerminalTransports::with_limits(
+            TransportLimits::new(4, 8, 4, 8).unwrap(),
+        ));
+        let a_route = route(Arc::new(Mutex::new(Vec::new())));
+        let a = hub.attach(owner(), run("a"), a_route.clone()).unwrap();
+        let b = hub
+            .attach(owner(), run("b"), route(Arc::new(Mutex::new(Vec::new()))))
+            .unwrap();
+
+        a.send(&[1, 1, 1, 1]).unwrap();
+        a.send(&[2, 2, 2, 2]).unwrap();
+        assert_eq!(hub.budgeted_bytes(), 8);
+
+        let worker = {
+            let b = b.clone();
+            std::thread::spawn(move || b.send(&[9, 9, 9, 9]))
+        };
+        std::thread::sleep(Duration::from_millis(20));
+
+        a_route.revoke();
+        for _ in 0..100 {
+            if hub.budgeted_bytes() <= 4 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(worker.join().unwrap(), Ok(()));
+        assert_eq!(hub.budgeted_bytes(), 4);
+    }
+
+    #[test]
+    fn D27_Core_ManyRunsStayWithinLowBudgetAndConvergeToZero_007() {
+        let hub = TerminalTransports::with_limits(
+            TransportLimits::new(4, 8, 4, 16).unwrap(),
+        );
+        for index in 0..64 {
+            let id = format!("run-{index}");
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let stream = hub.attach(owner(), run(&id), route(events.clone())).unwrap();
+            stream.send(&[index as u8, 1, 2, 3]).unwrap();
+            assert!(hub.budgeted_bytes() <= 16);
+            let epoch = stream.stream_epoch().to_string();
+            hub.ack(&owner(), &ack(&id, &epoch, "4")).unwrap();
+            assert_eq!(hub.budgeted_bytes(), 0);
+            assert_eq!(events.lock().len(), 1);
+        }
+    }
+
+    #[test]
     fn D14_Core_RouteLossIsFinalAndReleasesPayload_004() {
         let calls = Arc::new(AtomicUsize::new(0));
         let sent = calls.clone();
