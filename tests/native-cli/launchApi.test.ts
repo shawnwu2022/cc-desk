@@ -79,3 +79,19 @@ it('D11_Api_AttemptPinsDocumentAndRejectsRestart_006', async () => {
   expect(invoke).toHaveBeenCalledTimes(1);
   expect(replacement).not.toHaveBeenCalled();
 });
+
+
+it('D23_Api_ResizeUsesAuthenticatedNativeRunBoundary_007', async () => {
+  const invoke = vi.fn(async () => undefined);
+  bridge(invoke);
+  await api.cliResize({ runId: 'run-resize', generation: 3 }, 132, 47);
+  expect(invoke.mock.calls).toEqual([[
+    'cli_resize',
+    { runId: 'run-resize', generation: 3, cols: 132, rows: 47 },
+  ]]);
+});
+
+it('D23_Api_ResizeMissingDocumentNeverFallsBack_008', async () => {
+  await expect(api.cliResize({ runId: 'run-resize', generation: 3 }, 80, 24))
+    .rejects.toMatchObject({ code: 'DOCUMENT_BRIDGE_UNAVAILABLE' });
+});
