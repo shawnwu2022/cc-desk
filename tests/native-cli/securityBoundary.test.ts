@@ -16,6 +16,8 @@ describe('D26 native host security boundaries', () => {
     expect(terminal).not.toContain('WebLinksAddon')
     expect(terminal).not.toContain('@tauri-apps/plugin-shell')
     expect(terminal).not.toContain('window.open(')
+    expect(combined).not.toContain('console.error')
+    expect(combined).not.toContain('console.warn')
   })
 
   it('D26_IPC_NativeCommandsRequireDocumentBridgeAndHaveNoDirectInvokeFallback_004', () => {
