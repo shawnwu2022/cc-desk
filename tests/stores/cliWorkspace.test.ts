@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { nextTick } from 'vue'
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useCliWorkspaceStore } from '@/stores/cliWorkspace'
@@ -207,5 +208,27 @@ describe('D24 native resource/error workspace integration', () => {
 
     expect(workspace.error).toBe('REVISION_CONFLICT')
     expect(workspace.error).not.toContain('secret')
+  })
+
+  it('D24_Workspace_ProfileSelectionChangeImmediatelyInvalidatesOldWorkspace_07', async () => {
+    const profiles = await loadProfiles([
+      profile('claude-a', 'claude', '3'),
+      profile('claude-b', 'claude', '4'),
+    ])
+    profiles.select('claude', 'claude-a')
+    const workspace = useCliWorkspaceStore()
+    await workspace.open('claude')
+
+    profiles.select('claude', 'claude-b')
+    await nextTick()
+
+    expect(workspace.status).toBe('error')
+    expect(workspace.error).toBe('PROFILE_SELECTION_CHANGED')
+    expect(workspace.resource).toBeNull()
+    expect(workspace.profileIdentity).toEqual({
+      profileId: 'claude-a',
+      revision: '3',
+      cli: 'claude',
+    })
   })
 })
