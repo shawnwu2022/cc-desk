@@ -231,4 +231,31 @@ describe('D24 native resource/error workspace integration', () => {
       cli: 'claude',
     })
   })
+
+  it('D24_Workspace_ResourceReadCanBindExactRegisteredProject_08', async () => {
+    const profiles = useCliProfilesStore()
+    profiles.profiles = [
+      profile('codex-main', 'codex', '8'),
+    ] as any
+    profiles.revision = '1'
+    profiles.select('codex', 'codex-main')
+
+    mockIPC((command, args) => {
+      if (command === 'cli_list_projects') return projectList()
+      if (command === 'cli_projection_scope') {
+        expect(args).toMatchObject({
+          projectId: 'project-1',
+        })
+        return source('codex', 'codex-main', '8')
+      }
+      if (command === 'cli_projection_read') return readyResult('history')
+      throw new Error(command)
+    })
+
+    const store = useCliWorkspaceStore()
+    await store.open('codex')
+    await store.loadResource('history', { projectId: 'project-1' })
+    expect(store.resource?.state).toBe('ready')
+  })
+
 })
