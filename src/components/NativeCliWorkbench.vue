@@ -265,8 +265,8 @@ function createPicker() {
 }
 
 function createKnownResume() {
-  const id = resumeId.value.trim()
-  if (!id) return
+  const id = resumeId.value
+  if (!id.trim()) return
   workbench.createTab({ kind: 'resume-id', nativeSessionId: id })
   resumeId.value = ''
 }
