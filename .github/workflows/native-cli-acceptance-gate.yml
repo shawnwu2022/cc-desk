@@ -1,0 +1,86 @@
+name: Native CLI acceptance gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Signed candidate workflow run ID
+        required: true
+        type: string
+      evidence_run_id:
+        description: Authorized target evidence workflow run ID
+        required: true
+        type: string
+      evidence_artifact:
+        description: Artifact containing target-plan.json, records/, and evidence/
+        required: true
+        default: native-cli-acceptance-evidence
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    name: Verify candidate-bound acceptance evidence
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout verifier
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download candidate packages
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          pattern: cc-desk-candidate-*
+          path: gate/candidate
+          merge-multiple: false
+
+      - name: Download candidate manifest
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          name: cc-desk-candidate-manifest
+          path: gate/manifest
+
+      - name: Download authorized target evidence
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.evidence_run_id }}
+          name: ${{ inputs.evidence_artifact }}
+          path: gate/acceptance
+
+      - name: Verify exact candidate and all required evidence
+        shell: bash
+        run: |
+          test -f gate/manifest/candidate-manifest.json
+          test -f gate/acceptance/target-plan.json
+          test -d gate/acceptance/records
+          test -d gate/acceptance/evidence
+          node scripts/native-cli/verify-acceptance.mjs \
+            gate/manifest/candidate-manifest.json \
+            gate/candidate \
+            gate/acceptance/target-plan.json \
+            gate/acceptance/records \
+            gate/acceptance/evidence \
+            > gate/acceptance-result.json
+
+      - name: Upload machine gate result
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-cli-acceptance-result-${{ github.run_id }}
+          path: gate/acceptance-result.json
+          if-no-files-found: error
+          retention-days: 90
