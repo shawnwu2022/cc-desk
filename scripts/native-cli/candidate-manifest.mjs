@@ -89,18 +89,6 @@ export function buildCandidateManifest({ root, commitSha }) {
     if (!requiredKinds.includes(file.kind)) fail('CANDIDATE_PLATFORM_INCOMPLETE')
   }
 
-  for (const required of [
-    'windows-package',
-    'windows-signature',
-    'linux-package',
-    'linux-signature',
-    'macos-updater',
-    'macos-signature',
-    'macos-installer',
-  ]) {
-    if (!kinds.has(required)) fail('CANDIDATE_PLATFORM_INCOMPLETE')
-  }
-
   return {
     schemaVersion: 1,
     candidateId: candidateIdFor(commitSha, files),
