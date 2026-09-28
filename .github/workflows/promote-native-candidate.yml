@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_run_id:
-        description: Workflow run ID from Signed candidate packages
+        description: Successful Signed candidate packages run ID
         required: true
         type: string
       candidate_sha:
@@ -12,11 +12,11 @@ on:
         required: true
         type: string
       evidence_run_id:
-        description: Workflow run ID containing installed-package evidence
+        description: Successful Ingest installed native evidence run ID
         required: true
         type: string
-      evidence_artifact:
-        description: Artifact containing plan.json, records.json and evidence/
+      bundle_id:
+        description: Evidence bundle ID used by the ingest workflow
         required: true
         type: string
       tag:
@@ -57,6 +57,10 @@ jobs:
               exit 1
             fi
           done
+          if ! printf '%s' "${{ inputs.bundle_id }}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'; then
+            echo "::error::bundle_id is invalid"
+            exit 1
+          fi
           if ! printf '%s' "${{ inputs.tag }}" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$'; then
             echo "::error::tag must be an exact semver release tag"
             exit 1
@@ -72,6 +76,30 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
+
+      - name: Read source workflow-run metadata
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            fs.mkdirSync('.promotion', { recursive: true })
+            for (const [name, id] of [
+              ['candidate', Number('${{ inputs.candidate_run_id }}')],
+              ['evidence', Number('${{ inputs.evidence_run_id }}')],
+            ]) {
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: id,
+              })
+              fs.writeFileSync(`.promotion/${name}-run.json`, JSON.stringify(response.data))
+            }
+
+      - name: Verify candidate and evidence run provenance
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-workflow-run.mjs --run-json .promotion/candidate-run.json --workflow-path .github/workflows/release.yml --head-sha "${{ inputs.candidate_sha }}" --event workflow_dispatch --event push
+          node scripts/native-cli/verify-workflow-run.mjs --run-json .promotion/evidence-run.json --workflow-path .github/workflows/native-cli-installed-evidence.yml --head-sha "${{ inputs.candidate_sha }}" --event workflow_dispatch
 
       - name: Download macOS candidate bytes
         uses: actions/download-artifact@v4
@@ -105,10 +133,10 @@ jobs:
           github-token: ${{ github.token }}
           path: .promotion/candidate
 
-      - name: Download installed-package evidence bundle
+      - name: Download provenance-bound installed evidence bundle
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.evidence_artifact }}
+          name: native-installed-evidence-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
           run-id: ${{ inputs.evidence_run_id }}
           github-token: ${{ github.token }}
           path: .promotion/evidence-bundle
@@ -194,7 +222,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-promotion-${{ inputs.candidate_sha }}
+          name: native-promotion-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
           path: |
             .promotion/promotion.json
             .promotion/publish/candidate.json
