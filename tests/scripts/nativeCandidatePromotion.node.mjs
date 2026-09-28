@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -25,15 +25,24 @@ function fixture() {
   return root
 }
 
-function acceptance(candidate) {
-  const packageSha = candidate.files.find(file => file.kind === 'windows-package').sha256
+function targetPlan() {
   return {
     schemaVersion: 1,
-    candidate,
+    status: 'READY',
     targets: [{
       targetId: 'windows-codex',
-      required: [{ caseId: 'NATIVE-01' }],
+      required: [{ caseId: 'NATIVE-01', evidenceLayers: ['D'] }],
     }],
+  }
+}
+
+function acceptance(candidate) {
+  const packageSha = candidate.files.find(file => file.kind === 'windows-package').sha256
+  const targets = structuredClone(targetPlan().targets)
+  return {
+    schemaVersion: 1,
+    candidate: structuredClone(candidate),
+    targets,
     records: [{
       targetId: 'windows-codex',
       caseId: 'NATIVE-01',
@@ -68,6 +77,7 @@ test('D30_Promotion_AcceptsExactAcceptedCandidate_02', () => {
   const result = verifyPromotion({
     candidate,
     acceptance: acceptance(candidate),
+    targetPlan: targetPlan(),
     artifactsRoot: root,
     expectedCommitSha: commitSha,
   })
@@ -83,6 +93,7 @@ test('D30_Promotion_RejectsRebuiltOrMutatedArtifact_03', () => {
   assert.throws(() => verifyPromotion({
     candidate,
     acceptance: acceptance(candidate),
+    targetPlan: targetPlan(),
     artifactsRoot: root,
     expectedCommitSha: commitSha,
   }), /CANDIDATE_FILE_(SIZE|HASH)_MISMATCH/)
@@ -95,16 +106,42 @@ test('D30_Promotion_RejectsDifferentCommitOrCandidate_04', () => {
   assert.throws(() => verifyPromotion({
     candidate,
     acceptance: acceptance(candidate),
+    targetPlan: targetPlan(),
     artifactsRoot: root,
     expectedCommitSha: '5'.repeat(40),
   }), /CANDIDATE_COMMIT_MISMATCH/)
 
-  const wrong = acceptance(candidate)
-  wrong.candidate.candidateId = 'different'
+  const wrongAcceptance = acceptance(candidate)
+  wrongAcceptance.candidate.files[0].sha256 = 'f'.repeat(64)
   assert.throws(() => verifyPromotion({
     candidate,
-    acceptance: wrong,
+    acceptance: wrongAcceptance,
+    targetPlan: targetPlan(),
     artifactsRoot: root,
     expectedCommitSha: commitSha,
-  }), /ACCEPTANCE_CANDIDATE_MISMATCH/)
+  }), /INVALID_CANDIDATE_IDENTITY/)
+})
+
+test('D30_Candidate_RejectsDuplicatePlatformArtifact_05', () => {
+  const root = fixture()
+  writeFileSync(path.join(root, 'windows/Other-setup.exe'), 'duplicate')
+  assert.throws(() => buildCandidateManifest({
+    root,
+    commitSha: '6'.repeat(40),
+  }), /CANDIDATE_PLATFORM_INCOMPLETE/)
+})
+
+test('D30_Promotion_RejectsTargetPlanMismatch_06', () => {
+  const root = fixture()
+  const commitSha = '7'.repeat(40)
+  const candidate = buildCandidateManifest({ root, commitSha })
+  const plan = targetPlan()
+  plan.targets[0].required[0].evidenceLayers = ['A']
+  assert.throws(() => verifyPromotion({
+    candidate,
+    acceptance: acceptance(candidate),
+    targetPlan: plan,
+    artifactsRoot: root,
+    expectedCommitSha: commitSha,
+  }), /TARGET_PLAN_MISMATCH/)
 })
