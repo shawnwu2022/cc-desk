@@ -119,4 +119,38 @@ describe('CC Desk product boundary', () => {
     expect(docs).toContain('signed candidates only')
     expect(docs).toContain('publishing stays disabled')
   })
+  test('native workbench user-facing controls stay localized', () => {
+    const workbench = read('src/components/NativeCliWorkbench.vue')
+    const english = read('src/i18n/locales/en.ts')
+    const chinese = read('src/i18n/locales/zh.ts')
+    expect(workbench).toContain("useI18n")
+    expect(workbench).toContain("t('nativeSelectProject')")
+    expect(workbench).toContain("t('nativeResumePicker')")
+    expect(workbench).toContain("nativeStatusLabel(tab.status)")
+    expect(workbench).toContain("nativeResourceLabel(kind)")
+
+    for (const key of [
+      'nativeCreateCodexProfile',
+      'nativeCreateClaudeProfile',
+      'nativeSelectProject',
+      'nativeNewSession',
+      'nativeResumePicker',
+      'nativeWorkspaceLoading',
+      'nativeRecover',
+      'nativeStop',
+      'nativeRestart',
+      'nativeResources',
+      'nativeStatusRunning',
+      'nativeResource_history',
+    ]) {
+      expect(english).toContain(`${key}:`)
+      expect(chinese).toContain(`${key}:`)
+    }
+
+    const about = read('src/components/settings/sections/AboutSection.vue')
+    expect(about).toContain('developers.openai.com/learn/codex')
+    expect(english).toContain("codexDocs:")
+    expect(chinese).toContain("codexDocs:")
+  })
+
 })
