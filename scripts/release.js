@@ -532,9 +532,9 @@ function parseArgs() {
 CC Desk 自动化发布脚本（全自动，无需交互）
 
 用法:
-  npm run release -- --bump <type> --notes "<notes>"    发布新版本
-  npm run release -- --exact --notes "<notes>"          发布当前版本（不 bump）
-  npm run release -- --oss-only <version>               仅上传到自行配置的 OSS 镜像
+  npm run release -- --oss-only <version>               仅上传已发布版本到自行配置的 OSS 镜像
+
+直接稳定版发布已禁用。请使用 GitHub Actions 的候选构建、acceptance gate 和 promotion workflow。
 
 参数:
   --bump <type>      版本类型: major / minor / patch（与 --exact 二选一）
@@ -569,6 +569,12 @@ async function main() {
     return
   }
 
+  logError('DIRECT_RELEASE_DISABLED_USE_PROMOTION_WORKFLOW')
+  logInfo('Build a signed candidate, pass the native acceptance gate, then use the Promote accepted native CLI candidate workflow.')
+  process.exit(1)
+
+  // Legacy direct release code is intentionally unreachable and retained only
+  // for OSS compatibility helpers until a later cleanup can remove it safely.
   // 参数检查：--bump 或 --exact 二选一
   if (!args.exact && !args.bumpType) {
     logError('需要指定 --bump <type> 或 --exact')
