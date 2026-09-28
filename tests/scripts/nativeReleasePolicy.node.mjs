@@ -10,6 +10,9 @@ const releaseWorkflowPath = fileURLToPath(
 const promotionWorkflowPath = fileURLToPath(
   new URL('../../.github/workflows/promote-release.yml', import.meta.url),
 )
+const acceptanceWorkflowPath = fileURLToPath(
+  new URL('../../.github/workflows/native-cli-acceptance-gate.yml', import.meta.url),
+)
 const packagePath = fileURLToPath(new URL('../../package.json', import.meta.url))
 const legacyReleasePath = fileURLToPath(new URL('../../scripts/release.js', import.meta.url))
 
@@ -83,6 +86,9 @@ test('D30_CandidateWorkflow_FreezesSignedCandidateIdentity_02', () => {
   assert.match(workflow, /candidate-manifest\.mjs/)
   assert.match(workflow, /cc-desk-candidate-manifest/)
   assert.match(workflow, /actions\/upload-artifact@v4/)
+  assert.match(workflow, /workflow_dispatch:/)
+  assert.doesNotMatch(workflow, /^\s*push:\s*$/m)
+  assert.doesNotMatch(workflow, /^\s*schedule:\s*$/m)
 })
 
 test('D30_PromotionWorkflow_IsManualGateBoundAndNeverBuilds_03', () => {
@@ -92,6 +98,8 @@ test('D30_PromotionWorkflow_IsManualGateBoundAndNeverBuilds_03', () => {
   assert.match(workflow, /contents:\s*write/)
   assert.match(workflow, /environment:\s*release-promotion/)
   assert.match(workflow, /prepare-promotion\.mjs/)
+  assert.match(workflow, /Promotion workflow must be dispatched from the exact candidate source SHA/)
+  assert.match(workflow, /\.github\/workflows\/native-cli-acceptance-gate\.yml/)
   assert.match(workflow, /native-cli-acceptance-result-/)
   assert.match(workflow, /gh release create/)
   assert.match(workflow, /--draft/)
@@ -103,6 +111,19 @@ test('D30_PromotionWorkflow_IsManualGateBoundAndNeverBuilds_03', () => {
   assert.doesNotMatch(workflow, /tauri build/)
   assert.doesNotMatch(workflow, /^\s*push:\s*$/m)
   assert.doesNotMatch(workflow, /^\s*schedule:\s*$/m)
+})
+
+
+test('D28_AcceptanceWorkflow_IsManualAndCandidateSourceBound_04', () => {
+  const workflow = readFileSync(acceptanceWorkflowPath, 'utf8')
+  assert.match(workflow, /workflow_dispatch:/)
+  assert.match(workflow, /Gate workflow must be dispatched from the exact candidate source SHA/)
+  assert.match(workflow, /native-cli-acceptance-catalog\.json/)
+  assert.match(workflow, /verify-acceptance\.mjs/)
+  assert.match(workflow, /evidence_run_id/)
+  assert.doesNotMatch(workflow, /^\s*push:\s*$/m)
+  assert.doesNotMatch(workflow, /^\s*schedule:\s*$/m)
+  assert.doesNotMatch(workflow, /contents:\s*write/)
 })
 
 test('D31_LegacyDirectReleaseEntrypointsStayDisabled_01', () => {
