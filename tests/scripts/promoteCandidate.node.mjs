@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { buildCandidateManifest } from '../../scripts/native-cli/build-candidate-manifest.mjs'
 import { preparePromotion } from '../../scripts/native-cli/promote-candidate.mjs'
+import { targetIdentitySha256 } from '../../scripts/native-cli/verify-acceptance.mjs'
 
 const catalog = JSON.parse(readFileSync(
   new URL('../../docs/testing/native-cli-acceptance-catalog.json', import.meta.url),
@@ -49,25 +50,38 @@ function fixture() {
   const proof = Buffer.from('installed candidate proof\n')
   writeFileSync(join(evidenceRoot, 'proof.txt'), proof)
 
+  const target = {
+    targetId: 'windows-x64-codex-release',
+    os: 'windows',
+    osBuild: 'synthetic-build',
+    arch: 'x86_64',
+    executionDomain: 'local',
+    deskVersion: '0.17.7',
+    deskCommit: sourceCommit,
+    candidateFilePath: windows.path,
+    packageSha256: windows.sha256,
+    webviewRuntime: 'synthetic-webview',
+    xtermVersion: '5.5.0',
+    renderer: 'dom',
+    ptyBackend: 'bundled-conpty',
+    launcherKind: 'native',
+    shellVersion: 'none',
+    inputPolicyVersion: 'd19-v1',
+    terminalProtocolVersion: 'd19-v1',
+    fixtureConfigVersion: 'acceptance-v2',
+    cli: {
+      kind: 'codex',
+      version: 'synthetic-version',
+      binarySha256: 'c'.repeat(64),
+    },
+    requiredCaseIds: catalog.cases.map(item => item.caseId),
+  }
+  target.identitySha256 = targetIdentitySha256(target)
   const plan = {
     schemaVersion: 1,
     claim: 'installed-native-release',
     candidateId: candidate.candidateId,
-    targets: [{
-      targetId: 'windows-x64-codex-release',
-      os: 'windows',
-      osBuild: 'synthetic-build',
-      arch: 'x86_64',
-      executionDomain: 'local',
-      candidateFilePath: windows.path,
-      packageSha256: windows.sha256,
-      cli: {
-        kind: 'codex',
-        version: 'synthetic-version',
-        binarySha256: 'c'.repeat(64),
-      },
-      requiredCaseIds: catalog.cases.map(item => item.caseId),
-    }],
+    targets: [target],
   }
 
   const records = []
@@ -84,6 +98,8 @@ function fixture() {
         evidenceLayer: 'D',
         cliBinarySha256: 'c'.repeat(64),
         deskPackageSha256: windows.sha256,
+        expected: { outcome: 'synthetic-expected' },
+        actual: { outcome: 'synthetic-expected' },
         evidence: [{ path: 'proof.txt', sha256: sha(proof) }],
         nonApplicabilityReason: null,
       })
