@@ -38,6 +38,7 @@ jobs:
           tests/scripts/nativeReleasePolicy.node.mjs
           tests/scripts/nativeAcceptanceGate.node.mjs
           tests/scripts/nativeCliCanary.node.mjs
+          tests/scripts/nativePromotion.node.mjs
 
       - name: Build frontend
         run: npm run build
