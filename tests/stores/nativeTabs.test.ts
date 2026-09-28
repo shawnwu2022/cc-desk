@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { useNativeTabsStore } from '@/stores/nativeTabs'
+import {
+  captureNativeAttempt,
+  matchesNativeAttempt,
+  useNativeTabsStore,
+} from '@/stores/nativeTabs'
 import type { LaunchStatus } from '@/api/cliLaunchAttempt'
 
 function status(tab: any, phase: LaunchStatus['phase'] = 'running'): LaunchStatus {
@@ -129,4 +133,21 @@ describe('D22 native dual-CLI tab store', () => {
     expect(store.tab(tab.tabId)?.errorCode).toBe('NATIVE_OUTPUT_DEGRADED')
   })
 
+  it('D28_Tabs_AsyncCompletionCannotCrossExplicitRestart_15', () => {
+    const store = useNativeTabsStore()
+    const created = store.create({
+      cli: 'codex', projectId: 'p1', projectPath: '/repo',
+      profileId: 'codex-main', profileRevision: '1', action: { kind: 'new' },
+    })
+    const oldAttempt = captureNativeAttempt(created)
+    store.applyLaunchStatus(created.tabId, status(created, 'exited'))
+    const restarted = store.restart(created.tabId, {
+      profileId: 'codex-main', profileRevision: '2',
+    })
+
+    expect(matchesNativeAttempt(store.tab(created.tabId), oldAttempt)).toBe(false)
+    expect(matchesNativeAttempt(store.tab(created.tabId), captureNativeAttempt(restarted))).toBe(true)
+    expect(store.applyLaunchStatus(created.tabId, status(created, 'running'))).toBe(false)
+    expect(store.tab(created.tabId)?.status).toBe('stopped')
+  })
 })
