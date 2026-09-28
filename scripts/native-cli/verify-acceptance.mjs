@@ -42,22 +42,94 @@ function verifyCandidate(value) {
   const hashes = new Set()
   for (const raw of files) {
     const file = object(raw, 'INVALID_CANDIDATE_FILE')
-    const path = text(file.path, 'INVALID_CANDIDATE_PATH')
-    if (path.startsWith('/') || path.includes('..') || paths.has(path)) fail('INVALID_CANDIDATE_PATH')
-    paths.add(path)
+    const filePath = text(file.path, 'INVALID_CANDIDATE_PATH')
+    if (filePath.startsWith('/') || filePath.includes('..') || paths.has(filePath)) {
+      fail('INVALID_CANDIDATE_PATH')
+    }
+    paths.add(filePath)
     text(file.kind, 'INVALID_CANDIDATE_KIND')
     const sha = String(file.sha256 ?? '').toLowerCase()
     if (!SHA256.test(sha)) fail('INVALID_CANDIDATE_HASH')
     hashes.add(sha)
     if (!Number.isSafeInteger(file.size) || file.size <= 0) fail('INVALID_CANDIDATE_SIZE')
   }
-  const expectedId = candidateIdFor(candidate.commitSha, files)
-  if (candidateId !== expectedId) fail('INVALID_CANDIDATE_IDENTITY')
+  if (candidateId !== candidateIdFor(candidate.commitSha, files)) {
+    fail('INVALID_CANDIDATE_IDENTITY')
+  }
   return { candidateId, hashes }
 }
 
-function key(targetId, caseId, subcaseId) {
+function requirementKey(targetId, caseId, subcaseId) {
   return JSON.stringify([targetId, caseId, subcaseId ?? null])
+}
+
+function normalizeTargets(rawTargets) {
+  const targets = array(rawTargets, 'INVALID_TARGETS')
+  if (targets.length === 0) fail('TARGETS_REQUIRED')
+  const targetIds = new Set()
+  const normalized = []
+  const requirements = new Map()
+
+  for (const rawTarget of targets) {
+    const target = object(rawTarget, 'INVALID_TARGET')
+    const targetId = text(target.targetId, 'INVALID_TARGET_ID')
+    if (targetIds.has(targetId)) fail('DUPLICATE_TARGET')
+    targetIds.add(targetId)
+
+    const required = array(target.required, 'INVALID_REQUIRED_CASES')
+    if (required.length === 0) fail('REQUIRED_CASES_EMPTY')
+    const normalizedRequired = []
+
+    for (const rawReq of required) {
+      const req = object(rawReq, 'INVALID_REQUIRED_CASE')
+      const caseId = text(req.caseId, 'INVALID_CASE_ID')
+      if (!CASE_ID.test(caseId)) fail('INVALID_CASE_ID')
+      const layers = array(req.evidenceLayers, 'REQUIRED_EVIDENCE_LAYERS')
+      if (layers.length === 0) fail('REQUIRED_EVIDENCE_LAYERS')
+      const layerSet = new Set()
+      for (const layer of layers) {
+        if (!LAYERS.has(layer) || layerSet.has(layer)) fail('INVALID_REQUIRED_EVIDENCE_LAYER')
+        layerSet.add(layer)
+      }
+
+      const subcases = req.subcaseIds === undefined
+        ? [null]
+        : array(req.subcaseIds, 'INVALID_SUBCASES')
+      if (subcases.length === 0) fail('INVALID_SUBCASES')
+      const local = new Set()
+      const normalizedSubcases = []
+      for (const rawSubcase of subcases) {
+        const subcaseId = rawSubcase === null ? null : text(rawSubcase, 'INVALID_SUBCASE_ID')
+        if (local.has(subcaseId)) fail('DUPLICATE_REQUIREMENT')
+        local.add(subcaseId)
+        normalizedSubcases.push(subcaseId)
+        const key = requirementKey(targetId, caseId, subcaseId)
+        if (requirements.has(key)) fail('DUPLICATE_REQUIREMENT')
+        requirements.set(key, { layers: layerSet, covered: false })
+      }
+
+      normalizedRequired.push({
+        caseId,
+        evidenceLayers: [...layerSet].sort(),
+        subcaseIds: normalizedSubcases,
+      })
+    }
+
+    normalized.push({
+      targetId,
+      required: normalizedRequired.sort((a, b) => a.caseId.localeCompare(b.caseId)),
+    })
+  }
+
+  normalized.sort((a, b) => a.targetId.localeCompare(b.targetId))
+  return { normalized, requirements }
+}
+
+function verifyTargetPlan(value) {
+  const plan = object(value, 'INVALID_TARGET_PLAN')
+  if (plan.schemaVersion !== 1) fail('INVALID_TARGET_PLAN_SCHEMA')
+  if (plan.status !== 'READY') fail('RELEASE_TARGETS_NOT_READY')
+  return normalizeTargets(plan.targets)
 }
 
 function verifyEvidenceItems(value) {
@@ -67,54 +139,33 @@ function verifyEvidenceItems(value) {
   for (const raw of items) {
     const item = object(raw, 'INVALID_EVIDENCE')
     const kind = text(item.kind, 'INVALID_EVIDENCE_KIND')
-    const path = text(item.path, 'INVALID_EVIDENCE_PATH')
+    const evidencePath = text(item.path, 'INVALID_EVIDENCE_PATH')
     const sha = String(item.sha256 ?? '').toLowerCase()
     if (!SHA256.test(sha)) fail('INVALID_EVIDENCE_HASH')
-    const identity = JSON.stringify([kind, path, sha])
+    const identity = JSON.stringify([kind, evidencePath, sha])
     if (seen.has(identity)) fail('DUPLICATE_EVIDENCE')
     seen.add(identity)
   }
 }
 
-export function verifyAcceptance(manifest, expectedCandidate = null) {
+export function verifyAcceptance(manifest, expectedCandidate = null, expectedTargetPlan = null) {
   const root = object(manifest, 'INVALID_ACCEPTANCE_MANIFEST')
   if (root.schemaVersion !== 1) fail('UNSUPPORTED_ACCEPTANCE_SCHEMA')
   const candidate = verifyCandidate(root.candidate)
+
   if (expectedCandidate !== null) {
     const expected = verifyCandidate(expectedCandidate)
     if (expected.candidateId !== candidate.candidateId) fail('CANDIDATE_REFERENCE_MISMATCH')
   }
 
-  const requirements = new Map()
-  const targets = array(root.targets, 'INVALID_TARGETS')
-  if (targets.length === 0) fail('TARGETS_REQUIRED')
-  const targetIds = new Set()
-
-  for (const rawTarget of targets) {
-    const target = object(rawTarget, 'INVALID_TARGET')
-    const targetId = text(target.targetId, 'INVALID_TARGET_ID')
-    if (targetIds.has(targetId)) fail('DUPLICATE_TARGET')
-    targetIds.add(targetId)
-    const required = array(target.required, 'INVALID_REQUIRED_CASES')
-    if (required.length === 0) fail('REQUIRED_CASES_EMPTY')
-
-    for (const rawReq of required) {
-      const req = object(rawReq, 'INVALID_REQUIRED_CASE')
-      const caseId = text(req.caseId, 'INVALID_CASE_ID')
-      if (!CASE_ID.test(caseId)) fail('INVALID_CASE_ID')
-      const subcases = req.subcaseIds === undefined ? [null] : array(req.subcaseIds, 'INVALID_SUBCASES')
-      if (subcases.length === 0) fail('INVALID_SUBCASES')
-      const local = new Set()
-      for (const rawSubcase of subcases) {
-        const subcaseId = rawSubcase === null ? null : text(rawSubcase, 'INVALID_SUBCASE_ID')
-        if (local.has(subcaseId)) fail('DUPLICATE_REQUIREMENT')
-        local.add(subcaseId)
-        const requirementKey = key(targetId, caseId, subcaseId)
-        if (requirements.has(requirementKey)) fail('DUPLICATE_REQUIREMENT')
-        requirements.set(requirementKey, false)
-      }
-    }
+  const declared = normalizeTargets(root.targets)
+  const authoritative = expectedTargetPlan === null
+    ? declared
+    : verifyTargetPlan(expectedTargetPlan)
+  if (JSON.stringify(declared.normalized) !== JSON.stringify(authoritative.normalized)) {
+    fail('TARGET_PLAN_MISMATCH')
   }
+  const requirements = authoritative.requirements
 
   const records = array(root.records, 'INVALID_RECORDS')
   const recordKeys = new Set()
@@ -125,14 +176,16 @@ export function verifyAcceptance(manifest, expectedCandidate = null) {
     const subcaseId = record.subcaseId === null || record.subcaseId === undefined
       ? null
       : text(record.subcaseId, 'INVALID_SUBCASE_ID')
-    const recordKey = key(targetId, caseId, subcaseId)
-    if (!requirements.has(recordKey)) fail('UNDECLARED_ACCEPTANCE_RECORD')
-    if (recordKeys.has(recordKey)) fail('DUPLICATE_ACCEPTANCE_RECORD')
-    recordKeys.add(recordKey)
+    const key = requirementKey(targetId, caseId, subcaseId)
+    const requirement = requirements.get(key)
+    if (!requirement) fail('UNDECLARED_ACCEPTANCE_RECORD')
+    if (recordKeys.has(key)) fail('DUPLICATE_ACCEPTANCE_RECORD')
+    recordKeys.add(key)
 
     if (record.candidateId !== candidate.candidateId) fail('CANDIDATE_ID_MISMATCH')
     if (!CERTIFIED_STATUSES.has(record.status)) fail('UNCERTIFIED_STATUS')
     if (!LAYERS.has(record.evidenceLayer)) fail('INVALID_EVIDENCE_LAYER')
+    if (!requirement.layers.has(record.evidenceLayer)) fail('EVIDENCE_LAYER_TOO_WEAK')
     verifyEvidenceItems(record.evidence)
 
     if (record.status === 'N_A') {
@@ -147,17 +200,18 @@ export function verifyAcceptance(manifest, expectedCandidate = null) {
         fail('CANDIDATE_PACKAGE_HASH_MISMATCH')
       }
     }
-    requirements.set(recordKey, true)
+    requirement.covered = true
   }
 
-  const missing = [...requirements.entries()].filter(([, covered]) => !covered)
-  if (missing.length !== 0) fail('MISSING_REQUIRED_ACCEPTANCE')
+  if ([...requirements.values()].some(requirement => !requirement.covered)) {
+    fail('MISSING_REQUIRED_ACCEPTANCE')
+  }
 
   return Object.freeze({
     ok: true,
     schemaVersion: 1,
     candidateId: candidate.candidateId,
-    targetCount: targets.length,
+    targetCount: declared.normalized.length,
     recordCount: records.length,
   })
 }
@@ -165,12 +219,14 @@ export function verifyAcceptance(manifest, expectedCandidate = null) {
 function main() {
   const manifestPath = process.argv[2]
   const candidatePath = process.argv[3]
+  const targetPlanPath = process.argv[4]
   if (!manifestPath) fail('ACCEPTANCE_MANIFEST_PATH_REQUIRED')
+  if (!candidatePath) fail('ACCEPTANCE_CANDIDATE_PATH_REQUIRED')
+  if (!targetPlanPath) fail('ACCEPTANCE_TARGET_PLAN_PATH_REQUIRED')
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
-  const expectedCandidate = candidatePath
-    ? JSON.parse(fs.readFileSync(candidatePath, 'utf8'))
-    : null
-  const result = verifyAcceptance(manifest, expectedCandidate)
+  const expectedCandidate = JSON.parse(fs.readFileSync(candidatePath, 'utf8'))
+  const targetPlan = JSON.parse(fs.readFileSync(targetPlanPath, 'utf8'))
+  const result = verifyAcceptance(manifest, expectedCandidate, targetPlan)
   process.stdout.write(JSON.stringify(result) + '\n')
 }
 
