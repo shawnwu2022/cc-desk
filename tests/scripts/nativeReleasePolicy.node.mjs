@@ -51,6 +51,7 @@ test('D02_ReleaseWorkflow_HasNoPublishPath_02', () => {
   assert.doesNotMatch(workflow, /contents:\s*write/)
   assert.doesNotMatch(workflow, /make_latest:\s*true/)
   assert.doesNotMatch(workflow, /gh release create/)
+  assert.doesNotMatch(workflow, /^\s+tags:\s*$/m)
 })
 
 test('D02_ReleaseWorkflow_StillBuildsSignedCandidates_03', () => {
@@ -116,9 +117,22 @@ test('D30_PromotionWorkflow_ReusesCandidateAndReverifiesPublishedBytes_05', () =
   assert.match(workflow, /--phase complete/)
   assert.match(workflow, /verify-updater-manifest\.js/)
   assert.match(workflow, /gh release create/)
+  assert.match(workflow, /--draft/)
   assert.match(workflow, /gh release download/)
+  assert.match(workflow, /cmp \.promotion\/publish\/latest\.json \.promotion\/uploaded\/latest\.json/)
+  assert.match(workflow, /gh release edit/)
   assert.doesNotMatch(workflow, /npm run tauri build/)
   assert.doesNotMatch(workflow, /cargo build/)
+
+  const createDraft = workflow.indexOf('gh release create')
+  const verifyBytes = workflow.indexOf('verify-published-promotion.mjs')
+  const publishDraft = workflow.indexOf('gh release edit')
+  const verifyUpdater = workflow.indexOf('verify-updater-manifest.js')
+  const completePolicy = workflow.indexOf('--phase complete')
+  assert.ok(createDraft > -1 && createDraft < verifyBytes)
+  assert.ok(verifyBytes < publishDraft)
+  assert.ok(publishDraft < verifyUpdater)
+  assert.ok(verifyUpdater < completePolicy)
 })
 
 test('D31_LegacyReleaseScript_CannotPublishOrTag_06', () => {
