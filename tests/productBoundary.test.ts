@@ -119,6 +119,17 @@ describe('CC Desk product boundary', () => {
     expect(docs).toContain('signed candidates only')
     expect(docs).toContain('publishing stays disabled')
   })
+  test('package and installer metadata describe the dual-CLI product', () => {
+    const packageJson = JSON.parse(read('package.json')) as {
+      description?: string
+      keywords?: string[]
+    }
+    const tauri = read('src-tauri/tauri.conf.json')
+    expect(packageJson.description).toContain('Claude Code and Codex CLI')
+    expect(packageJson.keywords).toContain('codex-cli')
+    expect(tauri).toContain('Claude Code and Codex CLI')
+  })
+
   test('native workbench user-facing controls stay localized', () => {
     const workbench = read('src/components/NativeCliWorkbench.vue')
     const english = read('src/i18n/locales/en.ts')
