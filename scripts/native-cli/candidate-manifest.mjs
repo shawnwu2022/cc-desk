@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { lstatSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -59,6 +59,8 @@ export function buildCandidateManifest({ root, commitSha }) {
     .map(file => {
       const kind = classify(path.basename(file))
       if (!kind) return null
+      const metadata = lstatSync(file)
+      if (!metadata.isFile() || metadata.isSymbolicLink()) fail('UNSAFE_CANDIDATE_FILE')
       const bytes = readFileSync(file)
       return {
         path: normalizedRelative(root, file),
