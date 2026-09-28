@@ -86,7 +86,11 @@ jobs:
         shell: bash
         run: |
           binary="$(command -v "${{ steps.resolve.outputs.command }}")"
-          node scripts/native-cli/canary-identity.mjs             "${{ matrix.cli }}"             "${{ matrix.channel }}"             "$binary"             "canary-${{ matrix.cli }}-${{ matrix.channel }}.json"
+          node scripts/native-cli/canary-identity.mjs \
+            "${{ matrix.cli }}" \
+            "${{ matrix.channel }}" \
+            "$binary" \
+            "canary-${{ matrix.cli }}-${{ matrix.channel }}.json"
 
       - name: Upload canary identity
         uses: actions/upload-artifact@v4
