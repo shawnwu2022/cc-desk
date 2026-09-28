@@ -1,7 +1,7 @@
 {
   "name": "cc-desk",
   "version": "0.17.7",
-  "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code",
+  "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code and Codex CLI",
   "license": "MIT",
   "author": {
     "name": "shawnwu2022"
@@ -17,6 +17,8 @@
   "keywords": [
     "claude-code",
     "claude",
+    "codex",
+    "openai-codex",
     "tauri",
     "terminal",
     "gui",
@@ -34,12 +36,12 @@
     "build:mac": "tauri build --target x86_64-apple-darwin",
     "build:linux": "tauri build --target x86_64-unknown-linux-gnu",
     "release": "node scripts/release.js",
-    "release:oss": "node scripts/release.js --oss-only",
     "download-deps": "node scripts/download-deps.js",
     "test": "vitest run",
     "test:ci": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "verify:native-release": "node --test tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/verifyAcceptance.node.mjs tests/scripts/nativeCliCanary.node.mjs tests/scripts/candidateManifest.node.mjs tests/scripts/promoteCandidate.node.mjs tests/scripts/verifyPublishedPromotion.node.mjs"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",
