@@ -151,23 +151,63 @@ function validateCandidate(candidate) {
   return { status: 'PASS' }
 }
 
+function targetIdentityPayload(target) {
+  return {
+    os: target.os,
+    osBuild: target.osBuild,
+    arch: target.arch,
+    executionDomain: target.executionDomain,
+    cli: target.cli,
+    deskVersion: target.deskVersion,
+    deskCommit: target.deskCommit,
+    candidateFilePath: target.candidateFilePath,
+    packageSha256: target.packageSha256,
+    webviewRuntime: target.webviewRuntime,
+    xtermVersion: target.xtermVersion,
+    renderer: target.renderer,
+    ptyBackend: target.ptyBackend,
+    launcherKind: target.launcherKind,
+    shellVersion: target.shellVersion,
+    inputPolicyVersion: target.inputPolicyVersion,
+    terminalProtocolVersion: target.terminalProtocolVersion,
+    fixtureConfigVersion: target.fixtureConfigVersion,
+  }
+}
+
+export function targetIdentitySha256(target) {
+  if (!isObject(target)) return null
+  return sha256Json(targetIdentityPayload(target))
+}
+
 function targetIdentityValid(target) {
+  const requiredText = [
+    target?.targetId,
+    target?.os,
+    target?.osBuild,
+    target?.arch,
+    target?.deskVersion,
+    target?.webviewRuntime,
+    target?.xtermVersion,
+    target?.renderer,
+    target?.ptyBackend,
+    target?.shellVersion,
+    target?.inputPolicyVersion,
+    target?.terminalProtocolVersion,
+    target?.fixtureConfigVersion,
+  ]
   return (
     isObject(target)
-    && typeof target.targetId === 'string'
-    && target.targetId.length > 0
-    && typeof target.os === 'string'
-    && target.os.length > 0
-    && typeof target.osBuild === 'string'
-    && target.osBuild.length > 0
-    && typeof target.arch === 'string'
-    && target.arch.length > 0
+    && requiredText.every(value => typeof value === 'string' && value.length > 0 && !value.includes('\0'))
     && target.executionDomain === 'local'
+    && COMMIT.test(target.deskCommit ?? '')
+    && SHA256.test(target.identitySha256 ?? '')
+    && ['native', 'shell', 'shim'].includes(target.launcherKind)
     && isObject(target.cli)
     && ['claude', 'codex'].includes(target.cli.kind)
     && typeof target.cli.version === 'string'
     && target.cli.version.length > 0
     && SHA256.test(target.cli.binarySha256 ?? '')
+    && SHA256.test(target.packageSha256 ?? '')
     && safeRelativePath(target.candidateFilePath)
   )
 }
@@ -191,6 +231,13 @@ function validatePlan(plan, catalog, candidate) {
       return fail('TARGET_IDENTITY_INVALID')
     }
     targetIds.add(target.targetId)
+
+    if (target.deskCommit !== candidate.sourceCommit) {
+      return fail('TARGET_DESK_COMMIT_MISMATCH', target.targetId)
+    }
+    if (target.identitySha256 !== targetIdentitySha256(target)) {
+      return fail('TARGET_IDENTITY_HASH_MISMATCH', target.targetId)
+    }
 
     const candidateFile = candidate.files.find(file => file.path === target.candidateFilePath)
     if (
@@ -303,6 +350,16 @@ function verifyRecord(record, target, catalogCase, evidenceRoot) {
 
   if (record.status === 'FAIL' || record.status === 'BLOCKED' || record.status === 'NOT_RUN') {
     return fail('REQUIRED_EVIDENCE_NOT_PASSING', recordKey(record))
+  }
+  if (record.status === 'PASS' && (record.expected == null || record.actual == null)) {
+    return fail('PASS_RESULT_REQUIRED', recordKey(record))
+  }
+  if (
+    record.fixtureSha256 !== null
+    && record.fixtureSha256 !== undefined
+    && !SHA256.test(record.fixtureSha256)
+  ) {
+    return fail('FIXTURE_HASH_INVALID', recordKey(record))
   }
   if (record.status === 'N_A') {
     if (
