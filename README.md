@@ -5,8 +5,8 @@
 <h1 align="center">CC Desk</h1>
 
 <p align="center">
-  <strong>A desktop app for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> — multi-project, multi-session management</strong><br>
-  One window. Multiple projects. Instant session switching.
+  <strong>A native desktop workspace for Claude Code and Codex CLI — multi-project, multi-session management</strong><br>
+  One window. Real CLIs. Isolated projects and terminal tabs.
 </p>
 
 <p align="center">
@@ -24,11 +24,11 @@ English | [简体中文](README_CN.md)
 
 ## Why CC Desk?
 
-Claude Code's CLI is excellent for single-session work. But when you're managing **multiple projects** and need to **view, enter, and switch between sessions quickly** — the terminal alone becomes cumbersome.
+Claude Code and Codex CLI are strongest when they keep ownership of their native terminal UX. CC Desk adds a desktop workspace around those real CLIs: explicit project registration, per-CLI profiles, multiple isolated terminal tabs, native resume entry, and source-scoped resource panels.
 
-CC Desk is essentially a **desktop application for Claude Code**. It wraps the CLI with a native terminal experience and adds the things the CLI can't do well: multi-project management, session overview, and quick switching.
+The native path does **not** replace either CLI with an SDK or app-server protocol. CLI authentication, model selection, permission prompts, slash commands, editors, and other native behavior remain owned by the installed CLI.
 
-**Think of it as a desktop app purpose-built for Claude Code power users.**
+Compatibility is evidence-based. Unknown CLI versions may still launch, but they are not automatically labeled certified; certified target combinations must pass the repository's machine-verifiable acceptance gate.
 
 ---
 
@@ -49,11 +49,11 @@ Browse all your projects in one place. See which projects have active sessions, 
 
 ### Multi-Session in One Window
 
-Open as many Claude Code sessions as you need — each runs independently in its own terminal tab. View all sessions in the sidebar, switch between them instantly, output is preserved when you switch back.
+Run Claude Code and Codex CLI side by side. Each native tab freezes its CLI/profile/project/run identity, so input, output, restart state, and recovery do not cross between sibling tabs.
 
 ### Quick Launch with Presets
 
-Set per-project startup options like `--resume`, `--model`, or custom flags. Launch sessions with your preferred configuration without typing the same arguments every time.
+Use per-CLI profiles and explicit project registration. Start a new CLI, use its native resume picker, resume a known session ID, or pass an exact raw argv array without shell re-parsing.
 
 ### Provider Management
 
@@ -61,23 +61,23 @@ Manage Provider presets directly or import existing entries from cc-switch. Acti
 
 ### Sidebar Panels
 
-A side drawer with contextual panels — no overlay, no focus stealing:
+A side drawer with contextual panels — no overlay, no focus stealing. Native projections are bound to the selected CLI profile and registered project root, and unavailable capabilities stay explicitly unavailable instead of falling back to another CLI's data.
 
-- **Sessions** — Browse, search, and switch between all sessions. Status indicators show running/thinking/waiting states.
-- **MCP Servers** — Inspect connected MCP servers, browse available tools and their input schemas
-- **Skills & Agents** — Quick access to your Claude Code skills and agent configurations
-- **Plugins** — View installed plugins and their components
+Legacy Claude panels remain available where supported; Codex projections are kept separate from Claude configuration/history roots.
 
 ### Native Terminal, Zero Compromise
 
-The app runs the real Claude CLI binary through a pseudo-terminal. Everything works exactly as in your terminal — slash commands, keyboard shortcuts, streaming output, colors, and interactive prompts.
+The app runs the real Claude Code or Codex CLI binary through an owned pseudo-terminal. The host preserves raw argv, ordered input, terminal protocol replies, bounded output flow control, resize, native clipboard/IME paths, and process ownership without silently switching to a different executable or legacy PTY route.
 
 ---
 
 ## Prerequisites
 
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated
-- **Windows only**: [Git for Windows](https://git-scm.com/download/win), Microsoft C++ Build Tools, and Windows SDK (provides Git Bash)
+Install and authenticate the CLI(s) you intend to use:
+
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)**
+- **[Codex CLI](https://developers.openai.com/codex/cli/reference)**
+- **Windows / source builds**: follow the relevant CLI requirements plus the Rust/MSVC prerequisites listed below.
 
 ---
 
@@ -95,10 +95,11 @@ Head to the [**Releases**](https://github.com/shawnwu2022/cc-desk/releases) page
 
 ### 2. Launch & Go
 
-1. Open the app
-2. Select or add a project directory
-3. A Claude Code session starts — just type as you would in the terminal
-4. Open more sessions from the sidebar, each runs independently
+1. Open the app and enter **Native CLI**
+2. Register or select a project directory
+3. Select or explicitly create a Claude Code or Codex CLI profile
+4. Start **New**, native **Resume**, a known session ID, or an exact raw argv launch
+5. Open sibling tabs as needed; each run remains independently owned
 
 ---
 
@@ -111,8 +112,9 @@ Head to the [**Releases**](https://github.com/shawnwu2022/cc-desk/releases) page
 
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://www.rust-lang.org/tools/install) stable toolchain (MSVC on Windows)
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- **Windows only**: [Git for Windows](https://git-scm.com/download/win), Microsoft C++ Build Tools, and Windows SDK
+- Node.js 20+ and the Rust stable toolchain
+- The Claude Code and/or Codex CLI binaries needed for the scenarios you want to test
+- **Windows builds**: Microsoft C++ Build Tools and Windows SDK; follow each CLI's own Windows runtime requirements
 
 ### Setup
 
@@ -148,15 +150,15 @@ Output goes to `src-tauri/target/release/bundle/`.
 ## FAQ
 
 <details>
-<summary><strong>Does this modify my Claude Code config?</strong></summary>
+<summary><strong>Does this modify my native CLI config or history?</strong></summary>
 
-CC Desk treats Claude session and history data as read-only. Most GUI settings stay in the legacy-compatible `~/.cc-box/` directory. The only deliberate native-config write is Provider activation, which merges the selected env/model fields into `~/.claude/settings.json` after an explicit user action. Existing unrelated settings are preserved.
+The native dual-CLI workspace keeps its own profile/project state in CC Desk storage and treats native CLI history/config projections as read-only. Existing legacy Claude GUI compatibility remains isolated. The deliberate exception is the pre-existing **Provider activation** action for Claude, which explicitly merges selected env/model fields into `~/.claude/settings.json`; it is not applied to Codex.
 </details>
 
 <details>
 <summary><strong>Can I use all CLI features?</strong></summary>
 
-Yes. Slash commands, keyboard shortcuts, model switching, permission prompts — everything passes through to the real CLI transparently.
+CC Desk deliberately avoids a feature allowlist and forwards native terminal behavior through the real CLI. That is different from claiming every CLI/OS/version combination is certified. Release certification is target-specific and must be backed by the acceptance evidence gate; missing or blocked real-CLI evidence is not reported as PASS.
 </details>
 
 <details>
@@ -166,9 +168,9 @@ Built with Tauri 2 (Rust backend), the app is ~10 MB installed and uses minimal 
 </details>
 
 <details>
-<summary><strong>Will it break when Claude Code updates?</strong></summary>
+<summary><strong>What happens when Claude Code or Codex CLI updates?</strong></summary>
 
-The app runs the CLI binary directly — it doesn't depend on any internal API. As long as the CLI is on your PATH, it works with any version.
+Unknown versions are not blocked merely because the GUI has not seen them before, but they are also not automatically certified. The repository includes pinned/latest canaries plus target-specific acceptance evidence so maintainers can detect changes and re-certify without restarting or rewriting already-running user sessions.
 </details>
 
 ---
