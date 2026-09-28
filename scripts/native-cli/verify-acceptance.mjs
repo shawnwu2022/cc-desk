@@ -365,11 +365,34 @@ function verifyRecord(record, target, catalogCase, evidenceRoot) {
     if (
       typeof record.nonApplicabilityReason !== 'string'
       || record.nonApplicabilityReason.length < 8
+      || !isObject(record.nonApplicabilityBasis)
     ) {
       return fail('N_A_BASIS_REQUIRED', recordKey(record))
     }
-  } else if (record.nonApplicabilityReason !== null && record.nonApplicabilityReason !== undefined) {
-    return fail('PASS_CANNOT_HAVE_N_A_REASON', recordKey(record))
+    const basis = record.nonApplicabilityBasis
+    const observed = basis.kind === 'cli-version-capability'
+      ? target.cli.version
+      : basis.kind === 'platform-capability'
+        ? `${target.os}/${target.arch}`
+        : null
+    if (
+      observed === null
+      || basis.targetIdentitySha256 !== target.identitySha256
+      || basis.observed !== observed
+      || typeof basis.capability !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(basis.capability)
+      || !SHA256.test(basis.evidenceSha256 ?? '')
+      || !record.evidence.some(entry => entry?.sha256 === basis.evidenceSha256)
+    ) {
+      return fail('N_A_BASIS_INVALID', recordKey(record))
+    }
+  } else {
+    if (record.nonApplicabilityReason !== null && record.nonApplicabilityReason !== undefined) {
+      return fail('PASS_CANNOT_HAVE_N_A_REASON', recordKey(record))
+    }
+    if (record.nonApplicabilityBasis !== null && record.nonApplicabilityBasis !== undefined) {
+      return fail('PASS_CANNOT_HAVE_N_A_BASIS', recordKey(record))
+    }
   }
 
   return verifyEvidenceFiles(record, evidenceRoot)
