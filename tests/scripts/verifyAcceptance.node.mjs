@@ -155,17 +155,52 @@ test('D28_Gate_FailBlockedAndNotRunCanNeverCertify_05', () => {
   }
 })
 
-test('D28_Gate_NARequiresConcreteBasisAndEvidence_06', () => {
+test('D28_Gate_NARequiresTargetBoundCapabilityBasisAndEvidence_06', () => {
   const value = fixture()
-  value.records[0].status = 'N_A'
-  value.records[0].nonApplicabilityReason = 'no'
+  const record = value.records[0]
+  const target = value.plan.targets[0]
+  record.status = 'N_A'
+  record.nonApplicabilityReason = 'no'
   assert.equal(verify(value).reason, 'N_A_BASIS_REQUIRED')
 
-  value.records[0].nonApplicabilityReason = 'version does not expose this native capability'
+  record.nonApplicabilityReason = 'version does not expose this native capability'
+  assert.equal(verify(value).reason, 'N_A_BASIS_REQUIRED')
+
+  record.nonApplicabilityBasis = {
+    kind: 'cli-version-capability',
+    capability: 'native.resume.all',
+    targetIdentitySha256: target.identitySha256,
+    observed: target.cli.version,
+    evidenceSha256: record.evidence[0].sha256,
+  }
   assert.equal(verify(value).status, 'PASS')
 
-  value.records[0].evidence = []
-  assert.equal(verify(value).reason, 'EVIDENCE_REQUIRED')
+  record.nonApplicabilityBasis.targetIdentitySha256 = 'f'.repeat(64)
+  assert.equal(verify(value).reason, 'N_A_BASIS_INVALID')
+  record.nonApplicabilityBasis.targetIdentitySha256 = target.identitySha256
+
+  record.nonApplicabilityBasis.observed = 'forged-version'
+  assert.equal(verify(value).reason, 'N_A_BASIS_INVALID')
+  record.nonApplicabilityBasis.observed = target.cli.version
+
+  record.nonApplicabilityBasis.evidenceSha256 = 'e'.repeat(64)
+  assert.equal(verify(value).reason, 'N_A_BASIS_INVALID')
+  record.nonApplicabilityBasis.evidenceSha256 = record.evidence[0].sha256
+
+  record.evidence = []
+  assert.equal(verify(value).reason, 'N_A_BASIS_INVALID')
+})
+
+test('D28_Gate_PassCannotCarryNonApplicabilityBasis_06b', () => {
+  const value = fixture()
+  value.records[0].nonApplicabilityBasis = {
+    kind: 'platform-capability',
+    capability: 'windows.conpty',
+    targetIdentitySha256: value.plan.targets[0].identitySha256,
+    observed: 'windows/x86_64',
+    evidenceSha256: value.records[0].evidence[0].sha256,
+  }
+  assert.equal(verify(value).reason, 'PASS_CANNOT_HAVE_N_A_BASIS')
 })
 
 test('D28_Gate_WrongCandidateOrCliHashFailsIdentity_07', () => {
