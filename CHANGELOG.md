@@ -14,6 +14,7 @@
 
 ### Changed
 - Make Native CLI a first-class welcome-screen entry while retaining the legacy Claude workspace as an explicit compatibility path
+- Localize Native CLI workspace controls in English and Chinese and expose both Claude Code and Codex documentation from About
 - Align product, architecture, persistence, roadmap, and release documentation with the dual-CLI boundary
 - Keep release automation candidate-only; public publishing remains disabled pending an explicit promotion design
 
