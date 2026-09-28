@@ -76,12 +76,25 @@ function hashFile(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
-function safeEnvironment(source = process.env) {
+function safeEnvironment(source = process.env, workDir) {
   const result = {}
   for (const name of ['PATH', 'Path', 'LANG', 'LC_ALL', 'TERM', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT', 'TEMP', 'TMP', 'TMPDIR']) {
     const value = source[name]
     if (typeof value === 'string' && value.length > 0 && !value.includes('\0')) result[name] = value
   }
+
+  const home = resolve(workDir, 'home')
+  const config = resolve(workDir, 'config')
+  const codex = resolve(config, 'codex')
+  const claude = resolve(config, 'claude')
+  for (const path of [home, config, codex, claude]) {
+    mkdirSync(path, { recursive: true, mode: 0o700 })
+  }
+  result.HOME = home
+  result.USERPROFILE = home
+  result.XDG_CONFIG_HOME = config
+  result.CODEX_HOME = codex
+  result.CLAUDE_CONFIG_DIR = claude
   return result
 }
 
@@ -120,7 +133,7 @@ export function probeInstalledCli({
   const pkg = readPackageJson(packageDir)
   safeText(pkg.version, 'CANARY_VERSION_INVALID')
   const binary = resolveBinary(packageDir, binaryRelative(pkg, cli))
-  const env = safeEnvironment(sourceEnv)
+  const env = safeEnvironment(sourceEnv, workDir)
   const versionOutput = execute(binary, ['--version'], workDir, env)
   execute(binary, ['--help'], workDir, env)
 
