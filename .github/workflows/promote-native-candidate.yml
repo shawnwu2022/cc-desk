@@ -279,6 +279,19 @@ jobs:
         run: |
           gh release edit "${{ inputs.tag }}" --draft=false --latest
 
+      - name: Download public release bytes after publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .promotion/public
+          gh release download "${{ inputs.tag }}" --dir .promotion/public
+
+      - name: Verify exact public asset set and hashes
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-published-promotion.mjs .promotion/public .promotion/promotion.json .promotion/publish/latest.json
+
       - name: Verify updater manifest and published asset URLs
         shell: bash
         run: |
