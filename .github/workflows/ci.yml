@@ -33,7 +33,11 @@ jobs:
         run: npm run test:ci
 
       - name: Run Node policy tests
-        run: node --test tests/scripts/nativeReleasePolicy.node.mjs
+        run: >-
+          node --test
+          tests/scripts/nativeReleasePolicy.node.mjs
+          tests/scripts/nativeAcceptanceGate.node.mjs
+          tests/scripts/nativeCliCanary.node.mjs
 
       - name: Build frontend
         run: npm run build
