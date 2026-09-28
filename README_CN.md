@@ -5,8 +5,8 @@
 <h1 align="center">CC Desk</h1>
 
 <p align="center">
-  <strong>Claude Code 桌面应用 — 多项目、多会话管理</strong><br>
-  一个窗口。多个项目。快速切换会话。
+  <strong>Claude Code / Codex CLI 原生桌面工作台 — 多项目、多会话管理</strong><br>
+  一个窗口。真实 CLI。项目、Profile 与终端标签彼此隔离。
 </p>
 
 <p align="center">
@@ -24,11 +24,11 @@
 
 ## 为什么选择 CC Desk？
 
-Claude Code 的 CLI 在单会话工作中表现优秀。但当你需要管理**多个项目**，并希望**便捷地查看、进入、切换会话**时，纯终端就显得力不从心。
+Claude Code 和 Codex CLI 的核心价值都在原生终端行为。CC Desk 不用 SDK 或自绘聊天界面替代它们，而是在真实 CLI 二进制外增加桌面工作区，用于管理**多个项目**、**多个 CLI Profile**和**独立终端标签页**。
 
-CC Desk 本质上是 **Claude Code 的桌面应用**。它保留了原生终端体验，并添加了 CLI 不擅长做的事：多项目管理、会话总览、快速切换。
+Native CLI 工作台分别支持 Claude Code 与 Codex CLI；纯 Codex 环境不依赖 Claude 配置。已有的 Claude 项目/会话面板继续作为 legacy / 只读增强保留。
 
-**把它看作专为 Claude Code 重度用户打造的桌面应用。**
+**终端仍是权威入口；桌面 UI 只负责工作区、启动、恢复以及可选投影。**
 
 ---
 
@@ -49,15 +49,15 @@ CC Desk 本质上是 **Claude Code 的桌面应用**。它保留了原生终端�
 
 ### 多会话并行
 
-打开任意数量的 Claude Code 会话，每个会话在独立的终端标签页中运行。在侧边栏查看所有会话，快速切换，切换后输出内容保持不变。
+可在同一工作区中同时打开 Claude Code 与 Codex CLI 原生终端标签。每个 run 都冻结自己的 CLI、Profile、项目、输入输出流、进程生命周期和重启 generation，不会跨标签串线。
 
 ### 快速启动与预设
 
-为每个项目设置启动选项，如 `--resume`、`--model` 或自定义参数。无需每次输入相同参数，一键以预设配置启动会话。
+使用 per-CLI Profile，并显式选择 New、原生 Resume Picker、指定 Session ID 或 Raw argv。新原生 Profile 不会被 CC Desk 静默注入 model、approval、sandbox 或权限默认值。
 
-### Provider 管理
+### Claude Provider 管理（legacy 工具）
 
-可直接管理 Provider 预设，也可从 cc-switch 导入已有配置。激活 Provider 是显式操作，只会把所选 Provider 负责的 env/model 字段合并到 `~/.claude/settings.json`，不会覆盖无关的 Claude 设置。
+原有 Claude Provider 预设继续服务旧 Claude 工作流。它不是 Codex Provider/认证层，也不会应用到 Codex 原生 Profile。
 
 ### 侧边栏面板
 
@@ -70,14 +70,18 @@ CC Desk 本质上是 **Claude Code 的桌面应用**。它保留了原生终端�
 
 ### 原生终端体验
 
-通过伪终端直接运行 Claude CLI 二进制文件。所有功能与终端中完全一致 — slash 命令、快捷键、流式输出、颜色、交互式提示。
+Native CLI 工作台通过应用自有 PTY 和 xterm host 直接运行用户安装的 Claude Code 或 Codex CLI 二进制。Slash 命令、原生交互提示、终端编辑器、键盘/协议流、resize、剪贴板和恢复仍走 CLI 原生路径，而不是改造成聊天 UI。
 
 ---
 
 ## 先决条件
 
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** 已安装并完成认证
-- **Windows 用户**: [Git for Windows](https://git-scm.com/download/win)、Microsoft C++ Build Tools 和 Windows SDK（提供 Git Bash）
+至少安装并认证一个你实际要使用的 CLI：
+
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)**
+- **[Codex CLI](https://developers.openai.com/codex/cli/)**
+
+纯 Codex 的 Native CLI 工作台不要求 Git Bash。Git Bash 仅与 legacy / 显式 shell 启动模式相关。
 
 ---
 
@@ -95,10 +99,10 @@ CC Desk 本质上是 **Claude Code 的桌面应用**。它保留了原生终端�
 
 ### 2. 启动使用
 
-1. 打开应用
-2. 选择或添加项目目录
-3. Claude Code 会话启动 — 像在终端中一样输入
-4. 从侧边栏打开更多会话，每个独立运行
+1. 打开应用并进入 **Native CLI**
+2. 添加或选择项目目录
+3. 创建/选择 Claude Code 或 Codex CLI Profile
+4. 使用 New / Resume / Raw 启动会话；每个原生标签独立运行
 
 ---
 
@@ -111,8 +115,9 @@ CC Desk 本质上是 **Claude Code 的桌面应用**。它保留了原生终端�
 
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://www.rust-lang.org/tools/install) stable 工具链（Windows 使用 MSVC）
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 已安装并认证
-- **Windows 用户**: [Git for Windows](https://git-scm.com/download/win)、Microsoft C++ Build Tools 和 Windows SDK
+- 运行时测试可选：[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 和/或 [Codex CLI](https://developers.openai.com/codex/cli/)
+- **Windows 源码构建**：Microsoft C++ Build Tools 和 Windows SDK
+- 只有测试显式/legacy Git Bash 启动路径时才需要 Git for Windows
 
 ### 安装
 
