@@ -7,6 +7,9 @@ const policyPath = fileURLToPath(new URL('../../scripts/release-policy.mjs', imp
 const releaseWorkflowPath = fileURLToPath(
   new URL('../../.github/workflows/release.yml', import.meta.url),
 )
+const promotionWorkflowPath = fileURLToPath(
+  new URL('../../.github/workflows/promote-release.yml', import.meta.url),
+)
 
 async function loadPolicy() {
   return import(`${pathToFileURL(policyPath).href}?case=${Date.now()}-${Math.random()}`)
@@ -14,45 +17,48 @@ async function loadPolicy() {
 
 test('D02_PackageChange_DoesNotPublish_01', async () => {
   const { mayPublish } = await loadPolicy()
-  const contexts = [
-    { event: 'push', operation: 'build', gatePassed: true, manifestVerified: true },
-    { event: 'push', operation: 'promote', gatePassed: true, manifestVerified: true },
-    { event: 'tag', operation: 'promote', gatePassed: true, manifestVerified: true },
-    {
-      event: 'workflow_dispatch',
-      operation: 'promote',
-      gatePassed: false,
-      manifestVerified: false,
-    },
-    {
-      event: 'workflow_dispatch',
-      operation: 'promote',
-      gatePassed: true,
-      manifestVerified: true,
-    },
-  ]
-
-  for (const context of contexts) {
+  for (const context of [
+    { event: 'push', operation: 'promote', gatePassed: true, manifestVerified: true, sameCandidate: true, explicitApproval: true },
+    { event: 'tag', operation: 'promote', gatePassed: true, manifestVerified: true, sameCandidate: true, explicitApproval: true },
+    { event: 'workflow_dispatch', operation: 'promote', gatePassed: false, manifestVerified: true, sameCandidate: true, explicitApproval: true },
+    { event: 'workflow_dispatch', operation: 'promote', gatePassed: true, manifestVerified: false, sameCandidate: true, explicitApproval: true },
+    { event: 'workflow_dispatch', operation: 'promote', gatePassed: true, manifestVerified: true, sameCandidate: false, explicitApproval: true },
+    { event: 'workflow_dispatch', operation: 'promote', gatePassed: true, manifestVerified: true, sameCandidate: true, explicitApproval: false },
+  ]) {
     assert.equal(mayPublish(context), false, JSON.stringify(context))
   }
 })
 
-test('D02_ReleaseWorkflow_HasNoPublishPath_02', () => {
-  const workflow = readFileSync(releaseWorkflowPath, 'utf8')
-
-  assert.doesNotMatch(workflow, /^\s{2}release:\s*$/m)
-  assert.doesNotMatch(workflow, /softprops\/action-gh-release/)
-  assert.doesNotMatch(workflow, /contents:\s*write/)
-  assert.doesNotMatch(workflow, /make_latest:\s*true/)
-  assert.doesNotMatch(workflow, /Generate updater manifest/)
-  assert.doesNotMatch(workflow, /Publish GitHub Release/)
-  assert.doesNotMatch(workflow, /Verify published update channel/)
+test('D30_OnlyExplicitAcceptedCandidatePromotionCanPublish_02', async () => {
+  const { mayPublish } = await loadPolicy()
+  assert.equal(mayPublish({
+    event: 'workflow_dispatch',
+    operation: 'promote',
+    gatePassed: true,
+    manifestVerified: true,
+    sameCandidate: true,
+    explicitApproval: true,
+  }), true)
 })
 
-test('D02_ReleaseWorkflow_StillBuildsSignedCandidates_03', () => {
+test('D30_CandidateWorkflow_HasNoPublishPath_03', () => {
   const workflow = readFileSync(releaseWorkflowPath, 'utf8')
+  assert.match(workflow, /workflow_dispatch/)
+  assert.doesNotMatch(workflow, /^\s{2}push:\s*$/m)
+  assert.doesNotMatch(workflow, /softprops\/action-gh-release/)
+  assert.doesNotMatch(workflow, /contents:\s*write/)
+  assert.doesNotMatch(workflow, /gh release create/)
+  assert.match(workflow, /candidate-manifest\.mjs/)
+})
 
-  assert.match(workflow, /TAURI_SIGNING_PRIVATE_KEY/)
-  assert.match(workflow, /npm run tauri build/)
-  assert.match(workflow, /actions\/upload-artifact@v4/)
+test('D30_PromotionWorkflow_HasNoBuildAndRequiresExactGate_04', () => {
+  const workflow = readFileSync(promotionWorkflowPath, 'utf8')
+  assert.match(workflow, /environment:\s*release-promotion/)
+  assert.match(workflow, /verify-promotion\.mjs/)
+  assert.match(workflow, /verify-updater-manifest\.js/)
+  assert.match(workflow, /gh release create/)
+  assert.match(workflow, /--latest=false/)
+  assert.match(workflow, /gh release edit .*--latest/)
+  assert.doesNotMatch(workflow, /npm run tauri build/)
+  assert.doesNotMatch(workflow, /cargo build/)
 })
