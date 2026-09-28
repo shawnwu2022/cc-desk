@@ -92,6 +92,22 @@ jobs:
         run: |
           node scripts/native-cli/verify-promotion.mjs             "${{ steps.manifests.outputs.candidate }}"             "${{ steps.manifests.outputs.acceptance }}"             candidate             "${{ inputs.commit_sha }}"             > promotion-plan.json
 
+      - name: Verify release policy after gate and environment approval
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { mayPublish } from './scripts/release-policy.mjs'
+          const allowed = mayPublish({
+            event: 'workflow_dispatch',
+            operation: 'promote',
+            gatePassed: true,
+            manifestVerified: true,
+            sameCandidate: true,
+            explicitApproval: true,
+          })
+          if (!allowed) process.exit(1)
+          NODE
+
       - name: Verify release tag matches frozen package version
         shell: bash
         env:
