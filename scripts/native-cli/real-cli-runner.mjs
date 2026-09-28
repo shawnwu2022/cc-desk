@@ -78,6 +78,14 @@ function realContained(root, candidate) {
   }
 }
 
+function sameExistingPath(left, right) {
+  try {
+    return realpathSync(left) === realpathSync(right)
+  } catch {
+    return false
+  }
+}
+
 export function safeD20HostEnvironment(hostEnv) {
   const source = isObject(hostEnv) ? hostEnv : {}
   const out = {}
@@ -179,6 +187,29 @@ function recordMatchesCell(record, plan, run) {
   if (!isObject(record) || record.runId !== run.runId) return false
   if (record.status === 'BLOCKED') return record.cli === plan.cli
   return record.lane === run.lane && record.observer === run.observer
+}
+
+function recordPlanMismatch(record, plan, run) {
+  if (record.status !== 'PASS') return null
+  if (record.target?.cli?.kind !== plan.cli) {
+    return 'REAL_CLI_RECORD_CLI_MISMATCH'
+  }
+  const fixture = record.fixture
+  const expected = run.fixture
+  if (
+    !isObject(fixture)
+    || fixture.fixtureSha256 !== expected.fixtureSha256
+    || fixture.nonce !== expected.nonce
+    || fixture.originalText !== expected.originalText
+    || fixture.hostPayloadBase64 !== expected.hostPayloadBase64
+    || fixture.transformId !== expected.transformId
+  ) {
+    return 'REAL_CLI_RECORD_FIXTURE_MISMATCH'
+  }
+  if (!sameExistingPath(record.oracle?.cwd, run.projectRoot)) {
+    return 'REAL_CLI_RECORD_CWD_MISMATCH'
+  }
+  return null
 }
 
 export function prepareD20Matrix(config) {
@@ -405,6 +436,10 @@ export function executeD20Matrix(plan, options = {}) {
         `INVALID_REAL_CLI_EVIDENCE:${validation.reason}`,
         run.runId,
       )
+    }
+    const mismatch = recordPlanMismatch(record, plan, run)
+    if (mismatch) {
+      return executionFailure(mismatch, run.runId)
     }
     if (
       record.status === 'PASS'
