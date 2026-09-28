@@ -1,224 +1,132 @@
-# 组件结构
+# Component architecture
 
-## 组件树
+## Application shell
 
-```
-App.vue
-├── TitleBar.vue                    # 自定义标题栏（Windows 去除原生装饰）
-├── SettingsOverlay.vue             # 全局设置浮层（首次打开才加载，之后常驻）
-├── TerminalView.vue                # 终端主视图（常驻 DOM，v-show 控制）
-│   ├── IconBar.vue                 # 左侧图标栏（面板切换入口）
-│   ├── SidebarPanel.vue            # 侧边栏面板容器
-│   │   ├── SessionsPanel.vue       # 会话管理面板（组装 ProjectNode 全局树 + 搜索 + 空状态 + 孤儿分组）
-│   │   │   ├── ProjectNode.vue     # 项目节点（图标+名+状态徽标 ●N/琥珀点 + ▸展开 + hover 新建/菜单 + 已存档弹层恢复/删除）
-│   │   │   ├── SessionList.vue
-│   │   │   └── SessionItem.vue + SessionStatus.vue
-│   │   ├── SkillsPanel.vue         # Skills 面板
-│   │   ├── AgentsPanel.vue         # Agents 面板
-│   │   ├── McpPanel.vue            # MCP Servers 面板
-│   │   └── PluginsPanel.vue        # Plugins 面板
-│   ├── TerminalHeader.vue          # 终端标题栏（项目名 + 返回按钮）
-│   └── XTermTerminal.vue           # xterm.js 终端核心
-│
-├── WelcomeView.vue                 # 欢迎引导页（覆盖层，无收藏项目时）
-└── ProjectSelectView.vue           # 项目选择页（覆盖层，有收藏项目时；含已存档会话全局视图：恢复 + 删除（单删/跨项目批量））
-```
+`src/App.vue` owns top-level view switching.
 
-## 组件详情
+Main views:
 
-### App.vue — 视图切换 + 环境检查
+- `WelcomeView.vue` — exposes Native CLI v3 as a first-class entry and keeps the legacy Claude compatibility entry.
+- `ProjectSelectView.vue` — legacy Claude project/session management.
+- `TerminalView.vue` — legacy Claude terminal workspace.
+- `NativeCliWorkbench.vue` — forward-path Claude Code / Codex CLI workspace.
+- `TitleBar.vue` — window controls plus a persistent Native CLI toggle.
 
-- 管理三个视图：`welcome` / `projects` / `terminal`
-- TerminalView 使用 `v-show` 常驻 DOM（保持 PTY 和终端实例不销毁）
-- SettingsOverlay 使用 sticky activation：首次打开前不挂载，首次打开后保持挂载，由组件内部 `v-if` + Transition 控制关闭动画
-- WelcomeView/ProjectSelectView 使用 `v-if` 覆盖层叠加在终端之上
-- 环境检查失败时显示全屏遮罩
-- 初始化：hook store、快捷键监听、自动更新检查
+Native and legacy terminal views stay mounted where required so active terminal state is not destroyed merely by switching UI views.
 
-### XTermTerminal.vue — 终端核心
+## Native CLI workbench
 
-职责：
-- 管理多个终端实例（Map<tabId, TerminalInstance>）
-- 加载 FitAddon、SearchAddon、WebLinksAddon、SerializeAddon
-- 双向数据绑定：onData → ptyInput，onPtyOutput → term.write
-- Tab 创建/切换/重启/关闭
-- Ctrl+V 粘贴处理
-- 默认使用 DOM renderer；仅当新终端启用 WebGL 配置时动态导入 addon，避免 WebGL 进入初始依赖
-- 会话匹配轮询（通过 sessionStore）
-- 终端主题配色：xterm theme 由 `appStore.terminalTheme` 驱动（`getTerminalTheme`），与 GUI 浅/暗独立；watch 联动所有 tab；容器背景/滚动条用 `--terminal-surface-bg`/`--terminal-scrollbar`（继承自 TerminalView）
+### NativeCliWorkbench.vue
 
-Props：
-- `fontSize: number` — 终端字号
+Responsibilities:
 
-Events：
-- `ptyStarted(tabId, ptyId)` — PTY 启动成功
+- Claude/Codex switch;
+- independent profile selection/bootstrap;
+- registered project selection;
+- create New / resume-picker / resume-ID / raw-argv tabs;
+- recover, stop and explicit restart controls;
+- authenticated read-only resource projection.
 
-### 设置组件加载边界
+The workbench must not invoke legacy Claude PTY APIs.
 
-`SettingsOverlay` 通过 `useStickyActivation` 在第一次打开时激活异步组件，关闭后不卸载，避免重复初始化并保留 Transition 离场动画。CodeMirror、Lezer 与 `vue-codemirror` 归入独立 `editor-vendor` chunk，不进入入口 vendor；只有设置组件加载后才请求。
+### NativeCliTerminal.vue
 
-### TerminalView.vue — 终端主视图
+Responsibilities:
 
-> 终端容器表面色：根节点（`.terminal-view`）由 `computeTerminalSurfaceVars` 设置局部 CSS 变量 `--terminal-surface-bg`/`--terminal-scrollbar`（随 `appStore.terminalTheme` 变化），向下继承给 `.terminal-container`、`.xterm-container`、滚动条、空态。
+- xterm lifecycle for one native tab;
+- launch through `createNativeLaunchEntry`;
+- bind the exact run through `createDeskNativeTerminalBinding`;
+- ordered native input;
+- output parse/ACK;
+- authenticated resize/stop;
+- safe diagnostic projection.
 
+No arbitrary HTML rendering or payload logging is allowed.
 
-布局：
-```
-┌────┬──────────────┬───────────────────────────┐
-│Icon│  SidebarPanel │  TerminalHeader (38px)     │
-│Bar │  (sessions/   ├───────────────────────────┤
-│(40px│  skills/     │                           │
-│    │  agents/      │  XTermTerminal (flex:1)   │
-│    │  mcp/         │                           │
-│    │  plugins)     │                           │
-└────┴──────────────┴───────────────────────────┘
+## Native stores
+
+### nativeWorkbench.ts
+
+Coordinates:
+
+- `cliProfiles`;
+- `cliWorkspace`;
+- `nativeTabs`;
+- selected CLI/project;
+- safe workbench error projection.
+
+### nativeTabs.ts
+
+Stores the stable tab identity:
+
+```text
+tabId
+cli
+projectId/projectPath
+profileId/profileRevision
+requestId
+runId
+generation
+action
+status/errorCode/launchRevision
 ```
 
-职责：
-- 组合 IconBar、SidebarPanel、TerminalHeader、XTermTerminal
-- 管理会话操作（新建/切换/重命名/恢复/关闭）
-- 监听 cwd 变化，加载项目配置和历史会话
-- 初始化 `useWindowAttention`（窗口聚焦状态）和 `useStatusMonitor`（hook 事件→Tab 状态）
+Only exact request/run/generation launch status may be adopted.
 
-### IconBar.vue — 左侧图标栏
+### cliProfiles.ts / cliWorkspace.ts
 
-固定宽度 40px，提供面板切换入口：
-- Sessions、Skills、Agents、MCP、Plugins 图标按钮
-- Settings 按钮
-- Open Folder 按钮
+Own frontend snapshots of backend workspace/profile data and revisions.
 
-### SidebarPanel.vue — 侧边栏面板
+They do not turn frontend paths or IDs into filesystem authority.
 
-根据 `sidebarStore.activePanel` 显示对应面板内容，支持 `v-show` 切换（保留各面板状态）。
+## Native APIs
 
-### TitleBar.vue — 自定义标题栏
+- `src/api/cli.ts` — profile/workspace/native command facade.
+- `src/api/nativeProjection.ts` — scoped resource projection.
+- native functions in `src/api/tauri.ts` — authenticated document-bridge calls for runtime operations.
 
-Windows 平台去除原生装饰后自定义的拖拽区域 + 窗口控制按钮。
+Bare `invoke(...)` fallback is forbidden in the native authenticated section.
 
-## Composables
+## Native terminal helpers
 
-### useProjectTreeNavigation — 切换语义纯函数
+`src/terminal/` contains the host protocol pieces:
 
-`resolveSwitchAction(input)` 是树形项目会话管理的决策核心（对抗审查 D/E 的可测单元）。纯函数、无副作用、不读写全局单值中间态；输入全部显式参数直传，连续调用互不影响，避免竞态。
+- input intent queue;
+- input policy;
+- host protocol/provenance routing;
+- launch entry;
+- terminal binding;
+- output transport frontend state;
+- run lifecycle helpers.
 
-v3：点项目节点 = 展开/折叠（`toggleExpand`，不经本函数）；切换只靠点会话节点。新建会话走项目节点的「+」按钮（`newSessionIn`），不在本函数决策。
+These helpers preserve source/ordering identity rather than inferring behavior from byte content.
 
-输入 `SwitchInput`：`projectPath` / `sessionId`（点会话节点时给定，必填）/ `tabs` / `history`。
+## Legacy workspace
 
-输出 `SwitchAction`：
-- `activate` — sessionId 在 tabs 里 → 激活该 tab
-- `resume` — sessionId 在 history 里 → `--resume` 该历史会话；都不在也走 resume（name 缺省，下游 CLI 报错路径）
+The following remain compatibility components:
 
-`TerminalView.vue` 的 `handleSwitchToProjectSession` 等 handler 消费该结果，复用 `startResumeSession` 完成「切 cwd + 切 tab / --resume」。`SidebarPanel.vue` re-emit 新事件透传。
+- `TerminalView.vue`;
+- `XTermTerminal.vue`;
+- sessions/sidebar views;
+- legacy Claude settings and hook-driven UI.
 
-### 已知限制（§5.2 follow-up）
+Legacy sidebar Skills/Agents/MCP/Plugins are projections. The removed Provider management UI and mutating resource toggles must not return.
 
-每项目历史分页（5 条 + 显示更多懒加载）尚未实现，历史全量展示——重度多项目用户渲染性能待优化（follow-up，按实际体验定优先级）。
+## Settings
 
-## Store 结构
+`SettingsOverlay.vue` / `SettingsView.vue` currently cover CC Desk-owned appearance/startup/shortcut/update/about settings.
 
-### app.ts — 应用状态
+They do not provide Provider/API-key management.
 
-```typescript
-cwd: string                           // 当前工作目录
-theme: string                         // 主题
-fontSize: number                      // 终端字号
-pendingResume: PendingResume | null   // 待恢复会话信息
-checkResults: CheckResult[]           // 环境检查结果
-cachedProjects: Project[]             // 项目列表缓存（分页）
-cachedRecentSessions: SessionInfo[]   // 近期会话缓存
-defaultClaudeOptions: DefaultClaudeOptions  // 持久化默认启动参数
-claudeOptions: ClaudeOptions          // 当前启动参数
-```
+## Testing boundaries
 
-方法：loadAppConfig、runChecks、loadCache、loadMoreProjects、setCwd、setFontSize、getClaudeArgs 等
+`tests/productBoundary.test.ts` protects high-level architecture:
 
-### session.ts — 会话管理
-
-```typescript
-// Tab 数据模型（跨越 PTY 生命周期的稳定 UI 单元）
-interface TerminalTab {
-  tabId: string              // 稳定 ID
-  projectPath: string
-  ptyId: string | null       // PTY 进程 ID（停止时 null）
-  sessionId: string | null   // Claude session ID（匹配后赋值）
-  name: string
-  status: 'starting' | 'running' | 'stopped'
-  createdAt: number
-  lastActiveAt: number
-  working: boolean           // 正在工作中（用户发消息后、响应返回前）
-  pending: boolean           // 需要用户关注（响应完成但用户未看到）
-  model?: string             // 模型名
-}
-
-tabs: Map<string, TerminalTab>        // 所有 Tab
-activeTabId: string | null            // 当前活跃 Tab
-historySessions: HistorySession[]     // 未被 Tab 占用的历史会话
-```
-
-方法：createTab、setTabPty、handlePtyExit、closeTab、assignSessionIdByPtyId
-
-**全局项目树相关**（Sessions 面板从扁平列表升级为项目→会话全局树）：
-- `buildProjectGroups`：按项目路径分组 tabs + 历史，无 tab/历史的孤儿项目单独收集
-- `sortProjectGroups(groups)`：排序——置顶 → 字母序 → 孤儿置底
-- `filterProjectGroups(groups, query)`：搜索——匹配项目名 + 已加载历史会话名（`getHistoryFor`）+ 该组 tabs 的 name/sessionId
-- `getHistoryFor(projectPath)`：多项目历史选择器，按项目路径隔离历史，跨项目切换不串扰
-- `expandOverride` / `toggleExpand(path)` / `isExpanded(path)`：展开状态，纯手动展开（不自动展开当前/active），其余折叠
-- `deleteSessions(projectPath, sessionIds)`：永久删除已存档会话（opLock 串行；尽力批、非原子）。成功后 `applyReturnedState` 覆盖本地 + `loadHistoryFor(force=true)` 强制刷新历史（仅清缓存不够：在途 inflight 删除前响应会写回缓存复活已删会话）。失败不 apply 不强制重载，调用方据错误提示
-- 纯函数：`filterDeletable(sessionIds, activeTabSessionIds)`（滤掉运行中 claimed 会话）+ `groupByProject(items)`（跨项目分组，供批量删除逐项目调用）
-
-### sidebar.ts — 侧边栏状态
-
-```typescript
-activePanel: SidebarPanelType  // 'sessions' | 'skills' | 'agents' | 'mcp' | 'plugins' | null
-panelVisible: boolean
-showSettings: boolean
-// 预加载数据
-skills: SkillInfo[]
-agents: AgentInfo[]
-mcpServers: McpServerInfo[]
-plugins: PluginInfo[]
-updateInfo: UpdateInfo | null
-```
-
-方法：togglePanel、loadAllSidebarData、openSettings
-
-### config.ts — 项目配置
-
-```typescript
-projectConfig: ProjectConfigResult | null  // 当前项目 Claude 配置（只读展示）
-```
-
-方法：loadProjectConfig（带缓存）
-
-### hook.ts — Hook 事件总线
-
-纯事件总线，不包含业务逻辑。模块通过 `subscribe(eventTypes[], handler)` 注册，`init()` 时开始监听 Rust 后端 emit 的 hook-event 并 dispatch。
-
-```typescript
-subscribe(eventTypes: string[], handler: (payload) => void): () => void
-dispatch(payload: HookEventPayload): void
-init(): void
-clearSession(key: string): void
-```
-
-## 色彩系统
-
-主色调：**墨蓝 + 琥珀金**，温暖米灰基底。
-
-```css
-/* GUI 层 */
---bg-primary: #faf9f6;        /* 温暖米灰 */
---accent-primary: #1e3a5f;    /* 深邃墨蓝 */
---accent-gold: #d4a574;       /* 琥珀金 */
-
-/* 状态语义色 */
---status-success: #3d8c6e;    /* 墨绿 */
---status-info: #2a5082;       /* 墨蓝 */
---status-warning: #c4964a;    /* 琥珀 */
---status-error: #c45c4a;      /* 赭红 */
-
-/* 终端层 */
---terminal-bg: #f8f9fa;       /* 浅灰背景 */
---terminal-fg: #1a1816;       /* 深炭灰文字 */
-```
+- deleted Provider management stays deleted;
+- CLI installer/overwrite APIs stay deleted;
+- native workbench does not use legacy PTY APIs;
+- authenticated IPC has no bare invoke fallback;
+- native DOM/log surfaces stay inert/redacted;
+- native resource panels stay projection-only;
+- Native CLI remains a first-class entry;
+- release docs match the enforced candidate-only workflow.
