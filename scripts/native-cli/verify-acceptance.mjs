@@ -134,7 +134,7 @@ function validatePlan(plan, candidate, catalog) {
       fail('ACCEPTANCE_TARGET_IDENTITY_INVALID')
     }
 
-    const packageHashes = candidatePackageHashes(candidate, target.platform)
+    const packageHashes = candidateInstallPackageHashes(candidate, target.platform)
     if (!packageHashes.has(identity.desk.packageSha256)) {
       fail('ACCEPTANCE_TARGET_PACKAGE_MISMATCH')
     }
@@ -235,9 +235,17 @@ function verifyEvidenceFiles(record, evidenceRoot) {
   }
 }
 
-function candidatePackageHashes(candidate, platform) {
+function candidateInstallPackageHashes(candidate, platform) {
+  const matcher = platform === 'windows-x86_64'
+    ? /-setup\.exe$/i
+    : platform === 'darwin-aarch64'
+      ? /\.dmg$/i
+      : platform === 'linux-x86_64'
+        ? /\.AppImage$/i
+        : null
+  if (!matcher) return new Set()
   return new Set(candidate.files
-    .filter(file => file.platform === platform && !file.path.endsWith('.sig'))
+    .filter(file => file.platform === platform && matcher.test(file.path))
     .map(file => file.sha256))
 }
 
@@ -301,7 +309,7 @@ function validateRecord(record, plan, candidate, requirementEntry, evidenceRoot)
   if (record.evidenceLayer === 'D') {
     if (!SHA256.test(String(record.deskPackageSha256 ?? ''))
       || record.deskPackageSha256 !== target.identity.desk.packageSha256
-      || !candidatePackageHashes(candidate, target.platform).has(record.deskPackageSha256)) {
+      || !candidateInstallPackageHashes(candidate, target.platform).has(record.deskPackageSha256)) {
       fail('ACCEPTANCE_PACKAGE_HASH_MISMATCH')
     }
   }
