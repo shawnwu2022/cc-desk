@@ -95,13 +95,15 @@ jobs:
       - name: Verify exact candidate and all required evidence
         shell: bash
         run: |
-          test -f ${{ runner.temp }}/cc-desk-candidate-manifest/candidate-manifest.json
+          test -f "${{ runner.temp }}/cc-desk-candidate-manifest/candidate-manifest.json"
+          test -f docs/testing/native-cli-acceptance-catalog.json
           test -f gate/acceptance/target-plan.json
           test -d gate/acceptance/records
           test -d gate/acceptance/evidence
           node scripts/native-cli/verify-acceptance.mjs \
-            ${{ runner.temp }}/cc-desk-candidate-manifest/candidate-manifest.json \
+            "${{ runner.temp }}/cc-desk-candidate-manifest/candidate-manifest.json" \
             gate/candidate \
+            docs/testing/native-cli-acceptance-catalog.json \
             gate/acceptance/target-plan.json \
             gate/acceptance/records \
             gate/acceptance/evidence \
