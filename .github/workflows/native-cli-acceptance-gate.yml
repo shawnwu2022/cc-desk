@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_run_id:
-        description: Workflow run ID that built the signed candidate artifacts
+        description: Successful Signed candidate packages run ID
         required: true
         type: string
       candidate_sha:
@@ -12,11 +12,11 @@ on:
         required: true
         type: string
       evidence_run_id:
-        description: Workflow run ID containing the installed-package evidence bundle
+        description: Successful Ingest installed native evidence run ID
         required: true
         type: string
-      evidence_artifact:
-        description: Artifact name containing plan.json, records.json and evidence/
+      bundle_id:
+        description: Evidence bundle ID used by the ingest workflow
         required: true
         type: string
 
@@ -33,6 +33,7 @@ jobs:
     name: Verify installed-package acceptance
     runs-on: ubuntu-22.04
     timeout-minutes: 15
+
     steps:
       - name: Validate immutable inputs
         shell: bash
@@ -41,23 +42,51 @@ jobs:
             echo "::error::candidate_sha must be an exact commit SHA"
             exit 1
           fi
-          if ! printf '%s' "${{ inputs.candidate_run_id }}" | grep -Eq '^[1-9][0-9]*$'; then
-            echo "::error::candidate_run_id must be numeric"
-            exit 1
-          fi
-          if ! printf '%s' "${{ inputs.evidence_run_id }}" | grep -Eq '^[1-9][0-9]*$'; then
-            echo "::error::evidence_run_id must be numeric"
+          for id in "${{ inputs.candidate_run_id }}" "${{ inputs.evidence_run_id }}"; do
+            if ! printf '%s' "$id" | grep -Eq '^[1-9][0-9]*$'; then
+              echo "::error::run IDs must be positive integers"
+              exit 1
+            fi
+          done
+          if ! printf '%s' "${{ inputs.bundle_id }}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'; then
+            echo "::error::bundle_id is invalid"
             exit 1
           fi
 
-      - uses: actions/checkout@v5
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v5
         with:
           ref: ${{ inputs.candidate_sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
         with:
           node-version: 22
+
+      - name: Read source workflow-run metadata
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            fs.mkdirSync('.acceptance', { recursive: true })
+            for (const [name, id] of [
+              ['candidate', Number('${{ inputs.candidate_run_id }}')],
+              ['evidence', Number('${{ inputs.evidence_run_id }}')],
+            ]) {
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: id,
+              })
+              fs.writeFileSync(`.acceptance/${name}-run.json`, JSON.stringify(response.data))
+            }
+
+      - name: Verify candidate and evidence run provenance
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-workflow-run.mjs --run-json .acceptance/candidate-run.json --workflow-path .github/workflows/release.yml --head-sha "${{ inputs.candidate_sha }}" --event workflow_dispatch --event push
+          node scripts/native-cli/verify-workflow-run.mjs --run-json .acceptance/evidence-run.json --workflow-path .github/workflows/native-cli-installed-evidence.yml --head-sha "${{ inputs.candidate_sha }}" --event workflow_dispatch
 
       - name: Download candidate manifest from the candidate build
         uses: actions/download-artifact@v4
@@ -67,29 +96,31 @@ jobs:
           github-token: ${{ github.token }}
           path: .acceptance/candidate
 
-      - name: Download installed-package evidence bundle
+      - name: Download provenance-bound installed evidence bundle
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.evidence_artifact }}
+          name: native-installed-evidence-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
           run-id: ${{ inputs.evidence_run_id }}
           github-token: ${{ github.token }}
           path: .acceptance/bundle
 
-      - name: Verify complete target/subcase evidence
+      - name: Verify complete target and subcase evidence
         shell: bash
         run: |
-          node scripts/native-cli/verify-acceptance-command.mjs             --catalog docs/testing/native-cli-acceptance-catalog.json             --candidate .acceptance/candidate/candidate.json             --plan .acceptance/bundle/plan.json             --records .acceptance/bundle/records.json             --evidence-root .acceptance/bundle/evidence             --out .acceptance/acceptance-summary.json
+          node scripts/native-cli/verify-acceptance-command.mjs --catalog docs/testing/native-cli-acceptance-catalog.json --candidate .acceptance/candidate/candidate.json --plan .acceptance/bundle/plan.json --records .acceptance/bundle/records.json --evidence-root .acceptance/bundle/evidence --out .acceptance/acceptance-summary.json
 
       - name: Upload machine-verifiable acceptance summary
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-acceptance-summary-${{ inputs.candidate_sha }}
+          name: native-acceptance-summary-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
           path: .acceptance/acceptance-summary.json
           retention-days: 30
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Record boundary
+        if: always()
         shell: bash
         run: |
-          echo "This job only verifies evidence already collected from the exact candidate." >> "$GITHUB_STEP_SUMMARY"
+          echo "This job verifies a candidate manifest plus evidence emitted by the protected installed-evidence ingest workflow." >> "$GITHUB_STEP_SUMMARY"
           echo "It does not create missing C/D evidence and cannot turn BLOCKED/NOT_RUN into PASS." >> "$GITHUB_STEP_SUMMARY"
