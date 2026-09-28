@@ -86,6 +86,14 @@ function sameExistingPath(left, right) {
   }
 }
 
+function fileSha256(path) {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex')
+  } catch {
+    return null
+  }
+}
+
 export function safeD20HostEnvironment(hostEnv) {
   const source = isObject(hostEnv) ? hostEnv : {}
   const out = {}
@@ -372,23 +380,31 @@ export function executeD20Matrix(plan, options = {}) {
   if (!realContained(plan.testRoot, first.binaryPath)) {
     return executionBlocked(plan.cli, 'REAL_CLI_BINARY_NOT_ISOLATED')
   }
-
-  let actualBinarySha256
-  try {
-    actualBinarySha256 = createHash('sha256')
-      .update(readFileSync(first.binaryPath))
-      .digest('hex')
-  } catch {
+  const actualBinaryPath = realpathSync(first.binaryPath)
+  const actualBinarySha256 = fileSha256(actualBinaryPath)
+  if (!actualBinarySha256) {
     return executionBlocked(plan.cli, 'REAL_CLI_BINARY_UNAVAILABLE')
   }
 
+  const driverHashes = new Map()
   for (const run of plan.runs) {
+    if (!regularFile(run.binaryPath)) {
+      return executionBlocked(plan.cli, 'REAL_CLI_BINARY_UNAVAILABLE')
+    }
+    if (!realContained(plan.testRoot, run.binaryPath)
+      || !sameExistingPath(actualBinaryPath, run.binaryPath)) {
+      return executionBlocked(plan.cli, 'REAL_CLI_BINARY_NOT_ISOLATED')
+    }
     if (!regularFile(run.driverPath)) {
       return executionBlocked(plan.cli, 'REAL_CLI_DRIVER_UNAVAILABLE')
     }
     if (!realContained(plan.testRoot, run.driverPath)) {
       return executionBlocked(plan.cli, 'REAL_CLI_DRIVER_NOT_ISOLATED')
     }
+    const path = realpathSync(run.driverPath)
+    const hash = fileSha256(path)
+    if (!hash) return executionBlocked(plan.cli, 'REAL_CLI_DRIVER_UNAVAILABLE')
+    driverHashes.set(path, hash)
   }
 
   const timeoutMs = Number.isInteger(options.timeoutMs)
@@ -403,6 +419,14 @@ export function executeD20Matrix(plan, options = {}) {
     const fixtureError = prepareRunFixture(run)
     if (fixtureError) {
       return executionFailure(fixtureError, run.runId)
+    }
+
+    const driverPath = realpathSync(run.driverPath)
+    if (fileSha256(actualBinaryPath) !== actualBinarySha256) {
+      return executionFailure('REAL_CLI_BINARY_CHANGED', run.runId)
+    }
+    if (fileSha256(driverPath) !== driverHashes.get(driverPath)) {
+      return executionFailure('REAL_CLI_DRIVER_CHANGED', run.runId)
     }
 
     const driver = driverCommand(run.driverPath)
@@ -427,6 +451,12 @@ export function executeD20Matrix(plan, options = {}) {
       },
     )
 
+    if (fileSha256(actualBinaryPath) !== actualBinarySha256) {
+      return executionFailure('REAL_CLI_BINARY_CHANGED', run.runId)
+    }
+    if (fileSha256(driverPath) !== driverHashes.get(driverPath)) {
+      return executionFailure('REAL_CLI_DRIVER_CHANGED', run.runId)
+    }
     if (result.stdout !== '') {
       return executionFailure('REAL_CLI_DRIVER_STDOUT_FORBIDDEN', run.runId)
     }
