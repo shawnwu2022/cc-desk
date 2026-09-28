@@ -128,8 +128,12 @@ jobs:
           TAG: ${{ inputs.tag }}
           COMMIT_SHA: ${{ inputs.commit_sha }}
         run: |
-          mapfile -t files < <(find candidate -type f \( -name '*.exe' -o -name '*.exe.sig' -o -name '*.AppImage' -o -name '*.AppImage.sig' -o -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' -o -name '*.dmg' \) -print | sort)
-          [ "${#files[@]}" -ge 7 ] || { echo "::error::Candidate artifact set incomplete"; exit 1; }
+          mapfile -t relative_files < <(node -e "const p=require('./promotion-plan.json'); for (const f of p.files) console.log(f)")
+          [ "${#relative_files[@]}" -eq 7 ] || { echo "::error::Verified candidate artifact set must contain exactly seven files"; exit 1; }
+          files=()
+          for relative in "${relative_files[@]}"; do
+            files+=("candidate/$relative")
+          done
           gh release create "$TAG" --target "$COMMIT_SHA" --title "$TAG" --generate-notes --latest=false "${files[@]}" latest.json
 
       - name: Verify published updater manifest
