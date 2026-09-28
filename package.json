@@ -1,7 +1,7 @@
 {
   "name": "cc-desk",
   "version": "0.17.7",
-  "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code",
+  "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code and Codex CLI",
   "license": "MIT",
   "author": {
     "name": "shawnwu2022"
@@ -21,7 +21,9 @@
     "terminal",
     "gui",
     "multi-session",
-    "developer-tools"
+    "developer-tools",
+    "codex-cli",
+    "codex"
   ],
   "scripts": {
     "dev": "vite",
