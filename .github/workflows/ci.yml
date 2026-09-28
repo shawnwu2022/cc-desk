@@ -42,6 +42,7 @@ jobs:
           tests/scripts/promoteCandidate.node.mjs
           tests/scripts/verifyPublishedPromotion.node.mjs
           tests/scripts/promotionPolicy.node.mjs
+          tests/scripts/productContract.node.mjs
 
       - name: Build frontend
         run: npm run build
