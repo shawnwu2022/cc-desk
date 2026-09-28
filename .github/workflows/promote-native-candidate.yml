@@ -41,6 +41,9 @@ jobs:
     name: Verify exact signed candidate before approval
     runs-on: ubuntu-22.04
     timeout-minutes: 20
+    outputs:
+      promotion_sha256: ${{ steps.anchors.outputs.promotion_sha256 }}
+      updater_sha256: ${{ steps.anchors.outputs.updater_sha256 }}
 
     steps:
       - name: Validate immutable workflow inputs
@@ -158,6 +161,13 @@ jobs:
         run: |
           node scripts/native-cli/verify-published-promotion.mjs .promotion/publish .promotion/promotion.json .promotion/publish/latest.json
 
+      - name: Anchor verified promotion metadata for the approval job
+        id: anchors
+        shell: bash
+        run: |
+          echo "promotion_sha256=$(sha256sum .promotion/promotion.json | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "updater_sha256=$(sha256sum .promotion/publish/latest.json | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
       - name: Upload machine-verified promotion staging
         uses: actions/upload-artifact@v4
         with:
@@ -203,6 +213,17 @@ jobs:
         with:
           name: native-promotion-ready-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
           path: .promotion
+
+      - name: Verify staging anchors from the pre-approval job
+        shell: bash
+        env:
+          EXPECTED_PROMOTION_SHA256: ${{ needs.verify.outputs.promotion_sha256 }}
+          EXPECTED_UPDATER_SHA256: ${{ needs.verify.outputs.updater_sha256 }}
+        run: |
+          test -n "$EXPECTED_PROMOTION_SHA256"
+          test -n "$EXPECTED_UPDATER_SHA256"
+          printf '%s  %s\n' "$EXPECTED_PROMOTION_SHA256" .promotion/promotion.json | sha256sum --check --strict
+          printf '%s  %s\n' "$EXPECTED_UPDATER_SHA256" .promotion/publish/latest.json | sha256sum --check --strict
 
       - name: Reverify staged bytes after approval boundary
         shell: bash
