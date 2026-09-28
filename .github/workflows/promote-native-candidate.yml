@@ -166,6 +166,11 @@ jobs:
         run: |
           node scripts/native-cli/verify-published-promotion.mjs .promotion/uploaded .promotion/promotion.json
 
+      - name: Verify uploaded updater metadata bytes before publication
+        shell: bash
+        run: |
+          cmp .promotion/publish/latest.json .promotion/uploaded/latest.json
+
       - name: Publish the already verified draft
         shell: bash
         env:
