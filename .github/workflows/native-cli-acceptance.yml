@@ -3,6 +3,10 @@ name: Native CLI acceptance gate
 on:
   workflow_dispatch:
     inputs:
+      candidate_run_id:
+        description: Signed candidate workflow run ID containing candidate-manifest.json
+        required: true
+        type: string
       evidence_run_id:
         description: Workflow run ID containing the acceptance evidence artifact
         required: true
@@ -30,6 +34,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: Download candidate identity from the explicit candidate run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          mkdir candidate
+          gh run download "$RUN_ID" --pattern 'cc-desk-candidate-manifest-*' --dir candidate
+
       - name: Download evidence from the explicit run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,14 +56,20 @@ jobs:
         shell: bash
         run: |
           mapfile -t files < <(find evidence -type f -name 'acceptance-manifest.json' -print)
+          mapfile -t candidates < <(find candidate -type f -name 'candidate-manifest.json' -print)
           if [ "${#files[@]}" -ne 1 ]; then
             echo "::error::Exactly one acceptance-manifest.json is required"
             exit 1
           fi
+          if [ "${#candidates[@]}" -ne 1 ]; then
+            echo "::error::Exactly one candidate-manifest.json is required"
+            exit 1
+          fi
           echo "path=${files[0]}" >> "$GITHUB_OUTPUT"
+          echo "candidate=${candidates[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Verify complete target/case/subcase evidence
-        run: node scripts/native-cli/verify-acceptance.mjs "${{ steps.manifest.outputs.path }}" > acceptance-gate-result.json
+        run: node scripts/native-cli/verify-acceptance.mjs "${{ steps.manifest.outputs.path }}" "${{ steps.manifest.outputs.candidate }}" > acceptance-gate-result.json
 
       - name: Upload gate result
         uses: actions/upload-artifact@v4
