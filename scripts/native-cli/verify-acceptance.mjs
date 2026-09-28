@@ -37,6 +37,10 @@ export function computeAcceptanceCatalogId(catalog) {
   })))
 }
 
+export function computeTargetIdentitySha256(identity) {
+  return sha256(Buffer.from(canonical(identity)))
+}
+
 export function computeTargetPlanId(plan) {
   return sha256(Buffer.from(canonical({
     schemaVersion: 1,
@@ -101,11 +105,38 @@ function validatePlan(plan, candidate, catalog) {
     if (!target || typeof target.targetId !== 'string' || !target.targetId
       || typeof target.platform !== 'string' || !target.platform
       || !SHA256.test(String(target.identitySha256 ?? ''))
-      || !target.cli || !['claude', 'codex'].includes(target.cli.kind)
-      || typeof target.cli.version !== 'string' || !target.cli.version
-      || !SHA256.test(String(target.cli.binarySha256 ?? ''))
+      || !target.identity || typeof target.identity !== 'object' || Array.isArray(target.identity)
       || !Array.isArray(target.requirements) || target.requirements.length === 0) {
       fail('ACCEPTANCE_PLAN_INVALID')
+    }
+
+    const identity = target.identity
+    const nonempty = value => typeof value === 'string' && value.length > 0 && !value.includes('\0')
+    if (identity.platform !== target.platform
+      || !identity.os || !nonempty(identity.os.name) || !nonempty(identity.os.build) || !nonempty(identity.os.arch)
+      || !nonempty(identity.executionDomain)
+      || !identity.cli || !['claude', 'codex'].includes(identity.cli.kind)
+      || !nonempty(identity.cli.version) || !SHA256.test(String(identity.cli.binarySha256 ?? ''))
+      || !identity.desk || identity.desk.candidateId !== candidate.candidateId
+      || identity.desk.sourceSha !== candidate.sourceSha
+      || !SHA256.test(String(identity.desk.packageSha256 ?? ''))
+      || !identity.runtime || !nonempty(identity.runtime.webView)
+      || !nonempty(identity.runtime.xtermVersion) || !nonempty(identity.runtime.renderer)
+      || !identity.launcher || !['native', 'shell', 'shim'].includes(identity.launcher.kind)
+      || (identity.launcher.kind !== 'native' && !nonempty(identity.launcher.shellVersion))
+      || !nonempty(identity.inputPolicyVersion)
+      || !nonempty(identity.terminalProtocolVersion)
+      || !nonempty(identity.fixtureConfigVersion)
+      || (target.platform === 'windows-x86_64'
+        ? !nonempty(identity.runtime.conptyVersion)
+        : identity.runtime.conptyVersion !== null)
+      || computeTargetIdentitySha256(identity) !== target.identitySha256) {
+      fail('ACCEPTANCE_TARGET_IDENTITY_INVALID')
+    }
+
+    const packageHashes = candidatePackageHashes(candidate, target.platform)
+    if (!packageHashes.has(identity.desk.packageSha256)) {
+      fail('ACCEPTANCE_TARGET_PACKAGE_MISMATCH')
     }
     if (targetIds.has(target.targetId)) fail('ACCEPTANCE_TARGET_DUPLICATE')
     targetIds.add(target.targetId)
@@ -225,9 +256,9 @@ function validateRecord(record, plan, candidate, requirementEntry, evidenceRoot)
     fail('ACCEPTANCE_RECORD_INVALID')
   }
 
-  if (record.cliKind !== target.cli.kind
-    || record.cliVersion !== target.cli.version
-    || record.cliBinarySha256 !== target.cli.binarySha256) {
+  if (record.cliKind !== target.identity.cli.kind
+    || record.cliVersion !== target.identity.cli.version
+    || record.cliBinarySha256 !== target.identity.cli.binarySha256) {
     fail('ACCEPTANCE_CLI_IDENTITY_MISMATCH')
   }
 
@@ -253,8 +284,23 @@ function validateRecord(record, plan, candidate, requirementEntry, evidenceRoot)
     fail('ACCEPTANCE_RECORD_INVALID')
   }
 
+  if (record.evidenceLayer !== 'A') {
+    const verification = record.verification
+    if (!verification || typeof verification !== 'object' || Array.isArray(verification)
+      || typeof verification.kind !== 'string'
+      || !/^[a-z0-9][a-z0-9._-]{2,63}$/.test(verification.kind)
+      || !Number.isSafeInteger(verification.schemaVersion) || verification.schemaVersion <= 0
+      || !SHA256.test(String(verification.resultEvidenceSha256 ?? ''))) {
+      fail('ACCEPTANCE_VERIFICATION_REQUIRED')
+    }
+    if (!record.evidence.some(item => item.sha256 === verification.resultEvidenceSha256)) {
+      fail('ACCEPTANCE_VERIFICATION_EVIDENCE_MISMATCH')
+    }
+  }
+
   if (record.evidenceLayer === 'D') {
     if (!SHA256.test(String(record.deskPackageSha256 ?? ''))
+      || record.deskPackageSha256 !== target.identity.desk.packageSha256
       || !candidatePackageHashes(candidate, target.platform).has(record.deskPackageSha256)) {
       fail('ACCEPTANCE_PACKAGE_HASH_MISMATCH')
     }
