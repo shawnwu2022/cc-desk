@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { verifyAcceptance } from './verify-acceptance.mjs'
@@ -34,12 +34,17 @@ export function verifyPromotion({ candidate, acceptance, targetPlan, artifactsRo
   for (const entry of candidate.files ?? []) {
     if (!SHA256.test(String(entry.sha256))) fail('INVALID_CANDIDATE_HASH')
     const file = path.resolve(artifactsRoot, entry.path)
-    const root = path.resolve(artifactsRoot) + path.sep
-    if (!file.startsWith(root) || !existsSync(file)) fail('CANDIDATE_FILE_MISSING')
+    const root = path.resolve(artifactsRoot)
+    const prefix = root.endsWith(path.sep) ? root : root + path.sep
+    if (!file.startsWith(prefix) || !existsSync(file)) fail('CANDIDATE_FILE_MISSING')
     const metadata = lstatSync(file)
     if (!metadata.isFile() || metadata.isSymbolicLink()) fail('UNSAFE_CANDIDATE_FILE')
-    if (statSync(file).size !== entry.size) fail('CANDIDATE_FILE_SIZE_MISMATCH')
-    if (sha256(file) !== entry.sha256) fail('CANDIDATE_FILE_HASH_MISMATCH')
+    const realRoot = realpathSync(root)
+    const realFile = realpathSync(file)
+    const realPrefix = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep
+    if (!realFile.startsWith(realPrefix)) fail('UNSAFE_CANDIDATE_FILE')
+    if (statSync(realFile).size !== entry.size) fail('CANDIDATE_FILE_SIZE_MISMATCH')
+    if (sha256(realFile) !== entry.sha256) fail('CANDIDATE_FILE_HASH_MISMATCH')
     files.push(file)
   }
   if (files.length === 0) fail('CANDIDATE_FILES_EMPTY')
