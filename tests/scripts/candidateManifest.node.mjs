@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -54,5 +54,31 @@ test('D30_CandidateManifest_RejectsUnknownArtifactPartition_03', () => {
   assert.throws(
     () => buildCandidateManifest(value.root, value.sha),
     /CANDIDATE_PLATFORM_UNKNOWN/,
+  )
+})
+
+
+test('D30_CandidateManifest_RejectsSpoofedPartitionName_04', () => {
+  const value = candidateFixture()
+  renameSync(
+    join(value.root, `cc-desk-candidate-${value.sha}-macos`),
+    join(value.root, 'spoof-macos'),
+  )
+  assert.throws(
+    () => buildCandidateManifest(value.root, value.sha),
+    /CANDIDATE_PLATFORM_(?:UNKNOWN|INCOMPLETE)/,
+  )
+})
+
+test('D30_CandidateManifest_RejectsMissingRequiredPlatformAsset_05', () => {
+  const value = candidateFixture()
+  rmSync(join(
+    value.root,
+    `cc-desk-candidate-${value.sha}-windows`,
+    'CC.Desk-setup.exe.sig',
+  ))
+  assert.throws(
+    () => buildCandidateManifest(value.root, value.sha),
+    /CANDIDATE_PLATFORM_INCOMPLETE/,
   )
 })
