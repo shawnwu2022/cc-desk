@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { buildCandidateManifest } from '../../scripts/native-cli/candidate-manifest.mjs'
 import {
+  computeAcceptanceCatalogId,
   computeTargetPlanId,
   verifyAcceptance,
 } from '../../scripts/native-cli/verify-acceptance.mjs'
@@ -13,6 +14,26 @@ import {
 const SOURCE_SHA = 'a'.repeat(40)
 const CLI_SHA = 'b'.repeat(64)
 const IDENTITY_SHA = 'c'.repeat(64)
+
+const owners = [
+  'W7','W7','W2','W2','W2','W2','W2','W1','W7','W1',
+  'W7','W7','W3','W6','W6','W6','W6','W6','W5','W6',
+  'W5','W5','W5','W5','W5','W5','W6','W6','W4','W6',
+  'W4','W4','W4','W3','W3','W8','W6','W3','W6','W9',
+  'W5','W5','W5','W5','W5','W4','W4','W4','W4','W2',
+  'W2','W2','W1','W4','W3','W8','W1','W3','W0','W2',
+  'W4','W8','W6','W9',
+]
+
+const minimumLayers = [
+  ['C','D'],['D'],['A'],['A','C'],['B'],['B'],['A','B'],['A','C'],['A','C','D'],['A'],
+  ['C'],['A','C'],['A','B'],['C'],['C'],['C'],['C'],['C'],['A','C'],['B','C'],
+  ['B'],['A','C'],['A','C'],['A','C'],['A'],['A','B'],['B','C'],['B'],['A','B'],['B','C'],
+  ['B'],['B'],['B'],['A','B'],['A'],['A'],['C','D'],['B','C'],['D'],['C'],
+  ['A','B'],['A','B'],['A'],['A','B'],['B','C'],['A'],['B'],['A','B'],['A','B'],['A'],
+  ['A'],['A','C'],['A','B'],['B'],['B'],['A','B'],['D'],['A'],['A'],['A','B'],
+  ['A','C'],['A','D'],['C'],['A'],
+]
 
 function hash(value) {
   return createHash('sha256').update(value).digest('hex')
@@ -23,6 +44,29 @@ function write(root, relative, value) {
   mkdirSync(dirname(file), { recursive: true })
   writeFileSync(file, value)
   return file
+}
+
+function buildCatalog() {
+  const catalog = {
+    schemaVersion: 1,
+    catalogVersion: 1,
+    policy: {
+      allRequiredCasesMustAppearPerTarget: true,
+      naRequiresEvidence: true,
+      planMayAddLayersButNotRemoveMinimumLayers: true,
+      note: 'This catalog defines release-gate minimums, not execution results.',
+    },
+    cases: Array.from({ length: 64 }, (_, index) => ({
+      caseId: `NATIVE-${String(index + 1).padStart(2, '0')}`,
+      owner: owners[index],
+      required: true,
+      allowNa: true,
+      subcasePolicy: 'explicit',
+      minimumLayers: minimumLayers[index],
+    })),
+  }
+  catalog.catalogId = computeAcceptanceCatalogId(catalog)
+  return catalog
 }
 
 function fixture() {
@@ -46,9 +90,11 @@ function fixture() {
   const winPackage = candidate.files.find(file =>
     file.platform === 'windows-x86_64' && file.path.endsWith('.exe'))
 
+  const catalog = buildCatalog()
   const plan = {
     schemaVersion: 1,
     candidateId: candidate.candidateId,
+    catalogId: catalog.catalogId,
     targets: [{
       targetId: 'windows-codex-fixture',
       platform: 'windows-x86_64',
@@ -58,99 +104,130 @@ function fixture() {
         version: 'fixture-1.0.0',
         binarySha256: CLI_SHA,
       },
-      requirements: [{
-        caseId: 'NATIVE-64',
-        subcaseId: 'gate-negative-cases',
-        requiredLayers: ['A', 'D'],
-      }],
+      requirements: catalog.cases.map(entry => ({
+        caseId: entry.caseId,
+        subcaseId: 'baseline',
+        requiredLayers: [...entry.minimumLayers],
+      })),
     }],
   }
   plan.planId = computeTargetPlanId(plan)
 
-  const aEvidence = Buffer.from('layer-a-evidence')
-  const dEvidence = Buffer.from('layer-d-evidence')
-  write(evidenceRoot, 'a.json', aEvidence)
-  write(evidenceRoot, 'd.json', dEvidence)
-
-  const base = {
-    schemaVersion: 2,
-    targetId: 'windows-codex-fixture',
-    caseId: 'NATIVE-64',
-    subcaseId: 'gate-negative-cases',
-    candidateId: candidate.candidateId,
-    sourceSha: SOURCE_SHA,
-    targetIdentitySha256: IDENTITY_SHA,
-    cliKind: 'codex',
-    cliVersion: 'fixture-1.0.0',
-    cliBinarySha256: CLI_SHA,
-    status: 'PASS',
-    nonApplicabilityReason: null,
-    nonApplicabilityEvidenceSha256: null,
+  const records = []
+  for (const requirement of plan.targets[0].requirements) {
+    for (const layer of requirement.requiredLayers) {
+      const body = Buffer.from(`${requirement.caseId}:${layer}:evidence`)
+      const relative = `${requirement.caseId}/${layer}.json`
+      write(evidenceRoot, relative, body)
+      records.push({
+        schemaVersion: 2,
+        targetId: 'windows-codex-fixture',
+        caseId: requirement.caseId,
+        subcaseId: 'baseline',
+        runId: `run-${requirement.caseId}-${layer}`,
+        candidateId: candidate.candidateId,
+        sourceSha: SOURCE_SHA,
+        targetIdentitySha256: IDENTITY_SHA,
+        cliKind: 'codex',
+        cliVersion: 'fixture-1.0.0',
+        cliBinarySha256: CLI_SHA,
+        status: 'PASS',
+        evidenceLayer: layer,
+        deskPackageSha256: layer === 'D' ? winPackage.sha256 : null,
+        evidence: [{ path: relative, sha256: hash(body) }],
+        nonApplicabilityReason: null,
+        nonApplicabilityEvidenceSha256: null,
+      })
+    }
   }
-  const records = [
-    {
-      ...base,
-      runId: 'run-a',
-      evidenceLayer: 'A',
-      deskPackageSha256: null,
-      evidence: [{ path: 'a.json', sha256: hash(aEvidence) }],
-    },
-    {
-      ...base,
-      runId: 'run-d',
-      evidenceLayer: 'D',
-      deskPackageSha256: winPackage.sha256,
-      evidence: [{ path: 'd.json', sha256: hash(dEvidence) }],
-    },
-  ]
 
   return {
     root,
     candidateRoot,
     evidenceRoot,
     candidate,
+    catalog,
     plan,
     records,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   }
 }
 
-function verify(fx, records = fx.records, plan = fx.plan, candidate = fx.candidate) {
+function verify(fx, {
+  records = fx.records,
+  plan = fx.plan,
+  catalog = fx.catalog,
+  candidate = fx.candidate,
+} = {}) {
   return verifyAcceptance({
     candidate,
     candidateRoot: fx.candidateRoot,
+    catalog,
     plan,
     records,
     evidenceRoot: fx.evidenceRoot,
   })
 }
 
-test('D28_Gate_CompleteExactEvidencePasses_01', () => {
+function caseRecords(fx, caseId) {
+  return fx.records.filter(record => record.caseId === caseId)
+}
+
+test('D28_Gate_Complete64CasePlanPasses_01', () => {
   const fx = fixture()
   try {
     const result = verify(fx)
     assert.equal(result.status, 'PASS')
-    assert.equal(result.requirementCount, 1)
-    assert.equal(result.recordCount, 2)
+    assert.equal(result.catalogId, fx.catalog.catalogId)
+    assert.equal(result.requirementCount, 64)
+    assert.equal(result.recordCount, fx.records.length)
   } finally {
     fx.cleanup()
   }
 })
 
-test('D28_Gate_MissingRequiredLayerFails_02', () => {
+test('D28_Gate_PlanCannotOmitCatalogCase_02', () => {
   const fx = fixture()
   try {
-    assert.throws(() => verify(fx, [fx.records[0]]), /ACCEPTANCE_REQUIRED_LAYER_MISSING/)
+    const plan = structuredClone(fx.plan)
+    plan.targets[0].requirements = plan.targets[0].requirements
+      .filter(item => item.caseId !== 'NATIVE-63')
+    plan.planId = computeTargetPlanId(plan)
+    assert.throws(() => verify(fx, { plan }), /ACCEPTANCE_REQUIRED_CASE_MISSING/)
   } finally {
     fx.cleanup()
   }
 })
 
-test('D28_Gate_DuplicateFinalResultFails_03', () => {
+test('D28_Gate_PlanCannotDowngradeMinimumLayer_03', () => {
   const fx = fixture()
   try {
+    const plan = structuredClone(fx.plan)
+    plan.targets[0].requirements.find(item => item.caseId === 'NATIVE-01').requiredLayers = ['C']
+    plan.planId = computeTargetPlanId(plan)
+    assert.throws(() => verify(fx, { plan }), /ACCEPTANCE_MINIMUM_LAYER_MISSING/)
+  } finally {
+    fx.cleanup()
+  }
+})
+
+test('D28_Gate_MissingRequiredLayerFails_04', () => {
+  const fx = fixture()
+  try {
+    const records = fx.records.filter(record =>
+      !(record.caseId === 'NATIVE-01' && record.evidenceLayer === 'D'))
+    assert.throws(() => verify(fx, { records }), /ACCEPTANCE_REQUIRED_LAYER_MISSING/)
+  } finally {
+    fx.cleanup()
+  }
+})
+
+test('D28_Gate_DuplicateFinalResultFails_05', () => {
+  const fx = fixture()
+  try {
+    const duplicate = { ...caseRecords(fx, 'NATIVE-64')[0], runId: 'duplicate' }
     assert.throws(
-      () => verify(fx, [...fx.records, { ...fx.records[0], runId: 'duplicate' }]),
+      () => verify(fx, { records: [...fx.records, duplicate] }),
       /ACCEPTANCE_DUPLICATE_RESULT/,
     )
   } finally {
@@ -158,46 +235,53 @@ test('D28_Gate_DuplicateFinalResultFails_03', () => {
   }
 })
 
-test('D28_Gate_FakeNaAndNaConflictFailClosed_04', () => {
+test('D28_Gate_FakeNaAndNaConflictFailClosed_06', () => {
   const fx = fixture()
   try {
+    const source = caseRecords(fx, 'NATIVE-64')[0]
     const fakeNa = {
-      ...fx.records[0],
+      ...source,
       status: 'N_A',
       nonApplicabilityReason: 'not supported by fixture version',
       nonApplicabilityEvidenceSha256: 'd'.repeat(64),
     }
-    assert.throws(() => verify(fx, [fakeNa]), /ACCEPTANCE_NA_EVIDENCE_MISMATCH/)
+    const without64 = fx.records.filter(record => record.caseId !== 'NATIVE-64')
+    assert.throws(
+      () => verify(fx, { records: [...without64, fakeNa] }),
+      /ACCEPTANCE_NA_EVIDENCE_MISMATCH/,
+    )
 
-    const evidenceSha = fx.records[0].evidence[0].sha256
     const justifiedNa = {
       ...fakeNa,
-      nonApplicabilityEvidenceSha256: evidenceSha,
+      nonApplicabilityEvidenceSha256: source.evidence[0].sha256,
     }
     assert.throws(
-      () => verify(fx, [justifiedNa, fx.records[1]]),
-      /ACCEPTANCE_NA_CONFLICT/,
+      () => verify(fx, { records: [...fx.records, justifiedNa] }),
+      /ACCEPTANCE_NA_CONFLICT|ACCEPTANCE_DUPLICATE_RESULT/,
     )
   } finally {
     fx.cleanup()
   }
 })
 
-test('D28_Gate_WrongEvidenceOrPackageHashFails_05', () => {
+test('D28_Gate_WrongEvidenceOrPackageHashFails_07', () => {
   const fx = fixture()
   try {
+    const badEvidence = fx.records.map(record =>
+      record.caseId === 'NATIVE-64'
+        ? { ...record, evidence: [{ ...record.evidence[0], sha256: 'e'.repeat(64) }] }
+        : record)
     assert.throws(
-      () => verify(fx, [
-        { ...fx.records[0], evidence: [{ path: 'a.json', sha256: 'e'.repeat(64) }] },
-        fx.records[1],
-      ]),
+      () => verify(fx, { records: badEvidence }),
       /ACCEPTANCE_EVIDENCE_HASH_MISMATCH/,
     )
+
+    const badPackage = fx.records.map(record =>
+      record.caseId === 'NATIVE-01' && record.evidenceLayer === 'D'
+        ? { ...record, deskPackageSha256: 'f'.repeat(64) }
+        : record)
     assert.throws(
-      () => verify(fx, [
-        fx.records[0],
-        { ...fx.records[1], deskPackageSha256: 'f'.repeat(64) },
-      ]),
+      () => verify(fx, { records: badPackage }),
       /ACCEPTANCE_PACKAGE_HASH_MISMATCH/,
     )
   } finally {
@@ -205,7 +289,7 @@ test('D28_Gate_WrongEvidenceOrPackageHashFails_05', () => {
   }
 })
 
-test('D28_Gate_CandidateMutationOrIdentityMismatchFails_06', () => {
+test('D28_Gate_CandidateMutationFails_08', () => {
   const fx = fixture()
   try {
     const win = fx.candidate.files.find(file => file.path.endsWith('.exe'))
@@ -216,15 +300,22 @@ test('D28_Gate_CandidateMutationOrIdentityMismatchFails_06', () => {
   }
 })
 
-test('D28_Gate_UnplannedLayerOrRecordFails_07', () => {
+test('D28_Gate_UnplannedLayerOrSubcaseFails_09', () => {
   const fx = fixture()
   try {
+    const source = caseRecords(fx, 'NATIVE-64')[0]
     assert.throws(
-      () => verify(fx, [...fx.records, { ...fx.records[0], runId: 'run-b', evidenceLayer: 'B' }]),
+      () => verify(fx, { records: [
+        ...fx.records,
+        { ...source, runId: 'run-extra-layer', evidenceLayer: 'B' },
+      ] }),
       /ACCEPTANCE_UNPLANNED_LAYER/,
     )
     assert.throws(
-      () => verify(fx, [{ ...fx.records[0], caseId: 'NATIVE-63' }, fx.records[1]]),
+      () => verify(fx, { records: [
+        ...fx.records,
+        { ...source, runId: 'run-extra-subcase', subcaseId: 'undeclared' },
+      ] }),
       /ACCEPTANCE_UNPLANNED_RECORD/,
     )
   } finally {
@@ -232,12 +323,16 @@ test('D28_Gate_UnplannedLayerOrRecordFails_07', () => {
   }
 })
 
-test('D28_Gate_PlanCannotSilentlyChangeWithoutNewPlanId_08', () => {
+test('D28_Gate_CatalogAndPlanIdentityCannotChangeSilently_10', () => {
   const fx = fixture()
   try {
-    const changed = structuredClone(fx.plan)
-    changed.targets[0].requirements[0].requiredLayers = ['A']
-    assert.throws(() => verify(fx, fx.records, changed), /ACCEPTANCE_PLAN_ID_MISMATCH/)
+    const plan = structuredClone(fx.plan)
+    plan.targets[0].requirements[0].requiredLayers.push('A')
+    assert.throws(() => verify(fx, { plan }), /ACCEPTANCE_PLAN_ID_MISMATCH/)
+
+    const catalog = structuredClone(fx.catalog)
+    catalog.policy.note = 'changed without catalog id'
+    assert.throws(() => verify(fx, { catalog }), /ACCEPTANCE_CATALOG_INVALID/)
   } finally {
     fx.cleanup()
   }
