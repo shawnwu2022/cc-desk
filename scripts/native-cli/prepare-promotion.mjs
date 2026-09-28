@@ -49,6 +49,7 @@ function ensureEmptyDirectory(path) {
 function validateAcceptance(acceptance, candidate) {
   if (!acceptance || acceptance.schemaVersion !== 1 || acceptance.status !== 'PASS'
     || acceptance.candidateId !== candidate.candidateId
+    || !SHA256.test(String(acceptance.catalogId ?? ''))
     || !SHA256.test(String(acceptance.planId ?? ''))
     || !Number.isSafeInteger(acceptance.targetCount) || acceptance.targetCount <= 0
     || !Number.isSafeInteger(acceptance.requirementCount) || acceptance.requirementCount <= 0
@@ -107,6 +108,7 @@ export function preparePromotion({
     sourceSha: candidate.sourceSha,
     version: candidate.version,
     tag,
+    acceptanceCatalogId: acceptance.catalogId,
     acceptancePlanId: acceptance.planId,
     files,
   }
