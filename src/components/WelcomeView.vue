@@ -8,17 +8,28 @@
           <path d="M2 12l10 5 10-5"/>
         </svg>
       </div>
-      <h1>{{ t('claudeCode') }}</h1>
-      <p class="subtitle">{{ t('aiPoweredAssistant') }}</p>
-      <button class="select-btn" @click="handleSelectProject">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-          <line x1="12" y1="11" x2="12" y2="17"/>
-          <line x1="9" y1="14" x2="15" y2="14"/>
-        </svg>
-        {{ t('selectProjectDir') }}
-      </button>
-      <p class="hint">{{ t('chooseDirHint') }}</p>
+      <h1>CC Desk</h1>
+      <p class="subtitle">{{ t('nativeWorkspaceSubtitle') }}</p>
+
+      <div class="welcome-actions">
+        <button class="select-btn" @click="emit('openNative')">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="2"/>
+            <path d="m7 9 3 3-3 3"/>
+            <line x1="13" y1="15" x2="17" y2="15"/>
+          </svg>
+          {{ t('openNativeCliWorkspace') }}
+        </button>
+        <p class="hint">{{ t('nativeWorkspaceHint') }}</p>
+
+        <button class="legacy-btn" @click="handleSelectProject">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          {{ t('openLegacyClaudeWorkspace') }}
+        </button>
+        <p class="legacy-hint">{{ t('legacyClaudeWorkspaceHint') }}</p>
+      </div>
     </div>
   </div>
 </template>
@@ -30,6 +41,7 @@ const { t } = useI18n()
 
 const emit = defineEmits<{
   selectProject: []
+  openNative: []
 }>()
 
 function handleSelectProject() {
@@ -47,7 +59,8 @@ function handleSelectProject() {
 
 .welcome-content {
   text-align: center;
-  max-width: 400px;
+  max-width: 460px;
+  padding: 24px;
 }
 
 .logo {
@@ -73,24 +86,32 @@ h1 {
   margin-bottom: 32px;
 }
 
-.select-btn {
+.welcome-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.select-btn,
+.legacy-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   padding: 12px 24px;
-  background: var(--accent-primary);
-  color: var(--text-inverse);
-  border: none;
   border-radius: var(--radius-lg);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
-  box-shadow: var(--shadow-md);
 }
 
-.select-btn svg {
-  flex-shrink: 0;
+.select-btn {
+  background: var(--accent-primary);
+  color: var(--text-inverse);
+  border: none;
+  box-shadow: var(--shadow-md);
 }
 
 .select-btn:hover {
@@ -99,14 +120,32 @@ h1 {
   box-shadow: var(--shadow-lg);
 }
 
-.select-btn:active {
+.select-btn:active,
+.legacy-btn:active {
   transform: translateY(0);
-  box-shadow: var(--shadow-sm);
 }
 
-.hint {
-  margin-top: 16px;
+.legacy-btn {
+  margin-top: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.legacy-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
+  background: var(--hover-bg);
+}
+
+.hint,
+.legacy-hint {
+  margin: 0;
   font-size: 12px;
   color: var(--text-tertiary);
+}
+
+.legacy-hint {
+  font-size: 11px;
 }
 </style>

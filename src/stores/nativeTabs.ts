@@ -29,6 +29,12 @@ export interface NativeCliTab {
   launchRevision: string | null
 }
 
+export interface NativeAttemptIdentity {
+  requestId: string
+  runId: string
+  generation: number
+}
+
 export interface NativeTabCreate {
   cli: NativeCliKind
   projectId: string
@@ -36,6 +42,28 @@ export interface NativeTabCreate {
   profileId: string
   profileRevision: string
   action: LaunchAction
+}
+
+export function captureNativeAttempt(
+  tab: Pick<NativeCliTab, 'requestId' | 'runId' | 'generation'>,
+): NativeAttemptIdentity {
+  return {
+    requestId: tab.requestId,
+    runId: tab.runId,
+    generation: tab.generation,
+  }
+}
+
+export function matchesNativeAttempt(
+  tab: Pick<NativeCliTab, 'requestId' | 'runId' | 'generation'> | undefined,
+  attempt: NativeAttemptIdentity,
+): boolean {
+  return Boolean(
+    tab
+    && tab.requestId === attempt.requestId
+    && tab.runId === attempt.runId
+    && tab.generation === attempt.generation,
+  )
 }
 
 function id(prefix: string): string {
@@ -168,12 +196,11 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
 
   function applyLaunchStatus(tabId: string, launch: LaunchStatus): boolean {
     const value = tabs.get(tabId)
-    if (!value) return false
-    if (
-      launch.requestId !== value.requestId
-      || launch.run.runId !== value.runId
-      || launch.run.generation !== value.generation
-    ) {
+    if (!value || !matchesNativeAttempt(value, {
+      requestId: launch.requestId,
+      runId: launch.run.runId,
+      generation: launch.run.generation,
+    })) {
       return false
     }
     const next = statusFromLaunch(launch)

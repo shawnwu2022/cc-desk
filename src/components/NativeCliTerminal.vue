@@ -24,7 +24,12 @@ import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop } from '@/api/tauri'
 import type { OutputFrame } from '@/types/terminal'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
-import { useNativeTabsStore } from '@/stores/nativeTabs'
+import {
+  captureNativeAttempt,
+  matchesNativeAttempt,
+  useNativeTabsStore,
+  type NativeAttemptIdentity,
+} from '@/stores/nativeTabs'
 
 const props = defineProps<{
   tabId: string
@@ -65,6 +70,14 @@ function currentTab() {
   return tab
 }
 
+function currentAttempt(): NativeAttemptIdentity {
+  return captureNativeAttempt(currentTab())
+}
+
+function attemptIsCurrent(attempt: NativeAttemptIdentity): boolean {
+  return matchesNativeAttempt(tabs.tab(props.tabId), attempt)
+}
+
 function safeLaunchCode(error: unknown): string {
   return publicNativeErrorCode(error, 'NATIVE_LAUNCH_FAILED')
 }
@@ -93,9 +106,10 @@ function disposeRunBinding() {
   binding = null
 }
 
-function markInputFailure() {
-  const tab = tabs.tab(props.tabId)
-  if (tab) tabs.setDiagnostic(props.tabId, 'NATIVE_INPUT_PAUSED')
+function markInputFailure(attempt: NativeAttemptIdentity) {
+  if (attemptIsCurrent(attempt)) {
+    tabs.setDiagnostic(props.tabId, 'NATIVE_INPUT_PAUSED')
+  }
 }
 
 function bindClipboard() {
@@ -114,11 +128,12 @@ function bindClipboard() {
 
     event.preventDefault()
     event.stopPropagation()
+    const attempt = currentAttempt()
 
     if (snapshot.kind === 'image') {
       // Positive image MIME evidence preserves the CLI's native image-paste
       // shortcut. Route the key bytes through the same ordered native writer.
-      void binding.sendUserText(imagePasteBytes(platform)).catch(markInputFailure)
+      void binding.sendUserText(imagePasteBytes(platform)).catch(() => markInputFailure(attempt))
       return
     }
 
@@ -130,7 +145,7 @@ function bindClipboard() {
     if (!payload) return
     const bytes = new TextEncoder().encode(payload)
     const reserved = binding.reserveUserPaste(async () => bytes)
-    void reserved.settled.catch(markInputFailure)
+    void reserved.settled.catch(() => markInputFailure(attempt))
   }
   host.addEventListener('paste', pasteListener, true)
 }
@@ -149,7 +164,10 @@ function bindImeFallback() {
       composed: value.composed,
       data: value.data,
     })
-    if (text && binding) void binding.sendUserText(text).catch(markInputFailure)
+    if (text && binding) {
+      const attempt = currentAttempt()
+      void binding.sendUserText(text).catch(() => markInputFailure(attempt))
+    }
   }
   const xtermData = term.onData(() => policy.xtermData())
 
@@ -281,15 +299,17 @@ async function start(): Promise<void> {
 }
 
 async function recover(): Promise<void> {
-  const tab = currentTab()
+  const attempt = currentAttempt()
   try {
-    const result = await entry.recover(tab.requestId)
-    tabs.applyLaunchStatus(props.tabId, result)
+    const result = await entry.recover(attempt.requestId)
+    if (!attemptIsCurrent(attempt)) return
+    if (!tabs.applyLaunchStatus(props.tabId, result)) return
     launched = result.phase === 'running' || result.phase === 'starting'
     inputEnabled = launched
     if (!launched) stopStatusSync()
     else if (props.active && !statusTimer && !statusSyncInFlight) startStatusSync()
   } catch (error) {
+    if (!attemptIsCurrent(attempt)) return
     const code = safeLaunchCode(error)
     launched = false
     inputEnabled = false
@@ -319,10 +339,13 @@ function startStatusSync() {
 
 async function stop(): Promise<void> {
   const tab = currentTab()
+  const attempt = captureNativeAttempt(tab)
   try {
     await cliStop({ runId: tab.runId, generation: tab.generation })
+    if (!attemptIsCurrent(attempt)) return
     await recover()
   } catch (error) {
+    if (!attemptIsCurrent(attempt)) return
     tabs.setDiagnostic(props.tabId, safeLaunchCode(error))
     throw error
   }

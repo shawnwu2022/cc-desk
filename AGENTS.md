@@ -1,34 +1,36 @@
 # CC Desk
 
-针对 Claude Code 开发的多终端管理器，用 Tauri 2 + Vue 3 + xterm.js + portable-pty 直连 Claude CLI，在原生终端体验基础上增加外围功能和信息呈现。
+> **当前架构权威入口**：[docs/native-cli-v3.md](docs/native-cli-v3.md)。Native CLI v3 代码侧已完成到 D27；D20 真实 Claude Code / Codex CLI Layer-C 认证仍需授权目标环境。Provider 管理、bundled CLI installer、独立 MCP runtime 等旧文档口径均已废弃。
+
+面向 Claude Code 与 Codex CLI 的多项目、多会话桌面工作台。Tauri 2 + Vue 3 + xterm.js + Rust 负责宿主、终端与运行生命周期，真实 CLI 继续负责交互语义。
 
 ## 核心思想
 
-**面向 Claude Code 重度用户的多会话管理器。GUI 做增强不做替代，让 CLI 做不好的事变得容易。**
+**面向 Claude Code / Codex CLI 重度用户的多会话工作台。GUI 做宿主增强，不重做 CLI 已经拥有的能力。**
 
 ### 产品定位
 
-- **面向谁**：已熟练使用 Claude Code CLI 的开发者，尤其是需要同时管理多个会话、多个项目的重度用户
+- **面向谁**：已熟练使用 Claude Code、Codex CLI 或两者的开发者，尤其是需要同时管理多个会话、多个项目的重度用户
 - **解决什么问题**：CLI 在单会话交互上已经足够好，但在多会话并行、信息总览、跨会话状态追踪上力不从心
 - **核心价值**：
-  1. **多会话并行管理** — 一个窗口内同时运行多个 Claude 会话，快速切换、互不干扰
+  1. **多会话并行管理** — 一个窗口内同时运行多个 Claude/Codex 会话，快速切换、互不干扰
   2. **信息可视化增强** — MCP 工具详情等 CLI 不方便展示的信息，通过侧边栏面板呈现
   3. **工作流加速** — 快捷命令、prompt 片段、项目预设等 CLI 之外的外围辅助
 
 ### 设计原则
 
-- **CLI 优先，GUI 增强** — 直接运行 Claude CLI 二进制文件，输入行为与原生终端完全一致；GUI 只做 CLI 做不好或做起来不方便的事
-- **轻量透明** — JSON 文件存储，不引入数据库/路由/状态机；原生会话与历史数据只读，Provider 仅在用户明确激活时合并 `~/.claude/settings.json`，GUI 配置独立保存在 `~/.cc-box/config.json`
+- **CLI 优先，GUI 增强** — Native CLI v3 直接运行真实 Claude Code / Codex CLI；GUI 负责宿主能力，交互语义仍归 CLI
+- **轻量透明** — 原生 CLI 资源默认只读投影；Native workspace 使用独立 revision/CAS 存储，兼容旧 `~/.cc-box/` 数据但不让旧状态覆盖新状态
 - **功能边界** — CLI 里已经很好用的功能（对话交互、slash 命令、快捷键、模型切换），不在 GUI 里重复实现；GUI 专注于管理、可视化、辅助三类增强
-- **可逆性** — 用户可随时回到纯 CLI；仅在显式激活 Provider 时合并其 env/model 字段，停用或切换可恢复，且不覆盖其他 Claude Code 配置
-- **最小依赖** — 完全兼容 Claude Code 任何更新，无需适配 SDK API；新功能通过读取原生配置文件和 CLI 命令获取
+- **可逆性** — 用户可随时回到纯 CLI；CC Desk 不拥有 Provider/API Key 配置，不把 native resource projection 变成第二个配置写入器
+- **最小依赖** — 不依赖 Claude/Codex 内部 SDK；版本相关能力必须通过真实 CLI/公开契约验证，不能把宿主测试冒充真实 CLI 认证
 
 ### 不做什么
 
 - 不做 AI 补全/输入建议（CLI 已有）
 - 不做 slash 命令的 GUI 封装（CLI 已有）
 - 不做对话消息的结构化展示（终端原生渲染足够好）
-- 不做通用 Claude Code 配置编辑器（Provider 激活只管理其负责的 env/model 字段，其余配置由 CLI/settings.json 完成）
+- 不做 Provider/API Key 管理，也不做通用 native CLI 配置写入器；配置切换交给 CLI 或 cc-switch 等外部工具
 - 不做独立的 prompt 管理系统（CLI 的 /memory 和 AGENTS.md 已覆盖）
 
 ## 技术栈
@@ -37,71 +39,65 @@ Tauri 2.x (Rust) + Vue 3 + TypeScript + Vite + xterm.js + portable-pty + Pinia +
 
 ## 项目架构
 
-```
+> Native CLI v3 的权威边界见 [docs/native-cli-v3.md](docs/native-cli-v3.md)。旧 Claude workspace 仅用于兼容；新的双 CLI 功能不得借道旧 PTY/API。
+
+```text
 cc-desk/
-├── src-tauri/                  # Rust 后端
-│   ├── src/
-│   │   ├── main.rs             # 入口
-│   │   ├── lib.rs              # 初始化、插件注册、Command 注册
-│   │   ├── pty.rs              # PTY 管理（portable-pty 封装）
-│   │   ├── commands.rs         # Tauri IPC 命令
-│   │   ├── store.rs            # Claude Code 原生数据读取
-│   │   ├── providers.rs        # **Provider 管理**（存储、合并、激活、cc-switch 导入）
-│   │   ├── mcp.rs              # MCP 协议客户端（HTTP/SSE + stdio）
-│   │   ├── hook_events.rs      # Hook 事件数据结构与提取
-│   │   ├── hook_server.rs      # Hook HTTP 服务器（接收 Claude Code 运行时事件）
-│   │   ├── hook_config.rs      # Hook Plugin 文件管理
-│   │   ├── checks.rs           # 环境检查
-│   │   ├── logger.rs           # 日志系统（FileLogger、文件轮转）
-│   │   └── updater.rs          # 自动更新（GitHub Releases）
-│   ├── plugin/                 # Claude Code Plugin 文件（编译时嵌入）
-│   ├── capabilities/           # Tauri 权限配置
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-│
-├── src/                        # Vue 3 前端
+├── src-tauri/src/
+│   ├── cli/                    # Native CLI 核心：workspace/profile/document/launch/projection
+│   ├── terminal_input.rs       # 有序、分段、no-replay 输入
+│   ├── terminal_transport.rs   # 有界输出、offset/ACK、全局预算
+│   ├── run_supervisor.rs       # owned run 生命周期
+│   ├── observer_*.rs           # 可选 observer 隔离
+│   ├── pty.rs                  # legacy Claude PTY 兼容路径
+│   ├── checks.rs               # legacy 启动环境检查
+│   └── store.rs                # legacy Claude 数据读取
+├── src/
+│   ├── components/
+│   │   ├── NativeCliWorkbench.vue
+│   │   ├── NativeCliTerminal.vue
+│   │   ├── TerminalView.vue    # legacy Claude workspace
+│   │   └── XTermTerminal.vue   # legacy terminal
+│   ├── stores/
+│   │   ├── nativeWorkbench.ts
+│   │   ├── nativeTabs.ts
+│   │   ├── cliProfiles.ts
+│   │   └── cliWorkspace.ts
 │   ├── api/
-│   │   ├── tauri.ts            # Tauri invoke/listen 封装
-│   │   └── provider.ts         # **Provider API**（Tauri invoke 封装）
-│   ├── components/             # UI 组件
-│   │   ├── App.vue             # 视图切换 + 环境检查
-│   │   ├── TitleBar.vue        # 自定义标题栏（Windows）
-│   │   ├── WelcomeView.vue     # 欢迎页
-│   │   ├── ProjectSelectView.vue # 项目选择页
-│   │   ├── TerminalView.vue    # 终端主视图容器
-│   │   ├── XTermTerminal.vue   # xterm.js 终端核心（终端主题独立于 GUI 浅/暗）
-│   │   ├── TerminalHeader.vue  # 终端标题栏
-│   │   ├── IconBar.vue         # 左侧图标栏
-│   │   ├── ShortcutsModal.vue  # 快捷键弹窗
-│   │   ├── sessions/           # 会话面板（SessionsPanel 组装 ProjectNode 全局树 > SessionItem > SessionStatus）
-│   │   ├── skills/             # Skills 面板（SkillsPanel > SkillGroup > SkillItem）
-│   │   ├── agents/             # Agents 面板（AgentsPanel > AgentGroup > AgentItem）
-│   │   ├── mcp/                # MCP 面板（McpPanel > McpGroup > McpSubItem）
-│   │   ├── plugins/            # Plugins 面板（PluginsPanel > PluginGroup > PluginItem）
-│   │   ├── sidebar/            # 侧边栏容器（SidebarPanel > PanelHeader）
-│   │   └── settings/           # 设置（SettingsOverlay > SettingsView + sections/）
-│   │       └── providers/      # **Provider 组件**（ProviderList > ProviderCard、EditPanel、PresetPanel、CommonConfigPanel）
-│   ├── config/
-│   │   └── providerPresets.ts  # **Provider 预设模板**（50+ 厂商）
-│   ├── stores/                 # Pinia：app、session、sidebar、config、hook、providers
-│   ├── types/                  # TypeScript 类型定义（pty、session、project、config、app、hook、provider）
-│   ├── composables/            # useAppShortcuts、useTerminalCommand、useStatusMonitor、useWindowAttention、useProjectTreeNavigation（resolveSwitchAction 切换语义纯函数）
-│   ├── utils/                  # platform 工具
-│   └── styles/global.css       # CSS 变量与全局样式
-│
-├── docs/                       # 详细文档
-├── package.json
-└── vite.config.ts
+│   │   ├── cli.ts
+│   │   ├── nativeProjection.ts
+│   │   └── tauri.ts
+│   └── terminal/               # native host protocol / input queue / binding
+├── tests/native-cli/           # Native CLI host/unit regression
+├── docs/superpowers/execution/ # Dxx 执行账本
+└── docs/native-cli-v3.md       # 当前架构权威说明
 ```
 
 ## 核心数据流
 
-```
-xterm.js ←→ Tauri invoke/listen ←→ pty.rs (Rust) ←→ portable-pty ←→ Claude CLI
+### Native CLI v3（forward path）
+
+```text
+NativeCliTerminal
+  ↕ authenticated document bridge
+cli launch / terminal_input / terminal_transport
+  ↕ owned PTY
+Claude Code | Codex CLI
 ```
 
-- 用户输入 → `onData` → `invoke('pty_input')` → PTY writer → Claude CLI
-- CLI 输出 → PTY reader → `decode_output()`（UTF-8 优先，失败回退 GBK，兼容 Windows 中文子进程）→ `emit('pty-output')` → `term.write()` → xterm.js
+- launch 绑定 cli/project/profile revision/request/run/generation/action；
+- input 使用有序 intent + authenticated staged writer，partial/unknown 不重放；
+- output 使用 bounded stream + exact ACK，错 owner/generation/stream 一律拒绝；
+- resource projection 使用 backend-held scope，前端 path/opaque id 本身不构成授权；
+- Native UI 不得 fallback 到 legacy `ptySpawn` / `ptyInput` / `ptyKill`。
+
+### Legacy Claude workspace（compatibility path）
+
+```text
+XTermTerminal ←→ legacy Tauri IPC ←→ pty.rs ←→ Claude Code
+```
+
+Legacy 路径继续维护兼容性，但不是新的双 CLI 架构扩展点。
 
 ### Hook 监控数据流
 
@@ -172,16 +168,16 @@ npm run tauri:build        # 生产构建
 - **GitHub**：`https://github.com/shawnwu2022/cc-desk`
 - 项目源自 `orczh-hj/cc-box`，现按独立产品方向维护；来源与版权说明见 `NOTICE.md`
 - `~/.cc-box/`、`CC_BOX_*` 与 `cc-box-light` / `cc-box-dark` 暂作为兼容标识保留，避免旧用户配置和插件协议失效
-- 发布默认只面向 CC Desk 的 GitHub Releases，不再自动同步或发布到原项目的 Gitee / OSS 渠道
-- 首次发布前必须换用 CC Desk 自有 Tauri updater 密钥；私钥只存 GitHub Secrets，禁止提交到仓库
-### 版本发布（main 驱动）
+- 当前只产出 CC Desk signed candidate artifacts；公开 GitHub Release/updater promotion 仍禁用，不得借 Gitee/OSS 绕过
+- signed candidate 使用 CC Desk 自有 Tauri signing secret；私钥只存 GitHub Secrets，禁止提交到仓库、日志或支持包
+### 版本/发布边界（当前：signed candidates only）
 
-1. 同步更新 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/tauri.conf.json` 和 `CHANGELOG.md`。
-2. 通过 PR 合入 `main`，并等待前端与 Rust CI 全部通过。
-3. `package.json` 变更触发 `.github/workflows/release.yml`：工作流从版本号解析唯一标签，将标签显式传给 updater manifest 生成器，构建签名产物并发布为 GitHub Latest Release。
-4. 发布完成后必须验证 GitHub `releases/latest` 指向本次标签、`latest.json.version` 与本次版本一致，并逐个请求 manifest 内的平台资产链接。
-
-禁止在较新版本发布后再发布旧草稿；旧 Release 会抢占 Latest 更新入口。`npm run release -- --oss-only <ver>` 仅用于维护者自行配置的可选 OSS 镜像，不属于默认发布链。
+- 普通开发 PR 只跑验证，不做版本 bump/tag/release。
+- `.github/workflows/release.yml` 当前只构建并上传 signed candidate artifacts。
+- `scripts/release-policy.mjs` 必须保持 fail-closed（`mayPublish() === false`）。
+- 不得因为 CI 全绿就恢复 GitHub Release/updater 发布路径。
+- 真实 Claude Code / Codex CLI Layer-C 证据属于 D20，和普通代码 CI 分层记录。
+- 公开发布必须另行设计显式 promotion：绑定不可变候选产物、真实 CLI 证据、审批与回滚。
 
 详细流程 → [docs/release-process.md](docs/release-process.md)
 
@@ -191,10 +187,9 @@ npm run tauri:build        # 生产构建
 |--------------------------------------------------------------|-------------------------------------------------------|
 | [docs/测试编写原则.md](docs/测试编写原则.md)   | 项目如何编写测试                                              |
 | [docs/manual-test-cases.md](docs/manual-test-cases.md)   | **手动测试条目**：自动化无法覆盖的 UI 交互与端到端测试                  |
+| [docs/native-cli-v3.md](docs/native-cli-v3.md)               | **Native CLI v3 权威架构**：双 CLI、鉴权、输入输出、证据与发布边界        |
 | [docs/terminal-integration.md](docs/terminal-integration.md) | 终端集成架构、PTY 生命周期、IPC 命令与事件对照                           |
 | [docs/hook-monitor.md](docs/hook-monitor.md)                 | **Hook 监控系统**：Plugin 注入、事件采集、状态机、多终端区分                |
-| [docs/provider-management.md](docs/provider-management.md)   | **Provider 管理**：数据结构、激活流程、通用配置合并、CRUD、cc-switch 导入    |
-| [docs/provider-test-cases.md](docs/provider-test-cases.md)   | **Provider 测试条目**：9 大类 80+ 测试用例，覆盖 CRUD、激活合并、导入、UI 交互 |
 | [docs/layout-design.md](docs/layout-design.md)               | 布局设计、窗口结构、色彩系统、排版规范                                   |
 | [docs/components.md](docs/components.md)                     | 组件树、各组件职责与 props/events、Store 结构                      |
 | [docs/interaction.md](docs/interaction.md)                   | **快捷键处理架构**、三场景输入处理、DOM 捕获期监听                         |
@@ -204,7 +199,7 @@ npm run tauri:build        # 生产构建
 | [docs/startup-checks.md](docs/startup-checks.md)             | 启动先决条件检查、路径检测与自动保存                                    |
 | [docs/roadmap.md](docs/roadmap.md)                           | 开发路线图、进度跟踪、待办事项                                       |
 | [docs/logging.md](docs/logging.md)                           | 日志文件路径、级别策略、轮转与清理机制                                   |
-| [docs/release-process.md](docs/release-process.md)           | 版本号管理、本地打包、CI/CD 发布、签名与分发                             |
+| [docs/release-process.md](docs/release-process.md)           | signed candidate、D20/promotion gate、签名与未来发布边界                 |
 
 外部参考：[Claude Code 线上文档](https://code.claude.com/docs/llms.txt)
 
@@ -278,7 +273,7 @@ npm run tauri:build        # 生产构建
 - New native reads go through `native_get_scope` / `native_list_resources`, D11 document admission, and `cli/native_projection` held directory capabilities. A frontend path/owner or an opaque scope ID alone never authorizes a read.
 - `SourceRef.basis` is an observation source, not effective CLI state. Keep shell/raw/unknown-argument roots unknown. Never authorize transcript cwd or plugin install paths outside a granted root.
 - Return only the kind-specific projection DTO; do not add raw config/env/argv/headers to resource items or error logs. Scan failure must not remove registered projects.
-- Existing Claude UI is legacy-only until D22-D24. New dual-CLI code must use the authenticated API/store and must not fall back to legacy root/delete commands.
+- D22-D24 已完成 Native Claude/Codex UI adoption。新的双 CLI 代码必须继续使用 authenticated API/store，不得 fallback 到 legacy root/delete/PTY commands。
 - Run the committed `tests/native-cli/scope-core` harness (actual production sources), frontend tests/build, and Windows production/live WebView tests. Headless core success is not real CLI or package certification.
 
 ### D13 observer isolation
@@ -287,5 +282,5 @@ npm run tauri:build        # 生产构建
 - The native reservation winner adds verified observer plugin assets and a fresh capability to the frozen launch only when enabled. New profiles default off; raw/Codex/Shell never receive the Claude overlay. Strip only Desk capability environment names from ambient inputs, never user API credentials.
 - Observer leases follow exact run/document lifetime, never own process control. Dropping/invalidating a lease cannot kill or restart a CLI. The `NATIVE_RUNTIME_NOT_READY` gate is unchanged.
 - Only bounded allowlisted metadata reaches the owner WebView; prompt/assistant/error/env bodies and capabilities are not published. No sequence is invented for parallel Claude hooks: activity remains unknown even while the process runs.
-- New UI consumers use exact-run `subscribeObservation(target, handler)` and its projected state, not raw event kind as a current activity claim. The native and legacy event topics are separate. Full dual-CLI UI adoption remains D22-D24.
+- New UI consumers use exact-run `subscribeObservation(target, handler)` and its projected state, not raw event kind as a current activity claim. Native 与 legacy event topic 分离；D22-D24 的双 CLI UI adoption 已完成。
 - Verification, recovery history and limitations: `docs/superpowers/execution/D13.md`; final-head CI evidence belongs in PR #20.

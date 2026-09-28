@@ -83,4 +83,85 @@ describe('CC Desk product boundary', () => {
     expect(commands).not.toContain('commands::get_mcp_server_detail')
     expect(existsSync('src-tauri/src/mcp.rs')).toBe(false)
   })
+
+  test('native dual-CLI workspace remains a first-class product entry', () => {
+    const app = read('src/App.vue')
+    const welcome = read('src/components/WelcomeView.vue')
+    expect(app).toContain('@open-native="openNativeWorkbench"')
+    expect(welcome).toContain("openNative: []")
+    expect(welcome).toContain("t('openNativeCliWorkspace')")
+    expect(welcome).toContain("t('openLegacyClaudeWorkspace')")
+
+    for (const path of [
+      'README.md',
+      'README_CN.md',
+      'PRODUCT.md',
+      'docs/roadmap.md',
+      'docs/vision.md',
+      'docs/native-cli-v3.md',
+    ]) {
+      const document = read(path)
+      expect(document).toContain('Claude Code')
+      expect(document).toContain('Codex CLI')
+      expect(document).not.toContain('src-tauri/src/providers.rs')
+      expect(document).not.toContain('src/api/provider.ts')
+    }
+  })
+
+  test('release documentation matches the enforced candidate-only policy', () => {
+    const release = read('.github/workflows/release.yml')
+    const policy = read('scripts/release-policy.mjs')
+    const docs = read('docs/release-process.md')
+    expect(policy).toContain('return false')
+    expect(release).toContain('Upload candidate artifacts')
+    expect(release).not.toContain('softprops/action-gh-release')
+    expect(release).not.toContain('contents: write')
+    expect(docs).toContain('signed candidates only')
+    expect(docs).toContain('publishing stays disabled')
+  })
+  test('package and installer metadata describe the dual-CLI product', () => {
+    const packageJson = JSON.parse(read('package.json')) as {
+      description?: string
+      keywords?: string[]
+    }
+    const tauri = read('src-tauri/tauri.conf.json')
+    expect(packageJson.description).toContain('Claude Code and Codex CLI')
+    expect(packageJson.keywords).toContain('codex-cli')
+    expect(tauri).toContain('Claude Code and Codex CLI')
+  })
+
+  test('native workbench user-facing controls stay localized', () => {
+    const workbench = read('src/components/NativeCliWorkbench.vue')
+    const english = read('src/i18n/locales/en.ts')
+    const chinese = read('src/i18n/locales/zh.ts')
+    expect(workbench).toContain("useI18n")
+    expect(workbench).toContain("t('nativeSelectProject')")
+    expect(workbench).toContain("t('nativeResumePicker')")
+    expect(workbench).toContain("nativeStatusLabel(tab.status)")
+    expect(workbench).toContain("nativeResourceLabel(kind)")
+
+    for (const key of [
+      'nativeCreateCodexProfile',
+      'nativeCreateClaudeProfile',
+      'nativeSelectProject',
+      'nativeNewSession',
+      'nativeResumePicker',
+      'nativeWorkspaceLoading',
+      'nativeRecover',
+      'nativeStop',
+      'nativeRestart',
+      'nativeResources',
+      'nativeStatusRunning',
+      'nativeResource_history',
+    ]) {
+      expect(english).toContain(`${key}:`)
+      expect(chinese).toContain(`${key}:`)
+    }
+
+    const about = read('src/components/settings/sections/AboutSection.vue')
+    expect(about).toContain('developers.openai.com/learn/codex')
+    expect(english).toContain("codexDocs:")
+    expect(chinese).toContain("codexDocs:")
+  })
+
 })

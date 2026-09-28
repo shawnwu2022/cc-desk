@@ -2,13 +2,14 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   certifyCliComparison,
   validateRealCliRun,
@@ -78,6 +79,45 @@ function realContained(root, candidate) {
   }
 }
 
+function sameExistingPath(left, right) {
+  try {
+    return realpathSync(left) === realpathSync(right)
+  } catch {
+    return false
+  }
+}
+
+function fileSha256(path) {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex')
+  } catch {
+    return null
+  }
+}
+
+function ensureContainedDirectory(root, directory) {
+  const lexicalRoot = resolve(root)
+  const lexicalDirectory = resolve(directory)
+  if (!contained(lexicalRoot, lexicalDirectory)) return false
+
+  const rel = relative(lexicalRoot, lexicalDirectory)
+  let current = realpathSync(lexicalRoot)
+  if (rel === '') return lstatSync(current).isDirectory()
+
+  for (const segment of rel.split(sep).filter(Boolean)) {
+    const next = join(current, segment)
+    if (existsSync(next)) {
+      const metadata = lstatSync(next)
+      if (metadata.isSymbolicLink() || !metadata.isDirectory()) return false
+    } else {
+      mkdirSync(next, { mode: 0o700 })
+    }
+    if (!realContained(root, next)) return false
+    current = next
+  }
+  return true
+}
+
 export function safeD20HostEnvironment(hostEnv) {
   const source = isObject(hostEnv) ? hostEnv : {}
   const out = {}
@@ -138,12 +178,17 @@ function driverCommand(path) {
   return { command: path, prefix: [] }
 }
 
-function writeRunFixture(run) {
-  mkdirSync(run.configRoot, { recursive: true, mode: 0o700 })
-  mkdirSync(run.env.HOME, { recursive: true, mode: 0o700 })
-  mkdirSync(run.projectRoot, { recursive: true, mode: 0o700 })
+function prepareRunFixture(run) {
+  try {
+    if (![run.runRoot, run.configRoot, run.env.HOME, run.projectRoot]
+      .every(path => ensureContainedDirectory(run.testRoot, path))) {
+      return 'REAL_CLI_RUN_ROOT_NOT_ISOLATED'
+    }
+  } catch {
+    return 'REAL_CLI_RUN_ROOT_UNAVAILABLE'
+  }
   if (existsSync(run.fixturePath) || existsSync(run.reportPath)) {
-    return false
+    return 'REAL_CLI_RUN_ROOT_NOT_FRESH'
   }
   try {
     writeFileSync(
@@ -151,10 +196,13 @@ function writeRunFixture(run) {
       JSON.stringify(run.fixture),
       { encoding: 'utf8', flag: 'wx', mode: 0o600 },
     )
-    return true
   } catch {
-    return false
+    return 'REAL_CLI_RUN_ROOT_NOT_FRESH'
   }
+  if (!realContained(run.testRoot, run.fixturePath)) {
+    return 'REAL_CLI_RUN_ROOT_NOT_ISOLATED'
+  }
+  return null
 }
 
 function readEvidence(path) {
@@ -179,6 +227,29 @@ function recordMatchesCell(record, plan, run) {
   if (!isObject(record) || record.runId !== run.runId) return false
   if (record.status === 'BLOCKED') return record.cli === plan.cli
   return record.lane === run.lane && record.observer === run.observer
+}
+
+function recordPlanMismatch(record, plan, run) {
+  if (record.status !== 'PASS') return null
+  if (record.target?.cli?.kind !== plan.cli) {
+    return 'REAL_CLI_RECORD_CLI_MISMATCH'
+  }
+  const fixture = record.fixture
+  const expected = run.fixture
+  if (
+    !isObject(fixture)
+    || fixture.fixtureSha256 !== expected.fixtureSha256
+    || fixture.nonce !== expected.nonce
+    || fixture.originalText !== expected.originalText
+    || fixture.hostPayloadBase64 !== expected.hostPayloadBase64
+    || fixture.transformId !== expected.transformId
+  ) {
+    return 'REAL_CLI_RECORD_FIXTURE_MISMATCH'
+  }
+  if (!sameExistingPath(record.oracle?.cwd, run.projectRoot)) {
+    return 'REAL_CLI_RECORD_CWD_MISMATCH'
+  }
+  return null
 }
 
 export function prepareD20Matrix(config) {
@@ -330,23 +401,31 @@ export function executeD20Matrix(plan, options = {}) {
   if (!realContained(plan.testRoot, first.binaryPath)) {
     return executionBlocked(plan.cli, 'REAL_CLI_BINARY_NOT_ISOLATED')
   }
-
-  let actualBinarySha256
-  try {
-    actualBinarySha256 = createHash('sha256')
-      .update(readFileSync(first.binaryPath))
-      .digest('hex')
-  } catch {
+  const actualBinaryPath = realpathSync(first.binaryPath)
+  const actualBinarySha256 = fileSha256(actualBinaryPath)
+  if (!actualBinarySha256) {
     return executionBlocked(plan.cli, 'REAL_CLI_BINARY_UNAVAILABLE')
   }
 
+  const driverHashes = new Map()
   for (const run of plan.runs) {
+    if (!regularFile(run.binaryPath)) {
+      return executionBlocked(plan.cli, 'REAL_CLI_BINARY_UNAVAILABLE')
+    }
+    if (!realContained(plan.testRoot, run.binaryPath)
+      || !sameExistingPath(actualBinaryPath, run.binaryPath)) {
+      return executionBlocked(plan.cli, 'REAL_CLI_BINARY_NOT_ISOLATED')
+    }
     if (!regularFile(run.driverPath)) {
       return executionBlocked(plan.cli, 'REAL_CLI_DRIVER_UNAVAILABLE')
     }
     if (!realContained(plan.testRoot, run.driverPath)) {
       return executionBlocked(plan.cli, 'REAL_CLI_DRIVER_NOT_ISOLATED')
     }
+    const path = realpathSync(run.driverPath)
+    const hash = fileSha256(path)
+    if (!hash) return executionBlocked(plan.cli, 'REAL_CLI_DRIVER_UNAVAILABLE')
+    driverHashes.set(path, hash)
   }
 
   const timeoutMs = Number.isInteger(options.timeoutMs)
@@ -358,8 +437,17 @@ export function executeD20Matrix(plan, options = {}) {
   const records = []
   const recordPaths = []
   for (const run of plan.runs) {
-    if (!writeRunFixture(run)) {
-      return executionFailure('REAL_CLI_RUN_ROOT_NOT_FRESH', run.runId)
+    const fixtureError = prepareRunFixture(run)
+    if (fixtureError) {
+      return executionFailure(fixtureError, run.runId)
+    }
+
+    const driverPath = realpathSync(run.driverPath)
+    if (fileSha256(actualBinaryPath) !== actualBinarySha256) {
+      return executionFailure('REAL_CLI_BINARY_CHANGED', run.runId)
+    }
+    if (fileSha256(driverPath) !== driverHashes.get(driverPath)) {
+      return executionFailure('REAL_CLI_DRIVER_CHANGED', run.runId)
     }
 
     const driver = driverCommand(run.driverPath)
@@ -384,11 +472,20 @@ export function executeD20Matrix(plan, options = {}) {
       },
     )
 
+    if (fileSha256(actualBinaryPath) !== actualBinarySha256) {
+      return executionFailure('REAL_CLI_BINARY_CHANGED', run.runId)
+    }
+    if (fileSha256(driverPath) !== driverHashes.get(driverPath)) {
+      return executionFailure('REAL_CLI_DRIVER_CHANGED', run.runId)
+    }
     if (result.stdout !== '') {
       return executionFailure('REAL_CLI_DRIVER_STDOUT_FORBIDDEN', run.runId)
     }
     if (result.error || result.signal || result.status !== 0) {
       return executionFailure('REAL_CLI_DRIVER_FAILED', run.runId)
+    }
+    if (existsSync(run.reportPath) && !realContained(plan.testRoot, run.reportPath)) {
+      return executionFailure('REAL_CLI_REPORT_NOT_ISOLATED', run.runId)
     }
 
     const evidence = readEvidence(run.reportPath)
@@ -405,6 +502,10 @@ export function executeD20Matrix(plan, options = {}) {
         `INVALID_REAL_CLI_EVIDENCE:${validation.reason}`,
         run.runId,
       )
+    }
+    const mismatch = recordPlanMismatch(record, plan, run)
+    if (mismatch) {
+      return executionFailure(mismatch, run.runId)
     }
     if (
       record.status === 'PASS'

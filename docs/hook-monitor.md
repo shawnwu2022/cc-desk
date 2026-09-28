@@ -1,5 +1,8 @@
 # Hook 监控系统
 
+> **Native CLI v3 边界**：本页主要描述 legacy Claude hook 机制。Native CLI v3 的 observer 是可选、鉴权、按 run/document 生命周期绑定的元数据旁路；仅 Claude profile 在明确启用时注入，Codex/raw/shell 不注入。observer 不拥有进程控制，失败不能 kill/restart/retry CLI。Native 权威边界见 [native-cli-v3.md](native-cli-v3.md)。
+
+
 通过 Claude Code Plugin 机制注入 Hook，实时采集 Claude 运行时状态，经 HTTP 发送到 CC Desk 后端，再推送到前端展示。
 
 ## 设计理念

@@ -28,6 +28,13 @@
         </div>
         <span class="link-arrow">→</span>
       </a>
+      <a class="about-link" @click="openExternal('https://developers.openai.com/learn/codex')">
+        <div class="link-content">
+          <span class="link-title">{{ t('codexDocs') }}</span>
+          <span class="link-url">developers.openai.com/learn/codex</span>
+        </div>
+        <span class="link-arrow">→</span>
+      </a>
     </div>
   </div>
 </template>

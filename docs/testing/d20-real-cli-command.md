@@ -1,6 +1,6 @@
 # D20 target-machine real CLI certification command
 
-Status: **execution harness ready; real Claude Code / Codex Layer-C evidence is still NOT_RUN until a target machine supplies the actual binaries, real lane drivers and an explicitly authorized test account.**
+Status: **the execution harness is ready; real Claude Code / Codex CLI Layer-C evidence remains BLOCKED until an authorized target environment supplies the actual binaries, real lane drivers and a dedicated test account.**
 
 ## Entry point
 
@@ -16,17 +16,17 @@ Optional per-cell timeout:
 --timeout-ms <1..900000>
 ```
 
-Exit codes are stable:
+Stable exit codes:
 
-- `0`: both Claude Code and Codex certified PASS;
-- `1`: FAIL, including malformed command configuration or invalid/forged evidence;
-- `2`: BLOCKED because required real-target evidence is unavailable.
+- `0`: both Claude Code and Codex independently PASS all required cells;
+- `1`: FAIL, including malformed configuration, driver failure or invalid/forged evidence;
+- `2`: BLOCKED because required real-target material is unavailable or unverifiable.
 
-The command writes one JSON result to stdout. Driver stdout is forbidden by the lower-level runner, so target-driver diagnostics must not be mixed into the certification result.
+The command writes one aggregate JSON result to stdout. Driver stdout is forbidden, preventing native diagnostics or secrets from being mixed into the certification result.
 
-## Credential rule
+## Credential boundary
 
-Do not put test-account secrets directly in the JSON file.
+Do not place account secrets directly in the JSON configuration.
 
 A `testAccountEnv` value must be an exact environment-variable reference:
 
@@ -38,13 +38,11 @@ A `testAccountEnv` value must be an exact environment-variable reference:
 }
 ```
 
-At runtime the command resolves only the explicitly named variable. A literal value such as `"secret-token"` is rejected with `PLAINTEXT_TEST_ACCOUNT_ENV_FORBIDDEN`.
+Literal values are rejected with `PLAINTEXT_TEST_ACCOUNT_ENV_FORBIDDEN`.
 
-If `authorizedTestAccount` is not exactly `true`, the product is BLOCKED as `AUTHORIZED_TEST_ACCOUNT_UNAVAILABLE` **before credential references are parsed**.
+If `authorizedTestAccount` is not exactly `true`, the product becomes `AUTHORIZED_TEST_ACCOUNT_UNAVAILABLE` before credential references, CLI paths or native configuration are inspected.
 
-If an explicitly referenced environment variable is absent or empty, that product is BLOCKED as `TEST_ACCOUNT_ENV_UNAVAILABLE`.
-
-The wrapper separately projects only the non-secret host environment required to start local programs:
+The wrapper forwards only the non-secret host environment needed to start local programs:
 
 ```text
 PATH / Path
@@ -61,13 +59,11 @@ TMP
 TMPDIR
 ```
 
-Other process environment values are not forwarded as host environment. Account variables are forwarded only through the explicit `testAccountEnv` mapping above.
+Account variables are forwarded only through the explicit `testAccountEnv` mapping.
 
 ## Example configuration
 
-Use a **fresh absolute test root for every certification attempt**. The matrix intentionally refuses to overwrite existing fixture/evidence files.
-
-Example Windows shape:
+Use a fresh absolute root for every certification attempt. The runner refuses to overwrite fixture or evidence files.
 
 ```json
 {
@@ -75,14 +71,14 @@ Example Windows shape:
   "claude": {
     "cli": "claude",
     "authorizedTestAccount": true,
-    "testRoot": "C:\\cc-desk-d20\\run-20260927-claude",
-    "binaryPath": "C:\\cc-desk-d20\\run-20260927-claude\\bin\\claude.exe",
+    "testRoot": "C:\\cc-desk-d20\\run-claude-unique",
+    "binaryPath": "C:\\cc-desk-d20\\run-claude-unique\\bin\\claude.exe",
     "drivers": {
-      "ccDesk": "C:\\cc-desk-d20\\run-20260927-claude\\drivers\\cc-desk-driver.exe",
-      "systemTerminal": "C:\\cc-desk-d20\\run-20260927-claude\\drivers\\system-terminal-driver.exe"
+      "ccDesk": "C:\\cc-desk-d20\\run-claude-unique\\drivers\\cc-desk-driver.exe",
+      "systemTerminal": "C:\\cc-desk-d20\\run-claude-unique\\drivers\\system-terminal-driver.exe"
     },
-    "nonce": "d20-claude-20260927-unique",
-    "originalText": "d20-claude-20260927-unique\n你好\n<pasted_content id=\"literal\">keep literal</pasted_content id=\"literal\">\n",
+    "nonce": "d20-claude-unique",
+    "originalText": "d20-claude-unique\n你好\n<pasted_content id=\"literal\">keep literal</pasted_content id=\"literal\">\n",
     "transformId": "claude-user-prompt-submit-v1-exact",
     "testAccountEnv": {
       "CLAUDE_CODE_OAUTH_TOKEN": "${D20_CLAUDE_TEST_TOKEN}"
@@ -91,14 +87,14 @@ Example Windows shape:
   "codex": {
     "cli": "codex",
     "authorizedTestAccount": true,
-    "testRoot": "C:\\cc-desk-d20\\run-20260927-codex",
-    "binaryPath": "C:\\cc-desk-d20\\run-20260927-codex\\bin\\codex.exe",
+    "testRoot": "C:\\cc-desk-d20\\run-codex-unique",
+    "binaryPath": "C:\\cc-desk-d20\\run-codex-unique\\bin\\codex.exe",
     "drivers": {
-      "ccDesk": "C:\\cc-desk-d20\\run-20260927-codex\\drivers\\cc-desk-driver.exe",
-      "systemTerminal": "C:\\cc-desk-d20\\run-20260927-codex\\drivers\\system-terminal-driver.exe"
+      "ccDesk": "C:\\cc-desk-d20\\run-codex-unique\\drivers\\cc-desk-driver.exe",
+      "systemTerminal": "C:\\cc-desk-d20\\run-codex-unique\\drivers\\system-terminal-driver.exe"
     },
-    "nonce": "d20-codex-20260927-unique",
-    "originalText": "d20-codex-20260927-unique\n你好\n<pasted_content id=\"literal\">keep literal</pasted_content id=\"literal\">\n",
+    "nonce": "d20-codex-unique",
+    "originalText": "d20-codex-unique\n你好\n<pasted_content id=\"literal\">keep literal</pasted_content id=\"literal\">\n",
     "transformId": "codex-user-prompt-submit-v1-exact",
     "testAccountEnv": {
       "OPENAI_API_KEY": "${D20_CODEX_TEST_TOKEN}"
@@ -107,28 +103,36 @@ Example Windows shape:
 }
 ```
 
-The variable names above are examples of explicit test-account transport, not a requirement that a particular installed CLI version authenticate through those variables. If the selected real CLI uses browser/keychain authentication instead, omit `testAccountEnv` and let the real target driver perform the authorized login flow inside the isolated target environment.
+The account variable names are examples, not a requirement that a particular CLI authenticate through environment variables. A real lane driver may instead perform an explicitly authorized browser/keychain login inside the isolated target environment.
 
-PowerShell example:
+Do not commit the configuration, evidence directory or credentials.
 
-```powershell
-$env:D20_CLAUDE_TEST_TOKEN = "<dedicated-authorized-test-token>"
-$env:D20_CODEX_TEST_TOKEN = "<dedicated-authorized-test-token>"
-node scripts/native-cli/run-real-cli-certification.mjs --config C:\cc-desk-d20\d20.json
-$LASTEXITCODE
-```
+## Four-cell requirement
 
-Do not commit the generated config, evidence directory or credentials.
+Each product must run exactly:
 
-## Required target material
+1. CC Desk lane / observer off;
+2. CC Desk lane / observer on;
+3. system-terminal lane / observer off;
+4. system-terminal lane / observer on.
 
-For each product, the following paths must be absolute and contained by that product's `testRoot`:
+The aggregate command returns PASS only when both products independently pass all four cells.
 
-- `binaryPath`: the actual selected CLI executable/materialized binary identity;
-- `drivers.ccDesk`: driver that exercises the real CC Desk native-terminal lane;
-- `drivers.systemTerminal`: driver that exercises the real system-terminal comparison lane.
+## Filesystem isolation
 
-Execution re-checks containment with real paths, so a symlink that escapes the test root is BLOCKED.
+For each product, `binaryPath` and both driver paths must be absolute and contained by that product's `testRoot`.
+
+Execution rechecks containment with real paths. It rejects:
+
+- binary or driver symlink escape;
+- run/config/HOME/project subdirectory escape;
+- fixture creation outside the real test root;
+- report files whose real path escapes the test root;
+- reused/non-fresh fixture or report paths.
+
+Every cell receives isolated HOME, config, project, fixture and report locations.
+
+## Driver contract
 
 Each driver receives:
 
@@ -141,23 +145,41 @@ Each driver receives:
 --observer
 ```
 
-and must write exactly one evidence document to `--report`, emit no stdout, and exit zero only after the real target attempt has completed. The evidence must satisfy `scripts/native-cli/real-cli-evidence.mjs`.
+The driver must:
 
-A synthetic hook, screen scraper, model repetition, fake binary identity or writer-success receipt is not a valid replacement.
+- exercise the real target lane;
+- write exactly one evidence document to `--report`;
+- emit no stdout;
+- exit zero only after the target attempt has completed;
+- retain raw hook evidence required by `real-cli-evidence.mjs`.
 
-## Four-cell requirement
+The runner computes the SHA-256 of the actual selected CLI binary and rejects a different recorded identity.
 
-Each product runs exactly:
+## Exact orchestrator binding
 
-1. CC Desk / observer off;
-2. CC Desk / observer on;
-3. system terminal / observer off;
-4. system terminal / observer on.
+Internal evidence consistency is not sufficient.
 
-All four records must bind to the same target and fixture identity. PASS evidence is additionally checked against the SHA-256 of the actual `binaryPath` file that was executed.
+For every PASS cell, the runner additionally binds the record to the exact plan it created:
 
-The aggregate command returns PASS only when both products independently pass their four-cell comparison. One unavailable product keeps the aggregate D20 result BLOCKED.
+- CLI kind;
+- outer run ID;
+- lane and observer state;
+- fixture SHA-256;
+- nonce;
+- original text;
+- host payload bytes;
+- transform ID;
+- per-cell project cwd by real-path identity;
+- actual selected CLI binary SHA-256.
 
-## Current boundary
+For the CC Desk lane, native input-frame evidence must bind the exact outer run ID and positive generation/input sequence/mode epoch. Observer off/on records for a lane must also report the same host identity.
 
-This command makes D20 target execution deterministic and repeatable. It deliberately does **not** provision a test account, copy an installed CLI, fabricate a system terminal, or synthesize the CC Desk lane. Those are target-environment facts and must be supplied by the real certification machine.
+A self-consistent substituted fixture, forged cwd, unrelated native frame, malformed record, screen scraper, model repetition or writer-success receipt cannot become PASS.
+
+## Remaining trust boundary
+
+The target machine supplies the actual lane drivers and authorized account. Those drivers are reviewed target-environment material, not something the unit harness can manufacture.
+
+Synthetic drivers in automated tests verify fail-closed behavior only. They do not constitute Layer-C evidence.
+
+If either product, binary, account, hook schema, driver or evidence binding is unavailable, D20 remains BLOCKED.

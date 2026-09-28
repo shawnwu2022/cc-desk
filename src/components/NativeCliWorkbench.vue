@@ -20,13 +20,13 @@
         v-if="!workbench.profiles.selected.codex"
         @click="createDefaultProfile('codex')"
       >
-        + Codex Profile
+        {{ t('nativeCreateCodexProfile') }}
       </button>
       <button
         v-if="!workbench.profiles.selected.claude"
         @click="createDefaultProfile('claude')"
       >
-        + Claude Profile
+        {{ t('nativeCreateClaudeProfile') }}
       </button>
 
       <select
@@ -48,7 +48,7 @@
         :value="workbench.selectedProjectId ?? ''"
         @change="changeProject"
       >
-        <option value="" disabled>Select project</option>
+        <option value="" disabled>{{ t('nativeSelectProject') }}</option>
         <option
           v-for="project in workbench.workspace.projects"
           :key="project.projectId"
@@ -57,33 +57,33 @@
           {{ projectLabel(project) }}
         </option>
       </select>
-      <button @click="addProject">+ Project</button>
+      <button @click="addProject">{{ t('nativeAddProject') }}</button>
 
-      <button :disabled="!canCreate" @click="createNew">New</button>
+      <button :disabled="!canCreate" @click="createNew">{{ t('nativeNewSession') }}</button>
       <select v-model="pickerScope" class="select">
-        <option value="current-project">Current project</option>
-        <option value="all" :disabled="workbench.cli === 'claude'">All projects (Codex)</option>
+        <option value="current-project">{{ t('nativeCurrentProject') }}</option>
+        <option value="all" :disabled="workbench.cli === 'claude'">{{ t('nativeAllProjectsCodex') }}</option>
       </select>
-      <button :disabled="!canCreate" @click="createPicker">Resume…</button>
+      <button :disabled="!canCreate" @click="createPicker">{{ t('nativeResumePicker') }}</button>
       <input
         v-model="resumeId"
         class="resume-input"
-        placeholder="Session ID"
+        :placeholder="t('nativeSessionIdPlaceholder')"
         @keyup.enter="createKnownResume"
       />
       <button :disabled="!canCreate || !resumeId.trim()" @click="createKnownResume">
-        Resume ID
+        {{ t('nativeResumeId') }}
       </button>
       <input
         v-model="rawArgv"
         class="resume-input"
-        placeholder='Raw argv JSON, e.g. ["--help"]'
+        :placeholder="t('nativeRawArgvPlaceholder')"
         @keyup.enter="createRaw"
       />
-      <button :disabled="!canCreate" @click="createRaw">Raw</button>
+      <button :disabled="!canCreate" @click="createRaw">{{ t('nativeRawArgv') }}</button>
     </header>
 
-    <div v-if="workbench.status === 'loading'" class="state-banner">Loading native workspace…</div>
+    <div v-if="workbench.status === 'loading'" class="state-banner">{{ t('nativeWorkspaceLoading') }}</div>
     <div v-else-if="workbench.error" class="state-banner error">{{ workbench.error }}</div>
     <div v-else-if="rawArgvError" class="state-banner error">{{ rawArgvError }}</div>
 
@@ -98,7 +98,7 @@
             @click="workbench.tabs.setActive(tab.tabId)"
           >
             <span>{{ tab.cli === 'claude' ? 'Claude' : 'Codex' }}</span>
-            <small>{{ tab.status }}</small>
+            <small>{{ nativeStatusLabel(tab.status) }}</small>
             <span v-if="tab.errorCode" class="tab-error">!</span>
             <span class="tab-close" @click.stop="closeTab(tab.tabId)">×</span>
           </button>
@@ -106,7 +106,7 @@
 
         <div class="terminal-stack">
           <div v-if="tabList.length === 0" class="empty-terminal">
-            Select a profile and project, then start a native CLI session.
+            {{ t('nativeEmptySessionHint') }}
           </div>
           <NativeCliTerminal
             v-for="tab in tabList"
@@ -127,31 +127,31 @@
             v-if="activeTab.status === 'unknown'"
             @click="recoverActive"
           >
-            Recover
+            {{ t('nativeRecover') }}
           </button>
           <button
             v-if="['running', 'starting', 'unknown'].includes(activeTab.status)"
             @click="stopActive"
           >
-            Stop
+            {{ t('nativeStop') }}
           </button>
           <button
             v-if="['stopped', 'failed', 'exited'].includes(activeTab.status)"
             @click="restartActive"
           >
-            Restart
+            {{ t('nativeRestart') }}
           </button>
         </footer>
       </main>
 
       <aside class="resource-panel">
         <div class="resource-header">
-          <strong>Resources</strong>
+          <strong>{{ t('nativeResources') }}</strong>
           <select v-model="resourceKind" class="select">
-            <option v-for="kind in resourceKinds" :key="kind" :value="kind">{{ kind }}</option>
+            <option v-for="kind in resourceKinds" :key="kind" :value="kind">{{ nativeResourceLabel(kind) }}</option>
           </select>
           <button :disabled="workbench.workspace.status !== 'ready'" @click="loadResource">
-            Refresh
+            {{ t('refresh') }}
           </button>
         </div>
 
@@ -169,6 +169,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { selectDirectory } from '@/api/tauri'
 import type { NativeCliKind } from '@/types/cli'
 import type { ResourceKind } from '@/types/nativeProjection'
@@ -190,6 +191,7 @@ const resourceKinds: ResourceKind[] = [
   'instructions',
 ]
 
+const { t } = useI18n()
 const workbench = useNativeWorkbenchStore()
 const resumeId = ref('')
 const resourceKind = ref<ResourceKind>('history')
@@ -213,6 +215,22 @@ const resourceText = computed(() => {
   if (!result || result.state !== 'ready') return ''
   return JSON.stringify(result.items, null, 2)
 })
+
+function nativeStatusLabel(status: string): string {
+  switch (status) {
+    case 'stopped': return t('nativeStatusStopped')
+    case 'starting': return t('nativeStatusStarting')
+    case 'running': return t('nativeStatusRunning')
+    case 'unknown': return t('nativeStatusUnknown')
+    case 'failed': return t('nativeStatusFailed')
+    case 'exited': return t('nativeStatusExited')
+    default: return status
+  }
+}
+
+function nativeResourceLabel(kind: ResourceKind): string {
+  return t(`nativeResource_${kind}`)
+}
 
 function setTerminalRef(tabId: string, value: unknown) {
   if (value) terminalRefs.set(tabId, value)
@@ -250,9 +268,8 @@ function changeProject(event: Event) {
 async function addProject() {
   const result = await selectDirectory()
   if (!result) return
-  await workbench.workspace.open(workbench.cli).catch(() => {})
-  const added = workbench.workspace.projects.find(project => project.selectedPath === result.path)
-  if (added) workbench.selectProject(added.projectId)
+  const projectId = await workbench.workspace.registerProject(result.path).catch(() => null)
+  if (projectId) workbench.selectProject(projectId)
 }
 
 function createNew() {

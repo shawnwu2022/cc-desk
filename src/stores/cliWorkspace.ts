@@ -14,6 +14,9 @@ export interface CliWorkspaceProfileIdentity {
 
 const SAFE_ERRORS = new Set([
   'REVISION_CONFLICT',
+  'COMMIT_STATE_UNKNOWN',
+  'INVALID_WORKSPACE_RESPONSE',
+  'WORKSPACE_NOT_LOADED',
   'PROFILE_NOT_FOUND',
   'PROJECT_NOT_FOUND',
   'PROJECT_IDENTITY_CHANGED',
@@ -90,6 +93,19 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
     )
   }
 
+  function requireCurrentProfile(): CliWorkspaceProfileIdentity {
+    const identity = profileIdentity.value
+    if (!identity || cli.value !== identity.cli) {
+      invalidate('CLI_PROFILE_REQUIRED')
+      throw new Error('CLI_PROFILE_REQUIRED')
+    }
+    if (!currentSelectionMatches()) {
+      invalidate('PROFILE_SELECTION_CHANGED')
+      throw new Error('PROFILE_SELECTION_CHANGED')
+    }
+    return identity
+  }
+
   async function open(nextCli: NativeCliKind): Promise<void> {
     const selected = profiles.selected[nextCli]
     if (!selected) {
@@ -143,6 +159,31 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
     }
   }
 
+  async function registerProject(selectedPath: string): Promise<string> {
+    const identity = requireCurrentProfile()
+    const selectedOwner = owner
+    error.value = null
+    try {
+      const projectId = await projectsStore.register(selectedPath)
+      if (owner === selectedOwner && currentSelectionMatches()) {
+        await projectsStore.enrich({
+          profileId: identity.profileId,
+          revision: identity.revision,
+        })
+      }
+      if (owner === selectedOwner) {
+        status.value = currentSelectionMatches() ? 'ready' : 'error'
+        error.value = currentSelectionMatches() ? null : 'PROFILE_SELECTION_CHANGED'
+      }
+      return projectId
+    } catch (failure) {
+      if (owner === selectedOwner) {
+        error.value = safeErrorCode(failure)
+      }
+      throw failure
+    }
+  }
+
   async function loadResource(
     kind: ResourceKind,
     options: {
@@ -153,15 +194,7 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
       offset?: number
     } = {},
   ): Promise<void> {
-    const identity = profileIdentity.value
-    if (!identity || cli.value !== identity.cli) {
-      invalidate('CLI_PROFILE_REQUIRED')
-      throw new Error('CLI_PROFILE_REQUIRED')
-    }
-    if (!currentSelectionMatches()) {
-      invalidate('PROFILE_SELECTION_CHANGED')
-      throw new Error('PROFILE_SELECTION_CHANGED')
-    }
+    const identity = requireCurrentProfile()
 
     const selectedOwner = owner
     const projectId = options.projectId
@@ -227,6 +260,7 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
     enrichment,
     resource,
     open,
+    registerProject,
     loadResource,
     clear,
   }

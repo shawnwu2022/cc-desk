@@ -79,6 +79,7 @@
       v-if="currentView === 'welcome'"
       class="overlay-view"
       @select-project="handleSelectProject"
+      @open-native="openNativeWorkbench"
     />
     <ProjectSelectView
       v-else-if="currentView === 'projects'"
