@@ -37,6 +37,7 @@ function run(
   observer: 'off' | 'on',
   overrides: Record<string, unknown> = {},
 ) {
+  const runId = `${cli}-${lane}-${observer}`
   const envelope = cli === 'codex'
     ? {
         session_id: 'session-d20',
@@ -70,7 +71,7 @@ function run(
     caseId: 'NATIVE-63',
     evidenceLayer: 'C',
     status: 'PASS',
-    runId: `${cli}-${lane}-${observer}`,
+    runId,
     lane,
     observer,
     target: target(cli),
@@ -96,7 +97,7 @@ function run(
           bytesBase64: payloadBase64,
           sha256: payloadSha256,
           frame: {
-            runId: `${cli}-native-run-${observer}`,
+            runId,
             generation: 7,
             inputSeq: '1',
             modeEpoch: '3',
@@ -113,7 +114,7 @@ function run(
       kind: 'real-user-prompt-submit',
       schemaVersion: 1,
       cli,
-      runId: `${cli}-${lane}-${observer}`,
+      runId,
       lane,
       observer,
       transformId,
@@ -284,6 +285,33 @@ describe('D20 real CLI certification evidence', () => {
     }
   })
 
+  it('D20_Evidence_NativeFrameBindsExactRunAndPositiveCounters_03f', async () => {
+    const { validateRealCliRun } = await loadEvidence()
+
+    for (const [field, value] of [
+      ['runId', 'different-run'],
+      ['generation', 0],
+      ['inputSeq', '0'],
+      ['modeEpoch', '0'],
+      ['inputSeq', (1n << 64n).toString()],
+    ] as const) {
+      const forged = run('codex', 'cc-desk', 'off')
+      const frame = (forged.hostPayloadEvidence as { frame: Record<string, unknown> }).frame
+      frame[field] = value
+      expect(validateRealCliRun(forged)).toEqual({
+        valid: false,
+        reason: 'DESK_HOST_PAYLOAD_FRAME_REQUIRED',
+      })
+    }
+
+    const terminal = run('codex', 'system-terminal', 'off')
+    ;(terminal.hostPayloadEvidence as Record<string, unknown>).writeSeq = '0'
+    expect(validateRealCliRun(terminal)).toEqual({
+      valid: false,
+      reason: 'SYSTEM_TERMINAL_WRITE_EVIDENCE_REQUIRED',
+    })
+  })
+
   it('D20_Evidence_CodexRequiresTurnIdentity_04', async () => {
     const { validateRealCliRun } = await loadEvidence()
     const value = run('codex', 'cc-desk', 'off')
@@ -358,7 +386,35 @@ describe('D20 real CLI certification evidence', () => {
     ;(wrongFixture[2].fixture as Record<string, unknown>).fixtureSha256 = sha256
     expect(certifyCliComparison(wrongFixture)).toEqual({
       status: 'FAIL',
-      reason: 'COMPARISON_FIXTURE_MISMATCH',
+      reason: 'INVALID_REAL_CLI_EVIDENCE:FIXTURE_HASH_MISMATCH',
+    })
+  })
+
+  it('D20_Evidence_ObserverPairsRequireSameHostIdentity_07b', async () => {
+    const { certifyCliComparison } = await loadEvidence()
+
+    const deskMismatch = comparisonRuns('codex')
+    ;(deskMismatch[1].host as Record<string, unknown>).deskCommit = 'd'.repeat(40)
+    expect(certifyCliComparison(deskMismatch)).toEqual({
+      status: 'FAIL',
+      reason: 'COMPARISON_HOST_MISMATCH',
+    })
+
+    const terminalMismatch = comparisonRuns('codex')
+    ;(terminalMismatch[3].hostPayloadEvidence as Record<string, unknown>).driver = 'other-driver'
+    expect(certifyCliComparison(terminalMismatch)).toEqual({
+      status: 'FAIL',
+      reason: 'COMPARISON_HOST_MISMATCH',
+    })
+  })
+
+  it('D20_Evidence_ComparisonValidatesStructureBeforeFingerprinting_07c', async () => {
+    const { certifyCliComparison } = await loadEvidence()
+    const malformed = comparisonRuns('codex')
+    ;(malformed[0] as Record<string, unknown>).target = null
+    expect(certifyCliComparison(malformed)).toEqual({
+      status: 'FAIL',
+      reason: 'INVALID_REAL_CLI_EVIDENCE:TARGET_IDENTITY_REQUIRED',
     })
   })
 
