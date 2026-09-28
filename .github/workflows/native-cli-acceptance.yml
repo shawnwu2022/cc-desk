@@ -1,0 +1,61 @@
+name: Native CLI acceptance gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      evidence_run_id:
+        description: Workflow run ID containing the acceptance evidence artifact
+        required: true
+        type: string
+      evidence_artifact:
+        description: Acceptance evidence artifact name
+        required: true
+        default: native-cli-acceptance
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  verify:
+    name: Verify acceptance evidence
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download evidence from the explicit run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.evidence_run_id }}
+          ARTIFACT: ${{ inputs.evidence_artifact }}
+        run: |
+          mkdir evidence
+          gh run download "$RUN_ID" --name "$ARTIFACT" --dir evidence
+
+      - name: Require one acceptance manifest
+        id: manifest
+        shell: bash
+        run: |
+          mapfile -t files < <(find evidence -type f -name 'acceptance-manifest.json' -print)
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "::error::Exactly one acceptance-manifest.json is required"
+            exit 1
+          fi
+          echo "path=${files[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify complete target/case/subcase evidence
+        run: node scripts/native-cli/verify-acceptance.mjs "${{ steps.manifest.outputs.path }}" > acceptance-gate-result.json
+
+      - name: Upload gate result
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-cli-acceptance-gate-${{ github.run_id }}
+          path: acceptance-gate-result.json
+          if-no-files-found: error
