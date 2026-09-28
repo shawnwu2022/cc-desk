@@ -125,3 +125,43 @@ jobs:
           name: cc-desk-candidate-${{ github.sha }}-${{ matrix.name }}
           path: ${{ matrix.patterns }}
           if-no-files-found: error
+
+  manifest:
+    name: Bind candidate artifact hashes
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download all platform candidate artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cc-desk-candidate-${{ github.sha }}-*
+          path: candidate-artifacts
+          merge-multiple: false
+
+      - name: Build immutable candidate manifest
+        shell: bash
+        run: |
+          node scripts/native-cli/build-candidate-manifest.mjs \
+            --root candidate-artifacts \
+            --source-commit "${{ github.sha }}" \
+            --out .candidate/candidate.json
+
+      - name: Upload candidate manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ github.sha }}-manifest
+          path: .candidate/candidate.json
+          retention-days: 30
+          if-no-files-found: error
