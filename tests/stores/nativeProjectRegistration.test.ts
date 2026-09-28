@@ -55,6 +55,7 @@ afterEach(() => clearMocks())
 describe('D28 native project registration', () => {
   it('D28_Project_AddButtonUsesRegistrationMutation_01', () => {
     const source = readFileSync('src/components/NativeCliWorkbench.vue', 'utf8')
+      .replace(/\r\n/g, '\n')
     const start = source.indexOf('async function addProject()')
     const end = source.indexOf('\n}\n\nfunction createNew()', start)
     expect(start).toBeGreaterThan(-1)
