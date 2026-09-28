@@ -65,7 +65,7 @@ test('D02_ReleaseWorkflow_StillBuildsSignedCandidates_03', () => {
 })
 
 test('D30_Policy_AllowsOnlyFullyVerifiedPromotion_04', async () => {
-  const { mayPublish, promotionComplete } = await loadPolicy()
+  const { promotionReady, mayPublish, promotionComplete } = await loadPolicy()
   const good = {
     event: 'workflow_dispatch',
     operation: 'promote',
@@ -75,6 +75,7 @@ test('D30_Policy_AllowsOnlyFullyVerifiedPromotion_04', async () => {
     explicitApproval: true,
     rebuildPerformed: false,
   }
+  assert.equal(promotionReady({ ...good, explicitApproval: false }), true)
   assert.equal(mayPublish(good), true)
   assert.equal(promotionComplete({
     ...good,
@@ -104,33 +105,48 @@ test('D30_Policy_AllowsOnlyFullyVerifiedPromotion_04', async () => {
   assert.equal(mayPublish({ ...good, event: 'push' }), false)
 })
 
-test('D30_PromotionWorkflow_ReusesCandidateAndReverifiesPublishedBytes_05', () => {
+test('D30_PromotionWorkflow_GatesBeforeApprovalAndReusesExactBytes_05', () => {
   const workflow = readFileSync(promotionWorkflowPath, 'utf8')
 
-  assert.match(workflow, /contents:\s*write/)
   assert.match(workflow, /actions:\s*read/)
-  assert.match(workflow, /environment:\s*native-release-promotion/)
   assert.match(workflow, /promote-candidate\.mjs/)
   assert.match(workflow, /verify-published-promotion\.mjs/)
   assert.match(workflow, /check-promotion-policy\.mjs/)
+  assert.match(workflow, /--phase verify/)
   assert.match(workflow, /--phase pre/)
   assert.match(workflow, /--phase complete/)
   assert.match(workflow, /verify-updater-manifest\.js/)
   assert.match(workflow, /gh release create/)
   assert.match(workflow, /--draft/)
   assert.match(workflow, /gh release download/)
-  assert.match(workflow, /cmp \.promotion\/publish\/latest\.json \.promotion\/uploaded\/latest\.json/)
   assert.match(workflow, /gh release edit/)
   assert.doesNotMatch(workflow, /npm run tauri build/)
   assert.doesNotMatch(workflow, /cargo build/)
 
-  const createDraft = workflow.indexOf('gh release create')
-  const verifyBytes = workflow.indexOf('verify-published-promotion.mjs')
-  const publishDraft = workflow.indexOf('gh release edit')
-  const verifyUpdater = workflow.indexOf('verify-updater-manifest.js')
-  const completePolicy = workflow.indexOf('--phase complete')
-  assert.ok(createDraft > -1 && createDraft < verifyBytes)
-  assert.ok(verifyBytes < publishDraft)
+  const verifyJob = workflow.indexOf('\n  verify:')
+  const promoteJob = workflow.indexOf('\n  promote:')
+  assert.ok(verifyJob > -1 && promoteJob > verifyJob)
+  const verification = workflow.slice(verifyJob, promoteJob)
+  const promotion = workflow.slice(promoteJob)
+
+  assert.doesNotMatch(verification, /environment:\s*native-release-promotion/)
+  assert.match(verification, /--phase verify/)
+  assert.doesNotMatch(verification, /--explicit-approval/)
+  assert.match(promotion, /needs:\s*verify/)
+  assert.match(promotion, /environment:\s*native-release-promotion/)
+  assert.match(promotion, /contents:\s*write/)
+  assert.match(promotion, /--phase pre[^\n]*--explicit-approval/)
+  assert.match(promotion, /--phase complete[^\n]*--explicit-approval/)
+
+  const downloadVerified = promotion.indexOf('native-promotion-ready-')
+  const createDraft = promotion.indexOf('gh release create')
+  const verifyDraft = promotion.lastIndexOf('verify-published-promotion.mjs')
+  const publishDraft = promotion.indexOf('gh release edit')
+  const verifyUpdater = promotion.indexOf('verify-updater-manifest.js')
+  const completePolicy = promotion.indexOf('--phase complete')
+  assert.ok(downloadVerified > -1 && downloadVerified < createDraft)
+  assert.ok(createDraft < verifyDraft)
+  assert.ok(verifyDraft < publishDraft)
   assert.ok(publishDraft < verifyUpdater)
   assert.ok(verifyUpdater < completePolicy)
 })
