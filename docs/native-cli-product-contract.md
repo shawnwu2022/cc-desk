@@ -48,9 +48,11 @@ A required `FAIL`, `BLOCKED`, `NOT_RUN`, missing record, duplicate record, ident
 6. Enter the protected `native-release-promotion` GitHub environment for explicit maintainer approval.
 7. Download the existing candidate artifacts. **Do not rebuild.**
 8. Recompute every candidate file hash and rerun the acceptance gate.
-9. Publish only the verified staging bytes.
-10. Download the published release assets again and verify their hashes against `promotion.json`.
-11. Verify `latest.json`, signatures and platform asset URLs.
+9. Create a draft GitHub Release containing only the verified staging bytes and generated updater metadata.
+10. Download the draft assets again; verify candidate hashes and require the uploaded `latest.json` bytes to equal the local verified staging file.
+11. Publish that already verified draft without rebuilding or replacing assets.
+12. Verify the public `latest.json`, version, signatures and platform asset URLs.
+13. Mark promotion complete only after the published-byte and updater checks both pass.
 
 Any source/build-input change after candidate creation creates a new candidate and invalidates the previous promotion chain.
 
@@ -74,7 +76,7 @@ The code can be merged without pretending real certification has already happene
 Before the first promoted dual-CLI release, maintainers must:
 
 - configure required reviewers for the GitHub environment `native-release-promotion`;
-- build a candidate from the final frozen release commit;
+- build a candidate from the final frozen release commit; candidate builds are never triggered by the promotion tag;
 - collect authorized real Claude Code and Codex CLI evidence on the declared targets;
 - produce the installed-package `plan.json`, `records.json` and evidence files;
 - pass the Native CLI acceptance gate;
