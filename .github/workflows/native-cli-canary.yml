@@ -51,21 +51,32 @@ jobs:
           fi
           if [ "$CHANNEL" = "stable" ]; then
             version="latest"
+            blocked="false"
           else
             version="$pinned"
             if [ -z "$version" ]; then
-              echo "::error::Pinned canary version variable is required"
-              exit 1
+              blocked="true"
+            else
+              blocked="false"
             fi
           fi
           echo "package=$package" >> "$GITHUB_OUTPUT"
           echo "command=$command" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "blocked=$blocked" >> "$GITHUB_OUTPUT"
+
+      - name: Record unavailable pinned configuration as BLOCKED
+        if: steps.resolve.outputs.blocked == 'true'
+        shell: bash
+        run: |
+          printf '%s\n' '{"schemaVersion":1,"status":"BLOCKED","reason":"PINNED_CANARY_VERSION_REQUIRED","certificationRequired":true,"cli":"${{ matrix.cli }}","channel":"${{ matrix.channel }}"}' > "canary-${{ matrix.cli }}-${{ matrix.channel }}.json"
 
       - name: Install isolated CLI canary
+        if: steps.resolve.outputs.blocked != 'true'
         run: npm install --global "${{ steps.resolve.outputs.package }}@${{ steps.resolve.outputs.version }}"
 
       - name: Record binary identity without certification claim
+        if: steps.resolve.outputs.blocked != 'true'
         shell: bash
         run: |
           binary="$(command -v "${{ steps.resolve.outputs.command }}")"
