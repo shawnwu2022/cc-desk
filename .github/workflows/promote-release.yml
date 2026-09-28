@@ -1,0 +1,188 @@
+name: Promote accepted candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Signed candidate workflow run ID
+        required: true
+        type: string
+      acceptance_run_id:
+        description: Successful Native CLI acceptance gate run ID
+        required: true
+        type: string
+      candidate_id:
+        description: Exact candidateId from candidate-manifest.json
+        required: true
+        type: string
+      tag:
+        description: Exact release tag matching candidate version (vX.Y.Z)
+        required: true
+        type: string
+      approval:
+        description: Must equal PROMOTE:<candidateId>
+        required: true
+        type: string
+      release_notes:
+        description: Release notes for this exact candidate
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: release-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote exact accepted candidate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    environment: release-promotion
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout promotion verifier
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download candidate manifest
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          name: cc-desk-candidate-manifest
+          path: promotion/manifest
+
+      - name: Read frozen candidate source
+        id: candidate
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs')
+          const value = JSON.parse(fs.readFileSync('promotion/manifest/candidate-manifest.json', 'utf8'))
+          if (!/^[0-9a-f]{40,64}$/.test(String(value.sourceSha ?? ''))) {
+            throw new Error('CANDIDATE_SOURCE_SHA_INVALID')
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `source_sha=${value.sourceSha}\n`)
+          NODE
+
+      - name: Download exact signed candidate packages
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          pattern: cc-desk-candidate-${{ steps.candidate.outputs.source_sha }}-*
+          path: promotion/candidate
+          merge-multiple: false
+
+      - name: Download exact machine gate result
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.acceptance_run_id }}
+          name: native-cli-acceptance-result-${{ inputs.acceptance_run_id }}
+          path: promotion/acceptance
+
+      - name: Verify approval, gate and exact candidate; stage publish files
+        shell: bash
+        run: |
+          node scripts/native-cli/prepare-promotion.mjs \
+            --candidate promotion/manifest/candidate-manifest.json \
+            --candidate-root promotion/candidate \
+            --acceptance promotion/acceptance/acceptance-result.json \
+            --candidate-id "${{ inputs.candidate_id }}" \
+            --tag "${{ inputs.tag }}" \
+            --approval "${{ inputs.approval }}" \
+            --output-root promotion/publish \
+            --plan promotion/release-plan.json
+
+      - name: Generate updater manifest from staged candidate files
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          node scripts/generate-updater-manifest.js \
+            promotion/publish \
+            promotion/publish/latest.json \
+            "$RELEASE_TAG"
+          node <<'NODE'
+          const fs = require('fs')
+          const manifest = JSON.parse(fs.readFileSync('promotion/publish/latest.json', 'utf8'))
+          const plan = JSON.parse(fs.readFileSync('promotion/release-plan.json', 'utf8'))
+          if (manifest.version !== plan.version) throw new Error('UPDATER_VERSION_MISMATCH')
+          const keys = Object.keys(manifest.platforms ?? {}).sort()
+          if (JSON.stringify(keys) !== JSON.stringify(['darwin-aarch64','linux-x86_64','windows-x86_64'])) {
+            throw new Error('UPDATER_PLATFORM_SET_INVALID')
+          }
+          NODE
+
+      - name: Create draft release for exact source SHA
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+        shell: bash
+        run: |
+          printf '%s\n' "$RELEASE_NOTES" > promotion/release-notes.txt
+          gh release create "$RELEASE_TAG" \
+            --draft \
+            --target "$SOURCE_SHA" \
+            --title "CC Desk $RELEASE_TAG" \
+            --notes-file promotion/release-notes.txt
+
+      - name: Upload exact staged candidate assets to draft
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" promotion/publish/*
+
+      - name: Download draft assets and verify byte-for-byte identity
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          mkdir -p promotion/downloaded
+          gh release download "$RELEASE_TAG" --dir promotion/downloaded
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          import { verifyPublishedPromotion } from './scripts/native-cli/prepare-promotion.mjs'
+          const plan = JSON.parse(readFileSync('promotion/release-plan.json', 'utf8'))
+          verifyPublishedPromotion(plan, 'promotion/downloaded')
+          NODE
+          test "$(sha256sum promotion/publish/latest.json | cut -d' ' -f1)" = \
+               "$(sha256sum promotion/downloaded/latest.json | cut -d' ' -f1)"
+
+      - name: Publish verified draft without rebuilding
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest
+
+      - name: Verify published updater channel
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          node scripts/verify-updater-manifest.js \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/latest.json" \
+            "$version"
+
+      - name: Upload promotion audit plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-promotion-plan-${{ github.run_id }}
+          path: promotion/release-plan.json
+          if-no-files-found: error
+          retention-days: 90
