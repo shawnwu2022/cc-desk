@@ -75,8 +75,21 @@ test('D30_Policy_AllowsOnlyFullyVerifiedPromotion_04', async () => {
     rebuildPerformed: false,
   }
   assert.equal(mayPublish(good), true)
-  assert.equal(promotionComplete({ ...good, publishedBytesVerified: true }), true)
-  assert.equal(promotionComplete({ ...good, publishedBytesVerified: false }), false)
+  assert.equal(promotionComplete({
+    ...good,
+    publishedBytesVerified: true,
+    updaterVerified: true,
+  }), true)
+  assert.equal(promotionComplete({
+    ...good,
+    publishedBytesVerified: true,
+    updaterVerified: false,
+  }), false)
+  assert.equal(promotionComplete({
+    ...good,
+    publishedBytesVerified: false,
+    updaterVerified: true,
+  }), false)
 
   for (const key of [
     'gatePassed',
