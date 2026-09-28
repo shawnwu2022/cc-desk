@@ -33,7 +33,7 @@ export function candidateIdFor(commitSha, files) {
     }))
     .sort((a, b) => a.path.localeCompare(b.path))
   const digest = sha256(Buffer.from(JSON.stringify({ commitSha, files: normalized })))
-  return `candidate-${commitSha.slice(0, 12)}-${digest.slice(0, 16)}`
+  return `candidate-${commitSha.slice(0, 12)}-${digest}`
 }
 
 function normalizedRelative(root, file) {
