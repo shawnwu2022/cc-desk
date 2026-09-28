@@ -7,6 +7,7 @@ This document is the maintainer handoff for D28-D31.
 The repository now contains:
 
 - a strict machine acceptance gate: `scripts/native-cli/verify-acceptance.mjs`;
+- a repository-owned release target plan: `docs/testing/native-cli-release-targets.json`;
 - immutable candidate identity generation: `scripts/native-cli/candidate-manifest.mjs`;
 - same-candidate promotion verification: `scripts/native-cli/verify-promotion.mjs`;
 - pinned/stable CLI identity canary recording: `scripts/native-cli/canary-identity.mjs`;
@@ -21,14 +22,15 @@ The repository now contains:
 
 1. **No rebuild during promotion.** Promotion must publish the candidate bytes that were accepted.
 2. **No implicit latest evidence.** Candidate and acceptance workflow run IDs are explicit inputs.
-3. **No A/B-to-C/D promotion.** Unit, PTY, or WebView evidence cannot fill a required real-CLI or installed-package record.
-4. **No fake N/A.** N/A requires a reason and evidence.
-5. **No partial target certification.** Missing required case/subcase evidence fails the gate.
-6. **No automatic stable release from source changes or tags.**
-7. **No credential collection by CC Desk.** Real-CLI testing uses explicitly authorized isolated accounts and roots.
-8. **No canary-as-certification.** Canary records version/binary identity and always remains NOT_CERTIFIED or BLOCKED.
-9. **No direct legacy release.** Stable publishing is only through the protected promotion environment.
-10. **Any build-input change creates a new candidate.**
+3. **No A/B-to-C/D promotion.** The candidate commit's target plan declares allowed evidence layers; unit, PTY, or WebView evidence cannot fill a required real-CLI or installed-package record.
+4. **No evidence-owned scope.** Acceptance evidence repeats the target plan only for readability; the gate trusts the plan checked out from the exact candidate commit.
+5. **No fake N/A.** N/A requires a reason and evidence whose file hash is recomputed by the gate.
+6. **No partial target certification.** Missing required case/subcase evidence fails the gate.
+7. **No automatic stable release from source changes or tags.**
+8. **No credential collection by CC Desk.** Real-CLI testing uses explicitly authorized isolated accounts and roots.
+9. **No canary-as-certification.** Canary records version/binary identity and always remains NOT_CERTIFIED or BLOCKED.
+10. **No direct legacy release.** Stable publishing is only through the protected promotion environment.
+11. **Any build-input change creates a new candidate.**
 
 ## GitHub configuration required before a real promotion
 
@@ -71,10 +73,11 @@ Until those records exist for the declared target combinations, their required c
 ## Release sequence
 
 1. Freeze source and release metadata.
-2. Run **Signed candidate packages**.
-3. Preserve the candidate run ID and candidate manifest.
-4. Install those exact packages on declared targets and collect acceptance evidence.
-5. Run **Native CLI acceptance gate** on the explicit evidence run.
+2. Change `docs/testing/native-cli-release-targets.json` to a reviewed `READY` target plan before building the candidate.
+3. Run **Signed candidate packages**.
+4. Preserve the candidate run ID and candidate manifest.
+5. Install those exact packages on declared targets and collect acceptance evidence files plus `acceptance-manifest.json`.
+6. Run **Native CLI acceptance gate** with both the candidate run ID and explicit evidence run.
 6. Review the gate result and target coverage.
 7. Run **Promote accepted native CLI candidate** with exact candidate/evidence run IDs, commit SHA, and tag.
 8. Approve the protected `release-promotion` environment.
