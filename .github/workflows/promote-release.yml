@@ -130,7 +130,7 @@ jobs:
         run: |
           mapfile -t files < <(find candidate -type f \( -name '*.exe' -o -name '*.exe.sig' -o -name '*.AppImage' -o -name '*.AppImage.sig' -o -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' -o -name '*.dmg' \) -print | sort)
           [ "${#files[@]}" -ge 7 ] || { echo "::error::Candidate artifact set incomplete"; exit 1; }
-          gh release create "$TAG" --target "$COMMIT_SHA" --verify-tag=false --title "$TAG" --generate-notes --latest=false "${files[@]}" latest.json
+          gh release create "$TAG" --target "$COMMIT_SHA" --title "$TAG" --generate-notes --latest=false "${files[@]}" latest.json
 
       - name: Verify published updater manifest
         env:
