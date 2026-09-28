@@ -167,8 +167,12 @@ function verifyEvidenceItems(value, evidenceRoot = null) {
         fail('EVIDENCE_FILE_MISSING')
       }
       if (!metadata.isFile() || metadata.isSymbolicLink()) fail('UNSAFE_EVIDENCE_FILE')
+      const realRoot = fs.realpathSync(root)
+      const realFile = fs.realpathSync(file)
+      const realPrefix = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep
+      if (!realFile.startsWith(realPrefix)) fail('UNSAFE_EVIDENCE_FILE')
       if (metadata.size <= 0 || metadata.size > MAX_EVIDENCE_BYTES) fail('EVIDENCE_FILE_SIZE_INVALID')
-      const actual = createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+      const actual = createHash('sha256').update(fs.readFileSync(realFile)).digest('hex')
       if (actual !== sha) fail('EVIDENCE_FILE_HASH_MISMATCH')
     }
   }
