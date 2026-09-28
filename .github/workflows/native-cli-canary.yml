@@ -1,0 +1,79 @@
+name: Native CLI pinned/stable canary
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-cli-canary
+  cancel-in-progress: false
+
+jobs:
+  identity:
+    name: ${{ matrix.cli }} / ${{ matrix.channel }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cli: [claude, codex]
+        channel: [pinned, stable]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Resolve package and requested version
+        id: resolve
+        shell: bash
+        env:
+          CLI: ${{ matrix.cli }}
+          CHANNEL: ${{ matrix.channel }}
+          CLAUDE_PINNED: ${{ vars.CLAUDE_CANARY_PINNED_VERSION }}
+          CODEX_PINNED: ${{ vars.CODEX_CANARY_PINNED_VERSION }}
+        run: |
+          if [ "$CLI" = "claude" ]; then
+            package="@anthropic-ai/claude-code"
+            command="claude"
+            pinned="$CLAUDE_PINNED"
+          else
+            package="@openai/codex"
+            command="codex"
+            pinned="$CODEX_PINNED"
+          fi
+          if [ "$CHANNEL" = "stable" ]; then
+            version="latest"
+          else
+            version="$pinned"
+            if [ -z "$version" ]; then
+              echo "::error::Pinned canary version variable is required"
+              exit 1
+            fi
+          fi
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+          echo "command=$command" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install isolated CLI canary
+        run: npm install --global "${{ steps.resolve.outputs.package }}@${{ steps.resolve.outputs.version }}"
+
+      - name: Record binary identity without certification claim
+        shell: bash
+        run: |
+          binary="$(command -v "${{ steps.resolve.outputs.command }}")"
+          node scripts/native-cli/canary-identity.mjs             "${{ matrix.cli }}"             "${{ matrix.channel }}"             "$binary"             "canary-${{ matrix.cli }}-${{ matrix.channel }}.json"
+
+      - name: Upload canary identity
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-cli-canary-${{ matrix.cli }}-${{ matrix.channel }}-${{ github.run_id }}
+          path: canary-${{ matrix.cli }}-${{ matrix.channel }}.json
+          if-no-files-found: error
