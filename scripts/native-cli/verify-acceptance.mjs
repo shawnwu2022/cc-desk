@@ -28,10 +28,20 @@ function canonical(value) {
   return JSON.stringify(value)
 }
 
+export function computeAcceptanceCatalogId(catalog) {
+  return sha256(Buffer.from(canonical({
+    schemaVersion: catalog.schemaVersion,
+    catalogVersion: catalog.catalogVersion,
+    policy: catalog.policy,
+    cases: catalog.cases,
+  })))
+}
+
 export function computeTargetPlanId(plan) {
   return sha256(Buffer.from(canonical({
     schemaVersion: 1,
     candidateId: plan.candidateId,
+    catalogId: plan.catalogId,
     targets: plan.targets,
   })))
 }
@@ -40,8 +50,44 @@ function requirementKey(targetId, caseId, subcaseId) {
   return [targetId, caseId, subcaseId].join('\0')
 }
 
-function validatePlan(plan, candidate) {
+function validateCatalog(catalog) {
+  if (!catalog || catalog.schemaVersion !== 1
+    || !Number.isSafeInteger(catalog.catalogVersion) || catalog.catalogVersion <= 0
+    || !SHA256.test(String(catalog.catalogId ?? ''))
+    || computeAcceptanceCatalogId(catalog) !== catalog.catalogId
+    || catalog.policy?.allRequiredCasesMustAppearPerTarget !== true
+    || catalog.policy?.naRequiresEvidence !== true
+    || catalog.policy?.planMayAddLayersButNotRemoveMinimumLayers !== true
+    || !Array.isArray(catalog.cases)) {
+    fail('ACCEPTANCE_CATALOG_INVALID')
+  }
+
+  const expectedIds = Array.from({ length: 64 }, (_, index) =>
+    `NATIVE-${String(index + 1).padStart(2, '0')}`)
+  if (catalog.cases.length !== expectedIds.length) fail('ACCEPTANCE_CATALOG_INCOMPLETE')
+
+  const cases = new Map()
+  for (const entry of catalog.cases) {
+    if (!entry || !CASE_ID.test(String(entry.caseId ?? ''))
+      || typeof entry.owner !== 'string' || !/^W[0-9]$/.test(entry.owner)
+      || entry.required !== true || entry.allowNa !== true
+      || entry.subcasePolicy !== 'explicit'
+      || !Array.isArray(entry.minimumLayers) || entry.minimumLayers.length === 0
+      || entry.minimumLayers.some(layer => !LAYERS.includes(layer))
+      || new Set(entry.minimumLayers).size !== entry.minimumLayers.length) {
+      fail('ACCEPTANCE_CATALOG_INVALID')
+    }
+    if (cases.has(entry.caseId)) fail('ACCEPTANCE_CATALOG_DUPLICATE')
+    cases.set(entry.caseId, entry)
+  }
+  if (expectedIds.some(id => !cases.has(id))) fail('ACCEPTANCE_CATALOG_INCOMPLETE')
+  return cases
+}
+
+function validatePlan(plan, candidate, catalog) {
+  const catalogCases = validateCatalog(catalog)
   if (!plan || plan.schemaVersion !== 1 || plan.candidateId !== candidate.candidateId
+    || plan.catalogId !== catalog.catalogId
     || !Array.isArray(plan.targets) || plan.targets.length === 0) {
     fail('ACCEPTANCE_PLAN_INVALID')
   }
@@ -79,12 +125,23 @@ function validatePlan(plan, candidate) {
       if (uniqueLayers.size !== requirement.requiredLayers.length) {
         fail('ACCEPTANCE_REQUIREMENT_DUPLICATE_LAYER')
       }
+      const catalogCase = catalogCases.get(requirement.caseId)
+      if (!catalogCase) fail('ACCEPTANCE_REQUIREMENT_NOT_IN_CATALOG')
       const key = requirementKey(target.targetId, requirement.caseId, requirement.subcaseId)
       if (requirements.has(key)) fail('ACCEPTANCE_REQUIREMENT_DUPLICATE')
-      requirements.set(key, { target, requirement })
+      requirements.set(key, { target, requirement, catalogCase })
+    }
+
+    for (const [caseId, catalogCase] of catalogCases) {
+      const caseRequirements = target.requirements.filter(item => item.caseId === caseId)
+      if (caseRequirements.length === 0) fail('ACCEPTANCE_REQUIRED_CASE_MISSING')
+      const plannedLayers = new Set(caseRequirements.flatMap(item => item.requiredLayers))
+      for (const layer of catalogCase.minimumLayers) {
+        if (!plannedLayers.has(layer)) fail('ACCEPTANCE_MINIMUM_LAYER_MISSING')
+      }
     }
   }
-  return requirements
+  return { requirements, catalogCases }
 }
 
 function walkJson(root) {
@@ -154,7 +211,7 @@ function candidatePackageHashes(candidate, platform) {
 }
 
 function validateRecord(record, plan, candidate, requirementEntry, evidenceRoot) {
-  const { target, requirement } = requirementEntry
+  const { target, requirement, catalogCase } = requirementEntry
   if (!record || record.schemaVersion !== 2
     || record.targetId !== target.targetId
     || record.caseId !== requirement.caseId
@@ -178,6 +235,7 @@ function validateRecord(record, plan, candidate, requirementEntry, evidenceRoot)
   verifyEvidenceFiles(record, evidenceRoot)
 
   if (record.status === 'N_A') {
+    if (catalogCase.allowNa !== true) fail('ACCEPTANCE_NA_FORBIDDEN')
     if (typeof record.nonApplicabilityReason !== 'string'
       || record.nonApplicabilityReason.trim().length < 8
       || record.nonApplicabilityEvidenceSha256 == null
@@ -203,9 +261,9 @@ function validateRecord(record, plan, candidate, requirementEntry, evidenceRoot)
   }
 }
 
-export function verifyAcceptance({ candidate, candidateRoot, plan, records, evidenceRoot }) {
+export function verifyAcceptance({ candidate, candidateRoot, catalog, plan, records, evidenceRoot }) {
   verifyCandidateFiles(candidate, candidateRoot)
-  const requirements = validatePlan(plan, candidate)
+  const { requirements } = validatePlan(plan, candidate, catalog)
 
   const recordsByRequirement = new Map()
   const unique = new Set()
@@ -246,6 +304,7 @@ export function verifyAcceptance({ candidate, candidateRoot, plan, records, evid
     schemaVersion: 1,
     status: 'PASS',
     candidateId: candidate.candidateId,
+    catalogId: catalog.catalogId,
     planId: plan.planId,
     targetCount: plan.targets.length,
     requirementCount: requirements.size,
@@ -254,14 +313,15 @@ export function verifyAcceptance({ candidate, candidateRoot, plan, records, evid
 }
 
 function main() {
-  const [candidatePath, candidateRoot, planPath, recordsRoot, evidenceRoot] = process.argv.slice(2)
-  if (!candidatePath || !candidateRoot || !planPath || !recordsRoot || !evidenceRoot) {
-    fail('usage: verify-acceptance.mjs <candidate.json> <candidate-root> <plan.json> <records-dir> <evidence-dir>')
+  const [candidatePath, candidateRoot, catalogPath, planPath, recordsRoot, evidenceRoot] = process.argv.slice(2)
+  if (!candidatePath || !candidateRoot || !catalogPath || !planPath || !recordsRoot || !evidenceRoot) {
+    fail('usage: verify-acceptance.mjs <candidate.json> <candidate-root> <catalog.json> <plan.json> <records-dir> <evidence-dir>')
   }
   const candidate = JSON.parse(readFileSync(resolve(candidatePath), 'utf8'))
+  const catalog = JSON.parse(readFileSync(resolve(catalogPath), 'utf8'))
   const plan = JSON.parse(readFileSync(resolve(planPath), 'utf8'))
   const records = loadRecords(recordsRoot)
-  const result = verifyAcceptance({ candidate, candidateRoot, plan, records, evidenceRoot })
+  const result = verifyAcceptance({ candidate, candidateRoot, catalog, plan, records, evidenceRoot })
   process.stdout.write(JSON.stringify(result) + '\n')
 }
 
