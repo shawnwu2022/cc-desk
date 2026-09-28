@@ -7,6 +7,7 @@ import test from 'node:test'
 import { buildCandidateManifest } from '../../scripts/native-cli/candidate-manifest.mjs'
 import {
   computeAcceptanceCatalogId,
+  computeTargetIdentitySha256,
   computeTargetPlanId,
   verifyAcceptance,
 } from '../../scripts/native-cli/verify-acceptance.mjs'
@@ -91,6 +92,31 @@ function fixture() {
     file.platform === 'windows-x86_64' && file.path.endsWith('.exe'))
 
   const catalog = buildCatalog()
+  const identity = {
+    platform: 'windows-x86_64',
+    os: { name: 'Windows', build: '10.0.20348', arch: 'x86_64' },
+    executionDomain: 'local',
+    cli: {
+      kind: 'codex',
+      version: 'fixture-1.0.0',
+      binarySha256: CLI_SHA,
+    },
+    desk: {
+      candidateId: candidate.candidateId,
+      sourceSha: SOURCE_SHA,
+      packageSha256: winPackage.sha256,
+    },
+    runtime: {
+      webView: 'WebView2-fixture',
+      xtermVersion: '5.5.0',
+      renderer: 'canvas',
+      conptyVersion: '1.24-fixture',
+    },
+    launcher: { kind: 'native', shellVersion: null },
+    inputPolicyVersion: 'd18-v1',
+    terminalProtocolVersion: 'd19-v1',
+    fixtureConfigVersion: 'fixture-v1',
+  }
   const plan = {
     schemaVersion: 1,
     candidateId: candidate.candidateId,
@@ -98,12 +124,8 @@ function fixture() {
     targets: [{
       targetId: 'windows-codex-fixture',
       platform: 'windows-x86_64',
-      identitySha256: IDENTITY_SHA,
-      cli: {
-        kind: 'codex',
-        version: 'fixture-1.0.0',
-        binarySha256: CLI_SHA,
-      },
+      identity,
+      identitySha256: computeTargetIdentitySha256(identity),
       requirements: catalog.cases.map(entry => ({
         caseId: entry.caseId,
         subcaseId: 'baseline',
@@ -127,7 +149,7 @@ function fixture() {
         runId: `run-${requirement.caseId}-${layer}`,
         candidateId: candidate.candidateId,
         sourceSha: SOURCE_SHA,
-        targetIdentitySha256: IDENTITY_SHA,
+        targetIdentitySha256: plan.targets[0].identitySha256,
         cliKind: 'codex',
         cliVersion: 'fixture-1.0.0',
         cliBinarySha256: CLI_SHA,
@@ -135,6 +157,13 @@ function fixture() {
         evidenceLayer: layer,
         deskPackageSha256: layer === 'D' ? winPackage.sha256 : null,
         evidence: [{ path: relative, sha256: hash(body) }],
+        verification: layer === 'A'
+          ? null
+          : {
+              kind: `fixture-${layer.toLowerCase()}`,
+              schemaVersion: 1,
+              resultEvidenceSha256: hash(body),
+            },
         nonApplicabilityReason: null,
         nonApplicabilityEvidenceSha256: null,
       })
