@@ -42,6 +42,34 @@ function classify(path) {
   return 'support'
 }
 
+function validateCandidateShape(files) {
+  if (!Array.isArray(files) || files.length === 0) fail('CANDIDATE_EMPTY')
+  if (files.some(file => file.platform === 'support')) fail('CANDIDATE_UNDECLARED_FILE')
+
+  const byPath = new Map(files.map(file => [file.path, file]))
+  const match = pattern => files.filter(file => pattern.test(file.path))
+
+  const windows = match(/-setup\.exe$/i)
+  const linux = match(/\.AppImage$/i)
+  const macUpdater = match(/\.app\.tar\.gz$/i)
+  const macDmg = match(/\.dmg$/i)
+  if (windows.length !== 1 || linux.length !== 1 || macUpdater.length !== 1 || macDmg.length !== 1) {
+    fail('CANDIDATE_PLATFORM_SHAPE_INVALID')
+  }
+
+  for (const file of [...windows, ...linux, ...macUpdater]) {
+    const signature = byPath.get(`${file.path}.sig`)
+    if (!signature || signature.platform !== file.platform) fail('CANDIDATE_SIGNATURE_MISSING')
+  }
+
+  const expectedSignatures = new Set([...windows, ...linux, ...macUpdater].map(file => `${file.path}.sig`))
+  const signatures = files.filter(file => file.path.endsWith('.sig'))
+  if (signatures.length !== expectedSignatures.size
+    || signatures.some(file => !expectedSignatures.has(file.path))) {
+    fail('CANDIDATE_SIGNATURE_SET_INVALID')
+  }
+}
+
 function canonicalIdentity(input) {
   return JSON.stringify({
     schemaVersion: 1,
@@ -72,24 +100,12 @@ export function buildCandidateManifest({ root, sourceSha, version }) {
     }
   })
 
-  if (files.length === 0) fail('CANDIDATE_EMPTY')
   const paths = new Set()
   for (const file of files) {
     if (paths.has(file.path)) fail('CANDIDATE_DUPLICATE_PATH')
     paths.add(file.path)
   }
-
-  for (const platform of ['windows-x86_64', 'darwin-aarch64', 'linux-x86_64']) {
-    const platformFiles = files.filter(file => file.platform === platform)
-    if (platformFiles.length === 0) fail('CANDIDATE_PLATFORM_MISSING')
-    if (platform !== 'darwin-aarch64' && !platformFiles.some(file => file.path.endsWith('.sig'))) {
-      fail('CANDIDATE_SIGNATURE_MISSING')
-    }
-    if (platform === 'darwin-aarch64'
-      && !platformFiles.some(file => file.path.endsWith('.app.tar.gz.sig'))) {
-      fail('CANDIDATE_SIGNATURE_MISSING')
-    }
-  }
+  validateCandidateShape(files)
 
   const identity = { schemaVersion: 1, sourceSha, version, files }
   const candidateId = sha256(Buffer.from(canonicalIdentity(identity)))
@@ -113,7 +129,8 @@ export function verifyCandidateFiles(manifest, root) {
   const manifestPaths = new Set()
   for (const file of manifest.files) {
     if (!file || typeof file.path !== 'string' || !SHA256.test(String(file.sha256 ?? ''))
-      || !Number.isSafeInteger(file.size) || file.size < 0) {
+      || !Number.isSafeInteger(file.size) || file.size < 0
+      || file.platform !== classify(file.path)) {
       fail('CANDIDATE_MANIFEST_INVALID')
     }
     if (manifestPaths.has(file.path)) fail('CANDIDATE_DUPLICATE_PATH')
@@ -130,6 +147,7 @@ export function verifyCandidateFiles(manifest, root) {
     }
     if (bytes.byteLength !== file.size || sha256(bytes) !== file.sha256) fail('CANDIDATE_FILE_HASH_MISMATCH')
   }
+  validateCandidateShape(manifest.files)
   if (actualPaths.size !== manifestPaths.size
     || [...actualPaths].some(path => !manifestPaths.has(path))) {
     fail('CANDIDATE_UNDECLARED_FILE')
