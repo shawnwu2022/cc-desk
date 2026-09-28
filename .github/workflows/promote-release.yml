@@ -88,9 +88,16 @@ jobs:
           echo "candidate=${candidates[0]}" >> "$GITHUB_OUTPUT"
           echo "acceptance=${acceptances[0]}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify accepted candidate and every artifact hash
+      - name: Verify accepted candidate and every artifact/evidence hash
         run: |
-          node scripts/native-cli/verify-promotion.mjs             "${{ steps.manifests.outputs.candidate }}"             "${{ steps.manifests.outputs.acceptance }}"             candidate             "${{ inputs.commit_sha }}"             > promotion-plan.json
+          node scripts/native-cli/verify-promotion.mjs \
+            "${{ steps.manifests.outputs.candidate }}" \
+            "${{ steps.manifests.outputs.acceptance }}" \
+            docs/testing/native-cli-release-targets.json \
+            candidate \
+            acceptance \
+            "${{ inputs.commit_sha }}" \
+            > promotion-plan.json
 
       - name: Verify release policy after gate and environment approval
         shell: bash
