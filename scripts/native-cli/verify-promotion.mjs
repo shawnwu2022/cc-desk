@@ -27,7 +27,7 @@ export function verifyPromotion({ candidate, acceptance, artifactsRoot, expected
   }
   if (acceptance?.candidate?.candidateId !== candidate.candidateId) fail('ACCEPTANCE_CANDIDATE_MISMATCH')
 
-  const acceptanceResult = verifyAcceptance(acceptance)
+  const acceptanceResult = verifyAcceptance(acceptance, candidate)
   if (!acceptanceResult.ok) fail('ACCEPTANCE_GATE_FAILED')
 
   const files = []
