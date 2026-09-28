@@ -10,6 +10,9 @@ const releaseWorkflowPath = fileURLToPath(
 const promotionWorkflowPath = fileURLToPath(
   new URL('../../.github/workflows/promote-release.yml', import.meta.url),
 )
+const legacyReleasePath = fileURLToPath(
+  new URL('../../scripts/release.js', import.meta.url),
+)
 
 async function loadPolicy() {
   return import(`${pathToFileURL(policyPath).href}?case=${Date.now()}-${Math.random()}`)
@@ -61,4 +64,15 @@ test('D30_PromotionWorkflow_HasNoBuildAndRequiresExactGate_04', () => {
   assert.match(workflow, /gh release edit .*--latest/)
   assert.doesNotMatch(workflow, /npm run tauri build/)
   assert.doesNotMatch(workflow, /cargo build/)
+})
+
+
+test('D31_LegacyDirectReleasePathIsFailClosed_05', () => {
+  const source = readFileSync(legacyReleasePath, 'utf8')
+  const ossBranch = source.indexOf('if (args.ossOnly)')
+  const disabled = source.indexOf('DIRECT_RELEASE_DISABLED_USE_PROMOTION_WORKFLOW')
+  const legacyMutation = source.indexOf('// 参数检查：--bump 或 --exact 二选一')
+  assert.ok(ossBranch >= 0)
+  assert.ok(disabled > ossBranch)
+  assert.ok(legacyMutation > disabled)
 })
