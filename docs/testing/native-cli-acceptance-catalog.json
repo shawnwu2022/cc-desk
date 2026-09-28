@@ -1,0 +1,625 @@
+{
+  "schemaVersion": 2,
+  "caseCount": 64,
+  "cases": [
+    {
+      "caseId": "NATIVE-01",
+      "owner": "W7",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "claude-new",
+        "codex-new"
+      ]
+    },
+    {
+      "caseId": "NATIVE-02",
+      "owner": "W7",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "codex-only"
+      ]
+    },
+    {
+      "caseId": "NATIVE-03",
+      "owner": "W2",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "unknown-cli"
+      ]
+    },
+    {
+      "caseId": "NATIVE-04",
+      "owner": "W2",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "future-flag",
+        "raw-argv",
+        "double-dash"
+      ]
+    },
+    {
+      "caseId": "NATIVE-05",
+      "owner": "W2",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "empty",
+        "quotes",
+        "unicode",
+        "special"
+      ]
+    },
+    {
+      "caseId": "NATIVE-06",
+      "owner": "W2",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "native",
+        "shim",
+        "shell"
+      ]
+    },
+    {
+      "caseId": "NATIVE-07",
+      "owner": "W2",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "proxy",
+        "home",
+        "codex-home",
+        "claude-config-dir"
+      ]
+    },
+    {
+      "caseId": "NATIVE-08",
+      "owner": "W1",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "claude-legacy-permission",
+        "codex-isolation"
+      ]
+    },
+    {
+      "caseId": "NATIVE-09",
+      "owner": "W7",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "same-project-dual-cli",
+        "multi-project"
+      ]
+    },
+    {
+      "caseId": "NATIVE-10",
+      "owner": "W1",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "same-session-different-cli",
+        "same-session-different-root"
+      ]
+    },
+    {
+      "caseId": "NATIVE-11",
+      "owner": "W7",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "claude-picker",
+        "codex-picker"
+      ]
+    },
+    {
+      "caseId": "NATIVE-12",
+      "owner": "W7",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "claude-known-id",
+        "codex-known-id",
+        "cross-cwd"
+      ]
+    },
+    {
+      "caseId": "NATIVE-13",
+      "owner": "W3",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "unknown-picker-identity"
+      ]
+    },
+    {
+      "caseId": "NATIVE-14",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "claude-command",
+        "codex-command"
+      ]
+    },
+    {
+      "caseId": "NATIVE-15",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "claude-permission",
+        "codex-permission"
+      ]
+    },
+    {
+      "caseId": "NATIVE-16",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "claude-mcp",
+        "codex-mcp",
+        "skills",
+        "agents",
+        "plugins"
+      ]
+    },
+    {
+      "caseId": "NATIVE-17",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "terminal-editor"
+      ]
+    },
+    {
+      "caseId": "NATIVE-18",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "gui-editor-wait"
+      ]
+    },
+    {
+      "caseId": "NATIVE-19",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "ctrl-c",
+        "ctrl-d",
+        "alt",
+        "tab",
+        "esc",
+        "custom-key"
+      ]
+    },
+    {
+      "caseId": "NATIVE-20",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "shift-enter",
+        "child-tui"
+      ]
+    },
+    {
+      "caseId": "NATIVE-21",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "ime",
+        "emoji"
+      ]
+    },
+    {
+      "caseId": "NATIVE-22",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "short",
+        "multiline",
+        "crlf",
+        "json"
+      ]
+    },
+    {
+      "caseId": "NATIVE-23",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "128k",
+        "1m"
+      ]
+    },
+    {
+      "caseId": "NATIVE-24",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "text",
+        "image",
+        "mixed",
+        "empty",
+        "permission-denied"
+      ]
+    },
+    {
+      "caseId": "NATIVE-25",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "switch-tab",
+        "restart"
+      ]
+    },
+    {
+      "caseId": "NATIVE-26",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "keyboard-paste",
+        "menu-paste",
+        "dom-paste"
+      ]
+    },
+    {
+      "caseId": "NATIVE-27",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "main-screen",
+        "alternate-screen",
+        "fullscreen",
+        "scroll"
+      ]
+    },
+    {
+      "caseId": "NATIVE-28",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "resize",
+        "minimize",
+        "restore"
+      ]
+    },
+    {
+      "caseId": "NATIVE-29",
+      "owner": "W4",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "utf8-split",
+        "binary",
+        "control-sequence"
+      ]
+    },
+    {
+      "caseId": "NATIVE-30",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "dsr",
+        "da",
+        "focus",
+        "mouse",
+        "keyboard-protocol",
+        "sync-output"
+      ]
+    },
+    {
+      "caseId": "NATIVE-31",
+      "owner": "W4",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "immediate-output-nonzero-exit"
+      ]
+    },
+    {
+      "caseId": "NATIVE-32",
+      "owner": "W4",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "write-block",
+        "high-output",
+        "multi-session"
+      ]
+    },
+    {
+      "caseId": "NATIVE-33",
+      "owner": "W4",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "independent-close",
+        "external-cli",
+        "background-task"
+      ]
+    },
+    {
+      "caseId": "NATIVE-34",
+      "owner": "W3",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "observer-off",
+        "observer-failure",
+        "late-event"
+      ]
+    },
+    {
+      "caseId": "NATIVE-35",
+      "owner": "W3",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "panel-missing",
+        "panel-corrupt",
+        "runtime-switch"
+      ]
+    },
+    {
+      "caseId": "NATIVE-36",
+      "owner": "W8",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "upgrade",
+        "rollback",
+        "concurrent-write"
+      ]
+    },
+    {
+      "caseId": "NATIVE-37",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "login",
+        "browser-callback",
+        "keychain"
+      ]
+    },
+    {
+      "caseId": "NATIVE-38",
+      "owner": "W3",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "osc",
+        "bel",
+        "url",
+        "clipboard"
+      ]
+    },
+    {
+      "caseId": "NATIVE-39",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "bundled-runtime",
+        "corrupt-runtime"
+      ]
+    },
+    {
+      "caseId": "NATIVE-40",
+      "owner": "W9",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "pinned-version",
+        "latest-stable"
+      ]
+    },
+    {
+      "caseId": "NATIVE-41",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "paste-then-enter",
+        "paste-failure-then-enter"
+      ]
+    },
+    {
+      "caseId": "NATIVE-42",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "partial-write",
+        "unknown-write"
+      ]
+    },
+    {
+      "caseId": "NATIVE-43",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "same-payload-first",
+        "same-payload-second"
+      ]
+    },
+    {
+      "caseId": "NATIVE-44",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "mode-change"
+      ]
+    },
+    {
+      "caseId": "NATIVE-45",
+      "owner": "W5",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "risk-cancel",
+        "explicit-raw-send"
+      ]
+    },
+    {
+      "caseId": "NATIVE-46",
+      "owner": "W4",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "duplicate-ack",
+        "backward-ack",
+        "beyond-sent",
+        "old-epoch"
+      ]
+    },
+    {
+      "caseId": "NATIVE-47",
+      "owner": "W4",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "hidden-tab",
+        "pause",
+        "resume"
+      ]
+    },
+    {
+      "caseId": "NATIVE-48",
+      "owner": "W4",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "exit-before-parser"
+      ]
+    },
+    {
+      "caseId": "NATIVE-49",
+      "owner": "W4",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "webview-crash",
+        "channel-disconnect"
+      ]
+    },
+    {
+      "caseId": "NATIVE-50",
+      "owner": "W2",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "cli-profile-mismatch"
+      ]
+    },
+    {
+      "caseId": "NATIVE-51",
+      "owner": "W2",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "profile-revision-change"
+      ]
+    },
+    {
+      "caseId": "NATIVE-52",
+      "owner": "W2",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "cwd-semantics",
+        "unknown-extra-args"
+      ]
+    },
+    {
+      "caseId": "NATIVE-53",
+      "owner": "W1",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "root-alias",
+        "windows-env-case"
+      ]
+    },
+    {
+      "caseId": "NATIVE-54",
+      "owner": "W4",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "wrong-window-input",
+        "wrong-window-kill",
+        "wrong-window-ack"
+      ]
+    },
+    {
+      "caseId": "NATIVE-55",
+      "owner": "W3",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "forged-hook",
+        "replay",
+        "oversize",
+        "late-event"
+      ]
+    },
+    {
+      "caseId": "NATIVE-56",
+      "owner": "W8",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "argv-secret",
+        "error-secret",
+        "title-secret"
+      ]
+    },
+    {
+      "caseId": "NATIVE-57",
+      "owner": "W1",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "codex-only-restart"
+      ]
+    },
+    {
+      "caseId": "NATIVE-58",
+      "owner": "W3",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "two-root-mapping",
+        "two-root-index",
+        "two-root-panel"
+      ]
+    },
+    {
+      "caseId": "NATIVE-59",
+      "owner": "W0",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "test-harness-not-production"
+      ]
+    },
+    {
+      "caseId": "NATIVE-60",
+      "owner": "W2",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "shim",
+        "locator",
+        "picker-scope",
+        "raw-pipe"
+      ]
+    },
+    {
+      "caseId": "NATIVE-61",
+      "owner": "W4",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "duplicate-spawn",
+        "lost-response",
+        "native-detached"
+      ]
+    },
+    {
+      "caseId": "NATIVE-62",
+      "owner": "W8",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "inherit",
+        "set",
+        "set-false",
+        "unset",
+        "legacy-writeback",
+        "secret-isolation"
+      ]
+    },
+    {
+      "caseId": "NATIVE-63",
+      "owner": "W6",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "cc-desk-observer-off",
+        "cc-desk-observer-on",
+        "system-terminal-observer-off",
+        "system-terminal-observer-on"
+      ]
+    },
+    {
+      "caseId": "NATIVE-64",
+      "owner": "W9",
+      "requiredByDefault": true,
+      "subcaseIds": [
+        "missing-case",
+        "duplicate",
+        "fake-na",
+        "wrong-hash"
+      ]
+    }
+  ]
+}
