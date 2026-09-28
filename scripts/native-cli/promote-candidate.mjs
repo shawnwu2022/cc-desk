@@ -105,6 +105,12 @@ function packageVersion(repoRoot) {
   return value.version
 }
 
+function publishedAssetName(path) {
+  const name = basename(path)
+  if (!name) fail('PROMOTION_ASSET_NAME_INVALID')
+  return name.replaceAll(' ', '.')
+}
+
 function ensureEmptyPublishDir(path) {
   if (existsSync(path)) {
     const stat = lstatSync(path)
@@ -155,8 +161,8 @@ export function preparePromotion({
   const assetNames = new Set()
   const releaseFiles = []
   for (const file of candidate.files) {
-    const assetName = basename(file.path)
-    if (!assetName || assetNames.has(assetName)) fail('PROMOTION_ASSET_NAME_COLLISION')
+    const assetName = publishedAssetName(file.path)
+    if (assetNames.has(assetName)) fail('PROMOTION_ASSET_NAME_COLLISION')
     assetNames.add(assetName)
     const source = resolveCandidateFile(verifiedRoot, file.path)
     const destination = resolve(publish, assetName)
