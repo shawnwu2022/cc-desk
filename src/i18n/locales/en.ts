@@ -224,6 +224,11 @@ export default {
   // Welcome view
   claudeCode: 'Claude Code',
   aiPoweredAssistant: 'AI-powered coding assistant',
+  nativeWorkspaceSubtitle: 'Multi-project workspace for Claude Code and Codex CLI',
+  openNativeCliWorkspace: 'Open Native CLI Workspace',
+  nativeWorkspaceHint: 'Start Claude Code or Codex CLI with native profiles, projects, resume and raw argv.',
+  openLegacyClaudeWorkspace: 'Open Legacy Claude Workspace',
+  legacyClaudeWorkspaceHint: 'Compatibility path for the existing Claude-only workspace.',
   selectProjectDir: 'Select Project Directory',
   chooseDirHint: 'Choose a directory to start a new session',
 
