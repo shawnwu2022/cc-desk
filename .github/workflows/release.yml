@@ -3,13 +3,6 @@
 name: Signed candidate packages
 
 on:
-  push:
-    tags:
-      - 'v*'
-    branches:
-      - main
-    paths:
-      - package.json
   workflow_dispatch:
 
 permissions:
@@ -124,4 +117,34 @@ jobs:
         with:
           name: cc-desk-candidate-${{ github.sha }}-${{ matrix.name }}
           path: ${{ matrix.patterns }}
+          if-no-files-found: error
+
+
+  manifest:
+    name: Candidate manifest
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download exact candidate artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cc-desk-candidate-${{ github.sha }}-*
+          path: artifacts
+
+      - name: Build candidate identity manifest
+        run: node scripts/native-cli/candidate-manifest.mjs artifacts candidate-manifest.json "${{ github.sha }}"
+
+      - name: Upload candidate identity manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-candidate-manifest-${{ github.sha }}
+          path: candidate-manifest.json
           if-no-files-found: error
