@@ -156,6 +156,8 @@ jobs:
           printf '%s\n' "$RELEASE_NOTES" > promotion/release-notes.txt
           gh release create "$RELEASE_TAG" \
             --draft \
+            --prerelease \
+            --latest=false \
             --target "$SOURCE_SHA" \
             --title "CC Desk $RELEASE_TAG" \
             --notes-file promotion/release-notes.txt
@@ -182,11 +184,11 @@ jobs:
           test "$(sha256sum promotion/publish/latest.json | cut -d' ' -f1)" = \
                "$(sha256sum promotion/downloaded/latest.json | cut -d' ' -f1)"
 
-      - name: Publish verified draft without rebuilding
+      - name: Publish verified candidate as non-latest prerelease
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         shell: bash
-        run: gh release edit "$RELEASE_TAG" --draft=false --latest
+        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
 
       - name: Verify published updater channel
         env:
@@ -197,6 +199,12 @@ jobs:
           node scripts/verify-updater-manifest.js \
             "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/latest.json" \
             "$version"
+
+      - name: Promote verified public candidate to stable latest
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: gh release edit "$RELEASE_TAG" --prerelease=false --latest
 
       - name: Upload promotion audit plan
         uses: actions/upload-artifact@v4
