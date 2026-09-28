@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename, relative, resolve, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const SHA256 = /^[0-9a-f]{64}$/
 const SOURCE_SHA = /^[0-9a-f]{40,64}$/
@@ -145,7 +146,11 @@ function main() {
   writeFileSync(resolve(output), JSON.stringify(manifest, null, 2) + '\n')
 }
 
-if (import.meta.url === new URL('file://' + process.argv[1]).href) {
+const isEntryPoint = process.argv[1]
+  ? import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+  : false
+
+if (isEntryPoint) {
   try {
     main()
   } catch (error) {
