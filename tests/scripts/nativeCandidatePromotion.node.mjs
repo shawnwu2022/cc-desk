@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -36,7 +37,22 @@ function targetPlan() {
   }
 }
 
-function acceptance(candidate) {
+function evidenceFixture() {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ccdesk-evidence-'))
+  const relative = 'evidence/windows-codex.json'
+  const file = path.join(root, relative)
+  mkdirSync(path.dirname(file), { recursive: true })
+  const bytes = Buffer.from('synthetic-installed-package-evidence')
+  writeFileSync(file, bytes)
+  return {
+    root,
+    relative,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    file,
+  }
+}
+
+function acceptance(candidate, evidence) {
   const packageSha = candidate.files.find(file => file.kind === 'windows-package').sha256
   const targets = structuredClone(targetPlan().targets)
   return {
@@ -53,8 +69,8 @@ function acceptance(candidate) {
       packageSha256: packageSha,
       evidence: [{
         kind: 'installed-package',
-        path: 'evidence/windows-codex.json',
-        sha256: 'e'.repeat(64),
+        path: evidence.relative,
+        sha256: evidence.sha256,
       }],
       nonApplicabilityReason: null,
     }],
@@ -72,13 +88,15 @@ test('D30_Candidate_IdentityChangesWithArtifactBytes_01', () => {
 
 test('D30_Promotion_AcceptsExactAcceptedCandidate_02', () => {
   const root = fixture()
+  const evidence = evidenceFixture()
   const commitSha = '2'.repeat(40)
   const candidate = buildCandidateManifest({ root, commitSha })
   const result = verifyPromotion({
     candidate,
-    acceptance: acceptance(candidate),
+    acceptance: acceptance(candidate, evidence),
     targetPlan: targetPlan(),
     artifactsRoot: root,
+    evidenceRoot: evidence.root,
     expectedCommitSha: commitSha,
   })
   assert.equal(result.ok, true)
@@ -87,37 +105,42 @@ test('D30_Promotion_AcceptsExactAcceptedCandidate_02', () => {
 
 test('D30_Promotion_RejectsRebuiltOrMutatedArtifact_03', () => {
   const root = fixture()
+  const evidence = evidenceFixture()
   const commitSha = '3'.repeat(40)
   const candidate = buildCandidateManifest({ root, commitSha })
   writeFileSync(path.join(root, 'windows/CC.Desk-setup.exe'), 'rebuilt bytes')
   assert.throws(() => verifyPromotion({
     candidate,
-    acceptance: acceptance(candidate),
+    acceptance: acceptance(candidate, evidence),
     targetPlan: targetPlan(),
     artifactsRoot: root,
+    evidenceRoot: evidence.root,
     expectedCommitSha: commitSha,
   }), /CANDIDATE_FILE_(SIZE|HASH)_MISMATCH/)
 })
 
 test('D30_Promotion_RejectsDifferentCommitOrCandidate_04', () => {
   const root = fixture()
+  const evidence = evidenceFixture()
   const commitSha = '4'.repeat(40)
   const candidate = buildCandidateManifest({ root, commitSha })
   assert.throws(() => verifyPromotion({
     candidate,
-    acceptance: acceptance(candidate),
+    acceptance: acceptance(candidate, evidence),
     targetPlan: targetPlan(),
     artifactsRoot: root,
+    evidenceRoot: evidence.root,
     expectedCommitSha: '5'.repeat(40),
   }), /CANDIDATE_COMMIT_MISMATCH/)
 
-  const wrongAcceptance = acceptance(candidate)
+  const wrongAcceptance = acceptance(candidate, evidence)
   wrongAcceptance.candidate.files[0].sha256 = 'f'.repeat(64)
   assert.throws(() => verifyPromotion({
     candidate,
     acceptance: wrongAcceptance,
     targetPlan: targetPlan(),
     artifactsRoot: root,
+    evidenceRoot: evidence.root,
     expectedCommitSha: commitSha,
   }), /INVALID_CANDIDATE_IDENTITY/)
 })
@@ -133,15 +156,34 @@ test('D30_Candidate_RejectsDuplicatePlatformArtifact_05', () => {
 
 test('D30_Promotion_RejectsTargetPlanMismatch_06', () => {
   const root = fixture()
+  const evidence = evidenceFixture()
   const commitSha = '7'.repeat(40)
   const candidate = buildCandidateManifest({ root, commitSha })
   const plan = targetPlan()
   plan.targets[0].required[0].evidenceLayers = ['A']
   assert.throws(() => verifyPromotion({
     candidate,
-    acceptance: acceptance(candidate),
+    acceptance: acceptance(candidate, evidence),
     targetPlan: plan,
     artifactsRoot: root,
+    evidenceRoot: evidence.root,
     expectedCommitSha: commitSha,
   }), /TARGET_PLAN_MISMATCH/)
+})
+
+test('D30_Promotion_RejectsEvidenceFileMutation_07', () => {
+  const root = fixture()
+  const evidence = evidenceFixture()
+  const commitSha = '8'.repeat(40)
+  const candidate = buildCandidateManifest({ root, commitSha })
+  const manifest = acceptance(candidate, evidence)
+  writeFileSync(evidence.file, 'tampered-evidence')
+  assert.throws(() => verifyPromotion({
+    candidate,
+    acceptance: manifest,
+    targetPlan: targetPlan(),
+    artifactsRoot: root,
+    evidenceRoot: evidence.root,
+    expectedCommitSha: commitSha,
+  }), /EVIDENCE_FILE_HASH_MISMATCH/)
 })
