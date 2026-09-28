@@ -64,7 +64,7 @@ test('D02_ReleaseWorkflow_StillBuildsSignedCandidates_03', () => {
 })
 
 test('D30_Policy_AllowsOnlyFullyVerifiedPromotion_04', async () => {
-  const { mayPublish } = await loadPolicy()
+  const { mayPublish, promotionComplete } = await loadPolicy()
   const good = {
     event: 'workflow_dispatch',
     operation: 'promote',
@@ -73,16 +73,16 @@ test('D30_Policy_AllowsOnlyFullyVerifiedPromotion_04', async () => {
     sameCandidate: true,
     explicitApproval: true,
     rebuildPerformed: false,
-    publishedBytesVerified: true,
   }
   assert.equal(mayPublish(good), true)
+  assert.equal(promotionComplete({ ...good, publishedBytesVerified: true }), true)
+  assert.equal(promotionComplete({ ...good, publishedBytesVerified: false }), false)
 
   for (const key of [
     'gatePassed',
     'manifestVerified',
     'sameCandidate',
     'explicitApproval',
-    'publishedBytesVerified',
   ]) {
     assert.equal(mayPublish({ ...good, [key]: false }), false, key)
   }
