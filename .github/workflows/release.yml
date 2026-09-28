@@ -1,15 +1,8 @@
-# Build signed cross-platform candidate packages. Publishing remains disabled until
-# the native CLI acceptance gate and explicit promotion workflow are implemented.
+# Build signed cross-platform candidate packages only.
+# Publishing is a separate, explicit, candidate-bound promotion workflow.
 name: Signed candidate packages
 
 on:
-  push:
-    tags:
-      - 'v*'
-    branches:
-      - main
-    paths:
-      - package.json
   workflow_dispatch:
 
 permissions:
