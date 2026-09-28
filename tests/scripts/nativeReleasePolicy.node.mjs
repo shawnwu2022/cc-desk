@@ -10,6 +10,8 @@ const releaseWorkflowPath = fileURLToPath(
 const promotionWorkflowPath = fileURLToPath(
   new URL('../../.github/workflows/promote-release.yml', import.meta.url),
 )
+const packagePath = fileURLToPath(new URL('../../package.json', import.meta.url))
+const legacyReleasePath = fileURLToPath(new URL('../../scripts/release.js', import.meta.url))
 
 async function loadPolicy() {
   return import(`${pathToFileURL(policyPath).href}?case=${Date.now()}-${Math.random()}`)
@@ -101,4 +103,17 @@ test('D30_PromotionWorkflow_IsManualGateBoundAndNeverBuilds_03', () => {
   assert.doesNotMatch(workflow, /tauri build/)
   assert.doesNotMatch(workflow, /^\s*push:\s*$/m)
   assert.doesNotMatch(workflow, /^\s*schedule:\s*$/m)
+})
+
+test('D31_LegacyDirectReleaseEntrypointsStayDisabled_01', () => {
+  const pkg = JSON.parse(readFileSync(packagePath, 'utf8'))
+  assert.equal(pkg.scripts?.release, undefined)
+  assert.equal(pkg.scripts?.['release:oss'], undefined)
+
+  const legacy = readFileSync(legacyReleasePath, 'utf8')
+  assert.match(legacy, /DIRECT_RELEASE_DISABLED/)
+  assert.doesNotMatch(legacy, /git push/)
+  assert.doesNotMatch(legacy, /gh release create/)
+  assert.doesNotMatch(legacy, /gh release edit/)
+  assert.doesNotMatch(legacy, /TAURI_SIGNING_PRIVATE_KEY/)
 })
