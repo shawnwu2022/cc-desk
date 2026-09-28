@@ -125,3 +125,47 @@ jobs:
           name: cc-desk-candidate-${{ github.sha }}-${{ matrix.name }}
           path: ${{ matrix.patterns }}
           if-no-files-found: error
+          retention-days: 30
+
+  manifest:
+    name: Freeze candidate identity
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download exact candidate artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cc-desk-candidate-${{ github.sha }}-*
+          path: candidate
+          merge-multiple: false
+
+      - name: Build immutable candidate manifest
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          node scripts/native-cli/candidate-manifest.mjs \
+            candidate \
+            candidate-manifest.json \
+            "${GITHUB_SHA}" \
+            "$version"
+
+      - name: Upload candidate manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-candidate-manifest
+          path: candidate-manifest.json
+          if-no-files-found: error
+          retention-days: 30
