@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 
 const SHA256 = /^[0-9a-f]{64}$/i
 const COMMIT_SHA = /^[0-9a-f]{40}$/i
+const MAX_U64 = (1n << 64n) - 1n
 const EXACT_TRANSFORMS = new Set([
   'codex-user-prompt-submit-v1-exact',
   'claude-user-prompt-submit-v1-exact',
@@ -14,6 +15,15 @@ function isObject(value) {
 
 function text(value) {
   return typeof value === 'string' && value.length > 0
+}
+
+function positiveU64Text(value) {
+  if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value)) return false
+  try {
+    return BigInt(value) <= MAX_U64
+  } catch {
+    return false
+  }
 }
 
 function fail(reason) {
@@ -73,6 +83,23 @@ function fixtureFingerprint(record) {
     originalText: value.originalText,
     hostPayloadBase64: value.hostPayloadBase64,
     transformId: value.transformId,
+  })
+}
+
+function hostFingerprint(record) {
+  if (record.lane === 'cc-desk') {
+    return JSON.stringify({
+      kind: record.host.kind,
+      deskCommit: record.host.deskCommit,
+      xtermVersion: record.host.xtermVersion,
+      webviewRuntime: record.host.webviewRuntime,
+      renderer: record.host.renderer,
+    })
+  }
+  return JSON.stringify({
+    kind: record.host.kind,
+    terminalProgram: record.host.terminalProgram,
+    driver: record.hostPayloadEvidence.driver,
   })
 }
 
@@ -191,19 +218,19 @@ export function validateRealCliRun(record) {
     if (
       provenance.kind !== 'native-input-frame'
       || !isObject(provenance.frame)
-      || !text(provenance.frame.runId)
+      || provenance.frame.runId !== record.runId
       || !Number.isInteger(provenance.frame.generation)
-      || provenance.frame.generation < 0
+      || provenance.frame.generation <= 0
       || provenance.frame.generation > 0xffffffff
-      || !/^(?:0|[1-9][0-9]*)$/.test(provenance.frame.inputSeq ?? '')
-      || !/^(?:0|[1-9][0-9]*)$/.test(provenance.frame.modeEpoch ?? '')
+      || !positiveU64Text(provenance.frame.inputSeq)
+      || !positiveU64Text(provenance.frame.modeEpoch)
     ) {
       return fail('DESK_HOST_PAYLOAD_FRAME_REQUIRED')
     }
   } else if (
     provenance.kind !== 'terminal-driver-write'
     || !text(provenance.driver)
-    || !/^(?:0|[1-9][0-9]*)$/.test(provenance.writeSeq ?? '')
+    || !positiveU64Text(provenance.writeSeq)
   ) {
     return fail('SYSTEM_TERMINAL_WRITE_EVIDENCE_REQUIRED')
   }
@@ -328,6 +355,16 @@ export function certifyCliComparison(records) {
     return { status: 'BLOCKED', reason: 'INCOMPLETE_REAL_CLI_EVIDENCE' }
   }
 
+  for (const record of records) {
+    const validation = validateRealCliRun(record)
+    if (!validation.valid) {
+      return {
+        status: 'FAIL',
+        reason: `INVALID_REAL_CLI_EVIDENCE:${validation.reason}`,
+      }
+    }
+  }
+
   const targetKey = targetFingerprint(records[0])
   if (records.some(record => targetFingerprint(record) !== targetKey)) {
     return { status: 'FAIL', reason: 'COMPARISON_TARGET_MISMATCH' }
@@ -340,18 +377,11 @@ export function certifyCliComparison(records) {
 
   for (const lane of ['cc-desk', 'system-terminal']) {
     const pair = pairByLane(records, lane)
+    if (hostFingerprint(pair.off) !== hostFingerprint(pair.on)) {
+      return { status: 'FAIL', reason: 'COMPARISON_HOST_MISMATCH' }
+    }
     if (exactObserverPromptChanged(pair)) {
       return { status: 'FAIL', reason: 'OBSERVER_CHANGED_ORACLE' }
-    }
-  }
-
-  for (const record of records) {
-    const validation = validateRealCliRun(record)
-    if (!validation.valid) {
-      return {
-        status: 'FAIL',
-        reason: `INVALID_REAL_CLI_EVIDENCE:${validation.reason}`,
-      }
     }
   }
 
