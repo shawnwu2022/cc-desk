@@ -1,0 +1,189 @@
+name: Promote verified native candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Workflow run ID from Signed candidate packages
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact candidate source commit SHA
+        required: true
+        type: string
+      evidence_run_id:
+        description: Workflow run ID containing installed-package evidence
+        required: true
+        type: string
+      evidence_artifact:
+        description: Artifact containing plan.json, records.json and evidence/
+        required: true
+        type: string
+      tag:
+        description: Release tag matching the candidate package version (vX.Y.Z)
+        required: true
+        type: string
+      release_notes:
+        description: Release notes
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: native-release-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Re-gate and promote exact signed candidate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    environment: native-release-promotion
+
+    steps:
+      - name: Validate immutable workflow inputs
+        shell: bash
+        run: |
+          if ! printf '%s' "${{ inputs.candidate_sha }}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::candidate_sha must be an exact commit SHA"
+            exit 1
+          fi
+          for id in "${{ inputs.candidate_run_id }}" "${{ inputs.evidence_run_id }}"; do
+            if ! printf '%s' "$id" | grep -Eq '^[1-9][0-9]*$'; then
+              echo "::error::run IDs must be positive integers"
+              exit 1
+            fi
+          done
+          if ! printf '%s' "${{ inputs.tag }}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag must be an exact semver release tag"
+            exit 1
+          fi
+
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download macOS candidate bytes
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ inputs.candidate_sha }}-macos
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: candidate-artifacts/cc-desk-candidate-${{ inputs.candidate_sha }}-macos
+
+      - name: Download Linux candidate bytes
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ inputs.candidate_sha }}-linux
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: candidate-artifacts/cc-desk-candidate-${{ inputs.candidate_sha }}-linux
+
+      - name: Download Windows candidate bytes
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ inputs.candidate_sha }}-windows
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: candidate-artifacts/cc-desk-candidate-${{ inputs.candidate_sha }}-windows
+
+      - name: Download immutable candidate manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ inputs.candidate_sha }}-manifest
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: .promotion/candidate
+
+      - name: Download installed-package evidence bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.evidence_artifact }}
+          run-id: ${{ inputs.evidence_run_id }}
+          github-token: ${{ github.token }}
+          path: .promotion/evidence-bundle
+
+      - name: Recompute candidate hashes and rerun complete acceptance gate
+        shell: bash
+        run: |
+          node scripts/native-cli/promote-candidate.mjs \
+            --repo-root . \
+            --candidate-root candidate-artifacts \
+            --candidate .promotion/candidate/candidate.json \
+            --catalog docs/testing/native-cli-acceptance-catalog.json \
+            --plan .promotion/evidence-bundle/plan.json \
+            --records .promotion/evidence-bundle/records.json \
+            --evidence-root .promotion/evidence-bundle/evidence \
+            --source-commit "${{ inputs.candidate_sha }}" \
+            --tag "${{ inputs.tag }}" \
+            --publish-dir .promotion/publish \
+            --out .promotion/promotion.json
+
+      - name: Generate updater metadata from verified staging only
+        shell: bash
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node scripts/generate-updater-manifest.js             .promotion/publish             .promotion/publish/latest.json             "${{ inputs.tag }}"
+
+      - name: Ensure release tag and release do not already exist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Release tag already exists"
+            exit 1
+          fi
+          if gh release view "${{ inputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Release already exists"
+            exit 1
+          fi
+
+      - name: Publish the exact verified staging bytes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          printf '%s\n' "$RELEASE_NOTES" > .promotion/release-notes.txt
+          gh release create "${{ inputs.tag }}"             .promotion/publish/*             --target "${{ inputs.candidate_sha }}"             --title "CC Desk ${{ inputs.tag }}"             --notes-file .promotion/release-notes.txt             --latest
+
+      - name: Download published release bytes again
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .promotion/published
+          gh release download "${{ inputs.tag }}"             --dir .promotion/published
+
+      - name: Verify published candidate asset hashes
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-published-promotion.mjs             .promotion/published             .promotion/promotion.json
+
+      - name: Verify updater manifest and published asset URLs
+        shell: bash
+        run: |
+          node scripts/verify-updater-manifest.js             "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/latest.json"             "${{ inputs.tag }}"
+
+      - name: Upload promotion audit metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-promotion-${{ inputs.candidate_sha }}
+          path: |
+            .promotion/promotion.json
+            .promotion/publish/candidate.json
+            .promotion/publish/acceptance-summary.json
+          retention-days: 90
+          if-no-files-found: warn
