@@ -26,50 +26,55 @@ jobs:
     name: Verify acceptance evidence
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout repository
+      - name: Download candidate identity from explicit candidate run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/candidate"
+          gh run download "$RUN_ID" --pattern 'cc-desk-candidate-manifest-*' --dir "$RUNNER_TEMP/candidate"
+
+      - name: Resolve exact candidate manifest and commit
+        id: candidate
+        shell: bash
+        run: |
+          mapfile -t candidates < <(find "$RUNNER_TEMP/candidate" -type f -name 'candidate-manifest.json' -print)
+          [ "${#candidates[@]}" -eq 1 ] || { echo "::error::Exactly one candidate-manifest.json is required"; exit 1; }
+          commit="$(jq -r '.commitSha // empty' "${candidates[0]}")"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Candidate commit is invalid"; exit 1; }
+          echo "path=${candidates[0]}" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact candidate source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.candidate.outputs.commit }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
 
-      - name: Download candidate identity from the explicit candidate run
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.candidate_run_id }}
-        run: |
-          mkdir candidate
-          gh run download "$RUN_ID" --pattern 'cc-desk-candidate-manifest-*' --dir candidate
-
-      - name: Download evidence from the explicit run
+      - name: Download evidence from explicit evidence run
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.evidence_run_id }}
           ARTIFACT: ${{ inputs.evidence_artifact }}
         run: |
-          mkdir evidence
-          gh run download "$RUN_ID" --name "$ARTIFACT" --dir evidence
+          mkdir -p "$RUNNER_TEMP/evidence"
+          gh run download "$RUN_ID" --name "$ARTIFACT" --dir "$RUNNER_TEMP/evidence"
 
       - name: Require one acceptance manifest
         id: manifest
         shell: bash
         run: |
-          mapfile -t files < <(find evidence -type f -name 'acceptance-manifest.json' -print)
-          mapfile -t candidates < <(find candidate -type f -name 'candidate-manifest.json' -print)
-          if [ "${#files[@]}" -ne 1 ]; then
-            echo "::error::Exactly one acceptance-manifest.json is required"
-            exit 1
-          fi
-          if [ "${#candidates[@]}" -ne 1 ]; then
-            echo "::error::Exactly one candidate-manifest.json is required"
-            exit 1
-          fi
+          mapfile -t files < <(find "$RUNNER_TEMP/evidence" -type f -name 'acceptance-manifest.json' -print)
+          [ "${#files[@]}" -eq 1 ] || { echo "::error::Exactly one acceptance-manifest.json is required"; exit 1; }
           echo "path=${files[0]}" >> "$GITHUB_OUTPUT"
-          echo "candidate=${candidates[0]}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify complete target/case/subcase evidence
-        run: node scripts/native-cli/verify-acceptance.mjs "${{ steps.manifest.outputs.path }}" "${{ steps.manifest.outputs.candidate }}" docs/testing/native-cli-release-targets.json evidence > acceptance-gate-result.json
+      - name: Verify complete target/case/subcase evidence and bytes
+        run: |
+          node scripts/native-cli/verify-acceptance.mjs             "${{ steps.manifest.outputs.path }}"             "${{ steps.candidate.outputs.path }}"             docs/testing/native-cli-release-targets.json             "$RUNNER_TEMP/evidence"             > acceptance-gate-result.json
 
       - name: Upload gate result
         uses: actions/upload-artifact@v4
