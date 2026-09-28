@@ -146,12 +146,20 @@ function driverCommand(path) {
   return { command: path, prefix: [] }
 }
 
-function writeRunFixture(run) {
-  mkdirSync(run.configRoot, { recursive: true, mode: 0o700 })
-  mkdirSync(run.env.HOME, { recursive: true, mode: 0o700 })
-  mkdirSync(run.projectRoot, { recursive: true, mode: 0o700 })
+function prepareRunFixture(run) {
+  try {
+    mkdirSync(run.configRoot, { recursive: true, mode: 0o700 })
+    mkdirSync(run.env.HOME, { recursive: true, mode: 0o700 })
+    mkdirSync(run.projectRoot, { recursive: true, mode: 0o700 })
+  } catch {
+    return 'REAL_CLI_RUN_ROOT_UNAVAILABLE'
+  }
+  if (![run.runRoot, run.configRoot, run.env.HOME, run.projectRoot]
+    .every(path => realContained(run.testRoot, path))) {
+    return 'REAL_CLI_RUN_ROOT_NOT_ISOLATED'
+  }
   if (existsSync(run.fixturePath) || existsSync(run.reportPath)) {
-    return false
+    return 'REAL_CLI_RUN_ROOT_NOT_FRESH'
   }
   try {
     writeFileSync(
@@ -159,10 +167,13 @@ function writeRunFixture(run) {
       JSON.stringify(run.fixture),
       { encoding: 'utf8', flag: 'wx', mode: 0o600 },
     )
-    return true
   } catch {
-    return false
+    return 'REAL_CLI_RUN_ROOT_NOT_FRESH'
   }
+  if (!realContained(run.testRoot, run.fixturePath)) {
+    return 'REAL_CLI_RUN_ROOT_NOT_ISOLATED'
+  }
+  return null
 }
 
 function readEvidence(path) {
@@ -389,8 +400,9 @@ export function executeD20Matrix(plan, options = {}) {
   const records = []
   const recordPaths = []
   for (const run of plan.runs) {
-    if (!writeRunFixture(run)) {
-      return executionFailure('REAL_CLI_RUN_ROOT_NOT_FRESH', run.runId)
+    const fixtureError = prepareRunFixture(run)
+    if (fixtureError) {
+      return executionFailure(fixtureError, run.runId)
     }
 
     const driver = driverCommand(run.driverPath)
@@ -420,6 +432,9 @@ export function executeD20Matrix(plan, options = {}) {
     }
     if (result.error || result.signal || result.status !== 0) {
       return executionFailure('REAL_CLI_DRIVER_FAILED', run.runId)
+    }
+    if (existsSync(run.reportPath) && !realContained(plan.testRoot, run.reportPath)) {
+      return executionFailure('REAL_CLI_REPORT_NOT_ISOLATED', run.runId)
     }
 
     const evidence = readEvidence(run.reportPath)
