@@ -39,7 +39,7 @@ Install the **same candidate files** identified by the candidate manifest on the
 Acceptance evidence must use the D28 schema consumed by:
 
 ```bash
-node scripts/native-cli/verify-acceptance.mjs acceptance-manifest.json
+node scripts/native-cli/verify-acceptance.mjs acceptance-manifest.json candidate-manifest.json docs/testing/native-cli-release-targets.json <evidence-root>
 ```
 
 The gate rejects, among other failures:
