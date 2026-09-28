@@ -151,7 +151,7 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 
 ### Primary
 - **Ink Blue / 墨蓝** (#1e3a5f；暗色 Ink Blue Night #4a7aad): 主强调色。主按钮、链接、输入框聚焦边框、focus ring、info 语义。它是"可点击/可操作"的统一信号。次级墨蓝 Ink Blue Soft (#2a5082；暗色 #6a9acd) 用于 hover 递进与 info 状态。
-- **Amber Gold / 琥珀金** (#d4a574；暗色 Amber Glow #f0d4a8，深态 #b8956a): 特质色与激活色。终端光标、选中态背景与边框、图标激活指示条、"已激活 Provider"徽标。浅态 #e8c9a8 用于暗色下的奶色提亮。**作文字使用时**必须用 Amber Ink(#7a5c3a，暗色即 #f0d4a8)——琥珀金本身在浅色米灰底上仅 ~2:1，只作装饰与填充，不作文字。
+- **Amber Gold / 琥珀金** (#d4a574；暗色 Amber Glow #f0d4a8，深态 #b8956a): 特质色与激活色。终端光标、选中态背景与边框、图标激活指示条、"当前 Profile"徽标。浅态 #e8c9a8 用于暗色下的奶色提亮。**作文字使用时**必须用 Amber Ink(#7a5c3a，暗色即 #f0d4a8)——琥珀金本身在浅色米灰底上仅 ~2:1，只作装饰与填充，不作文字。
 
 ### Secondary
 - **Status Green / 墨绿** (#3d8c6e；暗色 #5dad8e): 成功、运行中状态。
@@ -184,7 +184,7 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 ### Hierarchy
 - **Headline** (600, 16px, 1.5): 欢迎页/设置区标题、弹窗标题。整个系统最大的字号。
 - **Title LG** (500, 15px, 1.5): 项目选择页的项目行主名。
-- **Title** (500, 14px, 1.5): 设置区列表条目主名称（Provider 名、卡片名称）。
+- **Title** (500, 14px, 1.5): 设置区列表条目主名称（Profile 名、卡片名称）。
 - **Title SM** (500, 13px, 1.5): 侧边栏条目主名（会话、Skill/Agent/MCP/Plugin 名）；主按钮文字也是 13px。
 - **Body** (400, 14px, 1.5): 正文、描述文字。全局 body 基线。
 - **Label** (500, 12px): 分组头、次级信息、表单标签。
@@ -237,7 +237,7 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 左侧 48px 窄条导航，`--bg-secondary` 底 + 1px 右边框。图标按钮 40×40px、6px 圆角、透明底。状态机：静默（`--text-secondary`）→ hover（`--hover-bg` + 主文字）→ **active（琥珀选中 `--selected-bg` + 琥珀金图标 + 左缘 3px 琥珀指示条）**。角标为 8px 圆点（2px 底色描边），`pulse 2s` 呼吸动画，红=错误/更新、琥珀=权限提醒。
 
 ### Cards / List Items
-条目式卡片（Provider 卡、会话条目）：`--bg-tertiary` 或透明底、6–8px 圆角、1px 边框或无边框。名称 14px/500 主文字 + 12px tertiary 副文字的单行结构。**hover 才浮现操作区**（`opacity: 0 → 1`, 0.15s），激活条目带琥珀 `active-badge`（12px/600 琥珀深色文字）。
+条目式卡片（Profile 卡、会话条目）：`--bg-tertiary` 或透明底、6–8px 圆角、1px 边框或无边框。名称 14px/500 主文字 + 12px tertiary 副文字的单行结构。**hover 才浮现操作区**（`opacity: 0 → 1`, 0.15s），激活条目带琥珀 `active-badge`（12px/600 琥珀深色文字）。
 
 ### Chips / Tags
 类型标签：10px 字号、2px 6px padding、4px 圆角、类型色淡底+同系深字（MCP 蓝 #e3f2fd/#1565c0、Skills 琥珀、Agents 紫；暗色换半透明底+亮字）。仅用于元数据分类，不做可交互筛选。
