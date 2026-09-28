@@ -59,10 +59,13 @@ jobs:
             echo "::error::Gate workflow must be dispatched from the exact candidate source SHA"
             exit 1
           }
-          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ inputs.candidate_run_id }}")"
-          test "$(jq -r .conclusion <<<"$run")" = "success"
-          test "$(jq -r .head_sha <<<"$run")" = "$SOURCE_SHA"
-          test "$(jq -r .path <<<"$run")" = ".github/workflows/release.yml"
+          candidate_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ inputs.candidate_run_id }}")"
+          evidence_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ inputs.evidence_run_id }}")"
+          test "$(jq -r .conclusion <<<"$candidate_run")" = "success"
+          test "$(jq -r .head_sha <<<"$candidate_run")" = "$SOURCE_SHA"
+          test "$(jq -r .path <<<"$candidate_run")" = ".github/workflows/release.yml"
+          test "$(jq -r .conclusion <<<"$evidence_run")" = "success"
+          test "$(jq -r .head_sha <<<"$evidence_run")" = "$SOURCE_SHA"
 
       - name: Checkout exact candidate source
         uses: actions/checkout@v5
