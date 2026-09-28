@@ -358,6 +358,12 @@ export function certifyCliComparison(records) {
   for (const record of records) {
     const validation = validateRealCliRun(record)
     if (!validation.valid) {
+      if (validation.reason === 'CONTENT_MISMATCH') {
+        const pair = pairByLane(records, record.lane)
+        if (exactObserverPromptChanged(pair)) {
+          return { status: 'FAIL', reason: 'OBSERVER_CHANGED_ORACLE' }
+        }
+      }
       return {
         status: 'FAIL',
         reason: `INVALID_REAL_CLI_EVIDENCE:${validation.reason}`,
