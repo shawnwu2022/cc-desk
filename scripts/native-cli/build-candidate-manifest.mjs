@@ -18,9 +18,24 @@ const COMMIT = /^[0-9a-f]{40}$/
 const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024
 
 const TARGETS = [
-  { suffix: '-macos', platform: 'macos', arch: 'aarch64' },
-  { suffix: '-linux', platform: 'linux', arch: 'x86_64' },
-  { suffix: '-windows', platform: 'windows', arch: 'x86_64' },
+  {
+    name: 'macos',
+    platform: 'macos',
+    arch: 'aarch64',
+    required: [/\.dmg$/i, /\.app\.tar\.gz$/i, /\.app\.tar\.gz\.sig$/i],
+  },
+  {
+    name: 'linux',
+    platform: 'linux',
+    arch: 'x86_64',
+    required: [/\.AppImage$/, /\.AppImage\.sig$/],
+  },
+  {
+    name: 'windows',
+    platform: 'windows',
+    arch: 'x86_64',
+    required: [/-setup\.exe$/i, /-setup\.exe\.sig$/i],
+  },
 ]
 
 function fail(code) {
@@ -31,11 +46,30 @@ function hashFile(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
-function classify(relativePath) {
+function classify(relativePath, sourceCommit) {
   const first = relativePath.split('/')[0]
-  const match = TARGETS.find(target => first.endsWith(target.suffix))
+  const match = TARGETS.find(
+    target => first === `cc-desk-candidate-${sourceCommit}-${target.name}`,
+  )
   if (!match) fail('CANDIDATE_PLATFORM_UNKNOWN')
   return match
+}
+
+function verifyPlatformCoverage(files, sourceCommit) {
+  for (const target of TARGETS) {
+    const prefix = `cc-desk-candidate-${sourceCommit}-${target.name}/`
+    const names = files
+      .filter(file => file.relativePath.startsWith(prefix))
+      .map(file => file.relativePath.slice(prefix.length))
+    if (names.length !== target.required.length) {
+      fail('CANDIDATE_PLATFORM_INCOMPLETE')
+    }
+    for (const pattern of target.required) {
+      if (names.filter(name => pattern.test(name)).length !== 1) {
+        fail('CANDIDATE_PLATFORM_INCOMPLETE')
+      }
+    }
+  }
 }
 
 function walk(root, directory = root) {
@@ -63,13 +97,14 @@ export function buildCandidateManifest(candidateRoot, sourceCommit) {
   const root = realpathSync(resolve(candidateRoot))
   const files = walk(root)
   if (files.length === 0) fail('CANDIDATE_FILES_MISSING')
+  verifyPlatformCoverage(files, sourceCommit)
 
   const manifest = {
     schemaVersion: 1,
     sourceCommit,
     files: files
       .map(file => {
-        const target = classify(file.relativePath)
+        const target = classify(file.relativePath, sourceCommit)
         return {
           path: file.relativePath,
           platform: target.platform,
