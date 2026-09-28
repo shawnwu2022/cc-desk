@@ -268,9 +268,8 @@ function changeProject(event: Event) {
 async function addProject() {
   const result = await selectDirectory()
   if (!result) return
-  await workbench.workspace.open(workbench.cli).catch(() => {})
-  const added = workbench.workspace.projects.find(project => project.selectedPath === result.path)
-  if (added) workbench.selectProject(added.projectId)
+  const projectId = await workbench.workspace.registerProject(result.path).catch(() => null)
+  if (projectId) workbench.selectProject(projectId)
 }
 
 function createNew() {
