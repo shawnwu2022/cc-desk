@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { relative, resolve, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { verifyCandidateFiles } from './candidate-manifest.mjs'
 
 const SHA256 = /^[0-9a-f]{64}$/
@@ -264,7 +265,11 @@ function main() {
   process.stdout.write(JSON.stringify(result) + '\n')
 }
 
-if (process.argv[1] && import.meta.url === new URL('file://' + resolve(process.argv[1])).href) {
+const isEntryPoint = process.argv[1]
+  ? import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+  : false
+
+if (isEntryPoint) {
   try {
     main()
   } catch (error) {
