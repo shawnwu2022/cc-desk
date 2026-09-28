@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -128,4 +128,23 @@ describe('D28 adversarial final review', () => {
       reason: 'REAL_CLI_RECORD_CWD_MISMATCH',
     })
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'D28_D20_RunRootSymlinkEscapeIsRejected_04',
+    async () => {
+      const { executeD20Matrix, prepareD20Matrix } = await loadRunner()
+      const plan = prepareD20Matrix(config('none'))
+      expect(plan.status).toBe('READY')
+      const outside = freshRoot()
+      const run = plan.runs[0]
+      mkdirSync(dirname(run.runRoot), { recursive: true })
+      symlinkSync(outside, run.runRoot, 'dir')
+
+      expect(executeD20Matrix(plan)).toMatchObject({
+        status: 'FAIL',
+        reason: 'REAL_CLI_RUN_ROOT_NOT_ISOLATED',
+        failedRunId: run.runId,
+      })
+    },
+  )
 })
