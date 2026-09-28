@@ -1,0 +1,135 @@
+name: Ingest installed native evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful Signed candidate packages run ID
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact candidate source commit SHA
+        required: true
+        type: string
+      bundle_id:
+        description: Safe directory name staged under NATIVE_CLI_EVIDENCE_DROP_ROOT
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-evidence-ingest-${{ inputs.candidate_sha }}
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    name: Validate and package installed-target evidence
+    runs-on: [self-hosted, linux, native-cli-evidence-ingest]
+    timeout-minutes: 20
+    environment: native-cli-certification-ingest
+    env:
+      DROP_ROOT: ${{ vars.NATIVE_CLI_EVIDENCE_DROP_ROOT }}
+
+    steps:
+      - name: Validate immutable inputs and workflow ref
+        shell: bash
+        run: |
+          if ! printf '%s' "${{ inputs.candidate_sha }}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::candidate_sha must be an exact commit SHA"
+            exit 1
+          fi
+          if ! printf '%s' "${{ inputs.candidate_run_id }}" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "::error::candidate_run_id must be numeric"
+            exit 1
+          fi
+          if ! printf '%s' "${{ inputs.bundle_id }}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'; then
+            echo "::error::bundle_id is invalid"
+            exit 1
+          fi
+          if [ "${{ github.sha }}" != "${{ inputs.candidate_sha }}" ]; then
+            echo "::error::Dispatch this workflow from the exact candidate ref"
+            exit 1
+          fi
+          if [ -z "$DROP_ROOT" ]; then
+            echo "::error::NATIVE_CLI_EVIDENCE_DROP_ROOT is not configured"
+            exit 1
+          fi
+
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Read candidate workflow-run metadata
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            fs.mkdirSync('.ingest', { recursive: true })
+            const response = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: Number('${{ inputs.candidate_run_id }}'),
+            })
+            fs.writeFileSync('.ingest/candidate-run.json', JSON.stringify(response.data))
+
+      - name: Verify candidate run provenance
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-workflow-run.mjs --run-json .ingest/candidate-run.json --workflow-path .github/workflows/release.yml --head-sha "${{ inputs.candidate_sha }}" --event workflow_dispatch --event push
+
+      - name: Download immutable candidate manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ inputs.candidate_sha }}-manifest
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: .ingest/candidate
+
+      - name: Resolve staged real-target evidence bundle
+        id: bundle
+        shell: bash
+        run: |
+          root_real="$(realpath "$DROP_ROOT")"
+          bundle_real="$(realpath "$root_real/${{ inputs.bundle_id }}")"
+          case "$bundle_real" in
+            "$root_real"/*) ;;
+            *)
+              echo "::error::Evidence bundle escapes configured drop root"
+              exit 1
+              ;;
+          esac
+          test -f "$bundle_real/plan.json"
+          test -f "$bundle_real/records.json"
+          test -d "$bundle_real/evidence"
+          echo "bundle=$bundle_real" >> "$GITHUB_OUTPUT"
+
+      - name: Gate and copy only referenced verified evidence
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ steps.bundle.outputs.bundle }}
+        run: |
+          node scripts/native-cli/stage-evidence-bundle.mjs --catalog docs/testing/native-cli-acceptance-catalog.json --candidate .ingest/candidate/candidate.json --plan "$BUNDLE_PATH/plan.json" --records "$BUNDLE_PATH/records.json" --evidence-root "$BUNDLE_PATH/evidence" --out .ingest/staged
+
+      - name: Upload clean installed-package evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-installed-evidence-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
+          path: .ingest/staged
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Record boundary
+        shell: bash
+        run: |
+          echo "This workflow ingests already collected real installed-target evidence; it does not manufacture D-layer results." >> "$GITHUB_STEP_SUMMARY"
+          echo "The run is valid only when dispatched from the exact candidate ref on the protected self-hosted ingest runner." >> "$GITHUB_STEP_SUMMARY"
