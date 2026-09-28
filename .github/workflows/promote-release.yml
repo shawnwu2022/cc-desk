@@ -52,7 +52,7 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_run_id }}
           name: cc-desk-candidate-manifest
-          path: promotion/manifest
+          path: ${{ runner.temp }}/cc-desk-candidate-manifest
 
       - name: Read frozen candidate source
         id: candidate
@@ -60,12 +60,30 @@ jobs:
         run: |
           node <<'NODE'
           const fs = require('fs')
-          const value = JSON.parse(fs.readFileSync('promotion/manifest/candidate-manifest.json', 'utf8'))
+          const value = JSON.parse(fs.readFileSync('${{ runner.temp }}/cc-desk-candidate-manifest/candidate-manifest.json', 'utf8'))
           if (!/^[0-9a-f]{40,64}$/.test(String(value.sourceSha ?? ''))) {
             throw new Error('CANDIDATE_SOURCE_SHA_INVALID')
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `source_sha=${value.sourceSha}\n`)
           NODE
+
+      - name: Verify promotion and source runs are bound to candidate
+        env:
+          SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+        shell: bash
+        run: |
+          test "$GITHUB_SHA" = "$SOURCE_SHA" || {
+            echo "::error::Promotion workflow must be dispatched from the exact candidate source SHA"
+            exit 1
+          }
+          candidate_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ inputs.candidate_run_id }}")"
+          acceptance_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ inputs.acceptance_run_id }}")"
+          test "$(jq -r .conclusion <<<"$candidate_run")" = "success"
+          test "$(jq -r .head_sha <<<"$candidate_run")" = "$SOURCE_SHA"
+          test "$(jq -r .path <<<"$candidate_run")" = ".github/workflows/release.yml"
+          test "$(jq -r .conclusion <<<"$acceptance_run")" = "success"
+          test "$(jq -r .head_sha <<<"$acceptance_run")" = "$SOURCE_SHA"
+          test "$(jq -r .path <<<"$acceptance_run")" = ".github/workflows/native-cli-acceptance-gate.yml"
 
       - name: Checkout exact candidate source
         uses: actions/checkout@v5
@@ -99,7 +117,7 @@ jobs:
         shell: bash
         run: |
           node scripts/native-cli/prepare-promotion.mjs \
-            --candidate promotion/manifest/candidate-manifest.json \
+            --candidate ${{ runner.temp }}/cc-desk-candidate-manifest/candidate-manifest.json \
             --candidate-root promotion/candidate \
             --acceptance promotion/acceptance/acceptance-result.json \
             --candidate-id "${{ inputs.candidate_id }}" \
