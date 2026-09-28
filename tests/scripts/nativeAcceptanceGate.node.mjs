@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -201,6 +201,18 @@ function verify(fx, {
 function caseRecords(fx, caseId) {
   return fx.records.filter(record => record.caseId === caseId)
 }
+
+test('D28_Catalog_FileIdentityAnd64CaseCoverageAreStable_00', () => {
+  const catalog = JSON.parse(
+    readFileSync(new URL('../../docs/testing/native-cli-acceptance-catalog.json', import.meta.url), 'utf8'),
+  )
+  assert.equal(catalog.catalogId, computeAcceptanceCatalogId(catalog))
+  assert.equal(catalog.cases.length, 64)
+  assert.deepEqual(
+    catalog.cases.map(entry => entry.caseId),
+    Array.from({ length: 64 }, (_, index) => `NATIVE-${String(index + 1).padStart(2, '0')}`),
+  )
+})
 
 test('D28_Gate_Complete64CasePlanPasses_01', () => {
   const fx = fixture()
