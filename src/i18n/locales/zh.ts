@@ -224,6 +224,11 @@ export default {
   // Welcome view
   claudeCode: 'Claude Code',
   aiPoweredAssistant: 'AI 驱动的编程助手',
+  nativeWorkspaceSubtitle: '面向 Claude Code 与 Codex CLI 的多项目工作台',
+  openNativeCliWorkspace: '打开 Native CLI 工作区',
+  nativeWorkspaceHint: '使用原生 Profile、项目、恢复与 raw argv 启动 Claude Code 或 Codex CLI。',
+  openLegacyClaudeWorkspace: '打开旧版 Claude 工作区',
+  legacyClaudeWorkspaceHint: '保留现有 Claude-only 工作流的兼容入口。',
   selectProjectDir: '选择项目目录',
   chooseDirHint: '选择一个目录来开始新会话',
 
