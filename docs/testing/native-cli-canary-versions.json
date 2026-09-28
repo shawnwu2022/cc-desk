@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-28",
+  "purpose": "Canary baselines only; not real-CLI certification evidence.",
+  "products": {
+    "claude": {
+      "package": "@anthropic-ai/claude-code",
+      "binary": "claude",
+      "pinnedVersion": "2.1.283",
+      "stableTag": "latest",
+      "certified": false
+    },
+    "codex": {
+      "package": "@openai/codex",
+      "binary": "codex",
+      "pinnedVersion": "0.157.0",
+      "stableTag": "latest",
+      "certified": false
+    }
+  }
+}
