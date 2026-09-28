@@ -40,8 +40,8 @@
     "publisher": "shawnwu2022",
     "copyright": "Copyright © 2025 orczh; © 2026 CC Desk contributors",
     "category": "Developer Tool",
-    "shortDescription": "CC Desk — Multi-project desktop workspace for Claude Code",
-    "longDescription": "A multi-project, multi-session desktop workspace for Claude Code power users, with native terminal sessions, project navigation, status monitoring, and workflow tools.",
+    "shortDescription": "CC Desk — Native workspace for Claude Code and Codex CLI",
+    "longDescription": "A multi-project, multi-tab desktop workspace that runs the user's installed Claude Code and Codex CLI through native terminal sessions while preserving CLI-owned authentication, permissions, models, plugins, and workflows.",
     "createUpdaterArtifacts": true,
     "macOS": {
       "frameworks": [],
