@@ -13,15 +13,21 @@ permissions:
 jobs:
   archive:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Archive exact tracked source
         run: git archive --format=tar.gz --output=cc-desk-source.tar.gz HEAD
-      - name: Upload source archive
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Archive Linux frontend dependencies
+        run: tar -czf cc-desk-node-modules-linux-x64.tar.gz node_modules
+      - name: Upload bootstrap archives
         uses: actions/upload-artifact@v4
         with:
-          name: cc-desk-source-${{ github.sha }}
-          path: cc-desk-source.tar.gz
+          name: cc-desk-bootstrap-${{ github.sha }}
+          path: |
+            cc-desk-source.tar.gz
+            cc-desk-node-modules-linux-x64.tar.gz
           retention-days: 1
           if-no-files-found: error
