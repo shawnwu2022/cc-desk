@@ -1,0 +1,102 @@
+name: Native CLI version canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      claude_pinned_version:
+        description: Exact pinned Claude Code version to compare with latest
+        required: true
+        type: string
+      codex_pinned_version:
+        description: Exact pinned Codex CLI version to compare with latest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-cli-canary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: ${{ matrix.cli }} / ${{ matrix.lane }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cli: claude
+            lane: pinned
+            package: '@anthropic-ai/claude-code'
+          - cli: claude
+            lane: latest-stable
+            package: '@anthropic-ai/claude-code'
+          - cli: codex
+            lane: pinned
+            package: '@openai/codex'
+          - cli: codex
+            lane: latest-stable
+            package: '@openai/codex'
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Resolve requested package spec
+        id: spec
+        shell: bash
+        env:
+          CLAUDE_PINNED: ${{ inputs.claude_pinned_version }}
+          CODEX_PINNED: ${{ inputs.codex_pinned_version }}
+        run: |
+          if [ "${{ matrix.lane }}" = "latest-stable" ]; then
+            spec="latest"
+          elif [ "${{ matrix.cli }}" = "claude" ]; then
+            spec="$CLAUDE_PINNED"
+          else
+            spec="$CODEX_PINNED"
+          fi
+          if [ "${{ matrix.lane }}" = "pinned" ] && ! printf '%s' "$spec" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'; then
+            echo "::error::Pinned canary version must be exact"
+            exit 1
+          fi
+          echo "spec=$spec" >> "$GITHUB_OUTPUT"
+
+      - name: Install disposable CLI package without account credentials
+        shell: bash
+        env:
+          NPM_CONFIG_FUND: 'false'
+          NPM_CONFIG_AUDIT: 'false'
+        run: |
+          root=".ci-canary/${{ matrix.cli }}-${{ matrix.lane }}"
+          mkdir -p "$root/work"
+          npm init -y --prefix "$root" >/dev/null
+          npm install --prefix "$root" --no-save "${{ matrix.package }}@${{ steps.spec.outputs.spec }}"
+
+      - name: Probe executable identity and help only
+        shell: bash
+        run: |
+          node scripts/native-cli/canary-probe.mjs             --package-root ".ci-canary/${{ matrix.cli }}-${{ matrix.lane }}"             --package-name "${{ matrix.package }}"             --cli "${{ matrix.cli }}"             --lane "${{ matrix.lane }}"             --requested-spec "${{ steps.spec.outputs.spec }}"             --work-dir ".ci-canary/${{ matrix.cli }}-${{ matrix.lane }}/work"             --out ".ci-canary/report-${{ matrix.cli }}-${{ matrix.lane }}.json"
+
+      - name: Upload canary identity report
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-canary-${{ matrix.cli }}-${{ matrix.lane }}
+          path: .ci-canary/report-${{ matrix.cli }}-${{ matrix.lane }}.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Record certification boundary
+        shell: bash
+        run: |
+          echo "Canary only checks package install, executable identity, --version and --help." >> "$GITHUB_STEP_SUMMARY"
+          echo "certificationStatus remains NOT_RUN; no provider/account credentials are forwarded." >> "$GITHUB_STEP_SUMMARY"
