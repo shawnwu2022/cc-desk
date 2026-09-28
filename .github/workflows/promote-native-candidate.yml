@@ -128,6 +128,19 @@ jobs:
             --publish-dir .promotion/publish \
             --out .promotion/promotion.json
 
+      - name: Enforce pre-publish release policy
+        shell: bash
+        run: |
+          node scripts/native-cli/check-promotion-policy.mjs \
+            --phase pre \
+            --event workflow_dispatch \
+            --operation promote \
+            --gate-passed \
+            --manifest-verified \
+            --same-candidate \
+            --explicit-approval \
+            --no-rebuild
+
       - name: Generate updater metadata from verified staging only
         shell: bash
         env:
@@ -170,6 +183,20 @@ jobs:
         shell: bash
         run: |
           node scripts/native-cli/verify-published-promotion.mjs             .promotion/published             .promotion/promotion.json
+
+      - name: Enforce post-publish completion policy
+        shell: bash
+        run: |
+          node scripts/native-cli/check-promotion-policy.mjs \
+            --phase complete \
+            --event workflow_dispatch \
+            --operation promote \
+            --gate-passed \
+            --manifest-verified \
+            --same-candidate \
+            --explicit-approval \
+            --no-rebuild \
+            --published-bytes-verified
 
       - name: Verify updater manifest and published asset URLs
         shell: bash
