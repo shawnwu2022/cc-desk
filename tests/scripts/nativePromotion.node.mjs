@@ -39,6 +39,7 @@ function fixture() {
     schemaVersion: 1,
     status: 'PASS',
     candidateId: candidate.candidateId,
+    catalogId: '5'.repeat(64),
     planId: '2'.repeat(64),
     targetCount: 3,
     requirementCount: 64,
@@ -74,6 +75,7 @@ test('D30_Promotion_StagesExactAcceptedCandidate_01', () => {
     assert.equal(plan.candidateId, fx.candidate.candidateId)
     assert.equal(plan.sourceSha, SOURCE_SHA)
     assert.equal(plan.tag, 'v1.2.3')
+    assert.equal(plan.acceptanceCatalogId, fx.acceptance.catalogId)
     assert.equal(plan.files.length, fx.candidate.files.length)
     for (const file of plan.files) {
       assert.equal(file.publishedName.includes(' '), false)
