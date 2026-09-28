@@ -112,7 +112,6 @@ Head to the [**Releases**](https://github.com/shawnwu2022/cc-desk/releases) page
 
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://www.rust-lang.org/tools/install) stable toolchain (MSVC on Windows)
-- Node.js 20+ and the Rust stable toolchain
 - The Claude Code and/or Codex CLI binaries needed for the scenarios you want to test
 - **Windows builds**: Microsoft C++ Build Tools and Windows SDK; follow each CLI's own Windows runtime requirements
 
