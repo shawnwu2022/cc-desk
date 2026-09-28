@@ -5,8 +5,8 @@
 <h1 align="center">CC Desk</h1>
 
 <p align="center">
-  <strong>Claude Code 桌面应用 — 多项目、多会话管理</strong><br>
-  一个窗口。多个项目。快速切换会话。
+  <strong>Claude Code + Codex CLI 原生桌面工作台 — 多项目、多会话管理</strong><br>
+  一个窗口。真实 CLI。项目与终端标签页相互隔离。
 </p>
 
 <p align="center">
@@ -24,11 +24,11 @@
 
 ## 为什么选择 CC Desk？
 
-Claude Code 的 CLI 在单会话工作中表现优秀。但当你需要管理**多个项目**，并希望**便捷地查看、进入、切换会话**时，纯终端就显得力不从心。
+Claude Code 和 Codex CLI 最有价值的部分仍然是它们自己的原生终端交互。CC Desk 在真实 CLI 外层提供桌面工作台：显式项目登记、每 CLI 独立 profile、多终端标签页、原生恢复入口，以及按来源隔离的资源面板。
 
-CC Desk 本质上是 **Claude Code 的桌面应用**。它保留了原生终端体验，并添加了 CLI 不擅长做的事：多项目管理、会话总览、快速切换。
+原生路径**不会**用 SDK 或 App Server 替代 CLI。认证、模型选择、权限提示、slash 命令、编辑器和其他原生行为仍由用户安装的 CLI 自己负责。
 
-**把它看作专为 Claude Code 重度用户打造的桌面应用。**
+兼容性按证据判断。未知 CLI 版本可以继续尝试启动，但不会自动被标记为“已认证”；只有通过机器可校验 acceptance gate 的目标组合，才属于认证范围。
 
 ---
 
@@ -49,11 +49,11 @@ CC Desk 本质上是 **Claude Code 的桌面应用**。它保留了原生终端�
 
 ### 多会话并行
 
-打开任意数量的 Claude Code 会话，每个会话在独立的终端标签页中运行。在侧边栏查看所有会话，快速切换，切换后输出内容保持不变。
+Claude Code 与 Codex CLI 可以并行运行。每个原生标签页冻结自己的 CLI / profile / 项目 / run 身份，输入、输出、重启状态和恢复不会串到相邻标签页。
 
 ### 快速启动与预设
 
-为每个项目设置启动选项，如 `--resume`、`--model` 或自定义参数。无需每次输入相同参数，一键以预设配置启动会话。
+使用每 CLI 独立 profile 和显式项目登记。可以 New、调用 CLI 自己的 resume picker、按已知 session ID 恢复，或传入精确 raw argv 数组；Desk 不把 raw argv 当 shell 字符串重新解析。
 
 ### Provider 管理
 
@@ -61,23 +61,23 @@ CC Desk 本质上是 **Claude Code 的桌面应用**。它保留了原生终端�
 
 ### 侧边栏面板
 
-非遮罩式侧边栏，不会抢占焦点：
+非遮罩式侧边栏，不会抢占焦点。原生资源投影绑定到当前 CLI profile 与已登记项目 root；某项能力不可用时明确显示 unavailable，不会偷用另一套 CLI 的配置或历史。
 
-- **会话** — 浏览、搜索、切换所有会话。状态指示灯显示运行/思考/等待状态。
-- **MCP 服务器** — 查看已连接的 MCP 服务器、可用工具及其参数结构
-- **Skills & Agents** — 快速访问 Claude Code skills 和 agent 配置
-- **插件** — 查看已安装的插件及其组件
+已有 Claude 面板在支持范围内继续保留；Codex 的配置根、历史和资源读取与 Claude 隔离。
 
 ### 原生终端体验
 
-通过伪终端直接运行 Claude CLI 二进制文件。所有功能与终端中完全一致 — slash 命令、快捷键、流式输出、颜色、交互式提示。
+通过受控伪终端直接运行真实 Claude Code 或 Codex CLI 二进制文件。宿主负责保持 raw argv、有序输入、终端协议回复、有界输出背压、resize、剪贴板/IME 与进程所有权，不会静默切换到其他 executable 或旧 PTY 路径。
 
 ---
 
 ## 先决条件
 
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** 已安装并完成认证
-- **Windows 用户**: [Git for Windows](https://git-scm.com/download/win)、Microsoft C++ Build Tools 和 Windows SDK（提供 Git Bash）
+安装并完成你准备使用的 CLI 认证：
+
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)**
+- **[Codex CLI](https://developers.openai.com/codex/cli/reference)**
+- **Windows / 源码构建**：同时满足对应 CLI 的 Windows 运行要求，以及下文 Rust/MSVC 构建要求。
 
 ---
 
@@ -95,10 +95,11 @@ CC Desk 本质上是 **Claude Code 的桌面应用**。它保留了原生终端�
 
 ### 2. 启动使用
 
-1. 打开应用
-2. 选择或添加项目目录
-3. Claude Code 会话启动 — 像在终端中一样输入
-4. 从侧边栏打开更多会话，每个独立运行
+1. 打开应用并进入 **Native CLI**
+2. 登记或选择项目目录
+3. 选择或显式创建 Claude Code / Codex CLI profile
+4. 选择 **New**、原生 **Resume**、已知 session ID 或 raw argv 启动
+5. 按需打开多个标签页，每个 run 独立归属
 
 ---
 
@@ -111,8 +112,9 @@ CC Desk 本质上是 **Claude Code 的桌面应用**。它保留了原生终端�
 
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://www.rust-lang.org/tools/install) stable 工具链（Windows 使用 MSVC）
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 已安装并认证
-- **Windows 用户**: [Git for Windows](https://git-scm.com/download/win)、Microsoft C++ Build Tools 和 Windows SDK
+- Node.js 20+ 与 Rust stable 工具链
+- 你要测试的 Claude Code 和/或 Codex CLI 二进制
+- **Windows 构建**：Microsoft C++ Build Tools 与 Windows SDK；CLI 运行要求以各自官方说明为准
 
 ### 安装
 
@@ -148,15 +150,15 @@ npm run build:linux   # Linux (x86_64)
 ## 常见问题
 
 <details>
-<summary><strong>会修改我的 Claude Code 配置吗？</strong></summary>
+<summary><strong>会修改原生 CLI 的配置或历史吗？</strong></summary>
 
-CC Desk 对 Claude 会话和历史数据只读，大多数 GUI 设置仍保存在兼容旧版本的 `~/.cc-box/` 目录中。唯一主动写入原生配置的场景是用户显式激活 Provider：应用会把所选 env/model 字段合并到 `~/.claude/settings.json`，并保留其他无关设置。
+双 CLI 原生工作台把 profile / 项目状态保存在 CC Desk 自己的 workspace 中，对原生 CLI 历史与配置投影保持只读。已有 Claude legacy GUI 兼容逻辑继续隔离存在。唯一明确例外是原有的 **Provider 激活**：只有用户显式操作时才会把选定 env/model 字段合并到 `~/.claude/settings.json`；这条 Claude 兼容逻辑不会应用到 Codex。
 </details>
 
 <details>
 <summary><strong>能用所有 CLI 功能吗？</strong></summary>
 
-可以。Slash 命令、快捷键、模型切换、权限提示 — 所有功能透明传递给真实 CLI。
+CC Desk 不对 CLI 功能做白名单，原生终端能力尽量直接交给真实 CLI。但这不等于宣称所有 CLI / OS / 版本组合都已经认证。发布认证是目标组合级别的，必须由 acceptance evidence gate 支撑；缺失或 BLOCKED 的真实 CLI 证据不会被写成 PASS。
 </details>
 
 <details>
@@ -166,9 +168,9 @@ CC Desk 对 Claude 会话和历史数据只读，大多数 GUI 设置仍保存�
 </details>
 
 <details>
-<summary><strong>Claude Code 更新后会失效吗？</strong></summary>
+<summary><strong>Claude Code 或 Codex CLI 更新后怎么办？</strong></summary>
 
-应用直接运行 CLI 二进制文件，不依赖任何内部 API。只要 CLI 在 PATH 中，任何版本都能正常工作。
+未知版本不会仅因为 GUI 尚未见过就被阻止启动，但也不会自动获得“已认证”状态。仓库提供 pinned/latest canary 与目标组合 acceptance evidence，用于发现变化并重新认证；已经运行中的用户会话不会因为 canary 变化被自动重启或改写。
 </details>
 
 ---
