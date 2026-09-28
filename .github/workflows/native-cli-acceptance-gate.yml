@@ -37,15 +37,6 @@ jobs:
         with:
           node-version: 22
 
-      - name: Download candidate packages
-        uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          run-id: ${{ inputs.candidate_run_id }}
-          pattern: cc-desk-candidate-*
-          path: gate/candidate
-          merge-multiple: false
-
       - name: Download candidate manifest
         uses: actions/download-artifact@v4
         with:
@@ -53,6 +44,28 @@ jobs:
           run-id: ${{ inputs.candidate_run_id }}
           name: cc-desk-candidate-manifest
           path: gate/manifest
+
+      - name: Read frozen candidate source
+        id: candidate
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs')
+          const value = JSON.parse(fs.readFileSync('gate/manifest/candidate-manifest.json', 'utf8'))
+          if (!/^[0-9a-f]{40,64}$/.test(String(value.sourceSha ?? ''))) {
+            throw new Error('CANDIDATE_SOURCE_SHA_INVALID')
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `source_sha=${value.sourceSha}\n`)
+          NODE
+
+      - name: Download exact candidate packages
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          pattern: cc-desk-candidate-${{ steps.candidate.outputs.source_sha }}-*
+          path: gate/candidate
+          merge-multiple: false
 
       - name: Download authorized target evidence
         uses: actions/download-artifact@v4
