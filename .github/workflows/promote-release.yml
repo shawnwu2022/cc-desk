@@ -88,6 +88,21 @@ jobs:
           echo "candidate=${candidates[0]}" >> "$GITHUB_OUTPUT"
           echo "acceptance=${acceptances[0]}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify candidate run provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.candidate_run_id }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          meta="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$RUN_ID")"
+          name="$(jq -r '.name // empty' <<<"$meta")"
+          conclusion="$(jq -r '.conclusion // empty' <<<"$meta")"
+          head_sha="$(jq -r '.head_sha // empty' <<<"$meta")"
+          [ "$name" = "Signed candidate packages" ] || { echo "::error::Candidate run uses unexpected workflow"; exit 1; }
+          [ "$conclusion" = "success" ] || { echo "::error::Candidate run did not succeed"; exit 1; }
+          [ "$head_sha" = "$COMMIT_SHA" ] || { echo "::error::Candidate run commit mismatch"; exit 1; }
+
       - name: Verify accepted candidate and every artifact/evidence hash
         run: |
           node scripts/native-cli/verify-promotion.mjs \
