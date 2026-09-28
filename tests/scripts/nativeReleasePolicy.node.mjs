@@ -7,6 +7,9 @@ const policyPath = fileURLToPath(new URL('../../scripts/release-policy.mjs', imp
 const releaseWorkflowPath = fileURLToPath(
   new URL('../../.github/workflows/release.yml', import.meta.url),
 )
+const testPackageWorkflowPath = fileURLToPath(
+  new URL('../../.github/workflows/conpty-integration.yml', import.meta.url),
+)
 
 async function loadPolicy() {
   return import(`${pathToFileURL(policyPath).href}?case=${Date.now()}-${Math.random()}`)
@@ -55,4 +58,17 @@ test('D02_ReleaseWorkflow_StillBuildsSignedCandidates_03', () => {
   assert.match(workflow, /TAURI_SIGNING_PRIVATE_KEY/)
   assert.match(workflow, /npm run tauri build/)
   assert.match(workflow, /actions\/upload-artifact@v4/)
+})
+
+test('D28_TestPackageWorkflow_RemainsTestOnly_04', () => {
+  const workflow = readFileSync(testPackageWorkflowPath, 'utf8')
+
+  assert.match(workflow, /channel = 'test-only'/)
+  assert.match(workflow, /publishable = \$false/)
+  assert.match(workflow, /updaterPublication = \$false/)
+  assert.match(workflow, /createUpdaterArtifacts\":false/)
+  assert.match(workflow, /actions\/upload-artifact@v4/)
+  assert.doesNotMatch(workflow, /softprops\/action-gh-release/)
+  assert.doesNotMatch(workflow, /contents:\s*write/)
+  assert.doesNotMatch(workflow, /make_latest:\s*true/)
 })
