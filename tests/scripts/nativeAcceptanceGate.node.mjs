@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -376,5 +376,60 @@ test('D28_Gate_CatalogAndPlanIdentityCannotChangeSilently_10', () => {
     assert.throws(() => verify(fx, { catalog }), /ACCEPTANCE_CATALOG_INVALID/)
   } finally {
     fx.cleanup()
+  }
+})
+
+
+test('D28_Gate_TargetIdentityAndMachineVerificationAreMandatory_11', () => {
+  const fx = fixture()
+  try {
+    const plan = structuredClone(fx.plan)
+    plan.targets[0].identity.runtime.webView = 'tampered-runtime'
+    plan.planId = computeTargetPlanId(plan)
+    assert.throws(() => verify(fx, { plan }), /ACCEPTANCE_TARGET_IDENTITY_INVALID/)
+
+    const records = fx.records.map(record =>
+      record.caseId === 'NATIVE-63' && record.evidenceLayer === 'C'
+        ? { ...record, verification: null }
+        : record)
+    assert.throws(
+      () => verify(fx, { records }),
+      /ACCEPTANCE_VERIFICATION_REQUIRED/,
+    )
+  } finally {
+    fx.cleanup()
+  }
+})
+
+test('D28_Candidate_RejectsMissingSignatureAndUnclassifiedFiles_12', () => {
+  const fx = fixture()
+  try {
+    const signature = fx.candidate.files.find(file => file.path.endsWith('.AppImage.sig'))
+    unlinkSync(join(fx.candidateRoot, signature.path))
+    assert.throws(
+      () => buildCandidateManifest({
+        root: fx.candidateRoot,
+        sourceSha: SOURCE_SHA,
+        version: '1.2.3',
+      }),
+      /CANDIDATE_SIGNATURE_MISSING|CANDIDATE_PLATFORM_SHAPE_INVALID/,
+    )
+  } finally {
+    fx.cleanup()
+  }
+
+  const fx2 = fixture()
+  try {
+    write(fx2.candidateRoot, 'windows/unplanned.txt', 'not-a-release-asset')
+    assert.throws(
+      () => buildCandidateManifest({
+        root: fx2.candidateRoot,
+        sourceSha: SOURCE_SHA,
+        version: '1.2.3',
+      }),
+      /CANDIDATE_UNDECLARED_FILE/,
+    )
+  } finally {
+    fx2.cleanup()
   }
 })
