@@ -62,7 +62,7 @@ function valid() {
       },
     ],
   }
-
+}
 
 test('D28_Gate_AcceptsCompleteDeclaredTarget_01', () => {
   const result = verifyAcceptance(valid())
@@ -122,4 +122,11 @@ test('D28_Gate_RejectsCandidateIdentityMismatchAndUndeclaredRecord_07', () => {
     caseId: 'NATIVE-02',
   })
   assert.throws(() => verifyAcceptance(extra), /UNDECLARED_ACCEPTANCE_RECORD/)
+})
+
+
+test('D28_Gate_RecomputesCandidateIdentity_08', () => {
+  const value = valid()
+  value.candidate.files[0].sha256 = 'c'.repeat(64)
+  assert.throws(() => verifyAcceptance(value), /INVALID_CANDIDATE_IDENTITY/)
 })
