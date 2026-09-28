@@ -56,20 +56,26 @@ jobs:
             version="$pinned"
             if [ -z "$version" ]; then
               blocked="true"
+              blocked_reason="PINNED_CANARY_VERSION_REQUIRED"
+            elif [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+              blocked="true"
+              blocked_reason="PINNED_CANARY_VERSION_INVALID"
             else
               blocked="false"
+              blocked_reason=""
             fi
           fi
           echo "package=$package" >> "$GITHUB_OUTPUT"
           echo "command=$command" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "blocked=$blocked" >> "$GITHUB_OUTPUT"
+          echo "blocked_reason=${blocked_reason:-}" >> "$GITHUB_OUTPUT"
 
       - name: Record unavailable pinned configuration as BLOCKED
         if: steps.resolve.outputs.blocked == 'true'
         shell: bash
         run: |
-          printf '%s\n' '{"schemaVersion":1,"status":"BLOCKED","reason":"PINNED_CANARY_VERSION_REQUIRED","certificationRequired":true,"cli":"${{ matrix.cli }}","channel":"${{ matrix.channel }}"}' > "canary-${{ matrix.cli }}-${{ matrix.channel }}.json"
+          printf '%s\n' '{"schemaVersion":1,"status":"BLOCKED","reason":"${{ steps.resolve.outputs.blocked_reason }}","certificationRequired":true,"cli":"${{ matrix.cli }}","channel":"${{ matrix.channel }}"}' > "canary-${{ matrix.cli }}-${{ matrix.channel }}.json"
 
       - name: Install isolated CLI canary
         if: steps.resolve.outputs.blocked != 'true'
