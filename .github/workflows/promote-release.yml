@@ -99,8 +99,12 @@ jobs:
           name="$(jq -r '.name // empty' <<<"$meta")"
           conclusion="$(jq -r '.conclusion // empty' <<<"$meta")"
           head_sha="$(jq -r '.head_sha // empty' <<<"$meta")"
+          head_branch="$(jq -r '.head_branch // empty' <<<"$meta")"
+          event="$(jq -r '.event // empty' <<<"$meta")"
           [ "$name" = "Signed candidate packages" ] || { echo "::error::Candidate run uses unexpected workflow"; exit 1; }
           [ "$conclusion" = "success" ] || { echo "::error::Candidate run did not succeed"; exit 1; }
+          [ "$event" = "workflow_dispatch" ] || { echo "::error::Candidate run must be manually dispatched"; exit 1; }
+          [ "$head_branch" = "main" ] || { echo "::error::Stable candidate must be built from main"; exit 1; }
           [ "$head_sha" = "$COMMIT_SHA" ] || { echo "::error::Candidate run commit mismatch"; exit 1; }
 
       - name: Verify accepted candidate and every artifact/evidence hash
