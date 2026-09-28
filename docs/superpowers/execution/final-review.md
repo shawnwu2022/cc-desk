@@ -58,6 +58,37 @@ Regression evidence:
 - `D20_Evidence_ObserverPairsRequireSameHostIdentity_07b`;
 - `D20_Evidence_ComparisonValidatesStructureBeforeFingerprinting_07c`.
 
+### P1 — D20 run subdirectories could follow a pre-existing symlink outside the test root
+
+Lexical containment and later realpath checks were insufficient if recursive directory creation followed a symlink before the check executed.
+
+Correction:
+
+- create every run/config/HOME/project directory one segment at a time;
+- use `lstat` to reject symbolic links/junctions at every existing segment;
+- realpath-check each newly created segment before continuing;
+- reject report files whose resolved path escapes the test root.
+
+Regression evidence:
+
+- `D28_D20_RunRootSymlinkEscapeIsRejected_04`.
+
+### P1 — D20 CLI or lane-driver files could change during the four-cell matrix
+
+Hashing only once before execution allowed a time-of-check/time-of-use gap. A driver or another process could mutate the selected CLI or driver between cells while records continued to claim the original identity.
+
+Correction:
+
+- freeze the canonical CLI SHA-256 for the matrix;
+- freeze each canonical lane-driver SHA-256;
+- re-read both immediately before and after every cell;
+- fail with `REAL_CLI_BINARY_CHANGED` or `REAL_CLI_DRIVER_CHANGED` on any mutation.
+
+Regression evidence:
+
+- `D28_D20_DriverCannotMutateSelectedCliDuringMatrix_01`;
+- `D28_D20_DriverCannotSelfModifyDuringMatrix_02`.
+
 ### P1 — a delayed old-generation status completion could mutate the new terminal generation
 
 The tab store rejected stale launch status, but `NativeCliTerminal.recover()` ignored that rejection and still changed component-local `launched` and `inputEnabled`. A delayed failure could also mark a newly restarted tab failed, and a delayed input rejection could pause the new run.
