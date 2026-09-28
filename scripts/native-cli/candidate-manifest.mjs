@@ -38,7 +38,7 @@ export function candidateIdFor(commitSha, files) {
 
 function normalizedRelative(root, file) {
   const relative = path.relative(root, file).split(path.sep).join('/')
-  if (!relative || relative.startsWith('../') || relative.includes('/../')) fail('INVALID_CANDIDATE_PATH')
+  if (!relative || relative.startsWith('../') || relative.includes('/../') || /[\0\r\n]/.test(relative)) fail('INVALID_CANDIDATE_PATH')
   return relative
 }
 
