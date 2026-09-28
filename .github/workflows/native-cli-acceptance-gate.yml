@@ -1,0 +1,95 @@
+name: Native CLI acceptance gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Workflow run ID that built the signed candidate artifacts
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact 40-hex source commit used for the candidate
+        required: true
+        type: string
+      evidence_run_id:
+        description: Workflow run ID containing the installed-package evidence bundle
+        required: true
+        type: string
+      evidence_artifact:
+        description: Artifact name containing plan.json, records.json and evidence/
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-acceptance-${{ inputs.candidate_sha }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify installed-package acceptance
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Validate immutable inputs
+        shell: bash
+        run: |
+          if ! printf '%s' "${{ inputs.candidate_sha }}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::candidate_sha must be an exact commit SHA"
+            exit 1
+          fi
+          if ! printf '%s' "${{ inputs.candidate_run_id }}" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "::error::candidate_run_id must be numeric"
+            exit 1
+          fi
+          if ! printf '%s' "${{ inputs.evidence_run_id }}" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "::error::evidence_run_id must be numeric"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download candidate manifest from the candidate build
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ inputs.candidate_sha }}-manifest
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: .acceptance/candidate
+
+      - name: Download installed-package evidence bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.evidence_artifact }}
+          run-id: ${{ inputs.evidence_run_id }}
+          github-token: ${{ github.token }}
+          path: .acceptance/bundle
+
+      - name: Verify complete target/subcase evidence
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-acceptance-command.mjs             --catalog docs/testing/native-cli-acceptance-catalog.json             --candidate .acceptance/candidate/candidate.json             --plan .acceptance/bundle/plan.json             --records .acceptance/bundle/records.json             --evidence-root .acceptance/bundle/evidence             --out .acceptance/acceptance-summary.json
+
+      - name: Upload machine-verifiable acceptance summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-acceptance-summary-${{ inputs.candidate_sha }}
+          path: .acceptance/acceptance-summary.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Record boundary
+        shell: bash
+        run: |
+          echo "This job only verifies evidence already collected from the exact candidate." >> "$GITHUB_STEP_SUMMARY"
+          echo "It does not create missing C/D evidence and cannot turn BLOCKED/NOT_RUN into PASS." >> "$GITHUB_STEP_SUMMARY"
