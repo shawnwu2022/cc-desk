@@ -2,6 +2,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { candidateIdFor } from './candidate-manifest.mjs'
 
 const SHA256 = /^[0-9a-f]{64}$/
 const COMMIT = /^[0-9a-f]{40}$/
@@ -32,7 +33,8 @@ function array(value, code) {
 
 function verifyCandidate(value) {
   const candidate = object(value, 'INVALID_CANDIDATE')
-  text(candidate.candidateId, 'INVALID_CANDIDATE_ID')
+  if (candidate.schemaVersion !== 1) fail('INVALID_CANDIDATE_SCHEMA')
+  const candidateId = text(candidate.candidateId, 'INVALID_CANDIDATE_ID')
   if (!COMMIT.test(String(candidate.commitSha))) fail('INVALID_CANDIDATE_COMMIT')
   const files = array(candidate.files, 'INVALID_CANDIDATE_FILES')
   if (files.length === 0) fail('EMPTY_CANDIDATE_FILES')
@@ -43,12 +45,15 @@ function verifyCandidate(value) {
     const path = text(file.path, 'INVALID_CANDIDATE_PATH')
     if (path.startsWith('/') || path.includes('..') || paths.has(path)) fail('INVALID_CANDIDATE_PATH')
     paths.add(path)
+    text(file.kind, 'INVALID_CANDIDATE_KIND')
     const sha = String(file.sha256 ?? '').toLowerCase()
     if (!SHA256.test(sha)) fail('INVALID_CANDIDATE_HASH')
     hashes.add(sha)
     if (!Number.isSafeInteger(file.size) || file.size <= 0) fail('INVALID_CANDIDATE_SIZE')
   }
-  return { candidateId: candidate.candidateId, hashes }
+  const expectedId = candidateIdFor(candidate.commitSha, files)
+  if (candidateId !== expectedId) fail('INVALID_CANDIDATE_IDENTITY')
+  return { candidateId, hashes }
 }
 
 function key(targetId, caseId, subcaseId) {
