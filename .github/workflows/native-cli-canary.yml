@@ -21,25 +21,16 @@ concurrency:
 
 jobs:
   probe:
-    name: ${{ matrix.cli }} / ${{ matrix.lane }}
-    runs-on: ubuntu-22.04
+    name: ${{ matrix.os }} / ${{ matrix.cli }} / ${{ matrix.lane }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
-        include:
-          - cli: claude
-            lane: pinned
-            package: '@anthropic-ai/claude-code'
-          - cli: claude
-            lane: latest-stable
-            package: '@anthropic-ai/claude-code'
-          - cli: codex
-            lane: pinned
-            package: '@openai/codex'
-          - cli: codex
-            lane: latest-stable
-            package: '@openai/codex'
+        os: [ubuntu-22.04, macos-14, windows-2022]
+        cli: [claude, codex]
+        lane: [pinned, latest-stable]
 
     steps:
       - uses: actions/checkout@v5
@@ -58,17 +49,23 @@ jobs:
           CLAUDE_PINNED: ${{ inputs.claude_pinned_version }}
           CODEX_PINNED: ${{ inputs.codex_pinned_version }}
         run: |
+          if [ "${{ matrix.cli }}" = "claude" ]; then
+            package="@anthropic-ai/claude-code"
+            pinned="$CLAUDE_PINNED"
+          else
+            package="@openai/codex"
+            pinned="$CODEX_PINNED"
+          fi
           if [ "${{ matrix.lane }}" = "latest-stable" ]; then
             spec="latest"
-          elif [ "${{ matrix.cli }}" = "claude" ]; then
-            spec="$CLAUDE_PINNED"
           else
-            spec="$CODEX_PINNED"
+            spec="$pinned"
           fi
-          if [ "${{ matrix.lane }}" = "pinned" ] && ! printf '%s' "$spec" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'; then
+          if [ "${{ matrix.lane }}" = "pinned" ] && ! printf '%s' "$spec" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$'; then
             echo "::error::Pinned canary version must be exact"
             exit 1
           fi
+          echo "package=$package" >> "$GITHUB_OUTPUT"
           echo "spec=$spec" >> "$GITHUB_OUTPUT"
 
       - name: Install disposable CLI package without account credentials
@@ -80,18 +77,18 @@ jobs:
           root=".ci-canary/${{ matrix.cli }}-${{ matrix.lane }}"
           mkdir -p "$root/work"
           printf '%s\n' '{"private":true}' > "$root/package.json"
-          npm install --prefix "$root" --no-save "${{ matrix.package }}@${{ steps.spec.outputs.spec }}"
+          npm install --prefix "$root" --no-save "${{ steps.spec.outputs.package }}@${{ steps.spec.outputs.spec }}"
 
       - name: Probe executable identity and help only
         shell: bash
         run: |
-          node scripts/native-cli/canary-probe.mjs             --package-root ".ci-canary/${{ matrix.cli }}-${{ matrix.lane }}"             --package-name "${{ matrix.package }}"             --cli "${{ matrix.cli }}"             --lane "${{ matrix.lane }}"             --requested-spec "${{ steps.spec.outputs.spec }}"             --work-dir ".ci-canary/${{ matrix.cli }}-${{ matrix.lane }}/work"             --out ".ci-canary/report-${{ matrix.cli }}-${{ matrix.lane }}.json"
+          node scripts/native-cli/canary-probe.mjs --package-root ".ci-canary/${{ matrix.cli }}-${{ matrix.lane }}" --package-name "${{ steps.spec.outputs.package }}" --cli "${{ matrix.cli }}" --lane "${{ matrix.lane }}" --requested-spec "${{ steps.spec.outputs.spec }}" --work-dir ".ci-canary/${{ matrix.cli }}-${{ matrix.lane }}/work" --out ".ci-canary/report-${{ matrix.os }}-${{ matrix.cli }}-${{ matrix.lane }}.json"
 
       - name: Upload canary identity report
         uses: actions/upload-artifact@v4
         with:
-          name: native-canary-${{ matrix.cli }}-${{ matrix.lane }}
-          path: .ci-canary/report-${{ matrix.cli }}-${{ matrix.lane }}.json
+          name: native-canary-${{ matrix.os }}-${{ matrix.cli }}-${{ matrix.lane }}
+          path: .ci-canary/report-${{ matrix.os }}-${{ matrix.cli }}-${{ matrix.lane }}.json
           retention-days: 14
           if-no-files-found: error
 
@@ -99,4 +96,4 @@ jobs:
         shell: bash
         run: |
           echo "Canary only checks package install, executable identity, --version and --help." >> "$GITHUB_STEP_SUMMARY"
-          echo "certificationStatus remains NOT_RUN; no provider/account credentials are forwarded." >> "$GITHUB_STEP_SUMMARY"
+          echo "OS/arch are recorded; certificationStatus remains NOT_RUN and no provider/account credentials are forwarded." >> "$GITHUB_STEP_SUMMARY"
