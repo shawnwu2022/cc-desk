@@ -196,7 +196,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
 
   function applyLaunchStatus(tabId: string, launch: LaunchStatus): boolean {
     const value = tabs.get(tabId)
-    if (!matchesNativeAttempt(value, {
+    if (!value || !matchesNativeAttempt(value, {
       requestId: launch.requestId,
       runId: launch.run.runId,
       generation: launch.run.generation,
