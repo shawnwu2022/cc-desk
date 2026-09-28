@@ -197,15 +197,16 @@ export function preparePromotion({
     acceptanceSummarySha256: sha256Json(acceptanceSummary),
   }
 
-  writeFileSync(resolve(publish, 'candidate.json'), `${JSON.stringify(candidate, null, 2)}\n`, {
+  const auditDir = dirname(publish)
+  writeFileSync(resolve(auditDir, 'candidate.json'), `${JSON.stringify(candidate, null, 2)}\n`, {
     mode: 0o600,
   })
   writeFileSync(
-    resolve(publish, 'acceptance-summary.json'),
+    resolve(auditDir, 'acceptance-summary.json'),
     `${JSON.stringify(acceptanceSummary, null, 2)}\n`,
     { mode: 0o600 },
   )
-  writeFileSync(resolve(publish, 'promotion.json'), `${JSON.stringify(promotion, null, 2)}\n`, {
+  writeFileSync(resolve(auditDir, 'promotion.json'), `${JSON.stringify(promotion, null, 2)}\n`, {
     mode: 0o600,
   })
 
