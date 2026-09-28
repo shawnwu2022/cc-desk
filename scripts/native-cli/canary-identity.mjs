@@ -83,8 +83,11 @@ export function probeCliIdentity({
   const version = run(binary, ['--version'], env)
   const versionText = (version.stdout + version.stderr).trim()
   if (!versionText || versionText.length > 4096) fail('CANARY_VERSION_INVALID')
-  if (expectedVersion !== null && !versionText.includes(expectedVersion)) {
-    fail('CANARY_PINNED_VERSION_MISMATCH')
+  if (expectedVersion !== null) {
+    const observedVersions = versionText.match(/\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/g) ?? []
+    if (!observedVersions.includes(expectedVersion)) {
+      fail('CANARY_PINNED_VERSION_MISMATCH')
+    }
   }
 
   const help = run(binary, ['--help'], env)
