@@ -4,8 +4,6 @@ name: Signed candidate packages
 
 on:
   push:
-    tags:
-      - 'v*'
     branches:
       - main
     paths:
