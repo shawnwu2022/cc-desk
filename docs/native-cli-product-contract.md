@@ -31,7 +31,7 @@ The acceptance catalog contains all `NATIVE-01` through `NATIVE-64` cases.
 - D = installed final candidate evidence.
 - A/B cannot substitute for required C/D evidence.
 - `PASS`, `FAIL`, `BLOCKED`, `NOT_RUN` and `N_A` retain their literal meanings.
-- `N_A` requires a concrete capability/version basis and evidence.
+- `N_A` requires a structured capability/version basis bound to the exact target identity and to a hashed evidence file; a free-text reason alone cannot pass the machine gate.
 - Unknown CLI versions may run, but do not inherit certification from another binary hash/version.
 - Unit tests, hosted-runner smoke tests and canary probes do not by themselves certify a real CLI target.
 
@@ -44,15 +44,16 @@ A required `FAIL`, `BLOCKED`, `NOT_RUN`, missing record, duplicate record, ident
 2. Build signed candidate packages once.
 3. Compute `candidateId` from the exact source commit plus every candidate file SHA-256.
 4. Install those candidate files on each declared target and collect D-layer evidence.
-5. Run the machine acceptance gate against the exact candidate/package hashes.
-6. Enter the protected `native-release-promotion` GitHub environment for explicit maintainer approval.
-7. Download the existing candidate artifacts. **Do not rebuild.**
-8. Recompute every candidate file hash and rerun the acceptance gate.
-9. Create a draft GitHub Release containing only the verified staging bytes and generated updater metadata.
-10. Download the draft assets again; verify candidate hashes and require the uploaded `latest.json` bytes to equal the local verified staging file.
-11. Publish that already verified draft without rebuilding or replacing assets.
-12. Verify the public `latest.json`, version, signatures and platform asset URLs.
-13. Mark promotion complete only after the published-byte and updater checks both pass.
+5. Run the machine acceptance gate against the exact candidate/package hashes. Acceptance and promotion workflows must themselves be dispatched from that exact candidate ref.
+6. In the promotion workflow, complete provenance checks, candidate re-hashing, the full acceptance gate, updater generation and an exact release-asset-set check **before** any protected publishing approval.
+7. Only after the verification job succeeds, enter the protected `native-release-promotion` GitHub environment for explicit maintainer approval.
+8. The approved job downloads only the machine-verified staging artifact from the preceding job. **Do not rebuild.**
+9. Reverify the staged candidate hashes and updater hash after the approval boundary.
+10. Create a draft GitHub Release whose public asset set is exactly the verified candidate files plus `latest.json`; internal candidate/acceptance/promotion audit JSON stays in workflow artifacts rather than public release assets.
+11. Download the draft assets again and require the exact asset set and every hash to match the local verified staging files.
+12. Publish that already verified draft without rebuilding or replacing assets.
+13. Verify the public `latest.json`, version, signatures and platform asset URLs.
+14. Mark promotion complete only after the published-byte and updater checks both pass.
 
 Any source/build-input change after candidate creation creates a new candidate and invalidates the previous promotion chain.
 
@@ -61,7 +62,7 @@ Any source/build-input change after candidate creation creates a new candidate a
 - Regular CI runs type checks, frontend tests, Rust tests/format/lint, release policy tests and machine gate negative tests.
 - OS-specific core workflows continue to test transport/observer/runtime behavior.
 - The Native CLI canary compares a maintainer-supplied pinned CLI version with the registry's `latest` package.
-- Canary execution is credential-free and only records installation/executable identity plus `--version` / `--help`.
+- Canary execution is credential-free, runs with disposable HOME/config/CODEX_HOME/CLAUDE_CONFIG_DIR roots, and only records installation/executable identity plus `--version` / `--help`.
 - Canary reports always use `certificationStatus: NOT_RUN`; they do not create C/D evidence.
 
 ## Legacy release route
