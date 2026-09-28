@@ -29,7 +29,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
   actions: read
 
 concurrency:
@@ -37,11 +37,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  promote:
-    name: Re-gate and promote exact signed candidate
+  verify:
+    name: Verify exact signed candidate before approval
     runs-on: ubuntu-22.04
     timeout-minutes: 20
-    environment: native-release-promotion
 
     steps:
       - name: Validate immutable workflow inputs
@@ -146,10 +145,10 @@ jobs:
         run: |
           node scripts/native-cli/promote-candidate.mjs --repo-root . --candidate-root candidate-artifacts --candidate .promotion/candidate/candidate.json --catalog docs/testing/native-cli-acceptance-catalog.json --plan .promotion/evidence-bundle/plan.json --records .promotion/evidence-bundle/records.json --evidence-root .promotion/evidence-bundle/evidence --source-commit "${{ inputs.candidate_sha }}" --tag "${{ inputs.tag }}" --publish-dir .promotion/publish --out .promotion/promotion.json
 
-      - name: Enforce pre-publish release policy
+      - name: Enforce machine-ready policy before approval
         shell: bash
         run: |
-          node scripts/native-cli/check-promotion-policy.mjs --phase pre --event workflow_dispatch --operation promote --gate-passed --manifest-verified --same-candidate --explicit-approval --no-rebuild
+          node scripts/native-cli/check-promotion-policy.mjs --phase verify --event workflow_dispatch --operation promote --gate-passed --manifest-verified --same-candidate --no-rebuild
 
       - name: Generate updater metadata from verified staging only
         shell: bash
@@ -157,6 +156,68 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           node scripts/generate-updater-manifest.js .promotion/publish .promotion/publish/latest.json "${{ inputs.tag }}"
+
+      - name: Verify exact release staging set before approval
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-published-promotion.mjs .promotion/publish .promotion/promotion.json .promotion/publish/latest.json
+
+      - name: Upload machine-verified promotion staging
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-promotion-ready-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
+          path: |
+            .promotion/publish
+            .promotion/candidate.json
+            .promotion/acceptance-summary.json
+            .promotion/promotion.json
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Record pre-approval boundary
+        shell: bash
+        run: |
+          echo "Machine verification completed before the protected promotion environment is entered." >> "$GITHUB_STEP_SUMMARY"
+          echo "The next job may publish only these staged bytes after explicit environment approval." >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Approve and publish already verified candidate
+    needs: verify
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    environment: native-release-promotion
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download machine-verified staging from this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          name: native-promotion-ready-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
+          path: .promotion
+
+      - name: Reverify staged bytes after approval boundary
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-published-promotion.mjs .promotion/publish .promotion/promotion.json .promotion/publish/latest.json
+
+      - name: Enforce approved pre-publish release policy
+        shell: bash
+        run: |
+          # Reaching this step proves the protected environment gate admitted the job.
+          node scripts/native-cli/check-promotion-policy.mjs --phase pre --event workflow_dispatch --operation promote --gate-passed --manifest-verified --same-candidate --explicit-approval --no-rebuild
 
       - name: Ensure release tag and release do not already exist
         shell: bash
@@ -189,15 +250,10 @@ jobs:
           mkdir -p .promotion/uploaded
           gh release download "${{ inputs.tag }}" --dir .promotion/uploaded
 
-      - name: Verify uploaded candidate asset hashes before publication
+      - name: Verify exact draft asset set and hashes before publication
         shell: bash
         run: |
-          node scripts/native-cli/verify-published-promotion.mjs .promotion/uploaded .promotion/promotion.json
-
-      - name: Verify uploaded updater metadata bytes before publication
-        shell: bash
-        run: |
-          cmp .promotion/publish/latest.json .promotion/uploaded/latest.json
+          node scripts/native-cli/verify-published-promotion.mjs .promotion/uploaded .promotion/promotion.json .promotion/publish/latest.json
 
       - name: Publish the already verified draft
         shell: bash
@@ -225,7 +281,7 @@ jobs:
           name: native-promotion-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
           path: |
             .promotion/promotion.json
-            .promotion/publish/candidate.json
-            .promotion/publish/acceptance-summary.json
+            .promotion/candidate.json
+            .promotion/acceptance-summary.json
           retention-days: 90
           if-no-files-found: warn
