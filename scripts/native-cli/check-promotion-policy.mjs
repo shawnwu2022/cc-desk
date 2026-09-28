@@ -3,6 +3,7 @@
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import {
+  promotionReady,
   mayPublish,
   promotionComplete,
 } from '../release-policy.mjs'
@@ -52,15 +53,17 @@ function parse(argv) {
     }
   }
 
-  if (!['pre', 'complete'].includes(phase)) fail('PROMOTION_POLICY_PHASE_INVALID')
+  if (!['verify', 'pre', 'complete'].includes(phase)) fail('PROMOTION_POLICY_PHASE_INVALID')
   return { phase, context }
 }
 
 export function checkPromotionPolicy(argv) {
   const { phase, context } = parse(argv)
-  const allowed = phase === 'pre'
-    ? mayPublish(context)
-    : promotionComplete(context)
+  const allowed = phase === 'verify'
+    ? promotionReady(context)
+    : phase === 'pre'
+      ? mayPublish(context)
+      : promotionComplete(context)
   if (!allowed) fail('PROMOTION_POLICY_REJECTED')
   return { status: 'PASS', phase }
 }
