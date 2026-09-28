@@ -21,7 +21,7 @@ The repository now contains:
 ## Invariants maintainers must preserve
 
 1. **No rebuild during promotion.** Promotion must publish the candidate bytes that were accepted.
-2. **No implicit latest evidence.** Candidate and acceptance workflow run IDs are explicit inputs.
+2. **No implicit latest evidence.** Candidate and acceptance workflow run IDs are explicit inputs; the candidate run must be a successful `Signed candidate packages` run whose `head_sha` matches the candidate manifest.
 3. **No A/B-to-C/D promotion.** The candidate commit's target plan declares allowed evidence layers; unit, PTY, or WebView evidence cannot fill a required real-CLI or installed-package record.
 4. **No evidence-owned scope.** Acceptance evidence repeats the target plan only for readability; the gate trusts the plan checked out from the exact candidate commit.
 5. **No fake N/A.** N/A requires a reason and evidence whose file hash is recomputed by the gate.
@@ -78,11 +78,11 @@ Until those records exist for the declared target combinations, their required c
 4. Preserve the candidate run ID and candidate manifest.
 5. Install those exact packages on declared targets and collect acceptance evidence files plus `acceptance-manifest.json`.
 6. Run **Native CLI acceptance gate** with both the candidate run ID and explicit evidence run.
-6. Review the gate result and target coverage.
-7. Run **Promote accepted native CLI candidate** with exact candidate/evidence run IDs, commit SHA, and tag.
-8. Approve the protected `release-promotion` environment.
-9. Verify the published updater manifest and platform assets.
-10. Retain manifests/evidence with release records.
+7. Review the gate result and target coverage.
+8. Run **Promote accepted native CLI candidate** with exact candidate/evidence run IDs, commit SHA, and tag.
+9. Approve the protected `release-promotion` environment.
+10. Verify the published updater manifest and platform assets.
+11. Retain manifests/evidence with release records.
 
 ## Rollback
 
