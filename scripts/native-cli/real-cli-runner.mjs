@@ -2,13 +2,14 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   certifyCliComparison,
   validateRealCliRun,
@@ -94,6 +95,29 @@ function fileSha256(path) {
   }
 }
 
+function ensureContainedDirectory(root, directory) {
+  const lexicalRoot = resolve(root)
+  const lexicalDirectory = resolve(directory)
+  if (!contained(lexicalRoot, lexicalDirectory)) return false
+
+  const rel = relative(lexicalRoot, lexicalDirectory)
+  let current = realpathSync(lexicalRoot)
+  if (rel === '') return lstatSync(current).isDirectory()
+
+  for (const segment of rel.split(sep).filter(Boolean)) {
+    const next = join(current, segment)
+    if (existsSync(next)) {
+      const metadata = lstatSync(next)
+      if (metadata.isSymbolicLink() || !metadata.isDirectory()) return false
+    } else {
+      mkdirSync(next, { mode: 0o700 })
+    }
+    if (!realContained(root, next)) return false
+    current = next
+  }
+  return true
+}
+
 export function safeD20HostEnvironment(hostEnv) {
   const source = isObject(hostEnv) ? hostEnv : {}
   const out = {}
@@ -156,15 +180,12 @@ function driverCommand(path) {
 
 function prepareRunFixture(run) {
   try {
-    mkdirSync(run.configRoot, { recursive: true, mode: 0o700 })
-    mkdirSync(run.env.HOME, { recursive: true, mode: 0o700 })
-    mkdirSync(run.projectRoot, { recursive: true, mode: 0o700 })
+    if (![run.runRoot, run.configRoot, run.env.HOME, run.projectRoot]
+      .every(path => ensureContainedDirectory(run.testRoot, path))) {
+      return 'REAL_CLI_RUN_ROOT_NOT_ISOLATED'
+    }
   } catch {
     return 'REAL_CLI_RUN_ROOT_UNAVAILABLE'
-  }
-  if (![run.runRoot, run.configRoot, run.env.HOME, run.projectRoot]
-    .every(path => realContained(run.testRoot, path))) {
-    return 'REAL_CLI_RUN_ROOT_NOT_ISOLATED'
   }
   if (existsSync(run.fixturePath) || existsSync(run.reportPath)) {
     return 'REAL_CLI_RUN_ROOT_NOT_FRESH'
