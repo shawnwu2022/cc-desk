@@ -44,21 +44,24 @@ node scripts/native-cli/verify-acceptance.mjs acceptance-manifest.json
 
 The gate rejects, among other failures:
 
+- a release target plan that is not explicitly `READY`;
+- evidence targets/layers that differ from the target plan frozen in the candidate commit;
 - missing target/case/subcase evidence;
 - duplicate records;
 - undeclared records;
 - `FAIL`, `BLOCKED`, or `NOT_RUN`;
 - `N_A` without explicit evidence and reason;
 - candidate identity mismatch;
+- missing, symlinked, oversized, or hash-mismatched evidence files;
 - D-layer package hashes not present in the candidate manifest.
 
 A/B layer tests cannot substitute for required C/D evidence.
 
 ## 4. Run the acceptance gate
 
-Use **Native CLI acceptance gate** with the explicit workflow run ID and artifact name that contain `acceptance-manifest.json`.
+Use **Native CLI acceptance gate** with the explicit candidate workflow run ID plus the evidence workflow run ID/artifact that contain `acceptance-manifest.json`.
 
-The gate downloads evidence from that exact run. It does not infer “latest”, search unrelated artifacts, or upgrade a unit-test result into real CLI certification.
+The gate first downloads the candidate manifest from the explicit candidate run, checks out that exact candidate commit, then loads the repository-owned target plan from that commit. It downloads evidence from the explicit evidence run and re-hashes every referenced evidence file. It does not infer “latest”, search unrelated artifacts, trust an evidence-owned target list, or upgrade a unit-test result into real CLI certification.
 
 ## 5. Promote the exact accepted candidate
 
