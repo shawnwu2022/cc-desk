@@ -21,6 +21,7 @@ function parse(argv) {
     explicitApproval: false,
     rebuildPerformed: true,
     publishedBytesVerified: false,
+    updaterVerified: false,
   }
   let phase = null
 
@@ -44,6 +45,8 @@ function parse(argv) {
       context.rebuildPerformed = false
     } else if (arg === '--published-bytes-verified') {
       context.publishedBytesVerified = true
+    } else if (arg === '--updater-verified') {
+      context.updaterVerified = true
     } else {
       fail('PROMOTION_POLICY_OPTION_INVALID')
     }
