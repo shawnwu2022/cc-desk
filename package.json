@@ -41,7 +41,7 @@
     "test:ci": "vitest run",
     "test:watch": "vitest",
     "typecheck": "vue-tsc --noEmit",
-    "verify:native-release": "node --test tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/verifyAcceptance.node.mjs tests/scripts/nativeCliCanary.node.mjs tests/scripts/workflowRunProvenance.node.mjs tests/scripts/stageEvidenceBundle.node.mjs tests/scripts/candidateManifest.node.mjs tests/scripts/promoteCandidate.node.mjs tests/scripts/verifyPublishedPromotion.node.mjs tests/scripts/promotionPolicy.node.mjs tests/scripts/productContract.node.mjs"
+    "verify:native-release": "node --test tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/verifyAcceptance.node.mjs tests/scripts/nativeCliCanary.node.mjs tests/scripts/workflowRunProvenance.node.mjs tests/scripts/nativeEvidenceWorkflowPolicy.node.mjs tests/scripts/stageEvidenceBundle.node.mjs tests/scripts/candidateManifest.node.mjs tests/scripts/promoteCandidate.node.mjs tests/scripts/verifyPublishedPromotion.node.mjs tests/scripts/promotionPolicy.node.mjs tests/scripts/productContract.node.mjs"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",
