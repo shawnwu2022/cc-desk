@@ -153,7 +153,6 @@ npm run tauri:build        # 生产构建
     set HTTP_PROXY=http://127.0.0.1:33210
     set HTTPS_PROXY=http://127.0.0.1:33210
     ```
-  - 推送到 Gitee 不需要代理
 - **打包代理设置**：首次打包下载 NSIS 组件时需要代理，设置环境变量：
   ```bash
   set HTTP_PROXY=http://127.0.0.1:33210
@@ -166,8 +165,8 @@ npm run tauri:build        # 生产构建
 - **GitHub**：`https://github.com/shawnwu2022/cc-desk`
 - 项目源自 `orczh-hj/cc-box`，现按独立产品方向维护；来源与版权说明见 `NOTICE.md`
 - `~/.cc-box/`、`CC_BOX_*` 与 `cc-box-light` / `cc-box-dark` 暂作为兼容标识保留，避免旧用户配置和插件协议失效
-- 发布默认只面向 CC Desk 的 GitHub Releases，不再自动同步或发布到原项目的 Gitee / OSS 渠道
-- 首次发布前必须换用 CC Desk 自有 Tauri updater 密钥；私钥只存 GitHub Secrets，禁止提交到仓库
+- 当前只产出 CC Desk signed candidate artifacts；公开 GitHub Release/updater promotion 仍禁用，不得借 Gitee/OSS 绕过
+- signed candidate 使用 CC Desk 自有 Tauri signing secret；私钥只存 GitHub Secrets，禁止提交到仓库、日志或支持包
 ### 版本/发布边界（当前：signed candidates only）
 
 - 普通开发 PR 只跑验证，不做版本 bump/tag/release。
@@ -185,6 +184,7 @@ npm run tauri:build        # 生产构建
 |--------------------------------------------------------------|-------------------------------------------------------|
 | [docs/测试编写原则.md](docs/测试编写原则.md)   | 项目如何编写测试                                              |
 | [docs/manual-test-cases.md](docs/manual-test-cases.md)   | **手动测试条目**：自动化无法覆盖的 UI 交互与端到端测试                  |
+| [docs/native-cli-v3.md](docs/native-cli-v3.md)               | **Native CLI v3 权威架构**：双 CLI、鉴权、输入输出、证据与发布边界        |
 | [docs/terminal-integration.md](docs/terminal-integration.md) | 终端集成架构、PTY 生命周期、IPC 命令与事件对照                           |
 | [docs/hook-monitor.md](docs/hook-monitor.md)                 | **Hook 监控系统**：Plugin 注入、事件采集、状态机、多终端区分                |
 | [docs/layout-design.md](docs/layout-design.md)               | 布局设计、窗口结构、色彩系统、排版规范                                   |
@@ -196,7 +196,7 @@ npm run tauri:build        # 生产构建
 | [docs/startup-checks.md](docs/startup-checks.md)             | 启动先决条件检查、路径检测与自动保存                                    |
 | [docs/roadmap.md](docs/roadmap.md)                           | 开发路线图、进度跟踪、待办事项                                       |
 | [docs/logging.md](docs/logging.md)                           | 日志文件路径、级别策略、轮转与清理机制                                   |
-| [docs/release-process.md](docs/release-process.md)           | 版本号管理、本地打包、CI/CD 发布、签名与分发                             |
+| [docs/release-process.md](docs/release-process.md)           | signed candidate、D20/promotion gate、签名与未来发布边界                 |
 
 外部参考：[Claude Code 线上文档](https://code.claude.com/docs/llms.txt)
 
