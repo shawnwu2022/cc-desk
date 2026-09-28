@@ -1,0 +1,685 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": 1,
+  "catalogId": "32ed38f1dd119a5d5855c66d8d5d43a88d3d504eaec00e7365a9d0a9be316757",
+  "policy": {
+    "allRequiredCasesMustAppearPerTarget": true,
+    "naRequiresEvidence": true,
+    "planMayAddLayersButNotRemoveMinimumLayers": true,
+    "note": "This catalog defines release-gate minimums, not execution results."
+  },
+  "cases": [
+    {
+      "caseId": "NATIVE-01",
+      "owner": "W7",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "C",
+        "D"
+      ]
+    },
+    {
+      "caseId": "NATIVE-02",
+      "owner": "W7",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "D"
+      ]
+    },
+    {
+      "caseId": "NATIVE-03",
+      "owner": "W2",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-04",
+      "owner": "W2",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-05",
+      "owner": "W2",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-06",
+      "owner": "W2",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-07",
+      "owner": "W2",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-08",
+      "owner": "W1",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-09",
+      "owner": "W7",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "C",
+        "D"
+      ]
+    },
+    {
+      "caseId": "NATIVE-10",
+      "owner": "W1",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-11",
+      "owner": "W7",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-12",
+      "owner": "W7",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-13",
+      "owner": "W3",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-14",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-15",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-16",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-17",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-18",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-19",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-20",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-21",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-22",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-23",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-24",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-25",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-26",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-27",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-28",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-29",
+      "owner": "W4",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-30",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-31",
+      "owner": "W4",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-32",
+      "owner": "W4",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-33",
+      "owner": "W4",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-34",
+      "owner": "W3",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-35",
+      "owner": "W3",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-36",
+      "owner": "W8",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-37",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "C",
+        "D"
+      ]
+    },
+    {
+      "caseId": "NATIVE-38",
+      "owner": "W3",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-39",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "D"
+      ]
+    },
+    {
+      "caseId": "NATIVE-40",
+      "owner": "W9",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-41",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-42",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-43",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-44",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-45",
+      "owner": "W5",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-46",
+      "owner": "W4",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-47",
+      "owner": "W4",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-48",
+      "owner": "W4",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-49",
+      "owner": "W4",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-50",
+      "owner": "W2",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-51",
+      "owner": "W2",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-52",
+      "owner": "W2",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-53",
+      "owner": "W1",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-54",
+      "owner": "W4",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-55",
+      "owner": "W3",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-56",
+      "owner": "W8",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-57",
+      "owner": "W1",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "D"
+      ]
+    },
+    {
+      "caseId": "NATIVE-58",
+      "owner": "W3",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-59",
+      "owner": "W0",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    },
+    {
+      "caseId": "NATIVE-60",
+      "owner": "W2",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "caseId": "NATIVE-61",
+      "owner": "W4",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-62",
+      "owner": "W8",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A",
+        "D"
+      ]
+    },
+    {
+      "caseId": "NATIVE-63",
+      "owner": "W6",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "C"
+      ]
+    },
+    {
+      "caseId": "NATIVE-64",
+      "owner": "W9",
+      "required": true,
+      "allowNa": true,
+      "subcasePolicy": "explicit",
+      "minimumLayers": [
+        "A"
+      ]
+    }
+  ]
+}
