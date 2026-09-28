@@ -1,4 +1,4 @@
-export function mayPublish(context) {
+export function promotionReady(context) {
   return Boolean(
     context
     && context.event === 'workflow_dispatch'
@@ -6,8 +6,14 @@ export function mayPublish(context) {
     && context.gatePassed === true
     && context.manifestVerified === true
     && context.sameCandidate === true
-    && context.explicitApproval === true
     && context.rebuildPerformed === false
+  )
+}
+
+export function mayPublish(context) {
+  return Boolean(
+    promotionReady(context)
+    && context.explicitApproval === true
   )
 }
 
