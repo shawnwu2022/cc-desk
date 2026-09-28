@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import {
   candidateIdFor,
+  targetIdentitySha256,
   verifyAcceptance,
 } from '../../scripts/native-cli/verify-acceptance.mjs'
 
@@ -36,25 +37,38 @@ function fixture() {
   candidate.candidateId = candidateIdFor(candidate)
 
   const requiredCaseIds = catalog.cases.map(item => item.caseId)
+  const target = {
+    targetId: 'windows-x64-codex-1',
+    os: 'windows',
+    osBuild: 'synthetic-build',
+    arch: 'x86_64',
+    executionDomain: 'local',
+    deskVersion: '0.17.7',
+    deskCommit: candidate.sourceCommit,
+    candidateFilePath: 'windows/cc-desk.exe',
+    packageSha256: 'b'.repeat(64),
+    webviewRuntime: 'synthetic-webview',
+    xtermVersion: '5.5.0',
+    renderer: 'dom',
+    ptyBackend: 'bundled-conpty',
+    launcherKind: 'native',
+    shellVersion: 'none',
+    inputPolicyVersion: 'd19-v1',
+    terminalProtocolVersion: 'd19-v1',
+    fixtureConfigVersion: 'acceptance-v2',
+    cli: {
+      kind: 'codex',
+      version: 'synthetic-version',
+      binarySha256: 'c'.repeat(64),
+    },
+    requiredCaseIds,
+  }
+  target.identitySha256 = targetIdentitySha256(target)
   const plan = {
     schemaVersion: 1,
     claim: 'installed-native-release',
     candidateId: candidate.candidateId,
-    targets: [{
-      targetId: 'windows-x64-codex-1',
-      os: 'windows',
-      osBuild: 'synthetic-build',
-      arch: 'x86_64',
-      executionDomain: 'local',
-      candidateFilePath: 'windows/cc-desk.exe',
-      packageSha256: 'b'.repeat(64),
-      cli: {
-        kind: 'codex',
-        version: 'synthetic-version',
-        binarySha256: 'c'.repeat(64),
-      },
-      requiredCaseIds,
-    }],
+    targets: [target],
   }
 
   const records = []
@@ -75,8 +89,8 @@ function fixture() {
         oracleKind: null,
         oracleSchemaVersion: null,
         expectedTransformId: null,
-        expected: null,
-        actual: null,
+        expected: { outcome: 'synthetic-expected' },
+        actual: { outcome: 'synthetic-expected' },
         evidence: [{
           path: 'proof.txt',
           sha256: sha(proof),
@@ -184,13 +198,29 @@ test('D28_Gate_UnplannedOrFakeTargetCannotBeSmuggledIn_10', () => {
   assert.equal(verify(value).reason, 'UNPLANNED_EVIDENCE_RECORD')
 })
 
-test('D28_Gate_CandidateIdBindsSourceAndAllFileHashes_11', () => {
+test('D28_Gate_TargetIdentityHashBindsHostRuntime_11', () => {
+  const value = fixture()
+  value.plan.targets[0].xtermVersion = 'different-xterm'
+  assert.deepEqual(verify(value), {
+    status: 'FAIL',
+    reason: 'TARGET_IDENTITY_HASH_MISMATCH',
+    detail: 'windows-x64-codex-1',
+  })
+})
+
+test('D28_Gate_PassRequiresExpectedAndActualResult_12', () => {
+  const value = fixture()
+  value.records[0].actual = null
+  assert.equal(verify(value).reason, 'PASS_RESULT_REQUIRED')
+})
+
+test('D28_Gate_CandidateIdBindsSourceAndAllFileHashes_13', () => {
   const value = fixture()
   value.candidate.files[0].sha256 = '9'.repeat(64)
   assert.equal(verify(value).reason, 'CANDIDATE_ID_MISMATCH')
 })
 
-test('D28_Gate_All64CasesArePresentAndUnique_12', () => {
+test('D28_Gate_All64CasesArePresentAndUnique_14', () => {
   assert.equal(catalog.caseCount, 64)
   assert.equal(catalog.cases.length, 64)
   assert.equal(new Set(catalog.cases.map(item => item.caseId)).size, 64)
