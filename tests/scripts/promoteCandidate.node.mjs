@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -144,6 +145,16 @@ test('D30_Promotion_CopiesOnlyVerifiedCandidateBytes_01', () => {
   const published = readFileSync(join(value.publishDir, 'CC.Desk-setup.exe'))
   assert.equal(sha(published), value.windows.sha256)
   assert.equal(result.acceptanceSummary.status, 'PASS')
+
+  const publicNames = readdirSync(value.publishDir).sort()
+  assert.deepEqual(
+    publicNames,
+    result.promotion.files.map(file => file.assetName).sort(),
+    'public staging contains candidate bytes only before latest.json is generated',
+  )
+  assert.ok(readFileSync(join(value.root, 'candidate.json'), 'utf8').includes(value.candidate.candidateId))
+  assert.ok(readFileSync(join(value.root, 'acceptance-summary.json'), 'utf8').includes('"status": "PASS"'))
+  assert.ok(readFileSync(join(value.root, 'promotion.json'), 'utf8').includes('READY_FOR_PROMOTION'))
 })
 
 test('D30_Promotion_ModifiedCandidateByteFailsBeforePublish_02', () => {
