@@ -8,6 +8,9 @@ export function mayPublish(context) {
     && context.sameCandidate === true
     && context.explicitApproval === true
     && context.rebuildPerformed === false
-    && context.publishedBytesVerified === true
   )
+}
+
+export function promotionComplete(context) {
+  return mayPublish(context) && context.publishedBytesVerified === true
 }
