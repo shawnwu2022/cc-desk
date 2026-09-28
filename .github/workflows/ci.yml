@@ -38,6 +38,8 @@ jobs:
           tests/scripts/nativeReleasePolicy.node.mjs
           tests/scripts/verifyAcceptance.node.mjs
           tests/scripts/nativeCliCanary.node.mjs
+          tests/scripts/workflowRunProvenance.node.mjs
+          tests/scripts/stageEvidenceBundle.node.mjs
           tests/scripts/candidateManifest.node.mjs
           tests/scripts/promoteCandidate.node.mjs
           tests/scripts/verifyPublishedPromotion.node.mjs
