@@ -112,7 +112,6 @@ Claude Code 与 Codex CLI 可以并行运行。每个原生标签页冻结自己
 
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://www.rust-lang.org/tools/install) stable 工具链（Windows 使用 MSVC）
-- Node.js 20+ 与 Rust stable 工具链
 - 你要测试的 Claude Code 和/或 Codex CLI 二进制
 - **Windows 构建**：Microsoft C++ Build Tools 与 Windows SDK；CLI 运行要求以各自官方说明为准
 
