@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+- Add the Native CLI workspace for Claude Code and Codex CLI with independent profiles, registered projects, native new/resume/raw launch entry, authenticated terminal control, and read-only native resource projections
+
+### Reliability
+- Add exact request/run/generation recovery, ordered staged input, bounded output ACK/backpressure, observer isolation, mixed-version rollback protection, and low-resource/fault stress coverage
+- Keep ambiguous launch and partial/unknown input writes fail-closed without automatic replay
+
+### Security
+- Keep native UI behind the authenticated document bridge, remove legacy PTY fallback, redact native diagnostics, and lock native resource panels to projection-only behavior
+
+### Changed
+- Make Native CLI a first-class welcome-screen entry while retaining the legacy Claude workspace as an explicit compatibility path
+- Align product, architecture, persistence, roadmap, and release documentation with the dual-CLI boundary
+- Keep release automation candidate-only; public publishing remains disabled pending an explicit promotion design
+
+### Verification
+- Record D22-D27 execution evidence in the repository
+- Keep D20 real Claude Code / Codex CLI Layer-C certification BLOCKED until an authorized target environment supplies real evidence
+
 ## [0.17.7] - 2026-09-20
 
 ### Fixed
