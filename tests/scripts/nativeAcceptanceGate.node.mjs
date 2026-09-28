@@ -1,20 +1,25 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { verifyAcceptance } from '../../scripts/native-cli/verify-acceptance.mjs'
+import { candidateIdFor } from '../../scripts/native-cli/candidate-manifest.mjs'
 
 const shaA = 'a'.repeat(64)
 const shaB = 'b'.repeat(64)
 
 function valid() {
+  const commitSha = '1'.repeat(40)
+  const files = [
+    { path: 'windows/app.exe', kind: 'windows-package', sha256: shaA, size: 10 },
+    { path: 'linux/app.AppImage', kind: 'linux-package', sha256: shaB, size: 20 },
+  ]
+  const candidateId = candidateIdFor(commitSha, files)
   return {
     schemaVersion: 1,
     candidate: {
-      candidateId: 'candidate-fixture',
-      commitSha: '1'.repeat(40),
-      files: [
-        { path: 'windows/app.exe', sha256: shaA, size: 10 },
-        { path: 'linux/app.AppImage', sha256: shaB, size: 20 },
-      ],
+      schemaVersion: 1,
+      candidateId,
+      commitSha,
+      files,
     },
     targets: [{
       targetId: 'windows-codex',
@@ -28,7 +33,7 @@ function valid() {
         targetId: 'windows-codex',
         caseId: 'NATIVE-01',
         subcaseId: null,
-        candidateId: 'candidate-fixture',
+        candidateId,
         status: 'PASS',
         evidenceLayer: 'D',
         packageSha256: shaA,
@@ -39,7 +44,7 @@ function valid() {
         targetId: 'windows-codex',
         caseId: 'NATIVE-63',
         subcaseId: 'observer-off',
-        candidateId: 'candidate-fixture',
+        candidateId,
         status: 'PASS',
         evidenceLayer: 'C',
         evidence: [{ kind: 'raw-envelope', path: 'evidence/off.json', sha256: shaA }],
@@ -49,7 +54,7 @@ function valid() {
         targetId: 'windows-codex',
         caseId: 'NATIVE-63',
         subcaseId: 'observer-on',
-        candidateId: 'candidate-fixture',
+        candidateId,
         status: 'N_A',
         evidenceLayer: 'C',
         evidence: [{ kind: 'capability-proof', path: 'evidence/na.json', sha256: shaB }],
@@ -57,14 +62,14 @@ function valid() {
       },
     ],
   }
-}
+
 
 test('D28_Gate_AcceptsCompleteDeclaredTarget_01', () => {
   const result = verifyAcceptance(valid())
   assert.deepEqual(result, {
     ok: true,
     schemaVersion: 1,
-    candidateId: 'candidate-fixture',
+    candidateId: valid().candidate.candidateId,
     targetCount: 1,
     recordCount: 3,
   })
