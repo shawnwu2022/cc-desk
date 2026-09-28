@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const SHA256 = /^[0-9a-f]{64}$/
 const COMMIT = /^[0-9a-f]{40}$/
@@ -159,7 +161,7 @@ function main() {
   process.stdout.write(JSON.stringify(result) + '\n')
 }
 
-if (import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   try {
     main()
   } catch (error) {
