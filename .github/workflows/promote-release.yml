@@ -1,0 +1,129 @@
+name: Promote accepted native CLI candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Signed candidate workflow run ID
+        required: true
+        type: string
+      acceptance_run_id:
+        description: Acceptance evidence workflow run ID
+        required: true
+        type: string
+      acceptance_artifact:
+        description: Acceptance artifact name
+        required: true
+        default: native-cli-acceptance
+        type: string
+      commit_sha:
+        description: Exact 40-hex source commit used for the candidate
+        required: true
+        type: string
+      tag:
+        description: Release tag (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Verify and promote same candidate files
+    runs-on: ubuntu-22.04
+    environment: release-promotion
+    steps:
+      - name: Validate promotion inputs
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid commit SHA"; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || { echo "::error::Invalid release tag"; exit 1; }
+
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.commit_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download exact candidate run artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          mkdir -p candidate
+          gh run download "$RUN_ID" --pattern 'cc-desk-candidate-*' --dir candidate
+
+      - name: Download acceptance evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.acceptance_run_id }}
+          ARTIFACT: ${{ inputs.acceptance_artifact }}
+        run: |
+          mkdir -p acceptance
+          gh run download "$RUN_ID" --name "$ARTIFACT" --dir acceptance
+
+      - name: Locate immutable manifests
+        id: manifests
+        shell: bash
+        run: |
+          mapfile -t candidates < <(find candidate -type f -name 'candidate-manifest.json' -print)
+          mapfile -t acceptances < <(find acceptance -type f -name 'acceptance-manifest.json' -print)
+          [ "${#candidates[@]}" -eq 1 ] || { echo "::error::Exactly one candidate manifest is required"; exit 1; }
+          [ "${#acceptances[@]}" -eq 1 ] || { echo "::error::Exactly one acceptance manifest is required"; exit 1; }
+          echo "candidate=${candidates[0]}" >> "$GITHUB_OUTPUT"
+          echo "acceptance=${acceptances[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify accepted candidate and every artifact hash
+        run: |
+          node scripts/native-cli/verify-promotion.mjs             "${{ steps.manifests.outputs.candidate }}"             "${{ steps.manifests.outputs.acceptance }}"             candidate             "${{ inputs.commit_sha }}"             > promotion-plan.json
+
+      - name: Verify release tag matches frozen package version
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          [ "$TAG" = "v$version" ] || { echo "::error::Tag/version mismatch"; exit 1; }
+
+      - name: Generate updater manifest from downloaded candidate files
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/generate-updater-manifest.js candidate latest.json "${{ inputs.tag }}"
+
+      - name: Publish exact candidate files without rebuilding
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          mapfile -t files < <(find candidate -type f \( -name '*.exe' -o -name '*.exe.sig' -o -name '*.AppImage' -o -name '*.AppImage.sig' -o -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' -o -name '*.dmg' \) -print | sort)
+          [ "${#files[@]}" -ge 7 ] || { echo "::error::Candidate artifact set incomplete"; exit 1; }
+          gh release create "$TAG" --target "$COMMIT_SHA" --verify-tag=false --title "$TAG" --generate-notes --latest=false "${files[@]}" latest.json
+
+      - name: Verify published updater manifest
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          node scripts/verify-updater-manifest.js             "https://github.com/${{ github.repository }}/releases/download/$TAG/latest.json"             "$version"
+
+      - name: Mark release latest only after verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ inputs.tag }}" --latest
