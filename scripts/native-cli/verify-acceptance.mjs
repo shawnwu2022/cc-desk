@@ -76,10 +76,14 @@ function verifyEvidenceItems(value) {
   }
 }
 
-export function verifyAcceptance(manifest) {
+export function verifyAcceptance(manifest, expectedCandidate = null) {
   const root = object(manifest, 'INVALID_ACCEPTANCE_MANIFEST')
   if (root.schemaVersion !== 1) fail('UNSUPPORTED_ACCEPTANCE_SCHEMA')
   const candidate = verifyCandidate(root.candidate)
+  if (expectedCandidate !== null) {
+    const expected = verifyCandidate(expectedCandidate)
+    if (expected.candidateId !== candidate.candidateId) fail('CANDIDATE_REFERENCE_MISMATCH')
+  }
 
   const requirements = new Map()
   const targets = array(root.targets, 'INVALID_TARGETS')
@@ -159,10 +163,14 @@ export function verifyAcceptance(manifest) {
 }
 
 function main() {
-  const path = process.argv[2]
-  if (!path) fail('ACCEPTANCE_MANIFEST_PATH_REQUIRED')
-  const manifest = JSON.parse(fs.readFileSync(path, 'utf8'))
-  const result = verifyAcceptance(manifest)
+  const manifestPath = process.argv[2]
+  const candidatePath = process.argv[3]
+  if (!manifestPath) fail('ACCEPTANCE_MANIFEST_PATH_REQUIRED')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+  const expectedCandidate = candidatePath
+    ? JSON.parse(fs.readFileSync(candidatePath, 'utf8'))
+    : null
+  const result = verifyAcceptance(manifest, expectedCandidate)
   process.stdout.write(JSON.stringify(result) + '\n')
 }
 
