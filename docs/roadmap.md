@@ -71,7 +71,7 @@ After D20 and owner approval:
 ### UX consolidation
 
 - native workbench as the primary discoverable path;
-- bilingual labels and error-code explanations;
+- accessibility, keyboard-navigation and safe error-code explanation polish;
 - project/profile onboarding without exposing secrets;
 - clear legacy-workspace migration/deprecation messaging.
 
