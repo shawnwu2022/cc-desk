@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { candidateIdFor } from './candidate-manifest.mjs'
@@ -9,6 +10,7 @@ const COMMIT = /^[0-9a-f]{40}$/
 const CASE_ID = /^NATIVE-(?:0[1-9]|[1-5][0-9]|6[0-4])$/
 const LAYERS = new Set(['A', 'B', 'C', 'D'])
 const CERTIFIED_STATUSES = new Set(['PASS', 'N_A'])
+const MAX_EVIDENCE_BYTES = 64 * 1024 * 1024
 
 function fail(code) {
   const error = new Error(code)
@@ -132,7 +134,7 @@ function verifyTargetPlan(value) {
   return normalizeTargets(plan.targets)
 }
 
-function verifyEvidenceItems(value) {
+function verifyEvidenceItems(value, evidenceRoot = null) {
   const items = array(value, 'EVIDENCE_REQUIRED')
   if (items.length === 0) fail('EVIDENCE_REQUIRED')
   const seen = new Set()
@@ -140,15 +142,39 @@ function verifyEvidenceItems(value) {
     const item = object(raw, 'INVALID_EVIDENCE')
     const kind = text(item.kind, 'INVALID_EVIDENCE_KIND')
     const evidencePath = text(item.path, 'INVALID_EVIDENCE_PATH')
+    if (
+      path.isAbsolute(evidencePath)
+      || evidencePath.split(/[\\/]/).includes('..')
+      || evidencePath.includes('\0')
+    ) {
+      fail('INVALID_EVIDENCE_PATH')
+    }
     const sha = String(item.sha256 ?? '').toLowerCase()
     if (!SHA256.test(sha)) fail('INVALID_EVIDENCE_HASH')
     const identity = JSON.stringify([kind, evidencePath, sha])
     if (seen.has(identity)) fail('DUPLICATE_EVIDENCE')
     seen.add(identity)
+
+    if (evidenceRoot !== null) {
+      const root = path.resolve(evidenceRoot)
+      const file = path.resolve(root, evidencePath)
+      const prefix = root.endsWith(path.sep) ? root : root + path.sep
+      if (!file.startsWith(prefix)) fail('INVALID_EVIDENCE_PATH')
+      let metadata
+      try {
+        metadata = fs.lstatSync(file)
+      } catch {
+        fail('EVIDENCE_FILE_MISSING')
+      }
+      if (!metadata.isFile() || metadata.isSymbolicLink()) fail('UNSAFE_EVIDENCE_FILE')
+      if (metadata.size <= 0 || metadata.size > MAX_EVIDENCE_BYTES) fail('EVIDENCE_FILE_SIZE_INVALID')
+      const actual = createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+      if (actual !== sha) fail('EVIDENCE_FILE_HASH_MISMATCH')
+    }
   }
 }
 
-export function verifyAcceptance(manifest, expectedCandidate = null, expectedTargetPlan = null) {
+export function verifyAcceptance(manifest, expectedCandidate = null, expectedTargetPlan = null, options = {}) {
   const root = object(manifest, 'INVALID_ACCEPTANCE_MANIFEST')
   if (root.schemaVersion !== 1) fail('UNSUPPORTED_ACCEPTANCE_SCHEMA')
   const candidate = verifyCandidate(root.candidate)
@@ -186,7 +212,7 @@ export function verifyAcceptance(manifest, expectedCandidate = null, expectedTar
     if (!CERTIFIED_STATUSES.has(record.status)) fail('UNCERTIFIED_STATUS')
     if (!LAYERS.has(record.evidenceLayer)) fail('INVALID_EVIDENCE_LAYER')
     if (!requirement.layers.has(record.evidenceLayer)) fail('EVIDENCE_LAYER_TOO_WEAK')
-    verifyEvidenceItems(record.evidence)
+    verifyEvidenceItems(record.evidence, options.evidenceRoot ?? null)
 
     if (record.status === 'N_A') {
       text(record.nonApplicabilityReason, 'N_A_REASON_REQUIRED')
@@ -220,13 +246,15 @@ function main() {
   const manifestPath = process.argv[2]
   const candidatePath = process.argv[3]
   const targetPlanPath = process.argv[4]
+  const evidenceRoot = process.argv[5]
   if (!manifestPath) fail('ACCEPTANCE_MANIFEST_PATH_REQUIRED')
   if (!candidatePath) fail('ACCEPTANCE_CANDIDATE_PATH_REQUIRED')
   if (!targetPlanPath) fail('ACCEPTANCE_TARGET_PLAN_PATH_REQUIRED')
+  if (!evidenceRoot) fail('ACCEPTANCE_EVIDENCE_ROOT_REQUIRED')
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
   const expectedCandidate = JSON.parse(fs.readFileSync(candidatePath, 'utf8'))
   const targetPlan = JSON.parse(fs.readFileSync(targetPlanPath, 'utf8'))
-  const result = verifyAcceptance(manifest, expectedCandidate, targetPlan)
+  const result = verifyAcceptance(manifest, expectedCandidate, targetPlan, { evidenceRoot })
   process.stdout.write(JSON.stringify(result) + '\n')
 }
 
