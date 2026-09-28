@@ -128,6 +128,8 @@ export function probeInstalledCli({
     schemaVersion: 1,
     probeStatus: 'PASS',
     certificationStatus: 'NOT_RUN',
+    platform: process.platform,
+    arch: process.arch,
     cli,
     lane,
     packageName,
@@ -172,6 +174,8 @@ function main() {
     process.stdout.write(`${JSON.stringify({
       probeStatus: report.probeStatus,
       certificationStatus: report.certificationStatus,
+      platform: report.platform,
+      arch: report.arch,
       cli: report.cli,
       lane: report.lane,
       resolvedVersion: report.resolvedVersion,
