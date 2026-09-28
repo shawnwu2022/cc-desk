@@ -58,6 +58,14 @@ test('D29_Canary_DoesNotForwardProviderCredentials_02', () => {
     if (process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.CODEX_API_KEY) {
       process.exit(8)
     }
+    const roots = [
+      process.env.HOME,
+      process.env.USERPROFILE,
+      process.env.XDG_CONFIG_HOME,
+      process.env.CODEX_HOME,
+      process.env.CLAUDE_CONFIG_DIR,
+    ]
+    if (roots.some(value => !value || !value.includes('work'))) process.exit(7)
     if (process.argv.includes('--version')) process.stdout.write('claude 4.5.6\\n')
     else if (process.argv.includes('--help')) process.stdout.write('help\\n')
     else process.exitCode = 9
@@ -76,6 +84,11 @@ test('D29_Canary_DoesNotForwardProviderCredentials_02', () => {
       OPENAI_API_KEY: 'fixture-secret',
       ANTHROPIC_API_KEY: 'fixture-secret',
       CODEX_API_KEY: 'fixture-secret',
+      HOME: '/host/private-home',
+      USERPROFILE: 'C:\\host-private-home',
+      XDG_CONFIG_HOME: '/host/private-config',
+      CODEX_HOME: '/host/private-codex',
+      CLAUDE_CONFIG_DIR: '/host/private-claude',
     },
   })
   assert.equal(report.probeStatus, 'PASS')
