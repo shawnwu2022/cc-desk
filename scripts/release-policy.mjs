@@ -12,5 +12,9 @@ export function mayPublish(context) {
 }
 
 export function promotionComplete(context) {
-  return mayPublish(context) && context.publishedBytesVerified === true
+  return Boolean(
+    mayPublish(context)
+    && context.publishedBytesVerified === true
+    && context.updaterVerified === true
+  )
 }
