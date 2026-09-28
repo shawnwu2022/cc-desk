@@ -36,11 +36,20 @@ test('D30_PromotionPolicy_CompletionRequiresPublishedByteVerification_02', () =>
     () => checkPromotionPolicy(['--phase', 'complete', ...base]),
     /PROMOTION_POLICY_REJECTED/,
   )
+  assert.throws(
+    () => checkPromotionPolicy([
+      '--phase', 'complete',
+      ...base,
+      '--published-bytes-verified',
+    ]),
+    /PROMOTION_POLICY_REJECTED/,
+  )
   assert.deepEqual(
     checkPromotionPolicy([
       '--phase', 'complete',
       ...base,
       '--published-bytes-verified',
+      '--updater-verified',
     ]),
     { status: 'PASS', phase: 'complete' },
   )
