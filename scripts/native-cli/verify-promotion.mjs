@@ -4,6 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { verifyAcceptance } from './verify-acceptance.mjs'
+import { candidateIdFor } from './candidate-manifest.mjs'
 
 const SHA256 = /^[0-9a-f]{64}$/
 
@@ -20,6 +21,10 @@ function sha256(file) {
 export function verifyPromotion({ candidate, acceptance, artifactsRoot, expectedCommitSha }) {
   if (!candidate || candidate.schemaVersion !== 1) fail('INVALID_CANDIDATE_MANIFEST')
   if (candidate.commitSha !== expectedCommitSha) fail('CANDIDATE_COMMIT_MISMATCH')
+  if (!Array.isArray(candidate.files) || candidate.files.length === 0) fail('INVALID_CANDIDATE_MANIFEST')
+  if (candidate.candidateId !== candidateIdFor(candidate.commitSha, candidate.files)) {
+    fail('INVALID_CANDIDATE_IDENTITY')
+  }
   if (acceptance?.candidate?.candidateId !== candidate.candidateId) fail('ACCEPTANCE_CANDIDATE_MISMATCH')
 
   const acceptanceResult = verifyAcceptance(acceptance)
