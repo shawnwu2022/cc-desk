@@ -1,0 +1,112 @@
+name: Native CLI version canary
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-cli-version-canary
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: ${{ matrix.cli }} / ${{ matrix.channel }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        cli: [claude, codex]
+        channel: [pinned, stable]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install repository dependencies
+        run: npm ci
+
+      - name: Resolve canary package identity
+        id: identity
+        env:
+          CANARY_CLI: ${{ matrix.cli }}
+          CANARY_CHANNEL: ${{ matrix.channel }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs')
+          const config = JSON.parse(fs.readFileSync('docs/testing/native-cli-canary-versions.json', 'utf8'))
+          const product = config.products?.[process.env.CANARY_CLI]
+          if (!product) throw new Error('CANARY_PRODUCT_CONFIG_MISSING')
+          const selector = process.env.CANARY_CHANNEL === 'pinned'
+            ? product.pinnedVersion
+            : product.stableTag
+          if (!selector) throw new Error('CANARY_SELECTOR_MISSING')
+          for (const [key, value] of Object.entries({
+            package: product.package,
+            binary: product.binary,
+            selector,
+            expected: process.env.CANARY_CHANNEL === 'pinned' ? product.pinnedVersion : '',
+          })) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`)
+          }
+          NODE
+
+      - name: Install isolated CLI package
+        env:
+          CANARY_CLI: ${{ matrix.cli }}
+          CANARY_CHANNEL: ${{ matrix.channel }}
+          PACKAGE_NAME: ${{ steps.identity.outputs.package }}
+          PACKAGE_SELECTOR: ${{ steps.identity.outputs.selector }}
+        shell: bash
+        run: |
+          prefix="$RUNNER_TEMP/cc-desk-canary-$CANARY_CLI-$CANARY_CHANNEL"
+          rm -rf "$prefix"
+          mkdir -p "$prefix"
+          npm install --global --prefix "$prefix" "$PACKAGE_NAME@$PACKAGE_SELECTOR"
+          echo "CC_DESK_CANARY_PREFIX=$prefix" >> "$GITHUB_ENV"
+
+      - name: Probe binary identity without credentials
+        env:
+          CANARY_CLI: ${{ matrix.cli }}
+          CANARY_CHANNEL: ${{ matrix.channel }}
+          CANARY_BINARY: ${{ steps.identity.outputs.binary }}
+          CANARY_EXPECTED: ${{ steps.identity.outputs.expected }}
+        shell: bash
+        run: |
+          binary="$CC_DESK_CANARY_PREFIX/bin/$CANARY_BINARY"
+          args=(
+            --cli "$CANARY_CLI"
+            --binary "$binary"
+            --channel "$CANARY_CHANNEL"
+            --output "canary-$CANARY_CLI-$CANARY_CHANNEL.json"
+          )
+          if [ -n "$CANARY_EXPECTED" ]; then
+            args+=(--expected-version "$CANARY_EXPECTED")
+          fi
+          env -u ANTHROPIC_API_KEY \
+              -u ANTHROPIC_AUTH_TOKEN \
+              -u CLAUDE_CODE_OAUTH_TOKEN \
+              -u OPENAI_API_KEY \
+              -u CODEX_API_KEY \
+              node scripts/native-cli/canary-identity.mjs "${args[@]}"
+
+      - name: Upload canary identity
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-cli-canary-${{ matrix.cli }}-${{ matrix.channel }}-${{ github.run_id }}
+          path: canary-${{ matrix.cli }}-${{ matrix.channel }}.json
+          if-no-files-found: error
+          retention-days: 30
