@@ -46,8 +46,247 @@ jobs:
       - name: Validate immutable workflow inputs
         shell: bash
         run: |
-          if ! printf '%s' "${{ inputs.candidate_sha }}" | grep -Eq '^[0-9a-f]{40}$'; then
+          if ! printf '%s' "${{ inputs.candidate_sha }}" | grep -Eq '^[0-9a-f]{40}          for id in "${{ inputs.candidate_run_id }}" "${{ inputs.evidence_run_id }}"; do
+            if ! printf '%s' "$id" | grep -Eq '^[1-9][0-9]*$'; then
+              echo "::error::run IDs must be positive integers"
+              exit 1
+            fi
+          done
+          if ! printf '%s' "${{ inputs.bundle_id }}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'; then
+            echo "::error::bundle_id is invalid"
+            exit 1
+          fi
+          if ! printf '%s' "${{ inputs.tag }}" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag must be an exact semver release tag"
+            exit 1
+          fi
+
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Read source workflow-run metadata
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            fs.mkdirSync('.promotion', { recursive: true })
+            for (const [name, id] of [
+              ['candidate', Number('${{ inputs.candidate_run_id }}')],
+              ['evidence', Number('${{ inputs.evidence_run_id }}')],
+            ]) {
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: id,
+              })
+              fs.writeFileSync(`.promotion/${name}-run.json`, JSON.stringify(response.data))
+            }
+
+      - name: Verify candidate and evidence run provenance
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-workflow-run.mjs --run-json .promotion/candidate-run.json --workflow-path .github/workflows/release.yml --head-sha "${{ inputs.candidate_sha }}" --event workflow_dispatch --event push
+          node scripts/native-cli/verify-workflow-run.mjs --run-json .promotion/evidence-run.json --workflow-path .github/workflows/native-cli-installed-evidence.yml --head-sha "${{ inputs.candidate_sha }}" --event workflow_dispatch
+
+      - name: Download macOS candidate bytes
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ inputs.candidate_sha }}-macos
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: candidate-artifacts/cc-desk-candidate-${{ inputs.candidate_sha }}-macos
+
+      - name: Download Linux candidate bytes
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ inputs.candidate_sha }}-linux
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: candidate-artifacts/cc-desk-candidate-${{ inputs.candidate_sha }}-linux
+
+      - name: Download Windows candidate bytes
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ inputs.candidate_sha }}-windows
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: candidate-artifacts/cc-desk-candidate-${{ inputs.candidate_sha }}-windows
+
+      - name: Download immutable candidate manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ inputs.candidate_sha }}-manifest
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: .promotion/candidate
+
+      - name: Download provenance-bound installed evidence bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: native-installed-evidence-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
+          run-id: ${{ inputs.evidence_run_id }}
+          github-token: ${{ github.token }}
+          path: .promotion/evidence-bundle
+
+      - name: Recompute candidate hashes and rerun complete acceptance gate
+        shell: bash
+        run: |
+          node scripts/native-cli/promote-candidate.mjs --repo-root . --candidate-root candidate-artifacts --candidate .promotion/candidate/candidate.json --catalog docs/testing/native-cli-acceptance-catalog.json --plan .promotion/evidence-bundle/plan.json --records .promotion/evidence-bundle/records.json --evidence-root .promotion/evidence-bundle/evidence --source-commit "${{ inputs.candidate_sha }}" --tag "${{ inputs.tag }}" --publish-dir .promotion/publish --out .promotion/promotion.json
+
+      - name: Enforce machine-ready policy before approval
+        shell: bash
+        run: |
+          node scripts/native-cli/check-promotion-policy.mjs --phase verify --event workflow_dispatch --operation promote --gate-passed --manifest-verified --same-candidate --no-rebuild
+
+      - name: Generate updater metadata from verified staging only
+        shell: bash
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node scripts/generate-updater-manifest.js .promotion/publish .promotion/publish/latest.json "${{ inputs.tag }}"
+
+      - name: Verify exact release staging set before approval
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-published-promotion.mjs .promotion/publish .promotion/promotion.json .promotion/publish/latest.json
+
+      - name: Upload machine-verified promotion staging
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-promotion-ready-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
+          path: |
+            .promotion/publish
+            .promotion/candidate.json
+            .promotion/acceptance-summary.json
+            .promotion/promotion.json
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Record pre-approval boundary
+        shell: bash
+        run: |
+          echo "Machine verification completed before the protected promotion environment is entered." >> "$GITHUB_STEP_SUMMARY"
+          echo "The next job may publish only these staged bytes after explicit environment approval." >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Approve and publish already verified candidate
+    needs: verify
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    environment: native-release-promotion
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Download machine-verified staging from this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          name: native-promotion-ready-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
+          path: .promotion
+
+      - name: Reverify staged bytes after approval boundary
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-published-promotion.mjs .promotion/publish .promotion/promotion.json .promotion/publish/latest.json
+
+      - name: Enforce approved pre-publish release policy
+        shell: bash
+        run: |
+          # Reaching this step proves the protected environment gate admitted the job.
+          node scripts/native-cli/check-promotion-policy.mjs --phase pre --event workflow_dispatch --operation promote --gate-passed --manifest-verified --same-candidate --explicit-approval --no-rebuild
+
+      - name: Ensure release tag and release do not already exist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Release tag already exists"
+            exit 1
+          fi
+          if gh release view "${{ inputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Release already exists"
+            exit 1
+          fi
+
+      - name: Create draft release with exact verified staging bytes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          printf '%s\n' "$RELEASE_NOTES" > .promotion/release-notes.txt
+          gh release create "${{ inputs.tag }}" .promotion/publish/* --target "${{ inputs.candidate_sha }}" --title "CC Desk ${{ inputs.tag }}" --notes-file .promotion/release-notes.txt --draft
+
+      - name: Download draft release bytes again
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .promotion/uploaded
+          gh release download "${{ inputs.tag }}" --dir .promotion/uploaded
+
+      - name: Verify exact draft asset set and hashes before publication
+        shell: bash
+        run: |
+          node scripts/native-cli/verify-published-promotion.mjs .promotion/uploaded .promotion/promotion.json .promotion/publish/latest.json
+
+      - name: Publish the already verified draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${{ inputs.tag }}" --draft=false --latest
+
+      - name: Verify updater manifest and published asset URLs
+        shell: bash
+        run: |
+          version="${{ inputs.tag }}"
+          version="${version#v}"
+          node scripts/verify-updater-manifest.js "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/latest.json" "$version"
+
+      - name: Enforce post-publish completion policy
+        shell: bash
+        run: |
+          node scripts/native-cli/check-promotion-policy.mjs --phase complete --event workflow_dispatch --operation promote --gate-passed --manifest-verified --same-candidate --explicit-approval --no-rebuild --published-bytes-verified --updater-verified
+
+      - name: Upload promotion audit metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-promotion-${{ inputs.candidate_sha }}-${{ inputs.bundle_id }}
+          path: |
+            .promotion/promotion.json
+            .promotion/candidate.json
+            .promotion/acceptance-summary.json
+          retention-days: 90
+          if-no-files-found: warn
+; then
             echo "::error::candidate_sha must be an exact commit SHA"
+            exit 1
+          fi
+          if [ "${{ github.sha }}" != "${{ inputs.candidate_sha }}" ]; then
+            echo "::error::Dispatch this workflow from the exact candidate ref"
             exit 1
           fi
           for id in "${{ inputs.candidate_run_id }}" "${{ inputs.evidence_run_id }}"; do
