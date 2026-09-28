@@ -2,44 +2,52 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { checkPromotionPolicy } from '../../scripts/native-cli/check-promotion-policy.mjs'
 
-const base = [
+const machine = [
   '--event', 'workflow_dispatch',
   '--operation', 'promote',
   '--gate-passed',
   '--manifest-verified',
   '--same-candidate',
-  '--explicit-approval',
   '--no-rebuild',
 ]
 
-test('D30_PromotionPolicy_PrePublishRequiresAllImmutableGates_01', () => {
+const approved = [...machine, '--explicit-approval']
+
+test('D30_PromotionPolicy_MachineVerificationPrecedesApproval_01', () => {
   assert.deepEqual(
-    checkPromotionPolicy(['--phase', 'pre', ...base]),
-    { status: 'PASS', phase: 'pre' },
+    checkPromotionPolicy(['--phase', 'verify', ...machine]),
+    { status: 'PASS', phase: 'verify' },
   )
   assert.throws(
     () => checkPromotionPolicy([
-      '--phase', 'pre',
+      '--phase', 'verify',
       '--event', 'workflow_dispatch',
       '--operation', 'promote',
       '--gate-passed',
       '--manifest-verified',
-      '--explicit-approval',
       '--no-rebuild',
     ]),
     /PROMOTION_POLICY_REJECTED/,
   )
+  assert.throws(
+    () => checkPromotionPolicy(['--phase', 'pre', ...machine]),
+    /PROMOTION_POLICY_REJECTED/,
+  )
+  assert.deepEqual(
+    checkPromotionPolicy(['--phase', 'pre', ...approved]),
+    { status: 'PASS', phase: 'pre' },
+  )
 })
 
-test('D30_PromotionPolicy_CompletionRequiresPublishedByteVerification_02', () => {
+test('D30_PromotionPolicy_CompletionRequiresApprovalAndPublishedVerification_02', () => {
   assert.throws(
-    () => checkPromotionPolicy(['--phase', 'complete', ...base]),
+    () => checkPromotionPolicy(['--phase', 'complete', ...approved]),
     /PROMOTION_POLICY_REJECTED/,
   )
   assert.throws(
     () => checkPromotionPolicy([
       '--phase', 'complete',
-      ...base,
+      ...approved,
       '--published-bytes-verified',
     ]),
     /PROMOTION_POLICY_REJECTED/,
@@ -47,7 +55,7 @@ test('D30_PromotionPolicy_CompletionRequiresPublishedByteVerification_02', () =>
   assert.deepEqual(
     checkPromotionPolicy([
       '--phase', 'complete',
-      ...base,
+      ...approved,
       '--published-bytes-verified',
       '--updater-verified',
     ]),
