@@ -79,7 +79,7 @@ jobs:
         run: |
           root=".ci-canary/${{ matrix.cli }}-${{ matrix.lane }}"
           mkdir -p "$root/work"
-          npm init -y --prefix "$root" >/dev/null
+          printf '%s\n' '{"private":true}' > "$root/package.json"
           npm install --prefix "$root" --no-save "${{ matrix.package }}@${{ steps.spec.outputs.spec }}"
 
       - name: Probe executable identity and help only
