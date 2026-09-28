@@ -15,6 +15,7 @@ test('D29_EvidenceIngest_RequiresProtectedSelfHostedProvenance_01', () => {
   assert.match(workflow, /verify-workflow-run\.mjs/)
   assert.match(workflow, /stage-evidence-bundle\.mjs/)
   assert.match(workflow, /native-installed-evidence-\$\{\{ inputs\.candidate_sha \}\}-\$\{\{ inputs\.bundle_id \}\}/)
+  assert.match(workflow, /github\.sha[^\n]*inputs\.candidate_sha|inputs\.candidate_sha[^\n]*github\.sha/)
   assert.doesNotMatch(workflow, /OPENAI_API_KEY|ANTHROPIC_API_KEY|CODEX_API_KEY/)
 })
 
@@ -25,6 +26,7 @@ test('D29_AcceptanceGate_DerivesEvidenceArtifactAndChecksBothRuns_02', () => {
   assert.match(workflow, /workflow-path \.github\/workflows\/release\.yml/)
   assert.match(workflow, /workflow-path \.github\/workflows\/native-cli-installed-evidence\.yml/)
   assert.match(workflow, /native-installed-evidence-\$\{\{ inputs\.candidate_sha \}\}-\$\{\{ inputs\.bundle_id \}\}/)
+  assert.match(workflow, /github\.sha[^\n]*inputs\.candidate_sha|inputs\.candidate_sha[^\n]*github\.sha/)
   assert.doesNotMatch(workflow, /evidence_artifact/)
 })
 
@@ -35,4 +37,10 @@ test('D29_Canary_IsCrossPlatformCredentialFreeAndNonCertifying_03', () => {
   assert.match(workflow, /lane: \[pinned, latest-stable\]/)
   assert.match(workflow, /certificationStatus remains NOT_RUN/)
   assert.doesNotMatch(workflow, /\$\{\{\s*secrets\./)
+})
+
+test('D30_PromotionWorkflow_IsDispatchedFromExactCandidateRef_04', () => {
+  const workflow = read('.github/workflows/promote-native-candidate.yml')
+  assert.match(workflow, /github\.sha[^\n]*inputs\.candidate_sha|inputs\.candidate_sha[^\n]*github\.sha/)
+  assert.match(workflow, /Checkout exact candidate source/)
 })
