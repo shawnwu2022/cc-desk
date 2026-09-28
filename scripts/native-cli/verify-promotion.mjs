@@ -18,7 +18,7 @@ function sha256(file) {
   return createHash('sha256').update(readFileSync(file)).digest('hex')
 }
 
-export function verifyPromotion({ candidate, acceptance, artifactsRoot, expectedCommitSha }) {
+export function verifyPromotion({ candidate, acceptance, targetPlan, artifactsRoot, expectedCommitSha }) {
   if (!candidate || candidate.schemaVersion !== 1) fail('INVALID_CANDIDATE_MANIFEST')
   if (candidate.commitSha !== expectedCommitSha) fail('CANDIDATE_COMMIT_MISMATCH')
   if (!Array.isArray(candidate.files) || candidate.files.length === 0) fail('INVALID_CANDIDATE_MANIFEST')
@@ -27,7 +27,7 @@ export function verifyPromotion({ candidate, acceptance, artifactsRoot, expected
   }
   if (acceptance?.candidate?.candidateId !== candidate.candidateId) fail('ACCEPTANCE_CANDIDATE_MISMATCH')
 
-  const acceptanceResult = verifyAcceptance(acceptance, candidate)
+  const acceptanceResult = verifyAcceptance(acceptance, candidate, targetPlan)
   if (!acceptanceResult.ok) fail('ACCEPTANCE_GATE_FAILED')
 
   const files = []
@@ -53,12 +53,14 @@ export function verifyPromotion({ candidate, acceptance, artifactsRoot, expected
 function main() {
   const candidatePath = path.resolve(process.argv[2] || '')
   const acceptancePath = path.resolve(process.argv[3] || '')
-  const artifactsRoot = path.resolve(process.argv[4] || '')
-  const expectedCommitSha = process.argv[5] || ''
-  if (!candidatePath || !acceptancePath || !artifactsRoot || !expectedCommitSha) fail('PROMOTION_ARGUMENTS_REQUIRED')
+  const targetPlanPath = path.resolve(process.argv[4] || '')
+  const artifactsRoot = path.resolve(process.argv[5] || '')
+  const expectedCommitSha = process.argv[6] || ''
+  if (!candidatePath || !acceptancePath || !targetPlanPath || !artifactsRoot || !expectedCommitSha) fail('PROMOTION_ARGUMENTS_REQUIRED')
   const result = verifyPromotion({
     candidate: JSON.parse(readFileSync(candidatePath, 'utf8')),
     acceptance: JSON.parse(readFileSync(acceptancePath, 'utf8')),
+    targetPlan: JSON.parse(readFileSync(targetPlanPath, 'utf8')),
     artifactsRoot,
     expectedCommitSha,
   })
