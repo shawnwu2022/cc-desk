@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import AppMenu from '@/components/ui/AppMenu.vue'
 import type { SessionMenuAction, SessionMenuActionDefinition } from '@/types/unifiedSession'
 
-const props = defineProps<{ open: boolean; actions: SessionMenuActionDefinition[]; anchor: { x: number; y: number } }>()
+const props = withDefaults(defineProps<{ open: boolean; actions: SessionMenuActionDefinition[]; anchor: { x: number; y: number }; teleport?: boolean }>(), { teleport: true })
 const emit = defineEmits<{ 'update:open': [open: boolean]; 'menu-action': [action: SessionMenuAction] }>()
 const { t } = useI18n()
 const menu = ref<InstanceType<typeof AppMenu> | null>(null)
@@ -35,7 +35,7 @@ function selectAction(id: string) {
 </script>
 
 <template>
-  <Teleport to="body">
+  <Teleport to="body" :disabled="!teleport">
     <AppMenu ref="menu" class="session-overflow-menu" :style="position" :open="open"
       :label="t('sessionActionsLabel')" :items="items" @update:open="emit('update:open', $event)" @select="selectAction" />
   </Teleport>

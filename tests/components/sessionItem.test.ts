@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
-import { createPinia } from 'pinia'
 import { nextTick } from 'vue'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -12,7 +11,6 @@ import SessionList from '@/components/sessions/SessionList.vue'
 import SessionOverflowMenu from '@/components/sessions/SessionOverflowMenu.vue'
 import { selectSessionMenuActions } from '@/utils/sessionPresentation'
 import type { SessionMenuAction, UnifiedSession } from '@/types/unifiedSession'
-import type { TerminalTab } from '@/stores/session'
 
 const now = new Date(2026, 8, 30, 9, 0).getTime()
 const base: UnifiedSession = {
@@ -330,7 +328,7 @@ describe('Unified session menu model', () => {
   })
 })
 
-describe('SessionList unified and temporary legacy boundary', () => {
+describe('SessionList unified boundary', () => {
   // 统一列表直传统一 ID 与动作，不依赖旧 attention store。
   it('List_UnifiedEvents_025', async () => {
     const wrapper = mount(SessionList, { props: { sessions: [base], selectedId: base.id }, global: { plugins: [i18n] } })
@@ -342,40 +340,28 @@ describe('SessionList unified and temporary legacy boundary', () => {
     expect(wrapper.get('.session-item').classes('active')).toBe(true)
   })
 
-  // 过渡旧调用只映射数据与事件，停止 tab 可恢复；历史归档与点击恢复继续有效。
-  it('List_LegacySupportedActions_026', async () => {
-    const tab: TerminalTab = { tabId: 'tab-1', projectPath: '/work/game', ptyId: null,
-      sessionId: 'history-1', name: 'Stopped tab', status: 'stopped', createdAt: now,
-      lastActiveAt: now - 2 * 60_000, working: false, pending: false, isResume: true }
+  // ProjectNode now provides unified identities only; no old events or legacy attention store are retained.
+  it('List_UnifiedMenuAndRenameOnly_026', async () => {
+    const history = { ...base, id: 'history-2', title: 'History', processState: 'stopped' as const }
     const wrapper = mount(SessionList, { attachTo: document.body,
-      props: { tabs: [tab], history: [{ sessionId: 'history-2', name: 'History', projectPath: '/work/game', lastActiveAt: now }], activeId: 'tab-1', closable: true },
-      global: { plugins: [i18n, createPinia()] },
+      props: { sessions: [base, history], selectedId: base.id }, global: { plugins: [i18n] },
     })
     mounted.push(wrapper)
     const rows = wrapper.findAllComponents(SessionItem)
     expect(rows).toHaveLength(2)
-    expect(rows[0].props('session').cli).toBe('claude')
-    expect(rows[0].props('session').runtime).toBe('legacy-claude')
-    expect(rows[0].get('.session-time').text()).toBe('2m')
-    await rows[0].get('.session-primary-action button').trigger('click')
-    expect(wrapper.emitted('restart')).toEqual([['tab-1']])
     await rows[0].trigger('keydown', { key: 'F2' })
-    await rows[0].get('input').setValue('Renamed tab')
+    await rows[0].get('input').setValue('Renamed session')
     await rows[0].get('input').trigger('keydown', { key: 'Enter' })
-    expect(wrapper.emitted('rename')).toEqual([['tab-1', 'Renamed tab']])
-    await rows[0].trigger('contextmenu')
-    await nextTick()
-    expect(menuIds()).toEqual(expect.arrayContaining(['rename', 'restart', 'close']))
-    expect(menuIds()).not.toContain('view-diagnostics')
-    document.querySelector<HTMLElement>('[data-item-id="close"]')!.click()
-    await nextTick()
-    expect(wrapper.emitted('close')).toEqual([['tab-1']])
-    await rows[1].trigger('click')
-    expect(wrapper.emitted('switch')).toEqual([['history-2']])
-    await rows[1].trigger('contextmenu')
-    await nextTick()
+    expect(wrapper.emitted('rename-commit')).toEqual([[base.id, 'Renamed session']])
+    expect(wrapper.emitted('rename')).toBeUndefined()
+    await rows[1].get('.session-primary-action button').trigger('click')
+    expect(wrapper.emitted('primary-action')).toEqual([[history.id, 'resume']])
+    await rows[1].trigger('contextmenu'); await nextTick()
     document.querySelector<HTMLElement>('[data-item-id="archive"]')!.click()
     await nextTick()
-    expect(wrapper.emitted('archive')).toEqual([['history-2']])
+    expect(wrapper.emitted('menu-action')).toEqual([[history.id, 'archive']])
+    expect(wrapper.emitted('archive')).toBeUndefined()
+    const source = readFileSync(resolve('src/components/sessions/SessionList.vue'), 'utf8')
+    expect(source).not.toMatch(/TerminalTab|HistorySession|useAttentionStore|isLegacy|legacyVisibility/)
   })
 })

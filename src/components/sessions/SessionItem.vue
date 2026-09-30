@@ -16,7 +16,9 @@ const props = withDefaults(defineProps<{
   selected?: boolean
   primaryAction?: SessionPrimaryAction | null
   menuActionVisibility?: SessionMenuActionVisibility
-}>(), { selected: false })
+  /** Keep a drawer menu inside the shared modal focus boundary. */
+  menuTeleport?: boolean
+}>(), { selected: false, menuTeleport: true })
 const emit = defineEmits<{
   activate: [id: string]
   'primary-action': [id: string, action: SessionPrimaryAction]
@@ -174,7 +176,7 @@ function onMenuAction(action: SessionMenuAction) {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
       </IconButton>
     </div>
-    <SessionOverflowMenu v-model:open="menuOpen" :actions="actions" :anchor="menuAnchor" @menu-action="onMenuAction" />
+    <SessionOverflowMenu v-model:open="menuOpen" :actions="actions" :anchor="menuAnchor" :teleport="menuTeleport" @menu-action="onMenuAction" />
   </div>
 </template>
 

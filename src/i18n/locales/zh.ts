@@ -1,5 +1,8 @@
 export default {
   // Common
+  projectNeedsReplyCount: '需要回复：{count}',
+  projectActionsLabel: '项目操作',
+  removeProject: '移除项目',
   close: '关闭',
   cancel: '取消',
   save: '保存',

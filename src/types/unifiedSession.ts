@@ -104,3 +104,14 @@ export interface SessionCatalogIdentity {
   adapterSessionId: string
   nativeSessionId?: string | null
 }
+
+/** Tree requests carry catalog/project identity; the workspace owns runtime dispatch. */
+export type UnifiedProjectIdentity = Pick<UnifiedProjectGroup, 'projectKey' | 'projectPath'>
+export type ProjectMenuAction = 'pin' | 'unpin' | 'rename' | 'view-archive' | 'open-project-directory' | 'remove-project'
+export interface ProjectActionRequest extends UnifiedProjectIdentity {
+  action: ProjectMenuAction
+}
+export interface SessionTreeConfirmationRequest extends UnifiedProjectIdentity {
+  kind: 'stop-and-archive'
+  sessionId: string
+}

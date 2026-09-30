@@ -33,7 +33,8 @@ Rules:
 - Task 5: initial implementation at `bd65fe1a0dce9e2cf90d73397ac762c9073d1bc8`; correctness repair described below
 - Task 6: complete at `31223e131396d8c899660ad8d47fabbb5d574dcc`
 - Task 7: complete at `d10fc5a637589de95875e61e1b1d48c332595c32`
-- Next task: Task 8 — unified session row and secondary menu
+- Task 8: complete at `aeb644965aa214fbca3885169c1132ed2d5d5ff5`
+- Next task: Task 9 — unified project tree and archived drawer
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -199,3 +200,37 @@ Rules:
 - Independent spec/quality review approved the final cross-row menu dismissal repair; no remaining Task 8 blocker
 - Final exact gate: 32 row/i18n tests, typecheck and diff check pass; earlier narrow affected regression gate61 passed
 - Atomic task publication pending remote readback
+
+### Verified Task 8 checkpoint
+
+- Remote commit `aeb644965aa214fbca3885169c1132ed2d5d5ff5`; exact staged/fetched tree and local/remote SHA match; clean working tree before this readback
+- Final32 tests/typecheck; independent spec/quality review approved; no CI/PR/package/release
+- Next: Task 9
+
+## Task 9 — Unified project tree and archived session drawer — September 30, 2026
+
+- Status: implemented and locally verified; controller review/publication pending. Base remains `aeb644965aa214fbca3885169c1132ed2d5d5ff5`. The existing Task 8 remote readback is preserved. No commit, remote write, PR, CI, build, package, version or release operation was performed by this implementer.
+- Migrated `ProjectNode` and `SessionsPanel` to `UnifiedProjectGroup[]` and unified typed requests. Claude Code and Codex CLI rows are directly mixed below their project through the same `SessionItem`. `SessionList`'s Task 8 temporary legacy tabs/history, attention-store mapping and old events are removed; its obsolete legacy-boundary test is replaced by strict unified menu/rename/event coverage.
+- Project rows use a stable 40px grid with reserved arrow/title/attention/new-session/overflow columns, single-line title ellipsis and full project-path tooltip. The only project quick action is new-session. Pin/unpin, rename, archive view, directory open and removal share one Task 6 `AppMenu` across overflow/context entry points. Collapsed needs-user markers use unified counts. Tree groups are nested inside their project treeitem.
+- Added `ArchivedSessionsDrawer` using shared `AppDrawer` and the existing unified row/list. Archived records remain in the Task 5 catalog and outside normal groups. Archive-only projects receive one empty UI project shell for their archive menu; a panel-wide archive entry remains usable through search/no-results. Restore emits a catalog-ID `restore-request`, leaves mutation/publication to the caller, and does not launch a CLI or delete CLI native history.
+- Running archive is intercepted as `{ kind: 'stop-and-archive', sessionId, projectKey, projectPath }` through `confirmation-request`, rather than emitting an immediately executable archive action or calling stop. Unknown/starting live states refuse archive. Adapter initialization and runtime dispatch remain Task 11; full confirmations remain Task 16. Project administration and restore are typed requests for their integrating callers.
+- Removed the entire global Legacy skip-permissions/custom-args footer. Search uses display name/basename/path/session title, temporarily expands matches and does not modify explicit expansion. Nested project controls, session rename, menu Escape and drawer focus stay isolated from parent toggle/close behavior.
+- RED exact initial gate: `npm test -- tests/components/projectSessionTree.test.ts` failed on the missing `ArchivedSessionsDrawer.vue` import before production changes. The approved missing-import RED was sufficient; no skeletal-component loop was introduced. First integrated tree/keyboard run passed 12 tests; typecheck exposed the expected obsolete SessionList test and older SidebarPanel listener parameter inference. Removed the obsolete test and added only explicit parameter types to those old listener lambdas.
+- Additional TDD regressions: drawer-menu focus boundary failed before its opt-out fix (menu teleported outside the modal); old-container create isolation failed before renaming the unified event (the old `newSession` event was incorrectly emitted); project/session ARIA hierarchy failed before moving the project treeitem boundary around its nested group. Each subsequently passed. A source-only keyboard assertion initially expected adjacent `.self.prevent` modifiers; reordered equivalent modifiers to match the shared keyboard gate.
+- Final exact required gate: `npm test -- tests/components/projectSessionTree.test.ts tests/sidebarKeyboardHandlers.test.ts && npm run typecheck` → 14 tests pass (13 tree + 1 keyboard), typecheck exit 0.
+- Final narrow affected gate: `npm test -- tests/components/sessionItem.test.ts tests/stores/unifiedSessions.test.ts tests/i18n/translations.test.ts tests/components/uiPrimitives.test.ts && git diff --check` → 71 tests pass (28/12/4/27), diff check exit 0. No full suite or unrelated platform validation was run. Existing npm http-proxy configuration and Vite CJS deprecation warnings remain; no component warnings or unhandled errors occurred in the final runs.
+- Updated `AGENTS.md` and `docs/components.md` with the unified tree, request ownership, retained archive reachability and shared modal/menu topology. Actual Windows 1024×640 font geometry, 100%/125%/150% scaling and rendered screen-reader checks remain final platform gates.
+
+### Task 9 rulings
+
+- Task 5 `projectGroups` intentionally omit archived sessions and therefore omit all-archived projects. UI-only empty shells plus a global archive entry avoid stranding their records without altering the store's normal grouping contract. Cost if wrong: upcoming project management/container integration must reconcile registered/empty/hidden projects with the same single tree, not add a second archive tree or mutate normal groups to include archived rows.
+- `new-session-request` is deliberately distinct from the older SidebarPanel's Legacy `new-session` launch handler. A regression proves the intermediate container cannot interpret the unified plus click as a Legacy PTY launch. Only four old listener lambda annotations change in SidebarPanel to retain typecheck; they do not implement runtime routing or expose a duplicate tree. Task 10/11 must adopt the new typed event model.
+- `SessionOverflowMenu` normally teleports to body. `menuTeleport=false` is passed only in the archived drawer, retaining the same fixed-position shared menu inside AppDrawer's DOM/focus boundary. The shared modal focus trap is unchanged. Cost if wrong: other modal consumers must explicitly keep their menus inside the same focus boundary rather than weakening the trap.
+- Tree components do not permanently remove Native history or map native IDs into old delete APIs. Project rename/removal and other administrative menu actions are typed requests; integrating surfaces own edits, persistence and the appropriate confirmation. Only list-only archive restoration is requested at this stage; restore-and-open can be provided by the later unified resume flow.
+
+### Task 9 review gate
+
+- Independent spec and quality review approved the staged snapshot with no actionable blocker
+- Controller reran exact required gate:14 tests and typecheck pass; implementer narrow affected gate71 passed
+- Runtime/action dispatch remains Task10/11 and confirmation UI Task16; this checkpoint adds no Legacy fallback
+- Atomic publication pending remote readback

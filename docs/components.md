@@ -107,7 +107,7 @@ The following remain compatibility components:
 
 - `TerminalView.vue`;
 - `XTermTerminal.vue`;
-- sessions/sidebar views;
+- the older `SidebarPanel.vue` composition, pending the unified shell integration;
 - legacy Claude settings and hook-driven UI.
 
 Legacy sidebar Skills/Agents/MCP/Plugins are projections. The removed Provider management UI and mutating resource toggles must not return.
@@ -164,3 +164,53 @@ recognition marks, with no assumed right to official Anthropic/OpenAI artwork.
 The Task 7 component gate is `tests/components/sessionIcons.test.ts` plus
 `npm run typecheck`; actual Windows scaling and visual accessibility remain
 separate final gates. Existing session rows are migrated by subsequent tasks.
+
+
+## Unified project/session tree
+
+`SessionsPanel.vue` consumes `UnifiedProjectGroup[]` and archived `UnifiedSession[]`
+(or defaults to the unified catalog store). `ProjectNode.vue` directly nests mixed
+Claude Code and Codex CLI rows through the strictly unified `SessionList.vue` and
+`SessionItem.vue`; there is no legacy visual tree or tabs/history compatibility
+adapter in those components. The global skip-permissions/custom-args footer is
+removed; launch settings belong to the upcoming new-session/settings surfaces.
+
+The 40px project row reserves arrow, flexible single-line name, attention marker,
+new-session and overflow columns. Full project path is available in the shared
+keyboard/pointer tooltip. A collapsed project's unified needs-user count keeps an
+attention marker visible. Its only high-frequency inline action is new-session;
+pin/unpin, rename, archive view, directory open and project removal share one
+`AppMenu` for overflow and context entry points.
+
+Project actions carry `ProjectActionRequest { action, projectKey, projectPath }`.
+New sessions use `new-session-request` with the same project identity, deliberately
+separate from the older container's legacy new-session event. Session activation,
+primary/menu actions and rename requests carry catalog IDs. A running archive is
+intercepted as `confirmation-request` with
+`{ kind: 'stop-and-archive', sessionId, projectKey, projectPath }`. It never invokes
+stop/archive itself. Unknown/starting sessions cannot request archive. Runtime
+adapter setup/dispatch and the full confirmation UI remain integration tasks; none
+of the tree components imports legacy PTY commands or performs lifecycle writes.
+
+Explicit expansion is stored by project key. Search matches project display name,
+original basename, path or session title, expands temporarily and disables toggles.
+Clearing search restores the explicit state. Nested control keys are guarded and
+consumed menu/editor Escape events do not dismiss the panel.
+
+`ArchivedSessionsDrawer.vue` uses shared `AppDrawer` and the same session row/list.
+It filters retained archived records by an optional normalized project identity
+and sends `restore-request` for list-only restoration. Clicking a row does not
+implicitly restore or launch it. Ordinary groups continue to exclude archived
+records; archive-only project shells retain the per-project archive menu, and the
+panel-level archive entry remains available even with no matching search results.
+There is no native-history permanent-delete affordance in this drawer.
+
+The drawer passes `menuTeleport=false` through the list/row to
+`SessionOverflowMenu.vue`. The fixed-position shared menu then stays inside the
+modal's DOM/focus boundary; normal tree menus still teleport to body. Shared focus
+trapping, menu keyboard navigation, Escape and focus return remain authoritative.
+
+Targeted gate: `npm test -- tests/components/projectSessionTree.test.ts
+tests/sidebarKeyboardHandlers.test.ts && npm run typecheck`. Row, unified-store,
+i18n and shared primitive regressions are affected narrow checks. CSS-rule/jsdom
+checks do not certify Windows font layout, 1024×640 or 100%/125%/150% scaling.

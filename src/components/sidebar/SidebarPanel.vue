@@ -6,7 +6,7 @@
         v-show="activePanel === 'sessions'"
         @close="$emit('close')"
         @switch-session="$emit('switchSession', $event)"
-        @rename-session="(id, name) => $emit('renameSession', id, name)"
+        @rename-session="(id: string, name: string) => $emit('renameSession', id, name)"
         @restart-session="$emit('restartSession')"
         @new-session="$emit('newSession')"
         @resume-session="$emit('resumeSession', $event)"
@@ -17,11 +17,11 @@
         @toggle-expand="$emit('toggleExpand', $event)"
         @close-all-sessions="$emit('closeAllSessionsIn', $event)"
         @open-in-explorer="$emit('openInExplorer', $event)"
-        @resume-session-in-project="(p, id, name) => $emit('resumeSessionInProject', p, id, name)"
+        @resume-session-in-project="(p: string, id: string, name?: string) => $emit('resumeSessionInProject', p, id, name)"
         @pin-project="$emit('pinProject', $event)"
         @unpin-project="$emit('unpinProject', $event)"
-        @archive-session="(p, id) => $emit('archiveSession', p, id)"
-        @restore-session="(p, id) => $emit('restoreSession', p, id)"
+        @archive-session="(p: string, id: string) => $emit('archiveSession', p, id)"
+        @restore-session="(p: string, id: string) => $emit('restoreSession', p, id)"
         @show-archived="$emit('showArchived', $event)"
       />
 

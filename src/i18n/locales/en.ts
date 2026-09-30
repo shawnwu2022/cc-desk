@@ -1,5 +1,8 @@
 export default {
   // Common
+  projectNeedsReplyCount: 'Needs your reply: {count}',
+  projectActionsLabel: 'Project actions',
+  removeProject: 'Remove project',
   close: 'Close',
   cancel: 'Cancel',
   save: 'Save',

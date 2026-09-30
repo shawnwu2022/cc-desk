@@ -113,20 +113,19 @@ Claude CLI hook 触发 → report-hook.sh → curl POST → hook_server.rs (axum
 
 ### 全局项目树数据流
 
-```
-sessionStore（tabs + historySessions）→ buildProjectGroups（分组+孤儿）→ sortProjectGroups（置顶→字母序→孤儿置底）→ filterProjectGroups（搜索）→ SessionsPanel 组装 ProjectNode 树
-点节点 → resolveSwitchAction（纯函数，D/E 参数直传无竞态）→ TerminalView handler（切 cwd + 切 tab / --resume）
+```text
+UnifiedSession catalog（Legacy/Native adapters）→ UnifiedProjectGroup[] → SessionsPanel → ProjectNode → SessionList → SessionItem
+已归档 catalog records → ArchivedSessionsDrawer → 同一 SessionList/SessionItem
 ```
 
-- Sessions 面板从「当前项目扁平列表」升级为「项目→会话全局树」：终端视图内跨项目一步切换 + 并行项目状态徽标（`●N` 运行 / 琥珀点 pending）一眼可见，后端 `projects.json` + `get_projects_state`（共享锁读）+ pin/unpin/archive/restore/set_display_name/delete_sessions 6 增量 command（独立 `projects.json.lock` 跨进程排他锁，置顶/存档/别名/永久删除持久化）
-- **会话永久删除**：`delete_sessions` command（薄壳 → `store::delete_sessions_inner`，opLock 串行）删会话文件 + 清 `archivedSessions` 标记，尽力批、非原子（任一失败整体不写 projects.json，重试靠「文件不存在视为已删」+「目录消失仍清标记」收敛）；前端 `deleteSessions` action（成功后 `applyReturnedState` + `loadHistoryFor(force=true)` 防 inflight 复活）+ 纯函数 `filterDeletable`/`groupByProject`；UI：管理页已存档区单删/跨项目批量 + ProjectNode 内联弹层单删，运行中（claimed）会话置灰拒删
-- `resolveSwitchAction`：纯函数决策切换语义（noop / activate / resume / new），输入全显式参数、不读写全局单值中间态，连续调用互不影响
-- `getHistoryFor(path)`：多项目历史选择器，按项目路径隔离历史，跨项目切换不串扰
-- 展开状态：`expandOverride`/`toggleExpand`/`isExpanded`，纯手动展开（不自动展开当前/active），其余折叠
-- **项目别名（display name）**：`projects.json` 的 `displayNames`（normalizedPath -> 别名）-> `loadProjectsState` -> `displayNames` reactive Map -> `getDisplayName`（别名优先 basename 回退）-> `buildProjectGroups`（含孤儿）/ `TitleBar` / native window title（watch `getDisplayName(cwd)` 实时刷新）/ `ProjectSelectView` 项目行 + 已存档视图；搜索查 displayName+basename+path 三字段（`matchProjectQuery`）
-- 编辑入口：管理页 `editingPath` 多行独立 input + 全局树 ProjectNode 单实例 editState，`editReducer` 状态机（成功才关 / 失败保留 + 错误 / 防重复 / retry + request id）
-- **多实例并发安全**：projects.json 写走后端独立 `projects.json.lock`（std `File::lock`）跨进程排他锁 + apply 增量操作（pin/unpin/archive/restore/setDisplayName 各一 async command，`spawn_blocking` 内锁定读最新 → canonicalize → 校验应用 → 原子写 → 返回最新）；Windows 已有文件通过 `ReplaceFileW` 原子覆盖。前端 `session.ts` 的 `opLock` 串行完整 action/reload request + apply；窗口聚焦 reload 共享锁读。config.json 的 hiddenProjects/lastOpened 暂未纳入（同 pattern 可扩展）。升级时须先关闭旧版本实例（见 spec §8 迁移风险）
-- 详细架构 → [docs/components.md](docs/components.md)
+- 统一树直接混排 Claude Code / Codex CLI；`ProjectNode` 和 `SessionList` 不再接收旧 tabs/history，也不依赖旧 PTY attention store。`SessionsPanel` 接收显式统一投影或默认读取 `unifiedSessions` store；adapter 初始化和生命周期 dispatch 由后续 workspace container 负责。
+- 项目行只有一个新建快捷动作；固定/取消固定、重命名、查看归档、打开目录、移除走同一 `AppMenu`，鼠标右键和 overflow 共用动作。`new-session-request` 携带 projectKey/projectPath，不能交给旧容器的 `new-session` Legacy 启动 handler。
+- normal `projectGroups` 保持排除已归档记录。UI 为仅剩归档的项目保留一个空项目壳以访问其归档菜单；面板全局归档入口在搜索无结果时仍可用。恢复仅发 `restore-request`，不直接恢复或启动，成功后由调用方发布 catalog 更新。
+- 运行态 archive 必须发 `SessionTreeConfirmationRequest { kind: 'stop-and-archive', sessionId, projectKey, projectPath }`；未知/启动态不发归档请求。树组件不得直接 stop/archive，也不得 fallback 到 Legacy PTY；完整确认 UI 在后续任务实现。
+- 展开状态按 projectKey 显式保存；搜索临时展开但禁止修改手动状态。项目名/原 basename/路径命中展示组内普通会话，会话名命中只展示匹配的普通会话。清空搜索恢复之前手动状态；nested controls 的 Enter/Space 不触发父级折叠，菜单/编辑器 Escape 不关闭整个面板。
+- 旧 `session.ts` 的分组、`resolveSwitchAction`、历史缓存、`projects.json` persistence 和 ProjectSelectView 管理行为仍属于兼容数据/管理路径。它们不再是新的双 CLI 树 UI 边界，也不能用旧历史删除接口删除 Native 记录。
+- `projects.json` pin/archive/displayName/delete 增量写继续通过独立 `projects.json.lock` 跨进程锁、增量 apply 和原子返回状态；统一项目状态由 `projectsState` store 读取。Native workspace 保持自己的 revision/CAS 和 authenticated document bridge。
+- 组件 gate：`npm test -- tests/components/projectSessionTree.test.ts tests/sidebarKeyboardHandlers.test.ts && npm run typecheck`。真实 Windows 1024×640、100%/125%/150% 缩放和渲染可访问性仍是最终平台门禁。
 
 ### 性能边界
 
@@ -313,5 +312,5 @@ npm run tauri:build        # 生产构建
 - `sessionPresentation.ts` owns the single typed secondary-action definition array. Overflow, pointer context menu and keyboard context menu render it through `SessionOverflowMenu`/`AppMenu`. Unknown/starting states cannot offer restart or archive; running archive is explicitly “Stop and archive”. Components emit action requests only; lifecycle, confirmation and diagnostic redaction remain caller responsibilities.
 - `relativeTime.ts` supplies one reference-counted minute clock shared by all mounted rows and releases it after the final consumer. Compact ages use the existing formatter; keyboard/pointer Tooltip shows the full local activity timestamp.
 - F2/menu rename edits only the title slot through `AppInput`; Enter/save commits the trimmed name, Escape cancels, and external saving disables repeated submission. Session identity changes discard the previous draft. Row controls reuse `IconButton` with the row-specific 20px width/28px height matching the fixed trailing column.
-- Until Task 9 migrates `ProjectNode`, `SessionList` alone maps old tabs/history and their supported switch/rename/restart/close/archive events into the unified row. Unsupported legacy capabilities remain hidden; no duplicate visual row is retained. Unified callers do not require the legacy attention store.
+- `SessionList` is strictly unified and only forwards unified action/rename/activation requests. Its Task 8 temporary tabs/history boundary is removed. `menuTeleport` defaults true; archived drawer consumers set it false so the same menu remains inside `AppDrawer`'s modal focus boundary. Do not weaken the shared modal focus trap to accommodate menus.
 - Regression gate: `npm test -- tests/components/sessionItem.test.ts tests/i18n/translations.test.ts && npm run typecheck`. Real Windows scaling, font geometry and rendered accessibility remain final visual/platform gates.
