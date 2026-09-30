@@ -39,7 +39,8 @@ Rules:
 - Task 11: complete at `b1309bd294f153e99449b0d3413542ba923a294e`
 - Task 12: complete at `72644819200a298f7b6689dfa512289036d37177`
 - Task 13: complete at `181c6f51c509468e3f6c3f2a844131dcd3975e65`
-- Next task: Task 14 — project management
+- Task 14: complete at `d1a6dc6d6fbb22057245e628c0b6eedcf83fe36a`
+- Next task: Task 15 — structured project resources
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -414,3 +415,26 @@ Rules:
 - Final exact gate28 tests+typecheck; final repair-affected167 tests across9 files. Earlier185-test14-file gate is pre-repair historical evidence; affected subset was rerun. Diff/manifest/reverse-apply checks pass
 - Independent spec/quality approval resolved all3 findings; reviewer reran original3 reproductions,10 targeted repair/ownership/cancellation checks and4 Legacy/coalescing checks successfully
 - No actual CLI/backend/platform/scaling/D20 certification, full suite, CI/PR/package/release; atomic publication pending readback
+
+### Verified Task 14 checkpoint
+
+- Remote commit `d1a6dc6d6fbb22057245e628c0b6eedcf83fe36a`; exact staged/fetched tree and local/remote SHA match; working tree clean before this readback
+-28 required tests/typecheck and167 repair-affected tests; independent approval with3 original repros,10 repair checks and4 Legacy/coalescing checks passing
+- No CI/PR/package/release or actual CLI/platform acceptance; next Task15
+
+### Task 15 preflight rulings
+
+- Ruling: Legacy instructions explicitly show unavailable because no existing authorized instruction-document reader exists; do not introduce arbitrary filesystem/default-root access. Other Legacy categories use only existing read-only scoped authority. Cost if wrong: Legacy instruction content is unavailable until a separately authorized reader contract exists.
+- Ruling: existing authenticated resource response budgets remain enforced and hasMore is visibly partial; do not present offset pages as a complete stable snapshot when no snapshot token exists. Cost if wrong: large resource collections show bounded partial results rather than an invented completeness guarantee.
+- Ruling: Legacy readers that mix ambient home data are projected only when records positively identify exact project/local scope; omit ambient/global records without selected-session root authority and label the view project-only/partial. Cost if wrong: globally inherited Legacy resources are intentionally omitted rather than falsely attributed to the selected session.
+
+## Task 15 — Structured project resources
+
+- Six typed read-only categories connect to normal App context slot; shell alone owns dock/overlay/focus. Same-owner refresh retains labeled stale content; identity/category changes clear it and reject late scope/read/error/finally publication
+- Native reads pin exact current session/project/CLI/profile revision/request/run/generation and existing authenticated client; invalid submitted run authority never falls back to defaults. One existing bounded page is labeled partial when hasMore
+- Safe display DTOs exclude raw transport fields, env/headers/credentials/arbitrary paths/errors; settings allowlist and conservative whole-field withholding protect structured views. Legacy instructions unavailable; other Legacy reads positively project-only/partial
+- Independent review R1 repaired failed/null launchRevision ambiguity: private exact-attempt never-started proof is revoked before start preparation and on unknown/error evidence. Actual terminal malformed-receipt regression prevents profile fallback without changing retry semantics
+- Review R2 repaired ancestor-mixing Legacy MCP labels: reuse existing getProjectConfig source.path DTO and verify exact fixed selected-project path internally; settings apply same check. Missing/ancestor/other/relative paths are omitted and never rendered
+- Final required78 tests+typecheck;266 affected tests across23 suites; diff/manifest/reverse-patch checks pass. Earlier71/219 counts superseded
+- Independent scoped spec/quality approval reran original2 repros and12 repair/positive-authority checks successfully
+- No actual CLI/account/Legacy plugin execution/platform/scaling/D20 certification, full suite, CI/PR/package/release; atomic publication pending readback

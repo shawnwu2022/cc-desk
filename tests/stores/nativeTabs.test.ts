@@ -150,4 +150,24 @@ describe('D22 native dual-CLI tab store', () => {
     expect(store.applyLaunchStatus(created.tabId, status(created, 'running'))).toBe(false)
     expect(store.tab(created.tabId)?.status).toBe('stopped')
   })
+  // 只有 create/restart 的新 attempt 有未开始证明，失败不能撤销既有准备证据。
+  it('Tabs_ResourceAttemptProof_016', () => {
+    const store = useNativeTabsStore()
+    const created = store.create({ cli: 'codex', projectId: 'p1', projectPath: '/repo', profileId: 'config', profileRevision: '1', action: { kind: 'new' } })
+    expect(store.hasUnstartedAttempt(created.tabId)).toBe(true)
+    store.markStarting(created.tabId); store.markError(created.tabId, 'INVALID_LAUNCH_RESPONSE')
+    expect(store.hasUnstartedAttempt(created.tabId)).toBe(false)
+    expect(store.tab(created.tabId)).toMatchObject({ status: 'failed', launchRevision: null })
+    const restarted = store.restart(created.tabId, { profileId: 'config', profileRevision: '1' })
+    expect(store.hasUnstartedAttempt(restarted.tabId)).toBe(true)
+    expect(restarted).toMatchObject({ generation: 2 })
+    expect(restarted.requestId).not.toBe(created.requestId)
+  })
+  // 未分类错误同样撤销正向未开始证明，不从 failed/null 推断没有提交。
+  it('Tabs_ErrorRevokesAttemptProof_017', () => {
+    const store = useNativeTabsStore()
+    const tab = store.create({ cli: 'codex', projectId: 'p1', projectPath: '/repo', profileId: 'config', profileRevision: '1', action: { kind: 'new' } })
+    store.markError(tab.tabId, 'INVALID_LAUNCH_RESPONSE')
+    expect(store.hasUnstartedAttempt(tab.tabId)).toBe(false)
+  })
 })

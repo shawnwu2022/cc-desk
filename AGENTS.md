@@ -136,6 +136,14 @@ UnifiedSession catalog（Legacy/Native adapters）→ UnifiedProjectGroup[] → 
 - 配置可见性读取、启动 hydration 和写入按发布版本保护，较晚启动迁移不能覆盖新的确认写入。project mutation 冲突/未知回执仅重读，不自动重放或补偿；多存储变更可能部分完成，安全提示区分重新加载成功与无法重新加载。
 - Task 14 gate：`npm test -- tests/components/projectsView.test.ts tests/stores/projectRegistrationFlow.test.ts tests/stores/nativeProjectRegistration.test.ts && npm run typecheck`。真实 CLI 和 Windows 平台验收仍独立未完成。
 
+### 统一只读项目资源
+
+- normal App 的 shell context slot 使用 `ProjectResourcesDrawer`，六类结构化资源绑定当前统一会话；不增加全局导航、第二个抽屉或配置写入器。无会话时不借用项目默认配置或 home。
+- `projectResources` 优先冻结的 Native run/generation；仅持有该 request/run/generation 的正向未开始证明且 stopped/null 时接受精确 profile revision/注册项目；`nativeTabs` 在开始准备前撤销该证明，failed/null 回执不等于未提交。历史会话另用冻结来源。无效、撤销或消失的 run 不回退当前默认配置。跨会话/attempt/CLI/配置/分类旧完成不能发布；仅同一 owner 刷新保留过期内容。
+- `nativeProjection.readScoped` 通过原 authenticated client 独立读一个有界页，不与兼容面板共享结果槽。`hasMore` 明示 partial，不发明分页快照完整性。typed display DTO 使用配置 allowlist、固定来源标签及保守自由文本筛查，不输出 env/header/凭证、路径、原始错误或 JSON dump。
+- Legacy 只读 stores 仅返回显式绝对项目路径的逐请求结果；settings/MCP 使用现有 config DTO 的 source.path 精确匹配项目固定配置文件，缺失/父目录/其他项目来源均省略；不能使用包含祖先记录且无路径的 getAllMcpServers project 标签。项目插件还须精确匹配 projectPath。ambient user/global/plugin 子资源省略并明示 project-only/partial；说明文档无现有契约，保持 unavailable。
+- Task 15 gate：`npm test -- tests/components/projectResourcesDrawer.test.ts tests/stores/projectResources.test.ts tests/native-cli/projectionScope.test.ts tests/productBoundary.test.ts && npm run typecheck`。实际 CLI、平台缩放/渲染和终端连续性仍须独立验收。详见 [docs/project-resources.md](docs/project-resources.md)。
+
 ### 性能边界
 
 - `get_home_data` 单次扫描 `~/.claude/projects`，同时生成项目列表与真实路径映射；近期会话直接复用该映射的目录列表，`get_home_data` / `get_sessions` 的同步文件 IO 统一放入 `spawn_blocking`。

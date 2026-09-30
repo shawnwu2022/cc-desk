@@ -6,10 +6,13 @@ import { useNativeTabsStore, captureNativeAttempt } from '@/stores/nativeTabs'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useProjectsStateStore } from '@/stores/projectsState'
+import { useProjectResourcesStore } from '@/stores/projectResources'
+import { useWorkspaceStore } from '@/stores/workspace'
+import { createLaunchAttempt } from '@/api/cliLaunchAttempt'
 import { useAppStore } from '@/stores/app'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 
-const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], bindings: [] as any[], channels: [] as any[], observers: [] as any[], start: vi.fn(), recover: vi.fn(), stop: vi.fn(), copy: vi.fn(), resize: vi.fn() }))
+const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], bindings: [] as any[], channels: [] as any[], observers: [] as any[], scope: vi.fn(), read: vi.fn(), start: vi.fn(), recover: vi.fn(), stop: vi.fn(), copy: vi.fn(), resize: vi.fn() }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: any; element!: HTMLElement; textarea!: HTMLTextAreaElement
   cols = 80; rows = 24; modes = { bracketedPasteMode: false }; output = ''; focus = vi.fn(); dispose = vi.fn(); key: any; selection = ''
@@ -20,7 +23,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
 } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit = vi.fn(); constructor() { io.fits.push(this) } } }))
 vi.mock('@tauri-apps/api/core', () => ({ Channel: class { onmessage: any; constructor() { io.channels.push(this) } }, invoke: vi.fn() }))
-vi.mock('@/api/tauri', () => ({ cliResize: io.resize, cliStop: io.stop }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), cliResize: io.resize, cliStop: io.stop, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }) }))
 vi.mock('@/terminal/nativeLaunchEntry', () => ({ createNativeLaunchEntry: () => ({ start: io.start, recover: io.recover }) }))
 vi.mock('@/terminal/deskNativeTerminal', () => ({ createDeskNativeTerminalBinding: (options: any) => {
   const binding = { options, acceptOutput: (frame: any) => { options.term.write(frame.data); return true }, dispose: vi.fn(), sendUserText: vi.fn().mockResolvedValue(undefined), reserveUserPaste: vi.fn(() => ({ inputSeq: '1', settled: Promise.resolve() })) }
@@ -206,4 +209,19 @@ describe('Unified native terminal identity', () => {
     expect(catalog.activeSessionId).toBe(`native-tab:${tab.tabId}`)
   })
 
+  // 真实 Native 组件错误分支组合实际回执解析失败，资源不得回退当前配置。
+  it('Native_InvalidReceiptResourceScope_016', async () => {
+    const sent = vi.fn(async () => ({}))
+    io.start.mockImplementation(input => createLaunchAttempt({ ...input, profileId: 'cx', expectedProfileRevision: '7' }, 'instance', { start: sent, status: vi.fn() }).start())
+    const { tab } = open(); await flushPromises()
+    const tabs = useNativeTabsStore(); expect(sent).toHaveBeenCalledOnce()
+    expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'failed', launchRevision: null })
+    useWorkspaceStore().projects = [{ projectId: 'project', hostId: 'host', sourcePathKey: 'root', selectedPath: '/repo', canonicalPath: null, alias: { mode: 'inherit' }, hidden: { mode: 'inherit' }, pinned: { mode: 'inherit' } }]
+    const sessions = useUnifiedSessionsStore(); sessions.sessions = [{ id: `native-tab:${tab.tabId}`, adapterSessionId: tab.tabId, cli: 'codex', runtime: 'native-cli', projectKey: '/repo', projectPath: '/repo', title: 'Codex',
+      processState: 'failed', attentionState: 'none', lastActivityAt: 1, archived: false, resumable: false }]; sessions.activeSessionId = sessions.sessions[0].id
+    io.scope.mockRejectedValue({ code: 'SCOPE_UNKNOWN' })
+    const resources = useProjectResourcesStore(); resources.setActive(true); await flushPromises()
+    expect(io.scope.mock.calls).toEqual([[{ kind: 'run', runId: tab.runId, generation: tab.generation }]])
+    expect(resources.unavailable).toBe(true); expect(io.read).not.toHaveBeenCalled(); expect(sent).toHaveBeenCalledOnce()
+  })
 })

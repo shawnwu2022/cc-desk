@@ -22,7 +22,7 @@ import type { UnifiedSession } from '@/types/unifiedSession'
 const host = vi.hoisted(() => ({
   callbacks: new Map<string, (...args: any[]) => void>(),
   cleanup: vi.fn(), minimize: vi.fn(), toggleMaximize: vi.fn(), close: vi.fn(),
-  getConfig: vi.fn(), updateConfig: vi.fn(), runChecks: vi.fn(),
+  resourceConfig: vi.fn(), getConfig: vi.fn(), updateConfig: vi.fn(), runChecks: vi.fn(),
 }))
 vi.mock('@/utils/platform', () => ({ isMac: false, isWindows: true, ctrl: 'Ctrl' }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({
@@ -31,7 +31,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({
 }) }))
 vi.mock('@/api/tauri', async (original) => ({ ...await original<object>(),
   getProjects: async () => [], getProjectsState: async () => ({ pinnedProjects: [], archivedSessions: {} }),
-  getAppConfig: host.getConfig, updateAppConfig: host.updateConfig, runChecks: host.runChecks,
+  getProjectConfig: host.resourceConfig, getAppConfig: host.getConfig, updateAppConfig: host.updateConfig, runChecks: host.runChecks,
   onMenuSettings: async (callback: () => void) => { host.callbacks.set('settings', callback); return host.cleanup },
   onMenuShortcuts: async (callback: () => void) => { host.callbacks.set('shortcuts', callback); return host.cleanup },
   onConfigFontSize: async (callback: (size: number) => void) => { host.callbacks.set('font', callback); return host.cleanup },
@@ -50,6 +50,7 @@ let i18n: ReturnType<typeof createI18n>
 beforeEach(() => {
   vi.clearAllMocks(); host.callbacks.clear()
   host.getConfig.mockResolvedValue({ theme: 'dark', terminalTheme: 'cc-box-light', language: 'en', claudeEnvVars: { TEST: 'private' } })
+  host.resourceConfig.mockResolvedValue({ basic: [], mcp: [], skills: [], agents: [], hooks: [] })
   host.updateConfig.mockResolvedValue(undefined)
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
   setActivePinia(createPinia()); useProjectsStateStore().loaded = true
@@ -352,4 +353,28 @@ describe('Unified application shell', () => {
     expect(document.querySelector('[role="menu"]')).toBeNull()
   })
 
+  // 正常 shell 使用当前会话项目读取资源，抽屉切换保留终端与选择。
+  it('Shell_ResourcesUseActiveSession_023', async () => {
+    const sessions = useUnifiedSessionsStore()
+    sessions.sessions = [{ id: 'legacy-history:exact', projectKey: '/work/exact', projectPath: '/work/exact', cli: 'claude', runtime: 'legacy-claude', title: 'Exact',
+      processState: 'stopped', attentionState: 'none', lastActivityAt: 1, archived: false, resumable: true, adapterSessionId: 'exact' }]
+    sessions.activeSessionId = 'legacy-history:exact'
+    host.resourceConfig.mockResolvedValue({ basic: [{ model: 'sonnet', source: { type: 'project', label: 'private-label', path: '/work/exact/.claude/settings.json' } }], mcp: [], skills: [], agents: [], hooks: [] })
+    const wrapper = render(App, { global: { stubs: { SettingsView: false } } }); await flushPromises()
+    const terminal = wrapper.get('[data-unified-terminal-host]').element
+    expect(host.resourceConfig).not.toHaveBeenCalled()
+    await wrapper.get('button[aria-label="Project resources"]').trigger('click'); await flushPromises()
+    await wrapper.get('[data-project-resources] select').setValue('config'); await flushPromises()
+    expect(host.resourceConfig).toHaveBeenCalledWith('/work/exact')
+    expect(wrapper.get('[data-project-resources]').text()).toContain('sonnet')
+    expect(wrapper.get('[data-project-resources]').text()).toContain('Partial results')
+    expect(wrapper.get('[data-project-resources]').html()).not.toContain('private-label')
+    useShellStore().setViewportWidth(1024); await flushPromises()
+    expect(document.querySelectorAll('[data-project-resources]')).toHaveLength(1)
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('sonnet')
+    useShellStore().navigate('settings'); await flushPromises()
+    expect(document.querySelector('[data-project-resources]')).toBeNull()
+    expect(wrapper.get('[data-unified-terminal-host]').element).toBe(terminal)
+    expect(sessions.activeSessionId).toBe('legacy-history:exact')
+  })
 })

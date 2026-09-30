@@ -4,6 +4,8 @@ import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/shell/AppShell.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import WorkspaceView from '@/components/workspace/WorkspaceView.vue'
+import ProjectResourcesDrawer from '@/components/workspace/ProjectResourcesDrawer.vue'
+import { useProjectResourcesStore } from '@/stores/projectResources'
 import NewSessionMenu from '@/components/sessions/NewSessionMenu.vue'
 import ResumeSessionDialog from '@/components/sessions/ResumeSessionDialog.vue'
 import NewSessionDialog from '@/components/sessions/NewSessionDialog.vue'
@@ -36,6 +38,8 @@ const emit = defineEmits<{ 'workspace-request': [request: WorkspaceRequest] }>()
 const { t } = useI18n()
 const shell = useShellStore()
 const sessions = useUnifiedSessionsStore()
+const resources = useProjectResourcesStore()
+watch(() => !compatibilityEnabled && shell.section === 'workspace' && shell.drawerVisible, resources.setActive, { immediate: true, flush: 'sync' })
 const newSessionDraft = useNewSessionDraftStore()
 const newMenuAnchor = ref({ x: 320, y: 64 })
 watch(() => [shell.section, newSessionDraft.chooserVisible], ([section]) => {
@@ -153,6 +157,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   disposed = true
+  resources.setActive(false)
   unlisteners.splice(0).forEach(unlisten => unlisten())
   window.removeEventListener('app:toggleHome', toggleProjects)
   window.removeEventListener('keydown', keydown)
@@ -208,7 +213,7 @@ onUnmounted(() => {
     <ProjectManagementDialogs />
     <SettingsView v-if="settingsLoaded" v-show="shell.section === 'settings'" @close="shell.navigate('workspace')" />
     <template #context>
-      <InlineNotice :message="t('contextResourcesHint')" />
+      <ProjectResourcesDrawer />
     </template>
   </AppShell>
 </template>

@@ -135,6 +135,13 @@ function statusFromLaunch(value: LaunchStatus): {
 export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   const tabs = reactive(new Map<string, NativeCliTab>())
   const activeTabId = ref<string | null>(null)
+  // Positive resource-scope proof only: false/absent receipts are not evidence
+  // that launch was never submitted. Bind proof to the exact local attempt.
+  const unstartedAttempts = reactive(new Map<string, NativeAttemptIdentity>())
+  function hasUnstartedAttempt(tabId: string): boolean {
+    const proof = unstartedAttempts.get(tabId)
+    return !!proof && matchesNativeAttempt(tabs.get(tabId), proof)
+  }
 
   function create(input: NativeTabCreate): NativeCliTab {
     if (input.cli !== 'claude' && input.cli !== 'codex') {
@@ -161,6 +168,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       lastActivityAt: Date.now(),
     }
     tabs.set(tabId, value)
+    unstartedAttempts.set(tabId, captureNativeAttempt(value))
     activeTabId.value = tabId
     return snapshot(value)
   }
@@ -196,6 +204,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   function markStarting(tabId: string): void {
     const value = tabs.get(tabId)
     if (!value) throw new Error('TAB_NOT_FOUND')
+    unstartedAttempts.delete(tabId)
     value.status = 'starting'
     value.errorCode = null
     value.lastActivityAt = Date.now()
@@ -204,6 +213,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   function markUnknown(tabId: string): void {
     const value = tabs.get(tabId)
     if (!value) throw new Error('TAB_NOT_FOUND')
+    unstartedAttempts.delete(tabId)
     value.status = 'unknown'
     value.errorCode = 'LAUNCH_STATE_UNKNOWN'
     value.lastActivityAt = Date.now()
@@ -212,6 +222,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   function markError(tabId: string, code: string): void {
     const value = tabs.get(tabId)
     if (!value) throw new Error('TAB_NOT_FOUND')
+    unstartedAttempts.delete(tabId)
     value.status = 'failed'
     value.errorCode = text(code, 'ERROR_CODE_REQUIRED')
     value.lastActivityAt = Date.now()
@@ -232,6 +243,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     })) {
       return false
     }
+    unstartedAttempts.delete(tabId)
     const next = statusFromLaunch(launch)
     value.status = next.status
     value.errorCode = next.errorCode
@@ -268,11 +280,13 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.errorCode = null
     value.launchRevision = null
     value.lastActivityAt = Date.now()
+    unstartedAttempts.set(tabId, captureNativeAttempt(value))
     activeTabId.value = tabId
     return snapshot(value)
   }
 
   function close(tabId: string): void {
+    unstartedAttempts.delete(tabId)
     if (!tabs.delete(tabId)) return
     if (activeTabId.value === tabId) {
       activeTabId.value = tabs.keys().next().value ?? null
@@ -280,6 +294,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   }
 
   function clear(): void {
+    unstartedAttempts.clear()
     tabs.clear()
     activeTabId.value = null
   }
@@ -287,6 +302,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   return {
     tabs,
     activeTabId,
+    hasUnstartedAttempt,
     create,
     tab,
     byProject,
