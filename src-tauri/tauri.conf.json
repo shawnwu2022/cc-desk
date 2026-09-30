@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "CC Desk",
-        "width": 800,
-        "height": 600,
-        "minWidth": 500,
-        "minHeight": 400,
+        "width": 1024,
+        "height": 640,
+        "minWidth": 1024,
+        "minHeight": 640,
         "resizable": true,
         "fullscreen": false,
         "decorations": true,

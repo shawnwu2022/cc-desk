@@ -2,13 +2,14 @@
 import SessionItem from './SessionItem.vue'
 import type { SessionMenuAction, SessionMenuActionVisibility, SessionPrimaryAction, UnifiedSession } from '@/types/unifiedSession'
 
-defineProps<{
+withDefaults(defineProps<{
   sessions: UnifiedSession[]
+  surfaceActive?: boolean
   selectedId?: string | null
   primaryActions?: Readonly<Record<string, SessionPrimaryAction | null>>
   menuActionVisibility?: SessionMenuActionVisibility
   menuTeleport?: boolean
-}>()
+}>(), { surfaceActive: true })
 const emit = defineEmits<{
   activate: [id: string]
   'primary-action': [id: string, action: SessionPrimaryAction]
@@ -21,7 +22,7 @@ const emit = defineEmits<{
 <template>
   <div class="session-list" role="group">
     <SessionItem v-for="session in sessions" :key="session.id" :session="session"
-      :selected="session.id === selectedId" :primary-action="primaryActions?.[session.id]"
+      :selected="session.id === selectedId" :surface-active="surfaceActive" :primary-action="primaryActions?.[session.id]"
       :menu-action-visibility="menuActionVisibility" :menu-teleport="menuTeleport" @activate="emit('activate', $event)"
       @primary-action="(id, action) => emit('primary-action', id, action)"
       @menu-action="(id, action) => emit('menu-action', id, action)"

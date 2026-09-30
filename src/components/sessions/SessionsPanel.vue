@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useProjectsStateStore } from '@/stores/projectsState'
@@ -19,13 +19,14 @@ import type {
 // Adapter setup, initial reads and runtime dispatch belong to the workspace container.
 // Props permit that container to provide an already-loaded unified projection.
 defineOptions({ inheritAttrs: false })
-const props = defineProps<{
+const props = withDefaults(defineProps<{
+  active?: boolean
   projectGroups?: UnifiedProjectGroup[]
   archivedSessions?: UnifiedSession[]
   selectedId?: string | null
   currentProjectPath?: string | null
   loading?: boolean
-}>()
+}>(), { active: true })
 const emit = defineEmits<{
   close: []
   'add-project': []
@@ -48,6 +49,14 @@ const searchQuery = ref('')
 const expandedKeys = ref(new Set<string>())
 const archivedOpen = ref(false)
 const archivedProject = ref<UnifiedProjectIdentity | null>(null)
+// A persistent tree is not an active surface after navigation/collapse. Its
+// teleported modal must release focus, without resetting search or expansion.
+watch(() => props.active, active => {
+  if (!active) {
+    archivedOpen.value = false
+    archivedProject.value = null
+  }
+}, { flush: 'sync' })
 const normalGroups = computed(() => props.projectGroups ?? store.projectGroups)
 const archived = computed(() => (props.archivedSessions ?? store.sessions).filter(session => session.archived))
 const selectedId = computed(() => props.selectedId === undefined ? store.activeSessionId : props.selectedId)
@@ -93,6 +102,7 @@ function toggleExpand(key: string) {
   emit('toggle-expand', key)
 }
 function showArchived(project: UnifiedProjectIdentity | null = null) {
+  if (!props.active) return
   archivedProject.value = project
   archivedOpen.value = true
 }
@@ -101,7 +111,7 @@ function projectAction(request: ProjectActionRequest) {
   emit('project-action', request)
 }
 function onKeydown(event: KeyboardEvent) {
-  if (event.defaultPrevented || archivedOpen.value) return
+  if (!props.active || event.defaultPrevented || archivedOpen.value) return
   if (event.key === 'Escape') emit('close')
 }
 onMounted(() => { window.addEventListener('keydown', onKeydown) })
@@ -136,7 +146,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
       </div>
       <div v-else-if="!stateReady" class="loading-indicator">{{ t('loading') }}</div>
       <template v-else>
-        <ProjectNode v-for="group in displayedGroups" :key="group.projectKey" :project="group"
+        <ProjectNode v-for="group in displayedGroups" :key="group.projectKey" :project="group" :surface-active="active"
           :expanded="searching || expandedKeys.has(group.projectKey)" :disable-toggle="searching"
           :is-current="sameProjectPath(group.projectPath, currentProjectPath ?? '')" :selected-id="selectedId"
           @toggle-expand="toggleExpand" @new-session-request="emit('new-session-request', $event)" @project-action="projectAction"

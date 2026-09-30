@@ -1,4 +1,19 @@
 export default {
+  // Unified application shell
+  workspace: 'Workspace',
+  primaryNavigation: 'Primary navigation',
+  contextResources: 'Project resources',
+  collapseSessions: 'Collapse sessions panel',
+  expandSessions: 'Expand sessions panel',
+  workspaceWelcome: 'Your workspace',
+  workspaceWelcomeHint: 'Manage Claude Code and Codex CLI sessions together under each project.',
+  workspaceActionPending: 'This action is waiting for the workspace connection.',
+  cliUnavailable: '{cli} is unavailable. Other sessions and navigation remain accessible.',
+  workspaceConfigFailed: 'Could not load application preferences. You can still navigate and retry.',
+  contextResourcesHint: 'Resources belong to the current project and session.',
+  windowMinimize: 'Minimize window',
+  windowMaximize: 'Maximize window',
+  windowRestore: 'Restore window',
   // Common
   projectNeedsReplyCount: 'Needs your reply: {count}',
   projectActionsLabel: 'Project actions',

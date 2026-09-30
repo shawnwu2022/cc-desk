@@ -14,11 +14,12 @@ import type { SessionMenuAction, SessionMenuActionVisibility, SessionPrimaryActi
 const props = withDefaults(defineProps<{
   session: UnifiedSession
   selected?: boolean
+  surfaceActive?: boolean
   primaryAction?: SessionPrimaryAction | null
   menuActionVisibility?: SessionMenuActionVisibility
   /** Keep a drawer menu inside the shared modal focus boundary. */
   menuTeleport?: boolean
-}>(), { selected: false, menuTeleport: true })
+}>(), { selected: false, menuTeleport: true, surfaceActive: true })
 const emit = defineEmits<{
   activate: [id: string]
   'primary-action': [id: string, action: SessionPrimaryAction]
@@ -57,8 +58,10 @@ watch(() => [props.session.id, props.session.renameState], () => {
     if (!isSaving.value) void focusRename()
   }
 }, { immediate: true })
+watch(() => props.surfaceActive, active => { if (!active) menuOpen.value = false }, { flush: 'sync' })
 async function focusRename() {
   await nextTick()
+  if (!props.surfaceActive) return
   const input = renameInput.value?.$el.querySelector('input') as HTMLInputElement | null
   input?.focus()
   input?.select()
@@ -97,6 +100,7 @@ function runPrimary() {
   else emit('primary-action', props.session.id, primary.value)
 }
 function openOverflow(event: MouseEvent) {
+  if (!props.surfaceActive) return
   const trigger = event.currentTarget as HTMLElement
   if (menuOpen.value) { menuOpen.value = false; return }
   trigger.focus()
@@ -110,6 +114,7 @@ function onOverflowPointerdown(event: PointerEvent) {
   if (menuOpen.value) event.stopPropagation()
 }
 function openContext(event: MouseEvent) {
+  if (!props.surfaceActive) return
   if (isRenaming.value || !actions.value.length) return
   event.preventDefault()
   event.stopPropagation()
@@ -118,6 +123,7 @@ function openContext(event: MouseEvent) {
   menuOpen.value = true
 }
 function onKeydown(event: KeyboardEvent) {
+  if (!props.surfaceActive) return
   if (event.target instanceof HTMLInputElement) return
   if (event.key === 'F2') { event.preventDefault(); event.stopPropagation(); startRename() }
   else if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {

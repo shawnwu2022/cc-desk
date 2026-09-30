@@ -1,72 +1,38 @@
-<template>
-  <aside class="sidebar-panel" :class="{ visible }">
-    <div class="panel-inner">
-      <!-- Sessions 面板 -->
-      <SessionsPanel
-        v-show="activePanel === 'sessions'"
-        @close="$emit('close')"
-        @switch-session="$emit('switchSession', $event)"
-        @rename-session="(id: string, name: string) => $emit('renameSession', id, name)"
-        @restart-session="$emit('restartSession')"
-        @new-session="$emit('newSession')"
-        @resume-session="$emit('resumeSession', $event)"
-        @close-tab="$emit('closeTab', $event)"
-        @close-all-tabs="$emit('closeAllTabs')"
-        @close-other-tabs="$emit('closeOtherTabs')"
-        @new-session-in="$emit('newSessionIn', $event)"
-        @toggle-expand="$emit('toggleExpand', $event)"
-        @close-all-sessions="$emit('closeAllSessionsIn', $event)"
-        @open-in-explorer="$emit('openInExplorer', $event)"
-        @resume-session-in-project="(p: string, id: string, name?: string) => $emit('resumeSessionInProject', p, id, name)"
-        @pin-project="$emit('pinProject', $event)"
-        @unpin-project="$emit('unpinProject', $event)"
-        @archive-session="(p: string, id: string) => $emit('archiveSession', p, id)"
-        @restore-session="(p: string, id: string) => $emit('restoreSession', p, id)"
-        @show-archived="$emit('showArchived', $event)"
-      />
-
-      <!-- Skills 面板 -->
-      <SkillsPanel
-        v-show="activePanel === 'skills'"
-        @close="$emit('close')"
-      />
-
-      <!-- Agents 面板 -->
-      <AgentsPanel
-        v-show="activePanel === 'agents'"
-        @close="$emit('close')"
-      />
-
-      <!-- MCP 面板 -->
-      <McpPanel
-        v-show="activePanel === 'mcp'"
-        @close="$emit('close')"
-      />
-
-      <!-- Plugins 面板 -->
-      <PluginsPanel
-        v-show="activePanel === 'plugins'"
-        @close="$emit('close')"
-      />
-    </div>
-  </aside>
-</template>
-
 <script setup lang="ts">
 import type { SidebarPanelType } from '@/stores/sidebar'
+import type {
+  ProjectActionRequest, SessionMenuAction, SessionPrimaryAction, SessionTreeConfirmationRequest,
+  UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession,
+} from '@/types/unifiedSession'
 import SessionsPanel from '../sessions/SessionsPanel.vue'
-import SkillsPanel from '../skills/SkillsPanel.vue'
-import AgentsPanel from '../agents/AgentsPanel.vue'
-import McpPanel from '../mcp/McpPanel.vue'
-import PluginsPanel from '../plugins/PluginsPanel.vue'
 
-defineProps<{
-  visible: boolean
-  activePanel: SidebarPanelType
-}>()
-
-defineEmits<{
+defineOptions({ inheritAttrs: false })
+withDefaults(defineProps<{
+  visible?: boolean
+  active?: boolean
+  // Temporary compatibility caller only; not a primary-navigation model.
+  activePanel?: SidebarPanelType
+  projectGroups?: UnifiedProjectGroup[]
+  archivedSessions?: UnifiedSession[]
+  selectedId?: string | null
+  currentProjectPath?: string | null
+  loading?: boolean
+}>(), { visible: true, active: true })
+const emit = defineEmits<{
   close: []
+  'add-project': []
+  refresh: []
+  'toggle-expand': [projectKey: string]
+  'new-session-request': [project: UnifiedProjectIdentity]
+  'project-action': [request: ProjectActionRequest]
+  activate: [id: string]
+  'primary-action': [id: string, action: SessionPrimaryAction]
+  'menu-action': [id: string, action: SessionMenuAction]
+  'rename-commit': [id: string, title: string]
+  'rename-cancel': [id: string]
+  'confirmation-request': [request: SessionTreeConfirmationRequest]
+  'restore-request': [id: string]
+  // Type-only compatibility events are never emitted by the unified panel.
   switchSession: [tabId: string]
   renameSession: [tabId: string, name: string]
   restartSession: []
@@ -88,27 +54,20 @@ defineEmits<{
 }>()
 </script>
 
+<template>
+  <div v-show="visible" class="sidebar-panel">
+    <SessionsPanel :active="active && visible" :project-groups="projectGroups" :archived-sessions="archivedSessions"
+      :selected-id="selectedId" :current-project-path="currentProjectPath" :loading="loading"
+      @close="emit('close')" @add-project="emit('add-project')" @refresh="emit('refresh')"
+      @toggle-expand="emit('toggle-expand', $event)" @new-session-request="emit('new-session-request', $event)"
+      @project-action="emit('project-action', $event)" @activate="emit('activate', $event)"
+      @primary-action="(id, action) => emit('primary-action', id, action)"
+      @menu-action="(id, action) => emit('menu-action', id, action)"
+      @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)"
+      @confirmation-request="emit('confirmation-request', $event)" @restore-request="emit('restore-request', $event)" />
+  </div>
+</template>
+
 <style scoped>
-.sidebar-panel {
-  width: 0;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border-color);
-  transition: width 0.25s ease;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-}
-
-.sidebar-panel.visible {
-  width: 280px;
-}
-
-.panel-inner {
-  width: 280px;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
+.sidebar-panel { display: flex; flex-direction: column; flex: 1; width: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 </style>

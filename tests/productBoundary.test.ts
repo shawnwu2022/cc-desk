@@ -33,8 +33,16 @@ describe('CC Desk product boundary', () => {
     expect(terminal).not.toContain('claudeOptions')
 
     const app = read('src/App.vue')
-    expect(app).toContain("appStore.checkFailed && currentView !== 'native'")
-    expect(app).toContain("startupError && currentView !== 'native'")
+    expect(app).not.toContain('await appStore.runChecks')
+    expect(app).not.toContain('decideStartupView')
+    expect(app).not.toContain('startProjectSession')
+    const workspace = read('src/components/workspace/WorkspaceView.vue')
+    expect(workspace).toContain("['claude', 'codex']")
+    expect(workspace).toContain("cliAvailability[cli] === 'unavailable'")
+    expect(workspace).not.toContain('check-failed-overlay')
+    expect(workspace).not.toContain('ptySpawn')
+    expect(workspace).not.toContain('ptyInput')
+    expect(workspace).not.toContain('ptyKill')
   })
 
   test('native workbench DOM and IPC surfaces stay inert and authenticated', () => {
@@ -84,13 +92,22 @@ describe('CC Desk product boundary', () => {
     expect(existsSync('src-tauri/src/mcp.rs')).toBe(false)
   })
 
-  test('native dual-CLI workspace remains a first-class product entry', () => {
+  test('dual-CLI sessions share one unified product shell', () => {
     const app = read('src/App.vue')
-    const welcome = read('src/components/WelcomeView.vue')
-    expect(app).toContain('@open-native="openNativeWorkbench"')
-    expect(welcome).toContain("openNative: []")
-    expect(welcome).toContain("t('openNativeCliWorkspace')")
-    expect(welcome).toContain("t('openLegacyClaudeWorkspace')")
+    const nav = read('src/components/shell/PrimaryNav.vue')
+    const workspace = read('src/components/workspace/WorkspaceView.vue')
+    expect(app).toContain('<AppShell v-else')
+    expect(app).toContain('<WorkspaceView v-show=')
+    expect(app).not.toContain('<NativeCliWorkbench')
+    expect(app).not.toContain('<TerminalView')
+    expect(app).not.toContain('openNativeWorkbench')
+    expect(nav).toContain("section: 'workspace'")
+    expect(nav).toContain("section: 'projects'")
+    expect(nav).toContain("section: 'settings'")
+    expect(nav).not.toContain('Native CLI')
+    expect(workspace).toContain('data-workspace-terminal-host')
+    expect(read('src/stores/shell.ts')).toContain("return dev && flag === '1'")
+    expect(app).toContain('isCompatibilityEnabled(import.meta.env.DEV,')
 
     for (const path of [
       'README.md',

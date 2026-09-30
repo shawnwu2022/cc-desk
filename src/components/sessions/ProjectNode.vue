@@ -13,11 +13,12 @@ import type {
 const props = withDefaults(defineProps<{
   project: UnifiedProjectGroup
   expanded: boolean
+  surfaceActive?: boolean
   selectedId?: string | null
   isCurrent?: boolean
   /** Search expansion is temporary and must not alter explicit user state. */
   disableToggle?: boolean
-}>(), { isCurrent: false, disableToggle: false })
+}>(), { isCurrent: false, disableToggle: false, surfaceActive: true })
 const emit = defineEmits<{
   'toggle-expand': [projectKey: string]
   'new-session-request': [project: UnifiedProjectIdentity]
@@ -50,6 +51,7 @@ function toggle() {
   if (!props.disableToggle) emit('toggle-expand', props.project.projectKey)
 }
 function openOverflow(event: MouseEvent) {
+  if (!props.surfaceActive) return
   if (menuOpen.value) { menuOpen.value = false; return }
   const trigger = event.currentTarget as HTMLElement
   trigger.focus()
@@ -62,12 +64,14 @@ function overflowPointerdown(event: PointerEvent) {
   if (menuOpen.value) event.stopPropagation()
 }
 function openContext(event: MouseEvent) {
+  if (!props.surfaceActive) return
   event.preventDefault(); event.stopPropagation()
   row.value?.focus()
   anchor.value = { x: event.clientX, y: event.clientY }
   menuOpen.value = true
 }
 function onRowKeydown(event: KeyboardEvent) {
+  if (!props.surfaceActive) return
   if (event.target !== event.currentTarget) return
   if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
     event.preventDefault(); event.stopPropagation()
@@ -112,6 +116,7 @@ watch(menuOpen, open => {
   else window.removeEventListener('resize', placeMenu)
 })
 watch(() => props.project.projectKey, () => { menuOpen.value = false })
+watch(() => props.surfaceActive, active => { if (!active) menuOpen.value = false }, { flush: 'sync' })
 onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
 </script>
 
@@ -144,7 +149,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
       </div>
     </div>
     <div v-if="expanded" class="session-sub">
-      <SessionList :sessions="sessions" :selected-id="selectedId" @activate="emit('activate', $event)"
+      <SessionList :sessions="sessions" :selected-id="selectedId" :surface-active="surfaceActive" @activate="emit('activate', $event)"
         @primary-action="(id, action) => emit('primary-action', id, action)" @menu-action="sessionMenuAction"
         @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)" />
       <div v-if="sessions.length === 0" class="empty-hint">{{ t('noHistorySessions') }}</div>

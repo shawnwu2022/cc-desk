@@ -1,4 +1,19 @@
 export default {
+  // Unified application shell
+  workspace: '工作区',
+  primaryNavigation: '主导航',
+  contextResources: '项目资源',
+  collapseSessions: '收起会话栏',
+  expandSessions: '展开会话栏',
+  workspaceWelcome: '你的工作区',
+  workspaceWelcomeHint: '在每个项目下统一管理 Claude Code 与 Codex CLI 会话。',
+  workspaceActionPending: '此操作正在等待工作区连接。',
+  cliUnavailable: '{cli} 当前不可用。其他会话与导航仍可访问。',
+  workspaceConfigFailed: '无法加载应用偏好设置。你仍可切换页面或重试。',
+  contextResourcesHint: '资源属于当前项目与会话。',
+  windowMinimize: '最小化窗口',
+  windowMaximize: '最大化窗口',
+  windowRestore: '还原窗口',
   // Common
   projectNeedsReplyCount: '需要回复：{count}',
   projectActionsLabel: '项目操作',

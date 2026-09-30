@@ -2,17 +2,63 @@
 
 ## Application shell
 
-`src/App.vue` owns top-level view switching.
+`src/stores/shell.ts` owns the only primary section (`workspace | projects | settings`),
+logical viewport mode, session-column visibility/width and context-drawer state.
+`AppShell.vue` owns the titlebar and four global columns: 44px primary navigation,
+288px sessions (240–360px), a shrinkable `minmax(0, 1fr)` main region and optional
+344px context (300–420px). Content views never recreate these columns.
 
-Main views:
+- `PrimaryNav.vue` exposes only Workspace, Projects and Settings, using shared
+  accessible controls and localized names. Skills/Agents/MCP/Plugins/Instructions
+  belong to project/session context, not global navigation.
+- `WorkspaceView.vue` stays mounted across section changes and exposes one
+  `terminal` slot / `data-workspace-terminal-host`; Task 11 owns runtime ports and
+  terminal integration. The project/session tree remains the only tab system.
+- `WorkspaceHeader.vue` offers session-column and context toggles, project/session
+  titles that ellipsize independently, and typed new-session/add-project requests.
+- `SidebarPanel.vue` is a content-only unified `SessionsPanel` wrapper. It forwards
+  Task 9 typed actions and confirmations without translating them to old Legacy
+  launch events. Global column widths belong only to `AppShell`.
+  Shell `active` ownership reaches SessionsPanel, ProjectNode, SessionList and
+  SessionItem. On navigation away from Workspace or session-column collapse,
+  panel-owned archived dialogs and teleported project/session menus close and
+  release focus. Persistent search/expansion/inline editing and workspace hosts
+  remain mounted; standalone list callers default their surface activity to true.
+- `TitleBar.vue` takes the unified context title, preserves Windows minimize /
+  maximize / close and macOS traffic-light space, and has no Native product toggle.
+- Projects currently has a content-only landing; Task 14 owns full management.
+  `SettingsView.vue` mounts within the main column, with its contextual settings
+  subsection navigation, and stays mounted after first activation. Task 17 owns
+  the settings-shell migration; Task 18 owns terminal preferences.
 
-- `WelcomeView.vue` — exposes Native CLI v3 as a first-class entry and keeps the legacy Claude compatibility entry.
-- `ProjectSelectView.vue` — legacy Claude project/session management.
-- `TerminalView.vue` — legacy Claude terminal workspace.
-- `NativeCliWorkbench.vue` — forward-path Claude Code / Codex CLI workspace.
-- `TitleBar.vue` — window controls plus a persistent Native CLI toggle.
+At widths below 1180 logical CSS pixels, context uses shared modal `AppDrawer`
+instead of reducing the main column. Below 900, the session column starts collapsed;
+its compact choice is independent of the desktop choice. Resize reads `innerWidth`,
+not the physical display scale. The native window's default and minimum are
+1024×640, and global containers use min-width zero with no horizontal overflow.
 
-Native and legacy terminal views stay mounted where required so active terminal state is not destroyed merely by switching UI views.
+Normal application initialization loads GUI/application preferences independently
+of CLI availability. GUI theme updates do not change terminal-theme preference or
+session selection. OS Settings / Shortcuts menu events route to the single settings
+section; directory and restart events become typed presentation requests only.
+No Claude-only environment gate, old history/startup decision, implicit PTY launch
+or old Native product page is mounted in the normal path. A CLI's unavailable state
+is an inline per-CLI notice, so navigation and other sessions remain accessible.
+
+`WorkspaceRequest` is a discriminated presentation-only union. `App.vue` publishes
+`workspace-request` and stores the latest ephemeral intent in shell `pendingRequest`
+with a monotonic `requestSequence`; an integrating owner may clear only its current
+sequence. It is not a persistent queue or automatic replay mechanism. Task 11 must
+explicitly admit/dispatch requests through runtime-owned adapters; paths in these
+requests do not authorize Native filesystem access. Confirmations remain owned by
+the integrating action layer (Task 16), never by the shell. New-session dialogs
+belong to Task 12, resume to Task 13 and contextual resources to Task 15.
+
+The old App is isolated as `LegacyCompatibilityApp.vue`, reachable only with BOTH
+Vite DEV and `VITE_CC_DESK_COMPATIBILITY=1`. Setting the flag in production cannot
+activate it. This temporary development route, `IconBar` adapter and old typed
+caller compatibility are removed in Task 21. Native bridge/terminal safeguards
+remain unchanged; this shell checkpoint is not real CLI or platform certification.
 
 ## Native CLI workbench
 
@@ -107,14 +153,14 @@ The following remain compatibility components:
 
 - `TerminalView.vue`;
 - `XTermTerminal.vue`;
-- the older `SidebarPanel.vue` composition, pending the unified shell integration;
+- `LegacyCompatibilityApp.vue` behind the explicit DEV-only flag;
 - legacy Claude settings and hook-driven UI.
 
 Legacy sidebar Skills/Agents/MCP/Plugins are projections. The removed Provider management UI and mutating resource toggles must not return.
 
 ## Settings
 
-`SettingsOverlay.vue` / `SettingsView.vue` currently cover CC Desk-owned appearance/startup/shortcut/update/about settings.
+`SettingsView.vue` covers CC Desk-owned appearance/startup/shortcut/update/about settings inside the unified shell. `SettingsOverlay.vue` is retained only for the development compatibility app.
 
 They do not provide Provider/API-key management.
 

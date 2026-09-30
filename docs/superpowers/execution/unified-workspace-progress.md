@@ -34,7 +34,8 @@ Rules:
 - Task 6: complete at `31223e131396d8c899660ad8d47fabbb5d574dcc`
 - Task 7: complete at `d10fc5a637589de95875e61e1b1d48c332595c32`
 - Task 8: complete at `aeb644965aa214fbca3885169c1132ed2d5d5ff5`
-- Next task: Task 9 — unified project tree and archived drawer
+- Task 9: complete at `f2764aa4728983fbdf8989f9c4bb9881a9069d8b`
+- Next task: Task 10 — unified application shell and primary navigation
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -233,4 +234,52 @@ Rules:
 - Independent spec and quality review approved the staged snapshot with no actionable blocker
 - Controller reran exact required gate:14 tests and typecheck pass; implementer narrow affected gate71 passed
 - Runtime/action dispatch remains Task10/11 and confirmation UI Task16; this checkpoint adds no Legacy fallback
+- Atomic publication pending remote readback
+
+### Verified Task 9 checkpoint
+
+- Remote commit `f2764aa4728983fbdf8989f9c4bb9881a9069d8b`; exact staged/fetched tree and local/remote SHA match; working tree clean before this readback
+-14 required tests/typecheck,71 narrow regressions, independent spec/quality approval; no CI/PR/package/release
+- Next: Task 10
+
+### Task 10 preflight ruling
+
+- Existing product-boundary assertions demand a first-class Native top-level entry and literal old overlay conditions. These conflict with the frozen unified-shell spec. Replace those old presentation assertions with equivalent unified dual-CLI/authentication/partial-availability boundary checks; do not retain dead strings to appease tests. Cost if wrong: any old navigation regression must be detected by the new behavioral shell tests instead.
+- Old automatic Legacy startup and Native/Legacy product views may execute only behind the temporary development-only compatibility flag; the normal shell must not start a Legacy PTY as an implicit default. Actual unified runtime boot/terminal wiring belongs Task 11. Cost if wrong: this intermediate shell checkpoint has no terminal host until the next task.
+
+## Task 10 — Unified application shell and primary navigation — September 30, 2026
+
+- Status: implemented and locally verified; controller review/publication pending. Base remains `f2764aa4728983fbdf8989f9c4bb9881a9069d8b`. Existing Task 9 remote readback and both Task 10 preflight rulings are preserved. No commit, remote write, PR, CI, build, package, version or release operation was performed by this implementer.
+- Added `useShellStore`, `AppShell`, `PrimaryNav`, `WorkspaceView` and `WorkspaceHeader`. Primary sections are exactly Workspace/Projects/Settings. The shell owns four columns (44px/288px/flexible/optional344px) with bounded session/resource widths, min-width zero and global overflow containment. Context uses shared `AppDrawer` below1180 logical CSS pixels; sessions default collapsed below900 with separate compact/desktop choices.
+- Migrated normal `App.vue` to unified routing and exact Task 9 typed tree requests. The workspace and single future terminal-host slot stay mounted across section changes; settings stays mounted after first activation. Project management currently has a content-only landing for Task 14. SidebarPanel forwards unified requests without mapping `new-session-request` to old Legacy events. No second tab strip or independent Native product entry is exposed.
+- Moved the old App into `LegacyCompatibilityApp.vue`, activated only by BOTH Vite DEV and explicit `VITE_CC_DESK_COMPATIBILITY=1`. Production cannot enter this path by setting the flag alone. Normal initialization loads config/GUI preferences independently of CLI availability, never runs the old Claude-only check/startup decision or mounts either old runtime product page. Native authenticated bridge, terminal and adapters remain unchanged.
+- Preserved Windows minimize/maximize/close and macOS traffic-light space; TitleBar accepts the unified project/session title, ellipsizes long titles and supplies localized control names/focus. Safe OS Settings/Shortcuts menu navigation remains; directory/restart events produce typed requests only. GUI theme changes preserve terminal-theme preference and unified selection. Per-CLI unavailable presentation never blocks the other CLI or navigation.
+- Necessary file-map expansions: TitleBar to remove the old Native top-level toggle while preserving window controls; LegacyCompatibilityApp to isolate old startup; English/Chinese locale keys; productBoundary assertions under the approved preflight ruling; and only the window geometry fields in `src-tauri/tauri.conf.json` to align actual default/minimum with1024×640. Read root and src-tauri AGENTS before edits. No Rust, version, bundle, security or updater metadata was changed.
+- RED: `npm test -- tests/components/appShell.test.ts` failed on the missing AppShell import before production changes. The approved missing-module RED was sufficient. First integrated run had26 passing/2 failing tests: one test compared recreated Vue Test Utils public proxies rather than the retained DOM host, and another assumed a data attribute wrapped AppButton instead of being on its actual button. Those test observations were corrected without changing expected behavior.
+- Additional TDD boundary regressions: hidden session-panel Escape changed desktop visibility during Settings, and the header's default-project request carried an entire group rather than exact project identity. Both tests failed before minimal fixes: App now ignores hidden-panel close intents and projects the header identity to only projectKey/projectPath. Their final tests pass.
+- Final exact required gate: `npm test -- tests/components/appShell.test.ts tests/productBoundary.test.ts && npm run typecheck` →30 tests pass (20 shell/10 product boundary), typecheck exit0. `git diff --check` passes. Native bridge safeguard assertions remain intact; obsolete Native-entry/old-overlay assertions are replaced with unified dual-CLI, partial-availability, DEV-boundary and single-host checks.
+- Narrow affected gate: `npm test -- tests/components/projectSessionTree.test.ts tests/sidebarKeyboardHandlers.test.ts tests/components/uiPrimitives.test.ts tests/i18n/translations.test.ts tests/stores/app.test.ts tests/stores/unifiedSessions.test.ts tests/designTokens.test.ts` →109 tests pass (13/1/27/4/43/12/9). Existing app-store negative tests print their expected config/home-read errors; existing npm http-proxy and Vite CJS deprecation notices remain. The final exact shell gate has no component warnings or unhandled errors. No unrelated full suite was run.
+- Updated AGENTS and component architecture documentation. Linux jsdom DOM/event/CSS-contract checks do not certify rendered1024×640 geometry, Windows100%/125%/150% scaling, actual OS controls or screen-reader behavior; those remain final platform gates.
+
+### Task 10 rulings and downstream interfaces
+
+- `WorkspaceRequest` is a typed presentation-only intent union, also emitted by App as `workspace-request`. Shell stores only the latest ephemeral intent plus monotonic requestSequence; an owner clears only its matching sequence. It is not a persistent queue and never admits, launches or replays an operation. Cost if wrong: Task 11 must explicitly route each current request, revalidate runtime state/authority and confirmations, and must not interpret a frontend path as Native filesystem authorization.
+- Task 11 configures unified adapters and fills WorkspaceView's single `terminal` slot while preserving mounted host/selection across section and GUI-theme changes. Task 12 owns new-session dialogs, Task 13 resume and Task 16 confirmation dialogs/consequential action admission. The shell's waiting notice is an honest intermediate checkpoint, not a successful runtime operation. Cost if wrong: requests remain inert until integration; do not add Legacy fallbacks to make the checkpoint appear functional.
+- Context remains read-only placeholder content until Task 15 authenticated resource integration, with a `context` slot owned by AppShell. WorkspaceView accepts per-CLI `unknown | available | unavailable` observations; unavailable notices are scoped, never global gates. Cost if wrong: the runtime owner must supply actual observed availability without guessing from old Claude checks.
+- The temporary DEV compatibility App, IconBar adapter and old caller type declarations are removal targets for Task 21. The old views are retained only there; normal content must never gain its own IconBar/global shell. The current existing SettingsView shell remains for Task 17 settings migration; terminal preferences belong to Task 18.
+
+### Task 10 independent review repair — active surface ownership
+
+- Reviewer reproduced the persistent SessionsPanel's teleported archive modal/focus trap surviving navigation to Settings. ProjectNode and SessionItem teleported menus had the same inactive-surface ownership gap. AppShell's resource drawer was already section-scoped.
+- Added four archive navigation tests before the fix: OS Settings, OS Shortcuts, direct Settings and direct Projects. RED:4 failures/20 passes. Added one project-menu and one row-menu navigation regression before extending ownership to those owners. RED:2 failures/24 passes. Logs are retained with the Task 10 report.
+- Minimal ownership chain: App supplies Workspace-and-visible `active` to SidebarPanel/SessionsPanel; SessionsPanel closes its archived modal and clears only its modal project scope on inactivity. `surfaceActive` propagates through ProjectNode/SessionList/SessionItem, closing only their controlled menus and preventing hidden-surface delayed rename focus. Search, explicit expansion, inline rename state, unified selection and the workspace/terminal-host DOM are retained. Shared menu/modal/overflow primitives are unchanged.
+- The first narrow row/tree rerun found four regressions (`Tree_ArchivedDrawerRestore_005`, `Tree_DrawerMenuFocusBoundary_012`, `Row_AnotherOverflowDismissesPrevious_028`, `List_UnifiedMenuAndRenameOnly_026`): absent optional Boolean surfaceActive on SessionList became Vue false and disabled standalone/drawer row menus. Added the explicit list default true; all existing assertions remain unchanged.
+- Final superseding verification: `npm test -- tests/components/appShell.test.ts tests/productBoundary.test.ts && npm run typecheck && npm test -- tests/components/projectSessionTree.test.ts tests/sidebarKeyboardHandlers.test.ts tests/components/sessionItem.test.ts && git diff --check` →36 shell/product tests (26/10), typecheck exit0,42 narrow tree/keyboard/row tests (13/1/28), diff check exit0. No component warning or unhandled error occurred. Original109-test narrow evidence remains historical; its affected tree/row subset was freshly rerun after the repair.
+- Four additional production paths (SessionsPanel, ProjectNode, SessionList, SessionItem) are necessary active-surface boundary changes; the full Task10 path list is now22. Controller's already-staged snapshot is preserved with these repairs unstaged on top. Updated AGENTS/components/report and preserved all readbacks/preflight entries. Review/publication remain pending; no commit, push, CI, build, package, release or unrelated full suite.
+
+### Task 10 review gate
+
+- Independent spec/quality review approved the consolidated active-surface repair: archive drawer and project/session menus close when Workspace is inactive, while host/tree state remains mounted
+- Final exact snapshot:36 shell/boundary tests, typecheck,42 affected tree/row tests and diff check pass
+- Earlier109-test broader narrow gate is historical before the ownership repair; full final validation remains Task25
 - Atomic publication pending remote readback
