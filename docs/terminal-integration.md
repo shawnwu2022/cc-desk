@@ -2,6 +2,31 @@
 
 CC Desk contains a legacy Claude terminal path and the Native CLI v3 path for Claude Code and Codex CLI.
 
+## Unified host
+
+The normal App mounts `UnifiedTerminalHost` in its only Workspace terminal slot.
+The host keeps every open Native terminal and one Legacy aggregator mounted across
+selection, navigation, and GUI-theme changes. Only visible terminals fit/focus;
+background output and Native protocol replies/ACK remain live. Hidden Legacy
+keyboard, paste, IME, copy, drag/drop and compatibility-command input are rejected.
+The existing pinned xterm user-input provenance signal preserves parser replies
+without classifying payload bytes. xterm `disableStdin` is never used for hidden
+terminals because it suppresses parser replies before onData. Real pinned-xterm
+parser/component tests cover DSR response generation with initial and changed
+visibility. Ended Legacy terminals retain scrollback. First Legacy spawn waits
+for output/exit listener readiness, independently of optional drag/drop, and then
+rechecks the original tab owner.
+
+`useUnifiedWorkspaceRuntime` supplies the real adapter ports and read-only bootstrap.
+It admits typed shell requests once by sequence and leaves create/resume, project,
+resource and consequential unconfirmed requests pending for their owning tasks.
+Native stop/recover receives the request/run/generation captured by the caller.
+Restart and close revalidate ownership after awaits; unknown status reads remain
+unknown and never authorize replay. Queued facade actions capture ownership before
+waiting. A local Legacy PTY generation prevents a late start/stop/restart/archive
+from modifying a replacement instance. These are host/unit-tested boundaries,
+not real CLI or platform certification.
+
 ## Native CLI v3 — forward path
 
 ```text

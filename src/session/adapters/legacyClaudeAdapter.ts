@@ -24,7 +24,7 @@ function sameProjectIdentity(left: string, right: string): boolean {
 
 export interface LegacyClaudeStorePort {
   readonly tabs: Map<string, TerminalTab>
-  getHistoryFor(projectPath: string): HistorySession[]
+  getCatalogHistoryFor(projectPath: string): HistorySession[]
   getArchivedSessions(projectPath: string): string[]
   createTab(projectPath: string, opts?: { sessionId?: string; name?: string }): string
   setActiveTab(tabId: string | null): void
@@ -165,7 +165,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
       const archived = new Set(store.getArchivedSessions(projectPath))
 
       sessions.push(...tabs.map(projectActiveTab))
-      for (const history of store.getHistoryFor(projectPath)) {
+      for (const history of store.getCatalogHistoryFor(projectPath)) {
         if (claimed.has(history.sessionId)) continue
         sessions.push({ ...projectHistorySession(projectPath, history), archived: archived.has(history.sessionId) })
       }
@@ -219,6 +219,13 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     return projectActiveTab(requireTab(activeId(tabId)))
   }
 
+  function captureOwnership(id: string): () => boolean {
+    if (!id.startsWith(ACTIVE_PREFIX)) return () => true
+    const tab = requireTab(id)
+    const generation = tab.ptyGeneration ?? 0
+    return () => store.tabs.get(tab.tabId) === tab && (tab.ptyGeneration ?? 0) === generation
+  }
+
   async function activateSession(id: string): Promise<void> {
     store.setActiveTab(requireTab(id).tabId)
   }
@@ -248,11 +255,14 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
   async function archiveSession(id: string): Promise<void> {
     if (id.startsWith(ACTIVE_PREFIX)) {
       const tab = requireTab(id)
+      const owns = captureOwnership(id)
       if (!tab.sessionId) throw new Error('SESSION_NOT_RESUMABLE')
       if (tab.status === 'running' || tab.status === 'starting') {
         await runtime.stopTab(tab.tabId)
       }
+      if (!owns()) throw new Error('STALE_SESSION_ATTEMPT')
       await store.archiveSession(tab.projectPath, tab.sessionId)
+      if (!owns()) throw new Error('STALE_SESSION_ATTEMPT')
       await store.closeTab(tab.tabId)
       return
     }
@@ -267,6 +277,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
 
   return {
     runtime: 'legacy-claude',
+    captureOwnership,
     listSessions,
     createSession,
     resumeSession,

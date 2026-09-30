@@ -85,6 +85,8 @@ export interface ResumeUnifiedSessionInput {
 
 export interface SessionAdapter {
   readonly runtime: SessionRuntimeKind
+  /** Freeze process ownership at admission, before a queued async action starts. */
+  captureOwnership?(id: string, operation?: 'close' | 'archive'): () => boolean
   listSessions(projectKey?: string): Promise<UnifiedSession[]>
   createSession(input: CreateUnifiedSessionInput): Promise<UnifiedSession>
   resumeSession(input: ResumeUnifiedSessionInput): Promise<UnifiedSession>

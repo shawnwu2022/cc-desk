@@ -210,9 +210,12 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     id: string,
     operation: () => Promise<T>,
     publish?: (value: T) => Promise<void> | void,
+    operationKind?: 'close' | 'archive',
   ): Promise<T> {
     const version = (actionVersion.get(id) ?? 0) + 1
     actionVersion.set(id, version)
+    const session = requireSession(id)
+    const owns = adapterForRuntime(session.runtime).captureOwnership?.(id, operationKind) ?? (() => true)
     const previous = actionTails.get(id) ?? Promise.resolve()
 
     let resolveValue!: (value: T | PromiseLike<T>) => void
@@ -224,6 +227,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
     const task = previous.catch(() => undefined).then(async () => {
       try {
+        if (!owns()) throw new Error('STALE_SESSION_ATTEMPT')
         const value = await operation()
         if (actionVersion.get(id) === version && publish) await publish(value)
         resolveValue(value)
@@ -267,7 +271,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return enqueue(id, () => adapter.closeSession(id), async () => {
       if (activeSessionId.value === id) activeSessionId.value = null
       await refresh(session.projectKey)
-    })
+    }, 'close')
   }
 
   function renameSession(id: string, title: string): Promise<void> {
@@ -283,7 +287,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return enqueue(id, () => adapter.archiveSession(id), async () => {
       if (activeSessionId.value === id) activeSessionId.value = null
       await refresh(session.projectKey)
-    })
+    }, 'archive')
   }
 
   function restoreArchivedSession(id: string): Promise<void> {

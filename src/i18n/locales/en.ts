@@ -1,4 +1,7 @@
 export default {
+  workspaceRuntimePartial: 'Some session sources could not be loaded. Open sessions remain available.',
+  workspaceRuntimeActionFailed: 'The action could not be completed. Check the session state before trying again.',
+
   // Unified application shell
   workspace: 'Workspace',
   primaryNavigation: 'Primary navigation',

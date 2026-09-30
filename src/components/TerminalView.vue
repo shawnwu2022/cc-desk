@@ -5,7 +5,7 @@
     :style="terminalSurfaceStyle"
   >
     <!-- 图标栏（常驻） -->
-    <IconBar
+    <IconBar v-if="!embedded"
       :active-panel="sidebarStore.activePanel"
       @toggle="handleTogglePanel"
       @toggle-settings="sidebarStore.toggleSettings()"
@@ -13,7 +13,7 @@
     />
 
     <!-- 侧边栏 + 终端 -->
-    <SidebarPanel
+    <SidebarPanel v-if="!embedded"
       :visible="sidebarStore.panelVisible"
       :active-panel="sidebarStore.activePanel"
       @close="sidebarStore.closePanel"
@@ -37,13 +37,13 @@
 
     <!-- 主内容区 -->
     <div class="main-content">
-      <TerminalHeader
+      <TerminalHeader v-if="!embedded"
         :project-name="appStore.currentProject || t('claudeCode')"
         @back="handleBack"
       />
       <div class="terminal-container">
         <!-- 空状态提示：没有任何 session -->
-        <div v-if="showEmptyState" class="empty-state-overlay">
+        <div v-if="!embedded && showEmptyState" class="empty-state-overlay">
           <div class="empty-state-content">
             <p class="empty-state-text">{{ t('startNewSession') }}</p>
             <button class="empty-state-btn" @click="handleNewSession">
@@ -55,6 +55,7 @@
         <XTermTerminal
           ref="terminalRef"
           :font-size="appStore.fontSize"
+          :visible="visible ?? true"
           @pty-started="handlePtyStarted"
           @pty-exited="handlePtyExited"
         />
@@ -98,6 +99,7 @@ const emit = defineEmits<{
 
 const props = defineProps<{
   visible?: boolean
+  embedded?: boolean
 }>()
 
 const appStore = useAppStore()
@@ -303,13 +305,42 @@ const sessionStartHandler: HookEventHandler = (payload: HookEventPayload) => {
 }
 let unsubscribeSessionStart: (() => void) | null = null
 
+async function startTab(tabId: string) {
+  if (!terminalRef.value) throw new Error('LEGACY_TERMINAL_NOT_READY')
+  const result = await terminalRef.value.startTab(tabId)
+  if (!result?.ok) throw new Error('LEGACY_LAUNCH_FAILED')
+}
+async function stopTab(tabId: string) {
+  if (!terminalRef.value) throw new Error('LEGACY_TERMINAL_NOT_READY')
+  await terminalRef.value.stopTab(tabId)
+}
+async function restartTab(tabId: string) {
+  if (!terminalRef.value) throw new Error('LEGACY_TERMINAL_NOT_READY')
+  await terminalRef.value.restartTab(tabId)
+}
+async function renameTab(tabId: string, title: string) {
+  if (!terminalRef.value) throw new Error('LEGACY_TERMINAL_NOT_READY')
+  await terminalRef.value.renameTab(tabId, title)
+}
+function focus() { if (props.visible !== false) terminalRef.value?.focus() }
+function fitVisible() { terminalRef.value?.fitVisible() }
+async function recover() {
+  if (!terminalRef.value) throw new Error('LEGACY_TERMINAL_NOT_READY')
+  await terminalRef.value.recover()
+}
+
 defineExpose({
+  startTab, stopTab, stop: stopTab, recover, restartTab, renameTab, focus, fitVisible,
   startResumeSession,
   startProjectSession,
 })
 
 // 初始化
 onMounted(async () => {
+  if (props.embedded) {
+    unsubscribeSessionStart = hookStore.subscribe(['sessionStart'], sessionStartHandler)
+    return
+  }
   // 监听快捷键事件（必须在 cwd 检查之前设置）
   window.addEventListener('terminal:newSession', handleNewSession)
   window.addEventListener('terminal:restartSession', handleRestartSession)
@@ -354,7 +385,7 @@ onUnmounted(() => {
 
 // KeepAlive 激活 → 改为 visible watcher（v-show 常驻 DOM）
 watch(() => props.visible, async (isVisible) => {
-  if (isVisible) {
+  if (isVisible && !props.embedded) {
     const cwd = appStore.cwd
     if (cwd) {
       updateWindowTitle(cwd)
@@ -367,7 +398,7 @@ watch(() => props.visible, async (isVisible) => {
 
 // 监听 cwd 变化
 watch(() => appStore.cwd, async (newCwd, oldCwd) => {
-  if (newCwd && newCwd !== oldCwd) {
+  if (!props.embedded && newCwd && newCwd !== oldCwd) {
     updateWindowTitle(newCwd)
 
     try {
@@ -382,7 +413,7 @@ watch(() => appStore.cwd, async (newCwd, oldCwd) => {
 // 别名变化（不改 cwd）也要刷新 native title：watch getDisplayName(cwd)（reactive，别名改后重算）
 watch(
   () => appStore.cwd ? sessionStore.getDisplayName(appStore.cwd) : '',
-  () => { if (appStore.cwd) updateWindowTitle(appStore.cwd) }
+  () => { if (!props.embedded && appStore.cwd) updateWindowTitle(appStore.cwd) }
 )
 
 function handleBack() {

@@ -1,5 +1,5 @@
 import type { LaunchAction } from '@/types/cli'
-import type { NativeCliTab } from '@/stores/nativeTabs'
+import { captureNativeAttempt, matchesNativeAttempt, type NativeCliTab } from '@/stores/nativeTabs'
 import type { NativeHistoryEntry } from '@/stores/nativeHistory'
 import type {
   CreateUnifiedSessionInput,
@@ -25,8 +25,13 @@ export interface NativeHistoryPort {
   all(): NativeHistoryEntry[]
 }
 
+export interface NativeRuntimeCreateInput extends CreateUnifiedSessionInput {
+  action: LaunchAction
+  sourceSessionKey?: string
+  sourceContext?: NativeHistoryEntry['context']
+}
 export interface NativeRuntimePort {
-  createTab(input: CreateUnifiedSessionInput & { action: LaunchAction }): Promise<NativeCliTab> | NativeCliTab
+  createTab(input: NativeRuntimeCreateInput): Promise<NativeCliTab> | NativeCliTab
   restartTab(tabId: string): Promise<NativeCliTab> | NativeCliTab
   stopTab(tab: NativeCliTab): Promise<void>
 }
@@ -180,10 +185,11 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
 
   async function resumeSession(input: ResumeUnifiedSessionInput): Promise<UnifiedSession> {
     const nativeSessionId = input.nativeSessionId ?? input.adapterSessionId
-    const origins = deps.history.all().filter(entry => entry.context.cli === input.cli
+    const candidateOrigins = deps.history.all().filter(entry => entry.context.cli === input.cli
       && normalizePath(entry.context.projectPath) === normalizePath(input.projectPath)
-      && (input.launchConfigId == null || entry.context.profileId === input.launchConfigId)
       && entry.sessions.some(item => item.sessionKey === input.adapterSessionId && item.nativeSessionId === nativeSessionId))
+    const origins = candidateOrigins.filter(entry => input.launchConfigId == null || entry.context.profileId === input.launchConfigId)
+    if (candidateOrigins.length && !origins.length) throw new Error('PROFILE_SELECTION_CHANGED')
     const contexts = new Set(origins.map(entry => JSON.stringify(entry.context)))
     if (contexts.size > 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
     const origin = origins[0]?.context
@@ -202,38 +208,60 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       deps.tabs.setActive(existing.tabId)
       return projectTab(existing)
     }
-    const created = await createSession({
+    const created = await deps.runtime.createTab({
       projectKey: input.projectKey,
       projectPath: input.projectPath,
       cli: input.cli,
       launchConfigId: input.launchConfigId ?? origin?.profileId,
       title: input.title,
+      sourceSessionKey: input.adapterSessionId,
+      ...(origin ? { sourceContext: { ...origin } } : {}),
       action: { kind: 'resume-id', nativeSessionId },
     })
-    const tab = deps.tabs.tabs.get(created.adapterSessionId)
-    if (tab) tab.sourceSessionKey = input.adapterSessionId
-    return created
+    deps.tabs.setActive(created.tabId)
+    return projectTab(created)
   }
 
+  function captureOwnership(id: string, operation?: 'close' | 'archive'): () => boolean {
+    if (!id.startsWith(ACTIVE_PREFIX)) return () => true
+    const tab = requireTab(id)
+    const attempt = captureNativeAttempt(tab)
+    const live = (value: NativeCliTab | undefined) => value && ['running', 'starting', 'unknown'].includes(value.status)
+    const mustRemainEnded = !!operation && !live(tab)
+    return () => {
+      const current = deps.tabs.tabs.get(tab.tabId)
+      return matchesNativeAttempt(current, attempt) && (!mustRemainEnded || !live(current))
+    }
+  }
   async function activateSession(id: string): Promise<void> { deps.tabs.setActive(requireTab(id).tabId) }
-  async function stopSession(id: string): Promise<void> { await deps.runtime.stopTab(requireTab(id)) }
+  async function stopSession(id: string): Promise<void> { await deps.runtime.stopTab({ ...requireTab(id) }) }
   async function restartSession(id: string): Promise<UnifiedSession> {
     const current = requireTab(id)
     if (current.status === 'unknown') throw new Error('LAUNCH_STATE_UNKNOWN')
     return projectTab(await deps.runtime.restartTab(current.tabId))
   }
-  async function closeSession(id: string): Promise<void> { deps.tabs.close(requireTab(id).tabId) }
+  async function closeSession(id: string): Promise<void> {
+    const tab = { ...requireTab(id) }
+    const attempt = captureNativeAttempt(tab)
+    if (tab.status === 'running' || tab.status === 'starting' || tab.status === 'unknown') await deps.runtime.stopTab(tab)
+    if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt)) throw new Error('STALE_SESSION_ATTEMPT')
+    deps.tabs.close(tab.tabId)
+  }
   async function renameSession(id: string, title: string): Promise<void> { deps.tabs.rename(requireTab(id).tabId, title) }
   async function archiveSession(id: string): Promise<void> {
     if (id.startsWith(ACTIVE_PREFIX)) {
-      const tab = requireTab(id)
+      const tab = { ...requireTab(id) }
+      const attempt = captureNativeAttempt(tab)
+      if (tab.status === 'unknown') throw new Error('LAUNCH_STATE_UNKNOWN')
       const nativeSessionId = tabNativeSessionId(tab)
       if (!nativeSessionId) throw new Error('SESSION_NOT_RESUMABLE')
       const candidates = historyForTab(tab)
       if (candidates.length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
       const { entry, item } = candidates[0]
       if (tab.status === 'running' || tab.status === 'starting') await deps.runtime.stopTab(tab)
+      if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt)) throw new Error('STALE_SESSION_ATTEMPT')
       await deps.archive.archiveSession(tab.projectPath, historyId(entry, item.sessionKey, item.nativeSessionId))
+      if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt)) throw new Error('STALE_SESSION_ATTEMPT')
       deps.tabs.close(tab.tabId)
       return
     }
@@ -245,5 +273,5 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     await deps.archive.restoreSession(history.projectPath, id)
   }
 
-  return { runtime: 'native-cli', listSessions, createSession, resumeSession, activateSession, stopSession, restartSession, closeSession, renameSession, archiveSession, restoreArchivedSession }
+  return { runtime: 'native-cli', captureOwnership, listSessions, createSession, resumeSession, activateSession, stopSession, restartSession, closeSession, renameSession, archiveSession, restoreArchivedSession }
 }

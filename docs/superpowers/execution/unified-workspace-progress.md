@@ -35,7 +35,8 @@ Rules:
 - Task 7: complete at `d10fc5a637589de95875e61e1b1d48c332595c32`
 - Task 8: complete at `aeb644965aa214fbca3885169c1132ed2d5d5ff5`
 - Task 9: complete at `f2764aa4728983fbdf8989f9c4bb9881a9069d8b`
-- Next task: Task 10 — unified application shell and primary navigation
+- Task 10: complete at `8683f6b9e56c2375a2520508f104754c8fd4553c`
+- Next task: Task 11 — unified terminal host and runtime integration
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -282,4 +283,45 @@ Rules:
 - Independent spec/quality review approved the consolidated active-surface repair: archive drawer and project/session menus close when Workspace is inactive, while host/tree state remains mounted
 - Final exact snapshot:36 shell/boundary tests, typecheck,42 affected tree/row tests and diff check pass
 - Earlier109-test broader narrow gate is historical before the ownership repair; full final validation remains Task25
+- Atomic publication pending remote readback
+
+### Verified Task 10 checkpoint
+
+- Remote commit `8683f6b9e56c2375a2520508f104754c8fd4553c`; exact staged/fetched tree and local/remote SHA match; working tree clean before this readback
+- Final36 shell/boundary tests, typecheck,42 affected regressions; independent spec/quality review approved; no CI/PR/package/release
+- Next: Task 11
+
+### Task 11 integration preflight
+
+- The normal App now publishes typed ephemeral WorkspaceRequest intents but deliberately has no adapter initialization or connected terminal host. Task 11 must provide real runtime-port admission/dispatch; a mocked-only host would not complete this task.
+- XTermTerminal already owns a map of Legacy terminals. Reuse that ownership rather than mounting duplicate aggregators per Legacy descriptor; remove embedded legacy chrome from the unified content path.
+- Preserve Native sourceSessionKey/profile/revision/project identity from Task 5 repairs and capture exact attempt ownership before asynchronous lifecycle actions.
+- Task 12/13 own create/resume dialogs, Task14 registration UI, Task15 resources and Task16 consequential confirmation UI. An unhandled or confirmation-requiring request must not silently execute or fall back to Legacy.
+
+## Task 11 — Unified terminal host/runtime integration
+
+- Normal App now configures actual adapters/bootstrap and one stable host: one Legacy aggregator plus one Native terminal per open Native descriptor; historical records never instantiate terminals
+- Visibility guards separate focus/fit/user input from background protocol replies/output ACK; hidden terminals retain buffers and defer fits
+- Exact Native source context is preserved before creation; queued lifecycle actions capture request/run/generation or Legacy local PTY ownership before waiting
+- RED→GREEN covered hidden Legacy input/clipboard, stale restart after close, unknown launch reentry, stale completed close selection, exact source mismatch, removed registration during restart and real binding user/protocol separation
+- Final required gate:26 host/identity/binding/attempt tests pass. Affected gate:216 tests across runtime, Legacy visibility, shell, adapters/stores, input/paste and safety boundaries pass. Typecheck and diff check pass
+- No Native backend command/schema/bridge/input queue protocol changes; optional user-input admission predicate preserves protocol/ACK behavior and paused unknown/partial queues
+- Runtime bootstrap reads sources independently and starts no process, creates no default profile and performs no implicit registration. Known-source failures remain isolated
+- Create/resume UI12/13, project UI14, resources15 and confirmations16 remain pending owners; unhandled/consequential requests are not synthesized into approved lifecycle actions
+- Independent review/publication pending. All checks are mocked host/unit integration; no real CLI/account or platform/D20 certification
+
+### Task 11 rulings
+
+- Added an optional captureOwnership adapter contract so facade queue admission freezes the actual attempt before awaits; otherwise a queued close could recapture a newer run. Cost if wrong: future adapters must supply equivalent ownership capture before enabling lifecycle mutations.
+- Added an optional isUserInputAllowed binding predicate and frontend Legacy PTY generation bookkeeping without changing the wire protocol. Cost if wrong: future renderer upgrades must preserve proven input provenance and background protocol replies.
+- Known Native attempts fail closed if a remount loses the in-memory binding, rather than relaunching implicitly. Cost if wrong: explicit recovery may be needed after abnormal host loss, but unknown launch is not replayed.
+
+### Task 11 independent review repairs and gate
+
+- R1: real installed xterm parser proved visibility-driven disableStdin suppressed DSR/DA replies before provenance. Removed parser-wide suppression; actual component/parser/Native binding tests retain hidden protocol/ACK while blocking hidden user input
+- R2: real Legacy store ordinary history selector filtered archives before adapter projection. Added explicit unfiltered getCatalogHistoryFor port; real store/adapter/drawer archive-refresh-restore round trip passes
+- R3: first Legacy launch could precede process-event registration because optional drag/drop was awaited first. Core output/exit receipts now gate spawn independently; closed/replaced ownership is rechecked after readiness and late disposal cleans subscriptions
+- All three had behavioral RED→GREEN evidence. Final exact-source gate:26 required tests,223 affected tests across17 files, typecheck and diff check pass; these supersede the216-test pre-review claim
+- Independent scoped review approved spec and quality and independently ran all7 repair regressions successfully
+- Installed parser/store/component integration is not real CLI/account/platform/D20 certification; those gates remain unperformed
 - Atomic publication pending remote readback

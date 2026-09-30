@@ -231,4 +231,33 @@ describe('D19 native terminal binding', () => {
     binding.dispose()
   })
 
+  // 隐藏Native终端拒绝用户键盘/粘贴，后台协议应答和输出ACK继续执行。
+  it('Unified_HiddenInputKeepsProtocol_001', async () => {
+    const xterm = fakeXterm()
+    const users: string[] = []; const protocol: string[] = []; const acks: string[] = []
+    let active = false
+    const binding = createNativeTerminalBinding({
+      term: xterm.term, runId: 'run-a', generation: 2,
+      currentTarget: () => ({ runId: 'run-a', generation: 2, modeEpoch: '4' }),
+      isUserInputAllowed: () => active,
+      writeUser: async input => {
+        users.push(new TextDecoder().decode(input.bytes))
+        return { ...input, state: 'host-written', confirmedBytes: String(input.bytes.length) }
+      },
+      writeProtocol: async (_run, bytes) => {
+        protocol.push(new TextDecoder().decode(bytes))
+        return { state: 'host-written', confirmedBytes: String(bytes.length) }
+      },
+      ackOutput: async ack => { acks.push(ack.throughOffset) },
+    })
+    xterm.user.fire(); xterm.data.fire('hidden keyboard'); await binding.drainInput()
+    await expect(binding.sendUserText('hidden command')).rejects.toThrow()
+    await expect(binding.reserveUserPaste(async () => new TextEncoder().encode('hidden paste')).settled).rejects.toThrow()
+    expect(binding.acceptOutput(frame([65]))).toBe(true)
+    xterm.data.fire('protocol reply'); xterm.writeCallbacks[0](); await binding.drainInput(); await Promise.resolve()
+    expect(users).toEqual([]); expect(protocol).toEqual(['protocol reply']); expect(acks).toEqual(['1'])
+    active = true; await binding.sendUserText('visible keyboard')
+    expect(users).toEqual(['visible keyboard']); binding.dispose()
+  })
+
 })

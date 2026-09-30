@@ -1,4 +1,7 @@
 export default {
+  workspaceRuntimePartial: '部分会话来源暂时无法加载，已打开的会话仍可使用。',
+  workspaceRuntimeActionFailed: '操作未完成，请先检查会话状态再重试。',
+
   // Unified application shell
   workspace: '工作区',
   primaryNavigation: '主导航',

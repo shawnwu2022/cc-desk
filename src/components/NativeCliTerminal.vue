@@ -23,6 +23,8 @@ import { platform } from '@/utils/platform'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop } from '@/api/tauri'
 import type { OutputFrame } from '@/types/terminal'
+import { useAppStore } from '@/stores/app'
+import { getTerminalTheme } from '@/config/terminalThemes'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import {
   captureNativeAttempt,
@@ -38,6 +40,7 @@ const props = defineProps<{
 
 const container = ref<HTMLElement | null>(null)
 const profiles = useCliProfilesStore()
+const app = useAppStore()
 const tabs = useNativeTabsStore()
 
 let term: Terminal | null = null
@@ -52,7 +55,11 @@ let modeEpoch = BigInt(1)
 let launched = false
 let inputEnabled = false
 let statusTimer: ReturnType<typeof setInterval> | null = null
-let statusSyncInFlight = false
+let statusSyncInFlight: object | null = null
+let disposed = false
+const needsFit = ref(true)
+let startedAttempt: NativeAttemptIdentity | null = null
+let startPromise: Promise<void> | null = null
 
 const entry = createNativeLaunchEntry({
   selectedProfile(cli) {
@@ -75,7 +82,7 @@ function currentAttempt(): NativeAttemptIdentity {
 }
 
 function attemptIsCurrent(attempt: NativeAttemptIdentity): boolean {
-  return matchesNativeAttempt(tabs.tab(props.tabId), attempt)
+  return !disposed && matchesNativeAttempt(tabs.tab(props.tabId), attempt)
 }
 
 function safeLaunchCode(error: unknown): string {
@@ -99,6 +106,7 @@ function stopStatusSync() {
 
 function disposeRunBinding() {
   runToken = {}
+  statusSyncInFlight = null
   launched = false
   inputEnabled = false
   stopStatusSync()
@@ -116,7 +124,7 @@ function bindClipboard() {
   if (!container.value || !term) return
   const host = container.value
   pasteListener = (event: ClipboardEvent) => {
-    if (!term || !binding) return
+    if (!props.active || !inputEnabled || !term || !binding) return
     const target = event.target as Node | null
     if (!target || !term.element?.contains(target)) return
 
@@ -164,7 +172,7 @@ function bindImeFallback() {
       composed: value.composed,
       data: value.data,
     })
-    if (text && binding) {
+    if (props.active && inputEnabled && text && binding) {
       const attempt = currentAttempt()
       void binding.sendUserText(text).catch(() => markInputFailure(attempt))
     }
@@ -184,9 +192,20 @@ function bindImeFallback() {
   }
 }
 
+function handleNativeCopy(event: ClipboardEvent) {
+  if (!props.active || !term?.element?.contains(document.activeElement)) return
+  const selection = term.getSelection()
+  if (!selection) return
+  event.preventDefault()
+  void writeText(selection).catch(() => {})
+}
+
+// Do not use xterm disableStdin for visibility: it also suppresses parser replies.
+// User-event/provenance admission owns the hidden-input boundary.
 function configureCopy() {
   if (!term) return
   term.attachCustomKeyEventHandler(event => {
+    if (!props.active) return false
     if (event.type !== 'keydown') return true
     const copy = (
       (event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'c')
@@ -214,7 +233,19 @@ async function resizeNative(cols: number, rows: number) {
   })
 }
 
-async function start(): Promise<void> {
+function start(): Promise<void> {
+  const attempt = currentAttempt()
+  if (startedAttempt && matchesNativeAttempt(startedAttempt, attempt)) return startPromise ?? Promise.resolve()
+  // A remounted known/unknown attempt has no safe new output route. Never replay it.
+  if (currentTab().status !== 'stopped' || currentTab().launchRevision !== null) {
+    return Promise.reject(new Error('NATIVE_ATTACH_UNAVAILABLE'))
+  }
+  startedAttempt = attempt
+  startPromise = startAttempt(attempt)
+  return startPromise
+}
+
+async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   if (!term || !fit) throw new Error('NATIVE_TERMINAL_NOT_READY')
   const tab = currentTab()
   const token = {}
@@ -234,13 +265,14 @@ async function start(): Promise<void> {
       runId,
       generation,
       currentTarget: () => {
-        if (!inputEnabled) throw new Error('NATIVE_RUN_NOT_WRITABLE')
+        if (!inputEnabled || runToken !== token || !attemptIsCurrent(attempt)) throw new Error('NATIVE_RUN_NOT_WRITABLE')
         return {
           runId,
           generation,
           modeEpoch: refreshModeEpoch(),
         }
       },
+      isUserInputAllowed: () => props.active && inputEnabled && attemptIsCurrent(attempt),
       onDegraded: reason => {
         const live = tabs.tab(props.tabId)
         if (runToken === token && live?.runId === runId && live.generation === generation) {
@@ -249,7 +281,7 @@ async function start(): Promise<void> {
       },
     })
   } catch (error) {
-    if (runToken === token) tabs.markError(props.tabId, safeLaunchCode(error))
+    if (runToken === token && attemptIsCurrent(attempt)) tabs.markError(props.tabId, safeLaunchCode(error))
     return
   }
 
@@ -258,6 +290,7 @@ async function start(): Promise<void> {
     const live = tabs.tab(props.tabId)
     if (
       runToken !== token
+      || !attemptIsCurrent(attempt)
       || !binding
       || !live
       || live.runId !== runId
@@ -279,18 +312,19 @@ async function start(): Promise<void> {
       cols: term.cols,
       rows: term.rows,
     }, channel)
-    if (runToken !== token) return
+    if (runToken !== token || !attemptIsCurrent(attempt)) return
     if (!tabs.applyLaunchStatus(props.tabId, result)) return
     launched = result.phase === 'running' || result.phase === 'starting'
     inputEnabled = launched
     if (launched) {
       await resizeNative(term.cols, term.rows)
+      if (runToken !== token || !attemptIsCurrent(attempt)) return
       startStatusSync()
     } else {
       stopStatusSync()
     }
   } catch (error) {
-    if (runToken !== token) return
+    if (runToken !== token || !attemptIsCurrent(attempt)) return
     const code = safeLaunchCode(error)
     inputEnabled = false
     if (code === 'LAUNCH_STATE_UNKNOWN') tabs.markUnknown(props.tabId)
@@ -298,8 +332,8 @@ async function start(): Promise<void> {
   }
 }
 
-async function recover(): Promise<void> {
-  const attempt = currentAttempt()
+async function recover(attempt: NativeAttemptIdentity = currentAttempt()): Promise<void> {
+  if (!attemptIsCurrent(attempt)) throw new Error('STALE_NATIVE_ATTEMPT')
   try {
     const result = await entry.recover(attempt.requestId)
     if (!attemptIsCurrent(attempt)) return
@@ -307,43 +341,46 @@ async function recover(): Promise<void> {
     launched = result.phase === 'running' || result.phase === 'starting'
     inputEnabled = launched
     if (!launched) stopStatusSync()
-    else if (props.active && !statusTimer && !statusSyncInFlight) startStatusSync()
+    else if (!statusTimer && !statusSyncInFlight) startStatusSync()
   } catch (error) {
     if (!attemptIsCurrent(attempt)) return
     const code = safeLaunchCode(error)
     launched = false
     inputEnabled = false
     stopStatusSync()
-    if (code === 'LAUNCH_STATE_UNKNOWN') tabs.markUnknown(props.tabId)
-    else tabs.markError(props.tabId, code)
+    // A failed status read is not evidence that an admitted process ended.
+    tabs.markUnknown(props.tabId)
+    tabs.setDiagnostic(props.tabId, code)
   }
 }
 
 async function syncStatus(): Promise<void> {
-  if (statusSyncInFlight || !props.active || !launched) return
-  statusSyncInFlight = true
+  if (statusSyncInFlight || !launched) return
+  const syncOwner = {}
+  statusSyncInFlight = syncOwner
   try {
     await recover()
   } finally {
-    statusSyncInFlight = false
+    if (statusSyncInFlight === syncOwner) statusSyncInFlight = null
   }
 }
 
 function startStatusSync() {
   stopStatusSync()
-  if (!props.active || !launched) return
+  if (!launched) return
   statusTimer = setInterval(() => {
     void syncStatus()
   }, 1500)
 }
 
-async function stop(): Promise<void> {
-  const tab = currentTab()
-  const attempt = captureNativeAttempt(tab)
+async function stop(attempt: NativeAttemptIdentity = currentAttempt()): Promise<void> {
+  if (!attemptIsCurrent(attempt)) throw new Error('STALE_NATIVE_ATTEMPT')
   try {
-    await cliStop({ runId: tab.runId, generation: tab.generation })
+    await cliStop({ runId: attempt.runId, generation: attempt.generation })
     if (!attemptIsCurrent(attempt)) return
-    await recover()
+    await recover(attempt)
+    if (!attemptIsCurrent(attempt)) return
+    if (!['stopped', 'exited', 'failed'].includes(currentTab().status)) throw new Error('NATIVE_STOP_UNCONFIRMED')
   } catch (error) {
     if (!attemptIsCurrent(attempt)) return
     tabs.setDiagnostic(props.tabId, safeLaunchCode(error))
@@ -352,14 +389,23 @@ async function stop(): Promise<void> {
 }
 
 function focus() {
-  term?.focus()
+  if (props.active && !disposed) term?.focus()
+}
+
+function fitVisible() {
+  needsFit.value = true
+  if (!props.active || !term || !fit || disposed) return
+  fit.fit()
+  needsFit.value = false
+  void resizeNative(term.cols, term.rows)
 }
 
 onMounted(async () => {
   if (!container.value) return
   term = new Terminal({
     fontFamily: '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace',
-    fontSize: 12,
+    fontSize: app.fontSize,
+    theme: getTerminalTheme(app.terminalTheme),
     lineHeight: 1.2,
     cursorBlink: true,
     cursorStyle: 'bar',
@@ -370,33 +416,29 @@ onMounted(async () => {
   fit = new FitAddon()
   term.loadAddon(fit)
   term.open(container.value)
-  fit.fit()
+  fitVisible()
   configureCopy()
+  window.addEventListener('copy', handleNativeCopy)
   bindClipboard()
   // D19 provenance binding is installed by start(); bind IME after it exists so
   // xtermData observation and explicit fallback share the same native writer.
   resizeObserver = new ResizeObserver(() => {
-    if (!fit || !term) return
-    requestAnimationFrame(() => {
-      if (!fit || !term) return
-      fit.fit()
-      void resizeNative(term.cols, term.rows)
-    })
+    needsFit.value = true
+    if (props.active) requestAnimationFrame(fitVisible)
   })
   resizeObserver.observe(container.value)
 
-  await start()
+  await start().catch(() => { /* A known attempt must be recovered, never relaunched. */ })
+  if (disposed) return
   bindImeFallback()
   if (props.active) await nextTick().then(focus)
 })
 
 watch(() => props.active, async active => {
-  if (!active) {
-    stopStatusSync()
-    return
-  }
+  needsFit.value = true
+  if (!active) return
   await nextTick()
-  fit?.fit()
+  fitVisible()
   focus()
   if (launched) {
     void syncStatus()
@@ -412,7 +454,17 @@ watch(
   },
 )
 
+watch(() => app.fontSize, size => {
+  if (term) term.options.fontSize = size
+  fitVisible()
+})
+watch(() => app.terminalTheme, theme => {
+  if (term) term.options.theme = getTerminalTheme(theme)
+})
+
 onUnmounted(() => {
+  disposed = true
+  window.removeEventListener('copy', handleNativeCopy)
   stopStatusSync()
   disposeRunBinding()
   imeCleanup?.()
@@ -428,7 +480,7 @@ onUnmounted(() => {
   fit = null
 })
 
-defineExpose({ start, recover, stop, focus })
+defineExpose({ start, recover, stop, focus, fitVisible, needsFit })
 </script>
 
 <style scoped>
@@ -437,7 +489,7 @@ defineExpose({ start, recover, stop, focus })
   inset: 0;
   display: none;
   padding: 6px;
-  background: var(--bg-primary);
+  background: var(--terminal-surface-bg);
 }
 
 .native-cli-terminal.active {

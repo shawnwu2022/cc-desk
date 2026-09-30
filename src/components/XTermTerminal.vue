@@ -13,7 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
+import { computed, ref, reactive, watch, onMounted, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import type { WebglAddon } from '@xterm/addon-webgl'
@@ -41,6 +41,7 @@ import { relativizePath } from '@/utils/path'
 import { PtyIndex } from '@/utils/ptyIndex'
 import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
 import { bindNativePaste, buildPastePayload, commitPasteWithEvidence, imagePasteBytes } from '@/utils/pasteText'
+import type { XtermProvenanceSource } from '@/terminal/xtermProvenance'
 import { createImeInputPolicy, isPasteShortcut } from '@/terminal/inputPolicy'
 import { readImage, readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -48,6 +49,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 
 const props = defineProps<{
   fontSize?: number
+  visible?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -61,6 +63,26 @@ const sessionStore = useSessionStore()
 const hookStore = useHookStore()
 const containerRef = ref<HTMLElement>()
 const isDragOver = ref(false)
+const visible = computed(() => props.visible !== false)
+const needsFit = new Set<string>()
+let disposed = false
+let unregisterCommand: (() => void) | null = null
+function isVisibleTab(tabId: string) { return !disposed && visible.value && currentDisplayTabId.value === tabId }
+function fitTab(tabId: string) {
+  needsFit.add(tabId)
+  if (!isVisibleTab(tabId) || isMinimized) return
+  const instance = terminalInstances.get(tabId)
+  if (!instance) return
+  requestAnimationFrame(() => {
+    if (!isVisibleTab(tabId) || terminalInstances.get(tabId) !== instance) return
+    instance.fitAddon.fit()
+    needsFit.delete(tabId)
+  })
+}
+function fitVisible() {
+  for (const tabId of terminalInstances.keys()) needsFit.add(tabId)
+  if (currentDisplayTabId.value) fitTab(currentDisplayTabId.value)
+}
 
 // 等待 DOM 元素可用
 async function waitForElement(tabId: string, timeout = 10000): Promise<HTMLElement | null> {
@@ -99,7 +121,7 @@ const terminalEls = reactive(new Map<string, HTMLElement | null>())
 const ptyToTab = new PtyIndex()
 
 // 当前显示的 Tab ID
-const currentDisplayTabId = ref<string | null>(null)
+const currentDisplayTabId = ref<string | null>(sessionStore.activeTabId)
 
 // 是否正在启动 PTY（防止并发）
 const isPtyStarting = ref<boolean>(false)
@@ -112,6 +134,7 @@ function createPtyId(): string {
 // macOS 原生 Copy 事件：Tauri MenuBuilder 注册了 Copy 菜单项后，
 // Cmd+C 会派发 copy 事件到 WebView，此处将 xterm 选中文本写入剪贴板
 function handleNativeCopy(e: ClipboardEvent) {
+  if (!visible.value || !containerRef.value?.contains(document.activeElement)) return
   const tabId = currentDisplayTabId.value
   if (!tabId) return
   const instance = terminalInstances.get(tabId)
@@ -144,20 +167,14 @@ function setTerminalEl(tabId: string, el: HTMLElement | null) {
     if (instance && !instance.term.element) {
       instance.term.open(el)
       void loadRendererAddons(instance.term)
-      if (tabId === currentDisplayTabId.value) {
-        requestAnimationFrame(() => instance.fitAddon.fit())
-      }
+      fitTab(tabId)
     }
   }
 }
 
 // Fit 当前显示的终端（防抖，频繁调用时只有最后一次生效，最小化期间跳过）
 const fitCurrentTerminal = debounce(() => {
-  if (isMinimized || !currentDisplayTabId.value) return
-  const instance = terminalInstances.get(currentDisplayTabId.value)
-  if (instance) {
-    requestAnimationFrame(() => instance.fitAddon.fit())
-  }
+  fitVisible()
 }, 50)
 
 // 按平台选择字体：CJK 用等宽字体（Microsoft YaHei / Noto Sans CJK），
@@ -319,7 +336,7 @@ function attachImeInputFix(term: Terminal) {
     // The fallback is a proven user action. Send it directly instead of feeding
     // it back through term.input(), which would re-emerge as ambiguous onData.
     for (const instance of terminalInstances.values()) {
-      if (instance.term.textarea === ta && instance.ptyId) {
+      if (isVisibleTab(currentDisplayTabId.value ?? '') && instance.term.textarea === ta && instance.ptyId && instance === terminalInstances.get(currentDisplayTabId.value!)) {
         void ptyInput(instance.ptyId, text, 'ime-fallback')
         return
       }
@@ -357,8 +374,17 @@ function createTerminal(tabId: string): Terminal {
   const fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
 
-  // 用户输入 → 发送到对应的 PTY
+  // disableStdin also suppresses parser replies, so it must stay off.
+  // The pinned xterm user-input signal separates hidden user events from
+  // parser replies. Background DSR/DA replies must keep the Legacy CLI live;
+  // payload bytes themselves never establish provenance.
+  const userSignal = (term as unknown as XtermProvenanceSource)._core?.coreService?.onUserInput
+  let pendingUserSignals = 0
+  userSignal?.(() => { ++pendingUserSignals })
   term.onData(data => {
+    const fromUser = pendingUserSignals > 0
+    if (fromUser) --pendingUserSignals
+    if (!isVisibleTab(tabId) && (fromUser || !userSignal)) return
     const instance = terminalInstances.get(tabId)
     if (instance) {
       // ptyId 空（fit 在 spawn 前发生）时跳过发送；Escape 仍清 working 状态
@@ -378,6 +404,7 @@ function createTerminal(tabId: string): Terminal {
   // 终端尺寸变化 → resize 对应的 PTY
   term.onResize(({ cols, rows }) => {
     const instance = terminalInstances.get(tabId)
+    if (!isVisibleTab(tabId)) { needsFit.add(tabId); return }
     if (instance && instance.ptyId) {
       ptyResize(instance.ptyId, cols, rows)
     }
@@ -385,6 +412,7 @@ function createTerminal(tabId: string): Terminal {
 
   // 复制粘贴处理
   term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+    if (!isVisibleTab(tabId)) return false
     if (event.type !== 'keydown') return true
 
     // Cmd+C (macOS) 复制选中内容
@@ -432,7 +460,7 @@ function createTerminal(tabId: string): Terminal {
       commitPasteWithEvidence(
         readText,
         readImage,
-        () => terminalInstances.get(tabId),
+        () => isVisibleTab(tabId) ? terminalInstances.get(tabId) : undefined,
         text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
         (id, payload) => ptyInput(id, payload, 'clipboard-keyboard'),
         () => imagePasteBytes(platform),
@@ -462,13 +490,16 @@ onMounted(async () => {
   if (containerRef.value) {
     unbindNativePaste = bindNativePaste({
       container: containerRef.value,
-      getTabId: () => currentDisplayTabId.value,
-      getInstance: tabId => terminalInstances.get(tabId),
+      getTabId: () => visible.value ? currentDisplayTabId.value : null,
+      getInstance: tabId => isVisibleTab(tabId) ? terminalInstances.get(tabId) : undefined,
       write: (id, payload) => ptyInput(id, payload, 'clipboard-dom'),
       imageFallback: () => imagePasteBytes(platform),
     })
   }
-  await setupEventListeners()
+  // Drag/drop is optional. Only output/exit registration gates process spawn.
+  void setupDragDropListener().catch(() => {})
+  await ensureCoreListeners().catch(() => { /* startTab reports the safe readiness error. */ })
+  if (disposed) { unlistenPtyOutput?.(); unlistenPtyExit?.(); unlistenDragDrop?.(); return }
   window.addEventListener('copy', handleNativeCopy)
 
   if (containerRef.value) {
@@ -488,7 +519,7 @@ onMounted(async () => {
         const instance = terminalInstances.get(tabId)
         if (instance) {
           await nextTick()
-          instance.fitAddon.fit()
+          fitTab(tabId)
           instance.term.refresh(0, instance.term.rows - 1)
           instance.term.scrollToBottom()
         }
@@ -498,14 +529,19 @@ onMounted(async () => {
     }
   })
 
-  registerTerminalCommand(sendText)
+  if (disposed) { unlistenWindowResized?.(); return }
+  unregisterCommand = registerTerminalCommand(sendText)
+  for (const tab of sessionStore.tabs.values()) {
+    if (tab.ptyId && tab.status === 'running') await createTerminalForTab(tab.tabId, tab.ptyId)
+  }
 })
 
 // 设置事件监听器
-async function setupEventListeners() {
+async function setupDragDropListener() {
   // 文件拖放 → 将路径输入终端
   // 项目内文件转换为相对路径，便于 Claude 直接引用
-  unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
+  const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+    if (!visible.value) { isDragOver.value = false; return }
     if (event.payload.type === 'drop') {
       isDragOver.value = false
       const paths = event.payload.paths
@@ -524,31 +560,53 @@ async function setupEventListeners() {
     }
   })
 
-  // PTY 输出 → 写入对应 Tab 的 Terminal（ptyToTab 反查 O(1)，替代遍历 terminalInstances）
-  unlistenPtyOutput = await onPtyOutput(({ id, data }) => {
-    const tabId = ptyToTab.get(id)
-    if (!tabId) return
-    const instance = terminalInstances.get(tabId)
-    if (instance) instance.term.write(data)
-  })
+  if (disposed) unlisten()
+  else unlistenDragDrop = unlisten
+}
 
-  // PTY 退出 → 先按 ptyId 收敛 store，再清理仍属于该 ID 的终端实例。
-  // 旧 PTY 的迟到事件不得销毁同一 tab 上已重启的新终端。
-  unlistenPtyExit = await onPtyExit(({ id }) => {
-    const tabId = ptyToTab.get(id)
-    sessionStore.handlePtyExit(id)
-    hookStore.clearSession(id)
-
-    if (!tabId) return
-    const instance = terminalInstances.get(tabId)
-    if (instance?.ptyId === id) {
-      void disposeTerminal(instance.term, `onPtyExit(tabId=${tabId})`)
-      terminalInstances.delete(tabId)
-      terminalEls.delete(tabId)
-    }
-    ptyToTab.unlink(id)
-    emit('ptyExited', tabId, id)
+let coreListenersReady: Promise<void> | null = null
+function ensureCoreListeners(): Promise<void> {
+  if (disposed) return Promise.reject(new Error('LEGACY_TERMINAL_NOT_READY'))
+  if (unlistenPtyOutput && unlistenPtyExit) return Promise.resolve()
+  if (coreListenersReady) return coreListenersReady
+  const registerOutput = async () => {
+    if (unlistenPtyOutput) return
+    const unlisten = await onPtyOutput(({ id, data }) => {
+      if (disposed) return
+      const tabId = ptyToTab.get(id)
+      if (!tabId) return
+      const instance = terminalInstances.get(tabId)
+      if (instance) instance.term.write(data)
+    })
+    if (disposed) unlisten()
+    else unlistenPtyOutput = unlisten
+  }
+  const registerExit = async () => {
+    if (unlistenPtyExit) return
+    const unlisten = await onPtyExit(({ id }) => {
+      if (disposed) return
+      const tabId = ptyToTab.get(id)
+      sessionStore.handlePtyExit(id)
+      hookStore.clearSession(id)
+      if (!tabId) return
+      const instance = terminalInstances.get(tabId)
+      // An ended open terminal still owns its scrollback until close/restart.
+      if (instance?.ptyId === id) instance.ptyId = ''
+      ptyToTab.unlink(id)
+      emit('ptyExited', tabId, id)
+    })
+    if (disposed) unlisten()
+    else unlistenPtyExit = unlisten
+  }
+  coreListenersReady = Promise.allSettled([registerOutput(), registerExit()]).then(results => {
+    if (disposed || results.some(result => result.status === 'rejected')) throw new Error('LEGACY_LISTENER_UNAVAILABLE')
+  }).catch(error => {
+    // Wait for both registrations to settle before allowing an explicit retry;
+    // keep any successful listener, so partial failure cannot double-subscribe.
+    coreListenersReady = null
+    throw error
   })
+  return coreListenersReady
 }
 
 // 监听 fontSize 变化
@@ -556,8 +614,8 @@ watch(() => props.fontSize, (newSize) => {
   if (newSize) {
     for (const instance of terminalInstances.values()) {
       instance.term.options.fontSize = newSize
-      instance.fitAddon.fit()
     }
+    fitVisible()
   }
 })
 
@@ -571,16 +629,13 @@ watch(() => appStore.terminalTheme, (newId) => {
 
 // 监听活跃 Tab 变化 → 切换显示
 watch(() => sessionStore.activeTabId, async (newTabId, oldTabId) => {
+  currentDisplayTabId.value = newTabId
   if (!newTabId) return
 
   if (newTabId === oldTabId) {
     fitCurrentTerminal()
     return
   }
-
-  if (isPtyStarting.value) return
-
-  currentDisplayTabId.value = newTabId
 
   await nextTick()
 
@@ -589,7 +644,7 @@ watch(() => sessionStore.activeTabId, async (newTabId, oldTabId) => {
   if (existingInstance) {
     const buf = existingInstance.term.buffer.active
     existingInstance.term.refresh(0, Math.max(buf.length - 1, 0))
-    requestAnimationFrame(() => existingInstance.fitAddon.fit())
+    fitTab(newTabId)
   } else {
     const tab = sessionStore.tabs.get(newTabId)
     if (!tab) return
@@ -616,21 +671,9 @@ async function createTerminalForTab(tabId: string, ptyId: string) {
 
   const el = await waitForElement(tabId)
   if (el) {
-    // display:none 时 xterm 无法获取尺寸，临时显示
-    const isActive = tabId === currentDisplayTabId.value
-    if (!isActive) el.style.display = 'block'
-
-    term.open(el)
+    if (!term.element) term.open(el)
     void loadRendererAddons(term)
-
-    if (!isActive) {
-      requestAnimationFrame(() => {
-        fitAddon.fit()
-        el.style.display = ''
-      })
-    } else {
-      requestAnimationFrame(() => fitAddon.fit())
-    }
+    fitTab(tabId)
   }
 }
 
@@ -660,11 +703,16 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
   }
 
   isPtyStarting.value = true
+  let startingPtyId: string | null = null
+  let startingGeneration = tab.ptyGeneration ?? 0
 
   try {
+    await ensureCoreListeners()
+    if (disposed || sessionStore.tabs.get(tabId) !== tab || (tab.ptyGeneration ?? 0) !== startingGeneration) throw new Error('STALE_LEGACY_ATTEMPT')
     const args = buildClaudeArgs(tab)
     const cwd = tab.projectPath
     const ptyId = createPtyId()
+    startingPtyId = ptyId
     const term = createTerminal(tabId)
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
@@ -672,6 +720,7 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
     // 先注册路由和 store，再启动后端进程。即使 CLI 立即输出或退出，事件也能定位 tab。
     terminalInstances.set(tabId, { term, fitAddon, ptyId })
     sessionStore.setTabPty(tabId, ptyId)
+    startingGeneration = tab.ptyGeneration ?? 0
     ptyToTab.link(ptyId, tabId)
     sessionStore.setActiveTab(tabId)
     currentDisplayTabId.value = tabId
@@ -680,13 +729,14 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
     let rows = 24
     const el = await waitForElement(tabId)
     if (el) {
-      term.open(el)
+      if (!term.element) term.open(el)
       void loadRendererAddons(term)
-      fitAddon.fit()
+      fitTab(tabId)
       cols = term.cols
       rows = term.rows
     }
 
+    if (disposed || sessionStore.tabs.get(tabId) !== tab || tab.ptyId !== ptyId) throw new Error('STALE_LEGACY_ATTEMPT')
     const info = await ptySpawn({
       id: ptyId,
       cwd,
@@ -707,14 +757,14 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
       liveTab?.ptyId !== ptyId ||
       liveTab.status !== 'running'
     ) {
-      discardUnstartedTab(tabId)
+      discardUnstartedTab(tabId, startingPtyId, startingGeneration)
       return { ok: false, error: 'PTY exited during startup' }
     }
 
     emit('ptyStarted', tabId, ptyId)
     return { ok: true }
   } catch (err) {
-    discardUnstartedTab(tabId)
+    discardUnstartedTab(tabId, startingPtyId, startingGeneration)
     console.error('[XTerm] startTab ERROR:', err)
     void logMessage('error', `startTab failed, tabId=${tabId}: ${err}`)
     return { ok: false, error: String(err) }
@@ -728,9 +778,9 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
  * - disposeTerminal（停 atlas/IME timer + safeDispose，非裸 term.dispose）
  * - sessionStore.removeTab（删 tab 不 kill PTY 不刷历史，区别于 closeTab）
  */
-function discardUnstartedTab(tabId: string) {
-  const instance = terminalInstances.get(tabId)
-  const ptyId = instance?.ptyId ?? sessionStore.tabs.get(tabId)?.ptyId ?? null
+function discardUnstartedTab(tabId: string, ptyId: string | null, generation: number) {
+  const candidate = terminalInstances.get(tabId)
+  const instance = candidate?.ptyId === ptyId ? candidate : undefined
   if (ptyId) {
     ptyToTab.unlink(ptyId)
     hookStore.clearSession(ptyId)
@@ -742,7 +792,8 @@ function discardUnstartedTab(tabId: string) {
     terminalInstances.delete(tabId)
     terminalEls.delete(tabId)
   }
-  sessionStore.removeTab(tabId)
+  const tab = sessionStore.tabs.get(tabId)
+  if (tab && (tab.ptyGeneration ?? 0) === generation && (tab.ptyId === ptyId || tab.ptyId === null)) sessionStore.removeTab(tabId)
 }
 
 /**
@@ -766,99 +817,28 @@ function disposeTabInstance(tabId: string) {
  */
 async function restartTab(tabId: string) {
   const tab = sessionStore.tabs.get(tabId)
-  if (!tab || isPtyStarting.value) return
-
+  if (!tab) throw new Error('LEGACY_SESSION_NOT_FOUND')
+  if (isPtyStarting.value) throw new Error('LEGACY_LAUNCH_BUSY')
+  const generation = tab.ptyGeneration ?? 0
+  const owns = () => !disposed && sessionStore.tabs.get(tabId) === tab && (tab.ptyGeneration ?? 0) === generation
+  const oldInstance = terminalInstances.get(tabId)
   isPtyStarting.value = true
-  let startingPtyId: string | null = null
-
   try {
-    const oldPtyId = tab.ptyId
-    if (oldPtyId) {
-      // 先取消旧事件路由，防止迟到退出事件误删随后创建的新终端。
-      ptyToTab.unlink(oldPtyId)
-      useAttentionStore().clearPty(oldPtyId)
-      try { await ptyKill(oldPtyId) } catch {}
-      sessionStore.handlePtyExit(oldPtyId)
-      hookStore.clearSession(oldPtyId)
-    }
-
-    const oldInstance = terminalInstances.get(tabId)
+    await stopTab(tabId)
+    if (!owns()) throw new Error('STALE_LEGACY_ATTEMPT')
     if (oldInstance) {
-      await disposeTerminal(oldInstance.term, `restartTab(old term, tabId=${tabId})`)
+      await disposeTerminal(oldInstance.term, `restartTab(tabId=${tabId})`)
+      if (!owns() || terminalInstances.get(tabId) !== oldInstance) throw new Error('STALE_LEGACY_ATTEMPT')
       terminalInstances.delete(tabId)
       terminalEls.delete(tabId)
     }
-
-    const args = buildClaudeArgs(tab)
-    const cwd = tab.projectPath
-    const ptyId = createPtyId()
-    startingPtyId = ptyId
-    const term = createTerminal(tabId)
-    const fitAddon = new FitAddon()
-    term.loadAddon(fitAddon)
-
-    terminalInstances.set(tabId, { term, fitAddon, ptyId })
-    sessionStore.setTabPty(tabId, ptyId)
-    ptyToTab.link(ptyId, tabId)
-    sessionStore.setActiveTab(tabId)
-    currentDisplayTabId.value = tabId
-
-    let cols = 80
-    let rows = 24
-    const el = await waitForElement(tabId)
-    if (el) {
-      term.open(el)
-      void loadRendererAddons(term)
-      fitAddon.fit()
-      cols = term.cols
-      rows = term.rows
-    }
-
-    const info = await ptySpawn({
-      id: ptyId,
-      cwd,
-      cols,
-      rows,
-      type: 'claude',
-      args,
-    })
-
-    if (!info || info.id !== ptyId) {
-      throw new Error('PTY restart returned an unexpected identifier')
-    }
-
-    const liveInstance = terminalInstances.get(tabId)
-    const liveTab = sessionStore.tabs.get(tabId)
-    if (
-      liveInstance?.ptyId !== ptyId ||
-      liveTab?.ptyId !== ptyId ||
-      liveTab.status !== 'running'
-    ) {
-      return
-    }
-
-    emit('ptyStarted', tabId, ptyId)
-    startingPtyId = null
-    appStore.resetClaudeOptions()
-  } catch (err) {
-    if (startingPtyId) {
-      const failedInstance = terminalInstances.get(tabId)
-      if (failedInstance?.ptyId === startingPtyId) {
-        await disposeTerminal(failedInstance.term, `restartTab(failed term, tabId=${tabId})`)
-        terminalInstances.delete(tabId)
-        terminalEls.delete(tabId)
-      }
-      ptyToTab.unlink(startingPtyId)
-      hookStore.clearSession(startingPtyId)
-      useAttentionStore().clearPty(startingPtyId)
-      sessionStore.handlePtyExit(startingPtyId)
-      void ptyKill(startingPtyId).catch(() => {})
-    }
-    console.error('[XTerm] restartTab ERROR:', err)
-    void logMessage('error', `restartTab failed, tabId=${tabId}: ${err}`)
   } finally {
     isPtyStarting.value = false
   }
+  if (!owns()) throw new Error('STALE_LEGACY_ATTEMPT')
+  const result = await startTab(tabId)
+  if (!result.ok) throw new Error('LEGACY_LAUNCH_FAILED')
+  appStore.resetClaudeOptions()
 }
 
 /**
@@ -929,22 +909,58 @@ async function cleanup() {
 
 // 向活跃终端发送文字并聚焦
 function sendText(text: string) {
+  if (!visible.value) return false
   const tabId = currentDisplayTabId.value
-  if (!tabId) return
+  if (!tabId) return false
   const instance = terminalInstances.get(tabId)
   if (instance?.ptyId) {
     void ptyInput(instance.ptyId, text)
     instance.term.focus()
+    return true
   }
+  return false
 }
 
 // 聚焦活跃终端
 function focus() {
+  if (!visible.value) return
   const tabId = currentDisplayTabId.value
   if (!tabId) return
   const instance = terminalInstances.get(tabId)
   if (instance) instance.term.focus()
 }
+
+// Lifecycle calls capture the exact PTY before awaiting. No completion resolves
+// a new current tab or selects another runtime to finish an old operation.
+async function stopTab(tabId: string) {
+  const ptyId = sessionStore.tabs.get(tabId)?.ptyId
+  if (!ptyId) return
+  await ptyKill(ptyId)
+  sessionStore.handlePtyExit(ptyId)
+  hookStore.clearSession(ptyId)
+  ptyToTab.unlink(ptyId)
+  const instance = terminalInstances.get(tabId)
+  if (instance?.ptyId === ptyId) instance.ptyId = ''
+}
+async function recover() { throw new Error('LEGACY_RECOVERY_UNSUPPORTED') }
+async function renameTab(tabId: string, title: string) {
+  if (!title.trim() || /[\x00-\x1f\x7f]/.test(title)) throw new Error('SESSION_TITLE_REQUIRED')
+  const tab = sessionStore.tabs.get(tabId)
+  if (!tab) throw new Error('LEGACY_SESSION_NOT_FOUND')
+  const ptyId = tab.ptyId
+  if (tab.status === 'running' && ptyId) await ptyInput(ptyId, `/rename ${title}\r`)
+}
+watch(() => props.visible, async () => {
+  for (const id of terminalInstances.keys()) needsFit.add(id)
+  if (!visible.value) return
+  await nextTick()
+  fitVisible()
+})
+watch(() => [...sessionStore.tabs.keys()], () => {
+  for (const id of terminalInstances.keys()) {
+    if (!sessionStore.tabs.has(id)) { disposeTabInstance(id); needsFit.delete(id) }
+  }
+})
 
 // 兼容：重启当前活跃 Tab
 async function restartCurrentPty() {
@@ -954,6 +970,8 @@ async function restartCurrentPty() {
 }
 
 onUnmounted(() => {
+  disposed = true
+  unregisterCommand?.()
   fitCurrentTerminal.cancel()
   resizeObserver?.disconnect()
   window.removeEventListener('copy', handleNativeCopy)
@@ -976,7 +994,7 @@ defineExpose({
   cleanup,
   sendText,
   focus,
-  fitCurrentTerminal,
+  fitCurrentTerminal, fitVisible, stopTab, stop: stopTab, recover, renameTab,
   disposeTabInstance,
 })
 </script>

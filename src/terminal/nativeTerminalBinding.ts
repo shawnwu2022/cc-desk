@@ -21,6 +21,7 @@ export interface NativeTerminalLike extends XtermProvenanceSource {
 export interface NativeTerminalBindingOptions extends RunKey {
   term: NativeTerminalLike
   currentTarget: () => InputTarget
+  isUserInputAllowed?: () => boolean
   writeUser: (frame: NativeInputFrame) => Promise<InputWriteReceipt>
   writeProtocol: (run: RunKey, bytes: Uint8Array) => Promise<ProtocolWriteReceipt>
   ackOutput: (ack: OutputAck) => Promise<unknown>
@@ -48,6 +49,7 @@ export function createNativeTerminalBinding(
 
   const provenance = bindXtermInputProvenance(options.term, {
     user: async data => {
+      if (options.isUserInputAllowed?.() === false) return
       const leave = host.beginUserEvent()
       let operation: Promise<void>
       try {
@@ -93,11 +95,12 @@ export function createNativeTerminalBinding(
 
     sendUserText(data) {
       if (disposed) return Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED'))
+      if (options.isUserInputAllowed?.() === false) return Promise.reject(new Error('NATIVE_TERMINAL_HIDDEN'))
       return host.sendUserText(data)
     },
 
     reserveUserPaste(produce) {
-      if (disposed) {
+      if (disposed || options.isUserInputAllowed?.() === false) {
         return {
           inputSeq: '0',
           settled: Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED')),

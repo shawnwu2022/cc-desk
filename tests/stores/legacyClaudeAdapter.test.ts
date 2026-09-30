@@ -16,7 +16,7 @@ class FakeLegacyStore implements LegacyClaudeStorePort {
   private nextId = 1
   activeTabId: string | null = null
 
-  getHistoryFor(projectPath: string): HistorySession[] {
+  getCatalogHistoryFor(projectPath: string): HistorySession[] {
     return this.history.get(projectPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()) ?? []
   }
 

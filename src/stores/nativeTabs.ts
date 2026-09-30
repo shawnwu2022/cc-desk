@@ -41,6 +41,7 @@ export interface NativeAttemptIdentity {
 }
 
 export interface NativeTabCreate {
+  sourceSessionKey?: string
   cli: NativeCliKind
   projectId: string
   projectPath: string
@@ -142,6 +143,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     const tabId = id('tab')
     const value: NativeCliTab = {
       tabId,
+      ...(input.sourceSessionKey ? { sourceSessionKey: input.sourceSessionKey } : {}),
       cli: input.cli,
       projectId: text(input.projectId, 'PROJECT_ID_REQUIRED'),
       projectPath: text(input.projectPath, 'PROJECT_PATH_REQUIRED'),

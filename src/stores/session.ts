@@ -73,6 +73,8 @@ export interface TerminalTab {
   tabId: string
   projectPath: string
   ptyId: string | null
+  /** Monotone local Legacy PTY ownership; natural exit never rewinds it. */
+  ptyGeneration?: number
   sessionId: string | null
   name: string
   status: 'starting' | 'running' | 'stopped'
@@ -192,6 +194,13 @@ export const useSessionStore = defineStore('session', () => {
   // 不依赖 tab.working 等 -> tab 工作状态变化不触发 history 重算，computed memo 返回同引用，
   // 避免模板 v-for 内反复调返回新数组导致 ProjectNode/SessionItem 无谓重渲染。
   // 项目数有限，缓存不主动清理（残留 computed 内存可忽略；项目删除后不再被调用即静止）。
+  /** Unfiltered cache projection for the unified catalog. The adapter owns
+   * project-scoped active claims and archive flags; ordinary Legacy lists keep
+   * using getHistoryFor and its existing hidden/claimed filtering. */
+  function getCatalogHistoryFor(projectPath: string): HistorySession[] {
+    return historyCacheMap.get(normalizePath(projectPath)) ?? []
+  }
+
   const historyComputedCache = new Map<string, ComputedRef<HistorySession[]>>()
   function getHistoryFor(projectPath: string): HistorySession[] {
     const n = normalizePath(projectPath)
@@ -255,6 +264,7 @@ export const useSessionStore = defineStore('session', () => {
   function setTabPty(tabId: string, ptyId: string) {
     const tab = tabs.get(tabId)
     if (!tab) return
+    tab.ptyGeneration = (tab.ptyGeneration ?? 0) + 1
     tab.ptyId = ptyId
     tab.status = 'running'
     tab.lastActiveAt = Date.now()
@@ -956,6 +966,7 @@ export const useSessionStore = defineStore('session', () => {
     toggleExpand,
     isExpanded,
     getHistoryFor,
+    getCatalogHistoryFor,
 
     // 全局树：项目分组
     buildProjectGroups,

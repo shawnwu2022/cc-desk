@@ -15,6 +15,7 @@ export interface DeskNativeTerminalBindingOptions {
   runId: string
   generation: number
   currentTarget: () => InputTarget
+  isUserInputAllowed?: () => boolean
   onDegraded?: (reason: string) => void
 }
 
@@ -30,6 +31,7 @@ export function createDeskNativeTerminalBinding(
     runId: options.runId,
     generation: options.generation,
     currentTarget: options.currentTarget,
+    isUserInputAllowed: options.isUserInputAllowed,
     writeUser: cliWriteInput,
     writeProtocol: cliWriteProtocol,
     ackOutput: cliAckOutput,

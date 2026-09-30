@@ -12,8 +12,7 @@ logical viewport mode, session-column visibility/width and context-drawer state.
   accessible controls and localized names. Skills/Agents/MCP/Plugins/Instructions
   belong to project/session context, not global navigation.
 - `WorkspaceView.vue` stays mounted across section changes and exposes one
-  `terminal` slot / `data-workspace-terminal-host`; Task 11 owns runtime ports and
-  terminal integration. The project/session tree remains the only tab system.
+  `terminal` slot / `data-workspace-terminal-host`, filled by `UnifiedTerminalHost`. The project/session tree remains the only tab system.
 - `WorkspaceHeader.vue` offers session-column and context toggles, project/session
   titles that ellipsize independently, and typed new-session/add-project requests.
 - `SidebarPanel.vue` is a content-only unified `SessionsPanel` wrapper. It forwards
@@ -41,17 +40,26 @@ Normal application initialization loads GUI/application preferences independentl
 of CLI availability. GUI theme updates do not change terminal-theme preference or
 session selection. OS Settings / Shortcuts menu events route to the single settings
 section; directory and restart events become typed presentation requests only.
-No Claude-only environment gate, old history/startup decision, implicit PTY launch
-or old Native product page is mounted in the normal path. A CLI's unavailable state
+No Claude-only environment gate, automatic startup decision, implicit PTY launch
+or old Native product page is mounted in the normal path. `useUnifiedWorkspaceRuntime`
+loads Legacy projects/history, Native profiles/registered projects/history and shared
+project metadata independently. A failing source leaves other sources and open
+terminals usable; saved launch configurations do not certify real CLI availability. A CLI's unavailable state
 is an inline per-CLI notice, so navigation and other sessions remain accessible.
 
 `WorkspaceRequest` is a discriminated presentation-only union. `App.vue` publishes
 `workspace-request` and stores the latest ephemeral intent in shell `pendingRequest`
 with a monotonic `requestSequence`; an integrating owner may clear only its current
-sequence. It is not a persistent queue or automatic replay mechanism. Task 11 must
-explicitly admit/dispatch requests through runtime-owned adapters; paths in these
-requests do not authorize Native filesystem access. Confirmations remain owned by
-the integrating action layer (Task 16), never by the shell. New-session dialogs
+sequence. It is not a persistent queue or automatic replay mechanism. The runtime claims each
+sequence once and clears only its matching completed request. It explicitly
+admits/dispatches requests through runtime-owned adapters; paths in these
+requests do not authorize Native filesystem access. The Legacy adapter reads `getCatalogHistoryFor`, an unfiltered cached history
+projection. Ordinary `getHistoryFor` keeps its existing archived/claimed filtering,
+while the unified catalog retains archived rows so the archive drawer can restore them.
+Live close/archive requests remain pending for the confirmation layer (Task 16).
+Admission reads current runtime state, rather than trusting an older catalog row.
+Queued operations capture adapter ownership before awaiting; an ended close/archive
+must still be ended at execution. Confirmations never belong to the shell. New-session dialogs
 belong to Task 12, resume to Task 13 and contextual resources to Task 15.
 
 The old App is isolated as `LegacyCompatibilityApp.vue`, reachable only with BOTH
@@ -60,11 +68,45 @@ activate it. This temporary development route, `IconBar` adapter and old typed
 caller compatibility are removed in Task 21. Native bridge/terminal safeguards
 remain unchanged; this shell checkpoint is not real CLI or platform certification.
 
+## Unified terminal runtime
+
+`UnifiedTerminalHost` consumes the selected catalog ID and open runtime descriptors.
+It owns one embedded `TerminalView` / `XTermTerminal` aggregator for every Legacy tab,
+and one stable-key `NativeCliTerminal` per open Native tab. History records never
+mount terminals. Switching sessions, primary sections or GUI themes changes only
+visibility. Embedded Legacy content has no IconBar, project tree, header or implicit
+startup/menu listeners.
+
+`UnifiedTerminalHostPort` exposes explicit Legacy start/stop/restart/rename and
+Native stop/recover-by-attempt hooks. The children expose focus and visible fit;
+hidden instances mark `needsFit` and retain their output. Native background status
+reads and output/ACK continue; Legacy ended scrollback lasts until close/restart.
+Global terminal theme and font-size changes update the existing terminal options.
+Legacy spawn first awaits core output and exit subscriptions and rechecks the captured
+tab/PTY generation. Optional drag/drop registration is independent of that gate.
+
+Native creation resolves the existing profile revision and registered project.
+Resumed history passes `sourceSessionKey` and its complete cached context to the
+runtime before creating the tab. Restart retains that context and revalidates it
+after stop. It never creates a profile, registers a frontend path, or changes argv.
+
+Runtime request handling supports open-session activation, explicit stop/cancel,
+exact status recovery, explicit restart/retry, open-tab rename, ended close/archive,
+archive restore, copy session ID and open project directory. Creation/resume dialogs,
+project management, resources, diagnostics and required confirmations remain explicit
+pending requests for Tasks 12–16. Unsupported operations are never translated to
+Legacy commands. Refresh reloads sources; it does not retry a failed lifecycle request.
+
+The optional adapter `captureOwnership` hook freezes exact Native request/run/generation
+or Legacy tab/local PTY generation at facade admission, before an action waits in a
+queue. Lifecycle completions recheck ownership before touching a newer context.
+
 ## Native CLI workbench
 
 ### NativeCliWorkbench.vue
 
-Responsibilities:
+Retained only by the DEV compatibility route; the normal shell never mounts its
+independent tab strip. Compatibility responsibilities:
 
 - Claude/Codex switch;
 - independent profile selection/bootstrap;
@@ -149,10 +191,10 @@ These helpers preserve source/ordering identity rather than inferring behavior f
 
 ## Legacy workspace
 
-The following remain compatibility components:
+The following retain the Legacy transport:
 
-- `TerminalView.vue`;
-- `XTermTerminal.vue`;
+- `TerminalView.vue` (embedded content-only mode in the unified host);
+- `XTermTerminal.vue` (one aggregator, explicit visibility, exact PTY lifecycle);
 - `LegacyCompatibilityApp.vue` behind the explicit DEV-only flag;
 - legacy Claude settings and hook-driven UI.
 
@@ -235,7 +277,8 @@ primary/menu actions and rename requests carry catalog IDs. A running archive is
 intercepted as `confirmation-request` with
 `{ kind: 'stop-and-archive', sessionId, projectKey, projectPath }`. It never invokes
 stop/archive itself. Unknown/starting sessions cannot request archive. Runtime
-adapter setup/dispatch and the full confirmation UI remain integration tasks; none
+adapter setup/dispatch now belongs to `useUnifiedWorkspaceRuntime`; full confirmation
+UI remains Task 16; none
 of the tree components imports legacy PTY commands or performs lifecycle writes.
 
 Explicit expansion is stored by project key. Search matches project display name,

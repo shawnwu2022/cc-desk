@@ -36,6 +36,13 @@ vi.mock('@/api/tauri', async (original) => ({ ...await original<object>(),
   onConfigFontSize: async (callback: (size: number) => void) => { host.callbacks.set('font', callback); return host.cleanup },
   onOpenDirectory: async (callback: (path: string) => void) => { host.callbacks.set('directory', callback); return host.cleanup },
 }))
+vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
+// Shell tests own presentation-only fixtures; production bootstrap/dispatch has
+// behavioral integration coverage in unifiedWorkspaceRuntime.test.ts.
+vi.mock('@/composables/useUnifiedWorkspaceRuntime', async () => {
+  const { ref } = await import('vue')
+  return { useUnifiedWorkspaceRuntime: () => ({ openSessions: ref([]), cliAvailability: ref({}), error: ref(null) }) }
+})
 const wrappers: VueWrapper[] = []
 let i18n: ReturnType<typeof createI18n>
 beforeEach(() => {
@@ -170,6 +177,15 @@ describe('Unified application shell', () => {
     expect(wrapper.find('.native-workbench-toggle').exists()).toBe(false)
     expect(host.runChecks).not.toHaveBeenCalled()
     expect(wrapper.text()).not.toContain('Native CLI')
+  })
+  // 正常根组件挂载统一宿主；跨导航保留同一个实例。
+  it('Shell_ConnectsUnifiedHost_018', async () => {
+    const wrapper = render(App); await flushPromises()
+    const terminal = wrapper.get('[data-unified-terminal-host]').element
+    useShellStore().navigate('projects'); await nextTick()
+    expect(wrapper.get('[data-unified-terminal-host]').element).toBe(terminal)
+    useShellStore().navigate('settings'); await nextTick()
+    expect(wrapper.get('[data-unified-terminal-host]').element).toBe(terminal)
   })
   // 兼容入口必须同时满足DEV与显式标志，生产环境单独设置标志无效。
   it('Shell_CompatibilityRequiresDev_010', () => {

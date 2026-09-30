@@ -4,6 +4,9 @@ import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/shell/AppShell.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import WorkspaceView from '@/components/workspace/WorkspaceView.vue'
+import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
+import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
+import type { UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import AppButton from '@/components/ui/AppButton.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
@@ -29,6 +32,8 @@ const shell = useShellStore()
 const sessions = useUnifiedSessionsStore()
 const app = useAppStore()
 const sidebar = useSidebarStore()
+const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
+const runtime = useUnifiedWorkspaceRuntime(terminalHost, !compatibilityEnabled)
 const configFailed = ref(false)
 const settingsLoaded = ref(false)
 const selectedProject = ref<UnifiedProjectIdentity | null>(null)
@@ -89,8 +94,7 @@ function retain(registration: Promise<() => void>) {
 onMounted(() => {
   if (compatibilityEnabled) return
   void loadPreferences()
-  // No Claude-only environment gate, history scan, startup decision or PTY launch.
-  // Task 11 will configure the unified adapters and the single terminal host.
+  // Runtime bootstrap reads each source independently; no implicit CLI launch.
   retain(onMenuSettings(() => { if (!disposed) openSettings() }))
   retain(onMenuShortcuts(() => { if (!disposed) openSettings('shortcuts') }))
   retain(onConfigFontSize(size => { if (!disposed) app.setFontSize(size) }))
@@ -135,8 +139,19 @@ onUnmounted(() => {
     <InlineNotice v-if="configFailed" kind="warning" :message="t('workspaceConfigFailed')"
       :action-label="t('retry')" @action="loadPreferences" />
     <WorkspaceView v-show="shell.section === 'workspace'" :project="project" :project-title="projectTitle"
-      :active-session="sessions.activeSession" :request-pending="!!shell.pendingRequest"
-      @add-project="request({ kind: 'add-project' })" @new-session-request="request({ kind: 'new-session', project: $event })" />
+      :active-session="sessions.activeSession" :request-pending="!!shell.pendingRequest" :cli-availability="runtime.cliAvailability.value"
+      @add-project="request({ kind: 'add-project' })" @new-session-request="request({ kind: 'new-session', project: $event })">
+      <template #terminal>
+        <InlineNotice v-if="runtime.error.value" kind="warning" :message="t(runtime.error.value)"
+          :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
+        <UnifiedTerminalHost ref="terminalHost" :sessions="runtime.openSessions.value" :active-session-id="sessions.activeSessionId"
+          :visible="shell.section === 'workspace'">
+          <EmptyState :title="t('workspaceWelcome')" :description="t('workspaceWelcomeHint')"
+            :action-label="t(project ? 'newSession' : 'addProject')"
+            @action="project ? request({ kind: 'new-session', project }) : request({ kind: 'add-project' })" />
+        </UnifiedTerminalHost>
+      </template>
+    </WorkspaceView>
     <!-- Task 15 replaces this content-only project landing, never the global shell. -->
     <section v-show="shell.section === 'projects'" class="projects-content" :aria-label="t('projects')">
       <h1>{{ t('projects') }}</h1>
