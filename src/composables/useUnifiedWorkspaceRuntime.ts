@@ -1,6 +1,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { getProjects, openInFileManager } from '@/api/tauri'
+import { openInFileManager } from '@/api/tauri'
+import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useNativeTabsStore, captureNativeAttempt, matchesNativeAttempt } from '@/stores/nativeTabs'
 import { useNativeHistoryStore } from '@/stores/nativeHistory'
@@ -21,6 +22,7 @@ import type { UnifiedCliKind } from '@/types/unifiedSession'
 /** Normal App composition root. Read-only bootstrap is independent per source;
  * only explicitly admitted operations can enter the existing runtime owners. */
 export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | null>, enabled = true) {
+  const app = useAppStore()
   const legacy = useSessionStore()
   const native = useNativeTabsStore()
   const history = useNativeHistoryStore()
@@ -68,6 +70,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     return host.value
   }
   function createNativeTab(input: NativeRuntimeCreateInput) {
+    if (app.isProjectAdmissionBlocked(input.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
     const source = input.sourceContext
     const profile = input.launchConfigId ? profiles.profile(input.launchConfigId) : profiles.selected[input.cli]
     if (!profile) throw new Error('CLI_PROFILE_REQUIRED')
@@ -111,7 +114,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     // Subscribe attention before child TerminalView status consumers mount.
     useAttentionStore().init()
     catalog.configureCreationPreparer(async input => {
+      if (app.isProjectAdmissionBlocked(input.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
       const prepared = await draft.prepareInput(input)
+      if (app.isProjectAdmissionBlocked(input.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
       await workspace.ensureRegistered(prepared.projectPath)
       if (disposed) throw new Error('NEW_SESSION_CANCELLED')
       const profile = prepared.launchConfigId ? profiles.profile(prepared.launchConfigId) : null
@@ -137,9 +142,13 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       return partial
     })
     catalog.configureAdapters([
-      createLegacyClaudeAdapter({ store: legacy, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
+      createLegacyClaudeAdapter({ store: legacy, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
         runtime: {
-          startTab: id => requireHost().startLegacy(id), stopTab: id => requireHost().stopLegacy(id),
+          startTab: id => {
+            const tab = legacy.tabs.get(id)
+            if (!tab || app.isProjectAdmissionBlocked(tab.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
+            return requireHost().startLegacy(id)
+          }, stopTab: id => requireHost().stopLegacy(id),
           restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title) => requireHost().renameLegacy(id, title),
         } }),
       createNativeCliAdapter({ tabs: native, history, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
@@ -161,7 +170,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     await Promise.all([
       settle(() => projects.ensureLoaded()),
       settle(async () => {
-        const rows = await getProjects()
+        await app.loadManagedProjects()
+        const rows = app.cachedProjects
         if (!current()) return
         legacyPaths.value = rows.map(row => row.path)
         const paths = [...new Set([...legacyPaths.value, ...projects.pinnedProjects, ...[...legacy.tabs.values()].map(tab => tab.projectPath)])]

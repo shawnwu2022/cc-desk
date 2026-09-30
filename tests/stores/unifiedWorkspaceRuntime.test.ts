@@ -16,12 +16,14 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { useSessionStore } from '@/stores/session'
 import type { ProjectsState } from '@/types/app'
+import { useAppStore } from '@/stores/app'
+import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useShellStore } from '@/stores/shell'
 
-const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn() }))
+const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getProjectsState: io.getState, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
-vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, registerProject: io.register }))
+vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, registerProject: io.register, removeProject: io.remove }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.writeText }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false }) }))
@@ -201,7 +203,7 @@ describe('Unified production runtime', () => {
     const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: child, SettingsView: true } } }); wrappers.push(w); await flushPromises()
     const profiles = useCliProfilesStore(); profiles.profiles.push({ ...profiles.profiles[0], id: 'custom', name: 'Custom' })
     const draft = useNewSessionDraftStore(); draft.setDefault('codex', 'cx'); profiles.select('codex', 'custom')
-    await w.get('[data-project-quick-action]').trigger('click'); await flushPromises()
+    await w.get('.project-node[aria-label="repo"] [data-project-quick-action]').trigger('click'); await flushPromises()
     ;(document.querySelector('[data-item-id="codex"]') as HTMLButtonElement).click(); await flushPromises()
     const tabs = useNativeTabsStore(); const tab = [...tabs.tabs.values()][0]
     expect(tab).toMatchObject({ cli: 'codex', profileId: 'cx', profileRevision: '7', projectId: 'project', action: { kind: 'new' } })
@@ -389,4 +391,39 @@ it('Runtime_ReportsArchiveAmbiguity_027', async () => {
   const row = useUnifiedSessionsStore().sessions.find(row => row.archived)!
   useShellStore().requestWorkspaceAction({ kind: 'restore-archive', sessionId: row.id }); await flushPromises()
   expect(runtime.error.value).toBe('resumeAmbiguous'); expect(io.restore).not.toHaveBeenCalled()
+})
+
+// 移除等待原生取消注册时，Legacy恢复不能创建或启动新的终端所有者。
+it('Runtime_RemoveBlocksLegacyRestore_028', async () => {
+  io.sessions.mockResolvedValue([{ sessionId: 'legacy-history', name: 'Legacy history', projectPath: '/legacy', lastActiveAt: 10 }])
+  io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'p', hostId: 'h', sourcePathKey: 's', selectedPath: '/legacy', canonicalPath: '/legacy', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
+  const { port } = render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(); const row = catalog.sessions.find(session => session.nativeSessionId === 'legacy-history')!
+  const management = useProjectManagementStore(); management.beginRemove({ projectKey: '/legacy', projectPath: '/legacy' })
+  let release!: (value: unknown) => void
+  io.remove.mockImplementation(() => new Promise(resolve => { release = resolve }))
+  const removing = management.remove(); await flushPromises()
+  expect(useAppStore().isProjectRemoving('/legacy')).toBe(true); expect(io.remove).toHaveBeenCalledOnce()
+  const restoring = catalog.resumeSession({ runtime: 'legacy-claude', cli: 'claude', projectKey: '/legacy', projectPath: '/legacy', adapterSessionId: row.adapterSessionId, nativeSessionId: row.nativeSessionId }).catch(() => undefined)
+  await flushPromises(); release({ revision: '2', projects: [] }); await removing; await restoring
+  expect(port.startLegacy).not.toHaveBeenCalled(); expect(useSessionStore().tabs.size).toBe(0)
+})
+// 较早恢复的历史读取在移除期间或完成后返回，也不能取得新的终端所有权。
+it.each(['during', 'after'])('Runtime_RemoveRevokesDeferredLegacy_%s', async when => {
+  io.sessions.mockResolvedValue([{ sessionId: 'legacy-history', name: 'Legacy history', projectPath: '/legacy', lastActiveAt: 10 }])
+  io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'p', hostId: 'h', sourcePathKey: 's', selectedPath: '/legacy', canonicalPath: '/legacy', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
+  const { port } = render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(); const row = catalog.sessions.find(session => session.nativeSessionId === 'legacy-history')!
+  let finishHistory!: (value: unknown) => void
+  io.sessions.mockImplementation(() => new Promise(resolve => { finishHistory = resolve }))
+  const restoring = catalog.resumeSession({ runtime: 'legacy-claude', cli: 'claude', projectKey: '/legacy', projectPath: '/legacy', adapterSessionId: row.adapterSessionId, nativeSessionId: row.nativeSessionId }).catch(() => undefined)
+  await flushPromises()
+  const management = useProjectManagementStore(); management.beginRemove({ projectKey: '/legacy', projectPath: '/legacy' })
+  let release!: (value: unknown) => void
+  io.remove.mockImplementation(() => new Promise(resolve => { release = resolve }))
+  const removing = management.remove(); await flushPromises()
+  if (when === 'after') { release({ revision: '2', projects: [] }); await removing }
+  finishHistory([{ sessionId: 'legacy-history', name: 'Legacy history', projectPath: '/legacy', lastActiveAt: 10 }]); await restoring
+  if (when === 'during') { release({ revision: '2', projects: [] }); await removing }
+  expect(port.startLegacy).not.toHaveBeenCalled(); expect(useSessionStore().tabs.size).toBe(0)
 })

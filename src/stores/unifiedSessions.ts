@@ -277,6 +277,14 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     initialized.value = true
   }
 
+  /** Explicit project navigation changes selection, never runtime ownership. */
+  function selectProjectContext(projectPath: string): void {
+    if (activeSession.value && normalizePath(activeSession.value.projectPath) === normalizePath(projectPath)) return
+    ++selectionEpoch
+    ++selectionIntentEpoch
+    activeSessionId.value = null
+  }
+
   async function activateSession(id: string): Promise<void> {
     const session = requireSession(id)
     const epoch = ++selectionEpoch
@@ -462,6 +470,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     isPreparingSession,
     initialize,
     refresh,
+    selectProjectContext,
     activateSession,
     createSession,
     resumeSession,

@@ -47,6 +47,8 @@ export interface LegacyClaudeAdapterDeps {
   store: LegacyClaudeStorePort
   runtime: LegacyClaudeRuntimePort
   projectPaths(): string[]
+  /** Freeze the caller's project mutation barrier across history checks. */
+  captureProjectAdmission?(projectPath: string): () => boolean
 }
 
 function activeId(tabId: string): string {
@@ -183,6 +185,8 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     if (input.action && input.action.kind !== 'new') {
       throw new Error('LEGACY_CREATE_ACTION_UNSUPPORTED')
     }
+    const projectAdmission = deps.captureProjectAdmission?.(input.projectPath) ?? (() => true)
+    if (!projectAdmission()) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
     const tabId = store.createTab(input.projectPath, { name: input.title })
     store.setActiveTab(tabId)
     try {
@@ -195,14 +199,16 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
   }
 
   function resumeSession(input: ResumeUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
+    const projectAdmission = deps.captureProjectAdmission?.(input.projectPath) ?? (() => true)
+    const canOwn = () => canAdmit() && projectAdmission()
     const key = JSON.stringify([normalizeProjectIdentity(input.projectPath), input.nativeSessionId ?? input.adapterSessionId])
     const ownResult = (promise: Promise<UnifiedSession>) => promise.then(value => {
-      if (!canAdmit()) throw new Error('RESTORE_CANCELLED')
+      if (!canOwn()) throw new Error('RESTORE_CANCELLED')
       return value
     })
     const existing = resumes.get(key)
-    if (existing) { existing.owners.add(canAdmit); return ownResult(existing.promise) }
-    const owners = new Set([canAdmit])
+    if (existing) { existing.owners.add(canOwn); return ownResult(existing.promise) }
+    const owners = new Set([canOwn])
     const task = resume(input, () => [...owners].some(isCurrent => isCurrent()))
     resumes.set(key, { promise: task, owners })
     void task.then(() => resumes.delete(key), () => resumes.delete(key))
@@ -219,6 +225,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
   async function verifyMissingSession(input: ResumeUnifiedSessionInput) { await verifyHistory(input, true) }
   async function resume(input: ResumeUnifiedSessionInput, canAdmit: () => boolean): Promise<UnifiedSession> {
     requireClaude(input)
+    if (!canAdmit()) throw new Error('RESTORE_CANCELLED')
     const nativeSessionId = input.nativeSessionId ?? input.adapterSessionId
     const existing = [...store.tabs.values()].find(tab =>
       isLegacyClaudeTab(tab)

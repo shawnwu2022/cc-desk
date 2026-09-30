@@ -321,13 +321,13 @@ export const logMessage = (level: 'error' | 'warn' | 'info' | 'debug', message: 
 // Dialog (Tauri dialog plugin)
 // ============================================
 
-export const selectDirectory = async (): Promise<{ path: string } | null> => {
+export const selectDirectory = async (options: { register?: boolean } = {}): Promise<{ path: string } | null> => {
   const result = await open({
     directory: true,
     multiple: false,
     title: 'Select Project Directory'
   } as any);
-  if (result && typeof result === 'string' && await registerSelectedDirectory(result)) {
+  if (result && typeof result === 'string' && (options.register === false || await registerSelectedDirectory(result))) {
     return { path: result };
   }
   return null;

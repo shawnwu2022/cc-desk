@@ -38,7 +38,8 @@ Rules:
 - Task 10: complete at `8683f6b9e56c2375a2520508f104754c8fd4553c`
 - Task 11: complete at `b1309bd294f153e99449b0d3413542ba923a294e`
 - Task 12: complete at `72644819200a298f7b6689dfa512289036d37177`
-- Next task: Task 13 — unified resume/history search
+- Task 13: complete at `181c6f51c509468e3f6c3f2a844131dcd3975e65`
+- Next task: Task 14 — project management
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -388,3 +389,28 @@ Rules:
 - Review R3 repaired Native/Legacy shared admission ownership: individual caller guards preserve fresh reconfirmation, canceled callers cannot authorize or claim success, all-canceled work cannot admit late
 - Final exact-source gate:34 required tests,289 affected tests across19 files, typecheck, diff check and20-file manifest pass. Independent scoped spec/quality approval reran original3 reproductions and6 focused Native/Legacy/App regressions successfully
 - Earlier29-test required count superseded. No actual CLI/account/platform/scaling/D20 acceptance, full suite, CI/PR/package/release; atomic publication pending readback
+
+### Verified Task 13 checkpoint
+
+- Remote commit `181c6f51c509468e3f6c3f2a844131dcd3975e65`; exact staged/fetched tree and local/remote SHA match; working tree clean before this readback
+-34 required tests,289 affected tests, typecheck, manifest and independent approval; all3 original review reproductions and6 focused regressions independently pass
+- No CI/PR/package/release or actual CLI/platform/D20 acceptance; next Task14
+
+### Task 14 preflight rulings
+
+- Ruling: reuse the existing trusted-main-window profile-independent Native registration contract. The named helper validates profile context when supplied/needed for launch; it does not invent a profile-bound registration API or create configuration. Add registers once and projects that path into unified management/Legacy discovery presentation; no nonexistent Legacy add command is introduced. Why: filesystem registration and launch/resource authorization are separate existing contracts. Cost if wrong: a project without any CLI configuration is manageable but needs explicit launch preparation later.
+- Ruling: Hide retains Native registration; Remove unregisters Native and hides rediscovered Legacy list entries while preserving CLI files and archive/display/preference metadata for re-add. Clear obsolete pin/list membership via existing commands when safe; no backend purge command. Explain removal as removing from CC Desk list rather than erasing every saved preference. Block removal while any open/live/unknown/preparing session owns the project; do not implicitly stop/close. Partial/unknown multi-store writes require safe feedback/read-only reconciliation, never automatic mutation replay. Cost if wrong: re-added projects retain prior display/preferences, and users must explicitly close sessions before removal.
+- Ruling refinement: never register Legacy-only projects merely to Hide or reinterpret old hidden/unregistered rows as permanently removed. Preserve hiddenProjects semantics and provide explicit Show hidden access; Remove suppresses ordinary list visibility and additionally unregisters Native when present. Why: no existing removed-vs-hidden persistence marker exists, and old hidden data must stay recoverable. Cost if wrong: Legacy-only Hide and Remove share persisted visibility semantics; explicitly showing hidden/history or re-adding can rediscover removed entries.
+
+## Task 14 — Unified project management
+
+- Normal Projects landing replaced by compact merged discovery/registration/catalog list with search, pinned-first recent/name sort,50-project coverage, active counts and long-path middle ellipsis
+- Real add/open/new-session/pin/rename/open-folder/hide/show/remove actions reuse shared controls and canonical writers. Add uses one normalized registration/adoption flow; no second visible registration or new backend/schema/CLI installation
+- Removal explicitly confirms ordinary-list removal, preserves files/history/display/archive/preferences, unpins/unregisters when applicable, and blocks any authoritative Native/Legacy/preparing ownership. Show hidden/re-add preserves recovery
+- Project-open invalidates old active session context without stopping processes; hidden archived-only shells cannot reappear in ordinary tree. Fixed menus escape scrolling-list clipping
+- Review R1: visibility writer rechecks ownership after initial read and queue waits, with per-path barrier spanning mutation; no hide after a late owner appears
+- Review R2: publication versions fence delayed startup/visibility reads against newer acknowledged hidden state; subsequent writes preserve prior successful hides
+- Review R3: Legacy restore freezes per-caller admission/barrier ownership across historical awaits, rejects during/after project mutation, and cannot create/start an orphaned tab. Independent cancellation/coalescing remains intact
+- Final exact gate28 tests+typecheck; final repair-affected167 tests across9 files. Earlier185-test14-file gate is pre-repair historical evidence; affected subset was rerun. Diff/manifest/reverse-apply checks pass
+- Independent spec/quality approval resolved all3 findings; reviewer reran original3 reproductions,10 targeted repair/ownership/cancellation checks and4 Legacy/coalescing checks successfully
+- No actual CLI/backend/platform/scaling/D20 certification, full suite, CI/PR/package/release; atomic publication pending readback

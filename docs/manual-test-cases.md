@@ -2384,3 +2384,14 @@
 - 前置：授权目标机器、真实 Claude Code/Codex CLI 与两种来源历史；账户/实际 CLI 的 D20 检查需单独授权。当前自动化仅验证宿主协议边界，不代表此项通过。
 - 操作：从项目＋、历史行和高级三种恢复模式进入；以 200 字符标题/80 字符项目名、中英文、双主题搜索；在当前/全部项目、CLI、时间筛选间切换并用键盘选择/确认/取消。分别执行真实 CLI 历史恢复、按 ID 恢复、自带 picker（当前/全部范围）。
 - 预期：窗口内容可滚动，按钮/筛选不引入页面横向滚动；失活后焦点陷阱关闭；同源已打开会话只激活一个终端，输出/输入身份与滚动内容连续；CLI 自身负责 picker 和实际 ID 可用性，未知启动不自动重试。实际 Native/Legacy CLI 恢复、账号可用性及系统缩放结果必须另行记录。
+
+
+## Unified workspace Task 14: project management platform acceptance (not yet performed)
+
+- Goal: verify compact project management and runtime continuity on Windows 1024×640 at 100%, 125%, and 150% scaling, plus macOS/Linux functional smoke
+- Preconditions: 50 real project folders including an 80-character display name and long Windows path, both CLIs/configurations when available, one unavailable CLI scenario, running/stopped/unknown open terminals
+- Steps: add a folder once and re-add a normalized path variant; search/sort; open another project; open the folder in the OS file manager; pin/rename; hide/show a project with no open terminal; open the last row menu near the bottom edge; navigate away with a menu or rename/remove dialog open
+- Expected: one adopted registration and row; fixed activity/session/menu columns and middle path ellipsis without horizontal page scrolling; shared keyboard/focus behavior; unavailable CLI does not block other CLI/read-only management; navigation preserves every existing terminal process, output and exact ownership
+- Steps: attempt removal with any open/preparing terminal, then explicitly finish/close sessions and confirm removal; show hidden projects and re-add; simulate an uncertain write or revision conflict
+- Expected: open ownership blocks removal without stopping/closing a process; confirmed removal suppresses the ordinary list and unregisters where present, without deleting local files or CLI transcripts; archive/name/preferences survive re-add; unknown/conflict results reload and show safe partial-state feedback without automatically repeating the mutation
+- Limit: Legacy-only Remove persists the same visibility suppression as Hide; Show hidden/history or re-add remains available. This is intentional compatibility behavior without a new persistence marker

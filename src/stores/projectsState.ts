@@ -127,11 +127,11 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
   }
 
   function pinProject(path: string): Promise<ProjectsState> {
-    return mutate(() => projectsApi.pinProject(path))
+    return mutate(() => projectsApi.pinProject(path), true)
   }
 
   function unpinProject(path: string): Promise<ProjectsState> {
-    return mutate(() => projectsApi.unpinProject(path))
+    return mutate(() => projectsApi.unpinProject(path), true)
   }
 
   function setProjectDisplayName(path: string, alias: string): Promise<ProjectsState> {
@@ -141,7 +141,7 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
         validation.error === 'tooLong' ? 'alias too long' : 'alias invalid characters',
       ))
     }
-    return mutate(() => projectsApi.setDisplayName(path, alias))
+    return mutate(() => projectsApi.setDisplayName(path, alias), true)
   }
 
   function archiveSession(projectPath: string, sessionId: string): Promise<ProjectsState> {

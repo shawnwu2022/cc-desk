@@ -11,7 +11,9 @@ import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
 import type { UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
-import AppButton from '@/components/ui/AppButton.vue'
+import ProjectsView from '@/components/projects/ProjectsView.vue'
+import ProjectManagementDialogs from '@/components/projects/ProjectManagementDialogs.vue'
+import { useProjectManagementStore } from '@/stores/projectManagement'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import { useShellStore, isCompatibilityEnabled, type WorkspaceRequest } from '@/stores/shell'
@@ -41,22 +43,28 @@ watch(() => [shell.section, newSessionDraft.chooserVisible], ([section]) => {
 }, { flush: 'sync' })
 const app = useAppStore()
 const sidebar = useSidebarStore()
+const management = useProjectManagementStore()
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
 const runtime = useUnifiedWorkspaceRuntime(terminalHost, !compatibilityEnabled)
 const configFailed = ref(false)
 const settingsLoaded = ref(false)
+let navigationVersion = 0
 const selectedProject = ref<UnifiedProjectIdentity | null>(null)
 const project = computed<UnifiedProjectIdentity | null>(() => {
   const session = sessions.activeSession
   if (session) return { projectKey: session.projectKey, projectPath: session.projectPath }
-  const selected = selectedProject.value ?? sessions.projectGroups[0]
+  const selected = selectedProject.value ?? management.visibleGroups[0]
   return selected ? { projectKey: selected.projectKey, projectPath: selected.projectPath } : null
 })
+watch(() => management.groups, groups => {
+  if (selectedProject.value && !sessions.activeSession && !groups.some(group => !group.hidden && sameProjectPath(group.projectPath, selectedProject.value!.projectPath))) selectedProject.value = null
+}, { deep: true })
+const visibleArchiveSessions = computed(() => sessions.sessions.filter(row => !app.isHidden(row.projectPath) || management.openCount(row.projectPath) > 0))
 const projectTitle = computed(() => project.value
-  ? sessions.projectGroups.find(group => sameProjectPath(group.projectPath, project.value!.projectPath))?.name
+  ? management.groups.find(group => sameProjectPath(group.projectPath, project.value!.projectPath))?.name
     ?? projectBasename(project.value.projectPath) : '')
 const windowTitle = computed(() => [projectTitle.value, sessions.activeSession?.title].filter(Boolean).join(' / ') || 'CC Desk')
-watch(() => shell.section, section => { if (section === 'settings') settingsLoaded.value = true }, { immediate: true })
+watch(() => shell.section, section => { ++navigationVersion; management.closeDialog(); if (section === 'settings') settingsLoaded.value = true }, { immediate: true })
 watch(() => app.theme, theme => { if (!compatibilityEnabled) applyThemeToDom(theme) }, { immediate: true })
 // Old settings buttons may still emit this presentation intent. Do not mount
 // SettingsOverlay or let its boolean become another routing source.
@@ -71,11 +79,25 @@ function request(action: WorkspaceRequest) {
   }
   shell.requestWorkspaceAction(action)
   emit('workspace-request', action)
+  if (action.kind === 'add-project' || action.kind === 'open-project' || action.kind === 'project-action') {
+    const sequence = shell.requestSequence
+    const navigation = navigationVersion
+    void (async () => {
+      if (action.kind === 'project-action') await management.action(action.request)
+      else {
+        const identity = await management.add(action.kind === 'open-project' ? action.projectPath : undefined)
+        // A later navigation/request owns selection; an older add may persist but cannot steal it.
+        if (identity && shell.requestSequence === sequence && navigationVersion === navigation) selectProject(identity)
+      }
+      shell.clearWorkspaceRequest(sequence)
+    })()
+  }
 }
 function chooseNewSession(intent: NonNullable<NewSessionRequest['intent']>) {
   if (shell.section === 'workspace' && newSessionDraft.project) request({ kind: 'new-session', project: { ...newSessionDraft.project, intent } })
 }
 function selectProject(identity: UnifiedProjectIdentity) {
+  sessions.selectProjectContext(identity.projectPath)
   selectedProject.value = { projectKey: identity.projectKey, projectPath: identity.projectPath }
   shell.navigate('workspace')
 }
@@ -111,6 +133,7 @@ function retain(registration: Promise<() => void>) {
 onMounted(() => {
   if (compatibilityEnabled) return
   void loadPreferences()
+  void management.refresh()
   // Runtime bootstrap reads each source independently; no implicit CLI launch.
   retain(onMenuSettings(() => { if (!disposed) openSettings() }))
   retain(onMenuShortcuts(() => { if (!disposed) openSettings('shortcuts') }))
@@ -140,7 +163,7 @@ onUnmounted(() => {
   <LegacyCompatibilityApp v-if="compatibilityEnabled" />
   <AppShell v-else :title="windowTitle">
     <template #sidebar>
-      <SidebarPanel :active="shell.section === 'workspace' && shell.sidebarVisible" :project-groups="sessions.projectGroups" :archived-sessions="sessions.sessions"
+      <SidebarPanel :active="shell.section === 'workspace' && shell.sidebarVisible" :project-groups="management.visibleGroups" :archived-sessions="visibleArchiveSessions"
         :selected-id="sessions.activeSessionId" :current-project-path="project?.projectPath" :loading="sessions.loading"
         @close="closeSessions" @add-project="request({ kind: 'add-project' })"
         @refresh="request({ kind: 'refresh' })" @new-session-request="request({ kind: 'new-session', project: $event })"
@@ -177,25 +200,15 @@ onUnmounted(() => {
     <NewSessionDialog :active="shell.section === 'workspace'" @create="request({ kind: 'create-session', input: $event })"
       @restore="request({ kind: 'restore-session', ...$event })" />
     <ResumeSessionDialog :active="shell.section === 'workspace'" />
-    <!-- Task 15 replaces this content-only project landing, never the global shell. -->
-    <section v-show="shell.section === 'projects'" class="projects-content" :aria-label="t('projects')">
-      <h1>{{ t('projects') }}</h1>
-      <AppButton size="compact" @click="request({ kind: 'add-project' })">{{ t('addProject') }}</AppButton>
-      <InlineNotice v-if="shell.pendingRequest" :message="t('workspaceActionPending')" />
-      <EmptyState v-if="!sessions.projectGroups.length" :title="t('noProjectsYet')" :description="t('workspaceWelcomeHint')"
-        :action-label="t('addProject')" @action="request({ kind: 'add-project' })" />
-      <AppButton v-for="group in sessions.projectGroups" :key="group.projectKey" class="project-entry"
-        @click="selectProject(group)">{{ group.name }}</AppButton>
-    </section>
+    <InlineNotice v-if="management.error" kind="warning" :message="t(management.error)" :action-label="t('retry')" @action="management.refresh" />
+    <ProjectsView v-show="shell.section === 'projects'" :active="shell.section === 'projects'"
+      @add-project="request({ kind: 'add-project' })" @open="selectProject"
+      @new-session-request="selectProject($event); request({ kind: 'new-session', project: $event })"
+      @project-action="request({ kind: 'project-action', request: $event })" />
+    <ProjectManagementDialogs />
     <SettingsView v-if="settingsLoaded" v-show="shell.section === 'settings'" @close="shell.navigate('workspace')" />
     <template #context>
       <InlineNotice :message="t('contextResourcesHint')" />
     </template>
   </AppShell>
 </template>
-
-<style scoped>
-.projects-content { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 20px; }
-.projects-content h1 { font-size: 18px; color: var(--text-primary); }
-.project-entry { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-</style>

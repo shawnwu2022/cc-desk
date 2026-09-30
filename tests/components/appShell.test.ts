@@ -30,12 +30,14 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({
   isMaximized: async () => false, onResized: async () => host.cleanup,
 }) }))
 vi.mock('@/api/tauri', async (original) => ({ ...await original<object>(),
+  getProjects: async () => [], getProjectsState: async () => ({ pinnedProjects: [], archivedSessions: {} }),
   getAppConfig: host.getConfig, updateAppConfig: host.updateConfig, runChecks: host.runChecks,
   onMenuSettings: async (callback: () => void) => { host.callbacks.set('settings', callback); return host.cleanup },
   onMenuShortcuts: async (callback: () => void) => { host.callbacks.set('shortcuts', callback); return host.cleanup },
   onConfigFontSize: async (callback: (size: number) => void) => { host.callbacks.set('font', callback); return host.cleanup },
   onOpenDirectory: async (callback: (path: string) => void) => { host.callbacks.set('directory', callback); return host.cleanup },
 }))
+vi.mock('@/api/workspace', () => ({ listRegisteredProjects: async () => ({ revision: '0', projects: [] }), registerProject: async (path: string) => ({ revision: '1', projectId: 'added', projects: [{ projectId: 'added', hostId: 'host', sourcePathKey: 'source', selectedPath: path, canonicalPath: null, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }) }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
 // Shell tests own presentation-only fixtures; production bootstrap/dispatch has
 // behavioral integration coverage in unifiedWorkspaceRuntime.test.ts.
@@ -313,7 +315,7 @@ describe('Unified application shell', () => {
       await flushPromises()
       expect(document.querySelector('[role="dialog"]')).toBeNull()
       const destinationControl = destination === 'projects-store'
-        ? wrapper.get('.projects-content button').element : wrapper.get('[data-settings-view] button').element
+        ? wrapper.get('[data-add-managed-project]').element : wrapper.get('[data-settings-view] button').element
       ;(destinationControl as HTMLElement).focus()
       expect(document.activeElement).toBe(destinationControl)
       useShellStore().navigate('workspace'); await nextTick()

@@ -13,6 +13,9 @@ import {
 } from '@/api/tauri'
 import { normalizeTerminalThemeId } from '@/config/terminalThemes'
 import { normalizePath } from '@/utils/path'
+import { useWorkspaceStore } from '@/stores/workspace'
+import { useCliWorkspaceStore } from '@/stores/cliWorkspace'
+import type { UnifiedProjectIdentity } from '@/types/unifiedSession'
 import { applyThemeToDom } from '@/utils/theme'
 import i18n from '@/i18n'
 
@@ -92,6 +95,107 @@ export const useAppStore = defineStore('app', () => {
   // 然 setCwdLocal 若与 persist 交错可能短暂错乱；串行化保证读-写原子）。
   let lastOpenedOpLock: Promise<void> = Promise.resolve()
 
+  const managedProjectsStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const removingProjectPaths = ref(new Set<string>())
+  const visibilityChangingPaths = ref(new Set<string>())
+  const projectAdmissionVersions = new Map<string, number>()
+  let visibilityVersion = 0
+  let configRead: ReturnType<typeof getAppConfig> | null = null
+  function readAppConfig(): ReturnType<typeof getAppConfig> {
+    if (configRead) return configRead
+    configRead = Promise.resolve().then(getAppConfig).finally(() => { configRead = null })
+    return configRead
+  }
+  let visibilityFailed = false
+  let visibilityLoaded = false
+  let visibilityLoad: Promise<void> | null = null
+  let managedLoad: Promise<void> | null = null
+  const addTails = new Map<string, Promise<UnifiedProjectIdentity>>()
+
+  /** Visibility-only read: does not migrate settings, create profiles or launch a CLI. */
+  function loadProjectVisibility(force = false): Promise<void> {
+    if (!force && (visibilityLoaded || loadStatus.value === 'loaded' && !visibilityFailed)) return Promise.resolve()
+    if (visibilityLoad) return visibilityLoad
+    const version = visibilityVersion
+    visibilityLoad = readAppConfig().then(config => {
+      if (version !== visibilityVersion) return
+      hiddenProjects.value = new Set(config.hiddenProjects ?? [])
+      visibilityLoaded = true
+      visibilityFailed = false
+      ++visibilityVersion
+    }).catch(failure => { if (version === visibilityVersion) { visibilityFailed = true; visibilityLoaded = false }; throw failure }).finally(() => { visibilityLoad = null })
+    return visibilityLoad
+  }
+  function loadManagedProjects(): Promise<void> {
+    if (managedLoad) return managedLoad
+    managedProjectsStatus.value = 'loading'
+    managedLoad = getProjects().then(rows => {
+      // Preserve explicitly added empty projects while history discovery is in flight.
+      const existing = [...cachedProjects.value]
+      cachedProjects.value = rows
+      for (const row of existing) if (!cachedProjects.value.some(project => normalizePath(project.path) === normalizePath(row.path))) cachedProjects.value.push(row)
+      managedProjectsStatus.value = 'ready'
+    }).catch(failure => { managedProjectsStatus.value = 'error'; throw failure })
+      .finally(() => { managedLoad = null })
+    return managedLoad
+  }
+  function addManagedProject(path: string): Promise<UnifiedProjectIdentity> {
+    const key = normalizePath(path)
+    if (isProjectAdmissionBlocked(path)) return Promise.reject(new Error('PROJECT_REMOVAL_IN_PROGRESS'))
+    const pending = addTails.get(key)
+    if (pending) return pending
+    const operation = (async () => {
+      await loadProjectVisibility()
+      const registry = useWorkspaceStore()
+      const id = await useCliWorkspaceStore().ensureNativeProjectRegistration({ path })
+      const registered = registry.projects.find(project => project.projectId === id)
+      if (!registered) throw new Error('PROJECT_REGISTRATION_FAILED')
+      await setManagedHidden(registered.selectedPath, false)
+      ensureProjectInList(registered.selectedPath)
+      return { projectKey: normalizePath(registered.selectedPath), projectPath: registered.selectedPath }
+    })()
+    addTails.set(key, operation)
+    void operation.finally(() => { if (addTails.get(key) === operation) addTails.delete(key) }).catch(() => undefined)
+    return operation
+  }
+  async function setManagedHidden(path: string, hidden: boolean, admit: () => void = () => {}): Promise<void> {
+    await loadProjectVisibility()
+    try { await setHidden(path, hidden, admit) }
+    catch (failure) {
+      if (failure instanceof Error && failure.message === 'PROJECT_HAS_OPEN_SESSIONS') throw failure
+      // Unknown acknowledgements may already have committed. Reconcile, never replay.
+      await loadProjectVisibility(true).catch(() => { visibilityLoaded = false })
+      throw failure
+    }
+  }
+  function isProjectRemoving(path: string): boolean { return removingProjectPaths.value.has(normalizePath(path)) }
+  function isProjectAdmissionBlocked(path: string): boolean {
+    const key = normalizePath(path)
+    return removingProjectPaths.value.has(key) || visibilityChangingPaths.value.has(key)
+  }
+  /** Every caller freezes its own barrier version, preserving restore cancellation. */
+  function captureProjectAdmission(path: string): () => boolean {
+    const key = normalizePath(path)
+    const version = projectAdmissionVersions.get(key) ?? 0
+    const allowed = !isProjectAdmissionBlocked(path)
+    return () => allowed && version === (projectAdmissionVersions.get(key) ?? 0) && !isProjectAdmissionBlocked(path)
+  }
+  function markProjectVisibilityChanging(path: string, changing: boolean) {
+    const key = normalizePath(path)
+    const next = new Set(visibilityChangingPaths.value)
+    if (changing) { next.add(key); projectAdmissionVersions.set(key, (projectAdmissionVersions.get(key) ?? 0) + 1) }
+    else next.delete(key)
+    visibilityChangingPaths.value = next
+  }
+  function markProjectRemoving(path: string, removing: boolean) {
+    const next = new Set(removingProjectPaths.value)
+    if (removing) {
+      const key = normalizePath(path)
+      next.add(key); projectAdmissionVersions.set(key, (projectAdmissionVersions.get(key) ?? 0) + 1)
+    } else next.delete(normalizePath(path))
+    removingProjectPaths.value = next
+  }
+
   const currentProject = computed(() => {
     if (!cwd.value) return null
     const parts = cwd.value.replace(/\\/g, '/').split('/')
@@ -102,8 +206,9 @@ export const useAppStore = defineStore('app', () => {
 
   async function loadAppConfig() {
     loadStatus.value = 'loading'
+    const version = visibilityVersion
     try {
-      const config = await getAppConfig()
+      const config = await readAppConfig()
       theme.value = config.theme || 'light'
       fontSize.value = config.fontSize || 12
       webglRenderer.value = config.webglRenderer ?? false
@@ -141,7 +246,13 @@ export const useAppStore = defineStore('app', () => {
 
       // 启动状态源：读 lastOpenedProject + hiddenProjects（v5-T3）
       lastOpenedProject.value = config.lastOpenedProject ?? ''
-      hiddenProjects.value = new Set(config.hiddenProjects ?? [])
+      // A newer visibility read/write owns publication, even while startup migration awaits.
+      if (version === visibilityVersion) {
+        hiddenProjects.value = new Set(config.hiddenProjects ?? [])
+        visibilityLoaded = true
+        visibilityFailed = false
+        ++visibilityVersion
+      }
 
       loadStatus.value = 'loaded'
     } catch (err) {
@@ -274,13 +385,14 @@ export const useAppStore = defineStore('app', () => {
    * - 幂等：状态未变则不持久化。
    * - persist-first：成功后才改本地；失败抛错，hiddenProjects 不变。
    */
-  async function setHidden(path: string, hidden: boolean): Promise<void> {
+  async function setHidden(path: string, hidden: boolean, admit: () => void = () => {}): Promise<void> {
     // cwd 保护：隐藏当前 cwd 破坏「隐藏项目不能成 cwd」不变量，直接拒绝（不抛错以兼容 UI 幂等调用，
     // 管理页按钮已 disabled，此处为 domain 层兜底防绕过）。隐藏=false（取消隐藏）不受限。
     if (hidden && cwd.value && normalizePath(path) === normalizePath(cwd.value)) {
       return
     }
     return withHiddenLock(async () => {
+      if (hidden && cwd.value && normalizePath(path) === normalizePath(cwd.value)) return
       const n = normalizePath(path)
       const next = new Set<string>()
       let existed = false
@@ -291,9 +403,12 @@ export const useAppStore = defineStore('app', () => {
       if (hidden) next.add(path)
       // 幂等：状态未变则跳过持久化
       if (hidden === existed) return
+      // Admit at the actual serialized write boundary, after every earlier await.
+      admit()
       // persist-first：失败抛错，本地不变
       await updateAppConfig({ hiddenProjects: [...next] })
       hiddenProjects.value = next
+      ++visibilityVersion
     })
   }
 
@@ -482,6 +597,7 @@ export const useAppStore = defineStore('app', () => {
     checkResults,
     checkFailed,
     failedChecks,
+    managedProjectsStatus, loadManagedProjects, loadProjectVisibility, addManagedProject, setManagedHidden, isProjectRemoving, markProjectRemoving, isProjectAdmissionBlocked, captureProjectAdmission, markProjectVisibilityChanging,
     cachedProjects,
     cachedRecentSessions,
     cacheLoaded,

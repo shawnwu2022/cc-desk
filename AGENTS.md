@@ -127,6 +127,15 @@ UnifiedSession catalog（Legacy/Native adapters）→ UnifiedProjectGroup[] → 
 - `projects.json` pin/archive/displayName/delete 增量写继续通过独立 `projects.json.lock` 跨进程锁、增量 apply 和原子返回状态；统一项目状态由 `projectsState` store 读取。Native workspace 保持自己的 revision/CAS 和 authenticated document bridge。
 - 组件 gate：`npm test -- tests/components/projectSessionTree.test.ts tests/sidebarKeyboardHandlers.test.ts && npm run typecheck`。真实 Windows 1024×640、100%/125%/150% 缩放和渲染可访问性仍是最终平台门禁。
 
+### 统一项目管理
+
+- normal App 的 Projects 页使用 `ProjectsView` / `ProjectRow` 紧凑列表；`projectManagement` 合并真实注册、Legacy discovery、统一会话与 canonical `projectsState` 元数据。空项目也进入同一会话树，不启动 CLI。
+- 添加目录使用不预注册的选择器，再经 `ensureNativeProjectRegistration` → 已有 `workspace.ensureRegistered` 采用规范化路径身份。注册仍遵循 trusted-main-window 的现有 profile-independent 契约；传入启动配置身份时才检查 CLI/修订绑定，不创建配置或使用另一 CLI 的配置。
+- 隐藏只更新已有配置可见性集合，不注册 Legacy-only 项目。移除在明确确认后隐藏常规列表并取消已有 Native 注册、清理 pin；归档、显示名、启动偏好、CLI history 和项目文件保留，可在“显示隐藏项目”中找回或重新添加。Legacy-only 移除与隐藏具有同一持久化可见性，不能宣称永久忘记。
+- 任何打开（包括 stopped、unknown 和未提交）/preparing 终端都会阻止隐藏或移除；进入变更时重新检查真实 owning stores。隐藏/移除期间按项目阻止新建与两种 runtime 的恢复 admission；Legacy恢复逐调用冻结屏障版本并在历史读取后检查，屏障结束也不能重新放行旧请求。隐藏在实际串行配置写入边界重新检查所有权，不隐式 close/stop。切换项目仅切换选择，不改变进程所有权。
+- 配置可见性读取、启动 hydration 和写入按发布版本保护，较晚启动迁移不能覆盖新的确认写入。project mutation 冲突/未知回执仅重读，不自动重放或补偿；多存储变更可能部分完成，安全提示区分重新加载成功与无法重新加载。
+- Task 14 gate：`npm test -- tests/components/projectsView.test.ts tests/stores/projectRegistrationFlow.test.ts tests/stores/nativeProjectRegistration.test.ts && npm run typecheck`。真实 CLI 和 Windows 平台验收仍独立未完成。
+
 ### 性能边界
 
 - `get_home_data` 单次扫描 `~/.claude/projects`，同时生成项目列表与真实路径映射；近期会话直接复用该映射的目录列表，`get_home_data` / `get_sessions` 的同步文件 IO 统一放入 `spawn_blocking`。

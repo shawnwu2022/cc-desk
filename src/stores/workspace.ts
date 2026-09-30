@@ -4,7 +4,7 @@ import type { ProjectionResult } from '@/types/nativeProjection'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { listRegisteredProjects, registerProject, patchProject, removeProject } from '@/api/workspace'
-import { sameProjectPath } from '@/utils/path'
+import { normalizePath, sameProjectPath } from '@/utils/path'
 import { parseU64 } from '@/utils/nativeIdentity'
 import type { SafeError } from '@/types/cli'
 import type { ProfileOverride } from '@/types/profile'
@@ -118,7 +118,16 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
 
   function mutate(operation: () => Promise<ProjectList>): Promise<ProjectList> {
     homeOwner = {}
-    const next = mutationTail.then(() => execute(operation))
+    const next = mutationTail.then(async () => {
+      try { return await execute(operation) }
+      catch (failure) {
+        const code = failure && typeof failure === 'object' && 'code' in failure ? failure.code : null
+        if (code === 'REVISION_CONFLICT' || code === 'COMMIT_STATE_UNKNOWN') {
+          await execute(listRegisteredProjects).catch(() => undefined)
+        }
+        throw failure
+      }
+    })
     mutationTail = next.then(() => undefined, () => undefined)
     return next
   }
@@ -138,7 +147,8 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
   const registrationTails = new Map<string, Promise<string>>()
   /** Explicit-create prerequisite, never called by bootstrap or history reads. */
   function ensureRegistered(selectedPath: string): Promise<string> {
-    const existing = registrationTails.get(selectedPath)
+    const key = normalizePath(selectedPath)
+    const existing = registrationTails.get(key)
     if (existing) return existing
     const operation = (async () => {
       if (status.value !== 'loaded') await load()
@@ -148,8 +158,8 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
       try { return await register(selectedPath) }
       catch { await load().catch(() => undefined); throw new Error('PROJECT_REGISTRATION_FAILED') }
     })()
-    registrationTails.set(selectedPath, operation)
-    void operation.finally(() => { if (registrationTails.get(selectedPath) === operation) registrationTails.delete(selectedPath) }).catch(() => undefined)
+    registrationTails.set(key, operation)
+    void operation.finally(() => { if (registrationTails.get(key) === operation) registrationTails.delete(key) }).catch(() => undefined)
     return operation
   }
 
