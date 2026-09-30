@@ -1,5 +1,8 @@
 import type {
   SessionCatalogIdentity,
+  SessionMenuAction,
+  SessionMenuActionDefinition,
+  SessionMenuActionVisibility,
   SessionPrimaryAction,
   SessionVisualState,
   UnifiedSession,
@@ -65,4 +68,41 @@ export function selectSessionPrimaryAction(session: UnifiedSession): SessionPrim
     case 'stopped':
       return session.resumable ? 'resume' : null
   }
+}
+
+interface MenuActionRule extends SessionMenuActionDefinition {
+  visible: (session: UnifiedSession) => boolean
+}
+const notArchived = (session: UnifiedSession) => !session.archived
+const isState = (...states: UnifiedSession['processState'][]) =>
+  (session: UnifiedSession) => !session.archived && states.includes(session.processState)
+
+/** Both menu entry points consume this one allowlisted action model. */
+export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
+  { id: 'rename', labelKey: 'sessionActionRename', visible: () => true },
+  { id: 'cancel-start', labelKey: 'sessionActionCancelStart', danger: true, visible: isState('starting') },
+  { id: 'stop', labelKey: 'sessionActionStop', danger: true, visible: isState('running') },
+  { id: 'confirm-status', labelKey: 'sessionActionConfirmStatus', visible: isState('unknown') },
+  { id: 'resume', labelKey: 'sessionActionResume', visible: (session) => isState('stopped')(session) && session.resumable },
+  { id: 'retry', labelKey: 'sessionActionRetry', visible: isState('failed') },
+  { id: 'restart', labelKey: 'sessionActionRestart', danger: true, visible: isState('running', 'stopped', 'failed') },
+  { id: 'close', labelKey: 'sessionActionClose', danger: true, visible: notArchived },
+  { id: 'archive', labelKey: 'sessionActionArchive', danger: true, visible: isState('running', 'stopped', 'failed') },
+  { id: 'restore-archive', labelKey: 'sessionActionRestoreArchive', visible: (session) => session.archived },
+  { id: 'copy-session-id', labelKey: 'sessionActionCopyId', visible: () => true },
+  { id: 'open-project-directory', labelKey: 'sessionActionOpenProject', visible: () => true },
+  { id: 'view-diagnostics', labelKey: 'sessionActionDiagnostics', visible: () => true },
+]
+export function sessionActionLabelKey(action: SessionMenuAction | SessionPrimaryAction, session: UnifiedSession): string {
+  if (action === 'save-rename') return 'sessionActionSaveRename'
+  if (action === 'archive' && session.processState === 'running') return 'sessionActionStopAndArchive'
+  return SESSION_MENU_ACTION_DEFINITIONS.find((definition) => definition.id === action)!.labelKey
+}
+export function selectSessionMenuActions(session: UnifiedSession, visibility: SessionMenuActionVisibility = {}): SessionMenuActionDefinition[] {
+  return SESSION_MENU_ACTION_DEFINITIONS
+    .filter((definition) => definition.visible(session) && visibility[definition.id] !== false)
+    .map(({ id, danger }) => ({ id, labelKey: sessionActionLabelKey(id, session), danger,
+      disabled: session.renameState === 'saving' || (id === 'copy-session-id' && !session.nativeSessionId),
+    }))
+    .sort((a, b) => Number(!!a.danger) - Number(!!b.danger))
 }

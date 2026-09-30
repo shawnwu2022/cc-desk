@@ -1,9 +1,29 @@
+import { onScopeDispose, readonly, ref } from 'vue'
+
 export type RelativeTimeLocale = 'zh' | 'en'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
 const NINETY_DAYS = 90 * DAY
+
+const activityNow = ref(Date.now())
+let clockUsers = 0
+let clockTimer: ReturnType<typeof setInterval> | null = null
+/** One app-wide minute clock; no timer survives the last visible consumer. */
+export function useRelativeActivityClock() {
+  if (clockUsers++ === 0) {
+    activityNow.value = Date.now()
+    clockTimer = setInterval(() => { activityNow.value = Date.now() }, MINUTE)
+  }
+  onScopeDispose(() => {
+    if (--clockUsers === 0 && clockTimer !== null) {
+      clearInterval(clockTimer)
+      clockTimer = null
+    }
+  })
+  return readonly(activityNow)
+}
 
 function finiteTimestamp(value: number): number {
   if (!Number.isFinite(value)) throw new Error('INVALID_ACTIVITY_TIME')

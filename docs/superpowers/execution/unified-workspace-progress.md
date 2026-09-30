@@ -32,7 +32,8 @@ Rules:
 - Tasks 2–4: source/tests restored remotely at `545c8cfce746076d891dfd1f97303011fac92bbd`; previous pending-sync entries were stale
 - Task 5: initial implementation at `bd65fe1a0dce9e2cf90d73397ac762c9073d1bc8`; correctness repair described below
 - Task 6: complete at `31223e131396d8c899660ad8d47fabbb5d574dcc`
-- Next task: Task 7 — session status and CLI application icons
+- Task 7: complete at `d10fc5a637589de95875e61e1b1d48c332595c32`
+- Next task: Task 8 — unified session row and secondary menu
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -153,4 +154,48 @@ Rules:
 - Independent spec review passed; scoped quality re-review approved both contrast repairs
 - Worst supported-surface contrast: CLI marks 3.1746:1, confirming breath trough 3.2484:1
 - Final exact verification: 27 Task 7 tests pass; typecheck pass; diff check clean
+- Atomic task publication pending remote readback
+
+### Verified Task 7 checkpoint
+
+- Remote commit `d10fc5a637589de95875e61e1b1d48c332595c32`; fetched tree equals staged tree, local/remote SHA match, clean working tree before this readback
+- 27 tests + typecheck, independent spec and quality approval, no CI/PR/package/release
+- Next: Task 8
+
+### Task 8 preflight ruling
+
+- Keep SessionItem strictly UnifiedSession-based. SessionList may temporarily adapt its legacy callers to UnifiedSession and old events until Task 9 migrates ProjectNode; do not keep a second visual row implementation. This maintains a buildable functional checkpoint between sequential tasks. Cost if wrong: the temporary compatibility mapping must be removed when Task 9 adopts unified project groups.
+
+## Task 8 — Unified session row and secondary menu — September 30, 2026
+
+- Status: implemented and locally verified; controller review/publication pending. Base remains `d10fc5a637589de95875e61e1b1d48c332595c32`. Existing Task 7 readback and Task 8 preflight ruling are preserved. No commit, remote write, PR, CI, build, package, version or release operation was performed by the implementer.
+- Replaced the legacy visual row with strict `UnifiedSession` `SessionItem`: fixed `16px 18px minmax(0, 1fr) 38px 20px` grid, 6px gaps, 38px height, single-line title ellipsis, 3px amber selection marker, Task 7 status/CLI icons and default compact activity age. No inline status/runtime/configuration fields. One state-owned quick control overlays its fixed age slot on hover/keyboard focus; no-action states keep the age.
+- Added the shared typed menu-action array in `sessionPresentation.ts` and `SessionOverflowMenu` using Task 6 `AppMenu`. Overflow, pointer context and Shift+F10/ContextMenu entry points use identical definitions and state/visibility rules. Running archive explicitly says “Stop and archive”; unknown/starting cannot offer restart/archive; missing native session IDs disable copy rather than guessing an ID. The teleported menu clamps to the viewport and shares the primitive's keyboard, outside-click and focus-return behavior.
+- F2/menu rename uses Task 6 `AppInput` in the same title column. Enter/save emits trimmed `rename-commit`, Escape emits `rename-cancel`, blank/control-character names remain invalid in the editor, blur does not race the explicit save, saving disables repeated submission, and a changed session ID discards the old draft. Rows emit typed action requests only; they do not perform process, clipboard, directory or diagnostic operations.
+- `SessionList` accepts unified sessions and forwards unified events without initializing the legacy attention store. Its temporary old tabs/history boundary preserves supported activation/resume, active-tab rename, stopped-tab restart, tab close and history archive using the same row; unsupported legacy actions remain hidden. Task 9 removes the boundary when ProjectNode adopts unified groups.
+- RED: exact initial command `npm test -- tests/components/sessionItem.test.ts` failed on the missing `SessionOverflowMenu.vue` import before production changes. No skeletal-component rerun was required by the approved task scope. The first integrated run had 2 failures: test selector incorrectly assumed AppInput's class lived on a wrapper, and deferred menu rename needed an extra render turn. The selector was corrected to its actual input; synchronous editor entry with next-tick focus resolved the timing.
+- A later focused pointer regression failed before its fix: reopening the overflow trigger while its menu was open caused AppMenu's outside pointer listener to close it before click, then the click reopened it. The trigger now stops its own pointerdown propagation so repeat click closes normally; outside pointers elsewhere still use the shared close behavior.
+- GREEN exact required gate: `npm test -- tests/components/sessionItem.test.ts tests/i18n/translations.test.ts && npm run typecheck` → 31 tests pass (27 row/menu/list + 4 i18n); typecheck exit 0.
+- Narrow affected regressions: `npm test -- tests/components/sessionIcons.test.ts tests/components/uiPrimitives.test.ts tests/utils/sessionPresentation.test.ts tests/utils/relativeTime.test.ts && git diff --check` → 61 tests pass (27/27/4/3), diff check exit 0. No unrelated full suite was run. Existing npm http-proxy configuration and Vite CJS deprecation warnings remain; no component warnings or unhandled errors occurred in the final runs.
+- Test evidence covers state-owned quick actions, strict unified events, no visible state words, exact production CSS declarations and stable geometry rules, compact age/localized full-time tooltip, shared-clock refresh and final-consumer cleanup, activation, F2/save/cancel/identity ownership, complete menu state sets, localized stop-and-archive, shared context/overflow definitions, viewport clamp, focus return, repeat toggle and legacy supported event routing.
+- Actual rendered 1024×640 font geometry, Windows 100%/125%/150% scaling, platform screenshots and screen-reader behavior remain final visual/platform gates. jsdom/CSS-rule verification does not certify them.
+
+### Task 8 rulings
+
+- The Task 1 `relativeTime.ts` had only its compact formatter, not a clock. Added one reference-counted minute clock in that shared utility, with cleanup after the final mounted consumer, rather than per-row timers. Types and `sessionPresentation.ts` were also added to Task 8's file map to own the typed shared action model. Cost if wrong: future consumers must subscribe through this helper rather than introduce another refresh loop.
+- Fixed trailing grid columns require row-specific `IconButton` geometry of 20px wide × 28px high; all menu items and other shared controls retain Task 6 sizes. Calendar-form ages use a smaller 9px numeric treatment rather than truncation in the fixed 38px age column. Cost if wrong: final font/scaling review may require a local readable size/layout adjustment while preserving the frozen grid and untruncated time strings.
+- Unknown/starting rows expose confirmation/cancel and close requests but never restart/archive requests. Runtime ownership, confirmations for running close/archive/restart, exact-ID copy and diagnostic redaction remain caller duties in subsequent migration tasks; this row layer must not bypass authenticated runtime adapters. Cost if wrong: callers must validate state again when handling a typed request.
+
+### Task 8 independent review repair — cross-row menu dismissal
+
+- Reviewer reproduced two simultaneously open menus when clicking another row's overflow opener. The earlier unconditional pointerdown stop fixed own-opener toggle but also suppressed another row's outside-dismiss signal; that overbroad interception is superseded.
+- Added `Row_AnotherOverflowDismissesPrevious_028` before changing production code. RED: 1 failure of 28 row tests, expected one menu but got two. The test also asserts opener expanded states, focus inside the replacement menu, and a second click closing that same opener.
+- Minimal fix: overflow pointerdown stops propagation only while that row's own menu is open. An inactive other-row opener reaches the shared AppMenu document listener, closing the preceding menu without taking focus, then opens its own menu. Existing `Row_OverflowToggle_027` still verifies own-opener close behavior.
+- GREEN exact command: `npm test -- tests/components/sessionItem.test.ts tests/i18n/translations.test.ts && npm run typecheck && git diff --check` → 32 tests pass (28 row/menu/list + 4 i18n); typecheck and diff check exit 0. No unrelated full suite, commit or remote action.
+- Controller's previously staged snapshot is preserved; this repair modifies SessionItem, its test and this ledger on top of it. Review/publication remain pending.
+
+### Task 8 review gate
+
+- Independent spec/quality review approved the final cross-row menu dismissal repair; no remaining Task 8 blocker
+- Final exact gate: 32 row/i18n tests, typecheck and diff check pass; earlier narrow affected regression gate61 passed
 - Atomic task publication pending remote readback

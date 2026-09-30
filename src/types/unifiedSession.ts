@@ -12,6 +12,18 @@ export type SessionPrimaryAction =
   | 'restore-archive'
   | 'save-rename'
 export type SessionRenameState = 'idle' | 'editing' | 'saving'
+export type SessionMenuAction =
+  | Exclude<SessionPrimaryAction, 'save-rename'>
+  | 'rename' | 'restart' | 'close' | 'archive'
+  | 'copy-session-id' | 'open-project-directory' | 'view-diagnostics'
+/** Omitted entries use state defaults; false hides an unsupported capability. */
+export type SessionMenuActionVisibility = Partial<Record<SessionMenuAction, boolean>>
+export interface SessionMenuActionDefinition {
+  id: SessionMenuAction
+  labelKey: string
+  danger?: boolean
+  disabled?: boolean
+}
 
 export interface UnifiedSession {
   id: string

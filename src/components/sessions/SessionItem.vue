@@ -1,205 +1,200 @@
-<template>
-  <div
-    class="session-item"
-    :class="{ active: isActive, stopped: isStopped }"
-    @click="handleClick"
-  >
-    <!-- 运行状态指示器 -->
-    <span class="status-dot" :class="dotClass"></span>
-
-    <!-- 会话名称 -->
-    <div class="session-name-wrapper">
-      <span v-if="!isRenaming" class="session-name">{{ name }}</span>
-      <input
-        v-else
-        ref="renameInputRef"
-        v-model="newName"
-        class="rename-input"
-        :style="{ width: inputWidth }"
-        @keyup.enter="confirmRename"
-        @keyup.escape="cancelRename"
-        @blur="confirmRename"
-        @click.stop
-      />
-      <span v-if="snippet" class="session-snippet">{{ snippet }}</span>
-    </div>
-
-    <!-- 操作按钮 -->
-    <!-- 重启按钮（已停止的 Tab，无 sessionId 时禁用） -->
-    <button
-      v-if="isStopped"
-      class="action-btn restart-btn"
-      :disabled="!canResume"
-      @click.stop="canResume && $emit('restart', id)"
-      :title="canResume ? t('restart') : t('waitingForSessionId')"
-    >
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="23 4 23 10 17 10"/>
-        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-      </svg>
-    </button>
-    <!-- 重命名按钮 -->
-    <button
-      v-if="isActive"
-      class="action-btn rename-btn"
-      @click.stop="startRename"
-      :title="t('rename')"
-    >
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
-        <path d="m15 5 4 4"/>
-      </svg>
-    </button>
-    <!-- 存档按钮（仅历史会话，running tab 不显示） -->
-    <button
-      v-if="archivable"
-      class="action-btn archive-btn"
-      @click.stop="$emit('archive', id)"
-      :title="t('archive')"
-    >
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="21 8 21 21 3 21 3 8"/>
-        <rect x="1" y="3" width="22" height="5"/>
-        <line x1="10" y1="12" x2="14" y2="12"/>
-      </svg>
-    </button>
-    <!-- 关闭按钮 -->
-    <button
-      v-if="closable"
-      class="action-btn close-action-btn"
-      @click.stop="$emit('close', id)"
-      :title="t('close')"
-    >
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <line x1="18" y1="6" x2="6" y2="18"/>
-        <line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-    </button>
-
-    <!-- 时间信息 -->
-    <span v-if="showTime" class="time-info">{{ timeAgo }}</span>
-  </div>
-</template>
-
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { computeDotClass } from '@/utils/sessionDot'
-import type { AttentionKind } from '@/composables/useAttentionQueue'
+import AppInput from '@/components/ui/AppInput.vue'
+import AppTooltip from '@/components/ui/AppTooltip.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import SessionStatusIcon from './SessionStatusIcon.vue'
+import CliAppIcon from './CliAppIcon.vue'
+import SessionOverflowMenu from './SessionOverflowMenu.vue'
+import { deriveSessionVisualState, selectSessionMenuActions, selectSessionPrimaryAction, sessionActionLabelKey } from '@/utils/sessionPresentation'
+import { formatRelativeActivity, useRelativeActivityClock } from '@/utils/relativeTime'
+import type { SessionMenuAction, SessionMenuActionVisibility, SessionPrimaryAction, UnifiedSession } from '@/types/unifiedSession'
 
-const { t } = useI18n()
-
-const props = defineProps<{
-  id: string
-  name: string
-  isActive: boolean
-  isRunning?: boolean
-  isStopped?: boolean
-  canResume?: boolean
-  working?: boolean
-  pending?: boolean
-  attentionKind?: AttentionKind
-  lastActiveAt: number
-  closable?: boolean
-  archivable?: boolean
-  snippet?: string
-  showTime?: boolean
-}>()
-
-const dotClass = computed(() => computeDotClass({
-  isStopped: props.isStopped,
-  isActive: props.isActive,
-  working: props.working,
-  pending: props.pending,
-  isRunning: props.isRunning,
-  attentionKind: props.attentionKind,
-}))
-
+const props = withDefaults(defineProps<{
+  session: UnifiedSession
+  selected?: boolean
+  primaryAction?: SessionPrimaryAction | null
+  menuActionVisibility?: SessionMenuActionVisibility
+}>(), { selected: false })
 const emit = defineEmits<{
-  switch: [id: string]
-  rename: [id: string, name: string]
-  restart: [id: string]
-  close: [id: string]
-  archive: [id: string]
+  activate: [id: string]
+  'primary-action': [id: string, action: SessionPrimaryAction]
+  'menu-action': [id: string, action: SessionMenuAction]
+  'rename-commit': [id: string, title: string]
+  'rename-cancel': [id: string]
 }>()
+const { t, locale } = useI18n()
+const now = useRelativeActivityClock()
+const row = ref<HTMLElement | null>(null)
+const renameInput = ref<InstanceType<typeof AppInput> | null>(null)
+const localRename = ref(false)
+const renameValue = ref('')
+const renameInvalid = ref(false)
+const menuOpen = ref(false)
+const menuAnchor = ref({ x: 8, y: 8 })
+const isRenaming = computed(() => localRename.value || props.session.renameState === 'editing' || props.session.renameState === 'saving')
+const isSaving = computed(() => props.session.renameState === 'saving')
+const visualState = computed(() => deriveSessionVisualState(props.session))
+const actions = computed(() => selectSessionMenuActions(props.session, props.menuActionVisibility))
+const primary = computed(() => isRenaming.value ? 'save-rename'
+  : props.primaryAction === undefined ? selectSessionPrimaryAction(props.session) : props.primaryAction)
+const primaryLabel = computed(() => primary.value ? t(sessionActionLabelKey(primary.value, props.session)) : '')
+const age = computed(() => formatRelativeActivity(props.session.lastActivityAt, now.value, locale.value.startsWith('zh') ? 'zh' : 'en'))
+const fullActivity = computed(() => new Date(props.session.lastActivityAt).toLocaleString(locale.value))
 
-const isRenaming = ref(false)
-const newName = ref('')
-const renameInputRef = ref<HTMLInputElement>()
-const inputWidth = ref('auto')
-
-// 计算时间差
-const timeAgo = computed(() => {
-  const now = Date.now()
-  const diff = now - props.lastActiveAt
-
-  const minutes = Math.floor(diff / 60000)
-  const hours = Math.floor(diff / 3600000)
-  const days = Math.floor(diff / 86400000)
-
-  if (minutes < 1) return t('justNow')
-  if (minutes < 60) return `${minutes}m`
-  if (hours < 24) return `${hours}h`
-  return `${days}d`
+watch(() => props.session.id, () => {
+  localRename.value = false
+  renameInvalid.value = false
+  renameValue.value = props.session.title
+  menuOpen.value = false
 })
-
-function handleClick() {
-  if (!isRenaming.value) {
-    emit('switch', props.id)
+watch(() => [props.session.id, props.session.renameState], () => {
+  if (props.session.renameState === 'editing' || props.session.renameState === 'saving') {
+    if (!localRename.value) renameValue.value = props.session.title
+    if (!isSaving.value) void focusRename()
   }
+}, { immediate: true })
+async function focusRename() {
+  await nextTick()
+  const input = renameInput.value?.$el.querySelector('input') as HTMLInputElement | null
+  input?.focus()
+  input?.select()
 }
-
+function activate() {
+  if (!isRenaming.value && !menuOpen.value) emit('activate', props.session.id)
+}
 function startRename() {
-  isRenaming.value = true
-  newName.value = props.name
-
-  const nameLen = props.name.length
-  inputWidth.value = `${Math.max(50, Math.min(nameLen * 8 + 16, 180))}px`
-
-  nextTick(() => {
-    renameInputRef.value?.focus()
-    renameInputRef.value?.select()
-  })
+  if (isSaving.value || props.menuActionVisibility?.rename === false) return
+  renameValue.value = props.session.title
+  renameInvalid.value = false
+  localRename.value = true
+  menuOpen.value = false
+  void focusRename()
 }
-
-function confirmRename() {
-  if (!isRenaming.value) return
-  isRenaming.value = false
-  if (newName.value.trim() && newName.value !== props.name) {
-    emit('rename', props.id, newName.value.trim())
+function commitRename() {
+  if (!isRenaming.value || isSaving.value) return
+  const title = renameValue.value.trim()
+  if (!title || /\p{Cc}/u.test(renameValue.value)) { renameInvalid.value = true; return }
+  localRename.value = false
+  renameInvalid.value = false
+  emit('rename-commit', props.session.id, title)
+  void nextTick(() => row.value?.focus())
+}
+function cancelRename() {
+  if (!isRenaming.value || isSaving.value) return
+  localRename.value = false
+  renameInvalid.value = false
+  renameValue.value = props.session.title
+  emit('rename-cancel', props.session.id)
+  void nextTick(() => row.value?.focus())
+}
+function runPrimary() {
+  if (!primary.value || isSaving.value) return
+  if (primary.value === 'save-rename') commitRename()
+  else emit('primary-action', props.session.id, primary.value)
+}
+function openOverflow(event: MouseEvent) {
+  const trigger = event.currentTarget as HTMLElement
+  if (menuOpen.value) { menuOpen.value = false; return }
+  trigger.focus()
+  const rect = trigger.getBoundingClientRect()
+  menuAnchor.value = { x: rect.right - 200, y: rect.bottom + 4 }
+  menuOpen.value = true
+}
+function onOverflowPointerdown(event: PointerEvent) {
+  // Preserve only this open menu for its own toggle click. Another row's
+  // opener must still reach AppMenu's outside listener and dismiss this one.
+  if (menuOpen.value) event.stopPropagation()
+}
+function openContext(event: MouseEvent) {
+  if (isRenaming.value || !actions.value.length) return
+  event.preventDefault()
+  event.stopPropagation()
+  row.value?.focus()
+  menuAnchor.value = { x: event.clientX, y: event.clientY }
+  menuOpen.value = true
+}
+function onKeydown(event: KeyboardEvent) {
+  if (event.target instanceof HTMLInputElement) return
+  if (event.key === 'F2') { event.preventDefault(); event.stopPropagation(); startRename() }
+  else if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
+    if (!actions.value.length || isRenaming.value) return
+    event.preventDefault(); event.stopPropagation()
+    row.value?.focus()
+    const rect = row.value!.getBoundingClientRect()
+    menuAnchor.value = { x: rect.right - 200, y: rect.bottom + 4 }
+    menuOpen.value = true
+  } else if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+    event.preventDefault(); activate()
   }
 }
-
-function cancelRename() {
-  isRenaming.value = false
-  newName.value = props.name
+function onMenuAction(action: SessionMenuAction) {
+  menuOpen.value = false
+  emit('menu-action', props.session.id, action)
+  // focusRename waits for the menu's close/render and focus restoration.
+  if (action === 'rename') startRename()
 }
 </script>
 
+<template>
+  <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, editing: isRenaming }"
+    role="treeitem" :aria-selected="selected" :aria-label="session.title" tabindex="0"
+    @click="activate" @keydown="onKeydown" @contextmenu="openContext">
+    <SessionStatusIcon :state="visualState" />
+    <CliAppIcon :cli="session.cli" />
+    <div class="session-name-wrapper">
+      <AppInput v-if="isRenaming" ref="renameInput" v-model="renameValue" class="rename-input" size="compact"
+        :aria-label="t('sessionRenameLabel')" :invalid="renameInvalid" :disabled="isSaving"
+        @click.stop @keydown.enter.stop.prevent="commitRename" @keydown.esc.stop.prevent="cancelRename" />
+      <AppTooltip v-else :text="session.title">
+        <span class="session-name" tabindex="0">{{ session.title }}</span>
+      </AppTooltip>
+    </div>
+    <div class="session-tail">
+      <AppTooltip :text="fullActivity">
+        <span class="session-time" :class="{ 'session-time--date': age.includes('/') }" tabindex="0">{{ age }}</span>
+      </AppTooltip>
+      <div v-if="primary" class="session-primary-action">
+        <IconButton class="session-row-control" :label="primaryLabel" :disabled="isSaving" @click.stop="runPrimary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path v-if="primary === 'save-rename'" d="m5 12 4 4L19 6" />
+            <rect v-else-if="primary === 'stop'" x="6" y="6" width="12" height="12" rx="1" />
+            <path v-else-if="primary === 'cancel-start'" d="m6 6 12 12M18 6 6 18" />
+            <path v-else-if="primary === 'confirm-status'" d="M9 9a3 3 0 1 1 5 2c-1.5 1-2 1.5-2 3m0 3h.01" />
+            <path v-else-if="primary === 'resume'" d="m9 5 11 7-11 7Z" />
+            <path v-else d="M20 7v5h-5m5 0a8 8 0 1 0-2 6" />
+          </svg>
+        </IconButton>
+      </div>
+    </div>
+    <div class="session-overflow-trigger" :class="{ 'is-open': menuOpen }" @pointerdown="onOverflowPointerdown" @click.stop>
+      <IconButton v-if="actions.length && !isRenaming" class="session-row-control" :label="t('sessionActionsLabel')"
+        aria-haspopup="menu" :aria-expanded="menuOpen" @click="openOverflow">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
+      </IconButton>
+    </div>
+    <SessionOverflowMenu v-model:open="menuOpen" :actions="actions" :anchor="menuAnchor" @menu-action="onMenuAction" />
+  </div>
+</template>
+
 <style scoped>
 .session-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 16px 18px minmax(0, 1fr) 38px 20px;
+  column-gap: 6px;
   align-items: center;
-  gap: 8px;
+  height: 38px;
   width: 100%;
-  padding: 8px 12px;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  cursor: pointer;
-  border-radius: 6px;
-  transition: background 0.15s ease;
+  padding: 0 8px;
   position: relative;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  background: transparent;
+  cursor: pointer;
 }
-
-.session-item:hover {
-  background: var(--hover-bg);
-}
-
-.session-item.active {
-  background: var(--selected-bg);
-}
-
+.session-item:hover { background: var(--hover-bg); }
+.session-item.active { background: var(--selected-bg); }
 .session-item.active::before {
   content: '';
   position: absolute;
@@ -207,164 +202,50 @@ function cancelRename() {
   top: 4px;
   bottom: 4px;
   width: 3px;
-  background: var(--accent-gold);
   border-radius: 0 2px 2px 0;
-}
-
-.session-item.active .session-name {
-  color: var(--accent-color);
-  font-weight: 600;
-}
-
-.session-item.stopped .session-name {
-  color: var(--text-secondary);
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  transition: background 0.3s ease;
-}
-
-/* 默认（无状态数据） */
-.status-dot:not(.working):not(.pending):not(.running):not(.stopped):not(.closed):not(.error):not(.permission):not(.completed) {
-  background: var(--text-tertiary);
-}
-
-/* 连接（idle — 绿色静止） */
-.status-dot.running {
-  background: var(--status-success);
-}
-
-/* 工作中（绿色脉冲） */
-.status-dot.working {
-  background: var(--status-success);
-  animation: status-pulse 2.5s ease-in-out infinite;
-}
-
-/* 待处理（waiting_permission/waiting_input） */
-.status-dot.pending {
   background: var(--accent-gold);
-  animation: status-pulse 2s ease-in-out infinite;
 }
-
-/* 已停止（当前活跃 tab） */
-.status-dot.stopped {
-  background: var(--text-tertiary);
-  animation: none;
-}
-
-/* 已关闭（非当前活跃 tab） */
-.status-dot.closed {
-  width: 6px;
-  height: 6px;
-  border: 1.5px solid var(--border-color);
-  background: transparent;
-  animation: none;
-}
-
-/* 出错（stopFailure -- CLI 异常停止，即使 active 也显示红） */
-.status-dot.error {
-  background: var(--status-error);
-  animation: none;
-}
-
-/* 等权限（permission_prompt / worker -- 金脉冲，复用 pending 动画） */
-.status-dot.permission {
-  background: var(--accent-gold);
-  animation: status-pulse 2s ease-in-out infinite;
-}
-
-/* 完成（idle_prompt -- 绿圈，区别于 running 绿静止） */
-.status-dot.completed {
-  width: 6px;
-  height: 6px;
-  border: 1.5px solid var(--status-success);
-  background: transparent;
-  animation: none;
-}
-
-@keyframes status-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-
-.session-name-wrapper {
-  flex: 1;
-  min-width: 0;
-}
-
+.session-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.session-name-wrapper { min-width: 0; }
+.session-name-wrapper :deep(.ui-tooltip-anchor) { display: block; min-width: 0; }
 .session-name {
-  font-size: 13px;
-  font-weight: 500;
+  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  display: block;
+  font-size: 13px;
+  font-weight: 500;
 }
-
-.session-snippet {
+.session-item.active .session-name { font-weight: 600; }
+.session-name:focus-visible, .session-time:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--radius-sm); }
+.session-name-wrapper :deep(.rename-input) { width: 100%; min-width: 0; padding: 0 4px; font-size: 13px; }
+.session-tail { position: relative; width: 38px; height: 28px; display: flex; align-items: center; justify-content: flex-end; }
+.session-time {
+  display: block;
+  width: 38px;
   font-size: 11px;
-  color: var(--text-tertiary);
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  margin-top: 1px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
 }
-
-.rename-input {
-  font-size: 13px;
-  font-weight: 500;
-  padding: 2px 6px;
-  border: 1px solid var(--accent-color);
-  border-radius: 3px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  outline: none;
-}
-
-.action-btn {
-  width: 20px;
-  height: 20px;
+.session-time--date { font-size: 9px; }
+.session-primary-action {
+  position: absolute;
+  inset: 0;
   display: flex;
+  justify-content: flex-end;
   align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
-
-.session-item:not(:hover) .action-btn {
   opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.15s ease, visibility 0s 0.15s;
+  pointer-events: none;
 }
-
-.session-item:hover .action-btn {
-  opacity: 1;
-  visibility: visible;
-  transition: opacity 0.15s ease, visibility 0s;
-}
-
-.action-btn:hover {
-  background: var(--hover-bg);
-  color: var(--text-primary);
-}
-
-.action-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-
-.time-info {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  flex-shrink: 0;
-}
+.session-overflow-trigger { width: 20px; height: 28px; opacity: 0; pointer-events: none; }
+.session-primary-action :deep(.ui-button), .session-overflow-trigger :deep(.ui-button) { width: 20px; min-width: 20px; height: 28px; padding: 0; }
+.session-item:hover .session-primary-action, .session-item:focus-within .session-primary-action,
+.session-item.editing .session-primary-action { opacity: 1; pointer-events: auto; }
+.session-item:hover .session-overflow-trigger, .session-item:focus-within .session-overflow-trigger,
+.session-overflow-trigger.is-open { opacity: 1; pointer-events: auto; }
+.session-item.has-primary:hover .session-time, .session-item.has-primary:focus-within .session-time,
+.session-item.editing .session-time { opacity: 0; pointer-events: none; }
 </style>
