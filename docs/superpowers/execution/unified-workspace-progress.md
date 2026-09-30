@@ -67,3 +67,48 @@ Rules:
 - Task 5 Ruling: `sessions` retains archived records; `projectGroups` is the normal visible projection — restore requires a stable addressable ID — cost if wrong: future archive consumers must filter the catalog deliberately.
 - Task 5 Ruling: Native archive uses the existing catalog ID in the shared archive array, while Legacy preserves raw IDs — runtime/CLI/source collisions must not cross-hide sessions — cost if wrong: unreleased historical Native raw-ID archive marks are not guessed/migrated.
 - Task 5 Ruling: active Native archive requires one exact cached history origin before stopping — absent/ambiguous roots cannot be guessed — cost if wrong: the user must refresh/select an explicit historical item before archiving.
+
+### Verified Task 5 repair checkpoint
+
+- Remote commit: `97fa67e5791a8238d8ea28e17e1407015456a65b`
+- Published via authenticated GitHub Git-data connector, fast-forward only; no shell credential configured
+- Verified local staged tree equals remote commit tree, fetched HEAD equals `ls-remote` branch SHA, and working tree was clean before this readback entry
+- Next: Task 6
+
+## Task 6 — Shared UI primitives and notifications — September 30, 2026
+
+- Status: implemented and locally verified; controller review/publication pending. Base remains `97fa67e5791a8238d8ea28e17e1407015456a65b`; no new commit, push, PR, CI, package, version or release operation was performed by the implementer.
+- Added all 13 planned common Vue primitives: buttons, input/select, tooltip, menu, dialog/drawer, toast host, inline notice, empty/loading state and safe error details. Existing product surfaces are not migrated during this foundational task.
+- Menu contracts: hidden actions omitted, danger actions last, disabled actions skipped, Arrow/Home/End/Enter/Space/Escape/Tab behavior, outside close and focus return. Danger-only menus focus their container until explicit keyboard navigation.
+- Modal contracts: labelled teleported dialog, safe initial focus, no danger autofocus, focus trap/return, hidden controls skipped and top-overlay ownership for nested modals. Drawer reuses the dialog contract.
+- Notifications are runtime-validated locale-key DTOs with bounded opaque dedupe identity; raw Error objects, unknown message keys, unknown kinds and extra transport fields never enter state. Latest-three capacity, five-second expiry, close/clear/dispose cleanup and pointer/focus pause-resume are covered.
+- Central shared styles use existing GUI tokens, 28/32/36px control geometry, 2px ink-blue focus, amber selection, flat static surfaces and existing menu/dialog shadow tokens. No transition-all or new runtime dependency. `@vue/test-utils` 2.5.1 is a development-only dependency.
+- RED: first required command failed on both missing new module imports. Importable skeletal components/store then produced 24 behavioral failures of 26 tests. Additional focused RED reproduced danger-only menu autofocus, hidden modal focus and prototype-key diagnostic fallback before their fixes. Instance IDs use module counters compatible with the declared Vue 3.4 API baseline; no Vue minimum/version change.
+- Final local regression: `npm test` → 98 files / 964 tests pass, exit 0. Existing app/sidebar/disposal failure-path tests intentionally emit stderr; no failing test. This is not actual CLI certification.
+- GREEN: `npm test -- tests/components/uiPrimitives.test.ts tests/stores/notifications.test.ts tests/designTokens.test.ts && npm run typecheck` → 40 tests pass (23 component, 8 notification, 9 token), typecheck exit 0. `git diff --check` passes.
+- The collapsed-details test was corrected to check native `open` state; DOM textContent includes collapsed content and is not a visibility assertion. One nullable test attribute access was corrected for strict TypeScript.
+- Windows 100%/125%/150% scaling, actual rendered 1024×640 layout, screen-reader behavior and final screenshots remain final visual/platform gates; Linux jsdom behavior is not that certification.
+
+### Task 6 rulings
+
+- Toast message keys are checked against the existing locale catalogue; downstream Task 16 must add its approved feedback keys to locales before emitting them. Unknown keys are rejected instead of falling back to raw text. Cost if wrong: callers get no toast until their catalogue key exists.
+- Short toasts expire after five seconds and pause while hovered/focused; dedupe returns the existing ID without extending it. Cost if wrong: downstream callers must choose stable action identities deliberately and use persistent inline notices for unresolved work.
+- Menu positioning remains the consumer's anchor responsibility; dialog/drawer modality and focus ownership are shared. Cost if wrong: final layout consumers must account for viewport edges when positioning their shared menus.
+
+### Task 6 independent review repair — native summary focus
+
+- Reproduced omitted native `<summary>` controls preventing keyboard access to ErrorDetails inside AppDialog. The modal focusable selector now includes the first direct summary in each details element.
+- RED: new `Dialog_SummaryTabCycle_024` failed because Tab from Close was intercepted. GREEN: required UI/notifications/tokens command now passes 41 tests (24/8/9), typecheck exit 0; log retained in the controller's Task 6 report.
+- The regression checks forward reachability and both focus-trap wrap directions. Prior staged task snapshot remains intact; controller review/publication still pending. Earlier full-suite 964-pass evidence predates this narrow repair.
+
+### Task 6 independent review repair — tooltip mixed input
+
+- Reproduced focus lost on pointer leave, hover lost on blur, and Escape dismissal reopened by an already-active focus event. Tooltip now derives visibility from independent focus/hover state with a dismissal latch reset only by a fresh inactive-to-active interaction.
+- RED: three new mixed-input regressions failed. GREEN: required UI/notifications/tokens command now passes 44 tests (27/8/9), typecheck exit 0; both review repairs are included.
+- Existing descriptions, actual native focus/blur and deliberate keyboard/pointer reentry after Escape are covered. Previous staged work is preserved; review/publication remains pending, with no new full-suite claim for this narrow repaired snapshot.
+
+### Task 6 review gate
+
+- Independent spec/quality review approved the final snapshot with both interaction repairs included; no remaining critical/important Task 6 finding
+- Final exact local gate: 44 targeted tests pass and typecheck passes. Earlier full frontend regression: 964 tests, before the two narrow interaction repairs; full final system verification remains Task 25
+- Publication uses one atomic task commit; remote SHA recorded after readback
