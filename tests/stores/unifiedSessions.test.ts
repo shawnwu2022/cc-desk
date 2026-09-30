@@ -46,7 +46,7 @@ function fakeAdapter(runtime: SessionRuntimeKind, initial: UnifiedSession[] = []
   let current = [...initial]
   const adapter: SessionAdapter = {
     runtime,
-    listSessions: vi.fn(async () => [...current]),
+    listSessions: vi.fn(async (projectKey?: string) => current.filter(value => projectKey === undefined || value.projectKey === projectKey)),
     createSession: vi.fn(async (input: CreateUnifiedSessionInput) => {
       const created = session({
         id: runtime + ':created',
@@ -84,8 +84,8 @@ function fakeAdapter(runtime: SessionRuntimeKind, initial: UnifiedSession[] = []
     renameSession: vi.fn(async (id, title) => {
       current = current.map(value => value.id === id ? { ...value, title } : value)
     }),
-    archiveSession: vi.fn(async id => { current = current.filter(value => value.id !== id) }),
-    restoreArchivedSession: vi.fn(async () => undefined),
+    archiveSession: vi.fn(async id => { current = current.map(value => value.id === id ? { ...value, archived: true } : value) }),
+    restoreArchivedSession: vi.fn(async id => { current = current.map(value => value.id === id ? { ...value, archived: false } : value) }),
   }
   return {
     adapter,
@@ -229,9 +229,9 @@ describe('unified sessions store', () => {
     expect(store.sessions[0].resumable).toBe(true)
   })
 
-  it('routes create/resume to native for Codex and legacy for Claude without duplicating adapters', async () => {
-    const legacy = fakeAdapter('legacy-claude')
-    const native = fakeAdapter('native-cli')
+  it('routes new Claude/Codex to native and resumes by catalog origin', async () => {
+    const legacy = fakeAdapter('legacy-claude', [session({ id: 'old', adapterSessionId: 'history-1', nativeSessionId: 'history-1' })])
+    const native = fakeAdapter('native-cli', [session({ id: 'native-old', runtime: 'native-cli', adapterSessionId: 'native-history', nativeSessionId: 'native-history' })])
     const store = useUnifiedSessionsStore()
     store.configureAdapters([legacy.adapter, native.adapter])
 
@@ -245,6 +245,12 @@ describe('unified sessions store', () => {
     expect(legacy.adapter.createSession).not.toHaveBeenCalled()
     expect(store.activeSessionId).toBe(created.id)
 
+    await store.createSession({ projectKey: '/repo', projectPath: '/repo', cli: 'claude' })
+    expect(native.adapter.createSession).toHaveBeenCalledTimes(2)
+    expect(legacy.adapter.createSession).not.toHaveBeenCalled()
+    await store.resumeSession({ projectKey: '/repo', projectPath: '/repo', cli: 'claude', adapterSessionId: 'native-history', nativeSessionId: 'native-history' })
+    expect(native.adapter.resumeSession).toHaveBeenCalledTimes(1)
+
     await store.resumeSession({
       projectKey: '/repo',
       projectPath: '/repo',
@@ -256,4 +262,67 @@ describe('unified sessions store', () => {
 
     expect(() => store.configureAdapters([legacy.adapter, legacy.adapter])).toThrow('DUPLICATE_SESSION_ADAPTER')
   })
+
+  it('UnifiedSessions_ScopedRefreshPreservesOtherProjectAndSelection_001', async () => {
+    const adapter = fakeAdapter('legacy-claude', [session({ id: 'a' }), session({ id: 'b', projectKey: '/other', projectPath: '/other' })])
+    const store = useUnifiedSessionsStore()
+    store.configureAdapters([adapter.adapter])
+    await store.refresh()
+    await store.activateSession('b')
+    await store.renameSession('a', 'Renamed')
+    expect(store.sessions.map(value => value.id).sort()).toEqual(['a', 'b'])
+    expect(store.activeSessionId).toBe('b')
+    adapter.setSessions([session({ id: 'b', projectKey: '/other', projectPath: '/other' })])
+    await store.refresh('/repo')
+    expect(store.sessions.map(value => value.id)).toEqual(['b'])
+  })
+
+  it.each(['legacy-claude', 'native-cli'] as const)('UnifiedSessions_ArchiveRefreshRestore_002 %s', async runtime => {
+    const adapter = fakeAdapter(runtime, [session({ id: 'history', runtime, processState: 'stopped' })])
+    const store = useUnifiedSessionsStore()
+    store.configureAdapters([adapter.adapter])
+    await store.refresh()
+    await store.archiveSession('history')
+    await store.refresh()
+    expect(store.sessions.find(value => value.id === 'history')?.archived).toBe(true)
+    expect(store.projectGroups.flatMap(group => group.sessions)).toEqual([])
+    await store.restoreArchivedSession('history')
+    expect(store.projectGroups[0].sessions[0].archived).toBe(false)
+  })
+
+  it('UnifiedSessions_ConcurrentScopes_003', async () => {
+    const a = deferred<UnifiedSession[]>()
+    const b = deferred<UnifiedSession[]>()
+    const adapter = fakeAdapter('legacy-claude', [session({ id: 'a' }), session({ id: 'b', projectPath: '/other', projectKey: '/other' })])
+    const store = useUnifiedSessionsStore()
+    store.configureAdapters([adapter.adapter])
+    await store.refresh()
+    vi.mocked(adapter.adapter.listSessions).mockImplementation(key => key === '/repo' ? a.promise : b.promise)
+    const first = store.refresh('/repo')
+    const second = store.refresh('/other')
+    b.resolve([session({ id: 'b', title: 'B updated', projectPath: '/other', projectKey: '/other' })])
+    await second
+    a.resolve([session({ id: 'a', title: 'A updated' })])
+    await first
+    expect(store.sessions.find(value => value.id === 'a')?.title).toBe('A updated')
+    expect(store.sessions.find(value => value.id === 'b')?.title).toBe('B updated')
+  })
+
+  it.each([true, false])('UnifiedRefresh_FullScopeOrdering_004 %s', async fullFirst => {
+    const full = deferred<UnifiedSession[]>()
+    const scoped = deferred<UnifiedSession[]>()
+    const adapter = fakeAdapter('legacy-claude', [session({ id: 'a' }), session({ id: 'b', projectPath: '/other', projectKey: '/other' })])
+    const store = useUnifiedSessionsStore()
+    store.configureAdapters([adapter.adapter])
+    await store.refresh()
+    vi.mocked(adapter.adapter.listSessions).mockImplementation(key => key === undefined ? full.promise : scoped.promise)
+    const first = fullFirst ? store.refresh() : store.refresh('/repo')
+    const second = fullFirst ? store.refresh('/repo') : store.refresh()
+    full.resolve([session({ id: 'a', title: 'Full' }), session({ id: 'b', title: 'B full', projectPath: '/other', projectKey: '/other' })])
+    scoped.resolve([session({ id: 'a', title: 'Scoped' })])
+    await Promise.all([first, second])
+    expect(store.sessions.find(value => value.id === 'a')?.title).toBe(fullFirst ? 'Scoped' : 'Full')
+    expect(store.sessions.find(value => value.id === 'b')?.title).toBe('B full')
+  })
+
 })

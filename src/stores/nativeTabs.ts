@@ -14,6 +14,8 @@ export type NativeTabStatus =
   | 'exited'
 
 export interface NativeCliTab {
+  /** Read-only history identity retained by an explicitly resumed catalog item. */
+  sourceSessionKey?: string
   tabId: string
   cli: NativeCliKind
   projectId: string

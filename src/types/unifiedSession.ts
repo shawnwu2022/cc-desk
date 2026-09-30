@@ -60,6 +60,8 @@ export interface CreateUnifiedSessionInput {
 }
 
 export interface ResumeUnifiedSessionInput {
+  /** Historical origin, required when adapter identities are ambiguous. */
+  runtime?: SessionRuntimeKind
   projectKey: string
   projectPath: string
   cli: UnifiedCliKind

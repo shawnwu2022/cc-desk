@@ -44,7 +44,10 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const error = ref<string | null>(null)
 
   let adapters: SessionAdapter[] = []
-  let refreshOwner: object = {}
+  let refreshVersion = 0
+  let fullRefreshVersion = 0
+  let pendingRefreshes = 0
+  const projectRefreshVersions = new Map<string, number>()
   let selectionEpoch = 0
   const actionVersion = new Map<string, number>()
   const actionTails = new Map<string, Promise<void>>()
@@ -58,6 +61,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const pinned = new Set(projects.pinnedProjects.map(normalizePath))
 
     for (const session of sessions.value) {
+      if (session.archived) continue
       const key = normalizePath(session.projectPath)
       let group = groups.get(key)
       if (!group) {
@@ -111,23 +115,47 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return adapter
   }
 
-  function adapterForCreate(input: CreateUnifiedSessionInput | ResumeUnifiedSessionInput): SessionAdapter {
-    const runtime: SessionRuntimeKind = input.cli === 'codex' ? 'native-cli' : 'legacy-claude'
-    return adapterForRuntime(runtime)
+  function adapterForResume(input: ResumeUnifiedSessionInput): SessionAdapter {
+    const matches = sessions.value.filter(session =>
+      session.cli === input.cli
+      && normalizePath(session.projectPath) === normalizePath(input.projectPath)
+      && session.adapterSessionId === input.adapterSessionId
+      && (input.runtime === undefined || session.runtime === input.runtime),
+    )
+    const runtimes = new Set(matches.map(session => session.runtime))
+    if (runtimes.size > 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+    return adapterForRuntime(matches[0]?.runtime ?? input.runtime ?? 'native-cli')
   }
 
   async function refresh(projectKey?: string): Promise<void> {
-    const owner = {}
-    refreshOwner = owner
+    const version = ++refreshVersion
+    const key = projectKey === undefined ? undefined : normalizePath(projectKey)
+    if (key === undefined) fullRefreshVersion = version
+    else projectRefreshVersions.set(key, version)
+    ++pendingRefreshes
     loading.value = true
     error.value = null
 
+    const ownsProject = (candidate: string): boolean =>
+      fullRefreshVersion <= version
+      && (projectRefreshVersions.get(candidate) ?? 0) <= version
+
     try {
       const lists = await Promise.all(adapters.map(adapter => adapter.listSessions(projectKey)))
-      if (refreshOwner !== owner) return
+      if (fullRefreshVersion > version || (key !== undefined && !ownsProject(key))) return
 
-      const byId = new Map<string, UnifiedSession>()
+      // Replace only the requested project. A full read also preserves scopes
+      // refreshed after it began, regardless of completion order.
+      const byId = new Map<string, UnifiedSession>(sessions.value
+        .filter(session => {
+          const sessionKey = normalizePath(session.projectPath)
+          return key !== undefined ? sessionKey !== key : !ownsProject(sessionKey)
+        })
+        .map(session => [session.id, session]),
+      )
       for (const session of lists.flat()) {
+        const sessionKey = normalizePath(session.projectPath)
+        if ((key !== undefined && key !== sessionKey) || !ownsProject(sessionKey)) continue
         byId.set(session.id, mergeDuplicateSession(byId.get(session.id), session))
       }
       sessions.value = [...byId.values()].sort((a, b) =>
@@ -137,12 +165,12 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         activeSessionId.value = null
       }
     } catch (failure) {
-      if (refreshOwner === owner) {
+      if (refreshVersion === version) {
         error.value = failure instanceof Error ? failure.message : 'SESSION_REFRESH_FAILED'
       }
       throw failure
     } finally {
-      if (refreshOwner === owner) loading.value = false
+      loading.value = --pendingRefreshes > 0
     }
   }
 
@@ -164,7 +192,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   async function createSession(input: CreateUnifiedSessionInput): Promise<UnifiedSession> {
     const epoch = ++selectionEpoch
-    const created = await adapterForCreate(input).createSession(input)
+    const created = await adapterForRuntime('native-cli').createSession(input)
     await refresh(input.projectKey)
     if (epoch === selectionEpoch) activeSessionId.value = created.id
     return sessions.value.find(value => value.id === created.id) ?? created
@@ -172,7 +200,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   async function resumeSession(input: ResumeUnifiedSessionInput): Promise<UnifiedSession> {
     const epoch = ++selectionEpoch
-    const resumed = await adapterForCreate(input).resumeSession(input)
+    const resumed = await adapterForResume(input).resumeSession(input)
     await refresh(input.projectKey)
     if (epoch === selectionEpoch) activeSessionId.value = resumed.id
     return sessions.value.find(value => value.id === resumed.id) ?? resumed

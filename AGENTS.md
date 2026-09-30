@@ -284,3 +284,10 @@ npm run tauri:build        # 生产构建
 - Only bounded allowlisted metadata reaches the owner WebView; prompt/assistant/error/env bodies and capabilities are not published. No sequence is invented for parallel Claude hooks: activity remains unknown even while the process runs.
 - New UI consumers use exact-run `subscribeObservation(target, handler)` and its projected state, not raw event kind as a current activity claim. Native 与 legacy event topic 分离；D22-D24 的双 CLI UI adoption 已完成。
 - Verification, recovery history and limitations: `docs/superpowers/execution/D13.md`; final-head CI evidence belongs in PR #20.
+
+### Unified workspace session facade
+
+- New Claude and Codex sessions use the Native adapter; historical resume retains the catalog runtime. Native operations never fall back to Legacy PTY commands.
+- Scoped catalog refresh replaces only that project. Per-project request ownership prevents distinct concurrent refreshes or late full refreshes from dropping newer projections.
+- Archived records remain in the addressable catalog, while normal project groups hide them. Legacy archive IDs retain compatibility; Native archive IDs include runtime, CLI, project and authenticated history session identity to avoid cross-source collisions.
+- Native active archive requires an exact known history origin; ambiguous origins fail before process side effects. Execution evidence and remaining gates are recorded in `docs/superpowers/execution/unified-workspace-progress.md`.

@@ -1,3 +1,5 @@
+import { createPinia, setActivePinia } from 'pinia'
+import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { describe, expect, it, vi } from 'vitest'
 import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
 import type { HistorySession, TerminalTab } from '@/stores/session'
@@ -64,10 +66,14 @@ class FakeLegacyStore implements LegacyClaudeStorePort {
   }
 
   async archiveSession(projectPath: string, sessionId: string): Promise<void> {
+    const key = projectPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    this.archived.set(key, [...(this.archived.get(key) ?? []), sessionId])
     this.events.push(`archive:${projectPath}:${sessionId}`)
   }
 
   async restoreSession(projectPath: string, sessionId: string): Promise<void> {
+    const key = projectPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    this.archived.set(key, (this.archived.get(key) ?? []).filter(id => id !== sessionId))
     this.events.push(`restore:${projectPath}:${sessionId}`)
   }
 }
@@ -144,7 +150,9 @@ describe('legacy Claude adapter', () => {
     expect(sessions.map(session => session.id)).toEqual([
       'legacy-tab:tab-active',
       'legacy-history:c:/work/game:history-1',
+      'legacy-history:c:/work/game:archived-1',
     ])
+    expect(sessions[2].archived).toBe(true)
     expect(sessions[0]).toMatchObject({
       projectKey: 'c:/work/game',
       runtime: 'legacy-claude',
@@ -251,4 +259,21 @@ describe('legacy Claude adapter', () => {
       'restore:/work/game:archived-1',
     ])
   })
+  it('LegacyArchive_RefreshRestore_005', async () => {
+    setActivePinia(createPinia())
+    const source = new FakeLegacyStore()
+    source.history.set('/repo', [{ sessionId: 'history', name: 'Old', projectPath: '/repo', lastActiveAt: 10 }])
+    const adapter = createLegacyClaudeAdapter({ store: source, runtime: runtime(source), projectPaths: () => ['/repo'] })
+    const store = useUnifiedSessionsStore()
+    store.configureAdapters([adapter])
+    await store.refresh()
+    const id = store.sessions[0].id
+    await store.archiveSession(id)
+    await store.refresh()
+    expect(store.sessions[0].archived).toBe(true)
+    expect(store.projectGroups).toEqual([])
+    await store.restoreArchivedSession(id)
+    expect(store.projectGroups[0].sessions[0].archived).toBe(false)
+  })
+
 })

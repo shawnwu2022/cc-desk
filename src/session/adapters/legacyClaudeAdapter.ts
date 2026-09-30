@@ -166,8 +166,8 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
 
       sessions.push(...tabs.map(projectActiveTab))
       for (const history of store.getHistoryFor(projectPath)) {
-        if (claimed.has(history.sessionId) || archived.has(history.sessionId)) continue
-        sessions.push(projectHistorySession(projectPath, history))
+        if (claimed.has(history.sessionId)) continue
+        sessions.push({ ...projectHistorySession(projectPath, history), archived: archived.has(history.sessionId) })
       }
     }
 
