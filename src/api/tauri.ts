@@ -31,6 +31,8 @@ import type {
   SessionSearchResult,
   AppConfig,
   ProjectsState,
+  SessionUiRecord,
+  ProjectLaunchPreference,
   DefaultClaudeOptions,
   ProjectConfigResult,
   AgentInfo,
@@ -57,6 +59,8 @@ export type {
   SessionSearchResult,
   AppConfig,
   ProjectsState,
+  SessionUiRecord,
+  ProjectLaunchPreference,
   DefaultClaudeOptions,
   ProjectConfigResult,
   AgentInfo,
@@ -217,6 +221,21 @@ export const deleteSessions = (projectPath: string, sessionIds: string[]): Promi
 
 export const setDisplayName = (path: string, alias: string): Promise<ProjectsState> =>
   invoke<ProjectsState>('set_display_name', { path, alias });
+
+export const upsertSessionUiRecord = (
+  recordKey: string,
+  record: SessionUiRecord,
+): Promise<ProjectsState> =>
+  invoke<ProjectsState>('upsert_session_ui_record', { recordKey, record });
+
+export const removeSessionUiRecord = (recordKey: string): Promise<ProjectsState> =>
+  invoke<ProjectsState>('remove_session_ui_record', { recordKey });
+
+export const setProjectLaunchPreference = (
+  projectPath: string,
+  preference: ProjectLaunchPreference,
+): Promise<ProjectsState> =>
+  invoke<ProjectsState>('set_project_launch_preference', { projectPath, preference });
 
 export const getDefaultClaudeOptions = (): Promise<DefaultClaudeOptions> =>
   invoke<DefaultClaudeOptions>('get_default_claude_options');

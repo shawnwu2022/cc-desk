@@ -1,3 +1,5 @@
+import type { SessionRuntimeKind, UnifiedCliKind } from './unifiedSession'
+
 // App 配置相关类型定义
 
 export interface CheckResult {
@@ -34,10 +36,28 @@ export interface AppConfig {
 
 // 项目置顶 + 会话存档 + 项目别名持久化状态（~/.cc-box/projects.json，与 config.json 分开存储）
 // 后端 merge 为顶层替换：写入时须发送完整 pinnedProjects / archivedSessions / displayNames
+export interface SessionUiRecord {
+  runtime: SessionRuntimeKind
+  cli: UnifiedCliKind
+  projectPath: string
+  adapterSessionId: string
+  nativeSessionId?: string | null
+  title: string
+  lastActivityAt: number
+}
+
+export interface ProjectLaunchPreference {
+  lastCli: UnifiedCliKind
+  claudeLaunchConfigId?: string | null
+  codexLaunchConfigId?: string | null
+}
+
 export interface ProjectsState {
   pinnedProjects: string[]
   archivedSessions: Record<string, string[]>
   displayNames?: Record<string, string>
+  sessionRecords?: Record<string, SessionUiRecord>
+  launchPreferences?: Record<string, ProjectLaunchPreference>
 }
 
 export interface DefaultClaudeOptions {

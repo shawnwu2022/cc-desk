@@ -2325,6 +2325,160 @@ fn WithLocked_WritesCamelCase_001() {
     assert_eq!(reparsed.pinned_projects, vec!["a"]);
 }
 
+// ==================== unified workspace projects state compatibility ====================
+
+#[test]
+#[allow(non_snake_case)]
+fn ProjectsState_OldFileDefaultsNewFields_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    std::fs::write(
+        &path,
+        r#"{"pinnedProjects":["D:/Work/Game"],"archivedSessions":{},"displayNames":{}}"#,
+    )
+    .unwrap();
+
+    let state = get_projects_state_at(&path).unwrap();
+    assert!(state.session_records.is_empty());
+    assert!(state.launch_preferences.is_empty());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn ProjectsState_RoundTripsSessionRecords_002() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    std::fs::write(
+        &data,
+        r#"{
+          "pinnedProjects":[],
+          "archivedSessions":{},
+          "displayNames":{},
+          "sessionRecords":{
+            "native-key":{
+              "runtime":"native-cli",
+              "cli":"codex",
+              "projectPath":"D:/Work/Game/",
+              "adapterSessionId":"tab-1",
+              "nativeSessionId":"native-1",
+              "title":"修复登录",
+              "lastActivityAt":1234
+            }
+          },
+          "launchPreferences":{
+            "D:/Work/Game/":{
+              "lastCli":"codex",
+              "claudeLaunchConfigId":null,
+              "codexLaunchConfigId":"codex-default"
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let state = with_projects_state_locked(&data, &lock, |_| Ok::<(), anyhow::Error>(())).unwrap();
+    let record = state.session_records.get("native-key").unwrap();
+    assert_eq!(record.title, "修复登录");
+    assert_eq!(record.project_path, "d:/work/game");
+    assert_eq!(record.native_session_id.as_deref(), Some("native-1"));
+    let preference = state.launch_preferences.get("d:/work/game").unwrap();
+    assert_eq!(preference.last_cli, "codex");
+    assert_eq!(preference.codex_launch_config_id.as_deref(), Some("codex-default"));
+
+    let reparsed = get_projects_state_at(&data).unwrap();
+    assert_eq!(reparsed.session_records.len(), 1);
+    assert_eq!(reparsed.launch_preferences.len(), 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn ProjectsState_SkipsMalformedSessionRecord_003() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    let mut records = serde_json::Map::new();
+    for i in 0..10_005usize {
+        records.insert(
+            format!("valid-{i:05}"),
+            json!({
+                "runtime": "native-cli",
+                "cli": "codex",
+                "projectPath": "/work/game",
+                "adapterSessionId": format!("tab-{i}"),
+                "nativeSessionId": null,
+                "title": "ok",
+                "lastActivityAt": i,
+            }),
+        );
+    }
+    records.insert(
+        "too-long".into(),
+        json!({
+            "runtime": "native-cli",
+            "cli": "codex",
+            "projectPath": "/work/game",
+            "adapterSessionId": "tab-long",
+            "nativeSessionId": null,
+            "title": "x".repeat(201),
+            "lastActivityAt": 1,
+        }),
+    );
+    records.insert(
+        "nul-title".into(),
+        json!({
+            "runtime": "legacy-claude",
+            "cli": "claude",
+            "projectPath": "/work/game",
+            "adapterSessionId": "legacy-1",
+            "nativeSessionId": null,
+            "title": "bad\0title",
+            "lastActivityAt": 1,
+        }),
+    );
+    let value = json!({
+        "pinnedProjects": [],
+        "archivedSessions": {},
+        "displayNames": {},
+        "sessionRecords": records,
+        "launchPreferences": {
+            "/valid": { "lastCli": "claude", "claudeLaunchConfigId": "default", "codexLaunchConfigId": null },
+            "/bad": { "lastCli": "shell", "claudeLaunchConfigId": null, "codexLaunchConfigId": null }
+        }
+    });
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    let state = get_projects_state_at(&path).unwrap();
+    assert_eq!(state.session_records.len(), 10_000);
+    assert!(!state.session_records.contains_key("too-long"));
+    assert!(!state.session_records.contains_key("nul-title"));
+    assert!(state.launch_preferences.contains_key("/valid"));
+    assert!(!state.launch_preferences.contains_key("/bad"));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn ProjectsState_PreservesUnknownTopLevelDataOnlyWhereAlreadySupported_004() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    std::fs::write(
+        &data,
+        r#"{
+          "pinnedProjects":["/work/game"],
+          "archivedSessions":{"/work/game":["legacy-1"]},
+          "displayNames":{"/work/game":"Game"},
+          "futureField":{"secret":"must-not-be-reflected"}
+        }"#,
+    )
+    .unwrap();
+
+    with_projects_state_locked(&data, &lock, |_| Ok::<(), anyhow::Error>(())).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&data).unwrap()).unwrap();
+    assert_eq!(value["pinnedProjects"], json!(["/work/game"]));
+    assert_eq!(value["displayNames"]["/work/game"], "Game");
+    assert!(value.get("futureField").is_none());
+}
+
 // ==================== compute_project_startup_state ====================
 
 // 无项目：has_any=false, has_visible=false, last_info=None

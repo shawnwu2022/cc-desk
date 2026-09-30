@@ -30,11 +30,22 @@ Rules:
 - Design specification: complete
 - Implementation plan: complete
 - Task 1: complete and present in remote history
-- Next implementation task: Task 2 — durable shared project and session catalog state
+- Task 2 frontend and persistence implementation: locally verified; remote checkpoint pending
+- Task 3 Legacy Claude adapter: locally verified; remote checkpoint pending
+- Next implementation task: Task 4 — Native CLI session adapter and history cache
 
 ## Task checkpoints
 
 | Task | Status | Tests | Remote commit |
 |---|---|---|---|
 | 1 | complete | relative time, session presentation, safe user-error mapping | `04370fdc22e41fa07ed61546d9b6e5d15ac69e35` |
-| 2 | pending | — | — |
+| 2 | local checkpoint; Rust filtered tests pending toolchain | 135 targeted + 903 full frontend tests, typecheck, build | pending remote sync |
+| 3 | local checkpoint | 41 targeted + 907 full frontend tests, typecheck, build | pending remote sync |
+
+## Rulings
+
+- Task 2: added typed IPC mutations (`upsert_session_ui_record`, `remove_session_ui_record`, `set_project_launch_preference`) and their frontend wrappers. The shared writer cannot safely persist the new fields through the existing legacy pin/archive/display-name mutations alone. Cost if wrong: a broader Tauri command surface requiring final Rust review.
+- Task 2: local environment has no Rust toolchain and outbound DNS is unavailable, so filtered Rust tests cannot run in this workspace. Frontend gates are green; the checkpoint remains explicitly Rust-pending until the final Windows/Rust gate runs. Cost if wrong: a Rust compile/test defect may be discovered at final CI rather than this checkpoint.
+
+- Task 3: Legacy runtime operations are injected through `LegacyClaudeRuntimePort` rather than implemented inside the Pinia store. Process ownership remains in the terminal host, while the adapter owns projection and routing. Cost if wrong: Task 11 must supply a complete runtime bridge before the adapter can be used in production.
+- Task 3: Windows-style project paths are normalized case-insensitively even when tests execute on Linux, because persisted Windows identities must remain stable across build/test hosts. Cost if wrong: a case-sensitive Windows-like path on Linux would be merged.

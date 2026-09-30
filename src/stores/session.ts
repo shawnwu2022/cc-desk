@@ -1,22 +1,16 @@
-import { defineStore } from 'pinia'
+import { defineStore, storeToRefs } from 'pinia'
 import { ref, computed, reactive, type ComputedRef } from 'vue'
 import {
-  getProjectsState,
   getSessions,
   ptyKill,
   searchSessionMessages,
-  pinProject as pinProjectApi,
-  unpinProject as unpinProjectApi,
-  archiveSession as archiveSessionApi,
-  restoreSession as restoreSessionApi,
   deleteSessions as deleteSessionsApi,
-  setDisplayName as setDisplayNameApi,
 } from '@/api/tauri'
 import { normalizePath, sameProjectPath } from '@/utils/path'
 import { validateDisplayName, projectBasename, matchProjectQuery } from '@/utils/displayName'
 import type { SessionSearchResult } from '@/types'
-import type { ProjectsState } from '@/types/app'
 import { useAttentionStore } from './attention'
+import { useProjectsStateStore } from './projectsState'
 
 // ==================== Tab-Centric 数据模型 ====================
 
@@ -138,20 +132,15 @@ export const useSessionStore = defineStore('session', () => {
   const messageSearchResults = ref<SessionSearchResult[]>([])
   let messageSearchTimer: ReturnType<typeof setTimeout> | null = null
 
-  /** 置顶项目（持久化到 projects.json，启动加载） */
-  const pinnedProjects = ref<string[]>([])
-  /** 会话存档：projectPath -> sessionId[]（持久化到 projects.json，启动加载） */
-  const archivedSessions = reactive(new Map<string, string[]>())
-  /** 项目别名：normalizedPath -> 别名（持久化到 projects.json displayNames，启动加载） */
-  const displayNames = reactive(new Map<string, string>())
-  /** projects.json 是否已加载完成（P1.2 门禁：pin/archive 前须确保加载，否则用空内存覆写旧文件） */
-  const projectsStateLoaded = ref(false)
-  /** projects.json 加载是否失败（P1 v-if 门禁：失败时树显示失败提示 + 重试，不读空状态） */
-  const projectsStateError = ref(false)
-  /** loadProjectsState 的进行中 Promise（供 ensureProjectsStateLoaded 复用，避免重复加载） */
-  let loadPromise: Promise<void> | null = null
-  /** pin/unpin/archive/restore 操作锁（P1.3 串行化，避免并发各自基于旧内存算 next 丢更新） */
-  let opLock: Promise<void> = Promise.resolve()
+  /** projects.json 的唯一前端所有者；本 store 只保留兼容投影与会话逻辑。 */
+  const projectsState = useProjectsStateStore()
+  const {
+    pinnedProjects,
+    loaded: projectsStateLoaded,
+    error: projectsStateError,
+  } = storeToRefs(projectsState)
+  const archivedSessions = projectsState.archivedSessions
+  const displayNames = projectsState.displayNames
 
   // ---- Computed ----
 
@@ -803,102 +792,23 @@ export const useSessionStore = defineStore('session', () => {
 
   // ---- 项目置顶 + 会话存档（持久化到 ~/.cc-box/projects.json）----
 
-  /** 用后端返回的 ProjectsState 覆盖本地三份（返回值是锁内写完的最新 canonical 状态）。
-   *  性能 #4：仅在变化时写，避免无条件 clear+rebuild 触发依赖（getDisplayName/buildProjectGroups）重算。 */
-  function applyReturnedState(s: ProjectsState) {
-    const nextPinned = s.pinnedProjects ?? []
-    const nextArchived = s.archivedSessions ?? {}
-    const nextDisplay = s.displayNames ?? {}
-    if (!stringArrEqual(pinnedProjects.value, nextPinned)) {
-      pinnedProjects.value = nextPinned
-    }
-    if (!stringArrMapEqual(archivedSessions, nextArchived)) {
-      archivedSessions.clear()
-      for (const [k, v] of Object.entries(nextArchived)) archivedSessions.set(k, v)
-    }
-    if (!stringMapEqual(displayNames, nextDisplay)) {
-      displayNames.clear()
-      for (const [k, v] of Object.entries(nextDisplay)) {
-        if (typeof v === 'string') displayNames.set(k, v)
-      }
-    }
-  }
-
-  /**
-   * 启动加载：读取 pinnedProjects + archivedSessions（参考 loadAppConfig 范式）。
-   * 后端 read_projects_state_locked 已 canonical（normalize + 去重 + 排序），前端 applyReturnedState 原样应用。
-   * P1.2：不吞失败--失败时 projectsStateLoaded 保持 false，ensureProjectsStateLoaded 据此抛错
-   * 阻断 pin/archive；但本函数不抛出（避免阻断 App.vue fire-and-forget 启动）。
-   * 赋值 loadPromise 供 ensureProjectsStateLoaded 复用（并发等待同一加载，不重复发请求）。
-   * P2：失败时 loadPromise 重置为 null，允许下次 ensureProjectsStateLoaded 重试
-   * （否则已 settled 的 loadPromise 被反复 await，一次临时 IPC/文件错误致本次进程永久不可用）。
-   * projectsStateError 供 UI 门禁区分「加载中」与「加载失败」（失败提示 + 重试按钮）。
-   */
+  /** 启动加载委托给 projectsState 单一所有者。 */
   function loadProjectsState(): Promise<void> {
-    loadPromise = (async () => {
-      try {
-        projectsStateError.value = false
-        const state = await getProjectsState()
-        applyReturnedState(state)          // 后端 read_projects_state_locked 已 canonical
-        projectsStateLoaded.value = true
-      } catch (err) {
-        console.error('[SessionStore] loadProjectsState failed:', err)
-        projectsStateLoaded.value = false
-        projectsStateError.value = true
-        loadPromise = null
-        throw err
-      }
-    })()
-    return loadPromise
+    return projectsState.load()
   }
 
-  /**
-   * 确保 projects.json 已加载完成（P1.2 门禁，pin/unpin/archive/restore 开头调用）。
-   * - loadPromise 已存在（含进行中）则直接 await 同一个，并发不重复触发
-   * - loadPromise 为 null（首次 / 上次失败已重置）则触发 loadProjectsState 并 await
-   * - 加载失败（projectsStateLoaded=false，loadPromise 已被重置为 null）则抛错，
-   *   阻止后续操作用空内存覆写磁盘旧数据；下次调用可重试（P2）
-   */
   async function ensureProjectsStateLoaded(): Promise<void> {
-    if (loadPromise === null) {
-      loadProjectsState()
-    }
-    await loadPromise
-    if (!projectsStateLoaded.value) {
-      throw new Error('projects state load failed; pin/archive blocked')
-    }
+    await projectsState.ensureLoaded()
   }
 
-  /** 聚焦 reload：与 action 共用 opLock，完整串行 invoke + apply，避免响应逆序覆盖。 */
+  /** 聚焦 reload：共享 store 与所有 mutation 使用同一串行队列。 */
   async function reloadProjectsState(): Promise<void> {
-    if (!projectsStateLoaded.value) return
+    if (!projectsState.loaded) return
     try {
-      await withLock(async () => {
-        const s = await getProjectsState()
-        applyReturnedState(s)
-      })
+      await projectsState.reload()
     } catch (err) {
       console.error('[SessionStore] reloadProjectsState failed:', err)
     }
-  }
-
-  /**
-   * 操作锁（P1.3）：串行化完整 request + apply--ensureProjectsStateLoaded → 发增量 invoke
-   * → applyReturnedState 全在锁内。增量操作在后端锁内原子读改写，本锁仅保证前端单实例串行
-   * （多实例跨进程排他由后端 projects.json.lock 负责）。
-   */
-  function withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = opLock
-    let release!: () => void
-    opLock = new Promise<void>(r => { release = r })
-    return (async () => {
-      await prev
-      try {
-        return await fn()
-      } finally {
-        release()
-      }
-    })()
   }
 
   /** 该项目是否已置顶（normalized 比较，兼容 Windows 路径大小写/斜杠差异） */
@@ -907,22 +817,13 @@ export const useSessionStore = defineStore('session', () => {
     return pinnedProjects.value.some(p => normalizePath(p) === n)
   }
 
-  /** 置顶项目（始终发后端；后端锁内据最新磁盘幂等。前端不做本地短路——本地不能证明磁盘状态）。 */
+  /** 置顶/取消置顶由 projectsState 单一写入队列执行。 */
   async function pinProject(path: string) {
-    return withLock(async () => {
-      await ensureProjectsStateLoaded()
-      const s = await pinProjectApi(path)
-      applyReturnedState(s)
-    })
+    await projectsState.pinProject(path)
   }
 
-  /** 取消置顶（始终发后端，后端锁内 normalized 移除）。 */
   async function unpinProject(path: string) {
-    return withLock(async () => {
-      await ensureProjectsStateLoaded()
-      const s = await unpinProjectApi(path)
-      applyReturnedState(s)
-    })
+    await projectsState.unpinProject(path)
   }
 
   /**
@@ -951,22 +852,13 @@ export const useSessionStore = defineStore('session', () => {
     })
   }
 
-  /** 存档会话（始终发后端，后端锁内 sessionId 去重归并）。 */
+  /** 存档/恢复由 projectsState 单一写入队列执行。 */
   async function archiveSession(projectPath: string, sessionId: string) {
-    return withLock(async () => {
-      await ensureProjectsStateLoaded()
-      const s = await archiveSessionApi(projectPath, sessionId)
-      applyReturnedState(s)
-    })
+    await projectsState.archiveSession(projectPath, sessionId)
   }
 
-  /** 恢复会话（始终发后端，后端锁内移除 + 空数组清理 key）。 */
   async function restoreSession(projectPath: string, sessionId: string) {
-    return withLock(async () => {
-      await ensureProjectsStateLoaded()
-      const s = await restoreSessionApi(projectPath, sessionId)
-      applyReturnedState(s)
-    })
+    await projectsState.restoreSession(projectPath, sessionId)
   }
 
   /**
@@ -976,16 +868,12 @@ export const useSessionStore = defineStore('session', () => {
    * 失败：不 apply、不强制重载，调用方据错误提示。
    */
   async function deleteSessions(projectPath: string, sessionIds: string[]) {
-    return withLock(async () => {
-      await ensureProjectsStateLoaded()
-      const s = await deleteSessionsApi(projectPath, sessionIds)
-      applyReturnedState(s)
-      // force 刷新历史;失败时清该项目缓存,避免已删会话(标记已清)作为普通历史重现
-      const res = await loadHistoryFor(projectPath, true)
-      if (!res.ok) {
-        invalidateHistoryCache(projectPath)
-      }
-    })
+    await projectsState.mutate(() => deleteSessionsApi(projectPath, sessionIds))
+    // force 刷新历史;失败时清该项目缓存,避免已删会话(标记已清)作为普通历史重现
+    const res = await loadHistoryFor(projectPath, true)
+    if (!res.ok) {
+      invalidateHistoryCache(projectPath)
+    }
   }
 
   /**
@@ -998,17 +886,13 @@ export const useSessionStore = defineStore('session', () => {
     return alias ? alias : projectBasename(projectPath)
   }
 
-  /** 设别名（前端 validateDisplayName 前置快速反馈 + 后端锁内校验兜底；空=清除）。 */
+  /** 设别名由 projectsState 校验并持久化。 */
   async function setDisplayName(path: string, alias: string): Promise<void> {
     const v = validateDisplayName(alias)
     if (!v.ok) {
       throw new Error(v.error === 'tooLong' ? 'alias too long' : 'alias invalid characters')
     }
-    return withLock(async () => {
-      await ensureProjectsStateLoaded()
-      const s = await setDisplayNameApi(path, alias)
-      applyReturnedState(s)
-    })
+    await projectsState.setProjectDisplayName(path, alias)
   }
 
   return {

@@ -27,6 +27,9 @@ export interface NativeCliTab {
   status: NativeTabStatus
   errorCode: string | null
   launchRevision: string | null
+  title: string
+  createdAt: number
+  lastActivityAt: number
 }
 
 export interface NativeAttemptIdentity {
@@ -42,6 +45,7 @@ export interface NativeTabCreate {
   profileId: string
   profileRevision: string
   action: LaunchAction
+  title?: string
 }
 
 export function captureNativeAttempt(
@@ -148,6 +152,9 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       status: 'stopped',
       errorCode: null,
       launchRevision: null,
+      title: input.title?.trim() || (input.cli === 'claude' ? 'Claude Code' : 'Codex CLI'),
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
     }
     tabs.set(tabId, value)
     activeTabId.value = tabId
@@ -167,11 +174,27 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     activeTabId.value = tabId
   }
 
+  function touch(tabId: string, at = Date.now()): void {
+    const value = tabs.get(tabId)
+    if (!value) throw new Error('TAB_NOT_FOUND')
+    value.lastActivityAt = at
+  }
+
+  function rename(tabId: string, title: string): void {
+    const value = tabs.get(tabId)
+    if (!value) throw new Error('TAB_NOT_FOUND')
+    const next = title.trim()
+    if (!next || next.includes('\0')) throw new Error('SESSION_TITLE_REQUIRED')
+    value.title = next
+    value.lastActivityAt = Date.now()
+  }
+
   function markStarting(tabId: string): void {
     const value = tabs.get(tabId)
     if (!value) throw new Error('TAB_NOT_FOUND')
     value.status = 'starting'
     value.errorCode = null
+    value.lastActivityAt = Date.now()
   }
 
   function markUnknown(tabId: string): void {
@@ -179,6 +202,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (!value) throw new Error('TAB_NOT_FOUND')
     value.status = 'unknown'
     value.errorCode = 'LAUNCH_STATE_UNKNOWN'
+    value.lastActivityAt = Date.now()
   }
 
   function markError(tabId: string, code: string): void {
@@ -186,6 +210,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (!value) throw new Error('TAB_NOT_FOUND')
     value.status = 'failed'
     value.errorCode = text(code, 'ERROR_CODE_REQUIRED')
+    value.lastActivityAt = Date.now()
   }
 
   function setDiagnostic(tabId: string, code: string): void {
@@ -207,6 +232,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.status = next.status
     value.errorCode = next.errorCode
     value.launchRevision = launch.revision
+    value.lastActivityAt = Date.now()
     return true
   }
 
@@ -237,6 +263,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.status = 'stopped'
     value.errorCode = null
     value.launchRevision = null
+    value.lastActivityAt = Date.now()
     activeTabId.value = tabId
     return snapshot(value)
   }
@@ -264,6 +291,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     markUnknown,
     markError,
     setDiagnostic,
+    touch,
+    rename,
     applyLaunchStatus,
     restart,
     close,

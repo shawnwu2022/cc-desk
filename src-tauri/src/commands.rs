@@ -8,8 +8,9 @@ use tauri::AppHandle;
 use crate::checks::CheckResult;
 use crate::pty::get_pty_manager;
 use crate::store::{
-    AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project, ProjectConfig,
-    ProjectsState, SessionDetails, SessionInfo, SessionSearchResult, SkillInfo,
+    AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project,
+    ProjectConfig, ProjectLaunchPreference, ProjectsState, SessionDetails, SessionInfo,
+    SessionSearchResult, SessionUiRecord, SkillInfo,
 };
 
 // ==================== PTY Commands ====================
@@ -376,6 +377,60 @@ pub async fn set_display_name(path: String, alias: String) -> Result<ProjectsSta
         } else {
             s.display_names.insert(n, trimmed.to_string());
         }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+}
+
+/// Upsert one bounded user-interface session record without replacing unrelated state.
+#[tauri::command]
+pub async fn upsert_session_ui_record(
+    record_key: String,
+    record: SessionUiRecord,
+) -> Result<ProjectsState, String> {
+    apply_projects_state_blocking(move |s| {
+        crate::store::validate_session_record_key(&record_key)?;
+        crate::store::validate_session_ui_record(&record)?;
+        if !s.session_records.contains_key(&record_key)
+            && s.session_records.len() >= crate::store::MAX_SESSION_UI_RECORDS
+        {
+            bail!("session record capacity reached");
+        }
+        let mut canonical = record;
+        canonical.project_path = crate::store::normalize_path_str(&canonical.project_path);
+        s.session_records.insert(record_key, canonical);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+}
+
+/// Remove one user-interface session record; missing keys are idempotent success.
+#[tauri::command]
+pub async fn remove_session_ui_record(record_key: String) -> Result<ProjectsState, String> {
+    apply_projects_state_blocking(move |s| {
+        crate::store::validate_session_record_key(&record_key)?;
+        s.session_records.remove(&record_key);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+}
+
+/// Store the last successful per-project CLI/config selection without exposing profiles in the shell.
+#[tauri::command]
+pub async fn set_project_launch_preference(
+    project_path: String,
+    preference: ProjectLaunchPreference,
+) -> Result<ProjectsState, String> {
+    apply_projects_state_blocking(move |s| {
+        crate::store::validate_project_path_identity(&project_path)?;
+        crate::store::validate_project_launch_preference(&preference)?;
+        let key = crate::store::normalize_path_str(&project_path);
+        if !s.launch_preferences.contains_key(&key)
+            && s.launch_preferences.len() >= crate::store::MAX_LAUNCH_PREFERENCES
+        {
+            bail!("launch preference capacity reached");
+        }
+        s.launch_preferences.insert(key, preference);
         Ok::<(), anyhow::Error>(())
     })
     .await
