@@ -3,6 +3,7 @@ import { reactive } from 'vue'
 import { createNativeProjectionClient } from '@/api/tauri'
 import type { NativeCliKind } from '@/types/cli'
 import type { ResourceItem } from '@/types/nativeProjection'
+import { projectionErrorCode } from '@/api/nativeProjection'
 import { normalizePath } from '@/utils/path'
 
 export interface NativeHistoryContext {
@@ -24,6 +25,9 @@ export interface NativeHistoryEntry {
   loaded: boolean
   error: string | null
   requestEpoch: string
+  /** Only one complete authenticated response can prove absence. Offset pages
+   * have no common snapshot token and are positive discovery only. */
+  absenceEvidence?: { cli: NativeCliKind; sourceRootKey: string }
 }
 
 function required(value: string, code: string): string {
@@ -100,19 +104,32 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
       })
       if (owners.get(key) !== owner) return entries.get(key) ?? entry
       if (source.cli !== context.cli) throw new Error('PROFILE_CLI_MISMATCH')
-      const result = await client.read({ source, resourceKind: 'history', requestEpoch: epoch, limit: 200 })
-      if (owners.get(key) !== owner) return entries.get(key) ?? entry
-      if (result.state !== 'ready') {
-        entry.error = result.reason ?? 'SOURCE_UNAVAILABLE'
-        entry.sessions = []
-      } else {
-        entry.sessions = result.items.filter((item): item is NativeHistorySession => item.type === 'session')
+      const sessions = new Map<string, NativeHistorySession>()
+      let offset = 0
+      while (true) {
+        const result = await client.read({ source, resourceKind: 'history', requestEpoch: epoch, limit: 200, offset })
+        if (owners.get(key) !== owner) return entries.get(key) ?? entry
+        if (result.state !== 'ready') {
+          entry.error = result.reason ?? 'SOURCE_UNAVAILABLE'
+          entry.sessions = []
+          break
+        }
+        for (const item of result.items) if (item.type === 'session') sessions.set(item.sessionKey, item)
+        if (!result.hasMore) {
+          entry.sessions = [...sessions.values()]
+          if (offset === 0 && typeof source.sourceRootKey === 'string' && source.sourceRootKey) {
+            entry.absenceEvidence = { cli: source.cli, sourceRootKey: source.sourceRootKey }
+          }
+          break
+        }
+        if (!result.items.length || offset + result.items.length > 1_000_000) throw new Error('SOURCE_UNAVAILABLE')
+        offset += result.items.length
       }
       entry.loaded = true
       return entry
     } catch (failure) {
       if (owners.get(key) !== owner) return entries.get(key) ?? entry
-      entry.error = failure instanceof Error ? failure.message : 'SOURCE_UNAVAILABLE'
+      entry.error = projectionErrorCode(failure)
       entry.sessions = []
       entry.loaded = true
       throw failure

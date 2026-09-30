@@ -25,6 +25,7 @@ function sameProjectIdentity(left: string, right: string): boolean {
 export interface LegacyClaudeStorePort {
   readonly tabs: Map<string, TerminalTab>
   getCatalogHistoryFor(projectPath: string): HistorySession[]
+  loadHistoryFor?(projectPath: string, force?: boolean): Promise<{ ok: true; sessions: HistorySession[] } | { ok: false; error: string }>
   getArchivedSessions(projectPath: string): string[]
   createTab(projectPath: string, opts?: { sessionId?: string; name?: string }): string
   setActiveTab(tabId: string | null): void
@@ -128,6 +129,7 @@ function requireClaude(input: { cli: string }): void {
 
 export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): SessionAdapter {
   const { store, runtime } = deps
+  const resumes = new Map<string, { promise: Promise<UnifiedSession>; owners: Set<() => boolean> }>()
 
   function requireTab(id: string): TerminalTab {
     const tabId = activeTabId(id)
@@ -192,7 +194,30 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     return projectActiveTab(requireTab(activeId(tabId)))
   }
 
-  async function resumeSession(input: ResumeUnifiedSessionInput): Promise<UnifiedSession> {
+  function resumeSession(input: ResumeUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
+    const key = JSON.stringify([normalizeProjectIdentity(input.projectPath), input.nativeSessionId ?? input.adapterSessionId])
+    const ownResult = (promise: Promise<UnifiedSession>) => promise.then(value => {
+      if (!canAdmit()) throw new Error('RESTORE_CANCELLED')
+      return value
+    })
+    const existing = resumes.get(key)
+    if (existing) { existing.owners.add(canAdmit); return ownResult(existing.promise) }
+    const owners = new Set([canAdmit])
+    const task = resume(input, () => [...owners].some(isCurrent => isCurrent()))
+    resumes.set(key, { promise: task, owners })
+    void task.then(() => resumes.delete(key), () => resumes.delete(key))
+    return ownResult(task)
+  }
+  async function verifyHistory(input: ResumeUnifiedSessionInput, missing: boolean) {
+    const result = store.loadHistoryFor ? await store.loadHistoryFor(input.projectPath, true)
+      : { ok: true as const, sessions: store.getCatalogHistoryFor(input.projectPath) }
+    if (!result.ok) throw new Error('SOURCE_UNAVAILABLE')
+    const present = result.sessions.some(row => row.sessionId === (input.nativeSessionId ?? input.adapterSessionId))
+    const open = [...store.tabs.values()].some(tab => isLegacyClaudeTab(tab) && sameProjectIdentity(tab.projectPath, input.projectPath) && tab.sessionId === (input.nativeSessionId ?? input.adapterSessionId))
+    if (missing ? present || open : !present) throw new Error(missing ? 'SESSION_EXISTS' : 'SESSION_NOT_FOUND')
+  }
+  async function verifyMissingSession(input: ResumeUnifiedSessionInput) { await verifyHistory(input, true) }
+  async function resume(input: ResumeUnifiedSessionInput, canAdmit: () => boolean): Promise<UnifiedSession> {
     requireClaude(input)
     const nativeSessionId = input.nativeSessionId ?? input.adapterSessionId
     const existing = [...store.tabs.values()].find(tab =>
@@ -205,6 +230,10 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
       return projectActiveTab(existing)
     }
 
+    if (store.loadHistoryFor) await verifyHistory(input, false)
+    if (!canAdmit()) throw new Error('RESTORE_CANCELLED')
+    const admitted = [...store.tabs.values()].find(tab => isLegacyClaudeTab(tab) && tab.sessionId === nativeSessionId && sameProjectIdentity(tab.projectPath, input.projectPath))
+    if (admitted) { store.setActiveTab(admitted.tabId); return projectActiveTab(admitted) }
     const tabId = store.createTab(input.projectPath, {
       sessionId: nativeSessionId,
       name: input.title,
@@ -288,5 +317,6 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     renameSession,
     archiveSession,
     restoreArchivedSession,
+    verifyMissingSession,
   }
 }

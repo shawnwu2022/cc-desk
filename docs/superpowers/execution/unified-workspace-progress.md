@@ -37,7 +37,8 @@ Rules:
 - Task 9: complete at `f2764aa4728983fbdf8989f9c4bb9881a9069d8b`
 - Task 10: complete at `8683f6b9e56c2375a2520508f104754c8fd4553c`
 - Task 11: complete at `b1309bd294f153e99449b0d3413542ba923a294e`
-- Next task: Task 12 — quick/advanced new-session flow
+- Task 12: complete at `72644819200a298f7b6689dfa512289036d37177`
+- Next task: Task 13 — unified resume/history search
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -362,3 +363,28 @@ Rules:
 - Independent scoped review approved all four findings; original four reproductions, six repair regressions, both selection reproductions and four focused selection/activation checks passed across review rounds
 - Earlier22/205 and25/208 counts are historical, superseded by final25/210. No actual CLI/account/platform/D20 certification or CI/PR/package/release
 - Atomic publication pending remote readback
+
+### Verified Task 12 checkpoint
+
+- Remote commit `72644819200a298f7b6689dfa512289036d37177`; exact staged/fetched tree and local/remote SHA match; working tree clean before this readback
+-25 required tests,210 affected tests, typecheck, manifest and independent spec/quality approval; all review findings repaired
+- No CI/PR/package/release or real CLI/platform acceptance; next Task13
+
+### Task 13 preflight ruling
+
+- Ruling: verified missing-history Remove Record evicts only exact cached/catalog identity and matching optional sessionRecords via canonical writer. Existing deleteSessions deletes real history files and is prohibited for this action. Do not add permanent tombstones/schema; a later successful authenticated scan may rediscover a restored source record. Why: the approved action removes an unavailable app record, not real CLI history or a durable ignore rule. Cost if wrong: rediscovered history can reappear; a permanent suppression preference would require a separately explicit data contract.
+- Ruling: legacy Native archive keys remain recognized only when uniquely mapped to the new full-origin catalog identity; explicit restore may clear that exact old key. Ambiguous mappings retain metadata and produce safe ambiguity feedback without guessed mutations; new archives use full-origin keys. Why: expanding identity must not orphan unambiguous saved archives or accidentally affect another source. Cost if wrong: formerly colliding archives require explicit origin clarification rather than automatic restoration.
+- Ruling: paginated offset history discovery may establish positive matches but cannot certify absence when the backend supplies no stable-snapshot evidence. Missing/removal proof requires a complete ready single response bound to the original authenticated sourceRootKey/sessionKey; changed root or uncertain multi-page negative reads fail closed. Why: concurrent reorder/root replacement is not proof a session disappeared. Cost if wrong: some large-history missing records cannot be removed through this UI until authoritative backend absence evidence exists; no snapshot protocol is invented in this task.
+
+## Task 13 — Unified resume/history search
+
+- Normal App quick Restore, historical row activation and advanced history/direct-ID/native-picker intents use one shared dialog, explicit confirmation and real runtime/catalog/adapter/host wiring
+- Search supports title/ID/CLI/time/current-or-all scope, read-only paginated source discovery, partial-source feedback, stale-response rejection and active-surface cancellation
+- Native catalog/admission identity now includes exact CLI/profile/revision/project/sourceSessionKey/session identity; concurrent same-origin restore coalesces and rechecks claims. Legacy claims/deduplication are project-scoped
+- Historical origin remains frozen; changed/missing configuration or authenticated revision conflicts fail closed with safe guidance, never substitute defaults or invoke new-session preparation
+- Direct modes freeze explicit existing configuration and registration, use existing backend actions and bypass new-session preparation; no new registration/profile mutation
+- Explicit missing cleanup revalidates absence and only removes exact optional canonical metadata/cache identity; history files remain untouched. Uniquely resolvable old Native archive keys remain compatible; ambiguous keys preserve metadata and fail closed
+- Independent review R1/R2 repaired absence proof: original authenticated root plus one complete ready response is required; root replacement or unstable multi-page negative discovery cannot authorize removal
+- Review R3 repaired Native/Legacy shared admission ownership: individual caller guards preserve fresh reconfirmation, canceled callers cannot authorize or claim success, all-canceled work cannot admit late
+- Final exact-source gate:34 required tests,289 affected tests across19 files, typecheck, diff check and20-file manifest pass. Independent scoped spec/quality approval reran original3 reproductions and6 focused Native/Legacy/App regressions successfully
+- Earlier29-test required count superseded. No actual CLI/account/platform/scaling/D20 acceptance, full suite, CI/PR/package/release; atomic publication pending readback

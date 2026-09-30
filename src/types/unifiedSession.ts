@@ -25,6 +25,31 @@ export interface SessionMenuActionDefinition {
   disabled?: boolean
 }
 
+/** Frozen authenticated history origin; never inferred from current UI selection. */
+export interface NativeSessionOrigin {
+  cli: UnifiedCliKind
+  profileId: string
+  profileRevision: string
+  projectId: string
+  projectPath: string
+}
+
+export interface ResumeHistoryQuery {
+  projectPath: string
+  scope: 'current-project' | 'all'
+  cli?: UnifiedCliKind
+  query?: string
+  since?: number
+}
+export interface ResumeDialogRequest {
+  project: UnifiedProjectIdentity
+  cli?: UnifiedCliKind
+  mode: 'history' | 'resume-picker' | 'resume-id'
+  sessionId?: string
+  launchConfigId?: string
+  launchConfigRevision?: string
+}
+
 export interface UnifiedSession {
   id: string
   projectKey: string
@@ -40,6 +65,7 @@ export interface UnifiedSession {
   adapterSessionId: string
   nativeSessionId?: string | null
   launchConfigId?: string | null
+  nativeOrigin?: NativeSessionOrigin
   safeErrorCode?: string | null
   renameState?: SessionRenameState
 }
@@ -67,6 +93,8 @@ export interface CreateUnifiedSessionInput {
   projectPath: string
   cli: UnifiedCliKind
   launchConfigId?: string | null
+  /** Explicit registered project selected for a direct restore. */
+  registeredProjectId?: string
   /** Frozen configuration identity, never displayed in the normal flow. */
   launchConfigRevision?: string
   action?: UnifiedLaunchAction
@@ -74,6 +102,7 @@ export interface CreateUnifiedSessionInput {
 }
 
 export interface ResumeUnifiedSessionInput {
+  nativeOrigin?: NativeSessionOrigin
   /** Historical origin, required when adapter identities are ambiguous. */
   runtime?: SessionRuntimeKind
   projectKey: string
@@ -90,8 +119,8 @@ export interface SessionAdapter {
   /** Freeze process ownership at admission, before a queued async action starts. */
   captureOwnership?(id: string, operation?: 'close' | 'archive'): () => boolean
   listSessions(projectKey?: string): Promise<UnifiedSession[]>
-  createSession(input: CreateUnifiedSessionInput): Promise<UnifiedSession>
-  resumeSession(input: ResumeUnifiedSessionInput): Promise<UnifiedSession>
+  createSession(input: CreateUnifiedSessionInput, canAdmit?: () => boolean): Promise<UnifiedSession>
+  resumeSession(input: ResumeUnifiedSessionInput, canAdmit?: () => boolean): Promise<UnifiedSession>
   activateSession(id: string): Promise<void> | void
   stopSession(id: string): Promise<void>
   restartSession(id: string): Promise<UnifiedSession>
@@ -99,6 +128,8 @@ export interface SessionAdapter {
   renameSession(id: string, title: string): Promise<void>
   archiveSession(id: string): Promise<void>
   restoreArchivedSession(id: string): Promise<void>
+  /** Recheck absence without deleting CLI history files. */
+  verifyMissingSession?(input: ResumeUnifiedSessionInput): Promise<void>
 }
 
 export interface SessionCatalogIdentity {

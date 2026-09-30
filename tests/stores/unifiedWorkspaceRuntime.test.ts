@@ -95,7 +95,7 @@ describe('Unified production runtime', () => {
     const { port } = render(); await flushPromises()
     const tabs = useNativeTabsStore(); const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } }); tabs.tab(tab.tabId)!.status = 'running'
     const unified = useUnifiedSessionsStore(); await unified.refresh(); const shell = useShellStore()
-    for (const action of ['close', 'archive', 'resume'] as const) {
+    for (const action of ['close', 'archive'] as const) {
       shell.requestWorkspaceAction({ kind: 'menu-action', sessionId: `native-tab:${tab.tabId}`, action }); await flushPromises()
       expect(shell.pendingRequest).toMatchObject({ action }); expect(port.stopNative).not.toHaveBeenCalled(); expect(tabs.tab(tab.tabId)).toBeDefined()
     }
@@ -272,10 +272,11 @@ describe('Unified production runtime', () => {
     expect(useUnifiedSessionsStore().sessions.find(s => s.projectPath === '/new')?.processState).toBe('failed')
   })
 
-  it('Runtime_RestoreRequestRemainsTypedAndPending_019', async () => {
+  it('Runtime_RestoreRequestOpensDialog_019', async () => {
     render(); await flushPromises(); const shell = useShellStore()
     shell.requestWorkspaceAction({ kind: 'new-session', project: { projectPath: '/repo', projectKey: '/repo', intent: 'restore' } }); await flushPromises()
-    expect(shell.pendingRequest).toEqual({ kind: 'restore-session', project: { projectPath: '/repo', projectKey: '/repo' }, mode: 'history' })
+    expect(shell.pendingRequest).toBeNull()
+    expect(useUnifiedSessionsStore().resumeDialog).toMatchObject({ project: { projectPath: '/repo', projectKey: '/repo' }, mode: 'history' })
     expect(useNativeTabsStore().tabs.size).toBe(0)
   })
 
@@ -375,4 +376,17 @@ describe('Unified production runtime', () => {
     expect(catalog.activeSessionId).toBe(created.id)
   })
 
+})
+
+// 旧归档键映射多个来源时显示明确、安全的歧义提示，保留所有记录。
+it('Runtime_ReportsArchiveAmbiguity_027', async () => {
+  const { runtime } = render(); await flushPromises()
+  const profiles = useCliProfilesStore(); profiles.profiles.push({ ...profiles.profiles[0], id: 'other' })
+  const history = useNativeHistoryStore(); await history.load({ cli: 'codex', profileId: 'other', profileRevision: '7', projectId: 'project', projectPath: '/repo' })
+  const { makeSessionCatalogKey } = await import('@/utils/sessionPresentation')
+  const key = 'native-history:' + makeSessionCatalogKey({ runtime: 'native-cli', cli: 'codex', projectPath: '/repo', adapterSessionId: 'root-key', nativeSessionId: 'history-id' })
+  useProjectsStateStore().archivedSessions.set('/repo', [key]); await useUnifiedSessionsStore().refresh(); await flushPromises()
+  const row = useUnifiedSessionsStore().sessions.find(row => row.archived)!
+  useShellStore().requestWorkspaceAction({ kind: 'restore-archive', sessionId: row.id }); await flushPromises()
+  expect(runtime.error.value).toBe('resumeAmbiguous'); expect(io.restore).not.toHaveBeenCalled()
 })

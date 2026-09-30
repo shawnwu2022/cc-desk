@@ -334,7 +334,18 @@ npm run tauri:build        # 生产构建
 - `newSessionDraft` 保存 UI 草稿与独立 CLI 默认选择，并消费 `projectsState.launchPreferences` 的项目+CLI 最近成功配置；成功写入只经过 `setLaunchPreference` / projects.json 单一 writer。偏好顺序为项目+CLI 最近成功配置、CLI 默认配置、显式创建时的安全默认配置；只有匹配 request/run/generation 的 `running` receipt 才记录成功，不把 tab admission 或文件系统 preflight 当成真实 CLI 成功。
 - 创建先插入 catalog 占位行，再异步准备配置/注册。`workspace.ensureRegistered` 是 Task14 可复用的显式创建前置步骤；bootstrap 仍只读。配置使用既有 patch/CAS；冲突/未知提交只 reload、不自动重复写或启动。失败占位保留并支持明确重试；取消后迟到完成不能启动，unknown 不重放。
 - 高级对话框按基本/更多/开发者选项纵向组织。权限仅描述 Desk 配置的标志并说明实际行为仍受已保存 argv/CLI 设置影响，不承诺实际权限模式，不提供不存在的 per-launch override，不隐式改写已有配置。Raw argv 默认逐行、JSON 显式切换，内部始终精确 `string[]`。
-- 恢复选项发出 `restore-session { project, cli?, mode }` 待处理意图，实际恢复 UI/确认由 Task13 接入。完整错误详情/运行态关闭确认仍归 Task16。
+- 恢复选项发出 `restore-session { project, cli?, mode }`，由 Task13 的统一恢复对话框处理。完整错误详情/运行态关闭确认仍归 Task16。
 - 菜单/对话框使用共享 AppMenu/AppDialog，并随所属活动界面失活而关闭。详细接口与门禁见 `docs/components.md` 和 `docs/terminal-integration.md`。
 
 - Task12 review repairs：pre-ready 创建后的本地会话取消/选择不依赖无关来源 bootstrap；占位行重新选择在 admission 时按最新选择所有权转移到 Native 行，不抢占更新选择。未知偏好写入确认在 projectsState writer 队列内只读恢复，恢复失败使快照失效，后续写入必须重新读取成功或停止。
+
+### 统一恢复与历史搜索（Task 13）
+
+- 普通 App 的快捷恢复、历史行激活/恢复和高级恢复意图共用 `ResumeSessionDialog`；恢复前显式确认，已打开的同源会话只切换现有尝试，包括 unknown 状态，绝不自动重启。搜索支持标题、Session ID、CLI、时间和当前/全部项目；旧请求或失活窗口不能发布结果、抢焦点或迟到启动。
+- Native 历史目录身份包含 CLI、配置 ID/修订、注册项目 ID/路径与 `sourceSessionKey`。恢复冻结原来源，并在异步历史检查后再次查找已打开的尝试；不以当前配置替换历史配置。完整历史分页走既有 authenticated document bridge；失败/部分来源不证明会话不存在。
+- 按 Session ID 和 CLI 自带恢复列表要求显式已有启动配置和已注册项目，冻结所选配置修订/注册身份，直接进入现有 Native adapter/runtime；不得调用新建准备逻辑、自动注册或创建配置。来源已变更/缺失时提示刷新并重新选择。
+- 缺失记录移除先重新验证来源/不存在证据，再经 `projectsState` 移除精确可选 UI 元数据并清理当前目录，不调用 `deleteSessions`，不删除 CLI 文件、不创建永久忽略标记。以后成功发现的真实记录可以重新出现。
+- 原 Native archive key 唯一匹配时继续兼容，显式恢复可移除该旧键；多来源歧义时保留元数据并提示，不猜测。新归档使用完整来源键。Legacy 普通历史按项目过滤占用/归档；`getCatalogHistoryFor` 始终保留归档供统一目录处理。
+- 门禁：`npm test -- tests/components/resumeSessionDialog.test.ts tests/stores/unifiedResume.test.ts tests/native-cli/nativeProjectionStore.test.ts && npm run typecheck`。真实 CLI/平台缩放验收仍未执行，见手动测试清单。
+
+- Task13 review repair：Native 不存在证据必须来自同一原始 `sourceRootKey` 的单次完整鉴权响应，并与保存的 `sessionKey` 匹配。offset 多页没有共同快照契约，只可提供正向发现，不能证明缺失/允许移除；大历史中无法证明缺失的记录需保留并提示不确定。合并恢复请求分别保留每个调用方的取消所有权，新显式确认可接管尚未完成的检查；旧已取消调用方仍拒绝，全部取消时不准入。

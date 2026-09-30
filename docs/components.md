@@ -350,7 +350,65 @@ read-only; `available-unverified` does not certify a launch. Unavailability evid
 is scoped to a configuration and its revision. A fresh successful preflight can
 clear an older executable failure; failed reads do not erase known failure evidence.
 
-Restore choices emit a pending shell intent `restore-session { project, cli?, mode }`,
-where mode is `history`, `resume-picker`, or `resume-id`. Task13 must implement that
-workflow using source-bound restore ownership, without treating this intent as an
-already-started session. No Session ID entry or history picker is fabricated here.
+Restore choices emit `restore-session { project, cli?, mode }`, where mode is
+`history`, `resume-picker`, or `resume-id`. Task13 now handles this with the common
+restore dialog. An explicitly selected advanced configuration also carries its ID
+and revision; automatic new-session configuration selection is not reused.
+
+## Task 13: unified restore and history search
+
+`ResumeSessionDialog` is mounted once in normal App, uses shared modal/input/select/
+button/notice/loading/empty-state primitives, and closes with the owning Workspace
+surface. Quick Restore, history-row activation/Resume, and all three advanced modes
+reach this same dialog through the runtime and `unifiedSessions.resumeDialog`.
+Selecting a history result requests confirmation; confirmation activates the exact
+existing attempt or resumes its exact origin. Dialog dismissal/navigation invalidates
+pending validation admission, and latest-search ownership rejects late success,
+failure and completion from older filters.
+
+History search defaults to the request's current project. Title and Session ID text,
+CLI, current/all project scope, and 24-hour/7-day/30-day activity filters combine.
+Unavailable sources produce a partial-history notice without hiding readable sources.
+History remains cached for filtering; workspace Refresh explicitly rereads sources.
+Native history consumes all supported pages through the authenticated projection
+client, rejecting partial/error reads as absence evidence.
+
+`unifiedSessions` exposes `openResumeDialog`, `closeResumeDialog`, `searchSessions`,
+`resumeCatalogSession`, `launchResume`, and `removeMissingRecord`. The runtime supplies
+the read-only `configureHistoryLoader` port. Adapter admission takes an optional
+`canAdmit` guard for cancellation before side effects; no guard is sent to the backend.
+`ResumeUnifiedSessionInput.nativeOrigin` carries the exact historical CLI, profile ID/
+revision, registered project ID and path. These fields are not ordinary UI copy.
+`CreateUnifiedSessionInput.registeredProjectId` freezes a direct restore's explicitly
+selected project. Direct-ID/picker confirmations require an existing configuration
+and registered project; they never call new-session preparation or create a default.
+
+A verified missing row keeps a safe explanation and a two-step Remove record action.
+Removal rereads the exact source, loads canonical app metadata, removes only exact
+matching optional UI records via `projectsState`, and removes the catalog row. It
+never calls legacy `deleteSessions`, removes real CLI history, or writes a tombstone.
+Rediscovered history may appear again. Unknown/unavailable sources are not missing
+records. If the source reappears before removal, the record is retained and refreshed.
+
+Native history keys now include complete origin identity. Previously persisted
+archive keys remain recognized; an explicit restore clears an old key only if it
+maps uniquely. Previously colliding old keys preserve all archive metadata and show
+safe ambiguity guidance. Resolving that ambiguity is not an automatic migration.
+
+### Task 13 review repairs: absence evidence and cancellation
+
+Native `NativeHistoryEntry.absenceEvidence` is published only for a single complete
+ready response from the authenticated source. The adapter compares its CLI/root key
+with the original source encoded in the exact saved sessionKey before declaring a
+session missing, and repeats that check before removing app metadata. A physically
+replaced source under unchanged configuration/project identity is source uncertainty,
+not evidence that the original history disappeared. Multi-page offset enumeration
+has no common stable-snapshot token in the existing backend contract; it remains
+positive discovery for search/resume but cannot certify a negative result. Such
+records cannot safely expose Remove record until authoritative absence evidence is
+available. No speculative second-pass snapshot or backend protocol is introduced.
+
+A coalesced restore now retains separate caller cancellation guards. At least one
+current explicit confirmation may admit the single shared result. A canceled caller
+still rejects and cannot publish selection, while a fresh confirmation after closing
+and reopening the dialog can succeed without waiting for a second manual retry.

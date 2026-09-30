@@ -77,7 +77,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       throw new Error('PROFILE_SELECTION_CHANGED')
     }
     const matches = workspace.projects.filter(project => sameProjectPath(project.selectedPath, input.projectPath)
-      && (!source || project.projectId === source.projectId))
+      && (!source || project.projectId === source.projectId)
+      && (!input.registeredProjectId || project.projectId === input.registeredProjectId))
     if (matches.length !== 1 || (source && !sameProjectPath(source.projectPath, input.projectPath))) throw new Error('PROJECT_NOT_FOUND')
     // Paths selected by the frontend do not create registration or bridge authority.
     const tab = native.create({ cli: input.cli, projectId: matches[0].projectId, projectPath: matches[0].selectedPath,
@@ -116,6 +117,24 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       const profile = prepared.launchConfigId ? profiles.profile(prepared.launchConfigId) : null
       if (!profile || profile.cli !== prepared.cli || profile.revision !== prepared.launchConfigRevision) throw new Error('PROFILE_SELECTION_CHANGED')
       return prepared
+    })
+    catalog.configureHistoryLoader(async query => {
+      let partial = false
+      const paths = query.scope === 'all' ? [...new Set([...legacyPaths.value, ...projects.pinnedProjects, ...[...legacy.tabs.values()].map(tab => tab.projectPath)])] : [query.projectPath]
+      if (!query.cli || query.cli === 'claude') {
+        for (let i = 0; i < paths.length && !disposed; i += 2) {
+          const results = await Promise.all(paths.slice(i, i + 2).map(path => legacy.loadHistoryFor(path)))
+          if (results.some(result => !result.ok)) partial = true
+        }
+      }
+      const contexts = profiles.profiles.flatMap(profile => profile.cli === 'shell' || query.cli && profile.cli !== query.cli ? []
+        : workspace.projects.filter(project => query.scope === 'all' || sameProjectPath(project.selectedPath, query.projectPath)).map(project => ({
+          cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision, projectId: project.projectId, projectPath: project.selectedPath,
+        })))
+      for (let i = 0; i < contexts.length && !disposed; i += 2) await Promise.all(contexts.slice(i, i + 2).map(async context => {
+        try { if ((await history.load(context)).error) partial = true } catch { partial = true }
+      }))
+      return partial
     })
     catalog.configureAdapters([
       createLegacyClaudeAdapter({ store: legacy, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
@@ -193,7 +212,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       return true
     }
     if (request.kind === 'create-session') { await catalog.createSession(request.input); return true }
-    if (request.kind === 'restore-session') return false
+    if (request.kind === 'restore-session') {
+      if (shell.section === 'workspace') catalog.openResumeDialog(request)
+      return true
+    }
     if (request.kind === 'add-project' || request.kind === 'open-project'
       || request.kind === 'confirmation' || request.kind === 'project-action') return false
     if (!('sessionId' in request)) return false
@@ -211,7 +233,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     const open = openSessions.value.some(value => value.id === session.id)
     if (request.kind === 'activate') {
-      if (!open) return false // Task 13 owns admission of historical resume.
+      if (!open) {
+        if (shell.section === 'workspace') catalog.openResumeDialog({ project: session, cli: session.cli, mode: 'history', sessionId: session.id })
+        return true
+      }
       await catalog.activateSession(session.id)
       return true
     }
@@ -255,6 +280,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       case 'archive':
         if (live) return false
         await catalog.archiveSession(session.id); return true
+      case 'resume':
+        if (open) { await catalog.activateSession(session.id); return true }
+        if (shell.section === 'workspace') catalog.openResumeDialog({ project: session, cli: session.cli, mode: 'history', sessionId: session.id })
+        return true
       case 'restore-archive': await catalog.restoreArchivedSession(session.id); return true
       case 'copy-session-id':
         if (!session.nativeSessionId) return false
@@ -266,7 +295,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   watch(() => [ready.value, shell.requestSequence], async () => {
     if (!enabled || disposed || !shell.pendingRequest || claimedSequence === shell.requestSequence) return
     const pending = shell.pendingRequest
-    const ownsSession = 'sessionId' in pending && (catalog.isPreparingSession(pending.sessionId)
+    const ownsSession = 'sessionId' in pending && typeof pending.sessionId === 'string' && (catalog.isPreparingSession(pending.sessionId)
       || openSessions.value.some(session => session.id === pending.sessionId))
     // Locally owned lifecycle controls cannot wait for unrelated history/bootstrap.
     if (!ready.value && !['new-session', 'create-session'].includes(pending.kind) && !ownsSession) return
@@ -275,8 +304,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     claimedSequence = sequence // Claim before async work; never retry on reactive changes.
     try {
       if (await dispatch(request)) shell.clearWorkspaceRequest(sequence)
-    } catch {
-      if (!disposed && shell.requestSequence === sequence) error.value = 'workspaceRuntimeActionFailed'
+    } catch (failure) {
+      if (!disposed && shell.requestSequence === sequence) error.value = failure instanceof Error && failure.message === 'SESSION_ORIGIN_AMBIGUOUS' ? 'resumeAmbiguous' : 'workspaceRuntimeActionFailed'
       // Keep the explicit request visible; a later user request is a new sequence.
     }
   }, { immediate: true })

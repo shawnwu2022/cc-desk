@@ -1,6 +1,6 @@
 import type { LaunchAction } from '@/types/cli'
 import { captureNativeAttempt, matchesNativeAttempt, type NativeCliTab } from '@/stores/nativeTabs'
-import type { NativeHistoryEntry } from '@/stores/nativeHistory'
+import { nativeHistoryContextKey, type NativeHistoryContext, type NativeHistoryEntry } from '@/stores/nativeHistory'
 import type {
   CreateUnifiedSessionInput,
   ResumeUnifiedSessionInput,
@@ -23,6 +23,7 @@ export interface NativeTabsPort {
 
 export interface NativeHistoryPort {
   all(): NativeHistoryEntry[]
+  load?(input: NativeHistoryContext): Promise<NativeHistoryEntry>
 }
 
 export interface NativeRuntimeCreateInput extends CreateUnifiedSessionInput {
@@ -84,12 +85,13 @@ function projectTab(tab: NativeCliTab): UnifiedSession {
     adapterSessionId: tab.tabId,
     nativeSessionId,
     launchConfigId: tab.profileId,
+    nativeOrigin: { cli: tab.cli, profileId: tab.profileId, profileRevision: tab.profileRevision, projectId: tab.projectId, projectPath: tab.projectPath },
     safeErrorCode: tab.errorCode,
     renameState: 'idle',
   }
 }
 
-function historyId(entry: NativeHistoryEntry, sessionKey: string, nativeSessionId: string): string {
+function oldHistoryId(entry: NativeHistoryEntry, sessionKey: string, nativeSessionId: string): string {
   return `${HISTORY_PREFIX}${makeSessionCatalogKey({
     runtime: 'native-cli',
     cli: entry.context.cli,
@@ -97,6 +99,10 @@ function historyId(entry: NativeHistoryEntry, sessionKey: string, nativeSessionI
     adapterSessionId: sessionKey,
     nativeSessionId,
   })}`
+}
+
+function historyId(entry: NativeHistoryEntry, sessionKey: string, nativeSessionId: string): string {
+  return `${HISTORY_PREFIX}${JSON.stringify(['native-history-v2', nativeHistoryContextKey(entry.context), sessionKey, nativeSessionId])}`
 }
 
 function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]): UnifiedSession {
@@ -116,6 +122,7 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     adapterSessionId: item.sessionKey,
     nativeSessionId: item.nativeSessionId,
     launchConfigId: entry.context.profileId,
+    nativeOrigin: { ...entry.context },
     safeErrorCode: null,
     renameState: 'idle',
   }
@@ -125,6 +132,15 @@ function parseHistoryId(id: string): { adapterSessionId: string; nativeSessionId
   if (!id.startsWith(HISTORY_PREFIX)) throw new Error('NATIVE_HISTORY_SESSION_REQUIRED')
   let value: unknown
   try { value = JSON.parse(id.slice(HISTORY_PREFIX.length)) } catch { throw new Error('NATIVE_HISTORY_SESSION_REQUIRED') }
+  if (Array.isArray(value) && value[0] === 'native-history-v2' && value.length === 4) {
+    try {
+      const context = JSON.parse(value[1])
+      if (context[0] === 'native-history-v1' && typeof context[5] === 'string' && typeof value[2] === 'string' && typeof value[3] === 'string') {
+        return { projectPath: context[5], adapterSessionId: value[2], nativeSessionId: value[3] }
+      }
+    } catch { /* Reject malformed identity below. */ }
+    throw new Error('NATIVE_HISTORY_SESSION_REQUIRED')
+  }
   if (!Array.isArray(value) || value.length !== 6 || value[0] !== 'cc-desk-session-v1' || value[1] !== 'native-cli') {
     throw new Error('NATIVE_HISTORY_SESSION_REQUIRED')
   }
@@ -136,6 +152,34 @@ function parseHistoryId(id: string): { adapterSessionId: string; nativeSessionId
 }
 
 export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapter {
+  const admissions = new Map<string, { promise: Promise<UnifiedSession>; owners: Set<() => boolean> }>()
+  function coalesce(key: string, operation: (canAdmit: () => boolean) => Promise<UnifiedSession>, canAdmit: () => boolean) {
+    const ownResult = (promise: Promise<UnifiedSession>) => promise.then(value => {
+      if (!canAdmit()) throw new Error('RESTORE_CANCELLED')
+      return value
+    })
+    const current = admissions.get(key)
+    if (current) { current.owners.add(canAdmit); return ownResult(current.promise) }
+    // Share the source check, not the first caller's cancellation lifetime. A new
+    // explicit confirmation can own admission after an older dialog was closed.
+    const owners = new Set([canAdmit])
+    const next = operation(() => [...owners].some(isCurrent => isCurrent()))
+    admissions.set(key, { promise: next, owners })
+    void next.then(() => { if (admissions.get(key)?.promise === next) admissions.delete(key) }, () => { if (admissions.get(key)?.promise === next) admissions.delete(key) })
+    return ownResult(next)
+  }
+  function oldKeyMatches(key: string) {
+    return deps.history.all().flatMap(entry => entry.sessions.filter(item => oldHistoryId(entry, item.sessionKey, item.nativeSessionId) === key)
+      .map(item => ({ entry, item })))
+  }
+  function archiveState(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]) {
+    const keys = deps.archive.getArchivedSessions(entry.context.projectPath)
+    const old = oldHistoryId(entry, item.sessionKey, item.nativeSessionId)
+    const legacy = keys.includes(old)
+    return { archived: keys.includes(historyId(entry, item.sessionKey, item.nativeSessionId)) || legacy,
+      safeErrorCode: legacy && oldKeyMatches(old).length !== 1 ? 'SESSION_ORIGIN_AMBIGUOUS' : null }
+  }
+
   function requireTab(id: string): NativeCliTab {
     const tab = deps.tabs.tabs.get(activeTabId(id))
     if (!tab) throw new Error('NATIVE_SESSION_NOT_FOUND')
@@ -169,58 +213,108 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         const claim = historyId(entry, item.sessionKey, item.nativeSessionId)
         if (!claimed.has(claim)) sessions.push({
           ...projectHistory(entry, item),
-          archived: deps.archive.getArchivedSessions(entry.context.projectPath).includes(historyId(entry, item.sessionKey, item.nativeSessionId)),
+          ...archiveState(entry, item),
         })
       }
     }
     return sessions.sort((a, b) => b.lastActivityAt - a.lastActivityAt || a.id.localeCompare(b.id))
   }
 
-  async function createSession(input: CreateUnifiedSessionInput): Promise<UnifiedSession> {
+  async function createSession(input: CreateUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
     const action = input.action ?? { kind: 'new' as const }
-    const tab = await deps.runtime.createTab({ ...input, action })
-    deps.tabs.setActive(tab.tabId)
-    return projectTab(tab)
+    if (action.kind === 'resume-id') {
+      const candidates = deps.history.all().filter(entry => entry.context.cli === input.cli && entry.context.profileId === input.launchConfigId
+        && entry.context.profileRevision === input.launchConfigRevision && (!input.registeredProjectId || entry.context.projectId === input.registeredProjectId) && normalizePath(entry.context.projectPath) === normalizePath(input.projectPath))
+        .flatMap(entry => entry.sessions.filter(item => item.nativeSessionId === action.nativeSessionId).map(item => ({ entry, item })))
+      if (candidates.length > 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+      if (candidates.length === 1) {
+        const { entry, item } = candidates[0]
+        return resumeSession({ ...input, adapterSessionId: item.sessionKey, nativeSessionId: item.nativeSessionId, nativeOrigin: entry.context }, canAdmit)
+      }
+    }
+    const create = async (owns = canAdmit) => {
+      if (action.kind === 'resume-id') {
+        const open = [...deps.tabs.tabs.values()].filter(tab => tab.cli === input.cli && tab.profileId === input.launchConfigId
+          && tab.profileRevision === input.launchConfigRevision && (!input.registeredProjectId || tab.projectId === input.registeredProjectId) && normalizePath(tab.projectPath) === normalizePath(input.projectPath)
+          && tabNativeSessionId(tab) === action.nativeSessionId)
+        if (open.length > 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+        if (open[0]) { deps.tabs.setActive(open[0].tabId); return projectTab(open[0]) }
+      }
+      if (!owns()) throw new Error('RESTORE_CANCELLED')
+      const tab = await deps.runtime.createTab({ ...input, action })
+      deps.tabs.setActive(tab.tabId)
+      return projectTab(tab)
+    }
+    return action.kind === 'new' || action.kind === 'raw' ? create()
+      : coalesce(JSON.stringify(['direct', input.projectPath, input.cli, input.launchConfigId, input.launchConfigRevision, input.registeredProjectId, action]), create, canAdmit)
   }
 
-  async function resumeSession(input: ResumeUnifiedSessionInput): Promise<UnifiedSession> {
-    const nativeSessionId = input.nativeSessionId ?? input.adapterSessionId
-    const candidateOrigins = deps.history.all().filter(entry => entry.context.cli === input.cli
+  function matchingOrigins(input: ResumeUnifiedSessionInput) {
+    const candidates = deps.history.all().filter(entry => entry.context.cli === input.cli
       && normalizePath(entry.context.projectPath) === normalizePath(input.projectPath)
-      && entry.sessions.some(item => item.sessionKey === input.adapterSessionId && item.nativeSessionId === nativeSessionId))
-    const origins = candidateOrigins.filter(entry => input.launchConfigId == null || entry.context.profileId === input.launchConfigId)
-    if (candidateOrigins.length && !origins.length) throw new Error('PROFILE_SELECTION_CHANGED')
-    const contexts = new Set(origins.map(entry => JSON.stringify(entry.context)))
-    if (contexts.size > 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
-    const origin = origins[0]?.context
-    const existingTabs = [...deps.tabs.tabs.values()].filter(tab =>
-      tab.cli === input.cli
-      && normalizePath(tab.projectPath) === normalizePath(input.projectPath)
-      && tabNativeSessionId(tab) === nativeSessionId
-      && (input.launchConfigId == null || tab.profileId === input.launchConfigId)
-      && (!origin || (tab.profileId === origin.profileId && tab.profileRevision === origin.profileRevision && tab.projectId === origin.projectId))
-      && (!tab.sourceSessionKey || tab.sourceSessionKey === input.adapterSessionId)
-      && historyForTab(tab).every(({ item }) => item.sessionKey === input.adapterSessionId),
-    )
-    if (existingTabs.length > 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
-    const existing = existingTabs[0]
-    if (existing) {
-      deps.tabs.setActive(existing.tabId)
-      return projectTab(existing)
-    }
-    const created = await deps.runtime.createTab({
-      projectKey: input.projectKey,
-      projectPath: input.projectPath,
-      cli: input.cli,
-      launchConfigId: input.launchConfigId ?? origin?.profileId,
-      title: input.title,
-      sourceSessionKey: input.adapterSessionId,
-      ...(origin ? { sourceContext: { ...origin } } : {}),
-      action: { kind: 'resume-id', nativeSessionId },
-    })
-    deps.tabs.setActive(created.tabId)
-    return projectTab(created)
+      && entry.sessions.some(item => item.sessionKey === input.adapterSessionId && item.nativeSessionId === (input.nativeSessionId ?? input.adapterSessionId)))
+    const matches = candidates.filter(entry => (!input.launchConfigId || entry.context.profileId === input.launchConfigId)
+      && (!input.nativeOrigin || nativeHistoryContextKey(entry.context) === nativeHistoryContextKey(input.nativeOrigin)))
+    if (candidates.length && !matches.length && !input.nativeOrigin) throw new Error('PROFILE_SELECTION_CHANGED')
+    if (new Set(matches.map(entry => nativeHistoryContextKey(entry.context))).size > 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+    return matches[0]?.context ?? input.nativeOrigin
   }
+  function existingFor(input: ResumeUnifiedSessionInput, origin = matchingOrigins(input)) {
+    const matches = [...deps.tabs.tabs.values()].filter(tab => tab.cli === input.cli
+      && normalizePath(tab.projectPath) === normalizePath(input.projectPath)
+      && tabNativeSessionId(tab) === (input.nativeSessionId ?? input.adapterSessionId)
+      && (!input.launchConfigId || tab.profileId === input.launchConfigId)
+      && (!origin || nativeHistoryContextKey(origin) === nativeHistoryContextKey({ cli: tab.cli, profileId: tab.profileId, profileRevision: tab.profileRevision, projectId: tab.projectId, projectPath: tab.projectPath }))
+      && (!tab.sourceSessionKey || tab.sourceSessionKey === input.adapterSessionId)
+      && historyForTab(tab).every(({ item }) => item.sessionKey === input.adapterSessionId))
+    if (matches.length > 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+    return matches[0]
+  }
+  async function verify(input: ResumeUnifiedSessionInput, missing: boolean) {
+    const origin = matchingOrigins(input)
+    if (!origin) throw new Error('SOURCE_UNAVAILABLE')
+    const entry = deps.history.load ? await deps.history.load({ ...origin, force: true })
+      : deps.history.all().find(entry => nativeHistoryContextKey(entry.context) === nativeHistoryContextKey(origin))
+    if (!entry?.loaded || entry.loading || entry.error) throw new Error(entry?.error || 'SOURCE_UNAVAILABLE')
+    const present = entry.sessions.some(item => item.sessionKey === input.adapterSessionId && item.nativeSessionId === (input.nativeSessionId ?? input.adapterSessionId))
+    if (missing && (present || existingFor(input, origin))) throw new Error('SESSION_EXISTS')
+    if (!present) {
+      const proof = entry.absenceEvidence
+      if (!proof) throw new Error('HISTORY_ABSENCE_UNVERIFIED')
+      let identity: unknown
+      try { identity = JSON.parse(input.adapterSessionId) } catch { throw new Error('HISTORY_ABSENCE_UNVERIFIED') }
+      if (!Array.isArray(identity) || identity.length !== 4 || identity[0] !== 'local'
+        || identity[1] !== input.cli || identity[3] !== (input.nativeSessionId ?? input.adapterSessionId)
+        || typeof identity[2] !== 'string' || !identity[2]) throw new Error('HISTORY_ABSENCE_UNVERIFIED')
+      if (proof.cli !== input.cli || proof.sourceRootKey !== identity[2]) throw new Error('SOURCE_CHANGED')
+      if (!missing) throw new Error('SESSION_NOT_FOUND')
+    }
+    return origin
+  }
+  function resumeSession(input: ResumeUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
+    let origin: ReturnType<typeof matchingOrigins>
+    try { origin = matchingOrigins(input) } catch (error) { return Promise.reject(error) }
+    const key = JSON.stringify([origin ? nativeHistoryContextKey(origin) : null, input.cli, normalizePath(input.projectPath), input.adapterSessionId, input.nativeSessionId])
+    return coalesce(key, async owns => {
+      const existing = existingFor(input, origin)
+      if (existing) { deps.tabs.setActive(existing.tabId); return projectTab(existing) }
+      if (!origin) throw new Error('SESSION_NOT_FOUND')
+      const frozen = { ...input, nativeOrigin: { ...origin } }
+      await verify(frozen, false)
+      if (!owns()) throw new Error('RESTORE_CANCELLED')
+      const admitted = existingFor(frozen, origin)
+      if (admitted) { deps.tabs.setActive(admitted.tabId); return projectTab(admitted) }
+      const created = await deps.runtime.createTab({
+        projectKey: input.projectKey, projectPath: input.projectPath, cli: input.cli,
+        launchConfigId: origin.profileId, launchConfigRevision: origin.profileRevision,
+        title: input.title, sourceSessionKey: input.adapterSessionId, sourceContext: { ...origin },
+        action: { kind: 'resume-id', nativeSessionId: input.nativeSessionId ?? input.adapterSessionId },
+      })
+      deps.tabs.setActive(created.tabId)
+      return projectTab(created)
+    }, canAdmit)
+  }
+  async function verifyMissingSession(input: ResumeUnifiedSessionInput) { await verify(input, true) }
 
   function captureOwnership(id: string, operation?: 'close' | 'archive'): () => boolean {
     if (!id.startsWith(ACTIVE_PREFIX)) return () => true
@@ -270,8 +364,16 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
   async function restoreArchivedSession(id: string): Promise<void> {
     const history = parseHistoryId(id)
-    await deps.archive.restoreSession(history.projectPath, id)
+    const match = deps.history.all().flatMap(entry => entry.sessions.filter(item => historyId(entry, item.sessionKey, item.nativeSessionId) === id).map(item => ({ entry, item })))[0]
+    if (match) {
+      const old = oldHistoryId(match.entry, match.item.sessionKey, match.item.nativeSessionId)
+      if (deps.archive.getArchivedSessions(history.projectPath).includes(old)) {
+        if (oldKeyMatches(old).length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+        await deps.archive.restoreSession(history.projectPath, old)
+      }
+    }
+    if (deps.archive.getArchivedSessions(history.projectPath).includes(id)) await deps.archive.restoreSession(history.projectPath, id)
   }
 
-  return { runtime: 'native-cli', captureOwnership, listSessions, createSession, resumeSession, activateSession, stopSession, restartSession, closeSession, renameSession, archiveSession, restoreArchivedSession }
+  return { runtime: 'native-cli', captureOwnership, listSessions, createSession, resumeSession, activateSession, stopSession, restartSession, closeSession, renameSession, archiveSession, restoreArchivedSession, verifyMissingSession }
 }

@@ -191,3 +191,36 @@ lifecycle-invalidating epoch, so closing an unrelated ended row cannot revoke a
 still-selected placeholder’s transfer. Close/archive stale-action checks are unchanged. The Task11 hidden
 parser/protocol path, user-input provenance gates, Native authenticated bridge,
 Legacy core-listener readiness, terminal binding, and no-replay behavior are unchanged.
+
+## Task 13: source-bound restore admission
+
+Historical restore bypasses the new-session preparer. The Native adapter freezes
+CLI/profile ID/profile revision/project ID/path/sessionKey/native Session ID, performs
+a fresh read from that exact authenticated source, rechecks for an existing owned
+attempt after the read, then asks the existing runtime to admit the tab. The runtime
+checks the frozen profile revision and registered project again. A changed or missing
+origin fails closed with configuration guidance; no default substitution, registry
+mutation, profile mutation or Legacy PTY fallback occurs.
+
+Same-origin concurrent restores share one in-flight admission. Existing Native tabs,
+including starting and unknown attempts, are activated without allocating new
+request/run/generation values. Different CLI/source/profile/revision/registration
+identities do not collapse merely because a raw Session ID is the same. Legacy
+restores similarly coalesce and recheck project-scoped active claims after reading.
+The caller's cancellation guard prevents a delayed history check from admitting a
+tab after dialog dismissal/navigation. Unified selection epochs still prevent older
+admission from stealing a newer selection.
+
+Direct-ID and native-picker restore use the already supported launch actions, an
+explicit configuration revision and explicit registered project identity. Their
+saved CLI settings remain authoritative; picker interaction and final Session ID
+availability are handled by the CLI. Host tests do not certify actual CLI restore
+behavior. Task11 parser/provenance/readiness, exact attempt ownership, authenticated
+transport and input/output no-replay paths are unchanged.
+
+Review repair: an exhausted offset page chain is not a stable absence proof. Only a
+single complete authenticated response with the original sourceRootKey/sessionKey
+can authorize missing-record cleanup; changing root identity or multi-page negative
+results fail closed. Positive source-bound records are still usable. Coalescing uses
+independent per-caller cancellation ownership: a later explicit confirmation may
+own one admission, and canceled callers cannot publish its result as their own.

@@ -5,6 +5,7 @@ import AppShell from '@/components/shell/AppShell.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import WorkspaceView from '@/components/workspace/WorkspaceView.vue'
 import NewSessionMenu from '@/components/sessions/NewSessionMenu.vue'
+import ResumeSessionDialog from '@/components/sessions/ResumeSessionDialog.vue'
 import NewSessionDialog from '@/components/sessions/NewSessionDialog.vue'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
@@ -160,7 +161,6 @@ onUnmounted(() => {
       <template #terminal>
         <InlineNotice v-if="runtime.error.value" kind="warning" :message="t(runtime.error.value)"
           :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
-        <InlineNotice v-if="shell.pendingRequest?.kind === 'restore-session'" :message="t('newSessionRestorePending')" />
         <InlineNotice v-if="sessions.activeSession?.safeErrorCode === 'NEW_SESSION_PREPARATION_FAILED'" kind="warning"
           :message="t('newSessionPreparationFailed')" :action-label="t('newSessionMoreOptions')"
           @action="newSessionDraft.open(sessions.activeSession!, sessions.activeSession!.cli)" />
@@ -176,6 +176,7 @@ onUnmounted(() => {
       :anchor="newMenuAnchor" :availability="newSessionDraft.cliAvailability" @select="chooseNewSession" />
     <NewSessionDialog :active="shell.section === 'workspace'" @create="request({ kind: 'create-session', input: $event })"
       @restore="request({ kind: 'restore-session', ...$event })" />
+    <ResumeSessionDialog :active="shell.section === 'workspace'" />
     <!-- Task 15 replaces this content-only project landing, never the global shell. -->
     <section v-show="shell.section === 'projects'" class="projects-content" :aria-label="t('projects')">
       <h1>{{ t('projects') }}</h1>

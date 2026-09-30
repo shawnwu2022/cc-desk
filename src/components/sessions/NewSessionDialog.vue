@@ -10,7 +10,7 @@ import { useNewSessionDraftStore, type NewSessionStartMode } from '@/stores/newS
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import type { CreateUnifiedSessionInput, UnifiedCliKind, UnifiedProjectIdentity } from '@/types/unifiedSession'
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
-const emit = defineEmits<{ create: [input: CreateUnifiedSessionInput]; restore: [request: { project: UnifiedProjectIdentity; cli: UnifiedCliKind; mode: Exclude<NewSessionStartMode, 'new'> }] }>()
+const emit = defineEmits<{ create: [input: CreateUnifiedSessionInput]; restore: [request: { project: UnifiedProjectIdentity; cli: UnifiedCliKind; mode: Exclude<NewSessionStartMode, 'new'>; launchConfigId?: string; launchConfigRevision?: string }] }>()
 const { t } = useI18n()
 const draft = useNewSessionDraftStore()
 const profiles = useCliProfilesStore()
@@ -27,7 +27,7 @@ function format(value: string) { try { draft.setArgvFormat(value as 'lines' | 'j
 function submit() {
   if (!props.active || !draft.project) return
   try {
-    if (draft.startMode !== 'new') emit('restore', { project: { ...draft.project }, cli: draft.cli, mode: draft.startMode })
+    if (draft.startMode !== 'new') emit('restore', { project: { ...draft.project }, cli: draft.cli, mode: draft.startMode, ...(draft.launchConfigId && selected.value ? { launchConfigId: selected.value.id, launchConfigRevision: selected.value.revision } : {}) })
     else emit('create', draft.toInput())
     draft.visible = false
   } catch { error.value = 'newSessionArgvError' }
@@ -44,7 +44,7 @@ function submit() {
           { value: 'resume-picker', label: t('newSessionNativePicker') }, { value: 'resume-id', label: t('newSessionById') }]" />
         <AppSelect v-model="draft.launchConfigId" :label="t('newSessionConfiguration')" :options="configurations" />
         <div class="ui-field"><span class="ui-field-label">{{ t('newSessionPermissions') }}</span><p>{{ permissionText }}</p><p v-if="!draft.rawEnabled || draft.startMode !== 'new'">{{ t('newSessionPermissionsHint') }}</p></div>
-        <InlineNotice v-if="!selected" :message="t('newSessionSafeDefaultHint')" />
+        <InlineNotice v-if="!selected && draft.startMode === 'new'" :message="t('newSessionSafeDefaultHint')" />
         <InlineNotice v-if="draft.startMode !== 'new'" :message="t('newSessionRestorePending')" />
       </fieldset>
       <details><summary>{{ t('newSessionMoreOptions') }}</summary><AppInput v-model="draft.title" :label="t('newSessionName')" /></details>

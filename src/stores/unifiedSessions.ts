@@ -8,8 +8,11 @@ import type {
   SessionRuntimeKind,
   UnifiedProjectGroup,
   UnifiedSession,
+  ResumeDialogRequest, ResumeHistoryQuery,
 } from '@/types/unifiedSession'
 import { createNativeId } from '@/utils/nativeId'
+import { makeSessionCatalogKey } from '@/utils/sessionPresentation'
+import { nativeHistoryContextKey } from '@/stores/nativeHistory'
 import { normalizePath } from '@/utils/path'
 
 function projectName(path: string): string {
@@ -43,6 +46,85 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const initialized = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+
+  const resumeDialog = ref<ResumeDialogRequest | null>(null)
+  const missingRecords = new Map<string, UnifiedSession>()
+  let historyLoader: (query: ResumeHistoryQuery) => Promise<boolean> = async () => false
+  function configureHistoryLoader(loader: typeof historyLoader) { historyLoader = loader }
+  function openResumeDialog(request: ResumeDialogRequest) {
+    resumeDialog.value = { ...request, project: { ...request.project } }
+  }
+  function closeResumeDialog() { resumeDialog.value = null }
+  async function searchSessions(query: ResumeHistoryQuery) {
+    const frozen = { ...query }
+    const partial = await historyLoader(frozen)
+    await refresh(frozen.scope === 'all' ? undefined : frozen.projectPath)
+    const text = (frozen.query ?? '').trim().toLocaleLowerCase()
+    return { partial, sessions: sessions.value.filter(row => !row.archived
+      && (frozen.scope === 'all' || normalizePath(row.projectPath) === normalizePath(frozen.projectPath))
+      && (!frozen.cli || row.cli === frozen.cli)
+      && (!frozen.since || row.lastActivityAt >= frozen.since)
+      && (!text || row.title.toLocaleLowerCase().includes(text) || row.nativeSessionId?.toLocaleLowerCase().includes(text))) }
+  }
+  function resumeInput(row: UnifiedSession): ResumeUnifiedSessionInput {
+    return { runtime: row.runtime, cli: row.cli, projectKey: row.projectKey, projectPath: row.projectPath,
+      adapterSessionId: row.adapterSessionId, nativeSessionId: row.nativeSessionId, launchConfigId: row.launchConfigId,
+      ...(row.nativeOrigin ? { nativeOrigin: { ...row.nativeOrigin } } : {}), title: row.title }
+  }
+  async function resumeCatalogSession(target: string | UnifiedSession, canAdmit = () => true) {
+    const row = typeof target === 'string' ? requireSession(target) : target
+    const id = row.id
+    if (id.startsWith('native-tab:') || id.startsWith('legacy-tab:')) { await activateSession(id); return row }
+    if (row.archived) throw new Error('SESSION_ARCHIVED')
+    try {
+      const resumed = await resumeSession(resumeInput(row), canAdmit)
+      missingRecords.delete(id)
+      sessions.value = sessions.value.filter(value => value.id !== id || value.id === resumed.id)
+      return resumed
+    }
+    catch (failure) {
+      if (failure instanceof Error && failure.message === 'SESSION_NOT_FOUND') {
+        const missing = { ...row, safeErrorCode: 'SESSION_NOT_FOUND' }
+        missingRecords.set(id, missing)
+        sessions.value = [...sessions.value.filter(value => value.id !== id), missing]
+      }
+      throw failure
+    }
+  }
+  async function removeMissingRecord(id: string) {
+    const row = missingRecords.get(id)
+    const adapter = row && adapterForRuntime(row.runtime)
+    if (!row || !adapter?.verifyMissingSession) throw new Error('SESSION_MISSING_NOT_VERIFIED')
+    await projects.ensureLoaded()
+    try { await adapter.verifyMissingSession(resumeInput(row)) }
+    catch (failure) {
+      if (failure instanceof Error && failure.message === 'SESSION_EXISTS') {
+        missingRecords.delete(id)
+        await refresh(row.projectKey)
+      }
+      throw failure
+    }
+    // UI metadata keys must be exact. Old raw/native IDs cannot authorize deletion
+    // of a different source's record, even when their displayed IDs happen to match.
+    const keys = [id]
+    if (row.runtime === 'legacy-claude') keys.push(makeSessionCatalogKey(row))
+    for (const key of keys) if (projects.sessionRecords.has(key)) await projects.removeSessionRecord(key)
+    missingRecords.delete(id)
+    sessions.value = sessions.value.filter(value => value.id !== id)
+    if (activeSessionId.value === id) activeSessionId.value = null
+  }
+  async function launchResume(input: CreateUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
+    if (!input.launchConfigId || !input.launchConfigRevision || !input.action || !['resume-id', 'resume-picker'].includes(input.action.kind)) throw new Error('RESTORE_CONFIGURATION_REQUIRED')
+    const epoch = ++selectionEpoch
+    ++selectionIntentEpoch
+    // Never use new-session preparation: an explicit existing configuration and
+    // already registered project are checked by the Native runtime owner.
+    const opened = await adapterForRuntime('native-cli').createSession(copyInput(input), canAdmit)
+    sessions.value = [...sessions.value.filter(row => row.id !== opened.id), opened]
+    if (epoch === selectionEpoch) activeSessionId.value = opened.id
+    await refresh(input.projectKey).catch(() => { error.value = 'SESSION_REFRESH_FAILED' })
+    return opened
+  }
 
   let adapters: SessionAdapter[] = []
   let prepareCreation: (input: CreateUnifiedSessionInput) => Promise<CreateUnifiedSessionInput> = async input => input
@@ -131,7 +213,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       session.cli === input.cli
       && normalizePath(session.projectPath) === normalizePath(input.projectPath)
       && session.adapterSessionId === input.adapterSessionId
-      && (input.runtime === undefined || session.runtime === input.runtime),
+      && (input.runtime === undefined || session.runtime === input.runtime)
+      && (!input.nativeOrigin || session.nativeOrigin && nativeHistoryContextKey(session.nativeOrigin) === nativeHistoryContextKey(input.nativeOrigin)),
     )
     const runtimes = new Set(matches.map(session => session.runtime))
     if (runtimes.size > 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
@@ -170,6 +253,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         if ((key !== undefined && key !== sessionKey) || !ownsProject(sessionKey)) continue
         byId.set(session.id, mergeDuplicateSession(byId.get(session.id), session))
       }
+      for (const [id, row] of missingRecords) byId.set(id, row)
       sessions.value = [...byId.values()].sort((a, b) =>
         b.lastActivityAt - a.lastActivityAt || a.id.localeCompare(b.id),
       )
@@ -239,11 +323,12 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     }
   }
 
-  async function resumeSession(input: ResumeUnifiedSessionInput): Promise<UnifiedSession> {
+  async function resumeSession(input: ResumeUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
     const epoch = ++selectionEpoch
     ++selectionIntentEpoch
-    const resumed = await adapterForResume(input).resumeSession(input)
-    await refresh(input.projectKey)
+    const resumed = await adapterForResume(input).resumeSession(input, canAdmit)
+    sessions.value = [...sessions.value.filter(row => row.id !== resumed.id), resumed]
+    await refresh(input.projectKey).catch(() => { error.value = 'SESSION_REFRESH_FAILED' })
     if (epoch === selectionEpoch) activeSessionId.value = resumed.id
     return sessions.value.find(value => value.id === resumed.id) ?? resumed
   }
@@ -371,6 +456,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     loading,
     error,
     configureAdapters,
+    resumeDialog, openResumeDialog, closeResumeDialog, configureHistoryLoader, searchSessions,
+    resumeCatalogSession, removeMissingRecord, launchResume,
     configureCreationPreparer,
     isPreparingSession,
     initialize,

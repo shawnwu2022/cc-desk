@@ -176,10 +176,11 @@ export const useSessionStore = defineStore('session', () => {
   /** 未被 Tab 占用的历史会话（去重 + 过滤） */
   const historySessions = computed<HistorySession[]>(() => {
     const cached = historyCacheMap.get(normalizePath(currentHistoryProject.value)) ?? []
-    const claimed = claimedSessionIds.value
+    const claimed = new Set([...tabs.values()].filter(tab => normalizePath(tab.projectPath) === normalizePath(currentHistoryProject.value) && (!tab.cli || tab.cli === 'claude')).map(tab => tab.sessionId))
+    const archived = new Set(archivedSessions.get(normalizePath(currentHistoryProject.value)) ?? [])
     const seen = new Set<string>()
     return cached.filter(s => {
-      if (claimed.has(s.sessionId) || seen.has(s.sessionId)) return false
+      if (claimed.has(s.sessionId) || archived.has(s.sessionId) || seen.has(s.sessionId)) return false
       seen.add(s.sessionId)
       return true
     })
@@ -208,7 +209,7 @@ export const useSessionStore = defineStore('session', () => {
     if (!c) {
       c = computed<HistorySession[]>(() => {
         const cached = historyCacheMap.get(n) ?? []
-        const claimed = claimedSessionIds.value
+        const claimed = new Set([...tabs.values()].filter(tab => normalizePath(tab.projectPath) === n && (!tab.cli || tab.cli === 'claude')).map(tab => tab.sessionId))
         // 精确追踪单 key（性能 #3：避免 getArchivedSessions 遍历整体 entries 导致跨项目过度失效）。
         // 后端 canonical 已保证 archivedSessions 的 key 为 normalized，get(n) 等价于合并匹配键查找。
         const archived = new Set(archivedSessions.get(n) ?? [])
