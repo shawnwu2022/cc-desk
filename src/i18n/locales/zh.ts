@@ -248,6 +248,13 @@ export default {
   nativeStop: '停止',
   nativeRestart: '重启',
   nativeResources: '资源',
+  // Unified workspace icon tooltip/accessibility names.
+  sessionStatusStarting: '启动中',
+  sessionStatusRunning: '运行中',
+  sessionStatusNeedsUser: '需要回复',
+  sessionStatusConfirming: '状态确认中',
+  sessionStatusEnded: '已结束',
+  sessionStatusFailed: '失败',
   nativeStatusStopped: '已停止',
   nativeStatusStarting: '启动中',
   nativeStatusRunning: '运行中',

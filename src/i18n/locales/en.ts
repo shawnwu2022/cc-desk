@@ -248,6 +248,13 @@ export default {
   nativeStop: 'Stop',
   nativeRestart: 'Restart',
   nativeResources: 'Resources',
+  // Unified workspace icon tooltip/accessibility names.
+  sessionStatusStarting: 'Starting',
+  sessionStatusRunning: 'Running',
+  sessionStatusNeedsUser: 'Needs reply',
+  sessionStatusConfirming: 'Confirming status',
+  sessionStatusEnded: 'Ended',
+  sessionStatusFailed: 'Failed',
   nativeStatusStopped: 'stopped',
   nativeStatusStarting: 'starting',
   nativeStatusRunning: 'running',

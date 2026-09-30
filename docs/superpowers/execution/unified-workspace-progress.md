@@ -31,7 +31,8 @@ Rules:
 - Task 1: present at `04370fdc22e41fa07ed61546d9b6e5d15ac69e35`
 - Tasks 2–4: source/tests restored remotely at `545c8cfce746076d891dfd1f97303011fac92bbd`; previous pending-sync entries were stale
 - Task 5: initial implementation at `bd65fe1a0dce9e2cf90d73397ac762c9073d1bc8`; correctness repair described below
-- Next task after repair checkpoint verification: Task 6 — shared UI primitives and notifications
+- Task 6: complete at `31223e131396d8c899660ad8d47fabbb5d574dcc`
+- Next task: Task 7 — session status and CLI application icons
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -112,3 +113,44 @@ Rules:
 - Independent spec/quality review approved the final snapshot with both interaction repairs included; no remaining critical/important Task 6 finding
 - Final exact local gate: 44 targeted tests pass and typecheck passes. Earlier full frontend regression: 964 tests, before the two narrow interaction repairs; full final system verification remains Task 25
 - Publication uses one atomic task commit; remote SHA recorded after readback
+
+### Verified Task 6 checkpoint
+
+- Remote commit: `31223e131396d8c899660ad8d47fabbb5d574dcc`
+- Atomic connector publication with no force; fetched commit tree exactly matched staged tree; local HEAD and remote ls-remote SHA matched; working tree clean before this readback entry
+- 44 targeted tests + typecheck; independent review clean; no CI/PR/package/release
+- Next: Task 7
+
+## Task 7 — Session status and CLI application icons — September 30, 2026
+
+- Status: implemented and locally verified; controller review/publication pending. Base remains `31223e131396d8c899660ad8d47fabbb5d574dcc`. Existing Task 6 readback is preserved; no commit, push, PR, CI, package, version or release operation was performed by the implementer.
+- Added `SessionStatusIcon` and `CliAppIcon`, eight self-owned MIT SVG assets with ownership notes, and English/Chinese status accessibility keys. Existing rows are not migrated during this primitive task.
+- Status shapes are separately identified gapped ring, circle/play, conversation bubble/dot, diamond/question, stop square and triangle/exclamation. No inline status text. One actual shared `AppTooltip` trigger supplies a localized accessible name, keyboard focus, pointer tooltip and 2px token focus ring.
+- Starting rotates slowly; confirming breathes weakly; needs-user has a one-shot entry cue. Stable state/locale changes do not recreate its shape. Reduced-motion overrides animation with matching specificity; running/ended/failed remain static.
+- CLI marks are neutral CC Desk-created conversation-terminal/code-bracket geometry, not copied official logos. Both use fixed low-saturation ink and 16px size. Full names are accessible/Tooltip-only. `CC`/`CX` appear only after the current SVG image fails; CLI change clears failure, stale detached-image errors are rejected, and fallback retains trigger focus identity.
+- RED: first exact required command failed on missing new component imports. The importable skeletal components then produced 25 failures of 25 tests before implementation. A strengthened existing reduced-motion assertion reproduced the specificity mismatch and failed before the CSS fix. No unrelated test expansion or full suite was run.
+- GREEN: `npm test -- tests/components/sessionIcons.test.ts && npm run typecheck` → 25 tests pass; typecheck exit 0. `git diff --check` passes. Logs are retained in the controller's Task 7 report.
+- Verification corrections: animation-rule lookup now skips color-only selectors; the test i18n instance uses inferred factory types rather than incorrect overload generics. These were test selection/typing fixes, not relaxed requirements.
+- Windows 100%/125%/150% scaling, actual rendered 1024×640 layout, final screenshots and screen-reader behavior remain final platform/visual gates. Linux jsdom CSS-rule and keyboard tests do not certify those gates.
+
+### Task 7 rulings
+
+- Status SVGs are imported as bundled static raw text and selected only from the exhaustive `SessionVisualState` mapping, allowing theme-token `currentColor` without a new SVG runtime dependency. No caller-provided markup enters the sink. Cost if wrong: future edits must preserve this strict asset allowlist rather than accepting arbitrary SVG strings.
+- Neutral CLI SVGs use fixed `#667587` and an explicit local `filter: none` rule that outranks the existing dark-image filter. Cost if wrong: future GUI palettes must retain contrast for that neutral ink; final visual gates remain required.
+- The needs-user cue runs once per entry into that visual state; locale/tooltip re-renders do not replay it. Cost if wrong: downstream row identity must remain stable to avoid treating row recreation as a new entry.
+
+### Task 7 independent review repair — icon contrast
+
+- Reviewer found fixed neutral CLI ink below 3:1 on supported dark tertiary/hover/selected backgrounds, and confirming's .65 opacity trough below 3:1 on light row surfaces. The controller verified the reported values; the initial fixed-across-GUI-themes ruling above is superseded by this accessibility repair.
+- Added two token-derived contrast regressions before changing production styles. Both failed: CLI selected-over-dark-primary at 2.5370:1 and confirming trough selected-over-light-primary at 2.9198:1 with 8-bit compositing. Tests evaluate both GUI themes, primary/secondary/tertiary/hover backgrounds, and selected overlays over each.
+- Minimal production change: same neutral CLI assets use `brightness(1.4)` only under GUI dark theme; session status never determines application-icon treatment. Confirming's weak breath now has .75 minimum opacity. Geometry, labels, tooltip/focus, reduced-motion and image-error fallback contracts remain intact.
+- The CLI regression compiles the production scoped stylesheet and uses the actual mounted image's computed filter alongside global tokens. Its emitted selector remains correctly scoped to the CLI image, so inherited/legacy dark filters cannot silently satisfy the test. Both neutral assets retain their common ink and existing original ownership.
+- GREEN exact gate: `npm test -- tests/components/sessionIcons.test.ts && npm run typecheck` → 27 tests pass (original 25 plus 2 regressions), typecheck exit 0. `git diff --check` passes. Evidence is retained in the controller's appended Task 7 report.
+- Status remains controller-review/publication pending. No commit/push, unrelated full suite, CI, build, packaging or release. Actual rendered/platform/scaling accessibility gates remain pending.
+
+### Task 7 review gate
+
+- Independent spec review passed; scoped quality re-review approved both contrast repairs
+- Worst supported-surface contrast: CLI marks 3.1746:1, confirming breath trough 3.2484:1
+- Final exact verification: 27 Task 7 tests pass; typecheck pass; diff check clean
+- Atomic task publication pending remote readback
