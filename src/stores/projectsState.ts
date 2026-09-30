@@ -104,7 +104,7 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     return enqueue(reloadNow)
   }
 
-  function mutate(operation: () => Promise<ProjectsState>): Promise<ProjectsState> {
+  function mutate(operation: () => Promise<ProjectsState>, reconcileFailure = false): Promise<ProjectsState> {
     return enqueue(async () => {
       await ensureLoaded()
       try {
@@ -113,10 +113,11 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
         error.value = false
         return next
       } catch (failure) {
-        if (errorCode(failure) === 'REVISION_CONFLICT') {
+        if (reconcileFailure || errorCode(failure) === 'REVISION_CONFLICT') {
           try {
             await reloadNow()
           } catch {
+            if (reconcileFailure) loaded.value = false
             error.value = true
           }
         }
@@ -164,16 +165,21 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     cli: UnifiedCliKind,
     launchConfigId: string | null,
   ): Promise<ProjectsState> {
-    const normalized = normalizePath(projectPath)
-    const current = launchPreferences.get(normalized)
-    const next: ProjectLaunchPreference = {
-      lastCli: cli,
-      claudeLaunchConfigId: current?.claudeLaunchConfigId ?? null,
-      codexLaunchConfigId: current?.codexLaunchConfigId ?? null,
-    }
-    if (cli === 'claude') next.claudeLaunchConfigId = launchConfigId
-    else next.codexLaunchConfigId = launchConfigId
-    return mutate(() => projectsApi.setProjectLaunchPreference(projectPath, next))
+    // Reconcile an uncertain acknowledgement while holding this writer queue.
+    // A later CLI cannot merge against the pre-commit snapshot.
+    return mutate(() => {
+      // Read after prior mutations and the initial load have been adopted. Two
+      // successful CLIs must not overwrite each other's last-used configuration.
+      const current = launchPreferences.get(normalizePath(projectPath))
+      const next: ProjectLaunchPreference = {
+        lastCli: cli,
+        claudeLaunchConfigId: current?.claudeLaunchConfigId ?? null,
+        codexLaunchConfigId: current?.codexLaunchConfigId ?? null,
+      }
+      if (cli === 'claude') next.claudeLaunchConfigId = launchConfigId
+      else next.codexLaunchConfigId = launchConfigId
+      return projectsApi.setProjectLaunchPreference(projectPath, next)
+    }, true)
   }
 
   return {

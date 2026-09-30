@@ -75,6 +75,6 @@ onBeforeUnmount(() => {
   <div v-if="open" ref="menu" class="ui-menu" role="menu" :aria-label="label" tabindex="-1" @keydown="onKeydown">
     <button v-for="item in items" :key="item.id" role="menuitem" type="button" class="ui-menu-item"
       :class="{ 'ui-menu-item--danger': item.danger }" :data-item-id="item.id" :disabled="item.disabled"
-      :tabindex="item.id === activeId ? 0 : -1" @focus="activeId = item.id" @click="select(item)">{{ item.label }}</button>
+      :tabindex="item.id === activeId ? 0 : -1" @focus="activeId = item.id" @click="select(item)"><slot name="item" :item="item">{{ item.label }}</slot></button>
   </div>
 </template>

@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type {
   ProjectActionRequest, SessionMenuAction, SessionPrimaryAction,
-  SessionTreeConfirmationRequest, UnifiedProjectIdentity,
+  SessionTreeConfirmationRequest, UnifiedProjectIdentity, NewSessionRequest, UnifiedCliKind, CreateUnifiedSessionInput,
 } from '@/types/unifiedSession'
 
 export type ShellSection = 'workspace' | 'projects' | 'settings'
@@ -11,7 +11,9 @@ export type ShellResponsiveMode = 'wide' | 'overlay' | 'compact'
 export type WorkspaceRequest =
   | { kind: 'add-project' | 'refresh' }
   | { kind: 'open-project'; projectPath: string }
-  | { kind: 'new-session'; project: UnifiedProjectIdentity }
+  | { kind: 'new-session'; project: NewSessionRequest }
+  | { kind: 'create-session'; input: CreateUnifiedSessionInput }
+  | { kind: 'restore-session'; project: UnifiedProjectIdentity; cli?: UnifiedCliKind; mode: 'history' | 'resume-picker' | 'resume-id' }
   | { kind: 'activate' | 'restore-archive' | 'rename-cancel'; sessionId: string }
   | { kind: 'primary-action'; sessionId: string; action: SessionPrimaryAction }
   | { kind: 'menu-action'; sessionId: string; action: SessionMenuAction }

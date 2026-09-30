@@ -36,7 +36,8 @@ Rules:
 - Task 8: complete at `aeb644965aa214fbca3885169c1132ed2d5d5ff5`
 - Task 9: complete at `f2764aa4728983fbdf8989f9c4bb9881a9069d8b`
 - Task 10: complete at `8683f6b9e56c2375a2520508f104754c8fd4553c`
-- Next task: Task 11 — unified terminal host and runtime integration
+- Task 11: complete at `b1309bd294f153e99449b0d3413542ba923a294e`
+- Next task: Task 12 — quick/advanced new-session flow
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -324,4 +325,40 @@ Rules:
 - All three had behavioral RED→GREEN evidence. Final exact-source gate:26 required tests,223 affected tests across17 files, typecheck and diff check pass; these supersede the216-test pre-review claim
 - Independent scoped review approved spec and quality and independently ran all7 repair regressions successfully
 - Installed parser/store/component integration is not real CLI/account/platform/D20 certification; those gates remain unperformed
+- Atomic publication pending remote readback
+
+### Verified Task 11 checkpoint
+
+- Remote commit `b1309bd294f153e99449b0d3413542ba923a294e`; exact staged/fetched tree and local/remote SHA match; working tree clean before this readback
+-26 required tests,223 affected tests, typecheck and independent approval; seven review-repair regressions independently rerun successfully
+- No CI/PR/package/release or real CLI/platform/D20 acceptance; next Task12
+
+### Task 12 preflight rulings
+
+- Frozen spec12.1 requires automatic registration within the two-click create flow, but the plan's registration helper is listed under14. Implement the minimal reusable registration prerequisite now using the existing authenticated registered-project store; Task14 will reuse it for management UI. No registration occurs during read-only bootstrap. Cost if wrong:14 must adopt this helper rather than create a second writer.
+- Safe default launch configuration may be created only as part of the explicit create flow, reusing existing profile patch/CAS contracts; no background profile creation or Legacy fallback. Conflicts/unknown commits reload but never automatically repeat a mutation or launch. Cost if wrong: the user sees a retry/configuration guidance step when preparation cannot complete safely.
+- Native tab creation is admission, not proof that the CLI started. Starting feedback must cover async preparation; failed rows remain addressable, unknown launches require status recovery, and last-successful preferences must not be saved as though an unconfirmed launch succeeded.
+
+
+## Task 12 — Quick new-session flow
+
+- Project plus and ordinary workspace header open the same quick chooser; Claude/Codex selection reaches actual normal App preparation/catalog/Native admission and existing unified host. More Options opens the shared advanced dialog
+- Immediate starting placeholder precedes asynchronous registration/configuration preparation. Failure remains addressable; cancellation blocks late admission; unknown mutation/admission is never automatically replayed
+- Exact raw argv stays string-array based: per-line arguments preserve blanks, JSON is explicit, unrepresentable line conversions retain JSON. No shell splitting or new backend launch protocol
+- CLI availability uses revision-scoped read-only observations, not account/startup certification; one unavailable CLI does not disable the other
+- Permission presentation describes existing selected/inherited configuration; no unsupported per-launch override or silent saved-profile mutation is introduced. Restore requests remain explicit pending Task13 intents
+- Controller caught and repaired initial project-history localStorage authority and header-to-Advanced routing. Canonical project+CLI history now reads/writes projectsState/projects.json, only after an exact matching running receipt; separate global CLI defaults remain optional local UI storage
+- Canonical preference setter computes both fields inside its serialized mutation, preserving concurrent Claude/Codex successes. Failed metadata saves issue safe feedback/read-only recovery without failing or replaying the running process or repeating the write
+- Final exact snapshot before independent review:22 required tests,205 affected tests across22 files, typecheck, diff check and28-file manifest readback pass. Behavioral RED→GREEN repairs documented in the task report
+- Independent review and atomic publication pending. No real CLI/account/platform acceptance, CI, PR, package or release performed
+
+### Task 12 independent review repairs and gate
+
+- R1: pre-ready cancel could wait behind unrelated bootstrap and admit late. Locally owned preparation/open-session requests now dispatch before global readiness; cancellation invalidates preparation immediately
+- R2: reselecting a placeholder, or closing a different ended row, could lose selected identity on admission. Separate selection-intent ownership from lifecycle invalidation; only the still-selected current preparation transfers, and newer selection/activation remains protected
+- R3: committed-but-rejected preference acknowledgement released the writer before recovery, allowing the next CLI update to erase the committed field. Read-only recovery now remains inside canonical serialization; failed readback marks state unverified and later writes must load or fail closed. No mutation/process replay
+- R4: permission copy now describes Desk flag injection only and defers effective permissions to saved arguments and CLI settings; no unsupported assurance, flag parser or configuration mutation
+- All findings have behavioral RED→GREEN regressions. Final exact snapshot:25 required tests,210 affected tests across22 files, typecheck, diff check and29-file manifest pass
+- Independent scoped review approved all four findings; original four reproductions, six repair regressions, both selection reproductions and four focused selection/activation checks passed across review rounds
+- Earlier22/205 and25/208 counts are historical, superseded by final25/210. No actual CLI/account/platform/D20 certification or CI/PR/package/release
 - Atomic publication pending remote readback

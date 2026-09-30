@@ -86,4 +86,17 @@ describe('D07 independent project registry', () => {
     expect(store.projects).toEqual([])
     expect(calls).toEqual(['cli_list_projects', 'cli_remove_project'])
   })
+  it('Task12_Project_UnknownRegistrationReloadsWithoutReplay_01', async () => {
+    let committed = false; let writes = 0
+    mockIPC(command => {
+      if (command === 'cli_list_projects') return { revision: committed ? '2' : '1', projects: committed ? [project('new', '/repo')] : [] }
+      if (command === 'cli_register_project') { writes++; committed = true; throw { code: 'COMMIT_OUTCOME_UNKNOWN', retryable: false } }
+      throw new Error('unexpected')
+    })
+    const store = useWorkspaceStore()
+    await expect(store.ensureRegistered('/repo')).rejects.toThrow('PROJECT_REGISTRATION_FAILED')
+    expect(writes).toBe(1); expect(store.projects[0].projectId).toBe('new')
+    expect(await store.ensureRegistered('/repo')).toBe('new'); expect(writes).toBe(1)
+  })
+
 })

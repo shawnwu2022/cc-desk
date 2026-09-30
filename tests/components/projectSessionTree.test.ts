@@ -93,8 +93,10 @@ describe('Unified project session tree', () => {
     const wrapper = node()
     const quick = wrapper.findAll('[data-project-quick-action]')
     expect(quick).toHaveLength(1)
-    await quick[0].trigger('click')
-    expect(wrapper.emitted('new-session-request')).toEqual([[{ projectKey: '/work/game', projectPath: '/work/game' }]])
+    await quick[0].trigger('click'); await nextTick()
+    expect(wrapper.emitted('new-session-request')).toBeUndefined()
+    await selectMenu('codex')
+    expect(wrapper.emitted('new-session-request')).toEqual([[{ projectKey: '/work/game', projectPath: '/work/game', intent: 'codex' }]])
     await wrapper.get('.project-overflow-trigger button').trigger('click')
     const ids = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'), item => item.dataset.itemId)
     expect(ids).toEqual(['pin', 'rename', 'view-archive', 'open-project-directory', 'remove-project'])
@@ -264,9 +266,9 @@ describe('Unified project session tree', () => {
       props: { visible: true, activePanel: 'sessions' }, global: { plugins: [i18n],
         stubs: { SkillsPanel: true, AgentsPanel: true, McpPanel: true, PluginsPanel: true } } })
     mounted.push(wrapper)
-    await wrapper.get('[data-project-quick-action]').trigger('click')
+    await wrapper.get('[data-project-quick-action]').trigger('click'); await nextTick(); await selectMenu('codex')
     expect(wrapper.emitted('newSession')).toBeUndefined()
-    expect(wrapper.getComponent(SessionsPanel).emitted('new-session-request')).toEqual([[{ projectKey: '/work/game', projectPath: '/work/game' }]])
+    expect(wrapper.getComponent(SessionsPanel).emitted('new-session-request')).toEqual([[{ projectKey: '/work/game', projectPath: '/work/game', intent: 'codex' }]])
   })
 
   // Shared menu's Escape handling must precede the panel's close handler.

@@ -4,6 +4,7 @@ import type { ProjectionResult } from '@/types/nativeProjection'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { listRegisteredProjects, registerProject, patchProject, removeProject } from '@/api/workspace'
+import { sameProjectPath } from '@/utils/path'
 import { parseU64 } from '@/utils/nativeIdentity'
 import type { SafeError } from '@/types/cli'
 import type { ProfileOverride } from '@/types/profile'
@@ -134,6 +135,24 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
     return result.projectId!
   }
 
+  const registrationTails = new Map<string, Promise<string>>()
+  /** Explicit-create prerequisite, never called by bootstrap or history reads. */
+  function ensureRegistered(selectedPath: string): Promise<string> {
+    const existing = registrationTails.get(selectedPath)
+    if (existing) return existing
+    const operation = (async () => {
+      if (status.value !== 'loaded') await load()
+      const matches = projects.value.filter(project => sameProjectPath(project.selectedPath, selectedPath))
+      if (matches.length > 1) throw new Error('PROJECT_REGISTRATION_FAILED')
+      if (matches.length === 1) return matches[0].projectId
+      try { return await register(selectedPath) }
+      catch { await load().catch(() => undefined); throw new Error('PROJECT_REGISTRATION_FAILED') }
+    })()
+    registrationTails.set(selectedPath, operation)
+    void operation.finally(() => { if (registrationTails.get(selectedPath) === operation) registrationTails.delete(selectedPath) }).catch(() => undefined)
+    return operation
+  }
+
   function patch(projectId: string, changes: ProjectChanges): Promise<ProjectList> {
     return mutate(() => {
       if (!initialized) throw { code: 'WORKSPACE_NOT_LOADED', retryable: false } satisfies SafeError
@@ -188,5 +207,5 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
     await execute(listRegisteredProjects, () => homeOwner === selected)
     if (homeOwner === selected) await enrich(frozen)
   }
-  return { projects, revision, metadata, warnings, status, lastError, load, register, patch, remove, enrichment, enrich, loadNativeHome }
+  return { projects, revision, metadata, warnings, status, lastError, load, register, ensureRegistered, patch, remove, enrichment, enrich, loadNativeHome }
 })

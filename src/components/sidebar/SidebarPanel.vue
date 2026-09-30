@@ -2,7 +2,7 @@
 import type { SidebarPanelType } from '@/stores/sidebar'
 import type {
   ProjectActionRequest, SessionMenuAction, SessionPrimaryAction, SessionTreeConfirmationRequest,
-  UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession,
+  UnifiedProjectGroup, UnifiedSession, NewSessionRequest,
 } from '@/types/unifiedSession'
 import SessionsPanel from '../sessions/SessionsPanel.vue'
 
@@ -23,7 +23,7 @@ const emit = defineEmits<{
   'add-project': []
   refresh: []
   'toggle-expand': [projectKey: string]
-  'new-session-request': [project: UnifiedProjectIdentity]
+  'new-session-request': [project: NewSessionRequest]
   'project-action': [request: ProjectActionRequest]
   activate: [id: string]
   'primary-action': [id: string, action: SessionPrimaryAction]

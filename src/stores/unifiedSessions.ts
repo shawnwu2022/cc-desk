@@ -9,6 +9,7 @@ import type {
   UnifiedProjectGroup,
   UnifiedSession,
 } from '@/types/unifiedSession'
+import { createNativeId } from '@/utils/nativeId'
 import { normalizePath } from '@/utils/path'
 
 function projectName(path: string): string {
@@ -44,11 +45,21 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const error = ref<string | null>(null)
 
   let adapters: SessionAdapter[] = []
+  let prepareCreation: (input: CreateUnifiedSessionInput) => Promise<CreateUnifiedSessionInput> = async input => input
+  const creations = new Map<string, { input: CreateUnifiedSessionInput; row: UnifiedSession; owner: object; preparing: boolean; selectionIntentEpoch: number }>()
+  function configureCreationPreparer(prepare: typeof prepareCreation) { prepareCreation = prepare }
+  function isPreparingSession(id: string) { return creations.has(id) }
+  function copyInput(input: CreateUnifiedSessionInput): CreateUnifiedSessionInput {
+    return { ...input, action: input.action?.kind === 'raw' ? { kind: 'raw', argv: [...input.action.argv] } : input.action ? { ...input.action } : undefined }
+  }
   let refreshVersion = 0
   let fullRefreshVersion = 0
   let pendingRefreshes = 0
   const projectRefreshVersions = new Map<string, number>()
   let selectionEpoch = 0
+  // Selection intent is distinct from lifecycle invalidation: closing an unrelated
+  // row must not revoke the selected preparation's eventual identity transfer.
+  let selectionIntentEpoch = 0
   const actionVersion = new Map<string, number>()
   const actionTails = new Map<string, Promise<void>>()
 
@@ -153,6 +164,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         })
         .map(session => [session.id, session]),
       )
+      for (const creation of creations.values()) byId.set(creation.row.id, creation.row)
       for (const session of lists.flat()) {
         const sessionKey = normalizePath(session.projectPath)
         if ((key !== undefined && key !== sessionKey) || !ownsProject(sessionKey)) continue
@@ -184,22 +196,52 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   async function activateSession(id: string): Promise<void> {
     const session = requireSession(id)
     const epoch = ++selectionEpoch
-    await adapterForRuntime(session.runtime).activateSession(id)
+    const intentEpoch = ++selectionIntentEpoch
+    const creation = creations.get(id)
+    if (creation) creation.selectionIntentEpoch = intentEpoch
+    else await adapterForRuntime(session.runtime).activateSession(id)
     if (epoch === selectionEpoch && sessions.value.some(value => value.id === id)) {
       activeSessionId.value = id
     }
   }
 
-  async function createSession(input: CreateUnifiedSessionInput): Promise<UnifiedSession> {
-    const epoch = ++selectionEpoch
-    const created = await adapterForRuntime('native-cli').createSession(input)
-    await refresh(input.projectKey)
-    if (epoch === selectionEpoch) activeSessionId.value = created.id
-    return sessions.value.find(value => value.id === created.id) ?? created
+  async function createSession(input: CreateUnifiedSessionInput, retryId?: string): Promise<UnifiedSession> {
+    ++selectionEpoch
+    const intentEpoch = ++selectionIntentEpoch
+    const id = retryId ?? createNativeId('preparing')
+    const owner = {}
+    const row: UnifiedSession = { id, projectKey: normalizePath(input.projectPath), projectPath: input.projectPath,
+      cli: input.cli, runtime: 'native-cli', title: input.title || (input.cli === 'claude' ? 'Claude Code' : 'Codex CLI'),
+      processState: 'starting', attentionState: 'none', lastActivityAt: Date.now(), archived: false, resumable: false, adapterSessionId: id }
+    const creation = { input: copyInput(input), row, owner, preparing: true, selectionIntentEpoch: intentEpoch }
+    creations.set(id, creation)
+    sessions.value = [...sessions.value.filter(session => session.id !== id), row]
+    activeSessionId.value = id
+    const current = () => creations.get(id)?.owner === owner
+    try {
+      const prepared = await prepareCreation(copyInput(creation.input))
+      if (!current()) throw new Error('NEW_SESSION_CANCELLED')
+      creation.preparing = false
+      const created = await adapterForRuntime('native-cli').createSession(prepared)
+      creations.delete(id)
+      sessions.value = [...sessions.value.filter(session => session.id !== id && session.id !== created.id), created]
+      if (creation.selectionIntentEpoch === selectionIntentEpoch && activeSessionId.value === id) activeSessionId.value = created.id
+      // Admission is not CLI success. A failed catalog read cannot turn an
+      // admitted attempt into a retryable preparation row.
+      await refresh(creation.input.projectKey).catch(() => { error.value = 'SESSION_REFRESH_FAILED' })
+      return sessions.value.find(value => value.id === created.id) ?? created
+    } catch {
+      if (!current()) throw new Error('NEW_SESSION_CANCELLED')
+      row.processState = creation.preparing ? 'failed' : 'unknown'
+      row.safeErrorCode = creation.preparing ? 'NEW_SESSION_PREPARATION_FAILED' : 'LAUNCH_STATE_UNKNOWN'
+      sessions.value = sessions.value.map(session => session.id === id ? { ...row } : session)
+      throw new Error(row.safeErrorCode)
+    }
   }
 
   async function resumeSession(input: ResumeUnifiedSessionInput): Promise<UnifiedSession> {
     const epoch = ++selectionEpoch
+    ++selectionIntentEpoch
     const resumed = await adapterForResume(input).resumeSession(input)
     await refresh(input.projectKey)
     if (epoch === selectionEpoch) activeSessionId.value = resumed.id
@@ -250,12 +292,23 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
 
   function stopSession(id: string): Promise<void> {
+    const creation = creations.get(id)
+    if (creation?.preparing) {
+      creation.owner = {}; creation.row.processState = 'failed'; creation.row.safeErrorCode = 'NEW_SESSION_CANCELLED'
+      sessions.value = sessions.value.map(row => row.id === id ? { ...creation.row } : row)
+      return Promise.resolve()
+    }
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     return enqueue(id, () => adapter.stopSession(id), () => refresh(session.projectKey))
   }
 
   function restartSession(id: string): Promise<UnifiedSession> {
+    const creation = creations.get(id)
+    if (creation) {
+      if (creation.row.processState !== 'failed') return Promise.reject(new Error('LAUNCH_STATE_UNKNOWN'))
+      return createSession(copyInput(creation.input), id)
+    }
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     return enqueue(id, () => adapter.restartSession(id), async restarted => {
@@ -265,6 +318,15 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
 
   function closeSession(id: string): Promise<void> {
+    const creation = creations.get(id)
+    if (creation) {
+      if (!creation.preparing && creation.row.processState === 'starting') return Promise.reject(new Error('NEW_SESSION_ADMISSION_IN_PROGRESS'))
+      if (creation.row.processState === 'unknown') return Promise.reject(new Error('LAUNCH_STATE_UNKNOWN'))
+      creations.delete(id); sessions.value = sessions.value.filter(row => row.id !== id)
+      if (activeSessionId.value === id) activeSessionId.value = null
+      ++selectionEpoch
+      return Promise.resolve()
+    }
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     ++selectionEpoch
@@ -309,6 +371,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     loading,
     error,
     configureAdapters,
+    configureCreationPreparer,
+    isPreparingSession,
     initialize,
     refresh,
     activateSession,

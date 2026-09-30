@@ -5,9 +5,11 @@ import AppMenu from '@/components/ui/AppMenu.vue'
 import AppTooltip from '@/components/ui/AppTooltip.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import SessionList from './SessionList.vue'
+import NewSessionMenu from './NewSessionMenu.vue'
+import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import type {
   ProjectActionRequest, ProjectMenuAction, SessionMenuAction, SessionPrimaryAction,
-  SessionTreeConfirmationRequest, UnifiedProjectGroup, UnifiedProjectIdentity,
+  SessionTreeConfirmationRequest, UnifiedProjectGroup, UnifiedProjectIdentity, NewSessionRequest,
 } from '@/types/unifiedSession'
 
 const props = withDefaults(defineProps<{
@@ -21,7 +23,7 @@ const props = withDefaults(defineProps<{
 }>(), { isCurrent: false, disableToggle: false, surfaceActive: true })
 const emit = defineEmits<{
   'toggle-expand': [projectKey: string]
-  'new-session-request': [project: UnifiedProjectIdentity]
+  'new-session-request': [project: NewSessionRequest]
   'project-action': [request: ProjectActionRequest]
   activate: [id: string]
   'primary-action': [id: string, action: SessionPrimaryAction]
@@ -34,6 +36,18 @@ const { t } = useI18n()
 const row = ref<HTMLElement | null>(null)
 const menu = ref<InstanceType<typeof AppMenu> | null>(null)
 const menuOpen = ref(false)
+const newMenuOpen = ref(false)
+const newMenuAnchor = ref({ x: 8, y: 8 })
+const draft = useNewSessionDraftStore()
+function openNewMenu(event: MouseEvent) {
+  if (!props.surfaceActive) return
+  const target = event.currentTarget as HTMLElement
+  target.focus()
+  const rect = target.getBoundingClientRect()
+  newMenuAnchor.value = { x: rect.left, y: rect.bottom + 4 }
+  menuOpen.value = false
+  newMenuOpen.value = !newMenuOpen.value
+}
 const anchor = ref({ x: 8, y: 8 })
 const menuPosition = ref({ left: '8px', top: '8px' })
 const sessions = computed(() => props.project.sessions.filter(session => !session.archived))
@@ -51,6 +65,7 @@ function toggle() {
   if (!props.disableToggle) emit('toggle-expand', props.project.projectKey)
 }
 function openOverflow(event: MouseEvent) {
+  newMenuOpen.value = false
   if (!props.surfaceActive) return
   if (menuOpen.value) { menuOpen.value = false; return }
   const trigger = event.currentTarget as HTMLElement
@@ -64,6 +79,7 @@ function overflowPointerdown(event: PointerEvent) {
   if (menuOpen.value) event.stopPropagation()
 }
 function openContext(event: MouseEvent) {
+  newMenuOpen.value = false
   if (!props.surfaceActive) return
   event.preventDefault(); event.stopPropagation()
   row.value?.focus()
@@ -74,6 +90,7 @@ function onRowKeydown(event: KeyboardEvent) {
   if (!props.surfaceActive) return
   if (event.target !== event.currentTarget) return
   if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
+    newMenuOpen.value = false
     event.preventDefault(); event.stopPropagation()
     const rect = row.value!.getBoundingClientRect()
     anchor.value = { x: rect.right - 200, y: rect.bottom + 4 }
@@ -115,7 +132,7 @@ watch(menuOpen, open => {
   if (open) window.addEventListener('resize', placeMenu)
   else window.removeEventListener('resize', placeMenu)
 })
-watch(() => props.project.projectKey, () => { menuOpen.value = false })
+watch(() => props.project.projectKey, () => { menuOpen.value = false; newMenuOpen.value = false })
 watch(() => props.surfaceActive, active => { if (!active) menuOpen.value = false }, { flush: 'sync' })
 onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
 </script>
@@ -139,7 +156,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
         role="img" :aria-label="t('projectNeedsReplyCount', { count: project.needsUserCount })" />
       <span v-else class="project-attention-slot" aria-hidden="true" />
       <IconButton class="project-new-session" data-project-quick-action="new-session" :label="t('newSessionTitle')"
-        @click.stop="emit('new-session-request', projectIdentity)">
+        aria-haspopup="menu" :aria-expanded="newMenuOpen" @pointerdown="newMenuOpen && $event.stopPropagation()" @click.stop="openNewMenu">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" /></svg>
       </IconButton>
       <div class="project-overflow-trigger" @pointerdown="overflowPointerdown">
@@ -154,6 +171,8 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
         @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)" />
       <div v-if="sessions.length === 0" class="empty-hint">{{ t('noHistorySessions') }}</div>
     </div>
+    <NewSessionMenu v-model:open="newMenuOpen" :active="surfaceActive" :anchor="newMenuAnchor" :availability="draft.availabilityFor(projectIdentity)"
+      @select="emit('new-session-request', { ...projectIdentity, intent: $event })" />
     <Teleport to="body">
       <AppMenu ref="menu" v-model:open="menuOpen" class="project-menu" :style="menuPosition"
         :label="t('projectActionsLabel')" :items="menuItems" @select="projectAction" />

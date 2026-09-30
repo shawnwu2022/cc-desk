@@ -327,3 +327,14 @@ npm run tauri:build        # 生产构建
 - Exact shell gate: `npm test -- tests/components/appShell.test.ts tests/productBoundary.test.ts && npm run typecheck`. Native bridge safeguards remain mandatory. Actual Windows 100%/125%/150% scaling, rendered1024×640 layout and platform/accessibility screenshots remain separate final gates.
 
 - Persistent tree surfaces must receive explicit `active`/`surfaceActive` ownership from the shell. Leaving Workspace or hiding the session column closes its archived modal, project menu and session menus, including teleported content, without discarding search, expansion, inline rename state or terminal hosts. Optional Boolean activity props default true at every standalone list boundary; do not let Vue's absent-Boolean false disable independent/drawer consumers. Shared menu/modal primitives retain their existing focus behavior.
+
+### 快捷新建会话（Task 12）
+
+- 项目 `＋` 和工作区普通新建按钮都先使用 `NewSessionMenu`，更多选项才打开高级对话框；选择 Claude/Codex 后由 normal App → shell → `useUnifiedWorkspaceRuntime` → unified catalog → Native adapter/host 执行；不走旧 PTY。
+- `newSessionDraft` 保存 UI 草稿与独立 CLI 默认选择，并消费 `projectsState.launchPreferences` 的项目+CLI 最近成功配置；成功写入只经过 `setLaunchPreference` / projects.json 单一 writer。偏好顺序为项目+CLI 最近成功配置、CLI 默认配置、显式创建时的安全默认配置；只有匹配 request/run/generation 的 `running` receipt 才记录成功，不把 tab admission 或文件系统 preflight 当成真实 CLI 成功。
+- 创建先插入 catalog 占位行，再异步准备配置/注册。`workspace.ensureRegistered` 是 Task14 可复用的显式创建前置步骤；bootstrap 仍只读。配置使用既有 patch/CAS；冲突/未知提交只 reload、不自动重复写或启动。失败占位保留并支持明确重试；取消后迟到完成不能启动，unknown 不重放。
+- 高级对话框按基本/更多/开发者选项纵向组织。权限仅描述 Desk 配置的标志并说明实际行为仍受已保存 argv/CLI 设置影响，不承诺实际权限模式，不提供不存在的 per-launch override，不隐式改写已有配置。Raw argv 默认逐行、JSON 显式切换，内部始终精确 `string[]`。
+- 恢复选项发出 `restore-session { project, cli?, mode }` 待处理意图，实际恢复 UI/确认由 Task13 接入。完整错误详情/运行态关闭确认仍归 Task16。
+- 菜单/对话框使用共享 AppMenu/AppDialog，并随所属活动界面失活而关闭。详细接口与门禁见 `docs/components.md` 和 `docs/terminal-integration.md`。
+
+- Task12 review repairs：pre-ready 创建后的本地会话取消/选择不依赖无关来源 bootstrap；占位行重新选择在 admission 时按最新选择所有权转移到 Native 行，不抢占更新选择。未知偏好写入确认在 projectsState writer 队列内只读恢复，恢复失败使快照失效，后续写入必须重新读取成功或停止。

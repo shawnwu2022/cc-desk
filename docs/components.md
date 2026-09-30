@@ -303,3 +303,54 @@ Targeted gate: `npm test -- tests/components/projectSessionTree.test.ts
 tests/sidebarKeyboardHandlers.test.ts && npm run typecheck`. Row, unified-store,
 i18n and shared primitive regressions are affected narrow checks. CSS-rule/jsdom
 checks do not certify Windows font layout, 1024×640 or 100%/125%/150% scaling.
+
+## Task 12: quick and advanced session creation
+
+`ProjectNode` owns the anchored `NewSessionMenu`. Its existing `new-session-request`
+event now carries `NewSessionRequest` (`projectKey`, `projectPath`, optional `intent`:
+`claude`, `codex`, `restore`, or `options`). The panel expands the requested project
+for a quick creation. Sidebar forwarding preserves this intent, and normal App's
+existing shell request channel handles it. A bare request from the workspace header
+or welcome action opens the same quick chooser. Only More options opens the
+advanced dialog in the normal flow. The plus menu keeps one action per CLI, Restore and More
+options, uses shared menu keyboard/focus handling, and clamps to the viewport.
+
+`NewSessionDialog` is mounted once in normal App, uses `AppDialog`, and closes when
+the Workspace surface becomes inactive. Its fields are vertically grouped as Basic,
+More options, and Developer options. Project is read-only; configuration options use
+human names. The permission field describes Desk’s configured flag injection only, with an
+explicit warning that saved argv and CLI settings determine effective permissions.
+It does not infer effective permission mode or parse flags; no per-launch permission
+override exists in the protocol. Existing settings are never
+mutated by selection. Raw mode explains that the existing backend bypasses saved
+default argv, permission flag injection, and observer injection.
+
+`useNewSessionDraftStore` provides `open`, `openChooser`, `toInput`, `prepareInput`, `preferred`,
+`recordSuccess`, `setDefault`, `refreshAvailability`, and `availabilityFor(project)`.
+A `CreateUnifiedSessionInput` may include `launchConfigRevision` to freeze the chosen
+configuration. Exact raw arrays are never shell-split. Each line is one argument,
+including blank and trailing lines; a completely empty editor means `[]`. JSON mode
+represents newline-containing arguments and `[""]`; switching these to an ambiguous
+line representation is refused rather than losing data. Draft raw args are not
+persisted. Canonical project/CLI last-success preferences are read from
+`projectsState.launchPreferences` and persisted through its existing
+`setLaunchPreference` action and projects.json single writer. The draft waits for
+canonical metadata before automatic selection; a not-yet-loaded automatic draft
+does not freeze a fallback configuration prematurely. The setter merges the other
+CLI field inside the serialized mutation, after previous snapshots are adopted.
+Only the separate global CLI default selection uses optional local UI storage with
+an in-memory fallback; local project history is ignored. A failed metadata save
+leaves the running session intact, reloads within canonical writer queue ownership
+without replaying the write, and surfaces a safe notice. An unsuccessful reload
+invalidates the snapshot; queued mutations must obtain a verified read or stop. Refreshing that notice never retries a process launch.
+
+Missing configuration leaves a CLI's availability unknown and permits explicit safe
+preparation. Existing `cliGetAvailability` filesystem/configuration preflight is
+read-only; `available-unverified` does not certify a launch. Unavailability evidence
+is scoped to a configuration and its revision. A fresh successful preflight can
+clear an older executable failure; failed reads do not erase known failure evidence.
+
+Restore choices emit a pending shell intent `restore-session { project, cli?, mode }`,
+where mode is `history`, `resume-picker`, or `resume-id`. Task13 must implement that
+workflow using source-bound restore ownership, without treating this intent as an
+already-started session. No Session ID entry or history picker is fabricated here.

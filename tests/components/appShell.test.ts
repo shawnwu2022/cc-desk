@@ -235,10 +235,11 @@ describe('Unified application shell', () => {
     const session: UnifiedSession = { id: 'claude-1', projectKey: '/work/game', projectPath: '/work/game', cli: 'claude', runtime: 'native-cli', title: 'Work', processState: 'running', attentionState: 'none', lastActivityAt: 0, archived: false, resumable: true, adapterSessionId: 'a1' }
     sessions.sessions = [session]
     const wrapper = render(App); await flushPromises()
-    await wrapper.get('[data-project-quick-action]').trigger('click')
-    expect(useShellStore().pendingRequest).toEqual({ kind: 'new-session', project: { projectKey: '/work/game', projectPath: '/work/game' } })
+    await wrapper.get('[data-project-quick-action]').trigger('click'); await flushPromises()
+    ;(document.querySelector('[data-item-id=codex]') as HTMLButtonElement).click(); await flushPromises()
+    expect(useShellStore().pendingRequest).toEqual({ kind: 'new-session', project: { projectKey: '/work/game', projectPath: '/work/game', intent: 'codex' } })
     expect(wrapper.getComponent(SidebarPanel).emitted('newSession')).toBeUndefined()
-    expect(wrapper.getComponent(SessionsPanel).emitted('new-session-request')).toEqual([[{ projectKey: '/work/game', projectPath: '/work/game' }]])
+    expect(wrapper.getComponent(SessionsPanel).emitted('new-session-request')).toEqual([[{ projectKey: '/work/game', projectPath: '/work/game', intent: 'codex' }]])
   })
   // Windows原生窗口操作保持可点，标题栏不再提供Native顶级入口。
   it('Shell_WindowControlsPreserved_015', async () => {

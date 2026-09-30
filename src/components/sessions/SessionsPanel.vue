@@ -13,7 +13,7 @@ import ProjectNode from './ProjectNode.vue'
 import ArchivedSessionsDrawer from './ArchivedSessionsDrawer.vue'
 import type {
   ProjectActionRequest, SessionMenuAction, SessionPrimaryAction, SessionTreeConfirmationRequest,
-  UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession,
+  UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession, NewSessionRequest,
 } from '@/types/unifiedSession'
 
 // Adapter setup, initial reads and runtime dispatch belong to the workspace container.
@@ -32,7 +32,7 @@ const emit = defineEmits<{
   'add-project': []
   refresh: []
   'toggle-expand': [projectKey: string]
-  'new-session-request': [project: UnifiedProjectIdentity]
+  'new-session-request': [project: NewSessionRequest]
   'project-action': [request: ProjectActionRequest]
   activate: [id: string]
   'primary-action': [id: string, action: SessionPrimaryAction]
@@ -93,6 +93,10 @@ const displayedGroups = computed(() => {
     return sessions.length ? [{ ...group, sessions }] : []
   })
 })
+function newSessionRequest(request: NewSessionRequest) {
+  if (request.intent === 'claude' || request.intent === 'codex') expandedKeys.value = new Set([...expandedKeys.value, request.projectKey])
+  emit('new-session-request', request)
+}
 function toggleExpand(key: string) {
   if (searching.value) return
   const next = new Set(expandedKeys.value)
@@ -149,7 +153,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
         <ProjectNode v-for="group in displayedGroups" :key="group.projectKey" :project="group" :surface-active="active"
           :expanded="searching || expandedKeys.has(group.projectKey)" :disable-toggle="searching"
           :is-current="sameProjectPath(group.projectPath, currentProjectPath ?? '')" :selected-id="selectedId"
-          @toggle-expand="toggleExpand" @new-session-request="emit('new-session-request', $event)" @project-action="projectAction"
+          @toggle-expand="toggleExpand" @new-session-request="newSessionRequest" @project-action="projectAction"
           @activate="emit('activate', $event)" @primary-action="(id, action) => emit('primary-action', id, action)"
           @menu-action="(id, action) => emit('menu-action', id, action)"
           @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)"

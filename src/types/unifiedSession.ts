@@ -67,6 +67,8 @@ export interface CreateUnifiedSessionInput {
   projectPath: string
   cli: UnifiedCliKind
   launchConfigId?: string | null
+  /** Frozen configuration identity, never displayed in the normal flow. */
+  launchConfigRevision?: string
   action?: UnifiedLaunchAction
   title?: string
 }
@@ -117,3 +119,6 @@ export interface SessionTreeConfirmationRequest extends UnifiedProjectIdentity {
   kind: 'stop-and-archive'
   sessionId: string
 }
+
+/** A menu selection; an omitted intent opens the advanced form. */
+export interface NewSessionRequest extends UnifiedProjectIdentity { intent?: UnifiedCliKind | 'restore' | 'options' }

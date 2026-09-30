@@ -4,6 +4,9 @@ import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/shell/AppShell.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import WorkspaceView from '@/components/workspace/WorkspaceView.vue'
+import NewSessionMenu from '@/components/sessions/NewSessionMenu.vue'
+import NewSessionDialog from '@/components/sessions/NewSessionDialog.vue'
+import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
 import type { UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
@@ -18,7 +21,7 @@ import { applyThemeToDom } from '@/utils/theme'
 import { projectBasename } from '@/utils/displayName'
 import { sameProjectPath } from '@/utils/path'
 import { onMenuSettings, onMenuShortcuts, onConfigFontSize, onOpenDirectory, onTerminalRestart } from '@/api/tauri'
-import type { UnifiedProjectIdentity } from '@/types/unifiedSession'
+import type { NewSessionRequest, UnifiedProjectIdentity } from '@/types/unifiedSession'
 
 // Removed in Task 21. A production build cannot enter this route by setting the
 // flag alone; its modules and implicit Legacy startup are never mounted normally.
@@ -30,6 +33,11 @@ const emit = defineEmits<{ 'workspace-request': [request: WorkspaceRequest] }>()
 const { t } = useI18n()
 const shell = useShellStore()
 const sessions = useUnifiedSessionsStore()
+const newSessionDraft = useNewSessionDraftStore()
+const newMenuAnchor = ref({ x: 320, y: 64 })
+watch(() => [shell.section, newSessionDraft.chooserVisible], ([section]) => {
+  if (section !== 'workspace') newSessionDraft.chooserVisible = false
+}, { flush: 'sync' })
 const app = useAppStore()
 const sidebar = useSidebarStore()
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
@@ -55,8 +63,16 @@ watch(() => sidebar.showSettings, open => {
   if (!compatibilityEnabled && open) { shell.navigate('settings'); sidebar.closeSettings() }
 })
 function request(action: WorkspaceRequest) {
+  if (action.kind === 'new-session' && !action.project.intent) {
+    const opener = document.activeElement
+    const rect = opener instanceof HTMLElement && opener !== document.body ? opener.getBoundingClientRect() : null
+    newMenuAnchor.value = { x: rect?.left ?? shell.sidebarWidth + 12, y: rect ? rect.bottom + 4 : 64 }
+  }
   shell.requestWorkspaceAction(action)
   emit('workspace-request', action)
+}
+function chooseNewSession(intent: NonNullable<NewSessionRequest['intent']>) {
+  if (shell.section === 'workspace' && newSessionDraft.project) request({ kind: 'new-session', project: { ...newSessionDraft.project, intent } })
 }
 function selectProject(identity: UnifiedProjectIdentity) {
   selectedProject.value = { projectKey: identity.projectKey, projectPath: identity.projectPath }
@@ -139,11 +155,15 @@ onUnmounted(() => {
     <InlineNotice v-if="configFailed" kind="warning" :message="t('workspaceConfigFailed')"
       :action-label="t('retry')" @action="loadPreferences" />
     <WorkspaceView v-show="shell.section === 'workspace'" :project="project" :project-title="projectTitle"
-      :active-session="sessions.activeSession" :request-pending="!!shell.pendingRequest" :cli-availability="runtime.cliAvailability.value"
+      :active-session="sessions.activeSession" :request-pending="!!shell.pendingRequest && shell.pendingRequest.kind !== 'restore-session'" :cli-availability="runtime.cliAvailability.value"
       @add-project="request({ kind: 'add-project' })" @new-session-request="request({ kind: 'new-session', project: $event })">
       <template #terminal>
         <InlineNotice v-if="runtime.error.value" kind="warning" :message="t(runtime.error.value)"
           :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
+        <InlineNotice v-if="shell.pendingRequest?.kind === 'restore-session'" :message="t('newSessionRestorePending')" />
+        <InlineNotice v-if="sessions.activeSession?.safeErrorCode === 'NEW_SESSION_PREPARATION_FAILED'" kind="warning"
+          :message="t('newSessionPreparationFailed')" :action-label="t('newSessionMoreOptions')"
+          @action="newSessionDraft.open(sessions.activeSession!, sessions.activeSession!.cli)" />
         <UnifiedTerminalHost ref="terminalHost" :sessions="runtime.openSessions.value" :active-session-id="sessions.activeSessionId"
           :visible="shell.section === 'workspace'">
           <EmptyState :title="t('workspaceWelcome')" :description="t('workspaceWelcomeHint')"
@@ -152,6 +172,10 @@ onUnmounted(() => {
         </UnifiedTerminalHost>
       </template>
     </WorkspaceView>
+    <NewSessionMenu v-model:open="newSessionDraft.chooserVisible" :active="shell.section === 'workspace'"
+      :anchor="newMenuAnchor" :availability="newSessionDraft.cliAvailability" @select="chooseNewSession" />
+    <NewSessionDialog :active="shell.section === 'workspace'" @create="request({ kind: 'create-session', input: $event })"
+      @restore="request({ kind: 'restore-session', ...$event })" />
     <!-- Task 15 replaces this content-only project landing, never the global shell. -->
     <section v-show="shell.section === 'projects'" class="projects-content" :aria-label="t('projects')">
       <h1>{{ t('projects') }}</h1>

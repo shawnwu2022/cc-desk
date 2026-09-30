@@ -325,4 +325,20 @@ describe('unified sessions store', () => {
     expect(store.sessions.find(value => value.id === 'b')?.title).toBe('B full')
   })
 
+  it('creation transfer cannot overtake a newer in-flight activation', async () => {
+    const store = useUnifiedSessionsStore()
+    const { adapter } = fakeAdapter('native-cli', [session({ id: 'other', runtime: 'native-cli' })])
+    const preparing = deferred<CreateUnifiedSessionInput>(); const activating = deferred<void>()
+    store.configureAdapters([adapter]); await store.refresh()
+    store.configureCreationPreparer(() => preparing.promise)
+    const input: CreateUnifiedSessionInput = { cli: 'codex', projectKey: '/repo', projectPath: '/repo' }
+    const creating = store.createSession(input)
+    ;(adapter.activateSession as ReturnType<typeof vi.fn>).mockReturnValueOnce(activating.promise)
+    const activation = store.activateSession('other')
+    preparing.resolve(input); const created = await creating
+    expect(store.activeSessionId).not.toBe(created.id)
+    activating.resolve(); await activation
+    expect(store.activeSessionId).toBe('other')
+  })
+
 })

@@ -175,4 +175,18 @@ describe('durable shared projects state', () => {
     expect(store.sessionRecords.get('native')).toEqual(nativeRecord)
     expect(store.launchPreferences.get('d:/work/game')).toEqual(codexPreference)
   })
+  it('Task12_ConcurrentCliPreferencesPreserveBothFields', async () => {
+    const api = await import('@/api/tauri')
+    const write = api.setProjectLaunchPreference as ReturnType<typeof vi.fn>
+    const first = deferred<ProjectsState>()
+    write.mockReturnValueOnce(first.promise).mockImplementationOnce(async (_path, preference) => ({ ...emptyState(), launchPreferences: { '/repo': preference } }))
+    const store = useProjectsStateStore(); await store.load()
+    const claude = store.setLaunchPreference('/repo', 'claude', 'claude-success')
+    const codex = store.setLaunchPreference('/repo', 'codex', 'codex-success')
+    first.resolve({ ...emptyState(), launchPreferences: { '/repo': { lastCli: 'claude', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: null } } })
+    await Promise.all([claude, codex])
+    expect(write.mock.calls[1][1]).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: 'codex-success' })
+    expect(store.launchPreferences.get('/repo')).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: 'codex-success' })
+  })
+
 })

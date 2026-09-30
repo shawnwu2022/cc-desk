@@ -151,3 +151,43 @@ D21 includes installed-runtime evidence for the tested Windows Server 2022 targe
 Host/unit/OS CI validates transport and lifecycle mechanics.
 
 Real installed Claude Code / Codex CLI behavior belongs to D20 Layer C and remains BLOCKED until an authorized target environment runs the certification matrix.
+
+## Task 12: preparation before Native admission
+
+The unified catalog creates a synthetic starting row synchronously before invoking
+its configured creation preparer. The normal runtime preparer selects/freezes the
+launch configuration and ensures registration using `workspace.ensureRegistered`.
+Only an explicit creation can call this helper or prepare the `desk-safe-claude` /
+`desk-safe-codex` configurations through existing profile patch/CAS APIs. Safe
+configurations use a native launcher, empty default argv/env, disabled observer, and
+standard Claude permission checks; Codex retains its own permission semantics.
+Read-only bootstrap never registers a project, creates a configuration, or starts a
+CLI. The existing availability endpoint is a read-only filesystem/config preflight.
+
+Preparation failures retain an addressable failed row with a fixed safe error code.
+Retry is explicit, and unknown mutation outcomes reload state without replaying the
+write. Local preparation/session controls dispatch even while unrelated bootstrap is
+pending. Cancel/close invalidates the preparation owner; its late completion cannot
+admit a Native tab. Close cannot discard an admission already in flight. After
+admission the real Native tab owns launch/recovery/stop; no new runtime protocol or
+Legacy fallback is introduced. A Native tab with `stopped` plus no launch receipt is
+projected as starting until the existing terminal starts it; its unstarted admission
+can be explicitly cancelled with an exact-owned close.
+
+Creation/retry freezes profile revision as well as the existing request/run/generation.
+Only a matching `running` receipt with launch revision records project+CLI success
+preference through canonical `projectsState.setLaunchPreference`, preserving the
+other CLI field at serialized write execution. Failed preference persistence reloads
+metadata under canonical writer queue ownership without repeating the write, cannot
+fail or restart the running process, and is caught separately from launch handling.
+A recovery read failure marks the snapshot unverified; a queued update must obtain
+a new authoritative read or fail before mutation, preserving other CLI fields. Tab creation, unknown outcome, failure, preflight availability, stale
+receipts, and replaced attempts cannot record success. Older preparation completion
+cannot steal unified selection or clear a newer shell request. Explicitly selecting
+the same placeholder updates its selection-intent owner; admission transfers that
+latest selection to the real row, but cannot supersede a newer selection elsewhere
+or a newer in-flight activation. Selection intent is separate from the existing
+lifecycle-invalidating epoch, so closing an unrelated ended row cannot revoke a
+still-selected placeholder’s transfer. Close/archive stale-action checks are unchanged. The Task11 hidden
+parser/protocol path, user-input provenance gates, Native authenticated bridge,
+Legacy core-listener readiness, terminal binding, and no-replay behavior are unchanged.
