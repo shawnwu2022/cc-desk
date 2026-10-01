@@ -76,6 +76,16 @@ describe('New session flow', () => {
     expect(store.activeSessionId).not.toBe(id)
   })
 
+  // UI旗标不授权丢弃：准入失败回执为unknown时必须保留原占位。
+  it('NewSession_DiscardRejectsUnknown_009', async () => {
+    const store = useUnifiedSessionsStore()
+    store.configureAdapters([{ runtime: 'native-cli', createSession: async () => { throw new Error('uncertain admission') }, listSessions: async () => [] } as unknown as SessionAdapter])
+    await expect(store.createSession({ ...project, cli: 'codex' })).rejects.toThrow('LAUNCH_STATE_UNKNOWN')
+    const id = store.sessions[0].id
+    await expect(store.discardPreparation(id)).rejects.toThrow('STALE_SESSION_ATTEMPT')
+    expect(store.sessions[0]).toMatchObject({ id, processState: 'unknown', preparationState: 'unknown' })
+  })
+
   it('NewSession_OneUnavailableToolStillAllowsOther_008', async () => {
     const w = mount(NewSessionMenu, { props: { open: true, anchor: { x: 0, y: 0 }, availability: { codex: 'unavailable', claude: 'unknown' } }, global: global(), attachTo: document.body }); wrappers.push(w); await flushPromises()
     expect((document.querySelector('[data-item-id=codex]') as HTMLButtonElement).disabled).toBe(true)

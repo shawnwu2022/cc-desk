@@ -199,6 +199,7 @@ describe('Unified migration through real workspace composition', () => {
   it('Migration_NativeHistoryName_006', async () => {
     seedBoth(); await boot()
     const catalog = useUnifiedSessionsStore(), row = catalog.sessions.find(row => row.runtime === 'native-cli')!
+    catalog.activeSessionId = row.id
     catalog.beginRename(row.id)
     useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: row.id, title: 'Saved history name' })
     await flushPromises()
@@ -245,6 +246,7 @@ describe('Unified migration through real workspace composition', () => {
     const catalog = useUnifiedSessionsStore(), row = catalog.sessions.find(row => row.runtime === 'legacy-claude')!
     const target = kind === 'live' ? await catalog.resumeCatalogSession(row) : row
     if (kind === 'live') useSessionStore().tabs.get(target.adapterSessionId)!.status = 'running'
+    catalog.activeSessionId = target.id
     catalog.beginRename(target.id)
     useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: target.id, title: 'Desk-only name' })
     await flushPromises()

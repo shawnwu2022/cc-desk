@@ -18,7 +18,7 @@ const base: UnifiedSession = {
   id: 'catalog-codex-1', projectKey: '/work/game', projectPath: '/work/game',
   cli: 'codex', runtime: 'native-cli', title: 'Fix a very long login title',
   processState: 'running', attentionState: 'none', lastActivityAt: now - 6 * 60_000,
-  archived: false, resumable: true, adapterSessionId: 'run-1', nativeSessionId: 'native-1',
+  archived: false, opened: true, resumable: true, adapterSessionId: 'run-1', nativeSessionId: 'native-1',
 }
 const mounted: VueWrapper[] = []
 let i18n = createI18n({ legacy: false, locale: 'en', fallbackLocale: 'en', messages: { en, zh } })
@@ -141,7 +141,7 @@ describe('Unified SessionItem', () => {
 
   // F2 在标题原列编辑，保存仅提交显示名称，不触发激活或进程动作。
   it('Row_F2RenameCommit_012', async () => {
-    const wrapper = row()
+    const wrapper = row(base, { selected: true })
     await wrapper.trigger('keydown', { key: 'F2' })
     expect(wrapper.emitted('menu-action')?.slice(-1)[0]).toEqual([base.id, 'rename'])
     await wrapper.setProps({ session: { ...base, renameState: 'editing' } })
@@ -162,7 +162,7 @@ describe('Unified SessionItem', () => {
 
   // Escape 取消一次；空名与控制字符不保存；保存按钮点击不会被 input blur 抢先取消。
   it('Row_RenameCancelAndSaveButton_013', async () => {
-    const wrapper = row()
+    const wrapper = row(base, { selected: true })
     await wrapper.trigger('keydown', { key: 'F2' })
     expect(wrapper.emitted('menu-action')?.slice(-1)[0]).toEqual([base.id, 'rename'])
     await wrapper.setProps({ session: { ...base, renameState: 'editing' } })
@@ -191,7 +191,7 @@ describe('Unified SessionItem', () => {
 
   // 外部保存态禁用编辑；复用成另一个会话时清除旧草稿，不能给新 ID 提交旧名。
   it('Row_RenameOwnership_014', async () => {
-    const wrapper = row({ ...base, renameState: 'saving' })
+    const wrapper = row({ ...base, renameState: 'saving' }, { selected: true })
     expect(wrapper.get('input').attributes('disabled')).toBeDefined()
     expect(wrapper.get('.session-primary-action button').attributes('disabled')).toBeDefined()
     await wrapper.setProps({ session: { ...base, renameState: 'idle' } })
@@ -208,7 +208,7 @@ describe('Unified SessionItem', () => {
 
   // 右键、更多及键盘菜单共享一组动作，选择的 typed ID 不会激活会话。
   it('Row_SharedContextAndOverflow_015', async () => {
-    const wrapper = row()
+    const wrapper = row(base, { selected: true })
     const trigger = wrapper.get('.session-overflow-trigger button')
     ;(trigger.element as HTMLElement).focus()
     await trigger.trigger('click')
@@ -236,7 +236,7 @@ describe('Unified SessionItem', () => {
 
   // 列表配置只隐藏指定动作；未列出的动作使用统一状态规则。
   it('Row_ActionVisibilityAndMenuRename_016', async () => {
-    const wrapper = row(base, { menuActionVisibility: { stop: false, 'view-diagnostics': false }, primaryAction: null })
+    const wrapper = row(base, { selected: true, menuActionVisibility: { stop: false, 'view-diagnostics': false }, primaryAction: null })
     expect(wrapper.find('.session-primary-action button').exists()).toBe(false)
     await wrapper.trigger('contextmenu')
     await nextTick()
@@ -252,6 +252,57 @@ describe('Unified SessionItem', () => {
     expect(wrapper.find('input').exists()).toBe(true)
     expect(document.activeElement).toBe(wrapper.get('input').element)
     expect(wrapper.get('.session-primary-action button').attributes('aria-label')).toBe('Save name')
+  })
+
+  // 未选择行的更多、右键和F2都不能进入重命名；激活后才出现相同入口。
+  it('Row_RenameNeedsSelection_031', async () => {
+    const wrapper = row(base, { menuActionVisibility: { rename: true } })
+    await wrapper.trigger('contextmenu')
+    expect(menuIds()).not.toContain('rename')
+    await wrapper.trigger('keydown', { key: 'F2' })
+    expect(wrapper.emitted('menu-action')).toBeUndefined()
+    await wrapper.setProps({ selected: true })
+    expect(menuIds()).toContain('rename')
+  })
+
+  // 第一次点击激活即使同步改变selected，同一双击也只能激活一次，下一次双击才重命名。
+  it('Row_DoubleClickKeepsFirstIntent_032', async () => {
+    const wrapper = row()
+    wrapper.get('.session-name').element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true })); await nextTick()
+    await wrapper.setProps({ selected: true })
+    wrapper.get('.session-name').element.dispatchEvent(new MouseEvent('click', { detail: 2, bubbles: true })); await nextTick()
+    wrapper.get('.session-name').element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true })); await nextTick()
+    expect(wrapper.emitted('activate')).toEqual([[base.id]])
+    expect(wrapper.emitted('menu-action')).toBeUndefined()
+    wrapper.get('.session-name').element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true })); await nextTick()
+    wrapper.get('.session-name').element.dispatchEvent(new MouseEvent('click', { detail: 2, bubbles: true })); await nextTick()
+    wrapper.get('.session-name').element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true })); await nextTick()
+    expect(wrapper.emitted('menu-action')).toEqual([[base.id, 'rename']])
+    expect(wrapper.emitted('primary-action')).toBeUndefined()
+  })
+
+  // 同一ID的新投影可能属于重启后的尝试，不能继承第一次点击的重命名意图。
+  it('Row_DoubleClickRejectsReplacement_035', async () => {
+    const wrapper = row(base, { selected: true })
+    wrapper.element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true })); await nextTick()
+    await wrapper.setProps({ session: { ...base } })
+    wrapper.element.dispatchEvent(new MouseEvent('click', { detail: 2, bubbles: true })); await nextTick()
+    wrapper.element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true })); await nextTick()
+    expect(wrapper.emitted('menu-action')).toBeUndefined()
+  })
+
+  // 双击嵌套按钮、隐藏界面或禁用能力不能借冒泡进入重命名。
+  it('Row_DoubleClickRespectsControls_033', async () => {
+    const wrapper = row(base, { selected: true })
+    wrapper.get('.session-primary-action button').element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true })); await nextTick()
+    wrapper.get('.session-overflow-trigger button').element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true })); await nextTick()
+    expect(wrapper.emitted('menu-action')).toBeUndefined()
+    await wrapper.setProps({ menuActionVisibility: { rename: false } })
+    wrapper.element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true })); await nextTick()
+    expect(wrapper.emitted('menu-action')).toBeUndefined()
+    await wrapper.setProps({ surfaceActive: false, menuActionVisibility: {} })
+    wrapper.element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true })); await nextTick()
+    expect(wrapper.emitted('menu-action')).toBeUndefined()
   })
 
   // 多行只创建一个刷新器；移除最后一行销毁定时器，恢复列表时取当前时间。
@@ -328,6 +379,19 @@ describe('Unified session menu model', () => {
     expect(new Set(definitions.map((action) => action.id)).size).toBe(definitions.length)
   })
 
+  // 结束状态不能证明终端仍打开；历史条目不显示重启和关闭，显式开启只用于菜单呈现。
+  it('Menu_ClosedHistoryOmitsLifecycle_034', () => {
+    for (const runtime of ['legacy-claude', 'native-cli'] as const) {
+      const history = { ...base, runtime, processState: 'stopped' as const, opened: false }
+      const ids = selectSessionMenuActions(history, { restart: true, close: true }).map(action => action.id)
+      expect(ids).not.toContain('restart')
+      expect(ids).not.toContain('close')
+      expect(ids).toContain('resume')
+      expect(ids).toContain('archive')
+      expect(selectSessionMenuActions({ ...history, opened: true }).map(action => action.id)).toEqual(expect.arrayContaining(['restart', 'close']))
+    }
+  })
+
   // 运行态归档文字明确停止后归档，英中菜单文案均完整；组件只发出 typed 动作。
   it('Menu_LocalizedLabels_024', async () => {
     const wrapper = mount(SessionOverflowMenu, { attachTo: document.body,
@@ -401,11 +465,31 @@ it('Row_ConfiguredRenameShortcut_033', async () => {
 
 // The catalog preserves the external editing owner across ordinary runtime projection refreshes.
 it('Row_ExternalRenameSurvivesProjection_034', async () => {
-  const wrapper = row({ ...base, renameState: 'editing' })
+  const wrapper = row({ ...base, renameState: 'editing' }, { selected: true })
   await nextTick(); await wrapper.get('input').setValue('Typed display name')
   await wrapper.setProps({ session: { ...base, renameState: 'editing', lastActivityAt: base.lastActivityAt + 1 } })
   expect(wrapper.find('input').exists()).toBe(true)
   expect((wrapper.get('input').element as HTMLInputElement).value).toBe('Typed display name')
   await wrapper.setProps({ session: { ...base, renameState: 'idle' } })
   expect(wrapper.find('input').exists()).toBe(false)
+})
+
+// 选择移走后不保留可操作的旧编辑器，旧输入事件也不能提交。
+it('Row_InactiveEditorCannotSave_036', async () => {
+  const wrapper = row({ ...base, renameState: 'editing' }, { selected: true })
+  const input = wrapper.get('input')
+  await input.setValue('Old draft')
+  await wrapper.setProps({ selected: false })
+  expect(wrapper.find('input').exists()).toBe(false)
+  await input.trigger('keydown', { key: 'Enter' })
+  expect(wrapper.emitted('rename-commit')).toBeUndefined()
+})
+
+// 取消新建只对明确未准入的失败占位显示，不用于历史、已打开终端或未知准入。
+it('Menu_DiscardRequiresFailedCreation_037', () => {
+  const failed = { ...base, processState: 'failed' as const, opened: false, preparationState: 'failed' as const }
+  expect(selectSessionMenuActions(failed).map(action => action.id)).toContain('discard-creation')
+  for (const session of [base, { ...failed, opened: true }, { ...failed, preparationState: undefined }, { ...failed, preparationState: 'unknown' as const }]) {
+    expect(selectSessionMenuActions(session).map(action => action.id)).not.toContain('discard-creation')
+  }
 })

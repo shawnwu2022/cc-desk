@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { inject } from 'vue'
+import { SESSION_INTERACTION_OWNER } from '@/session/sessionInteraction'
 import { APP_RENAME_SHORTCUT, captureShortcut } from '@/config/appShortcuts'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -30,6 +31,7 @@ const emit = defineEmits<{
   'rename-cancel': [id: string]
 }>()
 const { t, locale } = useI18n()
+const captureInteractionOwner = inject(SESSION_INTERACTION_OWNER, null)
 const renameShortcut = inject(APP_RENAME_SHORTCUT, computed(() => 'F2'))
 const now = useRelativeActivityClock()
 const row = ref<HTMLElement | null>(null)
@@ -38,13 +40,15 @@ const localRename = ref(false)
 const renameValue = ref('')
 const renameInvalid = ref(false)
 const menuOpen = ref(false)
+let firstClick: { session: UnifiedSession; owner: string; owns: (() => boolean) | null; selected: boolean } | null = null
 const menuAnchor = ref({ x: 8, y: 8 })
-const isRenaming = computed(() => localRename.value || props.session.renameState === 'editing' || props.session.renameState === 'saving')
+const isRenaming = computed(() => props.selected && (localRename.value || props.session.renameState === 'editing' || props.session.renameState === 'saving'))
 const isSaving = computed(() => props.session.renameState === 'saving')
 const visualState = computed(() => deriveSessionVisualState(props.session))
-const actions = computed(() => selectSessionMenuActions(props.session, props.menuActionVisibility))
+const canRename = computed(() => props.selected && !props.session.preparationState && props.menuActionVisibility?.rename !== false)
+const actions = computed(() => selectSessionMenuActions(props.session, { ...props.menuActionVisibility, rename: canRename.value }))
 const primary = computed(() => isRenaming.value ? 'save-rename'
-  : props.primaryAction === undefined ? selectSessionPrimaryAction(props.session) : props.primaryAction)
+  : props.primaryAction === undefined ? selectSessionPrimaryAction({ ...props.session, renameState: 'idle' }) : props.primaryAction)
 const primaryLabel = computed(() => primary.value ? t(sessionActionLabelKey(primary.value, props.session)) : '')
 const age = computed(() => formatRelativeActivity(props.session.lastActivityAt, now.value, locale.value.startsWith('zh') ? 'zh' : 'en'))
 const fullActivity = computed(() => new Date(props.session.lastActivityAt).toLocaleString(locale.value))
@@ -65,19 +69,35 @@ watch(() => props.session.renameState, (state, previous) => {
     renameValue.value = props.session.title
   }
 }, { immediate: true })
+watch(() => props.selected, selected => { if (!selected) { localRename.value = false; renameInvalid.value = false } }, { flush: 'sync' })
 watch(() => props.surfaceActive, active => { if (!active) menuOpen.value = false }, { flush: 'sync' })
 async function focusRename() {
   await nextTick()
-  if (!props.surfaceActive) return
+  if (!props.surfaceActive || !props.selected) return
   const input = renameInput.value?.$el.querySelector('input') as HTMLInputElement | null
   input?.focus()
   input?.select()
 }
 function activate() {
-  if (!isRenaming.value && !menuOpen.value) emit('activate', props.session.id)
+  if (props.surfaceActive && !isRenaming.value && !menuOpen.value) emit('activate', props.session.id)
+}
+function onClick(event: MouseEvent) {
+  // A browser double click dispatches click(1), click(2), then dblclick. Capture
+  // selection before the first click can activate this row asynchronously.
+  if (event.detail > 1) return
+  firstClick = { session: props.session, owns: captureInteractionOwner?.(props.session.id) ?? null, owner: makeSessionRenameOwnerKey(props.session), selected: props.selected }
+  activate()
+}
+function onDoubleClick(event: MouseEvent) {
+  if (!props.surfaceActive || isRenaming.value || menuOpen.value) return
+  if (event.target instanceof Element && event.target.closest('button, input, [role="menu"]')) return
+  if (firstClick && (firstClick.owner !== makeSessionRenameOwnerKey(props.session)
+    || (firstClick.owns ? !firstClick.owns() : firstClick.session !== props.session))) return
+  if (firstClick?.selected ?? props.selected) startRename()
+  else if (!firstClick) activate()
 }
 function startRename() {
-  if (isSaving.value || props.menuActionVisibility?.rename === false) return
+  if (!props.surfaceActive || isSaving.value || !canRename.value) return
   // The owning catalog admits the exact attempt before the editor is displayed.
   menuOpen.value = false
   emit('menu-action', props.session.id, 'rename')
@@ -144,14 +164,15 @@ function onKeydown(event: KeyboardEvent) {
 }
 function onMenuAction(action: SessionMenuAction) {
   menuOpen.value = false
-  emit('menu-action', props.session.id, action)
+  if (action === 'rename') startRename()
+  else emit('menu-action', props.session.id, action)
 }
 </script>
 
 <template>
   <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, editing: isRenaming }"
     role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" tabindex="0"
-    @click="activate" @keydown="onKeydown" @contextmenu="openContext">
+    @click="onClick" @dblclick="onDoubleClick" @keydown="onKeydown" @contextmenu="openContext">
     <SessionStatusIcon :state="visualState" />
     <CliAppIcon :cli="session.cli" />
     <div class="session-name-wrapper">

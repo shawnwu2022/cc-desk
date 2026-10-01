@@ -520,6 +520,7 @@ export default {
   sessionActionRetry: 'Retry',
   sessionActionRestart: 'Restart',
   sessionActionClose: 'Close',
+  sessionActionDiscardCreation: 'Cancel creation',
   sessionActionArchive: 'Archive',
   sessionActionStopAndArchive: 'Stop and archive',
   sessionActionRestoreArchive: 'Restore archive',

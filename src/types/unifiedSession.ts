@@ -14,7 +14,7 @@ export type SessionPrimaryAction =
 export type SessionRenameState = 'idle' | 'editing' | 'saving'
 export type SessionMenuAction =
   | Exclude<SessionPrimaryAction, 'save-rename'>
-  | 'rename' | 'restart' | 'close' | 'archive'
+  | 'rename' | 'restart' | 'close' | 'archive' | 'discard-creation'
   | 'copy-session-id' | 'open-project-directory' | 'view-diagnostics'
 /** Omitted entries use state defaults; false hides an unsupported capability. */
 export type SessionMenuActionVisibility = Partial<Record<SessionMenuAction, boolean>>
@@ -61,6 +61,10 @@ export interface UnifiedSession {
   attentionState: SessionAttentionState
   lastActivityAt: number
   archived: boolean
+  /** UI projection only; runtime actions must still check the owning store. */
+  opened?: boolean
+  /** Local creation projection; failed proves admission was never attempted. */
+  preparationState?: 'pending' | 'failed' | 'unknown'
   resumable: boolean
   adapterSessionId: string
   nativeSessionId?: string | null
@@ -125,7 +129,7 @@ export interface SessionAdapter {
   stopSession(id: string): Promise<void>
   restartSession(id: string, canContinue?: () => boolean): Promise<UnifiedSession>
   closeSession(id: string, canContinue?: () => boolean): Promise<void>
-  renameSession(id: string, title: string, canContinue?: () => boolean): Promise<void>
+  renameSession(id: string, title: string, canContinue?: () => boolean, onIssued?: () => void): Promise<void>
   archiveSession(id: string, canContinue?: () => boolean): Promise<void>
   restoreArchivedSession(id: string): Promise<void>
   /** Recheck absence without deleting CLI history files. */

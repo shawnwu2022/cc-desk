@@ -42,7 +42,7 @@ function onImageError(event: Event) {
   vertical-align: middle;
 }
 .cli-app-icon:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-/* Preserve Claude's brand color; Codex's monochrome mark follows the GUI theme. */
+/* Preserve Claude's brand color; Codex's ChatGPT/OpenAI knot follows the GUI theme. */
 .cli-app-icon .cli-app-icon__image { display: block; width: 16px; height: 16px; filter: none; }
 [data-theme="dark"] .cli-app-icon--codex .cli-app-icon__image { filter: invert(1); }
 .cli-app-icon__fallback { font-family: var(--font-sans); font-size: 9px; font-weight: 600; line-height: 16px; }

@@ -20,6 +20,7 @@ import LaunchConfigurationEditor from '@/components/settings/LaunchConfiguration
 import type { LaunchConfigurationEditorRequest } from '@/types/profile'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
+import { SESSION_INTERACTION_OWNER } from '@/session/sessionInteraction'
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import { APP_RENAME_SHORTCUT, type AppShortcutAction } from '@/config/appShortcuts'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
@@ -44,6 +45,10 @@ const emit = defineEmits<{ 'workspace-request': [request: WorkspaceRequest] }>()
 const { t } = useI18n()
 const shell = useShellStore()
 const sessions = useUnifiedSessionsStore()
+provide(SESSION_INTERACTION_OWNER, id => {
+  try { return sessions.captureSessionOwnership(id) }
+  catch { return () => false }
+})
 const resources = useProjectResourcesStore()
 watch(() => shell.section === 'workspace' && shell.drawerVisible, resources.setActive, { immediate: true, flush: 'sync' })
 const newSessionDraft = useNewSessionDraftStore()

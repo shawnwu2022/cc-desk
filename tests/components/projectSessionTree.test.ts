@@ -69,6 +69,7 @@ describe('Unified project session tree', () => {
     const original = session({ renameState: 'idle' })
     store.configureAdapters([{ runtime: 'legacy-claude', listSessions: vi.fn(async () => [{ ...original }]) } as unknown as SessionAdapter])
     await store.refresh()
+    store.activeSessionId = original.id
     const wrapper = panel()
     if (mode === 'filtered') await wrapper.get('.search-input').setValue('unmatched query')
     expect(wrapper.find('[data-session-row]').exists()).toBe(false)
@@ -91,6 +92,7 @@ describe('Unified project session tree', () => {
     let original = session({ renameState: 'idle' })
     store.configureAdapters([{ runtime: 'legacy-claude', listSessions: vi.fn(async () => [{ ...original }]) } as unknown as SessionAdapter])
     await store.refresh()
+    store.activeSessionId = original.id
     const wrapper = panel()
     await wrapper.get('.project-main').trigger('click')
     store.beginRename(original.id); await flushPromises()
@@ -332,7 +334,7 @@ describe('Unified project session tree', () => {
 
   // Inner controls and session rename consume their keys rather than collapsing the project or closing the panel.
   it('Tree_NestedKeyboardControls_010', async () => {
-    const wrapper = panel({ projectGroups: [group()], archivedSessions: [] })
+    const wrapper = panel({ projectGroups: [group()], archivedSessions: [], selectedId: 'claude-1' })
     await wrapper.get('.project-main').trigger('click')
     await wrapper.get('.project-overflow-trigger button').trigger('keydown', { key: 'Enter' })
     expect(wrapper.findAll('.session-item')).toHaveLength(1)

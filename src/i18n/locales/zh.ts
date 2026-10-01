@@ -520,6 +520,7 @@ export default {
   sessionActionRetry: '重试',
   sessionActionRestart: '重启',
   sessionActionClose: '关闭',
+  sessionActionDiscardCreation: '取消新建',
   sessionActionArchive: '归档',
   sessionActionStopAndArchive: '停止并归档',
   sessionActionRestoreArchive: '恢复归档',

@@ -223,6 +223,7 @@ describe('Adversarial unified ownership and persistence', () => {
     f.ipc.mockImplementation((command, args) => command === 'pin_project' ? barrier.promise : original(command, args))
     const projects = useProjectsStateStore(), pinning = projects.pinProject('/other')
     await vi.waitFor(() => expect(f.ipc.mock.calls.some(([command]) => command === 'pin_project')).toBe(true))
+    catalog.activeSessionId = row.id
     catalog.beginRename(row.id)
     const renaming = catalog.renameSession(row.id, 'Must not persist stale name')
     const outcome = renaming.then(() => null, failure => failure)
@@ -326,4 +327,28 @@ describe('Adversarial unified ownership and persistence', () => {
     expect(resources.error).toBe('SOURCE_CHANGED'); expect(wrapper.html()).not.toContain('DO_NOT_RENDER')
     expect(wrapper.html()).not.toContain('C:\\secret')
   })
+})
+
+// 使用真实metadata写队列区分尚未发出的保存和已经发出的保存；切换项目只撤销前者。
+it.each(['queued', 'issued'] as const)('Adversarial_RenameSelection_%s_015', async phase => {
+  seedHistory(); await boot()
+  const catalog = useUnifiedSessionsStore(), historyRow = catalog.sessions.find(row => row.runtime === 'native-cli')!
+  const row = await catalog.resumeCatalogSession(historyRow)
+  const barrier = deferred<any>(), original = f.ipc.getMockImplementation()!
+  f.ipc.mockImplementation((command, args) => command === (phase === 'queued' ? 'pin_project' : 'upsert_session_ui_record') ? barrier.promise : original(command, args))
+  const pinning = phase === 'queued' ? useProjectsStateStore().pinProject('/other') : Promise.resolve()
+  if (phase === 'queued') await vi.waitFor(() => expect(f.ipc.mock.calls.some(([command]) => command === 'pin_project')).toBe(true))
+  catalog.beginRename(row.id)
+  const saving = catalog.renameSession(row.id, 'Name before switching', true)
+  const outcome = saving.then(() => null, failure => failure)
+  await flushPromises()
+  const writesBeforeSwitch = f.ipc.mock.calls.filter(([command]) => command === 'upsert_session_ui_record').length
+  expect(writesBeforeSwitch).toBe(phase === 'issued' ? 1 : 0)
+  catalog.selectProjectContext('/other')
+  await expect(catalog.renameSession(row.id, 'Stale second submit', true)).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  barrier.resolve(clone(f.state)); await pinning
+  if (phase === 'queued') expect(await outcome).toMatchObject({ message: 'STALE_SESSION_ATTEMPT' })
+  else expect(await outcome).toBeNull()
+  expect(f.ipc.mock.calls.filter(([command]) => command === 'upsert_session_ui_record')).toHaveLength(phase === 'issued' ? 1 : 0)
+  expect(catalog.activeSessionId).toBeNull()
 })

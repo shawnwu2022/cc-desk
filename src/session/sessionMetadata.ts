@@ -16,7 +16,7 @@ export function withSessionDisplayName(row: UnifiedSession, metadata: SessionMet
   return { ...row, title: saved.title || row.title }
 }
 
-export async function saveSessionDisplayName(metadata: SessionMetadataPort, identity: UnifiedSession, title: string, owns: () => boolean): Promise<void> {
+export async function saveSessionDisplayName(metadata: SessionMetadataPort, identity: UnifiedSession, title: string, owns: () => boolean, onIssued?: () => void): Promise<void> {
   const value = title.trim()
   if (!value || /[\x00-\x1f\x7f]/.test(value) || [...value].length > 200) throw new Error('SESSION_TITLE_REQUIRED')
   const requireCurrent = () => { if (!owns()) throw new Error('STALE_SESSION_ATTEMPT') }
@@ -25,6 +25,11 @@ export async function saveSessionDisplayName(metadata: SessionMetadataPort, iden
     runtime: identity.runtime, cli: identity.cli, projectPath: identity.projectPath,
     adapterSessionId: identity.adapterSessionId, nativeSessionId: identity.nativeSessionId,
     title: value, lastActivityAt: identity.lastActivityAt,
-  }, requireCurrent)
+  }, () => {
+    requireCurrent()
+    // Called inside the canonical writer queue, immediately before the IPC.
+    // Selection changes after this boundary cannot undo an issued save.
+    onIssued?.()
+  })
   requireCurrent()
 }

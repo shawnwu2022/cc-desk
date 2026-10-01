@@ -303,6 +303,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (preparing) {
       if (request.kind === 'activate') { await catalog.activateSession(session.id); return true }
       if ('action' in request) {
+        if (request.action === 'discard-creation') { await catalog.discardPreparation(session.id); return true }
         if (request.action === 'retry' && session.processState === 'failed') { await catalog.restartSession(session.id); return true }
         if (request.action === 'cancel-start' && session.processState === 'starting') { await catalog.stopSession(session.id); return true }
         if (request.action === 'close' && session.processState !== 'unknown') { await catalog.closeSession(session.id); return true }

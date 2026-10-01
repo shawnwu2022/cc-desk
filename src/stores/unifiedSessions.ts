@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import type {
@@ -48,7 +48,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const projects = useProjectsStateStore()
   const sessions = ref<UnifiedSession[]>([])
   const activeSessionId = ref<string | null>(null)
-  type RenameOwner = { key: string; owns: () => boolean; state: 'editing' | 'saving' }
+  type RenameOwner = { key: string; owns: () => boolean; state: 'editing' | 'saving'; issued?: boolean }
   const renameOwners = new Map<string, RenameOwner>()
   const pendingRenames = new Map<string, number>()
   function captureRenameOwner(row: UnifiedSession, state: RenameOwner['state']): RenameOwner {
@@ -57,6 +57,14 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   function ownsRename(owner: RenameOwner, row: UnifiedSession | undefined) {
     return !!row && owner.key === makeSessionRenameOwnerKey(row) && owner.owns()
   }
+  function revokeUnissuedRenames(selectedId: string | null) {
+    const revoked = new Set<string>()
+    for (const [id, owner] of renameOwners) {
+      if (id !== selectedId && !owner.issued) { renameOwners.delete(id); revoked.add(id) }
+    }
+    if (revoked.size) sessions.value = sessions.value.map(row => revoked.has(row.id) ? { ...row, renameState: 'idle' } : row)
+  }
+  watch(activeSessionId, revokeUnissuedRenames, { flush: 'sync' })
   const initialized = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -206,6 +214,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
   async function launchResume(input: CreateUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
     if (!input.launchConfigId || !input.launchConfigRevision || !input.action || !['resume-id', 'resume-picker'].includes(input.action.kind)) throw new Error('RESTORE_CONFIGURATION_REQUIRED')
+    revokeUnissuedRenames(null)
     const epoch = ++selectionEpoch
     ++selectionIntentEpoch
     // Never use new-session preparation: an explicit existing configuration and
@@ -394,6 +403,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   function selectProjectContext(projectPath: string): void {
     if (activeSession.value && normalizePath(activeSession.value.projectPath) === normalizePath(projectPath)) return
     clearActionFeedback(); closeSessionConfirmation()
+    revokeUnissuedRenames(null)
     ++selectionEpoch
     ++selectionIntentEpoch
     activeSessionId.value = null
@@ -402,6 +412,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   async function activateSession(id: string): Promise<void> {
     clearActionFeedback(); closeSessionConfirmation()
     const session = requireSession(id)
+    revokeUnissuedRenames(id)
     const epoch = ++selectionEpoch
     const intentEpoch = ++selectionIntentEpoch
     const creation = creations.get(id)
@@ -419,7 +430,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const owner = {}
     const row: UnifiedSession = { id, projectKey: normalizePath(input.projectPath), projectPath: input.projectPath,
       cli: input.cli, runtime: 'native-cli', title: input.title || (input.cli === 'claude' ? 'Claude Code' : 'Codex CLI'),
-      processState: 'starting', attentionState: 'none', lastActivityAt: Date.now(), archived: false, resumable: false, adapterSessionId: id }
+      processState: 'starting', attentionState: 'none', lastActivityAt: Date.now(), archived: false, opened: false, preparationState: 'pending', resumable: false, adapterSessionId: id }
     const creation = { input: copyInput(input), row, owner, preparing: true, selectionIntentEpoch: intentEpoch }
     creations.set(id, creation)
     sessions.value = [...sessions.value.filter(session => session.id !== id), row]
@@ -440,6 +451,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     } catch (failure) {
       if (!current()) throw new Error('NEW_SESSION_CANCELLED')
       row.processState = creation.preparing ? 'failed' : 'unknown'
+      row.preparationState = creation.preparing ? 'failed' : 'unknown'
       if (creation.preparing && failure instanceof LaunchConfigurationRequiredError) {
         row.safeErrorCode = 'LAUNCH_CONFIGURATION_REQUIRED'
         row.launchConfigId = failure.profileId
@@ -450,6 +462,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
 
   async function resumeSession(input: ResumeUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
+    revokeUnissuedRenames(null)
     const epoch = ++selectionEpoch
     ++selectionIntentEpoch
     const resumed = await adapterForResume(input).resumeSession(input, canAdmit)
@@ -505,7 +518,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   function stopSession(id: string): Promise<void> {
     const creation = creations.get(id)
     if (creation?.preparing) {
-      creation.owner = {}; creation.row.processState = 'failed'; creation.row.safeErrorCode = 'NEW_SESSION_CANCELLED'
+      creation.owner = {}; creation.row.processState = 'failed'; creation.row.safeErrorCode = 'NEW_SESSION_CANCELLED'; creation.row.preparationState = 'failed'
       sessions.value = sessions.value.map(row => row.id === id ? { ...creation.row } : row)
       return Promise.resolve()
     }
@@ -569,9 +582,15 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     }, 'close')
   }
 
+  function discardPreparation(id: string): Promise<void> {
+    const creation = creations.get(id)
+    if (!creation?.preparing || creation.row.processState !== 'failed') return Promise.reject(new Error('STALE_SESSION_ATTEMPT'))
+    return closeSession(id)
+  }
+
   function beginRename(id: string) {
     const row = sessions.value.find(value => value.id === id)
-    if (!row || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
+    if (!row || activeSessionId.value !== id || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
     const current = renameOwners.get(id)
     if (!current || !ownsRename(current, row)) renameOwners.set(id, captureRenameOwner(row, 'editing'))
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'editing' } : row)
@@ -585,9 +604,11 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     const current = renameOwners.get(id)
-    if ((requireEditor && !current) || (current && !ownsRename(current, session))) {
-      renameOwners.delete(id)
-      sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'idle' } : row)
+    if ((requireEditor && (!current || activeSessionId.value !== id)) || (current && !ownsRename(current, session))) {
+      if (!current?.issued) {
+        renameOwners.delete(id)
+        sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'idle' } : row)
+      }
       return Promise.reject(new Error('STALE_SESSION_ATTEMPT'))
     }
     const owner = current ?? captureRenameOwner(session, 'saving')
@@ -597,7 +618,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'saving' } : row)
     return enqueue(id, () => {
       if (renameOwners.get(id) !== owner || !ownsRename(owner, sessions.value.find(row => row.id === id))) throw new Error('STALE_SESSION_ATTEMPT')
-      return adapter.renameSession(id, title, () => renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id)))
+      return adapter.renameSession(id, title, () => renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id)), () => { owner.issued = true })
     }, () => refresh(session.projectKey)).finally(() => {
       const remaining = (pendingRenames.get(id) ?? 1) - 1
       if (remaining) pendingRenames.set(id, remaining)
@@ -652,7 +673,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     stopSession,
     restartSession,
     closeSession,
-    renameSession, beginRename, cancelRename,
+    renameSession, beginRename, cancelRename, discardPreparation,
     archiveSession,
     restoreArchivedSession,
   }

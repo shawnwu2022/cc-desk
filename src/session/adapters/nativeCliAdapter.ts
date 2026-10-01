@@ -83,6 +83,7 @@ function projectTab(tab: NativeCliTab): UnifiedSession {
     attentionState: tab.attentionState ?? 'none',
     lastActivityAt: tab.lastActivityAt,
     archived: false,
+    opened: true,
     resumable: Boolean(nativeSessionId),
     adapterSessionId: tab.tabId,
     nativeSessionId,
@@ -120,6 +121,7 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     attentionState: 'none',
     lastActivityAt: Number.isFinite(updated) ? updated : 0,
     archived: false,
+    opened: false,
     resumable: true,
     adapterSessionId: item.sessionKey,
     nativeSessionId: item.nativeSessionId,
@@ -361,19 +363,20 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     deps.tabs.close(tab.tabId)
   }
-  async function renameSession(id: string, title: string, canContinue = () => true): Promise<void> {
+  async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
     const owns = captureOwnership(id)
     const current = () => canContinue() && owns()
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
     if (id.startsWith(ACTIVE_PREFIX)) {
       const tab = requireTab(id)
-      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), title, current)
+      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), title, current, onIssued)
       if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+      if (!deps.metadata) onIssued?.()
       deps.tabs.rename(tab.tabId, title)
     } else {
       const matches = findHistory(id)
       if (matches.length !== 1 || !deps.metadata) throw new Error('SESSION_NOT_FOUND')
-      await saveSessionDisplayName(deps.metadata, projectHistory(matches[0].entry, matches[0].item), title, current)
+      await saveSessionDisplayName(deps.metadata, projectHistory(matches[0].entry, matches[0].item), title, current, onIssued)
     }
   }
   async function archiveSession(id: string, canContinue = () => true): Promise<void> {

@@ -93,6 +93,7 @@ function projectActiveTab(tab: TerminalTab): UnifiedSession {
     attentionState: tab.pending ? 'needs-user' : 'none',
     lastActivityAt: tab.lastActiveAt,
     archived: false,
+    opened: true,
     resumable: Boolean(tab.sessionId),
     adapterSessionId: tab.tabId,
     nativeSessionId: tab.sessionId,
@@ -114,6 +115,7 @@ function projectHistorySession(projectPath: string, session: HistorySession): Un
     attentionState: 'none',
     lastActivityAt: session.lastActiveAt,
     archived: false,
+    opened: false,
     resumable: true,
     adapterSessionId: session.sessionId,
     nativeSessionId: session.sessionId,
@@ -300,7 +302,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     await store.closeTab(tab.tabId)
   }
 
-  async function renameSession(id: string, title: string, canContinue = () => true): Promise<void> {
+  async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
     const value = title.trim()
     if (!value || value.includes('\0')) throw new Error('SESSION_TITLE_REQUIRED')
     const owns = captureOwnership(id)
@@ -308,15 +310,16 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
     if (id.startsWith(ACTIVE_PREFIX)) {
       const tab = requireTab(id)
-      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current)
+      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current, onIssued)
       if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
       // Desk row rename is display metadata, never a command injected into CLI input.
+      if (!deps.metadata) onIssued?.()
       store.updateTabName(tab.tabId, value)
     } else {
       const history = parseHistoryId(id)
       const row = store.getCatalogHistoryFor(history.projectPath).find(row => row.sessionId === history.sessionId)
       if (!row || !deps.metadata) throw new Error('SESSION_NOT_FOUND')
-      await saveSessionDisplayName(deps.metadata, projectHistorySession(history.projectPath, row), value, current)
+      await saveSessionDisplayName(deps.metadata, projectHistorySession(history.projectPath, row), value, current, onIssued)
     }
   }
 

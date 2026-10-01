@@ -562,10 +562,35 @@ claims are separated in [the execution record](superpowers/execution/U01-U10.md)
 
 ## Final review interaction repairs
 
-`SessionItem` emits a rename admission request for both F2 and menu entry; only canonical `renameState` opens the editor. Normal App routes both through `unifiedSessions.beginRename`, and UI commits require the original admitted owner. Standalone component tests supply controlled state explicitly. Normal menus teleport; archived drawer menus remain within the modal, with shared mouse selection stopping row activation.
+`SessionItem` emits a rename admission request for F2, menu entry and a double-click that starts on the selected row; only canonical `renameState` opens the editor. Normal App routes both through `unifiedSessions.beginRename`, and UI commits require the original admitted owner. Standalone component tests supply controlled state explicitly. Normal menus teleport; archived drawer menus remain within the modal, with shared mouse selection stopping row activation.
 
 `SessionDiagnosticsDialog` is a read-only shared dialog bound to the selected request's exact current catalog/runtime owner. Its display DTO includes only fixed CLI/runtime/state labels, the open/history/preparing category, bounded generation and the safe error allowlist. Technical values appear inside details. It never copies runtime objects, names, paths, argv, environment/configuration values or arbitrary errors. A changed owner, selection, navigation or newer request revokes the view.
 
 `SessionsPanel.focusSearch` is the existing configurable quick-switch action's destination. Up/Down traverses mounted project/session rows; it does not call resume/launch. Enter on a quick-switch project result emits selection; session Enter uses the existing explicit opening/resume path. The persistent tree retains its search and expansion state, and shared modal/IME/editor ownership continues to take priority.
 
 The quick-switch mode itself clears on Escape and sidebar deactivation. Search/expansion remain persistent, but reopening the tree uses ordinary project Enter expansion until another explicit quick-switch shortcut.
+
+### State-appropriate session actions
+
+Adapters explicitly project `opened`; Native and Legacy history project false even
+when their process state is stopped. Restart and Close require an open terminal.
+Local preparation rows project `preparationState`; a positively never-admitted
+failure exposes “Cancel creation” / “取消新建” through `discard-creation`. The store
+rechecks its creation record before discarding. An unknown admission, ordinary
+history record or existing terminal cannot use this path.
+
+Rename menu entries, row shortcuts and double-click admission require selection.
+The first click captures whether the row was selected and its exact runtime owner;
+click(2) does not repeat activation. Thus the first double-click activates an
+inactive row, while a later selected double-click may open its editor. Historical
+activation retains the explicit Resume dialog and never starts a process to rename.
+The normal App supplies `SESSION_INTERACTION_OWNER`; an unchanged Native/Legacy
+attempt survives display refreshes, and replaced/disappeared attempts fail closed.
+Standalone rows conservatively compare their DTO identity as well as source key.
+
+Changing the selected session/project revokes old editors and saves still waiting
+in either the session queue or the canonical metadata writer. The `onIssued` hook
+marks the actual metadata IPC boundary: after issuance, selection changes and
+stale second submissions cannot invalidate or undo that save. Source/attempt guards
+remain authoritative before and after writes. Deselecting removes the old editor
+without focusing its row; temporarily hiding the selected surface preserves drafts.

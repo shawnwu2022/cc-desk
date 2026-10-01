@@ -257,7 +257,8 @@ describe('SessionIcons', () => {
         expect(notice).toContain('Anthropic')
         expect(notice).toContain('OpenAI')
         expect(notice).toContain('https://claude.com/')
-        expect(notice).toContain('https://github.com/openai/codex/blob/')
+        expect(notice).toContain('https://openai.com/brand/')
+        expect(notice).toContain('Blossom_Light.svg')
         expect(notice).not.toContain('self-owned project artwork')
       }
       const names = directory === 'cli' ? ['claude', 'codex'] : ['starting', 'running', 'needs-user', 'confirming', 'ended', 'failed']
@@ -309,10 +310,10 @@ describe('SessionIcons', () => {
     }
   })
 
-  // 防止回退到自绘终端/六边形占位图；校验官方来源的实际轮廓与原始色彩。
+  // Codex 按用户偏好采用官方 ChatGPT/OpenAI 花结；防止回退到终端字形或自绘图案。
   it.each([
     { cli: 'claude', viewBox: '0 0 125 125', hash: '055f133268cfc756c83c8731e02b234d522d27bdb7745bb46eb5439de61cc7dc' },
-    { cli: 'codex', viewBox: '0 0 32 32', hash: 'd172e73cdb5075fb000dc82eee4573cae1a905d1e612eabeefab765173cd1255' },
+    { cli: 'codex', viewBox: '146.694 227.042 267.198 264.812', hash: 'fb0a32a5384df5cdacc7d1a304f5b14df3c38a9a41ed08878adc99653efd0a33' },
   ])('Cli_OfficialGeometry_$cli', ({ cli, viewBox, hash }) => {
     const source = readFileSync(resolve(`src/assets/icons/cli/${cli}.svg`), 'utf8')
     const svg = new DOMParser().parseFromString(source, 'image/svg+xml').documentElement
@@ -321,7 +322,7 @@ describe('SessionIcons', () => {
     expect(paths).toHaveLength(1)
     expect(createHash('sha256').update(paths[0].getAttribute('d')!).digest('hex')).toBe(hash)
     if (cli === 'claude') expect(paths[0].getAttribute('fill')).toBe('#D97757')
-    else expect(paths[0].getAttribute('stroke')).toBe('#000')
+    else expect(paths[0].getAttribute('fill')).toBe('black')
   })
 
   // 状态确认的呼吸最低透明度仍在双主题、悬浮及选中行背景上至少达到 3:1。
