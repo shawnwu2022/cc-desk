@@ -8,7 +8,7 @@ import { FIXTURE_TIME, longProjectName, longSessionTitle } from '@/visual/fixtur
 import { blockedHostCalls, invoke } from '@/visual/tauriStub'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
-import { expandFixtureProjects, openFixtureSessionMenu } from './fixtureActions'
+import { expandFixtureProjects, clearFixtureSetupFocus, openFixtureSessionMenu } from './fixtureActions'
 
 vi.mock('@tauri-apps/api/window', () => import('@/visual/tauriStub'))
 vi.mock('@tauri-apps/api/core', () => import('@/visual/tauriStub'))
@@ -76,7 +76,8 @@ describe('Isolated production-component fixture', () => {
     expect(document.querySelectorAll(`${toggles}[aria-expanded="true"]`)).toHaveLength(4)
     expect(document.querySelectorAll('[data-session-row]')).toHaveLength(6)
     expect(document.querySelector('[role="tooltip"]'), 'project setup must not leave the last Collapse tooltip open').toBeNull()
-    expect(document.activeElement).toBe(document.querySelector('.shell-main'))
+    expect(document.activeElement, 'setup must not leave a whole-pane main focus outline').toBe(document.body)
+    expect(document.querySelector('.shell-main')!.hasAttribute('tabindex')).toBe(false)
     // Opening an already expanded fixture must not collapse it on a repeated setup.
     await expandFixtureProjects(page)
     expect(document.querySelectorAll('[data-session-row]')).toHaveLength(6)
@@ -107,6 +108,20 @@ describe('Isolated production-component fixture', () => {
     await flushPromises()
     expect(document.querySelector('[role="menu"]')).not.toBeNull()
     expect(document.querySelector('[role="menu"]')!.contains(document.activeElement)).toBe(true)
+    expect(blockedHostCalls.value).toBe(0)
+  })
+  // 截图准备完成后移除临时焦点，已有 tabindex 必须原样保留。
+  it('Fixture_RestoresMainFocusTarget_005', async () => {
+    const view = await render('empty')
+    const main = document.querySelector<HTMLElement>('.shell-main')!
+    main.setAttribute('tabindex', '0')
+    ;(view.get('input').element as HTMLElement).focus()
+    const page = { locator(selector: string) { return {
+      async evaluate(action: (element: Element) => void) { action(document.querySelector(selector)!); await nextTick() },
+    } } }
+    await clearFixtureSetupFocus(page)
+    expect(document.activeElement).toBe(document.body)
+    expect(main.getAttribute('tabindex')).toBe('0')
     expect(blockedHostCalls.value).toBe(0)
   })
 })

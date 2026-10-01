@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { expandFixtureProjects, focusFixtureMain, openFixtureSessionMenu } from './fixtureActions'
+import { expandFixtureProjects, clearFixtureSetupFocus, openFixtureSessionMenu } from './fixtureActions'
 
 const browserErrors = new WeakMap<Page, string[]>()
 test.beforeEach(async ({ page }) => {
@@ -43,7 +43,10 @@ for (const sample of snapshots) {
     test.use({ viewport: { width: sample.width, height: sample.height }, deviceScaleFactor: 'dpr' in sample ? sample.dpr : 1 })
     test('snapshot', async ({ page }) => {
       await openFixture(page, { scenario: sample.scenario, locale: sample.locale, gui: 'gui' in sample ? sample.gui : 'light', density: 'density' in sample ? sample.density : 'standard', terminal: 'terminal' in sample ? sample.terminal : 'cc-box-dark' })
-      if (['empty', 'mixed', 'hover', 'projects', 'terminal-settings', 'launch-configurations'].includes(sample.scenario)) await focusFixtureMain(page)
+      if (['empty', 'mixed', 'hover', 'projects', 'terminal-settings', 'launch-configurations'].includes(sample.scenario)) {
+        await clearFixtureSetupFocus(page)
+        await expect(page.locator('.shell-main')).not.toBeFocused()
+      }
       if (sample.scenario === 'menu') await openFixtureSessionMenu(page)
       if (sample.scenario === 'tooltip') await page.locator('[data-tooltip-trigger]').focus()
       // Use the main area's empty lower-right gutter, never a window control.
@@ -118,7 +121,7 @@ test.describe('rendered interaction boundaries', () => {
       return !!resized && resized.x >= 12 && resized.y >= 12 && resized.x + resized.width <= 788 && resized.y + resized.height <= 588
     }).toBe(true)
     await page.mouse.move(796, 596)
-    await focusFixtureMain(page)
+    await clearFixtureSetupFocus(page)
     await expect(tooltip).toHaveCount(0)
   })
   test('new-session action stays visible while options scroll and Enter submits', async ({ page }) => {
