@@ -41,7 +41,8 @@ Rules:
 - Task 13: complete at `181c6f51c509468e3f6c3f2a844131dcd3975e65`
 - Task 14: complete at `d1a6dc6d6fbb22057245e628c0b6eedcf83fe36a`
 - Task 15: complete at `6ae851a3a3ee9de789a5085b5a0e1d03b551eb44`
-- Next task: Task 16 — safe errors, confirmations and feedback
+- Task 16: complete at `c0a1c231426b599c30ec52ea2740f44d10334e96`
+- Next task: Task 17 — settings shell, General and Appearance
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -461,3 +462,30 @@ Rules:
 - Final required43 tests+typecheck;290 affected tests across25 files plus37 real Legacy store tests;29-source manifest/diff checks pass. Earlier33 required count superseded
 - Independent spec/quality approval reran original2 repros and10 targeted queue/ownership repairs successfully
 - No actual CLI/account/OS stop/platform/scaling/D20 certification, full suite, CI/PR/package/release; atomic publication pending readback
+
+### Task 16 BLOCKED_SYNC — approval evidence
+
+- Reviewed staged tree `e78e88d36a47b9c974b944685d8e9c019b3f7ba5` is complete and independently approved. GitHub create_tree was rejected by automatic approval review because trusted user-authored authorization for source/doc payload and repository destination was not visible to that reviewer
+- No Task16 remote commit/ref update occurred. Parent requested to supply exact transcript evidence; no alternate upload route used. Recovery bundle `/tmp/cc-desk-plan/task-16-blocked-sync.bundle` and staged binary patch `/tmp/cc-desk-plan/task-16-blocked-sync.patch` preserve local work
+- Next-task implementation paused until authorized identical publication retry and remote readback succeed
+
+### Verified Task 16 checkpoint — October 1, 2026
+
+- User explicitly approved the pending source/doc upload and continued per-task branch pushes. Identical previously denied create_tree retried once successfully; exact staged/fetched tree `e78e88d36a47b9c974b944685d8e9c019b3f7ba5` and local/remote commit `c0a1c231426b599c30ec52ea2740f44d10334e96` match
+-43 required tests/typecheck,290 affected tests plus37 Legacy store tests; independent approval with2 original repros and10 queue/ownership checks passing
+- Only local unsent BLOCKED_SYNC/readback ledger annotation remained after adoption; source/index clean. BLOCKED_SYNC resolved; no CI/PR/package/release or actual CLI/platform certification; next Task17
+
+### Task 17 preflight ruling
+
+- Ruling: add minimal optional typed AppConfig fields for GUI theme mode/system, density, sidebar width, supported startup destination and default new CLI because existing Rust typed reserialization drops unknown fields. Preserve old keys/defaults and test serialization compatibility; record unperformed Rust gate if toolchain absent. Fixed ink-blue focus/amber selection remain, no custom accent editor. Default CLI only guides explicit chooser/form selection; startup destination never implicitly launches a CLI. Close behavior exposes only actually supported choices. Cost if wrong: older versions ignore optional new preferences while preserving their existing behavior; no new runtime/launch protocol is introduced.
+
+## Task 17 — Settings shell, General and Appearance
+
+- Real seven-section Settings shell; General language/startup destination/default explicit new CLI and supported close explanation; no fake tray or implicit launch. Future18–20 content remains honestly bounded
+- Appearance GUI light/dark/system, standard/compact density and real session sidebar240–360/default288; fixed accents and terminal preferences/host/selection remain independent. Width uses editable draft committed by blur/Enter
+- Immediate serialized field saves retain confirmed baselines, current intent and safe feedback; uncertain writes read back without replay and failed readback blocks queued mutation until authoritative recovery
+- Optional typed AppConfig fields and real raw-object merge preserve old/future stored keys. Added3 focused Rust compatibility tests; cargo/rustc/rustfmt absent, attempted cargo gate exit127, compilation/formatting NOT RUN
+- Review repairs bind hydration/publication to underlying read sequence plus field commit/intent watermarks, not later joining caller epochs; startup migration obeys same uncertainty barrier. Original stale shared-read/migration/typing cases and combined recovery-overlap all repaired
+- Final66 exact tests+typecheck;152 affected tests,62 resources/errors and41 confirmations preserved. Manifest/diff/reverse-patch checks pass; earlier61/65 counts superseded
+- Independent spec/quality approval reran original3 repros, remaining overlap and5 focused repair/rollback/migration/width tests successfully. Static Rust review found no concrete defect but is not compilation evidence
+- No actual CLI/platform/scaling/system-appearance certification, full suite, CI/PR/package/release; atomic publication pending readback

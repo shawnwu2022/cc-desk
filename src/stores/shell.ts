@@ -27,6 +27,7 @@ export function isCompatibilityEnabled(dev: boolean, flag: string | undefined): 
 
 export const useShellStore = defineStore('shell', () => {
   const section = ref<ShellSection>('workspace')
+  const navigationSequence = ref(0)
   const viewportWidth = ref(1280)
   const sidebarWidth = ref(288)
   const drawerWidth = ref(344)
@@ -47,7 +48,7 @@ export const useShellStore = defineStore('shell', () => {
   const pendingRequest = ref<WorkspaceRequest | null>(null)
   const requestSequence = ref(0)
 
-  function navigate(destination: ShellSection) { section.value = destination }
+  function navigate(destination: ShellSection) { section.value = destination; ++navigationSequence.value }
   function setViewportWidth(width: number) {
     if (Number.isFinite(width) && width > 0) viewportWidth.value = width
   }
@@ -69,7 +70,7 @@ export const useShellStore = defineStore('shell', () => {
     if (sequence === requestSequence.value) pendingRequest.value = null
   }
   return {
-    section, viewportWidth, sidebarVisible, sidebarWidth, drawerVisible, drawerWidth,
+    section, navigationSequence, viewportWidth, sidebarVisible, sidebarWidth, drawerVisible, drawerWidth,
     responsiveMode, pendingRequest, requestSequence, navigate, setViewportWidth,
     setSidebarWidth, setDrawerWidth, toggleSidebar, toggleDrawer,
     requestWorkspaceAction, clearWorkspaceRequest,

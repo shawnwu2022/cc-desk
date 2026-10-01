@@ -82,7 +82,7 @@ describe('sidebar store', () => {
 
       store.openSettings('providers')
 
-      expect(store.activeSettingsSection).toBe('appearance')
+      expect(store.activeSettingsSection).toBe('general')
     })
   })
 

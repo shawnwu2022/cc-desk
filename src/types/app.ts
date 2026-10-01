@@ -18,11 +18,20 @@ export interface HomeData {
   startupState: ProjectStartupState
 }
 
+export type GuiThemeMode = 'light' | 'dark' | 'system'
+export type GuiDensity = 'standard' | 'compact'
+export type StartupDestination = 'workspace' | 'projects'
+
 export interface AppConfig {
   defaultContinue?: boolean
   defaultSkipPermissions?: boolean
   defaultCustomArgs?: string
   theme?: 'light' | 'dark'
+  guiThemeMode?: GuiThemeMode
+  guiDensity?: GuiDensity
+  sidebarWidth?: number
+  startupDestination?: StartupDestination
+  defaultNewCli?: UnifiedCliKind
   terminalTheme?: string
   fontSize?: number
   webglRenderer?: boolean

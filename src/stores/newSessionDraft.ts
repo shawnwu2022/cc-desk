@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { useAppStore } from './app'
 import { useProjectsStateStore } from './projectsState'
 import { useCliProfilesStore } from './cliProfiles'
 import { useNativeTabsStore, type NativeCliTab } from './nativeTabs'
@@ -101,8 +102,8 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
     cli.value = tool; title.value = ''; launchConfigId.value = ''; startMode.value = 'new'
     rawEnabled.value = false; argvFormat.value = 'lines'; argvText.value = ''; visible.value = advanced; chooserVisible.value = !advanced
   }
-  function open(identity: UnifiedProjectIdentity, tool: UnifiedCliKind = 'claude') { resetDraft(identity, tool, true) }
-  function openChooser(identity: UnifiedProjectIdentity) { resetDraft(identity, 'claude', false) }
+  function open(identity: UnifiedProjectIdentity, tool: UnifiedCliKind = useAppStore().defaultNewCli) { resetDraft(identity, tool, true) }
+  function openChooser(identity: UnifiedProjectIdentity) { resetDraft(identity, useAppStore().defaultNewCli, false) }
   function argv(): string[] { return argvFormat.value === 'json' ? parseNativeRawArgv(argvText.value) : argvFromLines(argvText.value) }
   function setArgvFormat(format: 'lines' | 'json') {
     if (format === argvFormat.value) return

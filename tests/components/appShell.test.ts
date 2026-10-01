@@ -8,6 +8,7 @@ import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import App from '@/App.vue'
 import AppShell from '@/components/shell/AppShell.vue'
+import SettingsView from '@/components/settings/SettingsView.vue'
 import PrimaryNav from '@/components/shell/PrimaryNav.vue'
 import WorkspaceView from '@/components/workspace/WorkspaceView.vue'
 import WorkspaceHeader from '@/components/workspace/WorkspaceHeader.vue'
@@ -24,7 +25,7 @@ const host = vi.hoisted(() => ({
   cleanup: vi.fn(), minimize: vi.fn(), toggleMaximize: vi.fn(), close: vi.fn(),
   resourceConfig: vi.fn(), getConfig: vi.fn(), updateConfig: vi.fn(), runChecks: vi.fn(),
 }))
-vi.mock('@/utils/platform', () => ({ isMac: false, isWindows: true, ctrl: 'Ctrl' }))
+vi.mock('@/utils/platform', () => ({ isMac: false, isWindows: true, ctrl: 'Ctrl', cmd: 'Ctrl', alt: 'Alt' }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({
   minimize: host.minimize, toggleMaximize: host.toggleMaximize, close: host.close,
   isMaximized: async () => false, onResized: async () => host.cleanup,
@@ -377,4 +378,44 @@ describe('Unified application shell', () => {
     expect(wrapper.get('[data-unified-terminal-host]').element).toBe(terminal)
     expect(sessions.activeSessionId).toBe('legacy-history:exact')
   })
+  // OS设置/快捷键入口对应新的真实分类，GUI改变保留终端宿主与当前选择。
+  it('Shell_SettingsSectionsKeepHost_024', async () => {
+    const sessions = useUnifiedSessionsStore()
+    sessions.sessions = [{ id: 'held', projectKey: '/work/exact', projectPath: '/work/exact', cli: 'codex', runtime: 'native-cli', title: 'Held', processState: 'stopped', attentionState: 'none', lastActivityAt: 1, archived: false, resumable: false, adapterSessionId: 'held' }]
+    sessions.activeSessionId = 'held'
+    const wrapper = render(App, { global: { stubs: { SettingsView } } }); await flushPromises()
+    const terminal = wrapper.get('[data-unified-terminal-host]').element
+    host.callbacks.get('settings')!(); await flushPromises()
+    expect(wrapper.get('[data-settings-content]').attributes('data-settings-content')).toBe('general')
+    expect(wrapper.findAll('[data-settings-section]')).toHaveLength(7)
+    host.callbacks.get('shortcuts')!(); await flushPromises()
+    expect(wrapper.get('[data-settings-content]').attributes('data-settings-content')).toBe('shortcuts')
+    await wrapper.get('[data-settings-section="appearance"]').trigger('click')
+    await wrapper.get('[data-gui-theme]').setValue('light')
+    await wrapper.get('[data-gui-density]').setValue('compact')
+    await wrapper.get('[data-settings-sidebar-width]').setValue('320')
+    await wrapper.get('[data-settings-sidebar-width]').trigger('blur'); await flushPromises()
+    expect(useShellStore().sidebarWidth).toBe(320); expect(useAppStore().terminalTheme).toBe('cc-box-light')
+    await wrapper.get('.settings-nav-header button').trigger('click'); await flushPromises()
+    expect(useShellStore().section).toBe('workspace')
+    expect(wrapper.get('[data-unified-terminal-host]').element).toBe(terminal)
+    expect(sessions.activeSessionId).toBe('held')
+  })
+  // 已保存启动页只路由到项目页，不启动会话或恢复旧自动继续行为。
+  it('Shell_StartupDestinationIsRouting_025', async () => {
+    host.getConfig.mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en', startupDestination: 'projects', defaultContinue: true, claudeEnvVars: { TEST: 'keep' } })
+    const wrapper = render(App); await flushPromises()
+    expect(useShellStore().section).toBe('projects'); expect(useUnifiedSessionsStore().sessions).toHaveLength(0)
+    expect(useAppStore().cwd).toBe(''); expect(wrapper.find('[data-unified-terminal-host]').exists()).toBe(true)
+  })
+  // 迟到启动配置不得抢走用户新的导航，连同点击当前工作区的意图也需保留。
+  it('Shell_StartupRespectsNewNavigation_026', async () => {
+    let finish!: (value: unknown) => void
+    host.getConfig.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const wrapper = render(App); await flushPromises()
+    await wrapper.get('[data-primary-section="workspace"]').trigger('click')
+    finish({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en', startupDestination: 'projects', claudeEnvVars: { TEST: 'keep' } }); await flushPromises()
+    expect(useShellStore().section).toBe('workspace')
+  })
+
 })

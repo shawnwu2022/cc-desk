@@ -4,6 +4,8 @@ import { defineComponent, h, onMounted, onUnmounted } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
+import { mockIPC, clearMocks } from '@tauri-apps/api/mocks'
+import { useAppStore } from '@/stores/app'
 import { useShellStore } from '@/stores/shell'
 import en from '@/i18n/locales/en'
 const seen = { mounts: [] as string[], unmounts: [] as string[], fits: [] as string[], focus: [] as string[], stops: [] as any[] }
@@ -15,8 +17,8 @@ const Child = defineComponent({ props: { tabId: String, active: { type: Boolean,
   return () => h('div', { 'data-child': id, 'data-visible': String(props.active ?? props.visible), 'data-embedded': String(props.embedded) }, id)
 } })
 const wrappers: VueWrapper[] = []
-beforeEach(() => { setActivePinia(createPinia()); Object.values(seen).forEach(values => { values.length = 0 }); vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }) })
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
+beforeEach(() => { clearMocks(); mockIPC(command => command === 'get_app_config' ? { theme: 'light', terminalTheme: 'cc-box-light', language: 'en' } : undefined); setActivePinia(createPinia()); Object.values(seen).forEach(values => { values.length = 0 }); vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }) })
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals(); clearMocks() })
 const sessions = [
   { id: 'legacy-tab:old-a', adapterSessionId: 'old-a', runtime: 'legacy-claude' },
   { id: 'legacy-tab:old-b', adapterSessionId: 'old-b', runtime: 'legacy-claude' },
@@ -57,4 +59,16 @@ describe('Unified terminal host', () => {
     expect(seen.stops).toEqual([['cx', attempt]])
     await expect((w.vm as any).stopNative('missing', attempt)).rejects.toThrow('NATIVE_TERMINAL_NOT_READY')
   })
+  // GUI主题/密度和会话栏保存只影响布局，所有runtime宿主与终端表面保持原有身份。
+  it('Host_GuiPreferencesPreserveOwners_004', async () => {
+    const w = render(); await w.setProps({ activeSessionId: 'native-tab:cc' }); await flushPromises()
+    const surface = w.get('[data-unified-terminal-host]').attributes('style')
+    const children = w.findAll('[data-child]').map(child => child.element)
+    const app = useAppStore(); await app.setTheme('dark'); await app.setGuiDensity('compact'); await app.setSidebarWidth(320); await flushPromises()
+    expect(w.findAll('[data-child]').map(child => child.element)).toEqual(children)
+    expect(w.get('[data-unified-terminal-host]').attributes('style')).toBe(surface)
+    expect(w.props('activeSessionId')).toBe('native-tab:cc'); expect(seen.mounts).toHaveLength(3); expect(seen.unmounts).toEqual([])
+    expect(seen.stops).toEqual([])
+  })
+
 })

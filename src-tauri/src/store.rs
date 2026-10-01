@@ -64,6 +64,16 @@ pub struct AppConfig {
     #[serde(rename = "defaultCustomArgs")]
     pub default_custom_args: Option<String>,
     pub theme: Option<String>,
+    #[serde(rename = "guiThemeMode")]
+    pub gui_theme_mode: Option<String>,
+    #[serde(rename = "guiDensity")]
+    pub gui_density: Option<String>,
+    #[serde(rename = "sidebarWidth")]
+    pub sidebar_width: Option<u16>,
+    #[serde(rename = "startupDestination")]
+    pub startup_destination: Option<String>,
+    #[serde(rename = "defaultNewCli")]
+    pub default_new_cli: Option<String>,
     #[serde(rename = "terminalTheme")]
     pub terminal_theme: Option<String>,
     #[serde(rename = "fontSize")]
@@ -1560,23 +1570,36 @@ pub fn get_app_config() -> Result<AppConfig> {
 
 /// 更新应用配置
 pub fn update_app_config(updates: serde_json::Value) -> Result<()> {
-    let config_path = get_gui_config_path()?;
+    update_app_config_at(&get_gui_config_path()?, updates)
+}
+
+/// Preserve stored compatibility/future keys that are not part of the read DTO.
+/// The write contract remains an explicit top-level delta, never a DTO replacement.
+pub(crate) fn update_app_config_at(config_path: &Path, updates: serde_json::Value) -> Result<()> {
     let config_dir = config_path
         .parent()
         .context("Could not get parent directory of config path")?;
-
     if !config_dir.exists() {
         fs::create_dir_all(config_dir)?;
     }
-
-    let existing = get_app_config()?;
-    let existing_json = serde_json::to_value(existing)?;
-
+    let existing_json = if config_path.exists() {
+        let content = fs::read_to_string(config_path)?;
+        let existing: serde_json::Value = serde_json::from_str(&content)
+            .context("Failed to parse config.json")?;
+        if !existing.is_object() {
+            bail!("App config must be an object");
+        }
+        existing
+    } else {
+        serde_json::json!({
+            "defaultContinue": true, "defaultSkipPermissions": false,
+            "defaultCustomArgs": "", "theme": "light", "fontSize": 12,
+            "hiddenProjects": []
+        })
+    };
     let merged = merge_json_values(existing_json, updates);
-
     let content = serde_json::to_string_pretty(&merged)?;
-    fs::write(&config_path, content)?;
-
+    fs::write(config_path, content)?;
     Ok(())
 }
 

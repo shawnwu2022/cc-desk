@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   getAppConfig,
@@ -13,6 +13,9 @@ import {
 } from '@/api/tauri'
 import { normalizeTerminalThemeId } from '@/config/terminalThemes'
 import { normalizePath } from '@/utils/path'
+import { useShellStore } from '@/stores/shell'
+import type { AppConfig, GuiThemeMode, GuiDensity, StartupDestination } from '@/types/app'
+import type { UnifiedCliKind } from '@/types/unifiedSession'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCliWorkspaceStore } from '@/stores/cliWorkspace'
 import type { UnifiedProjectIdentity } from '@/types/unifiedSession'
@@ -21,6 +24,22 @@ import i18n from '@/i18n'
 
 import type { ClaudeOptions, DefaultClaudeOptions, CheckResult, Project, ProjectStartupState, SessionInfo } from '@/types'
 
+interface SimpleSettings {
+  guiThemeMode: GuiThemeMode
+  guiDensity: GuiDensity
+  sidebarWidth: number
+  language: 'en' | 'zh'
+  startupDestination: StartupDestination
+  defaultNewCli: UnifiedCliKind
+}
+interface AppConfigRead {
+  config: AppConfig
+  sequence: number
+  intents: Record<keyof SimpleSettings, number>
+  commits: Record<keyof SimpleSettings, number>
+  visibilityVersion: number
+}
+const simpleSettingKeys = ['guiThemeMode', 'guiDensity', 'sidebarWidth', 'language', 'startupDestination', 'defaultNewCli'] as const
 const PAGE_SIZE = 12
 
 /** 默认环境变量（代码中定义，用户可重置） */
@@ -41,6 +60,12 @@ export interface PendingResume {
 }
 
 export const useAppStore = defineStore('app', () => {
+  const shell = useShellStore()
+  const guiThemeMode = ref<GuiThemeMode>('light')
+  const guiDensity = ref<GuiDensity>('standard')
+  const sidebarWidth = computed(() => shell.sidebarWidth)
+  const startupDestination = ref<StartupDestination>('workspace')
+  const defaultNewCli = ref<UnifiedCliKind>('claude')
   const cwd = ref<string>('')
   const theme = ref<string>('light')
   const terminalTheme = ref<string>('cc-box-light')
@@ -49,6 +74,138 @@ export const useAppStore = defineStore('app', () => {
   const language = ref<'en' | 'zh'>('en')
   const alwaysOnTop = ref<boolean>(false)
   const claudeEnvVars = ref<Record<string, string>>({})
+
+  const systemTheme = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null
+  const systemDark = ref(systemTheme?.matches ?? false)
+  function publishGuiTheme() {
+    theme.value = guiThemeMode.value === 'system' ? systemDark.value ? 'dark' : 'light' : guiThemeMode.value
+    applyThemeToDom(theme.value)
+  }
+  function onSystemTheme(event: MediaQueryListEvent) {
+    systemDark.value = event.matches
+    if (guiThemeMode.value === 'system') publishGuiTheme()
+  }
+  if (systemTheme?.addEventListener) systemTheme.addEventListener('change', onSystemTheme)
+  else systemTheme?.addListener?.(onSystemTheme)
+  onScopeDispose(() => {
+    if (systemTheme?.removeEventListener) systemTheme.removeEventListener('change', onSystemTheme)
+    else systemTheme?.removeListener?.(onSystemTheme)
+  })
+
+  function simpleSettings(): SimpleSettings {
+    return { guiThemeMode: guiThemeMode.value, guiDensity: guiDensity.value, sidebarWidth: shell.sidebarWidth,
+      language: language.value, startupDestination: startupDestination.value, defaultNewCli: defaultNewCli.value }
+  }
+  function applySimpleSettings(next: SimpleSettings) {
+    guiThemeMode.value = next.guiThemeMode
+    guiDensity.value = next.guiDensity
+    shell.setSidebarWidth(next.sidebarWidth)
+    language.value = next.language
+    startupDestination.value = next.startupDestination
+    defaultNewCli.value = next.defaultNewCli
+    i18n.global.locale.value = next.language
+    document.documentElement.dataset.density = next.guiDensity
+    publishGuiTheme()
+  }
+  let confirmedSettings = simpleSettings()
+  const settingIntents: Record<keyof SimpleSettings, number> = { guiThemeMode: 0, guiDensity: 0, sidebarWidth: 0, language: 0, startupDestination: 0, defaultNewCli: 0 }
+  const settingCommits = { ...settingIntents }
+  const pendingSettings = { ...settingIntents }
+  const settingsErrors = ref<Partial<Record<keyof SimpleSettings, string>>>({})
+  const settingsSaveError = computed(() => Object.values(settingsErrors.value).find(Boolean) ?? null)
+  let settingsLoaded = false
+  let settingsUnconfirmed = false
+  let settingsPublicationSequence = 0
+  let settingsLoad: Promise<void> | null = null
+  let settingsMutationTail: Promise<void> = Promise.resolve()
+  function widthValue(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) ? Math.round(Math.max(240, Math.min(360, value))) : 288
+  }
+  function hydrateSimpleSettings({ config, intents, commits, sequence }: AppConfigRead) {
+    // Publication follows underlying read order, not the order in which callers joined it.
+    if (sequence < settingsPublicationSequence) return
+    const values: SimpleSettings = {
+      guiThemeMode: config.guiThemeMode === 'system' || config.guiThemeMode === 'dark' || config.guiThemeMode === 'light'
+        ? config.guiThemeMode : config.theme === 'dark' ? 'dark' : 'light',
+      guiDensity: config.guiDensity === 'compact' ? 'compact' : 'standard', sidebarWidth: widthValue(config.sidebarWidth),
+      language: config.language === 'zh' || config.language === 'en' ? config.language : detectSystemLocale(),
+      startupDestination: config.startupDestination === 'projects' ? 'projects' : 'workspace',
+      defaultNewCli: config.defaultNewCli === 'codex' ? 'codex' : 'claude',
+    }
+    const next = simpleSettings()
+    for (const key of simpleSettingKeys) {
+      // A pending intention may need the read's confirmed baseline for rollback,
+      // but an older read can never overwrite a newer acknowledged write or UI choice.
+      if (settingCommits[key] !== commits[key]) continue
+      Object.assign(confirmedSettings, { [key]: values[key] })
+      if (settingIntents[key] === intents[key] && !pendingSettings[key]) Object.assign(next, { [key]: values[key] })
+    }
+    applySimpleSettings(next)
+    settingsPublicationSequence = sequence
+    settingsLoaded = true
+  }
+  function loadSettingsPreferences(force = false): Promise<void> {
+    if (settingsLoaded && !force) return Promise.resolve()
+    if (settingsLoad) return force ? settingsLoad.catch(() => undefined).then(() => loadSettingsPreferences(true)) : settingsLoad
+    settingsLoad = readAppConfig(force).then(read => {
+      const { config } = read
+      if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('APP_CONFIG_UNAVAILABLE')
+      hydrateSimpleSettings(read)
+    }).finally(() => { settingsLoad = null })
+    return settingsLoad
+  }
+  function isUnknownSettingsCommit(failure: unknown): boolean {
+    return !!failure && typeof failure === 'object'
+      && Object.prototype.hasOwnProperty.call(failure, 'code')
+      && (failure as { code?: unknown }).code === 'COMMIT_STATE_UNKNOWN'
+  }
+  async function ensureSettingsWriteReady() {
+    // Every participant in the lane, including startup migration, honors uncertainty.
+    await loadSettingsPreferences(settingsUnconfirmed)
+    settingsUnconfirmed = false
+  }
+  async function reconcileUnconfirmedSettings() {
+    settingsUnconfirmed = true
+    try {
+      await loadSettingsPreferences(true)
+      settingsUnconfirmed = false
+    } catch { /* Keep the barrier until a later explicit operation obtains a fresh read. */ }
+  }
+  function saveSimpleSetting<K extends keyof SimpleSettings>(key: K, value: SimpleSettings[K]): Promise<boolean> {
+    const intent = ++settingIntents[key]
+    ++pendingSettings[key]
+    settingsErrors.value = { ...settingsErrors.value, [key]: undefined }
+    applySimpleSettings({ ...simpleSettings(), [key]: value })
+    const operation = settingsMutationTail.then(async () => {
+      let submitted = false
+      try {
+        await ensureSettingsWriteReady()
+        // Exactly one submitted delta per explicit choice. No full config replacement.
+        const updates: Record<string, unknown> = { [key]: value }
+        if (key === 'guiThemeMode' && value !== 'system') updates.theme = value
+        submitted = true
+        await updateAppConfig(updates)
+        Object.assign(confirmedSettings, { [key]: value })
+        ++settingCommits[key]
+        return true
+      } catch (failure) {
+        const unknown = submitted && isUnknownSettingsCommit(failure)
+        if (unknown) {
+          // Reconcile inside this writer lane; never automatically resubmit the delta.
+          await reconcileUnconfirmedSettings()
+          if (!settingsUnconfirmed) ++settingCommits[key]
+        }
+        if (settingIntents[key] === intent) {
+          if (!settingsUnconfirmed) applySimpleSettings({ ...simpleSettings(), [key]: confirmedSettings[key] })
+          settingsErrors.value = { ...settingsErrors.value, [key]: settingsUnconfirmed ? 'settingsSaveReloadFailed'
+            : unknown ? 'settingsSaveUnconfirmed' : submitted ? 'settingsSaveFailed' : 'settingsSaveReadFailed' }
+        }
+        return false
+      } finally { --pendingSettings[key] }
+    })
+    settingsMutationTail = operation.then(() => undefined)
+    return operation
+  }
 
   // 启动控制
   const pendingResume = ref<PendingResume | null>(null)
@@ -100,10 +257,16 @@ export const useAppStore = defineStore('app', () => {
   const visibilityChangingPaths = ref(new Set<string>())
   const projectAdmissionVersions = new Map<string, number>()
   let visibilityVersion = 0
-  let configRead: ReturnType<typeof getAppConfig> | null = null
-  function readAppConfig(): ReturnType<typeof getAppConfig> {
+  let configRead: Promise<AppConfigRead> | null = null
+  let configReadSequence = 0
+  function readAppConfig(fresh = false): Promise<AppConfigRead> {
+    if (configRead && fresh) return configRead.catch(() => undefined).then(() => readAppConfig())
     if (configRead) return configRead
-    configRead = Promise.resolve().then(getAppConfig).finally(() => { configRead = null })
+    configRead = Promise.resolve().then(async () => {
+      // Shared waiters inherit the actual request's ownership fence, never their later join time.
+      const origin = { sequence: ++configReadSequence, intents: { ...settingIntents }, commits: { ...settingCommits }, visibilityVersion }
+      return { config: await getAppConfig(), ...origin }
+    }).finally(() => { configRead = null })
     return configRead
   }
   let visibilityFailed = false
@@ -117,8 +280,8 @@ export const useAppStore = defineStore('app', () => {
     if (!force && (visibilityLoaded || loadStatus.value === 'loaded' && !visibilityFailed)) return Promise.resolve()
     if (visibilityLoad) return visibilityLoad
     const version = visibilityVersion
-    visibilityLoad = readAppConfig().then(config => {
-      if (version !== visibilityVersion) return
+    visibilityLoad = readAppConfig().then(({ config, visibilityVersion: originVersion }) => {
+      if (originVersion !== visibilityVersion) return
       hiddenProjects.value = new Set(config.hiddenProjects ?? [])
       visibilityLoaded = true
       visibilityFailed = false
@@ -206,14 +369,12 @@ export const useAppStore = defineStore('app', () => {
 
   async function loadAppConfig() {
     loadStatus.value = 'loading'
-    const version = visibilityVersion
     try {
-      const config = await readAppConfig()
-      theme.value = config.theme || 'light'
+      const read = await readAppConfig()
+      const { config, visibilityVersion: version } = read
+      hydrateSimpleSettings(read)
       fontSize.value = config.fontSize || 12
       webglRenderer.value = config.webglRenderer ?? false
-      language.value = config.language === 'zh' ? 'zh' : config.language === 'en' ? 'en' : detectSystemLocale()
-      i18n.global.locale.value = language.value
 
       // 终端主题：归一化 + 迁移推断（缺失时按 GUI 映射）
       const inferredTerminalTheme = config.terminalTheme
@@ -229,10 +390,22 @@ export const useAppStore = defineStore('app', () => {
       // 启动持久化：env + terminalTheme（仅当需修正/迁移时写 terminalTheme）合并为一次调用，
       // 避免多次读-改-写加剧既有竞态（见 spec「已知限制」）
       const needWriteTheme = inferredTerminalTheme !== config.terminalTheme
-      await updateAppConfig({
+      const migrationUpdates = {
         claudeEnvVars: claudeEnvVars.value,
         ...(needWriteTheme ? { terminalTheme: inferredTerminalTheme } : {}),
+      }
+      // Startup migration and simple GUI changes share submission ordering.
+      // Hydration is already available, so this cannot wait on its own migration.
+      const migration = settingsMutationTail.then(async () => {
+        await ensureSettingsWriteReady()
+        try { await updateAppConfig(migrationUpdates) }
+        catch (failure) {
+          if (isUnknownSettingsCommit(failure)) await reconcileUnconfirmedSettings()
+          throw failure
+        }
       })
+      settingsMutationTail = migration.then(() => undefined, () => undefined)
+      await migration
 
       defaultClaudeOptions.value = {
         skipPermissions: config.defaultSkipPermissions ?? false,
@@ -448,13 +621,13 @@ export const useAppStore = defineStore('app', () => {
     saveLastProject(path)
   }
 
-  function setTheme(newTheme: string) {
-    theme.value = newTheme
-    // 同步应用到 DOM
-    applyThemeToDom(newTheme)
-    // 持久化
-    updateAppConfig({ theme: newTheme })
+  function setTheme(newTheme: string): Promise<boolean> {
+    return saveSimpleSetting('guiThemeMode', newTheme === 'system' || newTheme === 'dark' ? newTheme : 'light')
   }
+  function setGuiDensity(value: string): Promise<boolean> { return saveSimpleSetting('guiDensity', value === 'compact' ? 'compact' : 'standard') }
+  function setSidebarWidth(value: number): Promise<boolean> { return saveSimpleSetting('sidebarWidth', widthValue(value)) }
+  function setStartupDestination(value: string): Promise<boolean> { return saveSimpleSetting('startupDestination', value === 'projects' ? 'projects' : 'workspace') }
+  function setDefaultNewCli(value: string): Promise<boolean> { return saveSimpleSetting('defaultNewCli', value === 'codex' ? 'codex' : 'claude') }
 
   function setTerminalTheme(id: string) {
     const normalized = normalizeTerminalThemeId(id)
@@ -479,11 +652,8 @@ export const useAppStore = defineStore('app', () => {
     return browserLang.toLowerCase().startsWith('zh') ? 'zh' : 'en'
   }
 
-  function setLanguage(lang: string) {
-    const normalized = lang === 'zh' ? 'zh' : 'en'
-    language.value = normalized
-    updateAppConfig({ language: normalized })
-    i18n.global.locale.value = normalized
+  function setLanguage(lang: string): Promise<boolean> {
+    return saveSimpleSetting('language', lang === 'zh' ? 'zh' : 'en')
   }
 
   /** 同步当前 claudeEnvVars 到 CC Desk config */
@@ -583,6 +753,8 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     cwd,
+    guiThemeMode, guiDensity, sidebarWidth, startupDestination, defaultNewCli, settingsSaveError, loadSettingsPreferences,
+    setGuiDensity, setSidebarWidth, setStartupDestination, setDefaultNewCli,
     theme,
     terminalTheme,
     fontSize,

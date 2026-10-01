@@ -3877,3 +3877,59 @@ fn Delete_EmptyList_007() {
     let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &[]).unwrap();
     assert_eq!(state.archived_sessions.len(), 1);
 }
+
+// Task17 GUI设置字段可往返；终端与旧启动键保持独立。
+#[test]
+fn AppConfig_GuiSettings_Roundtrip_001() {
+    let config: AppConfig = serde_json::from_value(json!({
+        "theme": "dark", "terminalTheme": "dracula", "defaultContinue": true,
+        "guiThemeMode": "system", "guiDensity": "compact", "sidebarWidth": 320,
+        "startupDestination": "projects", "defaultNewCli": "codex", "language": "zh"
+    })).unwrap();
+    let result = serde_json::to_value(&config).unwrap();
+    assert_eq!(result["guiThemeMode"], "system");
+    assert_eq!(result["guiDensity"], "compact");
+    assert_eq!(result["sidebarWidth"], 320);
+    assert_eq!(result["startupDestination"], "projects");
+    assert_eq!(result["defaultNewCli"], "codex");
+    assert_eq!(result["theme"], "dark");
+    assert_eq!(result["terminalTheme"], "dracula");
+    assert_eq!(result["defaultContinue"], true);
+}
+
+// 旧配置缺少新增字段时仍可读取，不把旧自动继续键改成GUI默认启动。
+#[test]
+fn AppConfig_GuiSettings_LegacyDefaults_002() {
+    let config: AppConfig = serde_json::from_value(json!({
+        "theme": "dark", "defaultContinue": true, "defaultSkipPermissions": true,
+        "defaultCustomArgs": "--old exact value", "autoConnectIde": true
+    })).unwrap();
+    assert!(config.gui_theme_mode.is_none());
+    assert!(config.gui_density.is_none());
+    assert!(config.sidebar_width.is_none());
+    assert!(config.startup_destination.is_none());
+    assert!(config.default_new_cli.is_none());
+    assert_eq!(config.default_continue, Some(true));
+    assert_eq!(config.default_custom_args.as_deref(), Some("--old exact value"));
+    assert_eq!(config.auto_connect_ide, Some(true));
+}
+
+// GUI增量保存不经类型化重序列化丢掉旧/未来字段。
+#[test]
+fn AppConfig_GuiSettings_PreserveStoredKeys_003() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let original = json!({
+        "defaultContinue": true, "defaultSkipPermissions": true,
+        "defaultCustomArgs": "--old exact value", "autoConnectIde": true,
+        "terminalTheme": "dracula", "webglRenderer": true,
+        "hiddenProjects": ["/keep"], "legacyExtra": { "enabled": true }
+    });
+    std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+    crate::store::update_app_config_at(&path, json!({"sidebarWidth": 320})).unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for (key, value) in original.as_object().unwrap() {
+        assert_eq!(&result[key], value, "existing key {key} must remain unchanged");
+    }
+    assert_eq!(result["sidebarWidth"], 320);
+}

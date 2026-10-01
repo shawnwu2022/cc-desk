@@ -2413,3 +2413,16 @@
 - 操作：用鼠标/键盘触发关闭运行会话、停止并归档、未知状态检查后重启、项目移除；等待时取消或切换导航/会话；在单工具缺失/未登录与全来源不可用场景检查反馈。配置编辑器入口接入后再验证其删除确认。
 - 预期：默认焦点不落在危险按钮；长标题/中英文文案可滚动且无全页横向溢出；失活表面无残留焦点陷阱；工具故障不阻断另一工具；全工作区错误不卸载终端宿主；未知进程未确认停止时不重复启动；Toast 不覆盖新选择，诊断中没有原始路径、错误正文、环境值或凭据。
 - 排队检查：让另一元数据/注册写尚未完成，再确认停止并归档或项目移除；在 archive/unregister/unpin 发出前取消或替换原来源。预期：队列释放后不发出已失效步骤，Native/Legacy 均保留停止后的打开会话；取消未发出的写不显示存储失败或触发未知写恢复。已经完成的停止/隐藏/注销可以保留，应用不自动补偿或重放。
+
+
+## Unified workspace Task 17: settings platform acceptance (not yet performed)
+
+- Goal: verify the seven-section Settings shell and GUI-only preferences at Windows 1024×640 with 100%/125%/150% scaling, plus macOS/Linux functional smoke
+- Preconditions: existing mixed Claude Code/Codex CLI terminal owners with retained scrollback and selection; a config with old startup/terminal keys; system theme switching enabled; long English/Chinese labels
+- Steps: open Settings and Shortcuts through OS menus; visit all seven categories; change language, next-start page and default tool; restart the app and open the chooser/advanced form
+- Expected: General/Shortcuts routing is exact; the supported next-start surface opens without launching a CLI; the chosen default tool is preferred in the chooser/form while both tools remain independently available; old launch/env/terminal keys remain stored; no unsupported tray setting appears
+- Steps: switch GUI light/dark/system and system appearance, toggle density, and set sidebar widths at 240/288/360; navigate between Workspace/Projects/Settings with mixed owners and pending confirmations/resources
+- Expected: GUI colors/density/width update in the actual shell without horizontal page scrolling; terminal theme/font/renderer, scrollback, input identity, process ownership and active selection are preserved; fixed ink-blue/amber accents retain accessibility behavior
+- Steps: perform rapid successive preference changes, delay startup/read/write replies, reject a save, and simulate an unknown acknowledgement with a subsequent failed/successful reload
+- Expected: only current intents publish or roll back to confirmed values; old hydration cannot steal navigation or override a newer choice; startup migration is ordered with GUI writes; unknown deltas are never automatically resubmitted, raw transport details never render, and saved state must be read successfully before another write when reconciliation fails
+- Scope limit: Terminal and launch-configuration editing placeholders intentionally await Tasks 18–19. Existing shortcuts/update/about content awaits Task 20's expanded verification. This task does not certify actual Rust/backend persistence or real CLI/platform/scaling behavior

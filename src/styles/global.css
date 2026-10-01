@@ -445,3 +445,9 @@ button:disabled, input:disabled {
   .ui-spinner, .ui-skeleton { animation: none; }
   .ui-button, .ui-menu-item, .ui-input, .ui-select { transition: none; }
 }
+
+/* GUI density affects navigation geometry only, never xterm/PTY preferences. */
+[data-density="compact"] .session-list .session-item { height: 34px; }
+[data-density="compact"] .project-node > .project-row { height: 36px; }
+[data-density="compact"] .projects-list .project-row { padding-top: 6px; padding-bottom: 6px; }
+[data-density="compact"] .workspace-view > .workspace-header { padding-top: 6px; padding-bottom: 6px; }

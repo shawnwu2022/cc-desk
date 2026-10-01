@@ -8,18 +8,12 @@ import { sameProjectPath } from '@/utils/path'
 import type { AgentInfo, McpServerInfo, PluginInfo, SkillInfo, UpdateInfo } from '@/types'
 
 export type SidebarPanelType = 'sessions' | 'skills' | 'agents' | 'mcp' | 'plugins' | null
-export type SettingsSection = 'appearance' | 'startup' | 'shortcuts' | 'update' | 'about'
-
-const SETTINGS_SECTIONS: readonly SettingsSection[] = [
-  'appearance',
-  'startup',
-  'shortcuts',
-  'update',
-  'about',
-]
-
-function isSettingsSection(value: string): value is SettingsSection {
-  return SETTINGS_SECTIONS.includes(value as SettingsSection)
+export const SETTINGS_SECTIONS = ['general', 'appearance', 'terminal', 'launch-configurations', 'shortcuts', 'update', 'about'] as const
+export type SettingsSection = typeof SETTINGS_SECTIONS[number]
+/** Compatibility input mapping only; the public navigation still has seven IDs. */
+export function normalizeSettingsSection(value: string): SettingsSection {
+  if (value === 'startup') return 'general'
+  return SETTINGS_SECTIONS.includes(value as SettingsSection) ? value as SettingsSection : 'general'
 }
 
 export const useSidebarStore = defineStore('sidebar', () => {
@@ -27,7 +21,7 @@ export const useSidebarStore = defineStore('sidebar', () => {
   const panelVisible = ref(false)
 
   const showSettings = ref(false)
-  const activeSettingsSection = ref<SettingsSection>('appearance')
+  const activeSettingsSection = ref<SettingsSection>('general')
   const updateInfo = ref<UpdateInfo | null>(null)
   const updateAvailable = computed(() => updateInfo.value?.hasUpdate ?? false)
 
@@ -163,7 +157,7 @@ export const useSidebarStore = defineStore('sidebar', () => {
     activePanel.value = null
     showSettings.value = true
     if (section) {
-      activeSettingsSection.value = isSettingsSection(section) ? section : 'appearance'
+      activeSettingsSection.value = normalizeSettingsSection(section)
     }
   }
 

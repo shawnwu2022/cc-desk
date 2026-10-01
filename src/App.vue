@@ -58,6 +58,8 @@ const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
 const runtime = useUnifiedWorkspaceRuntime(terminalHost, !compatibilityEnabled)
 const configFailed = ref(false)
 const settingsLoaded = ref(false)
+const startupNavigation = shell.navigationSequence
+let startupApplied = false
 let navigationVersion = 0
 const selectedProject = ref<UnifiedProjectIdentity | null>(null)
 const project = computed<UnifiedProjectIdentity | null>(() => {
@@ -116,13 +118,19 @@ function selectProject(identity: UnifiedProjectIdentity) {
   selectedProject.value = { projectKey: identity.projectKey, projectPath: identity.projectPath }
   shell.navigate('workspace')
 }
-function openSettings(section: SettingsSection = 'appearance') {
+function openSettings(section: SettingsSection = 'general') {
   sidebar.activeSettingsSection = section
   shell.navigate('settings')
 }
 async function loadPreferences() {
   configFailed.value = false
-  try { await app.loadAppConfig() }
+  try {
+    await app.loadAppConfig()
+    if (!startupApplied && shell.navigationSequence === startupNavigation && shell.requestSequence === 0 && shell.section === 'workspace') {
+      shell.navigate(app.startupDestination)
+    }
+    startupApplied = true
+  }
   catch { configFailed.value = true }
 }
 function closeSessions() {
