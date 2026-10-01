@@ -26,6 +26,7 @@ export interface NativeTerminalBindingOptions extends RunKey {
   writeProtocol: (run: RunKey, bytes: Uint8Array) => Promise<ProtocolWriteReceipt>
   ackOutput: (ack: OutputAck) => Promise<unknown>
   onDegraded?: (reason: string) => void
+  onActivity?: () => void
 }
 
 export interface NativeTerminalBinding {
@@ -62,6 +63,7 @@ export function createNativeTerminalBinding(
         leave()
       }
       await operation
+      if (!disposed && data.length) options.onActivity?.()
     },
     protocol: async data => {
       const leave = host.beginParserOutput()
@@ -81,6 +83,7 @@ export function createNativeTerminalBinding(
     generation: options.generation,
     write(bytes, parsed) {
       options.term.write(bytes, parsed)
+      options.onActivity?.()
     },
     ack: options.ackOutput,
     onDegraded: options.onDegraded,
@@ -96,7 +99,7 @@ export function createNativeTerminalBinding(
     sendUserText(data) {
       if (disposed) return Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED'))
       if (options.isUserInputAllowed?.() === false) return Promise.reject(new Error('NATIVE_TERMINAL_HIDDEN'))
-      return host.sendUserText(data)
+      return host.sendUserText(data).then(() => { if (!disposed && data.length) options.onActivity?.() })
     },
 
     reserveUserPaste(produce) {
@@ -106,7 +109,11 @@ export function createNativeTerminalBinding(
           settled: Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED')),
         }
       }
-      return host.reserveUserPaste(produce)
+      let hasBytes = false
+      const reserved = host.reserveUserPaste(async () => {
+        const bytes = await produce(); hasBytes = bytes.length > 0; return bytes
+      })
+      return { inputSeq: reserved.inputSeq, settled: reserved.settled.then(() => { if (!disposed && hasBytes) options.onActivity?.() }) }
     },
 
     drainInput() {

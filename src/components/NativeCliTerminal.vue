@@ -23,6 +23,7 @@ import { platform } from '@/utils/platform'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop } from '@/api/tauri'
 import type { OutputFrame } from '@/types/terminal'
+import { useHookStore } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
 import { terminalAppearanceOptions, applyTerminalAppearance } from '@/config/terminalPreferences'
 import type { WebglAddon } from '@xterm/addon-webgl'
@@ -57,6 +58,7 @@ let observedBracketed = false
 let modeEpoch = BigInt(1)
 let launched = false
 let inputEnabled = false
+let stopObservation: (() => void) | null = null
 let statusTimer: ReturnType<typeof setInterval> | null = null
 let statusSyncInFlight: object | null = null
 let disposed = false
@@ -113,6 +115,7 @@ function disposeRunBinding() {
   launched = false
   inputEnabled = false
   stopStatusSync()
+  stopObservation?.(); stopObservation = null
   binding?.dispose()
   binding = null
 }
@@ -261,6 +264,13 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   const runId = tab.runId
   const generation = tab.generation
   tabs.markStarting(props.tabId)
+  // A passive exact-run subscription never enables the optional backend observer.
+  // Only its ordered projection can claim attention, never a raw hook event kind.
+  try {
+    stopObservation = useHookStore().subscribeObservation({ cli: tab.cli, runId, generation, enabled: true }, (_event, state) => {
+      if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservation(props.tabId, attempt, state)
+    })
+  } catch { /* Optional observation must never block the authoritative terminal. */ }
 
   try {
     binding = createDeskNativeTerminalBinding({
@@ -276,6 +286,9 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
         }
       },
       isUserInputAllowed: () => props.active && inputEnabled && attemptIsCurrent(attempt),
+      onActivity: () => {
+        if (runToken === token && attemptIsCurrent(attempt)) tabs.touch(props.tabId, attempt)
+      },
       onDegraded: reason => {
         const live = tabs.tab(props.tabId)
         if (runToken === token && live?.runId === runId && live.generation === generation) {

@@ -1,0 +1,125 @@
+name: Unified workspace visual evidence
+
+# No development push trigger. Opening the final PR requires the owner's explicit
+# sequencing decision while BLOCKED_VISUAL remains; see docs/visual-testing.md.
+on:
+  pull_request:
+    branches: [feat/native-cli-finalization, main]
+    types: [opened, synchronize, reopened]
+  # Available only after this workflow exists on the default branch.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unified-visual-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  visual:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      EXPECTED_BASELINE_COUNT: 13
+      SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      EVENT_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies and official Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
+      - name: Record source, browser and fonts
+        run: |
+          mkdir -p visual-evidence
+          git rev-parse HEAD > visual-evidence/tested-commit.txt
+          dpkg-query -W fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji > visual-evidence/fonts.txt
+          node --input-type=module <<'NODE'
+          import { writeFileSync, readFileSync } from 'node:fs'
+          import { execFileSync } from 'node:child_process'
+          import { chromium } from '@playwright/test'
+          const evidence = {
+            sourceHead: process.env.SOURCE_HEAD,
+            eventCommit: process.env.EVENT_COMMIT,
+            testedCommit: readFileSync('visual-evidence/tested-commit.txt', 'utf8').trim(),
+            node: process.version,
+            playwright: JSON.parse(readFileSync('node_modules/@playwright/test/package.json', 'utf8')).version,
+            browser: execFileSync(chromium.executablePath(), ['--version'], { encoding: 'utf8' }).trim(),
+            platform: 'ubuntu-24.04-linux-chromium',
+            acceptance: 'unreviewed; not Windows WebView2 or real CLI certification',
+          }
+          writeFileSync('visual-evidence/environment.json', JSON.stringify(evidence, null, 2) + '\n')
+          NODE
+      - name: Check baseline inventory
+        id: baselines
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, existsSync, readdirSync, readFileSync } from 'node:fs'
+          const directory = 'tests/visual/__screenshots__'
+          const actual = existsSync(directory) ? readdirSync(directory).filter(name => name.endsWith('.png')).sort() : []
+          const spec = readFileSync('tests/visual/unified-workspace.spec.ts', 'utf8')
+          const expected = [...spec.matchAll(/name: '([^']+)'/g)].map(match => match[1] + '.png').sort()
+          if (expected.length !== Number(process.env.EXPECTED_BASELINE_COUNT)) throw new Error('Snapshot inventory changed; review workflow expectations')
+          if (actual.length && JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('Partial or unexpected baseline inventory')
+          appendFileSync(process.env.GITHUB_OUTPUT, `absent=${actual.length === 0}\n`)
+          NODE
+      - name: Run fixture contracts and typecheck
+        run: |
+          npm run test:visual:unit
+          npm test -- tests/config/visualFixtureBoundary.test.ts tests/config/visualWorkflow.test.ts tests/productBoundary.test.ts
+          npm run typecheck
+      - name: Verify committed baselines and every geometry/interaction case
+        id: verify
+        continue-on-error: true
+        shell: bash
+        run: |
+          npx playwright test tests/visual/unified-workspace.spec.ts --update-snapshots=none --output=test-results/visual-verification 2>&1 | tee visual-evidence/verification.log
+      - name: Capture candidates for pixel review when baselines are absent
+        if: ${{ !cancelled() && steps.baselines.outputs.absent == 'true' && steps.verify.outcome == 'failure' }}
+        shell: bash
+        run: |
+          npx playwright test tests/visual/unified-workspace.spec.ts --grep snapshot --update-snapshots=all --output=test-results/visual-candidates 2>&1 | tee visual-evidence/candidate-capture.log
+          mkdir -p visual-evidence/candidate-baselines-unapproved
+          cp tests/visual/__screenshots__/*.png visual-evidence/candidate-baselines-unapproved/
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+          import { createHash } from 'node:crypto'
+          const root = 'visual-evidence/candidate-baselines-unapproved'
+          const files = readdirSync(root).filter(name => name.endsWith('.png')).sort()
+          if (files.length !== Number(process.env.EXPECTED_BASELINE_COUNT)) throw new Error('Candidate PNGs incomplete')
+          const entries = files.map(name => {
+            const bytes = readFileSync(`${root}/${name}`)
+            if (!bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new Error('Invalid candidate PNG')
+            return { name, width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20), sha256: createHash('sha256').update(bytes).digest('hex') }
+          })
+          writeFileSync('visual-evidence/candidate-manifest.json', JSON.stringify({ sourceHead: process.env.SOURCE_HEAD, testedCommit: process.env.EVENT_COMMIT, approved: false, entries }, null, 2) + '\n')
+          NODE
+      - name: Retain evidence even when verification or capture fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unified-visual-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            visual-evidence/
+            test-results/visual-verification/
+            test-results/visual-candidates/
+            tests/visual/__screenshots__/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Require the original verification to pass
+        if: always()
+        env:
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          process.exit(process.env.VERIFY_OUTCOME === 'success' ? 0 : 1)
+          NODE

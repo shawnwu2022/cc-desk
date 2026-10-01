@@ -80,7 +80,7 @@ function projectTab(tab: NativeCliTab): UnifiedSession {
     runtime: 'native-cli',
     title: tab.title,
     processState: tab.status === 'stopped' && tab.launchRevision === null ? 'starting' : processState(tab.status),
-    attentionState: 'none',
+    attentionState: tab.attentionState ?? 'none',
     lastActivityAt: tab.lastActivityAt,
     archived: false,
     resumable: Boolean(nativeSessionId),

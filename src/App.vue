@@ -8,6 +8,7 @@ import ProjectResourcesDrawer from '@/components/workspace/ProjectResourcesDrawe
 import { useProjectResourcesStore } from '@/stores/projectResources'
 import ProjectConfirmDialog from '@/components/dialogs/ProjectConfirmDialog.vue'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
+import SessionDiagnosticsDialog from '@/components/sessions/SessionDiagnosticsDialog.vue'
 import SessionConfirmDialog from '@/components/dialogs/SessionConfirmDialog.vue'
 import AppToastHost from '@/components/ui/AppToastHost.vue'
 import ErrorDetails from '@/components/ui/ErrorDetails.vue'
@@ -52,6 +53,7 @@ provide(APP_RENAME_SHORTCUT, computed(() => app.shortcutBindings.rename))
 const sidebar = useSidebarStore()
 const management = useProjectManagementStore()
 const configurations = useCliProfilesStore()
+const sessionSidebar = ref<InstanceType<typeof SidebarPanel> | null>(null)
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
 const runtime = useUnifiedWorkspaceRuntime(terminalHost)
 const configFailed = ref(false)
@@ -134,7 +136,7 @@ function closeSessions() {
   if (shell.section === 'workspace' && shell.sidebarVisible) shell.sidebarVisible = false
 }
 function shortcutAction(action: AppShortcutAction) {
-  if (action === 'projects') { shell.navigate('projects'); return }
+  if (action === 'projects') { shell.navigate('workspace'); shell.sidebarVisible = true; void sessionSidebar.value?.focusSearch(); return }
   if (action === 'settings') {
     if (shell.section === 'settings') shell.navigate('workspace')
     else openSettings()
@@ -191,7 +193,7 @@ onUnmounted(() => {
 <template>
   <AppShell :title="windowTitle">
     <template #sidebar>
-      <SidebarPanel :active="shell.section === 'workspace' && shell.sidebarVisible" :project-groups="management.visibleGroups" :archived-sessions="visibleArchiveSessions"
+      <SidebarPanel ref="sessionSidebar" @select-project="selectProject" :active="shell.section === 'workspace' && shell.sidebarVisible" :project-groups="management.visibleGroups" :archived-sessions="visibleArchiveSessions"
         :selected-id="sessions.activeSessionId" :current-project-path="project?.projectPath" :loading="sessions.loading"
         @close="closeSessions" @add-project="request({ kind: 'add-project' })"
         @refresh="request({ kind: 'refresh' })" @new-session-request="request({ kind: 'new-session', project: $event })"
@@ -233,6 +235,7 @@ onUnmounted(() => {
     <NewSessionDialog :active="shell.section === 'workspace'" @create="request({ kind: 'create-session', input: $event })"
       @restore="request({ kind: 'restore-session', ...$event })" />
     <ProjectConfirmDialog :request="configurations.deleteConfirmation" :active="shell.section === 'settings'" :busy="configurations.deleteBusy" :error-key="configurations.deleteError?.messageKey" @confirm="configurations.confirmDelete" @cancel="configurations.closeDeleteConfirmation" />
+    <SessionDiagnosticsDialog :diagnostics="runtime.diagnostics?.value ?? null" @close="runtime.closeDiagnostics()" />
     <SessionConfirmDialog :active="shell.section === 'workspace'" />
     <AppToastHost />
     <ResumeSessionDialog :active="shell.section === 'workspace'" />

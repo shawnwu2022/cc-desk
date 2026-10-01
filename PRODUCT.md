@@ -21,7 +21,7 @@ CC Desk is a native multi-project, multi-session host for real developer CLIs.
 Success means a user can:
 
 - keep several Claude/Codex sessions alive concurrently;
-- switch projects and tabs without losing terminal state;
+- switch project/session rows without losing terminal state;
 - start, resume, recover, stop, and explicitly restart an owned native run;
 - inspect useful native resources without giving the frontend arbitrary filesystem authority;
 - retain the real CLI's commands, prompts, authentication, permissions, extensions, editor behavior, and future updates.
@@ -49,10 +49,10 @@ The CLI remains the capability owner.
 ### CC Desk owns
 
 - desktop project/session organization;
-- tabs and restart/recovery controls;
+- one project/session tree and restart/recovery controls;
 - terminal rendering and host protocol;
 - input/output transport integrity;
-- application-local profile/workspace metadata;
+- application-local launch-configuration/workspace metadata;
 - backend-held read capabilities for native projections;
 - optional observer delivery that cannot own the process.
 
@@ -101,12 +101,26 @@ The repository currently builds signed candidates only. Publishing is disabled b
 
 A future publishing path requires an explicit promotion decision. It must not be inferred from a version bump or a green code-side CI run.
 
-## Product direction after native v3
+## Unified workspace behavior
 
-After real-CLI certification and owner review, the next work should focus on:
+The selected session owns resource context. New Claude/Codex sessions use Native admission; historical resume keeps its authenticated source and runtime. Startup only restores a UI destination, never a process. Selecting an already open source reuses its terminal, including unknown attempts. Explicit start/stop/restart/close/archive actions revalidate ownership after waits.
 
-- making the native workspace the clearest default entry without breaking legacy users;
-- finishing bilingual UI polish for native controls;
-- deciding legacy Claude workspace deprecation/migration;
-- defining an explicit signed-candidate-to-release promotion workflow;
-- compatibility testing against selected future Claude Code / Codex CLI versions.
+Projects can be added once and normalized path variants reuse registration. Hide/remove is blocked by any open or preparing terminal; removal unregisters where present and hides the ordinary row while retaining CLI files, history and Desk metadata. Legacy-only remove shares the reversible visibility behavior of Hide.
+
+Resources expose Instructions, Settings, MCP, Skills, Agents and Plugins as safe typed observations. Native run scope is preferred; invalid run authority never falls back to current defaults. Legacy observations require proven exact-project authority, omit ambient global/user records and remain partial; unsupported instructions are unavailable. Empty, unavailable, partial and stale-same-owner states are distinct.
+
+Settings has General, Appearance, Terminal, Launch configurations, Shortcuts, Update and About. GUI/terminal preferences are independent and share a serialized compatible settings writer. Launch editors preserve exact argv and expose environment names/modes without rendering existing values. Update installation remains disabled under the candidate-only policy; About diagnostics use an allowlist.
+
+## Current acceptance status
+
+The unified source and host/component contracts are implemented through Task 24. The local Task 25 evidence is recorded in [U01–U10](docs/superpowers/execution/U01-U10.md). The refactor is **not yet visually frozen or fully accepted**: Task 23 is `BLOCKED_VISUAL`; final Rust/CI, Windows package/manual/scaling, native macOS/Linux rendering, accessibility and D20 gates remain separate.
+
+A future PR must bind the tested source head and PR merge commit to its CI, visual and installer artifacts. Candidate screenshot generation is only review input; every PNG needs inspection, any fixes need regression evidence, and a subsequent no-diff run is required. No local host test or pre-existing Windows package result establishes acceptance of this new UX head.
+
+## Remaining direction
+
+- Complete the rendered and authorized installed-platform matrices, including CJK/emoji and real CLI continuity
+- Review migration and old user data on the exact final package
+- Complete D20 with authorized CLI/account/target evidence
+- Decide any later Legacy deprecation separately
+- Design explicit signed-candidate promotion only under separate approval

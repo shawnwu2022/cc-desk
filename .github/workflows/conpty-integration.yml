@@ -14,6 +14,22 @@ on:
       - .github/workflows/conpty-integration.yml
   pull_request:
     paths:
+      # Unified UX changes need the final installed Windows package gate too.
+      - src/**
+      - src-tauri/src/commands.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/src/store.rs
+      - src-tauri/src/tests/store.rs
+      - src-tauri/tauri.conf.json
+      - package.json
+      - package-lock.json
+      - build/**
+      - vite.config.ts
+      - tsconfig*.json
+      - tests/components/**
+      - tests/stores/**
+      - tests/native-cli/**
+      - tests/config/**
       - src-tauri/src/main.rs
       - src-tauri/src/conpty_runtime.rs
       - src-tauri/conpty/**

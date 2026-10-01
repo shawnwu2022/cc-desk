@@ -78,11 +78,9 @@ function activate() {
 }
 function startRename() {
   if (isSaving.value || props.menuActionVisibility?.rename === false) return
-  renameValue.value = props.session.title
-  renameInvalid.value = false
-  localRename.value = true
+  // The owning catalog admits the exact attempt before the editor is displayed.
   menuOpen.value = false
-  void focusRename()
+  emit('menu-action', props.session.id, 'rename')
 }
 function commitRename() {
   if (!isRenaming.value || isSaving.value) return
@@ -147,8 +145,6 @@ function onKeydown(event: KeyboardEvent) {
 function onMenuAction(action: SessionMenuAction) {
   menuOpen.value = false
   emit('menu-action', props.session.id, action)
-  // focusRename waits for the menu's close/render and focus restoration.
-  if (action === 'rename') startRename()
 }
 </script>
 

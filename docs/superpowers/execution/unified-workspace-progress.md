@@ -49,7 +49,8 @@ Rules:
 - Task 21: complete at `78263be9d73644b4faf55b4dd770e33da8de098e`
 - Task 22: complete at `426b1428bf1dce82e5863ea38010cfb69aa4d4ae`
 - Task 23: infrastructure checkpoint `36562bdc2e59890ddfd7035b0ff395f23d82c4af`; BLOCKED_VISUAL, not complete
-- Next independent task: Task 24 — migration, stress and adversarial tests
+- Task 24: complete at `26b8f761af80c230353c937bc5abc1cae580af26`
+- Next task: Task 25 — final local validation/review, visual/Rust/platform gates pending
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -623,3 +624,19 @@ Rules:
 -38newcases:22migration2stress14adversarial.50projects×100sessions and30opendescriptors×120state/layoutcycles measured956ms/16.2s host/jsdom, not realprocess/renderedperformance
 - Required365tests47files+typecheck;affected236+23tests.16sourcehash/diff checks pass; independentspec/quality approval3edgeprobes (removedLegacyhistoryqueue,initialreadinvalidation,lateNative receipt replacement) pass nofindings
 - ActualCLI/30realprocess/Rust/diskmigration/platform/D20 NOTRUN;23BLOCKED_VISUAL remains. Noallfrontendfullsuite/CI/PR/package/release; atomicpublication pendingreadback
+
+### Verified Task 24 checkpoint
+
+- Remote commit `26b8f761af80c230353c937bc5abc1cae580af26`; exact staged/fetched tree and local/remote SHA match; worktree clean before readback
+-365required/typecheck259affected, independent3ownershipprobes+scoped approval
+-23BLOCKED_VISUAL andRust/realCLI/platform/D20NOTRUN remain;25localfullsuite/review/docsnext, externalCItrigger held for parent
+
+## Task 25 — Final local verification and source review
+
+- Lockednpmci, freshfullfrontend1602tests130files, typecheck, productionbuild,15visualfixtureunit and4releasepolicytests PASS;137Playwrightcases onlycollected. Earlier1564/1594counts superseded after finalreviewrepairs
+- Two oldsessionTree readbackfixtures corrected to represent their own successfulpersistedstate; originalretainedstate assertions strengthened with singleread/singlemutation evidence, productionreconciliation unchanged
+- CurrentDESIGN/PRODUCT/component/persistence/terminal/roadmap/U01-U10 docs reconciled; sourcecomplete distinctfromvisual/platformacceptance. PRvisualevidenceworkflow read-only, explicitbashpipefail, unapprovedcandidatecapture retains originalFAIL. ConptyPRpathfilter extended only for finalUXbatch, nopushtrigger/jobs/permissions/releasechanges
+- Wholebranchindependentreview base7e31cff found6sourceissues: workflowfailuremasking, menumousebubbling, noncanonicalrenameentry, missingdiagnostics, falseidleactivity, missingarrow/quickswitch. Cohesivefixwave added actualApp/xterm/pipeline regressions and repairedall
+- Scopedreview found2directresiduals: quickswitchdismissal state and earlyorderedobserverevent. Parentauthorizednarrowdelta; exactattemptboundedpendingattention+modecleanup repaired, independent46focusedchecks PASS. Finalsource/spec+quality approval; nootherblocker in revieweddelta
+- Userexplicitlyapproved DraftPR+finalordinaryCI/visual/Windowspackage afterreview at2026-10-01T07:48:14Z. No merge/release authorized. Firstrealpixels must be inspected and acceptedbaselines committed beforevisualfreeze/no-diffPASS; initialvisualjob expectedFAIL untilthen
+- Rusttest/fmt/clippy,Windowsinstaller/manual/platform/actualCLI remainNOTRUNlocally; D20BLOCKED_EXTERNAL_TARGET. Externalbatch/source+mergeref/artifactevidence pending

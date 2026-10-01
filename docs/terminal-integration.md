@@ -18,8 +18,7 @@ for output/exit listener readiness, independently of optional drag/drop, and the
 rechecks the original tab owner.
 
 `useUnifiedWorkspaceRuntime` supplies the real adapter ports and read-only bootstrap.
-It admits typed shell requests once by sequence and leaves create/resume, project,
-resource and consequential unconfirmed requests pending for their owning tasks.
+It admits typed shell requests once by sequence. Current creation/resume dialogs, project/resource stores and typed confirmations own preparation and authorization before existing adapter dispatch.
 Native stop/recover receives the request/run/generation captured by the caller.
 Restart and close revalidate ownership after awaits; unknown status reads remain
 unknown and never authorize replay. Queued facade actions capture ownership before
@@ -126,7 +125,7 @@ Where xterm/public APIs cannot prove provenance, that capability stays blocked r
 
 ## DOM and error boundary
 
-Native terminal/workbench surfaces are interpolation-only:
+Native terminal and structured resource surfaces are interpolation-only:
 
 - no `v-html`;
 - no `innerHTML`;
@@ -287,3 +286,42 @@ and selects another existing same-CLI configuration if available. If none remain
 the UI explicitly describes the safe fallback; only a subsequent explicit New session
 materializes it via the existing Task12 preparer. Deletion does not create a second
 configuration or process, and project last-success metadata is untouched.
+
+
+## Shared appearance without runtime replacement
+
+Legacy Claude, Native Claude and Native Codex consume the same computed
+`app.terminalPreferences` through `terminalAppearanceOptions` / `applyTerminalAppearance`.
+Theme and cursor deltas update existing xterm options without resize, terminal
+recreation, process launch, scrollback/selection mutation or input. Font metrics
+request one coalesced visible fit; hidden terminals defer fitting until shown and
+recheck lifetime/visibility at the frame boundary. A new renderer choice affects only
+new terminals. WebGL load/context failure retains the terminal and latest colors.
+
+The fixed Settings preview opens no xterm, bridge or PTY. GUI light/dark × terminal
+light/dark independence, hidden parser replies, exact output ACK and selection/host
+retention have frontend/real-pinned-xterm tests; actual CLI, GPU and OS glyph behavior
+remain separate. Full preference persistence rules are in [terminal preferences](terminal-preferences.md).
+
+## Rename, stress and final evidence limits
+
+Unified history/live rename updates only `projectsState` display metadata. It neither
+sends Legacy `/rename` nor edits CLI transcripts. Canonical queue admission rechecks
+history identity and Native/Legacy attempts; late completions cannot name a replacement.
+New/raw Native tabs without authenticated history association retain tab-local names;
+no title/raw-ID/default inference associates later discovered history.
+
+Task 24 host tests cover 50 projects × 100 mixed sessions, 30 open descriptors and 120
+state/selection/layout cycles. They do not spawn 30 real CLIs or measure browser
+throughput. The current Task 25 frontend build/typecheck/full-suite result belongs to
+[U01–U10](superpowers/execution/U01-U10.md); earlier D21 installed ConPTY evidence is
+historical and cannot certify this new UX package. Rust is NOT RUN locally, rendered
+screenshots remain BLOCKED_VISUAL, and D20 remains BLOCKED_EXTERNAL_TARGET.
+
+## Native activity projection after final review
+
+Native launch receipts update `lastActivityAt` only when launch/state/error meaning changes; identical healthy polls neither refresh activity nor clear a transport diagnostic. Accepted output and successfully admitted user keyboard/explicit-text/paste operations report activity through the existing terminal binding. Parser replies and ACKs do not count as user activity. The terminal checks its exact request/run/generation and binding lifetime before publishing, while `nativeTabs.touch` coalesces reactive input/output timestamps to at most one publication per second per attempt. No delayed timer keeps idle rows recent.
+
+Optional attention consumes the existing exact-run observer's projected state. Only an active ordered `waiting` projection means `needs-user`; unordered/raw events remain unknown. Repeated projected attention does not refresh timestamps, and unknown/failed/starting/stopped/replacement state clears previous attention. Subscriptions are passive and released with the run binding; they do not enable the backend observer or control a CLI. These are host/source contracts, not D20 real-CLI or throughput certification.
+
+During a pending launch receipt, a starting tab retains one latest safe attention projection bound to its exact request/run/generation. It displays needs-user only after that same attempt is confirmed running. A newer unknown projection replaces waiting; unknown/failed/ended process state, restart, close and clear discard the pending projection. This bounded temporary state contains no raw observer event and cannot establish process state or input authority.

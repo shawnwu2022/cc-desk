@@ -139,7 +139,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
 
 <template>
   <div class="project-node" :class="{ current: isCurrent }" role="treeitem" :aria-expanded="expanded" :aria-label="project.name">
-    <div ref="row" class="project-row" role="button" :aria-expanded="expanded" :aria-label="project.name" tabindex="0"
+    <div ref="row" :data-project-key="project.projectKey" class="project-row" role="button" :aria-expanded="expanded" :aria-label="project.name" tabindex="0"
       @contextmenu="openContext" @keydown="onRowKeydown">
       <IconButton class="expand-arrow" :class="{ expanded }" :label="expanded ? t('collapse') : t('expand')"
         :aria-expanded="expanded" :disabled="disableToggle" @click.stop="toggle">

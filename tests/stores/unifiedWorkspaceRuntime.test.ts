@@ -156,6 +156,7 @@ describe('Unified production runtime', () => {
     useShellStore().navigate('workspace'); await flushPromises(); expect(w.get('[data-runtime-tab]').element).toBe(element); expect(unmounted).toEqual([])
     useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: opened.id, action: 'copy-session-id' }); await flushPromises()
     expect(io.writeText).not.toHaveBeenCalled()
+    useUnifiedSessionsStore().beginRename(opened.id)
     useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: opened.id, title: 'Unified name' }); await flushPromises()
     expect(tabsTitle()).toBe('Unified name'); expect(useShellStore().pendingRequest).toBeNull()
     function tabsTitle() { return useNativeTabsStore().tab(opened.adapterSessionId)?.title }

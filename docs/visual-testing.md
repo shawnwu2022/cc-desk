@@ -106,3 +106,60 @@ supplemental PNGs, pixel review, the rendered tooltip result and the final no-di
 PASS remain pending in an authorized browser environment. The generated browser
 launch failures are not counted as screenshot RED evidence. The parent owns the
 remaining rendered gate and final CI sequencing.
+
+
+## Prepared final workflow and evidence review
+
+`.github/workflows/unified-visual.yml` runs on the eventual final PR into
+`feat/native-cli-finalization` (or `main`), with no development push trigger. It uses
+Ubuntu 24.04, Node 22, `npm ci`, the lockfile's Playwright 1.63.0 and official Chromium
+installation with system dependencies, plus Noto core/CJK/emoji fonts. Browser and
+font package versions are recorded with source head and actual tested PR merge commit.
+
+The first full run uses `--update-snapshots=none`. Its logs/traces remain under
+`visual-evidence/verification.log` and `test-results/visual-verification/`. When all
+baselines are absent and this run fails, a separate snapshot-only run writes candidate
+PNGs with `--update-snapshots=all`. Copies in
+`visual-evidence/candidate-baselines-unapproved/` have dimensions/SHA256 recorded in
+`candidate-manifest.json` with `approved: false`. Capture failures also retain artifacts.
+The final workflow guard returns failure unless the **original** full verification
+passed; successful capture never changes missing-baseline or geometry failures into PASS.
+
+Artifact name: `unified-visual-<tested-commit>-<run-attempt>`, retained 14 days. A reviewer
+must inspect every actual image at its recorded dimensions, evaluate all other failures,
+and only then accept corrected baselines in a reviewed commit. The subsequent full
+no-update run is the screenshot/geometry/interaction gate. A browser-launch error in
+CI would still be a blocker, not the required missing-baseline failure.
+
+GitHub [requires a workflow_dispatch file on the default branch](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onworkflow_dispatch).
+This new file on the feature branch cannot promise an immediate manual dispatch.
+A [pull_request event tests the merge ref](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request)
+and supplies the head SHA separately. Opening the eventual draft also starts the
+existing ordinary CI and Windows package gate; the latter now includes unified UX
+source/configuration/test paths in its PR filter, with its push filter/jobs unchanged. The original plan required pixel freeze first, so with rendering
+blocked locally the owner approved the final draft/CI sequence on 2026-10-01, after
+independent review. The parent owns those external actions. No PR or workflow has
+been created/run by Task25 local preparation, and pixels remain unaccepted.
+
+| Snapshot | CSS viewport | DPR | Expected raster |
+|---|---|---|---|
+| workspace-empty-1024-zh | 1024×640 | 1 | 1024×640 |
+| workspace-mixed-1366-zh | 1366×768 | 1 | 1366×768 |
+| workspace-hover-action-1366-en | 1366×768 | 1 | 1366×768 |
+| workspace-resources-overlay-1024 | 1024×640 | 1 | 1024×640 |
+| projects-150-percent | 1280×720 | 1.5 | 1920×1080 |
+| new-session-dialog | 1024×640 | 1 | 1024×640 |
+| archived-sessions | 1366×768 | 1 | 1366×768 |
+| settings-terminal-light-gui-dark-terminal | 1440×900 | 1 | 1440×900 |
+| settings-launch-configurations | 1280×720 | 1 | 1280×720 |
+| confirm-stop-and-archive | 1024×640 | 1 | 1024×640 |
+| workspace-menu-1024-en | 1024×640 | 1 | 1024×640 |
+| workspace-dark-gui-light-terminal | 1280×720 | 1 | 1280×720 |
+| tooltip-transformed-1024 | 1024×640 | 1 | 1024×640 |
+
+Every baseline above is currently absent. This table is an expected artifact inventory,
+not rendered evidence. Windows WebView2/OS scaling and real CLI remain separate gates.
+
+### Final review: pipeline failure propagation
+
+Both Playwright producer pipelines explicitly select `shell: bash`, including the optional candidate capture. GitHub therefore invokes Bash with pipefail. `tests/config/visualWorkflow.test.ts` executes each actual step script with only the Playwright producer replaced by `node -e "process.exit(7)"`; both must exit 7 through `tee`. This complements the final outcome guard tests and does not launch a browser or create/approve baselines. The original verification result remains mandatory even if candidate capture succeeds.

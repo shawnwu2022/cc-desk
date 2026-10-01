@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import type {
   ProjectActionRequest, SessionMenuAction, SessionPrimaryAction, SessionTreeConfirmationRequest,
-  UnifiedProjectGroup, UnifiedSession, NewSessionRequest,
+  UnifiedProjectIdentity, UnifiedProjectGroup, UnifiedSession, NewSessionRequest,
 } from '@/types/unifiedSession'
 import SessionsPanel from '../sessions/SessionsPanel.vue'
 
@@ -18,6 +19,7 @@ withDefaults(defineProps<{
 const emit = defineEmits<{
   close: []
   'add-project': []
+  'select-project': [project: UnifiedProjectIdentity]
   refresh: []
   'toggle-expand': [projectKey: string]
   'new-session-request': [project: NewSessionRequest]
@@ -30,11 +32,13 @@ const emit = defineEmits<{
   'confirmation-request': [request: SessionTreeConfirmationRequest]
   'restore-request': [id: string]
 }>()
+const panel = ref<InstanceType<typeof SessionsPanel> | null>(null)
+defineExpose({ focusSearch: () => panel.value?.focusSearch() })
 </script>
 
 <template>
   <div v-show="visible" class="sidebar-panel">
-    <SessionsPanel :active="active && visible" :project-groups="projectGroups" :archived-sessions="archivedSessions"
+    <SessionsPanel ref="panel" @select-project="emit('select-project', $event)" :active="active && visible" :project-groups="projectGroups" :archived-sessions="archivedSessions"
       :selected-id="selectedId" :current-project-path="currentProjectPath" :loading="loading"
       @close="emit('close')" @add-project="emit('add-project')" @refresh="emit('refresh')"
       @toggle-expand="emit('toggle-expand', $event)" @new-session-request="emit('new-session-request', $event)"

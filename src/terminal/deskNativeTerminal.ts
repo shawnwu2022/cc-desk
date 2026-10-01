@@ -17,6 +17,7 @@ export interface DeskNativeTerminalBindingOptions {
   currentTarget: () => InputTarget
   isUserInputAllowed?: () => boolean
   onDegraded?: (reason: string) => void
+  onActivity?: () => void
 }
 
 /**
@@ -36,5 +37,6 @@ export function createDeskNativeTerminalBinding(
     writeProtocol: cliWriteProtocol,
     ackOutput: cliAckOutput,
     onDegraded: options.onDegraded,
+    onActivity: options.onActivity,
   })
 }

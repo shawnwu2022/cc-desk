@@ -539,11 +539,11 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     renameOwners.delete(id)
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'idle' } : row)
   }
-  function renameSession(id: string, title: string): Promise<void> {
+  function renameSession(id: string, title: string, requireEditor = false): Promise<void> {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     const current = renameOwners.get(id)
-    if (current && !ownsRename(current, session)) {
+    if ((requireEditor && !current) || (current && !ownsRename(current, session))) {
       renameOwners.delete(id)
       sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'idle' } : row)
       return Promise.reject(new Error('STALE_SESSION_ATTEMPT'))

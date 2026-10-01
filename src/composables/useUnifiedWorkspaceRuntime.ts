@@ -1,4 +1,4 @@
-import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
+import { computed, shallowRef, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { openInFileManager } from '@/api/tauri'
 import { useAppStore } from '@/stores/app'
@@ -16,6 +16,7 @@ import { useAttentionStore } from '@/stores/attention'
 import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
 import { createNativeCliAdapter, type NativeRuntimeCreateInput } from '@/session/adapters/nativeCliAdapter'
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
+import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
 import { sameProjectPath } from '@/utils/path'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { UnifiedCliKind } from '@/types/unifiedSession'
@@ -85,6 +86,18 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       id: `native-tab:${tab.tabId}`, adapterSessionId: tab.tabId, runtime: 'native-cli' as const,
     })),
   ])
+  const diagnosticsOwner = shallowRef<{ id: string; owns: () => boolean } | null>(null)
+  const diagnostics = computed(() => {
+    const owner = diagnosticsOwner.value
+    if (!owner || shell.section !== 'workspace' || !owner.owns()) return null
+    const row = catalog.sessions.find(row => row.id === owner.id)
+    if (!row) return null
+    const open = openSessions.value.some(session => session.id === row.id)
+    return projectSessionDiagnostics(row, open, row.runtime === 'native-cli' && open ? native.tab(row.adapterSessionId)?.generation : undefined, catalog.isPreparingSession(row.id))
+  })
+  function closeDiagnostics() { diagnosticsOwner.value = null }
+  watch(diagnostics, value => { if (!value) closeDiagnostics() }, { flush: 'sync' })
+  watch(() => [shell.navigationSequence, catalog.activeSessionId], closeDiagnostics, { flush: 'sync' })
   function requireHost() {
     if (disposed || !host.value) throw new Error('TERMINAL_HOST_NOT_READY')
     return host.value
@@ -274,6 +287,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (!('sessionId' in request)) return false
     const session = catalog.sessions.find(value => value.id === request.sessionId)
     if (!session) return false
+    if (request.kind === 'menu-action' && request.action === 'view-diagnostics') {
+      if (shell.section === 'workspace') diagnosticsOwner.value = { id: session.id, owns: catalog.captureSessionOwnership(session.id) }
+      return true
+    }
     const preparing = catalog.isPreparingSession(session.id)
     if (preparing) {
       if (request.kind === 'activate') { await catalog.activateSession(session.id); return true }
@@ -295,7 +312,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     if (request.kind === 'restore-archive') { await catalog.restoreArchivedSession(session.id); return true }
     if (request.kind === 'rename') {
-      await catalog.renameSession(session.id, request.title)
+      await catalog.renameSession(session.id, request.title, true)
       return true
     }
     if (!('action' in request)) return false
@@ -307,6 +324,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       : legacy.tabs.get(session.adapterSessionId)?.status : session.processState
     const live = state === 'running' || state === 'starting' || state === 'unknown'
     switch (action) {
+      case 'rename': catalog.beginRename(session.id); return true
       case 'stop':
       case 'cancel-start':
         if (action === 'cancel-start' && open && session.runtime === 'native-cli') {
@@ -357,6 +375,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const sequence = shell.requestSequence
     const request = shell.pendingRequest
     catalog.closeSessionConfirmation()
+    closeDiagnostics()
     const feedback = catalog.captureFeedbackOwner()
     const ownsFeedbackSession = 'sessionId' in request && typeof request.sessionId === 'string' && catalog.sessions.some(row => row.id === request.sessionId)
       ? catalog.captureSessionOwnership(request.sessionId) : () => true
@@ -405,5 +424,5 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     void refresh()
   })
   onUnmounted(() => { disposed = true; ++refreshOwner })
-  return { openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, refresh, retryAction }
+  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, refresh, retryAction }
 }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import {
   captureNativeAttempt,
@@ -23,6 +23,7 @@ function status(tab: any, phase: LaunchStatus['phase'] = 'running'): LaunchStatu
 }
 
 beforeEach(() => setActivePinia(createPinia()))
+afterEach(() => vi.restoreAllMocks())
 
 describe('D22 native dual-CLI tab store', () => {
   it('D22_Tabs_SameProjectClaudeAndCodexRemainIndependent_08', () => {
@@ -170,4 +171,48 @@ describe('D22 native dual-CLI tab store', () => {
     store.markError(tab.tabId, 'INVALID_LAUNCH_RESPONSE')
     expect(store.hasUnstartedAttempt(tab.tabId)).toBe(false)
   })
+  // 状态真正变化与新的诊断需要更新；相同诊断与旧代次必须保持时间。
+  it('Activity_ExactOwnerAndState_018', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    const store = useNativeTabsStore()
+    const tab = store.create({ cli: 'codex', projectId: 'p1', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    store.applyLaunchStatus(tab.tabId, status(tab))
+    now.mockReturnValue(2000); store.setDiagnostic(tab.tabId, 'NATIVE_INPUT_PAUSED')
+    expect(store.tab(tab.tabId)!.lastActivityAt).toBe(2000)
+    now.mockReturnValue(3000); store.setDiagnostic(tab.tabId, 'NATIVE_INPUT_PAUSED')
+    expect(store.tab(tab.tabId)!.lastActivityAt).toBe(2000)
+    now.mockReturnValue(4000); store.applyLaunchStatus(tab.tabId, status(tab, 'exited'))
+    expect(store.tab(tab.tabId)!.lastActivityAt).toBe(4000)
+    const newer = store.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+    now.mockReturnValue(8000); store.touch(tab.tabId, captureNativeAttempt(tab))
+    expect(store.tab(tab.tabId)!.lastActivityAt).toBe(4000)
+    store.touch(tab.tabId, captureNativeAttempt(newer))
+    expect(store.tab(tab.tabId)!.lastActivityAt).toBe(8000)
+  })
+
+  // 状态不明不得保留之前 observer 投影的明确回复状态。
+  it('Activity_UnknownClearsAttention_019', () => {
+    const store = useNativeTabsStore()
+    const tab = store.create({ cli: 'claude', projectId: 'p1', projectPath: '/repo', profileId: 'cc', profileRevision: '7', action: { kind: 'new' } })
+    store.applyLaunchStatus(tab.tabId, status(tab))
+    store.applyObservation(tab.tabId, captureNativeAttempt(tab), { observation: 'active', activity: 'waiting' })
+    expect(store.tab(tab.tabId)!.attentionState).toBe('needs-user')
+    store.markUnknown(tab.tabId)
+    expect(store.tab(tab.tabId)!.attentionState).toBe('none')
+  })
+
+  // 进程不明、失败、结束或新代次必须丢弃等待中的注意力投影。
+  it.each(['unknown', 'failed', 'exited', 'restart'] as const)('Attention_PendingInvalidation_020 %s', invalidation => {
+    const store = useNativeTabsStore()
+    const tab = store.create({ cli: 'claude', projectId: 'p1', projectPath: '/repo', profileId: 'cc', profileRevision: '7', action: { kind: 'new' } })
+    store.markStarting(tab.tabId)
+    store.applyObservation(tab.tabId, captureNativeAttempt(tab), { observation: 'active', activity: 'waiting' })
+    if (invalidation === 'unknown') store.markUnknown(tab.tabId)
+    else if (invalidation === 'failed') store.markError(tab.tabId, 'LAUNCH_FAILED')
+    else store.applyLaunchStatus(tab.tabId, status(tab, 'exited'))
+    const current = invalidation === 'restart' ? store.restart(tab.tabId, { profileId: 'cc', profileRevision: '7' }) : tab
+    store.applyLaunchStatus(tab.tabId, status(current))
+    expect(store.tab(tab.tabId)!.attentionState).toBe('none')
+  })
+
 })

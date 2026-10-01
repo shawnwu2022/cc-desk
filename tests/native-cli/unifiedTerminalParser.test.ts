@@ -65,9 +65,43 @@ beforeEach(() => {
   io.ack.mockResolvedValue(undefined); io.legacyInput.mockResolvedValue(undefined)
   useCliProfilesStore().profiles = [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }]
 })
-afterEach(() => { wrapper?.unmount(); wrapper = null; vi.unstubAllGlobals(); document.body.innerHTML = '' })
+afterEach(() => { wrapper?.unmount(); wrapper = null; vi.unstubAllGlobals(); document.body.innerHTML = ''; if (vi.isMockFunction(Date.now)) vi.mocked(Date.now).mockRestore() })
 
 describe('Unified host with pinned real xterm parser', () => {
+  // 真实 Native host/parser 输入输出推进活动；轮询、隐藏输入与旧 owner 不推进。
+  it('Native_MeaningfulActivity_005', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+    now.mockReturnValue(61000)
+    await (wrapper.vm as any).recover(); await flushPromises()
+    expect(tabs.tab(tab.tabId)!.lastActivityAt, 'unchanged poll must age').toBe(1000)
+    now.mockReturnValue(62000)
+    io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: '0', bytes: [65] })
+    await vi.waitFor(() => expect(io.ack).toHaveBeenCalled())
+    expect(tabs.tab(tab.tabId)!.lastActivityAt).toBe(62000)
+    // One hundred admitted output chunks in the same second do not publish one hundred catalog updates.
+    for (let n = 1; n <= 100; n++) {
+      now.mockReturnValue(62000 + n)
+      io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: String(n), bytes: [65] })
+    }
+    expect(tabs.tab(tab.tabId)!.lastActivityAt).toBe(62000)
+    now.mockReturnValue(65000)
+    io.terminals[0].input('real input', true)
+    await vi.waitFor(() => expect(io.user).toHaveBeenCalledTimes(1))
+    await flushPromises()
+    expect(tabs.tab(tab.tabId)!.lastActivityAt).toBe(65000)
+    await wrapper.setProps({ active: false }); now.mockReturnValue(70000)
+    io.terminals[0].input('hidden input', true); await flushPromises()
+    expect(tabs.tab(tab.tabId)!.lastActivityAt).toBe(65000)
+    now.mockReturnValue(75000)
+    tabs.tab(tab.tabId)!.status = 'exited'; tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' }); await flushPromises()
+    now.mockReturnValue(80000)
+    io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: '101', bytes: [65] })
+    expect(tabs.tab(tab.tabId)!.lastActivityAt).toBe(75000)
+  })
+
   // 真实xterm解析DSR时隐藏Native仍输出协议应答和ACK，同时拒绝用户输入。
   it.each([true, false])('Native_HiddenParserReplies_001 %s', async initiallyVisible => {
     const tab = useNativeTabsStore().create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })

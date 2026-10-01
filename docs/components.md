@@ -54,11 +54,10 @@ admits/dispatches requests through runtime-owned adapters; paths in these
 requests do not authorize Native filesystem access. The Legacy adapter reads `getCatalogHistoryFor`, an unfiltered cached history
 projection. Ordinary `getHistoryFor` keeps its existing archived/claimed filtering,
 while the unified catalog retains archived rows so the archive drawer can restore them.
-Live close/archive requests remain pending for the confirmation layer (Task 16).
+Live close/archive requests go through `SessionConfirmDialog` and the Task 16 exact-owner confirmation layer.
 Admission reads current runtime state, rather than trusting an older catalog row.
 Queued operations capture adapter ownership before awaiting; an ended close/archive
-must still be ended at execution. Confirmations never belong to the shell. New-session dialogs
-belong to Task 12, resume to Task 13 and contextual resources to Task 15.
+must still be ended at execution. The shell stores presentation intent, while runtime owners authorize side effects. `NewSessionDialog`, `ResumeSessionDialog` and `ProjectResourcesDrawer` are the current creation, restore and resource surfaces.
 
 All builds mount the same root shell. The temporary DEV compatibility route and
 its flag have been retired along with the independent Native workbench, old
@@ -88,12 +87,13 @@ Resumed history passes `sourceSessionKey` and its complete cached context to the
 runtime before creating the tab. Restart retains that context and revalidates it
 after stop. It never creates a profile, registers a frontend path, or changes argv.
 
-Runtime request handling supports open-session activation, explicit stop/cancel,
-exact status recovery, explicit restart/retry, open-tab rename, ended close/archive,
-archive restore, copy session ID and open project directory. Creation/resume dialogs,
-project management, resources, diagnostics and required confirmations remain explicit
-pending requests for Tasks 12–16. Unsupported operations are never translated to
-Legacy commands. Refresh reloads sources; it does not retry a failed lifecycle request.
+Runtime request handling connects selection, stop/cancel, exact status recovery,
+explicit restart/retry, metadata rename, close/archive/restore, copy session ID and
+open directory to current adapters and shared confirmations. New/Resume dialogs,
+project management, contextual resources and safe diagnostics are implemented;
+unsupported operations are never translated to Legacy commands. Refresh reloads
+sources without retrying a failed lifecycle request. Historical and live rename
+both use `projectsState` display metadata, never terminal `/rename` input.
 
 The optional adapter `captureOwnership` hook freezes exact Native request/run/generation
 or Legacy tab/local PTY generation at facade admission, before an action waits in a
@@ -525,3 +525,47 @@ The new tests establish behavioral and source-level contracts. They do not measu
 real browser overflow, Windows DPI, font metrics, rendered contrast or screen-reader
 output. Task23 owns deterministic browser visuals; authorized platform acceptance is
 still required for the full window/scale/language matrix.
+
+
+## Shared preferences and read-only resource context
+
+`app.terminalPreferences` supplies both actual terminal consumers and the static
+Settings preview. The seven terminal fields share the same serialized simple-settings
+writer as General, Appearance and Shortcuts. GUI theme changes do not change the
+terminal palette; metric changes coalesce visible fit and defer hidden fit; renderer
+selection applies only to newly created terminals. See [terminal preferences](terminal-preferences.md).
+
+`ProjectResourcesDrawer` renders six safe typed categories under current unified
+selection. `projectResources` freezes the run/source/request and rejects stale results;
+`nativeProjection.readScoped` reads one bounded authenticated page. `hasMore` means
+partial. Legacy observations require exact-project evidence and remain project-only;
+unsupported Instructions is unavailable, never an empty-success claim. No resource
+UI becomes a writer, raw-JSON view or arbitrary filesystem reader. See [resources](project-resources.md).
+
+## Visual fixture and acceptance boundary
+
+`VisualFixtureApp` is a separate development-only component graph using these same
+production surfaces, fabricated DTOs and an inert terminal preview. Ordinary App
+startup never imports it. The gate requires serve + visual mode + explicit flag;
+normal development rejects fixture routes/modules and production excludes them.
+A counted host stub fails closed; no real terminal or configuration mutation is used.
+Shared setup helpers expand stable project toggles and focus a session before its
+pointer-enabled overflow action. The fixture DOM tests verify ordering; they do not
+measure browser hit testing.
+
+The 13 screenshot cases, 120 geometry cases and four keyboard/overlay/tooltip cases
+are authored. Task 23 remains `BLOCKED_VISUAL`: no PNG has been reviewed and no
+rendered gate passed. The prepared final visual workflow uploads failed verification
+and unapproved candidates, keeps the original failure status, and requires later
+reviewed committed baselines plus a no-diff rerun. U01–U10 source, host and platform
+claims are separated in [the execution record](superpowers/execution/U01-U10.md).
+
+## Final review interaction repairs
+
+`SessionItem` emits a rename admission request for both F2 and menu entry; only canonical `renameState` opens the editor. Normal App routes both through `unifiedSessions.beginRename`, and UI commits require the original admitted owner. Standalone component tests supply controlled state explicitly. Normal menus teleport; archived drawer menus remain within the modal, with shared mouse selection stopping row activation.
+
+`SessionDiagnosticsDialog` is a read-only shared dialog bound to the selected request's exact current catalog/runtime owner. Its display DTO includes only fixed CLI/runtime/state labels, the open/history/preparing category, bounded generation and the safe error allowlist. Technical values appear inside details. It never copies runtime objects, names, paths, argv, environment/configuration values or arbitrary errors. A changed owner, selection, navigation or newer request revokes the view.
+
+`SessionsPanel.focusSearch` is the existing configurable quick-switch action's destination. Up/Down traverses mounted project/session rows; it does not call resume/launch. Enter on a quick-switch project result emits selection; session Enter uses the existing explicit opening/resume path. The persistent tree retains its search and expansion state, and shared modal/IME/editor ownership continues to take priority.
+
+The quick-switch mode itself clears on Escape and sidebar deactivation. Search/expansion remain persistent, but reopening the tree uses ordinary project Enter expansion until another explicit quick-switch shortcut.

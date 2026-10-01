@@ -9,7 +9,7 @@ withDefaults(defineProps<{
   primaryActions?: Readonly<Record<string, SessionPrimaryAction | null>>
   menuActionVisibility?: SessionMenuActionVisibility
   menuTeleport?: boolean
-}>(), { surfaceActive: true })
+}>(), { surfaceActive: true, menuTeleport: true })
 const emit = defineEmits<{
   activate: [id: string]
   'primary-action': [id: string, action: SessionPrimaryAction]

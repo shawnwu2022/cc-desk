@@ -9,6 +9,7 @@ import { useProjectsStateStore } from '@/stores/projectsState'
 import { useProjectResourcesStore } from '@/stores/projectResources'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { createLaunchAttempt } from '@/api/cliLaunchAttempt'
+import { useHookStore, type ObservationHandler } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 
@@ -224,4 +225,59 @@ describe('Unified native terminal identity', () => {
     expect(io.scope.mock.calls).toEqual([[{ kind: 'run', runId: tab.runId, generation: tab.generation }]])
     expect(resources.unavailable).toBe(true); expect(io.read).not.toHaveBeenCalled(); expect(sent).toHaveBeenCalledOnce()
   })
+  // 只消费 observer 投影的明确等待状态；失序未知状态不冒充需要回复，旧 run 无法改新 run。
+  it('Native_ProjectedAttention_017', async () => {
+    let observation: ObservationHandler | undefined
+    const unsubscribe = vi.fn()
+    const hook = useHookStore()
+    const subscribe = vi.spyOn(hook, 'subscribeObservation').mockImplementation((_target, handler) => { observation = handler; return unsubscribe })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    const profile = useCliProfilesStore().profiles[0]
+    useCliProfilesStore().profiles.push({ ...profile, id: 'cc', cli: 'claude' })
+    const tab = useNativeTabsStore().create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cc', profileRevision: '7', action: { kind: 'new' } })
+    const wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); wrappers.push(wrapper); await flushPromises()
+    const original = observation
+    expect(original, 'terminal subscribes to the existing exact-run observer projection').toBeTypeOf('function')
+    now.mockReturnValue(2000); original!({ kind: 'unknown', runId: tab.runId, generation: tab.generation }, { observation: 'active', activity: 'waiting' })
+    expect(useNativeTabsStore().tab(tab.tabId)).toMatchObject({ attentionState: 'needs-user', lastActivityAt: 2000 })
+    now.mockReturnValue(3000); original!({ kind: 'unknown', runId: tab.runId, generation: tab.generation }, { observation: 'active', activity: 'waiting' })
+    expect(useNativeTabsStore().tab(tab.tabId)!.lastActivityAt).toBe(2000)
+    now.mockReturnValue(4000); original!({ kind: 'unknown', runId: tab.runId, generation: tab.generation }, { observation: 'active', activity: 'unknown' })
+    expect(useNativeTabsStore().tab(tab.tabId)).toMatchObject({ attentionState: 'none', lastActivityAt: 4000 })
+    const tabs = useNativeTabsStore(); tabs.tab(tab.tabId)!.status = 'exited'; tabs.restart(tab.tabId, { profileId: 'cc', profileRevision: '7' }); await flushPromises()
+    now.mockReturnValue(9000); original!({ kind: 'unknown', runId: tab.runId, generation: tab.generation }, { observation: 'active', activity: 'waiting' })
+    expect(tabs.tab(tab.tabId)).toMatchObject({ attentionState: 'none', lastActivityAt: 4000 })
+    expect(unsubscribe).toHaveBeenCalled()
+    subscribe.mockRestore(); now.mockRestore()
+  })
+
+  // 可选观察订阅失败不得阻止 Native 启动或替换输入传输。
+  it('Native_ObserverFailureIsOptional_018', async () => {
+    const subscribe = vi.spyOn(useHookStore(), 'subscribeObservation').mockImplementation(() => { throw new Error('OBSERVER_CAPACITY') })
+    const { tab } = open(); await flushPromises()
+    expect(io.start).toHaveBeenCalledTimes(1)
+    expect(useNativeTabsStore().tab(tab.tabId)?.status).toBe('running')
+    subscribe.mockRestore()
+  })
+
+  // 启动回执等待期间只保留准确 run 的最新投影，直到 running 才发布需要回复。
+  it.each(['waiting', 'unknown'] as const)('Native_PendingReceiptAttention_019 %s', async latest => {
+    let observation: ObservationHandler | undefined
+    const subscribe = vi.spyOn(useHookStore(), 'subscribeObservation').mockImplementation((_target, handler) => { observation = handler; return () => {} })
+    let finish!: () => void
+    io.start.mockImplementation(input => new Promise(resolve => { finish = () => resolve({ requestId: input.requestId, run: { runId: input.runId, generation: input.generation }, phase: 'running', revision: '1', failure: null }) }))
+    useCliProfilesStore().profiles.push({ ...useCliProfilesStore().profiles[0], id: 'cc', cli: 'claude' })
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cc', profileRevision: '7', action: { kind: 'new' } })
+    const wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); wrappers.push(wrapper); await flushPromises()
+    expect(tabs.tab(tab.tabId)?.status).toBe('starting')
+    observation!({ kind: 'waiting', runId: tab.runId, generation: tab.generation, eventId: 'event-1', sourceSequence: '1' }, { observation: 'active', activity: 'waiting' })
+    if (latest === 'unknown') observation!({ kind: 'unknown', runId: tab.runId, generation: tab.generation, eventId: 'event-2' }, { observation: 'active', activity: 'unknown' })
+    expect(tabs.tab(tab.tabId)?.attentionState).toBe('none')
+    finish(); await flushPromises()
+    expect(tabs.tab(tab.tabId)?.status).toBe('running')
+    expect(tabs.tab(tab.tabId)?.attentionState).toBe(latest === 'waiting' ? 'needs-user' : 'none')
+    subscribe.mockRestore()
+  })
+
 })

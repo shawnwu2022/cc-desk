@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useProjectsStateStore } from '@/stores/projectsState'
@@ -30,6 +30,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   close: []
   'add-project': []
+  'select-project': [project: UnifiedProjectIdentity]
   refresh: []
   'toggle-expand': [projectKey: string]
   'new-session-request': [project: NewSessionRequest]
@@ -46,6 +47,18 @@ const { t } = useI18n()
 const store = useUnifiedSessionsStore()
 const projects = useProjectsStateStore()
 const searchQuery = ref('')
+const panel = ref<HTMLElement | null>(null)
+const searchInput = ref<InstanceType<typeof AppInput> | null>(null)
+const quickSwitch = ref(false)
+async function focusSearch() {
+  quickSwitch.value = true
+  await nextTick()
+  if (props.active) {
+    const input = searchInput.value?.$el.querySelector('input') as HTMLInputElement | null
+    input?.focus(); input?.select()
+  }
+}
+defineExpose({ focusSearch })
 const expandedKeys = ref(new Set<string>())
 const archivedOpen = ref(false)
 const archivedProject = ref<UnifiedProjectIdentity | null>(null)
@@ -53,6 +66,7 @@ const archivedProject = ref<UnifiedProjectIdentity | null>(null)
 // teleported modal must release focus, without resetting search or expansion.
 watch(() => props.active, active => {
   if (!active) {
+    quickSwitch.value = false
     archivedOpen.value = false
     archivedProject.value = null
   }
@@ -114,16 +128,36 @@ function projectAction(request: ProjectActionRequest) {
   if (request.action === 'view-archive') showArchived({ projectKey: request.projectKey, projectPath: request.projectPath })
   emit('project-action', request)
 }
+function onTreeKeydown(event: KeyboardEvent) {
+  if (!props.active || event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+    || archivedOpen.value || document.querySelector('[role="dialog"][aria-modal="true"]')) return
+  const target = event.target instanceof HTMLElement ? event.target : null
+  if (!target || target.closest('[role="menu"]')) return
+  const search = target.matches('.search-input')
+  if (!search && target.closest('input, textarea, select, [contenteditable="true"], button')) return
+  const rows = [...(panel.value?.querySelectorAll<HTMLElement>('.panel-content .project-row, .panel-content [data-session-row]') ?? [])]
+  const row = target.closest<HTMLElement>('.project-row, [data-session-row]')
+  if (event.key === 'Enter' && quickSwitch.value && row?.classList.contains('project-row')) {
+    const group = displayedGroups.value.find(group => group.projectKey === row.dataset.projectKey)
+    if (group) { event.preventDefault(); event.stopPropagation(); quickSwitch.value = false; emit('select-project', group) }
+    return
+  }
+  if (!['ArrowDown', 'ArrowUp'].includes(event.key) || (!search && !row)) return
+  const index = row ? rows.indexOf(row) : -1
+  const next = index < 0 ? (event.key === 'ArrowDown' ? 0 : rows.length - 1)
+    : Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
+  if (rows[next]) { event.preventDefault(); event.stopPropagation(); rows[next].focus(); rows[next].scrollIntoView?.({ block: 'nearest' }) }
+}
 function onKeydown(event: KeyboardEvent) {
   if (!props.active || event.defaultPrevented || archivedOpen.value) return
-  if (event.key === 'Escape') emit('close')
+  if (event.key === 'Escape') { quickSwitch.value = false; emit('close') }
 }
 onMounted(() => { window.addEventListener('keydown', onKeydown) })
 onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
 </script>
 
 <template>
-  <div class="sessions-panel">
+  <div ref="panel" class="sessions-panel" @keydown.capture="onTreeKeydown">
     <PanelHeader :title="t('sessions')" @close="emit('close')">
       <template #actions>
         <IconButton :label="t('addProject')" @click="emit('add-project')">
@@ -138,7 +172,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
       </template>
     </PanelHeader>
     <div class="search-box">
-      <AppInput v-model="searchQuery" class="search-input" size="compact" :aria-label="t('searchSessions')" :placeholder="t('searchSessions')" />
+      <AppInput ref="searchInput" v-model="searchQuery" class="search-input" size="compact" :aria-label="t('searchSessions')" :placeholder="t('searchSessions')" />
       <IconButton v-if="searchQuery" :label="t('clearSearch')" @click="searchQuery = ''">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 6 12 12M18 6 6 18" /></svg>
       </IconButton>
