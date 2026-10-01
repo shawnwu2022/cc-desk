@@ -95,7 +95,7 @@ comparison. Windows WebView2, macOS/WebKit and Linux native WebView acceptance
 remain separate. No screen-reader, real GPU or real Claude/Codex certification is
 implied by this harness.
 
-## Current evidence: baselines accepted; final no-update gate pending
+## Initial 0.17.7 baseline acceptance
 
 All 13 Linux Chromium baseline PNGs in `tests/visual/__screenshots__/` were copied
 byte-for-byte from artifact **11153226557**, after two independent reviews opened
@@ -116,7 +116,7 @@ cases passed; 13 screenshot cases failed solely because baselines were absent**.
 The separate capture then passed 13/13. The original missing-baseline failures
 remain genuine RED evidence; capture success and pixel approval do not turn that
 verification into PASS. The **full no-update screenshot/geometry/interaction gate
-against the committed accepted baselines is still pending**.
+against the committed accepted baselines subsequently passed all 138 cases in [run 36847655055](https://github.com/shawnwu2022/cc-desk/actions/runs/36847655055)**.
 
 ### Rendered review and corrections
 
@@ -221,3 +221,9 @@ Windows WebView2/OS scaling and real CLI remain separate gates.
 ### Final review: pipeline failure propagation
 
 Both Playwright producer pipelines explicitly select `shell: bash`, including the optional candidate capture. GitHub therefore invokes Bash with pipefail. `tests/config/visualWorkflow.test.ts` executes each actual step script with only the Playwright producer replaced by `node -e "process.exit(7)"`; both must exit 7 through `tee`. This complements the final outcome guard tests and does not launch a browser or create/approve baselines. The original verification result remains mandatory even if candidate capture succeeds.
+
+## 0.18.0 feedback baseline update
+
+[Run 36861864182](https://github.com/shawnwu2022/cc-desk/actions/runs/36861864182) tested source `444c2dfed9ed11305ea77fc14063caf17155d1a8`, merge `e7eebee57566b4f13de8b2c69a606ec1f48fc3b8`. All 133 geometry/interaction cases and five unchanged screenshots passed; eight screenshots differed only in the requested marks/status/chevrons, centered guidance and version text. The run remains a failed comparison, not a full PASS.
+
+All eight actual PNGs were independently inspected by two reviewers at original dimensions and accepted. They were copied byte-for-byte from artifact `11162500482` (ZIP SHA256 `2a3007d155f4fbc4f3ead6e5bf1d3d950367d0cb5ee37bee889368849b84b2c7`); five existing PNGs remain unchanged. The approval manifest records both generations of provenance. No image editing, masks or tolerance changes were used. A fresh full 146-case no-update run is required after committing this update.

@@ -677,3 +677,9 @@ Rules:
 - Explicit Close: successful close of the active session selects a remaining open terminal through its adapter, preferring the same project and honoring newer selection intent. Final-session close already cleared correctly in the reproduced App flow. Stop/CLI exit retains scrollback. Failed dispatch now clears only its own pending request, leaving explicit retry and newer requests intact.
 - Fresh aggregate: **1,667 tests / 131 files PASS**, typecheck PASS, production build PASS, isolated visual fixture **18 PASS**. Browser discovery collects **146 cases** (13 snapshots, 120 layout cases, 8 empty-guidance cases, 5 interaction cases); actual rerendering and baseline acceptance remain pending CI.
 - All six canonical npm/Cargo/Tauri version fields are **0.18.0**; installer staging includes the version in its test-only filename. Independent version consistency/release-policy checks pass. No tag, public release or updater publication is part of this batch.
+
+### 0.18.0 rendered feedback review
+
+- Source `444c2df`, tested merge `e7eebee`: ordinary CI `36861864297` and D13 `36861864079` passed. Windows package `36861864197` must reach a terminal result before the next ref update, to avoid cancelling its installer evidence.
+- Visual `36861864182`: 138 passed, 8 expected screenshot differences; all 133 geometry/interaction checks pass. Artifact `11162500482` ZIP SHA256 `2a3007d155f4fbc4f3ead6e5bf1d3d950367d0cb5ee37bee889368849b84b2c7` verified.
+- Two reviewers inspected all eight actual/expected/diff sets and accepted the exact actual bytes. The other five baselines are unchanged and passed comparison. No unexplained pixel differences, image editing, masking or relaxed tolerances. Updated 13-file inventory retains per-entry provenance; final 146-case no-update verification is pending.
