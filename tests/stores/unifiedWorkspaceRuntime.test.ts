@@ -15,13 +15,14 @@ import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { useSessionStore } from '@/stores/session'
+import type { LaunchAction } from '@/types/cli'
 import type { ProjectsState } from '@/types/app'
 import { useAppStore } from '@/stores/app'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useShellStore } from '@/stores/shell'
 
-const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn() }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getProjectsState: io.getState, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
+const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn() }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
 vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, registerProject: io.register, removeProject: io.remove }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.writeText }))
@@ -59,6 +60,8 @@ describe('Unified production runtime', () => {
     expect(port.startLegacy).not.toHaveBeenCalled(); expect(useNativeTabsStore().tabs.size).toBe(0)
     expect(runtime.error.value).not.toContain('/path')
     expect(runtime.cliAvailability.value.codex).toBe('unknown')
+    expect(io.runChecks).not.toHaveBeenCalled(); expect(io.ptySpawn).not.toHaveBeenCalled()
+    expect(io.ptyInput).not.toHaveBeenCalled(); expect(io.ptyKill).not.toHaveBeenCalled()
   })
   // 恢复使用历史来源的完整身份，当前选项变化不能覆盖其修订号和项目。
   it('Runtime_PreservesResumeOrigin_002', async () => {
@@ -426,4 +429,31 @@ it.each(['during', 'after'])('Runtime_RemoveRevokesDeferredLegacy_%s', async whe
   finishHistory([{ sessionId: 'legacy-history', name: 'Legacy history', projectPath: '/legacy', lastActiveAt: 10 }]); await restoring
   if (when === 'during') { release({ revision: '2', projects: [] }); await removing }
   expect(port.startLegacy).not.toHaveBeenCalled(); expect(useSessionStore().tabs.size).toBe(0)
+})
+
+// 旧工作台身份测试迁移到真实统一runtime；新建/恢复/原始参数均固定所选CLI、配置修订和注册项目。
+describe.each(['claude', 'codex'] as const)('Unified action identity: %s', cli => {
+  it.each<LaunchAction>([
+    { kind: 'new' }, { kind: 'raw', argv: ['', '中文', 'two words', '--future'] },
+    { kind: 'resume-picker', scope: 'current-project' }, { kind: 'resume-id', nativeSessionId: 'session-123' },
+  ])('Runtime_FreezesActionIdentity_029: $kind', async action => {
+    io.profiles.mockResolvedValue({ revision: '9', profiles: ['claude', 'codex'].map(kind => ({
+      id: kind, revision: kind === 'claude' ? '3' : '8', cli: kind, name: kind,
+      launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' },
+      skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {},
+    })) })
+    render(); await flushPromises()
+    const unified = useUnifiedSessionsStore()
+    const input = { cli, projectKey: '/repo', projectPath: '/repo', registeredProjectId: 'project',
+      launchConfigId: cli, launchConfigRevision: cli === 'claude' ? '3' : '8', action }
+    const opened = action.kind === 'resume-id' || action.kind === 'resume-picker'
+      ? await unified.launchResume(input) : await unified.createSession(input)
+    expect(useNativeTabsStore().tab(opened.adapterSessionId)).toMatchObject({
+      cli, projectId: 'project', projectPath: '/repo', profileId: cli,
+      profileRevision: input.launchConfigRevision, action,
+    })
+    expect(io.patchProfile).not.toHaveBeenCalled(); expect(io.register).not.toHaveBeenCalled()
+    expect(io.runChecks).not.toHaveBeenCalled(); expect(io.ptySpawn).not.toHaveBeenCalled()
+    expect(io.ptyInput).not.toHaveBeenCalled(); expect(io.ptyKill).not.toHaveBeenCalled()
+  })
 })

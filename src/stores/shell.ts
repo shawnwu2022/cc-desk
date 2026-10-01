@@ -21,10 +21,6 @@ export type WorkspaceRequest =
   | { kind: 'project-action'; request: ProjectActionRequest }
   | { kind: 'confirmation'; request: SessionTreeConfirmationRequest }
 
-export function isCompatibilityEnabled(dev: boolean, flag: string | undefined): boolean {
-  return dev && flag === '1'
-}
-
 export const useShellStore = defineStore('shell', () => {
   const section = ref<ShellSection>('workspace')
   const navigationSequence = ref(0)

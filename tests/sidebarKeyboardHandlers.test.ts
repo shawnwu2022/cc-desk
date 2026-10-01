@@ -3,10 +3,6 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const nestedInteractiveHeaders = [
-  'src/components/agents/AgentItem.vue',
-  'src/components/skills/SkillItem.vue',
-  'src/components/mcp/McpItem.vue',
-  'src/components/plugins/PluginItem.vue',
   'src/components/sessions/ProjectNode.vue',
 ]
 

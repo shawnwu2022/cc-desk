@@ -25,7 +25,7 @@ import ProjectManagementDialogs from '@/components/projects/ProjectManagementDia
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
-import { useShellStore, isCompatibilityEnabled, type WorkspaceRequest } from '@/stores/shell'
+import { useShellStore, type WorkspaceRequest } from '@/stores/shell'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useAppStore } from '@/stores/app'
 import { useSidebarStore, type SettingsSection } from '@/stores/sidebar'
@@ -35,18 +35,13 @@ import { sameProjectPath } from '@/utils/path'
 import { onMenuSettings, onMenuShortcuts, onConfigFontSize, onOpenDirectory, onTerminalRestart } from '@/api/tauri'
 import type { NewSessionRequest, UnifiedProjectIdentity } from '@/types/unifiedSession'
 
-// Removed in Task 21. A production build cannot enter this route by setting the
-// flag alone; its modules and implicit Legacy startup are never mounted normally.
-const compatibilityEnabled = isCompatibilityEnabled(import.meta.env.DEV, import.meta.env.VITE_CC_DESK_COMPATIBILITY)
-const LegacyCompatibilityApp = compatibilityEnabled
-  ? defineAsyncComponent(() => import('@/components/LegacyCompatibilityApp.vue')) : null
 const SettingsView = defineAsyncComponent(() => import('@/components/settings/SettingsView.vue'))
 const emit = defineEmits<{ 'workspace-request': [request: WorkspaceRequest] }>()
 const { t } = useI18n()
 const shell = useShellStore()
 const sessions = useUnifiedSessionsStore()
 const resources = useProjectResourcesStore()
-watch(() => !compatibilityEnabled && shell.section === 'workspace' && shell.drawerVisible, resources.setActive, { immediate: true, flush: 'sync' })
+watch(() => shell.section === 'workspace' && shell.drawerVisible, resources.setActive, { immediate: true, flush: 'sync' })
 const newSessionDraft = useNewSessionDraftStore()
 const newMenuAnchor = ref({ x: 320, y: 64 })
 watch(() => [shell.section, newSessionDraft.chooserVisible], ([section]) => {
@@ -58,7 +53,7 @@ const sidebar = useSidebarStore()
 const management = useProjectManagementStore()
 const configurations = useCliProfilesStore()
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
-const runtime = useUnifiedWorkspaceRuntime(terminalHost, !compatibilityEnabled)
+const runtime = useUnifiedWorkspaceRuntime(terminalHost)
 const configFailed = ref(false)
 const settingsLoaded = ref(false)
 const startupNavigation = shell.navigationSequence
@@ -85,11 +80,10 @@ watch(() => shell.section, section => {
   if (section !== 'settings') configurations.closeDeleteConfirmation()
   if (section === 'settings') settingsLoaded.value = true
 }, { immediate: true, flush: 'sync' })
-watch(() => app.theme, theme => { if (!compatibilityEnabled) applyThemeToDom(theme) }, { immediate: true })
-// Old settings buttons may still emit this presentation intent. Do not mount
-// SettingsOverlay or let its boolean become another routing source.
+watch(() => app.theme, applyThemeToDom, { immediate: true })
+// Compatibility settings intents resolve to the same Settings section.
 watch(() => sidebar.showSettings, open => {
-  if (!compatibilityEnabled && open) { shell.navigate('settings'); sidebar.closeSettings() }
+  if (open) { shell.navigate('settings'); sidebar.closeSettings() }
 })
 function request(action: WorkspaceRequest) {
   if (action.kind === 'new-session' && !action.project.intent) {
@@ -139,7 +133,6 @@ async function loadPreferences() {
 function closeSessions() {
   if (shell.section === 'workspace' && shell.sidebarVisible) shell.sidebarVisible = false
 }
-function toggleProjects() { shell.navigate(shell.section === 'projects' ? 'workspace' : 'projects') }
 function shortcutAction(action: AppShortcutAction) {
   if (action === 'projects') { shell.navigate('projects'); return }
   if (action === 'settings') {
@@ -170,7 +163,6 @@ function retain(registration: Promise<() => void>) {
   }).catch(() => { /* A missing OS menu bridge must not block application navigation. */ })
 }
 onMounted(() => {
-  if (compatibilityEnabled) return
   void loadPreferences()
   void management.refresh()
   // Runtime bootstrap reads each source independently; no implicit CLI launch.
@@ -187,20 +179,17 @@ onMounted(() => {
     shell.navigate('workspace')
     request({ kind: 'menu-action', sessionId: sessions.activeSessionId, action: 'restart' })
   }))
-  window.addEventListener('app:toggleHome', toggleProjects)
   unlisteners.push(...shortcuts.setupShortcutListeners())
 })
 onUnmounted(() => {
   disposed = true
   resources.setActive(false)
   unlisteners.splice(0).forEach(unlisten => unlisten())
-  window.removeEventListener('app:toggleHome', toggleProjects)
 })
 </script>
 
 <template>
-  <LegacyCompatibilityApp v-if="compatibilityEnabled" />
-  <AppShell v-else :title="windowTitle">
+  <AppShell :title="windowTitle">
     <template #sidebar>
       <SidebarPanel :active="shell.section === 'workspace' && shell.sidebarVisible" :project-groups="management.visibleGroups" :archived-sessions="visibleArchiveSessions"
         :selected-id="sessions.activeSessionId" :current-project-path="project?.projectPath" :loading="sessions.loading"

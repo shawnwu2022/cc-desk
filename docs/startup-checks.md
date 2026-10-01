@@ -1,12 +1,12 @@
 # Startup and availability checks
 
-CC Desk has separate startup behavior for the legacy Claude workspace and Native CLI v3.
+CC Desk has one application startup path and two runtime adapters. Startup loads preferences and independently reads Legacy history, Native configurations/projects/history and project metadata. It never implicitly launches a CLI.
 
 ## Native CLI v3
 
 Native CLI startup does **not** depend on the legacy Claude environment-check overlay.
 
-The Native CLI workspace is reachable even when the legacy check fails. Native availability and launch are evaluated through the selected native profile and authenticated launch path.
+Workspace, Projects and Settings remain reachable when either CLI is unavailable. Native availability and launch are evaluated through the selected launch configuration and authenticated launch path; failures are scoped to that CLI.
 
 For a native launch, the backend resolves and freezes the exact launch snapshot for:
 
@@ -24,13 +24,12 @@ Users install and authenticate the CLI through the CLI/vendor-supported mechanis
 
 The product-boundary test rejects reintroduction of the old installer APIs.
 
-## Legacy Claude workspace
+## Legacy compatibility
 
-The compatibility workspace retains its historical startup checks, including Claude availability and the Windows Git Bash requirement used by that path.
-
-Those checks may cache detected compatibility paths in legacy CC Desk config.
-
-A failed legacy check blocks the legacy Claude workspace UI, but the user can still enter Native CLI v3.
+Existing Claude sessions and history remain available through the Legacy adapter
+in the unified shell. The old Welcome/ProjectSelect decision and environment-check
+overlay route are removed. Compatibility check APIs and stored paths remain for
+the Legacy runtime; no global startup gate or automatic Legacy launch calls them.
 
 ## Failure semantics
 
@@ -54,7 +53,7 @@ Codex/raw/shell launches never receive the Claude observer overlay.
 
 Use:
 
-- frontend launch/workbench tests;
+- frontend launch/unified-runtime tests;
 - Rust launch/availability/supervisor tests;
 - product-boundary tests;
 - OS/runtime CI where applicable.

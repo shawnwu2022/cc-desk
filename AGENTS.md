@@ -39,7 +39,7 @@ Tauri 2.x (Rust) + Vue 3 + TypeScript + Vite + xterm.js + portable-pty + Pinia +
 
 ## 项目架构
 
-> Native CLI v3 的权威边界见 [docs/native-cli-v3.md](docs/native-cli-v3.md)。旧 Claude workspace 仅用于兼容；新的双 CLI 功能不得借道旧 PTY/API。
+> Native CLI v3 的权威边界见 [docs/native-cli-v3.md](docs/native-cli-v3.md)。旧 Claude runtime 通过统一 adapter 保持兼容；新的双 CLI 功能不得借道旧 PTY/API。
 
 ```text
 cc-desk/
@@ -54,12 +54,13 @@ cc-desk/
 │   └── store.rs                # legacy Claude 数据读取
 ├── src/
 │   ├── components/
-│   │   ├── NativeCliWorkbench.vue
+│   │   ├── shell/AppShell.vue   # 唯一全局外壳
+│   │   ├── workspace/UnifiedTerminalHost.vue
 │   │   ├── NativeCliTerminal.vue
-│   │   ├── TerminalView.vue    # legacy Claude workspace
+│   │   ├── TerminalView.vue    # content-only Legacy terminal port
 │   │   └── XTermTerminal.vue   # legacy terminal
 │   ├── stores/
-│   │   ├── nativeWorkbench.ts
+│   │   ├── unifiedSessions.ts
 │   │   ├── nativeTabs.ts
 │   │   ├── cliProfiles.ts
 │   │   └── cliWorkspace.ts
@@ -91,7 +92,7 @@ Claude Code | Codex CLI
 - resource projection 使用 backend-held scope，前端 path/opaque id 本身不构成授权；
 - Native UI 不得 fallback 到 legacy `ptySpawn` / `ptyInput` / `ptyKill`。
 
-### Legacy Claude workspace（compatibility path）
+### Legacy Claude runtime（compatibility path）
 
 ```text
 XTermTerminal ←→ legacy Tauri IPC ←→ pty.rs ←→ Claude Code
@@ -123,7 +124,7 @@ UnifiedSession catalog（Legacy/Native adapters）→ UnifiedProjectGroup[] → 
 - normal `projectGroups` 保持排除已归档记录。UI 为仅剩归档的项目保留一个空项目壳以访问其归档菜单；面板全局归档入口在搜索无结果时仍可用。恢复仅发 `restore-request`，不直接恢复或启动，成功后由调用方发布 catalog 更新。
 - 运行态 archive 必须发 `SessionTreeConfirmationRequest { kind: 'stop-and-archive', sessionId, projectKey, projectPath }`；未知/启动态不发归档请求。树组件不得直接 stop/archive，也不得 fallback 到 Legacy PTY；完整确认 UI 由 Task16 接入；normal App 的运行态关闭/归档在确认后仍须重新检查精确所有权，不能从目录旧快照推断已停止。
 - 展开状态按 projectKey 显式保存；搜索临时展开但禁止修改手动状态。项目名/原 basename/路径命中展示组内普通会话，会话名命中只展示匹配的普通会话。清空搜索恢复之前手动状态；nested controls 的 Enter/Space 不触发父级折叠，菜单/编辑器 Escape 不关闭整个面板。
-- 旧 `session.ts` 的分组、`resolveSwitchAction`、历史缓存、`projects.json` persistence 和 ProjectSelectView 管理行为仍属于兼容数据/管理路径。它们不再是新的双 CLI 树 UI 边界，也不能用旧历史删除接口删除 Native 记录。
+- 旧 `session.ts` 的历史缓存、Legacy PTY 所有权和兼容数据继续由统一 adapter 使用；项目管理只经 `ProjectsView` / `projectManagement`。旧历史删除接口不能删除 Native 记录。
 - `projects.json` pin/archive/displayName/delete 增量写继续通过独立 `projects.json.lock` 跨进程锁、增量 apply 和原子返回状态；统一项目状态由 `projectsState` store 读取。Native workspace 保持自己的 revision/CAS 和 authenticated document bridge。
 - 组件 gate：`npm test -- tests/components/projectSessionTree.test.ts tests/sidebarKeyboardHandlers.test.ts && npm run typecheck`。真实 Windows 1024×640、100%/125%/150% 缩放和渲染可访问性仍是最终平台门禁。
 
@@ -149,7 +150,7 @@ UnifiedSession catalog（Legacy/Native adapters）→ UnifiedProjectGroup[] → 
 - `get_home_data` 单次扫描 `~/.claude/projects`，同时生成项目列表与真实路径映射；近期会话直接复用该映射的目录列表，`get_home_data` / `get_sessions` 的同步文件 IO 统一放入 `spawn_blocking`。
 - JSONL 按字节行流式解析：项目路径在首个有效 `cwd` 后停止，名称继续扫描到 EOF 以保留末尾 `custom-title` 优先级；峰值内存为 O(最大 JSONL 单行)。首页、项目历史和 all-recent 共享 `~/.cc-box/session-name-index.json` 派生名称索引：`length + 高精度 mtime` 完全一致才 exact-hit（读取 0 JSONL bytes），任一变化都 full rebuild，不使用 append cursor。
 - 名称索引每个请求只读一次快照，前台共享锁内只读取有界 raw bytes、锁外解析；业务值先返回，delta 在 detached `spawn_blocking` 中写回。后台使用 replacement stamp 复核、entry/bucket CAS、整文件 raw CAS 和唯一临时文件；排他锁内只做 64 KiB 分块 raw compare 与原子替换。8 MiB 以上压缩至 6 MiB，16 MiB 为读取硬上限；损坏、未知版本、锁/写失败均只降低命中率，不改变业务结果。
-- `SettingsOverlay` 首次打开时才加载，之后保持挂载以保留关闭动画与内部状态；编辑器依赖位于独立异步 chunk。WebGL 仅在新终端启用 WebGL renderer 时动态加载，DOM renderer 仍为默认。
+- `SettingsView` 首次进入时异步加载，之后在统一主内容列保持挂载；复杂编辑器使用共享对话框。WebGL 仅在新终端启用 WebGL renderer 时动态加载，DOM renderer 仍为默认。
 
 详细架构 → [docs/terminal-integration.md](docs/terminal-integration.md)
 
@@ -337,9 +338,9 @@ npm run tauri:build        # 生产构建
 
 - `useShellStore` owns exactly `workspace | projects | settings`, logical responsive mode and global column state. `AppShell` is the only normal global layout: 44px navigation, 288px session tree (240–360), flexible main, optional344px resources (300–420). Do not recreate global shells in content views or add another tab strip.
 - Context overlays below1180 CSS pixels through shared `AppDrawer`; sessions can collapse below900 while preserving the separate desktop choice. Read `window.innerWidth`, not physical scale. Native default/minimum is1024×640; min-width zero/overflow-hidden containers avoid global horizontal scroll under scaling.
-- Normal `App.vue` loads app/GUI preferences independently of CLI availability. It never performs old automatic Legacy startup, configures a runtime adapter or mounts the old Native product page. Only `import.meta.env.DEV` together with `VITE_CC_DESK_COMPATIBILITY=1` can reach `LegacyCompatibilityApp.vue`; remove this route and compatibility event types in Task21.
+- Every build of `App.vue` mounts only `AppShell` and loads app/GUI preferences independently of CLI availability. `useUnifiedWorkspaceRuntime` configures the real adapters and performs read-only bootstrap; no old automatic Legacy startup or alternate DEV product route remains. The retired compatibility flag has no effect.
 - Task9 typed tree requests retain exact catalog/project identity through `SidebarPanel`. `new-session-request` must never map to old `newSession`/Legacy launch events. `WorkspaceRequest` is presentation-only; the latest ephemeral intent and sequence require explicit runtime-owner handling, never automatic replay. Clearing an older sequence cannot discard newer intent.
-- `WorkspaceView` and its one `terminal` slot stay mounted across navigation; Task11 owns unified adapter admission, Native authenticated runtime ports and actual terminal hosts. The content-only Projects landing is replaced by Task14. New-session dialogs belong to Task12, resume to Task13, resources to Task15, confirmations to Task16, the settings shell to Task17 and terminal preferences to Task18. Resource context stays read-only and must not accept old default-root projections or raw transport errors.
+- `WorkspaceView` and its one `terminal` slot stay mounted across navigation; Task11 owns unified adapter admission, Native authenticated runtime ports and actual terminal hosts. Projects uses the real project-management view; shared new/resume/confirmation dialogs, scoped resources and all seven Settings sections are connected to their owning stores. Resource context stays read-only and must not accept old default-root projections or raw transport errors.
 - `TitleBar` consumes the unified context title, ellipsizes long text, and preserves OS window controls. GUI theme updates change neither terminal preferences nor session selection. OS menu Settings/Shortcuts route safely to the one Settings section; directory/restart events only request actions until runtime integration.
 - Exact shell gate: `npm test -- tests/components/appShell.test.ts tests/productBoundary.test.ts && npm run typecheck`. Native bridge safeguards remain mandatory. Actual Windows 100%/125%/150% scaling, rendered1024×640 layout and platform/accessibility screenshots remain separate final gates.
 
@@ -413,4 +414,11 @@ npm run tauri:build        # 生产构建
 - F2 reveals the selected editor without changing project/session/process selection. The catalog retains editing/saving ownership across same-source refreshes, including collapsed or search-hidden rows; cancellation, disappearance, full source/origin changes or adapter attempt invalidation release it and discard the old draft. Queued rename rechecks that owner before dispatch, saving rows reject new editor admission, and canonical rename/stop/close continue through existing adapters. The tree remains the only session tabs.
 - Update UI separates stable/candidate/test labels and unverified observations. Existing artifact product/channel/non-publication markers are negative exclusion evidence only. There is no trusted promotion contract under the repository's signed-candidates-only policy, so every automatic install and ordinary update badge is fail-closed. The manual review dialog shows current Legacy+Native running/starting/unknown owner counts and installation impact, with install disabled and an explicit reason. Endpoints, signatures, release policy and publication workflows remain unchanged.
 - About displays compile-time version and Git HEAD commit (or honest source-archive absence), product positioning, MIT and the existing official repository/CLI docs links. Diagnostic clipboard output is a new structured allowlist of validated version/commit/platform, enum/bounded appearance fields and numeric owner counts. It contains no identities, paths, environment/credentials, prompt/output bodies, raw errors or arbitrary object spreads. Only an acknowledged current clipboard write receives a toast.
-- Exact gate: `npm test -- tests/components/remainingSettings.test.ts tests/composables/appShortcuts.test.ts tests/stores/update.test.ts && npm run typecheck`; affected shell/runtime/settings, API/channel-exclusion, localization and token tests remain mandatory. Rust/actual CLI/platform/scaling and updater install/relaunch are NOT RUN by this task. Task21 still owns removal of the explicit development compatibility route and its `useLegacyAppShortcuts` consumer.
+- Exact gate: `npm test -- tests/components/remainingSettings.test.ts tests/composables/appShortcuts.test.ts tests/stores/update.test.ts && npm run typecheck`; affected shell/runtime/settings, API/channel-exclusion, localization and token tests remain mandatory. Rust/actual CLI/platform/scaling and updater install/relaunch are NOT RUN by this task. Task21 retired the development compatibility route and its old shortcut consumer; only the canonical unified action routing remains.
+
+### Unified surface retirement (Task 21)
+
+- `NativeCliWorkbench`, `LegacyCompatibilityApp`, old Welcome/ProjectSelect, IconBar/TerminalHeader, SettingsOverlay/StartupSection and the orphan Legacy resource panels are removed after caller tracing. The project/session tree is the only session tabs, and resources use six structured read-only context views. No raw resource JSON or separate Native product page remains.
+- `nativeWorkbench.ts` had no caller outside the retired page and is removed; `useUnifiedWorkspaceRuntime`, `nativeTabs`, `cliProfiles`, `cliWorkspace`, both adapters and authenticated API/runtime helpers remain authoritative. Runtime/storage names do not imply a second UI.
+- `TerminalView` is only the Legacy aggregate port: explicit start/stop/restart/rename/recover, focus/fit and `useStatusMonitor` remain; nonembedded navigation, implicit startup/history/config reads on mount and old launch event listeners are gone. An exact-PTY start still adds the owned project and refreshes new-session history; stale events cannot use a global cwd fallback. `XTermTerminal` core subscriptions, PTY ownership, hidden parsing/protocol replies and all Native IO are unchanged.
+- Boundary tests now inspect the actual terminal and structured resource consumers for inert DOM, no payload logging, projection-only APIs and no Legacy PTY fallback. Gate: `npm test -- tests/productBoundary.test.ts && npm run typecheck && npm run build`; affected adapter/terminal/shell tests also run. Rust, D20 real CLI and final platform/visual acceptance remain separate and unperformed by this cleanup.

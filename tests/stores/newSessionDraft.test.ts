@@ -48,14 +48,14 @@ describe('New session draft', () => {
     expect(draft.toInput()).toMatchObject({ launchConfigId: 'other', launchConfigRevision: '1' })
     expect(draft.preferred(project, 'codex')?.id).toBe('default')
   })
-  it('Draft_SafeDefaultOnlyExplicit_003', async () => {
+  it.each(['claude', 'codex'] as const)('Draft_SafeDefaultOnlyExplicit_003: %s', async cli => {
     const profiles = useCliProfilesStore(); profiles.status = 'loaded'
-    const draft = useNewSessionDraftStore(); draft.open(project, 'claude')
-    expect(draft.cliAvailability.claude).toBe('unknown'); expect(io.patch).not.toHaveBeenCalled()
+    const draft = useNewSessionDraftStore(); draft.open(project, cli)
+    expect(draft.cliAvailability[cli]).toBe('unknown'); expect(io.patch).not.toHaveBeenCalled()
     io.patch.mockImplementation(async (_rev, patch) => ({ revision: '1', profiles: [{ ...patch.profile, revision: '1' }] }))
-    const result = await draft.prepareInput({ ...project, cli: 'claude' })
+    const result = await draft.prepareInput({ ...project, cli })
     expect(result.launchConfigId).toBeTruthy()
-    expect(profiles.profile(result.launchConfigId!)?.skipPermissions).toEqual({ mode: 'set', value: false })
+    expect(profiles.profile(result.launchConfigId!)?.skipPermissions).toEqual(cli === 'claude' ? { mode: 'set', value: false } : { mode: 'inherit' })
     expect(io.patch).toHaveBeenCalledTimes(1)
     const patch = io.patch.mock.calls[0][1]; expect(patch.profile.env).toEqual({}); expect(patch.profile.defaultArgs).toEqual({ mode: 'set', value: [] })
   })

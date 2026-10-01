@@ -70,7 +70,7 @@ defineExpose({ ...port, fitVisible })
 <template>
   <div class="unified-terminal-host" data-unified-terminal-host :style="surface">
     <!-- XTermTerminal already aggregates Legacy tabs; there is exactly one owner. -->
-    <TerminalView v-if="legacyMounted" ref="legacy" embedded :visible="legacyVisible" v-show="legacyVisible" />
+    <TerminalView v-if="legacyMounted" ref="legacy" :visible="legacyVisible" v-show="legacyVisible" />
     <NativeCliTerminal v-for="session in nativeSessions" :key="session.id"
       :ref="value => setNative(session.adapterSessionId, value)" :tab-id="session.adapterSessionId"
       :active="visible && activeSessionId === session.id" />

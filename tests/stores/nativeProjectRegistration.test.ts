@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
@@ -53,18 +52,6 @@ beforeEach(() => {
 afterEach(() => clearMocks())
 
 describe('D28 native project registration', () => {
-  it('D28_Project_AddButtonUsesRegistrationMutation_01', () => {
-    const source = readFileSync('src/components/NativeCliWorkbench.vue', 'utf8')
-      .replace(/\r\n/g, '\n')
-    const start = source.indexOf('async function addProject()')
-    const end = source.indexOf('\n}\n\nfunction createNew()', start)
-    expect(start).toBeGreaterThan(-1)
-    expect(end).toBeGreaterThan(start)
-    const body = source.slice(start, end)
-    expect(body).toContain('workbench.workspace.registerProject(result.path)')
-    expect(body).not.toContain('workbench.workspace.open(')
-  })
-
   it('D28_Project_SelectedDirectoryIsPersistedAndAdopted_02', async () => {
     const calls: Array<[string, unknown]> = []
     mockIPC((command, payload) => {

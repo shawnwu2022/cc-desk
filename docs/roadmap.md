@@ -45,7 +45,7 @@ Unavailable or unverifiable cells remain BLOCKED. Synthetic hooks, screen scrapi
 
 Code-side closeout consists of:
 
-1. keep the Native CLI workspace visible as a first-class entry;
+1. keep both CLIs available in the unified Workspace/Projects/Settings shell;
 2. keep product/developer/release documentation aligned with the implemented boundary;
 3. maintain regression gates against deleted Provider/mutating-resource/legacy-PTY fallbacks;
 4. run one final unified CI on the finalization PR;
@@ -70,10 +70,10 @@ After D20 and owner approval:
 
 ### UX consolidation
 
-- native workbench as the primary discoverable path;
+- unified project/session tree as the only tab system (implemented through Task 21);
 - accessibility, keyboard-navigation and safe error-code explanation polish;
-- project/profile onboarding without exposing secrets;
-- clear legacy-workspace migration/deprecation messaging.
+- project/launch-configuration onboarding without exposing secrets;
+- preserve Legacy sessions through the same shell; independent product pages are retired.
 
 ### Compatibility
 

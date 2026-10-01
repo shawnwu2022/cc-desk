@@ -2,6 +2,12 @@ import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 
 const read = (path: string) => readFileSync(path, 'utf8')
+const nativeSurfaces = [
+  'src/components/NativeCliTerminal.vue',
+  'src/components/workspace/ProjectResourcesDrawer.vue',
+  ...['InstructionsView', 'SettingsView', 'McpList', 'SkillList', 'AgentList', 'PluginList', 'ResourceMetadata']
+    .map(name => `src/components/resources/${name}.vue`),
+]
 
 describe('CC Desk product boundary', () => {
   test('does not ship downstream Provider management', () => {
@@ -46,12 +52,10 @@ describe('CC Desk product boundary', () => {
   })
 
   test('native workbench DOM and IPC surfaces stay inert and authenticated', () => {
-    const workbench = read('src/components/NativeCliWorkbench.vue')
-    const terminal = read('src/components/NativeCliTerminal.vue')
-    expect(workbench).not.toContain('v-html')
-    expect(terminal).not.toContain('v-html')
-    expect(workbench).not.toContain('innerHTML')
-    expect(terminal).not.toContain('innerHTML')
+    for (const path of nativeSurfaces) {
+      expect(read(path), path).not.toContain('v-html')
+      expect(read(path), path).not.toContain('innerHTML')
+    }
 
     const api = read('src/api/tauri.ts')
     const marker = api.indexOf('// The native document bridge owns the proof')
@@ -63,9 +67,8 @@ describe('CC Desk product boundary', () => {
   })
 
   test('native security surfaces redact values and do not log user payloads', () => {
-    const workbench = read('src/components/NativeCliWorkbench.vue')
-    const terminal = read('src/components/NativeCliTerminal.vue')
-    for (const source of [workbench, terminal]) {
+    for (const path of nativeSurfaces) {
+      const source = read(path)
       expect(source).not.toContain('console.')
       expect(source).not.toContain('logMessage(')
       expect(source).not.toContain('v-html')
@@ -96,7 +99,7 @@ describe('CC Desk product boundary', () => {
     const app = read('src/App.vue')
     const nav = read('src/components/shell/PrimaryNav.vue')
     const workspace = read('src/components/workspace/WorkspaceView.vue')
-    expect(app).toContain('<AppShell v-else')
+    expect(app).toContain('<AppShell :title=')
     expect(app).toContain('<WorkspaceView v-show=')
     expect(app).not.toContain('<NativeCliWorkbench')
     expect(app).not.toContain('<TerminalView')
@@ -106,8 +109,13 @@ describe('CC Desk product boundary', () => {
     expect(nav).toContain("section: 'settings'")
     expect(nav).not.toContain('Native CLI')
     expect(workspace).toContain('data-workspace-terminal-host')
-    expect(read('src/stores/shell.ts')).toContain("return dev && flag === '1'")
-    expect(app).toContain('isCompatibilityEnabled(import.meta.env.DEV,')
+    expect(app).not.toContain('LegacyCompatibilityApp')
+    expect(app).not.toContain('VITE_CC_DESK_COMPATIBILITY')
+    expect(read('src/stores/shell.ts')).not.toContain('isCompatibilityEnabled')
+    expect(nav.match(/section: '[^']+'/g)).toEqual(["section: 'workspace'", "section: 'projects'", "section: 'settings'"])
+    expect(read('src/components/TerminalView.vue')).not.toMatch(/IconBar|SidebarPanel|TerminalHeader|startProjectSession|pendingResume|terminal:newSession/)
+    expect(read('src/components/sidebar/SidebarPanel.vue')).not.toContain('Type-only compatibility')
+    expect(read('src/composables/useAppShortcuts.ts')).not.toContain('useLegacyAppShortcuts')
 
     for (const path of [
       'README.md',
@@ -147,38 +155,37 @@ describe('CC Desk product boundary', () => {
     expect(tauri).toContain('Claude Code and Codex CLI')
   })
 
-  test('native workbench user-facing controls stay localized', () => {
-    const workbench = read('src/components/NativeCliWorkbench.vue')
+  // 所有构建只保留统一入口；不能恢复旧产品页、第二套标签或资源导航。
+  test('Surface_RetiresDuplicatePages_001', () => {
+    for (const path of [
+      'src/components/NativeCliWorkbench.vue', 'src/components/LegacyCompatibilityApp.vue',
+      'src/components/WelcomeView.vue', 'src/components/ProjectSelectView.vue',
+      'src/components/IconBar.vue', 'src/components/TerminalHeader.vue',
+      'src/components/settings/SettingsOverlay.vue', 'src/components/settings/sections/StartupSection.vue',
+      'src/stores/nativeWorkbench.ts', 'src/composables/useStartupDecision.ts',
+      ...['agents/AgentsPanel', 'skills/SkillsPanel', 'mcp/McpPanel', 'plugins/PluginsPanel'].map(path => `src/components/${path}.vue`),
+    ]) expect(existsSync(path), path).toBe(false)
+    for (const locale of ['en', 'zh']) {
+      expect(read(`src/i18n/locales/${locale}.ts`)).not.toContain('openNativeCliWorkspace:')
+      expect(read(`src/i18n/locales/${locale}.ts`)).not.toContain('openLegacyClaudeWorkspace:')
+    }
+  })
+
+  test('unified session and resource controls stay localized and structured', () => {
     const english = read('src/i18n/locales/en.ts')
     const chinese = read('src/i18n/locales/zh.ts')
-    expect(workbench).toContain("useI18n")
-    expect(workbench).toContain("t('nativeSelectProject')")
-    expect(workbench).toContain("t('nativeResumePicker')")
-    expect(workbench).toContain("nativeStatusLabel(tab.status)")
-    expect(workbench).toContain("nativeResourceLabel(kind)")
-
-    for (const key of [
-      'nativeCreateCodexProfile',
-      'nativeCreateClaudeProfile',
-      'nativeSelectProject',
-      'nativeNewSession',
-      'nativeResumePicker',
-      'nativeWorkspaceLoading',
-      'nativeRecover',
-      'nativeStop',
-      'nativeRestart',
-      'nativeResources',
-      'nativeStatusRunning',
-      'nativeResource_history',
-    ]) {
+    expect(read('src/components/sessions/NewSessionDialog.vue')).toContain("t('newSessionTitle')")
+    expect(read('src/components/sessions/ResumeSessionDialog.vue')).toContain("t('resumeSearch')")
+    for (const path of nativeSurfaces.slice(1)) expect(read(path), path).not.toContain('JSON.stringify')
+    for (const key of ['newSessionTitle', 'resumeSearch', 'resourceCategory_instructions', 'resourceCategory_config',
+      'resourceCategory_mcp', 'resourceCategory_skills', 'resourceCategory_agents', 'resourceCategory_plugins']) {
       expect(english).toContain(`${key}:`)
       expect(chinese).toContain(`${key}:`)
     }
-
     const about = read('src/components/settings/sections/AboutSection.vue')
     expect(about).toContain('developers.openai.com/learn/codex')
-    expect(english).toContain("codexDocs:")
-    expect(chinese).toContain("codexDocs:")
+    expect(english).toContain('codexDocs:')
+    expect(chinese).toContain('codexDocs:')
   })
 
 })

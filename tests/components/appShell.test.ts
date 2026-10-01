@@ -14,7 +14,7 @@ import WorkspaceView from '@/components/workspace/WorkspaceView.vue'
 import WorkspaceHeader from '@/components/workspace/WorkspaceHeader.vue'
 import SessionsPanel from '@/components/sessions/SessionsPanel.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
-import { useShellStore, isCompatibilityEnabled } from '@/stores/shell'
+import { useShellStore } from '@/stores/shell'
 import { useAppStore } from '@/stores/app'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useProjectsStateStore } from '@/stores/projectsState'
@@ -62,7 +62,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   document.head.querySelectorAll('[data-test-shell]').forEach(style => style.remove())
   document.documentElement.removeAttribute('data-theme')
-  vi.restoreAllMocks()
+  vi.restoreAllMocks(); vi.unstubAllEnvs()
 })
 function render(component: any, options: Record<string, any> = {}) {
   const wrapper = mount(component, { attachTo: document.body, ...options,
@@ -191,13 +191,14 @@ describe('Unified application shell', () => {
     useShellStore().navigate('settings'); await nextTick()
     expect(wrapper.get('[data-unified-terminal-host]').element).toBe(terminal)
   })
-  // 兼容入口必须同时满足DEV与显式标志，生产环境单独设置标志无效。
-  it('Shell_CompatibilityRequiresDev_010', () => {
-    expect(isCompatibilityEnabled(false, '1')).toBe(false)
-    expect(isCompatibilityEnabled(false, 'true')).toBe(false)
-    expect(isCompatibilityEnabled(true, undefined)).toBe(false)
-    expect(isCompatibilityEnabled(true, '0')).toBe(false)
-    expect(isCompatibilityEnabled(true, '1')).toBe(true)
+  // 旧DEV标志不再改变唯一根组件或触发旧启动流程。
+  it('Shell_IgnoresRetiredDevFlag_010', async () => {
+    vi.stubEnv('VITE_CC_DESK_COMPATIBILITY', '1')
+    const wrapper = render(App); await flushPromises()
+    expect(wrapper.findAllComponents(AppShell)).toHaveLength(1)
+    expect(wrapper.findComponent({ name: 'LegacyCompatibilityApp' }).exists()).toBe(false)
+    expect(wrapper.find('[data-unified-terminal-host]').exists()).toBe(true)
+    expect(host.runChecks).not.toHaveBeenCalled()
   })
   // 配置加载与GUI主题不等待某个CLI可用性；终端主题和选择保持独立。
   it('Shell_ConfigAndThemeIndependent_011', async () => {

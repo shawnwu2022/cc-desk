@@ -45,7 +45,8 @@ Rules:
 - Task 17: complete at `bb8c2c999370e4988b96d2917bd10f66154bda51`
 - Task 18: complete at `c0158be02de8edf1dafe233c95b6550564e8f471`
 - Task 19: complete at `25cc65298caf2bf7c61fb0434edfa7eb815ddc19`
-- Next task: Task 20 — shortcuts, update and about
+- Task 20: complete at `c8887dd2645a03546f7f056046ea34e3e35ef502`
+- Next task: Task 21 — retire obsolete parallel UI
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -554,3 +555,19 @@ Rules:
 - Review repaired edit ownership across actual catalog refresh so collapsed/search-hidden draft stays mounted; cancel/disappearance/source/attempt invalidation revokes it. Follow-up fixed Save recapturing invalid old owner before refresh: old draft rejects, only new explicit edit creates owner
 - Final21 exact+typecheck;267affected15files; independent original3 repros and focused admission regression pass.37source manifest/diff/reverse checks pass; initial246/266 counts superseded
 - Optional Rust bindings compatibility tests authored NOTRUN; no actualclipboard/updater install/relaunch/CLI/platform/scaling certification/fullsuite/CI/PR/package/release. Atomic publication pending readback
+
+### Verified Task 20 checkpoint
+
+- Remote commit `c8887dd2645a03546f7f056046ea34e3e35ef502`; exact staged/fetched tree and local/remote SHA match; worktree clean before readback
+-21exact/typecheck267affected, independent3repros+focused admission regression approved
+- Two large inline-tree uploads stalled; disappeared cells and exact-tree404/unchanged ref established no completion. Same approved payload uploaded as38individual Git blobs then SHA-only tree matched `4acbc42331f72462befc794fd7fe5eedae6258ac`; one commit/nonforce ref succeeded. Future uploads prefer bounded blobs to avoid service stalls
+- No CI/PR/package/release or actualCLI/platform/Rust/updater installation certification; next21
+
+## Task 21 — Retire duplicate product surfaces
+
+- Unified shell is sole root in all builds; removed24 obsolete files including NativeCliWorkbench/DEVcompatApp/Welcome/ProjectSelect/oldnav/settings/resource wrappers and no-caller workbench/startup coordinator
+- TerminalView is only unified Legacy port; explicit lifecycle/status/attention/exactPTY project-history adoption retained, obsolete mountstartup/global navigation removed. Native/Legacy adapters, actual terminal IO/backend safety unchanged
+- Security boundary assertions migrated to real terminal/resource consumers; oldUI tests replaced by actualruntime identity/default/partialbootstrap/port regressions with documented coverage mapping
+- Current architecture docs updated, frozen plan/spec/history preserved; release/D20 policy unchanged
+- Required11boundary tests+typecheck+production Vite build pass;331affected28files.26present/24deleted hashes/diff/reverse checks pass; independent spec/quality review no actionable finding
+- Rust/realCLI/D20/GPU/platform/scaling/Windowspackage certification NOTRUN; nofullsuite/CI/PR/package/release. Atomic publication pending readback

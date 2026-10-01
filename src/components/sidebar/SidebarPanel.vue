@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { SidebarPanelType } from '@/stores/sidebar'
 import type {
   ProjectActionRequest, SessionMenuAction, SessionPrimaryAction, SessionTreeConfirmationRequest,
   UnifiedProjectGroup, UnifiedSession, NewSessionRequest,
@@ -10,8 +9,6 @@ defineOptions({ inheritAttrs: false })
 withDefaults(defineProps<{
   visible?: boolean
   active?: boolean
-  // Temporary compatibility caller only; not a primary-navigation model.
-  activePanel?: SidebarPanelType
   projectGroups?: UnifiedProjectGroup[]
   archivedSessions?: UnifiedSession[]
   selectedId?: string | null
@@ -32,25 +29,6 @@ const emit = defineEmits<{
   'rename-cancel': [id: string]
   'confirmation-request': [request: SessionTreeConfirmationRequest]
   'restore-request': [id: string]
-  // Type-only compatibility events are never emitted by the unified panel.
-  switchSession: [tabId: string]
-  renameSession: [tabId: string, name: string]
-  restartSession: []
-  newSession: []
-  resumeSession: [sessionId: string]
-  closeTab: [tabId: string]
-  closeAllTabs: []
-  closeOtherTabs: []
-  newSessionIn: [projectPath: string]
-  toggleExpand: [projectPath: string]
-  closeAllSessionsIn: [projectPath: string]
-  openInExplorer: [projectPath: string]
-  resumeSessionInProject: [projectPath: string, sessionId: string, name?: string]
-  pinProject: [projectPath: string]
-  unpinProject: [projectPath: string]
-  archiveSession: [projectPath: string, sessionId: string]
-  restoreSession: [projectPath: string, sessionId: string]
-  showArchived: [projectPath: string]
 }>()
 </script>
 

@@ -28,12 +28,9 @@ Success means a user can:
 
 ## Architecture direction
 
-There are two paths in the repository:
+There is one application shell: Workspace, Projects and Settings. The project/session tree mixes Claude Code and Codex CLI sessions and is the only tab system. Resources are six structured read-only context views, not global navigation.
 
-1. a legacy Claude-specific workspace kept for compatibility;
-2. the Native CLI v3 workspace, which is the forward path for Claude Code and Codex CLI.
-
-New dual-CLI work must use the authenticated native workspace.
+Two runtime adapters share that shell: Legacy Claude preserves existing sessions/history, while Native CLI v3 is the authenticated forward path for all new Claude/Codex sessions. The old product pages and compatibility startup routing are retired.
 
 The native workspace owns host mechanics only:
 

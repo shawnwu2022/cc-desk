@@ -25,10 +25,8 @@ logical viewport mode, session-column visibility/width and context-drawer state.
   remain mounted; standalone list callers default their surface activity to true.
 - `TitleBar.vue` takes the unified context title, preserves Windows minimize /
   maximize / close and macOS traffic-light space, and has no Native product toggle.
-- Projects currently has a content-only landing; Task 14 owns full management.
-  `SettingsView.vue` mounts within the main column, with its contextual settings
-  subsection navigation, and stays mounted after first activation. Task 17 owns
-  the settings-shell migration; Task 18 owns terminal preferences.
+- `ProjectsView` and `ProjectManagementDialogs` provide real registration, visibility and project metadata management through `projectManagement` and its admission barriers.
+- `SettingsView` loads in the main column on first activation and stays mounted. Its seven sections are General, Appearance, Terminal, Launch configurations, Shortcuts, Updates and About; complex edits use the shared dialogs.
 
 At widths below 1180 logical CSS pixels, context uses shared modal `AppDrawer`
 instead of reducing the main column. Below 900, the session column starts collapsed;
@@ -62,19 +60,19 @@ Queued operations capture adapter ownership before awaiting; an ended close/arch
 must still be ended at execution. Confirmations never belong to the shell. New-session dialogs
 belong to Task 12, resume to Task 13 and contextual resources to Task 15.
 
-The old App is isolated as `LegacyCompatibilityApp.vue`, reachable only with BOTH
-Vite DEV and `VITE_CC_DESK_COMPATIBILITY=1`. Setting the flag in production cannot
-activate it. This temporary development route, `IconBar` adapter and old typed
-caller compatibility are removed in Task 21. Native bridge/terminal safeguards
-remain unchanged; this shell checkpoint is not real CLI or platform certification.
+All builds mount the same root shell. The temporary DEV compatibility route and
+its flag have been retired along with the independent Native workbench, old
+Welcome/ProjectSelect pages, IconBar, TerminalHeader and SettingsOverlay. Empty
+states belong to Workspace/Projects. These source removals do not delete user data
+or remove either runtime adapter.
 
 ## Unified terminal runtime
 
 `UnifiedTerminalHost` consumes the selected catalog ID and open runtime descriptors.
-It owns one embedded `TerminalView` / `XTermTerminal` aggregator for every Legacy tab,
+It owns one content-only `TerminalView` / `XTermTerminal` aggregator for every Legacy tab,
 and one stable-key `NativeCliTerminal` per open Native tab. History records never
 mount terminals. Switching sessions, primary sections or GUI themes changes only
-visibility. Embedded Legacy content has no IconBar, project tree, header or implicit
+visibility. Legacy content has no IconBar, project tree, header or implicit
 startup/menu listeners.
 
 `UnifiedTerminalHostPort` exposes explicit Legacy start/stop/restart/rename and
@@ -101,21 +99,10 @@ The optional adapter `captureOwnership` hook freezes exact Native request/run/ge
 or Legacy tab/local PTY generation at facade admission, before an action waits in a
 queue. Lifecycle completions recheck ownership before touching a newer context.
 
-## Native CLI workbench
+## Native terminal
 
-### NativeCliWorkbench.vue
-
-Retained only by the DEV compatibility route; the normal shell never mounts its
-independent tab strip. Compatibility responsibilities:
-
-- Claude/Codex switch;
-- independent profile selection/bootstrap;
-- registered project selection;
-- create New / resume-picker / resume-ID / raw-argv tabs;
-- recover, stop and explicit restart controls;
-- authenticated read-only resource projection.
-
-The workbench must not invoke legacy Claude PTY APIs.
+The mixed project/session tree owns selection. Shared New/Resume dialogs and
+`useUnifiedWorkspaceRuntime` replace the retired workbench page and its tab strip.
 
 ### NativeCliTerminal.vue
 
@@ -133,15 +120,9 @@ No arbitrary HTML rendering or payload logging is allowed.
 
 ## Native stores
 
-### nativeWorkbench.ts
-
-Coordinates:
-
-- `cliProfiles`;
-- `cliWorkspace`;
-- `nativeTabs`;
-- selected CLI/project;
-- safe workbench error projection.
+`nativeWorkbench.ts` was used only by the retired page and is removed. The unified
+runtime independently loads profiles, registered projects, history and Legacy
+compatibility data; it does not launch a process during bootstrap.
 
 ### nativeTabs.ts
 
@@ -189,22 +170,30 @@ Bare `invoke(...)` fallback is forbidden in the native authenticated section.
 
 These helpers preserve source/ordering identity rather than inferring behavior from byte content.
 
-## Legacy workspace
+## Legacy terminal adapter
 
-The following retain the Legacy transport:
+`TerminalView.vue` supplies the explicit host port around the single
+`XTermTerminal.vue` aggregate. It retains status monitoring, focus and visible fit,
+but owns no navigation, history-selection or startup routing. Mounting it cannot
+start a process or load default-root project configuration. A successful exact-PTY
+start still adds its project and refreshes new-session history; resumed sessions
+skip the redundant read. Missing/stale PTY events never use a global cwd fallback.
+The Legacy adapter
+continues to own exact tab/PTY lifecycle and history compatibility.
 
-- `TerminalView.vue` (embedded content-only mode in the unified host);
-- `XTermTerminal.vue` (one aggregator, explicit visibility, exact PTY lifecycle);
-- `LegacyCompatibilityApp.vue` behind the explicit DEV-only flag;
-- legacy Claude settings and hook-driven UI.
-
-Legacy sidebar Skills/Agents/MCP/Plugins are projections. The removed Provider management UI and mutating resource toggles must not return.
+The old Skills/Agents/MCP/Plugins panels and their unused item/group components
+are removed. The six current `resources/` consumers are structured read-only views
+inside `ProjectResourcesDrawer`; Legacy observations use the same safe DTO boundary
+and explicit exact-project authority. No old slash-command launch control survives
+in those resource views.
 
 ## Settings
 
-`SettingsView.vue` covers CC Desk-owned appearance/startup/shortcut/update/about settings inside the unified shell. `SettingsOverlay.vue` is retained only for the development compatibility app.
-
-They do not provide Provider/API-key management.
+`SettingsView.vue` covers the seven CC Desk settings sections within the unified
+shell. `TerminalThemePreview` is static non-PTY markup; both terminal runtimes
+consume the shared preferences. The old StartupSection environment-value editor
+is removed; launch configuration edits use the current guarded editor contract.
+There is no Provider/API-key management or alternate settings overlay.
 
 ## Testing boundaries
 
@@ -212,11 +201,11 @@ They do not provide Provider/API-key management.
 
 - deleted Provider management stays deleted;
 - CLI installer/overwrite APIs stay deleted;
-- native workbench does not use legacy PTY APIs;
+- actual Native terminal does not use Legacy PTY APIs;
 - authenticated IPC has no bare invoke fallback;
 - native DOM/log surfaces stay inert/redacted;
 - native resource panels stay projection-only;
-- Native CLI remains a first-class entry;
+- only Workspace/Projects/Settings exist, with mixed CLI sessions below projects;
 - release docs match the enforced candidate-only workflow.
 
 ## Unified session icon primitives
@@ -277,8 +266,7 @@ primary/menu actions and rename requests carry catalog IDs. A running archive is
 intercepted as `confirmation-request` with
 `{ kind: 'stop-and-archive', sessionId, projectKey, projectPath }`. It never invokes
 stop/archive itself. Unknown/starting sessions cannot request archive. Runtime
-adapter setup/dispatch now belongs to `useUnifiedWorkspaceRuntime`; full confirmation
-UI remains Task 16; none
+adapter setup/dispatch now belongs to `useUnifiedWorkspaceRuntime`; confirmation UI uses shared typed dialogs; none
 of the tree components imports legacy PTY commands or performs lifecycle writes.
 
 Explicit expansion is stored by project key. Search matches project display name,
@@ -491,3 +479,17 @@ rendered attributes; only the environment variable name and override mode are sh
 Rename omits all other fields. Ordinary edits omit env, preserving opaque stored
 values; Duplicate copies the original saved configuration under a fresh ID and revision
 zero, guarded by its source revision. No provider/credential management was introduced.
+
+## Task 21 verification scope
+
+Boundary assertions require retired pages/routes to stay absent and inspect the
+actual Native terminal plus six structured resource consumers for inert DOM and
+no payload logging. Authenticated bridge, no Legacy PTY fallback, Provider/installer
+exclusion and candidate-only release assertions remain. Behavioral coverage checks
+the real Legacy port is inert on mount, propagates exact owned calls and failures,
+waits for stop, and stays mounted across visibility changes. Current unified runtime
+coverage retains the removed workbench's CLI/configuration/project/action identity
+checks; the old startup decision's implicit routing is intentionally retired.
+
+The frontend gate includes production `npm run build`. This is not a Rust build,
+Windows package, D20 real-CLI certification or rendered platform acceptance.

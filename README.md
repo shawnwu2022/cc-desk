@@ -2,7 +2,7 @@
 
 CC Desk is a desktop workspace for **Claude Code and Codex CLI** built with Tauri 2, Vue 3, xterm.js, and Rust.
 
-It keeps the real CLI in charge of the interactive session and adds the host capabilities that become awkward in a normal terminal: multi-project navigation, multiple concurrent tabs, stable run identity, recovery, bounded terminal transport, and read-only native-resource projection.
+It keeps the real CLI in charge of the interactive session and adds the host capabilities that become awkward in a normal terminal: multi-project navigation, multiple concurrent sessions, stable run identity, recovery, bounded terminal transport, and read-only native-resource projection.
 
 > Native CLI v3 is currently code-complete through D27 on the development stack. Real Claude Code / Codex CLI Layer-C certification (D20) still requires an authorized target environment. Do not treat host CI as real-CLI certification.
 
@@ -22,15 +22,23 @@ It keeps the real CLI in charge of the interactive session and adds the host cap
 CC Desk does **not** own Provider/API-key switching or native CLI configuration mutation.
 
 - Provider/configuration switching belongs to Claude Code, Codex CLI, or external tools such as cc-switch.
-- Skills, agents, MCP servers, plugins, history, and related native resources are projected read-only by the new native workspace.
+- Skills, agents, MCP servers, plugins, history, and related native resources are projected read-only in the current project/session context.
 - Observer failure never kills or restarts a CLI.
 - A launch or input result that is ambiguous is never silently replayed.
 
-## Native CLI workspace
+## Unified workspace
 
-The title bar and welcome screen expose the **Native CLI** workspace.
+The three main destinations are **Workspace**, **Projects** and **Settings**. One
+project/session tree mixes Claude Code and Codex CLI sessions below each project.
+The contextual resource drawer shows instructions, settings, MCP, skills, agents
+and plugins as structured read-only content.
 
-The native workspace supports:
+New and Restore use shared dialogs. Settings include launch configurations,
+terminal preferences with a static preview, configurable application shortcuts,
+updates and safe diagnostic copying. GUI and terminal themes are independent.
+Switching views or colors preserves running sessions and terminal scrollback.
+
+The unified workspace supports:
 
 | Capability | Claude Code | Codex CLI |
 |---|---:|---:|
@@ -39,13 +47,13 @@ The native workspace supports:
 | Known session-ID resume | Yes | Yes |
 | Exact raw argv | Yes | Yes |
 | Registered project selection | Yes | Yes |
-| Independent profile selection | Yes | Yes |
+| Independent launch configuration selection | Yes | Yes |
 | Read-only native resource projection | Yes | Yes |
 | Ordered staged input | Yes | Yes |
 | Bounded output + ACK | Yes | Yes |
 | Optional Claude observer overlay | Yes | No |
 
-The repository still contains the legacy Claude workspace for compatibility. New dual-CLI work must use the authenticated native path and must not fall back to legacy PTY APIs.
+Existing Claude history and sessions remain supported through the Legacy adapter in the same shell. New Claude/Codex sessions use the authenticated Native adapter. There is no separate Native product page or Legacy startup route, and Native operations never fall back to Legacy PTY APIs.
 
 ## Safety properties
 

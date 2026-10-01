@@ -305,8 +305,7 @@ describe('Unified project session tree', () => {
   it('Tree_NewSessionIsolatedFromLegacyContainer_013', async () => {
     useUnifiedSessionsStore().sessions = [session()]
     const wrapper = mount(SidebarPanel, { attachTo: document.body,
-      props: { visible: true, activePanel: 'sessions' }, global: { plugins: [i18n],
-        stubs: { SkillsPanel: true, AgentsPanel: true, McpPanel: true, PluginsPanel: true } } })
+      props: { visible: true }, global: { plugins: [i18n] } })
     mounted.push(wrapper)
     await wrapper.get('[data-project-quick-action]').trigger('click'); await nextTick(); await selectMenu('codex')
     expect(wrapper.emitted('newSession')).toBeUndefined()

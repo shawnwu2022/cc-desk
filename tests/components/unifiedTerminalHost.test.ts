@@ -10,11 +10,11 @@ import { useShellStore } from '@/stores/shell'
 import en from '@/i18n/locales/en'
 const seen = { mounts: [] as string[], unmounts: [] as string[], fits: [] as string[], focus: [] as string[], stops: [] as any[] }
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
-const Child = defineComponent({ props: { tabId: String, active: { type: Boolean, default: undefined }, visible: Boolean, embedded: Boolean }, setup(props, { expose }) {
+const Child = defineComponent({ props: { tabId: String, active: { type: Boolean, default: undefined }, visible: Boolean }, setup(props, { expose }) {
   const id = props.tabId ?? 'legacy'
   onMounted(() => seen.mounts.push(id)); onUnmounted(() => seen.unmounts.push(id))
   expose({ fitVisible: () => seen.fits.push(id), focus: () => seen.focus.push(id), stop: (attempt: any) => seen.stops.push([id, attempt]), recover: vi.fn(), startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn() })
-  return () => h('div', { 'data-child': id, 'data-visible': String(props.active ?? props.visible), 'data-embedded': String(props.embedded) }, id)
+  return () => h('div', { 'data-child': id, 'data-visible': String(props.active ?? props.visible) }, id)
 } })
 const wrappers: VueWrapper[] = []
 beforeEach(() => { clearMocks(); mockIPC(command => command === 'get_app_config' ? { theme: 'light', terminalTheme: 'cc-box-light', language: 'en' } : undefined); setActivePinia(createPinia()); Object.values(seen).forEach(values => { values.length = 0 }); vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }) })
@@ -33,7 +33,6 @@ describe('Unified terminal host', () => {
   it('Host_KeepsSingleOwnersMounted_001', async () => {
     const w = render(); await flushPromises()
     expect(seen.mounts.sort()).toEqual(['cc', 'cx', 'legacy'])
-    expect(w.get('[data-child="legacy"]').attributes('data-embedded')).toBe('true')
     await w.setProps({ activeSessionId: 'native-tab:cx' }); await flushPromises()
     expect(w.get('[data-child="legacy"]').attributes('data-visible')).toBe('false')
     expect(w.get('[data-child="cx"]').attributes('data-visible')).toBe('true')
