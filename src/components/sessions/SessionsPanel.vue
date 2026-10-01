@@ -89,7 +89,7 @@ const displayedGroups = computed(() => {
   if (!query) return allGroups.value
   return allGroups.value.flatMap(group => {
     if (matchProjectQuery(group.name, projectBasename(group.projectPath), group.projectPath, query)) return [group]
-    const sessions = group.sessions.filter(session => session.title.toLowerCase().includes(query))
+    const sessions = group.sessions.filter(session => session.title.toLowerCase().includes(query) || session.renameState === 'editing' || session.renameState === 'saving')
     return sessions.length ? [{ ...group, sessions }] : []
   })
 })
@@ -151,7 +151,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
       <div v-else-if="!stateReady" class="loading-indicator">{{ t('loading') }}</div>
       <template v-else>
         <ProjectNode v-for="group in displayedGroups" :key="group.projectKey" :project="group" :surface-active="active"
-          :expanded="searching || expandedKeys.has(group.projectKey)" :disable-toggle="searching"
+          :expanded="searching || expandedKeys.has(group.projectKey) || group.sessions.some(row => row.renameState === 'editing' || row.renameState === 'saving')" :disable-toggle="searching"
           :is-current="sameProjectPath(group.projectPath, currentProjectPath ?? '')" :selected-id="selectedId"
           @toggle-expand="toggleExpand" @new-session-request="newSessionRequest" @project-action="projectAction"
           @activate="emit('activate', $event)" @primary-action="(id, action) => emit('primary-action', id, action)"

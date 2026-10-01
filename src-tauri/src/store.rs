@@ -57,6 +57,8 @@ pub struct SessionDetails {
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
+    #[serde(rename = "shortcutBindings")]
+    pub shortcut_bindings: Option<HashMap<String, Option<String>>>,
     #[serde(rename = "defaultContinue")]
     pub default_continue: Option<bool>,
     #[serde(rename = "defaultSkipPermissions")]

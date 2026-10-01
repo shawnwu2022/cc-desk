@@ -116,7 +116,7 @@ import {
   checkForUpdates,
   onOpenDirectory
 } from '@/api/tauri'
-import { useAppShortcuts } from '@/composables/useAppShortcuts'
+import { useLegacyAppShortcuts } from '@/composables/useAppShortcuts'
 import { decideStartupView } from '@/composables/useStartupDecision'
 import { isPersistFailedError } from '@/composables/useSessionStartWaiter'
 import { useStickyActivation } from '@/composables/useStickyActivation'
@@ -142,7 +142,7 @@ const { t } = useI18n()
 // 否则 ack 会先空操作（item 未 ingest）再 ingest 残留,违背"看了就清"（codex 对抗审查 P0）。
 // 故在 setup（早于子 mount）初始化,而非 onMounted（晚于子 mount）。
 useAttentionStore().init()
-const { setupShortcutListeners } = useAppShortcuts()
+const { setupShortcutListeners } = useLegacyAppShortcuts()
 const currentView = ref<ViewType>('welcome')
 const previousNonNativeView = ref<Exclude<ViewType, 'native'>>('welcome')
 const terminalViewRef = ref()

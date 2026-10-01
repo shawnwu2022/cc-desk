@@ -1,5 +1,6 @@
+import { DEFAULT_SHORTCUT_BINDINGS, readShortcutBindings, validShortcutBindings, type ShortcutBindings } from '@/config/appShortcuts'
 import { defineStore } from 'pinia'
-import { ref, computed, onScopeDispose } from 'vue'
+import { ref, reactive, computed, onScopeDispose } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   getAppConfig,
@@ -26,6 +27,7 @@ import i18n from '@/i18n'
 import type { ClaudeOptions, DefaultClaudeOptions, CheckResult, Project, ProjectStartupState, SessionInfo } from '@/types'
 
 interface SimpleSettings extends TerminalSettingFields {
+  shortcutBindings: ShortcutBindings
   guiThemeMode: GuiThemeMode
   guiDensity: GuiDensity
   sidebarWidth: number
@@ -40,7 +42,7 @@ interface AppConfigRead {
   commits: Record<keyof SimpleSettings, number>
   visibilityVersion: number
 }
-const simpleSettingKeys = ['guiThemeMode', 'guiDensity', 'sidebarWidth', 'language', 'startupDestination', 'defaultNewCli',
+const simpleSettingKeys = ['shortcutBindings', 'guiThemeMode', 'guiDensity', 'sidebarWidth', 'language', 'startupDestination', 'defaultNewCli',
   'terminalTheme', 'terminalFontFamily', 'fontSize', 'terminalLineHeight', 'terminalCursorStyle', 'terminalCursorBlink', 'webglRenderer'] as const
 const PAGE_SIZE = 12
 
@@ -63,6 +65,7 @@ export interface PendingResume {
 
 export const useAppStore = defineStore('app', () => {
   const shell = useShellStore()
+  const shortcutBindings = ref<ShortcutBindings>({ ...DEFAULT_SHORTCUT_BINDINGS })
   const guiThemeMode = ref<GuiThemeMode>('light')
   const guiDensity = ref<GuiDensity>('standard')
   const sidebarWidth = computed(() => shell.sidebarWidth)
@@ -102,12 +105,13 @@ export const useAppStore = defineStore('app', () => {
   })
 
   function simpleSettings(): SimpleSettings {
-    return { guiThemeMode: guiThemeMode.value, guiDensity: guiDensity.value, sidebarWidth: shell.sidebarWidth,
+    return { shortcutBindings: shortcutBindings.value, guiThemeMode: guiThemeMode.value, guiDensity: guiDensity.value, sidebarWidth: shell.sidebarWidth,
       language: language.value, startupDestination: startupDestination.value, defaultNewCli: defaultNewCli.value,
       terminalTheme: terminalTheme.value, terminalFontFamily: terminalFontFamily.value, fontSize: fontSize.value, terminalLineHeight: terminalLineHeight.value,
       terminalCursorStyle: terminalCursorStyle.value, terminalCursorBlink: terminalCursorBlink.value, webglRenderer: webglRenderer.value }
   }
   function applySimpleSettings(next: SimpleSettings) {
+    shortcutBindings.value = { ...next.shortcutBindings }
     guiThemeMode.value = next.guiThemeMode
     guiDensity.value = next.guiDensity
     shell.setSidebarWidth(next.sidebarWidth)
@@ -124,8 +128,10 @@ export const useAppStore = defineStore('app', () => {
   let confirmedSettings = simpleSettings()
   const settingIntents = Object.fromEntries(simpleSettingKeys.map(key => [key, 0])) as Record<keyof SimpleSettings, number>
   const settingCommits = { ...settingIntents }
-  const pendingSettings = { ...settingIntents }
+  const pendingSettings = reactive({ ...settingIntents })
+  const shortcutBindingsSaving = computed(() => pendingSettings.shortcutBindings > 0)
   const settingsErrors = ref<Partial<Record<keyof SimpleSettings, string>>>({})
+  const shortcutBindingsError = computed(() => settingsErrors.value.shortcutBindings ?? null)
   const settingsSaveError = computed(() => Object.values(settingsErrors.value).find(Boolean) ?? null)
   let settingsLoaded = false
   let settingsUnconfirmed = false
@@ -143,6 +149,7 @@ export const useAppStore = defineStore('app', () => {
     // with that field still absent must not couple terminal colors to a GUI write.
     if (settingsLoaded && (config.terminalTheme == null || config.terminalTheme === '')) terminalValues.terminalTheme = confirmedSettings.terminalTheme
     const values: SimpleSettings = {
+      shortcutBindings: readShortcutBindings(config.shortcutBindings),
       guiThemeMode: config.guiThemeMode === 'system' || config.guiThemeMode === 'dark' || config.guiThemeMode === 'light'
         ? config.guiThemeMode : config.theme === 'dark' ? 'dark' : 'light',
       guiDensity: config.guiDensity === 'compact' ? 'compact' : 'standard', sidebarWidth: widthValue(config.sidebarWidth),
@@ -645,6 +652,10 @@ export const useAppStore = defineStore('app', () => {
   function setGuiDensity(value: string): Promise<boolean> { return saveSimpleSetting('guiDensity', value === 'compact' ? 'compact' : 'standard') }
   function setSidebarWidth(value: number): Promise<boolean> { return saveSimpleSetting('sidebarWidth', widthValue(value)) }
   function setStartupDestination(value: string): Promise<boolean> { return saveSimpleSetting('startupDestination', value === 'projects' ? 'projects' : 'workspace') }
+  function setShortcutBindings(value: unknown): Promise<boolean> {
+    if (!validShortcutBindings(value)) { settingsErrors.value = { ...settingsErrors.value, shortcutBindings: 'shortcutBindingInvalid' }; return Promise.resolve(false) }
+    return saveSimpleSetting('shortcutBindings', readShortcutBindings(value))
+  }
   function setDefaultNewCli(value: string): Promise<boolean> { return saveSimpleSetting('defaultNewCli', value === 'codex' ? 'codex' : 'claude') }
 
   function setTerminalTheme(id: string): Promise<boolean> { return saveSimpleSetting('terminalTheme', normalizeTerminalThemeId(id)) }
@@ -763,7 +774,7 @@ export const useAppStore = defineStore('app', () => {
   return {
     cwd,
     guiThemeMode, guiDensity, sidebarWidth, startupDestination, defaultNewCli, settingsSaveError, loadSettingsPreferences,
-    setGuiDensity, setSidebarWidth, setStartupDestination, setDefaultNewCli,
+    setGuiDensity, setSidebarWidth, setStartupDestination, setDefaultNewCli, shortcutBindings, setShortcutBindings, shortcutBindingsSaving, shortcutBindingsError,
     theme,
     terminalTheme, terminalPreferences, terminalFontFamily, terminalLineHeight, terminalCursorStyle, terminalCursorBlink,
     setTerminalFontFamily, setTerminalLineHeight, setTerminalCursorStyle, setTerminalCursorBlink,

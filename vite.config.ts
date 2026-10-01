@@ -1,9 +1,15 @@
+import { execFileSync } from 'node:child_process'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 import pkg from './package.json'
 import { manualChunkName } from './build/manualChunks'
 
+let buildCommit = 'unknown'
+try {
+  const value = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: __dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  if (/^[0-9a-f]{40}$/.test(value)) buildCommit = value
+} catch { /* Source archives have no Git identity; do not invent one. */ }
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [vue()],
@@ -13,7 +19,8 @@ export default defineConfig({
     }
   },
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version)
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_BUILD_COMMIT__: JSON.stringify(buildCommit)
   },
   test: {
     globals: true,

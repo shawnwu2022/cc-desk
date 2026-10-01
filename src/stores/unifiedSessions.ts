@@ -15,7 +15,7 @@ import type { SessionConfirmationRequest } from '@/types/confirmation'
 import { mapSafeUserError, safeUserErrorCode, type UserErrorPresentation } from '@/utils/userError'
 import { useNotificationsStore } from '@/stores/notifications'
 import type { ToastInput } from '@/stores/notifications'
-import { makeSessionCatalogKey } from '@/utils/sessionPresentation'
+import { makeSessionCatalogKey, makeSessionRenameOwnerKey } from '@/utils/sessionPresentation'
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
 import { normalizePath } from '@/utils/path'
 
@@ -47,6 +47,15 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const projects = useProjectsStateStore()
   const sessions = ref<UnifiedSession[]>([])
   const activeSessionId = ref<string | null>(null)
+  type RenameOwner = { key: string; owns: () => boolean; state: 'editing' | 'saving' }
+  const renameOwners = new Map<string, RenameOwner>()
+  const pendingRenames = new Map<string, number>()
+  function captureRenameOwner(row: UnifiedSession, state: RenameOwner['state']): RenameOwner {
+    return { key: makeSessionRenameOwnerKey(row), owns: adapters.find(adapter => adapter.runtime === row.runtime)?.captureOwnership?.(row.id) ?? (() => true), state }
+  }
+  function ownsRename(owner: RenameOwner, row: UnifiedSession | undefined) {
+    return !!row && owner.key === makeSessionRenameOwnerKey(row) && owner.owns()
+  }
   const initialized = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -329,7 +338,19 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         byId.set(session.id, mergeDuplicateSession(byId.get(session.id), session))
       }
       for (const [id, row] of missingRecords) byId.set(id, row)
-      sessions.value = [...byId.values()].sort((a, b) =>
+      // Adapter reads project runtime state; an unsaved draft belongs to the
+      // current UI owner until cancellation or exact source/attempt invalidation.
+      for (const [id, owner] of renameOwners) {
+        if (!ownsRename(owner, byId.get(id))) {
+          renameOwners.delete(id)
+          const row = byId.get(id)
+          if (row) byId.set(id, { ...row, renameState: 'idle' })
+        }
+      }
+      sessions.value = [...byId.values()].map(row => {
+        const owner = renameOwners.get(row.id)
+        return owner ? { ...row, renameState: owner.state } : row
+      }).sort((a, b) =>
         b.lastActivityAt - a.lastActivityAt || a.id.localeCompare(b.id),
       )
       if (activeSessionId.value && !byId.has(activeSessionId.value)) {
@@ -506,10 +527,41 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     }, 'close')
   }
 
+  function beginRename(id: string) {
+    const row = sessions.value.find(value => value.id === id)
+    if (!row || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
+    const current = renameOwners.get(id)
+    if (!current || !ownsRename(current, row)) renameOwners.set(id, captureRenameOwner(row, 'editing'))
+    sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'editing' } : row)
+  }
+  function cancelRename(id: string) {
+    if ((pendingRenames.get(id) ?? 0) > 0) return
+    renameOwners.delete(id)
+    sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'idle' } : row)
+  }
   function renameSession(id: string, title: string): Promise<void> {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
-    return enqueue(id, () => adapter.renameSession(id, title), () => refresh(session.projectKey))
+    const current = renameOwners.get(id)
+    if (current && !ownsRename(current, session)) {
+      renameOwners.delete(id)
+      sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'idle' } : row)
+      return Promise.reject(new Error('STALE_SESSION_ATTEMPT'))
+    }
+    const owner = current ?? captureRenameOwner(session, 'saving')
+    owner.state = 'saving'
+    renameOwners.set(id, owner)
+    pendingRenames.set(id, (pendingRenames.get(id) ?? 0) + 1)
+    sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'saving' } : row)
+    return enqueue(id, () => {
+      if (renameOwners.get(id) !== owner || !ownsRename(owner, sessions.value.find(row => row.id === id))) throw new Error('STALE_SESSION_ATTEMPT')
+      return adapter.renameSession(id, title)
+    }, () => refresh(session.projectKey)).finally(() => {
+      const remaining = (pendingRenames.get(id) ?? 1) - 1
+      if (remaining) pendingRenames.set(id, remaining)
+      else pendingRenames.delete(id)
+      if (renameOwners.get(id) === owner && !remaining) cancelRename(id)
+    })
   }
 
   function archiveSession(id: string, canContinue = () => true): Promise<void> {
@@ -558,7 +610,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     stopSession,
     restartSession,
     closeSession,
-    renameSession,
+    renameSession, beginRename, cancelRename,
     archiveSession,
     restoreArchivedSession,
   }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
-import { nextTick } from 'vue'
+import { nextTick, computed } from 'vue'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import en from '@/i18n/locales/en'
@@ -364,4 +364,23 @@ describe('SessionList unified boundary', () => {
     const source = readFileSync(resolve('src/components/sessions/SessionList.vue'), 'utf8')
     expect(source).not.toMatch(/TerminalTab|HistorySession|useAttentionStore|isLegacy|legacyVisibility/)
   })
+})
+
+// 自定义重命名键也传到同一行编辑器，旧F2不再是绕过用户配置的第二个入口。
+it('Row_ConfiguredRenameShortcut_033', async () => {
+  const wrapper = mount(SessionItem, { props: { session: base, selected: true }, global: { plugins: [i18n], provide: { [Symbol.for('cc-desk.rename-shortcut')]: computed(() => 'Mod+KeyK') } } })
+  mounted.push(wrapper)
+  await wrapper.trigger('keydown', { key: 'F2', code: 'F2' }); expect(wrapper.find('input').exists()).toBe(false)
+  await wrapper.trigger('keydown', { key: 'k', code: 'KeyK', ctrlKey: true }); expect(wrapper.find('input').exists()).toBe(true)
+})
+
+// The catalog preserves the external editing owner across ordinary runtime projection refreshes.
+it('Row_ExternalRenameSurvivesProjection_034', async () => {
+  const wrapper = row({ ...base, renameState: 'editing' })
+  await nextTick(); await wrapper.get('input').setValue('Typed display name')
+  await wrapper.setProps({ session: { ...base, renameState: 'editing', lastActivityAt: base.lastActivityAt + 1 } })
+  expect(wrapper.find('input').exists()).toBe(true)
+  expect((wrapper.get('input').element as HTMLInputElement).value).toBe('Typed display name')
+  await wrapper.setProps({ session: { ...base, renameState: 'idle' } })
+  expect(wrapper.find('input').exists()).toBe(false)
 })

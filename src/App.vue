@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, provide, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/shell/AppShell.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
@@ -16,6 +16,8 @@ import ResumeSessionDialog from '@/components/sessions/ResumeSessionDialog.vue'
 import NewSessionDialog from '@/components/sessions/NewSessionDialog.vue'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
+import { useAppShortcuts } from '@/composables/useAppShortcuts'
+import { APP_RENAME_SHORTCUT, type AppShortcutAction } from '@/config/appShortcuts'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
 import type { UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import ProjectsView from '@/components/projects/ProjectsView.vue'
@@ -51,6 +53,7 @@ watch(() => [shell.section, newSessionDraft.chooserVisible], ([section]) => {
   if (section !== 'workspace') newSessionDraft.chooserVisible = false
 }, { flush: 'sync' })
 const app = useAppStore()
+provide(APP_RENAME_SHORTCUT, computed(() => app.shortcutBindings.rename))
 const sidebar = useSidebarStore()
 const management = useProjectManagementStore()
 const configurations = useCliProfilesStore()
@@ -137,14 +140,27 @@ function closeSessions() {
   if (shell.section === 'workspace' && shell.sidebarVisible) shell.sidebarVisible = false
 }
 function toggleProjects() { shell.navigate(shell.section === 'projects' ? 'workspace' : 'projects') }
-function keydown(event: KeyboardEvent) {
-  if (event.defaultPrevented) return
-  if ((event.ctrlKey || event.metaKey) && event.key === ',') {
-    event.preventDefault()
+function shortcutAction(action: AppShortcutAction) {
+  if (action === 'projects') { shell.navigate('projects'); return }
+  if (action === 'settings') {
     if (shell.section === 'settings') shell.navigate('workspace')
     else openSettings()
+    return
   }
+  if (action === 'new-session') {
+    const selected = project.value
+    shell.navigate(selected ? 'workspace' : 'projects')
+    request(selected ? { kind: 'new-session', project: selected } : { kind: 'add-project' })
+    return
+  }
+  const selected = sessions.activeSession
+  if (!selected) return
+  shell.navigate('workspace')
+  if (action === 'close-session') request({ kind: 'menu-action', sessionId: selected.id, action: 'close' })
+  else if (!sessions.isPreparingSession(selected.id)) { shell.sidebarVisible = true; sessions.beginRename(selected.id) }
 }
+const shortcuts = useAppShortcuts({ onAction: shortcutAction })
+
 let disposed = false
 const unlisteners: Array<() => void> = []
 function retain(registration: Promise<() => void>) {
@@ -172,14 +188,13 @@ onMounted(() => {
     request({ kind: 'menu-action', sessionId: sessions.activeSessionId, action: 'restart' })
   }))
   window.addEventListener('app:toggleHome', toggleProjects)
-  window.addEventListener('keydown', keydown)
+  unlisteners.push(...shortcuts.setupShortcutListeners())
 })
 onUnmounted(() => {
   disposed = true
   resources.setActive(false)
   unlisteners.splice(0).forEach(unlisten => unlisten())
   window.removeEventListener('app:toggleHome', toggleProjects)
-  window.removeEventListener('keydown', keydown)
 })
 </script>
 

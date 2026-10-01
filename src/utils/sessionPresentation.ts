@@ -43,6 +43,13 @@ export function makeSessionCatalogKey(identity: SessionCatalogIdentity): string 
   ])
 }
 
+/** UI editing belongs to this exact source, independently of refreshed display/status fields. */
+export function makeSessionRenameOwnerKey(session: UnifiedSession): string {
+  const origin = session.nativeOrigin
+  return JSON.stringify([session.id, makeSessionCatalogKey(session), session.launchConfigId ?? null, session.archived,
+    origin ? [origin.cli, origin.profileId, origin.profileRevision, origin.projectId, normalizeProjectPath(origin.projectPath)] : null])
+}
+
 export function deriveSessionVisualState(session: UnifiedSession): SessionVisualState {
   if (session.processState === 'failed') return 'failed'
   if (session.attentionState === 'needs-user') return 'needs-user'

@@ -1,3 +1,5 @@
+import type { UpdateChannel } from '@/utils/updatePolicy'
+import type { ShortcutBindings } from '@/config/appShortcuts'
 import type { SessionRuntimeKind, UnifiedCliKind } from './unifiedSession'
 
 // App 配置相关类型定义
@@ -23,6 +25,7 @@ export type GuiDensity = 'standard' | 'compact'
 export type StartupDestination = 'workspace' | 'projects'
 
 export interface AppConfig {
+  shortcutBindings?: ShortcutBindings
   defaultContinue?: boolean
   defaultSkipPermissions?: boolean
   defaultCustomArgs?: string
@@ -93,6 +96,8 @@ export interface PlatformAsset {
 }
 
 export interface UpdateInfo {
+  channel?: UpdateChannel
+  installEligible?: boolean
   version: string
   currentVersion: string
   hasUpdate: boolean

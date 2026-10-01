@@ -1,3 +1,4 @@
+import { excludedArtifactChannel } from '@/utils/updatePolicy';
 import { createProjectionClient } from './nativeProjection'
 import { createLaunchAttempt } from './cliLaunchAttempt';
 import { invoke } from '@tauri-apps/api/core';
@@ -290,7 +291,9 @@ export const checkForUpdates = async (): Promise<UpdateInfo> => {
       platformAsset: null,
     };
   }
-  return {
+  const summary: UpdateInfo = {
+    channel: excludedArtifactChannel(update.rawJson),
+    installEligible: false,
     version: update.version,
     currentVersion: __APP_VERSION__,
     hasUpdate: true,
@@ -298,6 +301,8 @@ export const checkForUpdates = async (): Promise<UpdateInfo> => {
     downloadUrl: '',
     platformAsset: null,
   };
+  if (typeof update.close === 'function') await update.close().catch(() => { /* Read-only resource cleanup does not change update eligibility. */ });
+  return summary;
 };
 
 // ============================================

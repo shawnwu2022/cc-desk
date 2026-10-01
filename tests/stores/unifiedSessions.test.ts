@@ -342,3 +342,87 @@ describe('unified sessions store', () => {
   })
 
 })
+
+// F2重复意图不能在同一显示名称保存尚未确认时再开编辑器并丢失当前保存所有权。
+it('Unified_RenameSavingAdmission_014', async () => {
+  const value = session(), legacy = fakeAdapter('legacy-claude', [value]), store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter]); await store.refresh(); store.beginRename(value.id)
+  const pending = deferred<void>(); legacy.adapter.renameSession = () => pending.promise
+  const saving = store.renameSession(value.id, 'New title')
+  await store.refresh()
+  store.beginRename(value.id); const duringSave = store.sessions.find(row => row.id === value.id)?.renameState
+  pending.resolve(); await saving
+  expect(duringSave).toBe('saving')
+})
+
+it('Unified_RenameCancellationReadLifetime_015', async () => {
+  const value = session(), legacy = fakeAdapter('legacy-claude', [value]), store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter]); await store.refresh(); store.beginRename(value.id)
+  const reading = deferred<UnifiedSession[]>()
+  vi.mocked(legacy.adapter.listSessions).mockImplementationOnce(() => reading.promise)
+  const refreshing = store.refresh()
+  store.cancelRename(value.id)
+  reading.resolve([{ ...value }]); await refreshing
+  expect(store.sessions[0].renameState).toBe('idle')
+  // A new explicit save gets its own lifetime and cannot restore the canceled editing state.
+  await store.renameSession(value.id, 'New display name')
+  expect(store.sessions[0].title).toBe('New display name')
+  expect(store.sessions[0].renameState).toBe('idle')
+})
+
+it('Unified_RenameDisappearanceAndAttempt_016', async () => {
+  const value = session(), legacy = fakeAdapter('legacy-claude', [value]), store = useUnifiedSessionsStore()
+  let owns = true
+  legacy.adapter.captureOwnership = () => () => owns
+  store.configureAdapters([legacy.adapter]); await store.refresh(); store.beginRename(value.id)
+  owns = false; await store.refresh()
+  expect(store.sessions[0].renameState).toBe('idle')
+  owns = true; store.beginRename(value.id)
+  legacy.setSessions([]); await store.refresh()
+  legacy.setSessions([{ ...value }]); await store.refresh()
+  expect(store.sessions[0].renameState).toBe('idle')
+})
+
+it('Unified_RenameNativeOriginInvalidation_017', async () => {
+  const value = session({ runtime: 'native-cli', nativeOrigin: { cli: 'claude', profileId: 'config', profileRevision: '1', projectId: 'registered', projectPath: '/repo' } })
+  const native = fakeAdapter('native-cli', [value]), store = useUnifiedSessionsStore()
+  store.configureAdapters([native.adapter]); await store.refresh(); store.beginRename(value.id)
+  native.setSessions([{ ...value, nativeOrigin: { ...value.nativeOrigin!, profileRevision: '2' } }]); await store.refresh()
+  expect(store.sessions[0].renameState).toBe('idle')
+})
+
+it('Unified_RenameQueuedSourceAdmission_018', async () => {
+  const value = session(), legacy = fakeAdapter('legacy-claude', [value]), store = useUnifiedSessionsStore()
+  const stopping = deferred<void>()
+  legacy.adapter.stopSession = () => stopping.promise
+  store.configureAdapters([legacy.adapter]); await store.refresh(); store.beginRename(value.id)
+  const stop = store.stopSession(value.id)
+  const save = store.renameSession(value.id, 'Old draft')
+  const rejected = expect(save).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  await Promise.resolve()
+  legacy.setSessions([{ ...value, adapterSessionId: 'replacement', title: 'Replacement' }]); await store.refresh()
+  stopping.resolve(); await stop; await rejected
+  expect(legacy.adapter.renameSession).not.toHaveBeenCalled()
+  expect(store.sessions[0].renameState).toBe('idle')
+  store.beginRename(value.id)
+  expect(store.sessions[0].renameState).toBe('editing')
+})
+
+it('Unified_RenameAttemptBeforeProjection_019', async () => {
+  const value = session({ runtime: 'native-cli', cli: 'codex' }), native = fakeAdapter('native-cli', [value]), store = useUnifiedSessionsStore()
+  let attempt = 1
+  native.adapter.captureOwnership = () => {
+    const frozen = attempt
+    return () => attempt === frozen
+  }
+  store.configureAdapters([native.adapter]); await store.refresh(); store.beginRename(value.id)
+  // The actual attempt changes before an independent catalog read publishes it.
+  attempt = 2
+  await expect(store.renameSession(value.id, 'Old attempt draft')).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  expect(native.adapter.renameSession).not.toHaveBeenCalled()
+  expect(store.sessions[0].renameState).toBe('idle')
+  store.beginRename(value.id)
+  await store.renameSession(value.id, 'Explicit new edit')
+  expect(native.adapter.renameSession).toHaveBeenCalledExactlyOnceWith(value.id, 'Explicit new edit')
+  expect(store.sessions[0].renameState).toBe('idle')
+})

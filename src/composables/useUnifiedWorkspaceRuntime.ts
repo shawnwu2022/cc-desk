@@ -250,7 +250,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
 
   async function dispatch(request: WorkspaceRequest): Promise<boolean> {
     if (request.kind === 'refresh') { await refresh(); return true }
-    if (request.kind === 'rename-cancel') return true
+    if (request.kind === 'rename-cancel') { catalog.cancelRename(request.sessionId); return true }
     if (request.kind === 'new-session') {
       const { intent, ...project } = request.project
       if (intent === 'restore') {

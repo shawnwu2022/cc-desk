@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
@@ -14,7 +14,7 @@ import SessionItem from '@/components/sessions/SessionItem.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useProjectsStateStore } from '@/stores/projectsState'
-import type { UnifiedProjectGroup, UnifiedSession } from '@/types/unifiedSession'
+import type { SessionAdapter, UnifiedProjectGroup, UnifiedSession } from '@/types/unifiedSession'
 
 const now = new Date(2026, 8, 30, 9, 0).getTime()
 function session(extra: Partial<UnifiedSession> = {}): UnifiedSession {
@@ -63,6 +63,48 @@ function rules(file: string) {
 }
 
 describe('Unified project session tree', () => {
+  // The normal App's F2 reveal is owned by the catalog, including across actual adapter refreshes.
+  it.each(['collapsed', 'filtered'])('Tree_ExternalRenameDraftRefresh_016: %s', async mode => {
+    const store = useUnifiedSessionsStore()
+    const original = session({ renameState: 'idle' })
+    store.configureAdapters([{ runtime: 'legacy-claude', listSessions: vi.fn(async () => [{ ...original }]) } as unknown as SessionAdapter])
+    await store.refresh()
+    const wrapper = panel()
+    if (mode === 'filtered') await wrapper.get('.search-input').setValue('unmatched query')
+    expect(wrapper.find('[data-session-row]').exists()).toBe(false)
+    store.beginRename(original.id)
+    await flushPromises()
+    await wrapper.get('[data-session-row] input').setValue('My unsaved draft')
+    await store.refresh(); await flushPromises()
+    expect(wrapper.find('[data-session-row] input').exists()).toBe(true)
+    expect((wrapper.get('[data-session-row] input').element as HTMLInputElement).value).toBe('My unsaved draft')
+    store.cancelRename(original.id)
+    await flushPromises()
+    expect(wrapper.find('[data-session-row]').exists()).toBe(false)
+    await store.refresh(); await flushPromises()
+    expect(wrapper.find('[data-session-row]').exists()).toBe(false)
+    if (mode === 'filtered') expect((wrapper.get('.search-input').element as HTMLInputElement).value).toBe('unmatched query')
+  })
+
+  it('Tree_RenameSourceInvalidation_017', async () => {
+    const store = useUnifiedSessionsStore()
+    let original = session({ renameState: 'idle' })
+    store.configureAdapters([{ runtime: 'legacy-claude', listSessions: vi.fn(async () => [{ ...original }]) } as unknown as SessionAdapter])
+    await store.refresh()
+    const wrapper = panel()
+    await wrapper.get('.project-main').trigger('click')
+    store.beginRename(original.id); await flushPromises()
+    await wrapper.get('[data-session-row] input').setValue('Old source draft')
+    original = { ...original, adapterSessionId: 'replacement-source', title: 'Replacement source' }
+    await store.refresh(); await flushPromises()
+    expect(wrapper.find('[data-session-row] input').exists()).toBe(false)
+    expect(wrapper.get('[data-session-row]').text()).toContain('Replacement source')
+    store.beginRename(original.id); await flushPromises()
+    expect((wrapper.get('[data-session-row] input').element as HTMLInputElement).value).toBe('Replacement source')
+    store.cancelRename(original.id); await flushPromises()
+    expect(wrapper.find('[data-session-row] input').exists()).toBe(false)
+  })
+
   // Migrating ProjectNode's props is what makes mixed runtime sessions render once under their project.
   it('Tree_MixedCliSessions_001', async () => {
     const codex = session({ id: 'codex-1', cli: 'codex', runtime: 'native-cli', title: 'Codex work' })

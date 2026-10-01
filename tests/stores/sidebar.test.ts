@@ -92,7 +92,7 @@ describe('sidebar store', () => {
       expect(store.updateAvailable).toBe(false)
     })
 
-    it('Badge_AppUpdate_001', () => {
+    it('Badge_UnverifiedPackageExcluded_001', () => {
       const store = useSidebarStore()
       store.setUpdateInfo({
         version: '0.8.0',
@@ -103,7 +103,7 @@ describe('sidebar store', () => {
         platformAsset: null,
       })
 
-      expect(store.updateAvailable).toBe(true)
+      expect(store.updateAvailable).toBe(false)
     })
 
     it('Badge_NoUpdate_001', () => {

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { inject } from 'vue'
+import { APP_RENAME_SHORTCUT, captureShortcut } from '@/config/appShortcuts'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppInput from '@/components/ui/AppInput.vue'
@@ -7,7 +9,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import SessionStatusIcon from './SessionStatusIcon.vue'
 import CliAppIcon from './CliAppIcon.vue'
 import SessionOverflowMenu from './SessionOverflowMenu.vue'
-import { deriveSessionVisualState, selectSessionMenuActions, selectSessionPrimaryAction, sessionActionLabelKey } from '@/utils/sessionPresentation'
+import { deriveSessionVisualState, makeSessionRenameOwnerKey, selectSessionMenuActions, selectSessionPrimaryAction, sessionActionLabelKey } from '@/utils/sessionPresentation'
 import { formatRelativeActivity, useRelativeActivityClock } from '@/utils/relativeTime'
 import type { SessionMenuAction, SessionMenuActionVisibility, SessionPrimaryAction, UnifiedSession } from '@/types/unifiedSession'
 
@@ -28,6 +30,7 @@ const emit = defineEmits<{
   'rename-cancel': [id: string]
 }>()
 const { t, locale } = useI18n()
+const renameShortcut = inject(APP_RENAME_SHORTCUT, computed(() => 'F2'))
 const now = useRelativeActivityClock()
 const row = ref<HTMLElement | null>(null)
 const renameInput = ref<InstanceType<typeof AppInput> | null>(null)
@@ -46,16 +49,20 @@ const primaryLabel = computed(() => primary.value ? t(sessionActionLabelKey(prim
 const age = computed(() => formatRelativeActivity(props.session.lastActivityAt, now.value, locale.value.startsWith('zh') ? 'zh' : 'en'))
 const fullActivity = computed(() => new Date(props.session.lastActivityAt).toLocaleString(locale.value))
 
-watch(() => props.session.id, () => {
+watch(() => makeSessionRenameOwnerKey(props.session), () => {
   localRename.value = false
   renameInvalid.value = false
   renameValue.value = props.session.title
   menuOpen.value = false
 })
-watch(() => [props.session.id, props.session.renameState], () => {
-  if (props.session.renameState === 'editing' || props.session.renameState === 'saving') {
+watch(() => props.session.renameState, (state, previous) => {
+  if (state === 'editing' || state === 'saving') {
     if (!localRename.value) renameValue.value = props.session.title
-    if (!isSaving.value) void focusRename()
+    if (!isSaving.value) { localRename.value = true; void focusRename() }
+  } else if (previous === 'editing' || previous === 'saving') {
+    localRename.value = false
+    renameInvalid.value = false
+    renameValue.value = props.session.title
   }
 }, { immediate: true })
 watch(() => props.surfaceActive, active => { if (!active) menuOpen.value = false }, { flush: 'sync' })
@@ -125,7 +132,7 @@ function openContext(event: MouseEvent) {
 function onKeydown(event: KeyboardEvent) {
   if (!props.surfaceActive) return
   if (event.target instanceof HTMLInputElement) return
-  if (event.key === 'F2') { event.preventDefault(); event.stopPropagation(); startRename() }
+  if (renameShortcut.value && captureShortcut(event) === renameShortcut.value) { event.preventDefault(); event.stopPropagation(); startRename() }
   else if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
     if (!actions.value.length || isRenaming.value) return
     event.preventDefault(); event.stopPropagation()
@@ -147,7 +154,7 @@ function onMenuAction(action: SessionMenuAction) {
 
 <template>
   <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, editing: isRenaming }"
-    role="treeitem" :aria-selected="selected" :aria-label="session.title" tabindex="0"
+    role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" tabindex="0"
     @click="activate" @keydown="onKeydown" @contextmenu="openContext">
     <SessionStatusIcon :state="visualState" />
     <CliAppIcon :cli="session.cli" />

@@ -1,3 +1,4 @@
+import { isOrdinaryUpdateEligible } from '@/utils/updatePolicy'
 import { isResourceProjectPath } from '@/utils/projectResources'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
@@ -23,7 +24,7 @@ export const useSidebarStore = defineStore('sidebar', () => {
   const showSettings = ref(false)
   const activeSettingsSection = ref<SettingsSection>('general')
   const updateInfo = ref<UpdateInfo | null>(null)
-  const updateAvailable = computed(() => updateInfo.value?.hasUpdate ?? false)
+  const updateAvailable = computed(() => !!updateInfo.value?.hasUpdate && isOrdinaryUpdateEligible(updateInfo.value))
 
   function setUpdateInfo(info: UpdateInfo) {
     updateInfo.value = info

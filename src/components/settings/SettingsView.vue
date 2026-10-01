@@ -42,9 +42,9 @@ const items = computed(() => SETTINGS_SECTIONS.map(id => ({ id, label: t(labels[
       <AppearanceSection v-else-if="section === 'appearance'" />
       <TerminalSection v-else-if="section === 'terminal'" />
       <LaunchConfigurationsSection v-else-if="section === 'launch-configurations'" :active="active" />
-      <ShortcutsSection v-else-if="section === 'shortcuts'" />
-      <UpdateSection v-else-if="section === 'update'" />
-      <AboutSection v-else-if="section === 'about'" />
+      <ShortcutsSection v-else-if="section === 'shortcuts'" :active="active" />
+      <UpdateSection v-else-if="section === 'update'" :active="active" />
+      <AboutSection v-else-if="section === 'about'" :active="active" />
     </div>
   </section>
 </template>

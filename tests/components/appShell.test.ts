@@ -419,3 +419,25 @@ describe('Unified application shell', () => {
   })
 
 })
+
+// 默认快捷键由普通App真实项目/会话选择发出统一请求，运行关闭仍只请求既有确认流程。
+describe('Task 20 normal app shortcut integration', () => {
+  it('App_ShortcutUsesUnifiedSelection_032', async () => {
+    const sessions = useUnifiedSessionsStore(), shell = useShellStore()
+    sessions.sessions = [{ id: 'native-tab:active', projectKey: '/selected', projectPath: '/selected', cli: 'codex', runtime: 'native-cli', title: 'Selected session', processState: 'running', attentionState: 'none', lastActivityAt: 1, archived: false, resumable: false, adapterSessionId: 'active' }]
+    sessions.activeSessionId = 'native-tab:active'
+    const wrapper = render(App); await flushPromises()
+    const key = (value: string, code: string, ctrl = true) => window.dispatchEvent(new KeyboardEvent('keydown', { key: value, code, ctrlKey: ctrl, bubbles: true, cancelable: true }))
+    key('n', 'KeyN'); await flushPromises()
+    expect(wrapper.emitted('workspace-request')?.slice(-1)[0]?.[0]).toEqual({ kind: 'new-session', project: { projectKey: '/selected', projectPath: '/selected' } })
+    key('w', 'KeyW'); await flushPromises()
+    expect(wrapper.emitted('workspace-request')?.slice(-1)[0]?.[0]).toEqual({ kind: 'menu-action', sessionId: 'native-tab:active', action: 'close' })
+    expect(sessions.activeSessionId).toBe('native-tab:active')
+    key('p', 'KeyP'); await flushPromises(); expect(shell.section).toBe('projects')
+    key(',', 'Comma'); await flushPromises(); expect(shell.section).toBe('settings')
+    key('F2', 'F2', false); await flushPromises()
+    expect(shell.section).toBe('workspace'); expect(shell.sidebarVisible).toBe(true)
+    expect(sessions.activeSession?.renameState).toBe('editing')
+    expect(wrapper.find('.session-item.editing input').exists()).toBe(true)
+  })
+})

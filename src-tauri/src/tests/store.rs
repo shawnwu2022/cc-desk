@@ -3962,3 +3962,30 @@ fn AppConfig_TerminalPreferences_RoundTrip_002() {
         assert_eq!(&output[key], value);
     }
 }
+
+// 快捷键为可选字段，旧配置兼容，null明确禁用的绑定保持往返。
+#[test]
+fn AppConfig_ShortcutBindings_RoundTrip_001() {
+    let old: AppConfig = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
+    assert_eq!(old.shortcut_bindings, None);
+    let input = json!({ "shortcutBindings": { "new-session": "Mod+KeyN", "close-session": null } });
+    let config: AppConfig = serde_json::from_value(input.clone()).unwrap();
+    let output = serde_json::to_value(config).unwrap();
+    assert_eq!(output["shortcutBindings"], input["shortcutBindings"]);
+}
+
+// 整组快捷键增量保存不删除旧启动、终端或未来字段。
+#[test]
+fn AppConfig_ShortcutBindings_PreserveExisting_002() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let original = json!({ "defaultContinue": true, "terminalTheme": "nord", "futurePreference": { "keep": true } });
+    std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+    let bindings = json!({ "new-session": "Mod+KeyK", "close-session": null });
+    crate::store::update_app_config_at(&path, json!({ "shortcutBindings": bindings.clone() })).unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for (key, value) in original.as_object().unwrap() {
+        assert_eq!(&result[key], value);
+    }
+    assert_eq!(result["shortcutBindings"], bindings);
+}

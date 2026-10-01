@@ -44,7 +44,8 @@ Rules:
 - Task 16: complete at `c0a1c231426b599c30ec52ea2740f44d10334e96`
 - Task 17: complete at `bb8c2c999370e4988b96d2917bd10f66154bda51`
 - Task 18: complete at `c0158be02de8edf1dafe233c95b6550564e8f471`
-- Next task: Task 19 — launch configuration settings
+- Task 19: complete at `25cc65298caf2bf7c61fb0434edfa7eb815ddc19`
+- Next task: Task 20 — shortcuts, update and about
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -532,3 +533,24 @@ Rules:
 - Same-CLI default replacement uses existing authority, last default safely deferred to next explicitNew preparer; canonical project last-success/historical origin untouched
 - Final22 exact+typecheck; initial255 affected+10NativeTab tests, post-repair44 directly affected tests. Independent review12 high-risk cases passed; sole cold asyncSettings test-readiness defect repaired with rendered-row wait preserving all continuity assertions, independently cold-passed
 -18source manifest/diff checks pass. No actualCLI/backend/Rust/platform certification/fullsuite/CI/PR/package/release; atomic publication pending readback
+
+### Verified Task 19 checkpoint
+
+- Remote commit `25cc65298caf2bf7c61fb0434edfa7eb815ddc19`; exact staged/fetched tree and local/remote SHA match; working tree clean before readback
+-22required/typecheck;255affected+10NativeTabs initially,44direct repair checks; independent12high-risk cases+coldApp repair verified, scoped approval
+- No CI/PR/package/release or realCLI/backend/platform certification; next20
+
+### Task 20 preflight rulings
+
+- Ruling: add optional typed shortcutBindings via existing AppConfig serialized writer, preserving old defaults/keys; focused compatibility tests authored and Rust execution pending final toolchain gate. Cost if wrong: older versions ignore custom bindings and keep defaults.
+- Ruling: updater metadata without trustworthy explicit channel/promotion provenance remains unverified/manual-only; candidate/test artifacts never enter normal install. Do not infer stable promotion from semver/body/arbitrary rawJson flags; keep endpoints/signatures/release policy unchanged and explain unavailable installation in UI. Current signed-candidates-only boundary remains fail-closed. Cost if wrong: ordinary automatic installation stays unavailable until an authorized stable promotion contract supplies reliable eligibility; no updater/install/relaunch is executed during development.
+
+## Task 20 — Shortcuts, Update and About
+
+- Real five configurable normal-App actions, shared capture/conflict explicit replacement/per-all reset and optional typed bindings through existing settings writer; modal/editable/IME/pending-save ownership prevents accidental dispatch/replay
+- N/W/P/comma/F2 use selected unified context, existing confirmation flow and same tree; mapped rename replaces hardcodedF2 and temporary reveal retains search/collapse state
+- Update view consumes only negative candidate/test exclusion metadata, remains explicitly manual-only with truthful current owner counts and released check resources. No stable promotion inferred, endpoint/signature/workflow/release policy unchanged
+- About safe structured scalar diagnostics exclude private paths/secrets/prompts/output/raw errors, with version/build/product/license/official links
+- Review repaired edit ownership across actual catalog refresh so collapsed/search-hidden draft stays mounted; cancel/disappearance/source/attempt invalidation revokes it. Follow-up fixed Save recapturing invalid old owner before refresh: old draft rejects, only new explicit edit creates owner
+- Final21 exact+typecheck;267affected15files; independent original3 repros and focused admission regression pass.37source manifest/diff/reverse checks pass; initial246/266 counts superseded
+- Optional Rust bindings compatibility tests authored NOTRUN; no actualclipboard/updater install/relaunch/CLI/platform/scaling certification/fullsuite/CI/PR/package/release. Atomic publication pending readback
