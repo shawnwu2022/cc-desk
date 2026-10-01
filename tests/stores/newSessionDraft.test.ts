@@ -19,6 +19,7 @@ let persisted: ProjectsState
 beforeEach(() => {
   localStorage.clear(); setActivePinia(createPinia()); vi.clearAllMocks()
   persisted = { pinnedProjects: [], archivedSessions: {}, launchPreferences: {} }
+  io.list.mockResolvedValue({ revision: '0', profiles: [] })
   io.getState.mockImplementation(async () => structuredClone(persisted))
   io.setPreference.mockImplementation(async (path, preference) => {
     persisted.launchPreferences![path] = structuredClone(preference)
@@ -59,12 +60,19 @@ describe('New session draft', () => {
     expect(io.patch).toHaveBeenCalledTimes(1)
     const patch = io.patch.mock.calls[0][1]; expect(patch.profile.env).toEqual({}); expect(patch.profile.defaultArgs).toEqual({ mode: 'set', value: [] })
   })
-  it('Draft_ConflictDoesNotReplay_004', async () => {
-    useCliProfilesStore().status = 'loaded'; io.patch.mockRejectedValue({ code: 'REVISION_CONFLICT' }); io.list.mockResolvedValue({ revision: '2', profiles: [config('arrived')] })
+  it.each(['REVISION_CONFLICT', 'COMMIT_STATE_UNKNOWN'])('Draft_ConflictDoesNotReplay_004: %s', async code => {
+    useCliProfilesStore().status = 'loaded'; io.patch.mockRejectedValue({ code }); io.list.mockResolvedValueOnce({ revision: '0', profiles: [] }).mockResolvedValue({ revision: '2', profiles: [config('arrived')] })
     const draft = useNewSessionDraftStore()
     await expect(draft.prepareInput({ ...project, cli: 'codex' })).rejects.toThrow('NEW_SESSION_PREPARATION_FAILED')
-    expect(io.patch).toHaveBeenCalledTimes(1); expect(io.list).toHaveBeenCalledTimes(1)
+    expect(io.patch).toHaveBeenCalledTimes(1); expect(io.list).toHaveBeenCalledTimes(2)
     expect(useCliProfilesStore().profiles[0].id).toBe('arrived')
+  })
+  // 安全默认配置的最新CAS读取失败时，不得使用缓存版本写入或暴露原始异常。
+  it('Draft_DefaultReadFailureNoWrite_013', async () => {
+    useCliProfilesStore().status = 'loaded'
+    io.list.mockRejectedValue(new Error('/private/TOKEN unavailable'))
+    await expect(useNewSessionDraftStore().prepareInput({ ...project, cli: 'codex' })).rejects.toThrow('NEW_SESSION_PREPARATION_FAILED')
+    expect(io.patch).not.toHaveBeenCalled()
   })
   it('Draft_OnlyVerifiedExecutableFailureDisables_005', () => {
     const profiles = useCliProfilesStore(); profiles.profiles = [config('cx')]; profiles.status = 'loaded'

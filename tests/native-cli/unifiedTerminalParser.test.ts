@@ -36,16 +36,6 @@ vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { activate() {} dispose() {
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readText: vi.fn(), readImage: vi.fn(), writeText: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMinimized: async () => false }) }))
 vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }))
-vi.mock('@/terminal/nativeLaunchEntry', () => ({ createNativeLaunchEntry: () => ({
-  start: async (input: any, channel: any) => {
-    io.channels.push({ input, channel })
-    return { requestId: input.requestId, run: { runId: input.runId, generation: input.generation }, phase: 'running', revision: '1', failure: null }
-  },
-  recover: async (requestId: string) => {
-    const { input } = io.channels.find(value => value.input.requestId === requestId)
-    return { requestId, run: { runId: input.runId, generation: input.generation }, phase: 'running', revision: '2', failure: null }
-  },
-}) }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
   cliResize: vi.fn().mockResolvedValue(undefined), cliStop: vi.fn().mockResolvedValue(undefined),
   cliWriteInput: io.user, cliWriteProtocol: io.protocol, cliAckOutput: io.ack,
@@ -56,6 +46,21 @@ vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
 let wrapper: VueWrapper | null = null
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks(); io.terminals.length = 0; io.channels.length = 0
+  // Keep the real component -> launch entry -> attempt chain; stop at authenticated IPC.
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any, channel: any) {
+      if (command === 'cli_start') {
+        io.channels.push({ input, channel })
+        return { instanceId: 'test-backend', requestId: input.requestId, run: { runId: input.runId, generation: input.generation }, phase: 'running', revision: '1', failure: null }
+      }
+      if (command === 'cli_get_launch_status') {
+        const original = io.channels.find(value => value.input.requestId === input.requestId).input
+        return { instanceId: 'test-backend', requestId: input.requestId, run: { runId: original.runId, generation: original.generation }, phase: 'running', revision: '2', failure: null }
+      }
+      throw new Error('UNEXPECTED_BRIDGE_COMMAND')
+    },
+  } })
   let id = 0
   vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID: () => `legacy-${++id}` })
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
@@ -65,9 +70,21 @@ beforeEach(() => {
   io.ack.mockResolvedValue(undefined); io.legacyInput.mockResolvedValue(undefined)
   useCliProfilesStore().profiles = [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }]
 })
-afterEach(() => { wrapper?.unmount(); wrapper = null; vi.unstubAllGlobals(); document.body.innerHTML = ''; if (vi.isMockFunction(Date.now)) vi.mocked(Date.now).mockRestore() })
+afterEach(() => { wrapper?.unmount(); wrapper = null; Reflect.deleteProperty(window, '__CC_DESK_DOCUMENT__'); vi.unstubAllGlobals(); document.body.innerHTML = ''; if (vi.isMockFunction(Date.now)) vi.mocked(Date.now).mockRestore() })
 
 describe('Unified host with pinned real xterm parser', () => {
+  // 真实组件、Pinia、启动入口和请求冻结共同运行；同一尝试再次start不得重发。
+  it.each(['claude', 'codex'] as const)('Native_RealLaunchComposition_006: %s', async cli => {
+    useCliProfilesStore().profiles = [{ ...useCliProfilesStore().profiles[0], id: `${cli}-main`, cli }]
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli, projectId: 'project', projectPath: '/repo', profileId: `${cli}-main`, profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+    expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'running', errorCode: null, generation: 1 })
+    expect(io.channels).toHaveLength(1)
+    expect(io.channels[0].input).toMatchObject({ cli, profileId: `${cli}-main`, expectedProfileRevision: '7', requestId: tab.requestId, runId: tab.runId, action: { kind: 'new' } })
+    await (wrapper.vm as any).start(); await flushPromises()
+    expect(io.channels).toHaveLength(1)
+  })
   // 真实 Native host/parser 输入输出推进活动；轮询、隐藏输入与旧 owner 不推进。
   it('Native_MeaningfulActivity_005', async () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1000)

@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import { compileStyle } from '@vue/compiler-sfc'
 import { h, nextTick, ref } from 'vue'
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
@@ -25,7 +26,7 @@ afterEach(() => {
 })
 
 describe('SessionIcons', () => {
-  // 六种状态必须具有独立轮廓标识与几何图形，颜色不是唯一辨识手段。
+  // 六种状态统一圆形外轮廓，并用弧段及内部符号区分，颜色不是唯一辨识手段。
   it('Status_DistinctShapes_001', () => {
     const states: SessionVisualState[] = ['starting', 'running', 'needs-user', 'confirming', 'ended', 'failed']
     const shapes: string[] = []
@@ -39,8 +40,12 @@ describe('SessionIcons', () => {
       expect(svg.attributes('viewBox')).toBe('0 0 16 16')
       expect(svg.attributes('aria-hidden')).toBe('true')
       expect(svg.find('text').exists()).toBe(false)
+      const circle = svg.find('circle[cx="8"][cy="8"][r="6"]')
+      expect(circle.exists(), `${state} must keep the shared circular outline`).toBe(true)
+      expect(circle.attributes('fill')).toBe('none')
+      expect(circle.attributes('stroke')).toBe('currentColor')
     }
-    expect(shapes).toEqual(['gap-ring', 'active-play', 'reply-dot', 'question-diamond', 'stop-square', 'alert-triangle'])
+    expect(shapes).toEqual(['gap-ring', 'active-play', 'reply-dot', 'question-circle', 'stop-circle', 'alert-circle'])
     expect(new Set(geometries).size).toBe(6)
   })
 
@@ -223,7 +228,7 @@ describe('SessionIcons', () => {
     expect(wrapper.get('img').attributes('src')).toContain('/cli/codex.svg')
   })
 
-  // 六种会话状态切换不会修改旁边 CLI 图标的图片、类名或静态中性颜色。
+  // 六种会话状态切换不会修改旁边 CLI 应用图标或品牌颜色。
   it('Cli_StatusIndependent_024', async () => {
     const state = ref<SessionVisualState>('starting')
     const cli = ref<UnifiedCliKind>('claude')
@@ -239,17 +244,22 @@ describe('SessionIcons', () => {
     }
     const claude = readFileSync(resolve('src/assets/icons/cli/claude.svg'), 'utf8')
     const codex = readFileSync(resolve('src/assets/icons/cli/codex.svg'), 'utf8')
-    expect(claude.match(/color="(#[0-9a-f]{6})"/)?.[1]).toBe('#667587')
-    expect(codex.match(/color="(#[0-9a-f]{6})"/)?.[1]).toBe('#667587')
     expect(claude).not.toBe(codex)
   })
 
-  // 捆绑资产必须记录自有 MIT 来源，不含字母、脚本、外部引用或可执行属性。
-  it('Icons_SelfOwnedAssets_025', () => {
+  // 捆绑 SVG 只包含静态图形；品牌图标与自有状态图标分别记录来源。
+  it('Icons_StaticAssets_025', () => {
     for (const directory of ['cli', 'session-status']) {
       const notice = readFileSync(resolve(`src/assets/icons/${directory}/README.md`), 'utf8')
       expect(notice).toContain('CC Desk')
-      expect(notice).toContain('MIT')
+      if (directory === 'session-status') expect(notice).toContain('MIT')
+      else {
+        expect(notice).toContain('Anthropic')
+        expect(notice).toContain('OpenAI')
+        expect(notice).toContain('https://claude.com/')
+        expect(notice).toContain('https://github.com/openai/codex/blob/')
+        expect(notice).not.toContain('self-owned project artwork')
+      }
       const names = directory === 'cli' ? ['claude', 'codex'] : ['starting', 'running', 'needs-user', 'confirming', 'ended', 'failed']
       for (const name of names) {
         const source = readFileSync(resolve(`src/assets/icons/${directory}/${name}.svg`), 'utf8')
@@ -263,7 +273,7 @@ describe('SessionIcons', () => {
     }
   })
 
-  // GUI 双主题的中性 CLI 图像在实色行背景和选中叠色上都至少达到 3:1。
+  // Codex 黑白图标在双主题行背景和选中叠色上至少达到 3:1；Claude 保留原始品牌色。
   it('Cli_ThemeContrast_026', () => {
     const globalCss = readFileSync(resolve('src/styles/global.css'), 'utf8')
     const component = readFileSync(resolve('src/components/sessions/CliAppIcon.vue'), 'utf8')
@@ -273,18 +283,17 @@ describe('SessionIcons', () => {
     expect(compiled.errors).toEqual([])
     styles.textContent = globalCss + '\n' + compiled.code
     document.head.append(styles)
-    const wrapper = mount(CliAppIcon, { attachTo: document.body, props: { cli: 'claude' } })
-    mounted.push(wrapper)
-    const ink = readFileSync(resolve('src/assets/icons/cli/claude.svg'), 'utf8').match(/color="(#[0-9a-f]{6})"/)![1]
-    const inkRgb = [1, 3, 5].map((offset) => parseInt(ink.slice(offset, offset + 2), 16))
+    const wrapper = mount(CliAppIcon, { attachTo: document.body, props: { cli: 'codex' } })
+    const claudeWrapper = mount(CliAppIcon, { attachTo: document.body, props: { cli: 'claude' } })
+    mounted.push(wrapper, claudeWrapper)
     const luminance = (rgb: number[]) => rgb.map((channel) => channel / 255).map((channel) => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4).reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0)
     for (const theme of ['light', 'dark']) {
       document.documentElement.dataset.theme = theme
       const tokens = Object.fromEntries(Array.from(globalCss.match(theme === 'dark' ? /\[data-theme="dark"\]\s*\{([^}]*)\}/ : /:root\s*\{([^}]*)\}/)![1].matchAll(/--([\w-]+):\s*([^;]+);/g), (match) => [match[1], match[2].trim()]))
       const filter = getComputedStyle(wrapper.get('img').element).filter
-      expect(filter, `${theme} CLI must use an explicit neutral GUI treatment`).toMatch(/^(?:none|brightness\([\d.]+\))$/)
-      const brightness = filter === 'none' ? 1 : Number(filter.match(/[\d.]+/)![0])
-      const foreground = inkRgb.map((channel) => Math.min(255, Math.round(channel * brightness)))
+      expect(filter).toBe(theme === 'dark' ? 'invert(1)' : 'none')
+      expect(getComputedStyle(claudeWrapper.get('img').element).filter, 'Claude brand color must not be brightened or inverted').toBe('none')
+      const foreground = theme === 'dark' ? [255, 255, 255] : [0, 0, 0]
       const selected = tokens['selected-bg'].match(/[\d.]+/g)!.map(Number)
       for (const name of ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-hover']) {
         const hex = tokens[name]
@@ -298,6 +307,21 @@ describe('SessionIcons', () => {
         }
       }
     }
+  })
+
+  // 防止回退到自绘终端/六边形占位图；校验官方来源的实际轮廓与原始色彩。
+  it.each([
+    { cli: 'claude', viewBox: '0 0 125 125', hash: '055f133268cfc756c83c8731e02b234d522d27bdb7745bb46eb5439de61cc7dc' },
+    { cli: 'codex', viewBox: '0 0 32 32', hash: 'd172e73cdb5075fb000dc82eee4573cae1a905d1e612eabeefab765173cd1255' },
+  ])('Cli_OfficialGeometry_$cli', ({ cli, viewBox, hash }) => {
+    const source = readFileSync(resolve(`src/assets/icons/cli/${cli}.svg`), 'utf8')
+    const svg = new DOMParser().parseFromString(source, 'image/svg+xml').documentElement
+    expect(svg.getAttribute('viewBox')).toBe(viewBox)
+    const paths = Array.from(svg.querySelectorAll('path'))
+    expect(paths).toHaveLength(1)
+    expect(createHash('sha256').update(paths[0].getAttribute('d')!).digest('hex')).toBe(hash)
+    if (cli === 'claude') expect(paths[0].getAttribute('fill')).toBe('#D97757')
+    else expect(paths[0].getAttribute('stroke')).toBe('#000')
   })
 
   // 状态确认的呼吸最低透明度仍在双主题、悬浮及选中行背景上至少达到 3:1。

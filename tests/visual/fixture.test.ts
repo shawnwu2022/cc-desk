@@ -10,6 +10,8 @@ import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import { expandFixtureProjects, clearFixtureSetupFocus, openFixtureSessionMenu } from './fixtureActions'
 
+// Importing xterm probes canvas in jsdom; constructing it remains forbidden in this fixture.
+vi.mock('@xterm/xterm', () => ({ Terminal: class { constructor() { throw new Error('VISUAL_TERMINAL_MOUNT_BLOCKED') } } }))
 vi.mock('@tauri-apps/api/window', () => import('@/visual/tauriStub'))
 vi.mock('@tauri-apps/api/core', () => import('@/visual/tauriStub'))
 vi.mock('@tauri-apps/api/event', () => import('@/visual/tauriStub'))
@@ -41,6 +43,20 @@ describe('Isolated production-component fixture', () => {
     if (scenario === 'resources') expect(document.querySelectorAll('.resource-card')).toHaveLength(3)
     if (scenario === 'new-session' || scenario === 'confirmation' || scenario === 'archived') expect(document.querySelector('[role="dialog"]')).not.toBeNull()
     if (scenario === 'launch-configurations') expect(view.findAll('[data-launch-row]')).toHaveLength(4)
+  })
+  // 空工作区经过真实宿主的布局边界，但不挂载 Native/Legacy 终端或调用宿主。
+  it.each(['empty', 'empty-project'])('Fixture_EmptyUsesActualHost_006: %s', async scenario => {
+    const view = await render(scenario)
+    const host = view.findComponent({ name: 'UnifiedTerminalHost' })
+    expect(host.exists(), 'empty fixture must exercise the production terminal-host layout').toBe(true)
+    expect(host.props('sessions')).toEqual([])
+    expect(host.props('activeSessionId')).toBeNull()
+    expect(host.get('.ui-empty-state').text()).toContain(en.workspaceWelcome)
+    expect(host.get('.ui-empty-state button').text()).toBe(scenario === 'empty' ? en.addProject : en.newSession)
+    expect(view.findAllComponents({ name: 'NativeCliTerminal' })).toHaveLength(0)
+    expect(view.findAllComponents({ name: 'TerminalView' })).toHaveLength(0)
+    expect(view.findAll('.xterm')).toHaveLength(0)
+    expect(blockedHostCalls.value).toBe(0)
   })
   // 防护计数必须能暴露渲染后的意外宿主调用，不能用静态0掩盖后续访问。
   it('Fixture_ReportsBlockedHostCall_002', async () => {

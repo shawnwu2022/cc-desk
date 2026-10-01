@@ -2,9 +2,12 @@
 
 The fixture renders the production shell, project/session rows, resource views,
 Settings sections and shared menu/dialog/drawer primitives with fabricated in-memory
-data. The terminal area uses the production non-PTY `TerminalThemePreview`; it does
-not mount either real terminal host. Runtime IO certification belongs to the
-terminal and real-CLI gates.
+data. Populated terminal areas use the production non-PTY `TerminalThemePreview`.
+The `empty` and `empty-project` scenarios mount the actual `UnifiedTerminalHost`
+with an empty session list, matching the production empty-slot geometry without
+mounting `TerminalView` or `NativeCliTerminal`. The empty slot fills both host axes
+so the guidance group centers within the available main region. Runtime IO
+certification belongs to the terminal and real-CLI gates.
 
 ## Isolation
 
@@ -69,6 +72,9 @@ baseline from an error page, hidden content or an uninspected screenshot.
 
 - 10 required named screenshots, plus menu, transformed-tooltip and dark-GUI/light-terminal states
 - 120 geometry cases: five CSS viewport sizes × DPR 1/1.25/1.5 × zh/en × light/dark GUI × compact/standard density
+- Eight empty-workspace geometry cases: 1024/1468 CSS viewport widths × zh/en ×
+  no project/selected project, checking both center axes after sidebar collapse and
+  re-expansion, with no terminal children or host calls
 - Both light and dark terminal palettes under each GUI theme
 - 200-character session title and 80-character project name
 - Fixed UTC time through Playwright's clock, fresh browser contexts, local fonts,

@@ -147,11 +147,11 @@ jobs:
           if ($installers.Count -ne 1) { throw 'Expected one NSIS installer' }
           $stage = New-Item -ItemType Directory -Force -Path test-package
           $shortSha = '${{ github.sha }}'.Substring(0, 12)
-          $name = "CC-Desk-Native-CLI-v3-test-$shortSha-x64-setup.exe"
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $name = "CC-Desk-$version-test-$shortSha-x64-setup.exe"
           $target = Join-Path $stage.FullName $name
           Copy-Item -LiteralPath $installers[0].FullName -Destination $target
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLowerInvariant()
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $manifest = [ordered]@{
             schemaVersion = 1
             product = 'CC Desk'

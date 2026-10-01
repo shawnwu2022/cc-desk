@@ -97,6 +97,46 @@ for (const viewport of viewports) for (const dpr of [1, 1.25, 1.5]) for (const l
   })
 }
 
+// 空宿主必须填满工作区，内容组围绕可用主区域居中；会话栏变化不能留下旧中心点。
+for (const viewport of [{ width: 1024, height: 640 }, { width: 1468, height: 744 }]) for (const locale of ['zh', 'en']) for (const scenario of ['empty', 'empty-project']) {
+  test.describe(`empty workspace ${viewport.width}x${viewport.height} ${locale} ${scenario}`, () => {
+    test.use({ viewport, deviceScaleFactor: viewport.width === 1024 ? 1 : 1.5 })
+    test('centers guidance in the available production host after sidebar changes', async ({ page }) => {
+      await openFixture(page, { scenario, locale, gui: scenario === 'empty' ? 'light' : 'dark' })
+      await expect(page.locator('[data-unified-terminal-host]')).toHaveCount(1)
+      // Guidance uses GUI text, so its surface must follow GUI appearance, not the independent terminal theme.
+      expect(await page.locator('[data-unified-terminal-empty]').evaluate(element => {
+        const expected = document.createElement('span')
+        expected.style.backgroundColor = 'var(--bg-primary)'
+        element.append(expected)
+        const matches = getComputedStyle(element).backgroundColor === getComputedStyle(expected).backgroundColor
+        expected.remove()
+        return matches
+      })).toBe(true)
+      await expect(page.locator('.xterm, [data-terminal-view], [data-native-tab]')).toHaveCount(0)
+      const toggle = page.locator('.workspace-header button[aria-expanded]').first()
+      for (const sidebarVisible of [true, false, true]) {
+        if ((await toggle.getAttribute('aria-expanded')) !== String(sidebarVisible)) await toggle.click()
+        await expect.poll(async () => page.locator('[data-unified-terminal-host]').evaluate(host => {
+          const hostBox = host.getBoundingClientRect()
+          const guidance = host.querySelector<HTMLElement>('.ui-empty-state')!
+          const guidanceBox = guidance.getBoundingClientRect()
+          const content = [...guidance.children].map(child => child.getBoundingClientRect())
+          const left = Math.min(...content.map(box => box.left)), right = Math.max(...content.map(box => box.right))
+          const top = Math.min(...content.map(box => box.top)), bottom = Math.max(...content.map(box => box.bottom))
+          return {
+            fillsHost: Math.abs(guidanceBox.width - hostBox.width) <= 1 && Math.abs(guidanceBox.height - hostBox.height) <= 1,
+            centeredX: Math.abs((left + right) / 2 - (hostBox.left + hostBox.right) / 2) <= 1,
+            centeredY: Math.abs((top + bottom) / 2 - (hostBox.top + hostBox.bottom) / 2) <= 1,
+            insideHost: left >= hostBox.left && right <= hostBox.right && top >= hostBox.top && bottom <= hostBox.bottom,
+          }
+        })).toEqual({ fillsHost: true, centeredX: true, centeredY: true, insideHost: true })
+      }
+      await expect(page.locator('.ui-empty-state button')).toBeInViewport({ ratio: 1 })
+    })
+  })
+}
+
 test.describe('rendered interaction boundaries', () => {
   test.use({ viewport: { width: 1024, height: 640 } })
   test('tooltip escapes transformed clipping and remains viewport bounded', async ({ page }) => {

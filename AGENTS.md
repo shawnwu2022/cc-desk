@@ -321,9 +321,9 @@ npm run tauri:build        # 生产构建
 
 ### Shared session icon contract
 
-- `SessionStatusIcon` consumes `SessionVisualState`; six bundled self-owned SVG contours distinguish starting/running/needs-user/confirming/ended/failed without row status text. It supplies localized `aria-label` and keyboard/pointer Tooltip through the shared `AppTooltip` actual trigger. Reduced-motion CSS overrides all three motion rules at matching specificity.
-- `CliAppIcon` consumes `claude | codex`, shows self-owned neutral 16px marks with full CLI names in its Tooltip/accessible label, and keeps neutral image color independent of session state. GUI dark theme brightens the same neutral artwork for ≥3:1 contrast on supported row surfaces, including selected overlays. `CC`/`CX` appear only after the current SVG image fails; CLI changes clear the failure and detached image errors are ignored.
-- Assets and ownership notes are in `src/assets/icons/cli/` and `src/assets/icons/session-status/`; no official-brand asset license is inferred. Regression gate: `npm test -- tests/components/sessionIcons.test.ts && npm run typecheck`. Windows/scaling and rendered-screen-reader checks remain final platform gates.
+- `SessionStatusIcon` consumes `SessionVisualState`; six bundled self-owned SVGs use circular contours with distinct inner marks for starting/running/needs-user/confirming/ended/failed without row status text. It supplies localized `aria-label` and keyboard/pointer Tooltip through the shared `AppTooltip` actual trigger. Reduced-motion CSS overrides all three motion rules at matching specificity.
+- `CliAppIcon` consumes `claude | codex`, shows corresponding Claude and Codex application marks at 16px with full CLI names in its Tooltip/accessible label. Brand artwork remains independent of session state; Claude retains its official starburst color, and Codex uses theme-appropriate monochrome contrast. `CC`/`CX` appear only after the current SVG image fails; CLI changes clear the failure and detached image errors are ignored.
+- Assets and provenance/ownership notes are in `src/assets/icons/cli/` and `src/assets/icons/session-status/`; third-party application marks are attributed separately from CC Desk-owned status artwork. Regression gate: `npm test -- tests/components/sessionIcons.test.ts && npm run typecheck`. Windows/scaling and rendered-screen-reader checks remain final platform gates.
 
 ### Unified session row and menu contract
 
@@ -466,3 +466,15 @@ npm run tauri:build        # 生产构建
 - Focused regressions: `tests/components/finalWorkspaceReview.test.ts`, `tests/config/visualWorkflow.test.ts`, `tests/native-cli/unifiedTerminalParser.test.ts`, `tests/native-cli/unifiedTerminalIdentity.test.ts` and affected tree/runtime/native store suites. BLOCKED_VISUAL, Rust/real-platform and D20 acceptance are unchanged; no local DOM or host result certifies rendered/native CLI behavior.
 
 - Narrow R5/R6 repair-review follow-up: quick-switch mode is transient and clears on Escape or sidebar deactivation; reopening the persistent tree restores ordinary project Enter expansion. A starting Native tab retains at most one safe latest observer attention projection for its exact request/run/generation, publishes it only after the same attempt's running receipt, and discards it on unknown/failure/end/restart/close. Newer unknown projections replace earlier waiting; no observation establishes running or authorizes input.
+
+### User feedback corrections (2026-10-01)
+
+- TitleBar marks each noninteractive native hit target explicitly, including title text, app image and spacer; controls and their SVG descendants stay outside drag targets. The app image disables HTML image dragging. Tauri owns drag-region double-click maximize, avoiding a second Vue toggle. DOM regressions do not certify physical Windows dragging.
+- Project expand/collapse controls retain localized accessible names, expanded state and keyboard behavior without tooltip bubbles. Session state silhouettes are circular, with separate inner symbols and accessible state names.
+- Empty workspace guidance must fill and center within the available main terminal surface, including sidebar resizing/collapse. Visual fixtures must exercise the production empty surface rather than a narrower substitute.
+- These changes follow user testing of source `9eccaf1`; changed screenshot baselines require fresh actual-pixel review and a subsequent no-update verification. Native Windows scaling/accessibility and D20 real CLI certification remain separate.
+
+- Native launch request validation owns copying action/argv DTOs; do not `structuredClone` Pinia/Vue reactive objects before validation. The real terminal/store/entry composition is covered through the authenticated IPC test boundary for both CLIs.
+- Profile and project mutations share one backend workspace CAS revision. Before the first safe-default profile creation write, refresh a previously loaded profile cache; never replay a failed or uncertain mutation automatically.
+- Explicit Close selects an available remaining open session only while its original selection intent still owns the handoff; closing the final session returns to guidance. Stop/CLI exit retains ended scrollback. Failed runtime dispatch acknowledges only its claimed request sequence.
+- This user-authorized repair prepares version 0.18.0 consistently across npm/Cargo/Tauri and test installer naming; it does not authorize Release/tag/updater publication.

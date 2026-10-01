@@ -212,8 +212,8 @@ There is no Provider/API-key management or alternate settings overlay.
 
 `src/components/sessions/SessionStatusIcon.vue` accepts `state: SessionVisualState`
 and renders a 16px icon, without an inline status-label node. The bundled SVG
-shape identifiers are `gap-ring`, `active-play`, `reply-dot`, `question-diamond`,
-`stop-square`, and `alert-triangle`. Only allowlisted static project SVG imports
+shape identifiers are `gap-ring`, `active-play`, `reply-dot`, `question-circle`,
+`stop-circle`, and `alert-circle`. Only allowlisted static project SVG imports
 are rendered; caller data never becomes SVG/HTML markup. The accessible name and
 shared tooltip use the same English/Chinese locale key. Its single actual trigger
 is keyboard-focusable and has the shared 2px ink-blue focus ring.
@@ -226,18 +226,18 @@ The later reduced-motion rule matches the animation selectors' specificity and
 disables every animation.
 
 `src/components/sessions/CliAppIcon.vue` accepts `cli: 'claude' | 'codex'`. Its
-16px self-owned neutral SVG image uses low-saturation neutral ink and never
-derives color from session state. Its GUI dark-theme-only brightness(1.4)
-treatment preserves ≥3:1 contrast on primary/secondary/tertiary/hover row
-surfaces and their selected overlays; light GUI keeps the original ink. The
+16px SVG image uses the corresponding application mark and never derives
+color from session state. Claude retains its official orange starburst; Codex
+uses a black/white treatment for the current GUI theme. The
 image is decorative inside a single labelled keyboard-focusable `AppTooltip` trigger. Tooltip names are
 `Claude Code` and `Codex CLI`. Only a current image loading error enables the
 visible `CC` or `CX` fallback; changing CLI retries its image and rejects stale
 errors from detached image nodes. The tooltip trigger remains stable across
 fallback changes, preserving focus.
 
-Both asset directories include MIT ownership notices. These are CC Desk-created
-recognition marks, with no assumed right to official Anthropic/OpenAI artwork.
+The CLI asset directory records authoritative sources and third-party ownership;
+its application marks are not claimed as CC Desk-created MIT artwork. The
+circular session status symbols remain CC Desk-owned artwork under MIT.
 The Task 7 component gate is `tests/components/sessionIcons.test.ts` plus
 `npm run typecheck`; actual Windows scaling and visual accessibility remain
 separate final gates. Existing session rows are migrated by subsequent tasks.

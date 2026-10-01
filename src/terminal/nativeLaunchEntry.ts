@@ -67,8 +67,7 @@ export function createNativeLaunchEntry(options: NativeLaunchEntryOptions): Nati
 
     return validateLaunchRequest({
       ...input,
-      action: structuredClone(input.action),
-      extraArgs: [...input.extraArgs],
+      // Validation copies each action/argv field, including reactive store values.
       profileId: selected.id,
       expectedProfileRevision: selected.revision,
     })

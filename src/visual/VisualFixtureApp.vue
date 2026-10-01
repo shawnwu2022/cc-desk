@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/shell/AppShell.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import WorkspaceView from '@/components/workspace/WorkspaceView.vue'
+import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
 import ProjectsView from '@/components/projects/ProjectsView.vue'
 import SettingsView from '@/components/settings/SettingsView.vue'
 import TerminalThemePreview from '@/components/settings/TerminalThemePreview.vue'
@@ -30,6 +31,7 @@ import { resolveTerminalThemeId } from '@/config/terminalThemes'
 
 const parameters = new URLSearchParams(location.search)
 const scenario = parameters.get('scenario') ?? 'mixed'
+const emptyWorkspace = scenario === 'empty' || scenario === 'empty-project'
 const { locale, t } = useI18n()
 locale.value = parameters.get('locale') === 'zh' ? 'zh' : 'en'
 const app = useAppStore(), shell = useShellStore(), catalog = useUnifiedSessionsStore()
@@ -44,7 +46,7 @@ document.documentElement.dataset.visualFixture = ''
 metadata.loaded = true
 profiles.profiles = structuredClone(fixtureProfiles); profiles.status = 'loaded'; profiles.revision = '1'
 profiles.select('claude', 'visual-claude-0'); profiles.select('codex', 'visual-codex-0')
-catalog.sessions = scenario === 'empty' ? [] : fixtureSessions()
+catalog.sessions = emptyWorkspace ? [] : fixtureSessions()
 catalog.activeSessionId = catalog.sessions[0]?.id ?? null
 app.cachedProjects = scenario === 'empty' ? [] : projectPaths.map((path, index) => ({ path, name: ['cc-desk', 'Atlas design system', longProjectName, 'Empty project'][index], lastDuration: 0 }))
 metadata.displayNames.set(projectPaths[2].toLowerCase(), longProjectName)
@@ -72,7 +74,10 @@ onMounted(async () => { await nextTick(); ready.value = true })
       <template #sidebar><SidebarPanel :project-groups="management.visibleGroups" :archived-sessions="catalog.sessions" :selected-id="catalog.activeSessionId" /></template>
       <WorkspaceView v-if="shell.section === 'workspace'" :project="scenario === 'empty' ? null : project" project-title="cc-desk" :active-session="catalog.activeSession">
         <template #terminal>
-          <EmptyState v-if="scenario === 'empty'" :title="t('workspaceWelcome')" :description="t('workspaceWelcomeHint')" :action-label="t('addProject')" />
+          <!-- Empty sessions exercise the production layout without mounting either terminal. -->
+          <UnifiedTerminalHost v-if="emptyWorkspace" :sessions="[]" :active-session-id="null">
+            <EmptyState :title="t('workspaceWelcome')" :description="t('workspaceWelcomeHint')" :action-label="t(scenario === 'empty' ? 'addProject' : 'newSession')" />
+          </UnifiedTerminalHost>
           <div v-else class="visual-terminal"><TerminalThemePreview :preferences="app.terminalPreferences" /></div>
         </template>
       </WorkspaceView>

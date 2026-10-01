@@ -391,6 +391,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         if (key) catalog.publishActionSuccess(current, key)
       }
     } catch (failure) {
+      // This dispatch has finished unsuccessfully. Retire only its own pending
+      // banner; retry still requires a new explicit request and sequence.
+      shell.clearWorkspaceRequest(sequence)
       const code = safeUserErrorCode(failure)
       if (code === 'REVISION_CONFLICT') {
         const recovery = await Promise.allSettled([projects.reload(), profiles.load(), workspace.load()])

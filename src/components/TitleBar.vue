@@ -1,12 +1,13 @@
 <template>
-  <header class="title-bar" data-tauri-drag-region @dblclick="!isMac && handleDblClick()">
+  <!-- Tauri handles dragging and double-click maximize on each marked hit target. -->
+  <header class="title-bar" data-tauri-drag-region>
     <!-- macOS 红绿灯占位（系统原生绘制，此处仅预留空间） -->
-    <div v-if="isMac" class="traffic-light-spacer"></div>
+    <div v-if="isMac" class="traffic-light-spacer" data-tauri-drag-region></div>
 
     <!-- Windows 左侧图标和标题 -->
-    <div class="win-title-left">
-      <img v-if="!isMac" src="@/assets/icons/app-icon.png" alt="" class="win-app-icon" />
-      <span class="win-app-title">{{ title }}</span>
+    <div class="win-title-left" data-tauri-drag-region>
+      <img v-if="!isMac" src="@/assets/icons/app-icon.png" alt="" class="win-app-icon" data-tauri-drag-region draggable="false" />
+      <span class="win-app-title" data-tauri-drag-region>{{ title }}</span>
     </div>
 
     <!-- Windows 窗口控制按钮 -->
@@ -56,10 +57,6 @@ async function handleMaximize() {
 
 async function handleClose() {
   await win.close()
-}
-
-async function handleDblClick() {
-  await win.toggleMaximize()
 }
 
 let unlistenResize: (() => void) | null = null

@@ -139,9 +139,16 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
   async function prepareInput(input: CreateUnifiedSessionInput): Promise<CreateUnifiedSessionInput> {
     try {
       await projects.ensureLoaded()
-      if (profiles.status !== 'loaded') await profiles.load()
+      const usedCachedProfiles = profiles.status === 'loaded'
+      if (!usedCachedProfiles) await profiles.load()
       let selected = input.launchConfigId ? profiles.profile(input.launchConfigId) : preferred(input, input.cli)
       if (input.launchConfigId && (!selected || selected.cli !== input.cli || (input.launchConfigRevision && selected.revision !== input.launchConfigRevision))) throw new Error('PROFILE_SELECTION_CHANGED')
+      if (!selected && usedCachedProfiles) {
+        // Projects and profiles share the backend workspace CAS. Registration may
+        // have advanced it since this cache was read; refresh before the first write.
+        await profiles.load()
+        selected = preferred(input, input.cli)
+      }
       if (!selected) {
         const safe: CliProfile = { id: `desk-safe-${input.cli}`, revision: '0', cli: input.cli,
           name: input.cli === 'claude' ? 'Claude Code' : 'Codex CLI', launcher: { kind: 'native' },

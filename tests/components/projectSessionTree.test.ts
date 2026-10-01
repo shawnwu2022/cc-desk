@@ -130,6 +130,53 @@ describe('Unified project session tree', () => {
     expect(wrapper.find('[data-project-attention]').exists()).toBe(false)
   })
 
+  // 展开按钮保留可访问名称、原生键盘语义和展开状态，悬浮与聚焦不弹出说明。
+  it.each([false, true])('Tree_ToggleWithoutTooltip_018: %s', async expanded => {
+    const wrapper = node(group(), { expanded })
+    const toggle = wrapper.get('button.expand-arrow')
+    expect(toggle.attributes('type')).toBe('button')
+    expect(toggle.attributes('aria-label')).toBe(expanded ? 'Collapse' : 'Expand')
+    expect(toggle.attributes('aria-expanded')).toBe(String(expanded))
+    expect(toggle.attributes('title')).toBeUndefined()
+    ;(toggle.element as HTMLButtonElement).focus()
+    await nextTick()
+    expect(document.activeElement).toBe(toggle.element)
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+    await toggle.trigger('mouseenter')
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+    await toggle.trigger('click')
+    await toggle.trigger('mouseleave')
+    expect(wrapper.emitted('toggle-expand')).toEqual([['/work/game']])
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+    expect(toggle.attributes('aria-describedby')).toBeUndefined()
+    await wrapper.setProps({ expanded: !expanded })
+    expect(toggle.attributes('aria-expanded')).toBe(String(!expanded))
+    expect(toggle.attributes('aria-label')).toBe(expanded ? 'Expand' : 'Collapse')
+    await wrapper.setProps({ disableToggle: true })
+    expect((toggle.element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // 项目名也用于展开收起，悬浮、聚焦和点击均不显示路径气泡。
+  it.each([false, true])('Tree_NameWithoutTooltip_019: %s', async expanded => {
+    const wrapper = node(group(), { expanded })
+    const name = wrapper.get('.project-main')
+    expect(name.attributes('aria-label')).toBe('Game')
+    expect(name.attributes('aria-expanded')).toBe(String(expanded))
+    ;(name.element as HTMLElement).focus()
+    await nextTick()
+    expect(document.activeElement).toBe(name.element)
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+    await name.trigger('mouseenter')
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+    await name.trigger('click')
+    await name.trigger('mouseleave')
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+    expect(name.attributes('aria-describedby')).toBeUndefined()
+    expect(wrapper.emitted('toggle-expand')).toEqual([['/work/game']])
+    await wrapper.setProps({ expanded: !expanded })
+    expect(name.attributes('aria-expanded')).toBe(String(!expanded))
+  })
+
   // The plus is the only project quick action; all administrative actions share AppMenu.
   it('Tree_SinglePlusAndProjectMenu_003', async () => {
     const wrapper = node()

@@ -74,10 +74,11 @@ defineExpose({ ...port, fitVisible })
     <NativeCliTerminal v-for="session in nativeSessions" :key="session.id"
       :ref="value => setNative(session.adapterSessionId, value)" :tab-id="session.adapterSessionId"
       :active="visible && activeSessionId === session.id" />
-    <slot v-if="!active" />
+    <div v-if="!active" class="unified-terminal-empty" data-unified-terminal-empty><slot /></div>
   </div>
 </template>
 
 <style scoped>
 .unified-terminal-host { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--terminal-surface-bg); }
+.unified-terminal-empty { display: grid; flex: 1; min-width: 0; min-height: 0; background: var(--bg-primary); }
 </style>

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import AppButton from '@/components/ui/AppButton.vue'
 import AppMenu from '@/components/ui/AppMenu.vue'
-import AppTooltip from '@/components/ui/AppTooltip.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import SessionList from './SessionList.vue'
 import NewSessionMenu from './NewSessionMenu.vue'
@@ -141,17 +141,15 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
   <div class="project-node" :class="{ current: isCurrent }" role="treeitem" :aria-expanded="expanded" :aria-label="project.name">
     <div ref="row" :data-project-key="project.projectKey" class="project-row" role="button" :aria-expanded="expanded" :aria-label="project.name" tabindex="0"
       @contextmenu="openContext" @keydown="onRowKeydown">
-      <IconButton class="expand-arrow" :class="{ expanded }" :label="expanded ? t('collapse') : t('expand')"
+      <AppButton class="expand-arrow" :class="{ expanded }" variant="ghost" size="compact" :aria-label="expanded ? t('collapse') : t('expand')"
         :aria-expanded="expanded" :disabled="disableToggle" @click.stop="toggle">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18" /></svg>
-      </IconButton>
-      <AppTooltip :text="project.projectPath">
-        <div class="project-main" role="button" tabindex="0" :aria-label="project.name" :aria-expanded="expanded"
-          @click.stop="toggle" @keydown.enter.self.prevent.stop="toggle" @keydown.space.self.prevent.stop="toggle">
-          <span class="project-name">{{ project.name }}</span>
-          <span v-if="project.pinned" class="pin-mark" :aria-label="t('pinned')">⌖</span>
-        </div>
-      </AppTooltip>
+        <svg aria-hidden="true" focusable="false" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18" /></svg>
+      </AppButton>
+      <div class="project-main" role="button" tabindex="0" :aria-label="project.name" :aria-description="project.projectPath" :aria-expanded="expanded"
+        @click.stop="toggle" @keydown.enter.self.prevent.stop="toggle" @keydown.space.self.prevent.stop="toggle">
+        <span class="project-name">{{ project.name }}</span>
+        <span v-if="project.pinned" class="pin-mark" :aria-label="t('pinned')">⌖</span>
+      </div>
       <span v-if="!expanded && project.needsUserCount > 0" class="project-attention" data-project-attention
         role="img" :aria-label="t('projectNeedsReplyCount', { count: project.needsUserCount })" />
       <span v-else class="project-attention-slot" aria-hidden="true" />
@@ -210,7 +208,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
 .pin-mark { flex-shrink: 0; color: var(--text-tertiary); }
 .project-attention { width: 8px; height: 8px; justify-self: center; border-radius: 50%; background: var(--accent-gold); }
 .project-row :deep(.ui-icon-button) { width: 28px; min-width: 28px; height: 28px; padding: 0; }
-.project-row :deep(.expand-arrow) { width: 20px; min-width: 20px; }
+.project-row :deep(.expand-arrow) { width: 20px; min-width: 20px; padding: 0; }
 .expand-arrow :deep(svg) { transition: transform 0.15s ease; }
 .expand-arrow.expanded :deep(svg) { transform: rotate(90deg); }
 .session-sub { padding-left: 8px; min-width: 0; }

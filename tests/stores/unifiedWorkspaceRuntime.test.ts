@@ -51,6 +51,34 @@ function render() {
   return { runtime, port }
 }
 describe('Unified production runtime', () => {
+  // 配置与项目共用后端 workspace revision；注册项目后创建另一CLI配置须先读取当前CAS。
+  it.each([['claude', 'codex'], ['codex', 'claude']] as const)('Runtime_SequentialCliDefaults_045: %s then %s', async (firstCli, secondCli) => {
+    let revision = 0
+    const profiles: any[] = [], projects: any[] = []
+    io.profiles.mockImplementation(async () => ({ revision: String(revision), profiles: structuredClone(profiles) }))
+    io.registered.mockImplementation(async () => ({ revision: String(revision), projects: structuredClone(projects) }))
+    io.patchProfile.mockImplementation(async (expectedRevision, patch) => {
+      if (expectedRevision !== String(revision)) throw { code: 'REVISION_CONFLICT', retryable: false }
+      ++revision
+      profiles.push({ ...structuredClone(patch.profile), revision: String(revision) })
+      return { revision: String(revision), profiles: structuredClone(profiles) }
+    })
+    io.register.mockImplementation(async selectedPath => {
+      ++revision
+      projects.push({ projectId: 'registered', hostId: 'host', sourcePathKey: 'source', selectedPath, canonicalPath: selectedPath, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } })
+      return { revision: String(revision), projectId: 'registered', projects: structuredClone(projects) }
+    })
+    render(); await flushPromises()
+    const catalog = useUnifiedSessionsStore()
+    const first = await catalog.createSession({ cli: firstCli, projectKey: '/new', projectPath: '/new' })
+    expect(useNativeTabsStore().tab(first.adapterSessionId)?.cli).toBe(firstCli)
+    expect(revision).toBe(2)
+    const second = await catalog.createSession({ cli: secondCli, projectKey: '/new', projectPath: '/new' })
+    expect(useNativeTabsStore().tab(second.adapterSessionId)).toMatchObject({ cli: secondCli, profileId: `desk-safe-${secondCli}`, profileRevision: '3', projectId: 'registered' })
+    expect(io.patchProfile.mock.calls.map(([expectedRevision]) => expectedRevision)).toEqual(['0', '2'])
+    expect(io.register).toHaveBeenCalledOnce()
+    expect(useNativeTabsStore().tabs.size).toBe(2)
+  })
   // 一个来源失败不能隐藏另一个来源的已注册项目和历史；初始化不启动CLI。
   it('Runtime_BootsPartialSources_001', async () => {
     io.projects.mockRejectedValue(new Error('private /path secret'))

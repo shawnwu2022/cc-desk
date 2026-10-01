@@ -41,7 +41,7 @@ const label = computed(() => t(visual.value.labelKey))
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
-  border-radius: var(--radius-sm);
+  border-radius: 50%;
   color: var(--text-secondary);
   vertical-align: middle;
 }

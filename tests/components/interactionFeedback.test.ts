@@ -3,14 +3,16 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent, h } from 'vue'
 import { createI18n } from 'vue-i18n'
+import { randomUUID } from 'node:crypto'
 import App from '@/App.vue'
 import { useShellStore } from '@/stores/shell'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useNativeTabsStore, matchesNativeAttempt } from '@/stores/nativeTabs'
+import { useSessionStore } from '@/stores/session'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import en from '@/i18n/locales/en'
-const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn() }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getProjectsState: io.state, getProjects: io.projects, getSessions: async () => [],
+const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn() }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getProjectsState: io.state, getProjects: io.projects, getSessions: io.sessions,
   getAppConfig: async () => ({ language: 'en', theme: 'light', terminalTheme: 'cc-box-light' }), updateAppConfig: async () => {}, onHookEvent: async () => () => {}, archiveSession: io.archive, pinProject: io.pin,
   createNativeProjectionClient: () => ({ scope: async () => ({ cli: 'codex' }), read: async () => ({ state: 'ready', items: [{ type: 'session', sessionKey: 'source', nativeSessionId: 'saved', title: 'Saved', cwd: '/repo' }], hasMore: false }) }) }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patch }))
@@ -20,27 +22,220 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false }) }))
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
+  vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID })
   setActivePinia(createPinia()); vi.clearAllMocks(); localStorage.clear()
   io.projects.mockResolvedValue([])
+  io.sessions.mockResolvedValue([])
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.state.mockResolvedValue({ pinnedProjects: [], archivedSessions: {} })
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'Work', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.stop.mockResolvedValue(undefined); io.recover.mockResolvedValue(undefined)
   io.archive.mockImplementation(async (path, id) => ({ pinnedProjects: [], archivedSessions: { [path]: [id] } }))
 })
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; vi.restoreAllMocks() })
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function render(realSettings = false) {
-  const terminal = defineComponent({ props: ['tabId'], setup(props, { expose }) {
+  const terminal = defineComponent({ props: ['tabId', 'active'], setup(props, { expose }) {
     expose({ focus() {}, fitVisible() {}, async stop(attempt: any) { await io.stop(props.tabId, attempt); const tab = useNativeTabsStore().tab(props.tabId); if (matchesNativeAttempt(tab, attempt)) tab!.status = 'stopped' }, async recover(attempt: any) { await io.recover(props.tabId, attempt) } })
-    return () => h('div', { 'data-live-terminal': props.tabId })
+    return () => h('div', { 'data-live-terminal': props.tabId, style: { display: props.active ? '' : 'none' } })
   } })
-  const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: terminal, SettingsView: !realSettings } } }); wrappers.push(wrapper); return wrapper
+  const legacyTerminal = defineComponent({ props: ['visible'], setup(props, { expose }) {
+    expose({ focus() {}, fitVisible() {} })
+    return () => h('div', { 'data-legacy-terminal': '', style: { display: props.visible ? '' : 'none' } })
+  } })
+  const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: terminal, TerminalView: legacyTerminal, SettingsView: !realSettings } } }); wrappers.push(wrapper); return wrapper
 }
 async function running(status: 'running' | 'unknown' = 'running') {
   const tabs = useNativeTabsStore(); const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', sourceSessionKey: 'source', action: { kind: 'resume-id', nativeSessionId: 'saved' }, title: 'Live work' })
   tabs.tab(tab.tabId)!.status = status; tabs.tab(tab.tabId)!.launchRevision = '7'
   await useUnifiedSessionsStore().refresh(); await useUnifiedSessionsStore().activateSession('native-tab:' + tab.tabId); await flushPromises(); return tab
 }
+
+// 关闭最后一个会话后，真实App清除终端、标题和选择，保留可恢复历史与新建引导。
+it('WorkspaceClose_LastSession_001', async () => {
+  const wrapper = render(); await flushPromises(); const tab = await running()
+  const catalog = useUnifiedSessionsStore()
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'close' }); await flushPromises()
+  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(catalog.activeSessionId).toBeNull()
+  expect(wrapper.find('[data-live-terminal]').exists()).toBe(false)
+  expect(wrapper.find('[data-session-title]').exists()).toBe(false)
+  expect(wrapper.get('[data-unified-terminal-empty]').text()).toContain(en.workspaceWelcome)
+  expect(catalog.sessions.some(row => row.nativeSessionId === 'saved' && row.title === 'Saved')).toBe(true)
+})
+
+// 关闭当前会话后选中仍打开的会话，保持其终端实例并同步工作区标题。
+it('WorkspaceClose_SelectRemaining_002', async () => {
+  const wrapper = render(); await flushPromises(); const remaining = await running()
+  useNativeTabsStore().tab(remaining.tabId)!.title = 'Remaining work'; await flushPromises()
+  const existingTerminal = wrapper.get(`[data-live-terminal="${remaining.tabId}"]`).element
+  const closing = await running()
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + remaining.tabId)
+  expect(useNativeTabsStore().activeTabId).toBe(remaining.tabId)
+  expect(wrapper.get(`[data-live-terminal="${remaining.tabId}"]`).element).toBe(existingTerminal)
+  expect(wrapper.get(`[data-live-terminal="${remaining.tabId}"]`).isVisible()).toBe(true)
+  expect(wrapper.get('[data-session-title]').text()).toBe('Remaining work')
+  expect(wrapper.find('[data-unified-terminal-empty]').exists()).toBe(false)
+})
+
+// 关闭未选中会话不改变当前选择、标题或终端实例。
+it('WorkspaceClose_BackgroundSession_003', async () => {
+  const wrapper = render(); await flushPromises(); const closing = await running(); const selected = await running()
+  const selectedTerminal = wrapper.get(`[data-live-terminal="${selected.tabId}"]`).element
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(useNativeTabsStore().tab(closing.tabId)).toBeUndefined()
+  expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + selected.tabId)
+  expect(wrapper.get(`[data-live-terminal="${selected.tabId}"]`).element).toBe(selectedTerminal)
+  expect(wrapper.get(`[data-live-terminal="${selected.tabId}"]`).isVisible()).toBe(true)
+})
+
+// 停止请求失败时关闭没有完成，保留当前会话和终端并显示确认错误。
+it('WorkspaceClose_StopFailure_004', async () => {
+  const wrapper = render(); await flushPromises(); await running(); const closing = await running()
+  const selectedTerminal = wrapper.get(`[data-live-terminal="${closing.tabId}"]`).element
+  io.stop.mockRejectedValueOnce(new Error('NATIVE_STOP_UNCONFIRMED'))
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + closing.tabId)
+  expect(useNativeTabsStore().tab(closing.tabId)?.status).toBe('running')
+  expect(wrapper.get(`[data-live-terminal="${closing.tabId}"]`).element).toBe(selectedTerminal)
+  expect(useUnifiedSessionsStore().confirmationError).not.toBeNull()
+  expect(wrapper.find('[data-unified-terminal-empty]').exists()).toBe(false)
+})
+
+// 等待关闭时切换选择会撤销原确认；迟到停止不能清空或覆盖新选择。
+it('WorkspaceClose_NewerSelection_005', async () => {
+  const wrapper = render(); await flushPromises(); const newer = await running(); const closing = await running()
+  let finish!: () => void
+  io.stop.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: 'native-tab:' + newer.tabId }); await flushPromises()
+  finish(); await flushPromises()
+  expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + newer.tabId)
+  expect(wrapper.get(`[data-live-terminal="${newer.tabId}"]`).isVisible()).toBe(true)
+  expect(useNativeTabsStore().tab(closing.tabId)).toBeDefined()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+})
+
+// 同一行换成新尝试后，旧关闭完成不得移除新尝试或切换工作区。
+it('WorkspaceClose_ReplacedAttempt_006', async () => {
+  const wrapper = render(); await flushPromises(); await running(); const closing = await running()
+  let finish!: () => void
+  io.stop.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  useNativeTabsStore().tab(closing.tabId)!.generation++
+  finish(); await flushPromises()
+  expect(useNativeTabsStore().tab(closing.tabId)?.generation).toBe(2)
+  expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + closing.tabId)
+  expect(wrapper.get(`[data-live-terminal="${closing.tabId}"]`).isVisible()).toBe(true)
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+})
+
+// 显式停止仍保留已结束终端供查看输出，不冒充已关闭。
+it('WorkspaceClose_StopKeepsOutput_007', async () => {
+  const wrapper = render(); await flushPromises(); const tab = await running()
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'stop' }); await flushPromises()
+  expect(useNativeTabsStore().tab(tab.tabId)?.status).toBe('stopped')
+  expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + tab.tabId)
+  expect(wrapper.get(`[data-live-terminal="${tab.tabId}"]`).isVisible()).toBe(true)
+})
+
+// Legacy真实所有权已移除但历史读取未结束时，工作区不能继续显示旧标题或终端。
+it('WorkspaceClose_LegacyHistoryWait_008', async () => {
+  const wrapper = render(); await flushPromises()
+  const legacy = useSessionStore(); const id = legacy.createTab('/repo', { name: 'Legacy closing' })
+  const catalog = useUnifiedSessionsStore(); await catalog.refresh(); await catalog.activateSession('legacy-tab:' + id); await flushPromises()
+  let finish!: (rows: never[]) => void
+  io.sessions.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'legacy-tab:' + id, action: 'close' }); await flushPromises()
+  expect(legacy.tabs.has(id)).toBe(false)
+  expect(catalog.activeSessionId).toBeNull()
+  expect(wrapper.find('[data-session-title]').exists()).toBe(false)
+  expect(wrapper.get('[data-legacy-terminal]').isVisible()).toBe(false)
+  expect(wrapper.get('[data-unified-terminal-empty]').text()).toContain(en.workspaceWelcome)
+  finish([]); await flushPromises()
+})
+
+// Legacy关闭等待历史期间的新选择，不能被旧关闭完成时的候选会话覆盖。
+it('WorkspaceClose_LegacyLateRead_009', async () => {
+  const wrapper = render(); await flushPromises(); await running(); const newer = await running()
+  const legacy = useSessionStore(); const id = legacy.createTab('/repo', { name: 'Legacy closing' })
+  const catalog = useUnifiedSessionsStore(); await catalog.refresh(); await catalog.activateSession('legacy-tab:' + id); await flushPromises()
+  let finish!: (rows: never[]) => void
+  io.sessions.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'legacy-tab:' + id, action: 'close' }); await flushPromises()
+  await catalog.activateSession('native-tab:' + newer.tabId); await flushPromises()
+  const selectedTerminal = wrapper.get(`[data-live-terminal="${newer.tabId}"]`).element
+  finish([]); await flushPromises()
+  expect(catalog.activeSessionId).toBe('native-tab:' + newer.tabId)
+  expect(wrapper.get(`[data-live-terminal="${newer.tabId}"]`).element).toBe(selectedTerminal)
+  expect(wrapper.get(`[data-live-terminal="${newer.tabId}"]`).isVisible()).toBe(true)
+})
+
+// 剩余会话属于Legacy运行时也必须经其真实适配器激活，不能只改统一选择。
+it('WorkspaceClose_SelectLegacy_010', async () => {
+  const wrapper = render(); await flushPromises()
+  const legacy = useSessionStore(); const id = legacy.createTab('/repo', { name: 'Legacy remaining' })
+  legacy.setActiveTab(null)
+  const closing = await running()
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(useUnifiedSessionsStore().activeSessionId).toBe('legacy-tab:' + id)
+  expect(legacy.activeTabId).toBe(id)
+  expect(wrapper.get('[data-legacy-terminal]').isVisible()).toBe(true)
+  expect(wrapper.get('[data-session-title]').text()).toBe('Legacy remaining')
+})
+
+// 新建准备失败已落地为失败行，不能继续显示等待连接的进行中提示。
+it('WorkspaceRequest_FailedLaunch_001', async () => {
+  const wrapper = render(); await flushPromises()
+  const shell = useShellStore()
+  shell.requestWorkspaceAction({ kind: 'create-session', input: {
+    projectKey: '/repo', projectPath: '/repo', cli: 'codex', launchConfigId: 'missing-profile',
+  } }); await flushPromises()
+  expect(useUnifiedSessionsStore().activeSession?.safeErrorCode).toBe('NEW_SESSION_PREPARATION_FAILED')
+  expect(shell.pendingRequest).toBeNull()
+  expect(wrapper.text()).not.toContain(en.workspaceActionPending)
+  expect(wrapper.text()).toContain(en.newSessionPreparationFailed)
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+})
+
+// 旧请求失败时只能清理自己，不能清理仍在执行的新请求。
+it('WorkspaceRequest_PreservesNewer_002', async () => {
+  const wrapper = render(); await flushPromises(); const tab = await running()
+  let rejectFirst!: (reason: unknown) => void; let finishSecond!: () => void
+  io.write.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectFirst = reject }))
+    .mockReturnValueOnce(new Promise<void>(resolve => { finishSecond = resolve }))
+  const shell = useShellStore()
+  shell.requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'copy-session-id' }); await flushPromises()
+  shell.requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'copy-session-id' }); await flushPromises()
+  const sequence = shell.requestSequence
+  rejectFirst(new Error('RESOURCE_UNAVAILABLE')); await flushPromises()
+  expect(shell.requestSequence).toBe(sequence)
+  expect(shell.pendingRequest).toMatchObject({ action: 'copy-session-id' })
+  expect(wrapper.text()).toContain(en.workspaceActionPending)
+  expect(useUnifiedSessionsStore().actionFeedback).toBeNull()
+  finishSecond(); await flushPromises()
+  expect(shell.pendingRequest).toBeNull()
+})
+
+// 失败清除进行中状态后仍保留显式重试，不能自动重放操作。
+it('WorkspaceRequest_ExplicitRetry_003', async () => {
+  const wrapper = render(); await flushPromises(); const tab = await running()
+  io.write.mockRejectedValueOnce(new Error('RESOURCE_UNAVAILABLE')).mockResolvedValueOnce(undefined)
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'copy-session-id' }); await flushPromises()
+  expect(useShellStore().pendingRequest).toBeNull()
+  expect(wrapper.text()).not.toContain(en.workspaceActionPending)
+  expect(io.write).toHaveBeenCalledOnce()
+  ;(document.querySelector('[data-action-feedback] button') as HTMLButtonElement).click(); await flushPromises()
+  expect(io.write).toHaveBeenCalledTimes(2)
+  expect(useShellStore().pendingRequest).toBeNull()
+  expect(document.body.textContent).toContain(en.feedbackCopied)
+})
 // 运行态关闭先确认，确认前不停止，确认后只关闭原尝试。
 it('Feedback_ConfirmsRunningClose_001', async () => {
   render(); await flushPromises(); const tab = await running()

@@ -509,6 +509,20 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
 
   function closeSession(id: string, canContinue = () => true): Promise<void> {
+    const wasSelected = activeSessionId.value === id
+    const ownsSelection = captureSelectionOwnership()
+    async function selectRemaining(projectKey: string) {
+      // Ownership publication can clear the closed ID before this operation
+      // finishes. Only its original selection intent may choose a replacement.
+      if (!wasSelected || !ownsSelection() || activeSessionId.value !== null && activeSessionId.value !== id) return
+      activeSessionId.value = null
+      const open = sessions.value.filter(row => row.id !== id && !row.archived
+        && row.id === `${row.runtime === 'native-cli' ? 'native-tab' : 'legacy-tab'}:${row.adapterSessionId}`)
+      const next = open.find(row => normalizePath(row.projectPath) === normalizePath(projectKey)) ?? open[0]
+      // History is never resumed by a close; the existing runtime adapter owns
+      // activation, including the Legacy aggregate's internal selected tab.
+      if (next) await activateSession(next.id)
+    }
     const creation = creations.get(id)
     if (creation) {
       if (!creation.preparing && creation.row.processState === 'starting') return Promise.reject(new Error('NEW_SESSION_ADMISSION_IN_PROGRESS'))
@@ -516,7 +530,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       creations.delete(id); sessions.value = sessions.value.filter(row => row.id !== id)
       if (activeSessionId.value === id) activeSessionId.value = null
       ++selectionEpoch
-      return Promise.resolve()
+      return selectRemaining(creation.row.projectKey)
     }
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
@@ -524,6 +538,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return enqueue(id, () => adapter.closeSession(id, canContinue), async () => {
       if (activeSessionId.value === id) activeSessionId.value = null
       await refresh(session.projectKey)
+      await selectRemaining(session.projectKey)
     }, 'close')
   }
 

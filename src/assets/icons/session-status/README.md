@@ -8,12 +8,13 @@ only local static geometry, with no external artwork, references or scripts.
 |---|---|---|
 | `starting.svg` | `gap-ring` | Gapped circular ring |
 | `running.svg` | `active-play` | Circle containing a play shape |
-| `needs-user.svg` | `reply-dot` | Conversation bubble containing a filled dot |
-| `confirming.svg` | `question-diamond` | Diamond containing a question mark |
-| `ended.svg` | `stop-square` | Filled square stop symbol |
-| `failed.svg` | `alert-triangle` | Triangle containing an exclamation mark |
+| `needs-user.svg` | `reply-dot` | Circle containing a filled attention dot |
+| `confirming.svg` | `question-circle` | Circle containing a question mark |
+| `ended.svg` | `stop-circle` | Circle containing a filled square stop symbol |
+| `failed.svg` | `alert-circle` | Circle containing an exclamation mark |
 
-The application supplies semantic color using `currentColor`. Shape remains
-the primary differentiator; color is supplementary. SVGs are decorative inside
+All states share a circular silhouette. The application supplies semantic color
+using `currentColor`; the spinner gap and internal marks also distinguish states
+without relying on color. SVGs are decorative inside
 one labelled, keyboard-focusable tooltip trigger. All motion lives in the Vue
 component stylesheet, including the reduced-motion override.
