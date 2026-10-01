@@ -2,8 +2,21 @@ interface ProjectToggle {
   getAttribute(name: string): Promise<string | null>
   click(): Promise<void>
 }
-interface ProjectTreePage {
-  locator(selector: string): { all(): Promise<ProjectToggle[]> }
+interface FixtureFocusPage {
+  locator(selector: string): { evaluate(action: (element: Element) => void): Promise<void> }
+}
+interface ProjectTreePage extends FixtureFocusPage {
+  locator(selector: string): { all(): Promise<ProjectToggle[]>; evaluate(action: (element: Element) => void): Promise<void> }
+}
+
+/** Move focus through the DOM so setup controls do not leave an unrelated tooltip. */
+export async function focusFixtureMain(page: FixtureFocusPage) {
+  await page.locator('.shell-main').evaluate(element => {
+    if (element instanceof HTMLElement) {
+      element.tabIndex = -1
+      element.focus()
+    }
+  })
 }
 
 /** Shared by the browser setup and its real-fixture DOM regression. */
@@ -12,6 +25,7 @@ export async function expandFixtureProjects(page: ProjectTreePage) {
   for (const row of await page.locator('.project-node > .project-row .expand-arrow').all()) {
     if (await row.getAttribute('aria-expanded') === 'false') await row.click()
   }
+  await focusFixtureMain(page)
 }
 
 interface SessionMenuPage {

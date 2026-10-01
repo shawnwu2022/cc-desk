@@ -169,6 +169,8 @@ it('Stress_50Projects100Sessions_001', async () => {
   console.info(`Task24 stress catalog: 50 projects, 5000 sessions, ${Math.round(performance.now() - started)}ms`)
 }, 30000)
 
+// Each cycle settles a real 5,000-row catalog refresh plus Vue rendering. The
+// full workload exceeds 30s on shared CI runners; retain a scoped hang guard.
 it('Stress_30Owners120Changes_002', async () => {
   seed()
   const tabs = useNativeTabsStore(), legacy = useSessionStore()
@@ -225,4 +227,4 @@ it('Stress_30Owners120Changes_002', async () => {
   expect(f.host.stopNative).not.toHaveBeenCalled(); expect(f.host.startLegacy).not.toHaveBeenCalled()
   expect(f.ipc.mock.calls.some(([command]) => /^(pty_|cli_launch|cli_stop)/.test(command))).toBe(false)
   console.info(`Task24 stress continuity: 30 descriptors, 120 state/selection/layout changes, ${Math.round(performance.now() - started)}ms`)
-}, 30000)
+}, 60000)

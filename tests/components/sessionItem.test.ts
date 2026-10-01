@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { DOMWrapper, mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { nextTick, computed } from 'vue'
 import { readFileSync } from 'node:fs'
@@ -12,6 +12,7 @@ import SessionOverflowMenu from '@/components/sessions/SessionOverflowMenu.vue'
 import { selectSessionMenuActions } from '@/utils/sessionPresentation'
 import type { SessionMenuAction, UnifiedSession } from '@/types/unifiedSession'
 
+const body = new DOMWrapper(document.body)
 const now = new Date(2026, 8, 30, 9, 0).getTime()
 const base: UnifiedSession = {
   id: 'catalog-codex-1', projectKey: '/work/game', projectPath: '/work/game',
@@ -95,7 +96,7 @@ describe('Unified SessionItem', () => {
     expect(wrapper.text()).toBe(`${base.title}6m`)
     await wrapper.get('.session-time').trigger('focus')
     const fullDate = new Date(base.lastActivityAt).toLocaleString('en')
-    expect(wrapper.findAll('[role="tooltip"]').some((tooltip) => tooltip.text() === fullDate)).toBe(true)
+    expect(body.findAll('[role="tooltip"]').some((tooltip) => tooltip.text() === fullDate)).toBe(true)
     i18n.global.locale.value = 'zh'
     await wrapper.setProps({ session: { ...base, lastActivityAt: now - 20_000 } })
     expect(wrapper.get('.session-time').text()).toBe('刚刚')

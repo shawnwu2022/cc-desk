@@ -11,7 +11,7 @@ export default defineConfig({
   snapshotPathTemplate: '{testDir}/__screenshots__/{arg}{ext}',
   outputDir: 'test-results/visual',
   reporter: [['list']],
-  expect: { timeout: 5_000, toHaveScreenshot: { animations: 'disabled', caret: 'hide', maxDiffPixels: 0 } },
+  expect: { timeout: 5_000, toHaveScreenshot: { animations: 'disabled', caret: 'hide', scale: 'device', maxDiffPixels: 0 } },
   use: {
     baseURL: 'http://127.0.0.1:4174',
     browserName: 'chromium',

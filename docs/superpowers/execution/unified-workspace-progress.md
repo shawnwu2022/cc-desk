@@ -640,3 +640,17 @@ Rules:
 - Scopedreview found2directresiduals: quickswitchdismissal state and earlyorderedobserverevent. Parentauthorizednarrowdelta; exactattemptboundedpendingattention+modecleanup repaired, independent46focusedchecks PASS. Finalsource/spec+quality approval; nootherblocker in revieweddelta
 - Userexplicitlyapproved DraftPR+finalordinaryCI/visual/Windowspackage afterreview at2026-10-01T07:48:14Z. No merge/release authorized. Firstrealpixels must be inspected and acceptedbaselines committed beforevisualfreeze/no-diffPASS; initialvisualjob expectedFAIL untilthen
 - Rusttest/fmt/clippy,Windowsinstaller/manual/platform/actualCLI remainNOTRUNlocally; D20BLOCKED_EXTERNAL_TARGET. Externalbatch/source+mergeref/artifactevidence pending
+
+### Final source checkpoint and external batch — October 1, 2026
+
+- Reviewed source `397b3bfc7e9d954973aa664f83d9f30bf04de937`, exacttree/local/remote verified; DraftPR34 https://github.com/shawnwu2022/cc-desk/pull/34 targets `feat/native-cli-finalization` at `7e31cff37b199ba3b10cadf2fe038ed03fed45c2`
+- PRtestmerge `b8aee85adac4f50b0e59e907428c74e8209a7e04`; final CI36839148600, Windowspackage36839148577, visual36839148817 started by approvedPR. ExistingD13observer pathfilter auto-triggered36839148770, not manuallydispatched
+- Local1602/typecheck/build/15fixtureunit/4policy andindependent46reviewprobesPASS. Externalresults pending, visualnotaccepted; no merge/release/promotion
+
+### Final CI batch 1 — reproduced corrections
+
+- Source397b3bf / PRmerge b8aee85: frontend1601PASS1stress30sTIMEOUT;Windows frontend10failures from samebudget plusCRLF/nativepath testassumptions. RustE0063 oldProjectsState testinitializer omittednewmaps; rustfmt actualartifact11150264048 verifiedSHA68476f857ba0c3d289cb08a0c9eb5b3388f34f2ef79519207ba80a1bd8a63bc2
+- ScopedCIrepair preserves30owners120cycles/allassertions withprofiled60scontinuitybudget; executableLF/CRLFpipelinefailchecks/nativepathexpectations portable; exactCIrustfmt plusdefaultinitializer. Independent30checks/sourceartifactreview approved
+- Visualactual137run123PASS,13missingbaselines expectedFAIL plusrealtransformedtooltipoverflow. Artifact11151230321 ZIPSHAa5099cf7934629864dafa7e18d0fa51bceb6cd80a77795da89bfad22a6bd60ef captured13UNAPPROVEDPNGs; allpixels inspected (8reject5pending0approved)
+- Realtooltipbodyportal/sharedfooterCreate+nativeform/doublesubmitguard fix; fixturefocus/pointercleanup removesstraytooltips/redwindowclosehover, deviceRaster fixes150%dimensions. Independent14pathsourceapproval50checks, originalPNGhash/dimensions verified; correctedpixels pendingrerender
+- Integratedlocal1619tests130files/typecheck/build15fixtureunitPASS;138browsercases collected13snapshotnames unchanged. D13auto-triggered3OSPASS. No baselineaccepted/merge/release; correctivebatchsourcepublication pending

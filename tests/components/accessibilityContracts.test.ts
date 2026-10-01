@@ -1,13 +1,16 @@
 import { beforeEach, afterEach, it, expect, vi } from 'vitest'
-import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
+import { DOMWrapper, mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { createPinia, setActivePinia } from 'pinia'
+import { h } from 'vue'
 import { readFileSync } from 'node:fs'
 import AppDialog from '@/components/ui/AppDialog.vue'
+import AppTooltip from '@/components/ui/AppTooltip.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import SessionItem from '@/components/sessions/SessionItem.vue'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
+const body = new DOMWrapper(document.body)
 const wrappers: VueWrapper[] = []
 function localePlugin() { return createI18n({ legacy: false, locale: 'en', messages: { en, zh } }) }
 let i18n: ReturnType<typeof localePlugin>
@@ -42,13 +45,13 @@ it('A11y_ViewportBoundTooltip_003', async () => {
   })
   const w = mount(IconButton, { attachTo: document.body, props: { label: 'A long project path ' + 'x'.repeat(160) }, global: { plugins: [i18n] }, slots: { default: '⋯' } }); wrappers.push(w)
   ;(w.get('button').element as HTMLElement).focus(); await flushPromises()
-  const tooltip = w.get('[role="tooltip"]').element as HTMLElement
+  const tooltip = body.get('[role="tooltip"]').element as HTMLElement
   expect(getComputedStyle(tooltip).position).toBe('fixed')
   const left = Number.parseFloat(tooltip.style.left), top = Number.parseFloat(tooltip.style.top)
   expect(left).toBeGreaterThanOrEqual(12); expect(left + 220).toBeLessThanOrEqual(1012)
   expect(top + 42).toBeLessThanOrEqual(602)
   expect(w.get('button').attributes('aria-describedby')).toBe(tooltip.id)
-  await w.get('button').trigger('keydown', { key: 'Escape' }); expect(w.find('[role="tooltip"]').exists()).toBe(false)
+  await w.get('button').trigger('keydown', { key: 'Escape' }); expect(body.find('[role="tooltip"]').exists()).toBe(false)
 })
 // 中英文真实会话行保留图标语义；状态仅在焦点提示出现，菜单键不触发会话动作。
 it.each(['en', 'zh'] as const)('A11y_RowKeyboard_004_%s', async locale => {
@@ -56,7 +59,7 @@ it.each(['en', 'zh'] as const)('A11y_RowKeyboard_004_%s', async locale => {
   const w = mount(SessionItem, { attachTo: document.body, global: { plugins: [i18n] }, props: { session: { id: 'row', cli: 'codex', runtime: 'native-cli', adapterSessionId: 'tab', projectKey: '/repo', projectPath: '/repo', title: 'A'.repeat(200), processState: 'running', attentionState: 'none', archived: false, resumable: true, lastActivityAt: Date.now() } } }); wrappers.push(w)
   expect(w.text()).not.toContain(locale === 'en' ? en.sessionStatusRunning : zh.sessionStatusRunning)
   const icon = w.get('.session-status-icon'); (icon.element as HTMLElement).focus(); await flushPromises()
-  expect(w.get('[role="tooltip"]').text()).toBe(locale === 'en' ? en.sessionStatusRunning : zh.sessionStatusRunning)
+  expect(body.get('[role="tooltip"]').text()).toBe(locale === 'en' ? en.sessionStatusRunning : zh.sessionStatusRunning)
   await icon.trigger('keydown', { key: 'Escape' }); await w.trigger('keydown', { key: 'ContextMenu' }); await flushPromises()
   const menu = document.querySelector<HTMLElement>('[role="menu"]')!
   expect(menu).not.toBeNull(); menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
@@ -94,4 +97,43 @@ it('A11y_NestedContainerReturn_006', async () => {
   const child = mount(AppDialog, { attachTo: document.body, props: { open: true, title: 'Child' }, global: { plugins: [i18n] } }); wrappers.push(child); await flushPromises()
   await child.setProps({ open: false }); await flushPromises()
   expect(document.activeElement).toBe(container)
+})
+
+// transformed/overflow 祖先不能拥有提示的定位上下文，焦点仍由原按钮持有。
+it('A11y_TooltipEscapesClipping_007', async () => {
+  const w = mount({ render: () => h('section', { style: 'transform: translateZ(0); overflow: hidden' }, [
+    h(AppTooltip, { text: 'Outside the clipped project' }, { default: () => h('button', { 'aria-describedby': 'existing-help' }, 'Inspect project') }),
+  ]) }, { attachTo: document.body }); wrappers.push(w)
+  const trigger = w.get('button')
+  ;(trigger.element as HTMLElement).focus(); await flushPromises()
+  const tooltip = document.querySelector<HTMLElement>('[role="tooltip"]')!
+  expect(tooltip?.textContent).toBe('Outside the clipped project')
+  expect(w.element.contains(tooltip), 'tooltip must escape the transformed clipping ancestor').toBe(false)
+  expect(trigger.attributes('aria-describedby')).toBe(`existing-help ${tooltip.id}`)
+  expect(document.activeElement).toBe(trigger.element)
+  expect(tooltip.tabIndex).toBe(-1)
+  await trigger.trigger('keydown', { key: 'Escape' })
+  expect(document.querySelector('[role="tooltip"]')).toBeNull()
+  expect(trigger.attributes('aria-describedby')).toBe('existing-help')
+  expect(document.activeElement).toBe(trigger.element)
+})
+
+// 模态框内提示浮在遮罩上但不增加焦点所有者；第一次 Esc 只关提示。
+it('A11y_TooltipKeepsModalOwner_008', async () => {
+  const w = mount(AppDialog, { attachTo: document.body, props: { open: true, title: 'Inspect', showClose: false }, global: { plugins: [i18n] }, slots: {
+    default: () => h(AppTooltip, { text: 'Project details' }, { default: () => h('button', 'Inspect project') }),
+  } }); wrappers.push(w); await flushPromises()
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
+  const trigger = dialog.querySelector('button')!
+  const tooltip = document.querySelector<HTMLElement>('[role="tooltip"]')!
+  expect(document.activeElement).toBe(trigger)
+  expect(tooltip?.textContent).toBe('Project details')
+  expect(dialog.contains(tooltip)).toBe(false)
+  expect(Number(getComputedStyle(tooltip).zIndex)).toBeGreaterThan(Number(getComputedStyle(dialog.parentElement!).zIndex))
+  trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await flushPromises()
+  expect(document.querySelector('[role="tooltip"]')).toBeNull()
+  expect(w.emitted('close')).toBeUndefined()
+  expect(document.activeElement).toBe(trigger)
+  trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await flushPromises()
+  expect(w.emitted('close')).toHaveLength(1)
 })

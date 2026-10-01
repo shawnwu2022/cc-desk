@@ -1,3 +1,6 @@
+<script lang="ts">
+let nextFormId = 0
+</script>
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -15,6 +18,7 @@ const { t } = useI18n()
 const draft = useNewSessionDraftStore()
 const profiles = useCliProfilesStore()
 const error = ref('')
+const formId = `new-session-form-${++nextFormId}`
 const configurations = computed(() => [{ value: '', label: t('newSessionAutomaticConfig') }, ...profiles.byCli[draft.cli].map(profile => ({ value: profile.id, label: profile.name }))])
 const selected = computed(() => draft.launchConfigId ? profiles.profile(draft.launchConfigId) : draft.project ? draft.preferred(draft.project, draft.cli) : null)
 const permissionText = computed(() => draft.rawEnabled && draft.startMode === 'new' ? t('newSessionRawPermissions') : draft.cli === 'codex' ? t('newSessionCodexPermissions')
@@ -25,7 +29,7 @@ watch(() => draft.visible, () => { error.value = '' })
 watch(() => draft.cli, () => { draft.launchConfigId = '' })
 function format(value: string) { try { draft.setArgvFormat(value as 'lines' | 'json'); error.value = '' } catch { error.value = 'newSessionArgvFormatError' } }
 function submit() {
-  if (!props.active || !draft.project) return
+  if (!props.active || !draft.visible || !draft.project) return
   try {
     if (draft.startMode !== 'new') emit('restore', { project: { ...draft.project }, cli: draft.cli, mode: draft.startMode, ...(draft.launchConfigId && selected.value ? { launchConfigId: selected.value.id, launchConfigRevision: selected.value.revision } : {}) })
     else emit('create', draft.toInput())
@@ -35,7 +39,7 @@ function submit() {
 </script>
 <template>
   <AppDialog v-model:open="draft.visible" :title="t('newSessionTitle')" class="new-session-dialog">
-    <form class="new-session-fields" @submit.prevent="submit">
+    <form :id="formId" class="new-session-fields" @submit.prevent="submit">
       <fieldset><legend>{{ t('newSessionBasic') }}</legend>
         <AppInput :model-value="draft.project?.projectPath ?? ''" :label="t('newSessionProject')" readonly />
         <AppSelect v-model="draft.cli" :label="t('newSessionTool')" :options="[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }]" />
@@ -58,8 +62,10 @@ function submit() {
         </template>
       </details>
       <InlineNotice v-if="error" kind="error" :message="t(error)" />
-      <AppButton data-create-session type="submit" variant="primary">{{ t(draft.startMode === 'new' ? 'newSessionCreate' : 'newSessionContinueRestore') }}</AppButton>
     </form>
+    <template #footer>
+      <AppButton data-create-session type="submit" :form="formId" variant="primary">{{ t(draft.startMode === 'new' ? 'newSessionCreate' : 'newSessionContinueRestore') }}</AppButton>
+    </template>
   </AppDialog>
 </template>
 <style scoped>

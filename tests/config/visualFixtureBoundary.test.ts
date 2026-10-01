@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { visualFixturePlugin } from '../../build/visualFixture'
 
 // 真实插件路由和模块解析必须在普通开发/生产关闭；不调用Vite内部或真实宿主。
@@ -20,11 +21,14 @@ describe('Visual fixture module boundary', () => {
       'settings-terminal-light-gui-dark-terminal', 'settings-launch-configurations', 'confirm-stop-and-archive']) expect(spec).toContain(name)
   })
   it.each([false, true])('VisualGate_EnforcesModuleBoundary_002: enabled=%s', enabled => {
-    const plugin = visualFixturePlugin('/repo', enabled) as any
-    expect(plugin.resolveId('@tauri-apps/api/core')).toBe(enabled ? '/repo/src/visual/tauriStub.ts' : undefined)
+    const root = resolve('visual-fixture-repo')
+    const plugin = visualFixturePlugin(root, enabled) as any
+    expect(plugin.resolveId('@tauri-apps/api/core')).toBe(enabled ? join(root, 'src', 'visual', 'tauriStub.ts') : undefined)
     expect(plugin.resolveId('@/stores/app')).toBeUndefined()
-    if (enabled) expect(plugin.load('/repo/src/visual/entry.ts')).toBeUndefined()
-    else expect(() => plugin.load('/repo/src/visual/entry.ts')).toThrow('VISUAL_FIXTURE_DISABLED')
+    for (const id of [join(root, 'src', 'visual', 'entry.ts'), '/repo/src/visual/entry.ts', 'C:\\repo\\src\\visual\\entry.ts']) {
+      if (enabled) expect(plugin.load(id)).toBeUndefined()
+      else expect(() => plugin.load(id)).toThrow('VISUAL_FIXTURE_DISABLED')
+    }
   })
   it.each([false, true])('VisualGate_ServesOnlyExplicitRoute_003: enabled=%s', enabled => {
     let middleware!: (request: { url: string }, response: any, next: () => void) => void

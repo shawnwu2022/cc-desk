@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { expandFixtureProjects, openFixtureSessionMenu } from './fixtureActions'
+import { expandFixtureProjects, focusFixtureMain, openFixtureSessionMenu } from './fixtureActions'
 
 const browserErrors = new WeakMap<Page, string[]>()
 test.beforeEach(async ({ page }) => {
@@ -43,10 +43,12 @@ for (const sample of snapshots) {
     test.use({ viewport: { width: sample.width, height: sample.height }, deviceScaleFactor: 'dpr' in sample ? sample.dpr : 1 })
     test('snapshot', async ({ page }) => {
       await openFixture(page, { scenario: sample.scenario, locale: sample.locale, gui: 'gui' in sample ? sample.gui : 'light', density: 'density' in sample ? sample.density : 'standard', terminal: 'terminal' in sample ? sample.terminal : 'cc-box-dark' })
-      if (sample.scenario === 'hover') await page.locator('[data-session-row]').first().hover()
+      if (['empty', 'mixed', 'hover', 'projects', 'terminal-settings', 'launch-configurations'].includes(sample.scenario)) await focusFixtureMain(page)
       if (sample.scenario === 'menu') await openFixtureSessionMenu(page)
       if (sample.scenario === 'tooltip') await page.locator('[data-tooltip-trigger]').focus()
-      await page.mouse.move(1000, 5)
+      // Use the main area's empty lower-right gutter, never a window control.
+      await page.mouse.move(sample.width - 4, sample.height - 4)
+      if (sample.scenario !== 'tooltip') await expect(page.getByRole('tooltip')).toHaveCount(0)
       if (sample.scenario === 'hover') await page.locator('[data-session-row]').first().hover()
       await expect(page).toHaveScreenshot(`${sample.name}.png`)
     })
@@ -99,12 +101,39 @@ test.describe('rendered interaction boundaries', () => {
     await page.locator('[data-tooltip-trigger]').focus()
     const tooltip = page.getByRole('tooltip')
     await expect(tooltip).toBeVisible()
+    await expect(tooltip).toHaveCount(1)
+    expect(await tooltip.evaluate(element => document.querySelector('[data-tooltip-clipping]')!.contains(element))).toBe(false)
+    await expect(page.locator('[data-tooltip-trigger]')).toHaveAttribute('aria-describedby', (await tooltip.getAttribute('id'))!)
     const box = await tooltip.boundingBox()
     expect(box!.x).toBeGreaterThanOrEqual(12); expect(box!.y).toBeGreaterThanOrEqual(12)
     expect(box!.x + box!.width).toBeLessThanOrEqual(1012)
     expect(box!.y + box!.height).toBeLessThanOrEqual(628)
     await page.keyboard.press('Escape'); await expect(tooltip).toHaveCount(0)
     await expect(page.locator('[data-tooltip-trigger]')).toBeFocused()
+    await page.locator('[data-tooltip-trigger]').hover()
+    await expect(tooltip).toBeVisible()
+    await page.setViewportSize({ width: 800, height: 600 })
+    await expect.poll(async () => {
+      const resized = await tooltip.boundingBox()
+      return !!resized && resized.x >= 12 && resized.y >= 12 && resized.x + resized.width <= 788 && resized.y + resized.height <= 588
+    }).toBe(true)
+    await page.mouse.move(796, 596)
+    await focusFixtureMain(page)
+    await expect(tooltip).toHaveCount(0)
+  })
+  test('new-session action stays visible while options scroll and Enter submits', async ({ page }) => {
+    await openFixture(page, { scenario: 'new-session', locale: 'en' })
+    const dialog = page.getByRole('dialog')
+    const create = dialog.locator('[data-create-session]')
+    await expect(create).toBeInViewport({ ratio: 1 })
+    expect(await create.evaluate(element => (element as HTMLButtonElement).form?.classList.contains('new-session-fields'))).toBe(true)
+    await dialog.getByText('More options…', { exact: true }).click()
+    await dialog.getByText('Developer options', { exact: true }).click()
+    await dialog.locator('.ui-dialog-body').evaluate(element => { element.scrollTop = element.scrollHeight })
+    await expect(create).toBeInViewport({ ratio: 1 })
+    await dialog.getByRole('textbox', { name: 'Session name (optional)', exact: true }).fill('Review keyboard submission')
+    await page.keyboard.press('Enter')
+    await expect(dialog).toHaveCount(0)
   })
   test('menu keyboard traversal retains focus and fixed trailing control', async ({ page }) => {
     await openFixture(page, { scenario: 'mixed', locale: 'en' })

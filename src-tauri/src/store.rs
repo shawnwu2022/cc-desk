@@ -1596,8 +1596,8 @@ pub(crate) fn update_app_config_at(config_path: &Path, updates: serde_json::Valu
     }
     let existing_json = if config_path.exists() {
         let content = fs::read_to_string(config_path)?;
-        let existing: serde_json::Value = serde_json::from_str(&content)
-            .context("Failed to parse config.json")?;
+        let existing: serde_json::Value =
+            serde_json::from_str(&content).context("Failed to parse config.json")?;
         if !existing.is_object() {
             bail!("App config must be an object");
         }
@@ -1719,9 +1719,7 @@ where
 }
 
 fn valid_bounded_text(value: &str, maximum: usize, allow_empty: bool) -> bool {
-    (allow_empty || !value.is_empty())
-        && !value.contains('\0')
-        && value.chars().count() <= maximum
+    (allow_empty || !value.is_empty()) && !value.contains('\0') && value.chars().count() <= maximum
 }
 
 pub(crate) fn validate_session_record_key(value: &str) -> Result<()> {
@@ -1760,9 +1758,7 @@ pub(crate) fn validate_session_ui_record(value: &SessionUiRecord) -> Result<()> 
     Ok(())
 }
 
-pub(crate) fn validate_project_launch_preference(
-    value: &ProjectLaunchPreference,
-) -> Result<()> {
+pub(crate) fn validate_project_launch_preference(value: &ProjectLaunchPreference) -> Result<()> {
     if !matches!(value.last_cli.as_str(), "claude" | "codex") {
         bail!("invalid launch preference cli");
     }
@@ -3620,7 +3616,9 @@ pub(crate) fn canonicalize_state(s: &mut ProjectsState) {
         if normalized.is_empty() || validate_project_launch_preference(&preference).is_err() {
             continue;
         }
-        canonical_preferences.entry(normalized).or_insert(preference);
+        canonical_preferences
+            .entry(normalized)
+            .or_insert(preference);
     }
     s.launch_preferences = canonical_preferences;
 }

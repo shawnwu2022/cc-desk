@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { DOMWrapper, mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { compileStyle } from '@vue/compiler-sfc'
 import { h, nextTick, ref } from 'vue'
@@ -11,6 +11,7 @@ import SessionStatusIcon from '@/components/sessions/SessionStatusIcon.vue'
 import CliAppIcon from '@/components/sessions/CliAppIcon.vue'
 import type { SessionVisualState, UnifiedCliKind } from '@/types/unifiedSession'
 
+const body = new DOMWrapper(document.body)
 const mounted: VueWrapper[] = []
 let i18n = createI18n({ legacy: false, locale: 'en', fallbackLocale: 'en', messages: { en, zh } })
 beforeEach(() => {
@@ -65,15 +66,15 @@ describe('SessionIcons', () => {
     expect(trigger.attributes('aria-label')).toBe(label)
     expect(trigger.attributes('tabindex')).toBe('0')
     expect(wrapper.text()).toBe('')
-    expect(wrapper.find('[role="tooltip"]').exists()).toBe(false)
+    expect(body.find('[role="tooltip"]').exists()).toBe(false)
     ;(trigger.element as HTMLElement).focus()
     await nextTick()
     expect(document.activeElement).toBe(trigger.element)
-    expect(wrapper.get('[role="tooltip"]').text()).toBe(label)
-    expect(trigger.attributes('aria-describedby')).toBe(wrapper.get('[role="tooltip"]').attributes('id'))
+    expect(body.get('[role="tooltip"]').text()).toBe(label)
+    expect(trigger.attributes('aria-describedby')).toBe(body.get('[role="tooltip"]').attributes('id'))
     expect(trigger.text()).toBe('')
     await trigger.trigger('keydown', { key: 'Escape' })
-    expect(wrapper.find('[role="tooltip"]').exists()).toBe(false)
+    expect(body.find('[role="tooltip"]').exists()).toBe(false)
   })
 
   // 已打开的状态提示随语言切换更新，形状不因本地化刷新而重新创建。
@@ -82,11 +83,11 @@ describe('SessionIcons', () => {
     mounted.push(wrapper)
     const svg = wrapper.get('svg').element
     await wrapper.get('[role="img"]').trigger('mouseenter')
-    expect(wrapper.get('[role="tooltip"]').text()).toBe('Needs reply')
+    expect(body.get('[role="tooltip"]').text()).toBe('Needs reply')
     i18n.global.locale.value = 'zh'
     await nextTick()
     expect(wrapper.get('[role="img"]').attributes('aria-label')).toBe('需要回复')
-    expect(wrapper.get('[role="tooltip"]').text()).toBe('需要回复')
+    expect(body.get('[role="tooltip"]').text()).toBe('需要回复')
     expect(wrapper.get('svg').element).toBe(svg)
   })
 
@@ -164,13 +165,13 @@ describe('SessionIcons', () => {
     expect(trigger.text()).toBe('')
     ;(trigger.element as HTMLElement).focus()
     await nextTick()
-    expect(wrapper.get('[role="tooltip"]').text()).toBe(label)
-    expect(trigger.attributes('aria-describedby')).toBe(wrapper.get('[role="tooltip"]').attributes('id'))
+    expect(body.get('[role="tooltip"]').text()).toBe(label)
+    expect(trigger.attributes('aria-describedby')).toBe(body.get('[role="tooltip"]').attributes('id'))
     await trigger.trigger('keydown', { key: 'Escape' })
-    expect(wrapper.find('[role="tooltip"]').exists()).toBe(false)
+    expect(body.find('[role="tooltip"]').exists()).toBe(false)
     await trigger.trigger('blur')
     await trigger.trigger('mouseenter')
-    expect(wrapper.get('[role="tooltip"]').text()).toBe(label)
+    expect(body.get('[role="tooltip"]').text()).toBe(label)
   })
 
   // 只有实际 SVG error 事件允许显示 CC 或 CX，仍由完整 CLI 名称标记。
@@ -190,7 +191,7 @@ describe('SessionIcons', () => {
     expect(trigger.attributes('aria-label')).toBe(label)
     expect(trigger.element).toBe(triggerElement)
     await trigger.trigger('focus')
-    expect(wrapper.get('[role="tooltip"]').text()).toBe(label)
+    expect(body.get('[role="tooltip"]').text()).toBe(label)
   })
 
   // CLI 变更会清除旧图片失败态，不能把 CC/CX 带到另一种 CLI。

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { DOMWrapper, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { h, nextTick } from 'vue'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -20,6 +20,7 @@ import LoadingState from '@/components/ui/LoadingState.vue'
 import ErrorDetails from '@/components/ui/ErrorDetails.vue'
 import { useNotificationsStore } from '@/stores/notifications'
 
+const body = new DOMWrapper(document.body)
 const mounted: VueWrapper[] = []
 beforeEach(() => { setActivePinia(createPinia()); vi.useFakeTimers() })
 afterEach(() => {
@@ -126,11 +127,11 @@ describe('UiPrimitives_Interactions', () => {
     const wrapper = mount(AppTooltip, { attachTo: document.body, props: { text: 'Copy session title' }, slots: { default: '<button aria-describedby="field-help">Copy</button>' } })
     mounted.push(wrapper)
     await wrapper.get('button').trigger('focus')
-    const tooltip = wrapper.get('[role="tooltip"]')
+    const tooltip = body.get('[role="tooltip"]')
     expect(wrapper.get('button').attributes('aria-describedby')!.split(' ')).toContain(tooltip.attributes('id'))
     expect(wrapper.get('button').attributes('aria-describedby')).toContain('field-help')
     await wrapper.get('button').trigger('keydown', { key: 'Escape' })
-    expect(wrapper.find('[role="tooltip"]').exists()).toBe(false)
+    expect(body.find('[role="tooltip"]').exists()).toBe(false)
     expect(wrapper.get('button').attributes('aria-describedby')).toBe('field-help')
   })
 
@@ -140,8 +141,8 @@ describe('UiPrimitives_Interactions', () => {
     mounted.push(wrapper)
     expect(wrapper.get('button').attributes('aria-label')).toBe('More actions')
     await wrapper.get('button').trigger('focus')
-    expect(wrapper.get('[role="tooltip"]').text()).toBe('More actions')
-    expect(wrapper.get('button').attributes('aria-describedby')).toBe(wrapper.get('[role="tooltip"]').attributes('id'))
+    expect(body.get('[role="tooltip"]').text()).toBe('More actions')
+    expect(wrapper.get('button').attributes('aria-describedby')).toBe(body.get('[role="tooltip"]').attributes('id'))
   })
 
   // 加载按钮阻止重复动作，并向辅助技术暴露 busy。
@@ -302,7 +303,7 @@ describe('UiPrimitives_Interactions', () => {
     ;(button.element as HTMLButtonElement).focus(); await nextTick()
     await button.trigger('mouseenter'); await button.trigger('mouseleave')
     expect(document.activeElement).toBe(button.element)
-    const tooltipId = wrapper.get('[role="tooltip"]').attributes('id')
+    const tooltipId = body.get('[role="tooltip"]').attributes('id')
     expect(button.attributes('aria-describedby')).toBe(`existing-help ${tooltipId}`)
   })
 
@@ -314,8 +315,8 @@ describe('UiPrimitives_Interactions', () => {
     ;(button.element as HTMLButtonElement).focus(); await nextTick()
     await button.trigger('mouseenter')
     ;(button.element as HTMLButtonElement).blur(); await nextTick()
-    expect(wrapper.get('[role="tooltip"]').text()).toBe('Copy')
-    expect(button.attributes('aria-describedby')).toBe(wrapper.get('[role="tooltip"]').attributes('id'))
+    expect(body.get('[role="tooltip"]').text()).toBe('Copy')
+    expect(button.attributes('aria-describedby')).toBe(body.get('[role="tooltip"]').attributes('id'))
   })
 
   // Esc 明确关闭后，结束一种交互不会重开；新的 focus/hover 才重开。
@@ -326,14 +327,14 @@ describe('UiPrimitives_Interactions', () => {
     ;(button.element as HTMLButtonElement).focus(); await nextTick()
     await button.trigger('mouseenter'); await button.trigger('keydown', { key: 'Escape' })
     await button.trigger('mouseleave'); await button.trigger('focus')
-    expect(wrapper.find('[role="tooltip"]').exists()).toBe(false)
+    expect(body.find('[role="tooltip"]').exists()).toBe(false)
     expect(button.attributes('aria-describedby')).toBeUndefined()
     ;(button.element as HTMLButtonElement).blur(); await nextTick()
     ;(button.element as HTMLButtonElement).focus(); await nextTick()
-    expect(wrapper.find('[role="tooltip"]').exists()).toBe(true)
+    expect(body.find('[role="tooltip"]').exists()).toBe(true)
     await button.trigger('keydown', { key: 'Escape' })
     await button.trigger('mouseenter')
-    expect(wrapper.find('[role="tooltip"]').exists()).toBe(true)
+    expect(body.find('[role="tooltip"]').exists()).toBe(true)
   })
 
   // 新组件限定尺寸/焦点/阴影 token，禁止 transition all。

@@ -346,9 +346,9 @@ button:disabled, input:disabled {
 .ui-input[aria-invalid="true"], .ui-select[aria-invalid="true"] { border-color: var(--status-error); }
 .ui-tooltip-anchor { position: relative; display: inline-flex; }
 .ui-tooltip {
-  /* Viewport positioning escapes the shell/sidebar's overflow clipping. */
+  /* Body portal escapes transformed/clipped ancestors, including modal content. */
   position: fixed;
-  z-index: 80;
+  z-index: 110;
   width: max-content;
   max-width: min(280px, calc(100vw - 24px));
   padding: 5px 8px;
@@ -418,7 +418,7 @@ button:disabled, input:disabled {
 .ui-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; }
 .ui-dialog-header h2 { min-width: 0; overflow-wrap: anywhere; font-size: 16px; font-weight: 600; }
 .ui-dialog-body { min-height: 0; padding: 0 20px 20px; overflow-y: auto; }
-.ui-dialog-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border-light); }
+.ui-dialog-footer { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border-light); }
 .ui-dialog-footer .ui-button { max-width: 100%; min-width: 0; height: auto; min-height: var(--control-height-normal); padding-top: 4px; padding-bottom: 4px; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
 .ui-dialog-footer .ui-control--compact { min-height: var(--control-height-compact); }
 .ui-dialog-footer .ui-control--primary { min-height: var(--control-height-primary); }

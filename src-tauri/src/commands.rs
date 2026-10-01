@@ -8,9 +8,9 @@ use tauri::AppHandle;
 use crate::checks::CheckResult;
 use crate::pty::get_pty_manager;
 use crate::store::{
-    AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project,
-    ProjectConfig, ProjectLaunchPreference, ProjectsState, SessionDetails, SessionInfo,
-    SessionSearchResult, SessionUiRecord, SkillInfo,
+    AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project, ProjectConfig,
+    ProjectLaunchPreference, ProjectsState, SessionDetails, SessionInfo, SessionSearchResult,
+    SessionUiRecord, SkillInfo,
 };
 
 // ==================== PTY Commands ====================

@@ -5,15 +5,18 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const workflowPath = '.github/workflows/unified-visual.yml'
-function workflow() {
+// Run the actual policy and shell checks with both checkout encodings on every OS.
+const lineEndings = [{ name: 'LF', value: '\n' }, { name: 'CRLF', value: '\r\n' }]
+
+function workflow(lineEnding: string) {
   expect(existsSync(workflowPath), 'final visual verification needs its own non-publishing workflow').toBe(true)
-  return readFileSync(workflowPath, 'utf8')
+  return readFileSync(workflowPath, 'utf8').replace(/\r?\n/g, lineEnding).replace(/\r\n/g, '\n')
 }
 
 // Source-policy checks only: these do not execute GitHub Actions or render Chromium.
-describe('Final visual workflow policy', () => {
+describe.each(lineEndings)('Final visual workflow policy ($name)', ({ value: lineEnding }) => {
   it('runs on the final pull request without triggering development checkpoint pushes', () => {
-    const source = workflow()
+    const source = workflow(lineEnding)
     expect(source).toMatch(/^  pull_request:/m)
     expect(source).toContain('feat/native-cli-finalization')
     expect(source).not.toMatch(/^  (push|pull_request_target|schedule):/m)
@@ -22,7 +25,7 @@ describe('Final visual workflow policy', () => {
     expect(source).not.toMatch(/contents: write|secrets\.|git (?:push|commit)|gh release|action-gh-release/)
   })
   it('installs the locked official browser and records reproducible environment evidence', () => {
-    const source = workflow()
+    const source = workflow(lineEnding)
     expect(source).toContain('runs-on: ubuntu-24.04')
     expect(source).toContain('npm ci')
     expect(source).toContain('npx playwright install --with-deps chromium')
@@ -32,7 +35,7 @@ describe('Final visual workflow policy', () => {
     expect(source).toContain('environment.json')
   })
   it('verifies before capturing unapproved candidates and propagates the original failure', () => {
-    const source = workflow()
+    const source = workflow(lineEnding)
     const verify = source.indexOf('--update-snapshots=none')
     const capture = source.indexOf('--update-snapshots=all')
     expect(verify).toBeGreaterThan(0)
@@ -46,7 +49,7 @@ describe('Final visual workflow policy', () => {
     expect(source).toContain('if: always()')
   })
   it('retains traces and failure output and never relaxes production screenshot policy', () => {
-    const source = workflow()
+    const source = workflow(lineEnding)
     expect(source).toContain('actions/upload-artifact@v4')
     expect(source).toContain('visual-evidence/')
     expect(source).toContain('test-results/visual-verification')
@@ -57,7 +60,7 @@ describe('Final visual workflow policy', () => {
   })
   // 执行实际 run 脚本的管道，失败 producer 必须穿透 tee；不启动浏览器。
   it.each(['Verify committed baselines', 'Capture candidates'])('Pipeline_Failure_001 %s', stepName => {
-    const source = workflow()
+    const source = workflow(lineEnding)
     const step = source.split('      - name: ').find(block => block.startsWith(stepName))!
     const script = step.split('        run: |\n')[1].split('\n').map(line => line.replace(/^          /, '')).join('\n')
       .replace(/^npx playwright .+?(?= 2>&1 \| tee)/m, 'node -e "process.exit(7)"')
@@ -71,7 +74,7 @@ describe('Final visual workflow policy', () => {
     } finally { rmSync(directory, { recursive: true, force: true }) }
   })
   it.each(['success', 'failure', 'skipped', 'cancelled'])('keeps the actual final gate fail-closed for %s', outcome => {
-    const source = workflow()
+    const source = workflow(lineEnding)
     const block = source.slice(source.lastIndexOf('run: |'))
     const gate = block.match(/<<'NODE'\n([\s\S]*?)\n\s*NODE/)?.[1]
     expect(gate).toBeDefined()
@@ -81,8 +84,8 @@ describe('Final visual workflow policy', () => {
   })
 })
 
-describe('Final Windows package workflow triggers', () => {
-  const source = readFileSync('.github/workflows/conpty-integration.yml', 'utf8')
+describe.each(lineEndings)('Final Windows package workflow triggers ($name)', ({ value: lineEnding }) => {
+  const source = readFileSync('.github/workflows/conpty-integration.yml', 'utf8').replace(/\r?\n/g, lineEnding).replace(/\r\n/g, '\n')
   it('includes unified UX source, persistence, build configuration and focused tests on pull requests', () => {
     const pullRequest = source.split('  pull_request:\n')[1].split('  workflow_dispatch:')[0]
     for (const path of ['src/**', 'src-tauri/src/commands.rs', 'src-tauri/src/lib.rs',

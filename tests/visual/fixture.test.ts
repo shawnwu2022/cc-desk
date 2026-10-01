@@ -66,15 +66,17 @@ describe('Isolated production-component fixture', () => {
             }
             return {
               async getAttribute(name: string) { return current().getAttribute(name) },
-              async click() { current().click(); await nextTick() },
+              async click() { current().focus(); current().click(); await nextTick() },
             }
           })
-        } }
+        }, async evaluate(action: (element: Element) => void) { action(document.querySelector(selector)!); await nextTick() } }
       },
     }
     await expandFixtureProjects(page)
     expect(document.querySelectorAll(`${toggles}[aria-expanded="true"]`)).toHaveLength(4)
     expect(document.querySelectorAll('[data-session-row]')).toHaveLength(6)
+    expect(document.querySelector('[role="tooltip"]'), 'project setup must not leave the last Collapse tooltip open').toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('.shell-main'))
     // Opening an already expanded fixture must not collapse it on a repeated setup.
     await expandFixtureProjects(page)
     expect(document.querySelectorAll('[data-session-row]')).toHaveLength(6)

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { cloneVNode, computed, defineComponent, h, ref, watch, nextTick, onBeforeUnmount } from 'vue'
+import { cloneVNode, computed, defineComponent, h, ref, watch, nextTick, onBeforeUnmount, Teleport } from 'vue'
 
 let nextId = 0
 
@@ -57,7 +57,11 @@ export default defineComponent({
             }
           },
         }),
-        visible.value && props.text ? h('span', { ref: tooltip, id: tooltipId, role: 'tooltip', class: 'ui-tooltip', style: position.value }, props.text) : null,
+        // Fixed coordinates are viewport-relative only outside transformed ancestors.
+        // The passive description has no focus owner; Escape stays on the trigger.
+        visible.value && props.text ? h(Teleport, { to: 'body' }, [
+          h('span', { ref: tooltip, id: tooltipId, role: 'tooltip', class: 'ui-tooltip', style: position.value }, props.text),
+        ]) : null,
       ])
     }
   },

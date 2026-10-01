@@ -2384,7 +2384,10 @@ fn ProjectsState_RoundTripsSessionRecords_002() {
     assert_eq!(record.native_session_id.as_deref(), Some("native-1"));
     let preference = state.launch_preferences.get("d:/work/game").unwrap();
     assert_eq!(preference.last_cli, "codex");
-    assert_eq!(preference.codex_launch_config_id.as_deref(), Some("codex-default"));
+    assert_eq!(
+        preference.codex_launch_config_id.as_deref(),
+        Some("codex-default")
+    );
 
     let reparsed = get_projects_state_at(&data).unwrap();
     assert_eq!(reparsed.session_records.len(), 1);
@@ -2727,6 +2730,7 @@ fn ProjectsState_DisplayNames_Roundtrip_001() {
         pinned_projects: vec!["/p-a".into()],
         archived_sessions: HashMap::new(),
         display_names: m,
+        ..ProjectsState::default()
     };
     let json = serde_json::to_string(&state).unwrap();
     assert!(
@@ -3885,7 +3889,8 @@ fn AppConfig_GuiSettings_Roundtrip_001() {
         "theme": "dark", "terminalTheme": "dracula", "defaultContinue": true,
         "guiThemeMode": "system", "guiDensity": "compact", "sidebarWidth": 320,
         "startupDestination": "projects", "defaultNewCli": "codex", "language": "zh"
-    })).unwrap();
+    }))
+    .unwrap();
     let result = serde_json::to_value(&config).unwrap();
     assert_eq!(result["guiThemeMode"], "system");
     assert_eq!(result["guiDensity"], "compact");
@@ -3903,14 +3908,18 @@ fn AppConfig_GuiSettings_LegacyDefaults_002() {
     let config: AppConfig = serde_json::from_value(json!({
         "theme": "dark", "defaultContinue": true, "defaultSkipPermissions": true,
         "defaultCustomArgs": "--old exact value", "autoConnectIde": true
-    })).unwrap();
+    }))
+    .unwrap();
     assert!(config.gui_theme_mode.is_none());
     assert!(config.gui_density.is_none());
     assert!(config.sidebar_width.is_none());
     assert!(config.startup_destination.is_none());
     assert!(config.default_new_cli.is_none());
     assert_eq!(config.default_continue, Some(true));
-    assert_eq!(config.default_custom_args.as_deref(), Some("--old exact value"));
+    assert_eq!(
+        config.default_custom_args.as_deref(),
+        Some("--old exact value")
+    );
     assert_eq!(config.auto_connect_ide, Some(true));
 }
 
@@ -3929,7 +3938,10 @@ fn AppConfig_GuiSettings_PreserveStoredKeys_003() {
     crate::store::update_app_config_at(&path, json!({"sidebarWidth": 320})).unwrap();
     let result: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     for (key, value) in original.as_object().unwrap() {
-        assert_eq!(&result[key], value, "existing key {key} must remain unchanged");
+        assert_eq!(
+            &result[key], value,
+            "existing key {key} must remain unchanged"
+        );
     }
     assert_eq!(result["sidebarWidth"], 320);
 }
@@ -3982,7 +3994,8 @@ fn AppConfig_ShortcutBindings_PreserveExisting_002() {
     let original = json!({ "defaultContinue": true, "terminalTheme": "nord", "futurePreference": { "keep": true } });
     std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
     let bindings = json!({ "new-session": "Mod+KeyK", "close-session": null });
-    crate::store::update_app_config_at(&path, json!({ "shortcutBindings": bindings.clone() })).unwrap();
+    crate::store::update_app_config_at(&path, json!({ "shortcutBindings": bindings.clone() }))
+        .unwrap();
     let result: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     for (key, value) in original.as_object().unwrap() {
         assert_eq!(&result[key], value);

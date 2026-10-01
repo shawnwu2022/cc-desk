@@ -60,7 +60,8 @@ npx playwright test tests/visual/unified-workspace.spec.ts
 ```
 
 Review every PNG under `tests/visual/__screenshots__/` at its actual dimensions
-before accepting that candidate. The comparison permits zero differing pixels.
+before accepting that candidate. Screenshots explicitly use device pixels (`scale: device`), including the DPR 1.5
+sample. The comparison permits zero differing pixels.
 Failures/traces are under `test-results/visual/` (ignored). Never create a passing
 baseline from an error page, hidden content or an uninspected screenshot.
 
@@ -88,24 +89,49 @@ comparison. Windows WebView2, macOS/WebKit and Linux native WebView acceptance
 remain separate. No screen-reader, real GPU or real Claude/Codex certification is
 implied by this harness.
 
-## Current evidence: BLOCKED_VISUAL
+## Current evidence: first CI render reviewed, corrected rerender pending
 
-Infrastructure and component/isolation tests are implemented. No screenshot
-baseline has been captured or approved, and the screenshot gate has not passed.
+The first genuine Linux Chromium run was
+[Actions 36839148817](https://github.com/shawnwu2022/cc-desk/actions/runs/36839148817),
+source head `397b3bfc7e9d954973aa664f83d9f30bf04de937`, tested PR merge
+`b8aee85adac4f50b0e59e907428c74e8209a7e04`. It ran all 137 cases: 123 passed,
+13 failed for absent baselines, and the transformed-tooltip geometry case failed
+because its right edge was 1713px instead of at most 1012px. The separate candidate
+capture produced all 13 PNGs; artifact `11151230321` records Ubuntu 24.04, Node
+22.23.3, Playwright 1.63.0 and Chrome for Testing 153.0.8010.12.
 
-The Task 23 cloud environment installed `@playwright/test` 1.63.0 successfully.
-Its official Chromium and headless-shell 153.0.8010.12 downloads returned a 195-byte
-HTML response instead of a ZIP and failed extraction. Existing system Chromium
-151.0.7922.173 reported `socket() failed: Operation not permitted` at process
-singleton startup, including the authorized escalated retry. The managed cloud
-browser separately rejected the local fixture URL with `ERR_BLOCKED_BY_CLIENT`.
-No restriction was bypassed and no unofficial binary was fetched.
+All 13 actual images were inspected and their dimensions/SHA256 checked against
+the artifact manifest. No baseline is approved or copied into the repository.
+The tooltip image is rejected because its description is clipped out. Mixed,
+hover and dark workspace images retain an unrelated project-toggle tooltip;
+1024px empty/menu scenes accidentally hover the window Close control. The
+projects sample used CSS screenshot scale and is only 1280×720, so it is rejected
+as the promised DPR 1.5 raster. The new-session dialog hides its Create action
+below the initially visible scrolling body. The five other candidates have no
+additional demonstrated pixel defect but remain pending the corrected rerender.
 
-Consequently the first genuine missing-baseline run, all 10 required PNGs, three
-supplemental PNGs, pixel review, the rendered tooltip result and the final no-diff
-PASS remain pending in an authorized browser environment. The generated browser
-launch failures are not counted as screenshot RED evidence. The parent owns the
-remaining rendered gate and final CI sequencing.
+Corrections under review portal passive tooltips to the document body above
+modal backdrops, preserving the trigger's focus and description relationship.
+Snapshot setup now moves focus to the fixture main area and the pointer to its
+lower-right gutter, preserving intentional menu/dialog/tooltip focus and row
+hover. Screenshot scale is explicitly `device`, with zero allowed differing
+pixels unchanged. New-session Create uses the shared fixed footer with native
+form ownership; repeated synchronous submissions are rejected after closure.
+
+Component regressions cover clipping escape, modal focus/Escape ownership,
+setup-tooltip cleanup, footer form association, invalid-argument retry and
+single submission. The rendered suite still has 13 screenshots and 120 geometry
+cases, now with five interaction cases (138 total); the added case checks the
+new-session action at 1024×640 after scrolling and real Enter submission. The
+corrected browser run and all resulting PNGs must be inspected before baseline
+acceptance, followed by a full no-update run. These component checks do not prove
+corrected pixels, native Windows scaling, screen-reader behavior or real CLI IO.
+
+Local browser attempts remain blocked: official browser downloads returned HTML,
+system Chromium failed its process-singleton socket with `Operation not permitted`
+including the authorized escalated retry, and the managed cloud browser rejected
+the local URL with `ERR_BLOCKED_BY_CLIENT`. No retry or bypass was attempted for
+these corrections. The parent owns CI rerendering and baseline acceptance.
 
 
 ## Prepared final workflow and evidence review
@@ -157,8 +183,9 @@ been created/run by Task25 local preparation, and pixels remain unaccepted.
 | workspace-dark-gui-light-terminal | 1280×720 | 1 | 1280×720 |
 | tooltip-transformed-1024 | 1024×640 | 1 | 1024×640 |
 
-Every baseline above is currently absent. This table is an expected artifact inventory,
-not rendered evidence. Windows WebView2/OS scaling and real CLI remain separate gates.
+Every repository baseline above is still absent. The expected dimensions describe
+the corrected device-scale capture; the first projects candidate was only 1280×720.
+The first CI artifacts are unapproved evidence, not committed baselines. Windows WebView2/OS scaling and real CLI remain separate gates.
 
 ### Final review: pipeline failure propagation
 

@@ -110,4 +110,43 @@ describe('New session flow', () => {
     expect(profiles.profiles[0].skipPermissions).toEqual({ mode: 'set', value: false })
   })
 
+  // 创建动作不随表单滚走，仍属于原生表单并且一次点击只提交一次。
+  it('NewSession_FooterOwnsForm_012', async () => {
+    const draft = useNewSessionDraftStore(); draft.open(project, 'codex')
+    const w = mount(NewSessionDialog, { global: global(), attachTo: document.body }); wrappers.push(w); await flushPromises()
+    const form = document.querySelector<HTMLFormElement>('.new-session-fields')!
+    const button = document.querySelector<HTMLButtonElement>('[data-create-session]')!
+    expect(button.closest('.ui-dialog-footer'), 'Create stays outside the scrolling dialog body').not.toBeNull()
+    expect(button.form).toBe(form)
+    expect(form.contains(button)).toBe(false)
+    button.click(); await flushPromises()
+    expect(w.emitted('create')).toHaveLength(1)
+    expect(draft.visible).toBe(false)
+  })
+
+  // 页脚原生 submit 保留参数校验，修正后连续点击不能创建两个会话。
+  it('NewSession_InvalidFooterRetry_013', async () => {
+    const draft = useNewSessionDraftStore(); draft.open(project, 'codex')
+    draft.rawEnabled = true; draft.argvFormat = 'json'; draft.argvText = '['
+    const w = mount(NewSessionDialog, { global: global(), attachTo: document.body }); wrappers.push(w); await flushPromises()
+    const button = document.querySelector<HTMLButtonElement>('[data-create-session]')!
+    button.click(); await flushPromises()
+    expect(w.emitted('create')).toBeUndefined()
+    expect(draft.visible).toBe(true)
+    expect(document.body.textContent).toContain(en.newSessionArgvError)
+    draft.argvText = '["two words"]'; await flushPromises()
+    button.click(); button.click(); await flushPromises()
+    expect(w.emitted('create')).toHaveLength(1)
+    expect(w.emitted('create')![0][0]).toMatchObject({ cli: 'codex', action: { kind: 'raw', argv: ['two words'] } })
+  })
+
+  // 键盘提交使用相同 form 事件；同步重复提交在关闭前也只发出一次请求。
+  it('NewSession_FormSubmitOnce_014', async () => {
+    useNewSessionDraftStore().open(project, 'codex')
+    const w = mount(NewSessionDialog, { global: global(), attachTo: document.body }); wrappers.push(w); await flushPromises()
+    const form = document.querySelector<HTMLFormElement>('.new-session-fields')!
+    form.requestSubmit(); form.requestSubmit(); await flushPromises()
+    expect(w.emitted('create')).toHaveLength(1)
+  })
+
 })
