@@ -301,7 +301,10 @@ impl<R> RunRegistry<R> {
             let mut state = self.state.lock();
             self.authorize(&state, caller)?;
             let key = (caller.webview_epoch.get(), request.request_id.clone());
-            let record = state.records.get_mut(&key).expect("reservation is retained");
+            let record = state
+                .records
+                .get_mut(&key)
+                .expect("reservation is retained");
             if record.status.phase == LaunchPhase::Reserved {
                 record.transition(LaunchPhase::Cancelled, None);
                 record.in_flight = false;

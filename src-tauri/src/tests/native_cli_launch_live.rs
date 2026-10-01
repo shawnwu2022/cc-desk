@@ -37,10 +37,7 @@ const READY: &[&str] = &[
     "destroy-revoked",
     "owned-child-reaped",
 ];
-const CLOSED: &[&str] = &[
-    "unready-rejected-before-io",
-    "unready-cancelled-without-io",
-];
+const CLOSED: &[&str] = &["unready-rejected-before-io", "unready-cancelled-without-io"];
 
 #[derive(Default)]
 struct Consumer {
@@ -230,7 +227,10 @@ async fn d11_launch_cancelled(
     if receipt.phase != LaunchPhase::Cancelled
         || raw_value(&request)? != serde_json::to_value(receipt).unwrap()
         || state.consumer.calls.load(Ordering::SeqCst) != 0
-        || fs::read_dir(state.root.join("work")).unwrap().next().is_some()
+        || fs::read_dir(state.root.join("work"))
+            .unwrap()
+            .next()
+            .is_some()
     {
         return Err(state.fail(&app, "CANCEL_NOT_FENCED"));
     }

@@ -3,15 +3,15 @@
   "approved": true,
   "approvedFor": "Linux Chromium screenshot baselines",
   "reviewDate": "2026-10-01",
-  "actualPixelsInspected": 8,
+  "actualPixelsInspected": 6,
   "independentPixelReviewCount": 2,
   "rejectedImages": 0,
-  "sourceHead": "444c2dfed9ed11305ea77fc14063caf17155d1a8",
-  "testedCommit": "e7eebee57566b4f13de8b2c69a606ec1f48fc3b8",
-  "workflowRunId": "36861864182",
-  "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/36861864182",
-  "artifactId": "11162500482",
-  "artifactZipSha256": "2a3007d155f4fbc4f3ead6e5bf1d3d950367d0cb5ee37bee889368849b84b2c7",
+  "sourceHead": "0a0f246952f68281ab33a6bdb82c93507359644f",
+  "testedCommit": "eb030d455c7cc12fdea05fd5fd54aafc569f6c11",
+  "workflowRunId": "36882380587",
+  "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/36882380587",
+  "artifactId": "11174921424",
+  "artifactZipSha256": "00699d05fc86b9fdaf681ec6f77c698d41594f85bf44d9c7a057ea22588119cd",
   "environment": {
     "node": "v22.23.3",
     "playwright": "1.63.0",
@@ -21,8 +21,8 @@
   "verificationBeforeBaselineAcceptance": {
     "total": 146,
     "geometryAndInteractionPassed": 133,
-    "unchangedSnapshotsPassed": 5,
-    "changedSnapshotFailures": 8,
+    "unchangedSnapshotsPassed": 7,
+    "changedSnapshotFailures": 6,
     "otherFailures": 0,
     "fullVerification": "failed-reviewed-snapshot-differences"
   },
@@ -42,8 +42,8 @@
       "name": "archived-sessions.png",
       "width": 1366,
       "height": 768,
-      "sha256": "c0324d2b59570499c2537ea9a20e2c6a9a9c8ecc2c4e4f5bfc58a5544910f769",
-      "bytes": 45930,
+      "sha256": "bf52e313ed554f469d1117347475ac652fda287cf49e163f31181d850453a935",
+      "bytes": 46068,
       "reviewVerdict": "approve",
       "provenance": "reviewed actual image from current artifact"
     },
@@ -78,8 +78,8 @@
       "name": "settings-launch-configurations.png",
       "width": 1280,
       "height": 720,
-      "sha256": "c7669592bfbc29cf51f9e7a3ee810e309fa390c34b7979eabeae254808fa61e8",
-      "bytes": 52333,
+      "sha256": "6d0af32f96ab86bd2a057dad3518ed7ba3043e16a1505c3c691bc52a9ea48213",
+      "bytes": 52709,
       "reviewVerdict": "approve",
       "provenance": "reviewed actual image from current artifact"
     },
@@ -90,7 +90,7 @@
       "sha256": "5232c5d346f4cab41d352cbf897f35acd750e4904d4bfcdff6613b517382357d",
       "bytes": 84496,
       "reviewVerdict": "approve",
-      "provenance": "reviewed actual image from current artifact"
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
     },
     {
       "name": "tooltip-transformed-1024.png",
@@ -105,8 +105,8 @@
       "name": "workspace-dark-gui-light-terminal.png",
       "width": 1280,
       "height": 720,
-      "sha256": "13fb46794c0acca6f5c35f0086bf944f40272ffdd60a02670d27f7ffa0914783",
-      "bytes": 57692,
+      "sha256": "94712d839f58768fce2eee34a82bdc1c7f8aef45c63cfa745b8b4451391d80a0",
+      "bytes": 58002,
       "reviewVerdict": "approve",
       "provenance": "reviewed actual image from current artifact"
     },
@@ -117,14 +117,14 @@
       "sha256": "1883535cbdf3b05adfa0d4da8eed9eb60027884a3a193761a2677451b1c82d1d",
       "bytes": 24179,
       "reviewVerdict": "approve",
-      "provenance": "reviewed actual image from current artifact"
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
     },
     {
       "name": "workspace-hover-action-1366-en.png",
       "width": 1366,
       "height": 768,
-      "sha256": "a294289813218de206ea66fc4406c299cf6ca6cf698632ce346fdf96de75a5ec",
-      "bytes": 59279,
+      "sha256": "f22fd29b54ad5fd1c09845f014fb9e58905a7593fa89893d7a9174a00c06974f",
+      "bytes": 59606,
       "reviewVerdict": "approve",
       "provenance": "reviewed actual image from current artifact"
     },
@@ -132,8 +132,8 @@
       "name": "workspace-menu-1024-en.png",
       "width": 1024,
       "height": 640,
-      "sha256": "2f21aca36df91ef5a4138771c516914d9a9db42fe9b4d1d06860789c01cb0f30",
-      "bytes": 54108,
+      "sha256": "01a070d5b43ecc4f8b130c8809599eb738e8f87155e9446f4b54876542b972ac",
+      "bytes": 54468,
       "reviewVerdict": "approve",
       "provenance": "reviewed actual image from current artifact"
     },
@@ -141,8 +141,8 @@
       "name": "workspace-mixed-1366-zh.png",
       "width": 1366,
       "height": 768,
-      "sha256": "55c3dc045ac050507d6040d6ce95546f978757d23cb0c2709e4243b728da7941",
-      "bytes": 57945,
+      "sha256": "f05b81b81425f04c23fafce189b69fe529d39651bf3d041f58f2ecd49d58110b",
+      "bytes": 58363,
       "reviewVerdict": "approve",
       "provenance": "reviewed actual image from current artifact"
     },
@@ -156,7 +156,7 @@
       "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
     }
   ],
-  "unchangedVerifiedSnapshots": 5,
+  "unchangedVerifiedSnapshots": 7,
   "previousAcceptance": {
     "sourceHead": "d90ec90db9f2a27f1e77f747fecd62c6f716d233",
     "testedCommit": "2ce9e19545318a35a79094c7aea179ddb434fcd0",

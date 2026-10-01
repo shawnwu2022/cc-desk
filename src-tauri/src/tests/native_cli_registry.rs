@@ -696,7 +696,10 @@ fn Launch_CancelAfterBegin_004() {
         registry.cancel(&fixture.caller, &fixture.request).unwrap(),
         running
     );
-    assert_eq!(*registry.resource(&fixture.caller, &running.run).unwrap(), 42);
+    assert_eq!(
+        *registry.resource(&fixture.caller, &running.run).unwrap(),
+        42
+    );
     registry.mark_exited(&running.run).unwrap();
     assert_eq!(
         registry
