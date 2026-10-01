@@ -78,6 +78,19 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
     if (profiles.profile(id)?.cli !== tool) throw new Error('PROFILE_CLI_MISMATCH')
     preferences.value.defaults[tool] = id; savePreferences()
   }
+  function defaultFor(tool: UnifiedCliKind): CliProfile | null {
+    const selected = profiles.profile(preferences.value.defaults[tool] ?? '')
+    return selected?.cli === tool ? selected : profiles.selected[tool]
+  }
+  function forgetDefault(id: string): void {
+    for (const tool of ['claude', 'codex'] as const) {
+      if (preferences.value.defaults[tool] !== id) continue
+      const replacement = profiles.byCli[tool].find(row => row.id !== id)
+      if (replacement) preferences.value.defaults[tool] = replacement.id
+      else delete preferences.value.defaults[tool]
+    }
+    savePreferences()
+  }
   async function recordSuccess(path: string, tool: UnifiedCliKind, id: string): Promise<void> {
     if (profiles.profile(id)?.cli !== tool) return
     try { await projects.setLaunchPreference(path, tool, id) }
@@ -144,5 +157,5 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
     } catch { throw new Error('NEW_SESSION_PREPARATION_FAILED') }
   }
   return { visible, chooserVisible, project, cli, title, launchConfigId, startMode, rawEnabled, argvFormat, argvText,
-    cliAvailability, availabilityFor, refreshAvailability, preferred, setDefault, recordSuccess, open, openChooser, setArgvFormat, toInput, prepareInput }
+    cliAvailability, availabilityFor, refreshAvailability, preferred, setDefault, defaultFor, forgetDefault, recordSuccess, open, openChooser, setArgvFormat, toInput, prepareInput }
 })

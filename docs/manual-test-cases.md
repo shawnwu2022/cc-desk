@@ -2410,7 +2410,7 @@
 
 - 目标：Windows 1024×640 在 100%/125%/150% 缩放下，及 macOS/Linux 验证确认弹窗与反馈的真实渲染/可访问性。
 - 前置：已授权的真实 CLI/目标机器；准备运行、已结束和状态不明的会话。真实停止/恢复/重启与账号验证需单独授权，当前 jsdom/host 测试不代表通过。
-- 操作：用鼠标/键盘触发关闭运行会话、停止并归档、未知状态检查后重启、项目移除；等待时取消或切换导航/会话；在单工具缺失/未登录与全来源不可用场景检查反馈。配置编辑器入口接入后再验证其删除确认。
+- 操作：用鼠标/键盘触发关闭运行会话、停止并归档、未知状态检查后重启、项目移除；等待时取消或切换导航/会话；在单工具缺失/未登录与全来源不可用场景检查反馈。在真实启动配置设置页验证编辑、复制、默认选择和删除确认。
 - 预期：默认焦点不落在危险按钮；长标题/中英文文案可滚动且无全页横向溢出；失活表面无残留焦点陷阱；工具故障不阻断另一工具；全工作区错误不卸载终端宿主；未知进程未确认停止时不重复启动；Toast 不覆盖新选择，诊断中没有原始路径、错误正文、环境值或凭据。
 - 排队检查：让另一元数据/注册写尚未完成，再确认停止并归档或项目移除；在 archive/unregister/unpin 发出前取消或替换原来源。预期：队列释放后不发出已失效步骤，Native/Legacy 均保留停止后的打开会话；取消未发出的写不显示存储失败或触发未知写恢复。已经完成的停止/隐藏/注销可以保留，应用不自动补偿或重放。
 
@@ -2436,3 +2436,14 @@
 - Steps: choose WebGL, check existing terminal stays unchanged, open another terminal, exercise supported context-loss/unavailable-GPU scenario; restart app with old cc-box theme IDs and explicit false blink setting
 - Expected: renderer preference affects new terminals only; DOM fallback keeps the same palette and live terminal content; legacy IDs/colors and stored preferences survive restart; missing fonts use platform CJK/emoji fallbacks without installation
 - Limit: mocked frontend tests do not establish real GPU, PTY/input/output/ACK or installed CLI behavior. Rust DTO tests are NOT RUN here because cargo/rustc are unavailable. Final platform/Rust/Windows gate remains separate and unperformed
+
+
+## Task 19: launch configuration platform acceptance (not yet performed)
+
+- Goal: verify the grouped configuration list/editor on Windows 1024×640 at 100%/125%/150% scaling and macOS/Linux functional rendering
+- Preconditions: authorized target machine and real CLI runs, long configuration names/program paths/arguments, both locales; use synthetic environment sentinels only
+- Steps: navigate to Launch configurations; use hover/keyboard edit, context/overflow actions, progressive details, per-line/JSON arguments, Save/Cancel, and navigate away with dialogs open
+- Expected: one quick action, retained name/default/menu columns, no horizontal page overflow, shared keyboard/focus behavior, no environment values or host-reference values in rendered UI
+- Steps: save edits and delete a configuration used by a confirmed running session; inspect the existing terminal and project resources; resolve an unadmitted launch before deletion; delete the last default and explicitly create another session
+- Expected: admitted process/scrollback/selection/run resource identity remain intact; unadmitted attempts block deletion, historical restart/resume never silently substitutes defaults, safe default is prepared only on the new explicit creation
+- These rendered/real-CLI checks are pending; automated host/component evidence does not certify the target platforms

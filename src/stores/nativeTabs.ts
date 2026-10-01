@@ -138,6 +138,15 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   // Positive resource-scope proof only: false/absent receipts are not evidence
   // that launch was never submitted. Bind proof to the exact local attempt.
   const unstartedAttempts = reactive(new Map<string, NativeAttemptIdentity>())
+  const frozenLaunchReceipts = new Map<string, string>()
+  const frozenIdentity = (tab: NativeCliTab) => JSON.stringify([tab.requestId, tab.runId, tab.generation,
+    tab.cli, tab.profileId, tab.profileRevision, tab.projectId, tab.projectPath, tab.sourceSessionKey, tab.action])
+  /** Positive receipt proof only; a locally assigned status is not admission evidence. */
+  function hasFrozenLaunchReceipt(tabId: string): boolean {
+    const tab = tabs.get(tabId)
+    return !!tab && tab.status !== 'starting' && tab.launchRevision !== null
+      && frozenLaunchReceipts.get(tabId) === frozenIdentity(tab)
+  }
   function hasUnstartedAttempt(tabId: string): boolean {
     const proof = unstartedAttempts.get(tabId)
     return !!proof && matchesNativeAttempt(tabs.get(tabId), proof)
@@ -205,6 +214,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     const value = tabs.get(tabId)
     if (!value) throw new Error('TAB_NOT_FOUND')
     unstartedAttempts.delete(tabId)
+    frozenLaunchReceipts.delete(tabId)
     value.status = 'starting'
     value.errorCode = null
     value.lastActivityAt = Date.now()
@@ -248,6 +258,9 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.status = next.status
     value.errorCode = next.errorCode
     value.launchRevision = launch.revision
+    if (['running', 'exited', 'failed', 'cancelled'].includes(launch.phase)) {
+      frozenLaunchReceipts.set(tabId, frozenIdentity(value))
+    }
     value.lastActivityAt = Date.now()
     return true
   }
@@ -279,6 +292,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.status = 'stopped'
     value.errorCode = null
     value.launchRevision = null
+    frozenLaunchReceipts.delete(tabId)
     value.lastActivityAt = Date.now()
     unstartedAttempts.set(tabId, captureNativeAttempt(value))
     activeTabId.value = tabId
@@ -286,6 +300,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   }
 
   function close(tabId: string): void {
+    frozenLaunchReceipts.delete(tabId)
     unstartedAttempts.delete(tabId)
     if (!tabs.delete(tabId)) return
     if (activeTabId.value === tabId) {
@@ -294,6 +309,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   }
 
   function clear(): void {
+    frozenLaunchReceipts.clear()
     unstartedAttempts.clear()
     tabs.clear()
     activeTabId.value = null
@@ -303,6 +319,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     tabs,
     activeTabId,
     hasUnstartedAttempt,
+    hasFrozenLaunchReceipt,
     create,
     tab,
     byProject,

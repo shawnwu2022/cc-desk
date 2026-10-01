@@ -443,9 +443,9 @@ writes. Project/CLI history files are never deleted.
 
 Configuration deletion provides the real downstream Task19 contract:
 - `cliProfiles.requestDelete(id)` returns/publishes a typed frozen confirmation,
-  or null plus a safe `deleteError` for missing/in-use configurations
+  or null plus a safe `deleteError` for missing configurations or unadmitted preparation
 - `confirmDelete()` rechecks the configuration revision, workspace CAS revision,
-  current request and open Native sessions before the existing `cliPatchProfile`
+  current request and unadmitted Native/unified preparation before the existing `cliPatchProfile`
   delete operation; `deleteBusy` and `isDeleting(id)` provide admission barriers
 - `closeDeleteConfirmation()` invalidates queued work and feedback ownership
 - ordinary `patch(..., { op: 'delete' })` rejects with `CONFIRMATION_REQUIRED`
@@ -454,9 +454,8 @@ Configuration deletion provides the real downstream Task19 contract:
   delete is replayed automatically
 
 Normal App already binds the typed store request to the shared confirmation dialog
-on the Settings surface. The configuration editor/list trigger belongs to Task19;
-Task16 does not add a fake settings screen or standalone demo. Tests drive the real
-store request through normal App and the existing API boundary.
+on the Settings surface. Task19 now provides the real grouped configuration list/editor and menu trigger.
+Tests drive the real Settings menu through normal App and the existing API boundary.
 
 Safe error extraction only accepts fixed allowlisted codes with own properties.
 Inherited keys such as `constructor`, `__proto__`, and `toString` map to the generic
@@ -467,3 +466,28 @@ failure banners clear when newer successful evidence supersedes them. Whole-work
 failure requires all relevant sources to fail and no usable cached/open context;
 its error surface hides, but does not unmount, the terminal host. Existing read-only
 resource notices remain owned by Task15 and are not promoted to global failures.
+
+
+## Launch configuration settings (Task 19)
+
+`LaunchConfigurationsSection` is the real Settings section. It groups saved Claude
+and Codex configurations, shows the existing per-CLI default, and uses shared buttons,
+icons and a context/overflow menu. Edit is the only row quick action. Copy, Rename,
+Make default and Delete are secondary actions; Delete goes through the App-owned
+`ProjectConfirmDialog` and `cliProfiles.requestDelete` / `confirmDelete`.
+
+`LaunchConfigurationEditor` accepts a typed create/edit/copy/rename request. It freezes
+the source and workspace revisions when opened. Save passes an immutable
+`LaunchConfigurationSave` to the existing profile writer queue. Inactive navigation,
+unmount and Cancel invalidate admission and feedback ownership. Already issued writes
+may still update shared authoritative state; they cannot publish into another editor.
+After conflict/uncertain write, the list is reloaded read-only and Save stays disabled;
+the user closes/reopens after reviewing that state. No patch is automatically replayed.
+
+The editor progressively reveals explicit program/launcher choices, permission and
+observer overrides, and exact argv. Set/Unset/Inherit remain distinct. Existing
+environment literals and host-reference names are not copied into editor fields or
+rendered attributes; only the environment variable name and override mode are shown.
+Rename omits all other fields. Ordinary edits omit env, preserving opaque stored
+values; Duplicate copies the original saved configuration under a fresh ID and revision
+zero, guarded by its source revision. No provider/credential management was introduced.

@@ -196,6 +196,10 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const creations = new Map<string, { input: CreateUnifiedSessionInput; row: UnifiedSession; owner: object; preparing: boolean; selectionIntentEpoch: number }>()
   function configureCreationPreparer(prepare: typeof prepareCreation) { prepareCreation = prepare }
   function isPreparingSession(id: string) { return creations.has(id) }
+  function hasUnadmittedConfiguration(profileId: string, cli: UnifiedSession['cli']): boolean {
+    return [...creations.values()].some(creation => ['starting', 'unknown'].includes(creation.row.processState)
+      && (creation.input.launchConfigId ? creation.input.launchConfigId === profileId : creation.input.cli === cli))
+  }
   function copyInput(input: CreateUnifiedSessionInput): CreateUnifiedSessionInput {
     return { ...input, action: input.action?.kind === 'raw' ? { kind: 'raw', argv: [...input.action.argv] } : input.action ? { ...input.action } : undefined }
   }
@@ -544,6 +548,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     resumeCatalogSession, removeMissingRecord, launchResume,
     configureCreationPreparer,
     isPreparingSession,
+    hasUnadmittedConfiguration,
     initialize,
     refresh,
     selectProjectContext,

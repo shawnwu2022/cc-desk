@@ -43,7 +43,8 @@ Rules:
 - Task 15: complete at `6ae851a3a3ee9de789a5085b5a0e1d03b551eb44`
 - Task 16: complete at `c0a1c231426b599c30ec52ea2740f44d10334e96`
 - Task 17: complete at `bb8c2c999370e4988b96d2917bd10f66154bda51`
-- Next task: Task 18 — unified terminal preferences and preview
+- Task 18: complete at `c0158be02de8edf1dafe233c95b6550564e8f471`
+- Next task: Task 19 — launch configuration settings
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -510,3 +511,24 @@ Rules:
 - Optional Rust read DTO fields/2 compatibility tests added, raw config writer/protocol unchanged; Rust NOT RUN, finalWindows gate pending25
 - Final65 exact tests+typecheck;238 affected18 suites. Independent spec/quality approval ran13 focused continuity/migration checks and a new delayed-WebGL/queued-fit-after-unmount test successfully; manifest/diff checks pass
 - Actual GPU/fonts/CJK/CLI/PTY/platform/scaling/Native OS-minimize certification unperformed; no fullsuite/CI/PR/package/release. Atomic publication pending readback
+
+### Verified Task 18 checkpoint
+
+- Remote commit `c0158be02de8edf1dafe233c95b6550564e8f471`; exact staged/fetched tree and local/remote SHA match; working tree clean before readback
+-65 required/typecheck and238 affected tests; independent approval with13 focused plus async-disposal test
+- Tree-only connector call stalled; lost cell and404 exact-tree/unchanged branch established retry safety. Retry returned exact tree, commit/ref succeeded and readback verified. Recovery bundle/patch retained; no duplicate branch update
+- Rust and actual GPU/CLI/platform acceptance NOT RUN; final25 Windows gates pending. No CI/PR/package/release; next19
+
+### Task 19 preflight ruling
+
+- Ruling: saved launch-configuration deletion may proceed for already-admitted runs with positive frozen launch-receipt identity because backend deletion removes only saved configuration and plan requires running sessions unaffected. Keep pre-admission/in-flight/unknown-without-trustworthy-receipt work blocked; preserve typed confirmation/CAS/queue ownership. Never stop/restart/remount or change the active frozen run snapshot; future restart may require explicit replacement guidance. Verify existing run resource authority survives deletion, otherwise escalate contract gap. Cost if wrong: saved configuration cannot be reused for future launches until explicitly replaced; active runtime continuity takes priority.
+- Ruling: deleting the last global default clears stale selection and explicitly presents safe-default fallback; actual safe configuration is created only by the next explicit New session preparation, not as an automatic second mutation during deletion. Existing same-CLI alternatives are selected when available; project last-success/historical origin is not rewritten. Why: reuse Task12 authorized preparation and avoid partial delete/create transactions or implicit side effects. Cost if wrong: next explicit creation performs the safe-default preparation and may surface a recoverable configuration error.
+
+## Task 19 — Launch configuration settings
+
+- Real grouped CLI launch configuration list/editor with one Edit quick action, shared copy/rename/default/delete menu, explicit Save/Cancel and layered advanced fields; exact argv arrays preserved, environment values/host refs never rendered
+- Existing profile CAS writer validates editor/source/workspace/deletion ownership at actual queue admission; failed/uncertain writes read-only reconcile without mutation replay and require explicit reopen/review
+- Typed16 deletion confirmation retained. Positive receipt proof binds full exact Native run identity; admitted runs retain terminal/resource snapshot after saved deletion while unadmitted/pre-tab/unknown-unproven preparations block deletion
+- Same-CLI default replacement uses existing authority, last default safely deferred to next explicitNew preparer; canonical project last-success/historical origin untouched
+- Final22 exact+typecheck; initial255 affected+10NativeTab tests, post-repair44 directly affected tests. Independent review12 high-risk cases passed; sole cold asyncSettings test-readiness defect repaired with rendered-row wait preserving all continuity assertions, independently cold-passed
+-18source manifest/diff checks pass. No actualCLI/backend/Rust/platform certification/fullsuite/CI/PR/package/release; atomic publication pending readback

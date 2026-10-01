@@ -260,3 +260,30 @@ Project removal similarly guards `workspace.remove` inside its CAS queue, then g
 queued `unpinProject` against cancellation, open sessions, and any replacement
 registration. Prior completed steps may remain (stopped session, hidden/unregistered
 project); cancellation never invents compensation or deletes project/history files.
+
+
+## Saved configuration deletion and retained runs (Task 19)
+
+Deleting a saved configuration is a profile-repository CAS mutation and has no process
+side effect (`cli/profile_service.rs` → `cli/storage.rs`, Delete arm). Run resource
+scope in `cli/native_projection/service.rs` uses the retained launch snapshot and
+checks the same Arc through exact run/generation access; it does not reload the saved
+profile. Profile scopes still require that record and exact revision. This is source
+inspection evidence, not a new Rust or real-CLI certification run.
+
+The frontend admits deletion for an existing tab only when `nativeTabs` holds positive
+receipt evidence bound to its full attempt/profile/project/source/action identity.
+Local status strings or a non-null revision alone do not establish that evidence.
+Starting attempts, unadmitted tabs, uncertain attempts without a prior trustworthy
+receipt, and unified preparation before tab creation block deletion. Preparation with
+no selected configuration conservatively blocks deletion within the same CLI until it
+resolves. Queue admission rechecks the same profile and workspace CAS revisions.
+Saved edits/deletion never change current tab identity or terminal mount; restart or
+historical resume with a missing/changed original configuration fails closed with
+configuration guidance. No substitute default is chosen for those historical actions.
+
+The last-default ruling is deliberate: delete clears the stale global UI preference
+and selects another existing same-CLI configuration if available. If none remains,
+the UI explicitly describes the safe fallback; only a subsequent explicit New session
+materializes it via the existing Task12 preparer. Deletion does not create a second
+configuration or process, and project last-success metadata is untouched.

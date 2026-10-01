@@ -238,7 +238,7 @@ onUnmounted(() => {
       @new-session-request="selectProject($event); request({ kind: 'new-session', project: $event })"
       @project-action="request({ kind: 'project-action', request: $event })" />
     <ProjectManagementDialogs />
-    <SettingsView v-if="settingsLoaded" v-show="shell.section === 'settings'" @close="shell.navigate('workspace')" />
+    <SettingsView v-if="settingsLoaded" v-show="shell.section === 'settings'" :active="shell.section === 'settings'" @close="shell.navigate('workspace')" />
     <template #context>
       <ProjectResourcesDrawer />
     </template>

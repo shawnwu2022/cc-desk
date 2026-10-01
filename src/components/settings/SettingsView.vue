@@ -6,13 +6,14 @@ import { useAppStore } from '@/stores/app'
 import AppButton from '@/components/ui/AppButton.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
-import EmptyState from '@/components/ui/EmptyState.vue'
+import LaunchConfigurationsSection from './sections/LaunchConfigurationsSection.vue'
 import GeneralSection from './sections/GeneralSection.vue'
 import AppearanceSection from './sections/AppearanceSection.vue'
 import TerminalSection from './sections/TerminalSection.vue'
 import ShortcutsSection from './sections/ShortcutsSection.vue'
 import UpdateSection from './sections/UpdateSection.vue'
 import AboutSection from './sections/AboutSection.vue'
+withDefaults(defineProps<{ active?: boolean }>(), { active: true })
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
 const sidebar = useSidebarStore()
@@ -40,7 +41,7 @@ const items = computed(() => SETTINGS_SECTIONS.map(id => ({ id, label: t(labels[
       <GeneralSection v-if="section === 'general'" />
       <AppearanceSection v-else-if="section === 'appearance'" />
       <TerminalSection v-else-if="section === 'terminal'" />
-      <EmptyState v-else-if="section === 'launch-configurations'" :title="t('settingsLaunchConfigurations')" :description="t('settingsLaunchConfigurationsPending')" />
+      <LaunchConfigurationsSection v-else-if="section === 'launch-configurations'" :active="active" />
       <ShortcutsSection v-else-if="section === 'shortcuts'" />
       <UpdateSection v-else-if="section === 'update'" />
       <AboutSection v-else-if="section === 'about'" />

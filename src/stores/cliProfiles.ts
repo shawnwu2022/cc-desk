@@ -1,4 +1,6 @@
 import { useNativeTabsStore } from '@/stores/nativeTabs'
+import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
+import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useNotificationsStore } from '@/stores/notifications'
 import type { DeleteLaunchConfigurationRequest } from '@/types/confirmation'
 import { mapSafeUserError, type UserErrorPresentation, safeUserErrorCode } from '@/utils/userError'
@@ -11,6 +13,7 @@ import type {
   ProfileOverride,
   ProfilePatch,
   ProfileLauncher,
+  LaunchConfigurationSave,
 } from '@/types/profile'
 import { parseU64 } from '@/utils/nativeIdentity'
 import { computed, ref } from 'vue'
@@ -152,7 +155,12 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
   const deleteBusy = ref(false)
   const deletingIds = new Set<string>()
   function isDeleting(id: string) { return deletingIds.has(id) }
-  function isInUse(id: string) { return [...useNativeTabsStore().tabs.values()].some(tab => tab.profileId === id) }
+  function isInUse(id: string) {
+    const tabs = useNativeTabsStore()
+    const profile = profiles.value.find(row => row.id === id)
+    return [...tabs.tabs.values()].some(tab => tab.profileId === id && !tabs.hasFrozenLaunchReceipt(tab.tabId))
+      || !!profile && profile.cli !== 'shell' && useUnifiedSessionsStore().hasUnadmittedConfiguration(id, profile.cli)
+  }
   function closeDeleteConfirmation() { deleteConfirmation.value = null; deleteError.value = null }
   function requestDelete(id: string): DeleteLaunchConfigurationRequest | null {
     const profile = profiles.value.find(row => row.id === id)
@@ -178,10 +186,12 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
       try {
         attempted = true
         await execute(() => cliPatchProfile(request.workspaceRevision, { op: 'delete', id: request.profileId }))
+        useNewSessionDraftStore().forgetDefault(request.profileId)
       } catch (failure) {
         // The original writer retains queue ownership through read-only recovery.
         // A lost acknowledgement is never replayed or compensated by another write.
         try { await execute(cliListProfiles) } catch { throw new Error('RECOVERY_UNAVAILABLE') }
+        if (!profiles.value.some(row => row.id === request.profileId)) useNewSessionDraftStore().forgetDefault(request.profileId)
         throw failure
       }
     })
@@ -276,6 +286,28 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
     return next
   }
 
+  /** Editor writes retain queue ownership through read-only recovery, never replay. */
+  function saveConfiguration(input: LaunchConfigurationSave, canContinue: () => boolean): Promise<ProfileList> {
+    const frozen: LaunchConfigurationSave = JSON.parse(JSON.stringify(input))
+    const next = mutationTail.then(async () => {
+      if (!canContinue()) throw new Error('ACTION_CANCELLED')
+      const source = frozen.source ? profiles.value.find(row => row.id === frozen.source!.id) : undefined
+      if (revision.value !== frozen.expectedRevision || (frozen.source && source?.revision !== frozen.source.revision)) {
+        try { await execute(cliListProfiles) } catch { throw new Error('RECOVERY_UNAVAILABLE') }
+        throw new Error('REVISION_CONFLICT')
+      }
+      const target = frozen.patch.op === 'create' ? frozen.patch.profile.id : frozen.patch.id
+      if (isDeleting(target) || (frozen.source && isDeleting(frozen.source.id))) throw new Error('PROFILE_IN_USE')
+      try { return await execute(() => cliPatchProfile(frozen.expectedRevision, frozen.patch)) }
+      catch (failure) {
+        try { await execute(cliListProfiles) } catch { throw new Error('RECOVERY_UNAVAILABLE') }
+        throw failure
+      }
+    })
+    mutationTail = next.then(() => undefined, () => undefined)
+    return next
+  }
+
   function select(cli: NativeCliKind, profileId: string): void {
     const found = profiles.value.find(item => item.id === profileId)
     if (!found) throw new Error('PROFILE_NOT_FOUND')
@@ -297,6 +329,7 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
     selected,
     load,
     patch,
+    saveConfiguration,
     select,
     profile: getProfile,
   }

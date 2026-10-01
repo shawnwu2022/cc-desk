@@ -29,12 +29,12 @@ beforeEach(() => {
   io.archive.mockImplementation(async (path, id) => ({ pinnedProjects: [], archivedSessions: { [path]: [id] } }))
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; vi.restoreAllMocks() })
-function render() {
+function render(realSettings = false) {
   const terminal = defineComponent({ props: ['tabId'], setup(props, { expose }) {
     expose({ focus() {}, fitVisible() {}, async stop(attempt: any) { await io.stop(props.tabId, attempt); const tab = useNativeTabsStore().tab(props.tabId); if (matchesNativeAttempt(tab, attempt)) tab!.status = 'stopped' }, async recover(attempt: any) { await io.recover(props.tabId, attempt) } })
     return () => h('div', { 'data-live-terminal': props.tabId })
   } })
-  const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: terminal, SettingsView: true } } }); wrappers.push(wrapper); return wrapper
+  const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: terminal, SettingsView: !realSettings } } }); wrappers.push(wrapper); return wrapper
 }
 async function running(status: 'running' | 'unknown' = 'running') {
   const tabs = useNativeTabsStore(); const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', sourceSessionKey: 'source', action: { kind: 'resume-id', nativeSessionId: 'saved' }, title: 'Live work' })
@@ -240,4 +240,27 @@ it.each(['cancel', 'source', 'attempt'] as const)('Feedback_ArchiveQueueGuard_01
   expect(useNativeTabsStore().tab(tab.tabId)).toBeDefined()
   expect(catalog.confirmationError).toBeNull()
   expect(io.state).toHaveBeenCalledTimes(reads); expect(state.lastErrorCode).toBeNull(); expect(state.error).toBe(false)
+})
+
+
+// 真正设置页的删除菜单连接 App 确认，已承认的运行与资源 run authority 均保留。
+it('Feedback_SettingsDeleteKeepsRun_019', async () => {
+  const { useSidebarStore } = await import('@/stores/sidebar')
+  const { useProjectResourcesStore } = await import('@/stores/projectResources')
+  const wrapper = render(true); await flushPromises(); const tab = await running()
+  const native = useNativeTabsStore()
+  native.applyLaunchStatus(tab.tabId, { instanceId: 'instance', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+  const frozen = JSON.stringify(native.tab(tab.tabId)); const resources = useProjectResourcesStore()
+  const target = { kind: 'run', runId: tab.runId, generation: tab.generation }
+  expect(resources.context).toMatchObject({ target })
+  useSidebarStore().activeSettingsSection = 'launch-configurations'; useShellStore().navigate('settings'); await flushPromises()
+  await vi.waitFor(() => expect(wrapper.find('[data-launch-row="cx"] [data-launch-menu]').exists()).toBe(true))
+  await wrapper.get('[data-launch-row="cx"] [data-launch-menu]').trigger('click'); await flushPromises()
+  ;(document.querySelector('[data-item-id="delete"]') as HTMLButtonElement).click(); await flushPromises()
+  expect(io.patch).not.toHaveBeenCalled(); expect(document.querySelector('[data-confirm-configuration-delete]')).not.toBeNull()
+  io.patch.mockResolvedValue({ revision: '8', profiles: [] })
+  ;(document.querySelector('[data-confirm-configuration-delete]') as HTMLButtonElement).click(); await flushPromises()
+  expect(io.patch).toHaveBeenCalledOnce(); expect(io.stop).not.toHaveBeenCalled(); expect(io.recover).not.toHaveBeenCalled()
+  expect(JSON.stringify(native.tab(tab.tabId))).toBe(frozen); expect(resources.context).toMatchObject({ target })
+  expect(document.querySelector('[data-live-terminal]')).not.toBeNull()
 })
