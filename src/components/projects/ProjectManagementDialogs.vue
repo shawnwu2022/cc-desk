@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ProjectConfirmDialog from '@/components/dialogs/ProjectConfirmDialog.vue'
+import { projectBasename } from '@/utils/displayName'
 import { useI18n } from 'vue-i18n'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import AppDialog from '@/components/ui/AppDialog.vue'
@@ -9,16 +11,15 @@ const { t } = useI18n()
 const management = useProjectManagementStore()
 </script>
 <template>
-  <AppDialog :open="!!management.dialog" :title="t(management.dialog?.kind === 'remove' ? 'projectRemoveTitle' : 'rename')"
-    :description="management.dialog?.kind === 'remove' ? t('projectRemoveDescription') : undefined" @close="management.closeDialog">
+  <ProjectConfirmDialog :request="management.dialog?.kind === 'remove' ? { kind: 'remove-project', title: management.groups.find(group => group.projectKey === management.dialog!.project.projectKey)?.name ?? projectBasename(management.dialog.project.projectPath) } : null" :busy="management.busy" :error-key="management.error" @cancel="management.closeDialog" @confirm="management.remove" />
+  <AppDialog :open="management.dialog?.kind === 'rename'" :title="t('rename')" @close="management.closeDialog">
     <p class="project-target" :title="management.dialog?.project.projectPath">{{ management.dialog?.project.projectPath }}</p>
     <AppInput v-if="management.dialog?.kind === 'rename'" v-model="management.renameValue" :label="t('projectDisplayName')" :disabled="management.busy" @keydown.enter="management.rename" />
     <InlineNotice v-if="management.renameError" kind="warning" :message="t(management.renameError)" />
     <InlineNotice v-if="management.error" kind="warning" :message="t(management.error)" />
     <template #footer>
       <AppButton data-cancel-project-action :disabled="management.busy" @click="management.closeDialog">{{ t('cancel') }}</AppButton>
-      <AppButton v-if="management.dialog?.kind === 'remove'" data-confirm-project-remove variant="danger" :loading="management.busy" :disabled="management.busy" @click="management.remove">{{ t('projectRemoveConfirm') }}</AppButton>
-      <AppButton v-else data-confirm-project-rename variant="primary" :loading="management.busy" :disabled="management.busy" @click="management.rename">{{ t('save') }}</AppButton>
+      <AppButton data-confirm-project-rename variant="primary" :loading="management.busy" :disabled="management.busy" @click="management.rename">{{ t('save') }}</AppButton>
     </template>
   </AppDialog>
 </template>

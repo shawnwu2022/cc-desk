@@ -15,6 +15,7 @@ import { useHookStore } from '@/stores/hook'
 import { useAttentionStore } from '@/stores/attention'
 import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
 import { createNativeCliAdapter, type NativeRuntimeCreateInput } from '@/session/adapters/nativeCliAdapter'
+import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 import { sameProjectPath } from '@/utils/path'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { UnifiedCliKind } from '@/types/unifiedSession'
@@ -36,6 +37,24 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const error = ref<string | null>(null)
   const ready = ref(false)
   const loading = ref(false)
+  const fatal = computed(() => ready.value && !loading.value && !projects.loaded
+    && profiles.status === 'error' && workspace.status === 'error' && app.managedProjectsStatus === 'error'
+    && !openSessions.value.length && !catalog.sessions.length && !app.cachedProjects.length
+    && !profiles.profiles.length && !workspace.projects.length && !projects.pinnedProjects.length)
+  let retryRequest: { request: WorkspaceRequest; owns: () => boolean } | null = null
+  const cliProblems = computed(() => (['claude', 'codex'] as const).flatMap(cli => {
+    const latest = [...native.tabs.values()].reverse().filter(tab => tab.cli === cli).sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0]
+    const failed = latest?.status === 'failed' ? latest : null
+    const code = latest?.status === 'running' ? null : failed?.errorCode === 'AUTH_REQUIRED' ? 'AUTH_REQUIRED'
+      : draft.cliAvailability[cli] === 'unavailable' || ['CLI_NOT_FOUND', 'PROGRAM_UNAVAILABLE'].includes(failed?.errorCode ?? '') ? 'CLI_NOT_FOUND' : null
+    return code ? [{ cli, messageKey: mapSafeUserError(code, 'launch').messageKey }] : []
+  }))
+  function retryAction() {
+    const pending = retryRequest
+    retryRequest = null
+    if (pending?.owns()) shell.requestWorkspaceAction(pending.request)
+    else shell.requestWorkspaceAction({ kind: 'refresh' })
+  }
   let disposed = false
   let refreshOwner = 0
   let claimedSequence = -1
@@ -50,8 +69,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         awaitingSuccess.delete(id) // Claim before the canonical store write can publish state.
         if (profiles.profile(frozen.profileId)?.revision === frozen.profileRevision) {
           const sequence = shell.requestSequence
+          const ownsSelection = catalog.captureSelectionOwnership()
           void draft.recordSuccess(frozen.projectPath, frozen.cli, frozen.profileId).catch(() => {
-            if (!disposed && shell.requestSequence === sequence && matchesNativeAttempt(native.tab(id), frozen.attempt)) error.value = 'newSessionPreferenceSaveFailed'
+            if (!disposed && shell.requestSequence === sequence && ownsSelection() && matchesNativeAttempt(native.tab(id), frozen.attempt)) error.value = 'newSessionPreferenceSaveFailed'
           })
         }
       } else if (tab && ['failed', 'exited'].includes(tab.status)) awaitingSuccess.delete(id)
@@ -74,6 +94,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const source = input.sourceContext
     const profile = input.launchConfigId ? profiles.profile(input.launchConfigId) : profiles.selected[input.cli]
     if (!profile) throw new Error('CLI_PROFILE_REQUIRED')
+    if (profiles.isDeleting(profile.id)) throw new Error('PROFILE_IN_USE')
     if (profile.cli !== input.cli) throw new Error('PROFILE_CLI_MISMATCH')
     if (input.launchConfigRevision && profile.revision !== input.launchConfigRevision) throw new Error('PROFILE_SELECTION_CHANGED')
     if (source && (source.cli !== input.cli || source.profileId !== profile.id || source.profileRevision !== profile.revision)) {
@@ -95,16 +116,19 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const tab = native.tab(tabId)
     if (!tab) throw new Error('NATIVE_SESSION_NOT_FOUND')
     const frozen = { ...tab }
+    const ownsSource = catalog.captureSessionOwnership(`native-tab:${tabId}`)
     const attempt = captureNativeAttempt(frozen)
     if (frozen.status === 'unknown') throw new Error('LAUNCH_STATE_UNKNOWN')
     const requireSource = () => {
       const profile = profiles.profile(frozen.profileId)
+      if (profiles.isDeleting(frozen.profileId)) throw new Error('PROFILE_IN_USE')
       if (!profile || profile.cli !== frozen.cli || profile.revision !== frozen.profileRevision) throw new Error('PROFILE_SELECTION_CHANGED')
       if (!workspace.projects.some(project => project.projectId === frozen.projectId && sameProjectPath(project.selectedPath, frozen.projectPath))) throw new Error('PROJECT_NOT_FOUND')
     }
     requireSource()
     if (frozen.status === 'starting' || frozen.status === 'running') await requireHost().stopNative(tabId, attempt)
     if (!matchesNativeAttempt(native.tab(tabId), attempt)) throw new Error('STALE_NATIVE_ATTEMPT')
+    if (!ownsSource()) throw new Error('STALE_SESSION_ATTEMPT')
     requireSource()
     const restarted = native.restart(tabId, { cli: frozen.cli, profileId: frozen.profileId, profileRevision: frozen.profileRevision })
     awaitingSuccess.set(restarted.tabId, { attempt: captureNativeAttempt(restarted), projectPath: restarted.projectPath, cli: restarted.cli, profileId: restarted.profileId, profileRevision: restarted.profileRevision })
@@ -113,6 +137,21 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   if (enabled) {
     // Subscribe attention before child TerminalView status consumers mount.
     useAttentionStore().init()
+    catalog.configureUnknownRestartRecovery(async (id, canContinue) => {
+      const row = catalog.sessions.find(row => row.id === id)
+      if (row?.runtime !== 'native-cli') throw new Error('LAUNCH_STATE_UNKNOWN')
+      const tab = native.tab(row.adapterSessionId)
+      if (!tab || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+      const attempt = captureNativeAttempt(tab)
+      await requireHost().recoverNative(tab.tabId, attempt)
+      if (!canContinue() || !matchesNativeAttempt(native.tab(tab.tabId), attempt)) throw new Error('STALE_SESSION_ATTEMPT')
+      const current = native.tab(tab.tabId)!
+      if (current.status === 'unknown') throw new Error('LAUNCH_STATE_UNKNOWN')
+      if (current.status === 'running' || current.status === 'starting') await requireHost().stopNative(current.tabId, attempt)
+      if (!canContinue() || !matchesNativeAttempt(native.tab(tab.tabId), attempt)) throw new Error('STALE_SESSION_ATTEMPT')
+      const ended = native.tab(tab.tabId)!
+      if (!['stopped', 'exited', 'failed'].includes(ended.status) || ended.launchRevision === null) throw new Error('NATIVE_STOP_UNCONFIRMED')
+    })
     catalog.configureCreationPreparer(async input => {
       if (app.isProjectAdmissionBlocked(input.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
       const prepared = await draft.prepareInput(input)
@@ -121,6 +160,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       if (disposed) throw new Error('NEW_SESSION_CANCELLED')
       const profile = prepared.launchConfigId ? profiles.profile(prepared.launchConfigId) : null
       if (!profile || profile.cli !== prepared.cli || profile.revision !== prepared.launchConfigRevision) throw new Error('PROFILE_SELECTION_CHANGED')
+      if (profiles.isDeleting(profile.id)) throw new Error('PROFILE_IN_USE')
       return prepared
     })
     catalog.configureHistoryLoader(async query => {
@@ -205,7 +245,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (!current()) return
     ready.value = true
     loading.value = false
-    error.value = partial ? 'workspaceRuntimePartial' : null
+    error.value = partial && !fatal.value ? 'workspaceRuntimePartial' : null
   }
 
   async function dispatch(request: WorkspaceRequest): Promise<boolean> {
@@ -226,8 +266,11 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       if (shell.section === 'workspace') catalog.openResumeDialog(request)
       return true
     }
-    if (request.kind === 'add-project' || request.kind === 'open-project'
-      || request.kind === 'confirmation' || request.kind === 'project-action') return false
+    if (request.kind === 'confirmation') {
+      if (shell.section === 'workspace') catalog.beginSessionConfirmation(request.request.kind, request.request.sessionId)
+      return true
+    }
+    if (request.kind === 'add-project' || request.kind === 'open-project' || request.kind === 'project-action') return false
     if (!('sessionId' in request)) return false
     const session = catalog.sessions.find(value => value.id === request.sessionId)
     if (!session) return false
@@ -282,13 +325,15 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       }
       case 'restart':
       case 'retry':
-        if (!open || state === 'unknown') return false
+        if (!open) return false
+        if (state === 'unknown') { if (shell.section === 'workspace') catalog.beginSessionConfirmation('restart-unknown', session.id); return true }
         await catalog.restartSession(session.id); return true
       case 'close':
-        if (!open || live) return false // Task 16 must first confirm stopping a live run.
+        if (!open) return false
+        if (live) { if (shell.section === 'workspace') catalog.beginSessionConfirmation('close-running', session.id); return true }
         await catalog.closeSession(session.id); return true
       case 'archive':
-        if (live) return false
+        if (live) { if (shell.section === 'workspace') catalog.beginSessionConfirmation('stop-and-archive', session.id); return true }
         await catalog.archiveSession(session.id); return true
       case 'resume':
         if (open) { await catalog.activateSession(session.id); return true }
@@ -305,18 +350,43 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   watch(() => [ready.value, shell.requestSequence], async () => {
     if (!enabled || disposed || !shell.pendingRequest || claimedSequence === shell.requestSequence) return
     const pending = shell.pendingRequest
-    const ownsSession = 'sessionId' in pending && typeof pending.sessionId === 'string' && (catalog.isPreparingSession(pending.sessionId)
-      || openSessions.value.some(session => session.id === pending.sessionId))
+    const pendingSessionId = pending.kind === 'confirmation' ? pending.request.sessionId : 'sessionId' in pending ? pending.sessionId : undefined
+    const ownsSession = typeof pendingSessionId === 'string' && (catalog.isPreparingSession(pendingSessionId)
+      || openSessions.value.some(session => session.id === pendingSessionId))
     // Locally owned lifecycle controls cannot wait for unrelated history/bootstrap.
     if (!ready.value && !['new-session', 'create-session'].includes(pending.kind) && !ownsSession) return
     const sequence = shell.requestSequence
     const request = shell.pendingRequest
+    catalog.closeSessionConfirmation()
+    const feedback = catalog.captureFeedbackOwner()
+    const ownsFeedbackSession = 'sessionId' in request && typeof request.sessionId === 'string' && catalog.sessions.some(row => row.id === request.sessionId)
+      ? catalog.captureSessionOwnership(request.sessionId) : () => true
+    const current = () => !disposed && shell.requestSequence === sequence && feedback() && ownsFeedbackSession()
+    retryRequest = null
     claimedSequence = sequence // Claim before async work; never retry on reactive changes.
     try {
-      if (await dispatch(request)) shell.clearWorkspaceRequest(sequence)
+      if (await dispatch(request)) {
+        shell.clearWorkspaceRequest(sequence)
+        const key = request.kind === 'rename' ? 'feedbackRenamed'
+          : 'action' in request && request.action === 'copy-session-id' ? 'feedbackCopied'
+          : 'action' in request && request.action === 'archive' && !catalog.sessionConfirmation ? 'feedbackArchived' : null
+        if (key) catalog.publishActionSuccess(current, key)
+      }
     } catch (failure) {
-      if (!disposed && shell.requestSequence === sequence) error.value = failure instanceof Error && failure.message === 'SESSION_ORIGIN_AMBIGUOUS' ? 'resumeAmbiguous' : 'workspaceRuntimeActionFailed'
-      // Keep the explicit request visible; a later user request is a new sequence.
+      const code = safeUserErrorCode(failure)
+      if (code === 'REVISION_CONFLICT') {
+        const recovery = await Promise.allSettled([projects.reload(), profiles.load(), workspace.load()])
+        if (recovery.some(result => result.status === 'rejected')) {
+          catalog.publishActionFailure(current, new Error('RECOVERY_UNAVAILABLE'))
+          return
+        }
+      }
+      if (current()) {
+        error.value = code === 'SESSION_ORIGIN_AMBIGUOUS' ? 'resumeAmbiguous' : null
+        catalog.publishActionFailure(current, failure)
+        if (mapSafeUserError(code, 'session').retryable) retryRequest = { request, owns: () => current() && ownsFeedbackSession() }
+      }
+      // No side effect is replayed. Retry is a new, explicit user request.
     }
   }, { immediate: true })
   watch(() => [
@@ -336,5 +406,5 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     void refresh()
   })
   onUnmounted(() => { disposed = true; ++refreshOwner })
-  return { openSessions, cliAvailability, ready, loading, error, refresh }
+  return { openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, refresh, retryAction }
 }

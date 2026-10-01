@@ -1,3 +1,4 @@
+import { safeUserErrorCode } from '@/utils/userError'
 import { createNativeProjectionClient } from '@/api/tauri'
 import { projectionErrorCode } from '@/api/nativeProjection'
 import type { ProjectionResult } from '@/types/nativeProjection'
@@ -82,7 +83,7 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
   const metadata = ref<Record<string, ProjectMetadata>>({})
   const warnings = ref<string[]>([])
   const status = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
-  const lastError = ref<unknown>(null)
+  const lastError = ref<string | null>(null)
   let epoch = 0
   let initialized = false
   let mutationTail: Promise<void> = Promise.resolve()
@@ -110,15 +111,18 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
     } catch (error) {
       if (current === epoch) {
         status.value = 'error'
-        lastError.value = error
+        lastError.value = safeUserErrorCode(error)
       }
       throw error
     }
   }
 
-  function mutate(operation: () => Promise<ProjectList>): Promise<ProjectList> {
+  function mutate(operation: () => Promise<ProjectList>, beforeMutation?: () => void): Promise<ProjectList> {
     homeOwner = {}
     const next = mutationTail.then(async () => {
+      // Queued work is not admitted yet. Recheck its explicit owner before
+      // starting execute so cancellation is not published as a registry failure.
+      beforeMutation?.()
       try { return await execute(operation) }
       catch (failure) {
         const code = failure && typeof failure === 'object' && 'code' in failure ? failure.code : null
@@ -170,11 +174,11 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
     })
   }
 
-  function remove(projectId: string): Promise<ProjectList> {
+  function remove(projectId: string, beforeMutation?: () => void): Promise<ProjectList> {
     return mutate(() => {
       if (!initialized) throw { code: 'WORKSPACE_NOT_LOADED', retryable: false } satisfies SafeError
       return removeProject(projectId, revision.value)
-    })
+    }, beforeMutation)
   }
 
   // The registry is authoritative. Native reads add observations and never alter projects.

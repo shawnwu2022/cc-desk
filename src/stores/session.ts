@@ -864,8 +864,8 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /** 存档/恢复由 projectsState 单一写入队列执行。 */
-  async function archiveSession(projectPath: string, sessionId: string) {
-    await projectsState.archiveSession(projectPath, sessionId)
+  async function archiveSession(projectPath: string, sessionId: string, beforeMutation?: () => void) {
+    await projectsState.archiveSession(projectPath, sessionId, beforeMutation)
   }
 
   async function restoreSession(projectPath: string, sessionId: string) {

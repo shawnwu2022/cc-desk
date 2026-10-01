@@ -412,3 +412,58 @@ A coalesced restore now retains separate caller cancellation guards. At least on
 current explicit confirmation may admit the single shared result. A canceled caller
 still rejects and cannot publish selection, while a fresh confirmation after closing
 and reopening the dialog can succeed without waiting for a second manual retry.
+
+## Task 16: typed confirmations and owned feedback
+
+Normal App mounts `SessionConfirmDialog`, shared `ProjectConfirmDialog` consumers,
+and `AppToastHost`. Session confirmation requests discriminate `close-running`,
+`stop-and-archive`, and `restart-unknown`; their public state contains the session
+identity and display title, while executable ownership guards stay private to the
+catalog. The same flow consumes the existing tree stop-and-archive request and
+normal runtime Close/Archive/Restart commands. Opening a dialog has no process
+side effect. Native unknown Restart is reachable through the existing restart
+command path; the row's existing confirm-status primary action remains unchanged.
+
+`unifiedSessions.beginSessionConfirmation`, `confirmSessionAction`, and
+`closeSessionConfirmation` own admission. Native identity includes the exact
+attempt plus CLI, profile/revision, registered project/path, sourceSessionKey and
+launch action. Legacy identity includes the Tab object, PTY/generation and
+project/session identity; a successful stop may clear only that same PTY. Dialog
+cancellation/navigation may occur while an issued stop is completing, but no later
+close/archive/restart step may execute for an invalidated owner. An already-issued
+metadata write is not rolled back or replayed. Late outcomes do not close a new
+dialog or publish errors/toasts onto a changed selection or attempt.
+
+The project removal confirmation now renders through `ProjectConfirmDialog`, while
+rename remains in `ProjectManagementDialogs`. Task14 visibility/removal admission
+barriers remain intact. A known registration is frozen at dialog creation; if it
+was not loaded, the first authoritative read binds it before any write. Replacement
+registrations, open sessions, cancellation and changed selection fail before later
+writes. Project/CLI history files are never deleted.
+
+Configuration deletion provides the real downstream Task19 contract:
+- `cliProfiles.requestDelete(id)` returns/publishes a typed frozen confirmation,
+  or null plus a safe `deleteError` for missing/in-use configurations
+- `confirmDelete()` rechecks the configuration revision, workspace CAS revision,
+  current request and open Native sessions before the existing `cliPatchProfile`
+  delete operation; `deleteBusy` and `isDeleting(id)` provide admission barriers
+- `closeDeleteConfirmation()` invalidates queued work and feedback ownership
+- ordinary `patch(..., { op: 'delete' })` rejects with `CONFIRMATION_REQUIRED`
+- conflict/unknown acknowledgement performs a read-only reload while holding the
+  writer queue; an updated revision requires a fresh request/confirmation, and no
+  delete is replayed automatically
+
+Normal App already binds the typed store request to the shared confirmation dialog
+on the Settings surface. The configuration editor/list trigger belongs to Task19;
+Task16 does not add a fake settings screen or standalone demo. Tests drive the real
+store request through normal App and the existing API boundary.
+
+Safe error extraction only accepts fixed allowlisted codes with own properties.
+Inherited keys such as `constructor`, `__proto__`, and `toString` map to the generic
+safe fallback. Profile/workspace/catalog error state does not retain raw exceptions.
+Local failures render mapped inline notices and safe diagnostic codes in details;
+explicit Retry is a new typed request that rechecks original ownership. Single-CLI
+failure banners clear when newer successful evidence supersedes them. Whole-workspace
+failure requires all relevant sources to fail and no usable cached/open context;
+its error surface hides, but does not unmount, the terminal host. Existing read-only
+resource notices remain owned by Task15 and are not promoted to global failures.

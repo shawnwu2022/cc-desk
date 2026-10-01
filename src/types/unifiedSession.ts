@@ -123,10 +123,10 @@ export interface SessionAdapter {
   resumeSession(input: ResumeUnifiedSessionInput, canAdmit?: () => boolean): Promise<UnifiedSession>
   activateSession(id: string): Promise<void> | void
   stopSession(id: string): Promise<void>
-  restartSession(id: string): Promise<UnifiedSession>
-  closeSession(id: string): Promise<void>
+  restartSession(id: string, canContinue?: () => boolean): Promise<UnifiedSession>
+  closeSession(id: string, canContinue?: () => boolean): Promise<void>
   renameSession(id: string, title: string): Promise<void>
-  archiveSession(id: string): Promise<void>
+  archiveSession(id: string, canContinue?: () => boolean): Promise<void>
   restoreArchivedSession(id: string): Promise<void>
   /** Recheck absence without deleting CLI history files. */
   verifyMissingSession?(input: ResumeUnifiedSessionInput): Promise<void>

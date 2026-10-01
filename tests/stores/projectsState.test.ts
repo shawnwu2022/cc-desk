@@ -131,7 +131,7 @@ describe('durable shared projects state', () => {
     expect(store.sessionRecords.get('native')).toEqual(nativeRecord)
   })
 
-  it('leaves the adopted state unchanged when a non-conflict mutation fails', async () => {
+  it('reconciles an uncertain archive acknowledgement without replay', async () => {
     const api = await import('@/api/tauri')
     const get = api.getProjectsState as ReturnType<typeof vi.fn>
     const archive = api.archiveSession as ReturnType<typeof vi.fn>
@@ -140,6 +140,7 @@ describe('durable shared projects state', () => {
       pinnedProjects: ['/stable'],
       sessionRecords: { native: nativeRecord },
     })
+    get.mockResolvedValueOnce({ ...emptyState(), pinnedProjects: ['/stable'], archivedSessions: { '/stable': ['legacy-1'] }, sessionRecords: { native: nativeRecord } })
     archive.mockRejectedValueOnce(new Error('write failed'))
 
     const store = useProjectsStateStore()
@@ -147,8 +148,9 @@ describe('durable shared projects state', () => {
     await expect(store.archiveSession('/stable', 'legacy-1')).rejects.toThrow('write failed')
 
     expect(store.pinnedProjects).toEqual(['/stable'])
-    expect(store.archivedSessions.size).toBe(0)
+    expect(store.archivedSessions.get('/stable')).toEqual(['legacy-1'])
     expect(store.sessionRecords.get('native')).toEqual(nativeRecord)
+    expect(archive).toHaveBeenCalledTimes(1); expect(get).toHaveBeenCalledTimes(2)
   })
 
   it('persists session records and per-project launch preferences through typed actions', async () => {

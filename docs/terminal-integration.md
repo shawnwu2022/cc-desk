@@ -224,3 +224,39 @@ can authorize missing-record cleanup; changing root identity or multi-page negat
 results fail closed. Positive source-bound records are still usable. Coalescing uses
 independent per-caller cancellation ownership: a later explicit confirmation may
 own one admission, and canceled callers cannot publish its result as their own.
+
+## Task 16: consequential action ownership
+
+The UI never interprets confirmation as evidence that an unknown Native launch is
+safe to repeat. For restart-unknown, the production runtime first calls the existing
+`recoverNative(tabId, exactAttempt)`, rechecks full ownership, refuses a still-unknown
+state, stops a known live attempt through `stopNative`, and requires a definite ended
+state with a launch receipt before the catalog's normal restart route. The existing
+Native terminal already verifies the stop receipt; no transport or retry protocol
+was introduced.
+
+Confirmed close/archive freezes adapter ownership when the dialog opens and again
+when the queued action is admitted. Guards cover Native request/run/generation and
+profile/project/source/action identity. Legacy close awaits the existing exact-PTY
+stop before removing the tab; archive and async rename recheck the captured PTY and
+generation after awaits. Cancellation or replacement can leave an already-stopped
+original session open, but cannot close/archive a replacement or start a late run.
+
+Feedback ownership is separate from process ownership. A completed authorized action
+may still update its canonical source, but its stale success/error cannot be published
+for a newer user selection, shell request, navigation surface or runtime attempt.
+Canonical archive/restore/UI-record mutation recovery remains in `projectsState`'s
+single writer queue. Profile deletion similarly serializes read-only reconciliation
+within its own existing profile CAS queue. No successful reload automatically repeats
+a side effect, and no new Native code falls back to Legacy PTY commands.
+
+Writer admission is the final synchronous boundary before IPC, after any canonical
+queue wait and initial metadata load. Both archive adapters pass an optional
+`beforeMutation(): void` guard through `projectsState.archiveSession`; the Legacy
+session store forwards it unchanged. The guard throws before mutation error handling,
+so a canceled or replaced owner causes no archive write, readback, or writer error.
+Issued writes retain existing read-only reconciliation and are never replayed.
+Project removal similarly guards `workspace.remove` inside its CAS queue, then guards
+queued `unpinProject` against cancellation, open sessions, and any replacement
+registration. Prior completed steps may remain (stopped session, hidden/unregistered
+project); cancellation never invents compensation or deletes project/history files.

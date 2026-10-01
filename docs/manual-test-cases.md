@@ -2405,3 +2405,11 @@
 - Steps: inspect a Native run launched with a configuration different from the current default; modify the saved configuration without restarting; inspect a never-admitted/historical session; make the source unavailable; inspect Legacy project-only and instruction states
 - Expected: live Native resources follow the frozen run snapshot; exact historical/profile identities never silently become current defaults; missing/unsupported sources differ from empty observations; bounded pages and instruction truncation are labeled; Legacy omits ambient user/global observations and labels project-only/partial, with instructions unavailable
 - Scope: do not insert real secrets to test privacy. Automated synthetic sentinels cover DOM filtering. Automated review regressions additionally cover actual Native terminal malformed-receipt handling with no profile fallback, and Legacy MCP/settings missing/ancestor/other-project source-path rejection. These manual checks do not replace separately authorized D20 real-account/CLI certification, and have not been performed by the Task 15 implementation
+
+## Task 16：确认与反馈最终平台检查（待执行）
+
+- 目标：Windows 1024×640 在 100%/125%/150% 缩放下，及 macOS/Linux 验证确认弹窗与反馈的真实渲染/可访问性。
+- 前置：已授权的真实 CLI/目标机器；准备运行、已结束和状态不明的会话。真实停止/恢复/重启与账号验证需单独授权，当前 jsdom/host 测试不代表通过。
+- 操作：用鼠标/键盘触发关闭运行会话、停止并归档、未知状态检查后重启、项目移除；等待时取消或切换导航/会话；在单工具缺失/未登录与全来源不可用场景检查反馈。配置编辑器入口接入后再验证其删除确认。
+- 预期：默认焦点不落在危险按钮；长标题/中英文文案可滚动且无全页横向溢出；失活表面无残留焦点陷阱；工具故障不阻断另一工具；全工作区错误不卸载终端宿主；未知进程未确认停止时不重复启动；Toast 不覆盖新选择，诊断中没有原始路径、错误正文、环境值或凭据。
+- 排队检查：让另一元数据/注册写尚未完成，再确认停止并归档或项目移除；在 archive/unregister/unpin 发出前取消或替换原来源。预期：队列释放后不发出已失效步骤，Native/Legacy 均保留停止后的打开会话；取消未发出的写不显示存储失败或触发未知写恢复。已经完成的停止/隐藏/注销可以保留，应用不自动补偿或重放。

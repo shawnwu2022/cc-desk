@@ -121,7 +121,7 @@ UnifiedSession catalog（Legacy/Native adapters）→ UnifiedProjectGroup[] → 
 - 统一树直接混排 Claude Code / Codex CLI；`ProjectNode` 和 `SessionList` 不再接收旧 tabs/history，也不依赖旧 PTY attention store。`SessionsPanel` 接收显式统一投影或默认读取 `unifiedSessions` store；adapter 初始化和生命周期 dispatch 由 `useUnifiedWorkspaceRuntime` 负责；`UnifiedTerminalHost` 保持一个 Legacy 聚合器及每个 Native 会话的独立终端常驻。
 - 项目行只有一个新建快捷动作；固定/取消固定、重命名、查看归档、打开目录、移除走同一 `AppMenu`，鼠标右键和 overflow 共用动作。`new-session-request` 携带 projectKey/projectPath，不能交给旧容器的 `new-session` Legacy 启动 handler。
 - normal `projectGroups` 保持排除已归档记录。UI 为仅剩归档的项目保留一个空项目壳以访问其归档菜单；面板全局归档入口在搜索无结果时仍可用。恢复仅发 `restore-request`，不直接恢复或启动，成功后由调用方发布 catalog 更新。
-- 运行态 archive 必须发 `SessionTreeConfirmationRequest { kind: 'stop-and-archive', sessionId, projectKey, projectPath }`；未知/启动态不发归档请求。树组件不得直接 stop/archive，也不得 fallback 到 Legacy PTY；完整确认 UI 在后续任务实现；normal App 的运行态关闭/归档请求保持待确认，不能从目录旧快照推断已停止。
+- 运行态 archive 必须发 `SessionTreeConfirmationRequest { kind: 'stop-and-archive', sessionId, projectKey, projectPath }`；未知/启动态不发归档请求。树组件不得直接 stop/archive，也不得 fallback 到 Legacy PTY；完整确认 UI 由 Task16 接入；normal App 的运行态关闭/归档在确认后仍须重新检查精确所有权，不能从目录旧快照推断已停止。
 - 展开状态按 projectKey 显式保存；搜索临时展开但禁止修改手动状态。项目名/原 basename/路径命中展示组内普通会话，会话名命中只展示匹配的普通会话。清空搜索恢复之前手动状态；nested controls 的 Enter/Space 不触发父级折叠，菜单/编辑器 Escape 不关闭整个面板。
 - 旧 `session.ts` 的分组、`resolveSwitchAction`、历史缓存、`projects.json` persistence 和 ProjectSelectView 管理行为仍属于兼容数据/管理路径。它们不再是新的双 CLI 树 UI 边界，也不能用旧历史删除接口删除 Native 记录。
 - `projects.json` pin/archive/displayName/delete 增量写继续通过独立 `projects.json.lock` 跨进程锁、增量 apply 和原子返回状态；统一项目状态由 `projectsState` store 读取。Native workspace 保持自己的 revision/CAS 和 authenticated document bridge。
@@ -351,7 +351,7 @@ npm run tauri:build        # 生产构建
 - `newSessionDraft` 保存 UI 草稿与独立 CLI 默认选择，并消费 `projectsState.launchPreferences` 的项目+CLI 最近成功配置；成功写入只经过 `setLaunchPreference` / projects.json 单一 writer。偏好顺序为项目+CLI 最近成功配置、CLI 默认配置、显式创建时的安全默认配置；只有匹配 request/run/generation 的 `running` receipt 才记录成功，不把 tab admission 或文件系统 preflight 当成真实 CLI 成功。
 - 创建先插入 catalog 占位行，再异步准备配置/注册。`workspace.ensureRegistered` 是 Task14 可复用的显式创建前置步骤；bootstrap 仍只读。配置使用既有 patch/CAS；冲突/未知提交只 reload、不自动重复写或启动。失败占位保留并支持明确重试；取消后迟到完成不能启动，unknown 不重放。
 - 高级对话框按基本/更多/开发者选项纵向组织。权限仅描述 Desk 配置的标志并说明实际行为仍受已保存 argv/CLI 设置影响，不承诺实际权限模式，不提供不存在的 per-launch override，不隐式改写已有配置。Raw argv 默认逐行、JSON 显式切换，内部始终精确 `string[]`。
-- 恢复选项发出 `restore-session { project, cli?, mode }`，由 Task13 的统一恢复对话框处理。完整错误详情/运行态关闭确认仍归 Task16。
+- 恢复选项发出 `restore-session { project, cli?, mode }`，由 Task13 的统一恢复对话框处理。完整错误映射与运行态确认已由 Task16 接入。
 - 菜单/对话框使用共享 AppMenu/AppDialog，并随所属活动界面失活而关闭。详细接口与门禁见 `docs/components.md` 和 `docs/terminal-integration.md`。
 
 - Task12 review repairs：pre-ready 创建后的本地会话取消/选择不依赖无关来源 bootstrap；占位行重新选择在 admission 时按最新选择所有权转移到 Native 行，不抢占更新选择。未知偏好写入确认在 projectsState writer 队列内只读恢复，恢复失败使快照失效，后续写入必须重新读取成功或停止。
@@ -366,3 +366,13 @@ npm run tauri:build        # 生产构建
 - 门禁：`npm test -- tests/components/resumeSessionDialog.test.ts tests/stores/unifiedResume.test.ts tests/native-cli/nativeProjectionStore.test.ts && npm run typecheck`。真实 CLI/平台缩放验收仍未执行，见手动测试清单。
 
 - Task13 review repair：Native 不存在证据必须来自同一原始 `sourceRootKey` 的单次完整鉴权响应，并与保存的 `sessionKey` 匹配。offset 多页没有共同快照契约，只可提供正向发现，不能证明缺失/允许移除；大历史中无法证明缺失的记录需保留并提示不确定。合并恢复请求分别保留每个调用方的取消所有权，新显式确认可接管尚未完成的检查；旧已取消调用方仍拒绝，全部取消时不准入。
+
+### 统一确认与安全反馈（Task 16）
+
+- normal App 的运行态关闭、停止并归档和未知状态重启通过类型化 `SessionConfirmDialog`；打开对话框只冻结目标，不执行进程操作。确认固定 Native request/run/generation、CLI/配置修订/项目/来源/启动动作，或 Legacy Tab/PTY/generation/项目/Session 身份，并在异步边界重新检查。导航、项目/会话切换和新意图撤销旧确认，不能把旧错误或完成提示附到新选择。
+- 未知状态重启只授权既有 exact recover/stop 契约：仍未知或未确认停止时保留原尝试；只有状态已知且旧进程确认结束才分配新 generation。Native 不借道 Legacy PTY。Legacy 运行态关闭先 await 停止；异步重命名也重新检查原 PTY 所有权。
+- `ProjectConfirmDialog` 复用项目移除和启动配置删除展示。项目移除保留 Task14 admission/visibility 屏障、原注册身份和不删除文件边界；取消后不能继续后续写。配置删除由 `cliProfiles.requestDelete` / `confirmDelete` 提供真实 CAS 契约，冻结配置与工作区 revision、阻止删除打开会话使用的配置，并阻止删除期间新 Native admission。Task19 再接入配置编辑器入口；不能用 `patch({ op: 'delete' })` 绕过确认。
+- `userError` 仅以 own-property 白名单映射固定键/代码，原始异常与原型继承键不进入渲染状态。普通重试错误内联显示，单个 CLI 故障用工具级横幅；只有全部来源不可读、无缓存和打开会话时显示工作区错误页，终端宿主不卸载。复制、重命名、归档、项目固定/移除和配置删除只在已确认完成且上下文仍匹配时发短 Toast。
+- 冲突/未知写回执只读重新协调，不自动重复 mutation/启动/输入。`projectsState` 是索引元数据唯一 writer，归档/恢复等失败也在其队列内只读恢复。配置删除在自己的 mutation 队列内恢复；配置变化后旧确认不能借用新 revision，需重新检查并明确确认。
+- 精确门禁：`npm test -- tests/components/interactionFeedback.test.ts tests/stores/staleActionFeedback.test.ts tests/utils/nativeErrorCode.test.ts && npm run typecheck`。实际 CLI、Windows/macOS/Linux 渲染和缩放验收仍独立记录，不能以宿主测试替代。
+- Task16 确认的准入检查必须穿透实际 writer 队列：`workspace.remove` 在 CAS 调用前检查原确认/注册/打开会话；`projectsState.archiveSession` 与项目移除的 `unpinProject` 在初始读取和队列等待结束后执行同步检查。Native/Legacy adapter 都把准确 owner 检查传给 canonical writer；未准入取消不当作未知写、不触发 writer 恢复或错误。已经发出的停止/隐藏/注销不补偿，后续未发出的步骤停止。

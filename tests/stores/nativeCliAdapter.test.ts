@@ -77,7 +77,7 @@ describe('native CLI adapter', () => {
     const two = setup([running], [entry])
     await two.adapter.archiveSession('native-tab:tab-2')
     expect(two.runtime.stopTab).toHaveBeenCalledTimes(1)
-    expect(two.archive.archiveSession).toHaveBeenCalledWith('/repo', expect.stringContaining('native-history:'))
+    expect(two.archive.archiveSession).toHaveBeenCalledWith('/repo', expect.stringContaining('native-history:'), expect.any(Function))
   })
   it('NativeAdapter_ProjectsArchivedHistory_005', async () => {
     const { adapter, archived } = setup([], [history('codex', '/root', 'session-1')])

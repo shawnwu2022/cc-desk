@@ -39,7 +39,7 @@ export interface NativeRuntimePort {
 
 export interface NativeArchivePort {
   getArchivedSessions(projectPath: string): string[]
-  archiveSession(projectPath: string, sessionId: string): Promise<unknown>
+  archiveSession(projectPath: string, sessionId: string, beforeMutation?: () => void): Promise<unknown>
   restoreSession(projectPath: string, sessionId: string): Promise<unknown>
 }
 
@@ -320,29 +320,38 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     if (!id.startsWith(ACTIVE_PREFIX)) return () => true
     const tab = requireTab(id)
     const attempt = captureNativeAttempt(tab)
+    const source = JSON.stringify([tab.cli, tab.projectId, tab.projectPath, tab.profileId, tab.profileRevision, tab.sourceSessionKey, tab.action])
     const live = (value: NativeCliTab | undefined) => value && ['running', 'starting', 'unknown'].includes(value.status)
     const mustRemainEnded = !!operation && !live(tab)
     return () => {
       const current = deps.tabs.tabs.get(tab.tabId)
-      return matchesNativeAttempt(current, attempt) && (!mustRemainEnded || !live(current))
+      return matchesNativeAttempt(current, attempt) && !!current
+        && JSON.stringify([current.cli, current.projectId, current.projectPath, current.profileId, current.profileRevision, current.sourceSessionKey, current.action]) === source
+        && (!mustRemainEnded || !live(current))
     }
   }
   async function activateSession(id: string): Promise<void> { deps.tabs.setActive(requireTab(id).tabId) }
   async function stopSession(id: string): Promise<void> { await deps.runtime.stopTab({ ...requireTab(id) }) }
-  async function restartSession(id: string): Promise<UnifiedSession> {
+  async function restartSession(id: string, canContinue = () => true): Promise<UnifiedSession> {
+    if (!canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     const current = requireTab(id)
     if (current.status === 'unknown') throw new Error('LAUNCH_STATE_UNKNOWN')
     return projectTab(await deps.runtime.restartTab(current.tabId))
   }
-  async function closeSession(id: string): Promise<void> {
+  async function closeSession(id: string, canContinue = () => true): Promise<void> {
+    const owns = captureOwnership(id)
+    if (!canContinue() || !owns()) throw new Error('STALE_SESSION_ATTEMPT')
     const tab = { ...requireTab(id) }
     const attempt = captureNativeAttempt(tab)
     if (tab.status === 'running' || tab.status === 'starting' || tab.status === 'unknown') await deps.runtime.stopTab(tab)
-    if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt)) throw new Error('STALE_SESSION_ATTEMPT')
+    if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     deps.tabs.close(tab.tabId)
   }
   async function renameSession(id: string, title: string): Promise<void> { deps.tabs.rename(requireTab(id).tabId, title) }
-  async function archiveSession(id: string): Promise<void> {
+  async function archiveSession(id: string, canContinue = () => true): Promise<void> {
+    const owns = captureOwnership(id)
+    const requireCurrent = () => { if (!canContinue() || !owns()) throw new Error('STALE_SESSION_ATTEMPT') }
+    requireCurrent()
     if (id.startsWith(ACTIVE_PREFIX)) {
       const tab = { ...requireTab(id) }
       const attempt = captureNativeAttempt(tab)
@@ -353,14 +362,14 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       if (candidates.length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
       const { entry, item } = candidates[0]
       if (tab.status === 'running' || tab.status === 'starting') await deps.runtime.stopTab(tab)
-      if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt)) throw new Error('STALE_SESSION_ATTEMPT')
-      await deps.archive.archiveSession(tab.projectPath, historyId(entry, item.sessionKey, item.nativeSessionId))
-      if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt)) throw new Error('STALE_SESSION_ATTEMPT')
+      if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+      await deps.archive.archiveSession(tab.projectPath, historyId(entry, item.sessionKey, item.nativeSessionId), requireCurrent)
+      if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
       deps.tabs.close(tab.tabId)
       return
     }
     const history = parseHistoryId(id)
-    await deps.archive.archiveSession(history.projectPath, id)
+    await deps.archive.archiveSession(history.projectPath, id, requireCurrent)
   }
   async function restoreArchivedSession(id: string): Promise<void> {
     const history = parseHistoryId(id)

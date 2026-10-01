@@ -181,14 +181,15 @@ describe('D22 dual-CLI profile store', () => {
 
     const store = useCliProfilesStore()
     await expect(store.patch('9', {
-      op: 'delete',
+      op: 'update',
       id: 'claude-main',
+      changes: { name: 'Renamed' },
     })).rejects.toMatchObject({ code: 'REVISION_CONFLICT' })
 
     expect(calls).toBe(1)
     expect(args).toEqual({
       expectedRevision: '9',
-      patch: { op: 'delete', id: 'claude-main' },
+      patch: { op: 'update', id: 'claude-main', changes: { name: 'Renamed' } },
     })
   })
 })

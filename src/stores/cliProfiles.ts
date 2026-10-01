@@ -1,3 +1,7 @@
+import { useNativeTabsStore } from '@/stores/nativeTabs'
+import { useNotificationsStore } from '@/stores/notifications'
+import type { DeleteLaunchConfigurationRequest } from '@/types/confirmation'
+import { mapSafeUserError, type UserErrorPresentation, safeUserErrorCode } from '@/utils/userError'
 import { cliListProfiles, cliPatchProfile } from '@/api/cli'
 import type { SafeError, NativeCliKind } from '@/types/cli'
 import type {
@@ -142,7 +146,58 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
   const profiles = ref<CliProfile[]>([])
   const revision = ref('0')
   const status = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
-  const lastError = ref<unknown>(null)
+  const lastError = ref<string | null>(null)
+  const deleteConfirmation = ref<DeleteLaunchConfigurationRequest | null>(null)
+  const deleteError = ref<UserErrorPresentation | null>(null)
+  const deleteBusy = ref(false)
+  const deletingIds = new Set<string>()
+  function isDeleting(id: string) { return deletingIds.has(id) }
+  function isInUse(id: string) { return [...useNativeTabsStore().tabs.values()].some(tab => tab.profileId === id) }
+  function closeDeleteConfirmation() { deleteConfirmation.value = null; deleteError.value = null }
+  function requestDelete(id: string): DeleteLaunchConfigurationRequest | null {
+    const profile = profiles.value.find(row => row.id === id)
+    deleteError.value = null
+    if (!profile || isInUse(id) || deletingIds.has(id)) {
+      deleteError.value = mapSafeUserError(profile ? 'PROFILE_IN_USE' : 'PROFILE_SELECTION_CHANGED', 'settings')
+      return null
+    }
+    deleteConfirmation.value = { kind: 'delete-launch-configuration', title: profile.name, profileId: id, profileRevision: profile.revision, workspaceRevision: revision.value }
+    return deleteConfirmation.value
+  }
+  async function confirmDelete(): Promise<boolean> {
+    const request = deleteConfirmation.value
+    if (!request || deleteBusy.value) return false
+    const current = () => deleteConfirmation.value === request
+    deleteBusy.value = true; deleteError.value = null; deletingIds.add(request.profileId)
+    let attempted = false
+    const operation = mutationTail.then(async () => {
+      if (!current()) throw new Error('ACTION_CANCELLED')
+      const profile = profiles.value.find(row => row.id === request.profileId)
+      if (!profile || profile.revision !== request.profileRevision || revision.value !== request.workspaceRevision) throw new Error('REVISION_CONFLICT')
+      if (isInUse(request.profileId)) throw new Error('PROFILE_IN_USE')
+      try {
+        attempted = true
+        await execute(() => cliPatchProfile(request.workspaceRevision, { op: 'delete', id: request.profileId }))
+      } catch (failure) {
+        // The original writer retains queue ownership through read-only recovery.
+        // A lost acknowledgement is never replayed or compensated by another write.
+        try { await execute(cliListProfiles) } catch { throw new Error('RECOVERY_UNAVAILABLE') }
+        throw failure
+      }
+    })
+    mutationTail = operation.then(() => undefined, () => undefined)
+    try {
+      await operation
+      if (current()) { closeDeleteConfirmation(); useNotificationsStore().pushToast({ kind: 'success', messageKey: 'feedbackConfigurationDeleted' }) }
+      return true
+    } catch (failure) {
+      if (!attempted && safeUserErrorCode(failure) === 'REVISION_CONFLICT') {
+        try { await load() } catch { failure = new Error('RECOVERY_UNAVAILABLE') }
+      }
+      if (current()) deleteError.value = mapSafeUserError(safeUserErrorCode(failure), 'settings')
+      return false
+    } finally { deletingIds.delete(request.profileId); deleteBusy.value = false }
+  }
 
   const selectedIds = ref<Record<NativeCliKind, string | null>>({
     claude: null,
@@ -201,7 +256,7 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
     } catch (error) {
       if (current === epoch) {
         status.value = 'error'
-        lastError.value = error
+        lastError.value = safeUserErrorCode(error)
       }
       throw error
     }
@@ -212,6 +267,8 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
   }
 
   function patch(expectedRevision: string, change: ProfilePatch): Promise<ProfileList> {
+    if (change.op === 'delete') return Promise.reject(new Error('CONFIRMATION_REQUIRED'))
+    if (isDeleting(change.op === 'create' ? change.profile.id : change.id)) return Promise.reject(new Error('PROFILE_IN_USE'))
     const next = mutationTail.then(() =>
       execute(() => cliPatchProfile(expectedRevision, change)),
     )
@@ -232,6 +289,7 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
 
   return {
     profiles,
+    deleteConfirmation, deleteError, deleteBusy, requestDelete, confirmDelete, closeDeleteConfirmation, isDeleting,
     revision,
     status,
     lastError,

@@ -6,6 +6,11 @@ import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import WorkspaceView from '@/components/workspace/WorkspaceView.vue'
 import ProjectResourcesDrawer from '@/components/workspace/ProjectResourcesDrawer.vue'
 import { useProjectResourcesStore } from '@/stores/projectResources'
+import ProjectConfirmDialog from '@/components/dialogs/ProjectConfirmDialog.vue'
+import { useCliProfilesStore } from '@/stores/cliProfiles'
+import SessionConfirmDialog from '@/components/dialogs/SessionConfirmDialog.vue'
+import AppToastHost from '@/components/ui/AppToastHost.vue'
+import ErrorDetails from '@/components/ui/ErrorDetails.vue'
 import NewSessionMenu from '@/components/sessions/NewSessionMenu.vue'
 import ResumeSessionDialog from '@/components/sessions/ResumeSessionDialog.vue'
 import NewSessionDialog from '@/components/sessions/NewSessionDialog.vue'
@@ -48,6 +53,7 @@ watch(() => [shell.section, newSessionDraft.chooserVisible], ([section]) => {
 const app = useAppStore()
 const sidebar = useSidebarStore()
 const management = useProjectManagementStore()
+const configurations = useCliProfilesStore()
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
 const runtime = useUnifiedWorkspaceRuntime(terminalHost, !compatibilityEnabled)
 const configFailed = ref(false)
@@ -68,7 +74,12 @@ const projectTitle = computed(() => project.value
   ? management.groups.find(group => sameProjectPath(group.projectPath, project.value!.projectPath))?.name
     ?? projectBasename(project.value.projectPath) : '')
 const windowTitle = computed(() => [projectTitle.value, sessions.activeSession?.title].filter(Boolean).join(' / ') || 'CC Desk')
-watch(() => shell.section, section => { ++navigationVersion; management.closeDialog(); if (section === 'settings') settingsLoaded.value = true }, { immediate: true })
+watch(() => shell.section, section => {
+  ++navigationVersion; management.closeDialog(); sessions.clearActionFeedback()
+  if (section !== 'workspace') sessions.closeSessionConfirmation()
+  if (section !== 'settings') configurations.closeDeleteConfirmation()
+  if (section === 'settings') settingsLoaded.value = true
+}, { immediate: true, flush: 'sync' })
 watch(() => app.theme, theme => { if (!compatibilityEnabled) applyThemeToDom(theme) }, { immediate: true })
 // Old settings buttons may still emit this presentation intent. Do not mount
 // SettingsOverlay or let its boolean become another routing source.
@@ -187,12 +198,17 @@ onUnmounted(() => {
       :active-session="sessions.activeSession" :request-pending="!!shell.pendingRequest && shell.pendingRequest.kind !== 'restore-session'" :cli-availability="runtime.cliAvailability.value"
       @add-project="request({ kind: 'add-project' })" @new-session-request="request({ kind: 'new-session', project: $event })">
       <template #terminal>
+        <EmptyState v-if="runtime.fatal?.value" data-workspace-fatal :title="t('workspaceLoadFailed')" :description="t('workspaceLoadFailedHint')" :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
+        <InlineNotice v-for="problem in runtime.cliProblems?.value ?? []" :key="problem.cli" data-cli-banner kind="warning" :message="t('cliFailureBanner', { cli: problem.cli === 'claude' ? 'Claude Code' : 'Codex CLI', reason: t(problem.messageKey) })" :action-label="t('refresh')" @action="request({ kind: 'refresh' })" />
+        <InlineNotice v-if="sessions.actionFeedback" data-action-feedback :kind="sessions.actionFeedback.severity" :message="t(sessions.actionFeedback.messageKey)" :action-label="sessions.actionFeedback.retryable ? t('retry') : t('refresh')" @action="runtime.retryAction?.()">
+          <ErrorDetails :code="sessions.actionFeedback.detailCode" context="session" />
+        </InlineNotice>
         <InlineNotice v-if="runtime.error.value" kind="warning" :message="t(runtime.error.value)"
           :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
         <InlineNotice v-if="sessions.activeSession?.safeErrorCode === 'NEW_SESSION_PREPARATION_FAILED'" kind="warning"
           :message="t('newSessionPreparationFailed')" :action-label="t('newSessionMoreOptions')"
           @action="newSessionDraft.open(sessions.activeSession!, sessions.activeSession!.cli)" />
-        <UnifiedTerminalHost ref="terminalHost" :sessions="runtime.openSessions.value" :active-session-id="sessions.activeSessionId"
+        <UnifiedTerminalHost v-show="!runtime.fatal?.value" ref="terminalHost" :sessions="runtime.openSessions.value" :active-session-id="sessions.activeSessionId"
           :visible="shell.section === 'workspace'">
           <EmptyState :title="t('workspaceWelcome')" :description="t('workspaceWelcomeHint')"
             :action-label="t(project ? 'newSession' : 'addProject')"
@@ -204,6 +220,9 @@ onUnmounted(() => {
       :anchor="newMenuAnchor" :availability="newSessionDraft.cliAvailability" @select="chooseNewSession" />
     <NewSessionDialog :active="shell.section === 'workspace'" @create="request({ kind: 'create-session', input: $event })"
       @restore="request({ kind: 'restore-session', ...$event })" />
+    <ProjectConfirmDialog :request="configurations.deleteConfirmation" :active="shell.section === 'settings'" :busy="configurations.deleteBusy" :error-key="configurations.deleteError?.messageKey" @confirm="configurations.confirmDelete" @cancel="configurations.closeDeleteConfirmation" />
+    <SessionConfirmDialog :active="shell.section === 'workspace'" />
+    <AppToastHost />
     <ResumeSessionDialog :active="shell.section === 'workspace'" />
     <InlineNotice v-if="management.error" kind="warning" :message="t(management.error)" :action-label="t('retry')" @action="management.refresh" />
     <ProjectsView v-show="shell.section === 'projects'" :active="shell.section === 'projects'"

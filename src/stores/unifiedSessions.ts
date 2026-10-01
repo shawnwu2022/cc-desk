@@ -11,6 +11,10 @@ import type {
   ResumeDialogRequest, ResumeHistoryQuery,
 } from '@/types/unifiedSession'
 import { createNativeId } from '@/utils/nativeId'
+import type { SessionConfirmationRequest } from '@/types/confirmation'
+import { mapSafeUserError, safeUserErrorCode, type UserErrorPresentation } from '@/utils/userError'
+import { useNotificationsStore } from '@/stores/notifications'
+import type { ToastInput } from '@/stores/notifications'
 import { makeSessionCatalogKey } from '@/utils/sessionPresentation'
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
 import { normalizePath } from '@/utils/path'
@@ -46,6 +50,67 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const initialized = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+
+  const sessionConfirmation = ref<SessionConfirmationRequest | null>(null)
+  const confirmationBusy = ref(false)
+  const confirmationError = ref<UserErrorPresentation | null>(null)
+  const actionFeedback = ref<UserErrorPresentation | null>(null)
+  let confirmationOwner: { request: SessionConfirmationRequest; owns: () => boolean; selected: () => boolean } | null = null
+  let feedbackVersion = 0
+  let recoverForRestart: (id: string, canContinue: () => boolean) => Promise<void> = async () => { throw new Error('LAUNCH_STATE_UNKNOWN') }
+  function configureUnknownRestartRecovery(recover: typeof recoverForRestart) { recoverForRestart = recover }
+  function captureSelectionOwnership() { const intent = selectionIntentEpoch; return () => intent === selectionIntentEpoch }
+  function captureFeedbackOwner() {
+    const version = ++feedbackVersion
+    const intent = selectionIntentEpoch
+    actionFeedback.value = null
+    return () => version === feedbackVersion && intent === selectionIntentEpoch
+  }
+  function clearActionFeedback() { ++feedbackVersion; actionFeedback.value = null }
+  function publishActionFailure(current: () => boolean, failure: unknown) {
+    if (current()) actionFeedback.value = mapSafeUserError(safeUserErrorCode(failure), 'session')
+  }
+  function publishActionSuccess(current: () => boolean, key: ToastInput['messageKey']) {
+    if (current()) useNotificationsStore().pushToast({ kind: 'success', messageKey: key })
+  }
+  function closeSessionConfirmation() {
+    sessionConfirmation.value = null; confirmationOwner = null; confirmationBusy.value = false; confirmationError.value = null
+  }
+  function beginSessionConfirmation(kind: SessionConfirmationRequest['kind'], id: string) {
+    const row = requireSession(id)
+    const request: SessionConfirmationRequest = { kind, sessionId: id, title: row.title }
+    const intent = selectionIntentEpoch
+    sessionConfirmation.value = request
+    // Pinia wraps the request; keep the published identity for comparison.
+    confirmationOwner = { request: sessionConfirmation.value, owns: adapterForRuntime(row.runtime).captureOwnership?.(id) ?? (() => false), selected: () => selectionIntentEpoch === intent }
+    confirmationError.value = null; confirmationBusy.value = false
+  }
+  async function confirmSessionAction() {
+    const owner = confirmationOwner
+    if (!owner || confirmationBusy.value) return
+    const current = () => confirmationOwner === owner && sessionConfirmation.value === owner.request && owner.selected()
+    const canContinue = () => current() && owner.owns()
+    const feedback = captureFeedbackOwner()
+    confirmationBusy.value = true; confirmationError.value = null
+    try {
+      if (!canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+      const { kind, sessionId } = owner.request
+      if (kind === 'close-running') await closeSession(sessionId, canContinue)
+      else if (kind === 'stop-and-archive') await archiveSession(sessionId, canContinue)
+      else {
+        await recoverForRestart(sessionId, canContinue)
+        if (!canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+        await restartSession(sessionId, canContinue)
+      }
+      if (current()) {
+        if (kind === 'stop-and-archive') publishActionSuccess(feedback, 'feedbackArchived')
+        closeSessionConfirmation()
+      }
+    } catch (failure) {
+      if (current() && !owner.owns()) closeSessionConfirmation()
+      else if (current()) confirmationError.value = mapSafeUserError(safeUserErrorCode(failure), 'session')
+    } finally { if (current()) confirmationBusy.value = false }
+  }
 
   const resumeDialog = ref<ResumeDialogRequest | null>(null)
   const missingRecords = new Map<string, UnifiedSession>()
@@ -202,6 +267,12 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     adapters = [...next]
   }
 
+  function captureSessionOwnership(id: string) {
+    const creation = creations.get(id)
+    if (creation) { const owner = creation.owner; return () => creations.get(id)?.owner === owner }
+    return adapterForRuntime(requireSession(id).runtime).captureOwnership?.(id) ?? (() => false)
+  }
+
   function adapterForRuntime(runtime: SessionRuntimeKind): SessionAdapter {
     const adapter = adapters.find(candidate => candidate.runtime === runtime)
     if (!adapter) throw new Error('SESSION_ADAPTER_UNAVAILABLE')
@@ -262,7 +333,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       }
     } catch (failure) {
       if (refreshVersion === version) {
-        error.value = failure instanceof Error ? failure.message : 'SESSION_REFRESH_FAILED'
+        error.value = safeUserErrorCode(failure)
       }
       throw failure
     } finally {
@@ -280,12 +351,14 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   /** Explicit project navigation changes selection, never runtime ownership. */
   function selectProjectContext(projectPath: string): void {
     if (activeSession.value && normalizePath(activeSession.value.projectPath) === normalizePath(projectPath)) return
+    clearActionFeedback(); closeSessionConfirmation()
     ++selectionEpoch
     ++selectionIntentEpoch
     activeSessionId.value = null
   }
 
   async function activateSession(id: string): Promise<void> {
+    clearActionFeedback(); closeSessionConfirmation()
     const session = requireSession(id)
     const epoch = ++selectionEpoch
     const intentEpoch = ++selectionIntentEpoch
@@ -396,7 +469,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return enqueue(id, () => adapter.stopSession(id), () => refresh(session.projectKey))
   }
 
-  function restartSession(id: string): Promise<UnifiedSession> {
+  function restartSession(id: string, canContinue = () => true): Promise<UnifiedSession> {
     const creation = creations.get(id)
     if (creation) {
       if (creation.row.processState !== 'failed') return Promise.reject(new Error('LAUNCH_STATE_UNKNOWN'))
@@ -404,13 +477,13 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     }
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
-    return enqueue(id, () => adapter.restartSession(id), async restarted => {
+    return enqueue(id, () => adapter.restartSession(id, canContinue), async restarted => {
       await refresh(session.projectKey)
       if (activeSessionId.value === id) activeSessionId.value = restarted.id
     })
   }
 
-  function closeSession(id: string): Promise<void> {
+  function closeSession(id: string, canContinue = () => true): Promise<void> {
     const creation = creations.get(id)
     if (creation) {
       if (!creation.preparing && creation.row.processState === 'starting') return Promise.reject(new Error('NEW_SESSION_ADMISSION_IN_PROGRESS'))
@@ -423,7 +496,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     ++selectionEpoch
-    return enqueue(id, () => adapter.closeSession(id), async () => {
+    return enqueue(id, () => adapter.closeSession(id, canContinue), async () => {
       if (activeSessionId.value === id) activeSessionId.value = null
       await refresh(session.projectKey)
     }, 'close')
@@ -435,11 +508,11 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return enqueue(id, () => adapter.renameSession(id, title), () => refresh(session.projectKey))
   }
 
-  function archiveSession(id: string): Promise<void> {
+  function archiveSession(id: string, canContinue = () => true): Promise<void> {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     ++selectionEpoch
-    return enqueue(id, () => adapter.archiveSession(id), async () => {
+    return enqueue(id, () => adapter.archiveSession(id, canContinue), async () => {
       if (activeSessionId.value === id) activeSessionId.value = null
       await refresh(session.projectKey)
     }, 'archive')
@@ -457,6 +530,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   return {
     sessions,
+    sessionConfirmation, confirmationBusy, confirmationError, beginSessionConfirmation, closeSessionConfirmation, confirmSessionAction,
+    configureUnknownRestartRecovery, captureSelectionOwnership, captureFeedbackOwner, publishActionFailure, publishActionSuccess, clearActionFeedback, actionFeedback,
     projectGroups,
     activeSessionId,
     activeSession,
@@ -464,6 +539,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     loading,
     error,
     configureAdapters,
+    captureSessionOwnership,
     resumeDialog, openResumeDialog, closeResumeDialog, configureHistoryLoader, searchSessions,
     resumeCatalogSession, removeMissingRecord, launchResume,
     configureCreationPreparer,

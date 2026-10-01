@@ -255,6 +255,7 @@ describe('legacy Claude adapter', () => {
       'restart:tab-active',
       'runtime-rename:tab-active:Renamed',
       'rename:tab-active:Renamed',
+      'stop:tab-active',
       'close:tab-active',
       'restore:/work/game:archived-1',
     ])

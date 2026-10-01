@@ -40,7 +40,8 @@ Rules:
 - Task 12: complete at `72644819200a298f7b6689dfa512289036d37177`
 - Task 13: complete at `181c6f51c509468e3f6c3f2a844131dcd3975e65`
 - Task 14: complete at `d1a6dc6d6fbb22057245e628c0b6eedcf83fe36a`
-- Next task: Task 15 — structured project resources
+- Task 15: complete at `6ae851a3a3ee9de789a5085b5a0e1d03b551eb44`
+- Next task: Task 16 — safe errors, confirmations and feedback
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -438,3 +439,25 @@ Rules:
 - Final required78 tests+typecheck;266 affected tests across23 suites; diff/manifest/reverse-patch checks pass. Earlier71/219 counts superseded
 - Independent scoped spec/quality approval reran original2 repros and12 repair/positive-authority checks successfully
 - No actual CLI/account/Legacy plugin execution/platform/scaling/D20 certification, full suite, CI/PR/package/release; atomic publication pending readback
+
+### Verified Task 15 checkpoint
+
+- Remote commit `6ae851a3a3ee9de789a5085b5a0e1d03b551eb44`; exact staged/fetched tree and local/remote SHA match; working tree clean before this readback
+-78 required tests/typecheck and266 affected tests; independent approval with2 original repros and12 targeted authority checks passing
+- No CI/PR/package/release or actual CLI/platform acceptance; next Task16
+
+### Task 16 execution fallback
+
+- Platform refused a fresh implementation agent with `agent thread limit reached`. Reused a completed engineering worker with a self-contained Task16 assignment; previous Task13 remains sealed and is not repeated. Independent review will use a separate completed reviewer. No environment switch, permission expansion or gate reduction.
+
+## Task 16 — Safe interaction feedback and confirmations
+
+- Normal App running close/stop-and-archive/unknown restart now use typed shared confirmation dialogs and exact Native/Legacy ownership. Cancellation/new selection/new intent prevents later steps and stale feedback without compensating already-issued writes/stops
+- Unknown restart recovers exact status, requires definite ended/known receipt after stop, then admits restart; unresolved status remains fail-closed with no launch replay
+- Project removal shared confirmation preserves registration/visibility/session barriers. Real launch-config deletion request/confirm/CAS contract and App binding support future Task19 editor; raw delete patch rejects confirmation bypass
+- Safe own-property error allowlists prevent inherited-key templates; profile/workspace/canonical error state retains fixed safe codes. Per-CLI banners, local inline feedback, owned low-risk toasts and truly all-source workspace failure are distinct
+- Behavioral regressions cover stale same-ID attempt/project replacement, cancellation, Legacy late rename, partial availability, fatal host visibility and configuration-delete/preparation barrier
+- Independent review R1/R2 repaired post-queue cancellation: unregister, removal pin cleanup and both Native/Legacy archive invoke ownership guards inside actual serialized writers immediately before IPC. Canceled unissued writes bypass error/readback paths; genuine uncertain writes retain read-only recovery/no replay
+- Final required43 tests+typecheck;290 affected tests across25 files plus37 real Legacy store tests;29-source manifest/diff checks pass. Earlier33 required count superseded
+- Independent spec/quality approval reran original2 repros and10 targeted queue/ownership repairs successfully
+- No actual CLI/account/OS stop/platform/scaling/D20 certification, full suite, CI/PR/package/release; atomic publication pending readback

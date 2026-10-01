@@ -1,3 +1,4 @@
+import { safeUserErrorCode } from '@/utils/userError'
 import { defineStore } from 'pinia'
 import { reactive, ref } from 'vue'
 import * as projectsApi from '@/api/tauri'
@@ -49,6 +50,7 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
   const launchPreferences = reactive(new Map<string, ProjectLaunchPreference>())
   const loaded = ref(false)
   const error = ref(false)
+  const lastErrorCode = ref<string | null>(null)
 
   let loadPromise: Promise<void> | null = null
   let mutationTail: Promise<void> = Promise.resolve()
@@ -104,15 +106,20 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     return enqueue(reloadNow)
   }
 
-  function mutate(operation: () => Promise<ProjectsState>, reconcileFailure = false): Promise<ProjectsState> {
+  function mutate(operation: () => Promise<ProjectsState>, reconcileFailure = false, beforeMutation?: () => void): Promise<ProjectsState> {
     return enqueue(async () => {
       await ensureLoaded()
+      // Waits in the canonical queue (including initial load) cannot preserve
+      // admission. A rejected owner has issued no write and needs no recovery.
+      beforeMutation?.()
       try {
         const next = await operation()
         applyState(next)
         error.value = false
+        lastErrorCode.value = null
         return next
       } catch (failure) {
+        lastErrorCode.value = safeUserErrorCode(failure)
         if (reconcileFailure || errorCode(failure) === 'REVISION_CONFLICT') {
           try {
             await reloadNow()
@@ -130,8 +137,8 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     return mutate(() => projectsApi.pinProject(path), true)
   }
 
-  function unpinProject(path: string): Promise<ProjectsState> {
-    return mutate(() => projectsApi.unpinProject(path), true)
+  function unpinProject(path: string, beforeMutation?: () => void): Promise<ProjectsState> {
+    return mutate(() => projectsApi.unpinProject(path), true, beforeMutation)
   }
 
   function setProjectDisplayName(path: string, alias: string): Promise<ProjectsState> {
@@ -144,20 +151,20 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     return mutate(() => projectsApi.setDisplayName(path, alias), true)
   }
 
-  function archiveSession(projectPath: string, sessionId: string): Promise<ProjectsState> {
-    return mutate(() => projectsApi.archiveSession(projectPath, sessionId))
+  function archiveSession(projectPath: string, sessionId: string, beforeMutation?: () => void): Promise<ProjectsState> {
+    return mutate(() => projectsApi.archiveSession(projectPath, sessionId), true, beforeMutation)
   }
 
   function restoreSession(projectPath: string, sessionId: string): Promise<ProjectsState> {
-    return mutate(() => projectsApi.restoreSession(projectPath, sessionId))
+    return mutate(() => projectsApi.restoreSession(projectPath, sessionId), true)
   }
 
   function upsertSessionRecord(key: string, record: SessionUiRecord): Promise<ProjectsState> {
-    return mutate(() => projectsApi.upsertSessionUiRecord(key, record))
+    return mutate(() => projectsApi.upsertSessionUiRecord(key, record), true)
   }
 
   function removeSessionRecord(key: string): Promise<ProjectsState> {
-    return mutate(() => projectsApi.removeSessionUiRecord(key))
+    return mutate(() => projectsApi.removeSessionUiRecord(key), true)
   }
 
   function setLaunchPreference(
@@ -190,6 +197,7 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     launchPreferences,
     loaded,
     error,
+    lastErrorCode,
     load,
     reload,
     ensureLoaded,

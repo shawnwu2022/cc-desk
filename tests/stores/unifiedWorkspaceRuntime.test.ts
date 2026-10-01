@@ -89,17 +89,17 @@ describe('Unified production runtime', () => {
     shell.requestWorkspaceAction({ kind: 'activate', sessionId: `native-tab:${tab.tabId}` }); await flushPromises()
     shell.requestWorkspaceAction({ kind: 'confirmation', request: { kind: 'stop-and-archive', sessionId: `native-tab:${tab.tabId}`, projectKey: '/repo', projectPath: '/repo' } }); await flushPromises()
     finish(); await flushPromises()
-    expect(activate).toHaveBeenCalledTimes(1); expect(shell.pendingRequest?.kind).toBe('confirmation')
+    expect(activate).toHaveBeenCalledTimes(1); expect(shell.pendingRequest).toBeNull(); expect(unified.sessionConfirmation?.kind).toBe('stop-and-archive')
     shell.section = 'settings'; await flushPromises(); expect(activate).toHaveBeenCalledTimes(1)
   })
   // 新建/恢复/运行中关闭与归档保持待处理，不能假装已完成或自动执行。
-  it('Runtime_LeavesUnconfirmedPending_005', async () => {
+  it('Runtime_OpensOwnedConfirmations_005', async () => {
     const { port } = render(); await flushPromises()
     const tabs = useNativeTabsStore(); const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } }); tabs.tab(tab.tabId)!.status = 'running'
     const unified = useUnifiedSessionsStore(); await unified.refresh(); const shell = useShellStore()
     for (const action of ['close', 'archive'] as const) {
       shell.requestWorkspaceAction({ kind: 'menu-action', sessionId: `native-tab:${tab.tabId}`, action }); await flushPromises()
-      expect(shell.pendingRequest).toMatchObject({ action }); expect(port.stopNative).not.toHaveBeenCalled(); expect(tabs.tab(tab.tabId)).toBeDefined()
+      expect(shell.pendingRequest).toBeNull(); expect(unified.sessionConfirmation?.kind).toBe(action === 'close' ? 'close-running' : 'stop-and-archive'); expect(port.stopNative).not.toHaveBeenCalled(); expect(tabs.tab(tab.tabId)).toBeDefined()
     }
     shell.requestWorkspaceAction({ kind: 'new-session', project: { projectKey: '/repo', projectPath: '/repo' } }); await flushPromises()
     expect(shell.pendingRequest).toBeNull(); expect(useNewSessionDraftStore().chooserVisible).toBe(true); expect(useNewSessionDraftStore().visible).toBe(false); expect(tabs.tabs.size).toBe(1)
@@ -123,7 +123,7 @@ describe('Unified production runtime', () => {
     useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: `native-tab:${tab.tabId}`, action: 'close' })
     await flushPromises()
     expect(port.stopNative).not.toHaveBeenCalled()
-    expect(useShellStore().pendingRequest).toMatchObject({ action: 'close' })
+    expect(useShellStore().pendingRequest).toBeNull(); expect(unified.sessionConfirmation?.kind).toBe('close-running')
     expect(tabs.tab(tab.tabId)).toBeDefined()
   })
   // 重启等待停止时出现新代次，旧完成不能覆盖新的代次或启动配置。

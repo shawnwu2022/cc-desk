@@ -32,7 +32,7 @@ export interface LegacyClaudeStorePort {
   removeTab(tabId: string): void
   closeTab(tabId: string): Promise<void>
   updateTabName(tabId: string, name: string): void
-  archiveSession(projectPath: string, sessionId: string): Promise<void>
+  archiveSession(projectPath: string, sessionId: string, beforeMutation?: () => void): Promise<void>
   restoreSession(projectPath: string, sessionId: string): Promise<void>
 }
 
@@ -259,7 +259,11 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     if (!id.startsWith(ACTIVE_PREFIX)) return () => true
     const tab = requireTab(id)
     const generation = tab.ptyGeneration ?? 0
+    const ptyId = tab.ptyId
+    const identity = JSON.stringify([tab.projectPath, tab.sessionId, tab.cli])
     return () => store.tabs.get(tab.tabId) === tab && (tab.ptyGeneration ?? 0) === generation
+      && JSON.stringify([tab.projectPath, tab.sessionId, tab.cli]) === identity
+      && (tab.ptyId === ptyId || tab.ptyId === null && tab.status === 'stopped')
   }
 
   async function activateSession(id: string): Promise<void> {
@@ -270,40 +274,50 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     await runtime.stopTab(requireTab(id).tabId)
   }
 
-  async function restartSession(id: string): Promise<UnifiedSession> {
+  async function restartSession(id: string, canContinue = () => true): Promise<UnifiedSession> {
+    if (!canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     const tab = requireTab(id)
     await runtime.restartTab(tab.tabId)
     return projectActiveTab(requireTab(id))
   }
 
-  async function closeSession(id: string): Promise<void> {
-    await store.closeTab(requireTab(id).tabId)
+  async function closeSession(id: string, canContinue = () => true): Promise<void> {
+    const tab = requireTab(id)
+    const owns = captureOwnership(id)
+    if (!canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+    if (tab.status === 'running' || tab.status === 'starting') await runtime.stopTab(tab.tabId)
+    if (!owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+    await store.closeTab(tab.tabId)
   }
 
   async function renameSession(id: string, title: string): Promise<void> {
     const value = title.trim()
     if (!value || value.includes('\0')) throw new Error('SESSION_TITLE_REQUIRED')
     const tab = requireTab(id)
+    const owns = captureOwnership(id)
     await runtime.renameTab(tab.tabId, value)
+    if (!owns()) throw new Error('STALE_SESSION_ATTEMPT')
     store.updateTabName(tab.tabId, value)
   }
 
-  async function archiveSession(id: string): Promise<void> {
+  async function archiveSession(id: string, canContinue = () => true): Promise<void> {
+    const owns = captureOwnership(id)
+    const requireCurrent = () => { if (!owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT') }
+    requireCurrent()
     if (id.startsWith(ACTIVE_PREFIX)) {
       const tab = requireTab(id)
-      const owns = captureOwnership(id)
       if (!tab.sessionId) throw new Error('SESSION_NOT_RESUMABLE')
       if (tab.status === 'running' || tab.status === 'starting') {
         await runtime.stopTab(tab.tabId)
       }
-      if (!owns()) throw new Error('STALE_SESSION_ATTEMPT')
-      await store.archiveSession(tab.projectPath, tab.sessionId)
-      if (!owns()) throw new Error('STALE_SESSION_ATTEMPT')
+      if (!owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+      await store.archiveSession(tab.projectPath, tab.sessionId, requireCurrent)
+      if (!owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
       await store.closeTab(tab.tabId)
       return
     }
     const history = parseHistoryId(id)
-    await store.archiveSession(history.projectPath, history.sessionId)
+    await store.archiveSession(history.projectPath, history.sessionId, requireCurrent)
   }
 
   async function restoreArchivedSession(id: string): Promise<void> {
