@@ -167,6 +167,7 @@ pub fn run(initial_dir: Option<String>) {
             commands::native_list_resources,
             cli::commands::cli_start,
             cli::commands::cli_get_launch_status,
+            cli::commands::cli_cancel_launch,
             cli::commands::cli_ack_output,
             cli::commands::cli_input_begin,
             cli::commands::cli_input_chunk,

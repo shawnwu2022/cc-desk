@@ -14,7 +14,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { createNativeLaunchEntry } from '@/terminal/nativeLaunchEntry'
+import { createNativeLaunchEntry, NativeLaunchNotSubmittedError } from '@/terminal/nativeLaunchEntry'
+import type { LaunchStatus } from '@/api/cliLaunchAttempt'
 import { createDeskNativeTerminalBinding } from '@/terminal/deskNativeTerminal'
 import type { NativeTerminalBinding } from '@/terminal/nativeTerminalBinding'
 import { buildPastePayload, imagePasteBytes } from '@/utils/pasteText'
@@ -65,6 +66,8 @@ let disposed = false
 const needsFit = ref(true)
 let startedAttempt: NativeAttemptIdentity | null = null
 let startPromise: Promise<void> | null = null
+let stoppingAttempt: NativeAttemptIdentity | null = null
+let receiptPublication: object = {}
 
 const entry = createNativeLaunchEntry({
   selectedProfile(cli) {
@@ -111,6 +114,7 @@ function stopStatusSync() {
 
 function disposeRunBinding() {
   runToken = {}
+  receiptPublication = {}
   statusSyncInFlight = null
   launched = false
   inputEnabled = false
@@ -258,6 +262,7 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   runToken = token
   disposeRunBinding()
   runToken = token
+  const publication = receiptPublication
   observedBracketed = term.modes.bracketedPasteMode
   modeEpoch = BigInt(1)
 
@@ -328,11 +333,9 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
       cols: term.cols,
       rows: term.rows,
     }, channel)
-    if (runToken !== token || !attemptIsCurrent(attempt)) return
-    if (!tabs.applyLaunchStatus(props.tabId, result)) return
-    launched = result.phase === 'running' || result.phase === 'starting'
-    inputEnabled = launched
-    if (launched) {
+    if (runToken !== token || receiptPublication !== publication || !attemptIsCurrent(attempt)) return
+    if (!applyReceipt(attempt, result)) return
+    if (launched && !matchesNativeAttempt(stoppingAttempt ?? undefined, attempt)) {
       await resizeNative(term.cols, term.rows)
       if (runToken !== token || !attemptIsCurrent(attempt)) return
       startStatusSync()
@@ -340,26 +343,48 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
       stopStatusSync()
     }
   } catch (error) {
-    if (runToken !== token || !attemptIsCurrent(attempt)) return
+    if (runToken !== token || receiptPublication !== publication || !attemptIsCurrent(attempt)) return
+    // Recovery/cancellation can settle before a lost or late start reply. A
+    // transport rejection cannot overwrite its authenticated terminal receipt.
+    const latest = entry.latest(attempt.requestId)
+    if (latest) {
+      applyReceipt(attempt, latest)
+      return
+    }
     const code = safeLaunchCode(error)
     inputEnabled = false
-    if (code === 'LAUNCH_STATE_UNKNOWN') tabs.markUnknown(props.tabId)
-    else tabs.markError(props.tabId, code)
+    if (error instanceof NativeLaunchNotSubmittedError) tabs.markError(props.tabId, code)
+    else {
+      tabs.markUnknown(props.tabId)
+      tabs.setDiagnostic(props.tabId, code)
+    }
   }
+}
+
+function applyReceipt(attempt: NativeAttemptIdentity, result: LaunchStatus): boolean {
+  if (!attemptIsCurrent(attempt) || !tabs.applyLaunchStatus(props.tabId, result)) return false
+  launched = result.phase === 'running' || result.phase === 'starting'
+  const stopping = matchesNativeAttempt(stoppingAttempt ?? undefined, attempt)
+  inputEnabled = launched && !stopping
+  if (!launched) stopStatusSync()
+  else if (!stopping && !statusTimer && !statusSyncInFlight) startStatusSync()
+  return true
 }
 
 async function recover(attempt: NativeAttemptIdentity = currentAttempt()): Promise<void> {
   if (!attemptIsCurrent(attempt)) throw new Error('STALE_NATIVE_ATTEMPT')
+  const publication = receiptPublication
   try {
     const result = await entry.recover(attempt.requestId)
-    if (!attemptIsCurrent(attempt)) return
-    if (!tabs.applyLaunchStatus(props.tabId, result)) return
-    launched = result.phase === 'running' || result.phase === 'starting'
-    inputEnabled = launched
-    if (!launched) stopStatusSync()
-    else if (!statusTimer && !statusSyncInFlight) startStatusSync()
+    if (receiptPublication !== publication) return
+    applyReceipt(attempt, result)
   } catch (error) {
-    if (!attemptIsCurrent(attempt)) return
+    if (receiptPublication !== publication || !attemptIsCurrent(attempt)) return
+    const latest = entry.latest(attempt.requestId)
+    if (latest && ['cancelled', 'failed', 'exited'].includes(latest.phase)) {
+      applyReceipt(attempt, latest)
+      return
+    }
     const code = safeLaunchCode(error)
     launched = false
     inputEnabled = false
@@ -383,24 +408,80 @@ async function syncStatus(): Promise<void> {
 
 function startStatusSync() {
   stopStatusSync()
-  if (!launched) return
+  if (!launched || matchesNativeAttempt(stoppingAttempt ?? undefined, currentAttempt())) return
   statusTimer = setInterval(() => {
     void syncStatus()
   }, 1500)
 }
 
+async function withinStopDeadline<T>(deadline: number, operation: () => Promise<T>): Promise<T> {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) throw new Error('NATIVE_STOP_UNCONFIRMED')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('NATIVE_STOP_UNCONFIRMED')), remaining)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 async function stop(attempt: NativeAttemptIdentity = currentAttempt()): Promise<void> {
   if (!attemptIsCurrent(attempt)) throw new Error('STALE_NATIVE_ATTEMPT')
+  // Earlier start/status callbacks may still update their monotonic attempt
+  // receipt, but only this stop or a later explicit recovery may publish it.
+  receiptPublication = {}
+  stoppingAttempt = attempt
+  statusSyncInFlight = null
+  inputEnabled = false
+  stopStatusSync()
+  const deadline = Date.now() + 5000
   try {
-    await cliStop({ runId: attempt.runId, generation: attempt.generation })
-    if (!attemptIsCurrent(attempt)) return
-    await recover(attempt)
-    if (!attemptIsCurrent(attempt)) return
-    if (!['stopped', 'exited', 'failed'].includes(currentTab().status)) throw new Error('NATIVE_STOP_UNCONFIRMED')
+    // Cancellation uses the original full frozen request. A missing status is
+    // never proof of absence: preparation may still be waiting to reserve it.
+    let result = await withinStopDeadline(deadline, () => entry.cancel(attempt.requestId))
+    let stopAccepted = false
+    for (;;) {
+      if (!attemptIsCurrent(attempt)) return
+      if (!applyReceipt(attempt, result)) throw new Error('NATIVE_STOP_UNCONFIRMED')
+      if (['cancelled', 'failed', 'exited'].includes(result.phase)) return
+      if (Date.now() >= deadline) throw new Error('NATIVE_STOP_UNCONFIRMED')
+      if (!stopAccepted && ['starting', 'running', 'indeterminate'].includes(result.phase)) {
+        try {
+          await withinStopDeadline(deadline, () => cliStop({ runId: attempt.runId, generation: attempt.generation }))
+          stopAccepted = true
+        } catch {
+          // Starting can precede supervisor adoption; even RUN_NOT_FOUND or a
+          // lost stop response requires another exact receipt, never closure.
+        }
+        if (!attemptIsCurrent(attempt)) return
+      }
+      await withinStopDeadline(deadline, () => new Promise(resolve => setTimeout(resolve, 100)))
+      if (!attemptIsCurrent(attempt)) return
+      result = await withinStopDeadline(deadline, () => entry.recover(attempt.requestId))
+    }
   } catch (error) {
     if (!attemptIsCurrent(attempt)) return
-    tabs.setDiagnostic(props.tabId, safeLaunchCode(error))
+    const code = safeLaunchCode(error)
+    if (code === 'NATIVE_STOP_UNCONFIRMED') {
+      receiptPublication = {}
+      statusSyncInFlight = null
+      launched = false
+      inputEnabled = false
+      stopStatusSync()
+      tabs.markUnknown(props.tabId)
+    }
+    tabs.setDiagnostic(props.tabId, code)
     throw error
+  } finally {
+    if (stoppingAttempt === attempt) {
+      stoppingAttempt = null
+      if (attemptIsCurrent(attempt) && launched) startStatusSync()
+    }
   }
 }
 

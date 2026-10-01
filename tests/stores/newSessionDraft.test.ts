@@ -13,13 +13,14 @@ vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: io.availability })
 vi.mock('@/api/cli', () => ({ cliPatchProfile: io.patch, cliListProfiles: io.list }))
 const project = { projectKey: '/repo', projectPath: '/repo' }
 function config(id: string, cli: 'claude' | 'codex' = 'codex'): CliProfile {
-  return { id, cli, revision: '1', name: id, launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }
+  return { id, cli, revision: '1', name: id, launcher: { kind: 'native' }, programPath: { mode: 'set', value: `/tools/${cli}` }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }
 }
 let persisted: ProjectsState
 beforeEach(() => {
   localStorage.clear(); setActivePinia(createPinia()); vi.clearAllMocks()
   persisted = { pinnedProjects: [], archivedSessions: {}, launchPreferences: {} }
   io.list.mockResolvedValue({ revision: '0', profiles: [] })
+  io.availability.mockImplementation(async (profileId, profileRevision) => ({ profileId, profileRevision, cli: useCliProfilesStore().profile(profileId)?.cli, state: 'available-unverified', hostStatus: 'available', certified: false }))
   io.getState.mockImplementation(async () => structuredClone(persisted))
   io.setPreference.mockImplementation(async (path, preference) => {
     persisted.launchPreferences![path] = structuredClone(preference)
@@ -27,6 +28,24 @@ beforeEach(() => {
   })
 })
 describe('New session draft', () => {
+  // 已有配置同样需要本次精确修订的预检；读取失败或宿主不可用都不能进入 Native admission。
+  it.each(['configuration-required', 'unavailable'])('Draft_ExistingConfigurationPreflight_014: %s', async state => {
+    const profiles = useCliProfilesStore(); profiles.profiles = [config('cx')]; profiles.status = 'loaded'
+    io.availability.mockResolvedValue({ profileId: 'cx', profileRevision: '1', cli: 'codex', state, hostStatus: 'available', certified: false, issue: { code: state === 'configuration-required' ? 'PROGRAM_TRUST_REQUIRED' : 'PROGRAM_UNAVAILABLE', retryable: false } })
+    await expect(useNewSessionDraftStore().prepareInput({ ...project, cli: 'codex', launchConfigId: 'cx', launchConfigRevision: '1' })).rejects.toThrow('LAUNCH_CONFIGURATION_REQUIRED')
+    expect(io.patch).not.toHaveBeenCalled()
+    expect(io.availability).toHaveBeenCalledWith('cx', '1')
+  })
+  it.each(['read-failed', 'host-unavailable', 'profile-changed'])('Draft_UnverifiedPreflightDoesNotAdmit_015: %s', async reason => {
+    const profiles = useCliProfilesStore(); profiles.profiles = [config('cx')]; profiles.status = 'loaded'
+    io.availability.mockImplementation(async () => {
+      if (reason === 'read-failed') throw new Error('/private/SECRET')
+      if (reason === 'profile-changed') profiles.profiles[0].revision = '2'
+      return { profileId: 'cx', profileRevision: '1', cli: 'codex', state: 'available-unverified', hostStatus: reason === 'host-unavailable' ? 'unavailable' : 'available', certified: false }
+    })
+    await expect(useNewSessionDraftStore().prepareInput({ ...project, cli: 'codex' })).rejects.toThrow('NEW_SESSION_PREPARATION_FAILED')
+    expect(io.patch).not.toHaveBeenCalled()
+  })
   it('Draft_ExactArguments_001', () => {
     expect(argvFromLines('two words\r\n\n--literal= x\n"quoted"')).toEqual(['two words', '', '--literal= x', '"quoted"'])
     const draft = useNewSessionDraftStore(); draft.open(project, 'codex'); draft.rawEnabled = true; draft.argvText = 'two words\n';
@@ -54,9 +73,9 @@ describe('New session draft', () => {
     const draft = useNewSessionDraftStore(); draft.open(project, cli)
     expect(draft.cliAvailability[cli]).toBe('unknown'); expect(io.patch).not.toHaveBeenCalled()
     io.patch.mockImplementation(async (_rev, patch) => ({ revision: '1', profiles: [{ ...patch.profile, revision: '1' }] }))
-    const result = await draft.prepareInput({ ...project, cli })
-    expect(result.launchConfigId).toBeTruthy()
-    expect(profiles.profile(result.launchConfigId!)?.skipPermissions).toEqual(cli === 'claude' ? { mode: 'set', value: false } : { mode: 'inherit' })
+    io.availability.mockResolvedValue({ profileId: `desk-safe-${cli}`, profileRevision: '1', cli, state: 'configuration-required', hostStatus: 'available', certified: false, issue: { code: 'PROGRAM_TRUST_REQUIRED', retryable: false } })
+    await expect(draft.prepareInput({ ...project, cli })).rejects.toThrow('LAUNCH_CONFIGURATION_REQUIRED')
+    expect(profiles.profile(`desk-safe-${cli}`)?.skipPermissions).toEqual(cli === 'claude' ? { mode: 'set', value: false } : { mode: 'inherit' })
     expect(io.patch).toHaveBeenCalledTimes(1)
     const patch = io.patch.mock.calls[0][1]; expect(patch.profile.env).toEqual({}); expect(patch.profile.defaultArgs).toEqual({ mode: 'set', value: [] })
   })

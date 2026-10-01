@@ -9,7 +9,7 @@ import { useCliProfilesStore } from '@/stores/cliProfiles'
 
 const io = vi.hoisted(() => ({
   terminals: [] as import('@xterm/xterm').Terminal[], channels: [] as any[],
-  user: vi.fn(), protocol: vi.fn(), ack: vi.fn(), legacyInput: vi.fn(), output: null as any,
+  user: vi.fn(), protocol: vi.fn(), ack: vi.fn(), stop: vi.fn(), legacyInput: vi.fn(), output: null as any,
 }))
 // Keep the installed xterm 5.5 parser, CoreService, input(), onUserInput and onData.
 // Only DOM open/focus/render geometry and addon lifecycle are omitted; jsdom
@@ -37,7 +37,7 @@ vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readText: vi.fn(), read
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMinimized: async () => false }) }))
 vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
-  cliResize: vi.fn().mockResolvedValue(undefined), cliStop: vi.fn().mockResolvedValue(undefined),
+  cliResize: vi.fn().mockResolvedValue(undefined), cliStop: io.stop,
   cliWriteInput: io.user, cliWriteProtocol: io.protocol, cliAckOutput: io.ack,
   ptyInput: io.legacyInput, ptyKill: vi.fn().mockResolvedValue(undefined), ptyResize: vi.fn().mockResolvedValue(undefined),
   ptySpawn: async ({ id }: any) => ({ id }), logMessage: vi.fn().mockResolvedValue(undefined),
@@ -67,10 +67,10 @@ beforeEach(() => {
   vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { fn(0); return 1 })
   io.user.mockImplementation(async input => ({ ...input, state: 'host-written', confirmedBytes: String(input.bytes.length) }))
   io.protocol.mockImplementation(async (_run, bytes) => ({ state: 'host-written', confirmedBytes: String(bytes.length) }))
-  io.ack.mockResolvedValue(undefined); io.legacyInput.mockResolvedValue(undefined)
+  io.stop.mockResolvedValue(undefined); io.ack.mockResolvedValue(undefined); io.legacyInput.mockResolvedValue(undefined)
   useCliProfilesStore().profiles = [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }]
 })
-afterEach(() => { wrapper?.unmount(); wrapper = null; Reflect.deleteProperty(window, '__CC_DESK_DOCUMENT__'); vi.unstubAllGlobals(); document.body.innerHTML = ''; if (vi.isMockFunction(Date.now)) vi.mocked(Date.now).mockRestore() })
+afterEach(() => { wrapper?.unmount(); wrapper = null; Reflect.deleteProperty(window, '__CC_DESK_DOCUMENT__'); vi.unstubAllGlobals(); vi.useRealTimers(); document.body.innerHTML = ''; if (vi.isMockFunction(Date.now)) vi.mocked(Date.now).mockRestore() })
 
 describe('Unified host with pinned real xterm parser', () => {
   // 真实组件、Pinia、启动入口和请求冻结共同运行；同一尝试再次start不得重发。
@@ -153,4 +153,313 @@ describe('Unified host with pinned real xterm parser', () => {
     expect(io.legacyInput).toHaveBeenCalledTimes(2)
     expect(io.legacyInput.mock.calls[1][1]).toBe('visible keyboard')
   })
+})
+
+// 真实组件/入口/attempt 组合保留安全拒绝码并凭取消回执结束未知启动。
+it.each(['claude', 'codex'] as const)('Native_DeniedLaunchCancellation_007 %s', async cli => {
+  const profiles = useCliProfilesStore()
+  profiles.profiles = [{ ...profiles.profiles[0], id: `${cli}-main`, cli }]
+  let original: any
+  const calls: string[] = []
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any) {
+      calls.push(command)
+      if (command === 'cli_start') { original = input; throw { code: 'PROGRAM_TRUST_REQUIRED', retryable: false } }
+      if (command === 'cli_cancel_launch') {
+        expect(input).toEqual(original)
+        return { instanceId: 'test-backend', requestId: input.requestId, run: { runId: input.runId, generation: input.generation }, revision: '1', phase: 'cancelled', failure: null }
+      }
+      throw new Error('unexpected command')
+    },
+  } })
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli, projectId: 'project', projectPath: '/repo', profileId: `${cli}-main`, profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'unknown', errorCode: 'PROGRAM_TRUST_REQUIRED', launchRevision: null })
+  profiles.profiles = [] // Cleanup must not rebuild from the current selection.
+  await expect((wrapper.vm as any).stop()).resolves.toBeUndefined()
+  expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'failed', launchRevision: '1' })
+  expect(calls).toEqual(['cli_start', 'cli_cancel_launch'])
+  expect(io.stop).not.toHaveBeenCalled()
+})
+
+// 丢失开始回执的正在执行进程必须先检查准确状态，再停止并等待退出回执。
+it('Native_LostReceiptStopsRealRun_008', async () => {
+  vi.useFakeTimers()
+  let original: any
+  let reads = 0
+  const calls: string[] = []
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any) {
+      calls.push(command)
+      if (command === 'cli_start') { original = input; throw new Error('transport lost') }
+      const phase = command === 'cli_get_launch_status' && ++reads > 1 ? 'exited' : 'running'
+      return { instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision: phase === 'exited' ? '3' : '2', phase, failure: null }
+    },
+  } })
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const stopped = (wrapper.vm as any).stop()
+  const checked = expect(stopped).resolves.toBeUndefined()
+  void checked.catch(() => undefined)
+  await vi.advanceTimersByTimeAsync(300)
+  await checked
+  expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'exited', launchRevision: '3' })
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith({ runId: tab.runId, generation: tab.generation })
+  expect(calls.filter(command => command === 'cli_start')).toHaveLength(1)
+  vi.useRealTimers()
+})
+
+// 取消终态早于启动拒绝时，迟到错误不得把已取消会话重新标成未知。
+it('Native_LateStartPreservesCancel_009', async () => {
+  let rejectStart!: (error: unknown) => void
+  let original: any
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any) {
+      if (command === 'cli_start') {
+        original = input
+        return new Promise((_resolve, reject) => { rejectStart = reject })
+      }
+      return { instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision: '1', phase: 'cancelled', failure: null }
+    },
+  } })
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  await (wrapper.vm as any).stop()
+  rejectStart({ code: 'PROGRAM_TRUST_REQUIRED', retryable: false }); await flushPromises()
+  expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'failed', launchRevision: '1', errorCode: 'LAUNCH_CANCELLED' })
+})
+
+// 取消回执早于旧状态检查失败时，检查失败不能撤销已取消的终态证明。
+it('Native_LateStatusPreservesCancel_010', async () => {
+  let rejectStatus!: (error: unknown) => void
+  let original: any
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any) {
+      if (command === 'cli_start') { original = input; throw new Error('lost') }
+      if (command === 'cli_get_launch_status') return new Promise((_resolve, reject) => { rejectStatus = reject })
+      return { instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision: '1', phase: 'cancelled', failure: null }
+    },
+  } })
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const recovering = (wrapper.vm as any).recover(); await flushPromises()
+  await (wrapper.vm as any).stop()
+  rejectStatus(new Error('lost status')); await recovering
+  expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'failed', launchRevision: '1', errorCode: 'LAUNCH_CANCELLED' })
+})
+
+// 延迟成功启动回执在停止期间到达时不能重新打开用户输入或后台轮询。
+it('Native_LateStartKeepsInputPaused_011', async () => {
+  vi.useFakeTimers()
+  let resolveStart!: (receipt: unknown) => void
+  let finishStop!: () => void
+  let original: any
+  let statusReads = 0
+  const receipt = (phase: string, revision: string) => ({ instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision, phase, failure: null })
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any) {
+      if (command === 'cli_start') { original = input; return new Promise(resolve => { resolveStart = resolve }) }
+      if (command === 'cli_cancel_launch') return receipt('running', '2')
+      if (command === 'cli_get_launch_status') { statusReads++; return receipt('exited', '3') }
+      throw new Error('unexpected command')
+    },
+  } })
+  io.stop.mockImplementation(() => new Promise<void>(resolve => { finishStop = resolve }))
+  const tab = useNativeTabsStore().create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const stopped = (wrapper.vm as any).stop(); await flushPromises()
+  resolveStart(receipt('running', '2')); await flushPromises()
+  io.terminals[0].input('must not send while stopping', true); await flushPromises()
+  expect(io.user).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(statusReads).toBe(0)
+  finishStop(); await vi.advanceTimersByTimeAsync(100); await stopped
+  expect(useNativeTabsStore().tab(tab.tabId)?.status).toBe('exited')
+})
+
+// 没有文档桥接时本地工厂尚未提交启动，可以报告失败并关闭，不能变成不可取消的未知。
+it('Native_LocalBridgeFailureIsUnsent_012', async () => {
+  Reflect.deleteProperty(window, '__CC_DESK_DOCUMENT__')
+  const tab = useNativeTabsStore().create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  expect(useNativeTabsStore().tab(tab.tabId)).toMatchObject({ status: 'failed', launchRevision: null, errorCode: 'DOCUMENT_BRIDGE_UNAVAILABLE' })
+  expect(io.channels).toHaveLength(0)
+})
+
+// 本地选择配置已消失时没有提交启动，必须保留可关闭的确定失败状态。
+it('Native_LocalProfileFailureIsUnsent_013', async () => {
+  useCliProfilesStore().profiles = []
+  const tab = useNativeTabsStore().create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  expect(useNativeTabsStore().tab(tab.tabId)).toMatchObject({ status: 'failed', launchRevision: null, errorCode: 'CLI_PROFILE_REQUIRED' })
+  expect(io.channels).toHaveLength(0)
+})
+
+// spawn 已开始但监督器尚未接管时，RUN_NOT_FOUND 不代表结束，仍需停止后检查真实退出。
+it('Native_StopWaitsForAdoption_014', async () => {
+  vi.useFakeTimers()
+  let original: any
+  let reads = 0
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any) {
+      if (command === 'cli_start') { original = input; throw new Error('lost') }
+      const phase = command === 'cli_cancel_launch' ? 'starting' : ++reads < 2 ? 'running' : 'exited'
+      const revision = phase === 'starting' ? '1' : phase === 'running' ? '2' : '3'
+      return { instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision, phase, failure: null }
+    },
+  } })
+  io.stop.mockRejectedValueOnce({ code: 'RUN_NOT_FOUND', retryable: false }).mockResolvedValue(undefined)
+  const tab = useNativeTabsStore().create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const stopped = (wrapper.vm as any).stop()
+  await vi.advanceTimersByTimeAsync(300); await stopped
+  expect(useNativeTabsStore().tab(tab.tabId)).toMatchObject({ status: 'exited', launchRevision: '3' })
+  expect(io.stop).toHaveBeenCalledTimes(2)
+  expect(io.stop.mock.calls.every(([run]) => run.runId === tab.runId && run.generation === tab.generation)).toBe(true)
+})
+
+// 取消传输失败不能关闭未知会话，也不能调用停止不存在的run或重新启动。
+it('Native_CancelLossRetainsUnknown_015', async () => {
+  const calls: string[] = []
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string) { calls.push(command); throw new Error('transport lost') },
+  } })
+  const tab = useNativeTabsStore().create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  await expect((wrapper.vm as any).stop()).rejects.toThrow('LAUNCH_STATE_UNKNOWN')
+  expect(useNativeTabsStore().tab(tab.tabId)).toMatchObject({ status: 'unknown', launchRevision: null })
+  expect(calls).toEqual(['cli_start', 'cli_cancel_launch'])
+  expect(io.stop).not.toHaveBeenCalled()
+})
+
+// 取消、停止或状态 IPC 永不返回时，关闭等待仍须在同一个期限结束并保留未结束会话。
+it.each(['cancel', 'stop', 'status'] as const)('Native_StopBoundsPendingIpc_016 %s', async pendingStep => {
+  vi.useFakeTimers()
+  let original: any
+  let ended = false
+  let finishLate!: (value?: unknown) => void
+  const pending = new Promise(resolve => { finishLate = resolve })
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any) {
+      if (command === 'cli_start') { original = input; throw new Error('lost') }
+      if (ended) return { instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision: '3', phase: pendingStep === 'cancel' ? 'cancelled' : 'exited', failure: null }
+      if (command === 'cli_cancel_launch' && pendingStep === 'cancel'
+        || command === 'cli_get_launch_status' && pendingStep === 'status') return pending
+      return { instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision: '2', phase: 'running', failure: null }
+    },
+  } })
+  if (pendingStep === 'stop') io.stop.mockReturnValue(pending)
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  let outcome = 'pending'
+  void (wrapper.vm as any).stop().then(() => { outcome = 'resolved' }, (error: Error) => { outcome = error.message })
+  await vi.advanceTimersByTimeAsync(5100)
+  expect(outcome).toBe('NATIVE_STOP_UNCONFIRMED')
+  expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'unknown', errorCode: 'NATIVE_STOP_UNCONFIRMED' })
+  const beforeLate = { ...tabs.tab(tab.tabId)! }
+  finishLate(pendingStep === 'stop' ? undefined : { instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision: '3', phase: pendingStep === 'cancel' ? 'cancelled' : 'exited', failure: null })
+  await flushPromises()
+  expect(tabs.tab(tab.tabId)).toEqual(beforeLate)
+  io.terminals[0].input('paused after timeout', true); await flushPromises()
+  expect(io.user).not.toHaveBeenCalled()
+  ended = true
+  await expect((wrapper.vm as any).stop()).resolves.toBeUndefined()
+  expect(tabs.tab(tab.tabId)?.status).toBe(pendingStep === 'cancel' ? 'failed' : 'exited')
+})
+
+// 关闭超时后迟到的原始启动回执只进入 attempt，不得重新发布运行态或打开输入。
+it('Native_StopTimeoutFencesLateStart_017', async () => {
+  vi.useFakeTimers()
+  let original: any
+  let finishStart!: (value: unknown) => void
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any) {
+      if (command === 'cli_start') { original = input; return new Promise(resolve => { finishStart = resolve }) }
+      return new Promise(() => {})
+    },
+  } })
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const outcome = (wrapper.vm as any).stop().catch((error: Error) => error.message)
+  await vi.advanceTimersByTimeAsync(5100)
+  expect(await outcome).toBe('NATIVE_STOP_UNCONFIRMED')
+  finishStart({ instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision: '2', phase: 'running', failure: null })
+  await flushPromises()
+  expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'unknown', errorCode: 'NATIVE_STOP_UNCONFIRMED' })
+  io.terminals[0].input('late start cannot unpause', true); await flushPromises()
+  expect(io.user).not.toHaveBeenCalled()
+})
+
+// 停止前已在等待的检查回执晚于超时到达时，不能重新打开用户输入。
+it('Native_StopTimeoutFencesOldStatus_018', async () => {
+  vi.useFakeTimers()
+  let original: any
+  let finishStatus!: (value: unknown) => void
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any) {
+      if (command === 'cli_start') {
+        original = input
+        return { instanceId: 'test-backend', requestId: input.requestId, run: { runId: input.runId, generation: input.generation }, revision: '2', phase: 'running', failure: null }
+      }
+      if (command === 'cli_get_launch_status') return new Promise(resolve => { finishStatus = resolve })
+      return new Promise(() => {})
+    },
+  } })
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const recovery = (wrapper.vm as any).recover(); await flushPromises()
+  const outcome = (wrapper.vm as any).stop().catch((error: Error) => error.message)
+  await vi.advanceTimersByTimeAsync(5100)
+  expect(await outcome).toBe('NATIVE_STOP_UNCONFIRMED')
+  finishStatus({ instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision: '3', phase: 'running', failure: null })
+  await recovery
+  expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'unknown', errorCode: 'NATIVE_STOP_UNCONFIRMED' })
+  io.terminals[0].input('late status cannot unpause', true); await flushPromises()
+  expect(io.user).not.toHaveBeenCalled()
+})
+
+// 旧后台检查永不返回时，超时释放检查所有权，用户明确恢复后仍能启动新的周期检查。
+it('Native_RecoverRestartsAfterTimeout_019', async () => {
+  vi.useFakeTimers()
+  let original: any
+  let reads = 0
+  Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
+    instanceId: 'test-backend',
+    async invoke(command: string, input: any) {
+      if (command === 'cli_start') original = input
+      else if (command === 'cli_cancel_launch' || command === 'cli_get_launch_status' && ++reads === 1) return new Promise(() => {})
+      const phase = reads >= 3 ? 'exited' : 'running'
+      return { instanceId: 'test-backend', requestId: original.requestId, run: { runId: original.runId, generation: original.generation }, revision: phase === 'running' ? '2' : '3', phase, failure: null }
+    },
+  } })
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(reads).toBe(1)
+  const stopped = (wrapper.vm as any).stop().catch((error: Error) => error.message)
+  await vi.advanceTimersByTimeAsync(5100)
+  expect(await stopped).toBe('NATIVE_STOP_UNCONFIRMED')
+  await (wrapper.vm as any).recover()
+  expect(tabs.tab(tab.tabId)?.status).toBe('running')
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(reads).toBe(3)
+  expect(tabs.tab(tab.tabId)?.status).toBe('exited')
 })

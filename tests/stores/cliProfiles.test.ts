@@ -221,14 +221,15 @@ it('LaunchConfig_LastDefaultFallback_009', async () => {
       const patch = (payload as any).patch; patches.push(patch)
       return { revision: patches.length === 1 ? '8' : '9', profiles: patch.op === 'create' ? [{ ...patch.profile, revision: '9' }] : [] }
     }
+    if (command === 'cli_get_availability') return { profileId: 'desk-safe-claude', profileRevision: '9', cli: 'claude', state: 'configuration-required', hostStatus: 'available', certified: false, issue: { code: 'PROGRAM_TRUST_REQUIRED', retryable: false } }
     throw new Error('unexpected')
   })
   const profiles = useCliProfilesStore(); await profiles.load(); const defaults = useNewSessionDraftStore(); defaults.setDefault('claude', 'cc')
   profiles.requestDelete('cc'); expect(await profiles.confirmDelete()).toBe(true)
   expect(patches).toEqual([{ op: 'delete', id: 'cc' }]); expect(localStorage.getItem('cc-desk-launch-preferences-v1')).not.toContain('"cc"')
   useProjectsStateStore().loaded = true
-  const prepared = await defaults.prepareInput({ projectKey: '/repo', projectPath: '/repo', cli: 'claude' })
-  expect(prepared.launchConfigId).toBe('desk-safe-claude'); expect(patches).toHaveLength(2)
+  await expect(defaults.prepareInput({ projectKey: '/repo', projectPath: '/repo', cli: 'claude' })).rejects.toThrow('LAUNCH_CONFIGURATION_REQUIRED')
+  expect(profiles.profile('desk-safe-claude')?.programPath).toEqual({ mode: 'inherit' }); expect(patches).toHaveLength(2)
   expect(patches[1]).toMatchObject({ op: 'create', profile: { cli: 'claude', observer: { mode: 'set', value: false }, defaultArgs: { mode: 'set', value: [] }, skipPermissions: { mode: 'set', value: false } } })
 })
 

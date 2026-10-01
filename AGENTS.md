@@ -480,3 +480,10 @@ npm run tauri:build        # 生产构建
 - This user-authorized repair prepares version 0.18.0 consistently across npm/Cargo/Tauri and test installer naming; it does not authorize Release/tag/updater publication.
 
 - The final ordinary CI and Windows test-package workflows pin Rust 1.98.1, the compiler already verified for 0.18.0, after floating stable drifted to 1.99.0 mid-batch. Keep strict Clippy `-D warnings` and the declared 1.89 MSRV; toolchain upgrades require their own validation. No atomic runtime behavior is changed for this build reproducibility repair.
+
+### Native launch prerequisites and explicit recovery
+
+- A newly created `desk-safe-*` configuration does not imply a trusted executable. Nonlegacy `programPath: inherit` is `PROGRAM_TRUST_REQUIRED`, as enforced by the shared frontend/Rust availability fixture. New-session preparation checks the exact configuration revision before admitting a Native tab. The existing configuration editor may repair a never-admitted preparation; saving alone never launches. Explicit Retry can adopt the saved revision of that same configuration and CLI, but cannot relax an admitted attempt's frozen identity.
+- Explicit Resume of an ended open Legacy session restarts its original project/session identity through the existing lifecycle, from both the row and history chooser. Plain activation only displays retained scrollback. A newer selection or changed owner cancels a delayed resume before admission.
+
+- Workspace partial-source warnings retain up to twelve deduplicated, allowlisted source-category/error-code pairs behind collapsed details. Only the current refresh can publish them; late catalog reads cannot overwrite newer refresh results. No paths, profile/session identities, titles or raw exception fields enter diagnostics. Preserve source failures and existing filesystem/admission limits; see `docs/workspace-source-diagnostics.md`.

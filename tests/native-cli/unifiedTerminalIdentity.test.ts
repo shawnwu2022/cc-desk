@@ -13,7 +13,7 @@ import { useHookStore, type ObservationHandler } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 
-const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], bindings: [] as any[], channels: [] as any[], observers: [] as any[], scope: vi.fn(), read: vi.fn(), start: vi.fn(), recover: vi.fn(), stop: vi.fn(), copy: vi.fn(), resize: vi.fn() }))
+const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], bindings: [] as any[], channels: [] as any[], observers: [] as any[], scope: vi.fn(), read: vi.fn(), start: vi.fn(), recover: vi.fn(), cancel: vi.fn(), stop: vi.fn(), copy: vi.fn(), resize: vi.fn() }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: any; element!: HTMLElement; textarea!: HTMLTextAreaElement
   cols = 80; rows = 24; modes = { bracketedPasteMode: false }; output = ''; focus = vi.fn(); dispose = vi.fn(); key: any; selection = ''
@@ -25,7 +25,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit = vi.fn(); constructor() { io.fits.push(this) } } }))
 vi.mock('@tauri-apps/api/core', () => ({ Channel: class { onmessage: any; constructor() { io.channels.push(this) } }, invoke: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), cliResize: io.resize, cliStop: io.stop, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }) }))
-vi.mock('@/terminal/nativeLaunchEntry', () => ({ createNativeLaunchEntry: () => ({ start: io.start, recover: io.recover }) }))
+vi.mock('@/terminal/nativeLaunchEntry', async original => ({ ...await original<object>(), createNativeLaunchEntry: () => ({ start: io.start, recover: io.recover, cancel: io.cancel, latest: vi.fn() }) }))
 vi.mock('@/terminal/deskNativeTerminal', () => ({ createDeskNativeTerminalBinding: (options: any) => {
   const binding = { options, acceptOutput: (frame: any) => { options.term.write(frame.data); return true }, dispose: vi.fn(), sendUserText: vi.fn().mockResolvedValue(undefined), reserveUserPaste: vi.fn(() => ({ inputSeq: '1', settled: Promise.resolve() })) }
   io.bindings.push(binding); return binding
@@ -41,6 +41,10 @@ beforeEach(() => {
   io.recover.mockImplementation(async (requestId: string) => {
     const input = io.start.mock.calls.map(call => call[0]).find(input => input.requestId === requestId)
     return { requestId, run: { runId: input.runId, generation: input.generation }, phase: 'running', revision: '2', failure: null }
+  })
+  io.cancel.mockImplementation(async (requestId: string) => {
+    const input = io.start.mock.calls.map(call => call[0]).find(input => input.requestId === requestId)
+    return { requestId, run: { runId: input.runId, generation: input.generation }, phase: 'running', revision: '1', failure: null }
   })
   io.copy.mockResolvedValue(undefined)
   io.stop.mockResolvedValue(undefined); io.resize.mockResolvedValue(undefined)
@@ -80,7 +84,7 @@ describe('Unified native terminal identity', () => {
   it('Native_StaleStopIsIsolated_003', async () => {
     const { tab, vm } = open(); await flushPromises()
     let finish!: () => void; io.stop.mockReturnValue(new Promise<void>(resolve => { finish = resolve }))
-    const stopping = vm.stop(captureNativeAttempt(tab))
+    const stopping = vm.stop(captureNativeAttempt(tab)); await flushPromises()
     const tabs = useNativeTabsStore(); tabs.tab(tab.tabId)!.status = 'exited'
     const newer = tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' }); await flushPromises()
     finish(); await stopping
@@ -142,9 +146,11 @@ describe('Unified native terminal identity', () => {
   })
   // 停止回执后状态仍运行，不得向关闭或重启调用方报告已停止。
   it('Native_StopRequiresEndedState_009', async () => {
-    const { tab, vm } = open(); await flushPromises()
+    vi.useFakeTimers(); const { tab, vm } = open(); await flushPromises()
     io.recover.mockResolvedValue({ requestId: tab.requestId, run: { runId: tab.runId, generation: 1 }, phase: 'running', revision: '2' })
-    await expect(vm.stop()).rejects.toThrow('NATIVE_STOP_UNCONFIRMED')
+    const stopped = expect(vm.stop()).rejects.toThrow('NATIVE_STOP_UNCONFIRMED')
+    await vi.advanceTimersByTimeAsync(5100)
+    await stopped
   })
   // 排队的旧关闭请求不能在前一个停止完成后重新捕获新代次。
   it('Native_QueuedCloseKeepsOwnership_010', async () => {
@@ -216,7 +222,7 @@ describe('Unified native terminal identity', () => {
     io.start.mockImplementation(input => createLaunchAttempt({ ...input, profileId: 'cx', expectedProfileRevision: '7' }, 'instance', { start: sent, status: vi.fn() }).start())
     const { tab } = open(); await flushPromises()
     const tabs = useNativeTabsStore(); expect(sent).toHaveBeenCalledOnce()
-    expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'failed', launchRevision: null })
+    expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'unknown', launchRevision: null })
     useWorkspaceStore().projects = [{ projectId: 'project', hostId: 'host', sourcePathKey: 'root', selectedPath: '/repo', canonicalPath: null, alias: { mode: 'inherit' }, hidden: { mode: 'inherit' }, pinned: { mode: 'inherit' } }]
     const sessions = useUnifiedSessionsStore(); sessions.sessions = [{ id: `native-tab:${tab.tabId}`, adapterSessionId: tab.tabId, cli: 'codex', runtime: 'native-cli', projectKey: '/repo', projectPath: '/repo', title: 'Codex',
       processState: 'failed', attentionState: 'none', lastActivityAt: 1, archived: false, resumable: false }]; sessions.activeSessionId = sessions.sessions[0].id

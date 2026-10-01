@@ -131,6 +131,16 @@ impl NativeRuntime {
     ) -> Result<LaunchStatus, SafeError> {
         self.binding()?.query_native(webview, request)
     }
+    pub(crate) fn cancel_launch<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<LaunchStatus, SafeError> {
+        // Identical document admission and strict full-request decoding as start;
+        // cancellation never reads a new profile or rebuilds a launch snapshot.
+        let (caller, launch) = self.binding()?.start_native(webview, request)?;
+        self.service.registry().cancel(&caller, &launch)
+    }
     pub(crate) fn ack_output<T: Runtime>(
         &self,
         webview: &Webview<T>,

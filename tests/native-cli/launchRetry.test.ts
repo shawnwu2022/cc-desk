@@ -188,3 +188,90 @@ describe('D11 frontend launch attempt', () => {
     expect(Object.isFrozen(attempt.latest()?.run)).toBe(true)
   })
 })
+
+// 后端结构化拒绝保留固定诊断码，但不会伪造进程终态回执。
+it('Launch_StructuredDenial_013', async () => {
+  const attempt = createLaunchAttempt(request(), 'backend-one', {
+    start: async () => { throw { code: 'PROGRAM_TRUST_REQUIRED', retryable: false } },
+    status: vi.fn(),
+  })
+  await expect(attempt.start()).rejects.toThrow('PROGRAM_TRUST_REQUIRED')
+  expect(attempt.latest()).toBeUndefined()
+})
+
+// 相同文本、未知字段或可能已启动的错误码不能冒充确定的启动拒绝。
+it.each([
+  new Error('PROGRAM_TRUST_REQUIRED'), 'PROGRAM_TRUST_REQUIRED',
+  { code: 'PROGRAM_TRUST_REQUIRED', secret: '/private/value' },
+  { code: 'RUN_HANDOFF_FAILED', retryable: false },
+])('Launch_UntrustedDenialStaysUnknown_014 %j', async failure => {
+  const attempt = createLaunchAttempt(request(), 'backend-one', {
+    start: async () => { throw failure }, status: vi.fn(),
+  })
+  await expect(attempt.start()).rejects.toThrow('LAUNCH_STATE_UNKNOWN')
+  expect(attempt.latest()).toBeUndefined()
+})
+
+// 丢失启动回执后取消使用同一冻结请求；迟到启动回执不能覆盖取消终态。
+it('Launch_CancelFreezesRequest_015', async () => {
+  const pending = deferred<unknown>()
+  const input = request()
+  const cancelled = receipt({ revision: '1', phase: 'cancelled' })
+  let cancelInput: unknown
+  const transport = { start: () => pending.promise, status: vi.fn(), cancel: async (value: LaunchRequest) => { cancelInput = value; return cancelled } }
+  const attempt = createLaunchAttempt(input, 'backend-one', transport)
+  const starting = attempt.start()
+  input.cols = 132
+  expect(await attempt.cancel()).toEqual(cancelled)
+  expect(cancelInput).toEqual(request())
+  pending.resolve(receipt({ revision: '0', phase: 'reserved' }))
+  expect(await starting).toEqual(cancelled)
+  expect(attempt.latest()).toEqual(cancelled)
+})
+
+// 取消丢包后仍然只能检查原请求，不能宣称已停止或重放启动。
+it('Launch_CancelLossStaysUnknown_016', async () => {
+  const transport = {
+    start: vi.fn(async () => { throw new Error('lost') }),
+    status: vi.fn(async () => receipt({ phase: 'cancelled', revision: '1' })),
+    cancel: async () => { throw new Error('private failure') },
+  }
+  const attempt = createLaunchAttempt(request(), 'backend-one', transport)
+  await expect(attempt.start()).rejects.toThrow('LAUNCH_STATE_UNKNOWN')
+  await expect(attempt.cancel()).rejects.toThrow('LAUNCH_STATE_UNKNOWN')
+  expect(attempt.latest()).toBeUndefined()
+  expect((await attempt.recover()).phase).toBe('cancelled')
+  expect(transport.start).toHaveBeenCalledTimes(1)
+})
+
+// 错误对象的访问器不是后端结构化数据，即使抛出已知码也不可当作拒绝。
+it('Launch_DenialGetterIsNotData_017', async () => {
+  const failure = { get code(): string { throw new Error('PROGRAM_TRUST_REQUIRED') } }
+  const attempt = createLaunchAttempt(request(), 'backend-one', {
+    start: async () => { throw failure }, status: vi.fn(),
+  })
+  await expect(attempt.start()).rejects.toThrow('LAUNCH_STATE_UNKNOWN')
+})
+
+// 文档鉴权和解码拒绝只保留固定码，field/index 不进入公开诊断。
+it.each(['FORBIDDEN', 'DOCUMENT_BRIDGE_UNAVAILABLE', 'INVALID_REQUEST'])('Launch_AdmissionCodeOnly_018 %s', async code => {
+  const attempt = createLaunchAttempt(request(), 'backend-one', {
+    start: async () => { throw { code, field: 'requestId', index: 0, retryable: false } }, status: vi.fn(),
+  })
+  await expect(attempt.start()).rejects.toThrow(new Error(code))
+  expect(attempt.latest()).toBeUndefined()
+})
+
+// 取消回执也必须检查请求、代次、实例和终态单调性，不能借取消路径绕过。
+it.each([
+  receipt({ requestId: 'other-request', phase: 'cancelled' }),
+  receipt({ run: { runId: 'run-one', generation: 2 }, phase: 'cancelled' }),
+  receipt({ instanceId: 'other-backend', phase: 'cancelled' }),
+])('Launch_CancelRejectsOtherOwner_019 %j', async cancelled => {
+  const attempt = createLaunchAttempt(request(), 'backend-one', {
+    start: async () => { throw new Error('lost') }, status: vi.fn(), cancel: async () => cancelled,
+  })
+  await expect(attempt.start()).rejects.toThrow('LAUNCH_STATE_UNKNOWN')
+  await expect(attempt.cancel()).rejects.toThrow()
+  expect(attempt.latest()).toBeUndefined()
+})

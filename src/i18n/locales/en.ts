@@ -249,8 +249,19 @@ export default {
   newSessionCreate: "Create session",
   newSessionContinueRestore: "Continue to restore",
   newSessionPreparationFailed: "The project or launch configuration could not be prepared safely. Retry explicitly, or choose an existing configuration in More options. Launches are never retried automatically.",
+  launchPreparationConfigurationRequired: "Choose the CLI program and check this launch configuration before starting a session. Save your changes, then explicitly retry or create a session.",
+  launchPreparationWorkingDirectoryUnavailable: "The project's working folder is unavailable. Check that it still exists and is accessible.",
 
   workspaceRuntimePartial: 'Some session sources could not be loaded. Open sessions remain available.',
+  sourceWarningProjectMetadata: 'Saved project details',
+  sourceWarningProjectDiscovery: 'Discovered projects',
+  sourceWarningConfigurations: 'Launch configurations',
+  sourceWarningRegistrations: 'Registered projects',
+  sourceWarningLegacyHistory: 'Claude Code compatibility history',
+  sourceWarningClaudeHistory: 'Claude Code history',
+  sourceWarningCodexHistory: 'Codex CLI history',
+  sourceWarningCatalog: 'Session list',
+  sourceWarningMore: 'More source errors were omitted. Refresh to check again.',
   workspaceRuntimeActionFailed: 'The action could not be completed. Check the session state before trying again.',
 
   // Unified application shell

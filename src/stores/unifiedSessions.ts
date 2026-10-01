@@ -18,6 +18,7 @@ import type { ToastInput } from '@/stores/notifications'
 import { makeSessionCatalogKey, makeSessionRenameOwnerKey } from '@/utils/sessionPresentation'
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
 import { normalizePath } from '@/utils/path'
+import { LaunchConfigurationRequiredError } from '@/utils/launchPreparation'
 
 function projectName(path: string): string {
   const normalized = path.replace(/[\\/]+$/, '')
@@ -148,7 +149,23 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   async function resumeCatalogSession(target: string | UnifiedSession, canAdmit = () => true) {
     const row = typeof target === 'string' ? requireSession(target) : target
     const id = row.id
-    if (id.startsWith('native-tab:') || id.startsWith('legacy-tab:')) { await activateSession(id); return row }
+    if (id.startsWith('native-tab:')) { await activateSession(id); return row }
+    if (id.startsWith('legacy-tab:')) {
+      const owns = captureSessionOwnership(id)
+      const ownsSelection = captureSelectionOwnership()
+      if (!canAdmit()) throw new Error('RESTORE_CANCELLED')
+      // A chooser may retain an ended snapshot after the owning tab has started.
+      // Only fresh adapter state can authorize an explicit ended-session resume.
+      const current = (await adapterForRuntime('legacy-claude').listSessions(row.projectKey)).find(value => value.id === id)
+      if (!canAdmit() || !owns() || !ownsSelection() || !current || current.nativeSessionId !== row.nativeSessionId
+        || normalizePath(current.projectPath) !== normalizePath(row.projectPath)) throw new Error('STALE_SESSION_ATTEMPT')
+      await activateSession(id)
+      if (current.processState === 'stopped' && current.resumable) {
+        const selected = captureSelectionOwnership()
+        return restartSession(id, () => canAdmit() && owns() && selected() && activeSessionId.value === id)
+      }
+      return current
+    }
     if (row.archived) throw new Error('SESSION_ARCHIVED')
     try {
       const resumed = await resumeSession(resumeInput(row), canAdmit)
@@ -420,10 +437,13 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       // admitted attempt into a retryable preparation row.
       await refresh(creation.input.projectKey).catch(() => { error.value = 'SESSION_REFRESH_FAILED' })
       return sessions.value.find(value => value.id === created.id) ?? created
-    } catch {
+    } catch (failure) {
       if (!current()) throw new Error('NEW_SESSION_CANCELLED')
       row.processState = creation.preparing ? 'failed' : 'unknown'
-      row.safeErrorCode = creation.preparing ? 'NEW_SESSION_PREPARATION_FAILED' : 'LAUNCH_STATE_UNKNOWN'
+      if (creation.preparing && failure instanceof LaunchConfigurationRequiredError) {
+        row.safeErrorCode = 'LAUNCH_CONFIGURATION_REQUIRED'
+        row.launchConfigId = failure.profileId
+      } else row.safeErrorCode = creation.preparing ? 'NEW_SESSION_PREPARATION_FAILED' : 'LAUNCH_STATE_UNKNOWN'
       sessions.value = sessions.value.map(session => session.id === id ? { ...row } : session)
       throw new Error(row.safeErrorCode)
     }
@@ -498,7 +518,14 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const creation = creations.get(id)
     if (creation) {
       if (creation.row.processState !== 'failed') return Promise.reject(new Error('LAUNCH_STATE_UNKNOWN'))
-      return createSession(copyInput(creation.input), id)
+      const input = copyInput(creation.input)
+      if (creation.row.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED' && creation.row.launchConfigId) {
+        // Explicit retry of a never-admitted prerequisite failure may use the
+        // user's saved repair, but only for the same configuration and CLI.
+        input.launchConfigId = creation.row.launchConfigId
+        delete input.launchConfigRevision
+      }
+      return createSession(input, id)
     }
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)

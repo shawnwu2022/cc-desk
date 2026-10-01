@@ -7,6 +7,7 @@ import { useNativeTabsStore, type NativeCliTab } from './nativeTabs'
 import { cliGetAvailability } from '@/api/cliAvailability'
 import { parseNativeRawArgv } from '@/utils/nativeRawArgv'
 import { normalizePath } from '@/utils/path'
+import { LaunchConfigurationRequiredError } from '@/utils/launchPreparation'
 import type { CliProfile } from '@/types/profile'
 import type { CreateUnifiedSessionInput, UnifiedCliKind, UnifiedProjectIdentity } from '@/types/unifiedSession'
 
@@ -160,8 +161,18 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
         selected = profiles.profile(safe.id)
       }
       if (!selected || selected.cli !== input.cli) throw new Error('NEW_SESSION_PREPARATION_FAILED')
+      const profileId = selected.id, profileRevision = selected.revision
+      const availability = await cliGetAvailability(profileId, profileRevision)
+      if (profiles.profile(profileId)?.revision !== profileRevision || availability.cli !== input.cli) {
+        throw new Error('PROFILE_SELECTION_CHANGED')
+      }
+      if (availability.state !== 'available-unverified') throw new LaunchConfigurationRequiredError(profileId)
+      if (availability.hostStatus === 'unavailable') throw new Error('NEW_SESSION_PREPARATION_FAILED')
       return { ...input, launchConfigId: selected.id, launchConfigRevision: selected.revision }
-    } catch { throw new Error('NEW_SESSION_PREPARATION_FAILED') }
+    } catch (failure) {
+      if (failure instanceof LaunchConfigurationRequiredError) throw failure
+      throw new Error('NEW_SESSION_PREPARATION_FAILED')
+    }
   }
   return { visible, chooserVisible, project, cli, title, launchConfigId, startMode, rawEnabled, argvFormat, argvText,
     cliAvailability, availabilityFor, refreshAvailability, preferred, setDefault, defaultFor, forgetDefault, recordSuccess, open, openChooser, setArgvFormat, toInput, prepareInput }

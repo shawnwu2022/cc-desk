@@ -79,6 +79,15 @@ pub(crate) async fn cli_get_launch_status(
 }
 
 #[tauri::command]
+pub(crate) async fn cli_cancel_launch(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<LaunchStatus, SafeError> {
+    runtime.cancel_launch(&webview, &request)
+}
+
+#[tauri::command]
 pub(crate) async fn cli_ack_output(
     webview: Webview,
     request: Request<'_>,

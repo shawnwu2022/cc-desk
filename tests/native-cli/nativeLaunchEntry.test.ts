@@ -57,7 +57,7 @@ describe('D23 native launch/recovery user entry', () => {
     let captured: unknown
     const entry = createNativeLaunchEntry({ selectedProfile: () => profile(`${cli}-main`, cli), createAttempt: request => {
       captured = request.action
-      return { start: async () => running(request.requestId, request.runId, request.generation), recover: vi.fn(), latest: vi.fn() }
+      return { start: async () => running(request.requestId, request.runId, request.generation), recover: vi.fn(), cancel: vi.fn(), latest: vi.fn() }
     } })
     await expect(entry.start({ ...input(), requestId: tab.requestId, tabId: tab.tabId, runId: tab.runId, generation: tab.generation, cli, action: tab.action }, {} as any))
       .resolves.toMatchObject({ phase: 'running', requestId: tab.requestId })
@@ -73,7 +73,7 @@ describe('D23 native launch/recovery user entry', () => {
     let captured: unknown
     const entry = createNativeLaunchEntry({ selectedProfile: () => profile('codex-main', 'codex'), createAttempt: request => {
       captured = request.action
-      return { start: async () => running(request.requestId, request.runId, request.generation), recover: vi.fn(), latest: vi.fn() }
+      return { start: async () => running(request.requestId, request.runId, request.generation), recover: vi.fn(), cancel: vi.fn(), latest: vi.fn() }
     } })
     await entry.start({ ...input(), cli: 'codex', action: tab.action }, {} as any)
     if (tab.action.kind === 'raw') tab.action.argv.splice(0, 3, 'changed')
@@ -85,7 +85,7 @@ describe('D23 native launch/recovery user entry', () => {
     const attempt: LaunchAttempt = {
       start: vi.fn(async () => running('request-1', 'run-1', 1)),
       recover: vi.fn(),
-      latest: vi.fn(),
+      cancel: vi.fn(), latest: vi.fn(),
     }
     const createAttempt = vi.fn((request: any, _channel: any) => {
       captured = request
@@ -116,7 +116,7 @@ describe('D23 native launch/recovery user entry', () => {
   it('D23_Launch_LostStartResponseRecoversOriginalAttemptWithoutRespawn_02', async () => {
     const start = vi.fn(async () => { throw new Error('LAUNCH_STATE_UNKNOWN') })
     const recover = vi.fn(async () => running('request-1', 'run-1', 1))
-    const createAttempt = vi.fn(() => ({ start, recover, latest: vi.fn() }))
+    const createAttempt = vi.fn(() => ({ start, recover, cancel: vi.fn(), latest: vi.fn() }))
     const entry = createNativeLaunchEntry({
       selectedProfile: () => profile('claude-main', 'claude'),
       createAttempt,
@@ -132,7 +132,7 @@ describe('D23 native launch/recovery user entry', () => {
 
   it('D23_Launch_DuplicateRequestIdNeverCreatesSecondAttempt_03', async () => {
     const start = vi.fn(async () => running('request-1', 'run-1', 1))
-    const createAttempt = vi.fn(() => ({ start, recover: vi.fn(), latest: vi.fn() }))
+    const createAttempt = vi.fn(() => ({ start, recover: vi.fn(), cancel: vi.fn(), latest: vi.fn() }))
     const entry = createNativeLaunchEntry({
       selectedProfile: () => profile('claude-main', 'claude'),
       createAttempt,
@@ -152,7 +152,7 @@ describe('D23 native launch/recovery user entry', () => {
     const createAttempt = vi.fn(() => ({
       start: vi.fn(async () => running('request-1', 'run-1', 1)),
       recover: vi.fn(),
-      latest: vi.fn(),
+      cancel: vi.fn(), latest: vi.fn(),
     }))
     const entry = createNativeLaunchEntry({
       selectedProfile: () => profile('claude-main', 'claude'),
@@ -196,7 +196,7 @@ describe('D23 native launch/recovery user entry', () => {
         return {
           start: vi.fn(async () => running(request.requestId, request.runId, request.generation)),
           recover: vi.fn(),
-          latest: vi.fn(),
+          cancel: vi.fn(), latest: vi.fn(),
         }
       },
     })
@@ -237,7 +237,7 @@ describe('D23 native launch/recovery user entry', () => {
     const createAttempt = vi.fn(() => ({
       start,
       recover: vi.fn(),
-      latest: vi.fn(),
+      cancel: vi.fn(), latest: vi.fn(),
     }))
     entry = createNativeLaunchEntry({
       selectedProfile: () => profile('claude-main', 'claude'),

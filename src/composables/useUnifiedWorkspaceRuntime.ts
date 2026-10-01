@@ -18,6 +18,7 @@ import { createNativeCliAdapter, type NativeRuntimeCreateInput } from '@/session
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
 import { sameProjectPath } from '@/utils/path'
+import { createWorkspaceSourceWarnings, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { UnifiedCliKind } from '@/types/unifiedSession'
 
@@ -36,6 +37,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const shell = useShellStore()
   const legacyPaths = ref<string[]>([])
   const error = ref<string | null>(null)
+  const sourceWarnings = ref<WorkspaceSourceWarning[]>([])
+  const sourceWarningsTruncated = ref(false)
   const ready = ref(false)
   const loading = ref(false)
   const fatal = computed(() => ready.value && !loading.value && !projects.loaded
@@ -216,26 +219,29 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const current = () => !disposed && owner === refreshOwner
     loading.value = true
     error.value = null
-    let partial = false
-    const settle = async (operation: () => Promise<unknown>) => {
-      try { await operation() } catch { partial = true }
+    const warnings = createWorkspaceSourceWarnings()
+    const settle = async (source: WorkspaceWarningSource, operation: () => Promise<unknown>) => {
+      try { await operation() } catch (failure) { warnings.add(source, failure) }
     }
     await Promise.all([
-      settle(() => projects.ensureLoaded()),
-      settle(async () => {
+      settle('project-metadata', () => projects.ensureLoaded()),
+      settle('project-discovery', async () => {
         await app.loadManagedProjects()
         const rows = app.cachedProjects
         if (!current()) return
         legacyPaths.value = rows.map(row => row.path)
         const paths = [...new Set([...legacyPaths.value, ...projects.pinnedProjects, ...[...legacy.tabs.values()].map(tab => tab.projectPath)])]
         for (let i = 0; i < paths.length && current(); i += 2) {
-          const results = await Promise.all(paths.slice(i, i + 2).map(path => legacy.loadHistoryFor(path, true)))
-          if (results.some(result => !result.ok)) partial = true
+          await Promise.all(paths.slice(i, i + 2).map(path => settle('legacy-history', async () => {
+            if (!(await legacy.loadHistoryFor(path, true)).ok) warnings.add('legacy-history')
+          })))
         }
       }),
-      settle(async () => {
+      settle('configurations', async () => {
         const results = await Promise.allSettled([profiles.load(), workspace.load()])
-        if (results.some(result => result.status === 'rejected')) { partial = true; return }
+        if (results[0].status === 'rejected') warnings.add('configurations', results[0].reason)
+        if (results[1].status === 'rejected') warnings.add('registrations', results[1].reason)
+        if (results.some(result => result.status === 'rejected')) return
         await draft.refreshAvailability()
         const contexts = profiles.profiles.flatMap(profile => profile.cli === 'shell' ? [] : workspace.projects.map(project => ({
           cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
@@ -243,22 +249,24 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         })))
         // Match the backend's two-reader budget; isolate each source failure.
         for (let i = 0; i < contexts.length && current(); i += 2) {
-          await Promise.all(contexts.slice(i, i + 2).map(context => settle(async () => {
+          await Promise.all(contexts.slice(i, i + 2).map(context => settle(context.cli === 'claude' ? 'claude-history' : 'codex-history', async () => {
             const entry = await history.load(context)
-            if (entry.error) partial = true
+            if (entry.error) warnings.add(context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error })
           })))
         }
       }),
     ])
     if (!current()) return
-    await settle(() => catalog.initialize())
+    await settle('catalog', () => catalog.initialize())
     if (!current()) return
     // Even unavailable projects.json must not prevent the readable runtime catalog.
-    await settle(() => catalog.refresh())
+    await settle('catalog', () => catalog.refresh())
     if (!current()) return
     ready.value = true
     loading.value = false
-    error.value = partial && !fatal.value ? 'workspaceRuntimePartial' : null
+    sourceWarnings.value = warnings.items
+    sourceWarningsTruncated.value = warnings.truncated
+    error.value = warnings.items.length && !fatal.value ? 'workspaceRuntimePartial' : null
   }
 
   async function dispatch(request: WorkspaceRequest): Promise<boolean> {
@@ -353,7 +361,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         if (live) { if (shell.section === 'workspace') catalog.beginSessionConfirmation('stop-and-archive', session.id); return true }
         await catalog.archiveSession(session.id); return true
       case 'resume':
-        if (open) { await catalog.activateSession(session.id); return true }
+        if (open) { await catalog.resumeCatalogSession(session.id); return true }
         if (shell.section === 'workspace') catalog.openResumeDialog({ project: session, cli: session.cli, mode: 'history', sessionId: session.id })
         return true
       case 'restore-archive': await catalog.restoreArchivedSession(session.id); return true
@@ -414,8 +422,16 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     [...legacy.tabs.values()].map(tab => ({ ...tab })), [...native.tabs.values()].map(tab => ({ ...tab })),
     history.all(), projects.archivedSessions,
   ], async () => {
-    if (!enabled || !ready.value || disposed) return
-    try { await catalog.refresh() } catch { error.value = 'workspaceRuntimePartial' }
+    if (!enabled || !ready.value || disposed || loading.value) return
+    const owner = refreshOwner
+    try { await catalog.refresh() } catch (failure) {
+      if (disposed || owner !== refreshOwner || loading.value) return
+      const warnings = createWorkspaceSourceWarnings(sourceWarnings.value, sourceWarningsTruncated.value)
+      warnings.add('catalog', failure)
+      sourceWarnings.value = warnings.items
+      sourceWarningsTruncated.value = warnings.truncated
+      error.value = 'workspaceRuntimePartial'
+    }
   }, { deep: true })
   watch(() => catalog.activeSessionId, async () => {
     await nextTick()
@@ -427,5 +443,5 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     void refresh()
   })
   onUnmounted(() => { disposed = true; ++refreshOwner })
-  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, refresh, retryAction }
+  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, refresh, retryAction }
 }

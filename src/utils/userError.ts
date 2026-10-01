@@ -18,6 +18,19 @@ export interface UserErrorPresentation {
 type ErrorTemplate = Omit<UserErrorPresentation, 'context'>
 
 const KNOWN_ERRORS: Readonly<Record<string, ErrorTemplate>> = Object.freeze({
+  FORBIDDEN: { messageKey: 'errorGenericUnavailable', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'FORBIDDEN' },
+  DOCUMENT_BRIDGE_UNAVAILABLE: { messageKey: 'errorGenericUnavailable', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'DOCUMENT_BRIDGE_UNAVAILABLE' },
+  INVALID_REQUEST: { messageKey: 'errorGenericUnavailable', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'INVALID_REQUEST' },
+  LAUNCH_CANCEL_UNAVAILABLE: { messageKey: 'errorStopUnconfirmed', actionKey: 'confirmStatus', severity: 'warning', retryable: false, detailCode: 'LAUNCH_CANCEL_UNAVAILABLE' },
+  LAUNCH_CONFIGURATION_REQUIRED: { messageKey: 'launchPreparationConfigurationRequired', actionKey: 'launchConfigEditAction', severity: 'warning', retryable: false, detailCode: 'LAUNCH_CONFIGURATION_REQUIRED' },
+  PROGRAM_TRUST_REQUIRED: { messageKey: 'launchPreparationConfigurationRequired', actionKey: 'launchConfigEditAction', severity: 'warning', retryable: false, detailCode: 'PROGRAM_TRUST_REQUIRED' },
+  PROGRAM_UNAVAILABLE: { messageKey: 'errorCliNotFound', actionKey: 'launchConfigEditAction', severity: 'warning', retryable: false, detailCode: 'PROGRAM_UNAVAILABLE' },
+  WORKING_DIRECTORY_UNAVAILABLE: { messageKey: 'launchPreparationWorkingDirectoryUnavailable', actionKey: null, severity: 'warning', retryable: false, detailCode: 'WORKING_DIRECTORY_UNAVAILABLE' },
+  PROFILE_NOT_FOUND: { messageKey: 'resumeConfigurationChanged', actionKey: 'refresh', severity: 'warning', retryable: false, detailCode: 'PROFILE_NOT_FOUND' },
+  PROFILE_CLI_MISMATCH: { messageKey: 'resumeConfigurationChanged', actionKey: 'refresh', severity: 'warning', retryable: false, detailCode: 'PROFILE_CLI_MISMATCH' },
+  PROFILE_MISMATCH: { messageKey: 'resumeConfigurationChanged', actionKey: 'refresh', severity: 'warning', retryable: false, detailCode: 'PROFILE_MISMATCH' },
+  NATIVE_RUNTIME_NOT_READY: { messageKey: 'errorGenericUnavailable', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'NATIVE_RUNTIME_NOT_READY' },
+  RUN_SUPERVISOR_STOPPING: { messageKey: 'errorGenericUnavailable', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'RUN_SUPERVISOR_STOPPING' },
   RECOVERY_UNAVAILABLE: { messageKey: 'errorRecoveryUnavailable', actionKey: 'refresh', severity: 'warning', retryable: false, detailCode: 'RECOVERY_UNAVAILABLE' },
   STALE_SESSION_ATTEMPT: { messageKey: 'errorSessionChanged', actionKey: 'refresh', severity: 'warning', retryable: false, detailCode: 'STALE_SESSION_ATTEMPT' },
   ACTION_CANCELLED: { messageKey: 'errorActionCancelled', actionKey: null, severity: 'info', retryable: false, detailCode: 'ACTION_CANCELLED' },

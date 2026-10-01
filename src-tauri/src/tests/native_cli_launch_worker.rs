@@ -162,6 +162,8 @@ fn D11_Launch_Worker_099() {
         .invoke_handler(tauri::generate_handler![
             crate::cli::commands::cli_start,
             crate::cli::commands::cli_get_launch_status,
+            crate::cli::commands::cli_cancel_launch,
+            super::d11_launch_cancelled,
             super::d11_launch_validate,
             super::d11_launch_replayed,
             super::d11_launch_peer,
@@ -191,7 +193,8 @@ fn D11_Launch_Worker_099() {
                 let proof = serde_json::to_string(pages.proof.lock().as_ref().unwrap()).unwrap();
                 let id = serde_json::to_string(&json!({"requestId":pages.request.request_id})).unwrap();
                 let key = serde_json::to_string(&json!({"runId":pages.request.run_id,"generation":pages.request.generation})).unwrap();
-                format!("(async()=>{{const n=window.__TAURI_INTERNALS__,h={{headers:{{'x-cc-desk-document':{proof}}}}},b=x=>new TextEncoder().encode(JSON.stringify(x));const code=await n.invoke('cli_get_launch_status',b({id}),h).then(()=>'ACCEPTED',e=>e.code);if(code!=='FORBIDDEN')throw Error();await n.invoke('d11_launch_peer_ops',b({key}),h);}})().catch(()=>window.__TAURI_INTERNALS__.invoke('d11_launch_abort',{{stage:'peer'}}));")
+                let launch = serde_json::to_string(&pages.request).unwrap();
+                format!("(async()=>{{const n=window.__TAURI_INTERNALS__,h={{headers:{{'x-cc-desk-document':{proof}}}}},b=x=>new TextEncoder().encode(JSON.stringify(x));const code=await n.invoke('cli_get_launch_status',b({id}),h).then(()=>'ACCEPTED',e=>e.code);if(code!=='FORBIDDEN')throw Error();const cancelled=await n.invoke('cli_cancel_launch',b({launch}),h).then(()=>'ACCEPTED',e=>e.code);if(cancelled!=='FORBIDDEN')throw Error();await n.invoke('d11_launch_peer_ops',b({key}),h);}})().catch(()=>window.__TAURI_INTERNALS__.invoke('d11_launch_abort',{{stage:'peer'}}));")
             } else { return; };
             if webview.eval(script).is_err() { pages.fail(webview.app_handle(), "EVAL_FAILED"); }
         })

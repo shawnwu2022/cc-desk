@@ -41,6 +41,33 @@ fn request(profile: &Profile) -> AvailabilityRequest {
     }
 }
 
+// 与真实前端默认配置/预检解码共享契约；禁止 mock 把未选程序的配置当成可启动。
+#[test]
+fn D08_Availability_DeskDefaultContract_12() {
+    let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/native-cli/launch-preflight.json"
+    ))
+    .unwrap();
+    for case in cases {
+        let root = tempfile::tempdir().unwrap();
+        let repo = repository(root.path());
+        let profile: Profile = serde_json::from_value(case["profile"].clone()).unwrap();
+        let id = profile.id.clone();
+        let document = repo
+            .apply(revision("0"), Patch::Create { profile })
+            .unwrap();
+        let result = get_availability(
+            &repo,
+            "main",
+            &request(&document.profiles[&id]),
+            &EnvMap::new(),
+            || HostStatus::Available,
+        )
+        .unwrap();
+        assert_eq!(serde_json::to_value(result).unwrap(), case["availability"]);
+    }
+}
+
 #[test]
 fn D08_Availability_StrictSafeRequest_01() {
     let parsed = parse_request(json!({"profileId":"codex","expectedRevision":"1"})).unwrap();

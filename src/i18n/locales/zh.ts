@@ -249,8 +249,19 @@ export default {
   newSessionCreate: "创建会话",
   newSessionContinueRestore: "继续恢复",
   newSessionPreparationFailed: "未能安全准备项目或启动配置。可明确重试，或在更多选项中选择已有配置；不会自动重复启动。",
+  launchPreparationConfigurationRequired: "请先选择命令行程序并检查启动配置。保存后，再明确重试或新建会话。",
+  launchPreparationWorkingDirectoryUnavailable: "项目工作目录不可用，请检查目录是否仍然存在并且可以访问。",
 
   workspaceRuntimePartial: '部分会话来源暂时无法加载，已打开的会话仍可使用。',
+  sourceWarningProjectMetadata: '已保存的项目信息',
+  sourceWarningProjectDiscovery: '发现的项目',
+  sourceWarningConfigurations: '启动配置',
+  sourceWarningRegistrations: '已注册的项目',
+  sourceWarningLegacyHistory: 'Claude Code 兼容历史',
+  sourceWarningClaudeHistory: 'Claude Code 历史',
+  sourceWarningCodexHistory: 'Codex CLI 历史',
+  sourceWarningCatalog: '会话列表',
+  sourceWarningMore: '更多来源错误未列出，可刷新后重新检查。',
   workspaceRuntimeActionFailed: '操作未完成，请先检查会话状态再重试。',
 
   // Unified application shell

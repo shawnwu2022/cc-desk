@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/shell/AppShell.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import WorkspaceView from '@/components/workspace/WorkspaceView.vue'
+import WorkspaceSourceDetails from '@/components/workspace/WorkspaceSourceDetails.vue'
 import ProjectResourcesDrawer from '@/components/workspace/ProjectResourcesDrawer.vue'
 import { useProjectResourcesStore } from '@/stores/projectResources'
 import ProjectConfirmDialog from '@/components/dialogs/ProjectConfirmDialog.vue'
@@ -15,6 +16,8 @@ import ErrorDetails from '@/components/ui/ErrorDetails.vue'
 import NewSessionMenu from '@/components/sessions/NewSessionMenu.vue'
 import ResumeSessionDialog from '@/components/sessions/ResumeSessionDialog.vue'
 import NewSessionDialog from '@/components/sessions/NewSessionDialog.vue'
+import LaunchConfigurationEditor from '@/components/settings/LaunchConfigurationEditor.vue'
+import type { LaunchConfigurationEditorRequest } from '@/types/profile'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
@@ -53,6 +56,15 @@ provide(APP_RENAME_SHORTCUT, computed(() => app.shortcutBindings.rename))
 const sidebar = useSidebarStore()
 const management = useProjectManagementStore()
 const configurations = useCliProfilesStore()
+const preparationEditor = ref<LaunchConfigurationEditorRequest | null>(null)
+watch(() => [shell.section, sessions.activeSessionId], () => { preparationEditor.value = null }, { flush: 'sync' })
+function editPreparationConfiguration() {
+  const session = sessions.activeSession
+  const profile = session?.launchConfigId ? configurations.profile(session.launchConfigId) : undefined
+  if (shell.section !== 'workspace' || session?.safeErrorCode !== 'LAUNCH_CONFIGURATION_REQUIRED') return
+  if (profile && profile.cli === session.cli) preparationEditor.value = { kind: 'edit', profileId: profile.id }
+  else { sidebar.activeSettingsSection = 'launch-configurations'; shell.navigate('settings') }
+}
 const sessionSidebar = ref<InstanceType<typeof SidebarPanel> | null>(null)
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
 const runtime = useUnifiedWorkspaceRuntime(terminalHost)
@@ -214,11 +226,16 @@ onUnmounted(() => {
       <template #terminal>
         <EmptyState v-if="runtime.fatal?.value" data-workspace-fatal :title="t('workspaceLoadFailed')" :description="t('workspaceLoadFailedHint')" :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
         <InlineNotice v-for="problem in runtime.cliProblems?.value ?? []" :key="problem.cli" data-cli-banner kind="warning" :message="t('cliFailureBanner', { cli: problem.cli === 'claude' ? 'Claude Code' : 'Codex CLI', reason: t(problem.messageKey) })" :action-label="t('refresh')" @action="request({ kind: 'refresh' })" />
-        <InlineNotice v-if="sessions.actionFeedback" data-action-feedback :kind="sessions.actionFeedback.severity" :message="t(sessions.actionFeedback.messageKey)" :action-label="sessions.actionFeedback.retryable ? t('retry') : t('refresh')" @action="runtime.retryAction?.()">
+        <InlineNotice v-if="sessions.actionFeedback && sessions.actionFeedback.detailCode !== 'LAUNCH_CONFIGURATION_REQUIRED'" data-action-feedback :kind="sessions.actionFeedback.severity" :message="t(sessions.actionFeedback.messageKey)" :action-label="sessions.actionFeedback.retryable ? t('retry') : t('refresh')" @action="runtime.retryAction?.()">
           <ErrorDetails :code="sessions.actionFeedback.detailCode" context="session" />
         </InlineNotice>
-        <InlineNotice v-if="runtime.error.value" kind="warning" :message="t(runtime.error.value)"
-          :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
+        <InlineNotice v-if="runtime.error.value" class="workspace-source-notice" kind="warning" :message="t(runtime.error.value)"
+          :action-label="t('retry')" @action="request({ kind: 'refresh' })">
+          <WorkspaceSourceDetails v-if="runtime.error.value === 'workspaceRuntimePartial'"
+            :warnings="runtime.sourceWarnings?.value ?? []" :truncated="runtime.sourceWarningsTruncated?.value ?? false" />
+        </InlineNotice>
+        <InlineNotice v-if="sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED'" data-launch-preparation kind="warning"
+          :message="t('launchPreparationConfigurationRequired')" :action-label="t('launchConfigEditAction')" @action="editPreparationConfiguration" />
         <InlineNotice v-if="sessions.activeSession?.safeErrorCode === 'NEW_SESSION_PREPARATION_FAILED'" kind="warning"
           :message="t('newSessionPreparationFailed')" :action-label="t('newSessionMoreOptions')"
           @action="newSessionDraft.open(sessions.activeSession!, sessions.activeSession!.cli)" />
@@ -234,6 +251,7 @@ onUnmounted(() => {
       :anchor="newMenuAnchor" :availability="newSessionDraft.cliAvailability" @select="chooseNewSession" />
     <NewSessionDialog :active="shell.section === 'workspace'" @create="request({ kind: 'create-session', input: $event })"
       @restore="request({ kind: 'restore-session', ...$event })" />
+    <LaunchConfigurationEditor v-if="preparationEditor" :request="preparationEditor" :active="shell.section === 'workspace'" @close="preparationEditor = null" />
     <ProjectConfirmDialog :request="configurations.deleteConfirmation" :active="shell.section === 'settings'" :busy="configurations.deleteBusy" :error-key="configurations.deleteError?.messageKey" @confirm="configurations.confirmDelete" @cancel="configurations.closeDeleteConfirmation" />
     <SessionDiagnosticsDialog :diagnostics="runtime.diagnostics?.value ?? null" @close="runtime.closeDiagnostics()" />
     <SessionConfirmDialog :active="shell.section === 'workspace'" />
@@ -251,3 +269,7 @@ onUnmounted(() => {
     </template>
   </AppShell>
 </template>
+
+<style scoped>
+.workspace-source-notice { flex-wrap: wrap; }
+</style>

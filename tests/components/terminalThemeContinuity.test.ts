@@ -26,7 +26,7 @@ vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ onDragDr
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readText: vi.fn(), readImage: vi.fn(), writeText: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getAppConfig: io.config, updateAppConfig: vi.fn().mockResolvedValue(undefined), cliResize: io.resize, cliStop: io.stop,
   ptySpawn: io.spawn, ptyResize: io.resize, ptyInput: io.input, ptyKill: io.stop, logMessage: vi.fn(), getSessions: vi.fn().mockResolvedValue([]), onPtyOutput: async (fn: any) => { io.output = fn; return () => {} }, onPtyExit: async () => () => {} }))
-vi.mock('@/terminal/nativeLaunchEntry', () => ({ createNativeLaunchEntry: () => ({ start: io.start, recover: vi.fn() }) }))
+vi.mock('@/terminal/nativeLaunchEntry', async original => ({ ...await original<object>(), createNativeLaunchEntry: () => ({ start: io.start, recover: vi.fn(), cancel: vi.fn(), latest: vi.fn() }) }))
 vi.mock('@/terminal/deskNativeTerminal', () => ({ createDeskNativeTerminalBinding: () => ({ dispose() {}, sendUserText: io.input, acceptOutput: () => true, reserveUserPaste: vi.fn() }) }))
 const wrappers: VueWrapper[] = []
 beforeEach(async () => {

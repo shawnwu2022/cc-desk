@@ -11,11 +11,12 @@ import { useNativeTabsStore, matchesNativeAttempt } from '@/stores/nativeTabs'
 import { useSessionStore } from '@/stores/session'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import en from '@/i18n/locales/en'
-const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn() }))
+const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn(), availability: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getProjectsState: io.state, getProjects: io.projects, getSessions: io.sessions,
   getAppConfig: async () => ({ language: 'en', theme: 'light', terminalTheme: 'cc-box-light' }), updateAppConfig: async () => {}, onHookEvent: async () => () => {}, archiveSession: io.archive, pinProject: io.pin,
   createNativeProjectionClient: () => ({ scope: async () => ({ cli: 'codex' }), read: async () => ({ state: 'ready', items: [{ type: 'session', sessionKey: 'source', nativeSessionId: 'saved', title: 'Saved', cwd: '/repo' }], hasMore: false }) }) }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patch }))
+vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: io.availability }))
 vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, removeProject: io.remove }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.write }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
@@ -28,7 +29,8 @@ beforeEach(() => {
   io.sessions.mockResolvedValue([])
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.state.mockResolvedValue({ pinnedProjects: [], archivedSessions: {} })
-  io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'Work', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+  io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'Work', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/codex' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+  io.availability.mockImplementation(async (profileId, profileRevision) => ({ profileId, profileRevision, cli: 'codex', state: 'available-unverified', hostStatus: 'available', certified: false }))
   io.stop.mockResolvedValue(undefined); io.recover.mockResolvedValue(undefined)
   io.archive.mockImplementation(async (path, id) => ({ pinnedProjects: [], archivedSessions: { [path]: [id] } }))
 })
@@ -458,4 +460,47 @@ it('Feedback_SettingsDeleteKeepsRun_019', async () => {
   expect(io.patch).toHaveBeenCalledOnce(); expect(io.stop).not.toHaveBeenCalled(); expect(io.recover).not.toHaveBeenCalled()
   expect(JSON.stringify(native.tab(tab.tabId))).toBe(frozen); expect(resources.context).toMatchObject({ target })
   expect(document.querySelector('[data-live-terminal]')).not.toBeNull()
+})
+
+// 未选择可信程序时，真实新建入口停在可关闭的准备行，并直达同一配置编辑器。
+it('LaunchPreparation_ConfigurationActionDoesNotAdmit_001', async () => {
+  io.availability.mockImplementation(async (profileId, profileRevision) => ({ profileId, profileRevision, cli: 'codex', state: 'configuration-required', hostStatus: 'available', certified: false, issue: { code: 'PROGRAM_TRUST_REQUIRED', retryable: false } }))
+  const unconfigured = await io.profiles(); unconfigured.profiles[0].programPath = { mode: 'inherit' }; io.profiles.mockResolvedValue(unconfigured)
+  render(); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'create-session', input: { cli: 'codex', projectKey: '/repo', projectPath: '/repo', launchConfigId: 'cx', launchConfigRevision: '7' } })
+  await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  expect(useUnifiedSessionsStore().activeSession).toMatchObject({ processState: 'failed', safeErrorCode: 'LAUNCH_CONFIGURATION_REQUIRED', launchConfigId: 'cx' })
+  const notice = document.querySelector('[data-launch-preparation]')
+  expect(notice?.textContent).toContain('Choose the CLI program')
+  ;(notice!.querySelector('button') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector<HTMLInputElement>('[data-launch-name]')?.value).toBe('Work')
+  expect(document.querySelector('[data-launch-save]')).not.toBeNull()
+  expect(io.patch).not.toHaveBeenCalled()
+  ;(document.querySelector('[data-launch-cancel]') as HTMLButtonElement).click(); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  const { useCliProfilesStore } = await import('@/stores/cliProfiles')
+  const profiles = useCliProfilesStore()
+  profiles.profiles[0].name = 'Updated work'; profiles.profiles[0].revision = '8'; profiles.revision = '8'
+  ;(document.querySelector('[data-launch-preparation] button') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector<HTMLInputElement>('[data-launch-name]')?.value).toBe('Updated work')
+  const pathMode = document.querySelector<HTMLSelectElement>('.launch-editor select')!
+  pathMode.value = 'set'; pathMode.dispatchEvent(new Event('change', { bubbles: true })); await flushPromises()
+  const program = document.querySelector<HTMLInputElement>('[data-launch-program]')!
+  program.value = '/tools/codex'; program.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises()
+  io.patch.mockImplementation(async (expected, patch) => {
+    expect(expected).toBe('8')
+    return { revision: '9', profiles: [{ ...profiles.profiles[0], ...patch.changes, revision: '9' }] }
+  })
+  ;(document.querySelector('[data-launch-save]') as HTMLButtonElement).click(); await flushPromises()
+  expect(profiles.profile('cx')?.programPath).toEqual({ mode: 'set', value: '/tools/codex' })
+  expect(document.querySelector('[data-launch-save]')).toBeNull()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  io.availability.mockImplementation(async (profileId, profileRevision) => ({ profileId, profileRevision, cli: 'codex', state: 'available-unverified', hostStatus: 'available', certified: false }))
+  useShellStore().requestWorkspaceAction({ kind: 'primary-action', sessionId: useUnifiedSessionsStore().activeSessionId!, action: 'retry' })
+  await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(1)
+  expect([...useNativeTabsStore().tabs.values()][0]).toMatchObject({ profileId: 'cx', profileRevision: '9' })
+  await useUnifiedSessionsStore().closeSession(useUnifiedSessionsStore().activeSessionId!)
+  expect(document.querySelector('[data-live-terminal]')).toBeNull()
 })

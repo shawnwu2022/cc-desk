@@ -4,7 +4,16 @@ import type { LaunchAction, LaunchRequest, NativeCliKind } from '@/types/cli'
 import type { OutputFrame } from '@/types/terminal'
 import type { CliProfile } from '@/types/profile'
 import { validateLaunchRequest } from '@/utils/nativeIdentity'
+import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import type { Channel } from '@tauri-apps/api/core'
+
+/** Positive local proof: validation/factory failed before invoking start. */
+export class NativeLaunchNotSubmittedError extends Error {
+  constructor(error: unknown) {
+    super(publicNativeErrorCode(error, 'NATIVE_LAUNCH_FAILED'))
+    this.name = 'NativeLaunchNotSubmittedError'
+  }
+}
 
 export interface NativeLaunchEntryInput {
   requestId: string
@@ -30,6 +39,7 @@ export interface NativeLaunchEntryOptions {
 export interface NativeLaunchEntry {
   start(input: NativeLaunchEntryInput, channel: Channel<OutputFrame>): Promise<LaunchStatus>
   recover(requestId: string): Promise<LaunchStatus>
+  cancel(requestId: string): Promise<LaunchStatus>
   latest(requestId: string): LaunchStatus | undefined
 }
 
@@ -79,7 +89,9 @@ export function createNativeLaunchEntry(options: NativeLaunchEntryOptions): Nati
       try {
         request = build(input)
       } catch (error) {
-        return Promise.reject(error)
+        // A later build failure for an already-owned request cannot prove that
+        // its original start was never sent.
+        return Promise.reject(attempts.has(input.requestId) ? error : new NativeLaunchNotSubmittedError(error))
       }
 
       const fingerprint = requestFingerprint(request)
@@ -113,7 +125,9 @@ export function createNativeLaunchEntry(options: NativeLaunchEntryOptions): Nati
         owned.attempt = attempt
       } catch (error) {
         if (attempts.get(request.requestId) === owned) attempts.delete(request.requestId)
-        rejectStart(error)
+        // Attempt factories only validate and capture transport; start() is the
+        // sole effectful boundary and has not been invoked in this branch.
+        rejectStart(new NativeLaunchNotSubmittedError(error))
         return startPromise
       }
 
@@ -126,6 +140,13 @@ export function createNativeLaunchEntry(options: NativeLaunchEntryOptions): Nati
       if (!owned) return Promise.reject(new Error('LAUNCH_ATTEMPT_NOT_FOUND'))
       if (!owned.attempt) return Promise.reject(new Error('LAUNCH_ATTEMPT_NOT_READY'))
       return asPromise(() => owned.attempt!.recover())
+    },
+
+    cancel(requestId: string): Promise<LaunchStatus> {
+      const owned = attempts.get(requestId)
+      if (!owned) return Promise.reject(new Error('LAUNCH_ATTEMPT_NOT_FOUND'))
+      if (!owned.attempt) return Promise.reject(new Error('LAUNCH_ATTEMPT_NOT_READY'))
+      return asPromise(() => owned.attempt!.cancel())
     },
 
     latest(requestId: string): LaunchStatus | undefined {

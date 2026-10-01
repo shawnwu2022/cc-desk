@@ -470,6 +470,7 @@ export function createCliLaunchAttempt<E>(
   return createLaunchAttempt(request, bridge.instanceId, {
     start: (frozen) => bridge.invoke('cli_start', frozen, channel),
     status: (requestId) => bridge.invoke('cli_get_launch_status', { requestId }),
+    cancel: (frozen) => bridge.invoke('cli_cancel_launch', frozen),
   });
 }
 

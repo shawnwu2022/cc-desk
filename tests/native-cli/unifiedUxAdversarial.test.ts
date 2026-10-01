@@ -132,7 +132,7 @@ function workspaceFixture() {
   return Object.assign(fixture, { bridge, ipc, host, source, mountRuntime, resetStores, dispose })
 }
 
-const terminal = vi.hoisted(() => ({ start: vi.fn(), recover: vi.fn(), stop: vi.fn(), resize: vi.fn(), bindings: [] as any[] }))
+const terminal = vi.hoisted(() => ({ start: vi.fn(), recover: vi.fn(), cancel: vi.fn(), stop: vi.fn(), resize: vi.fn(), bindings: [] as any[] }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: any; cols = 80; rows = 24; modes = { bracketedPasteMode: false }; element!: HTMLElement; textarea!: HTMLTextAreaElement
   constructor(options: any) { this.options = options }
@@ -143,7 +143,7 @@ vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
 // Entry and terminal binding are already independently protocol-tested in the
 // required Native suite. Here deferred receipts exercise the real component's
 // run token plus store/adapter ownership, without starting a process.
-vi.mock('@/terminal/nativeLaunchEntry', () => ({ createNativeLaunchEntry: () => ({ start: terminal.start, recover: terminal.recover }) }))
+vi.mock('@/terminal/nativeLaunchEntry', async original => ({ ...await original<object>(), createNativeLaunchEntry: () => ({ start: terminal.start, recover: terminal.recover, cancel: terminal.cancel, latest: vi.fn() }) }))
 vi.mock('@/terminal/deskNativeTerminal', () => ({ createDeskNativeTerminalBinding: (options: any) => {
   const binding = { options, acceptOutput: vi.fn(() => true), dispose: vi.fn(), sendUserText: vi.fn(), reserveUserPaste: vi.fn() }
   terminal.bindings.push(binding); return binding
@@ -160,6 +160,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   terminal.start.mockImplementation(async input => status(input))
   terminal.recover.mockImplementation(async request => status(terminal.start.mock.calls.map(([input]) => input).find(input => input.requestId === request)))
+  terminal.cancel.mockImplementation(async request => status(terminal.start.mock.calls.map(([input]) => input).find(input => input.requestId === request)))
   terminal.stop.mockResolvedValue(undefined); terminal.resize.mockResolvedValue(undefined)
 })
 afterEach(() => { f.dispose(); vi.restoreAllMocks() })
@@ -198,6 +199,7 @@ describe('Adversarial unified ownership and persistence', () => {
     if (mode === 'stop') terminal.stop.mockReturnValueOnce(pending.promise)
     else terminal.recover.mockReturnValueOnce(pending.promise)
     const completion = mode === 'stop' ? vm.stop(captureNativeAttempt(old)) : vm.recover(captureNativeAttempt(old))
+    await flushPromises()
     tabs.tab(old.tabId)!.status = 'exited'
     const current = tabs.restart(old.tabId, { profileId: 'codex', profileRevision: '1' })
     await flushPromises()

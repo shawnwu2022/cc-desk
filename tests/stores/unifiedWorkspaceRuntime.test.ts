@@ -24,6 +24,12 @@ import { useShellStore } from '@/stores/shell'
 const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
+vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: async (profileId: string, profileRevision: string) => {
+  const profile = useCliProfilesStore().profile(profileId)!
+  const selected = profile.programPath.mode === 'set'
+  return { profileId, profileRevision, cli: profile.cli, state: selected ? 'available-unverified' : 'configuration-required', hostStatus: 'available', certified: false,
+    ...(selected ? {} : { issue: { code: 'PROGRAM_TRUST_REQUIRED', retryable: false } }) }
+} }))
 vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, registerProject: io.register, removeProject: io.remove }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.writeText }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
@@ -38,7 +44,7 @@ beforeEach(() => {
   io.upsertRecord.mockImplementation(async (key, record) => { persisted.sessionRecords ??= {}; persisted.sessionRecords[key] = structuredClone(record); return structuredClone(persisted) })
   io.setPreference.mockImplementation(async (path, preference) => { persisted.launchPreferences![path] = structuredClone(preference); return structuredClone(persisted) })
   io.projects.mockResolvedValue([{ path: '/legacy', name: 'Legacy' }]); io.sessions.mockResolvedValue([])
-  io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+  io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/codex' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.register.mockImplementation(async path => ({ revision: '2', projectId: 'registered-new', projects: [{ projectId: 'registered-new', hostId: 'host', sourcePathKey: 'source-new', selectedPath: path, canonicalPath: path, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }))
   io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
@@ -50,6 +56,75 @@ function render() {
   const w = mount(defineComponent({ setup() { runtime = useUnifiedWorkspaceRuntime(ref(port)); return () => null } })); wrappers.push(w)
   return { runtime, port }
 }
+describe('Workspace source warning diagnostics', () => {
+  it('retains authenticated safe error codes while hiding private exception fields and preserving open sessions', async () => {
+    io.projects.mockRejectedValue(new Error('private C:\\users\\secret token=hidden'))
+    io.scope.mockRejectedValue({ code: 'FORBIDDEN', field: 'private-path', message: 'token=hidden', retryable: false })
+    const tab = useNativeTabsStore().create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' }, title: 'Private session title' })
+    const { runtime } = render(); await flushPromises()
+    expect(runtime.error.value).toBe('workspaceRuntimePartial')
+    expect(runtime.sourceWarnings?.value).toEqual([
+      { source: 'project-discovery', code: 'SOURCE_UNAVAILABLE' },
+      { source: 'codex-history', code: 'FORBIDDEN' },
+    ])
+    expect(runtime.openSessions.value.some(row => row.adapterSessionId === tab.tabId)).toBe(true)
+    expect(JSON.stringify(runtime.sourceWarnings?.value)).not.toMatch(/private|token|secret|title/i)
+  })
+
+  it('retains an unavailable history reason and clears its warning only after a successful refresh', async () => {
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_TOO_LARGE', items: [], hasMore: false })
+    const { runtime } = render(); await flushPromises()
+    expect(runtime.sourceWarnings?.value).toEqual([{ source: 'codex-history', code: 'SOURCE_TOO_LARGE' }])
+    expect(runtime.error.value).toBe('workspaceRuntimePartial')
+    io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false })
+    await runtime.refresh()
+    expect(runtime.sourceWarnings?.value).toEqual([])
+    expect(runtime.error.value).toBeNull()
+  })
+
+  it('does not let an old refresh publish source failures after a newer successful refresh', async () => {
+    const { runtime } = render(); await flushPromises()
+    let rejectOld!: (reason: unknown) => void
+    io.scope.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject }))
+    const old = runtime.refresh(); await flushPromises()
+    await runtime.refresh()
+    rejectOld({ code: 'FORBIDDEN', retryable: false }); await old
+    expect(runtime.sourceWarnings?.value).toEqual([])
+    expect(runtime.error.value).toBeNull()
+  })
+
+  it('shows the failed source and safe code in collapsed details in the actual App warning', async () => {
+    io.scope.mockRejectedValue({ code: 'SOURCE_READ_FORBIDDEN', field: '/private/path', message: 'raw-secret' })
+    const w = mount(App, { global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } })
+    wrappers.push(w); await flushPromises()
+    const details = w.find('[data-workspace-source-details]')
+    expect(details.exists()).toBe(true)
+    expect(details.attributes('open')).toBeUndefined()
+    expect(details.text()).toContain('Codex CLI history')
+    expect(details.text()).toContain('SOURCE_READ_FORBIDDEN')
+    expect(details.text()).not.toMatch(/private|raw-secret/)
+    expect(w.text()).toContain(en.workspaceRuntimePartial)
+  })
+
+  it('attributes later catalog failures without allowing an older catalog read to overwrite a refreshed result', async () => {
+    const { runtime } = render(); await flushPromises()
+    const catalog = useUnifiedSessionsStore()
+    const original = catalog.refresh.bind(catalog)
+    const refresh = vi.spyOn(catalog, 'refresh').mockRejectedValueOnce({ code: 'SOURCE_BUSY' })
+    const tab = useNativeTabsStore().create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    await flushPromises()
+    expect(runtime.sourceWarnings?.value).toContainEqual({ source: 'catalog', code: 'SOURCE_BUSY' })
+    let rejectOld!: (reason: unknown) => void
+    refresh.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject })).mockImplementation(original)
+    useNativeTabsStore().tab(tab.tabId)!.title = 'Changed'
+    await flushPromises()
+    await runtime.refresh()
+    rejectOld({ code: 'FORBIDDEN' }); await flushPromises()
+    expect(runtime.sourceWarnings?.value).toEqual([])
+    expect(runtime.error.value).toBeNull()
+  })
+})
+
 describe('Unified production runtime', () => {
   // 配置与项目共用后端 workspace revision；注册项目后创建另一CLI配置须先读取当前CAS。
   it.each([['claude', 'codex'], ['codex', 'claude']] as const)('Runtime_SequentialCliDefaults_045: %s then %s', async (firstCli, secondCli) => {
@@ -60,7 +135,8 @@ describe('Unified production runtime', () => {
     io.patchProfile.mockImplementation(async (expectedRevision, patch) => {
       if (expectedRevision !== String(revision)) throw { code: 'REVISION_CONFLICT', retryable: false }
       ++revision
-      profiles.push({ ...structuredClone(patch.profile), revision: String(revision) })
+      if (patch.op === 'create') profiles.push({ ...structuredClone(patch.profile), revision: String(revision) })
+      else Object.assign(profiles.find(profile => profile.id === patch.id), structuredClone(patch.changes), { revision: String(revision) })
       return { revision: String(revision), profiles: structuredClone(profiles) }
     })
     io.register.mockImplementation(async selectedPath => {
@@ -70,12 +146,18 @@ describe('Unified production runtime', () => {
     })
     render(); await flushPromises()
     const catalog = useUnifiedSessionsStore()
-    const first = await catalog.createSession({ cli: firstCli, projectKey: '/new', projectPath: '/new' })
+    await expect(catalog.createSession({ cli: firstCli, projectKey: '/new', projectPath: '/new' })).rejects.toThrow('LAUNCH_CONFIGURATION_REQUIRED')
+    const firstId = catalog.activeSessionId!
+    await useCliProfilesStore().patch('1', { op: 'update', id: `desk-safe-${firstCli}`, changes: { programPath: { mode: 'set', value: `/tools/${firstCli}` } } })
+    const first = await catalog.restartSession(firstId)
     expect(useNativeTabsStore().tab(first.adapterSessionId)?.cli).toBe(firstCli)
-    expect(revision).toBe(2)
-    const second = await catalog.createSession({ cli: secondCli, projectKey: '/new', projectPath: '/new' })
-    expect(useNativeTabsStore().tab(second.adapterSessionId)).toMatchObject({ cli: secondCli, profileId: `desk-safe-${secondCli}`, profileRevision: '3', projectId: 'registered' })
-    expect(io.patchProfile.mock.calls.map(([expectedRevision]) => expectedRevision)).toEqual(['0', '2'])
+    expect(revision).toBe(3)
+    await expect(catalog.createSession({ cli: secondCli, projectKey: '/new', projectPath: '/new' })).rejects.toThrow('LAUNCH_CONFIGURATION_REQUIRED')
+    const secondId = catalog.activeSessionId!
+    await useCliProfilesStore().patch('4', { op: 'update', id: `desk-safe-${secondCli}`, changes: { programPath: { mode: 'set', value: `/tools/${secondCli}` } } })
+    const second = await catalog.restartSession(secondId)
+    expect(useNativeTabsStore().tab(second.adapterSessionId)).toMatchObject({ cli: secondCli, profileId: `desk-safe-${secondCli}`, profileRevision: '5', projectId: 'registered' })
+    expect(io.patchProfile.mock.calls.filter(([, patch]) => patch.op === 'create').map(([expectedRevision]) => expectedRevision)).toEqual(['0', '3'])
     expect(io.register).toHaveBeenCalledOnce()
     expect(useNativeTabsStore().tabs.size).toBe(2)
   })
@@ -469,7 +551,7 @@ describe.each(['claude', 'codex'] as const)('Unified action identity: %s', cli =
   ])('Runtime_FreezesActionIdentity_029: $kind', async action => {
     io.profiles.mockResolvedValue({ revision: '9', profiles: ['claude', 'codex'].map(kind => ({
       id: kind, revision: kind === 'claude' ? '3' : '8', cli: kind, name: kind,
-      launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' },
+      launcher: { kind: 'native' }, programPath: { mode: 'set', value: `/tools/${kind}` }, defaultArgs: { mode: 'inherit' },
       skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {},
     })) })
     render(); await flushPromises()
