@@ -2426,3 +2426,13 @@
 - Steps: perform rapid successive preference changes, delay startup/read/write replies, reject a save, and simulate an unknown acknowledgement with a subsequent failed/successful reload
 - Expected: only current intents publish or roll back to confirmed values; old hydration cannot steal navigation or override a newer choice; startup migration is ordered with GUI writes; unknown deltas are never automatically resubmitted, raw transport details never render, and saved state must be read successfully before another write when reconciliation fails
 - Scope limit: Terminal and launch-configuration editing placeholders intentionally await Tasks 18–19. Existing shortcuts/update/about content awaits Task 20's expanded verification. This task does not certify actual Rust/backend persistence or real CLI/platform/scaling behavior
+
+## Unified workspace Task 18: terminal appearance/platform acceptance (not yet performed)
+
+- Goal: validate Settings Terminal and live continuity on Windows 1024×640 at 100%, 125%, 150%, with equivalent macOS/Linux functional checks
+- Preconditions: authorized installed app; one Legacy Claude, Native Claude and Native Codex session with output/scrollback and selected text; existing terminal theme preferences; optional GPU/WebGL availability
+- Steps: inspect all theme cards and inert preview in English/Chinese; exercise font family, size drafts, line height, cursor style/blink; check all four GUI light/dark × terminal light/dark combinations; keep one terminal hidden while changing metrics and show it afterward
+- Expected: shared preferences apply across runtimes; GUI choice does not change terminal colors; color/cursor changes preserve dimensions, process, scrollback and selection; visible metric updates fit once and hidden metrics fit only when shown; preview starts no CLI or PTY; controls wrap without global horizontal overflow
+- Steps: choose WebGL, check existing terminal stays unchanged, open another terminal, exercise supported context-loss/unavailable-GPU scenario; restart app with old cc-box theme IDs and explicit false blink setting
+- Expected: renderer preference affects new terminals only; DOM fallback keeps the same palette and live terminal content; legacy IDs/colors and stored preferences survive restart; missing fonts use platform CJK/emoji fallbacks without installation
+- Limit: mocked frontend tests do not establish real GPU, PTY/input/output/ACK or installed CLI behavior. Rust DTO tests are NOT RUN here because cargo/rustc are unavailable. Final platform/Rust/Windows gate remains separate and unperformed

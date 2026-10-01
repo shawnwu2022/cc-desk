@@ -3933,3 +3933,32 @@ fn AppConfig_GuiSettings_PreserveStoredKeys_003() {
     }
     assert_eq!(result["sidebarWidth"], 320);
 }
+
+// 新终端偏好字段保持可选，旧配置无需新增字段即可读取。
+#[test]
+fn AppConfig_TerminalPreferences_Optional_001() {
+    let config: AppConfig =
+        serde_json::from_str(r#"{"terminalTheme":"cc-box-light","fontSize":12}"#).unwrap();
+    assert_eq!(config.terminal_font_family, None);
+    assert_eq!(config.terminal_line_height, None);
+    assert_eq!(config.terminal_cursor_style, None);
+    assert_eq!(config.terminal_cursor_blink, None);
+    assert_eq!(config.webgl_renderer, None);
+}
+
+// camelCase读取和序列化保留显式false与其他终端偏好。
+#[test]
+fn AppConfig_TerminalPreferences_RoundTrip_002() {
+    let input = json!({ "terminalTheme": "nord", "fontSize": 18, "terminalFontFamily": "Fira Code",
+        "terminalLineHeight": 1.5, "terminalCursorStyle": "underline", "terminalCursorBlink": false, "webglRenderer": true });
+    let config: AppConfig = serde_json::from_value(input.clone()).unwrap();
+    assert_eq!(config.terminal_font_family.as_deref(), Some("Fira Code"));
+    assert_eq!(config.terminal_line_height, Some(1.5));
+    assert_eq!(config.terminal_cursor_style.as_deref(), Some("underline"));
+    assert_eq!(config.terminal_cursor_blink, Some(false));
+    assert_eq!(config.webgl_renderer, Some(true));
+    let output = serde_json::to_value(config).unwrap();
+    for (key, value) in input.as_object().unwrap() {
+        assert_eq!(&output[key], value);
+    }
+}

@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import XTermTerminal from '@/components/XTermTerminal.vue'
+import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
 const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], input: vi.fn(), kill: vi.fn(), spawn: vi.fn(), output: null as any, exit: null as any, outputReady: vi.fn(), exitReady: vi.fn(), dragReady: vi.fn(), copy: vi.fn(), clip: vi.fn() }))
@@ -53,7 +54,7 @@ describe('Legacy unified ownership', () => {
     const sessions = useSessionStore(); const id = sessions.createTab('/repo')
     wrapper = mount(XTermTerminal, { props: { visible: true, fontSize: 12 } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
     const ptyId = sessions.tabs.get(id)!.ptyId!; await wrapper.setProps({ visible: false }); io.fits.forEach(f => f.fit.mockClear())
-    io.output({ id: ptyId, data: 'hidden output' }); await wrapper.setProps({ fontSize: 18 }); await flushPromises()
+    io.output({ id: ptyId, data: 'hidden output' }); useAppStore().fontSize = 18; await flushPromises()
     expect(io.fits.every(f => f.fit.mock.calls.length === 0)).toBe(true)
     io.exit({ id: ptyId }); await flushPromises()
     expect(io.terms[0].output).toBe('hidden output'); expect(io.terms[0].dispose).not.toHaveBeenCalled()

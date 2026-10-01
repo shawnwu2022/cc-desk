@@ -496,6 +496,13 @@ export function normalizeTerminalThemeId(id: string | undefined): string {
   return DEFAULT_TERMINAL_THEME_ID
 }
 
+/** Preserve every existing terminal ID. Only a missing old terminal field uses
+ * the legacy GUI theme for its one-time migration; subsequent GUI changes do not. */
+export function resolveTerminalThemeId(id: unknown, legacyGuiTheme: unknown): string {
+  return id == null || id === '' ? legacyGuiTheme === 'dark' ? 'cc-box-dark' : 'cc-box-light'
+    : normalizeTerminalThemeId(typeof id === 'string' ? id : undefined)
+}
+
 /** 取主题配色：内部先归一化，保证返回合法 colors */
 export function getTerminalTheme(id: string | undefined): TerminalThemeColors {
   const normalized = normalizeTerminalThemeId(id)

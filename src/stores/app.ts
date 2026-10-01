@@ -11,6 +11,7 @@ import {
   getCheckResults,
   runChecks,
 } from '@/api/tauri'
+import { normalizeTerminalFont, normalizeTerminalFontSize, normalizeTerminalLineHeight, normalizeTerminalCursor, readTerminalSettings, terminalPreferences as computeTerminalPreferences, type TerminalSettingFields, type TerminalFont, type TerminalCursorStyle } from '@/config/terminalPreferences'
 import { normalizeTerminalThemeId } from '@/config/terminalThemes'
 import { normalizePath } from '@/utils/path'
 import { useShellStore } from '@/stores/shell'
@@ -24,7 +25,7 @@ import i18n from '@/i18n'
 
 import type { ClaudeOptions, DefaultClaudeOptions, CheckResult, Project, ProjectStartupState, SessionInfo } from '@/types'
 
-interface SimpleSettings {
+interface SimpleSettings extends TerminalSettingFields {
   guiThemeMode: GuiThemeMode
   guiDensity: GuiDensity
   sidebarWidth: number
@@ -39,7 +40,8 @@ interface AppConfigRead {
   commits: Record<keyof SimpleSettings, number>
   visibilityVersion: number
 }
-const simpleSettingKeys = ['guiThemeMode', 'guiDensity', 'sidebarWidth', 'language', 'startupDestination', 'defaultNewCli'] as const
+const simpleSettingKeys = ['guiThemeMode', 'guiDensity', 'sidebarWidth', 'language', 'startupDestination', 'defaultNewCli',
+  'terminalTheme', 'terminalFontFamily', 'fontSize', 'terminalLineHeight', 'terminalCursorStyle', 'terminalCursorBlink', 'webglRenderer'] as const
 const PAGE_SIZE = 12
 
 /** 默认环境变量（代码中定义，用户可重置） */
@@ -71,6 +73,13 @@ export const useAppStore = defineStore('app', () => {
   const terminalTheme = ref<string>('cc-box-light')
   const fontSize = ref<number>(12)
   const webglRenderer = ref<boolean>(false)
+  const terminalFontFamily = ref<TerminalFont>('system')
+  const terminalLineHeight = ref(1.2)
+  const terminalCursorStyle = ref<TerminalCursorStyle>('bar')
+  const terminalCursorBlink = ref(true)
+  const terminalPreferences = computed(() => computeTerminalPreferences({ terminalTheme: terminalTheme.value,
+    terminalFontFamily: terminalFontFamily.value, fontSize: fontSize.value, terminalLineHeight: terminalLineHeight.value,
+    terminalCursorStyle: terminalCursorStyle.value, terminalCursorBlink: terminalCursorBlink.value, webglRenderer: webglRenderer.value }))
   const language = ref<'en' | 'zh'>('en')
   const alwaysOnTop = ref<boolean>(false)
   const claudeEnvVars = ref<Record<string, string>>({})
@@ -94,7 +103,9 @@ export const useAppStore = defineStore('app', () => {
 
   function simpleSettings(): SimpleSettings {
     return { guiThemeMode: guiThemeMode.value, guiDensity: guiDensity.value, sidebarWidth: shell.sidebarWidth,
-      language: language.value, startupDestination: startupDestination.value, defaultNewCli: defaultNewCli.value }
+      language: language.value, startupDestination: startupDestination.value, defaultNewCli: defaultNewCli.value,
+      terminalTheme: terminalTheme.value, terminalFontFamily: terminalFontFamily.value, fontSize: fontSize.value, terminalLineHeight: terminalLineHeight.value,
+      terminalCursorStyle: terminalCursorStyle.value, terminalCursorBlink: terminalCursorBlink.value, webglRenderer: webglRenderer.value }
   }
   function applySimpleSettings(next: SimpleSettings) {
     guiThemeMode.value = next.guiThemeMode
@@ -103,12 +114,15 @@ export const useAppStore = defineStore('app', () => {
     language.value = next.language
     startupDestination.value = next.startupDestination
     defaultNewCli.value = next.defaultNewCli
+    terminalTheme.value = next.terminalTheme; terminalFontFamily.value = next.terminalFontFamily; fontSize.value = next.fontSize
+    terminalLineHeight.value = next.terminalLineHeight; terminalCursorStyle.value = next.terminalCursorStyle
+    terminalCursorBlink.value = next.terminalCursorBlink; webglRenderer.value = next.webglRenderer
     i18n.global.locale.value = next.language
     document.documentElement.dataset.density = next.guiDensity
     publishGuiTheme()
   }
   let confirmedSettings = simpleSettings()
-  const settingIntents: Record<keyof SimpleSettings, number> = { guiThemeMode: 0, guiDensity: 0, sidebarWidth: 0, language: 0, startupDestination: 0, defaultNewCli: 0 }
+  const settingIntents = Object.fromEntries(simpleSettingKeys.map(key => [key, 0])) as Record<keyof SimpleSettings, number>
   const settingCommits = { ...settingIntents }
   const pendingSettings = { ...settingIntents }
   const settingsErrors = ref<Partial<Record<keyof SimpleSettings, string>>>({})
@@ -124,6 +138,10 @@ export const useAppStore = defineStore('app', () => {
   function hydrateSimpleSettings({ config, intents, commits, sequence }: AppConfigRead) {
     // Publication follows underlying read order, not the order in which callers joined it.
     if (sequence < settingsPublicationSequence) return
+    const terminalValues = readTerminalSettings(config)
+    // Legacy GUI-based inference is initial migration only. Later recovery reads
+    // with that field still absent must not couple terminal colors to a GUI write.
+    if (settingsLoaded && (config.terminalTheme == null || config.terminalTheme === '')) terminalValues.terminalTheme = confirmedSettings.terminalTheme
     const values: SimpleSettings = {
       guiThemeMode: config.guiThemeMode === 'system' || config.guiThemeMode === 'dark' || config.guiThemeMode === 'light'
         ? config.guiThemeMode : config.theme === 'dark' ? 'dark' : 'light',
@@ -131,6 +149,7 @@ export const useAppStore = defineStore('app', () => {
       language: config.language === 'zh' || config.language === 'en' ? config.language : detectSystemLocale(),
       startupDestination: config.startupDestination === 'projects' ? 'projects' : 'workspace',
       defaultNewCli: config.defaultNewCli === 'codex' ? 'codex' : 'claude',
+      ...terminalValues,
     }
     const next = simpleSettings()
     for (const key of simpleSettingKeys) {
@@ -373,14 +392,7 @@ export const useAppStore = defineStore('app', () => {
       const read = await readAppConfig()
       const { config, visibilityVersion: version } = read
       hydrateSimpleSettings(read)
-      fontSize.value = config.fontSize || 12
-      webglRenderer.value = config.webglRenderer ?? false
-
-      // 终端主题：归一化 + 迁移推断（缺失时按 GUI 映射）
-      const inferredTerminalTheme = config.terminalTheme
-        ? normalizeTerminalThemeId(config.terminalTheme)
-        : (config.theme === 'dark' ? 'cc-box-dark' : 'cc-box-light')
-      terminalTheme.value = inferredTerminalTheme
+      const inferredTerminalTheme = confirmedSettings.terminalTheme
 
       // 加载环境变量（首次使用默认值）
       claudeEnvVars.value = Object.keys(config.claudeEnvVars ?? {}).length > 0
@@ -390,17 +402,23 @@ export const useAppStore = defineStore('app', () => {
       // 启动持久化：env + terminalTheme（仅当需修正/迁移时写 terminalTheme）合并为一次调用，
       // 避免多次读-改-写加剧既有竞态（见 spec「已知限制」）
       const needWriteTheme = inferredTerminalTheme !== config.terminalTheme
-      const migrationUpdates = {
-        claudeEnvVars: claudeEnvVars.value,
-        ...(needWriteTheme ? { terminalTheme: inferredTerminalTheme } : {}),
-      }
+      const migrationEnv = { ...claudeEnvVars.value }
       // Startup migration and simple GUI changes share submission ordering.
       // Hydration is already available, so this cannot wait on its own migration.
       const migration = settingsMutationTail.then(async () => {
         await ensureSettingsWriteReady()
-        try { await updateAppConfig(migrationUpdates) }
-        catch (failure) {
-          if (isUnknownSettingsCommit(failure)) await reconcileUnconfirmedSettings()
+        // Recheck at actual submission: a late startup read must not rewrite a
+        // newer terminal choice, confirmed value, or recovery snapshot.
+        const migrateTheme = needWriteTheme && settingIntents.terminalTheme === read.intents.terminalTheme
+          && settingCommits.terminalTheme === read.commits.terminalTheme && settingsPublicationSequence === read.sequence
+        try {
+          await updateAppConfig({ claudeEnvVars: migrationEnv, ...(migrateTheme ? { terminalTheme: inferredTerminalTheme } : {}) })
+          if (migrateTheme) { confirmedSettings.terminalTheme = inferredTerminalTheme; ++settingCommits.terminalTheme }
+        } catch (failure) {
+          if (isUnknownSettingsCommit(failure)) {
+            await reconcileUnconfirmedSettings()
+            if (migrateTheme && !settingsUnconfirmed) ++settingCommits.terminalTheme
+          }
           throw failure
         }
       })
@@ -629,23 +647,14 @@ export const useAppStore = defineStore('app', () => {
   function setStartupDestination(value: string): Promise<boolean> { return saveSimpleSetting('startupDestination', value === 'projects' ? 'projects' : 'workspace') }
   function setDefaultNewCli(value: string): Promise<boolean> { return saveSimpleSetting('defaultNewCli', value === 'codex' ? 'codex' : 'claude') }
 
-  function setTerminalTheme(id: string) {
-    const normalized = normalizeTerminalThemeId(id)
-    terminalTheme.value = normalized
-    updateAppConfig({ terminalTheme: normalized })
-  }
-
-  function setFontSize(size: number) {
-    fontSize.value = Math.max(10, Math.min(24, size))
-    updateAppConfig({ fontSize: size })
-  }
-
-  // 渲染后端开关：true=WebGL（高频滚动流畅，但 CJK glyph atlas 可能留白/错位），
-  // false=DOM（默认，稳定）。仅对新开终端生效（renderer 在 term.open 时设定）。
-  function setWebglRenderer(enabled: boolean) {
-    webglRenderer.value = enabled
-    updateAppConfig({ webglRenderer: enabled })
-  }
+  function setTerminalTheme(id: string): Promise<boolean> { return saveSimpleSetting('terminalTheme', normalizeTerminalThemeId(id)) }
+  function setFontSize(size: number): Promise<boolean> { return saveSimpleSetting('fontSize', normalizeTerminalFontSize(size)) }
+  function setTerminalFontFamily(value: string): Promise<boolean> { return saveSimpleSetting('terminalFontFamily', normalizeTerminalFont(value)) }
+  function setTerminalLineHeight(value: number): Promise<boolean> { return saveSimpleSetting('terminalLineHeight', normalizeTerminalLineHeight(value)) }
+  function setTerminalCursorStyle(value: string): Promise<boolean> { return saveSimpleSetting('terminalCursorStyle', normalizeTerminalCursor(value)) }
+  function setTerminalCursorBlink(value: boolean): Promise<boolean> { return saveSimpleSetting('terminalCursorBlink', value === true) }
+  // Existing terminals keep their renderer; only options/metrics update live.
+  function setWebglRenderer(enabled: boolean): Promise<boolean> { return saveSimpleSetting('webglRenderer', enabled === true) }
 
   function detectSystemLocale(): 'en' | 'zh' {
     const browserLang = navigator.language || 'en'
@@ -756,7 +765,8 @@ export const useAppStore = defineStore('app', () => {
     guiThemeMode, guiDensity, sidebarWidth, startupDestination, defaultNewCli, settingsSaveError, loadSettingsPreferences,
     setGuiDensity, setSidebarWidth, setStartupDestination, setDefaultNewCli,
     theme,
-    terminalTheme,
+    terminalTheme, terminalPreferences, terminalFontFamily, terminalLineHeight, terminalCursorStyle, terminalCursorBlink,
+    setTerminalFontFamily, setTerminalLineHeight, setTerminalCursorStyle, setTerminalCursorBlink,
     fontSize,
     webglRenderer,
     language,

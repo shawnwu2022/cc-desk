@@ -54,7 +54,6 @@
         </div>
         <XTermTerminal
           ref="terminalRef"
-          :font-size="appStore.fontSize"
           :visible="visible ?? true"
           @pty-started="handlePtyStarted"
           @pty-exited="handlePtyExited"

@@ -42,7 +42,8 @@ Rules:
 - Task 14: complete at `d1a6dc6d6fbb22057245e628c0b6eedcf83fe36a`
 - Task 15: complete at `6ae851a3a3ee9de789a5085b5a0e1d03b551eb44`
 - Task 16: complete at `c0a1c231426b599c30ec52ea2740f44d10334e96`
-- Next task: Task 17 — settings shell, General and Appearance
+- Task 17: complete at `bb8c2c999370e4988b96d2917bd10f66154bda51`
+- Next task: Task 18 — unified terminal preferences and preview
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -489,3 +490,23 @@ Rules:
 - Final66 exact tests+typecheck;152 affected tests,62 resources/errors and41 confirmations preserved. Manifest/diff/reverse-patch checks pass; earlier61/65 counts superseded
 - Independent spec/quality approval reran original3 repros, remaining overlap and5 focused repair/rollback/migration/width tests successfully. Static Rust review found no concrete defect but is not compilation evidence
 - No actual CLI/platform/scaling/system-appearance certification, full suite, CI/PR/package/release; atomic publication pending readback
+
+### Verified Task 17 checkpoint
+
+- Remote commit `bb8c2c999370e4988b96d2917bd10f66154bda51`; exact staged/fetched tree and local/remote SHA match; source/worktree clean before readback
+-66 required tests/typecheck;152 affected+103 preservation tests; independent approval with original3+overlap1+5 focused checks passing
+- Initial tree-only upload stalled without result; original cell disappeared and expected tree read returned404 with branch unchanged. Exact staged-content retry returned matching tree, then normal commit/ref/readback succeeded; no duplicate ref mutation
+- Rust compilation/formatting and actual CLI/platform acceptance NOT RUN; final Windows CI route remains pending25. No CI/PR/package/release; next18
+
+### Task 18 preflight ruling
+
+- Ruling: renderer preference applies when a terminal is next created and is clearly labeled; do not recreate a running terminal solely to switch renderer. Live color/font/cursor options update in place using shared preferences. Add only necessary optional typed read DTO fields for already-existing persisted renderer/new preference compatibility; Rust tests remain NOT RUN until real toolchain gate. Cost if wrong: renderer changes need a newly opened terminal, preserving current process/buffer continuity.
+
+## Task 18 — Terminal preferences and theme continuity
+
+- Real Terminal settings and inert non-PTY preview expose themes/font/size/line-height/cursor/blink/renderer. One computed preferences object drives Legacy Claude, Native Claude and Native Codex through Task17 serialized settings writer
+- Colors/cursors update xterm options only, no resize/recreate/process/input. Font metrics coalesce one visible fit and defer hidden work with exact lifetime checks; renderer choice frozen at creation, optional Native WebGL safely falls back with same current colors
+- Existing16 palettes/IDs retained; old missing theme inference occurs once and later GUI recovery cannot recouple terminal colors. Numeric drafts commit blur/Enter and support rollback/cancel
+- Optional Rust read DTO fields/2 compatibility tests added, raw config writer/protocol unchanged; Rust NOT RUN, finalWindows gate pending25
+- Final65 exact tests+typecheck;238 affected18 suites. Independent spec/quality approval ran13 focused continuity/migration checks and a new delayed-WebGL/queued-fit-after-unmount test successfully; manifest/diff checks pass
+- Actual GPU/fonts/CJK/CLI/PTY/platform/scaling/Native OS-minimize certification unperformed; no fullsuite/CI/PR/package/release. Atomic publication pending readback

@@ -9,6 +9,7 @@ import InlineNotice from '@/components/ui/InlineNotice.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import GeneralSection from './sections/GeneralSection.vue'
 import AppearanceSection from './sections/AppearanceSection.vue'
+import TerminalSection from './sections/TerminalSection.vue'
 import ShortcutsSection from './sections/ShortcutsSection.vue'
 import UpdateSection from './sections/UpdateSection.vue'
 import AboutSection from './sections/AboutSection.vue'
@@ -38,7 +39,7 @@ const items = computed(() => SETTINGS_SECTIONS.map(id => ({ id, label: t(labels[
       <InlineNotice v-if="app.settingsSaveError" kind="warning" :message="t(app.settingsSaveError)" />
       <GeneralSection v-if="section === 'general'" />
       <AppearanceSection v-else-if="section === 'appearance'" />
-      <EmptyState v-else-if="section === 'terminal'" :title="t('settingsTerminal')" :description="t('settingsTerminalPending')" />
+      <TerminalSection v-else-if="section === 'terminal'" />
       <EmptyState v-else-if="section === 'launch-configurations'" :title="t('settingsLaunchConfigurations')" :description="t('settingsLaunchConfigurationsPending')" />
       <ShortcutsSection v-else-if="section === 'shortcuts'" />
       <UpdateSection v-else-if="section === 'update'" />

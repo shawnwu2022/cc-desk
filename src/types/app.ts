@@ -34,6 +34,10 @@ export interface AppConfig {
   defaultNewCli?: UnifiedCliKind
   terminalTheme?: string
   fontSize?: number
+  terminalFontFamily?: string
+  terminalLineHeight?: number
+  terminalCursorStyle?: 'bar' | 'block' | 'underline'
+  terminalCursorBlink?: boolean
   webglRenderer?: boolean
   autoConnectIde?: boolean
   hiddenProjects?: string[]

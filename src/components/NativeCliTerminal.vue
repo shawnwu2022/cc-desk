@@ -24,7 +24,8 @@ import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop } from '@/api/tauri'
 import type { OutputFrame } from '@/types/terminal'
 import { useAppStore } from '@/stores/app'
-import { getTerminalTheme } from '@/config/terminalThemes'
+import { terminalAppearanceOptions, applyTerminalAppearance } from '@/config/terminalPreferences'
+import type { WebglAddon } from '@xterm/addon-webgl'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import {
   captureNativeAttempt,
@@ -45,6 +46,8 @@ const tabs = useNativeTabsStore()
 
 let term: Terminal | null = null
 let fit: FitAddon | null = null
+let webglAddon: WebglAddon | null = null
+let preferenceFitPending = false
 let binding: NativeTerminalBinding | null = null
 let resizeObserver: ResizeObserver | null = null
 let pasteListener: ((event: ClipboardEvent) => void) | null = null
@@ -402,13 +405,9 @@ function fitVisible() {
 
 onMounted(async () => {
   if (!container.value) return
+  const preferences = app.terminalPreferences
   term = new Terminal({
-    fontFamily: '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace',
-    fontSize: app.fontSize,
-    theme: getTerminalTheme(app.terminalTheme),
-    lineHeight: 1.2,
-    cursorBlink: true,
-    cursorStyle: 'bar',
+    ...terminalAppearanceOptions(preferences),
     scrollback: 10000,
     allowProposedApi: true,
     macOptionIsMeta: true,
@@ -416,6 +415,7 @@ onMounted(async () => {
   fit = new FitAddon()
   term.loadAddon(fit)
   term.open(container.value)
+  if (preferences.renderer === 'webgl') void loadWebgl(term)
   fitVisible()
   configureCopy()
   window.addEventListener('copy', handleNativeCopy)
@@ -454,13 +454,38 @@ watch(
   },
 )
 
-watch(() => app.fontSize, size => {
-  if (term) term.options.fontSize = size
-  fitVisible()
+function schedulePreferenceFit() {
+  needsFit.value = true
+  if (!props.active || preferenceFitPending || disposed) return
+  preferenceFitPending = true
+  requestAnimationFrame(() => {
+    preferenceFitPending = false
+    if (needsFit.value) fitVisible()
+  })
+}
+watch(() => app.terminalPreferences, (next, previous) => {
+  if (term && applyTerminalAppearance(term.options, next, previous)) schedulePreferenceFit()
 })
-watch(() => app.terminalTheme, theme => {
-  if (term) term.options.theme = getTerminalTheme(theme)
-})
+
+/** Renderer is chosen once for each terminal. Failure/context loss falls back
+ * without replacing xterm, its theme options, scrollback, binding or selection. */
+async function loadWebgl(target: Terminal) {
+  try {
+    const { WebglAddon } = await import('@xterm/addon-webgl')
+    if (disposed || term !== target) return
+    const addon = new WebglAddon()
+    webglAddon = addon
+    addon.onContextLoss(() => {
+      if (webglAddon !== addon) return
+      webglAddon = null
+      try { addon.dispose() } catch { /* DOM fallback keeps the same theme. */ }
+    })
+    target.loadAddon(addon)
+  } catch {
+    try { webglAddon?.dispose() } catch { /* Optional renderer cleanup only. */ }
+    webglAddon = null
+  }
+}
 
 onUnmounted(() => {
   disposed = true
@@ -475,6 +500,8 @@ onUnmounted(() => {
   pasteListener = null
   resizeObserver?.disconnect()
   resizeObserver = null
+  try { webglAddon?.dispose() } catch { /* Optional renderer. */ }
+  webglAddon = null
   term?.dispose()
   term = null
   fit = null

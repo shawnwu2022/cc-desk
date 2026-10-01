@@ -13,7 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive, watch, onMounted, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
+import { computed, ref, reactive, watch, onMounted, onUnmounted, nextTick, toRaw, type ComponentPublicInstance } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import type { WebglAddon } from '@xterm/addon-webgl'
@@ -24,8 +24,8 @@ import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useHookStore } from '@/stores/hook'
 import { useAttentionStore } from '@/stores/attention'
-import { isMac, platform } from '@/utils/platform'
-import { getTerminalTheme } from '@/config/terminalThemes'
+import { platform } from '@/utils/platform'
+import { terminalAppearanceOptions, applyTerminalAppearance } from '@/config/terminalPreferences'
 import {
   ptySpawn,
   ptyInput,
@@ -48,7 +48,6 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 
 const props = defineProps<{
-  fontSize?: number
   visible?: boolean
 }>()
 
@@ -65,6 +64,8 @@ const containerRef = ref<HTMLElement>()
 const isDragOver = ref(false)
 const visible = computed(() => props.visible !== false)
 const needsFit = new Set<string>()
+const pendingFits = new Map<string, Terminal>()
+const rendererPreferences = new WeakMap<Terminal, boolean>()
 let disposed = false
 let unregisterCommand: (() => void) | null = null
 function isVisibleTab(tabId: string) { return !disposed && visible.value && currentDisplayTabId.value === tabId }
@@ -72,9 +73,12 @@ function fitTab(tabId: string) {
   needsFit.add(tabId)
   if (!isVisibleTab(tabId) || isMinimized) return
   const instance = terminalInstances.get(tabId)
-  if (!instance) return
+  if (!instance || pendingFits.get(tabId) === instance.term) return
+  pendingFits.set(tabId, instance.term)
   requestAnimationFrame(() => {
-    if (!isVisibleTab(tabId) || terminalInstances.get(tabId) !== instance) return
+    if (pendingFits.get(tabId) !== instance.term) return
+    pendingFits.delete(tabId)
+    if (!isVisibleTab(tabId) || isMinimized || terminalInstances.get(tabId) !== instance) return
     instance.fitAddon.fit()
     needsFit.delete(tabId)
   })
@@ -177,16 +181,6 @@ const fitCurrentTerminal = debounce(() => {
   fitVisible()
 }, 50)
 
-// 按平台选择字体：CJK 用等宽字体（Microsoft YaHei / Noto Sans CJK），
-// emoji 在主字体中缺失时回退到系统 emoji 字体。把 emoji 字体放在 monospace 前，
-// 确保渲染层能找到 emoji 字形（实际宽度由 Unicode 11 wcwidth 决定，与字体回退无关）
-function pickFontFamily(): string {
-  if (isMac) {
-    return '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "Apple Color Emoji", monospace'
-  }
-  return '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI Emoji", monospace'
-}
-
 // Terminal 渲染生命周期注册表：per-terminal 单飞初始化、dispose 标记、reload timer。
 // key 一律 toRaw 归一——terminalInstances 是深度 reactive Map，setTerminalEl 取出的
 // instance.term 是 Vue proxy，与创建路径的 raw terminal 身份不同；不归一会让 WeakMap
@@ -234,7 +228,7 @@ async function loadRendererAddonsOnce(term: Terminal) {
   // 渲染后端：外观设置 webglRenderer 控制。默认 DOM renderer（无 glyph atlas，
   // 规避 CJK 渲染留白/错位）；WebGL 高频滚动更流畅但附带该问题。
   // 仅对新开终端生效（renderer 在 term.open 时设定，运行时不切换）。
-  if (!appStore.webglRenderer) {
+  if (!rendererPreferences.get(toRaw(term))) {
     return
   }
 
@@ -360,16 +354,13 @@ function attachImeInputFix(term: Terminal) {
 // 创建新的 Terminal 实例
 function createTerminal(tabId: string): Terminal {
   const term = new Terminal({
-    fontFamily: pickFontFamily(),
-    fontSize: props.fontSize ?? 12,
-    lineHeight: 1.2,
-    cursorBlink: true,
-    cursorStyle: 'bar',
-    theme: getTerminalTheme(appStore.terminalTheme),
+    ...terminalAppearanceOptions(appStore.terminalPreferences),
     allowProposedApi: true,
     macOptionIsMeta: true,
     scrollback: 10000,
   })
+
+  rendererPreferences.set(term, appStore.terminalPreferences.renderer === 'webgl')
 
   const fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
@@ -609,22 +600,13 @@ function ensureCoreListeners(): Promise<void> {
   return coreListenersReady
 }
 
-// 监听 fontSize 变化
-watch(() => props.fontSize, (newSize) => {
-  if (newSize) {
-    for (const instance of terminalInstances.values()) {
-      instance.term.options.fontSize = newSize
-    }
-    fitVisible()
-  }
-})
-
-// 监听终端主题变化，更新所有终端实例（与 GUI 浅/暗独立）
-watch(() => appStore.terminalTheme, (newId) => {
-  const themeConfig = getTerminalTheme(newId)
+// Both runtimes consume this same store-owned computed preference object.
+watch(() => appStore.terminalPreferences, (next, previous) => {
+  let metricsChanged = false
   for (const instance of terminalInstances.values()) {
-    instance.term.options.theme = themeConfig
+    if (applyTerminalAppearance(instance.term.options, next, previous)) metricsChanged = true
   }
+  if (metricsChanged) fitVisible()
 })
 
 // 监听活跃 Tab 变化 → 切换显示
@@ -971,6 +953,7 @@ async function restartCurrentPty() {
 
 onUnmounted(() => {
   disposed = true
+  pendingFits.clear()
   unregisterCommand?.()
   fitCurrentTerminal.cancel()
   resizeObserver?.disconnect()

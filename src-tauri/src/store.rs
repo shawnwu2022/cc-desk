@@ -78,6 +78,16 @@ pub struct AppConfig {
     pub terminal_theme: Option<String>,
     #[serde(rename = "fontSize")]
     pub font_size: Option<u16>,
+    #[serde(rename = "terminalFontFamily")]
+    pub terminal_font_family: Option<String>,
+    #[serde(rename = "terminalLineHeight")]
+    pub terminal_line_height: Option<f64>,
+    #[serde(rename = "terminalCursorStyle")]
+    pub terminal_cursor_style: Option<String>,
+    #[serde(rename = "terminalCursorBlink")]
+    pub terminal_cursor_blink: Option<bool>,
+    #[serde(rename = "webglRenderer")]
+    pub webgl_renderer: Option<bool>,
     #[serde(rename = "autoConnectIde")]
     pub auto_connect_ide: Option<bool>,
     #[serde(rename = "hiddenProjects")]

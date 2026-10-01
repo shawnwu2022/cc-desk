@@ -47,7 +47,7 @@ describe('Unified settings shell', () => {
   // 外观只管理GUI，终端主题/字体/渲染器不混入该分类。
   it('Settings_GuiTerminalIndependent_003', async () => {
     useSidebarStore().activeSettingsSection = 'appearance'
-    const app = useAppStore(); app.terminalTheme = 'dracula'; app.fontSize = 16
+    const app = useAppStore(); await app.setTerminalTheme('dracula'); await app.setFontSize(16)
     const wrapper = render(); await wrapper.get('[data-gui-theme]').setValue('dark'); await flushPromises()
     expect(app.theme).toBe('dark'); expect(app.terminalTheme).toBe('dracula'); expect(app.fontSize).toBe(16)
     expect(wrapper.find('[data-terminal-theme]').exists()).toBe(false)
@@ -139,7 +139,7 @@ describe('Unified settings shell', () => {
   it('Settings_SystemAndDensityAreGuiOnly_012', async () => {
     let notify!: (event: MediaQueryListEvent) => void
     vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: (_type: string, callback: typeof notify) => { notify = callback }, removeEventListener: vi.fn() }))
-    const app = useAppStore(); app.terminalTheme = 'dracula'; app.fontSize = 17
+    const app = useAppStore(); await app.setTerminalTheme('dracula'); await app.setFontSize(17)
     useUnifiedSessionsStore().activeSessionId = 'held'
     await app.setTheme('system'); await app.setGuiDensity('compact')
     expect(app.theme).toBe('dark'); expect(document.documentElement.dataset.density).toBe('compact')
