@@ -24,17 +24,24 @@ const descriptionId = `${titleId}-description`
 let opener: HTMLElement | null = null
 let ownedPanel: HTMLElement | null = null
 function isTop() { return modalStack[modalStack.length - 1] === ownedPanel }
+function available(element: HTMLElement): boolean {
+  if (!element.isConnected || element.matches(':disabled, input[type="hidden"]')
+    || element.closest('[hidden], [inert], [aria-hidden="true"]')) return false
+  for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+    // Closed details hide their contents without changing computed display.
+    // Only the first summary (and its children) remains keyboard-accessible.
+    if (ancestor instanceof HTMLDetailsElement && !ancestor.open && ancestor !== element) {
+      const summary = [...ancestor.children].find(child => child.tagName === 'SUMMARY')
+      if (!summary?.contains(element)) return false
+    }
+    const style = getComputedStyle(ancestor)
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false
+  }
+  return true
+}
 function focusable() {
   return [...(panel.value?.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], details > summary:first-of-type, [tabindex]') ?? [])]
-    .filter((element) => {
-      if (element.matches(':disabled, input[type="hidden"], [tabindex="-1"]') || element.closest('[hidden], [inert], [aria-hidden="true"]')) return false
-      for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
-        const style = getComputedStyle(ancestor)
-        if (style.display === 'none' || style.visibility === 'hidden') return false
-        if (ancestor === panel.value) break
-      }
-      return true
-    })
+    .filter(element => !element.matches('[tabindex="-1"]') && available(element))
 }
 function danger(element: HTMLElement) { return !!element.closest('[data-danger="true"], .ui-button--danger') }
 function initialFocus() {
@@ -65,11 +72,20 @@ function onFocusIn(event: FocusEvent) {
 }
 function releaseFocus() {
   const wasTop = isTop()
+  const focusAtRelease = document.activeElement
+  const target = opener
   const index = ownedPanel ? modalStack.indexOf(ownedPanel) : -1
   if (index >= 0) modalStack.splice(index, 1)
   ownedPanel = null
   document.removeEventListener('focusin', onFocusIn)
-  if (wasTop && opener?.isConnected) opener.focus()
+  const remainingOwner = modalStack[modalStack.length - 1]
+  // Parent navigation can hide the opener later in this same render. Wait for
+  // that DOM commit, and never steal focus from a newer modal or destination.
+  if (wasTop) void nextTick(() => {
+    if (modalStack[modalStack.length - 1] !== remainingOwner) return
+    if (document.activeElement !== document.body && document.activeElement !== focusAtRelease) return
+    if (target && available(target)) target.focus()
+  })
 }
 watch(() => props.open, async (open) => {
   if (!open) { releaseFocus(); return }

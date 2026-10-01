@@ -493,3 +493,35 @@ checks; the old startup decision's implicit routing is intentionally retired.
 
 The frontend gate includes production `npm run build`. This is not a Rust build,
 Windows package, D20 real-CLI certification or rendered platform acceptance.
+
+## Responsive and accessibility contracts (Task 22)
+
+The automated matrix treats logical viewport dimensions and DPR as independent
+inputs. Five specified window sizes × three DPR values × two locales × two themes
+exercise the actual AppShell, project tree and session rows. Separate 1180/1179 and
+900/899 boundary cases lock resource overlay and compact-sidebar decisions, and a
+compact AppShell toggle preserves its main-content DOM host. The normal Settings
+component/editor composition proves that inactive navigation releases its modal.
+
+`AppTooltip` retains the original trigger and aria-describedby relationship. Its
+fixed viewport coordinates are measured after render, centered/clamped horizontally
+and placed above the trigger when the lower edge would exceed the viewport. Resize
+and ancestor-scroll listeners exist only while visible and are removed on unmount.
+No portal/focus ownership, application state, or runtime binding is changed.
+
+`AppDialog` filters controls inside closed details independently of computed display,
+which does not represent the browser's collapsed-content behavior. Hidden/inert/
+disabled ancestry also applies to focus restoration. Restoration runs after the DOM
+commit and respects any newer modal/destination focus. Negative tabindex excludes a
+control from sequential Tab traversal but remains valid for deliberate parent-modal
+container focus. Safe initial focus and explicit dangerous-action admission remain
+unchanged.
+
+Menu labels and dialog action labels use normal wrapping with unbroken-word wrapping;
+footer controls retain their compact/normal/primary minimum sizes and may grow for
+multiple lines. No session column is removed to make text fit.
+
+The new tests establish behavioral and source-level contracts. They do not measure
+real browser overflow, Windows DPI, font metrics, rendered contrast or screen-reader
+output. Task23 owns deterministic browser visuals; authorized platform acceptance is
+still required for the full window/scale/language matrix.

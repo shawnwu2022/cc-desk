@@ -46,7 +46,8 @@ Rules:
 - Task 18: complete at `c0158be02de8edf1dafe233c95b6550564e8f471`
 - Task 19: complete at `25cc65298caf2bf7c61fb0434edfa7eb815ddc19`
 - Task 20: complete at `c8887dd2645a03546f7f056046ea34e3e35ef502`
-- Next task: Task 21 — retire obsolete parallel UI
+- Task 21: complete at `78263be9d73644b4faf55b4dd770e33da8de098e`
+- Next task: Task 22 — responsive accessibility and localization
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -571,3 +572,17 @@ Rules:
 - Current architecture docs updated, frozen plan/spec/history preserved; release/D20 policy unchanged
 - Required11boundary tests+typecheck+production Vite build pass;331affected28files.26present/24deleted hashes/diff/reverse checks pass; independent spec/quality review no actionable finding
 - Rust/realCLI/D20/GPU/platform/scaling/Windowspackage certification NOTRUN; nofullsuite/CI/PR/package/release. Atomic publication pending readback
+
+### Verified Task 21 checkpoint
+
+- Remote commit `78263be9d73644b4faf55b4dd770e33da8de098e`; exact staged/fetched tree and local/remote SHA match; working tree clean before readback
+-11boundary+typecheck+productionbuild and331affected tests; independent spec/quality approval no actionable findings
+-27present blobs includingledger and24deletions formed exact reviewed tree; no CI/PR/package/release or realCLI/platform/Rust certification; next22
+
+## Task 22 — Responsive, accessibility and localization contracts
+
+-60 logical viewport/DPR/language/theme combinations retain all session columns, exact1180/900 responsivebreakpoints and stable host; tests explicitly do not certify renderedDPI geometry
+- SharedDialog excludes hidden/closed-details descendants while preserving summary/nestedcontainer focus and defers guarded return until navigationDOMcommit; sharedTooltip fixed/clamped/repositions on scroll and releases listeners
+- Longmenu/dialogfooter text wraps within bounds with originalcontrolsize variants; exactlocale key/duplicate checks and reducedmotion/keyboard/icon contracts covered
+- Final86exact+typecheck258affected13files;9source manifest/diff checks pass. Independent spec/quality approval with3 probes (newdestinationfocus,replacementmodal,tooltipscroll/disposal) passing, noactionablefinding
+- Actualrenderedbrowser/Windows scaling/platform/assistivetechnology/CLI/Rust NOTRUN;23visual fixture owns renderedevidence. Nofullsuite/CI/PR/package/release; atomicpublication pendingreadback
