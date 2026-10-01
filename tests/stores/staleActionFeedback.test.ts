@@ -87,11 +87,17 @@ it('Feedback_LegacyRenameRejectsNewPty_009', async () => {
   const { useSessionStore } = await import('@/stores/session'); const { createLegacyClaudeAdapter } = await import('@/session/adapters/legacyClaudeAdapter')
   const legacy = useSessionStore(); const id = legacy.createTab('/repo', { sessionId: 'saved', name: 'Original' }); const tab = legacy.tabs.get(id)!
   tab.ptyId = 'pty-1'; tab.ptyGeneration = 1; tab.status = 'running'
-  let finish!: () => void; const pending = new Promise<void>(resolve => { finish = resolve })
-  const adapter = createLegacyClaudeAdapter({ store: legacy, projectPaths: () => ['/repo'], runtime: { startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: () => pending } })
+  let finish!: (value: unknown) => void; const pending = new Promise(resolve => { finish = resolve })
+  const commands: string[] = []
+  mockIPC(command => { commands.push(command); if (command === 'upsert_session_ui_record') return pending; throw new Error('unexpected') })
+  const metadata = useProjectsStateStore(); metadata.loaded = true
+  const runtimeRename = vi.fn()
+  const adapter = createLegacyClaudeAdapter({ store: legacy, metadata, projectPaths: () => ['/repo'], runtime: { startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: runtimeRename } })
   const rename = adapter.renameSession('legacy-tab:' + id, 'Late name'); const rejected = expect(rename).rejects.toThrow('STALE_SESSION_ATTEMPT')
-  tab.ptyGeneration = 2; tab.ptyId = 'pty-2'; finish(); await rejected
+  await vi.waitFor(() => expect(commands).toEqual(['upsert_session_ui_record']))
+  tab.ptyGeneration = 2; tab.ptyId = 'pty-2'; finish({ pinnedProjects: [], archivedSessions: {} }); await rejected
   expect(tab.name).toBe('Original')
+  expect(runtimeRename).not.toHaveBeenCalled(); expect(commands).not.toContain('pty_input')
 })
 // Legacy 确认后的停止回执不能关闭同一个 Tab 下被替换的 PTY。
 it('Feedback_LegacyClosePinsPty_010', async () => {

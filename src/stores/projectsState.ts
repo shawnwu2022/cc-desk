@@ -20,9 +20,29 @@ function errorCode(value: unknown): string | null {
   return null
 }
 
+function objectEntries(value: unknown): [string, unknown][] {
+  return value && typeof value === 'object' && !Array.isArray(value) ? Object.entries(value) : []
+}
+function boundedText(value: unknown, maximum: number, empty = false): value is string {
+  return typeof value === 'string' && (empty || value.length > 0) && !value.includes('\0') && [...value].length <= maximum
+}
+function sessionRecord(value: unknown): value is SessionUiRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const row = value as SessionUiRecord
+  return ['legacy-claude', 'native-cli'].includes(row.runtime) && ['claude', 'codex'].includes(row.cli)
+    && boundedText(row.projectPath, 32768) && boundedText(row.adapterSessionId, 256)
+    && (row.nativeSessionId == null || boundedText(row.nativeSessionId, 256)) && boundedText(row.title, 200, true)
+    && Number.isInteger(row.lastActivityAt) && row.lastActivityAt >= 0
+}
+function launchPreference(value: unknown): value is ProjectLaunchPreference {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const row = value as ProjectLaunchPreference
+  return ['claude', 'codex'].includes(row.lastCli)
+    && [row.claudeLaunchConfigId, row.codexLaunchConfigId].every(id => id == null || boundedText(id, 256))
+}
 function syncStringMap(target: Map<string, string>, source: Record<string, string> | undefined): void {
   target.clear()
-  for (const [key, value] of Object.entries(source ?? {})) {
+  for (const [key, value] of objectEntries(source)) {
     if (typeof value === 'string') target.set(key, value)
   }
 }
@@ -37,9 +57,12 @@ function syncStringArrayMap(
   }
 }
 
-function syncObjectMap<T>(target: Map<string, T>, source: Record<string, T> | undefined): void {
+function syncObjectMap<T>(target: Map<string, T>, source: unknown, valid: (value: unknown) => value is T, keyLimit: number): void {
   target.clear()
-  for (const [key, value] of Object.entries(source ?? {})) target.set(key, value)
+  for (const [key, value] of objectEntries(source).sort(([left], [right]) => left.localeCompare(right))) {
+    if (target.size >= 10000) break
+    if (boundedText(key, keyLimit) && valid(value)) target.set(key, value)
+  }
 }
 
 export const useProjectsStateStore = defineStore('projects-state', () => {
@@ -59,8 +82,8 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     pinnedProjects.value = [...(state.pinnedProjects ?? [])]
     syncStringArrayMap(archivedSessions, state.archivedSessions)
     syncStringMap(displayNames, state.displayNames)
-    syncObjectMap(sessionRecords, state.sessionRecords)
-    syncObjectMap(launchPreferences, state.launchPreferences)
+    syncObjectMap(sessionRecords, state.sessionRecords, sessionRecord, 8192)
+    syncObjectMap(launchPreferences, state.launchPreferences, launchPreference, 32768)
   }
 
   function load(): Promise<void> {
@@ -159,8 +182,8 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     return mutate(() => projectsApi.restoreSession(projectPath, sessionId), true)
   }
 
-  function upsertSessionRecord(key: string, record: SessionUiRecord): Promise<ProjectsState> {
-    return mutate(() => projectsApi.upsertSessionUiRecord(key, record), true)
+  function upsertSessionRecord(key: string, record: SessionUiRecord, beforeMutation?: () => void): Promise<ProjectsState> {
+    return mutate(() => projectsApi.upsertSessionUiRecord(key, record), true, beforeMutation)
   }
 
   function removeSessionRecord(key: string): Promise<ProjectsState> {

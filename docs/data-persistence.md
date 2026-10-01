@@ -92,6 +92,44 @@ The legacy workspace still persists CC Desk-owned project presentation state suc
 
 Concurrent project-state mutations use the existing lock + read-latest + canonicalize + atomic-write path.
 
+### Unified display names
+
+`projectsState` is the sole frontend writer for `projects.json`, including optional
+`sessionRecords` and per-project launch preferences. Both adapters consume saved
+names when projecting discovered history or an existing terminal. Saving a name
+does not change a native Session ID, write CLI history, send terminal input, or
+restart a process. The normal Workspace history row supports the same rename
+operation as a live row.
+
+Native history metadata uses the full `native-history-v2` catalog identity,
+including CLI, launch configuration ID/revision, registered project ID/path and
+authenticated source session key. A resumed terminal keeps that identity for its
+display name, so refresh, close and a fresh application-store load retain the name.
+Legacy metadata binds the normalized project path and Legacy session ID. Records
+with a key whose runtime, CLI, project or session fields disagree are not applied.
+Raw IDs and ambiguous old Native keys are never guessed into another origin.
+
+A new or raw Native terminal without a known authenticated history association
+can only save its name under its exact tab identity. It retains the name across a
+restart of that tab, but independently discovered CLI history after application
+restart keeps its own title. No safe association can be inferred from a raw ID,
+title, current configuration or default root. Optional metadata alone never
+creates a catalog row or restores a process.
+
+Rename saves freeze the source and current attempt. Both the adapter and the
+canonical writer revalidate ownership after their queues, immediately before IPC;
+an invalidated historical row or replaced Native/Legacy attempt cannot submit the
+old name. A cancellation before submission is not an uncertain write and triggers
+no reconciliation. Conflicting or uncertain issued writes use the existing
+read-only reconciliation and require a fresh explicit action, without replay.
+
+The frontend tolerates malformed optional containers and skips invalid individual
+records/preferences while retaining valid siblings. It uses the existing backend
+limits (10,000 records, 200-character session titles, bounded identity fields),
+with no new storage schema, tombstones or migration write during catalog bootstrap.
+The Task 24 migration tests exercise the frontend store boundary with host I/O
+fixtures; they do not execute or certify Rust deserialization or real disk writes.
+
 ## Native observer data
 
 Observer capabilities and leases are runtime-scoped. They are not durable credentials and must not be persisted into general workspace/config files.

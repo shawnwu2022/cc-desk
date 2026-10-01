@@ -182,7 +182,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       return partial
     })
     catalog.configureAdapters([
-      createLegacyClaudeAdapter({ store: legacy, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
+      createLegacyClaudeAdapter({ store: legacy, metadata: projects, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
         runtime: {
           startTab: id => {
             const tab = legacy.tabs.get(id)
@@ -191,7 +191,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           }, stopTab: id => requireHost().stopLegacy(id),
           restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title) => requireHost().renameLegacy(id, title),
         } }),
-      createNativeCliAdapter({ tabs: native, history, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
+      createNativeCliAdapter({ tabs: native, history, metadata: projects, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
         runtime: { createTab: createNativeTab, restartTab: restartNative,
           stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)) } }),
     ])
@@ -295,7 +295,6 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     if (request.kind === 'restore-archive') { await catalog.restoreArchivedSession(session.id); return true }
     if (request.kind === 'rename') {
-      if (!open) return false
       await catalog.renameSession(session.id, request.title)
       return true
     }

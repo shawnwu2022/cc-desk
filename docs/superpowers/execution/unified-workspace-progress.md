@@ -48,7 +48,8 @@ Rules:
 - Task 20: complete at `c8887dd2645a03546f7f056046ea34e3e35ef502`
 - Task 21: complete at `78263be9d73644b4faf55b4dd770e33da8de098e`
 - Task 22: complete at `426b1428bf1dce82e5863ea38010cfb69aa4d4ae`
-- Next task: Task 23 — deterministic rendered visual fixture
+- Task 23: infrastructure checkpoint `36562bdc2e59890ddfd7035b0ff395f23d82c4af`; BLOCKED_VISUAL, not complete
+- Next independent task: Task 24 — migration, stress and adversarial tests
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -607,3 +608,18 @@ Rules:
 - Officialbrowserdownloads corrupt, installedChromiumsocketEPERM, cloudCUAlocalhostblocked. No restrictionbypass/desktop/newenvironment/earlyCI
 - Safe256affected+15isolatedfixture tests/typecheck,productionbuildexclusion andHTTPisolation pass. Review repaired live-nth shrinkingselector and overflow-beforefocus via sharedsetuphelpers/realfixtureDOMREDGREEN; independently4focusedhelpercases pass, conditionalinfra spec/quality approval
 - Parent permits atomic reviewedinfra checkpoint while keeping23BLOCKED_VISUAL, then independent24stress. Final25renderedjob trigger deferred for parent; firstpixels precede visualfreeze and may require correction/rerun. Rust/CLI/platform also NOTRUN
+
+### Verified Task 23 infrastructure checkpoint — BLOCKED_VISUAL
+
+- Remote commit `36562bdc2e59890ddfd7035b0ff395f23d82c4af`; exact staged/fetched tree and local/remote SHA match; worktree clean before readback
+-256affected15fixture/typecheck,137collected only, productionexclusion/HTTPisolation; conditionalinfrareview4helpertests pass
+- All13PNG/pixelreview/missingbaselineRED/no-diffPASS pending. No full23completion/visualfreeze claim. Parent explicitly allows independent24localstress next; no earlyCI/newenvironment
+
+## Task 24 — Migration, stress and adversarial verification
+
+- Reproduced12failures against actualstore/adapter composition, then connected canonical exact-origin displaymetadata to historical/liveNative/Legacy rows; historyrename dispatch active and LegacyDeskrename sends noCLIinput
+- Optionalmetadata containers/entries bounded and sanitized independently, valid siblings preserved; guardedcanonical upsert rechecks currentorigin/runtimeattempt at actualqueueadmission and receipt
+- No inferredhistory association for unclaimednew/rawNative tabs; exacttab identity only until authenticatedorigin known. Aliases change displaymetadata not activity/runtime/nativeIDs/sourceauthority
+-38newcases:22migration2stress14adversarial.50projects×100sessions and30opendescriptors×120state/layoutcycles measured956ms/16.2s host/jsdom, not realprocess/renderedperformance
+- Required365tests47files+typecheck;affected236+23tests.16sourcehash/diff checks pass; independentspec/quality approval3edgeprobes (removedLegacyhistoryqueue,initialreadinvalidation,lateNative receipt replacement) pass nofindings
+- ActualCLI/30realprocess/Rust/diskmigration/platform/D20 NOTRUN;23BLOCKED_VISUAL remains. Noallfrontendfullsuite/CI/PR/package/release; atomicpublication pendingreadback

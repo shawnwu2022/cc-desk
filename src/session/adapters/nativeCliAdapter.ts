@@ -9,6 +9,7 @@ import type {
 } from '@/types/unifiedSession'
 import { makeSessionCatalogKey } from '@/utils/sessionPresentation'
 import { normalizePath } from '@/utils/path'
+import { saveSessionDisplayName, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
 
 const ACTIVE_PREFIX = 'native-tab:'
 const HISTORY_PREFIX = 'native-history:'
@@ -48,6 +49,7 @@ export interface NativeCliAdapterDeps {
   history: NativeHistoryPort
   runtime: NativeRuntimePort
   archive: NativeArchivePort
+  metadata?: SessionMetadataPort
 }
 
 function processState(status: NativeCliTab['status']): UnifiedSession['processState'] {
@@ -101,7 +103,7 @@ function oldHistoryId(entry: NativeHistoryEntry, sessionKey: string, nativeSessi
   })}`
 }
 
-function historyId(entry: NativeHistoryEntry, sessionKey: string, nativeSessionId: string): string {
+function historyId(entry: Pick<NativeHistoryEntry, 'context'>, sessionKey: string, nativeSessionId: string): string {
   return `${HISTORY_PREFIX}${JSON.stringify(['native-history-v2', nativeHistoryContextKey(entry.context), sessionKey, nativeSessionId])}`
 }
 
@@ -152,6 +154,18 @@ function parseHistoryId(id: string): { adapterSessionId: string; nativeSessionId
 }
 
 export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapter {
+  function findHistory(id: string) {
+    return deps.history.all().flatMap(entry => entry.sessions.filter(item => historyId(entry, item.sessionKey, item.nativeSessionId) === id).map(item => ({ entry, item })))
+  }
+  function tabDisplayIdentity(tab: NativeCliTab): UnifiedSession {
+    const row = projectTab(tab)
+    if (tab.sourceSessionKey && row.nativeSessionId) {
+      return { ...row, id: historyId({ context: row.nativeOrigin! }, tab.sourceSessionKey, row.nativeSessionId), adapterSessionId: tab.sourceSessionKey }
+    }
+    const matches = historyForTab(tab)
+    return matches.length === 1 ? projectHistory(matches[0].entry, matches[0].item) : row
+  }
+  function projectActive(tab: NativeCliTab) { return withSessionDisplayName(projectTab(tab), deps.metadata, tabDisplayIdentity(tab)) }
   const admissions = new Map<string, { promise: Promise<UnifiedSession>; owners: Set<() => boolean> }>()
   function coalesce(key: string, operation: (canAdmit: () => boolean) => Promise<UnifiedSession>, canAdmit: () => boolean) {
     const ownResult = (promise: Promise<UnifiedSession>) => promise.then(value => {
@@ -206,13 +220,13 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         ? [historyId(matches[0].entry, matches[0].item.sessionKey, matches[0].item.nativeSessionId)]
         : []
     }))
-    const sessions = tabs.map(projectTab)
+    const sessions = tabs.map(projectActive)
     for (const entry of deps.history.all()) {
       if (wanted != null && normalizePath(entry.context.projectPath) !== wanted) continue
       for (const item of entry.sessions) {
         const claim = historyId(entry, item.sessionKey, item.nativeSessionId)
         if (!claimed.has(claim)) sessions.push({
-          ...projectHistory(entry, item),
+          ...withSessionDisplayName(projectHistory(entry, item), deps.metadata),
           ...archiveState(entry, item),
         })
       }
@@ -238,12 +252,12 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
           && tab.profileRevision === input.launchConfigRevision && (!input.registeredProjectId || tab.projectId === input.registeredProjectId) && normalizePath(tab.projectPath) === normalizePath(input.projectPath)
           && tabNativeSessionId(tab) === action.nativeSessionId)
         if (open.length > 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
-        if (open[0]) { deps.tabs.setActive(open[0].tabId); return projectTab(open[0]) }
+        if (open[0]) { deps.tabs.setActive(open[0].tabId); return projectActive(open[0]) }
       }
       if (!owns()) throw new Error('RESTORE_CANCELLED')
       const tab = await deps.runtime.createTab({ ...input, action })
       deps.tabs.setActive(tab.tabId)
-      return projectTab(tab)
+      return projectActive(tab)
     }
     return action.kind === 'new' || action.kind === 'raw' ? create()
       : coalesce(JSON.stringify(['direct', input.projectPath, input.cli, input.launchConfigId, input.launchConfigRevision, input.registeredProjectId, action]), create, canAdmit)
@@ -297,13 +311,13 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     const key = JSON.stringify([origin ? nativeHistoryContextKey(origin) : null, input.cli, normalizePath(input.projectPath), input.adapterSessionId, input.nativeSessionId])
     return coalesce(key, async owns => {
       const existing = existingFor(input, origin)
-      if (existing) { deps.tabs.setActive(existing.tabId); return projectTab(existing) }
+      if (existing) { deps.tabs.setActive(existing.tabId); return projectActive(existing) }
       if (!origin) throw new Error('SESSION_NOT_FOUND')
       const frozen = { ...input, nativeOrigin: { ...origin } }
       await verify(frozen, false)
       if (!owns()) throw new Error('RESTORE_CANCELLED')
       const admitted = existingFor(frozen, origin)
-      if (admitted) { deps.tabs.setActive(admitted.tabId); return projectTab(admitted) }
+      if (admitted) { deps.tabs.setActive(admitted.tabId); return projectActive(admitted) }
       const created = await deps.runtime.createTab({
         projectKey: input.projectKey, projectPath: input.projectPath, cli: input.cli,
         launchConfigId: origin.profileId, launchConfigRevision: origin.profileRevision,
@@ -311,13 +325,13 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         action: { kind: 'resume-id', nativeSessionId: input.nativeSessionId ?? input.adapterSessionId },
       })
       deps.tabs.setActive(created.tabId)
-      return projectTab(created)
+      return projectActive(created)
     }, canAdmit)
   }
   async function verifyMissingSession(input: ResumeUnifiedSessionInput) { await verify(input, true) }
 
   function captureOwnership(id: string, operation?: 'close' | 'archive'): () => boolean {
-    if (!id.startsWith(ACTIVE_PREFIX)) return () => true
+    if (!id.startsWith(ACTIVE_PREFIX)) return () => findHistory(id).length === 1
     const tab = requireTab(id)
     const attempt = captureNativeAttempt(tab)
     const source = JSON.stringify([tab.cli, tab.projectId, tab.projectPath, tab.profileId, tab.profileRevision, tab.sourceSessionKey, tab.action])
@@ -336,7 +350,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     if (!canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     const current = requireTab(id)
     if (current.status === 'unknown') throw new Error('LAUNCH_STATE_UNKNOWN')
-    return projectTab(await deps.runtime.restartTab(current.tabId))
+    return projectActive(await deps.runtime.restartTab(current.tabId))
   }
   async function closeSession(id: string, canContinue = () => true): Promise<void> {
     const owns = captureOwnership(id)
@@ -347,7 +361,21 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     deps.tabs.close(tab.tabId)
   }
-  async function renameSession(id: string, title: string): Promise<void> { deps.tabs.rename(requireTab(id).tabId, title) }
+  async function renameSession(id: string, title: string, canContinue = () => true): Promise<void> {
+    const owns = captureOwnership(id)
+    const current = () => canContinue() && owns()
+    if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+    if (id.startsWith(ACTIVE_PREFIX)) {
+      const tab = requireTab(id)
+      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), title, current)
+      if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+      deps.tabs.rename(tab.tabId, title)
+    } else {
+      const matches = findHistory(id)
+      if (matches.length !== 1 || !deps.metadata) throw new Error('SESSION_NOT_FOUND')
+      await saveSessionDisplayName(deps.metadata, projectHistory(matches[0].entry, matches[0].item), title, current)
+    }
+  }
   async function archiveSession(id: string, canContinue = () => true): Promise<void> {
     const owns = captureOwnership(id)
     const requireCurrent = () => { if (!canContinue() || !owns()) throw new Error('STALE_SESSION_ATTEMPT') }

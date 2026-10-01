@@ -6,6 +6,7 @@ import type {
   UnifiedSession,
 } from '@/types/unifiedSession'
 import { normalizePath } from '@/utils/path'
+import { saveSessionDisplayName, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
 
 const ACTIVE_PREFIX = 'legacy-tab:'
 const HISTORY_PREFIX = 'legacy-history:'
@@ -47,6 +48,7 @@ export interface LegacyClaudeAdapterDeps {
   store: LegacyClaudeStorePort
   runtime: LegacyClaudeRuntimePort
   projectPaths(): string[]
+  metadata?: SessionMetadataPort
   /** Freeze the caller's project mutation barrier across history checks. */
   captureProjectAdmission?(projectPath: string): () => boolean
 }
@@ -131,6 +133,11 @@ function requireClaude(input: { cli: string }): void {
 
 export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): SessionAdapter {
   const { store, runtime } = deps
+  function tabDisplayIdentity(tab: TerminalTab) {
+    const row = projectActiveTab(tab)
+    return tab.sessionId ? { ...row, id: historyId(tab.projectPath, tab.sessionId), adapterSessionId: tab.sessionId } : row
+  }
+  function projectActive(tab: TerminalTab) { return withSessionDisplayName(projectActiveTab(tab), deps.metadata, tabDisplayIdentity(tab)) }
   const resumes = new Map<string, { promise: Promise<UnifiedSession>; owners: Set<() => boolean> }>()
 
   function requireTab(id: string): TerminalTab {
@@ -168,10 +175,10 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
       )
       const archived = new Set(store.getArchivedSessions(projectPath))
 
-      sessions.push(...tabs.map(projectActiveTab))
+      sessions.push(...tabs.map(projectActive))
       for (const history of store.getCatalogHistoryFor(projectPath)) {
         if (claimed.has(history.sessionId)) continue
-        sessions.push({ ...projectHistorySession(projectPath, history), archived: archived.has(history.sessionId) })
+        sessions.push({ ...withSessionDisplayName(projectHistorySession(projectPath, history), deps.metadata), archived: archived.has(history.sessionId) })
       }
     }
 
@@ -195,7 +202,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
       store.removeTab(tabId)
       throw failure
     }
-    return projectActiveTab(requireTab(activeId(tabId)))
+    return projectActive(requireTab(activeId(tabId)))
   }
 
   function resumeSession(input: ResumeUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
@@ -234,13 +241,13 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     )
     if (existing) {
       store.setActiveTab(existing.tabId)
-      return projectActiveTab(existing)
+      return projectActive(existing)
     }
 
     if (store.loadHistoryFor) await verifyHistory(input, false)
     if (!canAdmit()) throw new Error('RESTORE_CANCELLED')
     const admitted = [...store.tabs.values()].find(tab => isLegacyClaudeTab(tab) && tab.sessionId === nativeSessionId && sameProjectIdentity(tab.projectPath, input.projectPath))
-    if (admitted) { store.setActiveTab(admitted.tabId); return projectActiveTab(admitted) }
+    if (admitted) { store.setActiveTab(admitted.tabId); return projectActive(admitted) }
     const tabId = store.createTab(input.projectPath, {
       sessionId: nativeSessionId,
       name: input.title,
@@ -252,11 +259,14 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
       store.removeTab(tabId)
       throw failure
     }
-    return projectActiveTab(requireTab(activeId(tabId)))
+    return projectActive(requireTab(activeId(tabId)))
   }
 
   function captureOwnership(id: string): () => boolean {
-    if (!id.startsWith(ACTIVE_PREFIX)) return () => true
+    if (!id.startsWith(ACTIVE_PREFIX)) {
+      const history = parseHistoryId(id)
+      return () => store.getCatalogHistoryFor(history.projectPath).some(row => row.sessionId === history.sessionId)
+    }
     const tab = requireTab(id)
     const generation = tab.ptyGeneration ?? 0
     const ptyId = tab.ptyId
@@ -278,7 +288,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     if (!canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     const tab = requireTab(id)
     await runtime.restartTab(tab.tabId)
-    return projectActiveTab(requireTab(id))
+    return projectActive(requireTab(id))
   }
 
   async function closeSession(id: string, canContinue = () => true): Promise<void> {
@@ -290,14 +300,24 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     await store.closeTab(tab.tabId)
   }
 
-  async function renameSession(id: string, title: string): Promise<void> {
+  async function renameSession(id: string, title: string, canContinue = () => true): Promise<void> {
     const value = title.trim()
     if (!value || value.includes('\0')) throw new Error('SESSION_TITLE_REQUIRED')
-    const tab = requireTab(id)
     const owns = captureOwnership(id)
-    await runtime.renameTab(tab.tabId, value)
-    if (!owns()) throw new Error('STALE_SESSION_ATTEMPT')
-    store.updateTabName(tab.tabId, value)
+    const current = () => owns() && canContinue()
+    if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+    if (id.startsWith(ACTIVE_PREFIX)) {
+      const tab = requireTab(id)
+      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current)
+      if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+      // Desk row rename is display metadata, never a command injected into CLI input.
+      store.updateTabName(tab.tabId, value)
+    } else {
+      const history = parseHistoryId(id)
+      const row = store.getCatalogHistoryFor(history.projectPath).find(row => row.sessionId === history.sessionId)
+      if (!row || !deps.metadata) throw new Error('SESSION_NOT_FOUND')
+      await saveSessionDisplayName(deps.metadata, projectHistorySession(history.projectPath, row), value, current)
+    }
   }
 
   async function archiveSession(id: string, canContinue = () => true): Promise<void> {

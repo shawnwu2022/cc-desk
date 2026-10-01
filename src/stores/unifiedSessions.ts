@@ -555,7 +555,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'saving' } : row)
     return enqueue(id, () => {
       if (renameOwners.get(id) !== owner || !ownsRename(owner, sessions.value.find(row => row.id === id))) throw new Error('STALE_SESSION_ATTEMPT')
-      return adapter.renameSession(id, title)
+      return adapter.renameSession(id, title, () => renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id)))
     }, () => refresh(session.projectKey)).finally(() => {
       const remaining = (pendingRenames.get(id) ?? 1) - 1
       if (remaining) pendingRenames.set(id, remaining)

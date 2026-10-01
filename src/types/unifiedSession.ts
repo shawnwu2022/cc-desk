@@ -125,7 +125,7 @@ export interface SessionAdapter {
   stopSession(id: string): Promise<void>
   restartSession(id: string, canContinue?: () => boolean): Promise<UnifiedSession>
   closeSession(id: string, canContinue?: () => boolean): Promise<void>
-  renameSession(id: string, title: string): Promise<void>
+  renameSession(id: string, title: string, canContinue?: () => boolean): Promise<void>
   archiveSession(id: string, canContinue?: () => boolean): Promise<void>
   restoreArchivedSession(id: string): Promise<void>
   /** Recheck absence without deleting CLI history files. */
