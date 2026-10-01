@@ -89,54 +89,77 @@ comparison. Windows WebView2, macOS/WebKit and Linux native WebView acceptance
 remain separate. No screen-reader, real GPU or real Claude/Codex certification is
 implied by this harness.
 
-## Current evidence: first CI render reviewed, corrected rerender pending
+## Current evidence: baselines accepted; final no-update gate pending
 
-The first genuine Linux Chromium run was
-[Actions 36839148817](https://github.com/shawnwu2022/cc-desk/actions/runs/36839148817),
-source head `397b3bfc7e9d954973aa664f83d9f30bf04de937`, tested PR merge
-`b8aee85adac4f50b0e59e907428c74e8209a7e04`. It ran all 137 cases: 123 passed,
-13 failed for absent baselines, and the transformed-tooltip geometry case failed
-because its right edge was 1713px instead of at most 1012px. The separate candidate
-capture produced all 13 PNGs; artifact `11151230321` records Ubuntu 24.04, Node
-22.23.3, Playwright 1.63.0 and Chrome for Testing 153.0.8010.12.
+All 13 Linux Chromium baseline PNGs in `tests/visual/__screenshots__/` were copied
+byte-for-byte from artifact **11153226557**, after two independent reviews opened
+and inspected every actual image. Their dimensions and SHA256 values match the
+[approval manifest](../tests/visual/__screenshots__/approval-manifest.json).
 
-All 13 actual images were inspected and their dimensions/SHA256 checked against
-the artifact manifest. No baseline is approved or copied into the repository.
-The tooltip image is rejected because its description is clipped out. Mixed,
-hover and dark workspace images retain an unrelated project-toggle tooltip;
-1024px empty/menu scenes accidentally hover the window Close control. The
-projects sample used CSS screenshot scale and is only 1280×720, so it is rejected
-as the promised DPR 1.5 raster. The new-session dialog hides its Create action
-below the initially visible scrolling body. The five other candidates have no
-additional demonstrated pixel defect but remain pending the corrected rerender.
+Accepted capture provenance:
 
-Corrections under review portal passive tooltips to the document body above
-modal backdrops, preserving the trigger's focus and description relationship.
-Snapshot setup now moves focus to the fixture main area and the pointer to its
-lower-right gutter, preserving intentional menu/dialog/tooltip focus and row
-hover. Screenshot scale is explicitly `device`, with zero allowed differing
-pixels unchanged. New-session Create uses the shared fixed footer with native
-form ownership; repeated synchronous submissions are rejected after closure.
+- [Actions run 36845204924](https://github.com/shawnwu2022/cc-desk/actions/runs/36845204924)
+- Source head `d90ec90db9f2a27f1e77f747fecd62c6f716d233`
+- Tested PR merge `2ce9e19545318a35a79094c7aea179ddb434fcd0`
+- Artifact ZIP SHA256 `8559c2be34ebc3fcd8f1b33a2381ceca331873faadc20cb626ba753dbbb0ddd9`
+- Ubuntu 24.04 Linux Chromium, Node 22.23.3, Playwright 1.63.0,
+  Chrome for Testing 153.0.8010.12
 
-Component regressions cover clipping escape, modal focus/Escape ownership,
-setup-tooltip cleanup, footer form association, invalid-argument retry and
-single submission. The rendered suite still has 13 screenshots and 120 geometry
-cases, now with five interaction cases (138 total); the added case checks the
-new-session action at 1024×640 after scrolling and real Enter submission. The
-corrected browser run and all resulting PNGs must be inspected before baseline
-acceptance, followed by a full no-update run. These component checks do not prove
-corrected pixels, native Windows scaling, screen-reader behavior or real CLI IO.
+That full browser run executed **138 cases: 120 geometry and five interaction
+cases passed; 13 screenshot cases failed solely because baselines were absent**.
+The separate capture then passed 13/13. The original missing-baseline failures
+remain genuine RED evidence; capture success and pixel approval do not turn that
+verification into PASS. The **full no-update screenshot/geometry/interaction gate
+against the committed accepted baselines is still pending**.
+
+### Rendered review and corrections
+
+The first run,
+[36839148817](https://github.com/shawnwu2022/cc-desk/actions/runs/36839148817),
+used source `397b3bfc7e9d954973aa664f83d9f30bf04de937` and merge
+`b8aee85adac4f50b0e59e907428c74e8209a7e04`. Its 137 cases had 123 passes,
+13 missing-baseline failures and one real transformed-tooltip geometry failure:
+right edge 1713px instead of at most 1012px. Actual pixel review also rejected
+stale project-toggle tooltips, accidental Close-button hover, the undersized
+projects raster and a Create action below the initially visible dialog body.
+
+Production fixes portal passive tooltips to the document body above modal
+backdrops while retaining trigger focus, hover/Escape and description semantics.
+New-session Create uses the shared non-shrinking footer and native form ownership;
+repeated synchronous submits are rejected after closure. The added rendered case
+checks the action at 1024×640 after scrolling and real Enter submission.
+
+The next capture,
+[36842796908](https://github.com/shawnwu2022/cc-desk/actions/runs/36842796908),
+passed all 125 geometry/interaction cases but exposed an unintended whole-main
+focus outline in four PNGs. Fixture setup now clears the prior control through
+real focus/blur events and restores the main element's previous tabindex. It
+preserves intentional menu/dialog/tooltip focus and row hover, with no CSS outline
+suppression or masks. Pointer setup uses the empty main gutter. Screenshot scale
+is explicitly `device`; the projects sample is now 1920×1080 for CSS 1280×720 at
+DPR 1.5, while zero differing pixels and all viewport/DPR cases remain unchanged.
+
+In the accepted final capture, all nine previously acceptable images were
+byte-identical and the four rejected outline images were corrected. Every final
+PNG was reopened and approved; no remaining demonstrated pixel defect was found.
+The original artifact's candidate manifest remains unmodified with `approved:
+false`; the repository's separate approval manifest records the subsequent review.
+
+Linux Chromium baselines do not certify Windows WebView2 or native 150% desktop
+scaling. Windows manual acceptance, screen-reader behavior and D20 real CLI IO
+certification remain pending/separate. No merge, public release or updater
+promotion is authorized by this evidence.
 
 Local browser attempts remain blocked: official browser downloads returned HTML,
 system Chromium failed its process-singleton socket with `Operation not permitted`
 including the authorized escalated retry, and the managed cloud browser rejected
 the local URL with `ERR_BLOCKED_BY_CLIENT`. No retry or bypass was attempted for
-these corrections. The parent owns CI rerendering and baseline acceptance.
+these corrections; actual rendered evidence was obtained through the CI runs above.
 
 
 ## Prepared final workflow and evidence review
 
-`.github/workflows/unified-visual.yml` runs on the eventual final PR into
+`.github/workflows/unified-visual.yml` runs on the final PR into
 `feat/native-cli-finalization` (or `main`), with no development push trigger. It uses
 Ubuntu 24.04, Node 22, `npm ci`, the lockfile's Playwright 1.63.0 and official Chromium
 installation with system dependencies, plus Noto core/CJK/emoji fonts. Browser and
@@ -164,8 +187,9 @@ and supplies the head SHA separately. Opening the eventual draft also starts the
 existing ordinary CI and Windows package gate; the latter now includes unified UX
 source/configuration/test paths in its PR filter, with its push filter/jobs unchanged. The original plan required pixel freeze first, so with rendering
 blocked locally the owner approved the final draft/CI sequence on 2026-10-01, after
-independent review. The parent owns those external actions. No PR or workflow has
-been created/run by Task25 local preparation, and pixels remain unaccepted.
+independent review. The parent owns those external actions. Task25 local preparation itself did not
+create a PR or run a workflow. The later CI captures and baseline acceptance are
+recorded above; the final no-update gate remains pending.
 
 | Snapshot | CSS viewport | DPR | Expected raster |
 |---|---|---|---|
@@ -183,9 +207,10 @@ been created/run by Task25 local preparation, and pixels remain unaccepted.
 | workspace-dark-gui-light-terminal | 1280×720 | 1 | 1280×720 |
 | tooltip-transformed-1024 | 1024×640 | 1 | 1024×640 |
 
-Every repository baseline above is still absent. The expected dimensions describe
-the corrected device-scale capture; the first projects candidate was only 1280×720.
-The first CI artifacts are unapproved evidence, not committed baselines. Windows WebView2/OS scaling and real CLI remain separate gates.
+All 13 repository baselines now match these dimensions and the accepted artifact
+hashes. The first projects candidate was only 1280×720 and was not accepted.
+A future full no-update run must validate the complete baseline inventory.
+Windows WebView2/OS scaling and real CLI remain separate gates.
 
 ### Final review: pipeline failure propagation
 

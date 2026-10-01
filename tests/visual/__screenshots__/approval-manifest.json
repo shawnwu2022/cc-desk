@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "approved": true,
+  "approvedFor": "Linux Chromium screenshot baselines",
+  "reviewDate": "2026-10-01",
+  "actualPixelsInspected": 13,
+  "independentPixelReviewCount": 2,
+  "rejectedImages": 0,
+  "sourceHead": "d90ec90db9f2a27f1e77f747fecd62c6f716d233",
+  "testedCommit": "2ce9e19545318a35a79094c7aea179ddb434fcd0",
+  "workflowRunId": "36845204924",
+  "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/36845204924",
+  "artifactId": "11153226557",
+  "artifactZipSha256": "8559c2be34ebc3fcd8f1b33a2381ceca331873faadc20cb626ba753dbbb0ddd9",
+  "environment": {
+    "node": "v22.23.3",
+    "playwright": "1.63.0",
+    "browser": "Google Chrome for Testing 153.0.8010.12",
+    "platform": "ubuntu-24.04-linux-chromium"
+  },
+  "verificationBeforeBaselineAcceptance": {
+    "total": 138,
+    "geometryPassed": 120,
+    "interactionPassed": 5,
+    "missingBaselineFailures": 13,
+    "otherFailures": 0,
+    "fullVerification": "failed-missing-baselines",
+    "candidateCapturePassed": 13
+  },
+  "finalNoUpdateVerification": {
+    "status": "pending",
+    "required": "Full screenshot, geometry and interaction run with updateSnapshots none and maxDiffPixels 0 after this baseline inventory is committed"
+  },
+  "acceptanceLimits": [
+    "Exact inspected Linux Chromium pixels and hashes only",
+    "Not Windows WebView2 or native OS scaling certification",
+    "Windows manual acceptance remains pending",
+    "D20 real CLI certification remains pending",
+    "Not screen-reader certification or release approval"
+  ],
+  "entries": [
+    {
+      "name": "archived-sessions.png",
+      "width": 1366,
+      "height": 768,
+      "sha256": "b12677e7d3a81973f58e34b43ae0eabfed55e7bc4ce990faf5178e94beeaa7c2",
+      "bytes": 44855,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "confirm-stop-and-archive.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "89515ecad7352d6a4787a36a3b2b3bdff8b8e94df029db023926ae89fcf32eb2",
+      "bytes": 55118,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "new-session-dialog.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "860bf64ad66e1a13b6961105f5dc837d407d587c2496b6a0fe118bd42a9dcfd5",
+      "bytes": 64616,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "projects-150-percent.png",
+      "width": 1920,
+      "height": 1080,
+      "sha256": "6856d244952f044beca763d1bd93c61e8f0a092cbd74eab4f394c9b5835d7017",
+      "bytes": 59941,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "settings-launch-configurations.png",
+      "width": 1280,
+      "height": 720,
+      "sha256": "b7f95a8d77ea9c1a9a199108df3bae6ef723666e4bb0c08baf5396207a303d1f",
+      "bytes": 51184,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "settings-terminal-light-gui-dark-terminal.png",
+      "width": 1440,
+      "height": 900,
+      "sha256": "5356a79a6988f0e6ced72c961dd5ef28cc639f0aed61b71846ee5d952f4a84b2",
+      "bytes": 84505,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "tooltip-transformed-1024.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "8a97e74b687dd55ebee851f9f52a7de0792f08fa24a7939ca62538816b4ec6a4",
+      "bytes": 47725,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "workspace-dark-gui-light-terminal.png",
+      "width": 1280,
+      "height": 720,
+      "sha256": "60b9bf0058084389fee0572c0578157cabf65b5b2125d038f86f0023b32b5361",
+      "bytes": 55884,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "workspace-empty-1024-zh.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "739cf304bee066610e4b5d7d80063840b9d8e0392d4cb557b10db39906379550",
+      "bytes": 24168,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "workspace-hover-action-1366-en.png",
+      "width": 1366,
+      "height": 768,
+      "sha256": "fb3fec6f8e57aa62c6c1046473a48e5ce6e0a1374672b10b33ebf6b085ee39a3",
+      "bytes": 57504,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "workspace-menu-1024-en.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "cf69ff4ef160c08a7353f6c36eac9190b436ee590052f8e94f15f10577b95fa5",
+      "bytes": 52287,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "workspace-mixed-1366-zh.png",
+      "width": 1366,
+      "height": 768,
+      "sha256": "65da4384a2ad3d6874e65400b09dc113eabb76c9c8a3e35882e4dda239d4a266",
+      "bytes": 56198,
+      "reviewVerdict": "approve"
+    },
+    {
+      "name": "workspace-resources-overlay-1024.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "251500b610bfb19683ecb8cbbd4b13111b3be5d73156010639afc231d6d53ca1",
+      "bytes": 66594,
+      "reviewVerdict": "approve"
+    }
+  ]
+}
