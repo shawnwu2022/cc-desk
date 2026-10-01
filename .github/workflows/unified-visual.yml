@@ -67,7 +67,12 @@ jobs:
           const directory = 'tests/visual/__screenshots__'
           const actual = existsSync(directory) ? readdirSync(directory).filter(name => name.endsWith('.png')).sort() : []
           const spec = readFileSync('tests/visual/unified-workspace.spec.ts', 'utf8')
-          const expected = [...spec.matchAll(/name: '([^']+)'/g)].map(match => match[1] + '.png').sort()
+          const declarations = [...spec.matchAll(/^const snapshots = \[\r?\n([\s\S]*?)^\] as const\r?$/gm)]
+          if (declarations.length !== 1) throw new Error('Snapshot inventory declaration missing or ambiguous')
+          const rows = declarations[0][1].split(/\r?\n/).filter(line => line.trim())
+          const names = rows.map(row => row.match(/^\s*\{ name: '([a-z0-9-]+)', scenario: '[a-z0-9-]+', width: \d+, height: \d+, locale: '(?:zh|en)'(?:, (?:dpr: \d+(?:\.\d+)?|(?:density|gui|terminal): '[a-z0-9-]+'))* \},\s*$/)?.[1])
+          if (names.some(name => !name) || new Set(names).size !== names.length) throw new Error('Malformed or duplicate snapshot inventory row')
+          const expected = names.map(name => name + '.png').sort()
           if (expected.length !== Number(process.env.EXPECTED_BASELINE_COUNT)) throw new Error('Snapshot inventory changed; review workflow expectations')
           if (actual.length && JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('Partial or unexpected baseline inventory')
           appendFileSync(process.env.GITHUB_OUTPUT, `absent=${actual.length === 0}\n`)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -57,6 +57,44 @@ describe.each(lineEndings)('Final visual workflow policy ($name)', ({ value: lin
     const config = readFileSync('playwright.config.ts', 'utf8')
     expect(config).toContain("updateSnapshots: 'none'")
     expect(config).toContain('maxDiffPixels: 0')
+  })
+  // 执行工作流中的真实 inventory gate；无关 accessible name 不能变成快照文件。
+  it.each(['absent', 'complete', 'partial', 'unexpected', 'duplicate', 'missing-row', 'missing-declaration'])('Inventory_DeclaredRows_002 %s', inventory => {
+    const step = workflow(lineEnding).split('      - name: ').find(block => block.startsWith('Check baseline inventory'))!
+    const gate = step.match(/<<'NODE'\n([\s\S]*?)\n\s*NODE/)?.[1]
+    expect(gate).toBeDefined()
+    const names = ['workspace-empty-1024-zh', 'workspace-mixed-1366-zh', 'workspace-hover-action-1366-en',
+      'workspace-resources-overlay-1024', 'projects-150-percent', 'new-session-dialog', 'archived-sessions',
+      'settings-terminal-light-gui-dark-terminal', 'settings-launch-configurations', 'confirm-stop-and-archive',
+      'workspace-menu-1024-en', 'workspace-dark-gui-light-terminal', 'tooltip-transformed-1024']
+    let spec = readFileSync('tests/visual/unified-workspace.spec.ts', 'utf8')
+      + "\npage.getByRole('textbox', { name: 'Unrelated accessible name', exact: true })\n"
+    if (inventory === 'duplicate') spec = spec.replace("name: 'workspace-empty-1024-zh'", "name: 'workspace-mixed-1366-zh'")
+    if (inventory === 'missing-row') spec = spec.replace(/^  \{ name: 'workspace-empty-1024-zh'.*\r?\n/m, '')
+    if (inventory === 'missing-declaration') spec = spec.replace('const snapshots = [', 'const unrelated = [')
+    const directory = mkdtempSync(join(tmpdir(), 'visual-inventory-'))
+    const output = join(directory, 'github-output')
+    const visual = join(directory, 'tests', 'visual')
+    mkdirSync(visual, { recursive: true })
+    writeFileSync(join(visual, 'unified-workspace.spec.ts'), spec.replace(/\r?\n/g, lineEnding))
+    if (['complete', 'partial', 'unexpected'].includes(inventory)) {
+      const snapshots = join(visual, '__screenshots__'); mkdirSync(snapshots)
+      const files = inventory === 'partial' ? names.slice(1) : inventory === 'unexpected' ? ['unexpected', ...names.slice(1)] : names
+      for (const name of files) writeFileSync(join(snapshots, `${name}.png`), '')
+    }
+    try {
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', gate!], {
+        cwd: directory, encoding: 'utf8', env: { ...process.env, EXPECTED_BASELINE_COUNT: '13', GITHUB_OUTPUT: output },
+      })
+      expect(result.error).toBeUndefined()
+      if (inventory === 'absent' || inventory === 'complete') {
+        expect(result.status, result.stderr).toBe(0)
+        expect(readFileSync(output, 'utf8')).toBe(`absent=${inventory === 'absent'}\n`)
+      } else {
+        expect(result.status, `${inventory} must fail closed`).not.toBe(0)
+        expect(existsSync(output), 'rejected inventory must not publish admission output').toBe(false)
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }) }
   })
   // 执行实际 run 脚本的管道，失败 producer 必须穿透 tee；不启动浏览器。
   it.each(['Verify committed baselines', 'Capture candidates'])('Pipeline_Failure_001 %s', stepName => {
