@@ -683,3 +683,8 @@ Rules:
 - Source `444c2df`, tested merge `e7eebee`: ordinary CI `36861864297` and D13 `36861864079` passed. Windows package `36861864197` must reach a terminal result before the next ref update, to avoid cancelling its installer evidence.
 - Visual `36861864182`: 138 passed, 8 expected screenshot differences; all 133 geometry/interaction checks pass. Artifact `11162500482` ZIP SHA256 `2a3007d155f4fbc4f3ead6e5bf1d3d950367d0cb5ee37bee889368849b84b2c7` verified.
 - Two reviewers inspected all eight actual/expected/diff sets and accepted the exact actual bytes. The other five baselines are unchanged and passed comparison. No unexplained pixel differences, image editing, masking or relaxed tolerances. Updated 13-file inventory retains per-entry provenance; final 146-case no-update verification is pending.
+
+### Final toolchain drift repair
+
+- Source `3f2db52`, merge `f4af106`: visual `36863916709` passed all 146 cases with no snapshot updates; frontend and all Rust tests passed. CI `36863916608` and Windows package `36863916661` failed strict Clippy after floating stable installed Rust 1.99.0, deprecating two existing `Atomic::fetch_update` calls. Both jobs reached terminal failure before a new ref update.
+- The earlier source `444c2df` had passed the same lint/package gates with Rust 1.98.1. The narrow repair pins all three ordinary-CI/Windows-format/package toolchain selections to the verified 1.98.1. Strict lint, declared Rust 1.89 MSRV and atomic runtime code are unchanged. Exact-version action support and its compiler constant were checked against the official action source. The final pinned-toolchain run remains pending.

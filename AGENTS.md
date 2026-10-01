@@ -478,3 +478,5 @@ npm run tauri:build        # 生产构建
 - Profile and project mutations share one backend workspace CAS revision. Before the first safe-default profile creation write, refresh a previously loaded profile cache; never replay a failed or uncertain mutation automatically.
 - Explicit Close selects an available remaining open session only while its original selection intent still owns the handoff; closing the final session returns to guidance. Stop/CLI exit retains ended scrollback. Failed runtime dispatch acknowledges only its claimed request sequence.
 - This user-authorized repair prepares version 0.18.0 consistently across npm/Cargo/Tauri and test installer naming; it does not authorize Release/tag/updater publication.
+
+- The final ordinary CI and Windows test-package workflows pin Rust 1.98.1, the compiler already verified for 0.18.0, after floating stable drifted to 1.99.0 mid-batch. Keep strict Clippy `-D warnings` and the declared 1.89 MSRV; toolchain upgrades require their own validation. No atomic runtime behavior is changed for this build reproducibility repair.
