@@ -47,7 +47,8 @@ Rules:
 - Task 19: complete at `25cc65298caf2bf7c61fb0434edfa7eb815ddc19`
 - Task 20: complete at `c8887dd2645a03546f7f056046ea34e3e35ef502`
 - Task 21: complete at `78263be9d73644b4faf55b4dd770e33da8de098e`
-- Next task: Task 22 — responsive accessibility and localization
+- Task 22: complete at `426b1428bf1dce82e5863ea38010cfb69aa4d4ae`
+- Next task: Task 23 — deterministic rendered visual fixture
 - Cloud checkout: September 30, 2026. No desktop work or real-CLI certification is implied
 
 ## Task checkpoints
@@ -586,3 +587,23 @@ Rules:
 - Longmenu/dialogfooter text wraps within bounds with originalcontrolsize variants; exactlocale key/duplicate checks and reducedmotion/keyboard/icon contracts covered
 - Final86exact+typecheck258affected13files;9source manifest/diff checks pass. Independent spec/quality approval with3 probes (newdestinationfocus,replacementmodal,tooltipscroll/disposal) passing, noactionablefinding
 - Actualrenderedbrowser/Windows scaling/platform/assistivetechnology/CLI/Rust NOTRUN;23visual fixture owns renderedevidence. Nofullsuite/CI/PR/package/release; atomicpublication pendingreadback
+
+### Verified Task 22 checkpoint
+
+- Remote commit `426b1428bf1dce82e5863ea38010cfb69aa4d4ae`; exact staged/fetched tree and local/remote SHA match; working tree clean before readback
+-86exact/typecheck258affected; independent3focus/tooltip probes and scoped approval
+- Realrenderedgeometry/WindowsDPI/platform/CLI/Rust NOTRUN; noCI/PR/package/release; next23
+
+### Task 23 browser gate ruling — BLOCKED_VISUAL
+
+- Official Playwright Chromium/headless-shell downloads returned corrupt ZIPs; existing Chromium151 launch failed socket EPERM including approved escalation; documented cloudbrowser localhost preview returned ERR_BLOCKED_BY_CLIENT. No restriction bypass or desktop switch
+- Parent ruling: independently review/checkpoint safe23 fixture/config/isolation with explicit BLOCKED_VISUAL, never mark accepted screenshots complete. Then local24stress may proceed because independent of visual acceptance. No earlyCI or newenvironment
+- Final25 visualjob may be prepared using original finalCI intent, but trigger deferred for parent to share material blocker/sequence. First rendered screenshots must be inspected before visualfreeze; acceptedbaseline corrective commit/rerun may be necessary. No invented PNGbaselines, missingbaselineRED or visualPASS
+
+## Task 23 — Visual infrastructure checkpoint, BLOCKED_VISUAL
+
+- Pinned devonlyPlaywright1.63.0 fixture graph renders realproductioncomponents with fakeDTO/inertterminalpreview/hostcallsblocked; explicitserve+visualmode+flag gate, normaldev/production excludes fixture
+-10required+3supplement snapshotcases,120geometrymatrix+4interactioncases authored;137collected only. No13PNGs, missingbaselineRED, pixelreview or no-diffPASS exists
+- Officialbrowserdownloads corrupt, installedChromiumsocketEPERM, cloudCUAlocalhostblocked. No restrictionbypass/desktop/newenvironment/earlyCI
+- Safe256affected+15isolatedfixture tests/typecheck,productionbuildexclusion andHTTPisolation pass. Review repaired live-nth shrinkingselector and overflow-beforefocus via sharedsetuphelpers/realfixtureDOMREDGREEN; independently4focusedhelpercases pass, conditionalinfra spec/quality approval
+- Parent permits atomic reviewedinfra checkpoint while keeping23BLOCKED_VISUAL, then independent24stress. Final25renderedjob trigger deferred for parent; firstpixels precede visualfreeze and may require correction/rerun. Rust/CLI/platform also NOTRUN

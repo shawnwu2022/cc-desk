@@ -4,6 +4,7 @@ import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 import pkg from './package.json'
 import { manualChunkName } from './build/manualChunks'
+import { visualFixturePlugin } from './build/visualFixture'
 
 let buildCommit = 'unknown'
 try {
@@ -11,8 +12,8 @@ try {
   if (/^[0-9a-f]{40}$/.test(value)) buildCommit = value
 } catch { /* Source archives have no Git identity; do not invent one. */ }
 // https://vitejs.dev/config/
-export default defineConfig({
-  plugins: [vue()],
+export default defineConfig(({ command, mode }) => ({
+  plugins: [visualFixturePlugin(__dirname, command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'), vue()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')
@@ -26,6 +27,7 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     include: ['tests/**/*.test.ts'],
+    exclude: ['tests/visual/**'],
     setupFiles: ['tests/test-setup.ts'],
   },
   // Vite options tailored for Tauri development
@@ -50,4 +52,4 @@ export default defineConfig({
       }
     }
   }
-})
+}))
