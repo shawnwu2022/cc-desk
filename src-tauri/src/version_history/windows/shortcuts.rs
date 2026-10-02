@@ -1183,10 +1183,70 @@ fn apply_descriptor(file: &File, bytes: &[u8]) -> io::Result<()> {
         .ok()
     }
     .map_err(win_error)?;
-    if capture_file_descriptor(handle(file))? != bytes {
+    let actual = capture_file_descriptor(handle(file))?;
+    if actual != bytes {
+        #[cfg(test)]
+        probe_descriptor_difference("shortcut", bytes, &actual);
         return Err(blocked("shortcut owner/group/DACL readback changed"));
     }
     Ok(())
+}
+
+/// Bounded diagnostics for disposable Windows tests. Never emit paths, SIDs,
+/// ACE contents, or raw descriptors; the exact production comparison is intact.
+#[cfg(test)]
+pub(crate) fn probe_descriptor_difference(label: &'static str, expected: &[u8], actual: &[u8]) {
+    fn offset(bytes: &[u8], field: usize) -> Option<usize> {
+        Some(u32::from_le_bytes(bytes.get(field..field + 4)?.try_into().ok()?) as usize)
+    }
+    fn component(bytes: &[u8], field: usize) -> Option<&[u8]> {
+        let start = offset(bytes, field)?;
+        if start == 0 {
+            return Some(&[]);
+        }
+        let header = bytes.get(start..start.checked_add(8)?)?;
+        let length = if field >= 12 {
+            u16::from_le_bytes([header[2], header[3]]) as usize
+        } else {
+            8 + header[1] as usize * 4
+        };
+        bytes.get(start..start.checked_add(length)?)
+    }
+    fn control(bytes: &[u8]) -> Option<u16> {
+        Some(u16::from_le_bytes(bytes.get(2..4)?.try_into().ok()?))
+    }
+    fn acl_shape(bytes: &[u8]) -> Option<(u8, u16, u16)> {
+        let acl = component(bytes, 16)?;
+        let header = acl.get(..8)?;
+        Some((
+            header[0],
+            u16::from_le_bytes([header[2], header[3]]),
+            u16::from_le_bytes([header[4], header[5]]),
+        ))
+    }
+    eprintln!(
+        "security-readback {label}: length={:?}; first_difference={:?}; control={:x?}; offsets={:?}; owner_equal={}; group_equal={}; sacl_equal={}; dacl_equal={}; acl_revision_size_count={:?}",
+        (expected.len(), actual.len()),
+        expected.iter().zip(actual).position(|(left, right)| left != right)
+            .or_else(|| (expected.len() != actual.len()).then_some(expected.len().min(actual.len()))),
+        (control(expected), control(actual)),
+        [4, 8, 12, 16].map(|field| (offset(expected, field), offset(actual, field))),
+        component(expected, 4) == component(actual, 4),
+        component(expected, 8) == component(actual, 8),
+        component(expected, 12) == component(actual, 12),
+        component(expected, 16) == component(actual, 16),
+        (acl_shape(expected), acl_shape(actual)),
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn probe_capture_descriptor(file: &File) -> io::Result<Vec<u8>> {
+    capture_file_descriptor(handle(file))
+}
+
+#[cfg(test)]
+pub(crate) fn probe_apply_descriptor(file: &File, bytes: &[u8]) -> io::Result<()> {
+    apply_descriptor(file, bytes)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

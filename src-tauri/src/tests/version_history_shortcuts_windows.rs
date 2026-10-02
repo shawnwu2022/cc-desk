@@ -1022,3 +1022,56 @@ fn HistoryShortcuts_AttributeCapacity_013() {
     let current = HeldProductShortcuts::capture_at(destinations).unwrap();
     assert_eq!(current.state(ShortcutSlot::Desktop), &before);
 }
+
+// 检查生产描述符设置器在独立 NTFS 文件上精确恢复继承与保护权限，仅输出有界差异。
+#[test]
+fn HistorySecurity_ReadbackProbe_001() {
+    use crate::version_history::windows::shortcuts::{
+        probe_apply_descriptor, probe_capture_descriptor, probe_descriptor_difference,
+    };
+    use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt};
+    use windows::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+
+    let temp = tempfile::tempdir().unwrap();
+    let user = CurrentUser::capture().unwrap();
+    let parent = Directory::open_absolute(temp.path()).unwrap();
+    let root = Arc::new(PrivateDirectory::create_new(parent, name("probe"), &user).unwrap());
+    root.verify(&user).unwrap();
+    let mut outcomes = Vec::new();
+    for case in ["inherited", "protected"] {
+        let path = temp.path().join("probe").join(case);
+        std::fs::write(&path, b"disposable descriptor readback probe").unwrap();
+        if case == "protected" {
+            set_dacl(
+                &path,
+                &format!("D:P(A;;FA;;;{})(A;;FR;;;SY)", user.sid_text()),
+            );
+        }
+        let expected = probe_capture_descriptor(&std::fs::File::open(&path).unwrap()).unwrap();
+        set_dacl(&path, &format!("D:P(A;;FA;;;{})", user.sid_text()));
+        let file = OpenOptions::new()
+            .access_mode(FILE_ALL_ACCESS.0)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        let before = probe_capture_descriptor(&file).unwrap();
+        assert_ne!(before, expected, "probe must restore a changed descriptor");
+        let restored = probe_apply_descriptor(&file, &expected);
+        let actual = probe_capture_descriptor(&file).unwrap();
+        probe_descriptor_difference(case, &expected, &actual);
+        outcomes.push((case, restored.is_ok(), actual == expected));
+        drop(file);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"disposable descriptor readback probe",
+            "descriptor restoration must leave file contents intact"
+        );
+    }
+    root.verify(&user).unwrap();
+    assert!(
+        outcomes
+            .iter()
+            .all(|(_, restored, exact)| *restored && *exact),
+        "each descriptor must restore exactly; (case, setter_success, exact_readback)={outcomes:?}"
+    );
+}

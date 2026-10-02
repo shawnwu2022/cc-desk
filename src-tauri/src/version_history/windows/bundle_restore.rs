@@ -1480,6 +1480,13 @@ impl BundleRestoration {
         let after = entry_metadata(path, handle(file))?;
         if !matches!(&after.permissions, PermissionRecord::Windows { descriptor: actual, .. } if actual == descriptor)
         {
+            #[cfg(test)]
+            if let PermissionRecord::Windows {
+                descriptor: actual, ..
+            } = &after.permissions
+            {
+                super::super::shortcuts::probe_descriptor_difference("bundle", descriptor, actual);
+            }
             return Err(blocked("restored owner group or DACL differs"));
         }
         journal.applied(pending, &after)?;

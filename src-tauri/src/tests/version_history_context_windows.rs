@@ -2840,20 +2840,30 @@ fn HistoryContextWindows_DurableReadmission_035() {
                 );
             }
         });
-        assert!(copy
-            .rotate_context_root(
-                &mut context,
-                RootKind::Desk,
-                fixture.parent.clone(),
-                name("desk"),
-                fixture.quarantine.clone(),
-                name("durable-retained"),
-                &boundary,
-                &image,
-                &fixture.user,
-                &mut journal,
-            )
-            .is_err());
+        let rotation = copy.rotate_context_root(
+            &mut context,
+            RootKind::Desk,
+            fixture.parent.clone(),
+            name("desk"),
+            fixture.quarantine.clone(),
+            name("durable-retained"),
+            &boundary,
+            &image,
+            &fixture.user,
+            &mut journal,
+        );
+        eprintln!(
+            "HISTORY_DURABLE_ROTATION blocked_reader={} original={} quarantined={} error_kind={:?}",
+            block_readmission,
+            fixture.temp.path().join("desk").exists(),
+            fixture
+                .temp
+                .path()
+                .join("quarantine/durable-retained")
+                .exists(),
+            rotation.as_ref().err().map(std::io::Error::kind),
+        );
+        assert!(rotation.is_err());
         if block_readmission {
             assert!(context.verify_durable().is_err());
         } else {
@@ -2863,9 +2873,17 @@ fn HistoryContextWindows_DurableReadmission_035() {
         }
         reader.borrow_mut().take();
         let _failure = probe_copy_failure(CopyFault::AfterReverseMove);
-        assert!(copy
-            .reverse_context_root(&mut context, &boundary, &image, &fixture.user, &mut journal)
-            .is_err());
+        let reversed =
+            copy.reverse_context_root(&mut context, &boundary, &image, &fixture.user, &mut journal);
+        eprintln!(
+            "HISTORY_DURABLE_REVERSE blocked_reader={} original={} quarantined={} succeeded={} error_kind={:?}",
+            block_readmission,
+            fixture.temp.path().join("desk").exists(),
+            fixture.temp.path().join("quarantine/durable-retained").exists(),
+            reversed.is_ok(),
+            reversed.as_ref().err().map(std::io::Error::kind),
+        );
+        assert!(reversed.is_err());
         assert!(context.verify_durable().is_err());
         copy.reverse_context_root(&mut context, &boundary, &image, &fixture.user, &mut journal)
             .unwrap();

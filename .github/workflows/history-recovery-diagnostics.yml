@@ -1,0 +1,60 @@
+name: Historical recovery focused checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/history-recovery-diagnostics.yml'
+      - 'src-tauri/src/version_history/**'
+      - 'src-tauri/src/tests/version_history*'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  recovery:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+      - name: Prepare verified Windows runtime
+        id: runtime
+        working-directory: .
+        run: node scripts/prepare-conpty.mjs
+      - name: Record tested source
+        run: git rev-parse HEAD
+      - name: Verify exact filesystem security restoration
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_shortcuts_windows::HistorySecurity_ReadbackProbe_001 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath descriptor-probe.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path descriptor-probe.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected one exact descriptor test' }
+          exit $result
+      - name: Verify durable context readmission
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_context_windows::HistoryContextWindows_DurableReadmission_035 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath durable-readmission.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path durable-readmission.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected one exact readmission test' }
+          exit $result
+      - name: Verify separate journal and recovery namespaces
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_scope_context_windows::HistoryScopeContext_DurableRotation_001 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath scope-context.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path scope-context.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected one exact scope test' }
+          exit $result

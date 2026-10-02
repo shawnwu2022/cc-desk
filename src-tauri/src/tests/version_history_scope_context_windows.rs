@@ -129,14 +129,24 @@ fn HistoryScopeContext_DurableRotation_001() {
         )
         .unwrap(),
     );
-    let mut store = JournalStore::open_windows(fixture.recovery.clone()).unwrap();
+    // Journal artifacts have their own protected namespace. Copies and
+    // quarantined roots belong to the separate recovery-data namespace.
+    let records = Arc::new(
+        PrivateDirectory::create_new(
+            fixture.recovery.directory().clone(),
+            name("records"),
+            &fixture.user,
+        )
+        .unwrap(),
+    );
+    let mut store = JournalStore::open_windows(records.clone()).unwrap();
     store
         .initialize(
             binding(),
             CapacityPlan::for_effects(100, 100, 20, 4096).unwrap(),
         )
         .unwrap();
-    let leases = LeaseFiles::open(fixture.recovery.clone(), &fixture.user).unwrap();
+    let leases = LeaseFiles::open(records.clone(), &fixture.user).unwrap();
     let control = leases.acquire_control().unwrap();
     let exclusive = leases.acquire_exclusive(&control).unwrap();
     std::fs::write(fixture.temporary.path().join("image.exe"), b"fixture image").unwrap();
@@ -149,14 +159,7 @@ fn HistoryScopeContext_DurableRotation_001() {
     drop(file);
     let fence =
         ImageFence::acquire(fixture.home.clone(), name("image.exe"), &identity, &digest).unwrap();
-    let mut journal = ContextJournal::new(
-        &mut store,
-        fixture.recovery.clone(),
-        &exclusive,
-        binding(),
-        0,
-    )
-    .unwrap();
+    let mut journal = ContextJournal::new(&mut store, records, &exclusive, binding(), 0).unwrap();
     let mut copy = PrivateTreeCopy::new(copies, name("desk-copy"));
     copy.copy_from(context.tree(RootKind::Desk), &fixture.user, &mut journal)
         .unwrap();
