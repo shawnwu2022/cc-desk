@@ -190,6 +190,10 @@ pub(crate) struct Directory {
     volume_path: Vec<u16>,
     rename_access: bool,
 }
+// Directory sharing pins the ancestor object, not an immutable child namespace.
+// Native rename opens its destination directory with FILE_WRITE_DATA. Permit
+// that open while continuing to exclude DELETE on every retained ancestor.
+const DIRECTORY_SHARING: FILE_SHARE_MODE = FILE_SHARE_MODE(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0);
 impl Directory {
     pub(crate) fn open_absolute(path: &Path) -> io::Result<Arc<Self>> {
         let units: Vec<_> = path.as_os_str().encode_wide().collect();
@@ -238,7 +242,7 @@ impl Directory {
     pub(crate) fn open_directory(self: &Arc<Self>, name: ComponentName) -> io::Result<Arc<Self>> {
         let access =
             FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE;
-        let file = self.open_relative(&name, access, FILE_SHARE_READ, FILE_OPEN, true, None)?;
+        let file = self.open_relative(&name, access, DIRECTORY_SHARING, FILE_OPEN, true, None)?;
         Self::from_child(self.clone(), name, file, false)
     }
     pub(crate) fn open_for_rename(
@@ -252,7 +256,7 @@ impl Directory {
             | READ_CONTROL
             | DELETE
             | SYNCHRONIZE;
-        let file = self.open_relative(&name, access, FILE_SHARE_READ, FILE_OPEN, true, None)?;
+        let file = self.open_relative(&name, access, DIRECTORY_SHARING, FILE_OPEN, true, None)?;
         let directory = Self::from_child(self.clone(), name, file, true)?;
         if directory.identity() != expected {
             return Err(blocked("rotating root identity changed"));
@@ -572,7 +576,7 @@ impl PrivateDirectory {
         let file = parent.open_relative(
             &name,
             access,
-            FILE_SHARE_READ,
+            DIRECTORY_SHARING,
             FILE_CREATE,
             true,
             Some(&security),
@@ -589,7 +593,7 @@ impl PrivateDirectory {
     ) -> io::Result<Self> {
         let access =
             FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE;
-        let file = parent.open_relative(&name, access, FILE_SHARE_READ, FILE_OPEN, true, None)?;
+        let file = parent.open_relative(&name, access, DIRECTORY_SHARING, FILE_OPEN, true, None)?;
         let directory = Directory::from_child(parent, name, file, false)?;
         let result = Self { directory };
         result.verify(user)?;
@@ -606,7 +610,7 @@ impl PrivateDirectory {
         let file = parent.open_relative(
             &name,
             FILE_ALL_ACCESS,
-            FILE_SHARE_READ,
+            DIRECTORY_SHARING,
             FILE_CREATE,
             true,
             Some(&security),
@@ -713,6 +717,31 @@ pub(crate) struct RenameReceipt {
     identity: FileIdentity,
     destination: Vec<u16>,
 }
+#[cfg(test)]
+thread_local! {
+    static RENAME_PROBE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+pub(crate) struct RenameProbeGuard(std::marker::PhantomData<std::rc::Rc<()>>);
+#[cfg(test)]
+impl Drop for RenameProbeGuard {
+    fn drop(&mut self) {
+        RENAME_PROBE.with_borrow_mut(|pending| {
+            pending.take();
+        });
+    }
+}
+#[cfg(test)]
+pub(crate) fn probe_before_rename(action: impl FnOnce() + 'static) -> RenameProbeGuard {
+    RENAME_PROBE.with_borrow_mut(|pending| {
+        assert!(
+            pending.is_none(),
+            "rename probe is already installed on this thread"
+        );
+        *pending = Some(Box::new(action));
+    });
+    RenameProbeGuard(std::marker::PhantomData)
+}
 impl RenameReceipt {
     pub(crate) fn identity(&self) -> &FileIdentity {
         &self.identity
@@ -743,6 +772,10 @@ fn rename_handle(
             (*information).FileName.as_mut_ptr(),
             name.0.len(),
         );
+        #[cfg(test)]
+        if let Some(action) = RENAME_PROBE.with_borrow_mut(|pending| pending.take()) {
+            action();
+        }
         let result = NtSetInformationFile(
             file,
             &mut status,

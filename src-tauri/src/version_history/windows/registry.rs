@@ -74,7 +74,7 @@ impl RegistryValue {
     }
 }
 pub(crate) struct RegistrationKey {
-    chain: Vec<Key>,
+    chain: KeyChain,
     slot: RegistrationSlot,
     view: RegistryView,
     relative: String,
@@ -113,7 +113,7 @@ impl RegistrationKey {
         }))
     }
     fn raw(&self) -> HKEY {
-        self.chain.last().expect("nonempty registry chain").0
+        self.chain.raw()
     }
     pub(crate) fn read(&self, name: &str) -> io::Result<Option<RegistryValue>> {
         read_value(self.raw(), name)
@@ -222,20 +222,95 @@ fn read_value(key: HKEY, name: &str) -> io::Result<Option<RegistryValue>> {
         bytes,
     }))
 }
+struct AliasBinding {
+    key_index: usize,
+    value: RegistryValue,
+}
+struct KeyChain {
+    keys: Vec<Key>,
+    aliases: Vec<AliasBinding>,
+}
+impl KeyChain {
+    fn raw(&self) -> HKEY {
+        self.keys.last().expect("nonempty registry chain").0
+    }
+    fn verify_aliases(&self) -> io::Result<()> {
+        for (index, key) in self.keys.iter().enumerate() {
+            let observed = read_value(key.0, "SymbolicLinkValue")?;
+            if let Some(binding) = self
+                .aliases
+                .iter()
+                .find(|binding| binding.key_index == index)
+            {
+                if observed.as_ref() != Some(&binding.value) {
+                    return Err(blocked("standard policy alias changed"));
+                }
+            } else if observed.is_some_and(|value| value.kind == REG_LINK.0) {
+                return Err(blocked("canonical registry chain became linked"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Only the observed OS-shared WebView policy alias has authority here. This
+/// predicate is independent of diagnostic strings and never applies to writes.
+pub(crate) fn shared_policy_alias(
+    root: HKEY,
+    view: RegistryView,
+    path: &str,
+    index: usize,
+    write_leaf: bool,
+    value: &RegistryValue,
+) -> bool {
+    const TARGET: &str = r"\REGISTRY\MACHINE\SOFTWARE\Policies";
+    root == HKEY_LOCAL_MACHINE
+        && view == RegistryView::View32
+        && index == 1
+        && !write_leaf
+        && matches!(
+            path,
+            "Software\\Policies\\Microsoft\\Edge\\WebView2\\UserDataFolder"
+                | "Software\\Policies\\Microsoft\\Edge\\WebView2\\BrowserExecutableFolder"
+                | "Software\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments"
+        )
+        && value.kind == REG_LINK.0
+        && value.bytes.len() <= TARGET.len() * 2 + 2
+        && registry_text(&value.bytes).is_some_and(|target| target.eq_ignore_ascii_case(TARGET))
+}
+
+fn registry_text(bytes: &[u8]) -> Option<String> {
+    if !bytes.len().is_multiple_of(2) {
+        return None;
+    }
+    let units: Vec<_> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .collect();
+    let units = units.strip_suffix(&[0]).unwrap_or(&units);
+    String::from_utf16(units).ok()
+}
+
 fn open_chain(
     root: HKEY,
     path: &str,
     view: RegistryView,
     write_leaf: bool,
-) -> io::Result<Option<Vec<Key>>> {
+) -> io::Result<Option<KeyChain>> {
     let parts: Vec<_> = path.split('\\').collect();
-    let mut keys = Vec::new();
+    let mut chain = KeyChain {
+        keys: Vec::new(),
+        aliases: Vec::new(),
+    };
     let mut parent = root;
+    let mut effective_view = view;
     for (index, part) in parts.iter().enumerate() {
         let text: Vec<_> = part.encode_utf16().chain(Some(0)).collect();
         let mut raw = HKEY::default();
         let access = KEY_QUERY_VALUE
-            | view.flags()
+            | effective_view.flags()
             | if write_leaf && index + 1 == parts.len() {
                 KEY_SET_VALUE
             } else {
@@ -251,6 +326,7 @@ fn open_chain(
             )
         };
         if status == ERROR_FILE_NOT_FOUND {
+            chain.verify_aliases()?;
             return Ok(None);
         }
         status.ok().map_err(win_error)?;
@@ -258,15 +334,35 @@ fn open_chain(
         if let Some(value) =
             read_value(key.0, "SymbolicLinkValue")?.filter(|value| value.kind == REG_LINK.0)
         {
+            if shared_policy_alias(root, view, path, index, write_leaf, &value) {
+                // Never ask the OS to follow the observed link. Open only the
+                // fixed native shared target, retaining the original alias.
+                let canonical = open_chain(
+                    HKEY_LOCAL_MACHINE,
+                    "Software\\Policies",
+                    RegistryView::View64,
+                    false,
+                )?
+                .ok_or_else(|| blocked("standard policy alias target is missing"))?;
+                let key_index = chain.keys.len();
+                chain.keys.push(key);
+                chain.aliases.push(AliasBinding { key_index, value });
+                chain.keys.extend(canonical.keys);
+                parent = chain.raw();
+                effective_view = RegistryView::View64;
+                chain.verify_aliases()?;
+                continue;
+            }
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 link_diagnostic(root, view, part, &value.bytes),
             ));
         }
         parent = key.0;
-        keys.push(key);
+        chain.keys.push(key);
     }
-    Ok(Some(keys))
+    chain.verify_aliases()?;
+    Ok(Some(chain))
 }
 
 /// Bounded diagnosis only. Recognizing a standard target does not authorize
@@ -303,30 +399,21 @@ pub(crate) fn link_diagnostic(
             r"\REGISTRY\MACHINE\SOFTWARE\Classes\Wow6432Node",
         ),
     ];
-    let category = if target.len().is_multiple_of(2) {
-        let units: Vec<_> = target
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect();
-        let units = units.strip_suffix(&[0]).unwrap_or(&units);
-        String::from_utf16(units)
-            .ok()
-            .and_then(|value| {
-                recognized
-                    .iter()
-                    .find(|(_, expected)| value.eq_ignore_ascii_case(expected))
-                    .map(|(category, _)| *category)
-            })
-            .unwrap_or("unknown")
-    } else {
-        "unknown"
-    };
+    let category = registry_text(target)
+        .and_then(|value| {
+            recognized
+                .iter()
+                .find(|(_, expected)| value.eq_ignore_ascii_case(expected))
+                .map(|(category, _)| *category)
+        })
+        .unwrap_or("unknown");
     format!("registry links are unsupported: hive={hive}, view={view:?}, component={component}, target={category}")
 }
 
 /// Conservative pre-controller check: any configured WebView policy under one
 /// of these override branches blocks, even if current app-name precedence would
-/// not select it. Inaccessible or linked policy roots also block.
+/// not select it. Inaccessible or unknown linked policy roots also block; only
+/// the exact shared machine Policies alias is traversed via its fixed target.
 pub(super) fn reject_webview_overrides() -> io::Result<()> {
     for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
         for view in [RegistryView::View32, RegistryView::View64] {
@@ -341,7 +428,7 @@ pub(super) fn reject_webview_overrides() -> io::Result<()> {
                     let mut subkeys = 0;
                     let status = unsafe {
                         RegQueryInfoKeyW(
-                            keys.last().expect("policy key").0,
+                            keys.raw(),
                             None,
                             None,
                             None,
@@ -356,12 +443,18 @@ pub(super) fn reject_webview_overrides() -> io::Result<()> {
                         )
                     };
                     status.ok().map_err(win_error)?;
-                    if values != 0 || subkeys != 0 {
-                        return Err(blocked("WebView policy override is configured"));
-                    }
+                    keys.verify_aliases()?;
+                    reject_policy_contents(values, subkeys)?;
                 }
             }
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_policy_contents(values: u32, subkeys: u32) -> io::Result<()> {
+    if values != 0 || subkeys != 0 {
+        return Err(blocked("WebView policy override is configured"));
     }
     Ok(())
 }

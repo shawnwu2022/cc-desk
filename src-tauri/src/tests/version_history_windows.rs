@@ -1041,3 +1041,327 @@ fn HistoryWindows_LifetimeReceipt_029() {
     );
     assert_eq!(std::fs::read(collision).unwrap(), b"collision");
 }
+
+// 检查目录允许 rename 所需的目标写访问，但仍拒绝祖先删除/替换，并持续保护子文件内容。
+#[test]
+fn HistoryWindows_DirectoryShare_030() {
+    use std::os::windows::{ffi::OsStrExt, io::FromRawHandle};
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA, OPEN_EXISTING,
+        SYNCHRONIZE,
+    };
+    use windows_core::PCWSTR;
+    let (temporary, user, private) = private_fixture();
+    let record = DurableRecord::create(private.clone(), name("held"), b"retained", &user).unwrap();
+    let path: Vec<_> = temporary
+        .path()
+        .join("private")
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let open = |rights| unsafe {
+        CreateFileW(
+            PCWSTR(path.as_ptr()),
+            rights,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+        .map(|raw| std::os::windows::io::OwnedHandle::from_raw_handle(raw.0))
+    };
+    let writer = open((FILE_WRITE_DATA | SYNCHRONIZE).0)
+        .expect("held destination directory must admit native rename helper write access");
+    assert!(
+        open(DELETE.0).is_err(),
+        "directory must still deny DELETE access"
+    );
+    assert!(std::fs::rename(
+        temporary.path().join("private"),
+        temporary.path().join("replaced")
+    )
+    .is_err());
+    assert!(std::fs::OpenOptions::new()
+        .write(true)
+        .open(temporary.path().join("private/held"))
+        .is_err());
+    assert!(std::fs::remove_file(temporary.path().join("private/held")).is_err());
+    private.verify(&user).unwrap();
+    record.verify().unwrap();
+    drop(writer);
+}
+
+// 检查仅指定的系统策略别名可被识别，任意目标、位置、写用途和已配置策略仍拒绝。
+#[test]
+fn HistoryWindows_PolicyAlias_031() {
+    use crate::version_history::windows::registry::{
+        reject_policy_contents, shared_policy_alias, RegistryValue, RegistryView,
+    };
+    use windows::Win32::System::Registry::{
+        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_LINK, REG_SZ,
+    };
+    let encode = |value: &str| {
+        value
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>()
+    };
+    let value = RegistryValue {
+        kind: REG_LINK.0,
+        bytes: encode(r"\REGISTRY\MACHINE\SOFTWARE\Policies"),
+    };
+    let path = "Software\\Policies\\Microsoft\\Edge\\WebView2\\UserDataFolder";
+    assert!(shared_policy_alias(
+        HKEY_LOCAL_MACHINE,
+        RegistryView::View32,
+        path,
+        1,
+        false,
+        &value
+    ));
+    let terminated = RegistryValue {
+        kind: REG_LINK.0,
+        bytes: encode("\\registry\\machine\\software\\policies\0"),
+    };
+    assert!(shared_policy_alias(
+        HKEY_LOCAL_MACHINE,
+        RegistryView::View32,
+        path,
+        1,
+        false,
+        &terminated
+    ));
+    assert!(!shared_policy_alias(
+        HKEY_CURRENT_USER,
+        RegistryView::View32,
+        path,
+        1,
+        false,
+        &value
+    ));
+    assert!(!shared_policy_alias(
+        HKEY_LOCAL_MACHINE,
+        RegistryView::View64,
+        path,
+        1,
+        false,
+        &value
+    ));
+    assert!(!shared_policy_alias(
+        HKEY_LOCAL_MACHINE,
+        RegistryView::View32,
+        path,
+        0,
+        false,
+        &value
+    ));
+    assert!(!shared_policy_alias(
+        HKEY_LOCAL_MACHINE,
+        RegistryView::View32,
+        path,
+        1,
+        true,
+        &value
+    ));
+    for path in [
+        "Software\\Other\\Microsoft\\Edge\\WebView2\\UserDataFolder",
+        "Software\\Policies\\Other",
+        "Software\\Policies",
+    ] {
+        assert!(!shared_policy_alias(
+            HKEY_LOCAL_MACHINE,
+            RegistryView::View32,
+            path,
+            1,
+            false,
+            &value
+        ));
+    }
+    for bytes in [
+        encode(r"\REGISTRY\USER\elsewhere"),
+        encode(r"\REGISTRY\MACHINE\SOFTWARE\Policies\Redirect"),
+        encode("\\REGISTRY\\MACHINE\\SOFTWARE\\Policies\0\0"),
+        vec![0x00, 0xd8],
+        vec![0x41],
+    ] {
+        let changed = RegistryValue {
+            kind: REG_LINK.0,
+            bytes,
+        };
+        assert!(!shared_policy_alias(
+            HKEY_LOCAL_MACHINE,
+            RegistryView::View32,
+            path,
+            1,
+            false,
+            &changed
+        ));
+    }
+    let wrong_kind = RegistryValue {
+        kind: REG_SZ.0,
+        bytes: value.bytes,
+    };
+    assert!(!shared_policy_alias(
+        HKEY_LOCAL_MACHINE,
+        RegistryView::View32,
+        path,
+        1,
+        false,
+        &wrong_kind
+    ));
+    reject_policy_contents(0, 0).unwrap();
+    for (values, subkeys) in [(1, 0), (0, 1), (u32::MAX, u32::MAX)] {
+        assert!(reject_policy_contents(values, subkeys).is_err());
+    }
+}
+
+fn make_probe_junction(directory: &std::path::Path, target: &std::path::Path) {
+    use std::os::windows::{
+        ffi::OsStrExt,
+        io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    };
+    use windows::Win32::{
+        Foundation::HANDLE,
+        Storage::FileSystem::{
+            CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            OPEN_EXISTING,
+        },
+        System::{
+            Ioctl::FSCTL_SET_REPARSE_POINT, SystemServices::IO_REPARSE_TAG_MOUNT_POINT,
+            IO::DeviceIoControl,
+        },
+    };
+    use windows_core::PCWSTR;
+    let path: Vec<_> = directory.as_os_str().encode_wide().chain(Some(0)).collect();
+    let target: Vec<_> = r"\??\"
+        .encode_utf16()
+        .chain(target.as_os_str().encode_wide())
+        .collect();
+    let bytes = target.len() * 2;
+    assert!(bytes < 16000);
+    // REPARSE_DATA_BUFFER mount-point header, substitute name + NUL, empty
+    // print name + NUL. Storage is aligned and all offsets are byte offsets.
+    let length = 16 + bytes + 4;
+    let mut storage = vec![0u32; length.div_ceil(4)];
+    let buffer =
+        unsafe { std::slice::from_raw_parts_mut(storage.as_mut_ptr().cast::<u8>(), length) };
+    buffer[..4].copy_from_slice(&IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
+    buffer[4..6].copy_from_slice(&((length - 8) as u16).to_le_bytes());
+    buffer[10..12].copy_from_slice(&(bytes as u16).to_le_bytes());
+    buffer[12..14].copy_from_slice(&((bytes + 2) as u16).to_le_bytes());
+    for (output, unit) in buffer[16..16 + bytes]
+        .as_chunks_mut::<2>()
+        .0
+        .iter_mut()
+        .zip(target)
+    {
+        *output = unit.to_le_bytes();
+    }
+    unsafe {
+        let raw = CreateFileW(
+            PCWSTR(path.as_ptr()),
+            FILE_GENERIC_WRITE.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+        .unwrap();
+        let owned = OwnedHandle::from_raw_handle(raw.0);
+        let mut returned = 0;
+        DeviceIoControl(
+            HANDLE(owned.as_raw_handle()),
+            FSCTL_SET_REPARSE_POINT,
+            Some(storage.as_ptr().cast()),
+            length as u32,
+            None,
+            0,
+            Some(&mut returned),
+            None,
+        )
+        .expect("disposable empty destination must actually become a junction");
+    }
+}
+
+// 检查空目标目录被原位改为 junction 时拒绝操作，包括通过逐线程钩子命中预检与改名之间的窗口。
+#[test]
+fn HistoryWindows_RenameReparse_032() {
+    use crate::version_history::windows::files::probe_before_rename;
+    for after_precheck in [false, true] {
+        let (temporary, user, private) = private_fixture();
+        let foreign = temporary.path().join("foreign");
+        std::fs::create_dir(&foreign).unwrap();
+        std::fs::write(foreign.join("untouched"), b"foreign fixture").unwrap();
+        let source = temporary.path().join("source.exe");
+        std::fs::write(&source, b"held image").unwrap();
+        let parent = Directory::open_absolute(temporary.path()).unwrap();
+        let image = parent
+            .open_file(name("source.exe"), FileAccess::Read)
+            .unwrap();
+        let identity = image.identity().clone();
+        let digest = image.digest().unwrap();
+        drop(image);
+        let mut fence =
+            ImageFence::acquire(parent, name("source.exe"), &identity, &digest).unwrap();
+        let destination = temporary.path().join("private");
+        let changed = destination.clone();
+        let target = foreign.clone();
+        let exercised = std::rc::Rc::new(std::cell::Cell::new(false));
+        let exercised_in_hook = exercised.clone();
+        let hook = if after_precheck {
+            Some(probe_before_rename(move || {
+                make_probe_junction(&changed, &target);
+                assert_eq!(
+                    std::fs::read(changed.join("untouched")).unwrap(),
+                    b"foreign fixture"
+                );
+                exercised_in_hook.set(true);
+            }))
+        } else {
+            make_probe_junction(&destination, &foreign);
+            assert_eq!(
+                std::fs::read(destination.join("untouched")).unwrap(),
+                b"foreign fixture"
+            );
+            assert!(private.verify(&user).is_err());
+            assert!(private
+                .directory()
+                .open_file(name("untouched"), FileAccess::Read)
+                .is_err());
+            None
+        };
+        let result = fence.rename_to(private.directory().clone(), name("moved.exe"));
+        drop(hook);
+        assert!(
+            !after_precheck || exercised.get(),
+            "native-call race hook must actually execute"
+        );
+        assert!(
+            result.is_err(),
+            "changed destination must not produce a success receipt"
+        );
+        assert_eq!(
+            fence.observe_location().unwrap().0,
+            identity,
+            "original source handle must survive refusal"
+        );
+        let contents: Vec<_> = std::fs::read_dir(&foreign)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            contents,
+            [std::ffi::OsString::from("untouched")],
+            "native rename followed the changed destination"
+        );
+        assert_eq!(
+            std::fs::read(foreign.join("untouched")).unwrap(),
+            b"foreign fixture"
+        );
+    }
+}
