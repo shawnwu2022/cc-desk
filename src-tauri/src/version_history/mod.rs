@@ -12,3 +12,4 @@ pub(crate) mod policy;
 pub(crate) mod snapshot;
 pub(crate) mod types;
 pub(crate) mod verified_package;
+pub(crate) mod windows;
