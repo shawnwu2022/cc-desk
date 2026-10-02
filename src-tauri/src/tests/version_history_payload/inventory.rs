@@ -482,11 +482,13 @@ fn value_text(key: &Key, name: &str) -> io::Result<Option<String>> {
         return Ok(None);
     }
     status.ok().map_err(win)?;
-    if kind != REG_SZ || size < 2 || size % 2 != 0 {
+    if kind != REG_SZ || size < 2 || !size.is_multiple_of(2) {
         return Err(blocked("unsupported registration text"));
     }
     let units: Vec<_> = bytes[..size as usize]
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
         .collect();
     if units.last() != Some(&0) {
@@ -871,13 +873,13 @@ pub(super) fn pe_identity(path: &Path) -> io::Result<Value> {
     }
     let fixed = unsafe { &*fixed.cast::<VS_FIXEDFILEINFO>() };
     let (translations, size) = query(&resource, "\\VarFileInfo\\Translation")?;
-    if size == 0 || size > 64 || size % 4 != 0 {
+    if size == 0 || size > 64 || !size.is_multiple_of(4) {
         return Err(blocked("unsupported version translation table"));
     }
     let translations =
         unsafe { std::slice::from_raw_parts(translations.cast::<u16>(), size as usize / 2) };
     let mut strings = BTreeMap::new();
-    for pair in translations.chunks_exact(2) {
+    for pair in translations.as_chunks::<2>().0 {
         for field in ["ProductName", "ProductVersion", "FileVersion"] {
             let key = format!("\\StringFileInfo\\{:04x}{:04x}\\{field}", pair[0], pair[1]);
             let (text, size) = query(&resource, &key)?;

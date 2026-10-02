@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { expandFixtureProjects, clearFixtureSetupFocus, openFixtureSessionMenu } from './fixtureActions'
+import { captureFixtureEvidence } from './fixtureEvidence'
 
 const browserErrors = new WeakMap<Page, string[]>()
 test.beforeEach(async ({ page }) => {
@@ -70,11 +71,11 @@ for (const locale of ['en', 'zh']) {
       await expect(page.locator('[data-history-row]')).toHaveCount(2)
       await expect(page.locator('[data-history-select]').nth(1)).toBeDisabled()
       await page.locator('[data-history-panel]').scrollIntoViewIfNeeded()
-      await testInfo.attach('history-catalog-unapproved', { body: await page.screenshot(), contentType: 'image/png' })
+      await captureFixtureEvidence(page, testInfo, `history-catalog-${locale}-unapproved`)
       await page.locator('[data-history-select]').first().click()
       await expect(page.locator('[data-history-selected]')).toContainText('0.17.7')
       await page.locator('[data-history-prepare]').scrollIntoViewIfNeeded()
-      await testInfo.attach('history-selection-unapproved', { body: await page.screenshot(), contentType: 'image/png' })
+      await captureFixtureEvidence(page, testInfo, `history-selection-${locale}-unapproved`)
       await page.locator('[data-history-prepare]').click()
       await expect(page.locator('[data-history-status]')).toContainText('SHA256')
       await expect(page.locator('[data-history-install]')).toBeDisabled()
@@ -82,7 +83,7 @@ for (const locale of ['en', 'zh']) {
       await page.locator('[data-history-install]').scrollIntoViewIfNeeded()
       await expect(page.locator('[data-history-cancel]')).toBeInViewport({ ratio: 1 })
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-      await testInfo.attach('history-prepared-blocked-unapproved', { body: await page.screenshot(), contentType: 'image/png' })
+      await captureFixtureEvidence(page, testInfo, `history-prepared-blocked-${locale}-unapproved`)
       await page.locator('[data-history-cancel]').click()
       await expect(page.locator('[data-history-cancel]')).toHaveCount(0)
     })

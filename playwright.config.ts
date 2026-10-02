@@ -10,6 +10,7 @@ export default defineConfig({
   updateSnapshots: 'none',
   snapshotPathTemplate: '{testDir}/__screenshots__/{arg}{ext}',
   outputDir: 'test-results/visual',
+  preserveOutput: 'always', // Review evidence is required even when every assertion passes.
   reporter: [['list']],
   expect: { timeout: 5_000, toHaveScreenshot: { animations: 'disabled', caret: 'hide', scale: 'device', maxDiffPixels: 0 } },
   use: {
