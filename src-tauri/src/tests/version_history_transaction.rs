@@ -466,8 +466,10 @@ fn HistoryTransaction_UnsafeTree_018() {
         )
         .is_err());
     }
-    let mut limits = SnapshotLimits::default();
-    limits.max_bytes = 1;
+    let limits = SnapshotLimits {
+        max_bytes: 1,
+        ..SnapshotLimits::default()
+    };
     assert!(capture_context(
         &boundary,
         &binding().source_context,
