@@ -244,6 +244,17 @@ pub(crate) struct FrozenAdmissions {
     committed: bool,
 }
 impl FrozenAdmissions {
+    pub(crate) fn verify_quiescent(&self, transaction_id: &str) -> Result<(), SafeError> {
+        let state = self.gate.0.lock();
+        if self.transaction_id != transaction_id
+            || state.frozen.as_deref() != Some(transaction_id)
+            || !state.children.is_empty()
+            || !state.mutations.is_empty()
+        {
+            return Err(error("HISTORY_SESSIONS_NOT_QUIESCENT"));
+        }
+        Ok(())
+    }
     /// The coordinator calls this only after the persistent barrier is durable.
     /// Post-commit interruption belongs to journaled recovery, never UI cancel.
     pub(crate) fn mark_committed(&mut self) -> Result<(), SafeError> {
@@ -281,9 +292,25 @@ impl FrozenAdmissions {
 pub(crate) struct SnapshotBoundary {
     binding: JournalBinding,
     root_identities: BTreeMap<RootKind, String>,
-    _held_platform_guards: Box<dyn Send + Sync>,
+    held_platform_guards: Box<dyn LiveSnapshotGuards>,
+}
+/// Private implementation seam, never a public proof constructor. Production
+/// construction will accept only the concrete coordinator's opaque evidence.
+trait LiveSnapshotGuards: Send + Sync {
+    fn verify_live(&self) -> Result<(), SafeError>;
+}
+#[cfg(test)]
+struct FixtureSnapshotGuards;
+#[cfg(test)]
+impl LiveSnapshotGuards for FixtureSnapshotGuards {
+    fn verify_live(&self) -> Result<(), SafeError> {
+        Ok(())
+    }
 }
 impl SnapshotBoundary {
+    pub(crate) fn verify_live(&self) -> Result<(), SafeError> {
+        self.held_platform_guards.verify_live()
+    }
     #[cfg(test)]
     pub(crate) fn fixture_with_roots(
         binding: JournalBinding,
@@ -292,7 +319,7 @@ impl SnapshotBoundary {
         Self {
             binding,
             root_identities,
-            _held_platform_guards: Box::new(()),
+            held_platform_guards: Box::new(FixtureSnapshotGuards),
         }
     }
     pub(crate) fn binding(&self) -> &JournalBinding {
@@ -310,7 +337,7 @@ impl SnapshotBoundary {
                 (RootKind::Desk, "desk-object".into()),
                 (RootKind::WebView, "webview-parent/absent".into()),
             ]),
-            _held_platform_guards: Box::new(()),
+            held_platform_guards: Box::new(FixtureSnapshotGuards),
         }
     }
 }
@@ -330,7 +357,7 @@ pub(crate) trait DirectoryDurability: Send + Sync {
 /// read marker, and decide_startup under control. Release control after decision.
 pub(crate) struct SharedStartupLease {
     user_installation: String,
-    actual_bundle: String,
+    actual_bundle: Option<String>,
     registered_entrypoint: bool,
     _held_shared_lease: Box<dyn Send + Sync>,
 }
@@ -359,6 +386,33 @@ pub(crate) enum MarkerRead<'a> {
         bytes: &'a [u8],
         journal: Option<&'a super::journal::JournalInspection>,
     },
+}
+
+/// Production startup accepts only evidence minted from a complete registered
+/// bundle and the actual same-root Windows locks. The caller cannot substitute
+/// identifiers/digests or detached receipt bytes for the held platform guards.
+#[cfg(windows)]
+pub(crate) fn admit_windows_startup(
+    evidence: super::windows::startup::StartupLeaseEvidence,
+    marker: MarkerRead<'_>,
+) -> Result<SharedStartupLease, SafeError> {
+    let parts = evidence.into_parts();
+    let registered_entrypoint = parts.actual_bundle.is_some();
+    let control = StartupControlLease {
+        user_installation: parts.user_installation.clone(),
+        _held_control: parts.control,
+    };
+    let shared = SharedStartupLease {
+        user_installation: parts.user_installation,
+        actual_bundle: parts.actual_bundle,
+        registered_entrypoint,
+        _held_shared_lease: parts.shared,
+    };
+    if decide_startup(&control, &shared, marker) != StartupDecision::Ordinary {
+        return Err(error("HISTORY_RECOVERY_REQUIRED"));
+    }
+    // Control drops after the decision; shared survives for the process lifetime.
+    Ok(shared)
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -476,6 +530,12 @@ impl ActiveContextMarker {
     pub(crate) fn binding(&self) -> &JournalBinding {
         &self.binding
     }
+    pub(crate) fn is_terminal(&self) -> bool {
+        matches!(
+            self.state,
+            BarrierState::Restored | BarrierState::PreContextAborted
+        )
+    }
     pub(super) fn validate_structure(&self) -> Result<(), SafeError> {
         if self.schema != 1 {
             return Err(error("HISTORY_MARKER_INVALID"));
@@ -541,13 +601,16 @@ pub(crate) fn decide_startup(
     lease: &SharedStartupLease,
     marker: MarkerRead<'_>,
 ) -> StartupDecision {
-    if control.user_installation != lease.user_installation || !lease.registered_entrypoint {
+    if control.user_installation != lease.user_installation {
         return StartupDecision::RecoveryOnly;
     }
     match marker {
         MarkerRead::Absent => StartupDecision::Ordinary,
         MarkerRead::Unreadable => StartupDecision::RecoveryOnly,
         MarkerRead::Present { bytes, journal } => {
+            if !lease.registered_entrypoint {
+                return StartupDecision::RecoveryOnly;
+            }
             if bytes.len() > 16384 {
                 return StartupDecision::RecoveryOnly;
             }
@@ -558,7 +621,7 @@ pub(crate) fn decide_startup(
                 || marker.binding.validate().is_err()
                 || marker.state == BarrierState::Transition
                 || marker.binding.user_installation != lease.user_installation
-                || marker.binding.source_bundle != lease.actual_bundle
+                || lease.actual_bundle.as_deref() != Some(marker.binding.source_bundle.as_str())
             {
                 return StartupDecision::RecoveryOnly;
             }
@@ -594,7 +657,7 @@ impl SharedStartupLease {
     pub(crate) fn fixture(binding: JournalBinding, backup: bool) -> Self {
         Self {
             user_installation: binding.user_installation,
-            actual_bundle: binding.source_bundle,
+            actual_bundle: Some(binding.source_bundle),
             registered_entrypoint: !backup,
             _held_shared_lease: Box::new(()),
         }
@@ -602,7 +665,7 @@ impl SharedStartupLease {
     pub(crate) fn fixture_with_guard(binding: JournalBinding, guard: Box<dyn Send + Sync>) -> Self {
         Self {
             user_installation: binding.user_installation,
-            actual_bundle: binding.source_bundle,
+            actual_bundle: Some(binding.source_bundle),
             registered_entrypoint: true,
             _held_shared_lease: guard,
         }

@@ -41,6 +41,33 @@ static CHECK_RESULTS: LazyLock<Mutex<Vec<checks::CheckResult>>> = LazyLock::new(
     Mutex::new(result.checks)
 });
 
+/// Opaque ordinary-startup capability. main obtains it before loading ConPTY;
+/// the Tauri application retains the same shared lease for its whole lifetime.
+#[cfg(windows)]
+pub struct DesktopStartup {
+    admission: std::sync::Arc<version_history::windows::startup::OrdinaryStartup>,
+}
+#[cfg(windows)]
+pub fn admit_desktop_startup() -> Result<DesktopStartup, String> {
+    version_history::windows::startup::admit_ordinary()
+        .map(|admission| DesktopStartup {
+            admission: std::sync::Arc::new(admission),
+        })
+        .map_err(|failure| failure.code)
+}
+/// Dispatch the independent manager before ordinary startup and diagnostic DLL
+/// loading. A UUID selector alone cannot pass its protected child admission.
+#[cfg(windows)]
+pub fn run_version_manager_entry() -> Result<bool, String> {
+    match version_history::manager_entry::observed_request().map_err(|failure| failure.code)? {
+        version_history::manager_entry::DesktopEntryRequest::Ordinary => Ok(false),
+        version_history::manager_entry::DesktopEntryRequest::Manager(request) => {
+            version_history::manager_runtime::run(request).map_err(|failure| failure.code)?;
+            Ok(true)
+        }
+    }
+}
+
 /// 获取缓存的检查结果
 pub fn get_check_results() -> Vec<checks::CheckResult> {
     CHECK_RESULTS.lock().unwrap().clone()
@@ -62,6 +89,22 @@ pub fn rerun_checks() -> Vec<checks::CheckResult> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(initial_dir: Option<String>) {
+    #[cfg(windows)]
+    {
+        let startup =
+            admit_desktop_startup().expect("ordinary startup requires maintenance admission");
+        run_admitted(initial_dir, startup);
+    }
+    #[cfg(not(windows))]
+    run_ordinary(initial_dir);
+}
+
+#[cfg(windows)]
+pub fn run_admitted(initial_dir: Option<String>, startup: DesktopStartup) {
+    run_ordinary(initial_dir, startup)
+}
+
+fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopStartup) {
     let mut context = tauri::generate_context!();
     let main_config = cli::native_runtime::take_main_config(context.config_mut())
         .expect("main window configuration unavailable");
@@ -73,7 +116,10 @@ pub fn run(initial_dir: Option<String>) {
     let native_setup = native_runtime.clone();
     let native_shutdown = native_runtime.clone();
     let native_exit_shutdown = native_runtime.clone();
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(windows)]
+    let builder = builder.manage(startup.admission);
+    let app = builder
         .manage(native_runtime)
         .manage(std::sync::Arc::new(
             version_history::commands::HistoryService::default(),
@@ -85,6 +131,16 @@ pub fn run(initial_dir: Option<String>) {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .on_window_event(move |window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main"
+                    && native_shutdown
+                        .binding()
+                        .is_ok_and(|binding| binding.blocks_handoff_exit())
+                {
+                    api.prevent_close();
+                    return;
+                }
+            }
             if window.label() == "main"
                 && matches!(event, tauri::WindowEvent::CloseRequested { .. })
             {
@@ -239,6 +295,15 @@ pub fn run(initial_dir: Option<String>) {
         .build(context)
         .expect("error while building tauri application");
     app.run(move |_app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { ref api, .. } = event {
+            if native_exit_shutdown
+                .binding()
+                .is_ok_and(|binding| binding.blocks_handoff_exit())
+            {
+                api.prevent_exit();
+                return;
+            }
+        }
         if matches!(
             event,
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit

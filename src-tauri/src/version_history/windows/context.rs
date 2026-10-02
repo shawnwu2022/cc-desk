@@ -307,6 +307,30 @@ pub(crate) struct HeldTree {
     fenced_location: Option<(Arc<Mutex<ImageFence>>, String)>,
 }
 impl HeldTree {
+    /// Complete read-only re-admission of private material. In particular this
+    /// cannot inherit the authority of a previously held writable copy tree.
+    pub(crate) fn capture_private(
+        root: Arc<Directory>,
+        limits: SnapshotLimits,
+        user: &CurrentUser,
+    ) -> io::Result<Self> {
+        let tree = Self::admit(HeldRoot::Present(root), &mut Budget::new(limits)?, None)?;
+        for entry in tree.entries.values() {
+            match entry {
+                HeldEntry::Directory(root) => user.verify_private_file(root.raw(), true)?,
+                HeldEntry::File(FileGuard::Ordinary(file)) => {
+                    user.verify_private_file(handle(&file.lock().file), false)?;
+                }
+                HeldEntry::File(FileGuard::Fenced(_)) => {
+                    return Err(blocked(
+                        "private manager tree cannot contain a source fence",
+                    ));
+                }
+            }
+        }
+        tree.verify()?;
+        Ok(tree)
+    }
     fn admit(
         root: HeldRoot,
         budget: &mut Budget,
@@ -881,6 +905,13 @@ impl<'a> ContextJournal<'a> {
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
+    pub(crate) fn verify_transaction(&mut self, transaction: &str) -> io::Result<()> {
+        self.verify()?;
+        if self.binding.transaction_id != transaction {
+            return Err(blocked("context journal belongs to another transaction"));
+        }
+        Ok(())
+    }
     fn verify(&mut self) -> io::Result<()> {
         self.lease.verify(&self.root)?;
         self.root.verify(&CurrentUser::capture()?)?;
@@ -992,6 +1023,205 @@ pub(crate) struct PrivateTreeCopy {
     retained_recovery_attempts: BTreeMap<String, HeldTree>,
 }
 impl PrivateTreeCopy {
+    /// Consume the unchanged-copy authority. Drop writable descendants, reopen
+    /// the complete tree read-only and compare every original ID/byte/ACL; then
+    /// separately journal one extra manager executable. Any release-gap change,
+    /// collision or partial write preserves the actual complete/partial trees.
+    pub(crate) fn into_manager_bundle(
+        mut self,
+        source_image: &PinnedFile,
+        manager_name: ComponentName,
+        user: &CurrentUser,
+        journal: &mut ContextJournal<'_>,
+    ) -> io::Result<(Arc<PrivateDirectory>, HeldTree)> {
+        self.verify(user)?;
+        journal.verify()?;
+        if self.rotation_attempted
+            || self.rotation.is_some()
+            || self.recovery_copy.is_some()
+            || !self.retained_recovery_attempts.is_empty()
+            || text(&manager_name)? != "cc-desk-version-manager.exe"
+        {
+            return Err(blocked(
+                "manager copy cannot reuse context recovery authority",
+            ));
+        }
+        let prior = self.manifest()?.clone();
+        let source_name = text(&source_image.name)?;
+        source_image.verify()?;
+        let original = prior
+            .source
+            .entries
+            .iter()
+            .find(|entry| entry.metadata.path == source_name)
+            .ok_or_else(|| blocked("manager source image is outside the copied tree"))?;
+        if original.metadata.kind != EntryType::File
+            || original.metadata.object_identity != identity(source_image.identity())?
+            || original.sha256.as_deref() != Some(source_image.digest()?.as_str())
+        {
+            return Err(blocked("manager source image changed"));
+        }
+        let tree = self
+            .tree
+            .take()
+            .ok_or_else(|| blocked("manager base copy is absent"))?;
+        let HeldRoot::Present(directory) = &tree.root else {
+            return Err(blocked("manager requires a complete present bundle"));
+        };
+        let directory = directory.clone();
+        let limits = tree.limits;
+        if prior.copy.entries.len() >= limits.max_entries
+            || prior
+                .copy
+                .entries
+                .iter()
+                .try_fold(original.metadata.size, |total, entry| {
+                    total.checked_add(entry.metadata.size)
+                })
+                .is_none_or(|total| total > limits.max_bytes)
+        {
+            return Err(blocked("augmented manager bundle exceeds capture capacity"));
+        }
+        // No claim of continuous descendant sealing across this interval. The
+        // root and parent remain retained, but all actual descendants must be
+        // freshly observed before the private copy can authorize a launch.
+        drop(tree);
+        #[cfg(test)]
+        if let Some(action) = MANAGER_COPY_HANDOFF_PROBE.with_borrow_mut(|pending| pending.take()) {
+            action();
+        }
+        let readmitted = HeldTree::capture_private(directory.clone(), limits, user)?;
+        if readmitted.manifest != prior.copy {
+            return Err(blocked(
+                "private manager copy changed during read-only handoff",
+            ));
+        }
+        let root = Arc::new(PrivateDirectory::open_existing(
+            self.parent.directory().clone(),
+            self.name.clone(),
+            user,
+        )?);
+        if root.directory().identity() != directory.identity() {
+            return Err(blocked("private manager bundle root changed"));
+        }
+        let extra_path = text(&manager_name)?;
+        let absent = HeldRoot::Absent {
+            parent: directory.clone(),
+            name: manager_name.clone(),
+        };
+        absent.verify()?;
+        // This is an additional independent destination with a separate bounded
+        // operation plan, not a mutation concealed by the old copy manifest.
+        let source_record = TreeManifest {
+            schema: 1,
+            location_identity: identity(&(
+                source_image.identity(),
+                source_image
+                    .path()?
+                    .into_string()
+                    .map_err(|_| blocked("unrepresentable manager image location"))?,
+            ))?,
+            entries: vec![original.clone()],
+        };
+        let (plan_generation, manifest) = safe(journal.store.plan_private_backup(
+            journal.generation,
+            1,
+            &source_record.encode()?,
+        ))?;
+        journal.generation = plan_generation;
+        journal.verify()?;
+        let destination = (directory.identity().clone(), extra_path.clone());
+        let pending = journal.begin(
+            EffectKind::PrivateBackupEntry {
+                plan_generation,
+                operation: PrivateBackupOperation::CopyFile,
+                manifest,
+                entry_index: 0,
+            },
+            &("absent-manager-image", &destination),
+            &("independent-manager-image", &destination, original),
+        )?;
+        let outcome = (|| -> io::Result<HeldTree> {
+            readmitted.verify()?;
+            source_image.verify()?;
+            let descriptor = user.descriptor(false)?;
+            let file = directory.open_relative(
+                &manager_name,
+                FILE_READ_DATA
+                    | FILE_WRITE_DATA
+                    | FILE_READ_ATTRIBUTES
+                    | READ_CONTROL
+                    | SYNCHRONIZE,
+                FILE_SHARE_READ,
+                FILE_CREATE,
+                false,
+                Some(&descriptor),
+            )?;
+            user.verify_private_file(handle(&file), false)?;
+            let file = PinnedFile::from_file(directory.clone(), manager_name.clone(), file)?;
+            let mut source = &source_image.file;
+            source.seek(SeekFrom::Start(0))?;
+            let mut writer = &file.file;
+            let copied = io::copy(
+                &mut source.take(original.metadata.size.saturating_add(1)),
+                &mut writer,
+            )?;
+            if copied != original.metadata.size {
+                return Err(blocked("manager image copy length differs"));
+            }
+            copy_fault(CopyFault::AfterWrite)?;
+            unsafe { FlushFileBuffers(handle(&file.file)) }.map_err(win_error)?;
+            copy_fault(CopyFault::AfterFlush)?;
+            let extra = ManifestEntry {
+                metadata: entry_metadata(&extra_path, handle(&file.file))?,
+                sha256: Some(file.digest()?),
+            };
+            if extra.metadata.kind != EntryType::File
+                || extra.metadata.size != original.metadata.size
+                || extra.sha256 != original.sha256
+                || prior
+                    .source
+                    .entries
+                    .iter()
+                    .chain(&prior.copy.entries)
+                    .any(|entry| entry.metadata.object_identity == extra.metadata.object_identity)
+            {
+                return Err(blocked("manager image is not an independent exact copy"));
+            }
+            // Release only the new writer, then compare its exact object through
+            // a complete read-only admission before exposing the launch root.
+            drop(file);
+            let complete = HeldTree::capture_private(directory.clone(), limits, user)?;
+            let mut expected = prior.copy.clone();
+            expected.entries.push(extra);
+            expected
+                .entries
+                .sort_by(|a, b| a.metadata.path.cmp(&b.metadata.path));
+            if complete.manifest != expected {
+                return Err(blocked("complete augmented manager bundle differs"));
+            }
+            source_image.verify()?;
+            if original.sha256.as_deref() != Some(source_image.digest()?.as_str()) {
+                return Err(blocked("manager source changed during copy"));
+            }
+            copy_fault(CopyFault::BeforeReceipt)?;
+            Ok(complete)
+        })();
+        match outcome {
+            Ok(complete) => {
+                journal.applied(pending, complete.manifest())?;
+                root.verify(user)?;
+                complete.verify()?;
+                // Retain the complete read-only admission through transfer.
+                // The consumed original PrivateTreeCopy no longer exists.
+                Ok((root, complete))
+            }
+            Err(error) => {
+                let _ = journal.unknown(pending);
+                Err(error)
+            }
+        }
+    }
     pub(crate) fn new(parent: Arc<PrivateDirectory>, name: ComponentName) -> Self {
         Self {
             parent,
@@ -1298,6 +1528,31 @@ pub(crate) enum CopyFault {
     AfterFlush,
     BeforeReceipt,
     AfterReverseMove,
+}
+
+#[cfg(test)]
+thread_local! {
+    static MANAGER_COPY_HANDOFF_PROBE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+pub(crate) struct ManagerCopyHandoffProbe(std::marker::PhantomData<std::rc::Rc<()>>);
+#[cfg(test)]
+impl Drop for ManagerCopyHandoffProbe {
+    fn drop(&mut self) {
+        MANAGER_COPY_HANDOFF_PROBE.with_borrow_mut(|pending| {
+            pending.take();
+        });
+    }
+}
+#[cfg(test)]
+pub(crate) fn probe_manager_copy_handoff(
+    action: impl FnOnce() + 'static,
+) -> ManagerCopyHandoffProbe {
+    MANAGER_COPY_HANDOFF_PROBE.with_borrow_mut(|pending| {
+        assert!(pending.is_none());
+        *pending = Some(Box::new(action));
+    });
+    ManagerCopyHandoffProbe(std::marker::PhantomData)
 }
 #[cfg(test)]
 thread_local! { static COPY_FAULT: std::cell::Cell<Option<CopyFault>> = const { std::cell::Cell::new(None) }; }

@@ -129,3 +129,10 @@ mod version_history_registration_journal;
 
 #[cfg(windows)]
 mod version_history_classes_alias;
+
+mod version_history_manager_document;
+mod version_history_manager_entry;
+mod version_history_manager_wire;
+mod version_history_source_document;
+#[cfg(windows)]
+mod version_history_startup_windows;

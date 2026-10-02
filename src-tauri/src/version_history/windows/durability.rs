@@ -800,6 +800,12 @@ impl DurableRecord {
     pub(super) fn root_identity(&self) -> &FileIdentity {
         self._root.directory().identity()
     }
+    pub(super) fn file_identity(&self) -> &FileIdentity {
+        self.file.identity()
+    }
+    pub(super) fn name(&self) -> &ComponentName {
+        &self.file.name
+    }
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }

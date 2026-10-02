@@ -29,8 +29,9 @@ use windows::Win32::{
         ERROR_PATH_NOT_FOUND, HANDLE,
     },
     Security::{
-        GetFileSecurityW, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
-        PSECURITY_DESCRIPTOR,
+        GetFileSecurityW, GetSecurityDescriptorControl, GetSecurityDescriptorLength,
+        IsValidSecurityDescriptor, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR, SE_SELF_RELATIVE,
     },
     Storage::FileSystem::{
         FindClose, FindFirstStreamW, FindNextStreamW, FindStreamInfoStandard,
@@ -437,19 +438,7 @@ fn snapshot_key(key: Key, depth: usize, count: &mut usize) -> io::Result<Value> 
         return Err(blocked("registry tree budget exceeded"));
     }
     let values = key_values(&key)?;
-    let mut bytes = vec![0u8; 65536];
-    let mut size = bytes.len() as u32;
-    unsafe {
-        RegGetKeySecurity(
-            key.0,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-            Some(PSECURITY_DESCRIPTOR(bytes.as_mut_ptr().cast())),
-            &mut size,
-        )
-        .ok()
-        .map_err(win)?;
-    }
-    bytes.truncate(size as usize);
+    let bytes = registry_security(&key)?;
     let mut children = BTreeMap::new();
     for child in subkeys(&key, 32)? {
         children.insert(
@@ -865,25 +854,227 @@ fn shortcut_target(path: &Path) -> io::Result<PathBuf> {
         .ok_or_else(|| blocked("shortcut path exceeds budget"))?;
     Ok(PathBuf::from(OsString::from_wide(&text[..end])))
 }
+const MAX_DESCRIPTOR_BYTES: usize = 65536;
+const RELATIVE_DESCRIPTOR_HEADER: usize = 20;
+
+// Bound every referenced SID/ACL before calling APIs without a length argument.
+// This is a memory-extent check; native descriptor validation remains authoritative.
+fn descriptor_extent(bytes: &[u8]) -> io::Result<usize> {
+    if !(RELATIVE_DESCRIPTOR_HEADER..=MAX_DESCRIPTOR_BYTES).contains(&bytes.len())
+        || bytes[0] != 1
+        || u16::from_le_bytes([bytes[2], bytes[3]]) & SE_SELF_RELATIVE.0 == 0
+    {
+        return Err(blocked("unsupported captured descriptor header"));
+    }
+    let mut extent = RELATIVE_DESCRIPTOR_HEADER;
+    for (field, acl) in [(4, false), (8, false), (12, true), (16, true)] {
+        let offset = u32::from_le_bytes(bytes[field..field + 4].try_into().unwrap()) as usize;
+        if offset == 0 {
+            continue;
+        }
+        if offset < RELATIVE_DESCRIPTOR_HEADER
+            || !offset.is_multiple_of(4)
+            || offset.checked_add(8).is_none_or(|end| end > bytes.len())
+        {
+            return Err(blocked("captured descriptor offset exceeds returned bytes"));
+        }
+        let length = if acl {
+            u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]) as usize
+        } else {
+            if bytes[offset + 1] > 15 {
+                return Err(blocked(
+                    "captured descriptor SID exceeds subauthority bound",
+                ));
+            }
+            8 + bytes[offset + 1] as usize * 4
+        };
+        let end = offset
+            .checked_add(length)
+            .filter(|end| length >= 8 && *end <= bytes.len())
+            .ok_or_else(|| blocked("captured descriptor component exceeds returned bytes"))?;
+        extent = extent.max(end);
+    }
+    Ok(extent)
+}
+
+struct DescriptorCapture {
+    words: Vec<u32>,
+}
+impl DescriptorCapture {
+    fn new() -> Self {
+        Self {
+            words: vec![0u32; MAX_DESCRIPTOR_BYTES / size_of::<u32>()],
+        }
+    }
+    fn pointer(&mut self) -> PSECURITY_DESCRIPTOR {
+        PSECURITY_DESCRIPTOR(self.words.as_mut_ptr().cast())
+    }
+    fn finish(mut self, returned: u32) -> io::Result<Vec<u8>> {
+        let returned = returned as usize;
+        if !(RELATIVE_DESCRIPTOR_HEADER..=MAX_DESCRIPTOR_BYTES).contains(&returned) {
+            return Err(blocked("captured descriptor returned size exceeds budget"));
+        }
+        let extent = descriptor_extent(unsafe {
+            std::slice::from_raw_parts(self.words.as_ptr().cast::<u8>(), returned)
+        })?;
+        let descriptor = self.pointer();
+        if !unsafe { IsValidSecurityDescriptor(descriptor) }.as_bool() {
+            return Err(blocked("captured security descriptor is invalid"));
+        }
+        let mut control = 0;
+        let mut revision = 0;
+        unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) }
+            .map_err(win)?;
+        if revision != 1 || control & SE_SELF_RELATIVE.0 == 0 {
+            return Err(blocked(
+                "captured descriptor is not self-relative revision one",
+            ));
+        }
+        let length = unsafe { GetSecurityDescriptorLength(descriptor) } as usize;
+        if length < extent || length > returned {
+            return Err(blocked(
+                "native descriptor length does not contain bounded components",
+            ));
+        }
+        // Preserve every descriptor byte, including trailing zeroes within its
+        // validated length. Allocation capacity is never evidence or a trim rule.
+        Ok(unsafe { std::slice::from_raw_parts(descriptor.0.cast::<u8>(), length) }.to_vec())
+    }
+}
+
+fn registry_security(key: &Key) -> io::Result<Vec<u8>> {
+    let mut capture = DescriptorCapture::new();
+    let mut returned = MAX_DESCRIPTOR_BYTES as u32;
+    unsafe {
+        RegGetKeySecurity(
+            key.0,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            Some(capture.pointer()),
+            &mut returned,
+        )
+        .ok()
+        .map_err(win)?;
+    }
+    capture.finish(returned)
+}
+
 fn file_security(path: &Path) -> io::Result<Vec<u8>> {
     let p = path_wide(path);
-    let mut bytes = vec![0u8; 65536];
+    let mut capture = DescriptorCapture::new();
     let mut needed = 0;
     let ok = unsafe {
         GetFileSecurityW(
             PCWSTR(p.as_ptr()),
             (OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION).0,
-            Some(PSECURITY_DESCRIPTOR(bytes.as_mut_ptr().cast())),
-            bytes.len() as u32,
+            Some(capture.pointer()),
+            MAX_DESCRIPTOR_BYTES as u32,
             &mut needed,
         )
     };
     if !ok.as_bool() {
         return Err(io::Error::last_os_error());
     }
-    bytes.truncate(needed as usize);
-    Ok(bytes)
+    capture.finish(needed)
 }
+
+// 本机转换器给出的实际描述符字节（含末尾零）必须完整保留，容量填充值不属于证据。
+#[test]
+fn HistoryPayload_DescriptorLength_011() {
+    use windows::Win32::{
+        Foundation::{LocalFree, HLOCAL},
+        Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        },
+    };
+    let text = wide("O:SYG:SYD:(A;;GR;;;SY)");
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    let mut length = 0;
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            PCWSTR(text.as_ptr()),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            Some(&mut length),
+        )
+        .unwrap();
+    }
+    struct Allocation(PSECURITY_DESCRIPTOR);
+    impl Drop for Allocation {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = LocalFree(Some(HLOCAL(self.0 .0)));
+            }
+        }
+    }
+    let allocation = Allocation(descriptor);
+    assert!((20..=MAX_DESCRIPTOR_BYTES as u32).contains(&length));
+    let expected =
+        unsafe { std::slice::from_raw_parts(allocation.0 .0.cast::<u8>(), length as usize) };
+    assert_eq!(expected.last(), Some(&0));
+    for fill in [0u32, 0x7e7e7e7e] {
+        for returned in [length, MAX_DESCRIPTOR_BYTES as u32] {
+            let mut capture = DescriptorCapture::new();
+            capture.words.fill(fill);
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    expected.as_ptr(),
+                    capture.words.as_mut_ptr().cast(),
+                    expected.len(),
+                );
+            }
+            assert_eq!(capture.finish(returned).unwrap(), expected);
+        }
+    }
+}
+
+// 非相对格式、越界偏移、截断 SID/ACL 与错误长度都在原生指针读取前被拒绝。
+#[test]
+fn HistoryPayload_DescriptorBounds_012() {
+    let mut header = vec![0u8; 20];
+    header[0] = 1;
+    header[2..4].copy_from_slice(&SE_SELF_RELATIVE.0.to_le_bytes());
+    assert_eq!(descriptor_extent(&header).unwrap(), 20);
+    assert!(descriptor_extent(&header[..19]).is_err());
+    let mut bad = header.clone();
+    bad[2..4].fill(0);
+    assert!(descriptor_extent(&bad).is_err());
+    for offset in [1u32, 19, 21, u32::MAX] {
+        let mut bad = header.clone();
+        bad[4..8].copy_from_slice(&offset.to_le_bytes());
+        assert!(descriptor_extent(&bad).is_err());
+    }
+    let mut sid = header.clone();
+    sid.resize(28, 0);
+    sid[4..8].copy_from_slice(&20u32.to_le_bytes());
+    sid[20] = 1;
+    for count in [1, 16] {
+        sid[21] = count;
+        assert!(descriptor_extent(&sid).is_err());
+    }
+    let mut acl = header;
+    acl.resize(28, 0);
+    acl[16..20].copy_from_slice(&20u32.to_le_bytes());
+    for length in [0u16, 7, 9, u16::MAX] {
+        acl[22..24].copy_from_slice(&length.to_le_bytes());
+        assert!(descriptor_extent(&acl).is_err());
+    }
+    for returned in [0, 19, MAX_DESCRIPTOR_BYTES as u32 + 1] {
+        assert!(DescriptorCapture::new().finish(returned).is_err());
+    }
+}
+
+// 真实注册表和文件只读 API 均经过同一有界提取器；不导出环境描述符或改变权限。
+#[test]
+fn HistoryPayload_DescriptorNative_013() {
+    let key = open_key(HKEY_CURRENT_USER, "Software", KEY_WOW64_64KEY)
+        .unwrap()
+        .expect("current-user Software key");
+    let registry = registry_security(&key).unwrap();
+    assert!(descriptor_extent(&registry).unwrap() <= registry.len());
+    let file = file_security(&std::env::current_exe().unwrap()).unwrap();
+    assert!(descriptor_extent(&file).unwrap() <= file.len());
+}
+
 fn reject_streams(path: &Path) -> io::Result<()> {
     let p = path_wide(path);
     let mut data = WIN32_FIND_STREAM_DATA::default();

@@ -430,6 +430,12 @@ struct EffectReceipt {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum ManifestRole {
+    /// Protected initial-manager selector. Opening its data root still requires
+    /// same-user ACL/object checks and exact child/material re-admission.
+    ManagerHandoff,
+    /// Original owner observed zero admitted children/writers and matching
+    /// BrowserProcessExited receipts before requesting source-host exit.
+    SourceHandoffExit,
     SourceContext,
     FreshTargetContext,
     RetainedTargetContext,
@@ -858,6 +864,18 @@ impl SwitchJournal {
             }
             JournalEvent::Manifest { role, digest } => {
                 validate_digest(digest)?;
+                if *role == ManifestRole::SourceHandoffExit
+                    && !self.manifests.contains_key(&ManifestRole::ManagerHandoff)
+                {
+                    return Err(error("HISTORY_HANDOFF_CHANGED"));
+                }
+                if matches!(
+                    role,
+                    ManifestRole::ManagerHandoff | ManifestRole::SourceHandoffExit
+                ) && self.phase != JournalPhase::Reviewed
+                {
+                    return Err(error("HISTORY_HANDOFF_CHANGED"));
+                }
                 if self.context_return_only {
                     return Err(error("HISTORY_CONTEXT_RETURN_ONLY"));
                 }

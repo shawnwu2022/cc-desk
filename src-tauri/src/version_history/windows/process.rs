@@ -100,7 +100,11 @@ impl ExactProcess {
         }
         Ok(())
     }
-    fn from_created(process: OwnedHandle, image: PinnedFile) -> io::Result<Self> {
+    pub(crate) fn verify_current_user(&self, user: &CurrentUser) -> io::Result<()> {
+        user.verify_process_user(handle(&self.process))?;
+        self.verify_held_image(&self._image)
+    }
+    pub(super) fn from_created(process: OwnedHandle, image: PinnedFile) -> io::Result<Self> {
         let identity = identity(handle(&process), &image)?;
         Ok(Self {
             process,

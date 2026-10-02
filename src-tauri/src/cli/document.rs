@@ -43,6 +43,7 @@ enum Phase {
 struct DocumentState {
     phase: Phase,
     attached: bool,
+    handoff: Option<String>,
 }
 
 pub(crate) struct DocumentAuthority<R> {
@@ -59,6 +60,76 @@ pub(crate) struct DocumentBinding<R> {
     authority: Arc<DocumentAuthority<R>>,
     witness: Arc<DocumentWitness>,
     witness_id: ResourceId,
+}
+/// Backend-only freeze of this exact original document. It is never decoded
+/// from an IPC field and does not authorize process, installer, or data effects.
+pub(crate) struct DocumentHandoffPin<R> {
+    authority: Arc<DocumentAuthority<R>>,
+    transaction: String,
+    committed: bool,
+}
+impl<R> Drop for DocumentHandoffPin<R> {
+    fn drop(&mut self) {
+        if !self.committed {
+            let mut state = self.authority.state.lock();
+            if state.handoff.as_deref() == Some(self.transaction.as_str()) {
+                state.handoff = None;
+            }
+        }
+    }
+}
+impl<R> DocumentHandoffPin<R> {
+    #[cfg(windows)]
+    pub(crate) fn commit_published(
+        &mut self,
+        published: &crate::version_history::windows::manager_handoff::PublishedManagerHandoff,
+    ) -> Result<(), SafeError> {
+        self.verify()?;
+        if published.transaction() != self.transaction {
+            return Err(error("HISTORY_HANDOFF_CHANGED"));
+        }
+        self.committed = true;
+        Ok(())
+    }
+    #[cfg(windows)]
+    pub(crate) fn finish_source_handoff(
+        self,
+        permission: &crate::version_history::windows::source_lifecycle::SourceExitPermission,
+    ) -> Result<(), SafeError> {
+        permission.verify_document(&self.authority.caller, &self.transaction)?;
+        let mut state = self.authority.state.lock();
+        if state.handoff.as_deref() != Some(self.transaction.as_str()) {
+            return Err(error("FORBIDDEN"));
+        }
+        state.handoff = None;
+        Ok(())
+    }
+    pub(crate) fn verify(&self) -> Result<(), SafeError> {
+        self.authority
+            .registry
+            .check_caller(&self.authority.caller)?;
+        let state = self.authority.state.lock();
+        if state.phase != Phase::Ready || state.handoff.as_deref() != Some(&self.transaction) {
+            return Err(error("FORBIDDEN"));
+        }
+        Ok(())
+    }
+    pub(crate) fn release_review(self) -> Result<(), SafeError> {
+        if self.committed {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
+        self.authority
+            .registry
+            .check_caller(&self.authority.caller)?;
+        let mut state = self.authority.state.lock();
+        if state.phase != Phase::Ready
+            || state.handoff.as_deref() != Some(self.transaction.as_str())
+        {
+            return Err(error("FORBIDDEN"));
+        }
+        state.handoff = None;
+        Ok(())
+    }
 }
 
 impl<R> std::fmt::Debug for DocumentAuthority<R> {
@@ -108,6 +179,7 @@ impl<R> DocumentAuthority<R> {
             state: Mutex::new(DocumentState {
                 phase: Phase::Created,
                 attached: false,
+                handoff: None,
             }),
         }))
     }
@@ -121,6 +193,9 @@ impl<R> DocumentAuthority<R> {
     /// Only the first navigation can proceed. Even same-URL reloads revoke.
     pub(crate) fn navigation(&self, url: &Url) -> bool {
         let mut state = self.state.lock();
+        if state.phase == Phase::Ready && state.handoff.is_some() {
+            return false;
+        }
         if state.phase == Phase::Created && self.same_document_url(url) {
             state.phase = Phase::Navigating;
             return true;
@@ -204,6 +279,30 @@ impl<R> DocumentAuthority<R> {
 }
 
 impl<R> DocumentBinding<R> {
+    pub(crate) fn pin_handoff(
+        self: &Arc<Self>,
+        caller: &CallerIdentity,
+        transaction: &str,
+    ) -> Result<DocumentHandoffPin<R>, SafeError> {
+        crate::version_history::journal::validate_id(transaction)?;
+        self.authority.registry.check_caller(caller)?;
+        if caller != &self.authority.caller {
+            return Err(error("FORBIDDEN"));
+        }
+        let mut state = self.authority.state.lock();
+        if state.phase != Phase::Ready || state.handoff.is_some() {
+            return Err(error("FORBIDDEN"));
+        }
+        state.handoff = Some(transaction.into());
+        Ok(DocumentHandoffPin {
+            authority: self.authority.clone(),
+            transaction: transaction.into(),
+            committed: false,
+        })
+    }
+    pub(crate) fn blocks_handoff_exit(&self) -> bool {
+        self.authority.state.lock().handoff.is_some()
+    }
     /// Backend lifecycle revocation. This invalidates the document epoch and
     /// output routes without waiting for the WebView or dropping owned runs.
     pub(crate) fn revoke(&self) {

@@ -9,6 +9,11 @@ pub(crate) mod compatibility;
 pub(crate) mod download;
 pub(crate) mod journal;
 pub(crate) mod maintenance;
+pub(crate) mod manager_document;
+pub(crate) mod manager_entry;
+#[cfg(windows)]
+pub(crate) mod manager_runtime;
+pub(crate) mod manager_types;
 pub(crate) mod policy;
 pub(crate) mod snapshot;
 pub(crate) mod types;

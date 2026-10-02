@@ -683,13 +683,14 @@ fn HistoryTransaction_PersistentMarker_025() {
         StartupDecision::RecoveryOnly
     );
     let backup = SharedStartupLease::fixture(binding(), true);
+    // 干净的marker缺失不要求历史切换scope；真实shared lease仍覆盖普通启动。
     assert_eq!(
         decide_startup(
             &StartupControlLease::fixture(binding()),
             &backup,
             MarkerRead::Absent
         ),
-        StartupDecision::RecoveryOnly
+        StartupDecision::Ordinary
     );
     assert_eq!(
         decide_startup(

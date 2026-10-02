@@ -382,8 +382,8 @@ impl SourceWebViews {
             "webview-exit-{}.json",
             uuid::Uuid::new_v4().simple()
         )))?;
+        self.persisted = true; // An uncertain write is never automatically replayed.
         let record = DurableRecord::create(root, name, &bytes, user)?;
-        self.persisted = true;
         Ok(Some(WebViewExitReceipt { record, binding }))
     }
 }
@@ -424,6 +424,13 @@ pub(crate) struct WebViewExitReceipt {
     record: DurableRecord,
     binding: WebViewExitBinding,
 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WebViewExitReference {
+    name: String,
+    identity: FileIdentity,
+    digest: String,
+}
 pub(crate) struct SourceExitEvidence {
     _receipt: WebViewExitReceipt,
     _host: ExactProcess,
@@ -445,12 +452,64 @@ impl SourceExitEvidence {
     }
 }
 impl SourceExitFenceEvidence {
+    pub(crate) fn host_identity(&self) -> &ProcessIdentity {
+        &self._receipt.binding.host
+    }
+    pub(crate) fn udf_identity(&self) -> &FileIdentity {
+        &self._receipt.binding.udf
+    }
     pub(crate) fn verify(&self) -> io::Result<()> {
         self._receipt.record.verify()?;
         self.host.verify()
     }
 }
 impl WebViewExitReceipt {
+    pub(crate) fn reference(&self) -> io::Result<WebViewExitReference> {
+        self.record.verify()?;
+        Ok(WebViewExitReference {
+            name: self
+                .record
+                .name()
+                .os_string()
+                .into_string()
+                .map_err(|_| blocked("invalid WebView receipt name"))?,
+            identity: self.record.file_identity().clone(),
+            digest: self.record.digest().into(),
+        })
+    }
+    pub(crate) fn verify_live_source(
+        &self,
+        source: &ExactProcess,
+        udf: &Directory,
+    ) -> io::Result<()> {
+        self.record.verify()?;
+        udf.recheck()?;
+        if source.identity() != &self.binding.host
+            || source.terminal(0)?.is_some()
+            || udf.identity() != &self.binding.udf
+        {
+            return Err(blocked(
+                "WebView exit receipt belongs to another live source",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn reopen(
+        root: Arc<PrivateDirectory>,
+        reference: &WebViewExitReference,
+        user: &CurrentUser,
+    ) -> io::Result<Self> {
+        let record = DurableRecord::open(
+            root,
+            ComponentName::new(OsStr::new(&reference.name))?,
+            &reference.digest,
+            user,
+        )?;
+        if record.file_identity() != &reference.identity {
+            return Err(blocked("WebView exit record identity changed"));
+        }
+        Self::open(record)
+    }
     pub(crate) fn open(record: DurableRecord) -> io::Result<Self> {
         record.verify()?;
         let binding: WebViewExitBinding =

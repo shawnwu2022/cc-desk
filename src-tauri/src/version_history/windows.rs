@@ -56,3 +56,16 @@ unsafe fn own(value: HANDLE) -> OwnedHandle {
     // SAFETY: callers only transfer successfully created, non-pseudo handles.
     unsafe { OwnedHandle::from_raw_handle(value.0) }
 }
+
+#[cfg(windows)]
+pub(crate) mod manager_bundle;
+#[cfg(windows)]
+pub(crate) mod manager_handoff;
+#[cfg(windows)]
+pub(crate) mod manager_process;
+#[cfg(windows)]
+pub(crate) mod manager_ui;
+#[cfg(windows)]
+pub(crate) mod source_lifecycle;
+#[cfg(windows)]
+pub(crate) mod startup;

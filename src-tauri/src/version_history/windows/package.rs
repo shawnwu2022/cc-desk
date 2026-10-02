@@ -275,6 +275,34 @@ impl RetainedPackage {
     pub(crate) fn record_digest(&self) -> String {
         self.files.lock().record.binding.digest.clone()
     }
+    pub(crate) fn transaction_id(&self) -> &str {
+        &self.binding.transaction_id
+    }
+    pub(crate) fn selection(&self) -> &SelectionMetadata {
+        &self.selection
+    }
+    pub(crate) fn root_identity(&self) -> &FileIdentity {
+        self.root.directory().identity()
+    }
+    /// Revalidates the exact retained objects/bytes used at transfer. Official
+    /// metadata and publisher authentication are freshly re-established by
+    /// reopen; this never changes package identity into installation authority.
+    pub(crate) fn verify_retained(&self) -> Result<(), SafeError> {
+        let user = CurrentUser::capture().map_err(storage)?;
+        self.root.verify(&user).map_err(storage)?;
+        let files = self.files.lock();
+        files.package.verify(&user)?;
+        files.signature.verify(&user)?;
+        files.observation.verify(&user)?;
+        if files.package.binding != self.binding.package
+            || files.signature.binding != self.binding.signature
+            || files.observation.binding != self.binding.observation
+            || files.record.bytes(&user)? != serde_json::to_vec(&self.binding).map_err(storage)?
+        {
+            return Err(error("HISTORY_PACKAGE_CHANGED"));
+        }
+        Ok(())
+    }
     /// Only a validated transaction's protected record digest may be supplied.
     /// The selected release is re-fetched and its complete observation compared;
     /// every reopened file must retain the exact copied object identity.
