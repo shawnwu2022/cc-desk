@@ -1,19 +1,27 @@
 //! Append-only, individually flushed records and immutable manifests. A record
 //! proves an observed transcript, never authority to replay an OS operation.
 //! No multi-file/registry atomicity or Windows directory durability is implied.
-use super::maintenance::{DirectoryDurability, PrivateRecoveryRoot};
+#[cfg(test)]
+use super::maintenance::DirectoryDurability;
 use super::verified_package::sha256;
 use crate::cli::profiles::error;
 use crate::cli::types::SafeError;
+#[cfg(test)]
 use cap_std::fs::{Dir, OpenOptions};
+#[cfg(any(test, windows))]
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(any(test, windows))]
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(test)]
+use std::io::Write;
+#[cfg(any(test, windows))]
+use std::io::{Read, Seek, SeekFrom};
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
+#[cfg(any(test, windows))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_RECORD_BYTES: usize = 128 * 1024;
@@ -690,6 +698,7 @@ impl JournalInspection {
         self.head.as_deref()
     }
 }
+#[cfg(any(test, windows))]
 struct WriterState {
     journal: SwitchJournal,
     head: String,
@@ -697,13 +706,22 @@ struct WriterState {
     hash: Sha256,
     identity: String,
 }
+#[cfg(any(test, windows))]
 struct ProtectedManifest {
+    #[cfg(test)]
+    fixture: Option<FixtureManifest>,
+    #[cfg(windows)]
+    windows: Option<super::windows::durability::DurableArtifact>,
+}
+#[cfg(test)]
+struct FixtureManifest {
     file: File,
     identity: String,
     length: u64,
 }
 
 #[derive(Clone, Copy)]
+#[cfg(any(test, windows))]
 enum WriterTrust {
     /// Real retained writable Windows handle with FILE_SHARE_READ only. Other
     /// write/delete opens and pathname replacement are denied for its lifetime.
@@ -714,13 +732,24 @@ enum WriterTrust {
     FixtureFullHash,
 }
 
+#[cfg(any(test, windows))]
+enum JournalStorage {
+    #[cfg(test)]
+    Fixture {
+        directory: Dir,
+        durability: Box<dyn DirectoryDurability>,
+    },
+    #[cfg(windows)]
+    Windows(super::windows::durability::WindowsJournalStorage),
+}
+
+#[cfg(any(test, windows))]
 pub(crate) struct JournalStore {
-    directory: Dir,
-    durability: Box<dyn DirectoryDurability>,
-    _writer_lock: File,
+    storage: JournalStorage,
+    _writer_lock: Option<File>,
     log: Mutex<File>,
     /// A referenced artifact is part of the validated writer state. Keep the
-    /// original read-only no-write/no-delete handle, not just a remembered hash.
+    /// original no-external-write/no-delete handle, not just a remembered hash.
     /// Deduplication bounds OS handles; never evict a recovery prerequisite.
     dependencies: Mutex<BTreeMap<String, ProtectedManifest>>,
     dependency_limit: usize,
@@ -731,24 +760,57 @@ pub(crate) struct JournalStore {
     #[cfg(test)]
     replay_count: AtomicU64,
 }
+
+#[cfg(any(test, windows))]
 impl JournalStore {
-    pub(crate) fn open(root: PrivateRecoveryRoot) -> Result<Self, SafeError> {
-        #[cfg(windows)]
-        {
-            let (directory, durability) = root.into_parts();
-            Self::open_parts(
-                directory,
-                durability,
-                Limits::default(),
-                WriterTrust::HeldWindowsHandle,
-            )
+    /// Marker publication holds an exclusive borrow of this original writer;
+    /// detached inspection data never supplies current/root publication authority.
+    #[cfg(windows)]
+    pub(super) fn validate_marker_publication(
+        &mut self,
+        root: &super::windows::files::PrivateDirectory,
+        marker: &super::maintenance::ActiveContextMarker,
+    ) -> Result<(), SafeError> {
+        self.check_writer_current()?;
+        let storage = match &self.storage {
+            JournalStorage::Windows(storage) => storage,
+            #[cfg(test)]
+            JournalStorage::Fixture { .. } => return Err(error("HISTORY_PLATFORM_UNSUPPORTED")),
+        };
+        if !storage.matches_root(root) {
+            return Err(error("HISTORY_ROOT_CHANGED"));
         }
-        #[cfg(not(windows))]
-        {
-            let _ = root;
-            Err(error("HISTORY_PLATFORM_UNSUPPORTED"))
-        }
+        let state = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?;
+        marker.validate_checkpoint(&state.journal, &state.head)
     }
+    /// The held private root is storage authority only. Scope/exclusion,
+    /// snapshot and installation admission remain separate coordinator proofs.
+    #[cfg(windows)]
+    pub(crate) fn open_windows(
+        root: std::sync::Arc<super::windows::files::PrivateDirectory>,
+    ) -> Result<Self, SafeError> {
+        let storage =
+            super::windows::durability::WindowsJournalStorage::open(root).map_err(storage_error)?;
+        let log = storage.log_file().map_err(storage_error)?;
+        regular_file(&log)?;
+        Ok(Self {
+            storage: JournalStorage::Windows(storage),
+            _writer_lock: None, // The log's original no-share-write handle excludes another writer.
+            log: Mutex::new(log),
+            writer: None,
+            dependencies: Mutex::new(BTreeMap::new()),
+            dependency_limit: MAX_DEPENDENCY_HANDLES,
+            trust: WriterTrust::HeldWindowsHandle,
+            limits: Limits::default(),
+            poisoned: AtomicBool::new(false),
+            #[cfg(test)]
+            replay_count: AtomicU64::new(0),
+        })
+    }
+    #[cfg(test)]
     fn open_parts(
         directory: Dir,
         durability: Box<dyn DirectoryDurability>,
@@ -774,9 +836,11 @@ impl JournalStore {
             .into_std();
         regular_file(&log)?;
         Ok(Self {
-            directory,
-            durability,
-            _writer_lock: file,
+            storage: JournalStorage::Fixture {
+                directory,
+                durability,
+            },
+            _writer_lock: Some(file),
             log: Mutex::new(log),
             writer: None,
             dependencies: Mutex::new(BTreeMap::new()),
@@ -923,15 +987,21 @@ impl JournalStore {
         }
         // Reopen for identity observation only. Share-write admits OUR already
         // held writer, not another writer: the original handle denies that open.
-        let mut options = file_options(true);
-        options.read(true);
-        let named = self
-            .directory
-            .open_with("journal.log", &options)
-            .map_err(storage_error)?
-            .into_std();
-        if regular_file(&named)? != state.identity {
-            return Err(error("HISTORY_JOURNAL_CHANGED"));
+        match &self.storage {
+            #[cfg(test)]
+            JournalStorage::Fixture { directory, .. } => {
+                let mut options = file_options(true);
+                options.read(true);
+                let named = directory
+                    .open_with("journal.log", &options)
+                    .map_err(storage_error)?
+                    .into_std();
+                if regular_file(&named)? != state.identity {
+                    return Err(error("HISTORY_JOURNAL_CHANGED"));
+                }
+            }
+            #[cfg(windows)]
+            JournalStorage::Windows(storage) => storage.verify().map_err(storage_error)?,
         }
         match self.trust {
             #[cfg(windows)]
@@ -961,10 +1031,17 @@ impl JournalStore {
     }
     fn check_protected_dependencies(&self) -> Result<(), SafeError> {
         match self.trust {
-            // Exact read-only handles deny ordinary writes/deletes for every
+            // Exact held handles deny external writes/deletes for every
             // cached dependency, including receipt wrappers and observed data.
             #[cfg(windows)]
-            WriterTrust::HeldWindowsHandle => Ok(()),
+            WriterTrust::HeldWindowsHandle => {
+                for held in self.dependencies.lock().values() {
+                    if let Some(artifact) = &held.windows {
+                        artifact.verify().map_err(storage_error)?;
+                    }
+                }
+                Ok(())
+            }
             WriterTrust::FixtureFullHash => {
                 let mut dependencies = self.dependencies.lock();
                 for (digest, held) in dependencies.iter_mut() {
@@ -976,18 +1053,29 @@ impl JournalStore {
     }
     fn write_frame(&self, expected_length: u64, bytes: &[u8]) -> Result<(), SafeError> {
         let result = (|| {
+            #[allow(unused_mut)]
             let mut file = self.log.lock();
             if file.metadata().map_err(storage_error)?.len() != expected_length {
                 return Err(error("HISTORY_JOURNAL_CHANGED"));
             }
-            file.seek(SeekFrom::Start(expected_length))
-                .map_err(storage_error)?;
-            file.write_all(bytes)
-                .and_then(|_| file.sync_all())
-                .map_err(storage_error)?;
-            self.durability
-                .sync_directory(&self.directory)
-                .map_err(storage_error)
+            match &self.storage {
+                #[cfg(test)]
+                JournalStorage::Fixture {
+                    directory,
+                    durability,
+                } => {
+                    file.seek(SeekFrom::Start(expected_length))
+                        .map_err(storage_error)?;
+                    file.write_all(bytes)
+                        .and_then(|_| file.sync_all())
+                        .map_err(storage_error)?;
+                    durability.sync_directory(directory).map_err(storage_error)
+                }
+                #[cfg(windows)]
+                JournalStorage::Windows(storage) => storage
+                    .append(expected_length, bytes)
+                    .map_err(storage_error),
+            }
         })();
         if result.is_err() {
             self.poisoned.store(true, Ordering::SeqCst);
@@ -1086,12 +1174,18 @@ impl JournalStore {
         }
         Ok(())
     }
-    fn create_immutable(&self, name: &str, bytes: &[u8]) -> Result<(), SafeError> {
+    #[cfg(test)]
+    fn create_immutable(
+        &self,
+        directory: &Dir,
+        durability: &dyn DirectoryDurability,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<(), SafeError> {
         let result = (|| {
             let mut options = file_options(false);
             options.write(true).create_new(true);
-            let mut file = self
-                .directory
+            let mut file = directory
                 .open_with(name, &options)
                 .map_err(storage_error)?
                 .into_std();
@@ -1099,9 +1193,7 @@ impl JournalStore {
             file.write_all(bytes)
                 .and_then(|_| file.sync_all())
                 .map_err(storage_error)?;
-            self.durability
-                .sync_directory(&self.directory)
-                .map_err(storage_error)
+            durability.sync_directory(directory).map_err(storage_error)
         })();
         if result.is_err() {
             self.poisoned.store(true, Ordering::SeqCst);
@@ -1114,14 +1206,60 @@ impl JournalStore {
             return Err(error("HISTORY_MANIFEST_INVALID"));
         }
         let digest = sha256(bytes);
-        let name = format!("manifest-{digest}.json");
-        if self.directory.symlink_metadata(&name).is_ok() {
-            if self.read_manifest(&digest)? == bytes {
-                return Ok(digest);
+        match &self.storage {
+            #[cfg(test)]
+            JournalStorage::Fixture {
+                directory,
+                durability,
+            } => {
+                let name = format!("manifest-{digest}.json");
+                if directory.symlink_metadata(&name).is_ok() {
+                    if self.read_manifest(&digest)? == bytes {
+                        return Ok(digest);
+                    }
+                    return Err(error("HISTORY_MANIFEST_CHANGED"));
+                }
+                self.create_immutable(directory, durability.as_ref(), &name, bytes)?;
             }
-            return Err(error("HISTORY_MANIFEST_CHANGED"));
+            #[cfg(windows)]
+            JournalStorage::Windows(storage) => {
+                let mut dependencies = self.dependencies.lock();
+                if let Some(held) = dependencies.get_mut(&digest) {
+                    if self.read_protected_manifest(&digest, held)? == bytes {
+                        return Ok(digest);
+                    }
+                    return Err(error("HISTORY_MANIFEST_CHANGED"));
+                }
+                if dependencies.len() >= self.dependency_limit {
+                    return Err(error("HISTORY_DEPENDENCY_LIMIT"));
+                }
+                let artifact = match storage.open_artifact(&digest) {
+                    Ok(artifact) => artifact,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        match storage.create_artifact(&digest, bytes) {
+                            Ok(artifact) => artifact,
+                            Err(failure) => {
+                                self.poisoned.store(true, Ordering::SeqCst);
+                                return Err(storage_error(failure));
+                            }
+                        }
+                    }
+                    Err(failure) => return Err(storage_error(failure)),
+                };
+                if artifact.read().map_err(storage_error)? != bytes {
+                    self.poisoned.store(true, Ordering::SeqCst);
+                    return Err(error("HISTORY_MANIFEST_CHANGED"));
+                }
+                dependencies.insert(
+                    digest.clone(),
+                    ProtectedManifest {
+                        #[cfg(test)]
+                        fixture: None,
+                        windows: Some(artifact),
+                    },
+                );
+            }
         }
-        self.create_immutable(&name, bytes)?;
         Ok(digest)
     }
     pub(crate) fn read_manifest(&self, digest: &str) -> Result<Vec<u8>, SafeError> {
@@ -1151,85 +1289,126 @@ impl JournalStore {
         Ok(bytes)
     }
     fn open_manifest(&self, digest: &str) -> Result<ProtectedManifest, SafeError> {
-        let mut options = file_options(false);
-        options.read(true);
-        let file = self
-            .directory
-            .open_with(format!("manifest-{digest}.json"), &options)
-            .map_err(storage_error)?
-            .into_std();
-        let identity = regular_file(&file)?;
-        let length = file.metadata().map_err(storage_error)?.len();
-        if length > MAX_MANIFEST_BYTES as u64 {
-            return Err(error("HISTORY_MANIFEST_INVALID"));
+        match &self.storage {
+            #[cfg(windows)]
+            JournalStorage::Windows(storage) => Ok(ProtectedManifest {
+                #[cfg(test)]
+                fixture: None,
+                windows: Some(storage.open_artifact(digest).map_err(storage_error)?),
+            }),
+            #[cfg(test)]
+            JournalStorage::Fixture { directory, .. } => {
+                let mut options = file_options(false);
+                options.read(true);
+                let file = directory
+                    .open_with(format!("manifest-{digest}.json"), &options)
+                    .map_err(storage_error)?
+                    .into_std();
+                let identity = regular_file(&file)?;
+                let length = file.metadata().map_err(storage_error)?.len();
+                if length > MAX_MANIFEST_BYTES as u64 {
+                    return Err(error("HISTORY_MANIFEST_INVALID"));
+                }
+                Ok(ProtectedManifest {
+                    fixture: Some(FixtureManifest {
+                        file,
+                        identity,
+                        length,
+                    }),
+                    #[cfg(windows)]
+                    windows: None,
+                })
+            }
         }
-        Ok(ProtectedManifest {
-            file,
-            identity,
-            length,
-        })
     }
     fn read_protected_manifest(
         &self,
         digest: &str,
         held: &mut ProtectedManifest,
     ) -> Result<Vec<u8>, SafeError> {
-        if regular_file(&held.file)? != held.identity
-            || held.file.metadata().map_err(storage_error)?.len() != held.length
+        #[cfg(windows)]
+        if let Some(artifact) = &held.windows {
+            return artifact.read().map_err(storage_error);
+        }
+        #[cfg(test)]
         {
-            return Err(error("HISTORY_MANIFEST_CHANGED"));
+            let directory = match &self.storage {
+                JournalStorage::Fixture { directory, .. } => directory,
+                #[cfg(windows)]
+                JournalStorage::Windows(_) => return Err(error("HISTORY_MANIFEST_CHANGED")),
+            };
+            let held = held
+                .fixture
+                .as_mut()
+                .ok_or_else(|| error("HISTORY_MANIFEST_CHANGED"))?;
+            if regular_file(&held.file)? != held.identity
+                || held.file.metadata().map_err(storage_error)?.len() != held.length
+            {
+                return Err(error("HISTORY_MANIFEST_CHANGED"));
+            }
+            let mut options = file_options(false);
+            options.read(true);
+            let named = directory
+                .open_with(format!("manifest-{digest}.json"), &options)
+                .map_err(storage_error)?
+                .into_std();
+            if regular_file(&named)? != held.identity {
+                return Err(error("HISTORY_MANIFEST_CHANGED"));
+            }
+            held.file.seek(SeekFrom::Start(0)).map_err(storage_error)?;
+            let mut bytes = Vec::new();
+            (&mut held.file)
+                .take(MAX_MANIFEST_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(storage_error)?;
+            if bytes.len() as u64 != held.length
+                || sha256(&bytes) != digest
+                || regular_file(&held.file)? != held.identity
+            {
+                return Err(error("HISTORY_MANIFEST_CHANGED"));
+            }
+            Ok(bytes)
         }
-        let mut options = file_options(false);
-        options.read(true);
-        let named = self
-            .directory
-            .open_with(format!("manifest-{digest}.json"), &options)
-            .map_err(storage_error)?
-            .into_std();
-        if regular_file(&named)? != held.identity {
-            return Err(error("HISTORY_MANIFEST_CHANGED"));
-        }
-        held.file.seek(SeekFrom::Start(0)).map_err(storage_error)?;
-        let mut bytes = Vec::new();
-        (&mut held.file)
-            .take(MAX_MANIFEST_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(storage_error)?;
-        if bytes.len() as u64 != held.length
-            || sha256(&bytes) != digest
-            || regular_file(&held.file)? != held.identity
+        #[cfg(not(test))]
         {
-            return Err(error("HISTORY_MANIFEST_CHANGED"));
+            let _ = (digest, held);
+            Err(error("HISTORY_PLATFORM_UNSUPPORTED"))
         }
-        Ok(bytes)
     }
     fn namespace_valid(&self) -> Result<bool, SafeError> {
-        for (index, entry) in self.directory.entries().map_err(storage_error)?.enumerate() {
-            if index > MAX_RECORDS * 4 {
-                return Ok(false);
-            }
-            let entry = entry.map_err(storage_error)?;
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                return Ok(false);
-            };
-            if name == "journal.lock" || name == "journal.log" {
-                continue;
-            }
-            let kind = entry.file_type().map_err(storage_error)?;
-            if !kind.is_file() || kind.is_symlink() {
-                return Ok(false);
-            }
-            let Some(digest) = name
-                .strip_prefix("manifest-")
-                .and_then(|name| name.strip_suffix(".json"))
-            else {
-                return Ok(false);
-            };
-            if validate_digest(digest).is_err() {
-                return Ok(false);
+        match &self.storage {
+            #[cfg(windows)]
+            JournalStorage::Windows(storage) => storage.namespace_valid().map_err(storage_error),
+            #[cfg(test)]
+            JournalStorage::Fixture { directory, .. } => {
+                for (index, entry) in directory.entries().map_err(storage_error)?.enumerate() {
+                    if index > MAX_RECORDS * 4 {
+                        return Ok(false);
+                    }
+                    let entry = entry.map_err(storage_error)?;
+                    let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                        return Ok(false);
+                    };
+                    if name == "journal.lock" || name == "journal.log" {
+                        continue;
+                    }
+                    let kind = entry.file_type().map_err(storage_error)?;
+                    if !kind.is_file() || kind.is_symlink() {
+                        return Ok(false);
+                    }
+                    let Some(digest) = name
+                        .strip_prefix("manifest-")
+                        .and_then(|name| name.strip_suffix(".json"))
+                    else {
+                        return Ok(false);
+                    };
+                    if validate_digest(digest).is_err() {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
             }
         }
-        Ok(true)
     }
 
     /// Full recovery validation is explicit and linear in records/artifact reads.
@@ -1340,6 +1519,18 @@ impl JournalStore {
     pub(crate) fn fixture_dependency_count(&self) -> usize {
         self.dependencies.lock().len()
     }
+    #[cfg(all(test, windows))]
+    pub(crate) fn fixture_windows_dependency_limit(
+        root: std::sync::Arc<super::windows::files::PrivateDirectory>,
+        limit: usize,
+    ) -> Result<Self, SafeError> {
+        if limit == 0 || limit > MAX_DEPENDENCY_HANDLES {
+            return Err(error("HISTORY_DEPENDENCY_LIMIT"));
+        }
+        let mut store = Self::open_windows(root)?;
+        store.dependency_limit = limit;
+        Ok(store)
+    }
     #[cfg(test)]
     pub(crate) fn fixture_with_dependency_limit(
         directory: Dir,
@@ -1410,9 +1601,11 @@ impl DirectoryDurability for TestDurability {
         }
     }
 }
+#[cfg(any(test, windows))]
 fn storage_error(_: std::io::Error) -> SafeError {
     error("HISTORY_STORAGE_UNAVAILABLE")
 }
+#[cfg(test)]
 fn file_options(shared_writer: bool) -> OpenOptions {
     let mut options = OpenOptions::new();
     #[cfg(unix)]
@@ -1436,6 +1629,7 @@ fn file_options(shared_writer: bool) -> OpenOptions {
     }
     options
 }
+#[cfg(any(test, windows))]
 fn regular_file(file: &File) -> Result<String, SafeError> {
     let metadata = file.metadata().map_err(storage_error)?;
     if !metadata.is_file() {

@@ -110,6 +110,8 @@ mod version_history_runtime;
 mod version_history_transaction;
 
 #[cfg(windows)]
+mod version_history_journal_windows;
+#[cfg(windows)]
 mod version_history_webview;
 #[cfg(windows)]
 mod version_history_windows;

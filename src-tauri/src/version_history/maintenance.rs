@@ -304,21 +304,11 @@ impl SnapshotBoundary {
     }
 }
 
-/// Secured, identity-pinned private directory OUTSIDE installation/data roots.
-/// Future Windows construction verifies the owner ACL, ancestor/reparse and
-/// overlap policy, and supplies validated durable-directory sync semantics.
-/// No frontend path or boolean can construct this capability.
-pub(crate) struct PrivateRecoveryRoot {
-    directory: cap_std::fs::Dir,
-    durability: Box<dyn DirectoryDurability>,
-}
+/// Fixture-only directory sync. Windows production persistence uses secured,
+/// held objects and operation-specific flush/readback, never directory fsync.
+#[cfg(test)]
 pub(crate) trait DirectoryDurability: Send + Sync {
     fn sync_directory(&self, directory: &cap_std::fs::Dir) -> std::io::Result<()>;
-}
-impl PrivateRecoveryRoot {
-    pub(super) fn into_parts(self) -> (cap_std::fs::Dir, Box<dyn DirectoryDurability>) {
-        (self.directory, self.durability)
-    }
 }
 
 /// Holds a SHARED lock on the stable per-user/registered-install admission file.
@@ -375,6 +365,25 @@ pub(crate) struct ActiveContextMarker {
     state: BarrierState,
 }
 impl ActiveContextMarker {
+    pub(crate) fn transition_from(
+        inspection: &super::journal::JournalInspection,
+    ) -> Result<Self, SafeError> {
+        let journal = inspection
+            .last_valid
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?;
+        if inspection.blocked || journal.phase() == super::journal::JournalPhase::Restored {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
+        Self::transition(
+            journal.binding().clone(),
+            journal.generation(),
+            inspection
+                .head()
+                .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?
+                .into(),
+        )
+    }
     pub(crate) fn transition(
         binding: JournalBinding,
         generation: u64,
@@ -419,6 +428,37 @@ impl ActiveContextMarker {
     }
     pub(crate) fn encode(&self) -> Result<Vec<u8>, SafeError> {
         serde_json::to_vec(self).map_err(|_| error("HISTORY_MARKER_INVALID"))
+    }
+    pub(super) fn validate_structure(&self) -> Result<(), SafeError> {
+        if self.schema != 1 {
+            return Err(error("HISTORY_MARKER_INVALID"));
+        }
+        self.binding.validate()?;
+        super::journal::validate_digest(&self.journal_digest)
+    }
+    /// Persisted markers bind observed journal checkpoints, not live OS proof.
+    /// The coordinator must still verify the matching source state under leases.
+    pub(super) fn validate_checkpoint(
+        &self,
+        journal: &super::journal::SwitchJournal,
+        head: &str,
+    ) -> Result<(), SafeError> {
+        self.validate_structure()?;
+        if journal.binding() != &self.binding
+            || journal.generation() != self.generation
+            || head != self.journal_digest
+            || (self.state == BarrierState::Restored)
+                != (journal.phase() == super::journal::JournalPhase::Restored)
+            || (self.state == BarrierState::Restored && journal.requires_reconciliation())
+        {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
+        Ok(())
+    }
+    pub(super) fn follows(&self, prior: &Self) -> bool {
+        self.binding == prior.binding
+            && self.generation > prior.generation
+            && prior.state == BarrierState::Transition
     }
 }
 
