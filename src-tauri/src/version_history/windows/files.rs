@@ -16,7 +16,8 @@ use std::{
 use windows::Wdk::{
     Foundation::OBJECT_ATTRIBUTES,
     Storage::FileSystem::{
-        NtCreateFile, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
+        FileRenameInformation, NtCreateFile, NtSetInformationFile, FILE_CREATE,
+        FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_RENAME_INFORMATION,
         FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_THROUGH, NTCREATEFILE_CREATE_DISPOSITION,
     },
 };
@@ -24,13 +25,12 @@ use windows::Win32::{
     Foundation::{ERROR_NO_MORE_FILES, HANDLE, OBJ_DONT_REPARSE, UNICODE_STRING},
     Storage::FileSystem::{
         CreateFileW, FileAttributeTagInfo, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
-        FileIdInfo, FileRenameInfo, FileStandardInfo, GetDriveTypeW, GetFileInformationByHandleEx,
-        GetFileType, GetFinalPathNameByHandleW, GetVolumeInformationByHandleW,
-        SetFileInformationByHandle, DELETE, FILE_ACCESS_RIGHTS, FILE_ALL_ACCESS,
-        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-        FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_ID_BOTH_DIR_INFO, FILE_ID_INFO, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
-        FILE_READ_DATA, FILE_RENAME_INFO, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FileIdInfo, FileStandardInfo, GetDriveTypeW, GetFileInformationByHandleEx, GetFileType,
+        GetFinalPathNameByHandleW, GetVolumeInformationByHandleW, DELETE, FILE_ACCESS_RIGHTS,
+        FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_BOTH_DIR_INFO, FILE_ID_INFO, FILE_LIST_DIRECTORY,
+        FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE,
         FILE_STANDARD_INFO, FILE_TRAVERSE, FILE_TYPE_DISK, FILE_WRITE_DATA, OPEN_EXISTING,
         READ_CONTROL, SYNCHRONIZE, VOLUME_NAME_GUID,
     },
@@ -194,7 +194,7 @@ impl Directory {
     pub(crate) fn open_absolute(path: &Path) -> io::Result<Arc<Self>> {
         let units: Vec<_> = path.as_os_str().encode_wide().collect();
         validate_absolute(&units)?;
-        let root = vec![units[0], b':' as u16, b'\\' as u16, 0];
+        let root = [units[0], b':' as u16, b'\\' as u16, 0];
         if unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) } != 3 {
             return Err(blocked("recovery requires a fixed local drive"));
         }
@@ -285,7 +285,7 @@ impl Directory {
             let mut offset = 0usize;
             loop {
                 let header = offset_of!(FILE_ID_BOTH_DIR_INFO, FileName);
-                if offset % std::mem::align_of::<FILE_ID_BOTH_DIR_INFO>() != 0
+                if !offset.is_multiple_of(std::mem::align_of::<FILE_ID_BOTH_DIR_INFO>())
                     || offset + size_of::<FILE_ID_BOTH_DIR_INFO>() > 65536
                 {
                     return Err(blocked("malformed NTFS directory entry"));
@@ -299,7 +299,7 @@ impl Directory {
                 };
                 let length = entry.FileNameLength as usize;
                 if length == 0
-                    || length % 2 != 0
+                    || !length.is_multiple_of(2)
                     || length > 510
                     || offset + header + length > 65536
                 {
@@ -728,15 +728,13 @@ fn rename_handle(
     if identity.volume != parent.identity.volume || metadata(file)?.identity != *identity {
         return Err(blocked("rename requires the same verified NTFS volume"));
     }
-    let length = offset_of!(FILE_RENAME_INFO, FileName) + name.0.len() * 2;
-    let mut buffer = vec![
-        0usize;
-        length
-            .max(size_of::<FILE_RENAME_INFO>())
-            .div_ceil(size_of::<usize>())
-    ];
+    // The Win32 wrapper interprets names relative to the process working
+    // directory. Use the native parent-handle-relative contract directly.
+    let length = size_of::<FILE_RENAME_INFORMATION>() + name.0.len() * 2;
+    let mut buffer = vec![0usize; length.div_ceil(size_of::<usize>())];
+    let mut status = IO_STATUS_BLOCK::default();
     unsafe {
-        let information = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+        let information = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
         (*information).Anonymous.ReplaceIfExists = false;
         (*information).RootDirectory = parent.raw();
         (*information).FileNameLength = (name.0.len() * 2) as u32;
@@ -745,8 +743,21 @@ fn rename_handle(
             (*information).FileName.as_mut_ptr(),
             name.0.len(),
         );
-        SetFileInformationByHandle(file, FileRenameInfo, information.cast(), length as u32)
-            .map_err(win_error)?;
+        let result = NtSetInformationFile(
+            file,
+            &mut status,
+            information.cast(),
+            length as u32,
+            FileRenameInformation,
+        );
+        // Handles are synchronous. Pending/other statuses are uncertain and
+        // must never cause a retry, absolute-path fallback, or handle release.
+        if result.0 != 0 || status.Anonymous.Status.0 != 0 {
+            return Err(io::Error::other(format!(
+                "relative NTFS rename failed: 0x{:08x}, completion 0x{:08x}",
+                result.0 as u32, status.Anonymous.Status.0 as u32
+            )));
+        }
     }
     // A failure after the syscall is an uncertain effect. Never rename back or
     // replay here. The caller retains the handle for journal reconciliation.

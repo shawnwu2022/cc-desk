@@ -61,7 +61,9 @@ impl RegistryValue {
             return Err(blocked("unsupported typed registry value"));
         }
         if matches!(self.kind, 1 | 2 | 7)
-            && (self.bytes.len() < 2 || self.bytes.len() % 2 != 0 || !self.bytes.ends_with(&[0, 0]))
+            && (self.bytes.len() < 2
+                || !self.bytes.len().is_multiple_of(2)
+                || !self.bytes.ends_with(&[0, 0]))
         {
             return Err(blocked("malformed registry string"));
         }
@@ -253,13 +255,73 @@ fn open_chain(
         }
         status.ok().map_err(win_error)?;
         let key = Key(raw);
-        if read_value(key.0, "SymbolicLinkValue")?.is_some_and(|value| value.kind == REG_LINK.0) {
-            return Err(blocked("registry links are unsupported"));
+        if let Some(value) =
+            read_value(key.0, "SymbolicLinkValue")?.filter(|value| value.kind == REG_LINK.0)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                link_diagnostic(root, view, part, &value.bytes),
+            ));
         }
         parent = key.0;
         keys.push(key);
     }
     Ok(Some(keys))
+}
+
+/// Bounded diagnosis only. Recognizing a standard target does not authorize
+/// following it. Never put arbitrary registry data, paths or SIDs into errors.
+pub(crate) fn link_diagnostic(
+    root: HKEY,
+    view: RegistryView,
+    component: &str,
+    target: &[u8],
+) -> String {
+    let hive = if root == HKEY_CURRENT_USER {
+        "currentUser"
+    } else if root == HKEY_LOCAL_MACHINE {
+        "localMachine"
+    } else {
+        "unknown"
+    };
+    let component = match component {
+        "Software" => "software",
+        "Policies" => "policies",
+        "Microsoft" => "microsoft",
+        "Edge" => "edge",
+        "WebView2" => "webview2",
+        "UserDataFolder" => "userDataFolder",
+        "BrowserExecutableFolder" => "browserExecutableFolder",
+        "AdditionalBrowserArguments" => "additionalBrowserArguments",
+        _ => "unknown",
+    };
+    let recognized = [
+        ("machinePolicies", r"\REGISTRY\MACHINE\SOFTWARE\Policies"),
+        ("machineClasses", r"\REGISTRY\MACHINE\SOFTWARE\Classes"),
+        (
+            "machineClasses32",
+            r"\REGISTRY\MACHINE\SOFTWARE\Classes\Wow6432Node",
+        ),
+    ];
+    let category = if target.len().is_multiple_of(2) {
+        let units: Vec<_> = target
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let units = units.strip_suffix(&[0]).unwrap_or(&units);
+        String::from_utf16(units)
+            .ok()
+            .and_then(|value| {
+                recognized
+                    .iter()
+                    .find(|(_, expected)| value.eq_ignore_ascii_case(expected))
+                    .map(|(category, _)| *category)
+            })
+            .unwrap_or("unknown")
+    } else {
+        "unknown"
+    };
+    format!("registry links are unsupported: hive={hive}, view={view:?}, component={component}, target={category}")
 }
 
 /// Conservative pre-controller check: any configured WebView policy under one

@@ -67,10 +67,14 @@ fn HistoryWindows_PinAncestors_003() {
 // 检查硬链接文件不会取得读取或写入能力。
 #[test]
 fn HistoryWindows_RejectLinks_004() {
-    let (temporary, _, private) = private_fixture();
+    let (temporary, user, private) = private_fixture();
     let path = temporary.path().join("private/source");
     std::fs::write(&path, b"source").unwrap();
+    // Prepare the hostile fixture before admission pins its ancestor chain.
+    drop(private);
     std::fs::hard_link(&path, temporary.path().join("alias")).unwrap();
+    let parent = Directory::open_absolute(temporary.path()).unwrap();
+    let private = PrivateDirectory::open_existing(parent, name("private"), &user).unwrap();
     assert!(private
         .directory()
         .open_file(name("source"), FileAccess::Read)
@@ -275,7 +279,7 @@ fn HistoryWindows_ProcessWorker_013() {
         let mut file = std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
-            .open(path)
+            .open(&path)
             .unwrap();
         file.write_all(b"executed").unwrap();
         if let Some(release) = std::env::var_os("CC_DESK_HISTORY_PROBE_RELEASE") {
@@ -293,6 +297,11 @@ fn HistoryWindows_ProcessWorker_013() {
             std::thread::sleep(std::time::Duration::from_secs(3));
         }
     }
+    std::fs::write(
+        std::path::Path::new(&path).with_extension("completed"),
+        b"completed",
+    )
+    .unwrap();
 }
 
 // 检查重开私有目录得到同一身份，不靠提前持有的 Rust 对象跳过 ACL 检查。
@@ -391,7 +400,7 @@ fn await_empty(read: impl Fn() -> std::io::Result<u32>) {
     }
 }
 
-// 检查历史应用 job 在管理者释放后仍可重开且不会终止用户进程。
+// 检查历史应用在管理者释放后继续运行并由用户完成，消失的 job 名称不表示已退出。
 #[test]
 fn HistoryWindows_HistoricalJob_017() {
     let (temporary, user, private) = private_fixture();
@@ -405,16 +414,22 @@ fn HistoryWindows_HistoricalJob_017() {
         &mut lease,
     );
     let receipt = process.persist_identity(&user).unwrap();
+    let prepared_job = PrivateJob::reopen(&receipt, &user).unwrap();
+    assert_eq!(prepared_job.active_processes().unwrap(), 1);
+    drop(prepared_job);
     process.resume(&receipt).unwrap();
     await_marker(&marker);
+    assert!(
+        PrivateJob::reopen(&receipt, &user).is_err(),
+        "preparation receipt cannot claim current disarmed limits"
+    );
     let exact = receipt.reopen_process().unwrap();
     drop(process);
     assert!(exact.terminal(0).unwrap().is_none());
-    let job = PrivateJob::reopen(&receipt, &user).unwrap();
-    assert_eq!(job.active_processes().unwrap(), 1);
+    assert!(PrivateJob::reopen(&receipt, &user).is_err());
     std::fs::write(marker.with_extension("release"), b"release").unwrap();
     assert_eq!(exact.terminal(10_000).unwrap().unwrap().exit_code(), 0);
-    await_empty(|| job.active_processes());
+    assert!(marker.with_extension("completed").exists());
 }
 
 // 检查仅 installer job 在最后一个 job 所有者关闭时终止其创建的测试进程。
@@ -447,7 +462,9 @@ fn HistoryWindows_InstallerJob_018() {
         killed.is_some(),
         "final job-handle closure did not terminate the blocked child"
     );
-    assert_ne!(killed.unwrap().exit_code(), 0);
+    // Windows chooses the kill-on-close exit code; it may be zero. The causal
+    // evidence is a live, blocked child before final close and no normal return.
+    assert!(!marker.with_extension("completed").exists());
 }
 
 // 检查真实可执行文件被排他句柄封锁，重命名后仍封锁该对象而不封锁新建目标。
@@ -502,8 +519,10 @@ fn HistoryWindows_ChangedImage_020() {
         .unwrap();
     let identity = original.identity().clone();
     drop(original);
+    drop(parent);
     std::fs::rename(&source, temporary.path().join("old.exe")).unwrap();
     std::fs::write(&source, b"same").unwrap();
+    let parent = Directory::open_absolute(temporary.path()).unwrap();
     assert!(ImageFence::acquire(
         parent,
         name("image.exe"),
@@ -526,10 +545,14 @@ fn HistoryWindows_FenceAliases_021() {
         .unwrap();
     let identity = original.identity().clone();
     drop(original);
+    drop(parent);
     let digest = crate::version_history::verified_package::sha256(b"image");
     std::fs::hard_link(&source, &alias).unwrap();
+    let parent = Directory::open_absolute(temporary.path()).unwrap();
     assert!(ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest).is_err());
+    drop(parent);
     std::fs::remove_file(&alias).unwrap();
+    let parent = Directory::open_absolute(temporary.path()).unwrap();
     let fence = ImageFence::acquire(parent, name("image.exe"), &identity, &digest).unwrap();
     assert!(
         std::fs::hard_link(&source, &alias).is_err(),
@@ -690,32 +713,50 @@ fn HistoryWindows_UnresumedDrop_025() {
 }
 
 fn stop_probe(exact: &ExactProcess) {
+    try_stop_probe(exact).unwrap();
+}
+fn try_stop_probe(exact: &ExactProcess) -> std::io::Result<()> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows::Win32::{
-        Foundation::{CloseHandle, WAIT_OBJECT_0},
+        Foundation::{HANDLE, WAIT_OBJECT_0},
         System::Threading::{
             OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
             PROCESS_TERMINATE,
         },
     };
-    if exact.terminal(0).unwrap().is_some() {
-        return;
+    if exact.terminal(0)?.is_some() {
+        return Ok(());
     }
     // The exact retained process object prevents PID reuse while this handle is
     // opened. This is test-only cleanup of the child launched by this harness.
     unsafe {
-        let process =
-            OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, exact.pid()).unwrap();
-        TerminateProcess(process, 0xccde0002).unwrap();
-        let waited = WaitForSingleObject(process, 5000);
-        CloseHandle(process).unwrap();
-        assert_eq!(
-            waited, WAIT_OBJECT_0,
-            "disposable probe child cleanup timed out"
-        );
+        let raw = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, exact.pid())
+            .map_err(std::io::Error::other)?;
+        let owned = OwnedHandle::from_raw_handle(raw.0);
+        let process = HANDLE(owned.as_raw_handle());
+        if let Err(error) = TerminateProcess(process, 0xccde0002) {
+            if WaitForSingleObject(process, 0) != WAIT_OBJECT_0 {
+                return Err(std::io::Error::other(error));
+            }
+        }
+        if WaitForSingleObject(process, 5000) != WAIT_OBJECT_0 {
+            return Err(std::io::Error::other(
+                "disposable probe child cleanup timed out",
+            ));
+        }
+    }
+    Ok(())
+}
+struct ProbeCleanup<'a>(&'a ExactProcess);
+impl Drop for ProbeCleanup<'_> {
+    fn drop(&mut self) {
+        if try_stop_probe(self.0).is_err() {
+            eprintln!("disposable exact-child cleanup failed");
+        }
     }
 }
 
-// 检查创建者进程崩溃后从已落盘 launch/job 身份清理未恢复子进程；恢复意图存在则拒绝终止。
+// 检查准备阶段崩溃会由 job 清理真实子进程，解除自动清理后的不确定状态则保留子进程。
 #[test]
 fn HistoryWindows_CrashRecovery_026() {
     for boundary in [
@@ -723,6 +764,8 @@ fn HistoryWindows_CrashRecovery_026() {
         "after-identity",
         "resume-intent",
         "torn-resume",
+        "disarm-readback",
+        "disarmed",
         "resumed",
     ] {
         let (temporary, user, private) = private_fixture();
@@ -738,6 +781,24 @@ fn HistoryWindows_CrashRecovery_026() {
             .spawn()
             .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !temporary.path().join("owner-ready").exists() {
+            if owner.try_wait().unwrap().is_some() || std::time::Instant::now() >= deadline {
+                let _ = owner.kill();
+                let _ = owner.wait();
+                panic!("disposable owner did not publish its exact child");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let ready: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(temporary.path().join("owner-ready.json")).unwrap(),
+        )
+        .unwrap();
+        // Retain the actual process before the creator exits. Neither a missing
+        // named job nor inability to reopen a dead PID is terminal evidence.
+        let exact = ExactProcess::capture_observed(ready["pid"].as_u64().unwrap() as u32).unwrap();
+        let _cleanup = ProbeCleanup(&exact);
+        assert!(exact.terminal(0).unwrap().is_none());
+        std::fs::write(temporary.path().join("owner-observed"), b"held exact child").unwrap();
         let status = loop {
             if let Some(status) = owner.try_wait().unwrap() {
                 break status;
@@ -745,6 +806,7 @@ fn HistoryWindows_CrashRecovery_026() {
             if std::time::Instant::now() >= deadline {
                 owner.kill().unwrap();
                 owner.wait().unwrap();
+                stop_probe(&exact);
                 panic!("disposable crash owner timed out");
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -754,11 +816,6 @@ fn HistoryWindows_CrashRecovery_026() {
             Some(23),
             "owner worker did not reach crash boundary {boundary}"
         );
-        let ready: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(temporary.path().join("owner-ready.json")).unwrap(),
-        )
-        .unwrap();
-        let exact = ExactProcess::capture_observed(ready["pid"].as_u64().unwrap() as u32).unwrap();
         let mut lease = exclusive(private.clone(), &user);
         let record = DurableRecord::open(
             private.clone(),
@@ -769,15 +826,22 @@ fn HistoryWindows_CrashRecovery_026() {
         .unwrap();
         let intent = DurableLaunchIntent::open(record, &user).unwrap();
         let recovered = recover_never_resumed(intent, private, &user, &mut lease);
-        if matches!(boundary, "before-identity" | "after-identity") {
-            if recovered.is_err() {
+        assert!(
+            recovered.is_err(),
+            "missing job or resume uncertainty must not claim recovery success"
+        );
+        if matches!(
+            boundary,
+            "before-identity" | "after-identity" | "resume-intent" | "torn-resume"
+        ) {
+            let cleaned = exact.terminal(2000).unwrap();
+            if cleaned.is_none() {
                 stop_probe(&exact);
             }
-            recovered
-                .expect("definitely never-resumed crash must be recoverable")
-                .verify()
-                .unwrap();
-            assert!(exact.terminal(0).unwrap().is_some());
+            assert!(
+                cleaned.is_some(),
+                "armed preparation crash leaked its never-started child at {boundary}"
+            );
             assert!(!temporary.path().join("nested-started").exists());
         } else {
             let still_live = exact.terminal(0).unwrap().is_none();
@@ -797,10 +861,6 @@ fn HistoryWindows_CrashRecovery_026() {
                 stop_probe(&exact);
             }
             assert!(
-                recovered.is_err(),
-                "a durable resume intent must prohibit automatic cleanup"
-            );
-            assert!(
                 still_live,
                 "uncertain/resumed historical child was terminated"
             );
@@ -816,7 +876,13 @@ fn HistoryWindows_CrashWorker_099() {
     let boundary = std::env::var("CC_DESK_HISTORY_CRASH_MODE").unwrap();
     assert!(matches!(
         boundary.as_str(),
-        "before-identity" | "after-identity" | "resume-intent" | "torn-resume" | "resumed"
+        "before-identity"
+            | "after-identity"
+            | "resume-intent"
+            | "torn-resume"
+            | "disarm-readback"
+            | "disarmed"
+            | "resumed"
     ));
     let user = CurrentUser::capture().unwrap();
     let parent = Directory::open_absolute(&root).unwrap();
@@ -831,10 +897,35 @@ fn HistoryWindows_CrashWorker_099() {
         &marker,
         &mut lease,
     );
+    let exact = process.probe_exact().unwrap();
+    let (name, digest) = process.launch_record();
+    std::fs::write(
+        root.join("owner-ready.json"),
+        serde_json::to_vec(
+            &serde_json::json!({ "pid": exact.pid(), "name": name, "digest": digest }),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(root.join("owner-ready"), b"ready").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !root.join("owner-observed").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "observer did not retain child"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     if boundary != "before-identity" {
         let receipt = process.persist_identity(&user).unwrap();
         if boundary == "resume-intent" {
             process.probe_commit_resume_intent(&receipt).unwrap();
+        }
+        if boundary == "disarm-readback" {
+            process.probe_disarm_before_readback(&receipt).unwrap();
+        }
+        if boundary == "disarmed" {
+            process.probe_disarm_before_resume(&receipt).unwrap();
         }
         if boundary == "torn-resume" {
             std::fs::write(
@@ -848,16 +939,6 @@ fn HistoryWindows_CrashWorker_099() {
             await_marker(&marker);
         }
     }
-    let exact = process.probe_exact().unwrap();
-    let (name, digest) = process.launch_record();
-    std::fs::write(
-        root.join("owner-ready.json"),
-        serde_json::to_vec(
-            &serde_json::json!({ "pid": exact.pid(), "name": name, "digest": digest }),
-        )
-        .unwrap(),
-    )
-    .unwrap();
     std::process::exit(23);
 }
 
@@ -890,4 +971,73 @@ fn HistoryWindows_UncertainResume_027() {
         "uncertain resume must not trigger historical child cleanup"
     );
     assert!(!marker.exists());
+}
+
+// 检查链接诊断只发布固定类别，不能泄露任意目标、SID 或组件名称，也不授予跟随链接权限。
+#[test]
+fn HistoryWindows_LinkDiagnosis_028() {
+    use crate::version_history::windows::registry::{link_diagnostic, RegistryView};
+    use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+    let encoded = |value: &str| {
+        value
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>()
+    };
+    let known = link_diagnostic(
+        HKEY_LOCAL_MACHINE,
+        RegistryView::View32,
+        "Policies",
+        &encoded(r"\REGISTRY\MACHINE\SOFTWARE\Policies"),
+    );
+    assert_eq!(known, "registry links are unsupported: hive=localMachine, view=View32, component=policies, target=machinePolicies");
+    for value in [
+        r"\REGISTRY\USER\S-1-private\Secrets",
+        r"\REGISTRY\MACHINE\SOFTWARE\Policies\Redirect",
+        "private\0target",
+    ] {
+        let unknown = link_diagnostic(
+            HKEY_LOCAL_MACHINE,
+            RegistryView::View64,
+            "private-component",
+            &encoded(value),
+        );
+        assert_eq!(unknown, "registry links are unsupported: hive=localMachine, view=View64, component=unknown, target=unknown");
+    }
+}
+
+// 检查解除历史 job 自动清理后，回执失败不会恢复主线程，也不会重新武装或自动杀死子进程。
+#[test]
+fn HistoryWindows_LifetimeReceipt_029() {
+    let (temporary, user, private) = private_fixture();
+    let marker = temporary.path().join("not-resumed");
+    let mut lease = exclusive(private.clone(), &user);
+    let mut process = waiting_process(
+        JobKind::HistoricalApplication,
+        private,
+        &user,
+        &marker,
+        &mut lease,
+    );
+    let receipt = process.persist_identity(&user).unwrap();
+    let collision = temporary
+        .path()
+        .join("private")
+        .join(process.probe_lifetime_name());
+    std::fs::write(&collision, b"collision").unwrap();
+    let outcome = process.resume(&receipt);
+    let exact = receipt.reopen_process().unwrap();
+    drop(process);
+    let live = exact.terminal(0).unwrap().is_none();
+    stop_probe(&exact);
+    assert!(outcome.is_err());
+    assert!(
+        live,
+        "post-disarm record failure must not re-arm or kill the child"
+    );
+    assert!(
+        !marker.exists(),
+        "record failure must not reach ResumeThread"
+    );
+    assert_eq!(std::fs::read(collision).unwrap(), b"collision");
 }

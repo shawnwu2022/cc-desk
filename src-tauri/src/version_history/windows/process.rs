@@ -391,9 +391,16 @@ struct JobIdentity {
     session: u32,
     kind: JobKind,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum JobPhase {
+    ArmedPreparation,
+    HistoricalLifetime,
+}
 pub(crate) struct PrivateJob {
     handle: OwnedHandle,
     identity: JobIdentity,
+    phase: Option<JobPhase>,
 }
 impl PrivateJob {
     fn new(identity: JobIdentity, user: &CurrentUser) -> io::Result<Self> {
@@ -412,9 +419,9 @@ impl PrivateJob {
             owned
         };
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        if identity.kind == JobKind::Installer {
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        }
+        // No user code can run during preparation. Creation-time containment
+        // must clean up even if the owner crashes before it records the PID.
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         unsafe {
             SetInformationJobObject(
                 super::handle(&handle),
@@ -424,12 +431,22 @@ impl PrivateJob {
             )
             .map_err(win_error)?;
         }
-        let result = Self { handle, identity };
+        let result = Self {
+            handle,
+            identity,
+            phase: Some(JobPhase::ArmedPreparation),
+        };
         user.verify_private_job(super::handle(&result.handle))?;
         result.verify_limits()?;
         Ok(result)
     }
     fn verify_limits(&self) -> io::Result<()> {
+        let phase = self
+            .phase
+            .ok_or_else(|| blocked("job disarm outcome is unknown"))?;
+        self.verify_phase(phase)
+    }
+    fn verify_phase(&self, phase: JobPhase) -> io::Result<()> {
         if session_id(unsafe { GetCurrentProcessId() })? != self.identity.session {
             return Err(blocked("named job belongs to another Windows session"));
         }
@@ -444,13 +461,41 @@ impl PrivateJob {
             )
             .map_err(win_error)?;
         }
-        let expected = if self.identity.kind == JobKind::Installer {
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.0
-        } else {
-            0
+        let expected = match (self.identity.kind, phase) {
+            (_, JobPhase::ArmedPreparation) => JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.0,
+            (JobKind::HistoricalApplication, JobPhase::HistoricalLifetime) => 0,
+            _ => return Err(blocked("installer job cannot disarm")),
         };
         if limits.BasicLimitInformation.LimitFlags.0 != expected {
             return Err(blocked("job containment or lifetime differs"));
+        }
+        Ok(())
+    }
+    fn disarm_historical(&mut self) -> io::Result<()> {
+        self.begin_historical_disarm()?;
+        self.verify_phase(JobPhase::HistoricalLifetime)?;
+        self.phase = Some(JobPhase::HistoricalLifetime);
+        Ok(())
+    }
+    fn begin_historical_disarm(&mut self) -> io::Result<()> {
+        if self.identity.kind != JobKind::HistoricalApplication
+            || self.phase != Some(JobPhase::ArmedPreparation)
+        {
+            return Err(blocked("historical job is not armed preparation"));
+        }
+        self.verify_limits()?;
+        // Mark unknown before the mutating call. No error path may re-arm a
+        // possibly disarmed job; that could later kill user work on owner exit.
+        self.phase = None;
+        let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        unsafe {
+            SetInformationJobObject(
+                handle(&self.handle),
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+            .map_err(win_error)?;
         }
         Ok(())
     }
@@ -487,9 +532,13 @@ impl PrivateJob {
     /// installer exit code, all UDF holders, or permission to replay a launch.
     pub(crate) fn reopen(receipt: &DurableProcessIdentity, user: &CurrentUser) -> io::Result<Self> {
         receipt.record.verify()?;
-        Self::open_recorded(&receipt.binding.job, user)
+        Self::open_recorded(&receipt.binding.job, receipt.binding.job_phase, user)
     }
-    fn open_recorded(identity: &JobIdentity, user: &CurrentUser) -> io::Result<Self> {
+    fn open_recorded(
+        identity: &JobIdentity,
+        phase: JobPhase,
+        user: &CurrentUser,
+    ) -> io::Result<Self> {
         if identity.owner != user.sid_text()
             || identity.session != session_id(unsafe { GetCurrentProcessId() })?
         {
@@ -502,6 +551,7 @@ impl PrivateJob {
         let result = Self {
             handle: unsafe { own(raw) },
             identity: identity.clone(),
+            phase: Some(phase),
         };
         user.verify_private_job(handle(&result.handle))?;
         result.verify_limits()?;
@@ -586,6 +636,7 @@ struct LaunchIntent {
     image_digest: String,
     command_digest: String,
     job: JobIdentity,
+    job_phase: JobPhase,
     lease: FileIdentity,
 }
 pub(crate) struct DurableLaunchIntent {
@@ -597,7 +648,8 @@ impl DurableLaunchIntent {
         record.verify()?;
         let binding: LaunchIntent =
             serde_json::from_slice(record.bytes()).map_err(io::Error::other)?;
-        if binding.schema != 2
+        if binding.schema != 3
+            || binding.job_phase != JobPhase::ArmedPreparation
             || binding.launch.len() != 32
             || !binding.launch.bytes().all(|c| c.is_ascii_hexdigit())
             || binding.job.owner != user.sid_text()
@@ -624,6 +676,7 @@ struct IdentityBinding {
     process: ProcessIdentity,
     command_digest: String,
     job: JobIdentity,
+    job_phase: JobPhase,
     lease: FileIdentity,
 }
 pub(crate) struct DurableProcessIdentity {
@@ -635,7 +688,8 @@ impl DurableProcessIdentity {
         record.verify()?;
         let binding: IdentityBinding =
             serde_json::from_slice(record.bytes()).map_err(io::Error::other)?;
-        if binding.schema != 2
+        if binding.schema != 3
+            || binding.job_phase != JobPhase::ArmedPreparation
             || binding.launch.len() != 32
             || !binding.launch.bytes().all(|c| c.is_ascii_hexdigit())
             || binding.job.owner != user.sid_text()
@@ -669,6 +723,7 @@ pub(crate) struct PreparedProcess<'lease> {
     identity_persisted: bool,
     resume_attempted: bool,
     resume_intent: Option<DurableRecord>,
+    historical_lifetime: Option<DurableRecord>,
     lease: &'lease mut ExclusiveLease,
 }
 impl<'lease> PreparedProcess<'lease> {
@@ -696,12 +751,13 @@ impl<'lease> PreparedProcess<'lease> {
         let command_digest =
             crate::version_history::verified_package::sha256(command.text.as_bytes());
         let intent_bytes = serde_json::to_vec(&LaunchIntent {
-            schema: 2,
+            schema: 3,
             launch: launch.clone(),
             image: image.identity().clone(),
             image_digest: image.digest()?,
             command_digest: command_digest.clone(),
             job: job_identity.clone(),
+            job_phase: JobPhase::ArmedPreparation,
             lease: lease.identity().clone(),
         })
         .map_err(io::Error::other)?;
@@ -770,6 +826,7 @@ impl<'lease> PreparedProcess<'lease> {
             identity_persisted: false,
             resume_attempted: false,
             resume_intent: None,
+            historical_lifetime: None,
             lease,
         })
     }
@@ -783,12 +840,13 @@ impl<'lease> PreparedProcess<'lease> {
         self.intent.verify()?;
         self.job.contains(&self.process)?;
         let binding = IdentityBinding {
-            schema: 2,
+            schema: 3,
             launch: self.launch.clone(),
             intent: self.intent.digest().into(),
             process: self.process.identity.clone(),
             command_digest: self.command_digest.clone(),
             job: self.job.identity.clone(),
+            job_phase: JobPhase::ArmedPreparation,
             lease: self.lease.identity().clone(),
         };
         let bytes = serde_json::to_vec(&binding).map_err(io::Error::other)?;
@@ -812,6 +870,8 @@ impl<'lease> PreparedProcess<'lease> {
             || receipt.binding.intent != self.intent.digest()
             || receipt.binding.command_digest != self.command_digest
             || receipt.binding.job != self.job.identity
+            || receipt.binding.job_phase != JobPhase::ArmedPreparation
+            || self.job.phase != Some(JobPhase::ArmedPreparation)
             || &receipt.binding.lease != self.lease.identity()
         {
             return Err(blocked("resume lacks its exact durable process receipt"));
@@ -821,7 +881,7 @@ impl<'lease> PreparedProcess<'lease> {
             return Err(blocked("suspended process already terminated"));
         }
         let user = CurrentUser::capture()?;
-        let bytes = serde_json::to_vec(&serde_json::json!({ "schema": 1, "launch": self.launch, "processReceipt": receipt.record.digest(), "operation": "resume" })).map_err(io::Error::other)?;
+        let bytes = serde_json::to_vec(&serde_json::json!({ "schema": 2, "launch": self.launch, "processReceipt": receipt.record.digest(), "operation": "resume", "fromJobPhase": JobPhase::ArmedPreparation })).map_err(io::Error::other)?;
         self.resume_intent = Some(DurableRecord::create(
             self.root.clone(),
             ComponentName::new(OsStr::new(&format!("resume-{}.json", self.launch)))?,
@@ -829,13 +889,37 @@ impl<'lease> PreparedProcess<'lease> {
             &user,
         )?);
         // Once the durable resume intent exists, a restart cannot distinguish
-        // before-call from after-call. Never terminate this historical process
-        // automatically, and never retry resume from this state.
+        // before-disarm/call from after-call. Never explicitly terminate or retry
+        // from this state. The still-armed job remains safe until disarm starts:
+        // ResumeThread is unreachable before disarm and its successful readback.
         self.resume_attempted = true;
         Ok(())
     }
+    fn prepare_historical_lifetime(&mut self, receipt: &DurableProcessIdentity) -> io::Result<()> {
+        if !self.resume_attempted || self.resume_intent.is_none() {
+            return Err(blocked("job disarm lacks a durable resume intent"));
+        }
+        if self.job.identity.kind == JobKind::HistoricalApplication {
+            self.job.disarm_historical()?;
+            let user = CurrentUser::capture()?;
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "schema": 1, "launch": self.launch, "processReceipt": receipt.record.digest(),
+                "job": self.job.identity, "jobPhase": JobPhase::HistoricalLifetime,
+                "operation": "historical-job-disarmed"
+            }))
+            .map_err(io::Error::other)?;
+            self.historical_lifetime = Some(DurableRecord::create(
+                self.root.clone(),
+                ComponentName::new(OsStr::new(&format!("lifetime-{}.json", self.launch)))?,
+                &bytes,
+                &user,
+            )?);
+        }
+        self.job.verify_limits()
+    }
     pub(crate) fn resume(&mut self, receipt: &DurableProcessIdentity) -> io::Result<()> {
         self.commit_resume_intent(receipt)?;
+        self.prepare_historical_lifetime(receipt)?;
         let previous = unsafe { ResumeThread(handle(&self.thread)) };
         if previous != 1 {
             return Err(blocked("process resume outcome is unknown"));
@@ -865,6 +949,22 @@ impl<'lease> PreparedProcess<'lease> {
         self.commit_resume_intent(receipt)
     }
     #[cfg(test)]
+    pub(crate) fn probe_disarm_before_resume(
+        &mut self,
+        receipt: &DurableProcessIdentity,
+    ) -> io::Result<()> {
+        self.commit_resume_intent(receipt)?;
+        self.prepare_historical_lifetime(receipt)
+    }
+    #[cfg(test)]
+    pub(crate) fn probe_disarm_before_readback(
+        &mut self,
+        receipt: &DurableProcessIdentity,
+    ) -> io::Result<()> {
+        self.commit_resume_intent(receipt)?;
+        self.job.begin_historical_disarm()
+    }
+    #[cfg(test)]
     pub(crate) fn probe_suspend_primary(&self) -> io::Result<()> {
         let previous =
             unsafe { windows::Win32::System::Threading::SuspendThread(handle(&self.thread)) };
@@ -882,10 +982,20 @@ impl<'lease> PreparedProcess<'lease> {
         format!("resume-{}.json", self.launch)
     }
     #[cfg(test)]
+    pub(crate) fn probe_lifetime_name(&self) -> String {
+        format!("lifetime-{}.json", self.launch)
+    }
+    #[cfg(test)]
     pub(crate) fn probe_exact(&self) -> io::Result<ExactProcess> {
         ExactProcess::reopen(&self.process.identity)
     }
     pub(crate) fn persist_terminal(&self, user: &CurrentUser) -> io::Result<DurableRecord> {
+        if self.job.phase == Some(JobPhase::HistoricalLifetime) {
+            self.historical_lifetime
+                .as_ref()
+                .ok_or_else(|| blocked("historical lifetime receipt is missing"))?
+                .verify()?;
+        }
         let terminal = self
             .process
             .terminal(0)?
@@ -893,7 +1003,7 @@ impl<'lease> PreparedProcess<'lease> {
         if self.job.active_processes()? != 0 {
             return Err(blocked("owned descendants have not exited"));
         }
-        let bytes = serde_json::to_vec(&serde_json::json!({ "schema": 1, "launch": self.launch, "process": terminal.identity, "exitCode": terminal.exit_code, "job": self.job.identity, "activeProcesses": 0 })).map_err(io::Error::other)?;
+        let bytes = serde_json::to_vec(&serde_json::json!({ "schema": 2, "launch": self.launch, "process": terminal.identity, "exitCode": terminal.exit_code, "job": self.job.identity, "jobPhase": self.job.phase, "activeProcesses": 0 })).map_err(io::Error::other)?;
         DurableRecord::create(
             self.root.clone(),
             ComponentName::new(OsStr::new(&format!("terminal-{}.json", self.launch)))?,
@@ -915,8 +1025,8 @@ impl<'lease> PreparedProcess<'lease> {
 impl Drop for PreparedProcess<'_> {
     fn drop(&mut self) {
         if !self.resume_attempted {
-            // Failure is not success evidence. The durable launch intent and
-            // named job remain available to exclusive-lease recovery.
+            // Failure is not success evidence. The armed job also cleans up on
+            // final handle closure. Its vanished name never proves success.
             let _ = stop_never_resumed(handle(&self.process.process));
         }
     }
@@ -976,7 +1086,7 @@ pub(crate) fn recover_never_resumed(
         // uncertain. Never infer safe termination from a parse/hash failure.
         _ => return Err(blocked("historical resume may have been attempted")),
     }
-    let job = PrivateJob::open_recorded(&intent.binding.job, user)?;
+    let job = PrivateJob::open_recorded(&intent.binding.job, intent.binding.job_phase, user)?;
     let process = ExactProcess::capture_with_access(job.only_member()?, PROCESS_TERMINATE)?;
     job.contains(&process)?;
     if process.identity.image != intent.binding.image

@@ -22,7 +22,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::{RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 thread_local! { static EXIT_PROBE: RefCell<Option<SourceWebViews>> = const { RefCell::new(None) }; }
 const WORKER: &str = "tests::version_history_webview::HistoryWebView_Worker_099";
