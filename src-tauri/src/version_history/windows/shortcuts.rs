@@ -409,8 +409,8 @@ impl HeldProductShortcuts {
     }
     pub(crate) fn verify(&self) -> io::Result<()> {
         self.source.verify(&self.destinations)?;
-        for i in 0..2 {
-            if self.destinations[i].entry(SLOTS[i], &self.held[i])? != self.entries[i] {
+        for (i, slot) in SLOTS.iter().enumerate() {
+            if self.destinations[i].entry(*slot, &self.held[i])? != self.entries[i] {
                 return Err(blocked("captured shortcut changed"));
             }
         }
@@ -540,8 +540,8 @@ impl RetainedProductShortcuts {
             Destination::capture(desktop)?,
             Destination::capture(programs)?,
         ];
-        for i in 0..2 {
-            destinations[i].matches(&manifest.entries[i])?;
+        for (destination, entry) in destinations.iter().zip(&manifest.entries) {
+            destination.matches(entry)?;
         }
         source.verify(&destinations)?;
         Ok(Self {
@@ -1102,7 +1102,7 @@ fn validate_descriptor_layout(bytes: &[u8]) -> io::Result<()> {
             continue;
         }
         if offset < 20
-            || offset % 4 != 0
+            || !offset.is_multiple_of(4)
             || offset.checked_add(8).is_none_or(|end| end > bytes.len())
         {
             return Err(invalid());

@@ -429,4 +429,5 @@ impl VerifiedInstalledPayload<'_> {
 
 #[cfg(test)]
 #[path = "../tests/version_history_payload_policy.rs"]
+#[allow(non_snake_case)]
 mod tests;

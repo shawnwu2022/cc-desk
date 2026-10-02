@@ -51,10 +51,13 @@ pub(crate) mod bundle_restore;
 #[path = "context_switch.rs"]
 mod switching;
 pub(crate) use switching::{
-    ContextRestoration, ContextRootEvidence, FreshContextRoots, LaterBackupEvidence,
-    LaterCompleteEvidence, LaterContextRoots, PreinstallReturnEvidence, RestoredContextRoots,
-    RetainedContextRoots,
+    ContextRootEvidence, LaterBackupEvidence, LaterCompleteEvidence, PreinstallReturnEvidence,
 };
+pub(crate) type ContextRestoration = switching::ContextRestoration;
+pub(crate) type FreshContextRoots = switching::FreshContextRoots;
+pub(crate) type LaterContextRoots = switching::LaterContextRoots;
+pub(crate) type RestoredContextRoots = switching::RestoredContextRoots;
+pub(crate) type RetainedContextRoots = switching::RetainedContextRoots;
 
 const MAX_MANIFEST_BYTES: usize = 32 * 1024 * 1024;
 

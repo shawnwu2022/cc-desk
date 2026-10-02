@@ -2878,10 +2878,13 @@ fn reopen_later_history(
             let next = history
                 .get(index + 1)
                 .and_then(|record| record.plan.previous_observation.as_deref());
-            if index + 1 == history.len() && record.complete.is_some() {
-                let complete: PrivateCopyManifest = serde_json::from_slice(&safe(
-                    store.read_manifest(record.complete.as_ref().expect("checked completion")),
-                )?)?;
+            if let Some(completion) = record
+                .complete
+                .as_ref()
+                .filter(|_| index + 1 == history.len())
+            {
+                let complete: PrivateCopyManifest =
+                    serde_json::from_slice(&safe(store.read_manifest(completion))?)?;
                 let mut copy = PrivateTreeCopy::reopen(
                     parent.clone(),
                     name,

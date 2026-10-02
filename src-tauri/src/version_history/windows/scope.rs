@@ -32,7 +32,8 @@ use windows::Win32::Globalization::{CompareStringOrdinal, CSTR_EQUAL};
 
 #[path = "scope_context.rs"]
 mod context_inventory;
-pub(crate) use context_inventory::{ConfiguredExclusions, ContextConfiguredInventory};
+pub(crate) type ConfiguredExclusions = context_inventory::ConfiguredExclusions;
+pub(crate) type ContextConfiguredInventory<'a> = context_inventory::ContextConfiguredInventory<'a>;
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_INPUT_BYTES: usize = 8 * 1024 * 1024;

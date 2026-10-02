@@ -772,9 +772,8 @@ impl PrepareService {
             }
             package.revalidate(&check)?;
             let switch_id = uuid::Uuid::new_v4().to_string();
-            let permit = admit(&package, &switch_id).map_err(|failure| {
+            let permit = admit(&package, &switch_id).inspect_err(|_| {
                 policy_refused = true;
-                failure
             })?;
             let mut held = self.held.lock();
             let item = transaction_mut(&mut held, caller, id)?;
