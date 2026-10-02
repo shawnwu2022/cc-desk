@@ -101,3 +101,5 @@ mod native_cli_observer_http;
 
 #[cfg(test)]
 mod native_cli_terminal_input;
+
+mod version_history_catalog;
