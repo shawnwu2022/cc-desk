@@ -5,9 +5,9 @@ use crate::cli::environment::EnvMap;
 use crate::cli::invocation::CliInvocation;
 use crate::cli::profiles::{error, Dialect, Launcher};
 use crate::cli::types::SafeError;
-use portable_pty::{Child, CommandBuilder, MasterPty};
 #[cfg(test)]
 use portable_pty::{native_pty_system, PtySize};
+use portable_pty::{Child, CommandBuilder, MasterPty};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 

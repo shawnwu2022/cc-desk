@@ -84,12 +84,18 @@ impl LaunchService {
         request: &LaunchRequest,
         connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<OutputFrame>, SafeError>,
     ) -> Result<LaunchStatus, SafeError> {
-        if let Some(status) = self.registry().existing(caller, request)? { return Ok(status); }
+        if let Some(status) = self.registry().existing(caller, request)? {
+            return Ok(status);
+        }
         self.start_admitted(self.admit_start()?, caller, request, connect)
     }
 
     pub(crate) fn admit_start(&self) -> Result<PreparingStart, SafeError> {
-        Ok(self.repository.admission().begin_start(RuntimeKind::Native)?.preparing())
+        Ok(self
+            .repository
+            .admission()
+            .begin_start(RuntimeKind::Native)?
+            .preparing())
     }
 
     pub(crate) fn start_admitted(

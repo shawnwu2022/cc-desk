@@ -1588,8 +1588,12 @@ pub fn update_app_config(updates: serde_json::Value) -> Result<()> {
 /// Preserve stored compatibility/future keys that are not part of the read DTO.
 /// The write contract remains an explicit top-level delta, never a DTO replacement.
 pub(crate) fn update_app_config_at(config_path: &Path, updates: serde_json::Value) -> Result<()> {
-    update_app_config_admitted(config_path, updates,
-        &crate::version_history::maintenance::process_admissions(), |path, bytes| fs::write(path, bytes))
+    update_app_config_admitted(
+        config_path,
+        updates,
+        &crate::version_history::maintenance::process_admissions(),
+        |path, bytes| fs::write(path, bytes),
+    )
 }
 
 pub(crate) fn update_app_config_admitted(
@@ -1598,7 +1602,10 @@ pub(crate) fn update_app_config_admitted(
     gate: &crate::version_history::maintenance::AdmissionGate,
     write: impl FnOnce(&Path, &[u8]) -> std::io::Result<()>,
 ) -> Result<()> {
-    let mut admission = gate.begin_mutation().map_err(|e| anyhow!(e.code))?.preparing();
+    let mut admission = gate
+        .begin_mutation()
+        .map_err(|e| anyhow::anyhow!(e.code))?
+        .preparing();
     let config_dir = config_path
         .parent()
         .context("Could not get parent directory of config path")?;
@@ -3649,8 +3656,12 @@ pub(crate) fn with_projects_state_locked<F, T>(
 where
     F: FnOnce(&mut ProjectsState) -> Result<T>,
 {
-    with_projects_state_admitted(data_path, lock_path,
-        &crate::version_history::maintenance::process_admissions(), apply)
+    with_projects_state_admitted(
+        data_path,
+        lock_path,
+        &crate::version_history::maintenance::process_admissions(),
+        apply,
+    )
 }
 
 pub(crate) fn with_projects_state_admitted<F, T>(
@@ -3662,7 +3673,10 @@ pub(crate) fn with_projects_state_admitted<F, T>(
 where
     F: FnOnce(&mut ProjectsState) -> Result<T>,
 {
-    let mut admission = gate.begin_mutation().map_err(|e| anyhow!(e.code))?.preparing();
+    let mut admission = gate
+        .begin_mutation()
+        .map_err(|e| anyhow::anyhow!(e.code))?
+        .preparing();
     ensure_parent(lock_path)?;
     let lock_file = fs::OpenOptions::new()
         .read(true)

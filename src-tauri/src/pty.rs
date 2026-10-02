@@ -430,16 +430,15 @@ impl PtyManager {
             })
             .with_context(|| format!("Failed to open PTY with size {cols}x{rows}"))?;
 
-        let mut child = match AdmittedChild::spawn_native(
-            slave.as_ref(), cmd, admission.begin_creation(),
-        ) {
-            Ok(child) => child,
-            Err(error) => {
-                let message = format!("Failed to spawn {description}: {error}");
-                self.emit_error(&id, &message, "spawn");
-                return Err(anyhow!(message));
-            }
-        };
+        let mut child =
+            match AdmittedChild::spawn_native(slave.as_ref(), cmd, admission.begin_creation()) {
+                Ok(child) => child,
+                Err(error) => {
+                    let message = format!("Failed to spawn {description}: {error}");
+                    self.emit_error(&id, &message, "spawn");
+                    return Err(anyhow!(message));
+                }
+            };
 
         // 父进程绝不能继续持有 slave；否则 Unix master 可能永远收不到 EOF。
         drop(slave);
@@ -494,7 +493,9 @@ impl PtyManager {
         rows: u16,
         args: Option<Vec<String>>,
     ) -> Result<PtyInfo> {
-        let admission = self.admission.begin_start(RuntimeKind::Legacy)
+        let admission = self
+            .admission
+            .begin_start(RuntimeKind::Legacy)
             .map_err(|e| anyhow!(e.code))?
             .preparing();
         self.validate_spawn_request(&id, cwd).inspect_err(|error| {
@@ -595,7 +596,9 @@ impl PtyManager {
         cols: u16,
         rows: u16,
     ) -> Result<PtyInfo> {
-        let admission = self.admission.begin_start(RuntimeKind::Legacy)
+        let admission = self
+            .admission
+            .begin_start(RuntimeKind::Legacy)
             .map_err(|e| anyhow!(e.code))?
             .preparing();
         self.validate_spawn_request(&id, cwd).inspect_err(|error| {
@@ -880,7 +883,9 @@ fn spawn_pty_thread(
         }
         let barrier = maintenance_tests::waiter_barrier(&name);
         thread::Builder::new().name(name).spawn(move || {
-            if let Some(barrier) = barrier { barrier.wait(); }
+            if let Some(barrier) = barrier {
+                barrier.wait();
+            }
             run();
         })
     }

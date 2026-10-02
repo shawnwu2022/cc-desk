@@ -74,14 +74,19 @@ impl WorkspaceRepository {
         Self::open_admitted(path, AdmissionGate::new())
     }
 
-    pub(crate) fn open_admitted(path: PathBuf, admission: AdmissionGate) -> Result<Self, SafeError> {
+    pub(crate) fn open_admitted(
+        path: PathBuf,
+        admission: AdmissionGate,
+    ) -> Result<Self, SafeError> {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err(SafeError::invalid("workspacePath"));
         }
         Ok(Self { path, admission })
     }
 
-    pub(crate) fn admission(&self) -> &AdmissionGate { &self.admission }
+    pub(crate) fn admission(&self) -> &AdmissionGate {
+        &self.admission
+    }
 
     pub(crate) fn metadata_directory(&self) -> &Path {
         self.path.parent().expect("validated workspace parent")
@@ -89,7 +94,10 @@ impl WorkspaceRepository {
 
     pub(crate) fn production() -> Result<Self, SafeError> {
         let home = dirs::home_dir().ok_or_else(|| error("HOME_UNAVAILABLE"))?;
-        Self::open_admitted(home.join(".cc-box").join("cli-workspace.v1.json"), process_admissions())
+        Self::open_admitted(
+            home.join(".cc-box").join("cli-workspace.v1.json"),
+            process_admissions(),
+        )
     }
 
     fn lock(&self) -> Result<File, SafeError> {

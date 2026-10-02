@@ -56,7 +56,8 @@ impl AdmittedChild {
             }
             // SAFETY: the private child owns this exact handle throughout the
             // call. It is never reopened by PID, replaced, or extracted.
-            let result = unsafe { wait_for_single_object(handle, if blocking { u32::MAX } else { 0 }) };
+            let result =
+                unsafe { wait_for_single_object(handle, if blocking { u32::MAX } else { 0 }) };
             if result != 0 {
                 return; // Only WAIT_OBJECT_0 is terminal proof.
             }

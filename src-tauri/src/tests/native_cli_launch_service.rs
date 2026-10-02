@@ -414,7 +414,10 @@ fn HistoryRuntime_NativeAdoptionFailureKeepsExactChildTicket_02() {
     let resource = f.consumer.runs.lock()[0].clone();
     resource.process.pty.terminate_root().unwrap();
     resource.process.pty.wait().unwrap();
-    gate.freeze(&uuid::Uuid::new_v4().to_string()).unwrap().release_review().unwrap();
+    gate.freeze(&uuid::Uuid::new_v4().to_string())
+        .unwrap()
+        .release_review()
+        .unwrap();
 }
 
 #[test]
@@ -432,7 +435,8 @@ fn HistoryRuntime_NativeBlockingLaunchSurvivesLostReceiver_03() {
     let worker = tauri::async_runtime::spawn_blocking(move || {
         let routes = OutputRoutes::new(2);
         service.start_admitted(admission, &caller, &request, |_| {
-            ready.wait(); resume.wait();
+            ready.wait();
+            resume.wait();
             routes.bind(1, Box::new(|| Ok(())), || Ok(Channel::new(|_| Ok(()))))
         })
     });
@@ -444,11 +448,16 @@ fn HistoryRuntime_NativeBlockingLaunchSurvivesLostReceiver_03() {
     assert!(gate.freeze(&uuid::Uuid::new_v4().to_string()).is_err());
     let deadline = Instant::now() + Duration::from_secs(5);
     let resource = loop {
-        if let Some(run) = f.consumer.runs.lock().first().cloned() { break run; }
+        if let Some(run) = f.consumer.runs.lock().first().cloned() {
+            break run;
+        }
         assert!(Instant::now() < deadline);
         std::thread::yield_now();
     };
     resource.process.pty.terminate_root().unwrap();
     resource.process.pty.wait().unwrap();
-    gate.freeze(&uuid::Uuid::new_v4().to_string()).unwrap().release_review().unwrap();
+    gate.freeze(&uuid::Uuid::new_v4().to_string())
+        .unwrap()
+        .release_review()
+        .unwrap();
 }

@@ -18,9 +18,9 @@ mod session_name_index;
 mod store;
 mod terminal_input;
 mod terminal_transport;
-mod version_history;
 #[cfg(test)]
 mod tests;
+mod version_history;
 
 #[cfg(target_os = "macos")]
 use tauri::menu::MenuBuilder;

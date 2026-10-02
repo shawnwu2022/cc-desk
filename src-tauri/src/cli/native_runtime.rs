@@ -62,8 +62,10 @@ impl NativeRuntime {
         let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
         let mut service = LaunchService::new(
             WorkspaceRepository::open_admitted(
-                dirs::home_dir().ok_or_else(|| error("HOME_UNAVAILABLE"))?
-                    .join(".cc-box").join("cli-workspace.v1.json"),
+                dirs::home_dir()
+                    .ok_or_else(|| error("HOME_UNAVAILABLE"))?
+                    .join(".cc-box")
+                    .join("cli-workspace.v1.json"),
                 admission,
             )?,
             None,

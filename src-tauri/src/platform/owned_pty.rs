@@ -9,9 +9,7 @@ use crate::version_history::maintenance::{PreparingStart, StartTicket};
 use parking_lot::Mutex;
 #[cfg(not(windows))]
 use portable_pty::ChildKiller;
-use portable_pty::{
-    native_pty_system, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize,
-};
+use portable_pty::{native_pty_system, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize};
 use std::io::{self, Read, Write};
 #[cfg(windows)]
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -78,7 +76,8 @@ impl OwnedPty {
         command: CommandBuilder,
     ) -> Result<Self, SafeError> {
         let admission = crate::version_history::maintenance::AdmissionGate::new()
-            .begin_start(crate::version_history::maintenance::RuntimeKind::Native)?.preparing();
+            .begin_start(crate::version_history::maintenance::RuntimeKind::Native)?
+            .preparing();
         Self::attach_admitted(pair, command, admission, false)
     }
 
@@ -102,7 +101,9 @@ impl OwnedPty {
                 .map_err(|_| error("PROCESS_START_FAILED"))?
         } else {
             // Arbitrary SlavePty adapters have no audited no-child-on-Err contract.
-            let child = pair.slave.spawn_command(command)
+            let child = pair
+                .slave
+                .spawn_command(command)
                 .map_err(|_| error("PROCESS_START_FAILED"))?;
             AdmittedChild::created(child, ticket)
         };
@@ -151,7 +152,10 @@ impl OwnedPty {
     }
 
     pub(crate) fn wait(&self) -> Result<ExitStatus, SafeError> {
-        self.child.lock().wait().map_err(|_| error("PROCESS_WAIT_FAILED"))
+        self.child
+            .lock()
+            .wait()
+            .map_err(|_| error("PROCESS_WAIT_FAILED"))
     }
 
     /// Signal only this retained child, never a process-name/PID search. Success
