@@ -105,3 +105,5 @@ mod native_cli_terminal_input;
 mod version_history_catalog;
 
 mod version_history_download;
+
+mod version_history_transaction;
