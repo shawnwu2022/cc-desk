@@ -25,7 +25,8 @@ use std::{
 };
 use windows::Win32::{
     Foundation::{
-        ERROR_FILE_NOT_FOUND, ERROR_HANDLE_EOF, ERROR_NO_MORE_ITEMS, ERROR_PATH_NOT_FOUND, HANDLE,
+        ERROR_FILE_NOT_FOUND, ERROR_HANDLE_EOF, ERROR_NO_MORE_FILES, ERROR_NO_MORE_ITEMS,
+        ERROR_PATH_NOT_FOUND, HANDLE,
     },
     Security::{
         GetFileSecurityW, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
@@ -692,17 +693,45 @@ fn HistoryPayload_MachineIdentity_008() {
         }
     }
 }
-fn reject_running_desk() -> io::Result<()> {
+const PROCESS_SNAPSHOT_BUDGET: usize = 16384;
+
+fn process_snapshot_next(result: windows_core::Result<()>) -> io::Result<bool> {
+    match result {
+        Ok(()) => Ok(true),
+        // ToolHelp process enumeration uses FILES, unlike registry enumeration.
+        Err(e) if e.code() == ERROR_NO_MORE_FILES.to_hresult() => Ok(false),
+        Err(e) => Err(win(e)),
+    }
+}
+
+fn visit_process_snapshot(
+    budget: usize,
+    mut visit: impl FnMut(&PROCESSENTRY32W) -> io::Result<()>,
+) -> io::Result<usize> {
+    if budget > PROCESS_SNAPSHOT_BUDGET {
+        return Err(blocked("process inventory exceeded budget"));
+    }
     let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(win)? };
     let _owned = unsafe { OwnedHandle::from_raw_handle(handle.0) };
     let mut entry = PROCESSENTRY32W {
         dwSize: size_of::<PROCESSENTRY32W>() as u32,
         ..Default::default()
     };
+    // An empty/malformed initial snapshot does not establish fixture absence.
     unsafe {
         Process32FirstW(handle, &mut entry).map_err(win)?;
     }
-    for _ in 0..16384 {
+    for count in 1..=budget {
+        visit(&entry)?;
+        if !process_snapshot_next(unsafe { Process32NextW(handle, &mut entry) })? {
+            return Ok(count);
+        }
+    }
+    Err(blocked("process inventory exceeded budget"))
+}
+
+fn reject_running_desk() -> io::Result<()> {
+    visit_process_snapshot(PROCESS_SNAPSHOT_BUDGET, |entry| {
         let end = entry
             .szExeFile
             .iter()
@@ -715,13 +744,64 @@ fn reject_running_desk() -> io::Result<()> {
         {
             return Err(blocked("Desk process exists before fixture installer"));
         }
-        match unsafe { Process32NextW(handle, &mut entry) } {
-            Ok(()) => (),
-            Err(e) if e.code() == ERROR_NO_MORE_ITEMS.to_hresult() => return Ok(()),
-            Err(e) => return Err(win(e)),
-        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+// 真实只读快照必须遍历至原生结束码，包含当前进程，且不保存其他进程信息。
+#[test]
+fn HistoryPayload_ProcessSnapshot_009() {
+    let mut current_seen = false;
+    let count = visit_process_snapshot(PROCESS_SNAPSHOT_BUDGET, |entry| {
+        current_seen |= entry.th32ProcessID == std::process::id();
+        Ok(())
+    })
+    .expect("bounded ToolHelp snapshot must reach its documented terminal status");
+    assert!(current_seen);
+    assert!((1..=PROCESS_SNAPSHOT_BUDGET).contains(&count));
+}
+
+// 非结束错误、条目预算耗尽和回调拒绝均不能伪装成成功或生产静默证明。
+#[test]
+fn HistoryPayload_ProcessSnapshotGuards_010() {
+    use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE};
+    assert!(process_snapshot_next(Ok(())).unwrap());
+    assert!(
+        !process_snapshot_next(Err(windows_core::Error::from_hresult(
+            ERROR_NO_MORE_FILES.to_hresult()
+        )))
+        .unwrap()
+    );
+    for code in [
+        ERROR_NO_MORE_ITEMS,
+        ERROR_ACCESS_DENIED,
+        ERROR_INVALID_HANDLE,
+    ] {
+        let error =
+            process_snapshot_next(Err(windows_core::Error::from_hresult(code.to_hresult())))
+                .unwrap_err();
+        assert_eq!(
+            error
+                .get_ref()
+                .unwrap()
+                .downcast_ref::<windows_core::Error>()
+                .unwrap()
+                .code(),
+            code.to_hresult()
+        );
     }
-    Err(blocked("process inventory exceeded budget"))
+    assert!(visit_process_snapshot(0, |_| panic!("zero budget visited an entry")).is_err());
+    assert!(visit_process_snapshot(PROCESS_SNAPSHOT_BUDGET + 1, |_| {
+        panic!("over-budget snapshot visited an entry")
+    })
+    .is_err());
+    assert_eq!(
+        visit_process_snapshot(PROCESS_SNAPSHOT_BUDGET, |_| Err(blocked("probe refusal")))
+            .unwrap_err()
+            .to_string(),
+        "probe refusal"
+    );
 }
 pub(super) fn existing_webview() -> io::Result<Value> {
     crate::version_history::windows::webview::reject_manager_overrides()?;
