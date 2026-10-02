@@ -103,3 +103,5 @@ mod native_cli_observer_http;
 mod native_cli_terminal_input;
 
 mod version_history_catalog;
+
+mod version_history_download;
