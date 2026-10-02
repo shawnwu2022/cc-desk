@@ -15,8 +15,13 @@ export function visualFixturePlugin(root: string, enabled: boolean): Plugin {
       server.middlewares.use((request, response, next) => {
         const path = new URL(request.url ?? '/', 'http://localhost').pathname
         const fixture = path.startsWith('/__visual__') || path.includes('/src/visual/')
-        if ((!enabled && fixture) || enabled && ['/', '/index.html', '/src/main.ts', '/src/App.vue'].includes(path)) {
+        if ((!enabled && fixture) || enabled && ['/', '/index.html', '/src/main.ts', '/src/App.vue', '/version-manager.html', '/src/manager/main.ts'].includes(path)) {
           response.statusCode = 404; response.end('Not found'); return
+        }
+        if (enabled && path === '/__visual__/version-manager/') {
+          response.setHeader('Content-Type', 'text/html')
+          response.end('<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>CC Desk manager visual fixture</title></head><body><div id="app"></div><script type="module" src="/src/visual/managerEntry.ts"></script></body></html>')
+          return
         }
         if (enabled && path === '/__visual__/') {
           response.setHeader('Content-Type', 'text/html')

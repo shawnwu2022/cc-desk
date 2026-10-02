@@ -7,8 +7,8 @@ use crate::cli::types::{CliKind, LaunchAction, LaunchRequest, WireU64};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::fs::{self, File};
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -25,6 +25,17 @@ const OBSERVATIONS: &[&str] = &[
     "bytes-received",
     "destroy-revoked",
 ];
+
+fn worker_log_tail(path: &Path) -> std::io::Result<String> {
+    const MAXIMUM: u64 = 64 * 1024;
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(
+        file.metadata()?.len().saturating_sub(MAXIMUM),
+    ))?;
+    let mut bytes = Vec::new();
+    file.take(MAXIMUM).read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
 
 struct Probe {
     registry: Arc<RunRegistry<usize>>,
@@ -212,7 +223,9 @@ fn D11_Channel_Native_011() {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("native Channel worker timed out");
+            let evidence = worker_log_tail(&log_path)
+                .unwrap_or_else(|error| format!("worker log unavailable: {:?}", error.kind()));
+            panic!("native Channel worker timed out; bounded last output:\n{evidence}");
         }
         std::thread::sleep(Duration::from_millis(20));
     };

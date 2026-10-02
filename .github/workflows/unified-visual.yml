@@ -80,14 +80,14 @@ jobs:
       - name: Run fixture contracts and typecheck
         run: |
           npm run test:visual:unit
-          npm test -- tests/config/visualFixtureBoundary.test.ts tests/config/visualWorkflow.test.ts tests/productBoundary.test.ts
+          npm test -- tests/config/visualFixtureBoundary.test.ts tests/config/versionManagerVisualBoundary.test.ts tests/config/visualWorkflow.test.ts tests/productBoundary.test.ts
           npm run typecheck
       - name: Verify committed baselines and every geometry/interaction case
         id: verify
         continue-on-error: true
         shell: bash
         run: |
-          npx playwright test tests/visual/unified-workspace.spec.ts --update-snapshots=none --output=test-results/visual-verification 2>&1 | tee visual-evidence/verification.log
+          npx playwright test tests/visual/unified-workspace.spec.ts tests/visual/version-manager.spec.ts --update-snapshots=none --output=test-results/visual-verification 2>&1 | tee visual-evidence/verification.log
       - name: Capture candidates for pixel review when baselines are absent
         if: ${{ !cancelled() && steps.baselines.outputs.absent == 'true' && steps.verify.outcome == 'failure' }}
         shell: bash

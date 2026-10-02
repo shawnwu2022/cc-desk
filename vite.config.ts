@@ -47,6 +47,10 @@ export default defineConfig(({ command, mode }) => ({
     // Produce sourcemaps for debug builds
     sourcemap: !!process.env.TAURI_DEBUG,
     rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        versionManager: resolve(__dirname, 'version-manager.html'),
+      },
       output: {
         manualChunks: manualChunkName
       }

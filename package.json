@@ -42,7 +42,7 @@
     "test:ci": "vitest run",
     "test:watch": "vitest",
     "typecheck": "vue-tsc --noEmit",
-    "test:visual": "playwright test tests/visual/unified-workspace.spec.ts",
+    "test:visual": "playwright test tests/visual/unified-workspace.spec.ts tests/visual/version-manager.spec.ts",
     "test:visual:unit": "vitest run --config vitest.visual.config.ts"
   },
   "dependencies": {

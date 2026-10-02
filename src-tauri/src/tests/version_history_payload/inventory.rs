@@ -548,9 +548,7 @@ fn reject_wix() -> io::Result<()> {
         )? {
             for child in subkeys(&root, 4096)? {
                 if let Some(key) = open_key(root.0, &child, view)? {
-                    if value_text(&key, "DisplayName")?.as_deref() == Some("CC Desk")
-                        && value_text(&key, "Publisher")?.as_deref() == Some("shawnwu2022")
-                    {
+                    if machine_desk_identity(&key)? {
                         return Err(blocked("machine Desk/WiX registration exists"));
                     }
                 }
@@ -558,6 +556,141 @@ fn reject_wix() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IdentityMatch {
+    Exact,
+    Different,
+    Unknown,
+}
+
+// RegQueryValueEx does not guarantee string termination. Decode bounded bytes
+// without dereferencing a native string or expanding ambient environment data.
+fn identity_text(kind: REG_VALUE_TYPE, bytes: &[u8], expected: &str) -> IdentityMatch {
+    if (kind != REG_SZ && kind != REG_EXPAND_SZ)
+        || bytes.len() > 8192
+        || !bytes.len().is_multiple_of(2)
+    {
+        return IdentityMatch::Unknown;
+    }
+    let mut units: Vec<_> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|value| u16::from_le_bytes(*value))
+        .collect();
+    if units.last() == Some(&0) {
+        units.pop();
+    }
+    if units.contains(&0) {
+        return IdentityMatch::Unknown;
+    }
+    let Ok(value) = String::from_utf16(&units) else {
+        return IdentityMatch::Unknown;
+    };
+    if kind == REG_EXPAND_SZ && value.contains('%') {
+        return IdentityMatch::Unknown;
+    }
+    if value.eq_ignore_ascii_case(expected) {
+        IdentityMatch::Exact
+    } else {
+        IdentityMatch::Different
+    }
+}
+
+fn identity_field(key: &Key, name: &str, expected: &str) -> io::Result<IdentityMatch> {
+    let name = wide(name);
+    let mut kind = REG_VALUE_TYPE(0);
+    let mut bytes = [0u8; 8192];
+    let mut length = bytes.len() as u32;
+    let status = unsafe {
+        RegQueryValueExW(
+            key.0,
+            PCWSTR(name.as_ptr()),
+            None,
+            Some(&mut kind),
+            Some(bytes.as_mut_ptr()),
+            Some(&mut length),
+        )
+    };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(IdentityMatch::Different);
+    }
+    if status == windows::Win32::Foundation::ERROR_MORE_DATA {
+        return Ok(IdentityMatch::Unknown);
+    }
+    status.ok().map_err(win)?;
+    if length as usize > bytes.len() {
+        return Ok(IdentityMatch::Unknown);
+    }
+    Ok(identity_text(kind, &bytes[..length as usize], expected))
+}
+
+fn identity_pair(name: IdentityMatch, publisher: IdentityMatch) -> io::Result<bool> {
+    // One positively different field disproves the same exact product/publisher
+    // pair used by the previous gate. Unknown data alone never proves absence.
+    if name == IdentityMatch::Different || publisher == IdentityMatch::Different {
+        return Ok(false);
+    }
+    if name == IdentityMatch::Exact && publisher == IdentityMatch::Exact {
+        return Ok(true);
+    }
+    Err(blocked("machine Desk identity fields are ambiguous"))
+}
+
+fn machine_desk_identity(key: &Key) -> io::Result<bool> {
+    identity_pair(
+        identity_field(key, "DisplayName", "CC Desk")?,
+        identity_field(key, "Publisher", "shawnwu2022")?,
+    )
+}
+
+// 非目标记录可由另一已验证字段排除；未知字段绝不能隐藏可能匹配的Desk安装。
+#[test]
+fn HistoryPayload_MachineIdentity_008() {
+    use IdentityMatch::{Different, Exact, Unknown};
+    let bytes = |value: &str| {
+        value
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>()
+    };
+    for kind in [REG_SZ, REG_EXPAND_SZ] {
+        for text in ["CC Desk", "CC Desk\0", "cc desk"] {
+            assert_eq!(identity_text(kind, &bytes(text), "CC Desk"), Exact);
+        }
+        for text in ["", "\0", "Other product"] {
+            assert_eq!(identity_text(kind, &bytes(text), "CC Desk"), Different);
+        }
+    }
+    assert_eq!(
+        identity_text(REG_EXPAND_SZ, &bytes("%PRODUCT%"), "CC Desk"),
+        Unknown
+    );
+    assert_eq!(
+        identity_text(REG_SZ, &bytes("CC Desk\0other"), "CC Desk"),
+        Unknown
+    );
+    assert_eq!(
+        identity_text(REG_BINARY, &bytes("CC Desk"), "CC Desk"),
+        Unknown
+    );
+    assert_eq!(identity_text(REG_SZ, &[0], "CC Desk"), Unknown);
+    assert_eq!(identity_text(REG_SZ, &[0, 0xd8], "CC Desk"), Unknown);
+    assert_eq!(identity_text(REG_SZ, &[0; 8194], "CC Desk"), Unknown);
+    for first in [Exact, Different, Unknown] {
+        for second in [Exact, Different, Unknown] {
+            let result = identity_pair(first, second);
+            if first == Different || second == Different {
+                assert!(!result.unwrap());
+            } else if first == Exact && second == Exact {
+                assert!(result.unwrap());
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
 }
 fn reject_running_desk() -> io::Result<()> {
     let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(win)? };
