@@ -1978,3 +1978,103 @@ fn HistoryWindows_TreeHandoff_034() {
         drop(lease);
     }
 }
+
+// 检查确定的读取句柄只阻塞首次排他打开，释放后取得同一对象且不把后续失败归为等待。
+#[test]
+fn HistoryWindows_FenceBusy_035() {
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("image.exe");
+    std::fs::write(&source, b"unchanged image fixture").unwrap();
+    let parent = Directory::open_absolute(temporary.path()).unwrap();
+    let reader = parent
+        .open_file(name("image.exe"), FileAccess::Read)
+        .unwrap();
+    let identity = reader.identity().clone();
+    let digest = reader.digest().unwrap();
+    for _ in 0..2 {
+        let error = ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest)
+            .err()
+            .expect("known reader must exclude an exclusive open");
+        assert!(ImageFence::is_acquisition_busy(&error));
+        assert_eq!(reader.identity(), &identity);
+        assert_eq!(reader.digest().unwrap(), digest);
+        assert!(!temporary.path().join("sealed.exe").exists());
+    }
+    assert!(!ImageFence::is_acquisition_busy(&std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        "initial exclusive NTFS open is busy: 0xc0000043"
+    )));
+    drop(reader);
+    let mut fence =
+        ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest).unwrap();
+    assert_eq!(fence.identity(), &identity);
+    fence.verify().unwrap();
+    let other_open = parent
+        .open_file(name("image.exe"), FileAccess::Read)
+        .err()
+        .expect("fenced image must exclude a data reader");
+    assert!(!ImageFence::is_acquisition_busy(&other_open));
+    std::fs::write(temporary.path().join("sealed.exe"), b"collision sentinel").unwrap();
+    let rename = fence
+        .rename_to(parent, name("sealed.exe"))
+        .err()
+        .expect("rename collision must fail");
+    assert!(!ImageFence::is_acquisition_busy(&rename));
+    fence.verify().unwrap();
+    assert_eq!(
+        std::fs::read(temporary.path().join("sealed.exe")).unwrap(),
+        b"collision sentinel"
+    );
+    std::fs::hard_link(&source, temporary.path().join("extra-link.exe")).unwrap();
+    let validation = fence
+        .verify()
+        .err()
+        .expect("later link-count validation must remain a hard failure");
+    assert!(!ImageFence::is_acquisition_busy(&validation));
+}
+
+// 检查等待期间身份置换或原对象字节变化都在取得排他句柄后立即拒绝，不再当作忙碌重试。
+#[test]
+fn HistoryWindows_FenceDrift_036() {
+    for replace_identity in [true, false] {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("image.exe");
+        std::fs::write(&source, b"original image fixture").unwrap();
+        let parent = Directory::open_absolute(temporary.path()).unwrap();
+        let reader = parent
+            .open_file(name("image.exe"), FileAccess::Read)
+            .unwrap();
+        let identity = reader.identity().clone();
+        let digest = reader.digest().unwrap();
+        let busy = ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest)
+            .err()
+            .unwrap();
+        assert!(ImageFence::is_acquisition_busy(&busy));
+        drop(reader);
+        if replace_identity {
+            std::fs::rename(&source, temporary.path().join("retained-original.exe")).unwrap();
+            std::fs::write(&source, b"original image fixture").unwrap();
+        } else {
+            std::fs::write(&source, b"changed image fixture").unwrap();
+        }
+        let current = parent
+            .open_file(name("image.exe"), FileAccess::Read)
+            .unwrap();
+        assert_eq!(current.identity() != &identity, replace_identity);
+        drop(current);
+        let failure = ImageFence::acquire(parent, name("image.exe"), &identity, &digest)
+            .err()
+            .expect("changed original binding must fail admission");
+        assert!(!ImageFence::is_acquisition_busy(&failure));
+        assert!(source.exists());
+        assert!(!temporary.path().join("sealed.exe").exists());
+        if replace_identity {
+            assert_eq!(
+                std::fs::read(temporary.path().join("retained-original.exe")).unwrap(),
+                b"original image fixture"
+            );
+        } else {
+            assert_eq!(std::fs::read(&source).unwrap(), b"changed image fixture");
+        }
+    }
+}

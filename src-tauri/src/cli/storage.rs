@@ -155,28 +155,7 @@ impl WorkspaceRepository {
         file.take(MAX_FILE_BYTES + 1)
             .read_to_end(&mut bytes)
             .map_err(|_| error("STORAGE_IO"))?;
-        if bytes.len() as u64 > MAX_FILE_BYTES {
-            return Err(error("WORKSPACE_TOO_LARGE"));
-        }
-        let raw: Value = serde_json::from_slice(&bytes).map_err(|_| error("WORKSPACE_INVALID"))?;
-        if raw.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
-            return Err(error("UNSUPPORTED_SCHEMA"));
-        }
-        let document: WorkspaceDocument =
-            serde_json::from_value(raw).map_err(|_| error("WORKSPACE_INVALID"))?;
-        for (id, profile) in &document.profiles {
-            if id != &profile.id || profile.revision.get() > document.revision.get() {
-                return Err(error("WORKSPACE_INVALID"));
-            }
-            profile.validate().map_err(|_| error("WORKSPACE_INVALID"))?;
-        }
-        for (id, project) in &document.registered_projects {
-            if id != &project.project_id {
-                return Err(error("WORKSPACE_INVALID"));
-            }
-            project.validate().map_err(|_| error("WORKSPACE_INVALID"))?;
-        }
-        Ok(document)
+        decode_workspace(&bytes)
     }
 
     /// A narrow, lock-held transaction; callers may mutate project records, never profile data.
@@ -327,6 +306,33 @@ impl WorkspaceRepository {
             .map_err(|_| error("COMMIT_STATE_UNKNOWN"))?;
         Ok(())
     }
+}
+
+/// Pure bounded workspace decoding for held read-only admission inputs. Ordinary
+/// repository reads use the same validation after acquiring their existing lock.
+pub(crate) fn decode_workspace(bytes: &[u8]) -> Result<WorkspaceDocument, SafeError> {
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(error("WORKSPACE_TOO_LARGE"));
+    }
+    let raw: Value = serde_json::from_slice(bytes).map_err(|_| error("WORKSPACE_INVALID"))?;
+    if raw.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+        return Err(error("UNSUPPORTED_SCHEMA"));
+    }
+    let document: WorkspaceDocument =
+        serde_json::from_value(raw).map_err(|_| error("WORKSPACE_INVALID"))?;
+    for (id, profile) in &document.profiles {
+        if id != &profile.id || profile.revision.get() > document.revision.get() {
+            return Err(error("WORKSPACE_INVALID"));
+        }
+        profile.validate().map_err(|_| error("WORKSPACE_INVALID"))?;
+    }
+    for (id, project) in &document.registered_projects {
+        if id != &project.project_id {
+            return Err(error("WORKSPACE_INVALID"));
+        }
+        project.validate().map_err(|_| error("WORKSPACE_INVALID"))?;
+    }
+    Ok(document)
 }
 
 struct TemporaryPath(PathBuf);

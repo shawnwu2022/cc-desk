@@ -79,6 +79,30 @@ impl ComponentName {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChildEntry {
+    pub(crate) name: ComponentName,
+    /// Enumeration is only a hint: the opened child's actual type is checked
+    /// again before it can enter a complete capture.
+    pub(crate) directory: bool,
+}
+#[derive(Debug)]
+struct InventoryLimit;
+impl std::fmt::Display for InventoryLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("directory inventory exceeds its admitted budget")
+    }
+}
+impl std::error::Error for InventoryLimit {}
+pub(crate) fn is_inventory_limit(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|source| source.is::<InventoryLimit>())
+}
+fn inventory_limit() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, InventoryLimit)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FileIdentity {
@@ -91,6 +115,28 @@ pub(crate) struct Metadata {
     pub(crate) size: u64,
     pub(crate) directory: bool,
     pub(crate) attributes: u32,
+}
+#[derive(Debug)]
+struct RelativeOpenFailure(u32);
+impl std::fmt::Display for RelativeOpenFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "relative NTFS open failed: 0x{:08x}", self.0)
+    }
+}
+impl std::error::Error for RelativeOpenFailure {}
+
+#[derive(Debug)]
+struct InitialExclusiveOpenBusy;
+impl std::fmt::Display for InitialExclusiveOpenBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("initial exclusive NTFS open is busy: 0xc0000043")
+    }
+}
+impl std::error::Error for InitialExclusiveOpenBusy {}
+pub(super) fn is_exclusive_open_busy(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|source| source.is::<InitialExclusiveOpenBusy>())
 }
 #[derive(Debug)]
 enum ObjectRejection {
@@ -233,6 +279,7 @@ pub(crate) struct Directory {
     file: File,
     identity: FileIdentity,
     location: Mutex<Option<Location>>,
+    enumeration: Mutex<()>,
     // Only the volume root is initially opened by absolute path.
     volume_path: Vec<u16>,
     rename_access: bool,
@@ -272,6 +319,7 @@ impl Directory {
             file,
             identity: meta.identity,
             location: Mutex::new(None),
+            enumeration: Mutex::new(()),
             volume_path,
             rename_access: false,
         });
@@ -314,8 +362,18 @@ impl Directory {
     /// must still be opened relative to this handle and inspected before use.
     /// This is an inventory observation, not proof that a live tree is immutable.
     pub(crate) fn read_children(&self, maximum: usize) -> io::Result<Vec<ComponentName>> {
+        Ok(self
+            .read_child_entries(maximum)?
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect())
+    }
+    pub(crate) fn read_child_entries(&self, maximum: usize) -> io::Result<Vec<ChildEntry>> {
+        // Nt directory enumeration has per-file-object cursor state. Serialize
+        // users of this retained handle so concurrent readers cannot skip pages.
+        let _enumeration = self.enumeration.lock();
         if maximum == 0 || maximum > 100_000 {
-            return Err(blocked("unsupported inventory budget"));
+            return Err(inventory_limit());
         }
         self.recheck()?;
         let mut names = vec![];
@@ -359,9 +417,15 @@ impl Directory {
                 let units =
                     unsafe { std::slice::from_raw_parts(entry.FileName.as_ptr(), length / 2) };
                 if units != [b'.' as u16] && units != [b'.' as u16, b'.' as u16] {
-                    names.push(ComponentName::new(&OsString::from_wide(units))?);
+                    if entry.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+                        return Err(blocked("reparse entry in complete inventory"));
+                    }
+                    names.push(ChildEntry {
+                        name: ComponentName::new(&OsString::from_wide(units))?,
+                        directory: entry.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0,
+                    });
                     if names.len() > maximum {
-                        return Err(blocked("directory inventory exceeds budget"));
+                        return Err(inventory_limit());
                     }
                 }
                 if entry.NextEntryOffset == 0 {
@@ -392,6 +456,7 @@ impl Directory {
             file,
             identity: meta.identity,
             location: Mutex::new(Some(Location { parent, name })),
+            enumeration: Mutex::new(()),
             volume_path: vec![],
             rename_access,
         });
@@ -408,6 +473,32 @@ impl Directory {
     }
     pub(crate) fn identity(&self) -> &FileIdentity {
         &self.identity
+    }
+    pub(crate) fn require_renameable(&self) -> io::Result<()> {
+        self.recheck()?;
+        if !self.rename_access {
+            return Err(blocked(
+                "root guard was not admitted for same-handle rename",
+            ));
+        }
+        Ok(())
+    }
+    /// Reconcile an uncertain rename from the SAME retained root object. This
+    /// performs no namespace mutation and accepts only an exact held parent.
+    pub(crate) fn reconcile_location(
+        &self,
+        parent: Arc<Self>,
+        name: ComponentName,
+    ) -> io::Result<()> {
+        parent.recheck()?;
+        if parent.identity() == self.identity()
+            || metadata(self.raw())?.identity != self.identity
+            || final_path(self.raw())? != child_path(parent.raw(), &name)?
+        {
+            return Err(blocked("held root does not occupy the expected location"));
+        }
+        *self.location.lock() = Some(Location { parent, name });
+        self.recheck()
     }
     pub(super) fn raw(&self) -> HANDLE {
         handle(&self.file)
@@ -481,7 +572,22 @@ impl Directory {
                 FILE_SHARE_MODE(0),
             ),
         };
-        let file = self.open_relative(&name, rights, sharing, FILE_OPEN, false, None)?;
+        let file = self
+            .open_relative(&name, rights, sharing, FILE_OPEN, false, None)
+            .map_err(|error| {
+                // Only this first, effect-free exclusive open can be pending.
+                // Never classify from error text or a later metadata/name check.
+                if matches!(access, FileAccess::ExclusiveRename)
+                    && error
+                        .get_ref()
+                        .and_then(|source| source.downcast_ref::<RelativeOpenFailure>())
+                        .is_some_and(|failure| failure.0 == 0xc0000043)
+                {
+                    io::Error::new(io::ErrorKind::WouldBlock, InitialExclusiveOpenBusy)
+                } else {
+                    error
+                }
+            })?;
         PinnedFile::from_file(self.clone(), name, file)
     }
     pub(super) fn open_relative(
@@ -539,10 +645,7 @@ impl Directory {
             return Err(io::Error::from_raw_os_error(2));
         }
         if result.0 != 0 {
-            return Err(io::Error::other(format!(
-                "relative NTFS open failed: 0x{:08x}",
-                result.0 as u32
-            )));
+            return Err(io::Error::other(RelativeOpenFailure(result.0 as u32)));
         }
         let file = File::from(unsafe { own(raw) });
         if unsafe { status.Anonymous.Status.0 } != 0 {

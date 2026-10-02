@@ -3,9 +3,13 @@
 //! coordinator. This module never imports HKCU or supplies installation approval.
 use super::{blocked, win_error};
 use serde::{Deserialize, Serialize};
-use std::io;
-use windows::Win32::{Foundation::ERROR_FILE_NOT_FOUND, System::Registry::*};
-use windows_core::PCWSTR;
+use std::{collections::BTreeMap, io};
+use windows::Wdk::System::Registry::{KeyNameInformation, NtQueryKey};
+use windows::Win32::{
+    Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, FILETIME, HANDLE},
+    System::Registry::*,
+};
+use windows_core::{PCWSTR, PWSTR};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum RegistrationSlot {
@@ -183,6 +187,9 @@ fn value_name(name: &str) -> io::Result<Vec<u16>> {
     Ok(name.encode_utf16().chain(Some(0)).collect())
 }
 fn read_value(key: HKEY, name: &str) -> io::Result<Option<RegistryValue>> {
+    read_value_bounded(key, name, 1024 * 1024)
+}
+fn read_value_bounded(key: HKEY, name: &str, maximum: usize) -> io::Result<Option<RegistryValue>> {
     let name = value_name(name)?;
     let mut kind = REG_VALUE_TYPE::default();
     let mut length = 0;
@@ -200,7 +207,7 @@ fn read_value(key: HKEY, name: &str) -> io::Result<Option<RegistryValue>> {
         return Ok(None);
     }
     status.ok().map_err(win_error)?;
-    if length > 1024 * 1024 {
+    if length as usize > maximum {
         return Err(blocked("registry value exceeds limit"));
     }
     let mut bytes = vec![0u8; length as usize];
@@ -222,6 +229,50 @@ fn read_value(key: HKEY, name: &str) -> io::Result<Option<RegistryValue>> {
         bytes,
     }))
 }
+/// Query the current name from the retained kernel object, never from a cached
+/// path. This observation does not lock the registry namespace against rename.
+fn current_key_name(key: HKEY) -> io::Result<Vec<u16>> {
+    const MAX_BYTES: usize = 64 * 1024;
+    let mut buffer = vec![0u32; (MAX_BYTES + 4) / 4];
+    let mut returned = 0;
+    let status = unsafe {
+        NtQueryKey(
+            HANDLE(key.0),
+            KeyNameInformation,
+            Some(buffer.as_mut_ptr().cast()),
+            (buffer.len() * 4) as u32,
+            &mut returned,
+        )
+    };
+    if status.0 != 0 {
+        return Err(blocked("registry key name is unavailable"));
+    }
+    let length = buffer[0] as usize;
+    if length == 0
+        || !length.is_multiple_of(2)
+        || length > MAX_BYTES
+        || returned as usize != length + 4
+    {
+        return Err(blocked("unsupported registry key name"));
+    }
+    // KEY_NAME_INFORMATION contains a byte length followed by nonterminated
+    // UTF-16. The u32 allocation aligns both fields; only returned bytes are read.
+    let name =
+        unsafe { std::slice::from_raw_parts(buffer.as_ptr().add(1).cast::<u16>(), length / 2) };
+    Ok(name.to_vec())
+}
+fn same_current_key_name(held: HKEY, reopened: HKEY, expected: &[u16]) -> io::Result<()> {
+    let before = current_key_name(held)?;
+    let observed = current_key_name(reopened)?;
+    if before != expected
+        || observed != expected
+        || current_key_name(held)? != before
+        || current_key_name(reopened)? != observed
+    {
+        return Err(blocked("registry key namespace changed"));
+    }
+    Ok(())
+}
 struct AliasBinding {
     key_index: usize,
     value: RegistryValue,
@@ -233,6 +284,42 @@ struct KeyChain {
 impl KeyChain {
     fn raw(&self) -> HKEY {
         self.keys.last().expect("nonempty registry chain").0
+    }
+    fn reopen_bound(
+        &self,
+        root: HKEY,
+        path: &str,
+        view: RegistryView,
+        enumerate_leaf: bool,
+        expected: &[Vec<u16>],
+    ) -> io::Result<Self> {
+        let fresh = open_chain_access(root, path, view, false, enumerate_leaf)?
+            .ok_or_else(|| blocked("registry namespace disappeared"))?;
+        self.verify_same_namespace(&fresh, expected)?;
+        Ok(fresh)
+    }
+    fn current_names(&self) -> io::Result<Vec<Vec<u16>>> {
+        self.keys
+            .iter()
+            .map(|key| current_key_name(key.0))
+            .collect()
+    }
+    // Expected names were returned by the OS at admission, including its actual
+    // WOW64 mapping. They only constrain freshly queried held AND fixed-path
+    // reopened objects; cached spelling alone never authorizes observation.
+    fn verify_same_namespace(&self, fresh: &Self, expected: &[Vec<u16>]) -> io::Result<()> {
+        self.verify_aliases()?;
+        fresh.verify_aliases()?;
+        if self.keys.len() != fresh.keys.len()
+            || self.keys.len() != expected.len()
+            || self.aliases.len() != fresh.aliases.len()
+        {
+            return Err(blocked("registry namespace changed"));
+        }
+        for ((held, reopened), name) in self.keys.iter().zip(&fresh.keys).zip(expected) {
+            same_current_key_name(held.0, reopened.0, name)?;
+        }
+        Ok(())
     }
     fn verify_aliases(&self) -> io::Result<()> {
         for (index, key) in self.keys.iter().enumerate() {
@@ -299,6 +386,15 @@ fn open_chain(
     view: RegistryView,
     write_leaf: bool,
 ) -> io::Result<Option<KeyChain>> {
+    open_chain_access(root, path, view, write_leaf, false)
+}
+fn open_chain_access(
+    root: HKEY,
+    path: &str,
+    view: RegistryView,
+    write_leaf: bool,
+    enumerate_leaf: bool,
+) -> io::Result<Option<KeyChain>> {
     let parts: Vec<_> = path.split('\\').collect();
     let mut chain = KeyChain {
         keys: Vec::new(),
@@ -311,6 +407,11 @@ fn open_chain(
         let mut raw = HKEY::default();
         let access = KEY_QUERY_VALUE
             | effective_view.flags()
+            | if enumerate_leaf && index + 1 == parts.len() {
+                KEY_ENUMERATE_SUB_KEYS
+            } else {
+                REG_SAM_FLAGS(0)
+            }
             | if write_leaf && index + 1 == parts.len() {
                 KEY_SET_VALUE
             } else {
@@ -363,6 +464,382 @@ fn open_chain(
     }
     chain.verify_aliases()?;
     Ok(Some(chain))
+}
+
+const UNINSTALL_ROOT: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+const PRODUCT_ROOT: &str = "Software\\shawnwu2022\\CC Desk";
+const INSTALL_VALUE_NAMES: &[&str] = &[
+    "DisplayName",
+    "Publisher",
+    "DisplayVersion",
+    "MainBinaryName",
+    "InstallLocation",
+    "UninstallString",
+    "DisplayIcon",
+    "WindowsInstaller",
+    "CurrentUser",
+    "AllUsers",
+];
+const MAX_UNINSTALL_KEYS: usize = 2048;
+const MAX_DISCOVERY_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InstallHive {
+    CurrentUser,
+    LocalMachine,
+}
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct InstallRecord {
+    pub(crate) hive: InstallHive,
+    pub(crate) view: RegistryView,
+    pub(crate) name: String,
+    pub(crate) values: BTreeMap<String, Option<RegistryValue>>,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct KeyStamp {
+    children: u32,
+    values: u32,
+    modified: u64,
+}
+fn key_stamp(key: HKEY) -> io::Result<KeyStamp> {
+    let mut children = 0;
+    let mut values = 0;
+    let mut modified = FILETIME::default();
+    unsafe {
+        RegQueryInfoKeyW(
+            key,
+            None,
+            None,
+            None,
+            Some(&mut children),
+            None,
+            None,
+            Some(&mut values),
+            None,
+            None,
+            None,
+            Some(&mut modified),
+        )
+        .ok()
+        .map_err(win_error)?;
+    }
+    Ok(KeyStamp {
+        children,
+        values,
+        modified: ((modified.dwHighDateTime as u64) << 32) | modified.dwLowDateTime as u64,
+    })
+}
+fn enum_subkeys(key: HKEY) -> io::Result<Vec<String>> {
+    let before = key_stamp(key)?;
+    if before.children as usize > MAX_UNINSTALL_KEYS {
+        return Err(blocked("uninstall key count exceeds limit"));
+    }
+    let mut names = Vec::new();
+    for index in 0..=before.children {
+        let mut buffer = [0u16; 256];
+        let mut length = buffer.len() as u32;
+        let status = unsafe {
+            RegEnumKeyExW(
+                key,
+                index,
+                Some(PWSTR(buffer.as_mut_ptr())),
+                &mut length,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        if status == ERROR_NO_MORE_ITEMS {
+            break;
+        }
+        status.ok().map_err(win_error)?;
+        if length == 0 || length > 255 {
+            return Err(blocked("unsupported uninstall key name"));
+        }
+        let name = String::from_utf16(&buffer[..length as usize])
+            .map_err(|_| blocked("unrepresentable uninstall key"))?;
+        if name.contains(['\\', '/', '\0']) || name.chars().any(char::is_control) {
+            return Err(blocked("unsupported uninstall key name"));
+        }
+        names.push(name);
+    }
+    if names.len() != before.children as usize || key_stamp(key)? != before {
+        return Err(blocked("uninstall namespace changed"));
+    }
+    names.sort();
+    Ok(names)
+}
+fn open_install_child(parent: HKEY, view: RegistryView, name: &str) -> io::Result<Key> {
+    let wide: Vec<_> = name.encode_utf16().chain(Some(0)).collect();
+    let mut raw = HKEY::default();
+    unsafe {
+        RegOpenKeyExW(
+            parent,
+            PCWSTR(wide.as_ptr()),
+            Some(REG_OPTION_OPEN_LINK.0),
+            KEY_QUERY_VALUE | view.flags(),
+            &mut raw,
+        )
+        .ok()
+        .map_err(win_error)?;
+    }
+    let key = Key(raw);
+    reject_install_link(key.0)?;
+    Ok(key)
+}
+struct ReadInstallKey {
+    key: Key,
+    namespace: Vec<u16>,
+    stamp: KeyStamp,
+    record: InstallRecord,
+}
+impl ReadInstallKey {
+    fn observe(
+        parent: HKEY,
+        hive: InstallHive,
+        view: RegistryView,
+        name: String,
+        total: &mut usize,
+    ) -> io::Result<Self> {
+        let key = open_install_child(parent, view, &name)?;
+        let raw = key.0;
+        let stamp = key_stamp(raw)?;
+        reject_install_link(raw)?;
+        let mut values = BTreeMap::new();
+        for name in INSTALL_VALUE_NAMES {
+            let value = read_value_bounded(raw, name, 65536)?;
+            *total = total
+                .checked_add(value.as_ref().map_or(0, |value| value.bytes.len()))
+                .ok_or_else(|| blocked("registration inventory exceeds limit"))?;
+            if *total > MAX_DISCOVERY_BYTES {
+                return Err(blocked("registration inventory exceeds limit"));
+            }
+            values.insert((*name).into(), value);
+        }
+        let result = Self {
+            namespace: current_key_name(key.0)?,
+            key,
+            stamp,
+            record: InstallRecord {
+                hive,
+                view,
+                name,
+                values,
+            },
+        };
+        result.recheck()?;
+        Ok(result)
+    }
+    fn recheck(&self) -> io::Result<()> {
+        self.recheck_key(self.key.0)
+    }
+    fn recheck_under(&self, parent: HKEY) -> io::Result<()> {
+        let fresh = open_install_child(parent, self.record.view, &self.record.name)?;
+        same_current_key_name(self.key.0, fresh.0, &self.namespace)?;
+        self.recheck()?;
+        self.recheck_key(fresh.0)?;
+        same_current_key_name(self.key.0, fresh.0, &self.namespace)?;
+        Ok(())
+    }
+    fn recheck_key(&self, key: HKEY) -> io::Result<()> {
+        reject_install_link(key)?;
+        if key_stamp(key)? != self.stamp {
+            return Err(blocked("installation registration changed"));
+        }
+        for (name, expected) in &self.record.values {
+            if &read_value_bounded(key, name, 65536)? != expected {
+                return Err(blocked("installation registration changed"));
+            }
+        }
+        if key_stamp(key)? != self.stamp {
+            return Err(blocked("installation registration changed during read"));
+        }
+        Ok(())
+    }
+}
+fn reject_install_link(key: HKEY) -> io::Result<()> {
+    if read_value_bounded(key, "SymbolicLinkValue", 65536)?
+        .is_some_and(|value| value.kind == REG_LINK.0)
+    {
+        return Err(blocked("linked installation registration is unsupported"));
+    }
+    Ok(())
+}
+struct UninstallView {
+    root: HKEY,
+    view: RegistryView,
+    chain: Option<KeyChain>,
+    namespace: Vec<Vec<u16>>,
+    names: Vec<String>,
+    records: Vec<ReadInstallKey>,
+}
+impl UninstallView {
+    fn observe(
+        root: HKEY,
+        hive: InstallHive,
+        view: RegistryView,
+        total: &mut usize,
+    ) -> io::Result<Self> {
+        let chain = open_chain_access(root, UNINSTALL_ROOT, view, false, true)?;
+        let namespace = chain
+            .as_ref()
+            .map(KeyChain::current_names)
+            .transpose()?
+            .unwrap_or_default();
+        let mut names = Vec::new();
+        let mut records = Vec::new();
+        if let Some(chain) = &chain {
+            names = enum_subkeys(chain.raw())?;
+            for name in &names {
+                records.push(ReadInstallKey::observe(
+                    chain.raw(),
+                    hive,
+                    view,
+                    name.clone(),
+                    total,
+                )?);
+            }
+        }
+        let result = Self {
+            root,
+            view,
+            chain,
+            namespace,
+            names,
+            records,
+        };
+        result.recheck()?;
+        Ok(result)
+    }
+    fn recheck(&self) -> io::Result<()> {
+        if let Some(chain) = &self.chain {
+            let fresh =
+                chain.reopen_bound(self.root, UNINSTALL_ROOT, self.view, true, &self.namespace)?;
+            if enum_subkeys(chain.raw())? != self.names || enum_subkeys(fresh.raw())? != self.names
+            {
+                return Err(blocked("uninstall namespace changed"));
+            }
+            for record in &self.records {
+                record.recheck_under(fresh.raw())?;
+            }
+            if enum_subkeys(chain.raw())? != self.names || enum_subkeys(fresh.raw())? != self.names
+            {
+                return Err(blocked("uninstall namespace changed during observation"));
+            }
+            chain.verify_same_namespace(&fresh, &self.namespace)?;
+        } else if open_chain_access(self.root, UNINSTALL_ROOT, self.view, false, true)?.is_some() {
+            return Err(blocked("uninstall namespace appeared"));
+        }
+        Ok(())
+    }
+}
+struct PublisherView {
+    root: HKEY,
+    view: RegistryView,
+    chain: Option<KeyChain>,
+    namespace: Vec<Vec<u16>>,
+    value: Option<RegistryValue>,
+    stamp: Option<KeyStamp>,
+}
+impl PublisherView {
+    fn observe(root: HKEY, view: RegistryView) -> io::Result<Self> {
+        let chain = open_chain(root, PRODUCT_ROOT, view, false)?;
+        let namespace = chain
+            .as_ref()
+            .map(KeyChain::current_names)
+            .transpose()?
+            .unwrap_or_default();
+        let (value, stamp) = if let Some(chain) = &chain {
+            (
+                read_value_bounded(chain.raw(), "", 65536)?,
+                Some(key_stamp(chain.raw())?),
+            )
+        } else {
+            (None, None)
+        };
+        let result = Self {
+            root,
+            view,
+            chain,
+            namespace,
+            value,
+            stamp,
+        };
+        result.recheck()?;
+        Ok(result)
+    }
+    fn recheck(&self) -> io::Result<()> {
+        if let Some(chain) = &self.chain {
+            let fresh =
+                chain.reopen_bound(self.root, PRODUCT_ROOT, self.view, false, &self.namespace)?;
+            for key in [chain.raw(), fresh.raw()] {
+                if Some(key_stamp(key)?) != self.stamp
+                    || read_value_bounded(key, "", 65536)? != self.value
+                    || Some(key_stamp(key)?) != self.stamp
+                {
+                    return Err(blocked("publisher registration changed"));
+                }
+            }
+            chain.verify_same_namespace(&fresh, &self.namespace)?;
+        } else if open_chain(self.root, PRODUCT_ROOT, self.view, false)?.is_some() {
+            return Err(blocked("publisher registration appeared"));
+        }
+        Ok(())
+    }
+}
+/// Complete bounded name/selection-field observations across both hives/views.
+/// Every existing key remains held and its current fixed-path binding is reopened
+/// and rechecked. This does not guarantee future atomic namespace stability or a
+/// complete registration/security restore manifest. No write rights are opened.
+pub(crate) struct InstallRegistryObservation {
+    views: Vec<UninstallView>,
+    publisher: Vec<PublisherView>,
+}
+impl InstallRegistryObservation {
+    pub(crate) fn capture() -> io::Result<Self> {
+        Self::capture_hives(HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE)
+    }
+    fn capture_hives(user: HKEY, machine: HKEY) -> io::Result<Self> {
+        let mut total = 0;
+        let mut views = Vec::new();
+        let mut publisher = Vec::new();
+        for (root, hive) in [
+            (user, InstallHive::CurrentUser),
+            (machine, InstallHive::LocalMachine),
+        ] {
+            for view in [RegistryView::View32, RegistryView::View64] {
+                views.push(UninstallView::observe(root, hive, view, &mut total)?);
+            }
+        }
+        for view in [RegistryView::View32, RegistryView::View64] {
+            publisher.push(PublisherView::observe(user, view)?);
+        }
+        let result = Self { views, publisher };
+        result.recheck()?;
+        Ok(result)
+    }
+    pub(crate) fn records(&self) -> impl Iterator<Item = &InstallRecord> {
+        self.views
+            .iter()
+            .flat_map(|view| view.records.iter().map(|record| &record.record))
+    }
+    pub(crate) fn publisher_values(&self) -> impl Iterator<Item = Option<&RegistryValue>> {
+        self.publisher.iter().map(|view| view.value.as_ref())
+    }
+    pub(crate) fn recheck(&self) -> io::Result<()> {
+        for view in &self.views {
+            view.recheck()?;
+        }
+        for view in &self.publisher {
+            view.recheck()?;
+        }
+        Ok(())
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_hives(user: HKEY, machine: HKEY) -> io::Result<Self> {
+        Self::capture_hives(user, machine)
+    }
 }
 
 /// Bounded diagnosis only. Recognizing a standard target does not authorize

@@ -42,6 +42,96 @@ fn capacity() -> CapacityPlan {
     CapacityPlan::for_effects(10, 10, 10, 4096).unwrap()
 }
 
+// 稳定控制根下每次切换使用独立UUID日志；重开缺失日志不能创建空日志冒充恢复。
+#[test]
+fn HistoryJournalWindows_NamedTransactions_012() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = private_root(temporary.path());
+    let original = binding();
+    assert!(
+        JournalStore::open_windows_transaction(root.clone(), &original.transaction_id).is_err()
+    );
+    let mut first =
+        JournalStore::create_windows_transaction(root.clone(), &original.transaction_id).unwrap();
+    first.initialize(original.clone(), capacity()).unwrap();
+    let mut next = original.clone();
+    next.transaction_id = "00000000-0000-4000-8000-000000000104".into();
+    let mut second =
+        JournalStore::create_windows_transaction(root.clone(), &next.transaction_id).unwrap();
+    assert!(second.initialize(original.clone(), capacity()).is_err());
+    second.initialize(next.clone(), capacity()).unwrap();
+    assert!(second.bind_existing(&original).is_err());
+    let before = std::fs::read(
+        temporary
+            .path()
+            .join(format!("private/journal-{}.log", original.transaction_id)),
+    )
+    .unwrap();
+    drop(first);
+    let mut reopened =
+        JournalStore::open_windows_transaction(root, &original.transaction_id).unwrap();
+    reopened.bind_existing(&original).unwrap();
+    assert_eq!(
+        std::fs::read(
+            temporary
+                .path()
+                .join(format!("private/journal-{}.log", original.transaction_id))
+        )
+        .unwrap(),
+        before
+    );
+}
+
+// 只有同根原终态完整检查点和新reviewed日志可发布下一次切换，原证据永不重置。
+#[test]
+fn HistoryJournalWindows_TerminalRollover_013() {
+    use crate::version_history::journal::PreContextAbortProof;
+    let temporary = tempfile::tempdir().unwrap();
+    let root = private_root(temporary.path());
+    let user = CurrentUser::capture().unwrap();
+    let leases = LeaseFiles::open(root.clone(), &user).unwrap();
+    let control = leases.acquire_control().unwrap();
+    let original = binding();
+    let mut old =
+        JournalStore::create_windows_transaction(root.clone(), &original.transaction_id).unwrap();
+    old.initialize(original.clone(), capacity()).unwrap();
+    let initial = ActiveContextMarker::transition_from(&old.inspect(&original).unwrap()).unwrap();
+    let mut markers = MarkerStore::create(root.clone(), &control, &initial, &mut old).unwrap();
+    let mut next = original.clone();
+    next.transaction_id = "00000000-0000-4000-8000-000000000104".into();
+    next.source_context = "00000000-0000-4000-8000-000000000105".into();
+    next.target_context = "00000000-0000-4000-8000-000000000106".into();
+    let mut new =
+        JournalStore::create_windows_transaction(root.clone(), &next.transaction_id).unwrap();
+    new.initialize(next.clone(), capacity()).unwrap();
+    let next_marker = ActiveContextMarker::transition_from(&new.inspect(&next).unwrap()).unwrap();
+    assert!(markers
+        .append_successor(&next_marker, &mut old, &mut new)
+        .is_err());
+    let digest = old
+        .retain_manifest(b"test-only unchanged source proof")
+        .unwrap();
+    let proof = PreContextAbortProof::fixture(
+        &old.inspect(&original).unwrap(),
+        std::array::from_fn(|_| digest.clone()),
+    );
+    old.abort_pre_context(&proof).unwrap();
+    let terminal =
+        ActiveContextMarker::pre_context_aborted(&old.inspect(&original).unwrap()).unwrap();
+    markers.append(&terminal, &mut old).unwrap();
+    let marker_path = temporary.path().join("private/active-context.log");
+    let prior = std::fs::read(&marker_path).unwrap();
+    assert!(markers.append(&next_marker, &mut new).is_err());
+    markers
+        .append_successor(&next_marker, &mut old, &mut new)
+        .unwrap();
+    assert!(std::fs::read(&marker_path).unwrap().starts_with(&prior));
+    drop(markers);
+    let reopened = MarkerStore::open_existing(root, &control).unwrap().unwrap();
+    assert_eq!(reopened.current().unwrap(), next_marker.encode().unwrap());
+    assert!(!old.inspect(&original).unwrap().blocked);
+}
+
 // 检查真实私有句柄写入、超过1MiB的manifest、重开链验证和第二writer拒绝。
 #[test]
 fn HistoryJournalWindows_Reopen_001() {
@@ -1002,6 +1092,7 @@ fn HistoryJournalWindows_ReturnOnly_018() {
         RegistrationSlot::DeskDirectoryBackground,
         RegistrationSlot::LegacyDirectory,
         RegistrationSlot::LegacyDirectoryBackground,
+        RegistrationSlot::OwnedRun,
     ] {
         observed(
             &mut store,

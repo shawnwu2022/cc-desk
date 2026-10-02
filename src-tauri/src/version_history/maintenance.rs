@@ -284,6 +284,17 @@ pub(crate) struct SnapshotBoundary {
     _held_platform_guards: Box<dyn Send + Sync>,
 }
 impl SnapshotBoundary {
+    #[cfg(test)]
+    pub(crate) fn fixture_with_roots(
+        binding: JournalBinding,
+        root_identities: BTreeMap<RootKind, String>,
+    ) -> Self {
+        Self {
+            binding,
+            root_identities,
+            _held_platform_guards: Box::new(()),
+        }
+    }
     pub(crate) fn binding(&self) -> &JournalBinding {
         &self.binding
     }
@@ -453,6 +464,18 @@ impl ActiveContextMarker {
     pub(crate) fn encode(&self) -> Result<Vec<u8>, SafeError> {
         serde_json::to_vec(self).map_err(|_| error("HISTORY_MARKER_INVALID"))
     }
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, SafeError> {
+        if bytes.is_empty() || bytes.len() > 16384 {
+            return Err(error("HISTORY_MARKER_INVALID"));
+        }
+        let marker: Self =
+            serde_json::from_slice(bytes).map_err(|_| error("HISTORY_MARKER_INVALID"))?;
+        marker.validate_structure()?;
+        Ok(marker)
+    }
+    pub(crate) fn binding(&self) -> &JournalBinding {
+        &self.binding
+    }
     pub(super) fn validate_structure(&self) -> Result<(), SafeError> {
         if self.schema != 1 {
             return Err(error("HISTORY_MARKER_INVALID"));
@@ -493,6 +516,23 @@ impl ActiveContextMarker {
         self.binding == prior.binding
             && self.generation > prior.generation
             && prior.state == BarrierState::Transition
+    }
+    /// A successor starts a distinct retained journal after the exact original
+    /// return point is terminal. Publication additionally consumes both live
+    /// same-root journal writers; this predicate alone is never write authority.
+    pub(super) fn succeeds_terminal(&self, prior: &Self) -> bool {
+        self.state == BarrierState::Transition
+            && matches!(
+                prior.state,
+                BarrierState::Restored | BarrierState::PreContextAborted
+            )
+            && self.binding.transaction_id != prior.binding.transaction_id
+            && self.binding.user_installation == prior.binding.user_installation
+            && self.binding.source_bundle == prior.binding.source_bundle
+            && self.binding.source_context != prior.binding.source_context
+            && self.binding.source_context != prior.binding.target_context
+            && self.binding.target_context != prior.binding.source_context
+            && self.binding.target_context != prior.binding.target_context
     }
 }
 

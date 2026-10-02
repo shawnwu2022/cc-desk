@@ -14,6 +14,7 @@ use crate::version_history::windows::{
 use std::{
     cell::RefCell,
     ffi::OsStr,
+    io::Write,
     path::PathBuf,
     process::Command,
     sync::{
@@ -113,13 +114,48 @@ fn HistoryWebView_Exit_001() {
         .unwrap()
         .after_host_exit(host)
         .unwrap();
-    assert!(
-        ImageFence::acquire(parent.clone(), name.clone(), &identity, &digest).is_err(),
-        "retained read image guard must conflict with an exclusive fence"
-    );
+    let conflict = ImageFence::acquire(parent.clone(), name.clone(), &identity, &digest)
+        .err()
+        .expect("retained read image guard must conflict with an exclusive fence");
+    assert!(ImageFence::is_acquisition_busy(&conflict));
+    // Host/browser termination cannot certify that every independent reader
+    // has released the image. Keep one known reader across the handoff.
+    let reader = parent.open_file(name.clone(), FileAccess::Read).unwrap();
     let evidence = evidence.release_image_for_fence().unwrap();
-    let mut fence = ImageFence::acquire(parent, name, &identity, &digest)
-        .expect("terminal source evidence must compose with image fencing");
+    evidence.verify().unwrap();
+    let conflict = ImageFence::acquire(parent.clone(), name.clone(), &identity, &digest)
+        .err()
+        .expect("a known reader must keep the initial exclusive open pending");
+    assert!(ImageFence::is_acquisition_busy(&conflict));
+    drop(reader);
+    let mut pending = 0;
+    let mut fence = loop {
+        evidence.verify().unwrap();
+        assert!(
+            Instant::now() < deadline,
+            "exclusive image readiness exhausted the existing overall budget after {pending} busy observations"
+        );
+        match ImageFence::acquire(parent.clone(), name.clone(), &identity, &digest) {
+            Ok(fence) => break fence,
+            Err(error) if ImageFence::is_acquisition_busy(&error) => {
+                pending += 1;
+                // Only an effect-free initial sharing refusal is observed
+                // again. No termination, verification failure or rename is retried.
+                std::thread::sleep(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(50)),
+                );
+            }
+            Err(error) => panic!("image admission failed after source exit: {error}"),
+        }
+    };
+    writeln!(
+        std::io::stderr().lock(),
+        "source image readiness: acquired=true, busyObservations={pending}"
+    )
+    .unwrap();
+    evidence.verify().unwrap();
     fence
         .rename_to(
             receipt_root.directory().clone(),

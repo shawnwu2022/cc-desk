@@ -213,6 +213,8 @@ enum Phase {
     Reserved,
     Running,
     Ready(Arc<VerifiedPackage>),
+    Handoff { switch_id: String },
+    ManagerOwned { switch_id: String },
     Cancelled,
     Failed,
 }
@@ -230,7 +232,11 @@ impl Transaction {
         self.in_flight
             || matches!(
                 self.phase,
-                Phase::Reserved | Phase::Running | Phase::Ready(_)
+                Phase::Reserved
+                    | Phase::Running
+                    | Phase::Ready(_)
+                    | Phase::Handoff { .. }
+                    | Phase::ManagerOwned { .. }
             )
     }
 }
@@ -242,6 +248,119 @@ pub(crate) struct PrepareService {
     owner_check: Arc<OwnerCheck>,
     clock: Arc<Clock>,
     held: Mutex<HashMap<String, Transaction>>,
+}
+
+/// Only the reservation winner receives transfer authority. Repeated source
+/// requests can inspect the same switch UUID but cannot copy/launch a second
+/// manager. Preparation IDs keep their original 32-hex wire contract.
+pub(crate) struct HandoffReservation {
+    pub(crate) transaction_id: String,
+    pub(crate) transfer: Option<PreparedHandoff>,
+}
+
+/// Keeps the exact prepared file alive while bounded private copying happens
+/// outside the preparation mutex. This is still source-document authority,
+/// not installer admission and not yet durable manager ownership.
+pub(crate) struct PreparedHandoff {
+    service: Arc<PrepareService>,
+    caller: CallerIdentity,
+    preparation_id: String,
+    switch_id: String,
+    package: Arc<VerifiedPackage>,
+    observation: Vec<u8>,
+    // Rust drops fields in declaration order: release the original package and
+    // observation before making this operation's capacity available again.
+    _budget: HandoffBudget,
+}
+struct HandoffBudget {
+    service: Arc<PrepareService>,
+    caller: CallerIdentity,
+    preparation_id: String,
+}
+impl Drop for HandoffBudget {
+    fn drop(&mut self) {
+        self.service
+            .finish_handoff_budget(&self.caller, &self.preparation_id);
+    }
+}
+impl PreparedHandoff {
+    pub(crate) fn transaction_id(&self) -> &str {
+        &self.switch_id
+    }
+    pub(crate) fn preparation_id(&self) -> &str {
+        &self.preparation_id
+    }
+    pub(crate) fn selection(&self) -> &SelectionMetadata {
+        self.package.selection()
+    }
+    pub(crate) fn check(&self) -> Result<(), SafeError> {
+        (self.service.owner_check)(&self.caller)?;
+        let token = {
+            let mut held = self.service.held.lock();
+            let item = transaction_mut(&mut held, &self.caller, &self.preparation_id)?;
+            state_check(item, (self.service.clock)())?;
+            if !matches!(&item.phase, Phase::Handoff { switch_id } if switch_id == &self.switch_id)
+            {
+                return Err(error("HISTORY_HANDOFF_CHANGED"));
+            }
+            item.token.clone()
+        };
+        if self
+            .service
+            .catalog
+            .resolve_selection(&self.caller, &token)?
+            != *self.package.selection()
+        {
+            return Err(error("HISTORY_SELECTION_CHANGED"));
+        }
+        Ok(())
+    }
+    /// The material callback has no transaction lock. It may copy to a secured
+    /// destination and must call check between bounded writes. Both sides are
+    /// checked again here, so cancellation/replacement cannot publish success.
+    pub(crate) fn with_material<T>(
+        &self,
+        copy: impl FnOnce(&[u8], &[u8], &[u8], &str) -> Result<T, SafeError>,
+    ) -> Result<T, SafeError> {
+        self.package.revalidate(&|| self.check())?;
+        let result = copy(
+            self.package.bytes(),
+            self.package.signature(),
+            &self.observation,
+            self.package.retained_identity(),
+        )?;
+        self.package.revalidate(&|| self.check())?;
+        Ok(result)
+    }
+    #[cfg(windows)]
+    pub(crate) fn complete(
+        self,
+        retained: super::windows::package::RetainedPackage,
+    ) -> Result<super::windows::package::RetainedPackage, SafeError> {
+        // Full destination readback/signature verification occurs outside the
+        // preparation mutex; the final ownership change is short and atomic.
+        retained.verify_transfer(&self)?;
+        let mut held = self.service.held.lock();
+        let item = transaction_mut(&mut held, &self.caller, &self.preparation_id)?;
+        state_check(item, (self.service.clock)())?;
+        (self.service.owner_check)(&self.caller)?;
+        if self
+            .service
+            .catalog
+            .resolve_selection(&self.caller, &item.token)?
+            != *self.package.selection()
+        {
+            return Err(error("HISTORY_SELECTION_CHANGED"));
+        }
+        if !matches!(&item.phase, Phase::Handoff { switch_id } if switch_id == &self.switch_id) {
+            return Err(error("HISTORY_HANDOFF_CHANGED"));
+        }
+        item.phase = Phase::ManagerOwned {
+            switch_id: self.switch_id.clone(),
+        };
+        drop(held);
+        Ok(retained)
+    }
 }
 impl PrepareService {
     /// Use only a pinned private manager directory, admitted CallerIdentity and
@@ -310,7 +429,14 @@ impl PrepareService {
         let mut held = self.held.lock();
         // Only finished expired entries may be discarded. A running operation
         // continues counting against memory/disk capacity until its IO unwinds.
-        held.retain(|_, item| now < item.expires || item.in_flight);
+        held.retain(|_, item| {
+            now < item.expires
+                || item.in_flight
+                || matches!(
+                    item.phase,
+                    Phase::Handoff { .. } | Phase::ManagerOwned { .. }
+                )
+        });
         if held
             .values()
             .any(|item| &item.owner == caller && item.active())
@@ -451,6 +577,9 @@ impl PrepareService {
         (self.owner_check)(caller)?;
         let mut held = self.held.lock();
         let item = transaction_mut(&mut held, caller, id)?;
+        if matches!(item.phase, Phase::ManagerOwned { .. }) {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
         // Failed/cancelled cancellation is idempotent; a ready package is dropped
         // and its private files removed. In-flight IO cleans up as it unwinds.
         item.cancelled.store(true, Ordering::SeqCst);
@@ -459,6 +588,106 @@ impl PrepareService {
             transaction_id: id.to_owned(),
             cancelled: true,
         })
+    }
+    pub(crate) fn reserve_handoff(
+        self: &Arc<Self>,
+        caller: &CallerIdentity,
+        id: &str,
+    ) -> Result<HandoffReservation, SafeError> {
+        (self.owner_check)(caller)?;
+        let (package, token, selection) = {
+            let mut held = self.held.lock();
+            let item = transaction_mut(&mut held, caller, id)?;
+            if let Phase::ManagerOwned { switch_id } = &item.phase {
+                return Ok(HandoffReservation {
+                    transaction_id: switch_id.clone(),
+                    transfer: None,
+                });
+            }
+            state_check(item, (self.clock)())?;
+            if let Phase::Handoff { switch_id } = &item.phase {
+                return Ok(HandoffReservation {
+                    transaction_id: switch_id.clone(),
+                    transfer: None,
+                });
+            }
+            if item.in_flight {
+                return Err(error("HISTORY_PREPARE_BUSY"));
+            }
+            let Phase::Ready(package) = &item.phase else {
+                return Err(error("HISTORY_PREPARE_NOT_READY"));
+            };
+            let package = package.clone();
+            item.in_flight = true;
+            (package, item.token.clone(), item.selection.clone())
+        };
+        let result = (|| {
+            let check = || {
+                (self.owner_check)(caller)?;
+                let mut held = self.held.lock();
+                state_check(transaction_mut(&mut held, caller, id)?, (self.clock)())
+            };
+            let observation = self.catalog.retain_selection_observation(caller, &token)?;
+            if self.catalog.resolve_selection(caller, &token)? != selection {
+                return Err(error("HISTORY_SELECTION_CHANGED"));
+            }
+            package.revalidate(&check)?;
+            let mut held = self.held.lock();
+            let item = transaction_mut(&mut held, caller, id)?;
+            state_check(item, (self.clock)())?;
+            (self.owner_check)(caller)?;
+            let Phase::Ready(current) = &item.phase else {
+                return Err(error("HISTORY_PREPARE_NOT_READY"));
+            };
+            if !Arc::ptr_eq(current, &package) {
+                return Err(error("HISTORY_PACKAGE_CHANGED"));
+            }
+            let switch_id = uuid::Uuid::new_v4().to_string();
+            item.phase = Phase::Handoff {
+                switch_id: switch_id.clone(),
+            };
+            Ok(HandoffReservation {
+                transaction_id: switch_id.clone(),
+                transfer: Some(PreparedHandoff {
+                    service: self.clone(),
+                    caller: caller.clone(),
+                    preparation_id: id.to_owned(),
+                    switch_id,
+                    package: package.clone(),
+                    observation,
+                    _budget: HandoffBudget {
+                        service: self.clone(),
+                        caller: caller.clone(),
+                        preparation_id: id.to_owned(),
+                    },
+                }),
+            })
+        })();
+        drop(package);
+        if let Some(item) = self
+            .held
+            .lock()
+            .get_mut(id)
+            .filter(|item| &item.owner == caller)
+        {
+            if result.is_err() {
+                item.in_flight = false;
+            }
+            if result.is_err() && matches!(item.phase, Phase::Ready(_)) {
+                item.phase = Phase::Failed;
+            }
+        }
+        result
+    }
+    fn finish_handoff_budget(&self, caller: &CallerIdentity, id: &str) {
+        if let Some(item) = self
+            .held
+            .lock()
+            .get_mut(id)
+            .filter(|item| &item.owner == caller)
+        {
+            item.in_flight = false;
+        }
     }
     /// Rust-only handoff. Revalidates metadata and bytes on the same retained file
     /// object; then cancellation, expiry and the short consumer admission share
@@ -557,7 +786,12 @@ fn state_check(item: &mut Transaction, now: Instant) -> Result<(), SafeError> {
         return Err(error("HISTORY_PREPARE_CANCELLED"));
     }
     if now >= item.expires {
-        if !item.in_flight {
+        if !item.in_flight
+            && !matches!(
+                item.phase,
+                Phase::Handoff { .. } | Phase::ManagerOwned { .. }
+            )
+        {
             item.phase = Phase::Failed;
         }
         return Err(error("HISTORY_PREPARE_EXPIRED"));

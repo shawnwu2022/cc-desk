@@ -298,6 +298,322 @@ fn fixture(payload: Vec<u8>, length: Option<u64>) -> Fixture {
     }
 }
 
+// 准备ID与切换UUID分离；同一owner重复点击只能观察原预约，不能拿到第二个执行能力。
+#[test]
+fn HistoryHandoff_IdempotentReservation_001() {
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let first = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    assert!(first.transfer.is_some());
+    assert_ne!(first.transaction_id, ticket.transaction_id);
+    crate::version_history::journal::validate_id(&first.transaction_id).unwrap();
+    let duplicate = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    assert_eq!(first.transaction_id, duplicate.transaction_id);
+    assert!(duplicate.transfer.is_none());
+    first.transfer.unwrap().check().unwrap();
+}
+
+// 复制期间取消能撤销继续写入和提交；已经持有的原文件不会在复制读操作中消失。
+#[test]
+fn HistoryHandoff_CancelBeforeCommit_002() {
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let transfer = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap()
+        .transfer
+        .unwrap();
+    transfer
+        .with_material(|bytes, signature, observation, identity| {
+            assert_eq!(bytes, PAYLOAD);
+            assert_eq!(signature, SIGNATURE);
+            assert!(!observation.is_empty());
+            assert!(!identity.is_empty());
+            f.service
+                .cancel_prepare(&f.caller, &ticket.transaction_id)
+                .unwrap();
+            Ok(())
+        })
+        .unwrap_err();
+    assert_eq!(
+        transfer.check().unwrap_err().code,
+        "HISTORY_PREPARE_CANCELLED"
+    );
+    assert_eq!(
+        f.service
+            .reserve_handoff(&f.caller, &ticket.transaction_id)
+            .err()
+            .unwrap()
+            .code,
+        "HISTORY_PREPARE_CANCELLED"
+    );
+}
+
+// 原文档失效或替换后，不能用旧预约取得复制材料或由新owner接管。
+#[test]
+fn HistoryHandoff_OriginalOwner_003() {
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let transfer = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap()
+        .transfer
+        .unwrap();
+    let mut replacement = f.caller.clone();
+    replacement.webview_epoch = WireU64::parse("2").unwrap();
+    assert_eq!(
+        f.service
+            .reserve_handoff(&replacement, &ticket.transaction_id)
+            .err()
+            .unwrap()
+            .code,
+        "HISTORY_PREPARE_UNKNOWN"
+    );
+    f.live.store(false, Ordering::SeqCst);
+    assert_eq!(
+        transfer
+            .with_material(|_, _, _, _| Ok(()))
+            .unwrap_err()
+            .code,
+        "FORBIDDEN"
+    );
+}
+
+// 预约重新校验完整release观察，资产之外的时间或其他metadata变化也拒绝。
+#[test]
+fn HistoryHandoff_MetadataChanged_004() {
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    f.metadata.release.lock().updated_at = "2026-10-02T12:00:00Z".into();
+    assert_eq!(
+        f.service
+            .reserve_handoff(&f.caller, &ticket.transaction_id)
+            .err()
+            .unwrap()
+            .code,
+        "HISTORY_SELECTION_CHANGED"
+    );
+}
+
+// 复制能力到期后仍保留预约账目；不得清掉旧owner然后同时产生另一个切换。
+#[test]
+fn HistoryHandoff_ExpiredReservation_005() {
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let transfer = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap()
+        .transfer
+        .unwrap();
+    *f.clock.lock() += PREPARATION_TTL;
+    assert_eq!(
+        transfer.check().unwrap_err().code,
+        "HISTORY_PREPARE_EXPIRED"
+    );
+    assert!(f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .is_err());
+    // 显式取消仍能终止未提交的准备预约，不谎称上下文已回滚。
+    assert!(
+        f.service
+            .cancel_prepare(&f.caller, &ticket.transaction_id)
+            .unwrap()
+            .cancelled
+    );
+}
+
+// selection早于准备创建，复制和提交必须继续遵守原selection的较早到期点。
+#[test]
+fn HistoryHandoff_SelectionExpiresDuringCopy_008() {
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    *f.clock.lock() += std::time::Duration::from_secs(240);
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let transfer = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap()
+        .transfer
+        .unwrap();
+    *f.clock.lock() += std::time::Duration::from_secs(61);
+    assert_eq!(
+        transfer.check().unwrap_err().code,
+        "HISTORY_SELECTION_EXPIRED"
+    );
+    assert_eq!(
+        transfer
+            .with_material(|_, _, _, _| Ok(()))
+            .unwrap_err()
+            .code,
+        "HISTORY_SELECTION_EXPIRED"
+    );
+}
+
+// 取消只撤销能力；持有原payload的回调和transfer仍占预算，drop后才允许重新准备。
+#[test]
+fn HistoryHandoff_CancelRetainsCapacity_009() {
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let transfer = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap()
+        .transfer
+        .unwrap();
+    transfer
+        .with_material(|_, _, _, _| {
+            f.service
+                .cancel_prepare(&f.caller, &ticket.transaction_id)
+                .unwrap();
+            assert_eq!(
+                f.service
+                    .begin_prepare(&f.caller, &f.selection)
+                    .unwrap_err()
+                    .code,
+                "HISTORY_PREPARE_BUSY"
+            );
+            Ok(())
+        })
+        .unwrap_err();
+    assert_eq!(
+        f.service
+            .begin_prepare(&f.caller, &f.selection)
+            .unwrap_err()
+            .code,
+        "HISTORY_PREPARE_BUSY"
+    );
+    drop(transfer);
+    assert!(f.service.begin_prepare(&f.caller, &f.selection).is_ok());
+}
+
+// 实际NTFS私有独立副本保留全部已验证字节；完成后取消不得撤销manager数据。
+#[cfg(windows)]
+#[test]
+fn HistoryHandoff_PrivateCopyOwnership_006() {
+    use crate::version_history::windows::{
+        files::{ComponentName, Directory, PrivateDirectory},
+        package::RetainedPackage,
+        security::CurrentUser,
+    };
+    use std::ffi::OsStr;
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let transfer = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap()
+        .transfer
+        .unwrap();
+    let switch_id = transfer.transaction_id().to_owned();
+    let temporary = tempfile::tempdir().unwrap();
+    let user = CurrentUser::capture().unwrap();
+    let root = Arc::new(
+        PrivateDirectory::create_new(
+            Directory::open_absolute(temporary.path()).unwrap(),
+            ComponentName::new(OsStr::new("retained")).unwrap(),
+            &user,
+        )
+        .unwrap(),
+    );
+    let retained = RetainedPackage::retain(&transfer, root).unwrap();
+    retained.verify_transfer(&transfer).unwrap();
+    assert!(std::fs::OpenOptions::new()
+        .write(true)
+        .open(temporary.path().join("retained/official-installer.exe"))
+        .is_err());
+    assert_eq!(
+        std::fs::read(temporary.path().join("retained/official-installer.exe")).unwrap(),
+        PAYLOAD
+    );
+    let retained = transfer.complete(retained).unwrap();
+    assert_eq!(retained.record_digest().len(), 64);
+    assert_eq!(
+        f.service
+            .cancel_prepare(&f.caller, &ticket.transaction_id)
+            .unwrap_err()
+            .code,
+        "HISTORY_RECOVERY_REQUIRED"
+    );
+    *f.clock.lock() += PREPARATION_TTL;
+    let repeat = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    assert_eq!(repeat.transaction_id, switch_id);
+    assert!(repeat.transfer.is_none());
+}
+
+// 同名目的文件碰撞只拒绝，不覆盖、不删除原来字节，也不能提交复制能力。
+#[cfg(windows)]
+#[test]
+fn HistoryHandoff_PrivateCopyCollision_007() {
+    use crate::version_history::windows::{
+        files::{ComponentName, Directory, PrivateDirectory},
+        package::RetainedPackage,
+        security::CurrentUser,
+    };
+    use std::ffi::OsStr;
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let transfer = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap()
+        .transfer
+        .unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let user = CurrentUser::capture().unwrap();
+    let root = Arc::new(
+        PrivateDirectory::create_new(
+            Directory::open_absolute(temporary.path()).unwrap(),
+            ComponentName::new(OsStr::new("retained")).unwrap(),
+            &user,
+        )
+        .unwrap(),
+    );
+    let destination = temporary.path().join("retained/official-installer.exe");
+    std::fs::write(&destination, b"existing evidence").unwrap();
+    assert!(RetainedPackage::retain(&transfer, root).is_err());
+    assert_eq!(std::fs::read(destination).unwrap(), b"existing evidence");
+    transfer.check().unwrap();
+}
+
 // 发布者验证成功只产生Rust持有的未认证负载身份，不会宣称可安装。
 #[test]
 fn HistoryDownload_PreparedSummary_008() {

@@ -99,38 +99,82 @@ impl HeldLog {
 /// JournalStore owns chain, capacity and effect validation. This object supplies
 /// only the actual secured NTFS persistence boundary, with no ambient reopen or
 /// claim that flushing this file commits unrelated filesystem metadata.
-pub(crate) struct WindowsJournalStorage(HeldLog);
+pub(crate) struct WindowsJournalStorage {
+    log: HeldLog,
+    transaction_id: Option<String>,
+}
 impl WindowsJournalStorage {
     pub(crate) fn open(root: Arc<PrivateDirectory>) -> io::Result<Self> {
-        Ok(Self(HeldLog::open(root, "journal.log", FILE_OPEN_IF)?))
+        Ok(Self {
+            log: HeldLog::open(root, "journal.log", FILE_OPEN_IF)?,
+            transaction_id: None,
+        })
+    }
+    pub(crate) fn transaction(
+        root: Arc<PrivateDirectory>,
+        transaction_id: &str,
+        create: bool,
+    ) -> io::Result<Self> {
+        crate::version_history::journal::validate_id(transaction_id)
+            .map_err(|_| blocked("invalid transaction journal name"))?;
+        if create {
+            let names = root.directory().read_children(100_000)?;
+            let count = names
+                .iter()
+                .filter(|name| {
+                    name.os_string().to_str().is_some_and(|name| {
+                        name.strip_prefix("journal-")
+                            .and_then(|name| name.strip_suffix(".log"))
+                            .is_some_and(|id| {
+                                crate::version_history::journal::validate_id(id).is_ok()
+                            })
+                    })
+                })
+                .count();
+            if count >= 64 {
+                return Err(blocked("retained transaction capacity reached"));
+            }
+        }
+        let name = format!("journal-{transaction_id}.log");
+        let log = HeldLog::open(root, &name, if create { FILE_CREATE } else { FILE_OPEN })?;
+        Ok(Self {
+            log,
+            transaction_id: Some(transaction_id.into()),
+        })
+    }
+    pub(crate) fn matches_transaction(&self, transaction_id: &str) -> bool {
+        self.transaction_id
+            .as_deref()
+            .is_none_or(|expected| expected == transaction_id)
     }
     pub(crate) fn log_file(&self) -> io::Result<File> {
-        self.0.verify()?;
-        self.0.file.file.try_clone()
+        self.log.verify()?;
+        self.log.file.file.try_clone()
     }
     pub(crate) fn verify(&self) -> io::Result<()> {
-        self.0.verify()
+        self.log.verify()
     }
     pub(crate) fn matches_root(&self, root: &PrivateDirectory) -> bool {
-        self.0.root.directory().identity() == root.directory().identity()
+        self.log.root.directory().identity() == root.directory().identity()
     }
     pub(crate) fn append(&self, length: u64, bytes: &[u8]) -> io::Result<()> {
-        self.0
+        self.log
             .append(length, bytes, PersistenceOperation::JournalFrame)
     }
     pub(crate) fn open_artifact(&self, digest: &str) -> io::Result<DurableArtifact> {
-        DurableArtifact::open(self.0.root.clone(), digest, &self.0.user)
+        DurableArtifact::open(self.log.root.clone(), digest, &self.log.user)
     }
     pub(crate) fn create_artifact(
         &self,
         digest: &str,
         bytes: &[u8],
     ) -> io::Result<DurableArtifact> {
-        DurableArtifact::create(self.0.root.clone(), digest, bytes, &self.0.user)
+        DurableArtifact::create(self.log.root.clone(), digest, bytes, &self.log.user)
     }
     pub(crate) fn namespace_valid(&self) -> io::Result<bool> {
-        self.0.verify()?;
-        for name in self.0.root.directory().read_children(100_000)? {
+        self.log.verify()?;
+        let mut transactions = 0usize;
+        for name in self.log.root.directory().read_children(100_000)? {
             let name_os = name.os_string();
             let Some(text) = name_os.to_str() else {
                 return Ok(false);
@@ -146,7 +190,19 @@ impl WindowsJournalStorage {
             let manifest = text
                 .strip_prefix("manifest-")
                 .and_then(|text| text.strip_suffix(".json"));
+            let transaction = text
+                .strip_prefix("journal-")
+                .and_then(|text| text.strip_suffix(".log"));
+            let named_journal = transaction
+                .is_some_and(|id| crate::version_history::journal::validate_id(id).is_ok());
+            if named_journal {
+                transactions += 1;
+                if transactions > 64 {
+                    return Ok(false);
+                }
+            }
             if !reserved
+                && !named_journal
                 && !manifest.is_some_and(|digest| {
                     crate::version_history::journal::validate_digest(digest).is_ok()
                 })
@@ -155,7 +211,7 @@ impl WindowsJournalStorage {
             }
             // Attribute/security-only observation admits our own writer but
             // never replaces its original guard or supplies write authority.
-            let file = self.0.root.directory().open_relative(
+            let file = self.log.root.directory().open_relative(
                 &name,
                 FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -163,8 +219,8 @@ impl WindowsJournalStorage {
                 false,
                 None,
             )?;
-            self.0.user.verify_private_file(handle(&file), false)?;
-            PinnedFile::from_file(self.0.root.directory().clone(), name, file)?.verify()?;
+            self.log.user.verify_private_file(handle(&file), false)?;
+            PinnedFile::from_file(self.log.root.directory().clone(), name, file)?.verify()?;
         }
         Ok(true)
     }
@@ -455,6 +511,7 @@ pub(crate) struct MarkerStore<'control> {
     current: Vec<u8>,
     length: u64,
     poisoned: bool,
+    transactions: std::collections::BTreeSet<String>,
 }
 impl<'control> MarkerStore<'control> {
     pub(crate) fn create(
@@ -488,6 +545,10 @@ impl<'control> MarkerStore<'control> {
             current,
             length: bytes.len() as u64,
             poisoned: false,
+            transactions: std::collections::BTreeSet::from([marker
+                .binding()
+                .transaction_id
+                .clone()]),
         })
     }
     pub(crate) fn open_existing(
@@ -502,6 +563,7 @@ impl<'control> MarkerStore<'control> {
         };
         let bytes = log.read(MAX_LOG_BYTES)?;
         let mut last: Option<MarkerEnvelope> = None;
+        let mut transactions = std::collections::BTreeSet::new();
         for (sequence, frame) in bytes.split_inclusive(|byte| *byte == b'\n').enumerate() {
             if sequence as u64 >= MAX_MARKER_RECORDS
                 || frame.len() > MAX_MARKER_FRAME_BYTES
@@ -523,11 +585,20 @@ impl<'control> MarkerStore<'control> {
                     != crate::version_history::verified_package::sha256(&serde_json::to_vec(
                         &envelope.frame,
                     )?)
-                || last
-                    .as_ref()
-                    .is_some_and(|last| !envelope.frame.marker.follows(&last.frame.marker))
+                || last.as_ref().is_some_and(|last| {
+                    !envelope.frame.marker.follows(&last.frame.marker)
+                        && !envelope.frame.marker.succeeds_terminal(&last.frame.marker)
+                })
             {
                 return Err(blocked("marker chain differs"));
+            }
+            let transaction = &envelope.frame.marker.binding().transaction_id;
+            if last
+                .as_ref()
+                .is_none_or(|last| last.frame.marker.binding().transaction_id != *transaction)
+                && (!transactions.insert(transaction.clone()) || transactions.len() > 64)
+            {
+                return Err(blocked("marker reused an earlier transaction"));
             }
             last = Some(envelope);
         }
@@ -544,6 +615,7 @@ impl<'control> MarkerStore<'control> {
             current,
             length: bytes.len() as u64,
             poisoned: false,
+            transactions,
         }))
     }
     pub(crate) fn current(&self) -> io::Result<&[u8]> {
@@ -562,6 +634,46 @@ impl<'control> MarkerStore<'control> {
         marker: &crate::version_history::maintenance::ActiveContextMarker,
         journal: &mut crate::version_history::journal::JournalStore,
     ) -> io::Result<()> {
+        self.append_checked(marker, journal, false)
+    }
+    /// Terminal rollover never resets the marker or reuses a completed journal.
+    /// Both original live stores must match this control root and their exact
+    /// checkpoints. A detached inspection or an unrelated completed transaction
+    /// cannot release the current source into a fresh switch.
+    pub(crate) fn append_successor(
+        &mut self,
+        marker: &crate::version_history::maintenance::ActiveContextMarker,
+        prior: &mut crate::version_history::journal::JournalStore,
+        successor: &mut crate::version_history::journal::JournalStore,
+    ) -> io::Result<()> {
+        self.current()?;
+        if !marker.succeeds_terminal(&self.last.frame.marker) {
+            return Err(blocked("marker does not follow this restored source"));
+        }
+        if self.transactions.contains(&marker.binding().transaction_id)
+            || self.transactions.len() >= 64
+        {
+            return Err(blocked(
+                "marker transaction was already used or exceeds capacity",
+            ));
+        }
+        prior
+            .validate_marker_publication(&self.log.root, &self.last.frame.marker)
+            .map_err(|_| blocked("previous terminal journal checkpoint differs"))?;
+        successor
+            .validate_marker_successor(&self.log.root, marker)
+            .map_err(|_| blocked("successor journal is not reviewed"))?;
+        self.append_checked(marker, successor, true)?;
+        // The old writer remained exclusively borrowed through the append.
+        // Its exact held log/artifact objects remain retained by the caller.
+        Ok(())
+    }
+    fn append_checked(
+        &mut self,
+        marker: &crate::version_history::maintenance::ActiveContextMarker,
+        journal: &mut crate::version_history::journal::JournalStore,
+        successor: bool,
+    ) -> io::Result<()> {
         if self.poisoned {
             return Err(blocked("marker reconciliation required"));
         }
@@ -569,8 +681,11 @@ impl<'control> MarkerStore<'control> {
         journal
             .validate_marker_publication(&self.log.root, marker)
             .map_err(|_| blocked("marker journal checkpoint differs"))?;
-        if !marker.follows(&self.last.frame.marker)
-            || self.last.frame.sequence + 1 >= MAX_MARKER_RECORDS
+        if !(if successor {
+            marker.succeeds_terminal(&self.last.frame.marker)
+        } else {
+            marker.follows(&self.last.frame.marker)
+        }) || self.last.frame.sequence + 1 >= MAX_MARKER_RECORDS
         {
             return Err(blocked("marker generation or capacity differs"));
         }
@@ -592,6 +707,8 @@ impl<'control> MarkerStore<'control> {
         self.length += bytes.len() as u64;
         self.last = next;
         self.current = current;
+        self.transactions
+            .insert(marker.binding().transaction_id.clone());
         self.poisoned = false;
         Ok(())
     }

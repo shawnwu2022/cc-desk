@@ -6,13 +6,24 @@ use super::{
     files::{ComponentName, Directory, FileAccess, FileIdentity, PinnedFile, RenameReceipt},
     handle, win_error,
 };
-use std::{io, sync::Arc};
+use std::{
+    io::{self, Read, Seek, SeekFrom},
+    sync::Arc,
+};
 
 pub(crate) struct ImageFence {
     image: PinnedFile,
     digest: String,
+    original_parent: Arc<Directory>,
+    original_name: ComponentName,
 }
 impl ImageFence {
+    /// Only the initial exclusive open reported a sharing conflict. No fence
+    /// was acquired and no mutation occurred. This is not evidence that the
+    /// unknown holder will exit, or permission to retry any later failure.
+    pub(crate) fn is_acquisition_busy(error: &io::Error) -> bool {
+        super::files::is_exclusive_open_busy(error)
+    }
     pub(crate) fn acquire(
         parent: Arc<Directory>,
         name: ComponentName,
@@ -31,6 +42,8 @@ impl ImageFence {
             return Err(blocked("registered image identity changed"));
         }
         Ok(Self {
+            original_parent: image.parent.clone(),
+            original_name: image.name.clone(),
             image,
             digest: digest.to_owned(),
         })
@@ -45,6 +58,47 @@ impl ImageFence {
     }
     pub(crate) fn identity(&self) -> &FileIdentity {
         self.image.identity()
+    }
+    /// Bundle capture reads the SAME exclusive image guard; it never reopens
+    /// the protected name or weakens sharing to copy the executable.
+    pub(super) fn context_metadata(&self) -> io::Result<super::files::Metadata> {
+        self.image.verify()?;
+        super::files::metadata(handle(&self.image.file))
+    }
+    pub(super) fn context_descriptor(&self) -> io::Result<Vec<u8>> {
+        self.image.verify()?;
+        super::security::capture_file_descriptor(handle(&self.image.file))
+    }
+    pub(super) fn context_read(&self, offset: u64, bytes: &mut [u8]) -> io::Result<usize> {
+        self.image.verify()?;
+        let mut file = &self.image.file;
+        file.seek(SeekFrom::Start(offset))?;
+        let count = file.read(bytes)?;
+        self.image.verify()?;
+        Ok(count)
+    }
+    pub(super) fn context_named_child(
+        &self,
+        parent: &Directory,
+        name: &ComponentName,
+    ) -> io::Result<bool> {
+        self.image.verify()?;
+        parent.recheck()?;
+        Ok(self.image.parent.identity() == parent.identity() && self.image.name == *name)
+    }
+    pub(super) fn context_original_child(
+        &self,
+        parent: &Directory,
+        name: &ComponentName,
+    ) -> io::Result<bool> {
+        self.image.verify()?;
+        self.original_parent.recheck()?;
+        parent.recheck()?;
+        Ok(self.original_parent.identity() == parent.identity() && self.original_name == *name)
+    }
+    pub(super) fn context_verify_streams(&self) -> io::Result<()> {
+        self.image.verify()?;
+        super::context::verify_streams(handle(&self.image.file), &self.context_metadata()?)
     }
     #[cfg(test)]
     pub(crate) fn probe_file(&self) -> &std::fs::File {

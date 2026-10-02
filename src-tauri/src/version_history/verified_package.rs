@@ -333,6 +333,12 @@ impl VerifiedPackage {
     pub(crate) fn size(&self) -> u64 {
         self.selection.installer().size()
     }
+    pub(super) fn signature(&self) -> &[u8] {
+        &self.signature
+    }
+    pub(super) fn retained_identity(&self) -> &str {
+        &self.file_identity
+    }
     /// Requires a later reviewed manifest keyed by this exact installer digest.
     pub(crate) fn payload_identity_authenticated(&self) -> bool {
         false

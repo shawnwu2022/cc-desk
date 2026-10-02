@@ -16,11 +16,12 @@ use std::{
 use windows::Win32::{
     Foundation::{LocalFree, ERROR_INSUFFICIENT_BUFFER, HANDLE, HLOCAL, WAIT_OBJECT_0},
     Security::{
-        Authorization::ConvertSidToStringSidW, CreateRestrictedToken, GetTokenInformation,
-        IsValidSid, TokenElevation, TokenGroups, TokenIntegrityLevel, TokenPrivileges,
-        TokenSessionId, TokenUser, DISABLE_MAX_PRIVILEGE, LUA_TOKEN, PSID, TOKEN_ASSIGN_PRIMARY,
-        TOKEN_DUPLICATE, TOKEN_ELEVATION, TOKEN_GROUPS, TOKEN_INFORMATION_CLASS,
-        TOKEN_MANDATORY_LABEL, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_USER,
+        Authorization::ConvertSidToStringSidW, CreateRestrictedToken, CreateWellKnownSid,
+        GetTokenInformation, IsValidSid, SetTokenInformation, TokenElevation, TokenGroups,
+        TokenIntegrityLevel, TokenPrivileges, TokenSessionId, TokenUser, WinMediumLabelSid,
+        DISABLE_MAX_PRIVILEGE, LUA_TOKEN, PSID, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT,
+        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_ELEVATION, TOKEN_GROUPS,
+        TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_USER,
     },
     System::{
         JobObjects::{
@@ -29,6 +30,7 @@ use windows::Win32::{
             JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         },
+        SystemServices::SE_GROUP_INTEGRITY,
         Threading::{
             CreateProcessAsUserW, GetCurrentProcess, GetExitCodeProcess, OpenProcess,
             OpenProcessToken, ResumeThread, TerminateProcess, WaitForSingleObject,
@@ -49,12 +51,12 @@ unsafe fn owned(h: HANDLE) -> OwnedHandle {
 const MAX_TOKEN_INFORMATION_BYTES: u32 = 65_536;
 fn token_class_name(class: TOKEN_INFORMATION_CLASS) -> &'static str {
     match class {
-        TokenUser => "TokenUser",
-        TokenGroups => "TokenGroups",
-        TokenPrivileges => "TokenPrivileges",
-        TokenSessionId => "TokenSessionId",
-        TokenElevation => "TokenElevation",
-        TokenIntegrityLevel => "TokenIntegrityLevel",
+        value if value == TokenUser => "TokenUser",
+        value if value == TokenGroups => "TokenGroups",
+        value if value == TokenPrivileges => "TokenPrivileges",
+        value if value == TokenSessionId => "TokenSessionId",
+        value if value == TokenElevation => "TokenElevation",
+        value if value == TokenIntegrityLevel => "TokenIntegrityLevel",
         _ => "UnsupportedClass",
     }
 }
@@ -97,10 +99,10 @@ impl TokenBuffer {
 }
 fn info(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<TokenBuffer> {
     let minimum = match class {
-        TokenUser => size_of::<TOKEN_USER>(),
-        TokenGroups => std::mem::offset_of!(TOKEN_GROUPS, Groups),
-        TokenIntegrityLevel => size_of::<TOKEN_MANDATORY_LABEL>(),
-        TokenPrivileges => std::mem::offset_of!(TOKEN_PRIVILEGES, Privileges),
+        value if value == TokenUser => size_of::<TOKEN_USER>(),
+        value if value == TokenGroups => std::mem::offset_of!(TOKEN_GROUPS, Groups),
+        value if value == TokenIntegrityLevel => size_of::<TOKEN_MANDATORY_LABEL>(),
+        value if value == TokenPrivileges => std::mem::offset_of!(TOKEN_PRIVILEGES, Privileges),
         _ => return Err(token_read_error(class, "variable-class", 0, 0, None)),
     } as u32;
     let mut required = 0;
@@ -165,7 +167,7 @@ fn info(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<TokenBuffer
 fn fixed_info<T: Default>(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<T> {
     // Only the documented fixed structures below use this path. A typed buffer
     // does not assume NULL/0 probing behaves identically for every token class.
-    if !matches!(class, TokenElevation | TokenSessionId) || size_of::<T>() != 4 {
+    if !(class == TokenElevation || class == TokenSessionId) || size_of::<T>() != 4 {
         return Err(token_read_error(
             class,
             "fixed-class",
@@ -327,6 +329,183 @@ pub(super) fn require_process(pid: u32, expected: &Observation) -> io::Result<Ob
     observed.require(expected)?;
     Ok(observed)
 }
+// A projected label only validates the requested mutation. It never admits a
+// token: only the observed native readback and actual child may pass require().
+fn medium_request(before: &Observation, parent: &Observation) -> io::Result<Observation> {
+    if before.integrity_sid != "S-1-16-12288" && before.integrity_sid != "S-1-16-8192" {
+        return Err(blocked(
+            "only a fresh High or already-Medium restricted fixture token is supported",
+        ));
+    }
+    let mut requested = before.clone();
+    requested.integrity_sid = "S-1-16-8192".into();
+    requested.require(parent)?;
+    Ok(requested)
+}
+
+/// No from-handle constructor exists. The sole constructor creates a new token
+/// for this test worker and drops the parent handle before any label operation.
+/// This type and its sole mutating API are compiled only within the test module.
+struct RestrictedWorkerToken {
+    token: OwnedHandle,
+    lowering_attempted: bool,
+    admitted: Option<Observation>,
+}
+impl RestrictedWorkerToken {
+    fn create(parent: &Observation) -> io::Result<Self> {
+        super::fixture_root()?; // Only the explicitly gated disposable CI fixture.
+        if current()? != *parent {
+            return Err(blocked("parent token changed before restricted creation"));
+        }
+        let mut original = HANDLE::default();
+        unsafe {
+            // CreateRestrictedToken gives the new handle these access rights.
+            // The original handle is used solely as the creation source, never
+            // by SetTokenInformation, and closes before the method returns.
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT,
+                &mut original,
+            )
+            .map_err(win)?;
+        }
+        let original = unsafe { owned(original) };
+        let mut created = HANDLE::default();
+        unsafe {
+            CreateRestrictedToken(
+                raw(&original),
+                LUA_TOKEN | DISABLE_MAX_PRIVILEGE,
+                None,
+                None,
+                None,
+                &mut created,
+            )
+            .map_err(win)?;
+        }
+        let token = unsafe { owned(created) };
+        drop(original);
+        if current()? != *parent {
+            return Err(blocked("parent token changed during restricted creation"));
+        }
+        Ok(Self {
+            token,
+            lowering_attempted: false,
+            admitted: None,
+        })
+    }
+    fn observe(&self) -> io::Result<Observation> {
+        observe(raw(&self.token))
+    }
+    fn lower_to_medium(&mut self, root: &Path, parent: &Observation) -> io::Result<()> {
+        if super::fixture_root()? != root {
+            return Err(blocked("fixture label evidence root differs"));
+        }
+        if self.lowering_attempted || self.admitted.is_some() {
+            return Err(blocked("fixture label operation cannot be replayed"));
+        }
+        let before = self.observe()?;
+        let requested = medium_request(&before, parent)?;
+        if current()? != *parent {
+            return Err(blocked(
+                "parent token changed before fixture label operation",
+            ));
+        }
+        report(
+            root,
+            "restricted-medium-intent.json",
+            &json!({"operation":"lower-only-new-restricted-worker-token-to-medium","before":before,"requestedIntegritySid":"S-1-16-8192","parentTokenMutation":false}),
+        )?;
+        // Commit before the native call: an error or unknown result is terminal.
+        self.lowering_attempted = true;
+        let result = if before.integrity_sid == "S-1-16-8192" {
+            Ok(())
+        } else {
+            let label_bytes = size_of::<TOKEN_MANDATORY_LABEL>();
+            let mut sid_bytes = 12u32; // One-subauthority mandatory integrity SID.
+            let bytes = label_bytes + sid_bytes as usize;
+            // Stable, aligned, contiguous label + SID buffer, bounded to 32 bytes
+            // on x64. The SID pointer stays inside this allocation for the call.
+            let mut storage = vec![0usize; bytes.div_ceil(size_of::<usize>())];
+            let sid = PSID(unsafe { storage.as_mut_ptr().cast::<u8>().add(label_bytes).cast() });
+            unsafe {
+                CreateWellKnownSid(WinMediumLabelSid, None, Some(sid), &mut sid_bytes)
+                    .map_err(win)?;
+            }
+            if sid_bytes != 12 || sid_text(sid)? != "S-1-16-8192" {
+                return Err(blocked("medium integrity SID construction differed"));
+            }
+            let label = TOKEN_MANDATORY_LABEL {
+                Label: SID_AND_ATTRIBUTES {
+                    Sid: sid,
+                    Attributes: SE_GROUP_INTEGRITY as u32,
+                },
+            };
+            unsafe {
+                storage
+                    .as_mut_ptr()
+                    .cast::<TOKEN_MANDATORY_LABEL>()
+                    .write(label);
+                // The only SetTokenInformation target in this module is the
+                // fresh handle produced by this type's constructor above.
+                SetTokenInformation(
+                    raw(&self.token),
+                    TokenIntegrityLevel,
+                    storage.as_ptr().cast(),
+                    bytes as u32,
+                )
+                .map_err(|error| {
+                    token_read_error(
+                        TokenIntegrityLevel,
+                        "set-new-fixture-token-medium",
+                        0,
+                        bytes as u32,
+                        Some(error.code().0),
+                    )
+                })
+            }
+        };
+        // Preserve actual child-token and parent observations even if the setter
+        // reports an error. Never substitute the requested/projected observation.
+        let after = self.observe();
+        let parent_after = current();
+        report(
+            root,
+            "restricted-medium-outcome.json",
+            &json!({"setError":result.as_ref().err().map(ToString::to_string),"observed":after.as_ref().ok(),"observationError":after.as_ref().err().map(ToString::to_string),"parentUnchanged":parent_after.as_ref().is_ok_and(|actual|actual==parent),"parentObservationError":parent_after.as_ref().err().map(ToString::to_string)}),
+        )?;
+        result?;
+        let after = after?;
+        if parent_after? != *parent {
+            return Err(blocked(
+                "parent token changed during fixture label operation",
+            ));
+        }
+        if after != requested {
+            return Err(blocked(
+                "actual restricted token differs from requested label-only change",
+            ));
+        }
+        after.require(parent)?;
+        report(root, "restricted-medium-token.json", &after)?;
+        self.admitted = Some(after);
+        Ok(())
+    }
+    fn for_launch(&self, parent: &Observation) -> io::Result<HANDLE> {
+        let admitted = self
+            .admitted
+            .as_ref()
+            .ok_or_else(|| blocked("fixture worker token has no observed Medium admission"))?;
+        let actual = self.observe()?;
+        if actual != *admitted || current()? != *parent {
+            return Err(blocked(
+                "admitted fixture or parent token changed before launch",
+            ));
+        }
+        actual.require(parent)?;
+        Ok(raw(&self.token))
+    }
+}
+
 struct Child {
     process: OwnedHandle,
     thread: OwnedHandle,
@@ -345,32 +524,10 @@ impl Drop for Child {
 pub(super) fn run_worker(root: &Path) -> io::Result<()> {
     let parent = current()?;
     report(root, "parent-token.json", &parent)?;
-    let mut original = HANDLE::default();
-    unsafe {
-        OpenProcessToken(
-            GetCurrentProcess(),
-            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY,
-            &mut original,
-        )
-        .map_err(win)?;
-    }
-    let original = unsafe { owned(original) };
-    let mut restricted = HANDLE::default();
-    unsafe {
-        CreateRestrictedToken(
-            raw(&original),
-            LUA_TOKEN | DISABLE_MAX_PRIVILEGE,
-            None,
-            None,
-            None,
-            &mut restricted,
-        )
-        .map_err(win)?;
-    }
-    let restricted = unsafe { owned(restricted) };
-    let candidate = observe(raw(&restricted))?;
+    let mut restricted = RestrictedWorkerToken::create(&parent)?;
+    let candidate = restricted.observe()?;
     report(root, "restricted-candidate-token.json", &candidate)?;
-    candidate.require(&parent)?;
+    restricted.lower_to_medium(root, &parent)?;
     let executable = std::env::current_exe()?;
     let image = executable
         .to_str()
@@ -406,11 +563,11 @@ pub(super) fn run_worker(root: &Path) -> io::Result<()> {
     report(
         root,
         "worker-launch-intent.json",
-        &json!({"application":executable,"commandLine":command,"commandSha256":sha256(command.as_bytes()),"flags":["CREATE_SUSPENDED"],"tokenFlags":["LUA_TOKEN","DISABLE_MAX_PRIVILEGE"]}),
+        &json!({"application":executable,"commandLine":command,"commandSha256":sha256(command.as_bytes()),"flags":["CREATE_SUSPENDED"],"tokenFlags":["LUA_TOKEN","DISABLE_MAX_PRIVILEGE"],"observedWorkerIntegrity":"S-1-16-8192"}),
     )?;
     unsafe {
         CreateProcessAsUserW(
-            Some(raw(&restricted)),
+            Some(restricted.for_launch(&parent)?),
             PCWSTR(application.as_ptr()),
             Some(PWSTR(line.as_mut_ptr())),
             None,
@@ -591,4 +748,49 @@ fn HistoryPayload_TokenReadError_006() {
         error.contains("hresult=0x"),
         "missing API error code: {error}"
     );
+}
+
+// 检查降级请求仅允许同用户受限 High/Medium 令牌，不能用标签变更掩盖其它资格失败。
+#[test]
+fn HistoryPayload_MediumRequest_007() {
+    let parent = Observation {
+        sid: "S-1-5-21-1".into(),
+        session: 2,
+        elevated: true,
+        integrity_sid: "S-1-16-12288".into(),
+        administrator_attributes: Some(15),
+        privileges: vec![(20, 0, 2)],
+    };
+    let high = Observation {
+        sid: parent.sid.clone(),
+        session: parent.session,
+        elevated: false,
+        integrity_sid: "S-1-16-12288".into(),
+        administrator_attributes: Some(16),
+        privileges: vec![(23, 0, 3)],
+    };
+    assert!(
+        high.require(&parent).is_err(),
+        "High remains ineligible before actual lowering"
+    );
+    let expected = medium_request(&high, &parent).unwrap();
+    assert_eq!(expected.integrity_sid, "S-1-16-8192");
+    assert_eq!(medium_request(&expected, &parent).unwrap(), expected);
+    for mutation in 0..8 {
+        let mut bad = high.clone();
+        match mutation {
+            0 => bad.sid = "S-1-5-21-2".into(),
+            1 => bad.session = 3,
+            2 => bad.elevated = true,
+            3 => bad.administrator_attributes = Some(4),
+            4 => bad.privileges.push((20, 0, 0)),
+            5 => bad.integrity_sid = "S-1-16-4096".into(),
+            6 => bad.integrity_sid = "S-1-16-16384".into(),
+            _ => bad.integrity_sid = "unreadable".into(),
+        }
+        assert!(
+            medium_request(&bad, &parent).is_err(),
+            "unsafe medium-label request {mutation} admitted"
+        );
+    }
 }

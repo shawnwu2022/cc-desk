@@ -2,7 +2,9 @@
 //! These guards describe real OS objects, not complete switch admission. The
 //! coordinator must still establish installation scope, all exclusion roots,
 //! journal intent and source quiescence before composing a SnapshotBoundary.
-//! In particular there is no DirectoryDurability or SnapshotBoundary factory.
+//! Operation-specific storage never supplies a generic directory-fsync adapter.
+#[cfg(windows)]
+pub(crate) mod context;
 #[cfg(windows)]
 pub(crate) mod durability;
 #[cfg(windows)]
@@ -12,9 +14,13 @@ pub(crate) mod files;
 #[cfg(windows)]
 pub(crate) mod lease;
 #[cfg(windows)]
+pub(crate) mod package;
+#[cfg(windows)]
 pub(crate) mod process;
 #[cfg(windows)]
 pub(crate) mod registry;
+#[cfg(windows)]
+pub(crate) mod scope;
 #[cfg(windows)]
 pub(crate) mod security;
 #[cfg(windows)]

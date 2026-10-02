@@ -123,6 +123,17 @@ pub(crate) struct ControlLease {
 pub(crate) struct SharedLease(ByteLock);
 pub(crate) struct ExclusiveLease(ByteLock);
 
+impl SharedLease {
+    pub(super) fn verify_root(&self, root: &PrivateDirectory) -> io::Result<()> {
+        self.0.file.verify()?;
+        root.directory().recheck()?;
+        if self.0.file.parent.identity() != root.directory().identity() {
+            return Err(blocked("foreign source lifetime lease"));
+        }
+        Ok(())
+    }
+}
+
 impl ControlLease {
     /// A marker writer borrows this guard for its entire lifetime. A lock on a
     /// different recovery root cannot authorize publication here.
@@ -139,6 +150,14 @@ impl ControlLease {
 }
 
 impl ExclusiveLease {
+    pub(super) fn verify_root(&self, root: &PrivateDirectory) -> io::Result<()> {
+        self.verify()?;
+        root.directory().recheck()?;
+        if self.0.file.parent.identity() != root.directory().identity() {
+            return Err(blocked("foreign exclusive lifetime lease"));
+        }
+        Ok(())
+    }
     pub(super) fn identity(&self) -> &FileIdentity {
         self.0.file.identity()
     }

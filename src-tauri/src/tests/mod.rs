@@ -119,3 +119,10 @@ mod version_history_windows;
 
 #[cfg(target_os = "windows")]
 mod version_history_payload;
+
+#[cfg(windows)]
+mod version_history_context_windows;
+#[cfg(windows)]
+mod version_history_scope;
+
+mod version_history_registration_journal;

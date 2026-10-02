@@ -8,7 +8,7 @@ use crate::cli::profiles::error;
 use crate::cli::snapshot::CallerIdentity;
 use crate::cli::types::SafeError;
 use parking_lot::Mutex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ const MAX_OWNER_SELECTIONS: usize = 16;
 const API_ROOT: &str = "https://api.github.com/repos/shawnwu2022/cc-desk/releases";
 const PUBLIC_ROOT: &str = "https://github.com/shawnwu2022/cc-desk/releases";
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct AssetMetadata {
     pub(crate) id: u64,
     pub(crate) name: String,
@@ -41,7 +41,7 @@ pub(crate) struct AssetMetadata {
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct ReleaseMetadata {
     pub(crate) id: u64,
     pub(crate) tag_name: String,
@@ -455,6 +455,17 @@ struct Selection {
     metadata: SelectionMetadata,
     release: ReleaseMetadata,
 }
+/// Private transfer material, never an IPC response or a live capability. The
+/// full observed release is retained because unrelated asset/timestamp changes
+/// must still invalidate the original selection after the source process exits.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetainedSelectionObservation {
+    schema: u32,
+    release: ReleaseMetadata,
+    installer_id: u64,
+    signature_id: u64,
+}
 #[derive(Default)]
 struct Held {
     observations: HashMap<String, Observation>,
@@ -738,6 +749,69 @@ impl CatalogService {
             return Err(error("HISTORY_SELECTION_CHANGED"));
         }
         self.resolve_selection_at(caller, token, now.max((self.clock)()))
+    }
+    pub(super) fn retain_selection_observation(
+        &self,
+        caller: &CallerIdentity,
+        token: &str,
+    ) -> Result<Vec<u8>, SafeError> {
+        let expected = self.revalidate_selection(caller, token)?;
+        let held = self.held.lock();
+        let selected = held
+            .selections
+            .get(token)
+            .filter(|selected| &selected.caller == caller)
+            .ok_or_else(|| error("HISTORY_SELECTION_UNKNOWN"))?;
+        if (self.clock)() >= selected.expires || selected.metadata != expected {
+            return Err(error("HISTORY_SELECTION_EXPIRED"));
+        }
+        let bytes = serde_json::to_vec(&RetainedSelectionObservation {
+            schema: 1,
+            release: selected.release.clone(),
+            installer_id: expected.installer.id,
+            signature_id: expected.signature.id,
+        })
+        .map_err(|_| error("HISTORY_METADATA_INVALID"))?;
+        bounded(&bytes)?;
+        Ok(bytes)
+    }
+    /// Rehydration always consults the official source again. Parsing a private
+    /// record alone never constructs a held selection or execution authority.
+    pub(crate) fn revalidate_retained_observation(
+        &self,
+        bytes: &[u8],
+    ) -> Result<SelectionMetadata, SafeError> {
+        bounded(bytes)?;
+        let observation: RetainedSelectionObservation =
+            serde_json::from_slice(bytes).map_err(|_| error("HISTORY_METADATA_INVALID"))?;
+        if observation.schema != 1 {
+            return Err(error("HISTORY_METADATA_INVALID"));
+        }
+        // Stored observations use our canonical projection. Reject extra keys,
+        // including nested keys that the public GitHub parser may safely ignore.
+        let supplied: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|_| error("HISTORY_METADATA_INVALID"))?;
+        if serde_json::to_value(&observation).map_err(|_| error("HISTORY_METADATA_INVALID"))?
+            != supplied
+        {
+            return Err(error("HISTORY_METADATA_INVALID"));
+        }
+        validate_release(&observation.release)?;
+        let expected = observation
+            .release
+            .bind(self.host)
+            .map_err(|_| error("HISTORY_RELEASE_BLOCKED"))?;
+        if expected.installer.id != observation.installer_id
+            || expected.signature.id != observation.signature_id
+        {
+            return Err(error("HISTORY_SELECTION_CHANGED"));
+        }
+        let current = self.source.release(expected.release_id)?;
+        validate_release(&current)?;
+        if current != observation.release || current.bind(self.host).as_ref() != Ok(&expected) {
+            return Err(error("HISTORY_SELECTION_CHANGED"));
+        }
+        Ok(expected)
     }
 }
 fn opaque(value: &str) -> bool {

@@ -90,6 +90,16 @@ pub(crate) struct ExactProcess {
     _image: PinnedFile,
 }
 impl ExactProcess {
+    /// Revalidate a scope-side image against this exact retained process. A
+    /// pathname or equal bytes at a different file object are not sufficient.
+    pub(crate) fn verify_held_image(&self, image: &PinnedFile) -> io::Result<()> {
+        self._image.verify()?;
+        image.verify()?;
+        if identity(handle(&self.process), image)? != self.identity {
+            return Err(blocked("held source image differs from the exact process"));
+        }
+        Ok(())
+    }
     fn from_created(process: OwnedHandle, image: PinnedFile) -> io::Result<Self> {
         let identity = identity(handle(&process), &image)?;
         Ok(Self {

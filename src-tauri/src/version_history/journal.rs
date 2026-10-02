@@ -219,6 +219,8 @@ pub(crate) enum RegistrationSlot {
     DeskDirectoryBackground,
     LegacyDirectory,
     LegacyDirectoryBackground,
+    /// Only the product-owned CC Desk value, never the shared Run tree.
+    OwnedRun,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum ShortcutSlot {
@@ -233,6 +235,11 @@ pub(crate) enum FilesystemOperation {
     SetPermissions,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub(crate) enum PrivateBackupOperation {
+    CreateDirectory,
+    CopyFile,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum RegistrationOperation {
     CreateKey,
     SetValue,
@@ -241,10 +248,33 @@ pub(crate) enum RegistrationOperation {
     SetPermissions,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub(crate) enum ShortcutOperation {
+    CreateFile,
+    WriteBytes,
+    SetPermissions,
+    RemoveFile,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum EffectKind {
     FenceSourceImage,
+    PrivateBackupEntry {
+        plan_generation: u64,
+        operation: PrivateBackupOperation,
+        manifest: String,
+        entry_index: u32,
+    },
+    RotateSourceRoot {
+        root: RootKind,
+        manifest: String,
+    },
+    ReverseSourceRoot {
+        original_effect_id: String,
+        original_intent_generation: u64,
+        current_manifest: String,
+    },
     ReverseSourceFence {
         original_effect_id: String,
         original_intent_generation: u64,
@@ -282,6 +312,12 @@ pub(crate) enum EffectKind {
     RecoveryRegistrationEntry {
         slot: RegistrationSlot,
         operation: RegistrationOperation,
+        manifest: String,
+        entry_index: u32,
+    },
+    RecoveryShortcutEntry {
+        slot: ShortcutSlot,
+        operation: ShortcutOperation,
         manifest: String,
         entry_index: u32,
     },
@@ -328,6 +364,11 @@ impl EffectSpec {
         if let EffectKind::ReverseSourceFence {
             original_effect_id,
             original_intent_generation,
+        }
+        | EffectKind::ReverseSourceRoot {
+            original_effect_id,
+            original_intent_generation,
+            ..
         } = &self.kind
         {
             validate_id(original_effect_id)?;
@@ -342,10 +383,17 @@ impl EffectSpec {
     }
     fn entry_manifest(&self) -> Option<&str> {
         match &self.kind {
-            EffectKind::FilesystemEntry { manifest, .. }
+            EffectKind::PrivateBackupEntry { manifest, .. }
+            | EffectKind::RotateSourceRoot { manifest, .. }
+            | EffectKind::ReverseSourceRoot {
+                current_manifest: manifest,
+                ..
+            }
+            | EffectKind::FilesystemEntry { manifest, .. }
             | EffectKind::RegistrationEntry { manifest, .. }
             | EffectKind::RecoveryFilesystemEntry { manifest, .. }
-            | EffectKind::RecoveryRegistrationEntry { manifest, .. } => Some(manifest),
+            | EffectKind::RecoveryRegistrationEntry { manifest, .. }
+            | EffectKind::RecoveryShortcutEntry { manifest, .. } => Some(manifest),
             _ => None,
         }
     }
@@ -399,11 +447,48 @@ pub(crate) enum JournalPhase {
     PreContextAborted,
     RecoveryRequired,
 }
+/// A durable C1 attempt selector. It records observation and capacity only;
+/// its live admission factory remains in the held Windows context executor.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RootBackupPlan {
+    pub(crate) original_effect_id: String,
+    pub(crate) original_intent_generation: u64,
+    pub(crate) current_manifest: String,
+    pub(crate) destination: String,
+    pub(crate) prior_plan_generation: Option<u64>,
+    pub(crate) preserved_manifest: Option<String>,
+    pub(crate) abandoned_effect: Option<(String, u64)>,
+    pub(crate) reservation_source: String,
+    pub(crate) effects: u32,
+    pub(crate) recovery_dependencies: u32,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum JournalEvent {
     Begin {
         capacity: CapacityPlan,
+    },
+    PrivateBackupPlan {
+        manifest: String,
+        effects: u32,
+        recovery_dependencies: u32,
+    },
+    PrepareRootBackup {
+        plan: RootBackupPlan,
+        receipt: String,
+    },
+    ConfirmRootReturned {
+        effect_id: String,
+        intent_generation: u64,
+        current_manifest: String,
+        receipt: String,
+    },
+    AdmitRootReverse {
+        effect_id: String,
+        intent_generation: u64,
+        current_manifest: String,
+        receipt: String,
     },
     Manifest {
         role: ManifestRole,
@@ -496,6 +581,23 @@ struct CompensationReceipt {
     intent_generation: u64,
     current: RecoveryObservations,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RootReverseReceipt {
+    schema: u32,
+    anchor: AdmissionAnchor,
+    effect_id: String,
+    intent_generation: u64,
+    current_manifest: String,
+    returned: bool,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RootBackupReceipt {
+    schema: u32,
+    anchor: AdmissionAnchor,
+    plan: RootBackupPlan,
+}
 /// No production constructor. A later audited factory must retain live exact
 /// source ownership/unchanged-state/quiescence guards; hashes are not that proof.
 pub(crate) struct PreContextAbortProof {
@@ -530,6 +632,15 @@ pub(crate) struct SwitchJournal {
     recovering: bool,
     compensated: BTreeSet<String>,
     return_roots: Option<String>,
+    context_return_only: bool,
+    admitted_root_reversals: BTreeMap<String, String>,
+    returned_reversals: BTreeSet<String>,
+    recovery_dependency_reserve: usize,
+    planned_backup_effects: u64,
+    backup_plans: BTreeMap<u64, (String, u32)>,
+    root_backup_plans: BTreeMap<String, (u64, RootBackupPlan)>,
+    recovery_reservations: BTreeMap<String, usize>,
+    recovery_backup_owners: BTreeMap<u64, String>,
 }
 impl SwitchJournal {
     pub(crate) fn new(binding: JournalBinding, capacity: CapacityPlan) -> Result<Self, SafeError> {
@@ -547,6 +658,15 @@ impl SwitchJournal {
             recovering: false,
             compensated: BTreeSet::new(),
             return_roots: None,
+            context_return_only: false,
+            admitted_root_reversals: BTreeMap::new(),
+            returned_reversals: BTreeSet::new(),
+            recovery_dependency_reserve: 0,
+            planned_backup_effects: 0,
+            backup_plans: BTreeMap::new(),
+            root_backup_plans: BTreeMap::new(),
+            recovery_reservations: BTreeMap::new(),
+            recovery_backup_owners: BTreeMap::new(),
         })
     }
     pub(crate) fn generation(&self) -> u64 {
@@ -557,6 +677,11 @@ impl SwitchJournal {
     }
     pub(crate) fn phase(&self) -> JournalPhase {
         self.phase
+    }
+    /// Diagnostic lookup; publication still requires the live healthy store,
+    /// exact binding and current head under its exclusive mutable borrow.
+    pub(crate) fn manifest(&self, role: ManifestRole) -> Option<&str> {
+        self.manifests.get(&role).map(String::as_str)
     }
     pub(crate) fn pending_effect(&self) -> Option<&EffectSpec> {
         self.pending
@@ -596,8 +721,143 @@ impl SwitchJournal {
         }
         match event {
             JournalEvent::Begin { .. } => return Err(error("HISTORY_JOURNAL_INVALID")),
+            JournalEvent::PrivateBackupPlan {
+                manifest,
+                effects,
+                recovery_dependencies,
+            } => {
+                validate_digest(manifest)?;
+                let expected_reserve = self.recovery_dependency_reserve.max(128).saturating_add(
+                    if !self.recovering && !self.recovery_reservations.contains_key(manifest) {
+                        (*effects as usize).saturating_mul(4).saturating_add(8)
+                    } else {
+                        0
+                    },
+                );
+                if *recovery_dependencies as usize != expected_reserve
+                    || self.requires_reconciliation()
+                    || *effects == 0
+                    || *effects > 100_000
+                    || !(128..=4096).contains(recovery_dependencies)
+                    || !matches!(
+                        self.phase,
+                        JournalPhase::Reviewed | JournalPhase::RecoveryRequired
+                    )
+                {
+                    return Err(error("HISTORY_CONTEXT_PLAN_BLOCKED"));
+                }
+            }
+            JournalEvent::PrepareRootBackup { plan, receipt } => {
+                validate_digest(receipt)?;
+                for digest in [
+                    &plan.current_manifest,
+                    &plan.destination,
+                    &plan.reservation_source,
+                ] {
+                    validate_digest(digest)?;
+                }
+                if let Some(digest) = &plan.preserved_manifest {
+                    validate_digest(digest)?;
+                }
+                let original = self
+                    .effects
+                    .get(&plan.original_effect_id)
+                    .ok_or_else(|| error("HISTORY_EFFECT_CHANGED"))?;
+                let prior = self.root_backup_plans.get(&plan.original_effect_id);
+                let remaining = self.recovery_dependency_reserve.max(128).saturating_sub(
+                    self.recovery_reservations
+                        .get(&plan.reservation_source)
+                        .copied()
+                        .unwrap_or(0),
+                );
+                if !matches!(original.spec.kind, EffectKind::RotateSourceRoot { .. })
+                    || original.intent_generation != plan.original_intent_generation
+                    || !self.admitted_root_reversals.contains_key(&plan.original_effect_id)
+                    || !self.context_return_only || !self.pre_context_phase()
+                    || plan.effects == 0 || plan.effects > 100_000
+                    || plan.recovery_dependencies as usize != remaining
+                    || prior.map(|(generation, _)| *generation) != plan.prior_plan_generation
+                    || prior.is_some() != plan.preserved_manifest.is_some()
+                    || self.effects.values().any(|effect| matches!(&effect.spec.kind,
+                        EffectKind::ReverseSourceRoot { original_effect_id, .. } if original_effect_id == &plan.original_effect_id))
+                { return Err(error("HISTORY_CONTEXT_REVERSE_BLOCKED")); }
+                match (&self.pending, &plan.abandoned_effect) {
+                    (None, None) => {}
+                    (Some(pending), Some((id, generation))) if pending == id => {
+                        let old = &self.effects[id];
+                        if old.intent_generation != *generation
+                            || !matches!(&old.spec.kind, EffectKind::PrivateBackupEntry { plan_generation, manifest, .. }
+                                if Some(*plan_generation) == plan.prior_plan_generation
+                                    && prior.is_some_and(|(_, prior)| &prior.current_manifest == manifest))
+                            || old
+                                .result
+                                .as_ref()
+                                .is_some_and(|result| result.observation != Observation::Unknown)
+                        {
+                            return Err(error("HISTORY_CONTEXT_REVERSE_BLOCKED"));
+                        }
+                    }
+                    _ => return Err(error("HISTORY_CONTEXT_REVERSE_BLOCKED")),
+                }
+            }
+            JournalEvent::ConfirmRootReturned {
+                effect_id,
+                intent_generation,
+                current_manifest,
+                receipt,
+            } => {
+                validate_digest(current_manifest)?;
+                validate_digest(receipt)?;
+                let effect = self
+                    .effects
+                    .get(effect_id)
+                    .ok_or_else(|| error("HISTORY_EFFECT_CHANGED"))?;
+                if !matches!(effect.spec.kind, EffectKind::ReverseSourceRoot { .. })
+                    || effect.intent_generation != *intent_generation
+                    || self.pending.as_deref() != Some(effect_id)
+                    || effect
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| result.observation != Observation::Unknown)
+                    || self.returned_reversals.contains(effect_id)
+                    || !self.context_return_only
+                    || !self.pre_context_phase()
+                {
+                    return Err(error("HISTORY_CONTEXT_REVERSE_BLOCKED"));
+                }
+            }
+            JournalEvent::AdmitRootReverse {
+                effect_id,
+                intent_generation,
+                current_manifest,
+                receipt,
+            } => {
+                validate_digest(current_manifest)?;
+                validate_digest(receipt)?;
+                let effect = self
+                    .effects
+                    .get(effect_id)
+                    .ok_or_else(|| error("HISTORY_EFFECT_CHANGED"))?;
+                if !matches!(effect.spec.kind, EffectKind::RotateSourceRoot { .. })
+                    || effect.intent_generation != *intent_generation
+                    || self.pending.as_deref().is_some_and(|pending| {
+                        pending != effect_id
+                            && !matches!(&self.effects[pending].spec.kind,
+                                EffectKind::PrivateBackupEntry { plan_generation, .. }
+                                if !self.recovery_backup_owners.contains_key(plan_generation))
+                    })
+                    || self.admitted_root_reversals.contains_key(effect_id)
+                    || self.has_historical_uncertainty()
+                    || !self.pre_context_phase()
+                {
+                    return Err(error("HISTORY_CONTEXT_REVERSE_BLOCKED"));
+                }
+            }
             JournalEvent::Manifest { role, digest } => {
                 validate_digest(digest)?;
+                if self.context_return_only {
+                    return Err(error("HISTORY_CONTEXT_RETURN_ONLY"));
+                }
                 if self.requires_reconciliation() || self.manifests.contains_key(role) {
                     return Err(error("HISTORY_RECONCILIATION_REQUIRED"));
                 }
@@ -610,6 +870,57 @@ impl SwitchJournal {
             }
             JournalEvent::Intent { effect } => {
                 effect.validate(&self.binding)?;
+                if matches!(effect.kind, EffectKind::RecoveryShortcutEntry { .. })
+                    && !self.return_effect_allowed(effect)
+                {
+                    return Err(error("HISTORY_SHORTCUT_RESTORE_BLOCKED"));
+                }
+                if self.context_return_only
+                    && !matches!(
+                        effect.kind,
+                        EffectKind::PrivateBackupEntry { .. }
+                            | EffectKind::ReverseSourceRoot { .. }
+                            | EffectKind::ReverseSourceFence { .. }
+                    )
+                {
+                    return Err(error("HISTORY_CONTEXT_RETURN_ONLY"));
+                }
+                if let EffectKind::PrivateBackupEntry {
+                    plan_generation,
+                    manifest,
+                    entry_index,
+                    ..
+                } = &effect.kind
+                {
+                    if self.recovery_backup_owners.get(plan_generation).is_some_and(|owner|
+                        self.root_backup_plans.get(owner).is_none_or(|(current, _)| current != plan_generation)
+                            || self.effects.values().any(|existing| matches!(&existing.spec.kind,
+                                EffectKind::ReverseSourceRoot { original_effect_id, .. } if original_effect_id == owner)))
+                        || self.backup_plans.get(plan_generation)
+                        .is_none_or(|(source, count)| source != manifest || entry_index >= count)
+                        || self.effects.values().any(|old| matches!(&old.spec.kind,
+                            EffectKind::PrivateBackupEntry { plan_generation: old_plan, entry_index: old_index, .. }
+                            if old_plan == plan_generation && old_index == entry_index))
+                    { return Err(error("HISTORY_CONTEXT_PLAN_BLOCKED")); }
+                }
+                if let EffectKind::ReverseSourceRoot {
+                    original_effect_id,
+                    original_intent_generation,
+                    current_manifest,
+                } = &effect.kind
+                {
+                    let original = self
+                        .effects
+                        .get(original_effect_id)
+                        .ok_or_else(|| error("HISTORY_EFFECT_CHANGED"))?;
+                    if !matches!(original.spec.kind, EffectKind::RotateSourceRoot { .. })
+                        || original.intent_generation != *original_intent_generation
+                        || self.admitted_root_reversals.get(original_effect_id) != Some(current_manifest)
+                        || self.effects.values().any(|existing| matches!(&existing.spec.kind,
+                            EffectKind::ReverseSourceRoot { original_effect_id: old, .. } if old == original_effect_id)) {
+                        return Err(error("HISTORY_CONTEXT_REVERSE_BLOCKED"));
+                    }
+                }
                 if self.requires_reconciliation()
                     || self.effects.len() >= MAX_RECORDS
                     || self.effects.contains_key(&effect.effect_id)
@@ -665,6 +976,9 @@ impl SwitchJournal {
                 }
             }
             JournalEvent::Phase { phase } => {
+                if self.context_return_only && *phase != JournalPhase::RecoveryRequired {
+                    return Err(error("HISTORY_CONTEXT_RETURN_ONLY"));
+                }
                 if *phase != JournalPhase::RecoveryRequired
                     && (self.requires_reconciliation() || !self.phase_allowed(*phase))
                 {
@@ -728,6 +1042,9 @@ impl SwitchJournal {
                     phase: JournalPhase::RecoveryRequired | JournalPhase::Restoring
                 } | JournalEvent::AbortPreContext { .. }
                     | JournalEvent::CompensateUnknown { .. }
+                    | JournalEvent::AdmitRootReverse { .. }
+                    | JournalEvent::ConfirmRootReturned { .. }
+                    | JournalEvent::PrepareRootBackup { .. }
             )
         {
             WriteLane::Recovery
@@ -740,6 +1057,96 @@ impl SwitchJournal {
         self.recovering |= self.lane(&event) == WriteLane::Recovery;
         match event {
             JournalEvent::Begin { .. } => unreachable!("genesis is not an appended event"),
+            JournalEvent::PrivateBackupPlan {
+                manifest,
+                recovery_dependencies,
+                effects,
+            } => {
+                self.recovery_dependency_reserve = recovery_dependencies as usize;
+                self.backup_plans
+                    .insert(self.generation, (manifest.clone(), effects));
+                if !self.recovering {
+                    self.planned_backup_effects += effects as u64;
+                    self.recovery_reservations
+                        .entry(manifest)
+                        .or_insert(effects as usize * 4 + 8);
+                }
+            }
+            JournalEvent::PrepareRootBackup { plan, .. } => {
+                if let Some((id, _)) = &plan.abandoned_effect {
+                    let old = self.effects.get_mut(id).expect("validated old C1 effect");
+                    if old.result.is_none() {
+                        old.result = Some(ObservedResult {
+                            observation: Observation::Unknown,
+                            receipt: None,
+                        });
+                    }
+                }
+                self.pending = None;
+                self.recovery_backup_owners
+                    .insert(self.generation, plan.original_effect_id.clone());
+                self.recovery_reservations.remove(&plan.reservation_source);
+                self.recovery_dependency_reserve = plan.recovery_dependencies as usize;
+                self.backup_plans.insert(
+                    self.generation,
+                    (plan.current_manifest.clone(), plan.effects),
+                );
+                self.admitted_root_reversals.insert(
+                    plan.original_effect_id.clone(),
+                    plan.current_manifest.clone(),
+                );
+                self.root_backup_plans
+                    .insert(plan.original_effect_id.clone(), (self.generation, plan));
+            }
+            JournalEvent::ConfirmRootReturned { effect_id, .. } => {
+                let effect = self
+                    .effects
+                    .get_mut(&effect_id)
+                    .expect("validated returned root");
+                if effect.result.is_none() {
+                    effect.result = Some(ObservedResult {
+                        observation: Observation::Unknown,
+                        receipt: None,
+                    });
+                }
+                self.returned_reversals.insert(effect_id);
+                self.pending = None;
+            }
+            JournalEvent::AdmitRootReverse {
+                effect_id,
+                current_manifest,
+                ..
+            } => {
+                if let Some(pending) = &self.pending {
+                    if pending != &effect_id {
+                        let backup = self
+                            .effects
+                            .get_mut(pending)
+                            .expect("validated private backup uncertainty");
+                        if backup.result.is_none() {
+                            backup.result = Some(ObservedResult {
+                                observation: Observation::Unknown,
+                                receipt: None,
+                            });
+                        }
+                    }
+                }
+                let effect = self
+                    .effects
+                    .get_mut(&effect_id)
+                    .expect("validated root reversal");
+                if effect.result.is_none() {
+                    effect.result = Some(ObservedResult {
+                        observation: Observation::Unknown,
+                        receipt: None,
+                    });
+                }
+                self.admitted_root_reversals
+                    .insert(effect_id, current_manifest);
+                self.pending = None;
+                self.context_return_only = true;
+                self.phase = JournalPhase::RecoveryRequired;
+            }
             JournalEvent::Manifest { role, digest } => {
                 self.manifests.insert(role, digest);
             }
@@ -769,7 +1176,21 @@ impl SwitchJournal {
             JournalEvent::Phase { phase } => {
                 self.phase = phase;
             }
-            JournalEvent::AbortPreContext { .. } => self.phase = JournalPhase::PreContextAborted,
+            JournalEvent::AbortPreContext { .. } => {
+                if let Some(pending) = self.pending.take() {
+                    let effect = self
+                        .effects
+                        .get_mut(&pending)
+                        .expect("validated private backup uncertainty");
+                    if effect.result.is_none() {
+                        effect.result = Some(ObservedResult {
+                            observation: Observation::Unknown,
+                            receipt: None,
+                        });
+                    }
+                }
+                self.phase = JournalPhase::PreContextAborted;
+            }
             JournalEvent::CompensateUnknown {
                 effect_id,
                 current_roots,
@@ -809,39 +1230,44 @@ impl SwitchJournal {
                 .into_iter()
                 .all(|root| self.applied(EffectKind::CreateFreshRoot { root }))
     }
+    fn pre_context_phase(&self) -> bool {
+        matches!(
+            self.phase,
+            JournalPhase::Reviewed | JournalPhase::RecoveryRequired
+        ) && ![
+            ManifestRole::SourceContext,
+            ManifestRole::FreshTargetContext,
+            ManifestRole::RetainedTargetContext,
+        ]
+        .into_iter()
+        .any(|role| self.manifests.contains_key(&role))
+    }
     fn can_abort_pre_context(&self) -> bool {
-        if self.requires_reconciliation()
-            || self.has_historical_uncertainty()
-            || !matches!(
-                self.phase,
-                JournalPhase::Reviewed | JournalPhase::RecoveryRequired
-            )
-            || [
-                ManifestRole::SourceContext,
-                ManifestRole::FreshTargetContext,
-                ManifestRole::RetainedTargetContext,
-            ]
-            .into_iter()
-            .any(|role| self.manifests.contains_key(&role))
+        if self.has_historical_uncertainty()
+            || !self.pre_context_phase()
+            || self.pending.as_ref().is_some_and(|pending| {
+                !matches!(
+                    self.effects[pending].spec.kind,
+                    EffectKind::PrivateBackupEntry { .. }
+                )
+            })
         {
             return false;
         }
         self.effects.values().all(|effect| {
-            let Some(result) = &effect.result else {
-                return false;
-            };
-            if result.observation == Observation::Unknown {
-                return false;
+            if matches!(effect.spec.kind, EffectKind::PrivateBackupEntry { .. }) { return true; }
+            if matches!(effect.spec.kind, EffectKind::RotateSourceRoot { .. }) {
+                return self.effects.values().any(|reverse| matches!(&reverse.spec.kind,
+                    EffectKind::ReverseSourceRoot { original_effect_id, original_intent_generation, .. }
+                    if original_effect_id == &effect.spec.effect_id && *original_intent_generation == effect.intent_generation)
+                    && (self.returned_reversals.contains(&reverse.spec.effect_id) || reverse.result.as_ref().is_some_and(|result| result.observation == Observation::Applied)));
             }
+            let Some(result) = &effect.result else { return false; };
+            if result.observation == Observation::Unknown && !self.returned_reversals.contains(&effect.spec.effect_id) { return false; }
             match &effect.spec.kind {
-                EffectKind::VerifySourceBundleCopy | EffectKind::ReverseSourceFence { .. } => true,
-                EffectKind::FenceSourceImage => {
-                    result.observation == Observation::NotApplied
-                        || self.applied(EffectKind::ReverseSourceFence {
-                            original_effect_id: effect.spec.effect_id.clone(),
-                            original_intent_generation: effect.intent_generation,
-                        })
-                }
+                EffectKind::VerifySourceBundleCopy | EffectKind::ReverseSourceFence { .. } | EffectKind::ReverseSourceRoot { .. } => true,
+                EffectKind::FenceSourceImage => result.observation == Observation::NotApplied
+                    || self.applied(EffectKind::ReverseSourceFence { original_effect_id: effect.spec.effect_id.clone(), original_intent_generation: effect.intent_generation }),
                 _ => false,
             }
         })
@@ -873,6 +1299,10 @@ impl SwitchJournal {
             EffectKind::RecoveryRegistrationEntry { manifest, .. } => {
                 self.phase == JournalPhase::Restoring
                     && self.manifests.get(&ManifestRole::Registration) == Some(manifest)
+            }
+            EffectKind::RecoveryShortcutEntry { manifest, .. } => {
+                self.phase == JournalPhase::Restoring
+                    && self.manifests.get(&ManifestRole::Shortcuts) == Some(manifest)
             }
             EffectKind::VerifySourceBundleRestore
             | EffectKind::RestoreSourceRoot { .. }
@@ -950,6 +1380,7 @@ impl SwitchJournal {
                         RegistrationSlot::DeskDirectoryBackground,
                         RegistrationSlot::LegacyDirectory,
                         RegistrationSlot::LegacyDirectoryBackground,
+                        RegistrationSlot::OwnedRun,
                     ]
                     .into_iter()
                     .all(|slot| self.applied(EffectKind::VerifyRegistrationRestore { slot }))
@@ -1088,6 +1519,344 @@ pub(crate) struct JournalStore {
 
 #[cfg(any(test, windows))]
 impl JournalStore {
+    /// Budget the complete private-copy slice before any destination mutation.
+    /// This is logical record/dependency admission, not a free-space promise.
+    #[cfg(windows)]
+    pub(crate) fn plan_private_backup(
+        &mut self,
+        expected_generation: u64,
+        effects: usize,
+        source: &[u8],
+    ) -> Result<(u64, String), SafeError> {
+        self.check_writer_current()?;
+        let effects = effects.max(1);
+        let needed = effects
+            .checked_mul(4)
+            .and_then(|n| n.checked_add(8))
+            .ok_or_else(|| error("HISTORY_JOURNAL_CAPACITY"))?;
+        let state = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?;
+        let recovery_dependencies = if state.journal.recovering {
+            state.journal.recovery_dependency_reserve.max(128)
+        } else {
+            state
+                .journal
+                .recovery_dependency_reserve
+                .max(128)
+                .checked_add(
+                    if state
+                        .journal
+                        .recovery_reservations
+                        .contains_key(&sha256(source))
+                    {
+                        0
+                    } else {
+                        needed
+                    },
+                )
+                .ok_or_else(|| error("HISTORY_JOURNAL_CAPACITY"))?
+        };
+        let unavailable = recovery_dependencies;
+        if state.journal.generation != expected_generation
+            || effects > 100_000
+            || self
+                .dependencies
+                .lock()
+                .len()
+                .checked_add(needed + unavailable)
+                .is_none_or(|n| n > self.dependency_limit)
+        {
+            return Err(error("HISTORY_DEPENDENCY_LIMIT"));
+        }
+        let records = (effects as u64)
+            .checked_mul(3)
+            .and_then(|n| n.checked_add(2))
+            .ok_or_else(|| error("HISTORY_JOURNAL_CAPACITY"))?;
+        let (used, reserved) = if state.journal.recovering {
+            (
+                state.usage.recovery_records,
+                state.journal.capacity.recovery_records,
+            )
+        } else {
+            (
+                state.usage.forward_records,
+                state.journal.capacity.forward_records,
+            )
+        };
+        if used.checked_add(records).is_none_or(|n| n > reserved)
+            || (!state.journal.recovering
+                && state
+                    .journal
+                    .planned_backup_effects
+                    .saturating_add(effects as u64)
+                    .saturating_mul(3)
+                    .saturating_add(32)
+                    > state.journal.capacity.recovery_records)
+            || state
+                .usage
+                .bytes
+                .checked_add(records.saturating_mul(state.journal.capacity.record_byte_ceiling))
+                .is_none_or(|n| n > self.limits.bytes)
+        {
+            return Err(error("HISTORY_JOURNAL_CAPACITY"));
+        }
+        let manifest = self.retain_manifest(source)?;
+        let generation = self.append(
+            expected_generation,
+            JournalEvent::PrivateBackupPlan {
+                manifest: manifest.clone(),
+                effects: effects as u32,
+                recovery_dependencies: recovery_dependencies as u32,
+            },
+        )?;
+        Ok((generation, manifest))
+    }
+    #[cfg(windows)]
+    pub(crate) fn context_root_backup(
+        &self,
+        original: &str,
+    ) -> Result<Option<(u64, RootBackupPlan)>, SafeError> {
+        self.check_writer_current()?;
+        Ok(self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?
+            .journal
+            .root_backup_plans
+            .get(original)
+            .cloned())
+    }
+    #[cfg(windows)]
+    pub(crate) fn context_pending(&self) -> Result<Option<(EffectSpec, u64)>, SafeError> {
+        self.check_writer_current()?;
+        let journal = &self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?
+            .journal;
+        Ok(journal.pending.as_ref().map(|id| {
+            let effect = &journal.effects[id];
+            (effect.spec.clone(), effect.intent_generation)
+        }))
+    }
+    #[cfg(windows)]
+    pub(crate) fn prepare_root_backup(
+        &mut self,
+        evidence: &super::windows::context::RootBackupEvidence<'_>,
+    ) -> Result<(u64, String), SafeError> {
+        let request = evidence.verify(self).map_err(storage_error)?;
+        self.check_writer_current()?;
+        let state = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?;
+        let effects = request.effects.max(1);
+        let needed = effects
+            .checked_mul(4)
+            .and_then(|n| n.checked_add(16))
+            .ok_or_else(|| error("HISTORY_JOURNAL_CAPACITY"))?;
+        let remaining = state
+            .journal
+            .recovery_dependency_reserve
+            .max(128)
+            .saturating_sub(
+                state
+                    .journal
+                    .recovery_reservations
+                    .get(&request.reservation_source)
+                    .copied()
+                    .unwrap_or(0),
+            );
+        let records = (effects as u64).saturating_mul(3).saturating_add(4);
+        let other_records = state
+            .journal
+            .recovery_reservations
+            .iter()
+            .filter(|(source, _)| *source != &request.reservation_source)
+            .map(|(_, dependencies)| {
+                ((dependencies.saturating_sub(8) / 4) as u64)
+                    .saturating_mul(3)
+                    .saturating_add(4)
+            })
+            .sum::<u64>()
+            .saturating_add(32);
+        if effects > 100_000
+            || self
+                .dependencies
+                .lock()
+                .len()
+                .checked_add(needed + remaining)
+                .is_none_or(|n| n > self.dependency_limit)
+            || state
+                .usage
+                .recovery_records
+                .saturating_add(records)
+                .saturating_add(other_records)
+                > state.journal.capacity.recovery_records
+            || state
+                .usage
+                .bytes
+                .checked_add(
+                    records
+                        .saturating_add(other_records)
+                        .saturating_mul(state.journal.capacity.record_byte_ceiling),
+                )
+                .is_none_or(|n| n > self.limits.bytes)
+        {
+            return Err(error("HISTORY_JOURNAL_CAPACITY"));
+        }
+        let anchor = AdmissionAnchor {
+            binding: state.journal.binding.clone(),
+            generation: state.journal.generation,
+            head: state.head.clone(),
+            journal_identity: state.identity.clone(),
+        };
+        let current_manifest = self.retain_manifest_in_lane(&request.current, true)?;
+        let destination = self.retain_manifest_in_lane(&request.destination, true)?;
+        let preserved_manifest = request
+            .preserved
+            .as_ref()
+            .map(|bytes| self.retain_manifest_in_lane(bytes, true))
+            .transpose()?;
+        let plan = RootBackupPlan {
+            original_effect_id: request.effect_id,
+            original_intent_generation: request.intent_generation,
+            current_manifest: current_manifest.clone(),
+            destination,
+            prior_plan_generation: request.prior_plan_generation,
+            preserved_manifest,
+            abandoned_effect: request.abandoned_effect,
+            reservation_source: request.reservation_source,
+            effects: effects as u32,
+            recovery_dependencies: remaining as u32,
+        };
+        let receipt = RootBackupReceipt {
+            schema: 1,
+            anchor,
+            plan: plan.clone(),
+        };
+        let receipt = self.retain_manifest_in_lane(
+            &serde_json::to_vec(&receipt).map_err(|_| error("HISTORY_RECEIPT_INVALID"))?,
+            true,
+        )?;
+        evidence.verify(self).map_err(storage_error)?;
+        let generation = self.append_admitted(
+            request.generation,
+            JournalEvent::PrepareRootBackup { plan, receipt },
+        )?;
+        Ok((generation, current_manifest))
+    }
+    #[cfg(windows)]
+    pub(crate) fn context_rotation(&self, effect_id: &str) -> Result<(EffectSpec, u64), SafeError> {
+        self.check_writer_current()?;
+        let effect = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?
+            .journal
+            .effects
+            .get(effect_id)
+            .ok_or_else(|| error("HISTORY_EFFECT_CHANGED"))?;
+        Ok((effect.spec.clone(), effect.intent_generation))
+    }
+    #[cfg(windows)]
+    pub(crate) fn context_inverse(
+        &self,
+        original: &str,
+    ) -> Result<(Option<String>, Option<(EffectSpec, u64)>), SafeError> {
+        self.check_writer_current()?;
+        let state = &self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?
+            .journal;
+        let inverse = state.effects.values().find(|effect| matches!(&effect.spec.kind,
+            EffectKind::ReverseSourceRoot { original_effect_id, .. } if original_effect_id == original))
+            .map(|effect| (effect.spec.clone(), effect.intent_generation));
+        Ok((
+            state.admitted_root_reversals.get(original).cloned(),
+            inverse,
+        ))
+    }
+    #[cfg(windows)]
+    pub(crate) fn admit_root_reverse(
+        &mut self,
+        evidence: &super::windows::context::RootRecoveryEvidence<'_>,
+    ) -> Result<u64, SafeError> {
+        let request = evidence.verify(self).map_err(storage_error)?;
+        self.check_writer_current()?;
+        let state = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?;
+        let anchor = AdmissionAnchor {
+            binding: state.journal.binding.clone(),
+            generation: state.journal.generation,
+            head: state.head.clone(),
+            journal_identity: state.identity.clone(),
+        };
+        let current_manifest = self.retain_manifest_in_lane(&request.current, true)?;
+        let receipt = RootReverseReceipt {
+            schema: 1,
+            anchor,
+            effect_id: request.effect_id.clone(),
+            intent_generation: request.intent_generation,
+            current_manifest: current_manifest.clone(),
+            returned: request.returned,
+        };
+        let digest = self.retain_manifest_in_lane(
+            &serde_json::to_vec(&receipt).map_err(|_| error("HISTORY_RECEIPT_INVALID"))?,
+            true,
+        )?;
+        evidence.verify(self).map_err(storage_error)?;
+        let event = if request.returned {
+            JournalEvent::ConfirmRootReturned {
+                effect_id: request.effect_id,
+                intent_generation: request.intent_generation,
+                current_manifest,
+                receipt: digest,
+            }
+        } else {
+            JournalEvent::AdmitRootReverse {
+                effect_id: request.effect_id,
+                intent_generation: request.intent_generation,
+                current_manifest,
+                receipt: digest,
+            }
+        };
+        self.append_admitted(request.generation, event)
+    }
+    /// Operation adapters bind to this live secured writer, not an inspection
+    /// snapshot or a caller-supplied root digest. Recheck at each effect boundary.
+    #[cfg(windows)]
+    pub(crate) fn verify_windows_binding(
+        &mut self,
+        root: &super::windows::files::PrivateDirectory,
+        binding: &JournalBinding,
+        generation: u64,
+    ) -> Result<(), SafeError> {
+        self.check_writer_current()?;
+        #[cfg(not(test))]
+        let JournalStorage::Windows(storage) = &self.storage;
+        #[cfg(test)]
+        let storage = match &self.storage {
+            JournalStorage::Windows(storage) => storage,
+            JournalStorage::Fixture { .. } => return Err(error("HISTORY_PLATFORM_UNSUPPORTED")),
+        };
+        let state = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?;
+        if !storage.matches_root(root) || &state.journal.binding != binding {
+            return Err(error("HISTORY_ROOT_CHANGED"));
+        }
+        if state.journal.generation != generation {
+            return Err(error("HISTORY_GENERATION_CHANGED"));
+        }
+        Ok(())
+    }
     /// Marker publication holds an exclusive borrow of this original writer;
     /// detached inspection data never supplies current/root publication authority.
     #[cfg(windows)]
@@ -1113,6 +1882,36 @@ impl JournalStore {
             .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?;
         marker.validate_checkpoint(&state.journal, &state.head)
     }
+    #[cfg(windows)]
+    pub(super) fn validate_marker_successor(
+        &mut self,
+        root: &super::windows::files::PrivateDirectory,
+        marker: &super::maintenance::ActiveContextMarker,
+    ) -> Result<(), SafeError> {
+        self.validate_marker_publication(root, marker)?;
+        let state = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?;
+        if state.journal.phase != JournalPhase::Reviewed || state.journal.requires_reconciliation()
+        {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
+        Ok(())
+    }
+    fn validate_storage_transaction(&self, binding: &JournalBinding) -> Result<(), SafeError> {
+        #[cfg(not(windows))]
+        let _ = binding;
+        match &self.storage {
+            #[cfg(windows)]
+            JournalStorage::Windows(storage)
+                if !storage.matches_transaction(&binding.transaction_id) =>
+            {
+                Err(error("HISTORY_TRANSACTION_CHANGED"))
+            }
+            _ => Ok(()),
+        }
+    }
     /// The held private root is storage authority only. Scope/exclusion,
     /// snapshot and installation admission remain separate coordinator proofs.
     #[cfg(windows)]
@@ -1121,6 +1920,42 @@ impl JournalStore {
     ) -> Result<Self, SafeError> {
         let storage =
             super::windows::durability::WindowsJournalStorage::open(root).map_err(storage_error)?;
+        Self::from_windows_storage(storage)
+    }
+    #[cfg(windows)]
+    pub(crate) fn create_windows_transaction(
+        root: std::sync::Arc<super::windows::files::PrivateDirectory>,
+        transaction_id: &str,
+    ) -> Result<Self, SafeError> {
+        Self::from_windows_storage(
+            super::windows::durability::WindowsJournalStorage::transaction(
+                root,
+                transaction_id,
+                true,
+            )
+            .map_err(storage_error)?,
+        )
+    }
+    /// Missing recovery logs remain missing. Unlike the legacy storage-only
+    /// primitive this path never creates a new empty journal while inspecting.
+    #[cfg(windows)]
+    pub(crate) fn open_windows_transaction(
+        root: std::sync::Arc<super::windows::files::PrivateDirectory>,
+        transaction_id: &str,
+    ) -> Result<Self, SafeError> {
+        Self::from_windows_storage(
+            super::windows::durability::WindowsJournalStorage::transaction(
+                root,
+                transaction_id,
+                false,
+            )
+            .map_err(storage_error)?,
+        )
+    }
+    #[cfg(windows)]
+    fn from_windows_storage(
+        storage: super::windows::durability::WindowsJournalStorage,
+    ) -> Result<Self, SafeError> {
         let log = storage.log_file().map_err(storage_error)?;
         regular_file(&log)?;
         Ok(Self {
@@ -1188,6 +2023,7 @@ impl JournalStore {
         capacity: CapacityPlan,
     ) -> Result<(), SafeError> {
         self.healthy()?;
+        self.validate_storage_transaction(&binding)?;
         if self.writer.is_some()
             || !self.namespace_valid()?
             || self.log.lock().metadata().map_err(storage_error)?.len() != 0
@@ -1224,6 +2060,7 @@ impl JournalStore {
     }
     pub(crate) fn bind_existing(&mut self, binding: &JournalBinding) -> Result<(), SafeError> {
         self.healthy()?;
+        self.validate_storage_transaction(binding)?;
         let read = self.inspect(binding)?;
         if read.blocked {
             return Err(error("HISTORY_RECOVERY_REQUIRED"));
@@ -1248,7 +2085,11 @@ impl JournalStore {
     ) -> Result<u64, SafeError> {
         if matches!(
             event,
-            JournalEvent::AbortPreContext { .. } | JournalEvent::CompensateUnknown { .. }
+            JournalEvent::AbortPreContext { .. }
+                | JournalEvent::CompensateUnknown { .. }
+                | JournalEvent::AdmitRootReverse { .. }
+                | JournalEvent::ConfirmRootReturned { .. }
+                | JournalEvent::PrepareRootBackup { .. }
         ) {
             return Err(error("HISTORY_LIVE_EVIDENCE_REQUIRED"));
         }
@@ -1276,7 +2117,7 @@ impl JournalStore {
         for digest in proof.unchanged.digests() {
             self.protect_manifest(digest)?;
         }
-        self.retain_manifest(&bytes)?;
+        self.retain_manifest_in_lane(&bytes, true)?;
         self.append_admitted(proof.anchor.generation, event)
     }
     pub(crate) fn compensate_unknown(
@@ -1306,7 +2147,7 @@ impl JournalStore {
         for digest in proof.current.digests() {
             self.protect_manifest(digest)?;
         }
-        self.retain_manifest(&bytes)?;
+        self.retain_manifest_in_lane(&bytes, true)?;
         self.append_admitted(proof.anchor.generation, event)
     }
     fn check_admission_anchor(&self, anchor: &AdmissionAnchor) -> Result<(), SafeError> {
@@ -1536,7 +2377,10 @@ impl JournalStore {
         identity: &str,
     ) -> Result<(), SafeError> {
         match event {
-            JournalEvent::Manifest { digest, .. } => {
+            JournalEvent::PrivateBackupPlan {
+                manifest: digest, ..
+            }
+            | JournalEvent::Manifest { digest, .. } => {
                 self.protect_manifest(digest)?;
             }
             JournalEvent::Intent { effect } => {
@@ -1565,6 +2409,55 @@ impl JournalStore {
                         return Err(error("HISTORY_EFFECT_CHANGED"));
                     }
                 }
+            }
+            JournalEvent::PrepareRootBackup { plan, receipt } => {
+                let bytes = self.protect_manifest(receipt)?;
+                if bytes.len() > 16384 {
+                    return Err(error("HISTORY_RECEIPT_INVALID"));
+                }
+                let saved: RootBackupReceipt =
+                    serde_json::from_slice(&bytes).map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
+                if saved.schema != 1
+                    || !saved.anchor.matches(journal, head, identity)
+                    || &saved.plan != plan
+                {
+                    return Err(error("HISTORY_RECEIPT_INVALID"));
+                }
+                self.protect_manifest(&plan.current_manifest)?;
+                self.protect_manifest(&plan.destination)?;
+                self.protect_manifest(&plan.reservation_source)?;
+                if let Some(digest) = &plan.preserved_manifest {
+                    self.protect_manifest(digest)?;
+                }
+            }
+            JournalEvent::ConfirmRootReturned {
+                effect_id,
+                intent_generation,
+                current_manifest,
+                receipt,
+            }
+            | JournalEvent::AdmitRootReverse {
+                effect_id,
+                intent_generation,
+                current_manifest,
+                receipt,
+            } => {
+                let bytes = self.protect_manifest(receipt)?;
+                if bytes.len() > 16384 {
+                    return Err(error("HISTORY_RECEIPT_INVALID"));
+                }
+                let receipt: RootReverseReceipt =
+                    serde_json::from_slice(&bytes).map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
+                if receipt.schema != 1
+                    || receipt.returned != matches!(event, JournalEvent::ConfirmRootReturned { .. })
+                    || !receipt.anchor.matches(journal, head, identity)
+                    || &receipt.effect_id != effect_id
+                    || receipt.intent_generation != *intent_generation
+                    || &receipt.current_manifest != current_manifest
+                {
+                    return Err(error("HISTORY_RECEIPT_INVALID"));
+                }
+                self.protect_manifest(current_manifest)?;
             }
             JournalEvent::AbortPreContext { receipt } => {
                 let bytes = self.protect_manifest(receipt)?;
@@ -1667,6 +2560,11 @@ impl JournalStore {
         result
     }
     pub(crate) fn retain_manifest(&self, bytes: &[u8]) -> Result<String, SafeError> {
+        self.retain_manifest_in_lane(bytes, false)
+    }
+    fn retain_manifest_in_lane(&self, bytes: &[u8], recovery: bool) -> Result<String, SafeError> {
+        #[cfg(not(windows))]
+        let _ = recovery;
         self.healthy()?;
         if bytes.is_empty() || bytes.len() > MAX_MANIFEST_BYTES {
             return Err(error("HISTORY_MANIFEST_INVALID"));
@@ -1696,7 +2594,12 @@ impl JournalStore {
                     }
                     return Err(error("HISTORY_MANIFEST_CHANGED"));
                 }
-                if dependencies.len() >= self.dependency_limit {
+                let reserve = self
+                    .writer
+                    .as_ref()
+                    .filter(|state| !recovery && !state.journal.recovering)
+                    .map_or(0, |state| state.journal.recovery_dependency_reserve);
+                if dependencies.len() >= self.dependency_limit.saturating_sub(reserve) {
                     return Err(error("HISTORY_DEPENDENCY_LIMIT"));
                 }
                 let artifact = match storage.open_artifact(&digest) {
@@ -1881,6 +2784,7 @@ impl JournalStore {
     /// No successful prefix is reused as authority when any suffix is uncertain.
     pub(crate) fn inspect(&self, binding: &JournalBinding) -> Result<JournalInspection, SafeError> {
         binding.validate()?;
+        self.validate_storage_transaction(binding)?;
         let mut file = self.log.lock();
         let identity = regular_file(&file)?;
         file.seek(SeekFrom::Start(0)).map_err(storage_error)?;

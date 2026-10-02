@@ -1423,6 +1423,7 @@ fn HistoryTransaction_CompensatedReturn_056() {
         RegistrationSlot::DeskDirectoryBackground,
         RegistrationSlot::LegacyDirectory,
         RegistrationSlot::LegacyDirectoryBackground,
+        RegistrationSlot::OwnedRun,
     ] {
         record_effect(
             &mut disk,
@@ -1744,6 +1745,7 @@ fn HistoryTransaction_CompleteReturn_030() {
         RegistrationSlot::DeskDirectory,
         RegistrationSlot::DeskDirectoryBackground,
         RegistrationSlot::LegacyDirectory,
+        RegistrationSlot::OwnedRun,
     ] {
         record_effect(
             &mut disk,
