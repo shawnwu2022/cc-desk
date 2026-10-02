@@ -6,7 +6,10 @@ use super::{
     blocked,
     durability::DurableRecord,
     files::{ComponentName, Directory, FileIdentity, PrivateDirectory},
-    process::{ExactProcess, ProcessIdentity, TerminalReceipt, TerminatedProcess},
+    process::{
+        creation_time, session_id, ExactProcess, ProcessIdentity, TerminalReceipt,
+        TerminatedProcess,
+    },
     registry,
     security::CurrentUser,
     win_error,
@@ -14,10 +17,11 @@ use super::{
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     io,
     marker::PhantomData,
+    os::windows::io::OwnedHandle,
     path::Path,
     rc::Rc,
     sync::Arc,
@@ -30,7 +34,16 @@ use webview2_com::{
         ICoreWebView2Environment7,
     },
 };
-use windows::Win32::System::{Com::CoTaskMemFree, Threading::GetCurrentProcessId};
+use windows::Win32::{
+    Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+    System::{
+        Com::CoTaskMemFree,
+        Threading::{
+            GetCurrentProcessId, GetProcessId, OpenProcess, WaitForSingleObject,
+            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        },
+    },
+};
 use windows_core::{Interface, PWSTR};
 
 /// No COM object or callback is sent to a background thread. Source integration
@@ -40,16 +53,82 @@ pub(crate) struct SourceWebViews {
     host: ExactProcess,
     udf: Arc<Directory>,
     environments: Vec<EnvironmentExit>,
-    controllers: Vec<ICoreWebView2Controller>,
+    controllers: Vec<ControllerBinding>,
     closed: bool,
     persisted: bool,
     _ui_only: PhantomData<Rc<()>>,
 }
+struct ControllerBinding {
+    controller: ICoreWebView2Controller,
+    browser_index: usize,
+}
 struct EnvironmentExit {
     environment: ICoreWebView2Environment5,
-    browser: ExactProcess,
+    browser: BrowserProcess,
     event: Rc<RefCell<EventState>>,
     token: i64,
+}
+
+/// A retained controller-observed browser process proves only exact lifetime.
+/// It grants no image admission, launch, mutation, termination or PID reopen.
+struct BrowserProcess {
+    process: OwnedHandle,
+    identity: BrowserIdentity,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserIdentity {
+    pid: u32,
+    created: u64,
+    session: u32,
+}
+impl BrowserProcess {
+    fn capture(pid: u32) -> io::Result<Self> {
+        if pid == 0 {
+            return Err(blocked("missing controller browser process"));
+        }
+        let process = unsafe {
+            super::own(
+                OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                    false,
+                    pid,
+                )
+                .map_err(win_error)?,
+            )
+        };
+        let observed = unsafe { GetProcessId(super::handle(&process)) };
+        let session = session_id(pid)?;
+        if observed != pid || session != session_id(unsafe { GetCurrentProcessId() })? {
+            return Err(blocked("controller browser identity or session differs"));
+        }
+        let identity = BrowserIdentity {
+            pid,
+            created: creation_time(super::handle(&process))?,
+            session,
+        };
+        identity.validate()?;
+        let result = Self { process, identity };
+        if result.terminal()? {
+            return Err(blocked("controller browser already exited"));
+        }
+        Ok(result)
+    }
+    fn terminal(&self) -> io::Result<bool> {
+        match unsafe { WaitForSingleObject(super::handle(&self.process), 0) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(blocked("controller browser wait is unresolved")),
+        }
+    }
+}
+impl BrowserIdentity {
+    fn validate(&self) -> io::Result<()> {
+        if self.pid == 0 || self.created == 0 {
+            return Err(blocked("invalid browser lifetime identity"));
+        }
+        Ok(())
+    }
 }
 #[derive(Default)]
 struct EventState {
@@ -133,13 +212,17 @@ impl SourceWebViews {
         if views.is_empty() || views.len() > 32 {
             return Err(blocked("unsupported source controller set"));
         }
-        expected.recheck()?;
-        let host = ExactProcess::capture_observed(unsafe { GetCurrentProcessId() })?;
+        expected
+            .recheck()
+            .map_err(|error| capture_diagnostic("expectedUdf", error))?;
+        let host = ExactProcess::capture_observed(unsafe { GetCurrentProcessId() })
+            .map_err(|error| capture_diagnostic("host", error))?;
         let mut environments = vec![];
         let mut controllers = vec![];
-        let mut browsers = BTreeSet::new();
+        let mut browsers = BTreeMap::new();
         for (environment, controller) in views {
-            let actual = actual_udf(&environment)?;
+            let actual =
+                actual_udf(&environment).map_err(|error| capture_diagnostic("actualUdf", error))?;
             if actual.identity() != expected.identity() {
                 return Err(blocked("source controller uses another UDF"));
             }
@@ -148,8 +231,19 @@ impl SourceWebViews {
             unsafe {
                 webview.BrowserProcessId(&mut pid).map_err(win_error)?;
             }
-            if browsers.insert(pid) {
-                let browser = ExactProcess::capture_observed(pid)?;
+            let browser_index = if let Some(index) = browsers.get(&pid) {
+                *index
+            } else {
+                #[cfg(test)]
+                match ExactProcess::capture_observed(pid) {
+                    Ok(previous) => {
+                        drop(previous);
+                        eprintln!("source WebView strict capture: stage=browser, reason=accepted");
+                    }
+                    Err(error) => eprintln!("{}", capture_diagnostic("browser", error)),
+                }
+                let browser = BrowserProcess::capture(pid)
+                    .map_err(|error| capture_diagnostic("browser", error))?;
                 let environment: ICoreWebView2Environment5 =
                     environment.cast().map_err(win_error)?;
                 let event = Rc::new(RefCell::new(EventState::default()));
@@ -185,12 +279,18 @@ impl SourceWebViews {
                 unsafe {
                     webview.BrowserProcessId(&mut after).map_err(win_error)?;
                 }
-                if after != pid || retained.browser.terminal(0)?.is_some() {
+                if after != pid || retained.browser.terminal()? {
                     return Err(blocked("source browser changed during capture"));
                 }
+                let index = environments.len();
                 environments.push(retained);
-            }
-            controllers.push(controller);
+                browsers.insert(pid, index);
+                index
+            };
+            controllers.push(ControllerBinding {
+                controller,
+                browser_index,
+            });
         }
         Ok(Self {
             thread: thread::current().id(),
@@ -214,14 +314,41 @@ impl SourceWebViews {
         if self.closed {
             return Err(blocked("source controllers were already closed"));
         }
-        self.closed = true; // Partial failure is not replayed.
+        self.closed = true; // Stale generation and partial failure are not replayed.
         for controller in &self.controllers {
+            self.verify_controller(controller)?;
+        }
+        for controller in &self.controllers {
+            self.verify_controller(controller)?;
             unsafe {
-                controller.Close().map_err(win_error)?;
+                controller.controller.Close().map_err(win_error)?;
             }
         }
         self.controllers.clear();
         Ok(())
+    }
+    fn verify_controller(&self, controller: &ControllerBinding) -> io::Result<()> {
+        let environment = self
+            .environments
+            .get(controller.browser_index)
+            .ok_or_else(|| blocked("source controller lacks its browser binding"))?;
+        let mut current = 0;
+        unsafe {
+            controller
+                .controller
+                .CoreWebView2()
+                .map_err(win_error)?
+                .BrowserProcessId(&mut current)
+                .map_err(win_error)?;
+        }
+        let event = environment.event.borrow();
+        check_browser_generation(
+            environment.browser.identity.pid,
+            current,
+            environment.browser.terminal()?,
+            event.matched,
+            event.invalid,
+        )
     }
     pub(crate) fn persist_when_exited(
         &mut self,
@@ -238,14 +365,14 @@ impl SourceWebViews {
             if event.invalid {
                 return Err(blocked("source WebView exit event is ambiguous"));
             }
-            if !event.matched || environment.browser.terminal(0)?.is_none() {
+            if !event.matched || !environment.browser.terminal()? {
                 return Ok(None);
             }
-            browsers.push(environment.browser.identity().clone());
+            browsers.push(environment.browser.identity.clone());
         }
         self.udf.recheck()?;
         let binding = WebViewExitBinding {
-            schema: 1,
+            schema: 2,
             host: self.host.identity().clone(),
             udf: self.udf.identity().clone(),
             browsers,
@@ -260,13 +387,38 @@ impl SourceWebViews {
         Ok(Some(WebViewExitReceipt { record, binding }))
     }
 }
+/// Inputs are sampled from the retained controller, kernel handle and matching
+/// callback immediately before close, never accepted from a frontend caller.
+pub(crate) fn check_browser_generation(
+    expected: u32,
+    current: u32,
+    terminal: bool,
+    matched: bool,
+    invalid: bool,
+) -> io::Result<()> {
+    if expected == 0 || current != expected || terminal || matched || invalid {
+        return Err(blocked("source controller browser generation changed"));
+    }
+    Ok(())
+}
+fn capture_diagnostic(stage: &'static str, error: io::Error) -> io::Error {
+    // Only fixed call-site stages and predicate categories cross this boundary;
+    // never include queried image paths, SIDs or other ambient error text.
+    io::Error::new(
+        error.kind(),
+        format!(
+            "source WebView capture failed: stage={stage}, reason={}",
+            super::files::metadata_rejection(&error)
+        ),
+    )
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WebViewExitBinding {
     schema: u32,
     host: ProcessIdentity,
     udf: FileIdentity,
-    browsers: Vec<ProcessIdentity>,
+    browsers: Vec<BrowserIdentity>,
 }
 pub(crate) struct WebViewExitReceipt {
     record: DurableRecord,
@@ -303,12 +455,16 @@ impl WebViewExitReceipt {
         record.verify()?;
         let binding: WebViewExitBinding =
             serde_json::from_slice(record.bytes()).map_err(io::Error::other)?;
-        if binding.schema != 1 || binding.browsers.is_empty() || binding.browsers.len() > 32 {
+        if binding.schema != 2 || binding.browsers.is_empty() || binding.browsers.len() > 32 {
             return Err(blocked("invalid persisted WebView exit receipt"));
         }
         binding.host.validate()?;
+        let mut observed = BTreeSet::new();
         for browser in &binding.browsers {
             browser.validate()?;
+            if browser.session != binding.host.session() || !observed.insert(browser.pid) {
+                return Err(blocked("browser receipt session or uniqueness differs"));
+            }
         }
         Ok(Self { record, binding })
     }

@@ -192,7 +192,7 @@ fn HistoryWindows_NoReplace_009() {
     fence.verify().unwrap();
 }
 
-// 检查真实 NTFS 在保留子文件保护句柄时成功改名父目录，失败不得释放后重开。
+// 检查真实 NTFS 明确拒绝保留 no-delete 子文件句柄的父目录改名，并保持原对象与字节。
 #[test]
 fn HistoryWindows_TreeRename_010() {
     let temporary = tempfile::tempdir().unwrap();
@@ -204,15 +204,26 @@ fn HistoryWindows_TreeRename_010() {
     let child =
         DurableRecord::create(private.clone(), name("child.json"), b"complete", &user).unwrap();
     let original = private.directory().identity().clone();
-    let receipt = private.directory().rename_to(parent, name("rotated"))
-        .expect("positive NTFS parent rename with retained no-delete child guard is required; do not release/reopen on failure");
-    assert_eq!(receipt.identity(), &original);
-    assert!(!temporary.path().join("private").exists());
+    let location = private.directory().observe_location().unwrap();
+    let result = private.directory().rename_to(parent, name("rotated"));
+    let error = match result {
+        Ok(_) => panic!("retained-child NTFS contract unexpectedly changed"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.to_string(),
+        "relative NTFS rename failed: 0xc0000022, completion 0xc0000022"
+    );
+    assert_eq!(private.directory().identity(), &original);
+    assert_eq!(private.directory().observe_location().unwrap(), location);
+    assert!(temporary.path().join("private").is_dir());
+    assert!(!temporary.path().join("rotated").exists());
     assert!(std::fs::OpenOptions::new()
         .write(true)
-        .open(temporary.path().join("rotated/child.json"))
+        .open(temporary.path().join("private/child.json"))
         .is_err());
-    child.verify_after_parent_rename().unwrap();
+    child.verify().unwrap();
+    assert_eq!(child.bytes(), b"complete");
 }
 
 // 检查 NSIS 的 /D 是不带引号的末尾参数，且拒绝换行与引号路径。
@@ -532,33 +543,119 @@ fn HistoryWindows_ChangedImage_020() {
     .is_err());
 }
 
-// 检查硬链接别名阻止 fence，且已持有的排他 fence 不能产生新的硬链接别名。
+// 检查新硬链接不能绕过同一对象的执行/读写/删除排他保护，链接数漂移使验证和改名失效。
 #[test]
 fn HistoryWindows_FenceAliases_021() {
     let temporary = tempfile::tempdir().unwrap();
     let source = temporary.path().join("image.exe");
     let alias = temporary.path().join("alias.exe");
-    std::fs::write(&source, b"image").unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), &source).unwrap();
+    let marker = temporary.path().join("alias-probe");
+    let launch = |path: &std::path::Path| {
+        std::process::Command::new(path)
+            .args([
+                "--exact",
+                "tests::version_history_windows::HistoryWindows_ProcessWorker_013",
+                "--ignored",
+            ])
+            .env("CC_DESK_HISTORY_PROBE_MARKER", &marker)
+            .env_remove("CC_DESK_HISTORY_PROBE_WAIT")
+            .env_remove("CC_DESK_HISTORY_PROBE_RELEASE")
+            .spawn()
+    };
+    assert!(launch(&source).unwrap().wait().unwrap().success());
+    std::fs::remove_file(&marker).unwrap();
     let parent = Directory::open_absolute(temporary.path()).unwrap();
     let original = parent
         .open_file(name("image.exe"), FileAccess::Read)
         .unwrap();
     let identity = original.identity().clone();
+    let digest = original.digest().unwrap();
+    let observed_identity = probe_file_identity(&source);
     drop(original);
     drop(parent);
-    let digest = crate::version_history::verified_package::sha256(b"image");
     std::fs::hard_link(&source, &alias).unwrap();
     let parent = Directory::open_absolute(temporary.path()).unwrap();
     assert!(ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest).is_err());
     drop(parent);
     std::fs::remove_file(&alias).unwrap();
     let parent = Directory::open_absolute(temporary.path()).unwrap();
-    let fence = ImageFence::acquire(parent, name("image.exe"), &identity, &digest).unwrap();
-    assert!(
-        std::fs::hard_link(&source, &alias).is_err(),
-        "a concurrent alias must not bypass the exclusive image fence"
+    let mut fence =
+        ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest).unwrap();
+    std::fs::hard_link(&source, &alias)
+        .expect("real NTFS fixture must exercise an alias created during the fence");
+    assert_eq!(probe_file_identity(&source), observed_identity);
+    assert_eq!(
+        probe_file_identity(&alias),
+        observed_identity,
+        "alias must identify the same held object"
     );
-    fence.verify().unwrap();
+    for path in [&source, &alias] {
+        let launched = launch(path);
+        if let Ok(mut escaped) = launched {
+            let _ = escaped.kill();
+            let _ = escaped.wait();
+            panic!("same-object alias bypassed the image execution fence");
+        }
+        assert!(std::fs::File::open(path).is_err());
+        assert!(std::fs::OpenOptions::new().write(true).open(path).is_err());
+        assert!(std::fs::remove_file(path).is_err());
+    }
+    assert!(!marker.exists());
+    assert!(
+        fence.verify().is_err(),
+        "link-count drift must invalidate verification"
+    );
+    assert!(
+        fence.rename_to(parent, name("quarantined.exe")).is_err(),
+        "link-count drift must block rename"
+    );
+    assert!(source.exists() && alias.exists());
+    assert!(!temporary.path().join("quarantined.exe").exists());
+    assert_eq!(probe_file_identity(&source), observed_identity);
+    assert_eq!(fence.identity(), &identity);
+}
+
+fn probe_file_identity(path: &std::path::Path) -> (u64, [u8; 16]) {
+    use std::os::windows::{
+        ffi::OsStrExt,
+        io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    };
+    use windows::Win32::{
+        Foundation::HANDLE,
+        Storage::FileSystem::{
+            CreateFileW, FileIdInfo, GetFileInformationByHandleEx, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, OPEN_EXISTING,
+        },
+    };
+    use windows_core::PCWSTR;
+    let path: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    unsafe {
+        let raw = CreateFileW(
+            PCWSTR(path.as_ptr()),
+            FILE_READ_ATTRIBUTES.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+        .unwrap();
+        let owned = OwnedHandle::from_raw_handle(raw.0);
+        let mut information = FILE_ID_INFO::default();
+        GetFileInformationByHandleEx(
+            HANDLE(owned.as_raw_handle()),
+            FileIdInfo,
+            (&mut information as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+        .unwrap();
+        (
+            information.VolumeSerialNumber,
+            information.FileId.Identifier,
+        )
+    }
 }
 
 // 检查同步起跑的 CreateProcess 与 fence 获取不能同时留下可执行的源进程。
@@ -1363,5 +1460,324 @@ fn HistoryWindows_RenameReparse_032() {
             std::fs::read(foreign.join("untouched")).unwrap(),
             b"foreign fixture"
         );
+    }
+}
+
+// 检查同一构造方式的空目录能成功改名，单独隔离非空目录内保留子文件句柄的限制。
+#[test]
+fn HistoryWindows_EmptyTreeRename_033() {
+    let temporary = tempfile::tempdir().unwrap();
+    let user = CurrentUser::capture().unwrap();
+    let parent = Directory::open_absolute(temporary.path()).unwrap();
+    let private =
+        PrivateDirectory::create_renameable_new(parent.clone(), name("private"), &user).unwrap();
+    let original = private.directory().identity().clone();
+    let receipt = private
+        .directory()
+        .rename_to(parent, name("rotated"))
+        .expect("empty directory positive control must succeed with the same constructor");
+    assert_eq!(receipt.identity(), &original);
+    assert!(!temporary.path().join("private").exists());
+    assert!(temporary.path().join("rotated").is_dir());
+    private.verify(&user).unwrap();
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+struct ProbeTreeEntry {
+    directory: bool,
+    identity: crate::version_history::windows::files::FileIdentity,
+    digest: Option<String>,
+    size: u64,
+    attributes: u32,
+}
+struct ProbeTree {
+    entries: std::collections::BTreeMap<std::path::PathBuf, ProbeTreeEntry>,
+    directories: Vec<Arc<Directory>>,
+    files: Vec<crate::version_history::windows::files::PinnedFile>,
+}
+impl ProbeTree {
+    fn verify(&self) {
+        for directory in &self.directories {
+            directory.recheck().unwrap();
+        }
+        for file in &self.files {
+            file.verify().unwrap();
+        }
+    }
+}
+fn admit_probe_tree(root: Arc<Directory>) -> ProbeTree {
+    use std::os::windows::fs::MetadataExt;
+    fn walk(directory: Arc<Directory>, relative: &std::path::Path, tree: &mut ProbeTree) {
+        let path = std::path::PathBuf::from(directory.path().unwrap());
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        tree.entries.insert(
+            relative.to_owned(),
+            ProbeTreeEntry {
+                directory: true,
+                identity: directory.identity().clone(),
+                digest: None,
+                size: 0,
+                attributes: metadata.file_attributes(),
+            },
+        );
+        for child in directory.read_children(32).unwrap() {
+            let next = relative.join(child.os_string());
+            let actual = path.join(child.os_string());
+            let metadata = std::fs::symlink_metadata(&actual).unwrap();
+            if metadata.is_dir() {
+                let held = directory.open_directory(child).unwrap();
+                walk(held, &next, tree);
+            } else {
+                assert!(metadata.is_file());
+                let held = directory.open_file(child, FileAccess::Read).unwrap();
+                tree.entries.insert(
+                    next,
+                    ProbeTreeEntry {
+                        directory: false,
+                        identity: held.identity().clone(),
+                        digest: Some(held.digest().unwrap()),
+                        size: metadata.len(),
+                        attributes: metadata.file_attributes(),
+                    },
+                );
+                tree.files.push(held);
+            }
+        }
+        directory.recheck().unwrap();
+        tree.directories.push(directory);
+    }
+    let mut tree = ProbeTree {
+        entries: Default::default(),
+        directories: vec![],
+        files: vec![],
+    };
+    walk(root, std::path::Path::new(""), &mut tree);
+    tree.verify();
+    tree
+}
+fn copy_probe_tree(source: &std::path::Path, destination: &std::path::Path, tree: &ProbeTree) {
+    tree.verify();
+    for (relative, entry) in &tree.entries {
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        let output = destination.join(relative);
+        if entry.directory {
+            std::fs::create_dir(&output).unwrap();
+        } else {
+            let bytes = std::fs::read(source.join(relative)).unwrap();
+            assert_eq!(
+                Some(crate::version_history::verified_package::sha256(&bytes)),
+                entry.digest
+            );
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(output)
+                .unwrap();
+            file.write_all(&bytes).unwrap();
+            file.sync_all().unwrap(); // Regular file FlushFileBuffers, never directory fsync.
+        }
+    }
+    tree.verify();
+}
+fn assert_probe_copy(original: &ProbeTree, copied: &ProbeTree) {
+    assert_eq!(
+        original.entries.keys().collect::<Vec<_>>(),
+        copied.entries.keys().collect::<Vec<_>>()
+    );
+    for (path, entry) in &original.entries {
+        let copy = &copied.entries[path];
+        assert_ne!(
+            entry.identity, copy.identity,
+            "copy must be independent for {path:?}"
+        );
+        assert_eq!(
+            (entry.directory, &entry.digest, entry.size, entry.attributes),
+            (copy.directory, &copy.digest, copy.size, copy.attributes)
+        );
+    }
+    original.verify();
+    copied.verify();
+}
+
+// 检查先验证独立副本，再显式丢弃子级证明并重新接纳；间隙写入/新增和 fresh 路径冲突均保留两份数据并阻止推进。
+#[test]
+fn HistoryWindows_TreeHandoff_034() {
+    // OS-only fixture: full production snapshot/permissions comparison and
+    // SourceContext/SourceSealed journal binding remain Task4b responsibilities.
+    for mutation in ["unchanged", "write", "added", "collision"] {
+        let (temporary, user, control_root) = private_fixture();
+        let parent = Directory::open_absolute(temporary.path()).unwrap();
+        let source =
+            PrivateDirectory::create_renameable_new(parent.clone(), name("source"), &user).unwrap();
+        let source_path = temporary.path().join("source");
+        std::fs::create_dir(source_path.join("nested")).unwrap();
+        std::fs::create_dir(source_path.join("empty")).unwrap();
+        std::fs::write(source_path.join("known.json"), b"{\"saved\":true}").unwrap();
+        std::fs::write(
+            source_path.join("nested").join("未知.data"),
+            b"unknown content preserved",
+        )
+        .unwrap();
+        let copy = PrivateDirectory::create_new(parent.clone(), name("copy"), &user).unwrap();
+        source
+            .directory()
+            .require_disjoint(&[control_root.directory().clone(), copy.directory().clone()])
+            .unwrap();
+        let leases = LeaseFiles::open(control_root.clone(), &user).unwrap();
+        let control = leases.acquire_control().unwrap();
+        let lease = leases.acquire_exclusive(&control).unwrap();
+        drop(control);
+        let image_path = temporary.path().join("manager.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &image_path).unwrap();
+        let image = parent
+            .open_file(name("manager.exe"), FileAccess::Read)
+            .unwrap();
+        let image_identity = image.identity().clone();
+        let image_digest = image.digest().unwrap();
+        drop(image);
+        let fence = ImageFence::acquire(
+            parent.clone(),
+            name("manager.exe"),
+            &image_identity,
+            &image_digest,
+        )
+        .unwrap();
+        let original = admit_probe_tree(source.directory().clone());
+        assert_eq!(original.entries.len(), 5);
+        let m0 = original.entries.clone();
+        let copy_path = temporary.path().join("copy");
+        copy_probe_tree(&source_path, &copy_path, &original);
+        let copied = admit_probe_tree(copy.directory().clone());
+        assert_probe_copy(&original, &copied);
+        let c0 = copied.entries.clone();
+        let source_manifest = DurableRecord::create(
+            control_root.clone(),
+            name("source-observed.json"),
+            &serde_json::to_vec(&m0).unwrap(),
+            &user,
+        )
+        .unwrap();
+        let copy_manifest = DurableRecord::create(
+            control_root.clone(),
+            name("copy-observed.json"),
+            &serde_json::to_vec(&c0).unwrap(),
+            &user,
+        )
+        .unwrap();
+        let mapping: Vec<_> = m0
+            .iter()
+            .map(|(path, entry)| (path, &entry.identity, &c0[path].identity))
+            .collect();
+        let ready = DurableRecord::create(control_root.clone(), name("copy-ready.json"), &serde_json::to_vec(&serde_json::json!({
+            "sourceManifest": source_manifest.digest(), "copyManifest": copy_manifest.digest(), "mapping": mapping,
+        })).unwrap(), &user).unwrap();
+        let rotation = DurableRecord::create(control_root.clone(), name("rotation-intent.json"), &serde_json::to_vec(&serde_json::json!({
+            "copyReady": ready.digest(), "rootIdentity": source.directory().identity(), "from": "source", "to": "rotated",
+        })).unwrap(), &user).unwrap();
+        // Consume ONLY descendant guards. This deliberately invalidates the old
+        // child proof; root DELETE handle, ancestors, fence and lease stay held.
+        drop(original);
+        match mutation {
+            "write" => std::fs::write(source_path.join("known.json"), b"changed during guard loss")
+                .unwrap(),
+            "added" => {
+                std::fs::write(source_path.join("extra-entry"), b"new during guard loss").unwrap()
+            }
+            _ => (),
+        }
+        let control = leases.acquire_control().unwrap();
+        assert!(leases.acquire_shared(&control).is_err());
+        drop(control);
+        fence.verify().unwrap();
+        let moved = source
+            .directory()
+            .rename_to(parent.clone(), name("rotated"))
+            .unwrap();
+        assert_eq!(moved.identity(), source.directory().identity());
+        assert!(!source_path.exists());
+        let rotated = temporary.path().join("rotated");
+        assert!(rotated.is_dir());
+        rotation.verify().unwrap();
+        let admitted = admit_probe_tree(source.directory().clone());
+        let observed_after = admitted.entries.clone();
+        let unchanged = m0 == observed_after;
+        if mutation == "collision" {
+            std::fs::create_dir(&source_path).unwrap();
+            std::fs::write(source_path.join("keep"), b"pre-existing fresh-path owner").unwrap();
+        }
+        let occupied = parent.read_children(32).unwrap().contains(&name("source"));
+        if unchanged && !occupied {
+            assert_eq!(mutation, "unchanged");
+            let admission = DurableRecord::create(control_root.clone(), name("fresh-admission.json"), &serde_json::to_vec(&serde_json::json!({
+                "rotationIntent": rotation.digest(), "sourceManifest": source_manifest.digest(), "observed": observed_after, "rootLocation": "rotated",
+            })).unwrap(), &user).unwrap();
+            let fresh =
+                PrivateDirectory::create_new(parent.clone(), name("source"), &user).unwrap();
+            assert_ne!(fresh.directory().identity(), source.directory().identity());
+            assert!(fresh.directory().read_children(8).unwrap().is_empty());
+            admission.verify().unwrap();
+        } else {
+            assert_ne!(mutation, "unchanged");
+            assert!(!temporary
+                .path()
+                .join("private")
+                .join("fresh-admission.json")
+                .exists());
+            if mutation == "collision" {
+                assert!(
+                    PrivateDirectory::create_new(parent.clone(), name("source"), &user).is_err()
+                );
+                assert_eq!(
+                    std::fs::read(source_path.join("keep")).unwrap(),
+                    b"pre-existing fresh-path owner"
+                );
+                assert!(unchanged);
+            } else {
+                assert!(!source_path.exists());
+                assert!(!unchanged);
+                if mutation == "write" {
+                    assert_eq!(
+                        std::fs::read(rotated.join("known.json")).unwrap(),
+                        b"changed during guard loss"
+                    );
+                } else {
+                    assert_eq!(
+                        std::fs::read(rotated.join("extra-entry")).unwrap(),
+                        b"new during guard loss"
+                    );
+                }
+            }
+        }
+        admitted.verify();
+        copied.verify();
+        assert_eq!(admit_probe_tree(copy.directory().clone()).entries, c0);
+        source_manifest.verify().unwrap();
+        copy_manifest.verify().unwrap();
+        ready.verify().unwrap();
+        fence.verify().unwrap();
+        let launch = std::process::Command::new(&image_path)
+            .args([
+                "--exact",
+                "tests::version_history_windows::HistoryWindows_ProcessWorker_013",
+                "--ignored",
+            ])
+            .env(
+                "CC_DESK_HISTORY_PROBE_MARKER",
+                temporary.path().join("escaped-manager"),
+            )
+            .env_remove("CC_DESK_HISTORY_PROBE_WAIT")
+            .env_remove("CC_DESK_HISTORY_PROBE_RELEASE")
+            .spawn();
+        if let Ok(mut escaped) = launch {
+            let _ = escaped.kill();
+            let _ = escaped.wait();
+            panic!("retained executable fence permitted a launch during handoff");
+        }
+        let control = leases.acquire_control().unwrap();
+        assert!(leases.acquire_shared(&control).is_err());
+        drop(control);
+        drop(lease);
     }
 }

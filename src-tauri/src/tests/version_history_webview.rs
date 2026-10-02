@@ -27,6 +27,22 @@ use tauri::{RunEvent, WebviewUrl, WebviewWindowBuilder};
 thread_local! { static EXIT_PROBE: RefCell<Option<SourceWebViews>> = const { RefCell::new(None) }; }
 const WORKER: &str = "tests::version_history_webview::HistoryWebView_Worker_099";
 
+// 检查不同浏览器 PID、已退出的旧浏览器和过期退出事件都不能授权关闭控制器。
+#[test]
+fn HistoryWebView_Generation_002() {
+    use crate::version_history::windows::webview::check_browser_generation;
+    check_browser_generation(100, 100, false, false, false).unwrap();
+    for (expected, current, terminal, matched, invalid) in [
+        (100, 101, false, false, false),
+        (100, 100, true, false, false),
+        (100, 100, false, true, false),
+        (100, 100, false, false, true),
+        (0, 0, false, false, false),
+    ] {
+        assert!(check_browser_generation(expected, current, terminal, matched, invalid).is_err());
+    }
+}
+
 // 检查真实 WebView 使用指定 UDF，关闭控制器后仅在 BrowserProcessExited 到达时允许宿主退出。
 #[test]
 fn HistoryWebView_Exit_001() {
@@ -70,9 +86,13 @@ fn HistoryWebView_Exit_001() {
     );
     let bytes = std::fs::read(temporary.path().join("receipts").join(&receipts[0])).unwrap();
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(value["schema"], 1);
+    assert_eq!(value["schema"], 2);
     assert_eq!(value["browsers"].as_array().unwrap().len(), 1);
     assert_ne!(value["host"]["pid"], value["browsers"][0]["pid"]);
+    assert_eq!(value["host"]["session"], value["browsers"][0]["session"]);
+    assert!(value["browsers"][0]["created"].as_u64().unwrap() > 0);
+    assert!(value["host"]["image"].is_object());
+    assert!(value["browsers"][0].get("image").is_none());
     let user = CurrentUser::capture().unwrap();
     let receipt_root = Arc::new(
         PrivateDirectory::open_existing(

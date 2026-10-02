@@ -92,10 +92,53 @@ pub(crate) struct Metadata {
     pub(crate) directory: bool,
     pub(crate) attributes: u32,
 }
+#[derive(Debug)]
+enum ObjectRejection {
+    NotDisk,
+    Reparse,
+    DeletePending,
+    NegativeSize,
+    LinkCount,
+    TypeMismatch,
+}
+impl ObjectRejection {
+    fn category(&self) -> &'static str {
+        match self {
+            Self::NotDisk => "notDisk",
+            Self::Reparse => "reparse",
+            Self::DeletePending => "deletePending",
+            Self::NegativeSize => "negativeSize",
+            Self::LinkCount => "linkCount",
+            Self::TypeMismatch => "typeMismatch",
+        }
+    }
+}
+impl std::fmt::Display for ObjectRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unsupported recovery object: {}", self.category())
+    }
+}
+impl std::error::Error for ObjectRejection {}
+pub(super) fn metadata_rejection(error: &io::Error) -> &'static str {
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<ObjectRejection>())
+        .map_or(
+            if error.raw_os_error().is_some() {
+                "osError"
+            } else {
+                "other"
+            },
+            ObjectRejection::category,
+        )
+}
+fn rejected_object(reason: ObjectRejection) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, reason)
+}
 pub(super) fn metadata(file: HANDLE) -> io::Result<Metadata> {
     unsafe {
         if GetFileType(file) != FILE_TYPE_DISK {
-            return Err(blocked("recovery requires disk objects"));
+            return Err(rejected_object(ObjectRejection::NotDisk));
         }
         let mut id = FILE_ID_INFO::default();
         let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
@@ -122,16 +165,20 @@ pub(super) fn metadata(file: HANDLE) -> io::Result<Metadata> {
         )
         .map_err(win_error)?;
         let directory = standard.Directory;
-        if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
-            || tag.ReparseTag != 0
-            || standard.DeletePending
-            || standard.EndOfFile < 0
-            || (!directory && standard.NumberOfLinks != 1)
-            || directory != (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0)
-        {
-            return Err(blocked(
-                "linked, pending-delete or unsupported recovery object",
-            ));
+        if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 || tag.ReparseTag != 0 {
+            return Err(rejected_object(ObjectRejection::Reparse));
+        }
+        if standard.DeletePending {
+            return Err(rejected_object(ObjectRejection::DeletePending));
+        }
+        if standard.EndOfFile < 0 {
+            return Err(rejected_object(ObjectRejection::NegativeSize));
+        }
+        if !directory && standard.NumberOfLinks != 1 {
+            return Err(rejected_object(ObjectRejection::LinkCount));
+        }
+        if directory != (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0) {
+            return Err(rejected_object(ObjectRejection::TypeMismatch));
         }
         Ok(Metadata {
             identity: FileIdentity {

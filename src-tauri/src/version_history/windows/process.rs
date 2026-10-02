@@ -67,6 +67,9 @@ pub(crate) struct ProcessIdentity {
     image_digest: String,
 }
 impl ProcessIdentity {
+    pub(super) fn session(&self) -> u32 {
+        self.session
+    }
     pub(super) fn validate(&self) -> io::Result<()> {
         if self.pid == 0
             || self.created == 0
@@ -197,14 +200,14 @@ impl TerminalReceipt {
         self.exit_code
     }
 }
-fn session_id(pid: u32) -> io::Result<u32> {
+pub(super) fn session_id(pid: u32) -> io::Result<u32> {
     let mut session = 0;
     unsafe {
         ProcessIdToSessionId(pid, &mut session).map_err(win_error)?;
     }
     Ok(session)
 }
-fn creation_time(process: HANDLE) -> io::Result<u64> {
+pub(super) fn creation_time(process: HANDLE) -> io::Result<u64> {
     let (mut created, mut exited, mut kernel, mut user) = (
         FILETIME::default(),
         FILETIME::default(),
