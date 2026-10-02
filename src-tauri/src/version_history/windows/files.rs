@@ -30,9 +30,9 @@ use windows::Win32::{
         FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
         FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_BOTH_DIR_INFO, FILE_ID_INFO, FILE_LIST_DIRECTORY,
-        FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FILE_STANDARD_INFO, FILE_TRAVERSE, FILE_TYPE_DISK, FILE_WRITE_DATA, OPEN_EXISTING,
-        READ_CONTROL, SYNCHRONIZE, VOLUME_NAME_GUID,
+        FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_MODE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TRAVERSE, FILE_TYPE_DISK, FILE_WRITE_DATA,
+        OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE, VOLUME_NAME_GUID,
     },
     System::IO::IO_STATUS_BLOCK,
 };
@@ -715,6 +715,22 @@ impl PinnedFile {
             || final_path(handle(&self.file))? != child_path(self.parent.raw(), &self.name)?
         {
             return Err(blocked("held file identity or location changed"));
+        }
+        // The retained handle's name is not proof that the current directory
+        // entry still names that object. Observe the recorded name relative to
+        // the held parent without following reparses or releasing the guard.
+        // Attribute-only access adds no data/delete authority, and the observer
+        // is never substituted for the original handle.
+        let named = self.parent.open_relative(
+            &self.name,
+            FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_OPEN,
+            false,
+            None,
+        )?;
+        if metadata(handle(&named))?.identity != self.identity {
+            return Err(blocked("held file name now identifies a different object"));
         }
         Ok(())
     }

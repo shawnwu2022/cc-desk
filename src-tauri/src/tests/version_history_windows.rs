@@ -543,12 +543,28 @@ fn HistoryWindows_ChangedImage_020() {
     .is_err());
 }
 
-// 检查新硬链接不能绕过同一对象的执行/读写/删除排他保护，链接数漂移使验证和改名失效。
+// 检查两个名称均不能绕过执行/数据保护；分别观察删除请求并拒绝失效的原名称绑定。
 #[test]
 fn HistoryWindows_FenceAliases_021() {
+    for standard_unlink in [false, true] {
+        for remove_source in [true, false] {
+            probe_fenced_unlink(standard_unlink, remove_source);
+        }
+    }
+}
+
+fn probe_fenced_unlink(standard_unlink: bool, remove_source: bool) {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let operation = if standard_unlink { "std" } else { "win32" };
+    let target = if remove_source { "source" } else { "alias" };
+    let case = format!("{operation}/{target}");
     let temporary = tempfile::tempdir().unwrap();
     let source = temporary.path().join("image.exe");
     let alias = temporary.path().join("alias.exe");
+    let quarantine = temporary.path().join("quarantined.exe");
     std::fs::copy(std::env::current_exe().unwrap(), &source).unwrap();
     let marker = temporary.path().join("alias-probe");
     let launch = |path: &std::path::Path| {
@@ -582,80 +598,261 @@ fn HistoryWindows_FenceAliases_021() {
     let parent = Directory::open_absolute(temporary.path()).unwrap();
     let mut fence =
         ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest).unwrap();
+    fence
+        .verify()
+        .expect("unchanged single-link fence must verify");
+    let initial = probe_held_file(fence.probe_file());
+    assert_eq!(initial.identity, observed_identity);
+    assert_eq!(initial.links, 1);
+    assert!(!initial.pending && initial.final_name.is_some());
     std::fs::hard_link(&source, &alias)
         .expect("real NTFS fixture must exercise an alias created during the fence");
     assert_eq!(probe_file_identity(&source), observed_identity);
-    assert_eq!(
-        probe_file_identity(&alias),
-        observed_identity,
-        "alias must identify the same held object"
-    );
-    for path in [&source, &alias] {
+    assert_eq!(probe_file_identity(&alias), observed_identity);
+    assert_eq!(probe_held_file(fence.probe_file()).links, 2);
+
+    // Complete both names' execution/data probes before any namespace mutation.
+    for (label, path) in [("source", &source), ("alias", &alias)] {
         let launched = launch(path);
         if let Ok(mut escaped) = launched {
             let _ = escaped.kill();
             let _ = escaped.wait();
-            panic!("same-object alias bypassed the image execution fence");
+            panic!("{operation}/{target}: {label} bypassed the image execution fence");
         }
-        assert!(std::fs::File::open(path).is_err());
-        assert!(std::fs::OpenOptions::new().write(true).open(path).is_err());
-        assert!(std::fs::remove_file(path).is_err());
+        assert!(
+            std::fs::File::open(path).is_err(),
+            "{label}: data read escaped"
+        );
+        assert!(
+            std::fs::OpenOptions::new().write(true).open(path).is_err(),
+            "{label}: data write escaped"
+        );
+        // A DELETE access request and a pathname deletion are separate probes.
+        let deletion = std::fs::OpenOptions::new()
+            .access_mode(DELETE.0)
+            .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(path);
+        probe_namespace_log(format_args!("image namespace probe: operation={operation}, target={target}, name={label}, deleteOpen={}, error={:?}",
+            deletion.is_ok(), deletion.as_ref().err().and_then(std::io::Error::raw_os_error)));
+        drop(deletion);
     }
     assert!(!marker.exists());
     assert!(
         fence.verify().is_err(),
-        "link-count drift must invalidate verification"
+        "two links must invalidate verification"
     );
     assert!(
-        fence.rename_to(parent, name("quarantined.exe")).is_err(),
-        "link-count drift must block rename"
+        fence
+            .rename_to(parent.clone(), name("quarantined.exe"))
+            .is_err(),
+        "two links must block rename"
     );
-    assert!(source.exists() && alias.exists());
-    assert!(!temporary.path().join("quarantined.exe").exists());
-    assert_eq!(probe_file_identity(&source), observed_identity);
+    assert!(!quarantine.exists());
+
+    let path = if remove_source { &source } else { &alias };
+    let removal = if standard_unlink {
+        std::fs::remove_file(path)
+    } else {
+        probe_delete_file(path)
+    };
+    probe_namespace_log(format_args!(
+        "image namespace probe: operation={operation}, target={target}, removal={}, error={:?}",
+        removal.is_ok(),
+        removal
+            .as_ref()
+            .err()
+            .and_then(std::io::Error::raw_os_error)
+    ));
+    // Success can mean deletion requested, pending, or a name actually removed.
+    // Judge the held object and exact original binding, not the API's bool.
+    probe_fence_binding(
+        &mut fence, &parent, &source, &alias, &initial, &digest, &case,
+    );
+    assert!(!quarantine.exists());
+
+    let replacement = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path);
+    let replaced = replacement.is_ok();
+    probe_namespace_log(format_args!("image namespace probe: operation={operation}, target={target}, createNew={replaced}, error={:?}",
+        replacement.as_ref().err().and_then(std::io::Error::raw_os_error)));
+    if let Ok(mut file) = replacement {
+        file.write_all(b"independent replacement").unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        assert_ne!(probe_file_identity(path), observed_identity);
+    }
+    probe_fence_binding(
+        &mut fence, &parent, &source, &alias, &initial, &digest, &case,
+    );
+    if replaced {
+        assert_eq!(std::fs::read(path).unwrap(), b"independent replacement");
+        if remove_source {
+            assert!(
+                fence.verify().is_err(),
+                "substituted original name must refuse"
+            );
+        }
+    }
+    assert!(!quarantine.exists());
     assert_eq!(fence.identity(), &identity);
+    assert!(!marker.exists());
 }
 
-fn probe_file_identity(path: &std::path::Path) -> (u64, [u8; 16]) {
-    use std::os::windows::{
-        ffi::OsStrExt,
-        io::{AsRawHandle, FromRawHandle, OwnedHandle},
-    };
+fn probe_fence_binding(
+    fence: &mut ImageFence,
+    parent: &Arc<Directory>,
+    source: &std::path::Path,
+    alias: &std::path::Path,
+    initial: &ProbeHeldFile,
+    digest: &str,
+    case: &str,
+) {
+    let held = probe_held_file(fence.probe_file());
+    assert_eq!(held.identity, initial.identity, "original handle changed");
+    assert_eq!(
+        probe_held_digest(fence.probe_file()),
+        digest,
+        "held data changed"
+    );
+    let original_name = probe_metadata_file(source).map(|file| probe_held_file(&file));
+    let alias_name = probe_metadata_file(alias).map(|file| probe_held_file(&file));
+    let original_exact = original_name
+        .as_ref()
+        .is_ok_and(|state| state.identity == initial.identity);
+    let names: Vec<_> = std::fs::read_dir(source.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    probe_namespace_log(format_args!("image namespace probe: case={case}, sourceListed={}, aliasListed={}, links={}, pending={}, heldNameUnchanged={}, sourceExact={original_exact}, sourceError={:?}, aliasExact={}, aliasError={:?}",
+        names.iter().any(|name| name == source.file_name().unwrap()),
+        names.iter().any(|name| name == alias.file_name().unwrap()),
+        held.links, held.pending, held.final_name == initial.final_name,
+        original_name.as_ref().err().and_then(std::io::Error::raw_os_error),
+        alias_name.as_ref().is_ok_and(|state| state.identity == initial.identity),
+        alias_name.as_ref().err().and_then(std::io::Error::raw_os_error)));
+    let intact = original_exact
+        && held.links == 1
+        && !held.pending
+        && held.final_name == initial.final_name
+        && original_name
+            .as_ref()
+            .is_ok_and(|state| state.links == 1 && !state.pending);
+    if intact {
+        fence
+            .verify()
+            .expect("exact original single-link binding must remain usable");
+        assert!(std::fs::File::open(source).is_err());
+        assert!(std::fs::OpenOptions::new()
+            .write(true)
+            .open(source)
+            .is_err());
+    } else {
+        assert!(
+            fence.verify().is_err(),
+            "missing/pending/substituted/multiply-linked original must refuse"
+        );
+        assert!(
+            fence
+                .rename_to(parent.clone(), name("quarantined.exe"))
+                .is_err(),
+            "invalid original binding must not produce a rename receipt"
+        );
+    }
+}
+
+fn probe_namespace_log(message: std::fmt::Arguments<'_>) {
+    // Bypass libtest capture for these bounded diagnostics, including passes.
+    writeln!(std::io::stderr().lock(), "{message}").unwrap();
+}
+
+struct ProbeHeldFile {
+    identity: (u64, [u8; 16]),
+    links: u32,
+    pending: bool,
+    final_name: Option<Vec<u16>>,
+}
+fn probe_held_file(file: &std::fs::File) -> ProbeHeldFile {
+    use std::os::windows::io::AsRawHandle;
     use windows::Win32::{
         Foundation::HANDLE,
         Storage::FileSystem::{
-            CreateFileW, FileIdInfo, GetFileInformationByHandleEx, FILE_FLAG_OPEN_REPARSE_POINT,
-            FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-            FILE_SHARE_WRITE, OPEN_EXISTING,
+            FileIdInfo, FileStandardInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
+            FILE_ID_INFO, FILE_STANDARD_INFO, VOLUME_NAME_GUID,
         },
     };
-    use windows_core::PCWSTR;
-    let path: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let raw = HANDLE(file.as_raw_handle());
+    let mut identity = FILE_ID_INFO::default();
+    let mut standard = FILE_STANDARD_INFO::default();
+    let mut final_name = vec![0u16; 32768];
     unsafe {
-        let raw = CreateFileW(
-            PCWSTR(path.as_ptr()),
-            FILE_READ_ATTRIBUTES.0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            None,
-            OPEN_EXISTING,
-            FILE_FLAG_OPEN_REPARSE_POINT,
-            None,
-        )
-        .unwrap();
-        let owned = OwnedHandle::from_raw_handle(raw.0);
-        let mut information = FILE_ID_INFO::default();
         GetFileInformationByHandleEx(
-            HANDLE(owned.as_raw_handle()),
+            raw,
             FileIdInfo,
-            (&mut information as *mut FILE_ID_INFO).cast(),
+            (&mut identity as *mut FILE_ID_INFO).cast(),
             std::mem::size_of::<FILE_ID_INFO>() as u32,
         )
         .unwrap();
-        (
-            information.VolumeSerialNumber,
-            information.FileId.Identifier,
+        GetFileInformationByHandleEx(
+            raw,
+            FileStandardInfo,
+            (&mut standard as *mut FILE_STANDARD_INFO).cast(),
+            std::mem::size_of::<FILE_STANDARD_INFO>() as u32,
         )
+        .unwrap();
+        let length = GetFinalPathNameByHandleW(raw, &mut final_name, VOLUME_NAME_GUID) as usize;
+        let final_name = if length > 0 && length < final_name.len() {
+            final_name.truncate(length);
+            Some(final_name)
+        } else {
+            None
+        };
+        ProbeHeldFile {
+            identity: (identity.VolumeSerialNumber, identity.FileId.Identifier),
+            links: standard.NumberOfLinks,
+            pending: standard.DeletePending,
+            final_name,
+        }
     }
+}
+fn probe_held_digest(mut file: &std::fs::File) -> String {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Seek, SeekFrom};
+    file.seek(SeekFrom::Start(0)).unwrap();
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let count = file.read(&mut buffer).unwrap();
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    format!("{:x}", hash.finalize())
+}
+fn probe_metadata_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+    std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES.0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(path)
+}
+fn probe_file_identity(path: &std::path::Path) -> (u64, [u8; 16]) {
+    probe_held_file(&probe_metadata_file(path).unwrap()).identity
+}
+fn probe_delete_file(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::DeleteFileW;
+    let path: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    unsafe { DeleteFileW(windows_core::PCWSTR(path.as_ptr())) }
+        .map_err(|error| std::io::Error::from_raw_os_error(error.code().0 & 0xffff))
 }
 
 // 检查同步起跑的 CreateProcess 与 fence 获取不能同时留下可执行的源进程。

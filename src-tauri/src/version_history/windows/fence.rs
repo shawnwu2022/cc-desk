@@ -46,6 +46,10 @@ impl ImageFence {
     pub(crate) fn identity(&self) -> &FileIdentity {
         self.image.identity()
     }
+    #[cfg(test)]
+    pub(crate) fn probe_file(&self) -> &std::fs::File {
+        &self.image.file
+    }
     pub(crate) fn verify(&self) -> io::Result<()> {
         if self.image.digest()? != self.digest {
             return Err(blocked("fenced image changed"));
