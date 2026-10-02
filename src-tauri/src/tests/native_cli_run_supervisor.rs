@@ -172,6 +172,10 @@ fn D15_Supervisor_ProcessExitEofAndParsedAckAreIndependent_001() {
 
     let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
     assert!(!exited.can_retire_as_complete());
+    // Actual waiter evidence settles maintenance independently of renderer ACK
+    // and retained output resources; no registry/map inference is involved.
+    fixture.service.repository().admission().freeze(&uuid::Uuid::new_v4().to_string())
+        .unwrap().release_review().unwrap();
     assert_eq!(
         fixture
             .service

@@ -1588,6 +1588,17 @@ pub fn update_app_config(updates: serde_json::Value) -> Result<()> {
 /// Preserve stored compatibility/future keys that are not part of the read DTO.
 /// The write contract remains an explicit top-level delta, never a DTO replacement.
 pub(crate) fn update_app_config_at(config_path: &Path, updates: serde_json::Value) -> Result<()> {
+    update_app_config_admitted(config_path, updates,
+        &crate::version_history::maintenance::process_admissions(), |path, bytes| fs::write(path, bytes))
+}
+
+pub(crate) fn update_app_config_admitted(
+    config_path: &Path,
+    updates: serde_json::Value,
+    gate: &crate::version_history::maintenance::AdmissionGate,
+    write: impl FnOnce(&Path, &[u8]) -> std::io::Result<()>,
+) -> Result<()> {
+    let mut admission = gate.begin_mutation().map_err(|e| anyhow!(e.code))?.preparing();
     let config_dir = config_path
         .parent()
         .context("Could not get parent directory of config path")?;
@@ -1611,7 +1622,9 @@ pub(crate) fn update_app_config_at(config_path: &Path, updates: serde_json::Valu
     };
     let merged = merge_json_values(existing_json, updates);
     let content = serde_json::to_string_pretty(&merged)?;
-    fs::write(config_path, content)?;
+    let ticket = admission.begin_write();
+    write(config_path, content.as_bytes())?;
+    ticket.completed_authoritative_write();
     Ok(())
 }
 
@@ -3636,6 +3649,20 @@ pub(crate) fn with_projects_state_locked<F, T>(
 where
     F: FnOnce(&mut ProjectsState) -> Result<T>,
 {
+    with_projects_state_admitted(data_path, lock_path,
+        &crate::version_history::maintenance::process_admissions(), apply)
+}
+
+pub(crate) fn with_projects_state_admitted<F, T>(
+    data_path: &Path,
+    lock_path: &Path,
+    gate: &crate::version_history::maintenance::AdmissionGate,
+    apply: F,
+) -> Result<ProjectsState>
+where
+    F: FnOnce(&mut ProjectsState) -> Result<T>,
+{
+    let mut admission = gate.begin_mutation().map_err(|e| anyhow!(e.code))?.preparing();
     ensure_parent(lock_path)?;
     let lock_file = fs::OpenOptions::new()
         .read(true)
@@ -3648,8 +3675,12 @@ where
     let result: Result<ProjectsState> = (|| {
         let mut state = get_projects_state_at(data_path)?; // 不存在 -> default
         canonicalize_state(&mut state);
+        // This callback can delete CLI history before returning an error. From
+        // this point failures are partial/unknown, never inferred to be no-ops.
+        let ticket = admission.begin_write();
         apply(&mut state)?;
         write_json_atomic(data_path, &serde_json::to_value(&state)?)?;
+        ticket.completed_authoritative_write();
         Ok(state)
     })();
     let _ = lock_file.unlock();

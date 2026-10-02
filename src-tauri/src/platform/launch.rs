@@ -5,7 +5,9 @@ use crate::cli::environment::EnvMap;
 use crate::cli::invocation::CliInvocation;
 use crate::cli::profiles::{error, Dialect, Launcher};
 use crate::cli::types::SafeError;
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{Child, CommandBuilder, MasterPty};
+#[cfg(test)]
+use portable_pty::{native_pty_system, PtySize};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -304,6 +306,7 @@ pub(crate) fn resolve_process(
 
 /// Caller transfers these handles to the run registry/waiter. No global locks,
 /// retries, process-name scans, CLI hooks, or output decoding occur here.
+#[cfg(test)]
 pub(crate) fn spawn_process(
     spec: &ProcessLaunchSpec,
     size: PtySize,

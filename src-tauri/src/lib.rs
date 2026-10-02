@@ -65,14 +65,17 @@ pub fn run(initial_dir: Option<String>) {
     let mut context = tauri::generate_context!();
     let main_config = cli::native_runtime::take_main_config(context.config_mut())
         .expect("main window configuration unavailable");
+    let admission = version_history::maintenance::process_admissions();
     let native_runtime = std::sync::Arc::new(
-        cli::native_runtime::NativeRuntime::production().expect("native workspace unavailable"),
+        cli::native_runtime::NativeRuntime::production(admission.clone())
+            .expect("native workspace unavailable"),
     );
     let native_setup = native_runtime.clone();
     let native_shutdown = native_runtime.clone();
     let native_exit_shutdown = native_runtime.clone();
     let app = tauri::Builder::default()
         .manage(native_runtime)
+        .manage(admission.clone())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -102,7 +105,7 @@ pub fn run(initial_dir: Option<String>) {
                 let _ = app.set_menu(menu);
             }
 
-            pty::init_pty_manager(app.handle().clone());
+            pty::init_pty_manager(app.handle().clone(), admission.clone());
             log::info!("PTY manager initialized");
 
             // Windows: 移除原生标题栏（UI 相关，尽早执行）

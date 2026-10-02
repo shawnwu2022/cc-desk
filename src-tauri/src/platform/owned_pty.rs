@@ -1,14 +1,16 @@
 //! Owned PTY handles with independent blocking domains, not a stop/drain policy.
 #![allow(dead_code)] // Connected to staged D11; not exposed through live IPC yet.
 
+use super::admitted_child::AdmittedChild;
 use super::launch::ProcessLaunchSpec;
 use crate::cli::profiles::error;
 use crate::cli::types::SafeError;
+use crate::version_history::maintenance::{PreparingStart, StartTicket};
 use parking_lot::Mutex;
 #[cfg(not(windows))]
 use portable_pty::ChildKiller;
 use portable_pty::{
-    native_pty_system, Child, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize,
+    native_pty_system, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize,
 };
 use std::io::{self, Read, Write};
 #[cfg(windows)]
@@ -21,11 +23,6 @@ unsafe extern "system" {
     fn terminate_process(handle: *mut std::ffi::c_void, exit_code: u32) -> i32;
 }
 
-struct ChildState {
-    child: Box<dyn Child + Send + Sync>,
-    status: Option<ExitStatus>,
-}
-
 /// Backend-only resource. Revoking a window does not drop it or kill its child.
 /// Its lifecycle owner must wait/reap and decide when master closure is safe;
 /// D14/D15 supply autonomous waiting, output draining and explicit stop policy.
@@ -34,7 +31,7 @@ pub(crate) struct OwnedPty {
     master: Mutex<Box<dyn MasterPty + Send>>,
     reader: Mutex<Option<Box<dyn Read + Send>>>,
     writer: Mutex<Box<dyn Write + Send>>,
-    child: Mutex<ChildState>,
+    child: Mutex<AdmittedChild>,
     #[cfg(not(windows))]
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     // Borrowed from the private child, which is never replaced or extracted.
@@ -51,21 +48,45 @@ impl std::fmt::Debug for OwnedPty {
 }
 
 impl OwnedPty {
+    #[cfg(test)]
     pub(crate) fn spawn(spec: &ProcessLaunchSpec, size: PtySize) -> Result<Self, SafeError> {
+        let ticket = crate::version_history::maintenance::AdmissionGate::new()
+            .begin_start(crate::version_history::maintenance::RuntimeKind::Native)?;
+        Self::spawn_admitted(spec, size, ticket)
+    }
+
+    pub(crate) fn spawn_admitted(
+        spec: &ProcessLaunchSpec,
+        size: PtySize,
+        ticket: StartTicket,
+    ) -> Result<Self, SafeError> {
+        let admission = ticket.preparing();
         validate_size(size)?;
         let command = spec.command()?;
         let pair = native_pty_system()
             .openpty(size)
             .map_err(|_| error("HOST_PTY_UNAVAILABLE"))?;
-        Self::attach_and_spawn(pair, command)
+        Self::attach_admitted(pair, command, admission, true)
     }
 
     /// Acquire both I/O handles before starting a child. There is no fallible
     /// reader/writer initialization after spawn succeeds, so an I/O setup failure
     /// cannot return Err while leaving a newly created child without an owner.
+    #[cfg(test)]
     pub(crate) fn attach_and_spawn(
         pair: PtyPair,
         command: CommandBuilder,
+    ) -> Result<Self, SafeError> {
+        let admission = crate::version_history::maintenance::AdmissionGate::new()
+            .begin_start(crate::version_history::maintenance::RuntimeKind::Native)?.preparing();
+        Self::attach_admitted(pair, command, admission, false)
+    }
+
+    fn attach_admitted(
+        pair: PtyPair,
+        command: CommandBuilder,
+        mut admission: PreparingStart,
+        native: bool,
     ) -> Result<Self, SafeError> {
         let reader = pair
             .master
@@ -75,27 +96,30 @@ impl OwnedPty {
             .master
             .take_writer()
             .map_err(|_| error("HOST_WRITER_UNAVAILABLE"))?;
-        let child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|_| error("PROCESS_START_FAILED"))?;
+        let ticket = admission.begin_creation();
+        let child = if native {
+            AdmittedChild::spawn_native(pair.slave.as_ref(), command, ticket)
+                .map_err(|_| error("PROCESS_START_FAILED"))?
+        } else {
+            // Arbitrary SlavePty adapters have no audited no-child-on-Err contract.
+            let child = pair.slave.spawn_command(command)
+                .map_err(|_| error("PROCESS_START_FAILED"))?;
+            AdmittedChild::created(child, ticket)
+        };
         #[cfg(not(windows))]
         let killer = child.clone_killer();
         // portable-pty 0.8.1's WinChildKiller inverts TerminateProcess's BOOL.
         // Keep the already-owned native handle, not that incorrect wrapper.
         // Capturing it adds no fallible handle duplication after child creation.
         #[cfg(windows)]
-        let process_handle = AtomicPtr::new(child.as_raw_handle().unwrap_or(std::ptr::null_mut()));
+        let process_handle = AtomicPtr::new(child.raw_handle());
         // Do not retain the parent's slave endpoint and prevent stream EOF.
         drop(pair.slave);
         Ok(Self {
             master: Mutex::new(pair.master),
             reader: Mutex::new(Some(reader)),
             writer: Mutex::new(writer),
-            child: Mutex::new(ChildState {
-                child,
-                status: None,
-            }),
+            child: Mutex::new(child),
             #[cfg(not(windows))]
             killer: Mutex::new(killer),
             #[cfg(windows)]
@@ -123,28 +147,11 @@ impl OwnedPty {
         let Some(mut state) = self.child.try_lock() else {
             return Ok(None);
         };
-        if let Some(status) = &state.status {
-            return Ok(Some(status.clone()));
-        }
-        let status = state
-            .child
-            .try_wait()
-            .map_err(|_| error("PROCESS_WAIT_FAILED"))?;
-        state.status = status.clone();
-        Ok(status)
+        state.try_wait().map_err(|_| error("PROCESS_WAIT_FAILED"))
     }
 
     pub(crate) fn wait(&self) -> Result<ExitStatus, SafeError> {
-        let mut state = self.child.lock();
-        if let Some(status) = &state.status {
-            return Ok(status.clone());
-        }
-        let status = state
-            .child
-            .wait()
-            .map_err(|_| error("PROCESS_WAIT_FAILED"))?;
-        state.status = Some(status.clone());
-        Ok(status)
+        self.child.lock().wait().map_err(|_| error("PROCESS_WAIT_FAILED"))
     }
 
     /// Signal only this retained child, never a process-name/PID search. Success

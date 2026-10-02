@@ -4,6 +4,7 @@
 use super::profiles::{error, Profile};
 use super::types::{SafeError, WireU64};
 use super::workspace::RegisteredProject;
+use crate::version_history::maintenance::{process_admissions, AdmissionGate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -57,6 +58,7 @@ pub(crate) enum Patch {
 #[derive(Debug, Clone)]
 pub(crate) struct WorkspaceRepository {
     path: PathBuf,
+    admission: AdmissionGate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,12 +69,19 @@ pub(crate) enum WriteStage {
 }
 
 impl WorkspaceRepository {
+    #[cfg(test)]
     pub(crate) fn open(path: PathBuf) -> Result<Self, SafeError> {
+        Self::open_admitted(path, AdmissionGate::new())
+    }
+
+    pub(crate) fn open_admitted(path: PathBuf, admission: AdmissionGate) -> Result<Self, SafeError> {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err(SafeError::invalid("workspacePath"));
         }
-        Ok(Self { path })
+        Ok(Self { path, admission })
     }
+
+    pub(crate) fn admission(&self) -> &AdmissionGate { &self.admission }
 
     pub(crate) fn metadata_directory(&self) -> &Path {
         self.path.parent().expect("validated workspace parent")
@@ -80,7 +89,7 @@ impl WorkspaceRepository {
 
     pub(crate) fn production() -> Result<Self, SafeError> {
         let home = dirs::home_dir().ok_or_else(|| error("HOME_UNAVAILABLE"))?;
-        Self::open(home.join(".cc-box").join("cli-workspace.v1.json"))
+        Self::open_admitted(home.join(".cc-box").join("cli-workspace.v1.json"), process_admissions())
     }
 
     fn lock(&self) -> Result<File, SafeError> {
@@ -168,6 +177,7 @@ impl WorkspaceRepository {
         expected_revision: Option<WireU64>,
         update: impl FnOnce(&mut BTreeMap<String, RegisteredProject>) -> Result<(T, bool), SafeError>,
     ) -> Result<T, SafeError> {
+        let mut admission = self.admission.begin_mutation()?.preparing();
         let _lock = self.lock()?;
         let mut document = self.read_locked()?;
         if expected_revision.is_some_and(|revision| revision != document.revision) {
@@ -193,7 +203,9 @@ impl WorkspaceRepository {
         if bytes.len() as u64 > MAX_FILE_BYTES {
             return Err(error("WORKSPACE_TOO_LARGE"));
         }
+        let ticket = admission.begin_write();
         self.write_atomic(&bytes, |_| Ok(()))?;
+        ticket.completed_authoritative_write();
         Ok(result)
     }
 
@@ -227,6 +239,7 @@ impl WorkspaceRepository {
         patch: Patch,
         observe: impl Fn(WriteStage) -> std::io::Result<()>,
     ) -> Result<WorkspaceDocument, SafeError> {
+        let mut admission = self.admission.begin_mutation()?.preparing();
         let _lock = self.lock()?;
         let mut document = self.read_locked()?;
         if document.revision != expected_revision {
@@ -270,7 +283,9 @@ impl WorkspaceRepository {
         if bytes.len() as u64 > MAX_FILE_BYTES {
             return Err(error("WORKSPACE_TOO_LARGE"));
         }
+        let ticket = admission.begin_write();
         self.write_atomic(&bytes, observe)?;
+        ticket.completed_authoritative_write();
         Ok(document)
     }
 

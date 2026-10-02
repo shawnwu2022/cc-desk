@@ -13,6 +13,7 @@ use super::types::{LaunchRequest, SafeError};
 use crate::platform::launch::resolve_process;
 use crate::platform::owned_pty::OwnedPty;
 use crate::terminal_transport::OutputFrame;
+use crate::version_history::maintenance::{PreparingStart, RuntimeKind};
 use parking_lot::RwLock;
 use portable_pty::PtySize;
 use std::cell::{Cell, RefCell};
@@ -79,6 +80,21 @@ impl LaunchService {
     }
     pub(crate) fn start(
         &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<OutputFrame>, SafeError>,
+    ) -> Result<LaunchStatus, SafeError> {
+        if let Some(status) = self.registry().existing(caller, request)? { return Ok(status); }
+        self.start_admitted(self.admit_start()?, caller, request, connect)
+    }
+
+    pub(crate) fn admit_start(&self) -> Result<PreparingStart, SafeError> {
+        Ok(self.repository.admission().begin_start(RuntimeKind::Native)?.preparing())
+    }
+
+    pub(crate) fn start_admitted(
+        &self,
+        mut admission: PreparingStart,
         caller: &CallerIdentity,
         request: &LaunchRequest,
         connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<OutputFrame>, SafeError>,
@@ -181,7 +197,7 @@ impl LaunchService {
                 let frozen = Arc::new(snapshot);
                 let invocation = build_invocation(frozen.request(), &frozen)?;
                 let spec = resolve_process(&invocation)?;
-                let pty = OwnedPty::spawn(
+                let pty = OwnedPty::spawn_admitted(
                     &spec,
                     PtySize {
                         cols: request.cols,
@@ -189,6 +205,7 @@ impl LaunchService {
                         pixel_width: 0,
                         pixel_height: 0,
                     },
+                    admission.begin_creation(),
                 )?;
                 spawned.set(true);
                 Ok(FrozenPty {

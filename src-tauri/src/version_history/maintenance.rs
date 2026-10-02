@@ -5,7 +5,7 @@ use crate::cli::profiles::error;
 use crate::cli::types::SafeError;
 use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 #[derive(Clone, Copy)]
 pub(crate) enum RuntimeKind {
@@ -30,6 +30,17 @@ enum MutationState { Active, Unknown }
 /// Existing registry/map emptiness is deliberately not an input to this API.
 #[derive(Clone, Default)]
 pub(crate) struct AdmissionGate(Arc<Mutex<AdmissionState>>);
+static PROCESS_ADMISSIONS: LazyLock<AdmissionGate> = LazyLock::new(AdmissionGate::new);
+
+/// Static config/check writers and freshly constructed repositories share this owner.
+pub(crate) fn process_admissions() -> AdmissionGate { PROCESS_ADMISSIONS.clone() }
+
+impl std::fmt::Debug for AdmissionGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AdmissionGate(<redacted>)")
+    }
+}
+
 impl AdmissionGate {
     pub(crate) fn new() -> Self { Self::default() }
 
@@ -70,6 +81,10 @@ impl AdmissionGate {
 /// a separate SnapshotBoundary prerequisite. Failures require reconciliation.
 pub(crate) struct MutationTicket { gate: AdmissionGate, id: uuid::Uuid, completed: bool }
 impl MutationTicket {
+    /// Only before an authoritative writer or effectful callback has been entered.
+    pub(crate) fn no_write_performed(self) { self.completed_authoritative_write(); }
+
+    pub(crate) fn preparing(self) -> PreparingMutation { PreparingMutation(Some(self)) }
     pub(crate) fn completed_authoritative_write(mut self) {
         self.gate.0.lock().mutations.remove(&self.id);
         self.completed = true;
@@ -89,6 +104,7 @@ pub(crate) struct StartTicket {
     completed: bool,
 }
 impl StartTicket {
+    pub(crate) fn preparing(self) -> PreparingStart { PreparingStart(Some(self)) }
     pub(crate) fn no_child_created(mut self) {
         self.gate.0.lock().children.remove(&self.id);
         self.completed = true;
@@ -110,9 +126,39 @@ impl Drop for StartTicket {
     }
 }
 
+/// A backend preparation scope knows that no process-creation call has begun.
+/// Move its ticket out immediately before entering spawn; errors/panics thereafter
+/// remain unknown unless the audited platform adapter proves no child was created.
+pub(crate) struct PreparingStart(Option<StartTicket>);
+impl PreparingStart {
+    pub(crate) fn begin_creation(&mut self) -> StartTicket {
+        self.0.take().expect("start ticket already transferred")
+    }
+}
+impl Drop for PreparingStart {
+    fn drop(&mut self) {
+        if let Some(ticket) = self.0.take() { ticket.no_child_created(); }
+    }
+}
+
+/// Only use around preparation known not to mutate authoritative data. An
+/// effectful callback (including deletion) must take the ticket before entry.
+pub(crate) struct PreparingMutation(Option<MutationTicket>);
+impl PreparingMutation {
+    pub(crate) fn begin_write(&mut self) -> MutationTicket {
+        self.0.take().expect("mutation ticket already transferred")
+    }
+}
+impl Drop for PreparingMutation {
+    fn drop(&mut self) {
+        if let Some(ticket) = self.0.take() { ticket.no_write_performed(); }
+    }
+}
+
 /// Move into the direct child's waiter, independently of UI/PTY registration.
 /// A kill request, synthetic exit, reader EOF, or drain timeout must never call
-/// reaped(). Actual wait success may call it before output finishes draining.
+/// reaped(). Unix wait/try_wait must reap; Windows requires WAIT_OBJECT_0 on
+/// the exact retained process handle. Output may still be draining afterwards.
 pub(crate) struct OwnedChildTicket {
     gate: AdmissionGate,
     id: uuid::Uuid,
