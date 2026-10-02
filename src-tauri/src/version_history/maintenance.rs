@@ -354,6 +354,7 @@ pub(crate) enum MarkerRead<'a> {
 enum BarrierState {
     Transition,
     Restored,
+    PreContextAborted,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -372,7 +373,13 @@ impl ActiveContextMarker {
             .last_valid
             .as_ref()
             .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?;
-        if inspection.blocked || journal.phase() == super::journal::JournalPhase::Restored {
+        if inspection.blocked
+            || matches!(
+                journal.phase(),
+                super::journal::JournalPhase::Restored
+                    | super::journal::JournalPhase::PreContextAborted
+            )
+        {
             return Err(error("HISTORY_RECOVERY_REQUIRED"));
         }
         Self::transition(
@@ -405,14 +412,31 @@ impl ActiveContextMarker {
     pub(crate) fn restored(
         inspection: &super::journal::JournalInspection,
     ) -> Result<Self, SafeError> {
+        Self::terminal(
+            inspection,
+            super::journal::JournalPhase::Restored,
+            BarrierState::Restored,
+        )
+    }
+    pub(crate) fn pre_context_aborted(
+        inspection: &super::journal::JournalInspection,
+    ) -> Result<Self, SafeError> {
+        Self::terminal(
+            inspection,
+            super::journal::JournalPhase::PreContextAborted,
+            BarrierState::PreContextAborted,
+        )
+    }
+    fn terminal(
+        inspection: &super::journal::JournalInspection,
+        expected: super::journal::JournalPhase,
+        state: BarrierState,
+    ) -> Result<Self, SafeError> {
         let journal = inspection
             .last_valid
             .as_ref()
             .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?;
-        if inspection.blocked
-            || journal.phase() != super::journal::JournalPhase::Restored
-            || journal.requires_reconciliation()
-        {
+        if inspection.blocked || journal.phase() != expected || journal.requires_reconciliation() {
             return Err(error("HISTORY_RECOVERY_REQUIRED"));
         }
         let mut marker = Self::transition(
@@ -423,7 +447,7 @@ impl ActiveContextMarker {
                 .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?
                 .into(),
         )?;
-        marker.state = BarrierState::Restored;
+        marker.state = state;
         Ok(marker)
     }
     pub(crate) fn encode(&self) -> Result<Vec<u8>, SafeError> {
@@ -444,12 +468,22 @@ impl ActiveContextMarker {
         head: &str,
     ) -> Result<(), SafeError> {
         self.validate_structure()?;
+        let phase_matches = match self.state {
+            BarrierState::Transition => !matches!(
+                journal.phase(),
+                super::journal::JournalPhase::Restored
+                    | super::journal::JournalPhase::PreContextAborted
+            ),
+            BarrierState::Restored => journal.phase() == super::journal::JournalPhase::Restored,
+            BarrierState::PreContextAborted => {
+                journal.phase() == super::journal::JournalPhase::PreContextAborted
+            }
+        };
         if journal.binding() != &self.binding
             || journal.generation() != self.generation
             || head != self.journal_digest
-            || (self.state == BarrierState::Restored)
-                != (journal.phase() == super::journal::JournalPhase::Restored)
-            || (self.state == BarrierState::Restored && journal.requires_reconciliation())
+            || !phase_matches
+            || (self.state != BarrierState::Transition && journal.requires_reconciliation())
         {
             return Err(error("HISTORY_RECOVERY_REQUIRED"));
         }
@@ -482,7 +516,7 @@ pub(crate) fn decide_startup(
             };
             if marker.schema != 1
                 || marker.binding.validate().is_err()
-                || marker.state != BarrierState::Restored
+                || marker.state == BarrierState::Transition
                 || marker.binding.user_installation != lease.user_installation
                 || marker.binding.source_bundle != lease.actual_bundle
             {
@@ -495,7 +529,14 @@ pub(crate) fn decide_startup(
                 return StartupDecision::RecoveryOnly;
             };
             if inspection.blocked
-                || journal.phase() != super::journal::JournalPhase::Restored
+                || journal.phase()
+                    != match marker.state {
+                        BarrierState::Restored => super::journal::JournalPhase::Restored,
+                        BarrierState::PreContextAborted => {
+                            super::journal::JournalPhase::PreContextAborted
+                        }
+                        BarrierState::Transition => return StartupDecision::RecoveryOnly,
+                    }
                 || journal.requires_reconciliation()
                 || journal.binding() != &marker.binding
                 || journal.generation() != marker.generation

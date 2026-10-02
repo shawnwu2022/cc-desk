@@ -903,6 +903,704 @@ fn record_effect(disk: &mut JournalStore, generation: &mut u64, kind: EffectKind
     );
 }
 
+fn record_exact_effect(disk: &mut JournalStore, generation: &mut u64, spec: EffectSpec) -> u64 {
+    record_event(
+        disk,
+        generation,
+        JournalEvent::Intent {
+            effect: spec.clone(),
+        },
+    );
+    let intent = *generation;
+    let receipt = disk
+        .retain_effect_receipt(
+            &spec.effect_id,
+            Observation::Applied,
+            &spec.expected_postconditions,
+        )
+        .unwrap();
+    record_event(
+        disk,
+        generation,
+        JournalEvent::Observed {
+            effect_id: spec.effect_id,
+            intent_generation: intent,
+            result: ObservedResult {
+                observation: Observation::Applied,
+                receipt: Some(receipt),
+            },
+        },
+    );
+    intent
+}
+
+fn prepare_compensation(
+    disk: &mut JournalStore,
+    kind: EffectKind,
+    unknown: bool,
+) -> (u64, EffectSpec) {
+    use crate::version_history::journal::ManifestRole;
+    let mut generation = 0;
+    for role in [
+        ManifestRole::SourceContext,
+        ManifestRole::SourceBundle,
+        ManifestRole::Registration,
+        ManifestRole::Shortcuts,
+    ] {
+        record_event(
+            disk,
+            &mut generation,
+            JournalEvent::Manifest {
+                role,
+                digest: effect().expected_postconditions,
+            },
+        );
+    }
+    record_effect(disk, &mut generation, EffectKind::VerifySourceBundleCopy);
+    record_effect(disk, &mut generation, EffectKind::FenceSourceImage);
+    for root in [RootKind::Desk, RootKind::WebView] {
+        record_effect(
+            disk,
+            &mut generation,
+            EffectKind::PreserveRoot {
+                context: binding().source_context,
+                root,
+            },
+        );
+    }
+    record_event(
+        disk,
+        &mut generation,
+        JournalEvent::Phase {
+            phase: JournalPhase::SourceSealed,
+        },
+    );
+    for root in [RootKind::Desk, RootKind::WebView] {
+        record_effect(disk, &mut generation, EffectKind::CreateFreshRoot { root });
+    }
+    record_event(
+        disk,
+        &mut generation,
+        JournalEvent::Manifest {
+            role: ManifestRole::FreshTargetContext,
+            digest: effect().expected_postconditions,
+        },
+    );
+    record_event(
+        disk,
+        &mut generation,
+        JournalEvent::Phase {
+            phase: JournalPhase::FreshReady,
+        },
+    );
+    record_event(
+        disk,
+        &mut generation,
+        JournalEvent::Phase {
+            phase: JournalPhase::Installing,
+        },
+    );
+    let mut step = effect();
+    step.effect_id = uuid::Uuid::new_v4().to_string();
+    step.kind = kind;
+    record_event(
+        disk,
+        &mut generation,
+        JournalEvent::Intent {
+            effect: step.clone(),
+        },
+    );
+    if unknown {
+        let intent = generation;
+        record_event(
+            disk,
+            &mut generation,
+            JournalEvent::Observed {
+                effect_id: step.effect_id.clone(),
+                intent_generation: intent,
+                result: ObservedResult {
+                    observation: Observation::Unknown,
+                    receipt: None,
+                },
+            },
+        );
+    }
+    (generation, step)
+}
+
+// 检查未触及context的真实journal终态不需要伪造snapshot便能形成独立abort marker。
+#[test]
+fn HistoryTransaction_EarlyAbort_051() {
+    use crate::version_history::journal::PreContextAbortProof;
+    use crate::version_history::maintenance::{
+        decide_startup, ActiveContextMarker, MarkerRead, SharedStartupLease, StartupDecision,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let mut disk = store(&root);
+    disk.initialize(binding(), capacity()).unwrap();
+    let inspection = disk.inspect(&binding()).unwrap();
+    let evidence =
+        PreContextAbortProof::fixture(&inspection, std::array::from_fn(|_| effect().before));
+    disk.abort_pre_context(&evidence).unwrap();
+    let inspection = disk.inspect(&binding()).unwrap();
+    assert_eq!(
+        inspection.last_valid.as_ref().unwrap().phase(),
+        JournalPhase::PreContextAborted
+    );
+    assert!(ActiveContextMarker::restored(&inspection).is_err());
+    let marker = ActiveContextMarker::pre_context_aborted(&inspection)
+        .unwrap()
+        .encode()
+        .unwrap();
+    assert_eq!(
+        decide_startup(
+            &StartupControlLease::fixture(binding()),
+            &SharedStartupLease::fixture(binding(), false),
+            MarkerRead::Present {
+                bytes: &marker,
+                journal: Some(&inspection)
+            }
+        ),
+        StartupDecision::Ordinary
+    );
+    assert!(disk
+        .append(
+            1,
+            JournalEvent::Phase {
+                phase: JournalPhase::RecoveryRequired
+            }
+        )
+        .is_err());
+}
+
+// 检查每个原image fence必须由绑定原effect/代数/观测状态的逆操作正向撤销。
+#[test]
+fn HistoryTransaction_AbortFence_052() {
+    use crate::version_history::journal::PreContextAbortProof;
+    let root = tempfile::tempdir().unwrap();
+    let mut disk = store(&root);
+    disk.initialize(binding(), capacity()).unwrap();
+    let mut generation = 0;
+    let mut fence = effect();
+    fence.kind = EffectKind::FenceSourceImage;
+    let intent = record_exact_effect(&mut disk, &mut generation, fence.clone());
+    let proof = PreContextAbortProof::fixture(
+        &disk.inspect(&binding()).unwrap(),
+        std::array::from_fn(|_| effect().before),
+    );
+    assert!(disk.abort_pre_context(&proof).is_err());
+    let reverse = EffectSpec {
+        effect_id: uuid::Uuid::new_v4().to_string(),
+        kind: EffectKind::ReverseSourceFence {
+            original_effect_id: fence.effect_id,
+            original_intent_generation: intent,
+        },
+        before: fence.expected_postconditions,
+        expected_postconditions: fence.before,
+    };
+    let mut wrong = reverse.clone();
+    wrong.expected_postconditions = effect().expected_postconditions;
+    assert!(disk
+        .append(generation, JournalEvent::Intent { effect: wrong })
+        .is_err());
+    record_exact_effect(&mut disk, &mut generation, reverse);
+    let proof = PreContextAbortProof::fixture(
+        &disk.inspect(&binding()).unwrap(),
+        std::array::from_fn(|_| effect().before),
+    );
+    disk.abort_pre_context(&proof).unwrap();
+}
+
+// 检查Reviewed中的context/installer/generic写入intent即使NotApplied也不能使用早期abort。
+#[test]
+fn HistoryTransaction_AbortReject_053() {
+    use crate::version_history::journal::{
+        FilesystemOperation, PreContextAbortProof, RegistrationOperation, RegistrationSlot,
+    };
+    let kinds = [
+        EffectKind::CreateFreshRoot {
+            root: RootKind::Desk,
+        },
+        EffectKind::InstallerCreateSuspended,
+        EffectKind::InstallerResume,
+        EffectKind::HistoricalResume,
+        EffectKind::FilesystemEntry {
+            operation: FilesystemOperation::CopyFile,
+            manifest: effect().before,
+            entry_index: 0,
+        },
+        EffectKind::RegistrationEntry {
+            slot: RegistrationSlot::Uninstall,
+            operation: RegistrationOperation::SetValue,
+            manifest: effect().before,
+            entry_index: 0,
+        },
+    ];
+    for kind in kinds {
+        for observation in [
+            None,
+            Some(Observation::Unknown),
+            Some(Observation::NotApplied),
+            Some(Observation::Applied),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mut disk = store(&root);
+            disk.initialize(binding(), capacity()).unwrap();
+            let mut step = effect();
+            step.kind = kind.clone();
+            disk.append(
+                0,
+                JournalEvent::Intent {
+                    effect: step.clone(),
+                },
+            )
+            .unwrap();
+            if let Some(observation) = observation {
+                let receipt = if observation == Observation::Unknown {
+                    None
+                } else {
+                    Some(
+                        disk.retain_effect_receipt(
+                            &step.effect_id,
+                            observation,
+                            if observation == Observation::NotApplied {
+                                &step.before
+                            } else {
+                                &step.expected_postconditions
+                            },
+                        )
+                        .unwrap(),
+                    )
+                };
+                disk.append(
+                    1,
+                    JournalEvent::Observed {
+                        effect_id: step.effect_id,
+                        intent_generation: 1,
+                        result: ObservedResult {
+                            observation,
+                            receipt,
+                        },
+                    },
+                )
+                .unwrap();
+            }
+            let proof = PreContextAbortProof::fixture(
+                &disk.inspect(&binding()).unwrap(),
+                std::array::from_fn(|_| effect().before),
+            );
+            assert!(disk.abort_pre_context(&proof).is_err());
+        }
+    }
+}
+
+// 检查丢失resume/terminal回执有无Unknown frame都保留Unknown，并禁止重放或改写历史结果。
+#[test]
+fn HistoryTransaction_Compensate_054() {
+    use crate::version_history::journal::UnknownCompensationProof;
+    for unknown in [false, true] {
+        for kind in [
+            EffectKind::InstallerResume,
+            EffectKind::InstallerTerminalOutcome,
+            EffectKind::HistoricalResume,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mut disk = store(&root);
+            disk.initialize(binding(), capacity()).unwrap();
+            let (_, step) = prepare_compensation(&mut disk, kind, unknown);
+            let proof = UnknownCompensationProof::fixture(
+                &disk.inspect(&binding()).unwrap(),
+                std::array::from_fn(|_| effect().before),
+            );
+            let generation = disk.compensate_unknown(&proof).unwrap();
+            let inspection = disk.inspect(&binding()).unwrap();
+            let journal = inspection.last_valid.as_ref().unwrap();
+            assert_eq!(
+                journal.effect_observation(&step.effect_id),
+                Some(Observation::Unknown)
+            );
+            assert!(journal.has_historical_uncertainty());
+            assert!(!journal.requires_reconciliation());
+            let mut replay = step.clone();
+            replay.effect_id = uuid::Uuid::new_v4().to_string();
+            assert!(disk
+                .append(generation, JournalEvent::Intent { effect: replay })
+                .is_err());
+            assert!(disk
+                .retain_effect_receipt(
+                    &step.effect_id,
+                    Observation::Applied,
+                    &step.expected_postconditions
+                )
+                .is_err());
+            drop(disk);
+            let mut disk = store(&root);
+            disk.bind_existing(&binding()).unwrap();
+            assert_eq!(
+                disk.inspect(&binding())
+                    .unwrap()
+                    .last_valid
+                    .unwrap()
+                    .effect_observation(&step.effect_id),
+                Some(Observation::Unknown)
+            );
+        }
+    }
+}
+
+// 检查compensation后的普通和generic写入在append及原始frame重放边界都被拒绝。
+#[test]
+fn HistoryTransaction_ReturnOnly_055() {
+    use crate::version_history::journal::{
+        FilesystemOperation, RegistrationOperation, RegistrationSlot, UnknownCompensationProof,
+    };
+    for kind in [
+        EffectKind::InstallerCreateSuspended,
+        EffectKind::HistoricalResume,
+        EffectKind::CreateFreshRoot {
+            root: RootKind::Desk,
+        },
+        EffectKind::FilesystemEntry {
+            operation: FilesystemOperation::Rename,
+            manifest: effect().before,
+            entry_index: 0,
+        },
+        EffectKind::RegistrationEntry {
+            slot: RegistrationSlot::Uninstall,
+            operation: RegistrationOperation::SetValue,
+            manifest: effect().before,
+            entry_index: 0,
+        },
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let mut disk = store(&root);
+        disk.initialize(binding(), capacity()).unwrap();
+        prepare_compensation(&mut disk, EffectKind::InstallerResume, false);
+        let proof = UnknownCompensationProof::fixture(
+            &disk.inspect(&binding()).unwrap(),
+            std::array::from_fn(|_| effect().before),
+        );
+        let generation = disk.compensate_unknown(&proof).unwrap();
+        let mut step = effect();
+        step.effect_id = uuid::Uuid::new_v4().to_string();
+        step.kind = kind;
+        let event = JournalEvent::Intent { effect: step };
+        assert!(disk.append(generation, event.clone()).is_err());
+        let mut replay = disk.inspect(&binding()).unwrap().last_valid.unwrap();
+        assert!(replay.apply(event.clone()).is_err());
+        drop(disk);
+        let path = root.path().join("journal.log");
+        let bytes = std::fs::read(&path).unwrap();
+        let last: serde_json::Value = serde_json::from_slice(
+            bytes
+                .split(|b| *b == b'\n')
+                .filter(|s| !s.is_empty())
+                .next_back()
+                .unwrap(),
+        )
+        .unwrap();
+        let record = serde_json::json!({"schema":2,"binding":binding(),"generation":generation+1,"previous":last["digest"],"lane":"Recovery","event":event});
+        let canonical = format!("{{\"schema\":2,\"binding\":{},\"generation\":{},\"previous\":{},\"lane\":\"Recovery\",\"event\":{}}}",
+            serde_json::to_string(&binding()).unwrap(), generation + 1,
+            serde_json::to_string(&last["digest"]).unwrap(), serde_json::to_string(&event).unwrap());
+        let digest = crate::version_history::verified_package::sha256(canonical.as_bytes());
+        let mut forged =
+            serde_json::to_vec(&serde_json::json!({"record":record,"digest":digest})).unwrap();
+        forged.push(b'\n');
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(&forged)
+            .unwrap();
+        let mut disk = store(&root);
+        assert!(disk.inspect(&binding()).unwrap().blocked);
+        assert!(disk.bind_existing(&binding()).is_err());
+    }
+}
+
+// 检查未知installer之后保留later context再恢复，终态仍保留原Unknown且不重放动作。
+#[test]
+fn HistoryTransaction_CompensatedReturn_056() {
+    use crate::version_history::journal::{
+        FilesystemOperation, ManifestRole, RegistrationOperation, RegistrationSlot, ShortcutSlot,
+        UnknownCompensationProof,
+    };
+    use crate::version_history::maintenance::ActiveContextMarker;
+    let root = tempfile::tempdir().unwrap();
+    let mut disk = store(&root);
+    disk.initialize(binding(), capacity()).unwrap();
+    let (_, original) =
+        prepare_compensation(&mut disk, EffectKind::InstallerTerminalOutcome, false);
+    let proof = UnknownCompensationProof::fixture(
+        &disk.inspect(&binding()).unwrap(),
+        std::array::from_fn(|_| effect().before),
+    );
+    let mut generation = disk.compensate_unknown(&proof).unwrap();
+    let mut wrong = effect();
+    wrong.effect_id = uuid::Uuid::new_v4().to_string();
+    wrong.kind = EffectKind::RecoveryFilesystemEntry {
+        context: binding().source_context,
+        operation: FilesystemOperation::Rename,
+        manifest: effect().expected_postconditions,
+        entry_index: 0,
+    };
+    assert!(disk
+        .append(generation, JournalEvent::Intent { effect: wrong })
+        .is_err());
+    record_effect(&mut disk, &mut generation, EffectKind::FenceHistoricalImage);
+    record_effect(
+        &mut disk,
+        &mut generation,
+        EffectKind::RecoveryFilesystemEntry {
+            context: binding().target_context,
+            operation: FilesystemOperation::CopyFile,
+            manifest: effect().before,
+            entry_index: 0,
+        },
+    );
+    for root in [RootKind::Desk, RootKind::WebView] {
+        record_effect(
+            &mut disk,
+            &mut generation,
+            EffectKind::PreserveRoot {
+                context: binding().target_context,
+                root,
+            },
+        );
+    }
+    record_event(
+        &mut disk,
+        &mut generation,
+        JournalEvent::Manifest {
+            role: ManifestRole::RetainedTargetContext,
+            digest: effect().expected_postconditions,
+        },
+    );
+    record_event(
+        &mut disk,
+        &mut generation,
+        JournalEvent::Phase {
+            phase: JournalPhase::Restoring,
+        },
+    );
+    record_effect(
+        &mut disk,
+        &mut generation,
+        EffectKind::RecoveryFilesystemEntry {
+            context: binding().source_context,
+            operation: FilesystemOperation::CopyFile,
+            manifest: effect().expected_postconditions,
+            entry_index: 0,
+        },
+    );
+    record_effect(
+        &mut disk,
+        &mut generation,
+        EffectKind::RecoveryRegistrationEntry {
+            slot: RegistrationSlot::Uninstall,
+            operation: RegistrationOperation::SetValue,
+            manifest: effect().expected_postconditions,
+            entry_index: 0,
+        },
+    );
+    record_effect(
+        &mut disk,
+        &mut generation,
+        EffectKind::VerifySourceBundleRestore,
+    );
+    for root in [RootKind::Desk, RootKind::WebView] {
+        record_effect(
+            &mut disk,
+            &mut generation,
+            EffectKind::RestoreSourceRoot { root },
+        );
+    }
+    for slot in [
+        RegistrationSlot::Uninstall,
+        RegistrationSlot::Publisher,
+        RegistrationSlot::DeskDirectory,
+        RegistrationSlot::DeskDirectoryBackground,
+        RegistrationSlot::LegacyDirectory,
+        RegistrationSlot::LegacyDirectoryBackground,
+    ] {
+        record_effect(
+            &mut disk,
+            &mut generation,
+            EffectKind::VerifyRegistrationRestore { slot },
+        );
+    }
+    for slot in [ShortcutSlot::Desktop, ShortcutSlot::StartMenu] {
+        record_effect(
+            &mut disk,
+            &mut generation,
+            EffectKind::RestoreShortcut { slot },
+        );
+    }
+    record_event(
+        &mut disk,
+        &mut generation,
+        JournalEvent::Phase {
+            phase: JournalPhase::Restored,
+        },
+    );
+    drop(disk);
+    let mut disk = store(&root);
+    disk.bind_existing(&binding()).unwrap();
+    let inspection = disk.inspect(&binding()).unwrap();
+    let journal = inspection.last_valid.as_ref().unwrap();
+    assert_eq!(journal.phase(), JournalPhase::Restored);
+    assert!(journal.has_historical_uncertainty());
+    assert_eq!(
+        journal.effect_observation(&original.effect_id),
+        Some(Observation::Unknown)
+    );
+    ActiveContextMarker::restored(&inspection).unwrap();
+    assert!(ActiveContextMarker::pre_context_aborted(&inspection).is_err());
+}
+
+// 检查特权事件不能借普通append提交，证据必须匹配原journal对象、最新代数和真实artifact。
+#[test]
+fn HistoryTransaction_AdmissionBinding_057() {
+    use crate::version_history::journal::PreContextAbortProof;
+    let root = tempfile::tempdir().unwrap();
+    let mut disk = store(&root);
+    disk.initialize(binding(), capacity()).unwrap();
+    let proof = PreContextAbortProof::fixture(
+        &disk.inspect(&binding()).unwrap(),
+        std::array::from_fn(|_| effect().before),
+    );
+    assert!(disk
+        .append(
+            0,
+            JournalEvent::AbortPreContext {
+                receipt: effect().before
+            }
+        )
+        .is_err());
+    let other_root = tempfile::tempdir().unwrap();
+    let mut other = store(&other_root);
+    other.initialize(binding(), capacity()).unwrap();
+    assert!(other.abort_pre_context(&proof).is_err());
+    disk.append(
+        0,
+        JournalEvent::Phase {
+            phase: JournalPhase::RecoveryRequired,
+        },
+    )
+    .unwrap();
+    assert!(disk.abort_pre_context(&proof).is_err());
+    let missing = PreContextAbortProof::fixture(
+        &disk.inspect(&binding()).unwrap(),
+        std::array::from_fn(|_| "0".repeat(64)),
+    );
+    assert!(disk.abort_pre_context(&missing).is_err());
+    assert_eq!(
+        disk.inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation(),
+        1
+    );
+}
+
+// 检查两类特权恢复事件直接使用保留lane，正向记录恰满也无需插入普通phase。
+#[test]
+fn HistoryTransaction_AdmissionLane_058() {
+    use crate::version_history::journal::{PreContextAbortProof, UnknownCompensationProof};
+    for compensation in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut disk = store(&root);
+        let plan = if compensation {
+            CapacityPlan::for_effects(6, 20, 3, 4096)
+        } else {
+            CapacityPlan::for_effects(1, 1, 1, 4096)
+        }
+        .unwrap();
+        disk.initialize(binding(), plan).unwrap();
+        if compensation {
+            let (generation, _) =
+                prepare_compensation(&mut disk, EffectKind::InstallerResume, false);
+            assert_eq!(generation, 21);
+            let proof = UnknownCompensationProof::fixture(
+                &disk.inspect(&binding()).unwrap(),
+                std::array::from_fn(|_| effect().before),
+            );
+            disk.compensate_unknown(&proof).unwrap();
+        } else {
+            let mut generation = 0;
+            record_effect(
+                &mut disk,
+                &mut generation,
+                EffectKind::VerifySourceBundleCopy,
+            );
+            record_effect(
+                &mut disk,
+                &mut generation,
+                EffectKind::VerifySourceBundleCopy,
+            );
+            let proof = PreContextAbortProof::fixture(
+                &disk.inspect(&binding()).unwrap(),
+                std::array::from_fn(|_| effect().before),
+            );
+            disk.abort_pre_context(&proof).unwrap();
+        }
+        let bytes = std::fs::read(root.path().join("journal.log")).unwrap();
+        let last: serde_json::Value = serde_json::from_slice(
+            bytes
+                .split(|b| *b == b'\n')
+                .filter(|s| !s.is_empty())
+                .next_back()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(last["record"]["lane"], "Recovery");
+        assert!(!disk.inspect(&binding()).unwrap().blocked);
+    }
+}
+
+// 检查context effect的未知结果或缺少完整source留存不能借compensation跳过安全前置条件。
+#[test]
+fn HistoryTransaction_CompensationReject_059() {
+    use crate::version_history::journal::{FilesystemOperation, UnknownCompensationProof};
+    for complete_source in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut disk = store(&root);
+        disk.initialize(binding(), capacity()).unwrap();
+        if complete_source {
+            prepare_compensation(
+                &mut disk,
+                EffectKind::FilesystemEntry {
+                    operation: FilesystemOperation::Rename,
+                    manifest: effect().before,
+                    entry_index: 0,
+                },
+                true,
+            );
+        } else {
+            let mut step = effect();
+            step.kind = EffectKind::InstallerResume;
+            disk.append(0, JournalEvent::Intent { effect: step })
+                .unwrap();
+        }
+        let inspection = disk.inspect(&binding()).unwrap();
+        let generation = inspection.last_valid.as_ref().unwrap().generation();
+        let proof = UnknownCompensationProof::fixture(
+            &inspection,
+            std::array::from_fn(|_| effect().before),
+        );
+        assert!(disk.compensate_unknown(&proof).is_err());
+        let current = disk.inspect(&binding()).unwrap();
+        assert_eq!(
+            current.last_valid.as_ref().unwrap().generation(),
+            generation
+        );
+        assert!(current.last_valid.unwrap().requires_reconciliation());
+    }
+}
+
 // 只有完整source/target留存、每个registry/shortcut恢复及精确终代marker才放行。
 #[test]
 fn HistoryTransaction_CompleteReturn_030() {

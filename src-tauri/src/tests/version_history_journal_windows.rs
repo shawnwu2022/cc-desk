@@ -725,3 +725,327 @@ fn HistoryJournalWindows_LiveCheckpoint_016() {
     assert!(MarkerStore::create(root, &control, &marker, &mut store).is_err());
     assert!(!temporary.path().join("private/active-context.log").exists());
 }
+
+// 检查early-abort完整frame回执丢失后仍需重开验证，旧transition marker不能提前放行。
+#[test]
+fn HistoryJournalWindows_AbortReceipt_017() {
+    use crate::version_history::journal::{JournalPhase, PreContextAbortProof};
+    let temporary = tempfile::tempdir().unwrap();
+    let root = private_root(temporary.path());
+    let user = CurrentUser::capture().unwrap();
+    let leases = LeaseFiles::open(root.clone(), &user).unwrap();
+    let control = leases.acquire_control().unwrap();
+    let mut store = JournalStore::open_windows(root.clone()).unwrap();
+    store.initialize(binding(), capacity()).unwrap();
+    let digest = store
+        .retain_manifest(b"fixture complete unchanged-source observations")
+        .unwrap();
+    let initial = store.inspect(&binding()).unwrap();
+    let transition = ActiveContextMarker::transition_from(&initial).unwrap();
+    let mut markers = MarkerStore::create(root.clone(), &control, &transition, &mut store).unwrap();
+    let proof = PreContextAbortProof::fixture(&initial, std::array::from_fn(|_| digest.clone()));
+    let fault = probe_persistence_fault(
+        PersistenceOperation::JournalFrame,
+        PersistenceBoundary::AfterWrite,
+    );
+    assert!(store.abort_pre_context(&proof).is_err());
+    drop(fault);
+    assert!(store.inspect(&binding()).unwrap().blocked);
+    assert_eq!(markers.current().unwrap(), transition.encode().unwrap());
+    drop(store);
+    let mut store = JournalStore::open_windows(root).unwrap();
+    store.bind_existing(&binding()).unwrap();
+    let inspected = store.inspect(&binding()).unwrap();
+    assert_eq!(
+        inspected.last_valid.as_ref().unwrap().phase(),
+        JournalPhase::PreContextAborted
+    );
+    let aborted = ActiveContextMarker::pre_context_aborted(&inspected).unwrap();
+    markers.append(&aborted, &mut store).unwrap();
+    assert_eq!(markers.current().unwrap(), aborted.encode().unwrap());
+}
+
+// 检查Windows真实持久化compensation约束、later留存和完整return终态保持原Unknown。
+#[test]
+fn HistoryJournalWindows_ReturnOnly_018() {
+    use crate::version_history::journal::{
+        EffectKind, EffectSpec, Observation, ObservedResult, RegistrationSlot, RootKind,
+        ShortcutSlot, UnknownCompensationProof,
+    };
+    fn observed(
+        store: &mut JournalStore,
+        generation: &mut u64,
+        kind: EffectKind,
+        before: &str,
+        after: &str,
+    ) {
+        let id = uuid::Uuid::new_v4().to_string();
+        *generation = store
+            .append(
+                *generation,
+                JournalEvent::Intent {
+                    effect: EffectSpec {
+                        effect_id: id.clone(),
+                        kind,
+                        before: before.into(),
+                        expected_postconditions: after.into(),
+                    },
+                },
+            )
+            .unwrap();
+        let intent = *generation;
+        let receipt = store
+            .retain_effect_receipt(&id, Observation::Applied, after)
+            .unwrap();
+        *generation = store
+            .append(
+                *generation,
+                JournalEvent::Observed {
+                    effect_id: id,
+                    intent_generation: intent,
+                    result: ObservedResult {
+                        observation: Observation::Applied,
+                        receipt: Some(receipt),
+                    },
+                },
+            )
+            .unwrap();
+    }
+    let temporary = tempfile::tempdir().unwrap();
+    let root = private_root(temporary.path());
+    let user = CurrentUser::capture().unwrap();
+    let leases = LeaseFiles::open(root.clone(), &user).unwrap();
+    let control = leases.acquire_control().unwrap();
+    let mut store = JournalStore::open_windows(root.clone()).unwrap();
+    store
+        .initialize(
+            binding(),
+            CapacityPlan::for_effects(100, 100, 10, 4096).unwrap(),
+        )
+        .unwrap();
+    let before = store
+        .retain_manifest(b"fixture owned before-state")
+        .unwrap();
+    let after = store
+        .retain_manifest(b"fixture retained after-state")
+        .unwrap();
+    let initial = store.inspect(&binding()).unwrap();
+    let transition = ActiveContextMarker::transition_from(&initial).unwrap();
+    let mut markers = MarkerStore::create(root.clone(), &control, &transition, &mut store).unwrap();
+    let mut generation = 0;
+    for role in [
+        ManifestRole::SourceContext,
+        ManifestRole::SourceBundle,
+        ManifestRole::Registration,
+        ManifestRole::Shortcuts,
+    ] {
+        generation = store
+            .append(
+                generation,
+                JournalEvent::Manifest {
+                    role,
+                    digest: after.clone(),
+                },
+            )
+            .unwrap();
+    }
+    for kind in [
+        EffectKind::VerifySourceBundleCopy,
+        EffectKind::FenceSourceImage,
+        EffectKind::PreserveRoot {
+            context: binding().source_context.clone(),
+            root: RootKind::Desk,
+        },
+        EffectKind::PreserveRoot {
+            context: binding().source_context,
+            root: RootKind::WebView,
+        },
+    ] {
+        observed(&mut store, &mut generation, kind, &before, &after);
+    }
+    generation = store
+        .append(
+            generation,
+            JournalEvent::Phase {
+                phase: JournalPhase::SourceSealed,
+            },
+        )
+        .unwrap();
+    for root in [RootKind::Desk, RootKind::WebView] {
+        observed(
+            &mut store,
+            &mut generation,
+            EffectKind::CreateFreshRoot { root },
+            &before,
+            &after,
+        );
+    }
+    generation = store
+        .append(
+            generation,
+            JournalEvent::Manifest {
+                role: ManifestRole::FreshTargetContext,
+                digest: after.clone(),
+            },
+        )
+        .unwrap();
+    for phase in [JournalPhase::FreshReady, JournalPhase::Installing] {
+        generation = store
+            .append(generation, JournalEvent::Phase { phase })
+            .unwrap();
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    generation = store
+        .append(
+            generation,
+            JournalEvent::Intent {
+                effect: EffectSpec {
+                    effect_id: id.clone(),
+                    kind: EffectKind::InstallerResume,
+                    before: before.clone(),
+                    expected_postconditions: after.clone(),
+                },
+            },
+        )
+        .unwrap();
+    let proof = UnknownCompensationProof::fixture(
+        &store.inspect(&binding()).unwrap(),
+        std::array::from_fn(|_| before.clone()),
+    );
+    assert!(store
+        .append(
+            generation,
+            JournalEvent::Phase {
+                phase: JournalPhase::Restoring
+            }
+        )
+        .is_err());
+    generation = store.compensate_unknown(&proof).unwrap();
+    assert!(store
+        .append(
+            generation,
+            JournalEvent::Intent {
+                effect: EffectSpec {
+                    effect_id: uuid::Uuid::new_v4().to_string(),
+                    kind: EffectKind::InstallerResume,
+                    before: before.clone(),
+                    expected_postconditions: after.clone()
+                }
+            }
+        )
+        .is_err());
+    assert_eq!(
+        store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .effect_observation(&id),
+        Some(Observation::Unknown)
+    );
+    observed(
+        &mut store,
+        &mut generation,
+        EffectKind::FenceHistoricalImage,
+        &before,
+        &after,
+    );
+    for root in [RootKind::Desk, RootKind::WebView] {
+        observed(
+            &mut store,
+            &mut generation,
+            EffectKind::PreserveRoot {
+                context: binding().target_context,
+                root,
+            },
+            &before,
+            &after,
+        );
+    }
+    generation = store
+        .append(
+            generation,
+            JournalEvent::Manifest {
+                role: ManifestRole::RetainedTargetContext,
+                digest: after.clone(),
+            },
+        )
+        .unwrap();
+    generation = store
+        .append(
+            generation,
+            JournalEvent::Phase {
+                phase: JournalPhase::Restoring,
+            },
+        )
+        .unwrap();
+    observed(
+        &mut store,
+        &mut generation,
+        EffectKind::VerifySourceBundleRestore,
+        &before,
+        &after,
+    );
+    for root in [RootKind::Desk, RootKind::WebView] {
+        observed(
+            &mut store,
+            &mut generation,
+            EffectKind::RestoreSourceRoot { root },
+            &before,
+            &after,
+        );
+    }
+    for slot in [
+        RegistrationSlot::Uninstall,
+        RegistrationSlot::Publisher,
+        RegistrationSlot::DeskDirectory,
+        RegistrationSlot::DeskDirectoryBackground,
+        RegistrationSlot::LegacyDirectory,
+        RegistrationSlot::LegacyDirectoryBackground,
+    ] {
+        observed(
+            &mut store,
+            &mut generation,
+            EffectKind::VerifyRegistrationRestore { slot },
+            &before,
+            &after,
+        );
+    }
+    for slot in [ShortcutSlot::Desktop, ShortcutSlot::StartMenu] {
+        observed(
+            &mut store,
+            &mut generation,
+            EffectKind::RestoreShortcut { slot },
+            &before,
+            &after,
+        );
+    }
+    store
+        .append(
+            generation,
+            JournalEvent::Phase {
+                phase: JournalPhase::Restored,
+            },
+        )
+        .unwrap();
+    drop(store);
+    let mut store = JournalStore::open_windows(root).unwrap();
+    store.bind_existing(&binding()).unwrap();
+    let inspection = store.inspect(&binding()).unwrap();
+    assert!(inspection
+        .last_valid
+        .as_ref()
+        .unwrap()
+        .has_historical_uncertainty());
+    assert_eq!(
+        inspection
+            .last_valid
+            .as_ref()
+            .unwrap()
+            .effect_observation(&id),
+        Some(Observation::Unknown)
+    );
+    let restored = ActiveContextMarker::restored(&inspection).unwrap();
+    markers.append(&restored, &mut store).unwrap();
+    assert_eq!(markers.current().unwrap(), restored.encode().unwrap());
+}

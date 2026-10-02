@@ -245,6 +245,10 @@ pub(crate) enum RegistrationOperation {
 #[serde(deny_unknown_fields)]
 pub(crate) enum EffectKind {
     FenceSourceImage,
+    ReverseSourceFence {
+        original_effect_id: String,
+        original_intent_generation: u64,
+    },
     FenceHistoricalImage,
     PreserveRoot {
         context: String,
@@ -269,12 +273,27 @@ pub(crate) enum EffectKind {
         manifest: String,
         entry_index: u32,
     },
+    RecoveryFilesystemEntry {
+        context: String,
+        operation: FilesystemOperation,
+        manifest: String,
+        entry_index: u32,
+    },
+    RecoveryRegistrationEntry {
+        slot: RegistrationSlot,
+        operation: RegistrationOperation,
+        manifest: String,
+        entry_index: u32,
+    },
     /// These aggregate observations never replace individual effect records.
     VerifySourceBundleCopy,
     VerifySourceBundleRestore,
     InstallerCreateSuspended,
     InstallerResume,
     InstallerTerminalOutcome,
+    HistoricalCreateSuspended,
+    HistoricalResume,
+    HistoricalTerminalOutcome,
     VerifyTargetBundle,
     ConfirmFirstLaunch,
     VerifyRegistrationRestore {
@@ -299,9 +318,21 @@ impl EffectSpec {
         validate_id(&self.effect_id)?;
         validate_digest(&self.before)?;
         validate_digest(&self.expected_postconditions)?;
-        if let EffectKind::PreserveRoot { context, .. } = &self.kind {
+        if let EffectKind::PreserveRoot { context, .. }
+        | EffectKind::RecoveryFilesystemEntry { context, .. } = &self.kind
+        {
             if !binding.has_context(context) {
                 return Err(error("HISTORY_CONTEXT_CHANGED"));
+            }
+        }
+        if let EffectKind::ReverseSourceFence {
+            original_effect_id,
+            original_intent_generation,
+        } = &self.kind
+        {
+            validate_id(original_effect_id)?;
+            if *original_intent_generation == 0 {
+                return Err(error("HISTORY_EFFECT_CHANGED"));
             }
         }
         if let Some(manifest) = self.entry_manifest() {
@@ -312,7 +343,9 @@ impl EffectSpec {
     fn entry_manifest(&self) -> Option<&str> {
         match &self.kind {
             EffectKind::FilesystemEntry { manifest, .. }
-            | EffectKind::RegistrationEntry { manifest, .. } => Some(manifest),
+            | EffectKind::RegistrationEntry { manifest, .. }
+            | EffectKind::RecoveryFilesystemEntry { manifest, .. }
+            | EffectKind::RecoveryRegistrationEntry { manifest, .. } => Some(manifest),
             _ => None,
         }
     }
@@ -363,6 +396,7 @@ pub(crate) enum JournalPhase {
     HistoricalActive,
     Restoring,
     Restored,
+    PreContextAborted,
     RecoveryRequired,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -386,6 +420,97 @@ pub(crate) enum JournalEvent {
     Phase {
         phase: JournalPhase,
     },
+    AbortPreContext {
+        receipt: String,
+    },
+    /// Missing acknowledgement is explicitly recorded as Unknown here when no
+    /// Observed frame survived. Existing Unknown is never overwritten.
+    CompensateUnknown {
+        effect_id: String,
+        intent_generation: u64,
+        current_roots: String,
+        receipt: String,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoveryObservations {
+    processes: String,
+    jobs: String,
+    roots: String,
+    registration: String,
+}
+impl RecoveryObservations {
+    fn digests(&self) -> [&str; 4] {
+        [&self.processes, &self.jobs, &self.roots, &self.registration]
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnchangedSourceObservations {
+    bundle: String,
+    roots: String,
+    registration: String,
+    quiescence: String,
+}
+impl UnchangedSourceObservations {
+    fn digests(&self) -> [&str; 4] {
+        [
+            &self.bundle,
+            &self.roots,
+            &self.registration,
+            &self.quiescence,
+        ]
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdmissionAnchor {
+    binding: JournalBinding,
+    generation: u64,
+    head: String,
+    journal_identity: String,
+}
+impl AdmissionAnchor {
+    fn matches(&self, journal: &SwitchJournal, head: &str, identity: &str) -> bool {
+        self.binding == journal.binding
+            && self.generation == journal.generation
+            && self.head == head
+            && self.journal_identity == identity
+    }
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AbortReceipt {
+    schema: u32,
+    anchor: AdmissionAnchor,
+    unchanged: UnchangedSourceObservations,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompensationReceipt {
+    schema: u32,
+    anchor: AdmissionAnchor,
+    effect_id: String,
+    intent_generation: u64,
+    current: RecoveryObservations,
+}
+/// No production constructor. A later audited factory must retain live exact
+/// source ownership/unchanged-state/quiescence guards; hashes are not that proof.
+pub(crate) struct PreContextAbortProof {
+    anchor: AdmissionAnchor,
+    unchanged: UnchangedSourceObservations,
+    _guards: Box<dyn Send + Sync>,
+}
+/// No production constructor or Deserialize. Missing process/job identity must
+/// prevent a future factory from minting this admission, never become quiescence.
+pub(crate) struct UnknownCompensationProof {
+    anchor: AdmissionAnchor,
+    effect_id: String,
+    intent_generation: u64,
+    current: RecoveryObservations,
+    _guards: Box<dyn Send + Sync>,
 }
 struct EffectRecord {
     spec: EffectSpec,
@@ -403,6 +528,8 @@ pub(crate) struct SwitchJournal {
     manifests: BTreeMap<ManifestRole, String>,
     capacity: CapacityPlan,
     recovering: bool,
+    compensated: BTreeSet<String>,
+    return_roots: Option<String>,
 }
 impl SwitchJournal {
     pub(crate) fn new(binding: JournalBinding, capacity: CapacityPlan) -> Result<Self, SafeError> {
@@ -418,6 +545,8 @@ impl SwitchJournal {
             manifests: BTreeMap::new(),
             capacity,
             recovering: false,
+            compensated: BTreeSet::new(),
+            return_roots: None,
         })
     }
     pub(crate) fn generation(&self) -> u64 {
@@ -438,6 +567,15 @@ impl SwitchJournal {
     pub(crate) fn requires_reconciliation(&self) -> bool {
         self.pending.is_some()
     }
+    pub(crate) fn effect_observation(&self, effect_id: &str) -> Option<Observation> {
+        self.effects
+            .get(effect_id)
+            .and_then(|effect| effect.result.as_ref())
+            .map(|result| result.observation)
+    }
+    pub(crate) fn has_historical_uncertainty(&self) -> bool {
+        !self.compensated.is_empty()
+    }
 
     /// Validation is read-only. Commit changes only the indexed affected entry;
     /// failed validation never requires cloning/rolling back the entire history.
@@ -450,7 +588,10 @@ impl SwitchJournal {
         self.generation
             .checked_add(1)
             .ok_or_else(|| error("HISTORY_JOURNAL_LIMIT"))?;
-        if self.phase == JournalPhase::Restored {
+        if matches!(
+            self.phase,
+            JournalPhase::Restored | JournalPhase::PreContextAborted
+        ) {
             return Err(error("HISTORY_TRANSACTION_TERMINAL"));
         }
         match event {
@@ -460,6 +601,12 @@ impl SwitchJournal {
                 if self.requires_reconciliation() || self.manifests.contains_key(role) {
                     return Err(error("HISTORY_RECONCILIATION_REQUIRED"));
                 }
+                if self.has_historical_uncertainty()
+                    && (*role != ManifestRole::RetainedTargetContext
+                        || self.phase != JournalPhase::RecoveryRequired)
+                {
+                    return Err(error("HISTORY_RETURN_ONLY"));
+                }
             }
             JournalEvent::Intent { effect } => {
                 effect.validate(&self.binding)?;
@@ -468,6 +615,27 @@ impl SwitchJournal {
                     || self.effects.contains_key(&effect.effect_id)
                 {
                     return Err(error("HISTORY_RECONCILIATION_REQUIRED"));
+                }
+                if self.has_historical_uncertainty() && !self.return_effect_allowed(effect) {
+                    return Err(error("HISTORY_RETURN_ONLY"));
+                }
+                if let EffectKind::ReverseSourceFence {
+                    original_effect_id,
+                    original_intent_generation,
+                } = &effect.kind
+                {
+                    let original = self
+                        .effects
+                        .get(original_effect_id)
+                        .ok_or_else(|| error("HISTORY_EFFECT_CHANGED"))?;
+                    if original.spec.kind != EffectKind::FenceSourceImage
+                        || original.intent_generation != *original_intent_generation
+                        || self.effect_observation(original_effect_id) != Some(Observation::Applied)
+                        || effect.expected_postconditions != original.spec.before
+                        || self.applied(effect.kind.clone())
+                    {
+                        return Err(error("HISTORY_EFFECT_CHANGED"));
+                    }
                 }
             }
             JournalEvent::Observed {
@@ -503,6 +671,52 @@ impl SwitchJournal {
                     return Err(error("HISTORY_RECONCILIATION_REQUIRED"));
                 }
             }
+            JournalEvent::AbortPreContext { receipt } => {
+                validate_digest(receipt)?;
+                if !self.can_abort_pre_context() {
+                    return Err(error("HISTORY_EARLY_ABORT_BLOCKED"));
+                }
+            }
+            JournalEvent::CompensateUnknown {
+                effect_id,
+                intent_generation,
+                current_roots,
+                receipt,
+            } => {
+                validate_digest(receipt)?;
+                validate_digest(current_roots)?;
+                let effect = self
+                    .effects
+                    .get(effect_id)
+                    .ok_or_else(|| error("HISTORY_EFFECT_CHANGED"))?;
+                if self.pending.as_deref() != Some(effect_id.as_str())
+                    || effect.intent_generation != *intent_generation
+                    || effect
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| result.observation != Observation::Unknown)
+                    || !matches!(
+                        effect.spec.kind,
+                        EffectKind::InstallerCreateSuspended
+                            | EffectKind::InstallerResume
+                            | EffectKind::InstallerTerminalOutcome
+                            | EffectKind::HistoricalCreateSuspended
+                            | EffectKind::HistoricalResume
+                            | EffectKind::HistoricalTerminalOutcome
+                    )
+                    || !matches!(
+                        self.phase,
+                        JournalPhase::Installing
+                            | JournalPhase::InstalledUnconfirmed
+                            | JournalPhase::HistoricalActive
+                            | JournalPhase::RecoveryRequired
+                    )
+                    || !self.source_ready_for_return()
+                    || self.has_historical_uncertainty()
+                {
+                    return Err(error("HISTORY_COMPENSATION_BLOCKED"));
+                }
+            }
         }
         Ok(())
     }
@@ -512,7 +726,8 @@ impl SwitchJournal {
                 event,
                 JournalEvent::Phase {
                     phase: JournalPhase::RecoveryRequired | JournalPhase::Restoring
-                }
+                } | JournalEvent::AbortPreContext { .. }
+                    | JournalEvent::CompensateUnknown { .. }
             )
         {
             WriteLane::Recovery
@@ -554,6 +769,116 @@ impl SwitchJournal {
             JournalEvent::Phase { phase } => {
                 self.phase = phase;
             }
+            JournalEvent::AbortPreContext { .. } => self.phase = JournalPhase::PreContextAborted,
+            JournalEvent::CompensateUnknown {
+                effect_id,
+                current_roots,
+                ..
+            } => {
+                let effect = self
+                    .effects
+                    .get_mut(&effect_id)
+                    .expect("validated pending effect");
+                if effect.result.is_none() {
+                    effect.result = Some(ObservedResult {
+                        observation: Observation::Unknown,
+                        receipt: None,
+                    });
+                }
+                self.compensated.insert(effect_id);
+                self.pending = None;
+                self.return_roots = Some(current_roots);
+                self.phase = JournalPhase::RecoveryRequired;
+            }
+        }
+    }
+    fn source_ready_for_return(&self) -> bool {
+        [
+            ManifestRole::SourceContext,
+            ManifestRole::SourceBundle,
+            ManifestRole::Registration,
+            ManifestRole::Shortcuts,
+            ManifestRole::FreshTargetContext,
+        ]
+        .into_iter()
+        .all(|role| self.manifests.contains_key(&role))
+            && self.preserved(&self.binding.source_context)
+            && self.applied(EffectKind::VerifySourceBundleCopy)
+            && self.applied(EffectKind::FenceSourceImage)
+            && [RootKind::Desk, RootKind::WebView]
+                .into_iter()
+                .all(|root| self.applied(EffectKind::CreateFreshRoot { root }))
+    }
+    fn can_abort_pre_context(&self) -> bool {
+        if self.requires_reconciliation()
+            || self.has_historical_uncertainty()
+            || !matches!(
+                self.phase,
+                JournalPhase::Reviewed | JournalPhase::RecoveryRequired
+            )
+            || [
+                ManifestRole::SourceContext,
+                ManifestRole::FreshTargetContext,
+                ManifestRole::RetainedTargetContext,
+            ]
+            .into_iter()
+            .any(|role| self.manifests.contains_key(&role))
+        {
+            return false;
+        }
+        self.effects.values().all(|effect| {
+            let Some(result) = &effect.result else {
+                return false;
+            };
+            if result.observation == Observation::Unknown {
+                return false;
+            }
+            match &effect.spec.kind {
+                EffectKind::VerifySourceBundleCopy | EffectKind::ReverseSourceFence { .. } => true,
+                EffectKind::FenceSourceImage => {
+                    result.observation == Observation::NotApplied
+                        || self.applied(EffectKind::ReverseSourceFence {
+                            original_effect_id: effect.spec.effect_id.clone(),
+                            original_intent_generation: effect.intent_generation,
+                        })
+                }
+                _ => false,
+            }
+        })
+    }
+    fn return_effect_allowed(&self, effect: &EffectSpec) -> bool {
+        match &effect.kind {
+            EffectKind::FenceHistoricalImage => self.phase == JournalPhase::RecoveryRequired,
+            EffectKind::PreserveRoot { context, .. } => {
+                self.phase == JournalPhase::RecoveryRequired
+                    && context == &self.binding.target_context
+            }
+            EffectKind::RecoveryFilesystemEntry {
+                context, manifest, ..
+            } => {
+                if context == &self.binding.target_context
+                    && self.phase == JournalPhase::RecoveryRequired
+                {
+                    self.return_roots.as_ref() == Some(manifest)
+                        || self.manifests.get(&ManifestRole::RetainedTargetContext)
+                            == Some(manifest)
+                } else {
+                    context == &self.binding.source_context
+                        && self.phase == JournalPhase::Restoring
+                        && [ManifestRole::SourceContext, ManifestRole::SourceBundle]
+                            .into_iter()
+                            .any(|role| self.manifests.get(&role) == Some(manifest))
+                }
+            }
+            EffectKind::RecoveryRegistrationEntry { manifest, .. } => {
+                self.phase == JournalPhase::Restoring
+                    && self.manifests.get(&ManifestRole::Registration) == Some(manifest)
+            }
+            EffectKind::VerifySourceBundleRestore
+            | EffectKind::RestoreSourceRoot { .. }
+            | EffectKind::VerifyRegistrationRestore { .. }
+            | EffectKind::RestoreShortcut { .. } => self.phase == JournalPhase::Restoring,
+            _ => false,
         }
     }
     fn applied(&self, kind: EffectKind) -> bool {
@@ -919,6 +1244,85 @@ impl JournalStore {
         expected_generation: u64,
         event: JournalEvent,
     ) -> Result<u64, SafeError> {
+        if matches!(
+            event,
+            JournalEvent::AbortPreContext { .. } | JournalEvent::CompensateUnknown { .. }
+        ) {
+            return Err(error("HISTORY_LIVE_EVIDENCE_REQUIRED"));
+        }
+        self.append_admitted(expected_generation, event)
+    }
+    pub(crate) fn abort_pre_context(
+        &mut self,
+        proof: &PreContextAbortProof,
+    ) -> Result<u64, SafeError> {
+        self.check_admission_anchor(&proof.anchor)?;
+        let receipt = AbortReceipt {
+            schema: 1,
+            anchor: proof.anchor.clone(),
+            unchanged: proof.unchanged.clone(),
+        };
+        let bytes = serde_json::to_vec(&receipt).map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
+        let event = JournalEvent::AbortPreContext {
+            receipt: sha256(&bytes),
+        };
+        self.writer
+            .as_ref()
+            .expect("bound writer")
+            .journal
+            .validate_event(&event)?;
+        for digest in proof.unchanged.digests() {
+            self.protect_manifest(digest)?;
+        }
+        self.retain_manifest(&bytes)?;
+        self.append_admitted(proof.anchor.generation, event)
+    }
+    pub(crate) fn compensate_unknown(
+        &mut self,
+        proof: &UnknownCompensationProof,
+    ) -> Result<u64, SafeError> {
+        self.check_admission_anchor(&proof.anchor)?;
+        let receipt = CompensationReceipt {
+            schema: 1,
+            anchor: proof.anchor.clone(),
+            effect_id: proof.effect_id.clone(),
+            intent_generation: proof.intent_generation,
+            current: proof.current.clone(),
+        };
+        let bytes = serde_json::to_vec(&receipt).map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
+        let event = JournalEvent::CompensateUnknown {
+            effect_id: proof.effect_id.clone(),
+            intent_generation: proof.intent_generation,
+            current_roots: proof.current.roots.clone(),
+            receipt: sha256(&bytes),
+        };
+        self.writer
+            .as_ref()
+            .expect("bound writer")
+            .journal
+            .validate_event(&event)?;
+        for digest in proof.current.digests() {
+            self.protect_manifest(digest)?;
+        }
+        self.retain_manifest(&bytes)?;
+        self.append_admitted(proof.anchor.generation, event)
+    }
+    fn check_admission_anchor(&self, anchor: &AdmissionAnchor) -> Result<(), SafeError> {
+        self.check_writer_current()?;
+        let state = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?;
+        if !anchor.matches(&state.journal, &state.head, &state.identity) {
+            return Err(error("HISTORY_GENERATION_CHANGED"));
+        }
+        Ok(())
+    }
+    fn append_admitted(
+        &mut self,
+        expected_generation: u64,
+        event: JournalEvent,
+    ) -> Result<u64, SafeError> {
         self.check_writer_current()?;
         let state = self
             .writer
@@ -928,7 +1332,7 @@ impl JournalStore {
             return Err(error("HISTORY_GENERATION_CHANGED"));
         }
         state.journal.validate_event(&event)?;
-        self.validate_artifacts(&state.journal, &event)?;
+        self.validate_artifacts(&state.journal, &event, &state.head, &state.identity)?;
         let lane = state.journal.lane(&event);
         let record = Envelope::new(Record {
             schema: 2,
@@ -1126,6 +1530,8 @@ impl JournalStore {
         &self,
         journal: &SwitchJournal,
         event: &JournalEvent,
+        head: &str,
+        identity: &str,
     ) -> Result<(), SafeError> {
         match event {
             JournalEvent::Manifest { digest, .. } => {
@@ -1136,6 +1542,64 @@ impl JournalStore {
                 self.protect_manifest(&effect.expected_postconditions)?;
                 if let Some(manifest) = effect.entry_manifest() {
                     self.protect_manifest(manifest)?;
+                }
+                if let EffectKind::ReverseSourceFence {
+                    original_effect_id, ..
+                } = &effect.kind
+                {
+                    let original = journal
+                        .effects
+                        .get(original_effect_id)
+                        .ok_or_else(|| error("HISTORY_EFFECT_CHANGED"))?;
+                    let digest = original
+                        .result
+                        .as_ref()
+                        .and_then(|result| result.receipt.as_ref())
+                        .ok_or_else(|| error("HISTORY_EFFECT_CHANGED"))?;
+                    let receipt: EffectReceipt =
+                        serde_json::from_slice(&self.protect_manifest(digest)?)
+                            .map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
+                    if effect.before != receipt.observed_manifest {
+                        return Err(error("HISTORY_EFFECT_CHANGED"));
+                    }
+                }
+            }
+            JournalEvent::AbortPreContext { receipt } => {
+                let bytes = self.protect_manifest(receipt)?;
+                if bytes.len() > 16384 {
+                    return Err(error("HISTORY_RECEIPT_INVALID"));
+                }
+                let receipt: AbortReceipt =
+                    serde_json::from_slice(&bytes).map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
+                if receipt.schema != 1 || !receipt.anchor.matches(journal, head, identity) {
+                    return Err(error("HISTORY_RECEIPT_INVALID"));
+                }
+                for digest in receipt.unchanged.digests() {
+                    self.protect_manifest(digest)?;
+                }
+            }
+            JournalEvent::CompensateUnknown {
+                effect_id,
+                intent_generation,
+                current_roots,
+                receipt,
+            } => {
+                let bytes = self.protect_manifest(receipt)?;
+                if bytes.len() > 16384 {
+                    return Err(error("HISTORY_RECEIPT_INVALID"));
+                }
+                let receipt: CompensationReceipt =
+                    serde_json::from_slice(&bytes).map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
+                if receipt.schema != 1
+                    || !receipt.anchor.matches(journal, head, identity)
+                    || &receipt.effect_id != effect_id
+                    || receipt.intent_generation != *intent_generation
+                    || &receipt.current.roots != current_roots
+                {
+                    return Err(error("HISTORY_RECEIPT_INVALID"));
+                }
+                for digest in receipt.current.digests() {
+                    self.protect_manifest(digest)?;
                 }
             }
             JournalEvent::Observed {
@@ -1482,7 +1946,14 @@ impl JournalStore {
                 let lane = journal.lane(&record.event);
                 if record.lane != Some(lane)
                     || journal.validate_event(&record.event).is_err()
-                    || self.validate_artifacts(journal, &record.event).is_err()
+                    || self
+                        .validate_artifacts(
+                            journal,
+                            &record.event,
+                            status.head.as_deref().unwrap_or_default(),
+                            &status.identity,
+                        )
+                        .is_err()
                     || status
                         .usage
                         .check(&journal.capacity, lane, frame.len() as u64, self.limits)
@@ -1587,6 +2058,56 @@ impl JournalStore {
 
 #[cfg(test)]
 struct TestDurability;
+#[cfg(test)]
+impl AdmissionAnchor {
+    fn fixture(inspection: &JournalInspection) -> Self {
+        assert!(!inspection.blocked);
+        let journal = inspection.last_valid.as_ref().unwrap();
+        Self {
+            binding: journal.binding.clone(),
+            generation: journal.generation,
+            head: inspection.head.clone().unwrap(),
+            journal_identity: inspection.identity.clone(),
+        }
+    }
+}
+#[cfg(test)]
+impl PreContextAbortProof {
+    pub(crate) fn fixture(inspection: &JournalInspection, digests: [String; 4]) -> Self {
+        let [bundle, roots, registration, quiescence] = digests;
+        Self {
+            anchor: AdmissionAnchor::fixture(inspection),
+            unchanged: UnchangedSourceObservations {
+                bundle,
+                roots,
+                registration,
+                quiescence,
+            },
+            _guards: Box::new(()),
+        }
+    }
+}
+#[cfg(test)]
+impl UnknownCompensationProof {
+    pub(crate) fn fixture(inspection: &JournalInspection, digests: [String; 4]) -> Self {
+        let journal = inspection.last_valid.as_ref().unwrap();
+        let pending = journal.pending.as_ref().unwrap();
+        let effect = journal.effects.get(pending).unwrap();
+        let [processes, jobs, roots, registration] = digests;
+        Self {
+            anchor: AdmissionAnchor::fixture(inspection),
+            effect_id: pending.clone(),
+            intent_generation: effect.intent_generation,
+            current: RecoveryObservations {
+                processes,
+                jobs,
+                roots,
+                registration,
+            },
+            _guards: Box::new(()),
+        }
+    }
+}
 #[cfg(test)]
 impl DirectoryDurability for TestDurability {
     fn sync_directory(&self, directory: &Dir) -> std::io::Result<()> {
