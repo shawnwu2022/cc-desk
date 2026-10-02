@@ -1294,8 +1294,7 @@ fn HistoryTransaction_ReturnOnly_055() {
         let last: serde_json::Value = serde_json::from_slice(
             bytes
                 .split(|b| *b == b'\n')
-                .filter(|s| !s.is_empty())
-                .next_back()
+                .rfind(|s| !s.is_empty())
                 .unwrap(),
         )
         .unwrap();
@@ -1551,8 +1550,7 @@ fn HistoryTransaction_AdmissionLane_058() {
         let last: serde_json::Value = serde_json::from_slice(
             bytes
                 .split(|b| *b == b'\n')
-                .filter(|s| !s.is_empty())
-                .next_back()
+                .rfind(|s| !s.is_empty())
                 .unwrap(),
         )
         .unwrap();

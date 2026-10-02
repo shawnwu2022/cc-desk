@@ -1097,9 +1097,11 @@ impl JournalStore {
         marker: &super::maintenance::ActiveContextMarker,
     ) -> Result<(), SafeError> {
         self.check_writer_current()?;
+        #[cfg(not(test))]
+        let JournalStorage::Windows(storage) = &self.storage;
+        #[cfg(test)]
         let storage = match &self.storage {
             JournalStorage::Windows(storage) => storage,
-            #[cfg(test)]
             JournalStorage::Fixture { .. } => return Err(error("HISTORY_PLATFORM_UNSUPPORTED")),
         };
         if !storage.matches_root(root) {
