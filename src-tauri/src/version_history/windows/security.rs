@@ -133,6 +133,54 @@ impl CurrentUser {
             })
         }
     }
+    /// Query the token of the exact retained source process; PID/session or
+    /// image spelling cannot substitute for same-user, unelevated ownership.
+    pub(super) fn verify_process_user(&self, process: HANDLE) -> io::Result<()> {
+        self.require_unelevated()?;
+        unsafe {
+            let mut raw = HANDLE::default();
+            OpenProcessToken(process, TOKEN_QUERY, &mut raw).map_err(win_error)?;
+            let token = own(raw);
+            let mut length = 0;
+            let sizing = GetTokenInformation(handle(&token), TokenUser, None, 0, &mut length);
+            if sizing.is_ok()
+                || sizing.err().map(|error| error.code())
+                    != Some(ERROR_INSUFFICIENT_BUFFER.to_hresult())
+                || (length as usize) < size_of::<TOKEN_USER>()
+                || length > 65536
+            {
+                return Err(blocked("source token identity unavailable"));
+            }
+            let mut buffer = vec![0usize; (length as usize).div_ceil(size_of::<usize>())];
+            GetTokenInformation(
+                handle(&token),
+                TokenUser,
+                Some(buffer.as_mut_ptr().cast()),
+                length,
+                &mut length,
+            )
+            .map_err(win_error)?;
+            let observed = &*buffer.as_ptr().cast::<TOKEN_USER>();
+            if !IsValidSid(observed.User.Sid).as_bool()
+                || EqualSid(observed.User.Sid, self.sid()).is_err()
+            {
+                return Err(blocked("source process belongs to another user"));
+            }
+            let mut elevation = TOKEN_ELEVATION::default();
+            GetTokenInformation(
+                handle(&token),
+                TokenElevation,
+                Some((&mut elevation as *mut TOKEN_ELEVATION).cast()),
+                size_of::<TOKEN_ELEVATION>() as u32,
+                &mut length,
+            )
+            .map_err(win_error)?;
+            if elevation.TokenIsElevated != 0 {
+                return Err(blocked("source process is elevated"));
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn require_unelevated(&self) -> io::Result<()> {
         if self.elevated || !cfg!(target_arch = "x86_64") {
             return Err(blocked("recovery requires an unelevated x64 user"));

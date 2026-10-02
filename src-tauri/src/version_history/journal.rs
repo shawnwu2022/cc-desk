@@ -146,7 +146,7 @@ impl Usage {
     }
 }
 
-pub(super) fn validate_id(value: &str) -> Result<(), SafeError> {
+pub(crate) fn validate_id(value: &str) -> Result<(), SafeError> {
     let parsed = uuid::Uuid::parse_str(value).map_err(|_| error("HISTORY_IDENTITY_INVALID"))?;
     if parsed.is_nil() || parsed.hyphenated().to_string() != value {
         return Err(error("HISTORY_IDENTITY_INVALID"));

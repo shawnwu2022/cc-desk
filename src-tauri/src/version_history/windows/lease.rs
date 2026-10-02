@@ -137,7 +137,7 @@ impl SharedLease {
 impl ControlLease {
     /// A marker writer borrows this guard for its entire lifetime. A lock on a
     /// different recovery root cannot authorize publication here.
-    pub(super) fn verify_root(&self, root: &PrivateDirectory) -> io::Result<()> {
+    pub(crate) fn verify_root(&self, root: &PrivateDirectory) -> io::Result<()> {
         self.lock.file.verify()?;
         root.directory().recheck()?;
         if &self.root != root.directory().identity()
