@@ -141,6 +141,9 @@ fn worker(root: &Path) -> io::Result<()> {
     )?;
     let user = CurrentUser::capture()?;
     user.require_unelevated()?;
+    // The actual Medium worker exercises both exact-target admission and the
+    // foreign-SID/wrong-target policy refusals before any fixture effects.
+    super::version_history_classes_alias::run_policy_probe();
     let parent = Directory::open_absolute(root.parent().unwrap())?;
     let owned = Arc::new(PrivateDirectory::open_existing(
         parent,

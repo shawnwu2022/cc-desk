@@ -126,3 +126,6 @@ mod version_history_context_windows;
 mod version_history_scope;
 
 mod version_history_registration_journal;
+
+#[cfg(windows)]
+mod version_history_classes_alias;

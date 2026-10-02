@@ -2028,8 +2028,7 @@ fn HistoryWindows_FenceBusy_035() {
     std::fs::hard_link(&source, temporary.path().join("extra-link.exe")).unwrap();
     let validation = fence
         .verify()
-        .err()
-        .expect("later link-count validation must remain a hard failure");
+        .expect_err("later link-count validation must remain a hard failure");
     assert!(!ImageFence::is_acquisition_busy(&validation));
 }
 

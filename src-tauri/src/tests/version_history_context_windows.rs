@@ -289,17 +289,43 @@ fn HistoryContextWindows_UnsupportedAndBounded_004() {
         "overlap",
         "wrong-type",
     ] {
-        let fixture = Fixture::new();
+        let mut fixture = Fixture::new();
         fixture.fill();
         let mut limits = SnapshotLimits::default();
+        let hardlink_identity = (variant == "hardlink").then(|| {
+            fixture
+                .source
+                .directory()
+                .open_file(name("unknown.bin"), FileAccess::Read)
+                .unwrap()
+                .identity()
+                .clone()
+        });
         match variant {
             "bytes" => limits.max_bytes = 1,
             "entries" => limits.max_entries = 2,
-            "hardlink" => std::fs::hard_link(
-                fixture.temp.path().join("desk/unknown.bin"),
-                fixture.temp.path().join("desk/alias"),
-            )
-            .unwrap(),
+            "hardlink" => {
+                // Construct the hostile fixture before pinning its rotating
+                // parent. The DELETE-capable root guard conflicts with Win32's
+                // hardlink setup open; rejection must come from capture itself.
+                let expected_root = fixture.source.directory().identity().clone();
+                let rotating = std::mem::replace(&mut fixture.source, fixture.records.clone());
+                drop(rotating);
+                std::fs::hard_link(
+                    fixture.temp.path().join("desk/unknown.bin"),
+                    fixture.temp.path().join("desk/alias"),
+                )
+                .unwrap();
+                fixture.source = Arc::new(
+                    PrivateDirectory::open_existing(
+                        fixture.parent.clone(),
+                        name("desk"),
+                        &fixture.user,
+                    )
+                    .unwrap(),
+                );
+                assert_eq!(fixture.source.directory().identity(), &expected_root);
+            }
             "stream" => std::fs::write(
                 fixture.temp.path().join("desk/unknown.bin:retained-data"),
                 b"cannot omit",
@@ -323,6 +349,20 @@ fn HistoryContextWindows_UnsupportedAndBounded_004() {
             )
         });
         assert!(result.is_err(), "{variant}");
+        drop(result);
+        if let Some(expected) = hardlink_identity {
+            // Remove only the hostile alias created by this fixture, then
+            // prove the same normal read guard admits the unchanged object.
+            std::fs::remove_file(fixture.temp.path().join("desk/alias")).unwrap();
+            let admitted = fixture.context();
+            admitted.verify().unwrap();
+            let file = fixture
+                .source
+                .directory()
+                .open_file(name("unknown.bin"), FileAccess::Read)
+                .unwrap();
+            assert_eq!(file.identity(), &expected);
+        }
         assert_eq!(
             std::fs::read(fixture.temp.path().join("desk/unknown.bin")).unwrap(),
             [0, 1, 255]
@@ -789,8 +829,13 @@ fn HistoryContextWindows_BundleAfterImageQuarantine_013() {
 #[test]
 fn HistoryContextWindows_NestedAbsentParents_014() {
     let fixture = Fixture::new();
-    std::fs::create_dir_all(fixture.temp.path().join("local/app")).unwrap();
-    let nested = Directory::open_absolute(&fixture.temp.path().join("local/app")).unwrap();
+    std::fs::create_dir_all(fixture.temp.path().join("local").join("app")).unwrap();
+    let nested = fixture
+        .parent
+        .open_directory(name("local"))
+        .unwrap()
+        .open_directory(name("app"))
+        .unwrap();
     let mut context = HeldContext::capture(
         HeldRoot::observe(fixture.parent.clone(), name("absent-desk")).unwrap(),
         HeldRoot::observe(nested, name("absent-udf")).unwrap(),
@@ -1369,6 +1414,50 @@ fn actual_sid_pair(path: &Path) -> (String, String) {
     }
 }
 
+fn token_default_owner() -> String {
+    use std::{
+        mem::size_of,
+        os::windows::io::{FromRawHandle, OwnedHandle},
+    };
+    use windows::Win32::{
+        Foundation::{LocalFree, ERROR_INSUFFICIENT_BUFFER, HANDLE, HLOCAL},
+        Security::{
+            Authorization::ConvertSidToStringSidW, GetTokenInformation, IsValidSid, TokenOwner,
+            TOKEN_OWNER, TOKEN_QUERY,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    use windows_core::PWSTR;
+    unsafe {
+        let mut raw = HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw).unwrap();
+        let _token = OwnedHandle::from_raw_handle(raw.0);
+        let mut length = 0;
+        let sizing = GetTokenInformation(raw, TokenOwner, None, 0, &mut length);
+        assert_eq!(
+            sizing.unwrap_err().code(),
+            ERROR_INSUFFICIENT_BUFFER.to_hresult()
+        );
+        assert!((size_of::<TOKEN_OWNER>()..=65536).contains(&(length as usize)));
+        let mut buffer = vec![0usize; (length as usize).div_ceil(size_of::<usize>())];
+        GetTokenInformation(
+            raw,
+            TokenOwner,
+            Some(buffer.as_mut_ptr().cast()),
+            length,
+            &mut length,
+        )
+        .unwrap();
+        let owner = &*buffer.as_ptr().cast::<TOKEN_OWNER>();
+        assert!(IsValidSid(owner.Owner).as_bool());
+        let mut text = PWSTR::null();
+        ConvertSidToStringSidW(owner.Owner, &mut text).unwrap();
+        let result = text.to_string().unwrap();
+        let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+        result
+    }
+}
+
 // 检查实际新建子目录/文件继承 Creator Owner 规则后的真实 owner/group 与精确 descriptor 在复制和旋转后保持。
 #[test]
 fn HistoryContextWindows_InheritedOwnerGroup_023() {
@@ -1383,7 +1472,10 @@ fn HistoryContextWindows_InheritedOwnerGroup_023() {
     let file_path = fixture.temp.path().join("desk/inherited/child/data");
     std::fs::write(&file_path, b"created after inheritance was configured").unwrap();
     let (owner, group) = actual_sid_pair(&file_path);
-    assert_eq!(owner, fixture.user.sid_text());
+    // Elevated Windows tokens can choose Administrators as the default object
+    // owner. Compare with the actual token default, then preserve owner/group
+    // and the complete inherited descriptor exactly throughout capture/rotation.
+    assert_eq!(owner, token_default_owner());
     let mut context = fixture.context();
     let original = context
         .tree(RootKind::Desk)

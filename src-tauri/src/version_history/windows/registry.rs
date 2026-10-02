@@ -82,6 +82,7 @@ pub(crate) struct RegistrationKey {
     slot: RegistrationSlot,
     view: RegistryView,
     relative: String,
+    namespace: Vec<Vec<u16>>,
 }
 impl RegistrationKey {
     pub(crate) fn open(
@@ -109,18 +110,36 @@ impl RegistrationKey {
         let Some(chain) = open_chain(HKEY_CURRENT_USER, &path, view, true)? else {
             return Ok(None);
         };
-        Ok(Some(Self {
+        let namespace = chain.current_names()?;
+        let result = Self {
             chain,
             slot,
             view,
             relative: relative.into(),
-        }))
+            namespace,
+        };
+        result.verify_binding()?;
+        Ok(Some(result))
     }
     fn raw(&self) -> HKEY {
         self.chain.raw()
     }
+    fn verify_binding(&self) -> io::Result<()> {
+        let path = if self.relative.is_empty() {
+            self.slot.path().to_owned()
+        } else {
+            format!("{}\\{}", self.slot.path(), self.relative)
+        };
+        let fresh =
+            self.chain
+                .reopen_bound(HKEY_CURRENT_USER, &path, self.view, false, &self.namespace)?;
+        self.chain.verify_same_namespace(&fresh, &self.namespace)
+    }
     pub(crate) fn read(&self, name: &str) -> io::Result<Option<RegistryValue>> {
-        read_value(self.raw(), name)
+        self.verify_binding()?;
+        let observed = read_value(self.raw(), name)?;
+        self.verify_binding()?;
+        Ok(observed)
     }
     /// Compare actual typed before state immediately before one mutation, then
     /// flush the containing hive and compare actual typed after state. This is
@@ -189,7 +208,11 @@ fn value_name(name: &str) -> io::Result<Vec<u16>> {
 fn read_value(key: HKEY, name: &str) -> io::Result<Option<RegistryValue>> {
     read_value_bounded(key, name, 1024 * 1024)
 }
-fn read_value_bounded(key: HKEY, name: &str, maximum: usize) -> io::Result<Option<RegistryValue>> {
+pub(super) fn read_value_bounded(
+    key: HKEY,
+    name: &str,
+    maximum: usize,
+) -> io::Result<Option<RegistryValue>> {
     let name = value_name(name)?;
     let mut kind = REG_VALUE_TYPE::default();
     let mut length = 0;
@@ -231,7 +254,7 @@ fn read_value_bounded(key: HKEY, name: &str, maximum: usize) -> io::Result<Optio
 }
 /// Query the current name from the retained kernel object, never from a cached
 /// path. This observation does not lock the registry namespace against rename.
-fn current_key_name(key: HKEY) -> io::Result<Vec<u16>> {
+pub(super) fn current_key_name(key: HKEY) -> io::Result<Vec<u16>> {
     const MAX_BYTES: usize = 64 * 1024;
     let mut buffer = vec![0u32; (MAX_BYTES + 4) / 4];
     let mut returned = 0;
@@ -366,7 +389,52 @@ pub(crate) fn shared_policy_alias(
         && registry_text(&value.bytes).is_some_and(|target| target.eq_ignore_ascii_case(TARGET))
 }
 
-fn registry_text(bytes: &[u8]) -> Option<String> {
+/// The only current-user Classes redirection admitted by product operations.
+/// Return a fixed canonical HKEY_USERS component derived from the actual token;
+/// the observed REG_LINK is never followed by RegOpenKeyEx.
+pub(crate) fn current_user_classes_alias(
+    root: HKEY,
+    path: &str,
+    index: usize,
+    value: &RegistryValue,
+) -> io::Result<Option<String>> {
+    const PREFIXES: [&str; 4] = [
+        "Software\\Classes\\Directory\\shell\\cc-desk",
+        "Software\\Classes\\Directory\\Background\\shell\\cc-desk",
+        "Software\\Classes\\Directory\\shell\\cc-box",
+        "Software\\Classes\\Directory\\Background\\shell\\cc-box",
+    ];
+    if root != HKEY_CURRENT_USER
+        || index != 1
+        || value.kind != REG_LINK.0
+        || !PREFIXES.iter().any(|prefix| {
+            path == *prefix
+                || path
+                    .strip_prefix(*prefix)
+                    .is_some_and(|tail| tail.starts_with('\\'))
+        })
+        || path.split('\\').any(|part| {
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || part.contains(['/', '\0'])
+                || part.chars().any(char::is_control)
+        })
+    {
+        return Ok(None);
+    }
+    let user = super::security::CurrentUser::capture()?;
+    user.require_unelevated()?;
+    let component = format!("{}_Classes", user.sid_text());
+    let target = format!(r"\REGISTRY\USER\{component}");
+    if registry_text(&value.bytes).is_some_and(|value| value.eq_ignore_ascii_case(&target)) {
+        Ok(Some(component))
+    } else {
+        Ok(None)
+    }
+}
+
+pub(super) fn registry_text(bytes: &[u8]) -> Option<String> {
     if !bytes.len().is_multiple_of(2) {
         return None;
     }
@@ -454,6 +522,19 @@ fn open_chain_access(
                 chain.verify_aliases()?;
                 continue;
             }
+            if let Some(component) = current_user_classes_alias(root, path, index, &value)? {
+                // Explicitly open the verified current SID's canonical hive;
+                // write access remains confined to the originally fixed leaf.
+                let canonical = open_chain(HKEY_USERS, &component, view, false)?
+                    .ok_or_else(|| blocked("current-user Classes target is missing"))?;
+                let key_index = chain.keys.len();
+                chain.keys.push(key);
+                chain.aliases.push(AliasBinding { key_index, value });
+                chain.keys.extend(canonical.keys);
+                parent = chain.raw();
+                chain.verify_aliases()?;
+                continue;
+            }
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 link_diagnostic(root, view, part, &value.bytes),
@@ -496,12 +577,12 @@ pub(crate) struct InstallRecord {
     pub(crate) values: BTreeMap<String, Option<RegistryValue>>,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct KeyStamp {
+pub(super) struct KeyStamp {
     children: u32,
     values: u32,
     modified: u64,
 }
-fn key_stamp(key: HKEY) -> io::Result<KeyStamp> {
+pub(super) fn key_stamp(key: HKEY) -> io::Result<KeyStamp> {
     let mut children = 0;
     let mut values = 0;
     let mut modified = FILETIME::default();
@@ -529,7 +610,7 @@ fn key_stamp(key: HKEY) -> io::Result<KeyStamp> {
         modified: ((modified.dwHighDateTime as u64) << 32) | modified.dwLowDateTime as u64,
     })
 }
-fn enum_subkeys(key: HKEY) -> io::Result<Vec<String>> {
+pub(super) fn enum_subkeys(key: HKEY) -> io::Result<Vec<String>> {
     let before = key_stamp(key)?;
     if before.children as usize > MAX_UNINSTALL_KEYS {
         return Err(blocked("uninstall key count exceeds limit"));
@@ -859,6 +940,7 @@ pub(crate) fn link_diagnostic(
     };
     let component = match component {
         "Software" => "software",
+        "Classes" => "classes",
         "Policies" => "policies",
         "Microsoft" => "microsoft",
         "Edge" => "edge",
@@ -882,6 +964,16 @@ pub(crate) fn link_diagnostic(
                 .iter()
                 .find(|(_, expected)| value.eq_ignore_ascii_case(expected))
                 .map(|(category, _)| *category)
+                .or_else(|| {
+                    super::security::CurrentUser::capture()
+                        .ok()
+                        .and_then(|user| {
+                            let expected = format!(r"\REGISTRY\USER\{}_Classes", user.sid_text());
+                            value
+                                .eq_ignore_ascii_case(&expected)
+                                .then_some("currentUserClasses")
+                        })
+                })
         })
         .unwrap_or("unknown");
     format!("registry links are unsupported: hive={hive}, view={view:?}, component={component}, target={category}")
@@ -934,4 +1026,40 @@ pub(crate) fn reject_policy_contents(values: u32, subkeys: u32) -> io::Result<()
         return Err(blocked("WebView policy override is configured"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) struct AliasGuardProbe(KeyChain);
+#[cfg(test)]
+impl AliasGuardProbe {
+    pub(crate) fn verify(&self) -> io::Result<()> {
+        self.0.verify_aliases()
+    }
+}
+#[cfg(test)]
+pub(crate) fn fixture_alias_guard(root: HKEY, name: &str) -> io::Result<AliasGuardProbe> {
+    let text = value_name(name)?;
+    let mut raw = HKEY::default();
+    unsafe {
+        RegOpenKeyExW(
+            root,
+            PCWSTR(text.as_ptr()),
+            Some(REG_OPTION_OPEN_LINK.0),
+            KEY_QUERY_VALUE,
+            &mut raw,
+        )
+        .ok()
+        .map_err(win_error)?;
+    }
+    let key = Key(raw);
+    let value = read_value(key.0, "SymbolicLinkValue")?
+        .filter(|value| value.kind == REG_LINK.0)
+        .ok_or_else(|| blocked("fixture alias value missing"))?;
+    Ok(AliasGuardProbe(KeyChain {
+        keys: vec![key],
+        aliases: vec![AliasBinding {
+            key_index: 0,
+            value,
+        }],
+    }))
 }
