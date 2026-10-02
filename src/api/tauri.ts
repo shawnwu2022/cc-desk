@@ -1,5 +1,6 @@
 import { excludedArtifactChannel } from '@/utils/updatePolicy';
 import { createProjectionClient } from './nativeProjection'
+import { createHistoryClient } from './versionHistory'
 import { createLaunchAttempt } from './cliLaunchAttempt';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -482,4 +483,9 @@ export async function nativeGetScope(target: import('@/types/nativeProjection').
 }
 export async function nativeListResources(request: import('@/types/nativeProjection').ReadRequest): Promise<import('@/types/nativeProjection').ProjectionResult> {
   return createNativeProjectionClient().read(request);
+}
+
+export function createNativeHistoryClient(): import('./versionHistory').HistoryClient {
+  const bridge = nativeDocumentBridge()
+  return createHistoryClient(bridge, () => nativeDocumentBridge() === bridge)
 }

@@ -4,6 +4,7 @@
 #![allow(dead_code)] // Authenticated manager/ordinary UI wiring is staged separately.
 
 pub(crate) mod catalog;
+pub(crate) mod commands;
 pub(crate) mod compatibility;
 pub(crate) mod download;
 pub(crate) mod journal;

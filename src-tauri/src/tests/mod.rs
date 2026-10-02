@@ -103,6 +103,7 @@ mod native_cli_observer_http;
 mod native_cli_terminal_input;
 
 mod version_history_catalog;
+mod version_history_commands;
 
 mod version_history_download;
 
@@ -115,3 +116,6 @@ mod version_history_journal_windows;
 mod version_history_webview;
 #[cfg(windows)]
 mod version_history_windows;
+
+#[cfg(target_os = "windows")]
+mod version_history_payload;

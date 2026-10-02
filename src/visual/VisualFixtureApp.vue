@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/shell/AppShell.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
@@ -26,12 +26,14 @@ import { useProjectResourcesStore } from '@/stores/projectResources'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { fixtureSessions, fixtureProfiles, fixtureResources, longProjectName, projectPaths } from './fixtures'
 import { blockedHostCalls } from './tauriStub'
+import { installHistoryFixture } from './historyFixture'
 import { applyThemeToDom } from '@/utils/theme'
 import { resolveTerminalThemeId } from '@/config/terminalThemes'
 
 const parameters = new URLSearchParams(location.search)
 const scenario = parameters.get('scenario') ?? 'mixed'
 const emptyWorkspace = scenario === 'empty' || scenario === 'empty-project'
+if (scenario === 'historical-versions') onBeforeUnmount(installHistoryFixture())
 const { locale, t } = useI18n()
 locale.value = parameters.get('locale') === 'zh' ? 'zh' : 'en'
 const app = useAppStore(), shell = useShellStore(), catalog = useUnifiedSessionsStore()
@@ -57,8 +59,8 @@ const draft = useNewSessionDraftStore()
 const project = { projectKey: projectPaths[0].toLowerCase(), projectPath: projectPaths[0] }
 const archived = ref(scenario === 'archived')
 if (scenario === 'projects') shell.navigate('projects')
-else if (scenario === 'terminal-settings' || scenario === 'launch-configurations') {
-  sidebar.activeSettingsSection = scenario === 'terminal-settings' ? 'terminal' : 'launch-configurations'
+else if (scenario === 'terminal-settings' || scenario === 'launch-configurations' || scenario === 'historical-versions') {
+  sidebar.activeSettingsSection = scenario === 'terminal-settings' ? 'terminal' : scenario === 'historical-versions' ? 'update' : 'launch-configurations'
   shell.navigate('settings')
 }
 if (scenario === 'resources') shell.drawerVisible = true

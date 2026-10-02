@@ -1,0 +1,26 @@
+{
+  "status": "source comparison evidence only; compiled installer contract not independently attested",
+  "targetCommit": "77707e3b03187aa2ed96f5ab780f62f14c1e4ffc",
+  "sources": [
+    {
+      "file": "v0.17.7-installer.nsh",
+      "sha256": "f4d2d53b35173e223d8191c511f7f357a234ebed4cbb32bb563c8d63721241a4",
+      "source": "https://github.com/shawnwu2022/cc-desk/blob/77707e3b03187aa2ed96f5ab780f62f14c1e4ffc/src-tauri/installer.nsh"
+    },
+    {
+      "file": "v0.17.7-tauri.conf.json",
+      "sha256": "006cbc199bff682ec5c7f8290bc08387a9a3b20359a9150de28d128278f1d6e8",
+      "source": "https://github.com/shawnwu2022/cc-desk/blob/77707e3b03187aa2ed96f5ab780f62f14c1e4ffc/src-tauri/tauri.conf.json"
+    },
+    {
+      "file": "v0.17.7-tauri.windows.conf.json",
+      "sha256": "9160838b9b5359a55c71639f728046ea1363811e20a31ed6515120de4f65fb74",
+      "source": "https://github.com/shawnwu2022/cc-desk/blob/77707e3b03187aa2ed96f5ab780f62f14c1e4ffc/src-tauri/tauri.windows.conf.json"
+    },
+    {
+      "file": "tauri-2.10.1-installer.nsi",
+      "sha256": "fdb6e40b4a1792bc51e126dbc57cf28275e51745a5c9496bb13a2ef22fc192b8",
+      "source": "https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi"
+    }
+  ]
+}

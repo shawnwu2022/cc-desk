@@ -140,4 +140,17 @@ describe('Isolated production-component fixture', () => {
     expect(main.getAttribute('tabindex')).toBe('0')
     expect(blockedHostCalls.value).toBe(0)
   })
+  // 历史版本截图使用真实设置组件、文档客户端和签名DTO，不触达宿主或网络。
+  it('Fixture_HistoryPreparation_007', async () => {
+    const view = await render('historical-versions')
+    await view.get('[data-history-refresh]').trigger('click'); await flushPromises()
+    expect(view.findAll('[data-history-row]')).toHaveLength(2)
+    expect(view.findAll('[data-history-select]')[1].attributes('disabled')).toBeDefined()
+    await view.findAll('[data-history-select]')[0].trigger('click'); await flushPromises()
+    await view.get('[data-history-prepare]').trigger('click'); await flushPromises()
+    expect(view.get('[data-history-status]').text()).toContain('Publisher signature, SHA256 and size verified')
+    expect(view.get('[data-history-install]').attributes('disabled')).toBeDefined()
+    expect(blockedHostCalls.value).toBe(0)
+  })
+
 })

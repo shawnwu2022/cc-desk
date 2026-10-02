@@ -34,3 +34,13 @@ export interface HistorySelection {
 }
 export interface ListHistoryRequest { cursor: string | null }
 export interface SelectHistoryRequest { releaseId: string; assetId: string }
+/** Signature and digest verification alone never authorizes execution. */
+export interface PreparationTicket { transactionId: string }
+export interface PreparedPackageSummary {
+  transactionId: string
+  version: string
+  verification: 'publisher-verified'
+  installReady: false
+  blockedReason: 'PACKAGE_IDENTITY_UNVERIFIED'
+}
+export interface CancelPrepareSummary { transactionId: string; cancelled: true }

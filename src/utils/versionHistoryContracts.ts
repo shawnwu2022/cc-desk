@@ -16,12 +16,12 @@ function token(value: unknown): string {
   return typeof value === 'string' && /^[a-f0-9]{32}$/.test(value) ? value : invalid()
 }
 function assetId(value: unknown): string {
-  if (typeof value !== 'string' || !/^[1-9][0-9]{0,19}$/.test(value) || BigInt(value) > 18446744073709551615n) return invalid()
+  if (typeof value !== 'string' || !/^[1-9][0-9]{0,19}$/.test(value) || BigInt(value) > BigInt('18446744073709551615')) return invalid()
   return value
 }
 function version(value: unknown): string {
   if (typeof value !== 'string' || value.length > 32 || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value)
-    || value.split('.').some(part => BigInt(part) > 4294967295n)) return invalid()
+    || value.split('.').some(part => BigInt(part) > BigInt('4294967295'))) return invalid()
   return value
 }
 function timestamp(value: unknown): string {
@@ -70,4 +70,19 @@ export function parseHistorySelection(value: unknown): HistorySelection {
   pending(selected)
   return { selectionToken: token(selected.selectionToken), releaseId: token(selected.releaseId), assetId: assetId(selected.assetId),
     version: version(selected.version), expiresAt: timestamp(selected.expiresAt), verification: 'awaiting-verification', installReady: false }
+}
+
+export function parsePreparationTicket(value: unknown): import('@/types/versionHistory').PreparationTicket {
+  const ticket = object(value, ['transactionId'])
+  return { transactionId: token(ticket.transactionId) }
+}
+export function parsePreparedPackageSummary(value: unknown): import('@/types/versionHistory').PreparedPackageSummary {
+  const ready = object(value, ['transactionId', 'version', 'verification', 'installReady', 'blockedReason'])
+  if (ready.verification !== 'publisher-verified' || ready.installReady !== false || ready.blockedReason !== 'PACKAGE_IDENTITY_UNVERIFIED') invalid()
+  return { transactionId: token(ready.transactionId), version: version(ready.version), verification: 'publisher-verified', installReady: false, blockedReason: 'PACKAGE_IDENTITY_UNVERIFIED' }
+}
+export function parseCancelPrepareSummary(value: unknown): import('@/types/versionHistory').CancelPrepareSummary {
+  const cancelled = object(value, ['transactionId', 'cancelled'])
+  if (cancelled.cancelled !== true) invalid()
+  return { transactionId: token(cancelled.transactionId), cancelled: true }
 }

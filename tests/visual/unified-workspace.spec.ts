@@ -59,6 +59,37 @@ for (const sample of snapshots) {
 }
 
 
+// New history pixels are evidence for review, not automatically approved baselines.
+// Keep the existing committed snapshot inventory and all of its assertions intact.
+for (const locale of ['en', 'zh']) {
+  test.describe(`historical preparation evidence ${locale}`, () => {
+    test.use({ viewport: { width: 1024, height: 640 }, deviceScaleFactor: 1.25 })
+    test('catalogue, selection and blocked preparation remain usable', async ({ page }, testInfo) => {
+      await openFixture(page, { scenario: 'historical-versions', locale, gui: locale === 'zh' ? 'dark' : 'light' })
+      await page.locator('[data-history-refresh]').click()
+      await expect(page.locator('[data-history-row]')).toHaveCount(2)
+      await expect(page.locator('[data-history-select]').nth(1)).toBeDisabled()
+      await page.locator('[data-history-panel]').scrollIntoViewIfNeeded()
+      await testInfo.attach('history-catalog-unapproved', { body: await page.screenshot(), contentType: 'image/png' })
+      await page.locator('[data-history-select]').first().click()
+      await expect(page.locator('[data-history-selected]')).toContainText('0.17.7')
+      await page.locator('[data-history-prepare]').scrollIntoViewIfNeeded()
+      await testInfo.attach('history-selection-unapproved', { body: await page.screenshot(), contentType: 'image/png' })
+      await page.locator('[data-history-prepare]').click()
+      await expect(page.locator('[data-history-status]')).toContainText('SHA256')
+      await expect(page.locator('[data-history-install]')).toBeDisabled()
+      await expect(page.locator('[data-update-install]')).toBeDisabled()
+      await page.locator('[data-history-install]').scrollIntoViewIfNeeded()
+      await expect(page.locator('[data-history-cancel]')).toBeInViewport({ ratio: 1 })
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await testInfo.attach('history-prepared-blocked-unapproved', { body: await page.screenshot(), contentType: 'image/png' })
+      await page.locator('[data-history-cancel]').click()
+      await expect(page.locator('[data-history-cancel]')).toHaveCount(0)
+    })
+  })
+}
+
+
 const viewports = [{ width: 1024, height: 640 }, { width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }]
 for (const viewport of viewports) for (const dpr of [1, 1.25, 1.5]) for (const locale of ['zh', 'en']) for (const gui of ['light', 'dark']) for (const density of ['compact', 'standard']) {
   test.describe(`geometry ${viewport.width}x${viewport.height} DPR${dpr} ${locale} ${gui} ${density}`, () => {

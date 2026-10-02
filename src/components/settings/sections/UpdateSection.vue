@@ -9,6 +9,7 @@ import { useOwnedSessionCounts } from '@/composables/useOwnedSessionCounts'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
+import HistoricalVersionsPanel from '@/components/settings/HistoricalVersionsPanel.vue'
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
 const { t } = useI18n(), sidebar = useSidebarStore(), updates = useUpdateStore()
 const counts = useOwnedSessionCounts(), checking = ref(false), error = ref<string | null>(null), reviewing = ref(false)
@@ -51,6 +52,7 @@ async function manualDownload() {
       <AppButton data-update-review :disabled="!active" @click="reviewInstall">{{ t('updateReviewInstallation') }}</AppButton>
     </div>
     <div class="actions"><AppButton data-update-install disabled>{{ t('updateRestartInstall') }}</AppButton><AppButton variant="ghost" @click="manualDownload">{{ t('manualDownload') }}</AppButton></div>
+    <HistoricalVersionsPanel :active="active" />
     <AppDialog :open="reviewing && active" data-update-confirmation :title="t('updateReviewInstallation')" @close="reviewing = false">
       <p data-update-running-count>{{ t('updateRunningCount', { count: counts.running }) }}</p>
       <p data-update-starting-count>{{ t('updateStartingCount', { count: counts.starting }) }}</p>

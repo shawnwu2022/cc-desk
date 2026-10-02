@@ -48,3 +48,23 @@ describe('historical release wire boundary', () => {
     }
   })
 })
+
+import preparationWire from '../fixtures/version-history-preparation-wire.json'
+import { parsePreparationTicket, parsePreparedPackageSummary, parseCancelPrepareSummary } from '@/utils/versionHistoryContracts'
+
+describe('Rust preparation serialization fixture', () => {
+  // Rust共享契约保持发布者验证与安装准入分离。
+  it('HistoryWire_Preparation_001', () => {
+    expect(parsePreparationTicket(preparationWire.ticket)).toEqual(preparationWire.ticket)
+    expect(parsePreparedPackageSummary(preparationWire.prepared)).toEqual(preparationWire.prepared)
+    expect(parseCancelPrepareSummary(preparationWire.cancelled)).toEqual(preparationWire.cancelled)
+  })
+  // 安装授权、路径、错误详情或未知包身份不能借准备回执进入UI。
+  it('HistoryWire_RejectAuthority_002', () => {
+    for (const changed of [{ installReady: true }, { verification: 'verified' }, { blockedReason: null },
+      { path: 'C:\\private\\package.exe' }, { blockedReason: 'raw diagnostics' }]) {
+      expect(() => parsePreparedPackageSummary({ ...preparationWire.prepared, ...changed })).toThrow('HISTORY_INVALID_RESPONSE')
+    }
+    expect(() => parseCancelPrepareSummary({ ...preparationWire.cancelled, cancelled: false })).toThrow('HISTORY_INVALID_RESPONSE')
+  })
+})

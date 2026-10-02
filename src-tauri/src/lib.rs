@@ -75,6 +75,9 @@ pub fn run(initial_dir: Option<String>) {
     let native_exit_shutdown = native_runtime.clone();
     let app = tauri::Builder::default()
         .manage(native_runtime)
+        .manage(std::sync::Arc::new(
+            version_history::commands::HistoryService::default(),
+        ))
         .manage(admission.clone())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -167,6 +170,11 @@ pub fn run(initial_dir: Option<String>) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            version_history::commands::list_history,
+            version_history::commands::select_history,
+            version_history::commands::begin_prepare_history,
+            version_history::commands::prepare_history,
+            version_history::commands::cancel_prepare_history,
             commands::native_get_scope,
             commands::native_list_resources,
             cli::commands::cli_start,

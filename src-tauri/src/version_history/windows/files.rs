@@ -398,6 +398,14 @@ impl Directory {
         result.recheck()?;
         Ok(result)
     }
+    /// Preparation-only capability derived from the retained directory object.
+    /// The caller must retain the PrivateDirectory and its pinned ancestor chain.
+    pub(crate) fn capability(&self) -> io::Result<cap_std::fs::Dir> {
+        self.recheck()?;
+        let capability = cap_std::fs::Dir::from_std_file(self.file.try_clone()?);
+        self.recheck()?;
+        Ok(capability)
+    }
     pub(crate) fn identity(&self) -> &FileIdentity {
         &self.identity
     }
