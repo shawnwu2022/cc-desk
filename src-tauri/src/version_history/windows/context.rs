@@ -33,7 +33,7 @@ use std::{
     mem::offset_of,
     sync::Arc,
 };
-use windows::Wdk::Storage::FileSystem::FILE_CREATE;
+use windows::Wdk::Storage::FileSystem::{FILE_CREATE, FILE_OPEN};
 use windows::Win32::{
     Foundation::{ERROR_HANDLE_EOF, HANDLE},
     Storage::FileSystem::{
@@ -43,6 +43,17 @@ use windows::Win32::{
         FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ, FILE_STREAM_INFO, FILE_WRITE_DATA,
         READ_CONTROL, SYNCHRONIZE,
     },
+};
+
+#[path = "bundle_restore.rs"]
+pub(crate) mod bundle_restore;
+
+#[path = "context_switch.rs"]
+mod switching;
+pub(crate) use switching::{
+    ContextRestoration, ContextRootEvidence, FreshContextRoots, LaterBackupEvidence,
+    LaterCompleteEvidence, LaterContextRoots, PreinstallReturnEvidence, RestoredContextRoots,
+    RetainedContextRoots,
 };
 
 const MAX_MANIFEST_BYTES: usize = 32 * 1024 * 1024;
@@ -256,6 +267,7 @@ impl Read for BoundedReader {
 
 struct Budget {
     limits: SnapshotLimits,
+    flush_files: bool,
     entries: usize,
     bytes: u64,
     manifest: usize,
@@ -274,6 +286,7 @@ impl Budget {
         }
         Ok(Self {
             limits,
+            flush_files: false,
             entries: 0,
             bytes: 0,
             manifest: 0,
@@ -305,6 +318,9 @@ pub(crate) struct HeldTree {
     limits: SnapshotLimits,
     detached_image: Option<String>,
     fenced_location: Option<(Arc<Mutex<ImageFence>>, String)>,
+    // Desired capture mode survives failed guard gaps; evidence does not.
+    flush_required: bool,
+    durably_flushed: bool,
 }
 impl HeldTree {
     /// Complete read-only re-admission of private material. In particular this
@@ -346,6 +362,8 @@ impl HeldTree {
             root,
             entries: BTreeMap::new(),
             limits: budget.limits,
+            flush_required: budget.flush_files,
+            durably_flushed: false,
             detached_image: None,
             fenced_location: None,
         };
@@ -365,6 +383,7 @@ impl HeldTree {
         }
         tree.verify()?;
         tree.manifest.encode()?;
+        tree.durably_flushed = budget.flush_files;
         Ok(tree)
     }
     fn insert(&mut self, path: &str, held: HeldEntry, budget: &mut Budget) -> io::Result<()> {
@@ -423,9 +442,32 @@ impl HeldTree {
                         }
                         FileGuard::Fenced(fence.clone())
                     }
-                    None => FileGuard::Ordinary(Arc::new(Mutex::new(
-                        directory.open_file(child.name, FileAccess::Read)?,
-                    ))),
+                    None => {
+                        let file = if budget.flush_files {
+                            let file = directory.open_relative(
+                                &child.name,
+                                FILE_READ_DATA
+                                    | FILE_WRITE_DATA
+                                    | FILE_READ_ATTRIBUTES
+                                    | READ_CONTROL
+                                    | SYNCHRONIZE,
+                                FILE_SHARE_READ,
+                                FILE_OPEN,
+                                false,
+                                None,
+                            )?;
+                            let held = PinnedFile::from_file(directory.clone(), child.name, file)?;
+                            held.verify()?;
+                            unsafe {
+                                FlushFileBuffers(handle(&held.file)).map_err(win_error)?;
+                            }
+                            held.verify()?;
+                            held
+                        } else {
+                            directory.open_file(child.name, FileAccess::Read)?
+                        };
+                        FileGuard::Ordinary(Arc::new(Mutex::new(file)))
+                    }
                 };
                 self.insert(&next, HeldEntry::File(file), budget)?;
             }
@@ -449,6 +491,9 @@ impl HeldTree {
     }
     pub(crate) fn manifest(&self) -> &TreeManifest {
         &self.manifest
+    }
+    pub(crate) fn root(&self) -> &HeldRoot {
+        &self.root
     }
     pub(crate) fn verify(&self) -> io::Result<()> {
         self.root.verify()?;
@@ -538,8 +583,26 @@ impl HeldContext {
         webview: HeldRoot,
         limits: SnapshotLimits,
     ) -> io::Result<Self> {
+        Self::capture_with_flush(desk, webview, limits, false)
+    }
+    /// Only observed file durability. The coordinator must still prove actual
+    /// source/child/browser quiescence and complete configured-root exclusion.
+    pub(crate) fn capture_durable(
+        desk: HeldRoot,
+        webview: HeldRoot,
+        limits: SnapshotLimits,
+    ) -> io::Result<Self> {
+        Self::capture_with_flush(desk, webview, limits, true)
+    }
+    fn capture_with_flush(
+        desk: HeldRoot,
+        webview: HeldRoot,
+        limits: SnapshotLimits,
+        flush: bool,
+    ) -> io::Result<Self> {
         require_distinct_roots(&desk, &webview)?;
         let mut budget = Budget::new(limits)?;
+        budget.flush_files = flush;
         let trees = BTreeMap::from([
             (RootKind::Desk, HeldTree::admit(desk, &mut budget, None)?),
             (
@@ -550,6 +613,12 @@ impl HeldContext {
         let context = Self { trees };
         context.verify()?;
         Ok(context)
+    }
+    pub(crate) fn verify_durable(&self) -> io::Result<()> {
+        if self.trees.values().any(|tree| !tree.durably_flushed) {
+            return Err(blocked("context has no same-object file flush evidence"));
+        }
+        self.verify()
     }
     pub(crate) fn tree(&self, root: RootKind) -> &HeldTree {
         &self.trees[&root]
@@ -689,6 +758,9 @@ impl HeldBundle {
     }
 }
 impl InstalledBundleManifest {
+    pub(crate) fn original_image_name(&self) -> &str {
+        &self.original_image_name
+    }
     /// Logical original installation identity is stable across the explicitly
     /// journaled image quarantine. Actual fence location remains separate data.
     pub(crate) fn logical_digest(&self) -> io::Result<String> {
@@ -1017,6 +1089,7 @@ pub(crate) struct PrivateTreeCopy {
     tree: Option<HeldTree>,
     manifest: Option<PrivateCopyManifest>,
     attempted: bool,
+    plan_generation: Option<u64>,
     rotation_attempted: bool,
     rotation: Option<RotationTicket>,
     recovery_copy: Option<Box<PrivateTreeCopy>>,
@@ -1229,6 +1302,7 @@ impl PrivateTreeCopy {
             tree: None,
             manifest: None,
             attempted: false,
+            plan_generation: None,
             rotation_attempted: false,
             rotation: None,
             recovery_copy: None,
@@ -1294,6 +1368,7 @@ impl PrivateTreeCopy {
             ))?
         };
         journal.generation = generation;
+        self.plan_generation = Some(generation);
         journal.verify()?;
         let root = HeldRoot::Absent {
             parent: self.parent.directory().clone(),
@@ -1309,6 +1384,8 @@ impl PrivateTreeCopy {
             root,
             entries: BTreeMap::new(),
             limits: source.limits,
+            flush_required: false,
+            durably_flushed: false,
             detached_image: None,
             fenced_location: None,
         });
@@ -1523,6 +1600,13 @@ fn verify_copy_mapping(manifest: &PrivateCopyManifest) -> io::Result<()> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CopyFault {
+    AfterLaterMove,
+    BeforeLaterComplete,
+    AfterSourceRestoreMove,
+    BeforeSourceRestoreMove,
+    BeforeFreshCreate,
+    AfterFreshCreate,
+    BeforeFreshReceipt,
     BeforeCreate,
     AfterWrite,
     AfterFlush,
@@ -1641,6 +1725,7 @@ impl PrivateTreeCopy {
         user: &CurrentUser,
         journal: &mut ContextJournal<'_>,
     ) -> io::Result<ReadmittedRoot> {
+        safe(boundary.verify_live())?;
         journal.exclusive()?.verify_root(&journal.root)?;
         if self.rotation_attempted {
             return Err(blocked("rotation retry requires reconciliation"));
@@ -1666,6 +1751,7 @@ impl PrivateTreeCopy {
         };
         let root = root.clone();
         root.require_renameable()?;
+        root.require_same_volume(quarantine.directory())?;
         original_parent.recheck()?;
         let actual = root
             .path()?
@@ -1752,6 +1838,7 @@ impl PrivateTreeCopy {
         self.verify(user)?;
         fence.verify()?;
         journal.verify()?;
+        source.durably_flushed = false;
         source.entries.clear();
         #[cfg(test)]
         if let Some(action) = ROTATION_PROBE.with_borrow_mut(|pending| pending.take()) {
@@ -1765,11 +1852,9 @@ impl PrivateTreeCopy {
             if let Some(action) = ROTATION_AFTER_MOVE.with_borrow_mut(|pending| pending.take()) {
                 action();
             }
-            let admitted = HeldTree::admit(
-                HeldRoot::Present(root.clone()),
-                &mut Budget::new(source.limits)?,
-                None,
-            )?;
+            let mut budget = Budget::new(source.limits)?;
+            budget.flush_files = source.flush_required;
+            let admitted = HeldTree::admit(HeldRoot::Present(root.clone()), &mut budget, None)?;
             let after = admitted.manifest.clone();
             // Keep the actual rotated tree even on content/permission drift.
             *source = admitted;
@@ -1906,6 +1991,7 @@ pub(crate) struct RootRecoveryRequest {
 }
 impl RootRecoveryEvidence<'_> {
     pub(crate) fn verify(&self, store: &mut JournalStore) -> io::Result<RootRecoveryRequest> {
+        safe(self.boundary.verify_live())?;
         self.lease.verify_root(self.records)?;
         self.fence.verify()?;
         self.copy.verify(self.user)?;
@@ -2179,6 +2265,7 @@ impl PrivateTreeCopy {
             tree: Some(tree),
             manifest: Some(expected),
             attempted: true,
+            plan_generation: None,
             rotation_attempted: false,
             rotation: None,
             recovery_copy: None,
@@ -2265,11 +2352,13 @@ impl PrivateTreeCopy {
         } else {
             return Err(blocked("uncertain root is outside recorded locations"));
         }
-        *source = HeldTree::admit(
-            HeldRoot::Present(root.clone()),
-            &mut Budget::new(source.limits)?,
-            None,
-        )?;
+        let mut budget = Budget::new(source.limits)?;
+        budget.flush_files = source.flush_required;
+        // Old readers must not self-block the fresh writable flush handles.
+        // Invalidate evidence before releasing them, even if admission fails.
+        source.durably_flushed = false;
+        source.entries.clear();
+        *source = HeldTree::admit(HeldRoot::Present(root.clone()), &mut budget, None)?;
         let evidence = RootRecoveryEvidence {
             copy: self,
             context,
@@ -2437,22 +2526,17 @@ impl PrivateTreeCopy {
             self.verify(user)?;
             fence.verify()?;
             journal.verify()?;
+            let source = context.trees.get_mut(&kind).expect("source retained");
+            let mut budget = Budget::new(source.limits)?;
+            budget.flush_files = source.flush_required;
+            source.durably_flushed = false;
+            source.entries.clear();
             if !at_original {
-                context
-                    .trees
-                    .get_mut(&kind)
-                    .expect("source retained")
-                    .entries
-                    .clear();
                 root.rename_to(original_parent, original_name)?;
                 #[cfg(test)]
                 copy_fault(CopyFault::AfterReverseMove)?;
             }
-            let admitted = HeldTree::admit(
-                HeldRoot::Present(root),
-                &mut Budget::new(context.tree(kind).limits)?,
-                None,
-            )?;
+            let admitted = HeldTree::admit(HeldRoot::Present(root), &mut budget, None)?;
             // Preserve actual data even if a writer changed it during this second
             // guard gap. A later positive returned-slot observation may finish;
             // this attempt cannot claim equality or overwrite it from a backup.

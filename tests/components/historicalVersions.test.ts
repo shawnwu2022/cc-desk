@@ -6,6 +6,7 @@ import UpdateSection from '@/components/settings/sections/UpdateSection.vue'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import wire from '../fixtures/version-history-preparation-wire.json'
+import switchWire from '../fixtures/version-switch-wire.json'
 
 const io = vi.hoisted(() => ({ invoke: vi.fn(), check: vi.fn(), relaunch: vi.fn() }))
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: vi.fn() }))
@@ -21,6 +22,7 @@ beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks()
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: { instanceId: 'instance', invoke: io.invoke } })
   io.invoke.mockImplementation(async command => {
+    if (command === 'inspect_switch') return { ...switchWire.reviews[1], preparationId: wire.ticket.transactionId }
     if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
     if (command === 'select_history') return selection
     if (command === 'begin_prepare_history') return wire.ticket
@@ -49,14 +51,15 @@ describe('historical versions through the real settings and document client', ()
     expect(io.invoke).toHaveBeenCalledWith('begin_prepare_history', { selectionToken: selection.selectionToken })
     expect(io.invoke).toHaveBeenCalledWith('prepare_history', { transactionId: wire.ticket.transactionId })
     expect(w.get('[data-history-status]').text()).toMatch(/publisher.*verified/i)
-    expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-history-install]').attributes('disabled')).toBeUndefined()
     expect(w.get('[data-update-install]').attributes('disabled')).toBeDefined()
     expect(io.check).not.toHaveBeenCalled(); expect(io.relaunch).not.toHaveBeenCalled()
   })
   // 验证失败后的自动清理不能把签名错误隐藏成普通取消。
   it('HistoryUI_VerificationFailure_002', async () => {
     io.invoke.mockImplementation(async command => {
-      if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
+      if (command === 'inspect_switch') return { ...switchWire.reviews[1], preparationId: wire.ticket.transactionId }
+    if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
       if (command === 'select_history') return selection
       if (command === 'begin_prepare_history') return wire.ticket
       if (command === 'prepare_history') throw { code: 'HISTORY_SIGNATURE_INVALID', details: '/private TOKEN=secret' }
@@ -75,7 +78,8 @@ describe('historical versions through the real settings and document client', ()
     const unavailable = { ...row, releaseId: 'd'.repeat(32), version: '0.17.6', selectAllowed: false,
       assetId: null, packageFormat: null, dataModes: { freshSettings: 'unavailable', keepCurrentData: 'unavailable' }, blockedReason: 'SIGNATURE_MISSING' }
     io.invoke.mockImplementation(async (command, payload) => {
-      if (command === 'list_history') return payload.cursor === null ? { rows: [row], nextCursor: cursor, truncated: false }
+      if (command === 'inspect_switch') return { ...switchWire.reviews[1], preparationId: wire.ticket.transactionId }
+    if (command === 'list_history') return payload.cursor === null ? { rows: [row], nextCursor: cursor, truncated: false }
         : { rows: [unavailable], nextCursor: null, truncated: true }
     })
     const w = render(); await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
@@ -88,11 +92,12 @@ describe('historical versions through the real settings and document client', ()
     expect(w.findAll('[data-history-row]')).toHaveLength(1)
     expect(w.get('[data-history-row]').text()).toContain('signature is missing')
   })
-  // 取消先于预约回执时，回执必须在原文档中取消，不得开始下载。
+  // 离开面板先于预约回执时，回执必须在原文档检查后取消，不得开始下载。
   it('HistoryUI_CancelBeforeTicket_004', async () => {
     let finish!: (value: unknown) => void
     io.invoke.mockImplementation(async command => {
-      if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
+      if (command === 'inspect_switch') return { ...switchWire.reviews[1], preparationId: wire.ticket.transactionId }
+    if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
       if (command === 'select_history') return selection
       if (command === 'begin_prepare_history') return new Promise(resolve => { finish = resolve })
       if (command === 'cancel_prepare_history') return wire.cancelled
@@ -100,7 +105,7 @@ describe('historical versions through the real settings and document client', ()
     const w = render(); await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
     await w.get('[data-history-select]').trigger('click'); await flushPromises()
     await w.get('[data-history-prepare]').trigger('click'); await flushPromises()
-    await w.get('[data-history-cancel]').trigger('click'); finish(wire.ticket); await flushPromises()
+    await w.setProps({ active: false }); finish(wire.ticket); await flushPromises()
     expect(io.invoke.mock.calls.filter(([command]) => command === 'begin_prepare_history')).toHaveLength(1)
     expect(io.invoke.mock.calls.filter(([command]) => command === 'prepare_history')).toHaveLength(0)
     expect(io.invoke.mock.calls.filter(([command]) => command === 'cancel_prepare_history')).toHaveLength(1)
@@ -110,7 +115,8 @@ describe('historical versions through the real settings and document client', ()
   it('HistoryUI_RemountCancelRace_005', async () => {
     let finish!: (value: unknown) => void
     io.invoke.mockImplementation(async command => {
-      if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
+      if (command === 'inspect_switch') return { ...switchWire.reviews[1], preparationId: wire.ticket.transactionId }
+    if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
       if (command === 'select_history') return selection
       if (command === 'begin_prepare_history') return wire.ticket
       if (command === 'prepare_history') return new Promise(resolve => { finish = resolve })
@@ -131,7 +137,8 @@ describe('historical versions through the real settings and document client', ()
   it('HistoryUI_StaleSelection_006', async () => {
     let finish!: (value: unknown) => void
     io.invoke.mockImplementation(async command => {
-      if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
+      if (command === 'inspect_switch') return { ...switchWire.reviews[1], preparationId: wire.ticket.transactionId }
+    if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
       if (command === 'select_history') return new Promise(resolve => { finish = resolve })
     })
     const w = render(); await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
@@ -141,7 +148,7 @@ describe('historical versions through the real settings and document client', ()
     expect(w.find('[data-history-selected]').exists()).toBe(false)
     expect(w.find('[data-history-prepare]').exists()).toBe(false)
   })
-  // 取消失败必须保留占用状态，重试不得创建第二个准备事务。
+  // 取消失败必须保留占用状态，新的检查允许重试后也不得创建第二个准备事务。
   it('HistoryUI_CancelFailure_007', async () => {
     const w = render(); await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
     await w.get('[data-history-select]').trigger('click'); await flushPromises()
@@ -150,7 +157,8 @@ describe('historical versions through the real settings and document client', ()
     await w.get('[data-history-cancel]').trigger('click'); await flushPromises()
     expect(w.get('[data-history-error]').text()).toContain('Could not confirm cancellation')
     expect(w.get('[data-history-refresh]').attributes('disabled')).toBeDefined()
-    expect(w.get('[data-history-cancel]').text()).toContain('Retry')
+    expect(w.find('[data-history-cancel]').exists()).toBe(false)
+    await w.get('[data-history-inspect]').trigger('click'); await flushPromises()
     await w.get('[data-history-cancel]').trigger('click'); await flushPromises()
     expect(w.get('[data-history-status]').text()).toContain('cancelled')
     expect(w.get('[data-history-refresh]').attributes('disabled')).toBeUndefined()
@@ -160,7 +168,8 @@ describe('historical versions through the real settings and document client', ()
   it('HistoryUI_DocumentReplacement_008', async () => {
     let finish!: (value: unknown) => void
     io.invoke.mockImplementation(async command => {
-      if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
+      if (command === 'inspect_switch') return { ...switchWire.reviews[1], preparationId: wire.ticket.transactionId }
+    if (command === 'list_history') return { rows: [row], nextCursor: null, truncated: false }
       if (command === 'select_history') return new Promise(resolve => { finish = resolve })
     })
     const w = render(); await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
@@ -181,7 +190,7 @@ describe('historical versions through the real settings and document client', ()
     io.invoke.mockRejectedValueOnce({ code: 'FORBIDDEN' })
     await w.get('[data-history-cancel]').trigger('click'); await flushPromises()
     expect(w.get('[data-history-error]').text()).toContain('Reopen CC Desk')
-    expect(w.get('[data-history-cancel]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-history-cancel]').exists()).toBe(false)
     expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
   })
 
@@ -190,7 +199,8 @@ describe('historical versions through the real settings and document client', ()
     const other = { ...row, releaseId: 'c'.repeat(32), assetId: '576638000' }
     let finishCancel!: (value: unknown) => void
     io.invoke.mockImplementation(async (command, payload) => {
-      if (command === 'list_history') return { rows: [row, other], nextCursor: null, truncated: false }
+      if (command === 'inspect_switch') return { ...switchWire.reviews[1], preparationId: wire.ticket.transactionId }
+    if (command === 'list_history') return { rows: [row, other], nextCursor: null, truncated: false }
       if (command === 'select_history') return { ...selection, releaseId: payload.releaseId, assetId: payload.assetId }
       if (command === 'begin_prepare_history') return wire.ticket
       if (command === 'prepare_history') return wire.prepared
@@ -201,7 +211,7 @@ describe('historical versions through the real settings and document client', ()
     await w.get('[data-history-prepare]').trigger('click'); await flushPromises()
     expect(w.findAll('[data-history-row]')[0].get('.history-reason').text()).toBe('Publisher verified')
     expect(w.findAll('[data-history-row]')[1].get('.history-reason').text()).toBe('Publisher verification pending')
-    expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-history-install]').attributes('disabled')).toBeUndefined()
     await w.get('[data-history-cancel]').trigger('click'); await flushPromises()
     expect(w.findAll('[data-history-row]').map(row => row.get('.history-reason').text())).toEqual(['Publisher verification pending', 'Publisher verification pending'])
     finishCancel(wire.cancelled); await flushPromises()

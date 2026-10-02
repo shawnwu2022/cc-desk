@@ -30,6 +30,10 @@ use std::{
 };
 use windows::Win32::Globalization::{CompareStringOrdinal, CSTR_EQUAL};
 
+#[path = "scope_context.rs"]
+mod context_inventory;
+pub(crate) use context_inventory::{ConfiguredExclusions, ContextConfiguredInventory};
+
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_INPUT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SELECTORS: usize = 10_000;
@@ -879,8 +883,8 @@ fn observe_registered_location(
         image,
     })
 }
-/// Ordinary source-host observation only. A copied manager must use a separate
-/// re-admission path; this never approves arbitrary registered bytes for launch.
+/// Ordinary source-host or exact-process manager re-admission. This never
+/// approves arbitrary registered bytes for launch.
 pub(crate) struct RegisteredInstallation {
     user: CurrentUser,
     process: ExactProcess,
@@ -889,18 +893,37 @@ pub(crate) struct RegisteredInstallation {
 }
 impl RegisteredInstallation {
     pub(crate) fn capture() -> ScopeResult<Self> {
+        let process = ExactProcess::capture_observed(std::process::id())
+            .map_err(|_| ScopeBlock::ImageUnsupported)?;
+        let current = std::env::current_exe().map_err(|_| ScopeBlock::ImageUnsupported)?;
+        Self::capture_for_source(process, &current)
+    }
+    /// The caller has already reopened the exact protected handoff process.
+    /// original_image is only a selector: registry, token and held file identity
+    /// are all independently observed below, including from a copied manager.
+    pub(crate) fn capture_for_source(
+        process: ExactProcess,
+        original_image: &Path,
+    ) -> ScopeResult<Self> {
+        let registry = InstallRegistryObservation::capture()
+            .map_err(|_| ScopeBlock::UnsupportedRegistration)?;
+        Self::from_source_registry(process, original_image, registry)
+    }
+    fn from_source_registry(
+        process: ExactProcess,
+        original_image: &Path,
+        registry: InstallRegistryObservation,
+    ) -> ScopeResult<Self> {
         if !cfg!(target_arch = "x86_64") {
             return Err(ScopeBlock::UnsupportedArchitecture);
         }
         let user = CurrentUser::capture().map_err(|_| ScopeBlock::InputUnavailable)?;
         user.require_unelevated()
             .map_err(|_| ScopeBlock::Elevated)?;
-        let process = ExactProcess::capture_observed(std::process::id())
+        process
+            .verify_current_user(&user)
             .map_err(|_| ScopeBlock::ImageUnsupported)?;
-        let registry = InstallRegistryObservation::capture()
-            .map_err(|_| ScopeBlock::UnsupportedRegistration)?;
-        let current = std::env::current_exe().map_err(|_| ScopeBlock::ImageUnsupported)?;
-        let location = observe_registered_location(&registry, &current)?;
+        let location = observe_registered_location(&registry, original_image)?;
         process
             .verify_held_image(&location.image)
             .map_err(|_| ScopeBlock::Relocated)?;
@@ -913,6 +936,65 @@ impl RegisteredInstallation {
         result.recheck()?;
         Ok(result)
     }
+    #[cfg(test)]
+    pub(crate) fn fixture_for_source(
+        process: ExactProcess,
+        original_image: &Path,
+        user: windows::Win32::System::Registry::HKEY,
+        machine: windows::Win32::System::Registry::HKEY,
+    ) -> ScopeResult<Self> {
+        Self::from_source_registry(
+            process,
+            original_image,
+            InstallRegistryObservation::fixture_hives(user, machine)
+                .map_err(|_| ScopeBlock::UnsupportedRegistration)?,
+        )
+    }
+    pub(crate) fn release_after_exit(self) -> ScopeResult<ExitedInstallation> {
+        self.user
+            .require_unelevated()
+            .map_err(|_| ScopeBlock::Elevated)?;
+        self.registry
+            .recheck()
+            .map_err(|_| ScopeBlock::RegistrationChanged)?;
+        self.location
+            .directory
+            .recheck()
+            .map_err(|_| ScopeBlock::InputChanged)?;
+        self.location
+            .image
+            .verify()
+            .map_err(|_| ScopeBlock::InputChanged)?;
+        let identity = self.location.image.identity().clone();
+        let digest = self
+            .location
+            .image
+            .digest()
+            .map_err(|_| ScopeBlock::InputChanged)?;
+        let name = self.location.image.name.clone();
+        let terminal = self
+            .process
+            .release_terminated_image()
+            .map_err(|_| ScopeBlock::InputUnavailable)?;
+        let RegisteredLocation {
+            spelling,
+            directory,
+            image,
+        } = self.location;
+        drop(image);
+        let exited = ExitedInstallation {
+            user: self.user,
+            terminal,
+            registry: self.registry,
+            directory,
+            spelling,
+            name,
+            identity,
+            digest,
+        };
+        exited.verify()?;
+        Ok(exited)
+    }
     pub(crate) fn recheck(&self) -> ScopeResult<()> {
         self.user
             .require_unelevated()
@@ -924,6 +1006,9 @@ impl RegisteredInstallation {
             .directory
             .recheck()
             .map_err(|_| ScopeBlock::InputChanged)?;
+        self.process
+            .verify_current_user(&self.user)
+            .map_err(|_| ScopeBlock::ImageUnsupported)?;
         self.process
             .verify_held_image(&self.location.image)
             .map_err(|_| ScopeBlock::Relocated)?;
@@ -943,6 +1028,193 @@ impl RegisteredInstallation {
     pub(crate) fn image(&self) -> &PinnedFile {
         &self.location.image
     }
+}
+/// Exact waited source ownership after image read guards are consumed. The
+/// original directory and registry observations remain held; no caller supplies
+/// a digest or file identity to obtain this fence input.
+pub(crate) struct ExitedInstallation {
+    user: CurrentUser,
+    terminal: super::process::TerminatedProcess,
+    registry: InstallRegistryObservation,
+    directory: Arc<Directory>,
+    spelling: PathBuf,
+    name: ComponentName,
+    identity: super::files::FileIdentity,
+    digest: String,
+}
+impl ExitedInstallation {
+    pub(crate) fn verify(&self) -> ScopeResult<()> {
+        self.user
+            .require_unelevated()
+            .map_err(|_| ScopeBlock::Elevated)?;
+        self.terminal
+            .verify()
+            .map_err(|_| ScopeBlock::ImageUnsupported)?;
+        self.registry
+            .recheck()
+            .map_err(|_| ScopeBlock::RegistrationChanged)?;
+        self.directory
+            .recheck()
+            .map_err(|_| ScopeBlock::InputChanged)?;
+        let named = Directory::open_absolute(&self.spelling).map_err(|_| ScopeBlock::Relocated)?;
+        if named.identity() != self.directory.identity() {
+            return Err(ScopeBlock::Relocated);
+        }
+        Ok(())
+    }
+    pub(crate) fn directory(&self) -> &Arc<Directory> {
+        &self.directory
+    }
+    pub(crate) fn image_name(&self) -> &ComponentName {
+        &self.name
+    }
+    pub(crate) fn acquire_source_fence(&self) -> std::io::Result<super::fence::ImageFence> {
+        self.verify()
+            .map_err(|_| super::blocked("exited source observation changed"))?;
+        // Keep the original OS sharing error so the coordinator may distinguish
+        // a definitely unacquired fence from an uncertain later effect.
+        let fence = super::fence::ImageFence::acquire(
+            self.directory.clone(),
+            self.name.clone(),
+            &self.identity,
+            &self.digest,
+        )?;
+        self.verify()
+            .map_err(|_| super::blocked("exited source observation changed"))?;
+        fence.verify()?;
+        Ok(fence)
+    }
+    /// Consumes pre-install registry readers only after their original source
+    /// image has been matched to the actual retained exclusive fence.
+    pub(crate) fn into_fenced(
+        self,
+        fence: Arc<parking_lot::Mutex<super::fence::ImageFence>>,
+    ) -> ScopeResult<FencedInstallation> {
+        self.verify()?;
+        verify_original_fence(
+            &fence.lock(),
+            &self.directory,
+            &self.name,
+            &self.identity,
+            &self.digest,
+        )?;
+        self.verify()?;
+        let Self {
+            user,
+            terminal,
+            registry,
+            directory,
+            spelling,
+            name,
+            identity,
+            digest,
+        } = self;
+        drop(registry);
+        let result = FencedInstallation {
+            user,
+            terminal,
+            directory,
+            spelling,
+            name,
+            identity,
+            digest,
+            _fence: fence,
+        };
+        result.verify()?;
+        result.verify_fence(&result._fence.lock())?;
+        Ok(result)
+    }
+}
+
+/// Historical registered-source ownership after its obsolete registry readers
+/// have been consumed. It retains the actual terminal process and fence guard,
+/// not current registry state after the installer intentionally changes it.
+pub(crate) struct FencedInstallation {
+    user: CurrentUser,
+    terminal: super::process::TerminatedProcess,
+    directory: Arc<Directory>,
+    spelling: PathBuf,
+    name: ComponentName,
+    identity: super::files::FileIdentity,
+    digest: String,
+    _fence: Arc<parking_lot::Mutex<super::fence::ImageFence>>,
+}
+impl FencedInstallation {
+    /// No mutex reacquisition: boundary verification may run while context
+    /// holds the fence. Its caller also verifies_fence with that existing lock.
+    pub(crate) fn verify(&self) -> ScopeResult<()> {
+        self.user
+            .require_unelevated()
+            .map_err(|_| ScopeBlock::Elevated)?;
+        self.terminal
+            .verify()
+            .map_err(|_| ScopeBlock::ImageUnsupported)?;
+        self.directory
+            .recheck()
+            .map_err(|_| ScopeBlock::InputChanged)?;
+        let named = Directory::open_absolute(&self.spelling).map_err(|_| ScopeBlock::Relocated)?;
+        if named.identity() != self.directory.identity() {
+            return Err(ScopeBlock::Relocated);
+        }
+        Ok(())
+    }
+    pub(crate) fn verify_fence(&self, fence: &super::fence::ImageFence) -> ScopeResult<()> {
+        self.verify()?;
+        verify_original_fence(
+            fence,
+            &self.directory,
+            &self.name,
+            &self.identity,
+            &self.digest,
+        )
+    }
+    pub(crate) fn directory(&self) -> &Arc<Directory> {
+        &self.directory
+    }
+    pub(crate) fn image_name(&self) -> &ComponentName {
+        &self.name
+    }
+}
+fn verify_original_fence(
+    fence: &super::fence::ImageFence,
+    directory: &Directory,
+    name: &ComponentName,
+    identity: &super::files::FileIdentity,
+    digest: &str,
+) -> ScopeResult<()> {
+    use sha2::{Digest, Sha256};
+    fence.verify().map_err(|_| ScopeBlock::ImageUnsupported)?;
+    if fence.identity() != identity
+        || !fence
+            .context_original_child(directory, name)
+            .map_err(|_| ScopeBlock::ImageUnsupported)?
+    {
+        return Err(ScopeBlock::Relocated);
+    }
+    let length = fence
+        .context_metadata()
+        .map_err(|_| ScopeBlock::ImageUnsupported)?
+        .size;
+    let mut actual = Sha256::new();
+    let mut offset = 0;
+    let mut bytes = [0; 65536];
+    loop {
+        let count = fence
+            .context_read(offset, &mut bytes)
+            .map_err(|_| ScopeBlock::ImageUnsupported)?;
+        if count == 0 {
+            break;
+        }
+        offset += count as u64;
+        if offset > length {
+            return Err(ScopeBlock::InputChanged);
+        }
+        actual.update(&bytes[..count]);
+    }
+    if offset != length || format!("{:x}", actual.finalize()) != digest {
+        return Err(ScopeBlock::InputChanged);
+    }
+    fence.verify().map_err(|_| ScopeBlock::ImageUnsupported)
 }
 #[cfg(test)]
 pub(crate) fn fixture_registration_location(

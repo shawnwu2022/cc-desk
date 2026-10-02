@@ -1,0 +1,105 @@
+{
+  "reviews": [
+    {
+      "preparationId": "00112233445566778899aabbccddeeff",
+      "version": "0.17.7",
+      "phase": "preparing",
+      "contextPolicy": "fresh-settings-preserve-current-shared-cli",
+      "transactionId": null,
+      "allowedActions": [
+        "refresh",
+        "cancel-preparation"
+      ],
+      "blockReason": "PREPARATION_PENDING"
+    },
+    {
+      "preparationId": "00112233445566778899aabbccddeeff",
+      "version": "0.17.7",
+      "phase": "verified",
+      "contextPolicy": "fresh-settings-preserve-current-shared-cli",
+      "transactionId": null,
+      "allowedActions": [
+        "refresh",
+        "review",
+        "cancel-preparation"
+      ],
+      "blockReason": "PAYLOAD_UNVERIFIED"
+    },
+    {
+      "preparationId": "00112233445566778899aabbccddeeff",
+      "version": "0.17.7",
+      "phase": "verified",
+      "contextPolicy": "fresh-settings-preserve-current-shared-cli",
+      "transactionId": null,
+      "allowedActions": [
+        "refresh",
+        "review",
+        "cancel-preparation"
+      ],
+      "blockReason": "COORDINATOR_UNAVAILABLE"
+    },
+    {
+      "preparationId": "00112233445566778899aabbccddeeff",
+      "version": "0.17.7",
+      "phase": "verified",
+      "contextPolicy": "fresh-settings-preserve-current-shared-cli",
+      "transactionId": null,
+      "allowedActions": [
+        "refresh",
+        "review",
+        "cancel-preparation",
+        "begin-switch"
+      ],
+      "blockReason": null
+    },
+    {
+      "preparationId": "00112233445566778899aabbccddeeff",
+      "version": "0.17.7",
+      "phase": "handoff-issued",
+      "contextPolicy": "fresh-settings-preserve-current-shared-cli",
+      "transactionId": "00112233-4455-4677-8899-aabbccddeeff",
+      "allowedActions": [
+        "refresh"
+      ],
+      "blockReason": "HANDOFF_ISSUED"
+    },
+    {
+      "preparationId": "00112233445566778899aabbccddeeff",
+      "version": "0.17.7",
+      "phase": "cancelled",
+      "contextPolicy": "fresh-settings-preserve-current-shared-cli",
+      "transactionId": null,
+      "allowedActions": [
+        "refresh"
+      ],
+      "blockReason": null
+    },
+    {
+      "preparationId": "00112233445566778899aabbccddeeff",
+      "version": "0.17.7",
+      "phase": "aborted",
+      "contextPolicy": "fresh-settings-preserve-current-shared-cli",
+      "transactionId": "00112233-4455-4677-8899-aabbccddeeff",
+      "allowedActions": [
+        "refresh",
+        "prepare-again"
+      ],
+      "blockReason": null
+    },
+    {
+      "preparationId": "00112233445566778899aabbccddeeff",
+      "version": "0.17.7",
+      "phase": "unavailable",
+      "contextPolicy": "fresh-settings-preserve-current-shared-cli",
+      "transactionId": null,
+      "allowedActions": [
+        "refresh",
+        "cancel-preparation"
+      ],
+      "blockReason": "PREPARATION_EXPIRED"
+    }
+  ],
+  "ticket": {
+    "transactionId": "00112233-4455-4677-8899-aabbccddeeff"
+  }
+}

@@ -231,6 +231,8 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             version_history::commands::begin_prepare_history,
             version_history::commands::prepare_history,
             version_history::commands::cancel_prepare_history,
+            version_history::commands::begin_switch,
+            version_history::commands::inspect_switch,
             commands::native_get_scope,
             commands::native_list_resources,
             cli::commands::cli_start,

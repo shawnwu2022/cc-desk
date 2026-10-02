@@ -136,3 +136,15 @@ mod version_history_manager_wire;
 mod version_history_source_document;
 #[cfg(windows)]
 mod version_history_startup_windows;
+
+mod version_history_begin_switch;
+mod version_history_private_abort;
+
+#[cfg(windows)]
+mod version_history_registration_windows;
+#[cfg(windows)]
+mod version_history_registry_state_windows;
+#[cfg(windows)]
+mod version_history_scope_context_windows;
+#[cfg(windows)]
+mod version_history_shortcuts_windows;

@@ -226,10 +226,15 @@ struct Transaction {
     cancelled: Arc<AtomicBool>,
     phase: Phase,
     in_flight: bool,
+    // Once issued, even a cancelled/failed preparation cannot imply that its
+    // private/native switch work has been safely reversed.
+    issued_switch: Option<String>,
+    verified_abort: bool,
 }
 impl Transaction {
     fn active(&self) -> bool {
         self.in_flight
+            || (self.issued_switch.is_some() && !self.verified_abort)
             || matches!(
                 self.phase,
                 Phase::Reserved
@@ -284,6 +289,36 @@ impl Drop for HandoffBudget {
     }
 }
 impl PreparedHandoff {
+    #[cfg(windows)]
+    pub(crate) fn record_unstarted(
+        &self,
+        outcome: &super::windows::source_lifecycle::UnstartedSource,
+    ) -> Result<(), SafeError> {
+        outcome.verify_document(&self.caller, &self.switch_id)?;
+        let mut held = self.service.held.lock();
+        let item = transaction_mut(&mut held, &self.caller, &self.preparation_id)?;
+        if item.issued_switch.as_deref() != Some(self.switch_id.as_str()) {
+            return Err(error("HISTORY_HANDOFF_CHANGED"));
+        }
+        item.verified_abort = true;
+        item.phase = Phase::Failed;
+        Ok(())
+    }
+    #[cfg(windows)]
+    pub(crate) fn record_verified_abort(
+        &self,
+        outcome: &super::windows::pre_context_abort::VerifiedPrivateAbort<'_>,
+    ) -> Result<(), SafeError> {
+        outcome.verify_document(&self.caller, &self.switch_id)?;
+        let mut held = self.service.held.lock();
+        let item = transaction_mut(&mut held, &self.caller, &self.preparation_id)?;
+        if item.issued_switch.as_deref() != Some(self.switch_id.as_str()) {
+            return Err(error("HISTORY_HANDOFF_CHANGED"));
+        }
+        item.verified_abort = true;
+        item.phase = Phase::Failed;
+        Ok(())
+    }
     pub(crate) fn transaction_id(&self) -> &str {
         &self.switch_id
     }
@@ -334,12 +369,12 @@ impl PreparedHandoff {
     }
     #[cfg(windows)]
     pub(crate) fn complete(
-        self,
+        &self,
         retained: super::windows::package::RetainedPackage,
     ) -> Result<super::windows::package::RetainedPackage, SafeError> {
         // Full destination readback/signature verification occurs outside the
         // preparation mutex; the final ownership change is short and atomic.
-        retained.verify_transfer(&self)?;
+        retained.verify_transfer(self)?;
         let mut held = self.service.held.lock();
         let item = transaction_mut(&mut held, &self.caller, &self.preparation_id)?;
         state_check(item, (self.service.clock)())?;
@@ -363,6 +398,75 @@ impl PreparedHandoff {
     }
 }
 impl PrepareService {
+    /// Does not start IO, re-download, allocate a switch UUID, cancel, or replay
+    /// a handoff. Issued UUIDs remain observable even after preparation expiry.
+    pub(crate) fn inspect_switch(
+        &self,
+        caller: &CallerIdentity,
+        id: &str,
+    ) -> Result<super::manager::SwitchReview, SafeError> {
+        use super::manager::{
+            SwitchContextPolicy, SwitchReview, SwitchReviewAction as Action,
+            SwitchReviewBlock as Block, SwitchReviewPhase as ReviewPhase,
+        };
+        (self.owner_check)(caller)?;
+        let mut held = self.held.lock();
+        let item = transaction_mut(&mut held, caller, id)?;
+        let mut result = SwitchReview {
+            preparation_id: id.to_owned(),
+            version: item.selection.version().to_owned(),
+            phase: ReviewPhase::Unavailable,
+            context_policy: SwitchContextPolicy::FreshSettingsPreserveCurrentSharedCli,
+            transaction_id: None,
+            allowed_actions: vec![Action::Refresh],
+            block_reason: None,
+        };
+        if let Some(switch_id) = &item.issued_switch {
+            result.transaction_id = Some(switch_id.clone());
+            if item.verified_abort {
+                result.phase = ReviewPhase::Aborted;
+                result.allowed_actions.push(Action::PrepareAgain);
+            } else {
+                result.phase = ReviewPhase::HandoffIssued;
+                result.block_reason = Some(Block::HandoffIssued);
+            }
+        } else if matches!(item.phase, Phase::Cancelled) {
+            result.phase = ReviewPhase::Cancelled;
+        } else if (self.clock)() >= item.expires {
+            result.block_reason = Some(Block::PreparationExpired);
+            result.allowed_actions.push(Action::CancelPreparation);
+        } else {
+            match &item.phase {
+                Phase::Reserved | Phase::Running => {
+                    result.phase = ReviewPhase::Preparing;
+                    result.block_reason = Some(Block::PreparationPending);
+                    result.allowed_actions.push(Action::CancelPreparation);
+                }
+                Phase::Ready(_) => {
+                    result.phase = ReviewPhase::Verified;
+                    result.allowed_actions.push(Action::Review);
+                    if item.in_flight {
+                        result.block_reason = Some(Block::PreparationBusy);
+                    } else {
+                        result.block_reason = super::payload_policy::review_block(&item.selection);
+                        result.allowed_actions.push(Action::CancelPreparation);
+                        if result.block_reason.is_none() {
+                            result.allowed_actions.push(Action::BeginSwitch);
+                        }
+                    }
+                }
+                Phase::Failed => {
+                    result.block_reason = Some(Block::PreparationFailed);
+                    result.allowed_actions.push(Action::CancelPreparation);
+                }
+                Phase::Handoff { .. } | Phase::ManagerOwned { .. } | Phase::Cancelled => {
+                    unreachable!("terminal preparation cases handled above")
+                }
+            }
+        }
+        (self.owner_check)(caller)?;
+        Ok(result)
+    }
     /// Use only a pinned private manager directory, admitted CallerIdentity and
     /// exact registry-liveness check. IPC must re-admit after this blocking work
     /// before publishing responses or admitting subsequent manager effects.
@@ -432,6 +536,7 @@ impl PrepareService {
         held.retain(|_, item| {
             now < item.expires
                 || item.in_flight
+                || item.issued_switch.is_some()
                 || matches!(
                     item.phase,
                     Phase::Handoff { .. } | Phase::ManagerOwned { .. }
@@ -460,6 +565,8 @@ impl PrepareService {
                 cancelled: Arc::new(AtomicBool::new(false)),
                 phase: Phase::Reserved,
                 in_flight: false,
+                issued_switch: None,
+                verified_abort: false,
             },
         );
         Ok(PreparationTicket { transaction_id: id })
@@ -594,22 +701,53 @@ impl PrepareService {
         caller: &CallerIdentity,
         id: &str,
     ) -> Result<HandoffReservation, SafeError> {
+        self.reserve_handoff_admitted(caller, id, |_| Ok(()))
+            .map(|(reservation, _)| reservation)
+    }
+    /// The winner's additional admission sees the actual still-pinned verified
+    /// package before a UUID is reserved. A policy refusal keeps preparation
+    /// available; duplicates retain their existing UUID and never re-admit an
+    /// installer or return another transfer capability.
+    pub(crate) fn reserve_handoff_admitted<T>(
+        self: &Arc<Self>,
+        caller: &CallerIdentity,
+        id: &str,
+        admit: impl FnOnce(&VerifiedPackage) -> Result<T, SafeError>,
+    ) -> Result<(HandoffReservation, Option<T>), SafeError> {
+        self.reserve_handoff_with_source(caller, id, |package, _transaction| admit(package))
+    }
+    /// The production source-admission callback receives a backend-generated
+    /// candidate UUID before publication. A rejected zero-owner freeze leaves
+    /// the package ready, and its guard releases an uncommitted freeze if final
+    /// package/document checks fail. Duplicates never call it again.
+    pub(crate) fn reserve_handoff_with_source<T>(
+        self: &Arc<Self>,
+        caller: &CallerIdentity,
+        id: &str,
+        admit: impl FnOnce(&VerifiedPackage, &str) -> Result<T, SafeError>,
+    ) -> Result<(HandoffReservation, Option<T>), SafeError> {
         (self.owner_check)(caller)?;
         let (package, token, selection) = {
             let mut held = self.held.lock();
             let item = transaction_mut(&mut held, caller, id)?;
             if let Phase::ManagerOwned { switch_id } = &item.phase {
-                return Ok(HandoffReservation {
-                    transaction_id: switch_id.clone(),
-                    transfer: None,
-                });
+                return Ok((
+                    HandoffReservation {
+                        transaction_id: switch_id.clone(),
+                        transfer: None,
+                    },
+                    None,
+                ));
             }
             state_check(item, (self.clock)())?;
             if let Phase::Handoff { switch_id } = &item.phase {
-                return Ok(HandoffReservation {
-                    transaction_id: switch_id.clone(),
-                    transfer: None,
-                });
+                return Ok((
+                    HandoffReservation {
+                        transaction_id: switch_id.clone(),
+                        transfer: None,
+                    },
+                    None,
+                ));
             }
             if item.in_flight {
                 return Err(error("HISTORY_PREPARE_BUSY"));
@@ -621,6 +759,7 @@ impl PrepareService {
             item.in_flight = true;
             (package, item.token.clone(), item.selection.clone())
         };
+        let mut policy_refused = false;
         let result = (|| {
             let check = || {
                 (self.owner_check)(caller)?;
@@ -632,6 +771,11 @@ impl PrepareService {
                 return Err(error("HISTORY_SELECTION_CHANGED"));
             }
             package.revalidate(&check)?;
+            let switch_id = uuid::Uuid::new_v4().to_string();
+            let permit = admit(&package, &switch_id).map_err(|failure| {
+                policy_refused = true;
+                failure
+            })?;
             let mut held = self.held.lock();
             let item = transaction_mut(&mut held, caller, id)?;
             state_check(item, (self.clock)())?;
@@ -642,26 +786,29 @@ impl PrepareService {
             if !Arc::ptr_eq(current, &package) {
                 return Err(error("HISTORY_PACKAGE_CHANGED"));
             }
-            let switch_id = uuid::Uuid::new_v4().to_string();
+            item.issued_switch = Some(switch_id.clone());
             item.phase = Phase::Handoff {
                 switch_id: switch_id.clone(),
             };
-            Ok(HandoffReservation {
-                transaction_id: switch_id.clone(),
-                transfer: Some(PreparedHandoff {
-                    service: self.clone(),
-                    caller: caller.clone(),
-                    preparation_id: id.to_owned(),
-                    switch_id,
-                    package: package.clone(),
-                    observation,
-                    _budget: HandoffBudget {
+            Ok((
+                HandoffReservation {
+                    transaction_id: switch_id.clone(),
+                    transfer: Some(PreparedHandoff {
                         service: self.clone(),
                         caller: caller.clone(),
                         preparation_id: id.to_owned(),
-                    },
-                }),
-            })
+                        switch_id,
+                        package: package.clone(),
+                        observation,
+                        _budget: HandoffBudget {
+                            service: self.clone(),
+                            caller: caller.clone(),
+                            preparation_id: id.to_owned(),
+                        },
+                    }),
+                },
+                Some(permit),
+            ))
         })();
         drop(package);
         if let Some(item) = self
@@ -673,7 +820,7 @@ impl PrepareService {
             if result.is_err() {
                 item.in_flight = false;
             }
-            if result.is_err() && matches!(item.phase, Phase::Ready(_)) {
+            if result.is_err() && !policy_refused && matches!(item.phase, Phase::Ready(_)) {
                 item.phase = Phase::Failed;
             }
         }

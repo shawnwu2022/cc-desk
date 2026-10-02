@@ -149,7 +149,26 @@ describe('Isolated production-component fixture', () => {
     await view.findAll('[data-history-select]')[0].trigger('click'); await flushPromises()
     await view.get('[data-history-prepare]').trigger('click'); await flushPromises()
     expect(view.get('[data-history-status]').text()).toContain('Publisher signature, SHA256 and size verified')
+    expect(view.get('[data-history-install]').attributes('disabled')).toBeUndefined()
+    await view.get('[data-history-install]').trigger('click'); await flushPromises()
+    expect(document.querySelector<HTMLButtonElement>('[data-history-begin]')?.disabled).toBe(true)
+    expect(blockedHostCalls.value).toBe(0)
+  })
+
+  // 合成签发与未知回执仅使用隔离桥，不触发真实安装或进程调用。
+  it.each(['admitted', 'unknown', 'aborted'])('Fixture_HistorySwitch_013: %s', async outcome => {
+    const view = await render(`historical-versions&historySwitch=${outcome}`)
+    await view.get('[data-history-refresh]').trigger('click'); await flushPromises()
+    await view.findAll('[data-history-select]')[0].trigger('click'); await flushPromises()
+    await view.get('[data-history-prepare]').trigger('click'); await flushPromises()
+    await view.get('[data-history-install]').trigger('click'); await flushPromises()
+    document.querySelector<HTMLButtonElement>('[data-history-begin]')!.click(); await flushPromises()
+    if (outcome === 'unknown') expect(view.get('[data-history-status]').text()).toContain('unknown')
+    await view.get('[data-history-inspect]').trigger('click'); await flushPromises()
+    expect(view.get('[data-history-status]').text()).toContain(outcome === 'aborted' ? 'confirmed an abort' : 'handed to the version manager')
+    expect(view.find('[data-history-cancel]').exists()).toBe(false)
     expect(view.get('[data-history-install]').attributes('disabled')).toBeDefined()
+    expect(view.find('[data-history-prepare-again]').exists()).toBe(outcome === 'aborted')
     expect(blockedHostCalls.value).toBe(0)
   })
 

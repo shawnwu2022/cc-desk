@@ -72,9 +72,10 @@ jobs:
       - name: Verify native manager process boundary
         run: cargo test --locked --lib version_history::windows::manager_process::tests::HistoryManagerProcess_SuspendedIdentity_001 -- --exact --nocapture --test-threads=1
 
-      - name: Run Rust tests
+      - name: Run remaining Rust tests after the explicit manager boundary gate
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         id: rust_tests
-        run: cargo test --locked
+        run: cargo test --locked -- --skip version_history::windows::manager_process::tests::HistoryManagerProcess_SuspendedIdentity_001
 
       - name: Diagnose native Channel separately after an aggregate failure
         if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' }}

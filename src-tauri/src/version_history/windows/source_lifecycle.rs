@@ -59,6 +59,29 @@ pub(crate) struct SourceHandoff {
     driver_started: AtomicBool,
     transition: Mutex<()>,
 }
+/// A native original-document review was cancelled before its first persistent
+/// write attempt. It cannot be created from an IPC error or a missing file.
+pub(crate) struct UnstartedSource {
+    owner: Arc<SourceHandoff>,
+}
+impl UnstartedSource {
+    pub(crate) fn verify_document(
+        &self,
+        caller: &CallerIdentity,
+        transaction: &str,
+    ) -> Result<(), SafeError> {
+        self.owner.verify_original_document(caller, transaction)?;
+        if self.owner.committed.load(Ordering::SeqCst)
+            || self.owner.close_started.load(Ordering::SeqCst)
+            || self.owner.pin.lock().is_some()
+            || self.owner.frozen.lock().is_some()
+        {
+            return Err(error("HISTORY_HANDOFF_CHANGED"));
+        }
+        self.owner.udf.recheck().map_err(blocked)?;
+        Ok(())
+    }
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceHandoffExitManifest {
@@ -197,6 +220,107 @@ impl Drop for CaptureFreeze {
     }
 }
 impl SourceHandoff {
+    pub(crate) fn verify_original_document(
+        &self,
+        caller: &CallerIdentity,
+        transaction: &str,
+    ) -> Result<(), SafeError> {
+        if caller != &self.caller
+            || transaction != self.transaction
+            || self.binding.admit_window(&self.window, &self.headers)? != self.caller
+        {
+            return Err(error("FORBIDDEN"));
+        }
+        Ok(())
+    }
+    /// Enter fail-closed ownership before the first persistent switch write,
+    /// including a write whose completion cannot be established.
+    pub(crate) fn retain_for_recovery(&self) -> Result<(), SafeError> {
+        self.verify_before_close()?;
+        let _transition = self.transition.lock();
+        self.committed.store(true, Ordering::SeqCst);
+        self.pin
+            .lock()
+            .as_mut()
+            .ok_or_else(|| error("HISTORY_HANDOFF_CHANGED"))?
+            .retain_for_recovery()?;
+        self.frozen
+            .lock()
+            .as_mut()
+            .ok_or_else(|| error("HISTORY_HANDOFF_CHANGED"))?
+            .mark_committed()?;
+        Ok(())
+    }
+    pub(crate) fn finish_private_abort(
+        self: &Arc<Self>,
+        outcome: &super::pre_context_abort::VerifiedPrivateAbort<'_>,
+    ) -> Result<(), SafeError> {
+        outcome.verify()?;
+        outcome.verify_document(&self.caller, &self.transaction)?;
+        let owner = self.clone();
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        self.window
+            .run_on_main_thread(move || {
+                let result = SOURCE_VIEWS.with(|cell| {
+                    let _transition = owner.transition.lock();
+                    let mut slot = cell.borrow_mut();
+                    let held = slot
+                        .as_ref()
+                        .ok_or_else(|| error("HISTORY_HANDOFF_CHANGED"))?;
+                    if !Arc::ptr_eq(&held.owner, &owner)
+                        || held.ready.is_some()
+                        || owner.close_started.load(Ordering::SeqCst)
+                    {
+                        return Err(error("HISTORY_EARLY_ABORT_BLOCKED"));
+                    }
+                    // Native subscriptions/controllers are released on their UI
+                    // thread; ordinary document ownership remains pinned here.
+                    slot.take();
+                    Ok(())
+                });
+                let _ = send.send(result);
+            })
+            .map_err(blocked)?;
+        receive.recv().map_err(blocked)??;
+        let _transition = self.transition.lock();
+        outcome.verify()?;
+        self.verify_before_close()?;
+        self.pin
+            .lock()
+            .take()
+            .ok_or_else(|| error("HISTORY_HANDOFF_CHANGED"))?
+            .release_verified_abort(outcome)?;
+        self.frozen
+            .lock()
+            .take()
+            .ok_or_else(|| error("HISTORY_HANDOFF_CHANGED"))?
+            .release_verified_abort(outcome)?;
+        self.committed.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+    /// A private-copy abort leaves the original context in place. This proves
+    /// the actual original host/frozen ledger/root owner, not browser shutdown.
+    pub(crate) fn verify_private_abort_owner(&self, transaction: &str) -> Result<(), SafeError> {
+        if self.transaction != transaction
+            || self.source.pid() != std::process::id()
+            || self.source.terminal(0).map_err(blocked)?.is_some()
+            || self.close_started.load(Ordering::SeqCst)
+        {
+            return Err(error("HISTORY_HANDOFF_CHANGED"));
+        }
+        self.source
+            .verify_current_user(&CurrentUser::capture().map_err(blocked)?)
+            .map_err(blocked)?;
+        self.verify_frozen()?;
+        self.udf.recheck().map_err(blocked)
+    }
+    pub(crate) fn private_abort_observation(
+        &self,
+        transaction: &str,
+    ) -> Result<Vec<u8>, SafeError> {
+        self.verify_private_abort_owner(transaction)?;
+        serde_json::to_vec(&serde_json::json!({"schema":1,"basis":"live-original-source-frozen-empty-admission","transaction":self.transaction,"source":self.source.identity(),"udf":self.udf.identity()})).map_err(blocked)
+    }
     pub(crate) fn start_exit_driver(
         self: &Arc<Self>,
         installation: Arc<InstallationControl>,
@@ -341,7 +465,7 @@ impl SourceHandoff {
         self.committed.store(true, Ordering::SeqCst);
         Ok(())
     }
-    pub(crate) async fn cancel_review(self: &Arc<Self>) -> Result<(), SafeError> {
+    pub(crate) async fn cancel_review(self: &Arc<Self>) -> Result<UnstartedSource, SafeError> {
         if self.committed.load(Ordering::SeqCst) || self.close_started.load(Ordering::SeqCst) {
             return Err(error("HISTORY_RECOVERY_REQUIRED"));
         }
@@ -378,7 +502,12 @@ impl SourceHandoff {
                 let _ = send.send(result);
             })
             .map_err(blocked)?;
-        receive.await.map_err(blocked)?
+        receive.await.map_err(blocked)??;
+        let outcome = UnstartedSource {
+            owner: self.clone(),
+        };
+        outcome.verify_document(&self.caller, &self.transaction)?;
+        Ok(outcome)
     }
     pub(crate) fn udf(&self) -> &Arc<Directory> {
         &self.udf

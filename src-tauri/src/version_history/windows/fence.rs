@@ -110,6 +110,15 @@ impl ImageFence {
         }
         Ok(())
     }
+    /// A private quarantine parent cannot substitute for this object ACL
+    /// check: Windows traversal privileges can bypass a parent's DACL.
+    pub(super) fn verify_confidential(
+        &self,
+        user: &super::security::CurrentUser,
+    ) -> io::Result<()> {
+        self.verify()?;
+        user.verify_confidential_source(super::handle(&self.image.file), false)
+    }
     /// Caller must commit its exact rename intent first. Failure after rename
     /// can be uncertain; this object retains the original handle either way.
     pub(crate) fn rename_to(

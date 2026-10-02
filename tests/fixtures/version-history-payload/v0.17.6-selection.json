@@ -1,0 +1,33 @@
+{
+  "id": 387003216,
+  "tag_name": "v0.17.6",
+  "name": "CC Desk 0.17.6",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2026-09-11T12:00:23Z",
+  "created_at": "2026-09-11T11:53:53Z",
+  "updated_at": "2026-09-11T12:03:06Z",
+  "html_url": "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.17.6",
+  "assets": [
+    {
+      "id": 557169459,
+      "name": "CC.Desk_0.17.6_x64-setup.exe",
+      "state": "uploaded",
+      "size": 4486992,
+      "digest": "sha256:a0df0178b4d4c4ab08f1229bbdf9b6d4c2c2e402139cbeaf9acd6bb9eb053afd",
+      "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.6/CC.Desk_0.17.6_x64-setup.exe",
+      "created_at": "2026-09-11T12:00:19Z",
+      "updated_at": "2026-09-11T12:00:20Z"
+    },
+    {
+      "id": 557169462,
+      "name": "CC.Desk_0.17.6_x64-setup.exe.sig",
+      "state": "uploaded",
+      "size": 420,
+      "digest": "sha256:74a470b1966f5b4cdd6840efe0509fe587ec2c7a9445a4529ba81de1b2f8339d",
+      "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.6/CC.Desk_0.17.6_x64-setup.exe.sig",
+      "created_at": "2026-09-11T12:00:19Z",
+      "updated_at": "2026-09-11T12:00:20Z"
+    }
+  ]
+}

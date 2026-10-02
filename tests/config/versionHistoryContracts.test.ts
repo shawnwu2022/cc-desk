@@ -68,3 +68,56 @@ describe('Rust preparation serialization fixture', () => {
     expect(() => parseCancelPrepareSummary({ ...preparationWire.cancelled, cancelled: false })).toThrow('HISTORY_INVALID_RESPONSE')
   })
 })
+
+import switchWire from '../fixtures/version-switch-wire.json'
+import { parseSwitchReview, parseSwitchTicket } from '@/utils/versionHistoryContracts'
+
+describe('Rust ordinary switch serialization fixture', () => {
+  // 检查确切的共享契约，准备身份与管理器UUID不可混用。
+  it('HistoryWire_SwitchReview_003', () => {
+    for (const review of switchWire.reviews) expect(parseSwitchReview(review)).toEqual(review)
+    expect(parseSwitchTicket(switchWire.ticket)).toEqual(switchWire.ticket)
+  })
+  // 路径、原始错误、未知策略或矛盾的签发身份必须拒绝。
+  it('HistoryWire_RejectSwitchAuthority_004', () => {
+    for (const changed of [{ path: '/private/package' }, { contextPolicy: 'keep-current-data' },
+      { allowedActions: ['install'] }, { allowedActions: ['review', 'review'] }, { blockReason: 'raw error' },
+      { transactionId: switchWire.ticket.transactionId }, { preparationId: switchWire.ticket.transactionId }]) {
+      expect(() => parseSwitchReview({ ...switchWire.reviews[3], ...changed })).toThrow('HISTORY_INVALID_RESPONSE')
+    }
+    for (const changed of [{ transactionId: null }, { allowedActions: ['refresh', 'cancel-preparation'] }]) {
+      expect(() => parseSwitchReview({ ...switchWire.reviews[4], ...changed })).toThrow('HISTORY_INVALID_RESPONSE')
+    }
+    expect(() => parseSwitchTicket(preparationWire.ticket)).toThrow('HISTORY_INVALID_RESPONSE')
+  })
+})
+
+describe('ordinary switch cross-field authority', () => {
+  // 阶段、阻止原因和动作必须一致；繁忙或已交接不能授权取消。
+  it('HistoryWire_RejectContradictions_005', () => {
+    const invalidReviews = [
+      { ...switchWire.reviews[3], blockReason: 'PREPARATION_BUSY', allowedActions: ['refresh', 'review', 'cancel-preparation'] },
+      { ...switchWire.reviews[3], blockReason: 'HANDOFF_ISSUED', allowedActions: ['refresh', 'review', 'cancel-preparation'] },
+      { ...switchWire.reviews[3], blockReason: 'PREPARATION_PENDING' },
+      { ...switchWire.reviews[0], blockReason: null },
+      { ...switchWire.reviews[4], blockReason: null },
+      { ...switchWire.reviews.find(review => review.phase === 'aborted'), blockReason: 'HANDOFF_ISSUED' },
+      { ...switchWire.reviews.find(review => review.phase === 'cancelled'), blockReason: 'PREPARATION_FAILED' },
+      { ...switchWire.reviews.find(review => review.phase === 'unavailable'), blockReason: 'COORDINATOR_UNAVAILABLE' },
+    ]
+    for (const review of invalidReviews) expect(() => parseSwitchReview(review)).toThrow('HISTORY_INVALID_RESPONSE')
+  })
+  // 有效响应可以收紧动作列表，包括繁忙状态仅允许查看或刷新。
+  it('HistoryWire_AcceptWithheldSubsets_006', () => {
+    const validReviews = [...switchWire.reviews,
+      { ...switchWire.reviews[3], blockReason: 'PREPARATION_BUSY', allowedActions: ['refresh', 'review'] },
+      { ...switchWire.reviews.find(review => review.phase === 'unavailable')!, blockReason: 'PREPARATION_FAILED' },
+    ]
+    for (const review of validReviews) {
+      expect(parseSwitchReview({ ...review, allowedActions: [] }).allowedActions).toEqual([])
+      for (const action of review.allowedActions) {
+        expect(parseSwitchReview({ ...review, allowedActions: [action] }).allowedActions).toEqual([action])
+      }
+    }
+  })
+})

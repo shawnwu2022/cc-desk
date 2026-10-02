@@ -79,6 +79,24 @@ impl<R> Drop for DocumentHandoffPin<R> {
     }
 }
 impl<R> DocumentHandoffPin<R> {
+    /// Freeze survives an uncertain first persistence attempt. This grants no
+    /// execution authority and can only make ordinary admission stricter.
+    #[cfg(windows)]
+    pub(crate) fn retain_for_recovery(&mut self) -> Result<(), SafeError> {
+        self.verify()?;
+        self.committed = true;
+        Ok(())
+    }
+    #[cfg(windows)]
+    pub(crate) fn release_verified_abort(
+        self,
+        outcome: &crate::version_history::windows::pre_context_abort::VerifiedPrivateAbort<'_>,
+    ) -> Result<(), SafeError> {
+        outcome.verify_document(&self.authority.caller, &self.transaction)?;
+        self.verify()?;
+        self.authority.state.lock().handoff = None;
+        Ok(())
+    }
     #[cfg(windows)]
     pub(crate) fn commit_published(
         &mut self,

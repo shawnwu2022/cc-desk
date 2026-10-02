@@ -44,3 +44,19 @@ export interface PreparedPackageSummary {
   blockedReason: 'PACKAGE_IDENTITY_UNVERIFIED'
 }
 export interface CancelPrepareSummary { transactionId: string; cancelled: true }
+
+export type SwitchReviewPhase = 'preparing' | 'verified' | 'handoff-issued' | 'cancelled' | 'unavailable' | 'aborted'
+export type SwitchReviewAction = 'refresh' | 'review' | 'begin-switch' | 'cancel-preparation' | 'prepare-again'
+export type SwitchReviewBlock = 'PREPARATION_PENDING' | 'PREPARATION_BUSY' | 'PREPARATION_EXPIRED' | 'PREPARATION_FAILED'
+  | 'PAYLOAD_UNVERIFIED' | 'COORDINATOR_UNAVAILABLE' | 'HANDOFF_ISSUED'
+export interface SwitchReview {
+  preparationId: string
+  version: string
+  phase: SwitchReviewPhase
+  contextPolicy: 'fresh-settings-preserve-current-shared-cli'
+  transactionId: string | null
+  allowedActions: SwitchReviewAction[]
+  blockReason: SwitchReviewBlock | null
+}
+/** The manager owns this issued transaction; it is not installation success. */
+export interface SwitchTicket { transactionId: string }

@@ -33,7 +33,7 @@ import { resolveTerminalThemeId } from '@/config/terminalThemes'
 const parameters = new URLSearchParams(location.search)
 const scenario = parameters.get('scenario') ?? 'mixed'
 const emptyWorkspace = scenario === 'empty' || scenario === 'empty-project'
-if (scenario === 'historical-versions') onBeforeUnmount(installHistoryFixture())
+if (scenario === 'historical-versions') onBeforeUnmount(installHistoryFixture(parameters.get('historySwitch')))
 const { locale, t } = useI18n()
 locale.value = parameters.get('locale') === 'zh' ? 'zh' : 'en'
 const app = useAppStore(), shell = useShellStore(), catalog = useUnifiedSessionsStore()

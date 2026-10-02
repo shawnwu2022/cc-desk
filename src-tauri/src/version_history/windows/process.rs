@@ -104,6 +104,14 @@ impl ExactProcess {
         user.verify_process_user(handle(&self.process))?;
         self.verify_held_image(&self._image)
     }
+    /// Locator for registered-source re-admission, derived from this exact
+    /// retained image. The locator alone never authorizes opening or launch.
+    pub(crate) fn observed_image_path(&self) -> io::Result<std::path::PathBuf> {
+        self.verify_held_image(&self._image)?;
+        let path = super::manager_process::launch_path(handle(&self._image.file))?;
+        self.verify_held_image(&self._image)?;
+        Ok(path.into())
+    }
     pub(super) fn from_created(process: OwnedHandle, image: PinnedFile) -> io::Result<Self> {
         let identity = identity(handle(&process), &image)?;
         Ok(Self {

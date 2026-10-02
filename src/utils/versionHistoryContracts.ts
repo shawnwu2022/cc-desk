@@ -1,4 +1,4 @@
-import type { HistoryBlockReason, HistoryCatalogPage, HistoryPlatform, HistoryRelease, HistorySelection } from '@/types/versionHistory'
+import type { HistoryBlockReason, HistoryCatalogPage, HistoryPlatform, HistoryRelease, HistorySelection, SwitchReviewPhase } from '@/types/versionHistory'
 
 const reasons = new Set<HistoryBlockReason>([
   'PLATFORM_UNSUPPORTED', 'PLATFORM_ASSET_MISSING', 'PACKAGE_FORMAT_UNSUPPORTED', 'PACKAGING_BOUNDARY_UNKNOWN',
@@ -85,4 +85,46 @@ export function parseCancelPrepareSummary(value: unknown): import('@/types/versi
   const cancelled = object(value, ['transactionId', 'cancelled'])
   if (cancelled.cancelled !== true) invalid()
   return { transactionId: token(cancelled.transactionId), cancelled: true }
+}
+
+const switchActions = ['refresh', 'review', 'begin-switch', 'cancel-preparation', 'prepare-again'] as const
+const switchPhases = ['preparing', 'verified', 'handoff-issued', 'cancelled', 'unavailable', 'aborted'] as const
+const switchBlocks = ['PREPARATION_PENDING', 'PREPARATION_BUSY', 'PREPARATION_EXPIRED', 'PREPARATION_FAILED',
+  'PAYLOAD_UNVERIFIED', 'COORDINATOR_UNAVAILABLE', 'HANDOFF_ISSUED'] as const
+const phaseBlocks = {
+  preparing: ['PREPARATION_PENDING'],
+  verified: [null, 'PREPARATION_BUSY', 'PAYLOAD_UNVERIFIED', 'COORDINATOR_UNAVAILABLE'],
+  'handoff-issued': ['HANDOFF_ISSUED'], aborted: [null], cancelled: [null],
+  unavailable: ['PREPARATION_EXPIRED', 'PREPARATION_FAILED'],
+} as const
+function managerId(value: unknown): string {
+  return typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value) ? value : invalid()
+}
+export function parseSwitchReview(value: unknown): import('@/types/versionHistory').SwitchReview {
+  const review = object(value, ['preparationId', 'version', 'phase', 'contextPolicy', 'transactionId', 'allowedActions', 'blockReason'])
+  if (!switchPhases.includes(review.phase as never) || review.contextPolicy !== 'fresh-settings-preserve-current-shared-cli'
+    || !Array.isArray(review.allowedActions) || review.allowedActions.length > switchActions.length
+    || review.allowedActions.some(action => !switchActions.includes(action))
+    || new Set(review.allowedActions).size !== review.allowedActions.length
+    || (review.blockReason !== null && !switchBlocks.includes(review.blockReason as never))) invalid()
+  const actions = review.allowedActions as import('@/types/versionHistory').SwitchReviewAction[]
+  // A subset may withhold any valid action, but cannot contradict ownership.
+  if (!phaseBlocks[review.phase as SwitchReviewPhase].includes(review.blockReason as never)
+    || (review.blockReason === 'PREPARATION_BUSY' && actions.includes('cancel-preparation'))) invalid()
+  const issued = review.phase === 'handoff-issued' || review.phase === 'aborted'
+  if (issued !== (review.transactionId !== null)
+    || (review.phase === 'handoff-issued' && actions.some(action => action !== 'refresh'))
+    || (review.phase === 'aborted' && actions.some(action => !['refresh', 'prepare-again'].includes(action)))
+    || (actions.includes('prepare-again') && review.phase !== 'aborted')
+    || (actions.includes('review') && review.phase !== 'verified')
+    || (actions.includes('begin-switch') && (review.phase !== 'verified' || review.blockReason !== null))
+    || (review.phase === 'cancelled' && actions.some(action => action !== 'refresh'))) invalid()
+  return { preparationId: token(review.preparationId), version: version(review.version),
+    phase: review.phase as import('@/types/versionHistory').SwitchReviewPhase,
+    contextPolicy: 'fresh-settings-preserve-current-shared-cli', transactionId: issued ? managerId(review.transactionId) : null,
+    allowedActions: [...actions], blockReason: review.blockReason as import('@/types/versionHistory').SwitchReviewBlock | null }
+}
+export function parseSwitchTicket(value: unknown): import('@/types/versionHistory').SwitchTicket {
+  const ticket = object(value, ['transactionId'])
+  return { transactionId: managerId(ticket.transactionId) }
 }

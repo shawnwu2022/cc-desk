@@ -69,3 +69,16 @@ pub(crate) mod manager_ui;
 pub(crate) mod source_lifecycle;
 #[cfg(windows)]
 pub(crate) mod startup;
+
+#[cfg(windows)]
+pub(crate) mod coordinator_evidence;
+#[cfg(windows)]
+pub(crate) mod pre_context_abort;
+#[cfg(windows)]
+pub(crate) mod registration_state;
+#[cfg(windows)]
+pub(crate) mod shortcuts;
+#[cfg(windows)]
+pub(crate) mod source_begin;
+#[cfg(windows)]
+pub(crate) mod space;

@@ -478,7 +478,7 @@ fn HistoryHandoff_SelectionExpiresDuringCopy_008() {
     );
 }
 
-// 取消只撤销能力；持有原payload的回调和transfer仍占预算，drop后才允许重新准备。
+// 取消只撤销复制能力；已发出的切换必须经后端证明未开始或已安全abort，不能以drop代替。
 #[test]
 fn HistoryHandoff_CancelRetainsCapacity_009() {
     let f = fixture(PAYLOAD.to_vec(), Some(4));
@@ -515,7 +515,13 @@ fn HistoryHandoff_CancelRetainsCapacity_009() {
         "HISTORY_PREPARE_BUSY"
     );
     drop(transfer);
-    assert!(f.service.begin_prepare(&f.caller, &f.selection).is_ok());
+    assert_eq!(
+        f.service
+            .begin_prepare(&f.caller, &f.selection)
+            .unwrap_err()
+            .code,
+        "HISTORY_PREPARE_BUSY"
+    );
 }
 
 // 实际NTFS私有独立副本保留全部已验证字节；完成后取消不得撤销manager数据。
@@ -1067,4 +1073,154 @@ fn HistoryDownload_ReplacedDuringIo_026() {
             .code,
         "HISTORY_SELECTION_CHANGED"
     );
+}
+
+// 未测量payload拒绝发生在UUID/转移前，原已验证准备仍可查看和取消。
+#[test]
+fn HistoryHandoff_UnmeasuredPolicyPreservesPreparation_010() {
+    use crate::version_history::payload_policy::PayloadAdmission;
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let failure = f
+        .service
+        .reserve_handoff_admitted(&f.caller, &ticket.transaction_id, PayloadAdmission::admit)
+        .err()
+        .unwrap();
+    assert_eq!(failure.code, "HISTORY_PAYLOAD_UNVERIFIED");
+    f.service
+        .with_verified_package(&f.caller, &ticket.transaction_id, |package| {
+            assert_eq!(package.bytes(), PAYLOAD);
+            Ok(())
+        })
+        .unwrap();
+    assert!(f
+        .service
+        .cancel_prepare(&f.caller, &ticket.transaction_id)
+        .is_ok());
+}
+
+// 重复命令只返回原UUID，不再次调用实际包准入或交付第二个transfer。
+#[test]
+fn HistoryHandoff_AdmissionRunsOnlyForWinner_011() {
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let (first, permit) = f
+        .service
+        .reserve_handoff_admitted(&f.caller, &ticket.transaction_id, |package| {
+            assert_eq!(package.bytes(), PAYLOAD);
+            Ok("fixture-only admission")
+        })
+        .unwrap();
+    assert_eq!(permit, Some("fixture-only admission"));
+    let (duplicate, permit) = f
+        .service
+        .reserve_handoff_admitted::<()>(&f.caller, &ticket.transaction_id, |_| {
+            panic!("duplicate must not re-admit")
+        })
+        .unwrap();
+    assert_eq!(first.transaction_id, duplicate.transaction_id);
+    assert!(first.transfer.is_some());
+    assert!(duplicate.transfer.is_none());
+    assert!(permit.is_none());
+}
+
+// 发布者验证只开放review；缺少实际payload/完整coordinator准入仍不能begin。
+#[test]
+fn HistorySwitchReview_ExplicitActions_001() {
+    use crate::version_history::manager::{
+        SwitchReviewAction as A, SwitchReviewBlock as B, SwitchReviewPhase as P,
+    };
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    let pending = f
+        .service
+        .inspect_switch(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    assert_eq!(pending.phase, P::Preparing);
+    assert!(!pending.allowed_actions.contains(&A::Review));
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let review = f
+        .service
+        .inspect_switch(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    assert_eq!(review.phase, P::Verified);
+    assert_eq!(review.block_reason, Some(B::PayloadUnverified));
+    assert_eq!(
+        review.allowed_actions,
+        vec![A::Refresh, A::Review, A::CancelPreparation]
+    );
+    assert!(review.transaction_id.is_none());
+}
+
+// 已发出的UUID不会因取消、过期或消费者丢失而重新变成可安全重试的准备。
+#[test]
+fn HistorySwitchReview_IssuedOwnershipSurvivesFailure_002() {
+    use crate::version_history::manager::{SwitchReviewAction as A, SwitchReviewPhase as P};
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let handoff = f
+        .service
+        .reserve_handoff(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    f.service
+        .cancel_prepare(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    drop(handoff.transfer);
+    *f.clock.lock() += PREPARATION_TTL;
+    let review = f
+        .service
+        .inspect_switch(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    assert_eq!(review.phase, P::HandoffIssued);
+    assert_eq!(
+        review.transaction_id.as_deref(),
+        Some(handoff.transaction_id.as_str())
+    );
+    assert_eq!(review.allowed_actions, vec![A::Refresh]);
+}
+
+// 候选UUID只在真实zero-owner准入后发布；busy拒绝保持原准备和取消能力。
+#[test]
+fn HistorySwitchReview_SourceRefusalBeforeIssue_003() {
+    use crate::version_history::{
+        maintenance::{AdmissionGate, RuntimeKind},
+        manager::{SwitchReviewAction as A, SwitchReviewPhase as P},
+    };
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let gate = AdmissionGate::new();
+    let child = gate
+        .begin_start(RuntimeKind::Native)
+        .unwrap()
+        .child_created();
+    let failure = f
+        .service
+        .reserve_handoff_with_source(&f.caller, &ticket.transaction_id, |_, transaction| {
+            gate.freeze(transaction)
+        })
+        .err()
+        .unwrap();
+    assert_eq!(failure.code, "HISTORY_SESSIONS_NOT_QUIESCENT");
+    let state = f
+        .service
+        .inspect_switch(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    assert_eq!(state.phase, P::Verified);
+    assert!(state.transaction_id.is_none());
+    assert!(state.allowed_actions.contains(&A::CancelPreparation));
+    child.reaped();
 }

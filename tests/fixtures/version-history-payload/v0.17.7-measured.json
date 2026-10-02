@@ -1,0 +1,213 @@
+{
+  "evidenceSourceHead": "a5e409966888bb0c6c766a6dbed49dd1fe51fb6b",
+  "evidenceRun": 37053252570,
+  "installerVersion": "0.17.7",
+  "installerSha256": "e9ffbc5ba627f0c133a4385db404342a7344729339185e6f9b8ee6b5969086ac",
+  "installerSize": 4966193,
+  "testMetadata": "Object identities and descriptors below are synthetic. Produced paths, sizes, SHA256 and attributes are measured. This file grants no filesystem or execution authority.",
+  "originalImageName": "Old Desk.exe",
+  "source": [
+    {
+      "metadata": {
+        "path": "",
+        "kind": "Directory",
+        "size": 0,
+        "object_identity": "0000000000000000000000000000000000000000000000000000000000000001",
+        "link_count": 1,
+        "permissions": {
+          "Windows": {
+            "descriptor": [
+              1,
+              2,
+              3
+            ],
+            "attributes": 16
+          }
+        }
+      },
+      "sha256": null
+    },
+    {
+      "metadata": {
+        "path": "Old Desk.exe",
+        "kind": "File",
+        "size": 37,
+        "object_identity": "0000000000000000000000000000000000000000000000000000000000000007",
+        "link_count": 1,
+        "permissions": {
+          "Windows": {
+            "descriptor": [
+              1,
+              2,
+              3
+            ],
+            "attributes": 32
+          }
+        }
+      },
+      "sha256": "d571f5ba16e6f49d70213c94c68596ade6c438122d798a3c0fc43afd2ae9c02e"
+    },
+    {
+      "metadata": {
+        "path": "source-only-leftover.txt",
+        "kind": "File",
+        "size": 56,
+        "object_identity": "0000000000000000000000000000000000000000000000000000000000000008",
+        "link_count": 1,
+        "permissions": {
+          "Windows": {
+            "descriptor": [
+              1,
+              2,
+              3
+            ],
+            "attributes": 32
+          }
+        }
+      },
+      "sha256": "822892581326b94903d0615fd265d4627a6a7d17ddf8af70d40b0b9e18a990f6"
+    }
+  ],
+  "installed": [
+    {
+      "metadata": {
+        "path": "",
+        "kind": "Directory",
+        "size": 0,
+        "object_identity": "0000000000000000000000000000000000000000000000000000000000000001",
+        "link_count": 1,
+        "permissions": {
+          "Windows": {
+            "descriptor": [
+              1,
+              2,
+              3
+            ],
+            "attributes": 16
+          }
+        }
+      },
+      "sha256": null
+    },
+    {
+      "metadata": {
+        "path": "LICENSE-Microsoft-ConPTY.txt",
+        "kind": "File",
+        "size": 1116,
+        "object_identity": "0000000000000000000000000000000000000000000000000000000000000002",
+        "link_count": 1,
+        "permissions": {
+          "Windows": {
+            "descriptor": [
+              1,
+              2,
+              3
+            ],
+            "attributes": 32
+          }
+        }
+      },
+      "sha256": "5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b"
+    },
+    {
+      "metadata": {
+        "path": "OpenConsole.exe",
+        "kind": "File",
+        "size": 1066296,
+        "object_identity": "0000000000000000000000000000000000000000000000000000000000000003",
+        "link_count": 1,
+        "permissions": {
+          "Windows": {
+            "descriptor": [
+              1,
+              2,
+              3
+            ],
+            "attributes": 32
+          }
+        }
+      },
+      "sha256": "b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160"
+    },
+    {
+      "metadata": {
+        "path": "cc-desk.exe",
+        "kind": "File",
+        "size": 17342976,
+        "object_identity": "0000000000000000000000000000000000000000000000000000000000000004",
+        "link_count": 1,
+        "permissions": {
+          "Windows": {
+            "descriptor": [
+              1,
+              2,
+              3
+            ],
+            "attributes": 32
+          }
+        }
+      },
+      "sha256": "07d55b6b0841bd84357e71fd306a6a4265546181ccead573f3e756617a943719"
+    },
+    {
+      "metadata": {
+        "path": "conpty.dll",
+        "kind": "File",
+        "size": 109920,
+        "object_identity": "0000000000000000000000000000000000000000000000000000000000000005",
+        "link_count": 1,
+        "permissions": {
+          "Windows": {
+            "descriptor": [
+              1,
+              2,
+              3
+            ],
+            "attributes": 32
+          }
+        }
+      },
+      "sha256": "39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8"
+    },
+    {
+      "metadata": {
+        "path": "uninstall.exe",
+        "kind": "File",
+        "size": 79267,
+        "object_identity": "0000000000000000000000000000000000000000000000000000000000000006",
+        "link_count": 1,
+        "permissions": {
+          "Windows": {
+            "descriptor": [
+              1,
+              2,
+              3
+            ],
+            "attributes": 32
+          }
+        }
+      },
+      "sha256": "1b80e884a3a5106a7ccb5309940edc955c5def6448b9576777427717988a0381"
+    },
+    {
+      "metadata": {
+        "path": "source-only-leftover.txt",
+        "kind": "File",
+        "size": 56,
+        "object_identity": "0000000000000000000000000000000000000000000000000000000000000008",
+        "link_count": 1,
+        "permissions": {
+          "Windows": {
+            "descriptor": [
+              1,
+              2,
+              3
+            ],
+            "attributes": 32
+          }
+        }
+      },
+      "sha256": "822892581326b94903d0615fd265d4627a6a7d17ddf8af70d40b0b9e18a990f6"
+    }
+  ]
+}

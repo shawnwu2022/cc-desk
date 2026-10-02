@@ -402,3 +402,107 @@ impl PrivateDescriptor {
         }
     }
 }
+
+/// A bounded parsed owner/group/DACL descriptor. This is restoration data only;
+/// it carries no destination or permission to change any object.
+pub(super) struct ValidatedDescriptor {
+    words: Vec<u32>,
+    control: u16,
+}
+impl ValidatedDescriptor {
+    pub(super) fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
+        if !(20..=65536).contains(&bytes.len())
+            || bytes[0] != 1
+            || u16::from_le_bytes([bytes[2], bytes[3]]) & SE_SELF_RELATIVE.0 == 0
+        {
+            return Err(blocked("invalid restoration descriptor"));
+        }
+        for (field, acl) in [(4, false), (8, false), (12, true), (16, true)] {
+            let offset = u32::from_le_bytes(
+                bytes[field..field + 4]
+                    .try_into()
+                    .map_err(|_| blocked("invalid restoration descriptor"))?,
+            ) as usize;
+            if offset == 0 {
+                if field != 12 {
+                    return Err(blocked("missing restoration descriptor field"));
+                }
+                continue;
+            }
+            if offset < 20
+                || !offset.is_multiple_of(4)
+                || offset.checked_add(8).is_none_or(|end| end > bytes.len())
+            {
+                return Err(blocked("invalid restoration descriptor offset"));
+            }
+            let length = if acl {
+                u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]) as usize
+            } else {
+                8 + bytes[offset + 1] as usize * 4
+            };
+            if length < 8
+                || offset
+                    .checked_add(length)
+                    .is_none_or(|end| end > bytes.len())
+            {
+                return Err(blocked("invalid restoration descriptor extent"));
+            }
+        }
+        let mut words = vec![0u32; bytes.len().div_ceil(4)];
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), words.as_mut_ptr().cast(), bytes.len());
+        }
+        let descriptor = PSECURITY_DESCRIPTOR(words.as_mut_ptr().cast());
+        if !unsafe { IsValidSecurityDescriptor(descriptor) }.as_bool() {
+            return Err(blocked("invalid restoration descriptor contents"));
+        }
+        let mut control = 0;
+        let mut revision = 0;
+        unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) }
+            .map_err(win_error)?;
+        Ok(Self { words, control })
+    }
+    pub(super) fn raw(&self) -> PSECURITY_DESCRIPTOR {
+        PSECURITY_DESCRIPTOR(self.words.as_ptr().cast_mut().cast())
+    }
+    /// Recreating a key while unelevated cannot restore an arbitrary owner or
+    /// primary group. Refuse that source before installer effects are allowed.
+    pub(super) fn require_assignable(&self, user: &CurrentUser) -> io::Result<()> {
+        use windows::Win32::Security::{
+            CheckTokenMembership, GetSecurityDescriptorGroup, GetSecurityDescriptorOwner,
+        };
+        let mut owner = PSID::default();
+        let mut group = PSID::default();
+        let mut defaulted = windows_core::BOOL::default();
+        unsafe {
+            GetSecurityDescriptorOwner(self.raw(), &mut owner, &mut defaulted)
+                .map_err(win_error)?;
+            GetSecurityDescriptorGroup(self.raw(), &mut group, &mut defaulted)
+                .map_err(win_error)?;
+            if EqualSid(owner, user.sid()).is_err() {
+                return Err(blocked("registry owner cannot be restored unelevated"));
+            }
+            if EqualSid(group, user.sid()).is_err() {
+                let mut member = windows_core::BOOL::default();
+                CheckTokenMembership(None, group, &mut member).map_err(win_error)?;
+                if !member.as_bool() {
+                    return Err(blocked("registry group cannot be restored unelevated"));
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn information(&self) -> windows::Win32::Security::OBJECT_SECURITY_INFORMATION {
+        use windows::Win32::Security::{
+            PROTECTED_DACL_SECURITY_INFORMATION, UNPROTECTED_DACL_SECURITY_INFORMATION,
+        };
+        OWNER_SECURITY_INFORMATION
+            | GROUP_SECURITY_INFORMATION
+            | DACL_SECURITY_INFORMATION
+            | if self.control & SE_DACL_PROTECTED.0 != 0 {
+                PROTECTED_DACL_SECURITY_INFORMATION
+            } else {
+                UNPROTECTED_DACL_SECURITY_INFORMATION
+            }
+    }
+}

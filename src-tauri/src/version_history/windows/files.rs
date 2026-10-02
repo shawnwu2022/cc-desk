@@ -500,6 +500,30 @@ impl Directory {
         *self.location.lock() = Some(Location { parent, name });
         self.recheck()
     }
+    pub(crate) fn require_same_volume(&self, other: &Self) -> io::Result<()> {
+        self.recheck()?;
+        other.recheck()?;
+        if self.identity.volume != other.identity.volume {
+            return Err(blocked("held directories are on different volumes"));
+        }
+        Ok(())
+    }
+    /// Observed slot of this same held object; never accepts a pathname.
+    pub(crate) fn held_location(&self) -> io::Result<(Arc<Self>, ComponentName)> {
+        self.recheck()?;
+        let location = self
+            .location
+            .lock()
+            .clone()
+            .ok_or_else(|| blocked("volume root has no held parent slot"))?;
+        location.parent.recheck()?;
+        if metadata(self.raw())?.identity != self.identity
+            || final_path(self.raw())? != child_path(location.parent.raw(), &location.name)?
+        {
+            return Err(blocked("held directory slot changed"));
+        }
+        Ok((location.parent, location.name))
+    }
     pub(super) fn raw(&self) -> HANDLE {
         handle(&self.file)
     }

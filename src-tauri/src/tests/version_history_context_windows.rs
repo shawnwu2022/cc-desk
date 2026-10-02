@@ -2026,3 +2026,1840 @@ fn HistoryContextWindows_RecoveryBudgetIsolation_028() {
     );
     assert!(store.abort_pre_context(&proof).is_err());
 }
+
+// 检查持有写入权限的同一源对象完成真实 flush/readback，普通只读捕获不能冒充持久性证据。
+#[test]
+fn HistoryContextWindows_DurableCapture_029() {
+    let fixture = Fixture::new();
+    fixture.fill();
+    let readonly = fixture.context();
+    assert!(readonly.verify_durable().is_err());
+    drop(readonly);
+    let durable = HeldContext::capture_durable(
+        HeldRoot::Present(fixture.source.directory().clone()),
+        HeldRoot::observe(fixture.parent.clone(), name("udf")).unwrap(),
+        SnapshotLimits::default(),
+    )
+    .unwrap();
+    durable.verify_durable().unwrap();
+    assert_eq!(
+        std::fs::read(fixture.temp.path().join("desk/providers.json")).unwrap(),
+        b"private provider settings"
+    );
+}
+
+fn fixture_external_effect(
+    store: &mut JournalStore,
+    kind: crate::version_history::journal::EffectKind,
+) {
+    use crate::version_history::journal::{EffectSpec, JournalEvent, Observation, ObservedResult};
+    // Only unrelated bundle/process/registration proof is mocked by this helper.
+    // Context effects below always use the production held Windows executor.
+    let observed = store
+        .retain_manifest(b"fixture external subsystem evidence")
+        .unwrap();
+    let generation = store
+        .inspect(&binding())
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .generation();
+    let effect_id = uuid::Uuid::new_v4().to_string();
+    let generation = store
+        .append(
+            generation,
+            JournalEvent::Intent {
+                effect: EffectSpec {
+                    effect_id: effect_id.clone(),
+                    kind,
+                    before: observed.clone(),
+                    expected_postconditions: observed.clone(),
+                },
+            },
+        )
+        .unwrap();
+    let receipt = store
+        .retain_effect_receipt(&effect_id, Observation::Applied, &observed)
+        .unwrap();
+    store
+        .append(
+            generation,
+            JournalEvent::Observed {
+                effect_id,
+                intent_generation: generation,
+                result: ObservedResult {
+                    observation: Observation::Applied,
+                    receipt: Some(receipt),
+                },
+            },
+        )
+        .unwrap();
+}
+fn fixture_sealed_context(
+    fixture: &Fixture,
+    present_udf: bool,
+) -> (
+    crate::version_history::windows::context::RetainedContextRoots,
+    SnapshotBoundary,
+    ImageFence,
+    ExclusiveLease,
+    JournalStore,
+) {
+    use crate::version_history::{
+        journal::{EffectKind, JournalEvent, JournalPhase, ManifestRole},
+        windows::context::RetainedContextRoots,
+    };
+    use std::collections::BTreeMap;
+    fixture.fill();
+    let udf = present_udf.then(|| {
+        PrivateDirectory::create_renameable_new(fixture.parent.clone(), name("udf"), &fixture.user)
+            .unwrap()
+    });
+    if present_udf {
+        std::fs::write(fixture.temp.path().join("udf/state"), b"original webview").unwrap();
+    }
+    let mut context = HeldContext::capture_durable(
+        HeldRoot::Present(fixture.source.directory().clone()),
+        udf.as_ref().map_or_else(
+            || HeldRoot::observe(fixture.parent.clone(), name("udf")).unwrap(),
+            |root| HeldRoot::Present(root.directory().clone()),
+        ),
+        SnapshotLimits::default(),
+    )
+    .unwrap();
+    let boundary = SnapshotBoundary::fixture_with_roots(binding(), context.root_identities());
+    let snapshot = capture_context(
+        &boundary,
+        &binding().source_context,
+        &mut context,
+        SnapshotLimits::default(),
+    )
+    .unwrap();
+    let image = fixture.image();
+    let lease = fixture.lease();
+    let mut store = fixture.journal();
+    let mut journal =
+        ContextJournal::new(&mut store, fixture.records.clone(), &lease, binding(), 0).unwrap();
+    let mut copies = BTreeMap::new();
+    let mut readmitted = BTreeMap::new();
+    for (kind, original, retained, backup) in [
+        (RootKind::Desk, "desk", "desk-old", "desk-backup"),
+        (RootKind::WebView, "udf", "udf-old", "udf-backup"),
+    ] {
+        let mut copy = PrivateTreeCopy::new(fixture.copies.clone(), name(backup));
+        copy.copy_from(context.tree(kind), &fixture.user, &mut journal)
+            .unwrap();
+        if !context.tree(kind).manifest().entries.is_empty() {
+            readmitted.insert(
+                kind,
+                copy.rotate_context_root(
+                    &mut context,
+                    kind,
+                    fixture.parent.clone(),
+                    name(original),
+                    fixture.quarantine.clone(),
+                    name(retained),
+                    &boundary,
+                    &image,
+                    &fixture.user,
+                    &mut journal,
+                )
+                .unwrap(),
+            );
+        }
+        copies.insert(kind, copy);
+    }
+    drop(journal);
+    let originals = RetainedContextRoots::admit(
+        context,
+        copies,
+        readmitted,
+        snapshot,
+        &boundary,
+        &fixture.user,
+    )
+    .unwrap();
+    let digest = store
+        .retain_manifest(&originals.snapshot().encode().unwrap())
+        .unwrap();
+    let generation = store
+        .inspect(&binding())
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .generation();
+    let generation = store
+        .append(
+            generation,
+            JournalEvent::Manifest {
+                role: ManifestRole::SourceContext,
+                digest,
+            },
+        )
+        .unwrap();
+    let mut journal = ContextJournal::new(
+        &mut store,
+        fixture.records.clone(),
+        &lease,
+        binding(),
+        generation,
+    )
+    .unwrap();
+    originals
+        .record_preserved(&boundary, &image, &fixture.user, &mut journal)
+        .unwrap();
+    drop(journal);
+    for role in [
+        ManifestRole::SourceBundle,
+        ManifestRole::Registration,
+        ManifestRole::Shortcuts,
+    ] {
+        let digest = store
+            .retain_manifest(b"fixture other subsystem manifest")
+            .unwrap();
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        store
+            .append(generation, JournalEvent::Manifest { role, digest })
+            .unwrap();
+    }
+    fixture_external_effect(&mut store, EffectKind::VerifySourceBundleCopy);
+    fixture_external_effect(&mut store, EffectKind::FenceSourceImage);
+    let generation = store
+        .inspect(&binding())
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .generation();
+    store
+        .append(
+            generation,
+            JournalEvent::Phase {
+                phase: JournalPhase::SourceSealed,
+            },
+        )
+        .unwrap();
+    (originals, boundary, image, lease, store)
+}
+
+// 检查完整原始根/缺失根保留后才创建全新的空 Desk/UDF，原始字节与权限继续由同一对象保留。
+#[test]
+fn HistoryContextWindows_FreshRoots_030() {
+    use crate::version_history::windows::context::FreshContextRoots;
+    for present_udf in [false, true] {
+        let fixture = Fixture::new();
+        let (originals, boundary, image, lease, mut store) =
+            fixture_sealed_context(&fixture, present_udf);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+        fresh
+            .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        fresh.verify(&originals, &fixture.user).unwrap();
+        assert!(!fresh
+            .manifest_bytes(&originals, &fixture.user)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            std::fs::read_dir(fixture.temp.path().join("desk"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert_eq!(
+            std::fs::read_dir(fixture.temp.path().join("udf"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert_eq!(
+            std::fs::read(
+                fixture
+                    .temp
+                    .path()
+                    .join("quarantine/desk-old/providers.json")
+            )
+            .unwrap(),
+            b"private provider settings"
+        );
+        assert!(fresh
+            .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .is_err());
+    }
+}
+
+// 检查 fresh 创建前、创建后和回执前失败均保留原始树及实际创建对象，不能重试 create。
+#[test]
+fn HistoryContextWindows_FreshFailurePreserves_031() {
+    use crate::version_history::windows::context::FreshContextRoots;
+    for fault in [
+        CopyFault::BeforeFreshCreate,
+        CopyFault::AfterFreshCreate,
+        CopyFault::BeforeFreshReceipt,
+    ] {
+        let fixture = Fixture::new();
+        let (originals, boundary, image, lease, mut store) = fixture_sealed_context(&fixture, true);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+        let _fault = probe_copy_failure(fault);
+        assert!(fresh
+            .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .is_err());
+        assert!(fresh.verify(&originals, &fixture.user).is_err());
+        originals.verify(&fixture.user).unwrap();
+        assert_eq!(
+            fixture.temp.path().join("desk").exists(),
+            fault != CopyFault::BeforeFreshCreate
+        );
+        assert!(!fixture.temp.path().join("udf").exists());
+        let generation = journal.generation();
+        assert!(fresh
+            .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .is_err());
+        assert_eq!(generation, journal.generation());
+    }
+}
+
+fn fixture_begin_context_restore(
+    store: &mut JournalStore,
+    later: &crate::version_history::windows::context::LaterContextRoots,
+    originals: &crate::version_history::windows::context::RetainedContextRoots,
+    user: &CurrentUser,
+) {
+    use crate::version_history::journal::{JournalEvent, JournalPhase, ManifestRole};
+    let bytes = later.manifest_bytes(originals, user).unwrap();
+    let digest = store.retain_manifest(&bytes).unwrap();
+    let generation = store
+        .inspect(&binding())
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .generation();
+    let generation = store
+        .append(
+            generation,
+            JournalEvent::Manifest {
+                role: ManifestRole::RetainedTargetContext,
+                digest,
+            },
+        )
+        .unwrap();
+    store
+        .append(
+            generation,
+            JournalEvent::Phase {
+                phase: JournalPhase::Restoring,
+            },
+        )
+        .unwrap();
+}
+fn fixture_finish_context_restore(store: &mut JournalStore) {
+    use crate::version_history::journal::{
+        EffectKind, JournalEvent, JournalPhase, RegistrationSlot, ShortcutSlot,
+    };
+    fixture_external_effect(store, EffectKind::VerifySourceBundleRestore);
+    for slot in [
+        RegistrationSlot::Uninstall,
+        RegistrationSlot::Publisher,
+        RegistrationSlot::DeskDirectory,
+        RegistrationSlot::DeskDirectoryBackground,
+        RegistrationSlot::LegacyDirectory,
+        RegistrationSlot::LegacyDirectoryBackground,
+        RegistrationSlot::OwnedRun,
+    ] {
+        fixture_external_effect(store, EffectKind::VerifyRegistrationRestore { slot });
+    }
+    for slot in [ShortcutSlot::Desktop, ShortcutSlot::StartMenu] {
+        fixture_external_effect(store, EffectKind::RestoreShortcut { slot });
+    }
+    let generation = store
+        .inspect(&binding())
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .generation();
+    store
+        .append(
+            generation,
+            JournalEvent::Phase {
+                phase: JournalPhase::Restored,
+            },
+        )
+        .unwrap();
+}
+
+// 检查 fresh 成功或未知均可保留实际后续数据并恢复同一原始根，原始缺失状态也准确恢复。
+#[test]
+fn HistoryContextWindows_PreinstallContextReturn_032() {
+    use crate::version_history::windows::context::{ContextRestoration, FreshContextRoots};
+    for (present_udf, fault) in [
+        (false, None),
+        (true, Some(CopyFault::BeforeFreshCreate)),
+        (true, Some(CopyFault::AfterFreshCreate)),
+        (true, Some(CopyFault::BeforeFreshReceipt)),
+    ] {
+        let fixture = Fixture::new();
+        let (originals, boundary, image, lease, mut store) =
+            fixture_sealed_context(&fixture, present_udf);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+        let injected = fault.map(probe_copy_failure);
+        assert_eq!(
+            fresh
+                .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+                .is_err(),
+            fault.is_some()
+        );
+        drop(injected);
+        if fixture.temp.path().join("desk").exists() {
+            std::fs::write(
+                fixture.temp.path().join("desk/later-data"),
+                b"retain actual later data",
+            )
+            .unwrap();
+        }
+        let mut later = fresh
+            .observe_for_return(
+                &originals,
+                fixture.quarantine.clone(),
+                &boundary,
+                &fixture.user,
+            )
+            .unwrap();
+        later
+            .admit_preinstall_return(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        later
+            .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        let generation = journal.generation();
+        drop(journal);
+        let roots = store.inspect(&binding()).unwrap().last_valid.unwrap();
+        assert_eq!(roots.generation(), generation);
+        fixture_begin_context_restore(&mut store, &later, &originals, &fixture.user);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut returning = ContextRestoration::new(originals, later).unwrap();
+        returning
+            .restore(&boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        let restored = returning.finish(&fixture.user).unwrap();
+        restored.verify(&fixture.user).unwrap();
+        assert_eq!(
+            std::fs::read(fixture.temp.path().join("desk/providers.json")).unwrap(),
+            b"private provider settings"
+        );
+        assert_eq!(fixture.temp.path().join("udf").exists(), present_udf);
+        assert!(!fixture.temp.path().join("desk/later-data").exists());
+        drop(journal);
+        fixture_finish_context_restore(&mut store);
+        restored.verify(&fixture.user).unwrap();
+    }
+}
+
+// 检查实际后来根/原始根 rename 后丢失回执只重新观察同一对象，不再次执行 rename。
+#[test]
+fn HistoryContextWindows_ContextMoveReceiptLoss_033() {
+    use crate::version_history::windows::context::{ContextRestoration, FreshContextRoots};
+    for fault in [CopyFault::AfterLaterMove, CopyFault::AfterSourceRestoreMove] {
+        let fixture = Fixture::new();
+        let (originals, boundary, image, lease, mut store) = fixture_sealed_context(&fixture, true);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+        fresh
+            .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        std::fs::write(
+            fixture.temp.path().join("desk/new-data"),
+            b"new retained bytes",
+        )
+        .unwrap();
+        let mut later = fresh
+            .observe_for_return(
+                &originals,
+                fixture.quarantine.clone(),
+                &boundary,
+                &fixture.user,
+            )
+            .unwrap();
+        later
+            .admit_preinstall_return(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        let injected = (fault == CopyFault::AfterLaterMove).then(|| probe_copy_failure(fault));
+        if injected.is_some() {
+            assert!(later
+                .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+                .is_err());
+        }
+        drop(injected);
+        later
+            .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        drop(journal);
+        fixture_begin_context_restore(&mut store, &later, &originals, &fixture.user);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut returning = ContextRestoration::new(originals, later).unwrap();
+        let injected =
+            (fault == CopyFault::AfterSourceRestoreMove).then(|| probe_copy_failure(fault));
+        if injected.is_some() {
+            assert!(returning
+                .restore(&boundary, &image, &fixture.user, &mut journal)
+                .is_err());
+        }
+        drop(injected);
+        returning
+            .restore(&boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        returning
+            .finish(&fixture.user)
+            .unwrap()
+            .verify(&fixture.user)
+            .unwrap();
+        assert_eq!(
+            std::fs::read(fixture.temp.path().join("desk/providers.json")).unwrap(),
+            b"private provider settings"
+        );
+        drop(journal);
+        fixture_finish_context_restore(&mut store);
+    }
+}
+
+// 检查后来上下文私有复制失败后保留旧部分副本与 Unknown，重新计划独立副本后仍能返回原始根。
+#[test]
+fn HistoryContextWindows_LaterCopyFailure_034() {
+    use crate::version_history::windows::context::{ContextRestoration, FreshContextRoots};
+    for (fault, reopen) in [
+        (CopyFault::AfterWrite, false),
+        (CopyFault::BeforeReceipt, true),
+    ] {
+        let fixture = Fixture::new();
+        let (mut originals, boundary, image, lease, mut store) =
+            fixture_sealed_context(&fixture, false);
+        drop(fixture.source);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+        fresh
+            .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        std::fs::write(fixture.temp.path().join("desk/later"), b"later user data").unwrap();
+        std::fs::write(
+            fixture.temp.path().join("desk/zz-unattempted"),
+            b"unattempted retained data",
+        )
+        .unwrap();
+        let mut later = fresh
+            .observe_for_return(
+                &originals,
+                fixture.quarantine.clone(),
+                &boundary,
+                &fixture.user,
+            )
+            .unwrap();
+        later
+            .admit_preinstall_return(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        let injected = probe_copy_failure(fault);
+        assert!(later
+            .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .is_err());
+        drop(injected);
+        std::fs::write(
+            fixture.temp.path().join("desk/arrived"),
+            b"additional later data",
+        )
+        .unwrap();
+        let retained_before: Vec<_> = std::fs::read_dir(fixture.temp.path().join("copies"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        let generation = journal.generation();
+        drop(journal);
+        let (stale_generation, stale_plan) =
+            store.context_later_backup(RootKind::Desk).unwrap().unwrap();
+        let unknown = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .pending_effect()
+            .unwrap()
+            .effect_id
+            .clone();
+        if reopen {
+            use crate::version_history::windows::context::{
+                LaterContextRoots, RetainedContextRoots,
+            };
+            use std::collections::BTreeMap;
+            drop(later);
+            drop(originals);
+            drop(store);
+            store = JournalStore::open_windows(fixture.records.clone()).unwrap();
+            store.bind_existing(&binding()).unwrap();
+            let mut journal = ContextJournal::new(
+                &mut store,
+                fixture.records.clone(),
+                &lease,
+                binding(),
+                generation,
+            )
+            .unwrap();
+            originals = RetainedContextRoots::reopen_observation(
+                BTreeMap::from([
+                    (RootKind::Desk, fixture.parent.clone()),
+                    (RootKind::WebView, fixture.parent.clone()),
+                ]),
+                fixture.copies.clone(),
+                fixture.quarantine.clone(),
+                &fixture.user,
+                &mut journal,
+            )
+            .unwrap();
+            later = LaterContextRoots::reopen_observation(
+                &originals,
+                fixture.quarantine.clone(),
+                &fixture.user,
+                &mut journal,
+            )
+            .unwrap();
+        }
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        later
+            .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        assert!(retained_before.iter().all(|path| path.exists()));
+        drop(journal);
+        assert_eq!(
+            store
+                .inspect(&binding())
+                .unwrap()
+                .last_valid
+                .unwrap()
+                .effect_observation(&unknown),
+            Some(crate::version_history::journal::Observation::Unknown)
+        );
+        {
+            use crate::version_history::journal::{
+                EffectKind, EffectSpec, JournalEvent, PrivateBackupOperation,
+            };
+            let evidence = store
+                .retain_manifest(b"stale later copy cannot authorize an unattempted entry")
+                .unwrap();
+            let stale = JournalEvent::Intent {
+                effect: EffectSpec {
+                    effect_id: uuid::Uuid::new_v4().to_string(),
+                    kind: EffectKind::PrivateBackupEntry {
+                        plan_generation: stale_generation,
+                        operation: PrivateBackupOperation::CopyFile,
+                        manifest: stale_plan.source_manifest,
+                        entry_index: stale_plan.effects - 1,
+                    },
+                    before: evidence.clone(),
+                    expected_postconditions: evidence,
+                },
+            };
+            let mut state = store.inspect(&binding()).unwrap().last_valid.unwrap();
+            assert!(state.apply(stale.clone()).is_err());
+            assert!(store.append(state.generation(), stale.clone()).is_err());
+            drop(store);
+            store = JournalStore::open_windows(fixture.records.clone()).unwrap();
+            store.bind_existing(&binding()).unwrap();
+            let current = store
+                .inspect(&binding())
+                .unwrap()
+                .last_valid
+                .unwrap()
+                .generation();
+            assert!(store.append(current, stale).is_err());
+        }
+        fixture_begin_context_restore(&mut store, &later, &originals, &fixture.user);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut returning = ContextRestoration::new(originals, later).unwrap();
+        returning
+            .restore(&boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        returning
+            .finish(&fixture.user)
+            .unwrap()
+            .verify(&fixture.user)
+            .unwrap();
+        assert!(!fixture.temp.path().join("desk/arrived").exists());
+        drop(journal);
+        fixture_finish_context_restore(&mut store);
+    }
+}
+
+// 检查逐树 flush 证据在 guard gap 失败时失效，当前字节必须重新 flush 后才可恢复持久性声明。
+#[test]
+fn HistoryContextWindows_DurableReadmission_035() {
+    use std::{cell::RefCell, os::windows::fs::OpenOptionsExt, rc::Rc};
+    for block_readmission in [false, true] {
+        let fixture = Fixture::new();
+        fixture.fill();
+        let mut context = HeldContext::capture_durable(
+            HeldRoot::Present(fixture.source.directory().clone()),
+            HeldRoot::observe(fixture.parent.clone(), name("udf")).unwrap(),
+            SnapshotLimits::default(),
+        )
+        .unwrap();
+        context.verify_durable().unwrap();
+        let boundary = SnapshotBoundary::fixture_with_roots(binding(), context.root_identities());
+        let image = fixture.image();
+        let lease = fixture.lease();
+        let mut store = fixture.journal();
+        let mut journal =
+            ContextJournal::new(&mut store, fixture.records.clone(), &lease, binding(), 0).unwrap();
+        let mut copy = PrivateTreeCopy::new(fixture.copies.clone(), name("durable-backup"));
+        copy.copy_from(context.tree(RootKind::Desk), &fixture.user, &mut journal)
+            .unwrap();
+        let path = fixture.temp.path().join("desk/providers.json");
+        let reader = Rc::new(RefCell::new(None));
+        let hold = reader.clone();
+        let _probe = probe_after_guard_release(move || {
+            std::fs::write(&path, b"actual changed bytes after guard release").unwrap();
+            if block_readmission {
+                *hold.borrow_mut() = Some(
+                    std::fs::OpenOptions::new()
+                        .read(true)
+                        .share_mode(5)
+                        .open(&path)
+                        .unwrap(),
+                );
+            }
+        });
+        assert!(copy
+            .rotate_context_root(
+                &mut context,
+                RootKind::Desk,
+                fixture.parent.clone(),
+                name("desk"),
+                fixture.quarantine.clone(),
+                name("durable-retained"),
+                &boundary,
+                &image,
+                &fixture.user,
+                &mut journal,
+            )
+            .is_err());
+        if block_readmission {
+            assert!(context.verify_durable().is_err());
+        } else {
+            // Changed current contents were actually captured using fresh writable
+            // handles and flushed; this is no assertion of equality to original C0.
+            context.verify_durable().unwrap();
+        }
+        reader.borrow_mut().take();
+        let _failure = probe_copy_failure(CopyFault::AfterReverseMove);
+        assert!(copy
+            .reverse_context_root(&mut context, &boundary, &image, &fixture.user, &mut journal)
+            .is_err());
+        assert!(context.verify_durable().is_err());
+        copy.reverse_context_root(&mut context, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        context.verify_durable().unwrap();
+        assert_eq!(
+            std::fs::read(fixture.temp.path().join("desk/providers.json")).unwrap(),
+            b"actual changed bytes after guard release"
+        );
+        assert_eq!(
+            std::fs::read(
+                fixture
+                    .temp
+                    .path()
+                    .join("copies/durable-backup/providers.json")
+            )
+            .unwrap(),
+            b"private provider settings"
+        );
+        copy.verify(&fixture.user).unwrap();
+        drop(journal);
+        fixture_abort(&mut store, &context, &image);
+    }
+}
+
+// 检查独立 return boundary 的真实缺失 image / fence 路径，丢失根改名回执跨重启后只重新观测。
+#[test]
+fn HistoryContextWindows_NormalReturnReopen_036() {
+    use crate::version_history::{
+        journal::{EffectKind, JournalEvent, JournalPhase},
+        windows::{
+            context::{
+                ContextRestoration, FreshContextRoots, LaterContextRoots, RetainedContextRoots,
+            },
+            coordinator_evidence::ReturnBoundary,
+        },
+    };
+    use std::collections::BTreeMap;
+    for fault in [
+        None,
+        Some(CopyFault::AfterLaterMove),
+        Some(CopyFault::AfterSourceRestoreMove),
+    ] {
+        let fixture = Fixture::new();
+        let (originals, source_boundary, source_image, lease, mut store) =
+            fixture_sealed_context(&fixture, false);
+        // Model actual process loss: the fixture must not retain an extra DELETE
+        // root guard after all executor owners have been dropped for restart.
+        drop(fixture.source);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+        fresh
+            .create(
+                &originals,
+                &source_boundary,
+                &source_image,
+                &fixture.user,
+                &mut journal,
+            )
+            .unwrap();
+        std::fs::write(
+            fixture.temp.path().join("desk/later-work"),
+            b"preserved later work",
+        )
+        .unwrap();
+        let mut later = fresh
+            .observe_for_return(
+                &originals,
+                fixture.quarantine.clone(),
+                &source_boundary,
+                &fixture.user,
+            )
+            .unwrap();
+        drop(journal);
+        // Only unrelated process facts are fixtures. This prior launch intent
+        // permanently disqualifies the source-only pre-install return route.
+        fixture_external_effect(&mut store, EffectKind::InstallerCreateSuspended);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        store
+            .append(
+                generation,
+                JournalEvent::Phase {
+                    phase: JournalPhase::RecoveryRequired,
+                },
+            )
+            .unwrap();
+        fixture_external_effect(&mut store, EffectKind::FenceHistoricalImage);
+        std::fs::create_dir(fixture.temp.path().join("current-installation")).unwrap();
+        let installation = fixture
+            .parent
+            .open_directory(name("current-installation"))
+            .unwrap();
+        let current_fence = if fault.is_none() {
+            std::fs::write(
+                fixture.temp.path().join("current-installation/current.exe"),
+                b"current fixture image",
+            )
+            .unwrap();
+            let image = installation
+                .open_file(name("current.exe"), FileAccess::Read)
+                .unwrap();
+            let id = image.identity().clone();
+            let digest = image.digest().unwrap();
+            drop(image);
+            Some(Arc::new(Mutex::new(
+                ImageFence::acquire(installation.clone(), name("current.exe"), &id, &digest)
+                    .unwrap(),
+            )))
+        } else {
+            None
+        };
+        let return_boundary = ReturnBoundary::fixture(
+            SnapshotBoundary::fixture_with_roots(binding(), later.root_identities()),
+            installation,
+            name("current.exe"),
+            current_fence,
+        )
+        .unwrap();
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        assert!(later
+            .admit_preinstall_return(
+                &originals,
+                &source_boundary,
+                &source_image,
+                &fixture.user,
+                &mut journal
+            )
+            .is_err());
+        assert!(later
+            .preserve(
+                &originals,
+                &source_boundary,
+                &source_image,
+                &fixture.user,
+                &mut journal
+            )
+            .is_err());
+        if fault.is_some() {
+            let generation = journal.generation();
+            let replacement = fixture.temp.path().join("current-installation/current.exe");
+            std::fs::write(&replacement, b"foreign image occupies the verified absence").unwrap();
+            assert!(later
+                .preserve_after_exit(&originals, &return_boundary, &fixture.user, &mut journal)
+                .is_err());
+            assert_eq!(generation, journal.generation());
+            std::fs::remove_file(replacement).unwrap();
+        }
+        let injection = (fault == Some(CopyFault::AfterLaterMove))
+            .then(|| probe_copy_failure(CopyFault::AfterLaterMove));
+        if injection.is_some() {
+            assert!(later
+                .preserve_after_exit(&originals, &return_boundary, &fixture.user, &mut journal)
+                .is_err());
+        }
+        drop(injection);
+        if fault == Some(CopyFault::AfterLaterMove) {
+            let moved = std::fs::read_dir(fixture.temp.path().join("quarantine"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .find(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("later-root-")
+                })
+                .unwrap()
+                .path();
+            std::fs::write(
+                moved.join("arrived-after-move"),
+                b"new data requires latest B copy after uncertain move A",
+            )
+            .unwrap();
+        }
+        let generation = journal.generation();
+        drop(journal);
+        drop(later);
+        drop(originals);
+        drop(store);
+        let mut store = JournalStore::open_windows(fixture.records.clone()).unwrap();
+        store.bind_existing(&binding()).unwrap();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let parents = BTreeMap::from([
+            (RootKind::Desk, fixture.parent.clone()),
+            (RootKind::WebView, fixture.parent.clone()),
+        ]);
+        let originals = RetainedContextRoots::reopen_observation(
+            parents.clone(),
+            fixture.copies.clone(),
+            fixture.quarantine.clone(),
+            &fixture.user,
+            &mut journal,
+        )
+        .unwrap();
+        let mut later = LaterContextRoots::reopen_observation(
+            &originals,
+            fixture.quarantine.clone(),
+            &fixture.user,
+            &mut journal,
+        )
+        .unwrap();
+        later
+            .preserve_after_exit(&originals, &return_boundary, &fixture.user, &mut journal)
+            .unwrap();
+        drop(journal);
+        fixture_begin_context_restore(&mut store, &later, &originals, &fixture.user);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut returning = ContextRestoration::new(originals, later).unwrap();
+        let injection = (fault == Some(CopyFault::AfterSourceRestoreMove))
+            .then(|| probe_copy_failure(CopyFault::AfterSourceRestoreMove));
+        if injection.is_some() {
+            assert!(returning
+                .restore_after_exit(&return_boundary, &fixture.user, &mut journal)
+                .is_err());
+        }
+        drop(injection);
+        let generation = journal.generation();
+        drop(journal);
+        drop(returning);
+        drop(store);
+        let mut store = JournalStore::open_windows(fixture.records.clone()).unwrap();
+        store.bind_existing(&binding()).unwrap();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let originals = RetainedContextRoots::reopen_observation(
+            parents,
+            fixture.copies.clone(),
+            fixture.quarantine.clone(),
+            &fixture.user,
+            &mut journal,
+        )
+        .unwrap();
+        let later = LaterContextRoots::reopen_observation(
+            &originals,
+            fixture.quarantine.clone(),
+            &fixture.user,
+            &mut journal,
+        )
+        .unwrap();
+        let mut returning =
+            ContextRestoration::reopen_observation(originals, later, &fixture.user, &mut journal)
+                .unwrap();
+        returning
+            .restore_after_exit(&return_boundary, &fixture.user, &mut journal)
+            .unwrap();
+        let restored = returning.finish(&fixture.user).unwrap();
+        restored.verify(&fixture.user).unwrap();
+        assert_eq!(
+            std::fs::read(fixture.temp.path().join("desk/providers.json")).unwrap(),
+            b"private provider settings"
+        );
+        assert!(!fixture.temp.path().join("udf").exists());
+        assert!(std::fs::read_dir(fixture.temp.path().join("quarantine"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("later-root-")
+                && entry.path().join("later-work").exists()));
+        if fault == Some(CopyFault::AfterLaterMove) {
+            let moved = std::fs::read_dir(fixture.temp.path().join("quarantine"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .find(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("later-root-")
+                        && entry.path().join("arrived-after-move").exists()
+                })
+                .unwrap()
+                .path();
+            assert_eq!(
+                std::fs::read(moved.join("arrived-after-move")).unwrap(),
+                b"new data requires latest B copy after uncertain move A"
+            );
+        }
+        drop(journal);
+        if fault == Some(CopyFault::AfterLaterMove) {
+            let histories = store.context_later_history(RootKind::Desk).unwrap();
+            assert_eq!(histories.len(), 2);
+            assert!(histories.iter().all(|record| record.complete.is_some()));
+        }
+        fixture_finish_context_restore(&mut store);
+    }
+}
+
+// 检查任何已记录 installer/historical launch intent（含 NotApplied 与 Unknown）均禁止提前返回通道。
+#[test]
+fn HistoryContextWindows_PreinstallLaunchRefusal_037() {
+    use crate::version_history::{
+        journal::{EffectKind, EffectSpec, JournalEvent, Observation, ObservedResult},
+        windows::context::FreshContextRoots,
+    };
+    for observation in [
+        Observation::Applied,
+        Observation::NotApplied,
+        Observation::Unknown,
+    ] {
+        let fixture = Fixture::new();
+        let (originals, boundary, image, lease, mut store) =
+            fixture_sealed_context(&fixture, false);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+        fresh
+            .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        let later = fresh
+            .observe_for_return(
+                &originals,
+                fixture.quarantine.clone(),
+                &boundary,
+                &fixture.user,
+            )
+            .unwrap();
+        let generation = journal.generation();
+        drop(journal);
+        let evidence = store
+            .retain_manifest(b"fixture prior launch attempt")
+            .unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let generation = store
+            .append(
+                generation,
+                JournalEvent::Intent {
+                    effect: EffectSpec {
+                        effect_id: id.clone(),
+                        kind: EffectKind::HistoricalCreateSuspended,
+                        before: evidence.clone(),
+                        expected_postconditions: evidence.clone(),
+                    },
+                },
+            )
+            .unwrap();
+        let receipt = if observation == Observation::Unknown {
+            None
+        } else {
+            Some(
+                store
+                    .retain_effect_receipt(&id, observation, &evidence)
+                    .unwrap(),
+            )
+        };
+        let current = store
+            .append(
+                generation,
+                JournalEvent::Observed {
+                    effect_id: id,
+                    intent_generation: generation,
+                    result: ObservedResult {
+                        observation,
+                        receipt,
+                    },
+                },
+            )
+            .unwrap();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            current,
+        )
+        .unwrap();
+        assert!(later
+            .admit_preinstall_return(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .is_err());
+        assert_eq!(current, journal.generation());
+        originals.verify(&fixture.user).unwrap();
+    }
+}
+
+// 检查目的地冲突与保留原树新增条目均在原对象恢复前拒绝，不删除用户内容或用 C0 覆盖。
+#[test]
+fn HistoryContextWindows_ReturnConflicts_038() {
+    use crate::version_history::windows::context::{ContextRestoration, FreshContextRoots};
+    for original_drift in [false, true] {
+        let fixture = Fixture::new();
+        let (originals, boundary, image, lease, mut store) = fixture_sealed_context(&fixture, true);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+        fresh
+            .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        let mut later = fresh
+            .observe_for_return(
+                &originals,
+                fixture.quarantine.clone(),
+                &boundary,
+                &fixture.user,
+            )
+            .unwrap();
+        later
+            .admit_preinstall_return(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        later
+            .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        drop(journal);
+        fixture_begin_context_restore(&mut store, &later, &originals, &fixture.user);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut returning = ContextRestoration::new(originals, later).unwrap();
+        let user_path = if original_drift {
+            fixture
+                .temp
+                .path()
+                .join("quarantine/desk-old/new-original-data")
+        } else {
+            std::fs::create_dir(fixture.temp.path().join("desk")).unwrap();
+            fixture.temp.path().join("desk/foreign")
+        };
+        std::fs::write(&user_path, b"never overwrite or delete this work").unwrap();
+        assert!(returning
+            .restore(&boundary, &image, &fixture.user, &mut journal)
+            .is_err());
+        assert_eq!(generation, journal.generation());
+        assert_eq!(
+            std::fs::read(&user_path).unwrap(),
+            b"never overwrite or delete this work"
+        );
+        assert_eq!(
+            std::fs::read(
+                fixture
+                    .temp
+                    .path()
+                    .join("quarantine/desk-old/providers.json")
+            )
+            .unwrap(),
+            b"private provider settings"
+        );
+        assert_eq!(
+            std::fs::read(
+                fixture
+                    .temp
+                    .path()
+                    .join("copies/desk-backup/providers.json")
+            )
+            .unwrap(),
+            b"private provider settings"
+        );
+    }
+}
+
+// 检查历史部分副本与缺失完成记录的已确认完整副本，跨重试/重启必须保留原 ID、字节、权限与完整旧快照。
+#[test]
+fn HistoryContextWindows_LaterHistoryIntegrity_039() {
+    use crate::version_history::windows::context::{
+        ContextRestoration, FreshContextRoots, LaterContextRoots, RetainedContextRoots,
+    };
+    use std::collections::BTreeMap;
+    for variant in [
+        "snapshot-bytes",
+        "snapshot-missing",
+        "snapshot-live-add",
+        "unpublished-bytes",
+        "unpublished-positive",
+    ] {
+        let fixture = Fixture::new();
+        let (originals, boundary, image, lease, mut store) =
+            fixture_sealed_context(&fixture, false);
+        drop(fixture.source);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+        fresh
+            .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        std::fs::write(fixture.temp.path().join("desk/later"), b"known later bytes").unwrap();
+        std::fs::write(fixture.temp.path().join("desk/z"), b"last copied entry").unwrap();
+        let mut later = fresh
+            .observe_for_return(
+                &originals,
+                fixture.quarantine.clone(),
+                &boundary,
+                &fixture.user,
+            )
+            .unwrap();
+        later
+            .admit_preinstall_return(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        let unpublished = variant.starts_with("unpublished");
+        let injected = probe_copy_failure(if unpublished {
+            CopyFault::BeforeLaterComplete
+        } else {
+            CopyFault::AfterWrite
+        });
+        assert!(later
+            .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .is_err());
+        drop(injected);
+        let generation = journal.generation();
+        drop(journal);
+        let history = store.context_later_history(RootKind::Desk).unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].complete.is_none());
+        if unpublished {
+            assert_eq!(history[0].applied.len(), 3);
+        }
+        let selector: serde_json::Value =
+            serde_json::from_slice(&store.read_manifest(&history[0].plan.destination).unwrap())
+                .unwrap();
+        let old = fixture
+            .temp
+            .path()
+            .join("copies")
+            .join(selector["name"].as_str().unwrap());
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        if !unpublished {
+            later
+                .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+                .unwrap();
+        }
+        if variant == "snapshot-live-add" {
+            std::fs::write(
+                old.join("new-foreign-entry"),
+                b"detect changed old namespace",
+            )
+            .unwrap();
+            assert!(later.verify_preserved(&originals, &fixture.user).is_err());
+            assert!(later.manifest_bytes(&originals, &fixture.user).is_err());
+            assert_eq!(
+                std::fs::read(old.join("later")).unwrap(),
+                b"known later bytes"
+            );
+            continue;
+        }
+        drop(journal);
+        if !unpublished {
+            fixture_begin_context_restore(&mut store, &later, &originals, &fixture.user);
+        }
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        drop(later);
+        drop(originals);
+        drop(store);
+        if variant == "snapshot-missing" {
+            std::fs::remove_dir_all(&old).unwrap();
+        } else if variant != "unpublished-positive" {
+            std::fs::write(old.join("later"), b"changed known private material").unwrap();
+        }
+        let mut store = JournalStore::open_windows(fixture.records.clone()).unwrap();
+        store.bind_existing(&binding()).unwrap();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let parents = BTreeMap::from([
+            (RootKind::Desk, fixture.parent.clone()),
+            (RootKind::WebView, fixture.parent.clone()),
+        ]);
+        let originals = RetainedContextRoots::reopen_observation(
+            parents,
+            fixture.copies.clone(),
+            fixture.quarantine.clone(),
+            &fixture.user,
+            &mut journal,
+        )
+        .unwrap();
+        let reopened = LaterContextRoots::reopen_observation(
+            &originals,
+            fixture.quarantine.clone(),
+            &fixture.user,
+            &mut journal,
+        );
+        if variant != "unpublished-positive" {
+            assert!(reopened.is_err(), "{variant}");
+            assert_eq!(generation, journal.generation());
+            assert_eq!(
+                std::fs::read(
+                    fixture
+                        .temp
+                        .path()
+                        .join("quarantine/desk-old/providers.json")
+                )
+                .unwrap(),
+                b"private provider settings"
+            );
+            continue;
+        }
+        let mut later = reopened.unwrap();
+        later
+            .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        assert_eq!(
+            std::fs::read(old.join("later")).unwrap(),
+            b"known later bytes"
+        );
+        drop(journal);
+        let history = store.context_later_history(RootKind::Desk).unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history[0].complete.is_none());
+        assert!(history[1].complete.is_some());
+        fixture_begin_context_restore(&mut store, &later, &originals, &fixture.user);
+        let generation = store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .generation();
+        let mut journal = ContextJournal::new(
+            &mut store,
+            fixture.records.clone(),
+            &lease,
+            binding(),
+            generation,
+        )
+        .unwrap();
+        let mut returning = ContextRestoration::new(originals, later).unwrap();
+        returning
+            .restore(&boundary, &image, &fixture.user, &mut journal)
+            .unwrap();
+        returning
+            .finish(&fixture.user)
+            .unwrap()
+            .verify(&fixture.user)
+            .unwrap();
+        drop(journal);
+        fixture_finish_context_restore(&mut store);
+    }
+}
+
+// 检查根均已保留后新副本 B 完成但完成记录未发布，不能凭内存中的成功副本提前绑定返回清单。
+#[test]
+fn HistoryContextWindows_LaterCompletionPublication_040() {
+    use crate::version_history::windows::context::{ContextRestoration, FreshContextRoots};
+    let fixture = Fixture::new();
+    let (originals, boundary, image, lease, mut store) = fixture_sealed_context(&fixture, false);
+    let generation = store
+        .inspect(&binding())
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .generation();
+    let mut journal = ContextJournal::new(
+        &mut store,
+        fixture.records.clone(),
+        &lease,
+        binding(),
+        generation,
+    )
+    .unwrap();
+    let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+    fresh
+        .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+        .unwrap();
+    std::fs::write(fixture.temp.path().join("desk/later-data"), b"later data A").unwrap();
+    let mut later = fresh
+        .observe_for_return(
+            &originals,
+            fixture.quarantine.clone(),
+            &boundary,
+            &fixture.user,
+        )
+        .unwrap();
+    later
+        .admit_preinstall_return(&originals, &boundary, &image, &fixture.user, &mut journal)
+        .unwrap();
+    later
+        .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+        .unwrap();
+    let retained = std::fs::read_dir(fixture.temp.path().join("quarantine"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("later-root-")
+                && entry.path().join("later-data").exists()
+        })
+        .unwrap()
+        .path();
+    std::fs::write(retained.join("arrived"), b"new data requires B").unwrap();
+    let injected = probe_copy_failure(CopyFault::BeforeLaterComplete);
+    assert!(later
+        .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+        .is_err());
+    drop(injected);
+    assert!(later.manifest_bytes(&originals, &fixture.user).is_err());
+    let generation = journal.generation();
+    drop(journal);
+    let history = store.context_later_history(RootKind::Desk).unwrap();
+    assert_eq!(history.len(), 2);
+    assert!(history[0].complete.is_some());
+    assert!(history[1].complete.is_none());
+    assert_eq!(history[1].applied.len(), 3);
+    let mut journal = ContextJournal::new(
+        &mut store,
+        fixture.records.clone(),
+        &lease,
+        binding(),
+        generation,
+    )
+    .unwrap();
+    later
+        .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+        .unwrap();
+    later.manifest_bytes(&originals, &fixture.user).unwrap();
+    drop(journal);
+    assert_eq!(
+        store.context_later_history(RootKind::Desk).unwrap().len(),
+        2
+    );
+    fixture_begin_context_restore(&mut store, &later, &originals, &fixture.user);
+    let generation = store
+        .inspect(&binding())
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .generation();
+    let mut journal = ContextJournal::new(
+        &mut store,
+        fixture.records.clone(),
+        &lease,
+        binding(),
+        generation,
+    )
+    .unwrap();
+    let mut returning = ContextRestoration::new(originals, later).unwrap();
+    returning
+        .restore(&boundary, &image, &fixture.user, &mut journal)
+        .unwrap();
+    returning
+        .finish(&fixture.user)
+        .unwrap()
+        .verify(&fixture.user)
+        .unwrap();
+    assert_eq!(
+        std::fs::read(retained.join("arrived")).unwrap(),
+        b"new data requires B"
+    );
+    drop(journal);
+    fixture_finish_context_restore(&mut store);
+}
+
+// 检查第一个根的副本已完成而第二个根 AfterWrite 失败，跨根验证前先完整重新观测第二个部分副本。
+#[test]
+fn HistoryContextWindows_SecondRootCopyRetry_041() {
+    use crate::version_history::windows::context::{ContextRestoration, FreshContextRoots};
+    let fixture = Fixture::new();
+    let (originals, boundary, image, lease, mut store) = fixture_sealed_context(&fixture, false);
+    let generation = store
+        .inspect(&binding())
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .generation();
+    let mut journal = ContextJournal::new(
+        &mut store,
+        fixture.records.clone(),
+        &lease,
+        binding(),
+        generation,
+    )
+    .unwrap();
+    let mut fresh = FreshContextRoots::new(&originals, &binding()).unwrap();
+    fresh
+        .create(&originals, &boundary, &image, &fixture.user, &mut journal)
+        .unwrap();
+    // Desk has only its empty directory, so AfterWrite occurs in actual UDF.
+    std::fs::write(
+        fixture.temp.path().join("udf/browser-store"),
+        b"second root user data",
+    )
+    .unwrap();
+    let mut later = fresh
+        .observe_for_return(
+            &originals,
+            fixture.quarantine.clone(),
+            &boundary,
+            &fixture.user,
+        )
+        .unwrap();
+    later
+        .admit_preinstall_return(&originals, &boundary, &image, &fixture.user, &mut journal)
+        .unwrap();
+    let injected = probe_copy_failure(CopyFault::AfterWrite);
+    assert!(later
+        .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+        .is_err());
+    drop(injected);
+    let generation = journal.generation();
+    drop(journal);
+    let desk = store.context_later_history(RootKind::Desk).unwrap();
+    let udf = store.context_later_history(RootKind::WebView).unwrap();
+    assert_eq!(desk.len(), 1);
+    assert!(desk[0].complete.is_some());
+    assert_eq!(udf.len(), 1);
+    assert!(udf[0].complete.is_none());
+    assert_eq!(udf[0].applied.len(), 1);
+    let selector: serde_json::Value =
+        serde_json::from_slice(&store.read_manifest(&udf[0].plan.destination).unwrap()).unwrap();
+    let partial = fixture
+        .temp
+        .path()
+        .join("copies")
+        .join(selector["name"].as_str().unwrap());
+    let pending = store
+        .inspect(&binding())
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .pending_effect()
+        .unwrap()
+        .effect_id
+        .clone();
+    let mut journal = ContextJournal::new(
+        &mut store,
+        fixture.records.clone(),
+        &lease,
+        binding(),
+        generation,
+    )
+    .unwrap();
+    // Keep the exact same executor and partial writable file owner alive.
+    later
+        .preserve(&originals, &boundary, &image, &fixture.user, &mut journal)
+        .unwrap();
+    assert_eq!(
+        std::fs::read(partial.join("browser-store")).unwrap(),
+        b"second root user data"
+    );
+    drop(journal);
+    assert_eq!(
+        store.context_later_history(RootKind::Desk).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        store
+            .context_later_history(RootKind::WebView)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .inspect(&binding())
+            .unwrap()
+            .last_valid
+            .unwrap()
+            .effect_observation(&pending),
+        Some(crate::version_history::journal::Observation::Unknown)
+    );
+    fixture_begin_context_restore(&mut store, &later, &originals, &fixture.user);
+    let generation = store
+        .inspect(&binding())
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .generation();
+    let mut journal = ContextJournal::new(
+        &mut store,
+        fixture.records.clone(),
+        &lease,
+        binding(),
+        generation,
+    )
+    .unwrap();
+    let mut returning = ContextRestoration::new(originals, later).unwrap();
+    returning
+        .restore(&boundary, &image, &fixture.user, &mut journal)
+        .unwrap();
+    returning
+        .finish(&fixture.user)
+        .unwrap()
+        .verify(&fixture.user)
+        .unwrap();
+    assert!(!fixture.temp.path().join("udf").exists());
+    assert_eq!(
+        std::fs::read(partial.join("browser-store")).unwrap(),
+        b"second root user data"
+    );
+    drop(journal);
+    fixture_finish_context_restore(&mut store);
+}

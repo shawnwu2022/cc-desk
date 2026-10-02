@@ -244,6 +244,15 @@ pub(crate) struct FrozenAdmissions {
     committed: bool,
 }
 impl FrozenAdmissions {
+    #[cfg(windows)]
+    pub(crate) fn release_verified_abort(
+        self,
+        outcome: &super::windows::pre_context_abort::VerifiedPrivateAbort<'_>,
+    ) -> Result<(), SafeError> {
+        self.verify_quiescent(outcome.transaction())?;
+        self.gate.0.lock().frozen = None;
+        Ok(())
+    }
     pub(crate) fn verify_quiescent(&self, transaction_id: &str) -> Result<(), SafeError> {
         let state = self.gate.0.lock();
         if self.transaction_id != transaction_id
