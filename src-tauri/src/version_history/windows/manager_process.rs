@@ -172,8 +172,10 @@ fn create_manager_process(
         .encode_wide()
         .chain(Some(0))
         .collect();
-    let mut startup = STARTUPINFOW::default();
-    startup.cb = size_of::<STARTUPINFOW>() as u32;
+    let startup = STARTUPINFOW {
+        cb: size_of::<STARTUPINFOW>() as u32,
+        ..Default::default()
+    };
     let mut created = PROCESS_INFORMATION::default();
     // A manager inside a launcher's kill-on-close job would die when its source
     // exits. Require real breakaway where necessary; unsupported containment

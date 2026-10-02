@@ -13,8 +13,33 @@ fn HistoryManagerProcess_SuspendedIdentity_001() {
         .open_file(name(MANAGER_BASENAME).unwrap(), FileAccess::Read)
         .unwrap();
     let expected_image = image.identity().clone();
+    let source_in_job = in_job(unsafe { GetCurrentProcess() }).unwrap();
+    let source_job_limits = if source_in_job {
+        use windows::Win32::System::JobObjects::{
+            JobObjectExtendedLimitInformation, QueryInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        unsafe {
+            QueryInformationJobObject(
+                None,
+                JobObjectExtendedLimitInformation,
+                (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                None,
+            )
+        }
+        .map(|()| limits.BasicLimitInformation.LimitFlags.0)
+    } else {
+        Ok(0)
+    };
     let (process, thread, pending) =
-        create_manager_process(image, "11111111-1111-4111-8111-111111111111").unwrap();
+        create_manager_process(image, "11111111-1111-4111-8111-111111111111")
+            .unwrap_or_else(|error| {
+                panic!(
+                    "suspended manager creation failed: {error:?}; source_in_job={source_in_job}; source_job_limits={source_job_limits:?}"
+                )
+            });
     assert!(!in_job(handle(pending.0.as_ref().unwrap())).unwrap());
     assert!(process.terminal(0).unwrap().is_none());
     let same_image = root

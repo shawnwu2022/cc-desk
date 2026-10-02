@@ -55,9 +55,9 @@ pub(crate) fn publish_initial_handoff(
     data: &TransactionDataRoot,
     bundle: &ManagerBundle,
     resume: ManagerResumeAdmission,
-    binding: &JournalBinding,
-    generation: u64,
+    checkpoint: (&JournalBinding, u64),
 ) -> Result<PublishedManagerHandoff, SafeError> {
+    let (binding, generation) = checkpoint;
     control.verify_root(installation.root()).map_err(blocked)?;
     store.verify_windows_binding(installation.root(), binding, generation)?;
     data.verify()?;
