@@ -153,6 +153,9 @@ pub(super) fn validate_id(value: &str) -> Result<(), SafeError> {
     }
     Ok(())
 }
+#[cfg(windows)]
+type ContextInverse = (Option<String>, Option<(EffectSpec, u64)>);
+
 pub(super) fn validate_digest(value: &str) -> Result<(), SafeError> {
     if value.len() != 64
         || !value
@@ -1762,10 +1765,7 @@ impl JournalStore {
         Ok((effect.spec.clone(), effect.intent_generation))
     }
     #[cfg(windows)]
-    pub(crate) fn context_inverse(
-        &self,
-        original: &str,
-    ) -> Result<(Option<String>, Option<(EffectSpec, u64)>), SafeError> {
+    pub(crate) fn context_inverse(&self, original: &str) -> Result<ContextInverse, SafeError> {
         self.check_writer_current()?;
         let state = &self
             .writer

@@ -312,7 +312,9 @@ fn HistoryHandoff_IdempotentReservation_001() {
         .unwrap();
     assert!(first.transfer.is_some());
     assert_ne!(first.transaction_id, ticket.transaction_id);
-    crate::version_history::journal::validate_id(&first.transaction_id).unwrap();
+    let parsed = uuid::Uuid::parse_str(&first.transaction_id).unwrap();
+    assert!(!parsed.is_nil());
+    assert_eq!(parsed.hyphenated().to_string(), first.transaction_id);
     let duplicate = f
         .service
         .reserve_handoff(&f.caller, &ticket.transaction_id)

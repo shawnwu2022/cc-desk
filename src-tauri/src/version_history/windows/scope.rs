@@ -808,7 +808,8 @@ fn verify_x64_header(file: &PinnedFile) -> ScopeResult<()> {
             .try_into()
             .map_err(|_| ScopeBlock::ImageUnsupported)?,
     ) as u64;
-    if offset < 64 || offset > 1024 * 1024 || offset.checked_add(26).is_none_or(|end| end > size) {
+    if !(64..=1024 * 1024).contains(&offset) || offset.checked_add(26).is_none_or(|end| end > size)
+    {
         return Err(ScopeBlock::ImageUnsupported);
     }
     source
