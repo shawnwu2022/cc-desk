@@ -855,4 +855,5 @@ export default {
   historyErrorUnavailable: "This historical-version request could not be completed. Refresh and try again.",
   historyErrorCancel: "Could not confirm cancellation. Installation remains unavailable. Retry cancellation in this window.",
   historyPreparationFailed: 'Preparation failed. No installation or Desk-data change was performed.',
+  historyPublisherVerifiedShort: 'Publisher verified',
 }

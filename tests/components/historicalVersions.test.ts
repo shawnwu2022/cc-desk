@@ -185,4 +185,50 @@ describe('historical versions through the real settings and document client', ()
     expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
   })
 
+  // 验证标签仅属于精确选择的发行版；同版本其他资产、取消中与后续选择仍待验证。
+  it('HistoryUI_RowVerificationOwner_010', async () => {
+    const other = { ...row, releaseId: 'c'.repeat(32), assetId: '576638000' }
+    let finishCancel!: (value: unknown) => void
+    io.invoke.mockImplementation(async (command, payload) => {
+      if (command === 'list_history') return { rows: [row, other], nextCursor: null, truncated: false }
+      if (command === 'select_history') return { ...selection, releaseId: payload.releaseId, assetId: payload.assetId }
+      if (command === 'begin_prepare_history') return wire.ticket
+      if (command === 'prepare_history') return wire.prepared
+      if (command === 'cancel_prepare_history') return new Promise(resolve => { finishCancel = resolve })
+    })
+    const w = render(); await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
+    await w.findAll('[data-history-select]')[0].trigger('click'); await flushPromises()
+    await w.get('[data-history-prepare]').trigger('click'); await flushPromises()
+    expect(w.findAll('[data-history-row]')[0].get('.history-reason').text()).toBe('Publisher verified')
+    expect(w.findAll('[data-history-row]')[1].get('.history-reason').text()).toBe('Publisher verification pending')
+    expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
+    await w.get('[data-history-cancel]').trigger('click'); await flushPromises()
+    expect(w.findAll('[data-history-row]').map(row => row.get('.history-reason').text())).toEqual(['Publisher verification pending', 'Publisher verification pending'])
+    finishCancel(wire.cancelled); await flushPromises()
+    await w.findAll('[data-history-select]')[1].trigger('click'); await flushPromises()
+    expect(w.findAll('[data-history-select]')[1].attributes('aria-pressed')).toBe('true')
+    expect(w.findAll('[data-history-row]').map(row => row.get('.history-reason').text())).toEqual(['Publisher verification pending', 'Publisher verification pending'])
+  })
+  // 重新激活必须清除已验证标签；旧下载在新owner出现后完成也不能恢复该标签。
+  it('HistoryUI_RowOwnerInvalidation_011', async () => {
+    const w = render(); await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
+    await w.get('[data-history-select]').trigger('click'); await flushPromises()
+    await w.get('[data-history-prepare]').trigger('click'); await flushPromises()
+    expect(w.get('[data-history-row] .history-reason').text()).toBe('Publisher verified')
+    await w.setProps({ active: false }); await flushPromises(); await w.setProps({ active: true }); await flushPromises()
+    await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
+    expect(w.get('[data-history-row] .history-reason').text()).toBe('Publisher verification pending')
+    let finish!: (value: unknown) => void
+    io.invoke.mockImplementationOnce(async () => selection)
+    await w.get('[data-history-select]').trigger('click'); await flushPromises()
+    io.invoke.mockImplementationOnce(async () => wire.ticket).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await w.get('[data-history-prepare]').trigger('click'); await flushPromises()
+    await w.setProps({ active: false }); await w.setProps({ active: true }); await flushPromises()
+    finish(wire.prepared); await flushPromises()
+    await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
+    expect(w.get('[data-history-row] .history-reason').text()).toBe('Publisher verification pending')
+    expect(w.find('[data-history-selected]').exists()).toBe(false)
+    expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
+  })
+
 })

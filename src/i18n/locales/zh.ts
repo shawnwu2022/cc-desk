@@ -855,4 +855,5 @@ export default {
   historyErrorUnavailable: "无法完成此次历史版本请求，请刷新后重试。",
   historyErrorCancel: "无法确认取消结果，安装仍不可用。请在此窗口重试取消。",
   historyPreparationFailed: '准备失败，尚未执行安装或更改 Desk 数据。',
+  historyPublisherVerifiedShort: '发布者签名已验证',
 }

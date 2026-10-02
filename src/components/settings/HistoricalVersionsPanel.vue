@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useVersionHistoryStore } from '@/stores/versionHistory'
-import type { HistoryBlockReason } from '@/types/versionHistory'
+import type { HistoryBlockReason, HistoryRelease } from '@/types/versionHistory'
 import AppButton from '@/components/ui/AppButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 const props = defineProps<{ active: boolean }>()
@@ -23,6 +23,16 @@ const reasons: Record<HistoryBlockReason, string> = {
 }
 const status = computed(() => ({ idle: 'historyAwaitingVerification', preparing: 'historyPreparing', verified: 'historyPublisherVerified',
   cancelling: 'historyCancelling', cancelled: 'historyCancelled', failed: 'historyPreparationFailed', 'cancel-failed': 'historyCancelUnconfirmed' })[history.phase])
+function rowStatus(row: HistoryRelease) {
+  if (row.blockedReason) return reasons[row.blockedReason]
+  const selected = history.selected, prepared = history.prepared
+  // Display only the current preparation of this exact observation/asset. The
+  // catalogue stays unverified metadata, and this label grants no installation.
+  return props.active && history.phase === 'verified' && selected?.releaseId === row.releaseId
+    && selected.assetId === row.assetId && selected.version === row.version
+    && prepared?.version === selected.version && prepared.verification === 'publisher-verified'
+    ? 'historyPublisherVerifiedShort' : 'historyAwaitingVerification'
+}
 function date(value: string) { return new Date(value).toLocaleDateString(locale.value) }
 </script>
 <template>
@@ -41,7 +51,7 @@ function date(value: string) { return new Date(value).toLocaleDateString(locale.
       <li v-for="row in visibleRows" :key="row.releaseId" data-history-row>
         <div class="history-release">
           <strong>v{{ row.version }}</strong><time :datetime="row.publishedAt">{{ date(row.publishedAt) }}</time>
-          <span class="history-reason">{{ row.blockedReason ? t(reasons[row.blockedReason]) : t('historyAwaitingVerification') }}</span>
+          <span class="history-reason">{{ t(rowStatus(row)) }}</span>
         </div>
         <AppButton data-history-select :aria-label="t('historySelectVersion', { version: row.version })"
           :aria-pressed="history.selected?.releaseId === row.releaseId" :disabled="disabled || !row.selectAllowed"

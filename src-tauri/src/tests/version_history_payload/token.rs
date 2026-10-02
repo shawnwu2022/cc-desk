@@ -46,25 +46,159 @@ fn raw(h: &OwnedHandle) -> HANDLE {
 unsafe fn owned(h: HANDLE) -> OwnedHandle {
     unsafe { OwnedHandle::from_raw_handle(h.0) }
 }
-fn info(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<Vec<usize>> {
-    let mut size = 0;
-    let error = unsafe { GetTokenInformation(token, class, None, 0, &mut size) }
-        .expect_err("token sizing must fail");
-    if error.code() != ERROR_INSUFFICIENT_BUFFER.to_hresult() || size == 0 || size > 65536 {
-        return Err(blocked("unsupported token observation length"));
+const MAX_TOKEN_INFORMATION_BYTES: u32 = 65_536;
+fn token_class_name(class: TOKEN_INFORMATION_CLASS) -> &'static str {
+    match class {
+        TokenUser => "TokenUser",
+        TokenGroups => "TokenGroups",
+        TokenPrivileges => "TokenPrivileges",
+        TokenSessionId => "TokenSessionId",
+        TokenElevation => "TokenElevation",
+        TokenIntegrityLevel => "TokenIntegrityLevel",
+        _ => "UnsupportedClass",
     }
-    let mut bytes = vec![0usize; (size as usize).div_ceil(size_of::<usize>())];
+}
+fn token_read_error(
+    class: TOKEN_INFORMATION_CLASS,
+    stage: &'static str,
+    returned: u32,
+    capacity: u32,
+    hresult: Option<i32>,
+) -> io::Error {
+    // Numeric API diagnostics only: never a token handle, address or token data.
+    io::Error::other(format!(
+        "token observation class={}({}) stage={stage} returnedBytes={returned} capacityBytes={capacity} hresult={}",
+        token_class_name(class), class.0,
+        hresult.map(|value|format!("0x{:08x}",value as u32)).unwrap_or_else(||"none".into())
+    ))
+}
+struct TokenBuffer {
+    words: Vec<usize>,
+    length: usize,
+}
+impl TokenBuffer {
+    fn as_ptr(&self) -> *const usize {
+        self.words.as_ptr()
+    }
+    fn sid_text(&self, sid: PSID) -> io::Result<String> {
+        let start = self.words.as_ptr() as usize;
+        let offset = (sid.0 as usize)
+            .checked_sub(start)
+            .filter(|offset| offset.checked_add(8).is_some_and(|end| end <= self.length))
+            .ok_or_else(|| blocked("token SID header is outside returned bytes"))?;
+        // SID: revision, subauthority count, six identifier-authority bytes,
+        // then at most 15 DWORD subauthorities. Validate range before OS reads.
+        let count = unsafe { *sid.0.cast::<u8>().add(1) } as usize;
+        if count > 15 || offset + 8 + count * 4 > self.length {
+            return Err(blocked("token SID extends outside returned bytes"));
+        }
+        sid_text(sid)
+    }
+}
+fn info(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<TokenBuffer> {
+    let minimum = match class {
+        TokenUser => size_of::<TOKEN_USER>(),
+        TokenGroups => std::mem::offset_of!(TOKEN_GROUPS, Groups),
+        TokenIntegrityLevel => size_of::<TOKEN_MANDATORY_LABEL>(),
+        TokenPrivileges => std::mem::offset_of!(TOKEN_PRIVILEGES, Privileges),
+        _ => return Err(token_read_error(class, "variable-class", 0, 0, None)),
+    } as u32;
+    let mut required = 0;
+    let sizing = unsafe { GetTokenInformation(token, class, None, 0, &mut required) };
+    let error = match sizing {
+        Err(error) => error,
+        Ok(()) => {
+            return Err(token_read_error(
+                class,
+                "unexpected-sizing-success",
+                required,
+                0,
+                None,
+            ))
+        }
+    };
+    if error.code() != ERROR_INSUFFICIENT_BUFFER.to_hresult()
+        || !(minimum..=MAX_TOKEN_INFORMATION_BYTES).contains(&required)
+    {
+        return Err(token_read_error(
+            class,
+            "size",
+            required,
+            0,
+            Some(error.code().0),
+        ));
+    }
+    let mut words = vec![0usize; (required as usize).div_ceil(size_of::<usize>())];
+    let mut returned = 0;
     unsafe {
         GetTokenInformation(
             token,
             class,
-            Some(bytes.as_mut_ptr().cast()),
-            size,
-            &mut size,
+            Some(words.as_mut_ptr().cast()),
+            required,
+            &mut returned,
         )
-        .map_err(win)?;
+        .map_err(|error| {
+            token_read_error(
+                class,
+                "variable-read",
+                returned,
+                required,
+                Some(error.code().0),
+            )
+        })?;
     }
-    Ok(bytes)
+    if !(minimum..=required).contains(&returned) {
+        return Err(token_read_error(
+            class,
+            "variable-return-length",
+            returned,
+            required,
+            None,
+        ));
+    }
+    Ok(TokenBuffer {
+        words,
+        length: returned as usize,
+    })
+}
+fn fixed_info<T: Default>(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<T> {
+    // Only the documented fixed structures below use this path. A typed buffer
+    // does not assume NULL/0 probing behaves identically for every token class.
+    if !matches!(class, TokenElevation | TokenSessionId) || size_of::<T>() != 4 {
+        return Err(token_read_error(
+            class,
+            "fixed-class",
+            0,
+            size_of::<T>() as u32,
+            None,
+        ));
+    }
+    let mut value = T::default();
+    let size = size_of::<T>() as u32;
+    let mut returned = 0;
+    unsafe {
+        GetTokenInformation(
+            token,
+            class,
+            Some((&mut value as *mut T).cast()),
+            size,
+            &mut returned,
+        )
+        .map_err(|error| {
+            token_read_error(class, "fixed-read", returned, size, Some(error.code().0))
+        })?;
+    }
+    if returned != size {
+        return Err(token_read_error(
+            class,
+            "fixed-return-length",
+            returned,
+            size,
+            None,
+        ));
+    }
+    Ok(value)
 }
 fn sid_text(sid: PSID) -> io::Result<String> {
     if !unsafe { IsValidSid(sid) }.as_bool() {
@@ -115,42 +249,58 @@ fn observe(token: HANDLE) -> io::Result<Observation> {
     let user = info(token, TokenUser)?;
     let groups = info(token, TokenGroups)?;
     let integrity = info(token, TokenIntegrityLevel)?;
-    let elevation = info(token, TokenElevation)?;
-    let session = info(token, TokenSessionId)?;
+    let elevation: TOKEN_ELEVATION = fixed_info(token, TokenElevation)?;
+    let session: u32 = fixed_info(token, TokenSessionId)?;
     let privileges = info(token, TokenPrivileges)?;
     unsafe {
-        let groups_ptr = &*groups.as_ptr().cast::<TOKEN_GROUPS>();
-        let count = groups_ptr.GroupCount as usize;
+        let count = *groups.as_ptr().cast::<u32>() as usize;
         let offset = std::mem::offset_of!(TOKEN_GROUPS, Groups);
-        if offset + count * size_of::<windows::Win32::Security::SID_AND_ATTRIBUTES>()
-            > groups.len() * size_of::<usize>()
+        if count
+            .checked_mul(size_of::<windows::Win32::Security::SID_AND_ATTRIBUTES>())
+            .and_then(|bytes| offset.checked_add(bytes))
+            .is_none_or(|end| end > groups.length)
         {
             return Err(blocked("invalid token group size"));
         }
-        let entries = std::slice::from_raw_parts(groups_ptr.Groups.as_ptr(), count);
+        let entries = std::slice::from_raw_parts(
+            groups
+                .as_ptr()
+                .cast::<u8>()
+                .add(offset)
+                .cast::<windows::Win32::Security::SID_AND_ATTRIBUTES>(),
+            count,
+        );
         let mut admin = None;
         for group in entries {
-            if sid_text(group.Sid)? == "S-1-5-32-544" {
+            if groups.sid_text(group.Sid)? == "S-1-5-32-544" {
                 admin = Some(group.Attributes);
             }
         }
-        let privileges_ptr = &*privileges.as_ptr().cast::<TOKEN_PRIVILEGES>();
-        let count = privileges_ptr.PrivilegeCount as usize;
-        if std::mem::offset_of!(TOKEN_PRIVILEGES, Privileges)
-            + count * size_of::<windows::Win32::Security::LUID_AND_ATTRIBUTES>()
-            > privileges.len() * size_of::<usize>()
+        let count = *privileges.as_ptr().cast::<u32>() as usize;
+        let offset = std::mem::offset_of!(TOKEN_PRIVILEGES, Privileges);
+        if count
+            .checked_mul(size_of::<windows::Win32::Security::LUID_AND_ATTRIBUTES>())
+            .and_then(|bytes| offset.checked_add(bytes))
+            .is_none_or(|end| end > privileges.length)
         {
             return Err(blocked("invalid token privilege size"));
         }
-        let privileges = std::slice::from_raw_parts(privileges_ptr.Privileges.as_ptr(), count)
-            .iter()
-            .map(|p| (p.Luid.LowPart, p.Luid.HighPart, p.Attributes.0))
-            .collect();
+        let privileges = std::slice::from_raw_parts(
+            privileges
+                .as_ptr()
+                .cast::<u8>()
+                .add(offset)
+                .cast::<windows::Win32::Security::LUID_AND_ATTRIBUTES>(),
+            count,
+        )
+        .iter()
+        .map(|p| (p.Luid.LowPart, p.Luid.HighPart, p.Attributes.0))
+        .collect();
         Ok(Observation {
-            sid: sid_text((*user.as_ptr().cast::<TOKEN_USER>()).User.Sid)?,
-            session: *session.as_ptr().cast::<u32>(),
-            elevated: (*elevation.as_ptr().cast::<TOKEN_ELEVATION>()).TokenIsElevated != 0,
-            integrity_sid: sid_text(
+            sid: user.sid_text((*user.as_ptr().cast::<TOKEN_USER>()).User.Sid)?,
+            session,
+            elevated: elevation.TokenIsElevated != 0,
+            integrity_sid: integrity.sid_text(
                 (*integrity.as_ptr().cast::<TOKEN_MANDATORY_LABEL>())
                     .Label
                     .Sid,
@@ -376,4 +526,69 @@ fn HistoryPayload_TokenGate_004() {
             "unsafe token mutation {mutation} admitted"
         );
     }
+}
+
+// 检查真实当前进程令牌可完整读取，与生产 SID/提升状态及独立会话 API 一致；不要求安装资格。
+#[test]
+fn HistoryPayload_ObserveToken_005() {
+    let observed =
+        current().expect("current-token observation must succeed before eligibility is considered");
+    let production = crate::version_history::windows::security::CurrentUser::capture().unwrap();
+    assert_eq!(
+        observed.sid,
+        production.sid_text(),
+        "fixture and production must observe the same token user"
+    );
+    assert_eq!(
+        !observed.elevated && cfg!(target_arch = "x86_64"),
+        production.require_unelevated().is_ok(),
+        "typed elevation must match the independent production read"
+    );
+    let mut session = 0;
+    unsafe {
+        windows::Win32::System::RemoteDesktop::ProcessIdToSessionId(
+            std::process::id(),
+            &mut session,
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        observed.session, session,
+        "typed TokenSessionId must match the actual process session"
+    );
+    assert!(
+        observed.integrity_sid.starts_with("S-1-16-"),
+        "integrity label must be a mandatory integrity SID"
+    );
+    // This test reads the ordinary runner token, which may be elevated. It does
+    // not call require(), create a restricted token/process, or install anything.
+}
+
+// 检查实际无效令牌调用保留安全的 class/stage/长度/错误码，不输出令牌数据。
+#[test]
+fn HistoryPayload_TokenReadError_006() {
+    let error = match info(HANDLE::default(), TokenUser) {
+        Ok(_) => panic!("a null token handle must not produce token information"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("class=TokenUser(1)"),
+        "missing token class: {error}"
+    );
+    assert!(
+        error.contains("stage=size"),
+        "missing reader stage: {error}"
+    );
+    assert!(
+        error.contains("returnedBytes="),
+        "missing returned length: {error}"
+    );
+    assert!(
+        error.contains("capacityBytes=0"),
+        "missing supplied length: {error}"
+    );
+    assert!(
+        error.contains("hresult=0x"),
+        "missing API error code: {error}"
+    );
 }
