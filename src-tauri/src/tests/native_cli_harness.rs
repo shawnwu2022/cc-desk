@@ -1,7 +1,7 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Deserialize;
 use std::ffi::OsString;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -15,6 +15,53 @@ mod bundled_runtime;
 const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 const PROBE_READY_TIMEOUT: Duration = Duration::from_secs(5);
+
+// This fixture stands in for a fresh terminal during ConPTY startup only.
+// Match xterm's DA1 reply; mode requests do not authorize Win32 input encoding.
+// Stop after DA1 so later application queries cannot contaminate captured input.
+#[derive(Default)]
+struct StartupHandshake {
+    pending: Vec<u8>,
+    cursor_replied: bool,
+    da1_replied: bool,
+}
+
+impl StartupHandshake {
+    fn respond(&mut self, output: &[u8], writer: &mut dyn Write) -> io::Result<()> {
+        const QUERIES: [&[u8]; 3] = [b"\x1b[c", b"\x1b[0c", b"\x1b[6n"];
+        for &byte in output {
+            if self.da1_replied {
+                break;
+            }
+            self.pending.push(byte);
+            match self.pending.as_slice() {
+                b"\x1b[c" | b"\x1b[0c" => {
+                    writer.write_all(b"\x1b[?1;2c")?;
+                    writer.flush()?;
+                    self.da1_replied = true;
+                    self.pending.clear();
+                }
+                b"\x1b[6n" => {
+                    if !self.cursor_replied {
+                        // A newly created PTY starts at row 1, column 1.
+                        writer.write_all(b"\x1b[1;1R")?;
+                        writer.flush()?;
+                        self.cursor_replied = true;
+                    }
+                    self.pending.clear();
+                }
+                pending if QUERIES.iter().any(|query| query.starts_with(pending)) => {}
+                _ => {
+                    self.pending.clear();
+                    if byte == 0x1b {
+                        self.pending.push(byte);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -40,6 +87,7 @@ pub(crate) struct ProbeExecution {
     pub(crate) report: ProbeReport,
     pub(crate) stdout: Vec<u8>,
     pub(crate) exit_code: u32,
+    pub(crate) startup_da1_replies: usize,
 }
 
 fn node_path() -> Result<PathBuf, String> {
@@ -120,14 +168,19 @@ pub(crate) fn spawn_probe(
         .master
         .try_clone_reader()
         .map_err(|error| error.to_string())?;
-    let mut writer = pair
-        .master
-        .take_writer()
-        .map_err(|error| error.to_string())?;
+    let writer = Arc::new(Mutex::new(Some(
+        pair.master
+            .take_writer()
+            .map_err(|error| error.to_string())?,
+    )));
 
     let output = Arc::new(Mutex::new(Vec::new()));
     let collected = output.clone();
-    let reader_thread = thread::spawn(move || -> Result<(), String> {
+    #[cfg(windows)]
+    let reply_writer = writer.clone();
+    let reader_thread = thread::spawn(move || -> Result<usize, String> {
+        #[cfg(windows)]
+        let mut handshake = StartupHandshake::default();
         let mut buffer = [0u8; 8192];
         loop {
             match reader.read(&mut buffer) {
@@ -138,6 +191,15 @@ pub(crate) fn spawn_probe(
                         return Err("probe output exceeded 4 MiB".to_string());
                     }
                     bytes.extend_from_slice(&buffer[..count]);
+                    drop(bytes);
+                    #[cfg(windows)]
+                    if !handshake.da1_replied {
+                        let mut writer = reply_writer.lock().map_err(|_| "writer lock poisoned")?;
+                        let writer = writer.as_mut().ok_or("probe writer closed")?;
+                        handshake
+                            .respond(&buffer[..count], &mut **writer)
+                            .map_err(|error| error.to_string())?;
+                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
@@ -146,7 +208,10 @@ pub(crate) fn spawn_probe(
                 Err(error) => return Err(error.to_string()),
             }
         }
-        Ok(())
+        #[cfg(windows)]
+        return Ok(usize::from(handshake.da1_replied));
+        #[cfg(not(windows))]
+        Ok(0)
     });
 
     let (done_tx, done_rx) = mpsc::channel();
@@ -162,7 +227,9 @@ pub(crate) fn spawn_probe(
 
     let write_result = if let Some(bytes) = input {
         wait_for_probe_ready(&ready_path).and_then(|()| {
-            crate::pty::write_pty_data(&mut *writer, bytes).map_err(|error| error.to_string())
+            let mut writer = writer.lock().map_err(|_| "writer lock poisoned")?;
+            let writer = writer.as_mut().ok_or("probe writer closed")?;
+            crate::pty::write_pty_data(&mut **writer, bytes).map_err(|error| error.to_string())
         })
     } else {
         Ok(())
@@ -197,7 +264,8 @@ pub(crate) fn spawn_probe(
 
     let status = child.wait().map_err(|error| error.to_string());
     let _ = done_tx.send(());
-    drop(writer);
+    // Close the actual input handle even while the reader retains its Arc.
+    writer.lock().map_err(|_| "writer lock poisoned")?.take();
     drop(pair.master);
 
     let reader_result = reader_thread
@@ -235,7 +303,7 @@ pub(crate) fn spawn_probe(
             find_subslice(&bytes, b"\x1b[2t").is_some(),
         ));
     }
-    reader_result?;
+    let startup_da1_replies = reader_result?;
     let status = status?;
     let exit_code = status.exit_code();
     let stdout = output
@@ -256,6 +324,7 @@ pub(crate) fn spawn_probe(
         report,
         stdout,
         exit_code,
+        startup_da1_replies,
     })
 }
 
@@ -281,6 +350,54 @@ fn extract_marked_output(output: &[u8], marker: &str) -> Result<Vec<u8>, String>
     let end_relative = find_subslice(&output[payload_at..], &end)
         .ok_or_else(|| "output end marker missing".to_string())?;
     Ok(output[payload_at..payload_at + end_relative].to_vec())
+}
+
+// 启动查询跨读取分片时只回复完整 DA1，不回显模式请求或重复回复。
+#[test]
+fn NativeCliHandshake_FragmentedDA1_005() {
+    let mut handshake = StartupHandshake::default();
+    let mut replies = Vec::new();
+    for chunk in [b"\x1b[1t\x1b[".as_slice(), b"c\x1b[?1004h\x1b[?9001h"] {
+        handshake.respond(chunk, &mut replies).unwrap();
+    }
+    handshake.respond(b"\x1b[c\x1b[6n", &mut replies).unwrap();
+    assert_eq!(replies, b"\x1b[?1;2c");
+    assert!(handshake.da1_replied);
+}
+
+// 全新 PTY 的光标查询必须在 DA1 之前回复，并保留分片及回复顺序。
+#[test]
+fn NativeCliHandshake_CursorBeforeDA1_006() {
+    let mut handshake = StartupHandshake::default();
+    let mut replies = Vec::new();
+    for chunk in [b"\x1b[6".as_slice(), b"n\x1b[6n\x1b[0", b"c"] {
+        handshake.respond(chunk, &mut replies).unwrap();
+    }
+    assert_eq!(replies, b"\x1b[1;1R\x1b[?1;2c");
+}
+
+// 模式请求、次要设备查询和不完整 DA1 不产生输入字节。
+#[test]
+fn NativeCliHandshake_IgnoreModes_007() {
+    let mut handshake = StartupHandshake::default();
+    let mut replies = Vec::new();
+    handshake
+        .respond(b"\x1b[?1004h\x1b[?9001h\x1b[>c\x1b[?c\x1b[0", &mut replies)
+        .unwrap();
+    assert!(replies.is_empty());
+    assert!(!handshake.da1_replied);
+}
+
+// 回复只写入部分字节时报告失败，不能记录为完成的 DA1 应答。
+#[test]
+fn NativeCliHandshake_WriteFailure_008() {
+    let mut handshake = StartupHandshake::default();
+    let mut capacity = [0u8; 3];
+    let error = handshake
+        .respond(b"\x1b[c", &mut capacity.as_mut_slice())
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+    assert!(!handshake.da1_replied);
 }
 
 #[test]
@@ -345,6 +462,11 @@ fn NativeCliHarness_PtyCapturesTerminalBytes_002() {
     )
     .expect("terminal input through PTY");
 
+    assert_eq!(
+        execution.startup_da1_replies,
+        usize::from(cfg!(windows)),
+        "the test terminal must answer ConPTY startup DA1 before capturing input",
+    );
     assert_eq!(execution.exit_code, 0);
     assert_eq!(
         execution.report.captured_base64.as_deref(),
