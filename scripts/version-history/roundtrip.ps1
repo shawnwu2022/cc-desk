@@ -64,8 +64,9 @@ function Assert-RoundtripEqual {
         return
     }
     if ($Expected -is [Collections.IDictionary] -or $Expected -is [pscustomobject]) {
-        $keys = if ($Expected -is [Collections.IDictionary]) { @($Expected.Keys) } else { @($Expected.PSObject.Properties.Name) }
-        $actualKeys = if ($Actual -is [Collections.IDictionary]) { @($Actual.Keys) } elseif ($Actual -is [pscustomobject]) { @($Actual.PSObject.Properties.Name) } else { throw "ASSERTION_FAILED: $Label object type" }
+        # Collect the whole conditional output so zero/one key stays an array under StrictMode.
+        $keys = @(if ($Expected -is [Collections.IDictionary]) { $Expected.Keys } else { $Expected.PSObject.Properties | ForEach-Object { $_.Name } })
+        $actualKeys = @(if ($Actual -is [Collections.IDictionary]) { $Actual.Keys } elseif ($Actual -is [pscustomobject]) { $Actual.PSObject.Properties | ForEach-Object { $_.Name } } else { throw "ASSERTION_FAILED: $Label object type" })
         if ($keys.Count -ne $actualKeys.Count) { throw "ASSERTION_FAILED: $Label field count" }
         foreach ($key in $keys) {
             if ($actualKeys -cnotcontains $key) { throw "ASSERTION_FAILED: $Label missing field $key" }

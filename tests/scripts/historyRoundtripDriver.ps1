@@ -33,6 +33,33 @@ function Copy-TestValue($Value) { $Value | ConvertTo-Json -Depth 100 -Compress |
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('ccdesk-roundtrip-contract-' + [guid]::NewGuid())
 [IO.Directory]::CreateDirectory($temporary) | Out-Null
 try {
+    # Exercise the actual recursive comparator under StrictMode with every key cardinality.
+    # Hashtable and parsed JSON object representations must retain identical comparisons.
+    foreach ($case in @(
+        @{ name = 'Empty_049'; value = @{} },
+        @{ name = 'Single_050'; value = @{ only = 1 } },
+        @{ name = 'Multiple_051'; value = @{ first = 1; second = @{ nested = 'value' } } }
+    )) {
+        Check-Passes "ValueEqual_ObjectKeys_$($case.name)" {
+            $dictionary = $case.value
+            $parsed = Copy-TestValue $dictionary
+            Assert-RoundtripEqual $dictionary $dictionary 'dictionary keys'
+            Assert-RoundtripEqual $parsed $parsed 'parsed object keys'
+            Assert-RoundtripEqual $dictionary $parsed 'dictionary to parsed object'
+            Assert-RoundtripEqual $parsed $dictionary 'parsed object to dictionary'
+        }
+    }
+    Check-Rejects 'ValueEqual_EmptyRejectsExtraKey_052' { Assert-RoundtripEqual @{} ([pscustomobject]@{ only = 1 }) 'extra key' } 'field count'
+    Check-Rejects 'ValueEqual_SingleRejectsMissingKey_053' { Assert-RoundtripEqual ([pscustomobject]@{ only = 1 }) @{} 'missing key' } 'field count'
+    Check-Rejects 'ValueEqual_SingleRejectsDifferentKey_054' { Assert-RoundtripEqual @{ first = 1 } ([pscustomobject]@{ second = 1 }) 'different key' } 'missing field first'
+    Check-Rejects 'ValueEqual_KeyCaseRemainsExact_055' { Assert-RoundtripEqual ([pscustomobject]@{ key = 1 }) @{ KEY = 1 } 'key case' } 'missing field key'
+    Check-Rejects 'ValueEqual_MultipleRejectsNestedChange_056' { Assert-RoundtripEqual @{ first = 1; second = @{ nested = 'value' } } ([pscustomobject]@{ second = [pscustomobject]@{ nested = 'changed' }; first = 1 }) 'nested change' } 'value mismatch'
+    Check-Rejects 'ValueEqual_ObjectRejectsArray_057' { Assert-RoundtripEqual @{} @() 'object type' } 'object type'
+    Check-Passes 'ValueEqual_EmptyArray_058' { Assert-RoundtripEqual @() @() 'empty array' }
+    Check-Passes 'ValueEqual_SingleArray_059' { Assert-RoundtripEqual @([pscustomobject]@{ only = 1 }) @(@{ only = 1 }) 'single array' }
+    Check-Passes 'ValueEqual_MultipleArray_060' { Assert-RoundtripEqual @(1, [pscustomobject]@{ only = 2 }) @(1, @{ only = 2 }) 'multiple array' }
+    Check-Rejects 'ValueEqual_ArrayRejectsMissingEntry_061' { Assert-RoundtripEqual @(1, 2) @(1) 'array count' } 'entry count'
+
     $uuid = '11111111-2222-4333-8444-555555555555'
     $binding = [ordered]@{ transaction_id = $uuid; source_context = '22222222-2222-4333-8444-555555555555'; target_context = '33333333-2222-4333-8444-555555555555'; user_installation = 'b' * 64; source_bundle = 'a' * 64; target_package = 'e9ffbc5ba627f0c133a4385db404342a7344729339185e6f9b8ee6b5969086ac'; target_payload = 'd' * 64; roots = 'e' * 64 }
     $permission = [ordered]@{ Windows = [ordered]@{ descriptor = @(1, 0, 4, 128) + @(0) * 16; attributes = 32 } }

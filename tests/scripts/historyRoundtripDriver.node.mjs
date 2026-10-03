@@ -89,6 +89,14 @@ test('Driver_SentinelsUseHeldCanonicalRoots_009', () => {
   assert.ok(writer.indexOf('RequireSentinelDisjoint') < writer.indexOf('stream.SetLength(0)'))
 })
 
+// Source guard only; the PowerShell suite below exercises actual key cardinalities and mismatches.
+test('Driver_ObjectKeyResultsStayArrays_010', () => {
+  const equal = driver.slice(driver.indexOf('function Assert-RoundtripEqual'), driver.indexOf('function Assert-RoundtripDescriptor'))
+  assert.match(equal, /\$keys = @\(if /, 'collect the conditional output, including empty and single-key objects')
+  assert.match(equal, /\$actualKeys = @\(if /, 'actual object keys need the same array shape')
+  assert.doesNotMatch(equal, /PSObject\.Properties\.Name/, 'empty objects must not use StrictMode member-access enumeration')
+})
+
 // Windows CI executes the production PowerShell validators against mutations, without native effects.
 test('Driver_ExecutableDryRunContracts_007', t => {
   const available = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' })
