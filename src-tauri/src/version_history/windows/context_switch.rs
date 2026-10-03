@@ -1038,6 +1038,39 @@ fn observe_renameable(slot: &OriginSlot) -> io::Result<HeldRoot> {
     }
 }
 impl LaterContextRoots {
+    #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+    pub(crate) fn acceptance_retained_locations(&self) -> io::Result<BTreeMap<RootKind, String>> {
+        [RootKind::Desk, RootKind::WebView]
+            .into_iter()
+            .map(|kind| {
+                // A later absent root has no moved object. Its original slot
+                // is occupied by the restored source, so report the actual
+                // retained empty-copy slot, never that reused source location.
+                let retained = match self.context.tree(kind).root() {
+                    HeldRoot::Present(root) => HeldRoot::Present(root.clone()),
+                    HeldRoot::Absent { .. } => self
+                        .copies
+                        .get(&kind)
+                        .and_then(|copy| copy.tree.as_ref())
+                        .ok_or_else(|| blocked("retained absence copy missing"))?
+                        .root()
+                        .clone(),
+                };
+                let path = match retained {
+                    HeldRoot::Present(root) => std::path::PathBuf::from(root.path()?),
+                    HeldRoot::Absent { parent, name } => {
+                        std::path::PathBuf::from(parent.path()?).join(name.os_string())
+                    }
+                };
+                Ok((
+                    kind,
+                    path.into_os_string()
+                        .into_string()
+                        .map_err(|_| blocked("unrepresentable acceptance location"))?,
+                ))
+            })
+            .collect()
+    }
     pub(crate) fn root_identities(&self) -> BTreeMap<RootKind, String> {
         self.context.root_identities()
     }
@@ -2119,6 +2152,10 @@ impl RestoredContextRoots {
     }
     pub(crate) fn original_snapshot(&self) -> &SnapshotManifest {
         &self.originals.expected
+    }
+    #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+    pub(crate) fn acceptance_retained_locations(&self) -> io::Result<BTreeMap<RootKind, String>> {
+        self.later.acceptance_retained_locations()
     }
 }
 impl LaterContextRoots {

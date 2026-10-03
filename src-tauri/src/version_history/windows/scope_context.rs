@@ -254,6 +254,22 @@ impl ContextConfiguredInventory<'_> {
 }
 
 impl ConfiguredExclusions {
+    #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+    pub(crate) fn acceptance_require_disjoint(&self, evidence: &ObservedPath) -> ScopeResult<()> {
+        self.verify_external()?;
+        let evidence = evidence.components()?;
+        for root in self.root_components()? {
+            if components_overlap(&root, &evidence)? {
+                return Err(ScopeBlock::Overlap);
+            }
+        }
+        for path in &self.paths {
+            if components_overlap(&path.components()?, &evidence)? {
+                return Err(ScopeBlock::Overlap);
+            }
+        }
+        self.verify_external()
+    }
     /// Rechecks the SAME complete durable M0 before source boundary admission.
     /// The original bytes cannot be replaced with an equal caller-supplied hash.
     pub(crate) fn verify_context(&self, context: &HeldContext) -> ScopeResult<()> {

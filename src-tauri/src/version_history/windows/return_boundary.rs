@@ -607,6 +607,10 @@ impl ReturnBoundaryPreparation {
 }
 
 impl ReturnBoundaryAttempt {
+    #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+    pub(crate) fn acceptance_exclusions(&self) -> &ConfiguredExclusions {
+        &self.dependencies.exclusions
+    }
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }

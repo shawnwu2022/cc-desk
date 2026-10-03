@@ -33,7 +33,7 @@ jobs:
         run: npm run test:ci
 
       - name: Run Node policy tests
-        run: node --test tests/scripts/nativeReleasePolicy.node.mjs
+        run: node --test tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs
 
       - name: Build frontend
         run: npm run build
@@ -116,3 +116,84 @@ jobs:
             $process.Dispose()
             if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
           }
+
+  roundtrip-build-policy:
+    name: Disposable roundtrip compile-only policy (no native acceptance)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - name: Cache isolated compile-only dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: roundtrip-compile-only
+      - name: Prepare frontend and verified runtime
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/prepare-conpty.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check inert binding and ordinary admission with acceptance feature
+        working-directory: src-tauri
+        run: |
+          cargo test --locked --lib --features history-roundtrip-acceptance version_history_roundtrip_contract
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --lib --features history-roundtrip-acceptance version_history::payload_policy::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build ordinary embedded release without acceptance
+        run: |
+          npm run tauri -- build --no-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Require feature release rejection from the policy guard
+        working-directory: src-tauri
+        run: |
+          $output = & cargo build --locked --release --features history-roundtrip-acceptance 2>&1
+          $result = $LASTEXITCODE
+          $output | Write-Output
+          if ($result -eq 0) { throw 'Acceptance feature entered a release build' }
+          if (($output -join "`n") -notmatch 'roundtrip acceptance is forbidden in release builds') {
+            throw 'Release failed for an unrelated reason; exclusion remains unverified'
+          }
+      - name: Build both inert embedded acceptance scenarios without packages
+        run: |
+          $path = 'tests/fixtures/version-history-roundtrip/target.json'
+          $original = [IO.File]::ReadAllBytes((Resolve-Path $path))
+          try {
+            foreach ($scenario in @('success', 'before-installer-resume')) {
+              $target = [Text.Encoding]::UTF8.GetString($original) | ConvertFrom-Json
+              if ($target.enabled -ne $false) { throw 'CI only admits the disabled binding' }
+              $target.scenario = $scenario
+              [IO.File]::WriteAllText((Resolve-Path $path), ($target | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+              npm run tauri -- build --debug --features history-roundtrip-acceptance --no-bundle
+              if ($LASTEXITCODE -ne 0) { throw "Inert acceptance build failed: $scenario" }
+              Get-FileHash src-tauri/target/debug/cc-desk.exe -Algorithm SHA256
+            }
+            Push-Location src-tauri
+            try {
+              cargo clippy --locked --all-targets --features history-roundtrip-acceptance -- -D warnings
+              if ($LASTEXITCODE -ne 0) { throw 'Acceptance compilation lint failed' }
+            } finally { Pop-Location }
+          } finally { [IO.File]::WriteAllBytes((Resolve-Path $path), $original) }
+      - name: Parse PowerShell and run effect-free driver contracts
+        run: |
+          foreach ($path in @('scripts/version-history/roundtrip.ps1', 'scripts/version-history/roundtrip-ui.ps1', 'tests/scripts/historyRoundtripDriver.ps1')) {
+            $tokens = $null; $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -ne 0) { throw ($errors | Out-String) }
+          }
+          . ./scripts/version-history/roundtrip-ui.ps1
+          Initialize-RoundtripNative
+          node --test tests/scripts/historyRoundtripBuild.node.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/scripts/historyRoundtripDriver.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

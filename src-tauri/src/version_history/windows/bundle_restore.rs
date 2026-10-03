@@ -1920,6 +1920,20 @@ impl RestoredInstallationBundle {
     pub(crate) fn later_manifest(&self) -> &PrivateCopyManifest {
         &self.result.later
     }
+    #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+    pub(crate) fn acceptance_retained_directory(&self) -> io::Result<String> {
+        let tree = self
+            .later
+            .tree
+            .as_ref()
+            .ok_or_else(|| blocked("retained bundle observation missing"))?;
+        let HeldRoot::Present(root) = tree.root() else {
+            return Err(blocked("retained bundle root absent"));
+        };
+        root.path()?
+            .into_string()
+            .map_err(|_| blocked("unrepresentable acceptance location"))
+    }
     pub(crate) fn return_reference(&self) -> BundleReturnReference {
         BundleReturnReference {
             attempt: self.result.attempt.clone(),

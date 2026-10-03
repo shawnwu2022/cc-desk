@@ -75,13 +75,28 @@ const REVIEWED: &[MeasuredPayload] = &[MeasuredPayload {
 // cannot enable an unfinished coordinator.
 const SUPPORTED_ROUNDTRIP_ENABLED: bool = false;
 
+// Called only after the measured selection matched. Unit tests and every
+// ordinary artifact keep the production denial, even when Cargo enables tests
+// and this opt-in feature together. Review grants no later begin authority.
+fn roundtrip_enabled(_selection: &SelectionMetadata) -> bool {
+    if SUPPORTED_ROUNDTRIP_ENABLED {
+        return true;
+    }
+    #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+    {
+        super::acceptance::require_source_target(_selection).is_ok()
+    }
+    #[cfg(not(all(feature = "history-roundtrip-acceptance", not(test))))]
+    false
+}
+
 pub(crate) fn review_block(
     selection: &SelectionMetadata,
 ) -> Option<super::manager::SwitchReviewBlock> {
     use super::manager::SwitchReviewBlock;
     if PayloadAdmission::for_selection(selection).is_err() {
         Some(SwitchReviewBlock::PayloadUnverified)
-    } else if !SUPPORTED_ROUNDTRIP_ENABLED {
+    } else if !roundtrip_enabled(selection) {
         Some(SwitchReviewBlock::CoordinatorUnavailable)
     } else {
         None
@@ -95,7 +110,7 @@ pub(crate) struct PayloadAdmission {
 impl PayloadAdmission {
     pub(crate) fn admit_begin(package: &VerifiedPackage) -> Result<Self, SafeError> {
         let admission = Self::admit(package)?;
-        if !SUPPORTED_ROUNDTRIP_ENABLED {
+        if !roundtrip_enabled(package.selection()) {
             return Err(error("HISTORY_COORDINATOR_UNAVAILABLE"));
         }
         Ok(admission)

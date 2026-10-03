@@ -112,6 +112,7 @@ mod version_history_source_document;
 
 mod version_history_begin_switch;
 mod version_history_download;
+mod version_history_roundtrip_contract;
 
 #[cfg(windows)]
 mod version_history_classes_alias;

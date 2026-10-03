@@ -61,6 +61,26 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use std::{collections::BTreeMap, ffi::OsStr, os::windows::ffi::OsStrExt, sync::Arc};
 
+#[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+use crate::version_history::acceptance::{self, AcceptanceScenario, AcceptanceStage};
+
+#[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+fn acceptance_manifest(
+    store: &JournalStore,
+    binding: &JournalBinding,
+    role: ManifestRole,
+) -> Result<serde_json::Value, SafeError> {
+    let inspection = store.inspect(binding)?;
+    let state = inspection
+        .last_valid
+        .as_ref()
+        .ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?;
+    let digest = state
+        .manifest(role)
+        .ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?;
+    serde_json::from_slice(&store.read_manifest(digest)?).map_err(blocked)
+}
+
 fn blocked(_: impl std::fmt::Debug) -> SafeError {
     error("HISTORY_RECOVERY_REQUIRED")
 }
@@ -419,6 +439,17 @@ impl SourceExecution {
             result.map_err(blocked)?;
         }
         self.phase(JournalPhase::SourceSealed)?;
+        #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+        acceptance::observe(
+            AcceptanceStage::SourceSealed,
+            &self.parts.binding,
+            self.parts.generation,
+            || {
+                Ok(
+                    serde_json::json!({"binding":self.parts.binding,"context":acceptance_manifest(&self.parts.store,&self.parts.binding,ManifestRole::SourceContext)?}),
+                )
+            },
+        );
         progress.publish(&mut self.parts.store, None, &[ManagerAction::Refresh])?;
         self.fresh = Some(
             FreshContextRoots::new(
@@ -470,6 +501,17 @@ impl SourceExecution {
             },
         )?;
         self.phase(JournalPhase::FreshReady)?;
+        #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+        acceptance::observe(
+            AcceptanceStage::FreshReady,
+            &self.parts.binding,
+            self.parts.generation,
+            || {
+                Ok(
+                    serde_json::json!({"binding":self.parts.binding,"context":acceptance_manifest(&self.parts.store,&self.parts.binding,ManifestRole::FreshTargetContext)?}),
+                )
+            },
+        );
         progress.publish(&mut self.parts.store, None, &[ManagerAction::Refresh])?;
         Ok(())
     }
@@ -614,6 +656,30 @@ impl SourceExecution {
         self.manifest = Some(manifest);
         self.parts.generation = generation;
         self.checkpoint()?;
+        #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+        acceptance::check_evidence_scope(Some(&self.exclusions));
+        #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+        acceptance::observe(
+            AcceptanceStage::M0,
+            &self.parts.binding,
+            self.parts.generation,
+            || {
+                let bundle = self
+                    .current_bundle
+                    .as_ref()
+                    .ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?
+                    .manifest();
+                Ok(
+                    serde_json::json!({"binding":self.parts.binding,"bundle":bundle,
+                "bundleLogicalDigest":bundle.logical_digest().map_err(blocked)?,
+                "context":self.manifest,
+                "registration":acceptance_manifest(&self.parts.store,&self.parts.binding,ManifestRole::Registration)?,
+                "shortcuts":acceptance_manifest(&self.parts.store,&self.parts.binding,ManifestRole::Shortcuts)?,
+                "dataRoot":self.parts.data.root().directory().path().map_err(blocked)?.to_string_lossy(),
+                "controlDirectory":self.parts.installation.root().directory().path().map_err(blocked)?.to_string_lossy()}),
+                )
+            },
+        );
         progress.publish(&mut self.parts.store, None, &[ManagerAction::Refresh])?;
         self.source_quarantine = Some(Arc::new(
             PrivateDirectory::create_new(
@@ -969,6 +1035,20 @@ fn request_unstarted_return(
     record_applied(store, generation, pending, proof.terminal_bytes())?;
     publish_checkpoint(installation, control, binding, store)?;
     command.verify(binding, store, *generation)?;
+    #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+    if kind == JobKind::Installer {
+        acceptance::observe(
+            AcceptanceStage::CancelledBeforeResume,
+            binding,
+            *generation,
+            || {
+                Ok(
+                    serde_json::json!({"binding":binding,"emptyOwnedJob":true,"resumeAttempted":false,
+                "terminal":serde_json::from_slice::<serde_json::Value>(proof.terminal_bytes()).map_err(blocked)?}),
+                )
+            },
+        );
+    }
     progress.publish(store, None, &[ManagerAction::Refresh])?;
     Ok(true)
 }
@@ -1105,6 +1185,35 @@ impl SourceExecution {
                 pending,
                 receipt.record_bytes().map_err(blocked)?,
             )?;
+
+            #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+            {
+                acceptance::observe(
+                    AcceptanceStage::InstallerSuspended,
+                    &self.parts.binding,
+                    self.parts.generation,
+                    || {
+                        Ok(serde_json::json!({"binding":self.parts.binding,
+                        "creation":serde_json::from_slice::<serde_json::Value>(receipt.record_bytes().map_err(blocked)?).map_err(blocked)?,
+                        "resumeAttempted":false}))
+                    },
+                );
+                if acceptance::scenario() == AcceptanceScenario::BeforeInstallerResume {
+                    acceptance::observe(
+                        AcceptanceStage::InjectedPreResumeFailure,
+                        &self.parts.binding,
+                        self.parts.generation,
+                        || {
+                            Ok(
+                                serde_json::json!({"binding":self.parts.binding,"resumeAttempted":false,"injection":"before-installer-resume"}),
+                            )
+                        },
+                    );
+                }
+                // The sole intentional failure is inside this already-owned
+                // outcome closure, after durable create and before resume intent.
+                acceptance::before_installer_resume()?;
+            }
             let resume = record_intent(
                 &mut self.parts.store,
                 &mut self.parts.generation,
@@ -1252,6 +1361,18 @@ impl SourceExecution {
             .verify_installed(target.tree(), &self.parts.companions)?
             .verify()?;
         self.applied(pending, target.manifest())?;
+        #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+        acceptance::observe(
+            AcceptanceStage::TargetVerified,
+            &self.parts.binding,
+            self.parts.generation,
+            || {
+                Ok(
+                    serde_json::json!({"binding":self.parts.binding,"bundle":target.manifest(),
+                "bundleLogicalDigest":target.manifest().logical_digest().map_err(blocked)?}),
+                )
+            },
+        );
         // No target bytes are edited after release. Historical launch reopens
         // the same actual executable identity and rechecks the measured bundle.
         let measured = target.manifest().tree.clone();
@@ -1372,6 +1493,17 @@ impl SourceExecution {
                 &self.parts.binding,
                 &mut self.parts.store,
             )?;
+            #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+            acceptance::observe(
+                AcceptanceStage::HistoricalLaunched,
+                &self.parts.binding,
+                self.parts.generation,
+                || {
+                    Ok(
+                        serde_json::json!({"binding":self.parts.binding,"creation":serde_json::from_slice::<serde_json::Value>(receipt.record_bytes().map_err(blocked)?).map_err(blocked)?,"resumeApplied":true}),
+                    )
+                },
+            );
             let mut confirmed = false;
             progress.publish(
                 &mut self.parts.store,
@@ -2024,6 +2156,12 @@ impl SourceExecution {
         self.parts.generation = generation;
         self.return_boundary = Some(Arc::new(boundary));
         self.return_roots = Some((desk, webview));
+        #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+        acceptance::check_evidence_scope(
+            self.return_attempt
+                .as_ref()
+                .map(|attempt| attempt.acceptance_exclusions()),
+        );
         self.checkpoint()?;
         progress.publish(&mut self.parts.store, None, &[ManagerAction::Refresh])?;
         self.later_quarantine = Some(Arc::new(
@@ -2094,6 +2232,18 @@ impl SourceExecution {
                 digest,
             },
         )?;
+        #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+        acceptance::observe(
+            AcceptanceStage::LaterCaptured,
+            &self.parts.binding,
+            self.parts.generation,
+            || {
+                Ok(serde_json::json!({"binding":self.parts.binding,
+                "retainedContext":serde_json::from_slice::<serde_json::Value>(&later_manifest).map_err(blocked)?,
+                "retainedContextLocations":self.later.as_ref().ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?.acceptance_retained_locations().map_err(blocked)?,
+                "laterContextDirectory":self.later_quarantine.as_ref().ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?.directory().path().map_err(blocked)?.to_string_lossy()}))
+            },
+        );
         self.bundle_preparation = Some(BundlePreparationAttempt::new(
             self.parts.original_bundle.clone(),
             self.return_boundary
@@ -2235,6 +2385,60 @@ impl SourceExecution {
         // Release startup only after the exact final marker and all actual
         // restored state were checked together under the original lease.
         self.verify_restored()?;
+        #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+        acceptance::observe(
+            AcceptanceStage::FinalRestored,
+            &self.parts.binding,
+            self.parts.generation,
+            || {
+                let bundle = self
+                    .restored_bundle
+                    .as_ref()
+                    .ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?;
+                let context = self
+                    .restored_context
+                    .as_ref()
+                    .ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?;
+                let inspection = self.parts.store.inspect(&self.parts.binding)?;
+                let state = inspection
+                    .last_valid
+                    .as_ref()
+                    .ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?;
+                let marker = MarkerStore::open_existing(
+                    self.parts.installation.root().clone(),
+                    &self.parts.control,
+                )
+                .map_err(blocked)?
+                .ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?;
+                let marker_bytes = marker.current().map_err(blocked)?;
+                if inspection.blocked
+                    || state.phase() != JournalPhase::Restored
+                    || state.requires_reconciliation()
+                    || state.generation() != self.parts.generation
+                    || marker_bytes != terminal.encode()?
+                {
+                    return Err(error("HISTORY_ACCEPTANCE_REPORT_MISSING"));
+                }
+                Ok(
+                    serde_json::json!({"binding":self.parts.binding,"phase":state.phase(),"pending":false,
+                "marker":serde_json::from_slice::<serde_json::Value>(marker_bytes).map_err(blocked)?,
+                "markerLogPath":std::path::PathBuf::from(self.parts.installation.root().directory().path().map_err(blocked)?).join("active-context.log").to_string_lossy(),
+                "journalLogPath":std::path::PathBuf::from(self.parts.installation.root().directory().path().map_err(blocked)?).join(format!("journal-{}.log",self.parts.binding.transaction_id)).to_string_lossy(),
+                "journalHead":inspection.head().ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?,
+                "bundle":bundle.manifest(),"sourceBundle":bundle.source_manifest(),
+                "bundleLogicalDigest":bundle.source_manifest().logical_digest().map_err(blocked)?,
+                "context":context.original_snapshot(),
+                "registration":acceptance_manifest(&self.parts.store,&self.parts.binding,ManifestRole::Registration)?,
+                "shortcuts":acceptance_manifest(&self.parts.store,&self.parts.binding,ManifestRole::Shortcuts)?,
+                "retainedContext":acceptance_manifest(&self.parts.store,&self.parts.binding,ManifestRole::RetainedTargetContext)?,
+                "retainedBundle":bundle.later_manifest(),
+                    "retainedBundleDirectory":bundle.acceptance_retained_directory().map_err(blocked)?,
+                    "retainedContextLocations":context.acceptance_retained_locations().map_err(blocked)?,
+                "dataRoot":self.parts.data.root().directory().path().map_err(blocked)?.to_string_lossy(),
+                "laterContextDirectory":self.later_quarantine.as_ref().ok_or_else(|| error("HISTORY_ACCEPTANCE_REPORT_MISSING"))?.directory().path().map_err(blocked)?.to_string_lossy()}),
+                )
+            },
+        );
         progress.publish(&mut self.parts.store, None, &[ManagerAction::Refresh])
     }
     fn verify_restored(&mut self) -> Result<(), SafeError> {

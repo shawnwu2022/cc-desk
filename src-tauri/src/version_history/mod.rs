@@ -3,6 +3,24 @@
 //! after network IO. Tokens alone do not authorize a document or installation.
 #![allow(dead_code)] // Authenticated manager/ordinary UI wiring is staged separately.
 
+#[cfg(all(feature = "history-roundtrip-acceptance", not(debug_assertions)))]
+compile_error!("roundtrip acceptance requires debug assertions and cannot ship in release builds");
+#[cfg(all(
+    feature = "history-roundtrip-acceptance",
+    not(all(windows, target_arch = "x86_64"))
+))]
+compile_error!("roundtrip acceptance is restricted to Windows x64");
+#[cfg(any(
+    test,
+    all(
+        feature = "history-roundtrip-acceptance",
+        windows,
+        target_arch = "x86_64",
+        debug_assertions
+    )
+))]
+pub(crate) mod acceptance;
+
 pub(crate) mod catalog;
 pub(crate) mod commands;
 pub(crate) mod compatibility;

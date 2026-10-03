@@ -140,6 +140,13 @@ fn prepare_and_handoff(
     inventory
         .require_disjoint(&[&udf, &installed, &control_root])
         .map_err(blocked)?;
+    #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
+    {
+        let evidence = crate::version_history::acceptance::evidence_observation()?;
+        inventory
+            .require_disjoint(&[&udf, &installed, &control_root, &evidence])
+            .map_err(blocked)?;
+    }
     let registration = HeldRegistrationState::capture(source.installation()).map_err(blocked)?;
     let shortcuts = HeldProductShortcuts::capture_current_user().map_err(blocked)?;
     let space = SpaceAdmission::source_handoff(
