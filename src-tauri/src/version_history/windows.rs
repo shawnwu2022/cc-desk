@@ -6,6 +6,10 @@
 #[cfg(windows)]
 pub(crate) mod context;
 #[cfg(windows)]
+pub(crate) mod coordinator;
+#[cfg(windows)]
+pub(crate) mod coordinator_evidence;
+#[cfg(windows)]
 pub(crate) mod durability;
 #[cfg(windows)]
 pub(crate) mod fence;
@@ -14,15 +18,47 @@ pub(crate) mod files;
 #[cfg(windows)]
 pub(crate) mod lease;
 #[cfg(windows)]
+pub(crate) mod manager_bundle;
+#[cfg(windows)]
+pub(crate) mod manager_handoff;
+#[cfg(windows)]
+pub(crate) mod manager_process;
+#[cfg(windows)]
+pub(crate) mod manager_ui;
+#[cfg(windows)]
 pub(crate) mod package;
+#[cfg(windows)]
+pub(crate) mod pre_context_abort;
 #[cfg(windows)]
 pub(crate) mod process;
 #[cfg(windows)]
+pub(crate) mod recovery_space;
+#[cfg(windows)]
+pub(crate) mod reentry;
+#[cfg(windows)]
+pub(crate) mod registration_state;
+#[cfg(windows)]
 pub(crate) mod registry;
+#[cfg(windows)]
+pub(crate) mod return_boundary;
 #[cfg(windows)]
 pub(crate) mod scope;
 #[cfg(windows)]
 pub(crate) mod security;
+#[cfg(windows)]
+pub(crate) mod shortcuts;
+#[cfg(windows)]
+pub(crate) mod source_begin;
+#[cfg(windows)]
+pub(crate) mod source_boundary;
+#[cfg(windows)]
+pub(crate) mod source_lifecycle;
+#[cfg(windows)]
+pub(crate) mod source_session;
+#[cfg(windows)]
+pub(crate) mod space;
+#[cfg(windows)]
+pub(crate) mod startup;
 #[cfg(windows)]
 pub(crate) mod webview;
 
@@ -56,29 +92,3 @@ unsafe fn own(value: HANDLE) -> OwnedHandle {
     // SAFETY: callers only transfer successfully created, non-pseudo handles.
     unsafe { OwnedHandle::from_raw_handle(value.0) }
 }
-
-#[cfg(windows)]
-pub(crate) mod manager_bundle;
-#[cfg(windows)]
-pub(crate) mod manager_handoff;
-#[cfg(windows)]
-pub(crate) mod manager_process;
-#[cfg(windows)]
-pub(crate) mod manager_ui;
-#[cfg(windows)]
-pub(crate) mod source_lifecycle;
-#[cfg(windows)]
-pub(crate) mod startup;
-
-#[cfg(windows)]
-pub(crate) mod coordinator_evidence;
-#[cfg(windows)]
-pub(crate) mod pre_context_abort;
-#[cfg(windows)]
-pub(crate) mod registration_state;
-#[cfg(windows)]
-pub(crate) mod shortcuts;
-#[cfg(windows)]
-pub(crate) mod source_begin;
-#[cfg(windows)]
-pub(crate) mod space;

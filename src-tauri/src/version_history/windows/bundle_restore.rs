@@ -6,7 +6,7 @@ use super::super::{
     coordinator_evidence::{CurrentImageEvidence, ReturnBoundary},
     manager_bundle::{ManagerRecord, ManagerRecordReference},
     scope::RegisteredInstallation,
-    security::ValidatedDescriptor,
+    security::{restored_file_descriptor_matches, ValidatedDescriptor},
 };
 use super::*;
 use crate::version_history::journal::{FilesystemOperation, JournalPhase, ManifestRole};
@@ -661,33 +661,46 @@ impl MovedObject {
     }
 }
 
-/// One admitted return attempt. An uncertain effect permanently consumes this
-/// attempt; its recorded exact selectors remain inspectable after restart.
-pub(crate) struct BundleRestoration {
+/// Owns every preparation observation and partial private copy before the
+/// first durable bundle-start intent. Failure consumes this attempt but leaves
+/// its native custody with the coordinator; no missing handle implies rollback.
+pub(crate) struct BundlePreparationAttempt {
     original: Arc<RetainedInstallationBundle>,
     boundary: Arc<ReturnBoundary>,
-    later: PrivateTreeCopy,
     current: Option<HeldTree>,
-    plan_record: ManagerRecord,
-    plan: ReturnPlan,
-    quarantine: Option<Arc<PrivateDirectory>>,
-    moved: BTreeMap<String, MovedObject>,
-    writes: BTreeMap<String, File>,
-    directories: BTreeMap<String, Arc<Directory>>,
+    root_write: Option<File>,
+    later: Option<PrivateTreeCopy>,
+    sealing_root: Option<HeldRoot>,
+    prepared: Option<BundleRestoration>,
     attempted: bool,
-    history: BundleHistory,
-    admitted_generation: Option<u64>,
 }
-impl BundleRestoration {
-    /// The return factory has reconciled the exact installer, historical App,
-    /// browser and owned children and minted fresh lease/quiescence evidence.
-    /// A source SnapshotBoundary cannot be substituted here.
-    pub(crate) fn prepare(
+impl BundlePreparationAttempt {
+    pub(crate) fn new(
         original: Arc<RetainedInstallationBundle>,
         boundary: Arc<ReturnBoundary>,
+    ) -> Self {
+        Self {
+            original,
+            boundary,
+            current: None,
+            root_write: None,
+            later: None,
+            sealing_root: None,
+            prepared: None,
+            attempted: false,
+        }
+    }
+    pub(crate) fn prepare(
+        &mut self,
         user: &CurrentUser,
         journal: &mut ContextJournal<'_>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<BundleRestoration> {
+        if self.attempted {
+            return Err(blocked("bundle preparation requires reconciliation"));
+        }
+        self.attempted = true;
+        let original = &self.original;
+        let boundary = &self.boundary;
         original.verify(user)?;
         original.verify_journal(journal)?;
         safe(boundary.verify_live())?;
@@ -721,11 +734,12 @@ impl BundleRestoration {
                 None
             }
         };
-        let current = HeldTree::admit(
+        self.current = Some(HeldTree::admit(
             HeldRoot::Present(original.directory.clone()),
             &mut Budget::new(SnapshotLimits::default())?,
             fenced,
-        )?;
+        )?);
+        let current = self.current.as_ref().expect("retained current bundle");
         if matches!(boundary.current_image(), CurrentImageEvidence::Absent(_))
             && current.manifest.entries.iter().any(|entry| {
                 entry
@@ -736,10 +750,10 @@ impl BundleRestoration {
         {
             return Err(blocked("current executable absence changed"));
         }
-        verify_bundle_confidential(&current, user)?;
+        verify_bundle_confidential(current, user)?;
         require_space(original.data.directory(), bytes_in(&current.manifest)?)?;
         require_space(&original.directory, bytes_in(&original.saved.source.tree)?)?;
-        let root_write = open_root_permissions(&original.directory)?;
+        self.root_write = Some(open_root_permissions(&original.directory)?);
         let seed = BundleSeed {
             schema: 1,
             transaction: journal.binding.transaction_id.clone(),
@@ -749,9 +763,9 @@ impl BundleRestoration {
             current: current.manifest.clone(),
         };
         let evidence = BundleStartEvidence {
-            original: &original,
-            boundary: &boundary,
-            current: &current,
+            original,
+            boundary,
+            current,
             seed: &seed,
             user,
             root: &journal.root,
@@ -760,9 +774,34 @@ impl BundleRestoration {
         };
         let (generation, digest) = safe(journal.store.admit_bundle_start(&evidence))?;
         journal.generation = generation;
-        let mut later = PrivateTreeCopy::new(original.data.clone(), component(LATER_COPY)?);
-        later.copy_from_plan(&current, user, journal, Some((generation, digest)))?;
-        let later = seal_copy(later, user)?;
+        self.later = Some(PrivateTreeCopy::new(
+            original.data.clone(),
+            component(LATER_COPY)?,
+        ));
+        let later = self.later.as_mut().expect("retained partial bundle copy");
+        later.copy_from_plan(current, user, journal, Some((generation, digest)))?;
+        let expected = later.manifest()?.clone();
+        later.verify(user)?;
+        // Writable descendants must be closed for read-only admission, but the
+        // actual private root and incomplete copy owner remain retained.
+        self.sealing_root = Some(
+            later
+                .tree
+                .as_ref()
+                .ok_or_else(|| blocked("missing copy tree"))?
+                .root
+                .clone(),
+        );
+        drop(later.tree.take());
+        let sealed = PrivateTreeCopy::reopen(
+            later.parent.clone(),
+            later.name.clone(),
+            expected,
+            user,
+            SnapshotLimits::default(),
+        )?;
+        *later = sealed;
+        self.sealing_root = None;
         current.verify()?;
         safe(boundary.verify_current_image())?;
         let plan = ReturnPlan {
@@ -782,13 +821,16 @@ impl BundleRestoration {
         };
         let plan_record = ManagerRecord::create(original.data.clone(), RETURN_PLAN, &plan, user)?;
         let mut writes = BTreeMap::new();
-        writes.insert(String::new(), root_write);
-        let result = Self {
+        writes.insert(
+            String::new(),
+            self.root_write.take().expect("retained root permissions"),
+        );
+        self.prepared = Some(BundleRestoration {
             directories: BTreeMap::from([(String::new(), original.directory.clone())]),
-            original,
-            boundary,
-            later,
-            current: Some(current),
+            original: self.original.clone(),
+            boundary: self.boundary.clone(),
+            later: self.later.take().expect("sealed later copy"),
+            current: self.current.take(),
             plan_record,
             plan,
             quarantine: None,
@@ -797,9 +839,49 @@ impl BundleRestoration {
             attempted: false,
             history: BundleHistory::default(),
             admitted_generation: None,
-        };
-        result.verify_dependencies(user, journal)?;
-        Ok(result)
+            pending_readback: None,
+            pending_result_record: None,
+            pending_restored: None,
+        });
+        self.prepared
+            .as_ref()
+            .expect("retained prepared bundle")
+            .verify_dependencies(user, journal)?;
+        Ok(self.prepared.take().expect("verified prepared bundle"))
+    }
+}
+
+/// One admitted return attempt. An uncertain effect permanently consumes this
+/// attempt; its recorded exact selectors remain inspectable after restart.
+pub(crate) struct BundleRestoration {
+    original: Arc<RetainedInstallationBundle>,
+    boundary: Arc<ReturnBoundary>,
+    later: PrivateTreeCopy,
+    current: Option<HeldTree>,
+    plan_record: ManagerRecord,
+    plan: ReturnPlan,
+    quarantine: Option<Arc<PrivateDirectory>>,
+    moved: BTreeMap<String, MovedObject>,
+    writes: BTreeMap<String, File>,
+    directories: BTreeMap<String, Arc<Directory>>,
+    attempted: bool,
+    history: BundleHistory,
+    admitted_generation: Option<u64>,
+    pending_readback: Option<HeldTree>,
+    pending_result_record: Option<ManagerRecord>,
+    pending_restored: Option<RestoredInstallationBundle>,
+}
+impl BundleRestoration {
+    /// The return factory has reconciled the exact installer, historical App,
+    /// browser and owned children and minted fresh lease/quiescence evidence.
+    /// A source SnapshotBoundary cannot be substituted here.
+    pub(crate) fn prepare(
+        original: Arc<RetainedInstallationBundle>,
+        boundary: Arc<ReturnBoundary>,
+        user: &CurrentUser,
+        journal: &mut ContextJournal<'_>,
+    ) -> io::Result<Self> {
+        BundlePreparationAttempt::new(original, boundary).prepare(user, journal)
     }
     pub(crate) fn plan_reference(&self) -> &ManagerRecordReference {
         self.plan_record.reference()
@@ -926,11 +1008,15 @@ impl BundleRestoration {
         self.writes.clear();
         self.directories.clear();
         bundle_fault(BundleFault::BeforeReadmission)?;
-        let held = HeldTree::admit(
+        self.pending_readback = Some(HeldTree::admit(
             HeldRoot::Present(self.original.directory.clone()),
             &mut Budget::new(SnapshotLimits::default())?,
             None,
-        )?;
+        )?);
+        let held = self
+            .pending_readback
+            .as_ref()
+            .expect("retained restored readback");
         verify_logical_restore(&self.original.saved.source.tree, &held.manifest)?;
         self.verify_dependencies(user, journal)?;
         let before = BundleEffectBefore {
@@ -964,40 +1050,58 @@ impl BundleRestoration {
                 .identity()
                 .clone(),
         };
-        let record = ManagerRecord::create(
+        self.pending_result_record = Some(ManagerRecord::create(
             self.original.data.clone(),
             &self.plan.attempt.name(RETURN_RESULT)?,
             &result,
             user,
-        )?;
+        )?);
+        let record = self
+            .pending_result_record
+            .as_ref()
+            .expect("retained restored record");
         bundle_fault(BundleFault::BeforeFinalReceipt)?;
         journal.applied(pending, &(record.reference(), &result))?;
         self.verify_dependencies(user, journal)?;
         held.verify()?;
+        // Finish all fallible readmission before transferring any actual
+        // restored or evacuated owner out of the retained executor.
+        let later = PrivateTreeCopy::reopen(
+            self.original.data.clone(),
+            component(&self.plan.attempt.name(LATER_COPY)?)?,
+            self.plan.later_copy.clone(),
+            user,
+            SnapshotLimits::default(),
+        )?;
+        let quarantine = self
+            .quarantine
+            .clone()
+            .ok_or_else(|| blocked("later objects missing"))?;
         let restored = RestoredInstallationBundle {
             original: self.original.clone(),
             boundary: self.boundary.clone(),
-            held,
-            later: PrivateTreeCopy::reopen(
-                self.original.data.clone(),
-                component(&self.plan.attempt.name(LATER_COPY)?)?,
-                self.plan.later_copy.clone(),
-                user,
-                SnapshotLimits::default(),
-            )?,
-            quarantine: self
-                .quarantine
-                .clone()
-                .ok_or_else(|| blocked("later objects missing"))?,
+            held: self
+                .pending_readback
+                .take()
+                .expect("retained restored readback"),
+            later,
+            quarantine,
             moved: std::mem::take(&mut self.moved),
             history: std::mem::take(&mut self.history),
-            record,
+            record: self
+                .pending_result_record
+                .take()
+                .expect("retained restored record"),
             result,
         };
-        restored.verify(user)?;
+        self.pending_restored = Some(restored);
+        self.pending_restored
+            .as_ref()
+            .expect("retained final bundle")
+            .verify(user)?;
         // The durable pending aggregate forbids replay if record publication
         // or its journal receipt was interrupted.
-        Ok(restored)
+        Ok(self.pending_restored.take().expect("verified final bundle"))
     }
 
     fn create_quarantine(
@@ -1478,7 +1582,7 @@ impl BundleRestoration {
         .map_err(win_error)?;
         bundle_fault(BundleFault::AfterPermissions)?;
         let after = entry_metadata(path, handle(file))?;
-        if !matches!(&after.permissions, PermissionRecord::Windows { descriptor: actual, .. } if actual == descriptor)
+        if !matches!(&after.permissions, PermissionRecord::Windows { descriptor: actual, .. } if restored_file_descriptor_matches(descriptor, actual))
         {
             #[cfg(test)]
             if let PermissionRecord::Windows {
@@ -1515,7 +1619,7 @@ impl BundleRestoration {
             unsafe { FlushFileBuffers(handle(file)) }.map_err(win_error)?;
         }
         let actual = entry_metadata(path, handle(file))?;
-        if actual.permissions != entry.metadata.permissions {
+        if !restored_permissions_match(&entry.metadata.permissions, &actual.permissions) {
             return Err(blocked("restored attributes differ"));
         }
         journal.applied(pending, &actual)
@@ -1552,6 +1656,27 @@ fn raw_digest(file: &File) -> io::Result<String> {
     }
     Ok(format!("{:x}", hash.finalize()))
 }
+/// Restore verification has a narrower, directional Windows contract than the
+/// raw PermissionRecord equality used for capture, custody and retained copies.
+fn restored_permissions_match(expected: &PermissionRecord, actual: &PermissionRecord) -> bool {
+    match (expected, actual) {
+        (
+            PermissionRecord::Windows {
+                descriptor: expected,
+                attributes: expected_attributes,
+            },
+            PermissionRecord::Windows {
+                descriptor: actual,
+                attributes: actual_attributes,
+            },
+        ) => {
+            expected_attributes == actual_attributes
+                && restored_file_descriptor_matches(expected, actual)
+        }
+        _ => false,
+    }
+}
+
 fn verify_logical_restore(original: &TreeManifest, actual: &TreeManifest) -> io::Result<()> {
     if original.entries.len() != actual.entries.len() {
         return Err(blocked("restored installation namespace differs"));
@@ -1561,7 +1686,10 @@ fn verify_logical_restore(original: &TreeManifest, actual: &TreeManifest) -> io:
             || expected.metadata.kind != observed.metadata.kind
             || expected.metadata.size != observed.metadata.size
             || expected.metadata.link_count != observed.metadata.link_count
-            || expected.metadata.permissions != observed.metadata.permissions
+            || !restored_permissions_match(
+                &expected.metadata.permissions,
+                &observed.metadata.permissions,
+            )
             || expected.sha256 != observed.sha256
         {
             return Err(blocked("restored installation logical contract differs"));
@@ -2044,6 +2172,9 @@ impl InterruptedInstallationReturn {
             attempted: false,
             history: self.history,
             admitted_generation: Some(generation),
+            pending_readback: None,
+            pending_result_record: None,
+            pending_restored: None,
         };
         result.verify_dependencies(user, journal)?;
         Ok(result)
@@ -2436,3 +2567,7 @@ fn bundle_fault(_fault: BundleFault) -> io::Result<()> {
 #[path = "../../tests/version_history_bundle_restore_windows.rs"]
 #[allow(non_snake_case)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/version_history_bundle_preparation_windows.rs"]
+mod preparation_tests;

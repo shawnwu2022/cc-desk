@@ -11,7 +11,7 @@ use super::{
         MANAGER_BASENAME,
     },
     own,
-    package::RetainedPackage,
+    package::{LocalPackageInspection, RetainedPackage},
     process::{ExactProcess, ProcessIdentity},
     scope::RegisteredInstallation,
     security::CurrentUser,
@@ -30,14 +30,25 @@ use std::{
     sync::Arc,
 };
 use windows::Win32::{
-    Foundation::{HANDLE, WAIT_OBJECT_0},
+    Foundation::{
+        GetLastError, SetLastError, ERROR_ALREADY_EXISTS, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS,
+        HANDLE, WAIT_OBJECT_0,
+    },
     Storage::FileSystem::{GetFinalPathNameByHandleW, VOLUME_NAME_DOS},
     System::{
-        JobObjects::IsProcessInJob,
+        JobObjects::{
+            CreateJobObjectW, IsProcessInJob, JobObjectBasicAccountingInformation,
+            JobObjectExtendedLimitInformation, OpenJobObjectW, QueryInformationJobObject,
+            SetInformationJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        },
         Threading::{
-            CreateProcessW, GetCurrentProcess, GetCurrentProcessId, ResumeThread, TerminateProcess,
-            WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, CREATE_SUSPENDED,
-            CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTUPINFOW,
+            CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess, GetCurrentProcessId,
+            InitializeProcThreadAttributeList, ResumeThread, TerminateProcess,
+            UpdateProcThreadAttribute, WaitForSingleObject, CREATE_SUSPENDED,
+            CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
+            PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_JOB_LIST, STARTUPINFOEXW,
         },
     },
 };
@@ -46,6 +57,7 @@ use windows_core::{BOOL, PCWSTR, PWSTR};
 const LAUNCH: &str = "manager-launch.json";
 const PROCESS: &str = "manager-process.json";
 const RESUME: &str = "manager-resume.json";
+const DISARM: &str = "manager-disarm.json";
 const READY: &str = "manager-ready.json";
 
 // Launch spelling comes only from a retained object. Context paths use volume
@@ -69,7 +81,7 @@ pub(super) fn launch_path(file: HANDLE) -> io::Result<OsString> {
     Ok(OsString::from_wide(&path))
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LaunchBinding {
     schema: u32,
@@ -80,6 +92,7 @@ struct LaunchBinding {
     package_digest: String,
     source: ProcessIdentity,
     command_digest: String,
+    job: ManagerJobIdentity,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,12 +104,24 @@ struct ProcessBinding {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DisarmBinding {
+    schema: u32,
+    transaction: String,
+    data_root: FileIdentity,
+    launch: ManagerRecordReference,
+    process: ManagerRecordReference,
+    job: ManagerJobIdentity,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ResumeBinding {
     schema: u32,
     transaction: String,
     data_root: FileIdentity,
     launch: ManagerRecordReference,
     process: ManagerRecordReference,
+    job: ManagerJobIdentity,
+    disarm: ManagerRecordReference,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -109,6 +134,64 @@ struct ReadyBinding {
     source: ProcessIdentity,
     bundle: ManagerRecordReference,
     package_digest: String,
+}
+
+fn verify_resume_chain(
+    transaction: &str,
+    data_root: &PrivateDirectory,
+    resume: &ResumeBinding,
+    launch: &LaunchBinding,
+    process: &ProcessBinding,
+    disarm: &DisarmBinding,
+    user: &CurrentUser,
+) -> io::Result<()> {
+    launch.job.validate(transaction, user)?;
+    verify_resume_record(
+        transaction,
+        data_root,
+        resume,
+        launch,
+        process,
+        disarm,
+        user,
+    )
+}
+/// Structural observations only. A historical logon session can differ after a
+/// restart; this helper neither opens the old job nor manufactures terminality.
+fn verify_resume_record(
+    transaction: &str,
+    data_root: &PrivateDirectory,
+    resume: &ResumeBinding,
+    launch: &LaunchBinding,
+    process: &ProcessBinding,
+    disarm: &DisarmBinding,
+    user: &CurrentUser,
+) -> io::Result<()> {
+    launch.source.validate()?;
+    process.process.validate()?;
+    launch.job.validate_record(transaction, user)?;
+    if resume.schema != 2
+        || launch.schema != 2
+        || process.schema != 2
+        || disarm.schema != 1
+        || resume.transaction != transaction
+        || launch.transaction != transaction
+        || process.transaction != transaction
+        || disarm.transaction != transaction
+        || &resume.data_root != data_root.directory().identity()
+        || launch.data_root != resume.data_root
+        || disarm.data_root != resume.data_root
+        || process.launch != resume.launch
+        || disarm.launch != resume.launch
+        || disarm.process != resume.process
+        || disarm.job != launch.job
+        || resume.job != launch.job
+        || launch.source.session() != launch.job.session
+        || process.process.session() != launch.job.session
+    {
+        return Err(blocked("manager actual lifetime receipt chain differs"));
+    }
+    Ok(())
 }
 
 fn manager_command(image: &OsStr, transaction: &str) -> io::Result<String> {
@@ -149,6 +232,372 @@ fn in_job(process: HANDLE) -> io::Result<bool> {
     unsafe { IsProcessInJob(process, None, &mut assigned) }.map_err(win_error)?;
     Ok(assigned.as_bool())
 }
+/// Supported initial sources are outside every job. This is also called before
+/// transaction preparation by the coordinator; it never alters launcher policy.
+pub(crate) fn require_job_free_source() -> io::Result<()> {
+    if in_job(unsafe { GetCurrentProcess() })? {
+        return Err(blocked("source host is job-contained"));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagerJobIdentity {
+    name: String,
+    nonce: String,
+    transaction: String,
+    owner: String,
+    session: u32,
+}
+impl ManagerJobIdentity {
+    fn validate(&self, transaction: &str, user: &CurrentUser) -> io::Result<()> {
+        self.validate_record(transaction, user)?;
+        if self.session != super::process::session_id(unsafe { GetCurrentProcessId() })? {
+            return Err(blocked("manager job current session differs"));
+        }
+        Ok(())
+    }
+    fn validate_record(&self, transaction: &str, user: &CurrentUser) -> io::Result<()> {
+        valid_transaction(transaction)?;
+        let nonce =
+            uuid::Uuid::parse_str(&self.nonce).map_err(|_| blocked("invalid manager job nonce"))?;
+        if nonce.to_string() != self.nonce
+            || nonce.get_version_num() != 4
+            || self.transaction != transaction
+            || self.owner != user.sid_text()
+            || self.name != format!("Local\\CCDeskManager-{}-{}", self.owner, self.nonce)
+        {
+            return Err(blocked("manager job owner or session differs"));
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManagerJobPhase {
+    ArmedPreparation,
+    ManagerLifetime,
+}
+fn verify_job_phase(job: HANDLE, phase: ManagerJobPhase) -> io::Result<()> {
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    unsafe {
+        QueryInformationJobObject(
+            Some(job),
+            JobObjectExtendedLimitInformation,
+            (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            None,
+        )
+    }
+    .map_err(win_error)?;
+    let expected = match phase {
+        ManagerJobPhase::ArmedPreparation => JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        ManagerJobPhase::ManagerLifetime => JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+    };
+    if limits.BasicLimitInformation.LimitFlags != expected {
+        return Err(blocked("manager job phase differs"));
+    }
+    Ok(())
+}
+fn job_members(job: HANDLE) -> io::Result<u32> {
+    let mut information = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+    unsafe {
+        QueryInformationJobObject(
+            Some(job),
+            JobObjectBasicAccountingInformation,
+            (&mut information as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+            size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+            None,
+        )
+    }
+    .map_err(win_error)?;
+    Ok(information.ActiveProcesses)
+}
+
+// The attribute's value points into stable owned storage, kept with the job
+// through child identity inspection and durable publication. It is not a handle
+// inheritance list: the child receives no job handle.
+struct ManagerJobAttributes {
+    _storage: Vec<usize>,
+    _jobs: Box<[HANDLE; 1]>,
+    list: LPPROC_THREAD_ATTRIBUTE_LIST,
+}
+impl ManagerJobAttributes {
+    fn new(job: HANDLE) -> io::Result<Self> {
+        let mut size = 0;
+        let sizing = unsafe { InitializeProcThreadAttributeList(None, 1, None, &mut size) };
+        if sizing.is_ok()
+            || sizing.err().map(|error| error.code())
+                != Some(ERROR_INSUFFICIENT_BUFFER.to_hresult())
+            || size == 0
+            || size > 65536
+        {
+            return Err(blocked("manager process attributes unsupported"));
+        }
+        let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
+        let list = LPPROC_THREAD_ATTRIBUTE_LIST(storage.as_mut_ptr().cast());
+        unsafe { InitializeProcThreadAttributeList(Some(list), 1, None, &mut size) }
+            .map_err(win_error)?;
+        let result = Self {
+            _storage: storage,
+            _jobs: Box::new([job]),
+            list,
+        };
+        unsafe {
+            UpdateProcThreadAttribute(
+                result.list,
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                Some(result._jobs.as_ptr().cast()),
+                size_of::<HANDLE>(),
+                None,
+                None,
+            )
+        }
+        .map_err(win_error)?;
+        Ok(result)
+    }
+}
+impl Drop for ManagerJobAttributes {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteProcThreadAttributeList(self.list);
+        }
+    }
+}
+struct ManagerPreparationJob {
+    attributes: ManagerJobAttributes,
+    handle: OwnedHandle,
+    identity: ManagerJobIdentity,
+    phase: Option<ManagerJobPhase>,
+}
+impl ManagerPreparationJob {
+    fn create(transaction: &str, user: &CurrentUser) -> io::Result<Self> {
+        require_job_free_source()?;
+        valid_transaction(transaction)?;
+        let nonce = uuid::Uuid::new_v4().to_string();
+        Self::new_with_identity(
+            ManagerJobIdentity {
+                name: format!("Local\\CCDeskManager-{}-{nonce}", user.sid_text()),
+                nonce,
+                transaction: transaction.into(),
+                owner: user.sid_text().into(),
+                session: super::process::session_id(unsafe { GetCurrentProcessId() })?,
+            },
+            user,
+        )
+    }
+    fn new_with_identity(identity: ManagerJobIdentity, user: &CurrentUser) -> io::Result<Self> {
+        require_job_free_source()?;
+        identity.validate(&identity.transaction, user)?;
+        let descriptor = user.job_descriptor()?;
+        let attributes = descriptor.attributes();
+        let name: Vec<_> = identity.name.encode_utf16().chain(Some(0)).collect();
+        let owned = unsafe {
+            SetLastError(ERROR_SUCCESS);
+            let raw =
+                CreateJobObjectW(Some(&attributes), PCWSTR(name.as_ptr())).map_err(win_error)?;
+            let last = GetLastError();
+            let owned = own(raw);
+            // An existing object is never configured, even if its ACL matches.
+            if last == ERROR_ALREADY_EXISTS {
+                return Err(blocked("manager job name collision"));
+            }
+            owned
+        };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        unsafe {
+            SetInformationJobObject(
+                handle(&owned),
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        }
+        .map_err(win_error)?;
+        user.verify_private_job(handle(&owned))?;
+        verify_job_phase(handle(&owned), ManagerJobPhase::ArmedPreparation)?;
+        let result = Self {
+            attributes: ManagerJobAttributes::new(handle(&owned))?,
+            handle: owned,
+            identity,
+            phase: Some(ManagerJobPhase::ArmedPreparation),
+        };
+        #[cfg(test)]
+        tests::manager_checkpoint("job-armed", None)?;
+        Ok(result)
+    }
+    fn verify(&self, user: &CurrentUser) -> io::Result<()> {
+        self.identity.validate(&self.identity.transaction, user)?;
+        user.verify_private_job(handle(&self.handle))?;
+        verify_job_phase(
+            handle(&self.handle),
+            self.phase
+                .ok_or_else(|| blocked("manager job phase unknown"))?,
+        )
+    }
+    fn contains(&self, process: &ExactProcess, user: &CurrentUser) -> io::Result<()> {
+        self.verify(user)?;
+        if !process.is_in_job(Some(handle(&self.handle)))? {
+            return Err(blocked("manager is not in its recorded private job"));
+        }
+        Ok(())
+    }
+    fn prepare_lifetime(
+        &mut self,
+        process: &ExactProcess,
+        pending: &mut NeverResumed,
+        root: Arc<PrivateDirectory>,
+        records: (&LaunchBinding, &ManagerRecord, &ManagerRecord),
+        user: &CurrentUser,
+    ) -> io::Result<(ManagerRecord, ManagerRecord)> {
+        let (launch, launch_record, process_record) = records;
+        root.verify(user)?;
+        launch_record.verify(user)?;
+        process_record.verify(user)?;
+        self.contains(process, user)?;
+        running(process)?;
+        let bound_launch: LaunchBinding = launch_record.decode(user)?;
+        let bound_process: ProcessBinding = process_record.decode(user)?;
+        if self.phase != Some(ManagerJobPhase::ArmedPreparation)
+            || pending.0.is_none()
+            || launch.schema != 2
+            || bound_process.schema != 2
+            || bound_process.transaction != launch.transaction
+            || self.identity != launch.job
+            || bound_process.launch != *launch_record.reference()
+            || bound_process.process != *process.identity()
+            || bound_launch != *launch
+            || launch.data_root != *root.directory().identity()
+        {
+            return Err(blocked(
+                "manager disarm lacks its exact durable child identity",
+            ));
+        }
+        #[cfg(test)]
+        tests::manager_checkpoint("identity-persisted", None)?;
+        let disarm = ManagerRecord::create(
+            root.clone(),
+            DISARM,
+            &DisarmBinding {
+                schema: 1,
+                transaction: launch.transaction.clone(),
+                data_root: launch.data_root.clone(),
+                launch: launch_record.reference().clone(),
+                process: process_record.reference().clone(),
+                job: self.identity.clone(),
+            },
+            user,
+        )?;
+        // All ownership and the one-attempt disarm/resume intent are durable.
+        // No explicit termination is safe after attempting to change lifetime.
+        drop(pending.0.take());
+        #[cfg(test)]
+        tests::manager_checkpoint("intent-persisted", None)?;
+        self.disarm()?;
+        let resume = ManagerRecord::create(
+            root,
+            RESUME,
+            &ResumeBinding {
+                schema: 2,
+                transaction: launch.transaction.clone(),
+                data_root: launch.data_root.clone(),
+                launch: launch_record.reference().clone(),
+                process: process_record.reference().clone(),
+                job: self.identity.clone(),
+                disarm: disarm.reference().clone(),
+            },
+            user,
+        )?;
+        #[cfg(test)]
+        tests::manager_checkpoint("lifetime-persisted", None)?;
+        Ok((disarm, resume))
+    }
+    fn disarm(&mut self) -> io::Result<()> {
+        if self.phase != Some(ManagerJobPhase::ArmedPreparation) {
+            return Err(blocked("manager disarm already attempted"));
+        }
+        self.verify(&CurrentUser::capture()?)?;
+        // The caller already persisted exact identity + disarm intent and
+        // suppressed explicit cleanup. Unknown is set before the syscall.
+        self.phase = None;
+        #[cfg(test)]
+        tests::manager_checkpoint("disarm-intent", None)?;
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        unsafe {
+            SetInformationJobObject(
+                handle(&self.handle),
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        }
+        .map_err(win_error)?;
+        #[cfg(test)]
+        tests::manager_checkpoint("disarm-set", None)?;
+        verify_job_phase(handle(&self.handle), ManagerJobPhase::ManagerLifetime)?;
+        self.phase = Some(ManagerJobPhase::ManagerLifetime);
+        #[cfg(test)]
+        tests::manager_checkpoint("disarm-verified", None)?;
+        Ok(())
+    }
+}
+
+/// This capability exists only after an authenticated actual lifetime receipt
+/// and exact child admission. It grants explicit breakaway for our dedicated
+/// installer/historical jobs; it cannot alter or escape a foreign launcher job.
+pub(crate) struct AdmittedManagerJob {
+    handle: OwnedHandle,
+    identity: ManagerJobIdentity,
+    manager: ProcessIdentity,
+}
+impl AdmittedManagerJob {
+    fn open(
+        identity: &ManagerJobIdentity,
+        manager: &ExactProcess,
+        user: &CurrentUser,
+    ) -> io::Result<Self> {
+        identity.validate(&identity.transaction, user)?;
+        let name: Vec<_> = identity.name.encode_utf16().chain(Some(0)).collect();
+        // JOB_OBJECT_QUERY | READ_CONTROL. No assignment, mutation or terminate.
+        let raw = unsafe { OpenJobObjectW(0x0004 | 0x0002_0000, false, PCWSTR(name.as_ptr())) }
+            .map_err(win_error)?;
+        let result = Self {
+            handle: unsafe { own(raw) },
+            identity: identity.clone(),
+            manager: manager.identity().clone(),
+        };
+        result.verify_manager(manager, user)?;
+        Ok(result)
+    }
+    fn verify_manager(&self, manager: &ExactProcess, user: &CurrentUser) -> io::Result<()> {
+        self.identity.validate(&self.identity.transaction, user)?;
+        user.verify_private_job(handle(&self.handle))?;
+        verify_job_phase(handle(&self.handle), ManagerJobPhase::ManagerLifetime)?;
+        if manager.identity() != &self.manager
+            || manager.identity().session() != self.identity.session
+            || !manager.is_in_job(Some(handle(&self.handle)))?
+        {
+            return Err(blocked("authenticated manager job membership differs"));
+        }
+        manager.verify_current_user(user)
+    }
+    pub(super) fn verify_current(&self) -> io::Result<()> {
+        let current = ExactProcess::capture_observed(unsafe { GetCurrentProcessId() })?;
+        self.verify_manager(&current, &CurrentUser::capture()?)?;
+        running(&current)
+    }
+    pub(super) fn verify_child_outside(&self, process: &ExactProcess) -> io::Result<()> {
+        self.verify_current()?;
+        if process.is_in_job(Some(handle(&self.handle)))? {
+            return Err(blocked("dedicated child still belongs to manager job"));
+        }
+        Ok(())
+    }
+}
+
 struct NeverResumed(Option<OwnedHandle>);
 impl Drop for NeverResumed {
     fn drop(&mut self) {
@@ -162,8 +611,14 @@ impl Drop for NeverResumed {
 fn create_manager_process(
     image: PinnedFile,
     transaction: &str,
+    job: &ManagerPreparationJob,
 ) -> io::Result<(ExactProcess, OwnedHandle, NeverResumed)> {
     image.verify()?;
+    if job.phase != Some(ManagerJobPhase::ArmedPreparation)
+        || job.identity.transaction != transaction
+    {
+        return Err(blocked("manager creation lacks armed transaction job"));
+    }
     let application = launch_path(handle(&image.file))?;
     let command = manager_command(&application, transaction)?;
     let app: Vec<_> = application.encode_wide().chain(Some(0)).collect();
@@ -172,18 +627,14 @@ fn create_manager_process(
         .encode_wide()
         .chain(Some(0))
         .collect();
-    let startup = STARTUPINFOW {
-        cb: size_of::<STARTUPINFOW>() as u32,
-        ..Default::default()
-    };
+    let mut startup = STARTUPINFOEXW::default();
+    startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+    startup.lpAttributeList = job.attributes.list;
     let mut created = PROCESS_INFORMATION::default();
-    // A manager inside a launcher's kill-on-close job would die when its source
-    // exits. Require real breakaway where necessary; unsupported containment
-    // fails creation instead of falsely acknowledging durable independence.
-    let mut flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT;
-    if in_job(unsafe { GetCurrentProcess() })? {
-        flags |= CREATE_BREAKAWAY_FROM_JOB;
-    }
+    job.verify(&CurrentUser::capture()?)?;
+    require_job_free_source()?;
+    #[cfg(test)]
+    tests::manager_checkpoint("before-create", None)?;
     unsafe {
         CreateProcessW(
             PCWSTR(app.as_ptr()),
@@ -191,19 +642,24 @@ fn create_manager_process(
             None,
             None,
             false,
-            flags,
+            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
             None,
             PCWSTR(cwd.as_ptr()),
-            &startup,
+            &startup.StartupInfo,
             &mut created,
         )
     }
     .map_err(win_error)?;
     let pending = NeverResumed(Some(unsafe { own(created.hProcess) }));
     let thread = unsafe { own(created.hThread) };
-    if in_job(handle(pending.0.as_ref().expect("created process")))? {
-        return Err(blocked("manager remains dependent on a source job"));
-    }
+    #[cfg(test)]
+    tests::manager_checkpoint(
+        "create-returned",
+        Some(handle(pending.0.as_ref().expect("created process"))),
+    )?;
+    // Membership cannot detach: a successful post-check also excludes a source
+    // assignment concurrent with creation. Any failure leaves the child armed.
+    require_job_free_source()?;
     let process = ExactProcess::from_created(
         pending.0.as_ref().expect("created process").try_clone()?,
         image,
@@ -212,6 +668,12 @@ fn create_manager_process(
         return Err(blocked("created manager identity differs"));
     }
     running(&process)?;
+    job.contains(&process, &CurrentUser::capture()?)?;
+    #[cfg(test)]
+    tests::manager_checkpoint(
+        "identity-captured",
+        Some(handle(pending.0.as_ref().expect("created process"))),
+    )?;
     Ok((process, thread, pending))
 }
 
@@ -224,6 +686,8 @@ pub(crate) struct PreparedManager<'a> {
     process: ExactProcess,
     thread: OwnedHandle,
     suspended: NeverResumed,
+    job: ManagerPreparationJob,
+    disarm: Option<ManagerRecord>,
     launch_record: ManagerRecord,
     process_record: ManagerRecord,
     launch: LaunchBinding,
@@ -257,6 +721,7 @@ impl<'a> PreparedManager<'a> {
         user: &CurrentUser,
     ) -> io::Result<Self> {
         user.require_unelevated()?;
+        require_job_free_source()?;
         control.verify_root(&control_root)?;
         shared.verify_root(&control_root)?;
         bundle.verify(user)?;
@@ -284,8 +749,9 @@ impl<'a> PreparedManager<'a> {
         let image = bundle.reopen_image(user)?;
         let application = launch_path(handle(&image.file))?;
         let command = manager_command(&application, bundle.transaction())?;
+        let job = ManagerPreparationJob::create(bundle.transaction(), user)?;
         let launch = LaunchBinding {
-            schema: 1,
+            schema: 2,
             transaction: bundle.transaction().into(),
             data_root: bundle.data_root().directory().identity().clone(),
             bundle: bundle.reference().clone(),
@@ -293,6 +759,7 @@ impl<'a> PreparedManager<'a> {
             package_digest: package.record_digest(),
             source: source.identity().clone(),
             command_digest: sha256(command.as_bytes()),
+            job: job.identity.clone(),
         };
         let root = bundle.data_root().clone();
         // The fixed create-new intent prevents replay after a lost creation
@@ -303,7 +770,7 @@ impl<'a> PreparedManager<'a> {
         bundle.verify(user)?;
         source.verify_held_image(installation.image())?;
         running(&source)?;
-        let (process, thread, pending) = create_manager_process(image, bundle.transaction())?;
+        let (process, thread, pending) = create_manager_process(image, bundle.transaction(), &job)?;
         if process.identity().session() != source.identity().session() {
             return Err(blocked("created manager session differs"));
         }
@@ -311,7 +778,7 @@ impl<'a> PreparedManager<'a> {
             root,
             PROCESS,
             &ProcessBinding {
-                schema: 1,
+                schema: 2,
                 transaction: launch.transaction.clone(),
                 launch: launch_record.reference().clone(),
                 process: process.identity().clone(),
@@ -324,6 +791,8 @@ impl<'a> PreparedManager<'a> {
             process,
             thread,
             suspended: pending,
+            job,
+            disarm: None,
             launch_record,
             process_record,
             launch,
@@ -340,6 +809,7 @@ impl<'a> PreparedManager<'a> {
         self.launch_record.verify(user)?;
         self.process_record.verify(user)?;
         self.process.verify_held_image(self.bundle.image())?;
+        self.job.contains(&self.process, user)?;
         running(&self.source)?;
         running(&self.process)
     }
@@ -362,19 +832,14 @@ impl<'a> PreparedManager<'a> {
         self.verify(user)?;
         control.verify_root(&self.control_root)?;
         self.resume_prepared = true;
-        drop(self.suspended.0.take());
-        let resume = ManagerRecord::create(
+        let (disarm, resume) = self.job.prepare_lifetime(
+            &self.process,
+            &mut self.suspended,
             self.bundle.data_root().clone(),
-            RESUME,
-            &ResumeBinding {
-                schema: 1,
-                transaction: self.launch.transaction.clone(),
-                data_root: self.launch.data_root.clone(),
-                launch: self.launch_record.reference().clone(),
-                process: self.process_record.reference().clone(),
-            },
+            (&self.launch, &self.launch_record, &self.process_record),
             user,
         )?;
+        self.disarm = Some(disarm);
         let admission = ManagerResumeAdmission {
             reference: resume.reference().clone(),
             transaction: self.launch.transaction.clone(),
@@ -404,10 +869,61 @@ impl<'a> PreparedManager<'a> {
             return Err(blocked("manager resume admission differs"));
         }
         self.resume_called = true;
+        #[cfg(test)]
+        tests::manager_checkpoint("before-resume", None)?;
         if unsafe { ResumeThread(handle(&self.thread)) } != 1 {
             return Err(blocked("manager resume outcome unknown"));
         }
+        #[cfg(test)]
+        tests::manager_checkpoint("after-resume", None)?;
         Ok(())
+    }
+    /// Observe failed initial admission without inferring success from a missing
+    /// ready file. A terminal manager with living WebView descendants is pending.
+    pub(crate) fn observe_terminal_before_context(
+        &self,
+        user: &CurrentUser,
+    ) -> io::Result<Option<ManagerPreContextTerminal>> {
+        self.shared.verify_root(&self.control_root)?;
+        self.bundle.verify(user)?;
+        self.launch_record.verify(user)?;
+        self.process_record.verify(user)?;
+        running(&self.source)?;
+        let lifetime = self
+            .resume
+            .as_ref()
+            .ok_or_else(|| blocked("manager has no durable actual lifetime receipt"))?;
+        lifetime.verify(user)?;
+        self.job.verify(user)?;
+        if self.job.phase != Some(ManagerJobPhase::ManagerLifetime) {
+            return Err(blocked("manager lifetime is not authenticated"));
+        }
+        if self.process.terminal(0)?.is_none() || job_members(handle(&self.job.handle))? != 0 {
+            return Ok(None);
+        }
+        let manager = self.process.retain_terminal()?;
+        // The original preparation handle is still held, so this read-only
+        // reopen cannot substitute a newly created object of the same name.
+        let job = ManagerTerminalJob::open(&self.job, user)?;
+        let result = ManagerPreContextTerminal {
+            manager,
+            job,
+            source: ExactProcess::reopen(self.source.identity())?,
+            lifetime: ManagerRecord::open(
+                self.bundle.data_root().clone(),
+                RESUME,
+                lifetime.reference(),
+                user,
+            )?,
+            transaction: self.launch.transaction.clone(),
+            data_root: self.launch.data_root.clone(),
+        };
+        result.verify_for(
+            &self.launch.transaction,
+            &self.source,
+            self.bundle.data_root(),
+        )?;
+        Ok(Some(result))
     }
     pub(crate) fn observe_ready(
         &self,
@@ -443,16 +959,83 @@ impl<'a> PreparedManager<'a> {
     }
 }
 
+struct ManagerTerminalJob {
+    handle: OwnedHandle,
+    identity: ManagerJobIdentity,
+}
+impl ManagerTerminalJob {
+    fn open(owner: &ManagerPreparationJob, user: &CurrentUser) -> io::Result<Self> {
+        owner.verify(user)?;
+        if owner.phase != Some(ManagerJobPhase::ManagerLifetime) {
+            return Err(blocked("terminal job lacks actual lifetime"));
+        }
+        let name: Vec<_> = owner.identity.name.encode_utf16().chain(Some(0)).collect();
+        let raw = unsafe { OpenJobObjectW(0x0004 | 0x0002_0000, false, PCWSTR(name.as_ptr())) }
+            .map_err(win_error)?;
+        let result = Self {
+            handle: unsafe { own(raw) },
+            identity: owner.identity.clone(),
+        };
+        user.verify_private_job(handle(&result.handle))?;
+        verify_job_phase(handle(&result.handle), ManagerJobPhase::ManagerLifetime)?;
+        Ok(result)
+    }
+}
+
+/// Kernel terminal evidence for the initial manager before any context change.
+/// This observes failure only; it does not authorize termination or restoration.
+pub(crate) struct ManagerPreContextTerminal {
+    manager: super::process::TerminatedProcess,
+    job: ManagerTerminalJob,
+    source: ExactProcess,
+    lifetime: ManagerRecord,
+    transaction: String,
+    data_root: FileIdentity,
+}
+impl ManagerPreContextTerminal {
+    pub(crate) fn verify_for(
+        &self,
+        transaction: &str,
+        source: &ExactProcess,
+        data_root: &PrivateDirectory,
+    ) -> io::Result<()> {
+        let user = CurrentUser::capture()?;
+        data_root.verify(&user)?;
+        self.manager.verify()?;
+        self.lifetime.verify(&user)?;
+        self.job.identity.validate(transaction, &user)?;
+        user.verify_private_job(handle(&self.job.handle))?;
+        verify_job_phase(handle(&self.job.handle), ManagerJobPhase::ManagerLifetime)?;
+        running(&self.source)?;
+        if self.transaction != transaction
+            || self.data_root != *data_root.directory().identity()
+            || self.source.identity() != source.identity()
+            || job_members(handle(&self.job.handle))? != 0
+        {
+            return Err(blocked("pre-context manager terminal ownership differs"));
+        }
+        Ok(())
+    }
+    pub(crate) fn process_identity(&self) -> &ProcessIdentity {
+        self.manager.identity()
+    }
+    pub(crate) fn lifetime_reference(&self) -> &ManagerRecordReference {
+        self.lifetime.reference()
+    }
+}
+
 /// Actual child ownership and re-admitted files stay alive after publishing the
 /// receipt. No caller boolean or deserialized observation can construct this.
 pub(crate) struct ManagerChildAdmission {
     bundle: ManagerBundle,
-    package: RetainedPackage,
+    package: Arc<RetainedPackage>,
     manager: ExactProcess,
     source: Option<ExactProcess>,
     _launch: ManagerRecord,
     _process: ManagerRecord,
     _resume: ManagerRecord,
+    _disarm: ManagerRecord,
+    job: AdmittedManagerJob,
     launch: LaunchBinding,
     ui: Option<super::manager_ui::ManagerUiReady>,
     ready_attempted: bool,
@@ -472,7 +1055,7 @@ impl ManagerChildAdmission {
         let resume_record =
             ManagerRecord::open(data_root.clone(), RESUME, expected_admission, &user)?;
         let resume: ResumeBinding = resume_record.decode(&user)?;
-        if resume.schema != 1
+        if resume.schema != 2
             || resume.transaction != transaction
             || resume.data_root != *data_root.directory().identity()
         {
@@ -483,17 +1066,17 @@ impl ManagerChildAdmission {
         let process_record =
             ManagerRecord::open(data_root.clone(), PROCESS, &resume.process, &user)?;
         let process: ProcessBinding = process_record.decode(&user)?;
-        if launch.schema != 1
-            || process.schema != 1
-            || launch.transaction != transaction
-            || process.transaction != transaction
-            || process.launch != resume.launch
-            || launch.data_root != resume.data_root
-        {
-            return Err(blocked("manager receipt chain differs"));
-        }
-        launch.source.validate()?;
-        process.process.validate()?;
+        let disarm_record = ManagerRecord::open(data_root.clone(), DISARM, &resume.disarm, &user)?;
+        let disarm: DisarmBinding = disarm_record.decode(&user)?;
+        verify_resume_chain(
+            transaction,
+            &data_root,
+            &resume,
+            &launch,
+            &process,
+            &disarm,
+            &user,
+        )?;
         let bundle = ManagerBundle::reopen(data_root.clone(), transaction, &launch.bundle, &user)?;
         let current = ExactProcess::capture_observed(unsafe { GetCurrentProcessId() })?;
         current.verify_held_image(bundle.image())?;
@@ -507,10 +1090,9 @@ impl ManagerChildAdmission {
             return Err(blocked("current manager is not the exact launched child"));
         }
         running(&current)?;
-        if in_job(unsafe { GetCurrentProcess() })? {
-            return Err(blocked("manager lifetime is still job-dependent"));
-        }
+        let job = AdmittedManagerJob::open(&launch.job, &current, &user)?;
         let source = ExactProcess::reopen(&launch.source)?;
+        source.verify_current_user(&user)?;
         running(&source)?;
         let package_root = Arc::new(PrivateDirectory::open_existing(
             data_root.directory().clone(),
@@ -534,12 +1116,14 @@ impl ManagerChildAdmission {
         running(&current)?;
         Ok(Self {
             bundle,
-            package,
+            package: Arc::new(package),
             manager: current,
             source: Some(source),
             _launch: launch_record,
             _process: process_record,
             _resume: resume_record,
+            _disarm: disarm_record,
+            job,
             launch,
             ui: None,
             ready_attempted: false,
@@ -615,6 +1199,15 @@ impl ManagerChildAdmission {
             .release_after_source_exit(source)?;
         Ok(self.source.take().expect("checked source"))
     }
+    pub(crate) fn retained_package(&self) -> &RetainedPackage {
+        &self.package
+    }
+    pub(crate) fn retained_package_owner(&self) -> Arc<RetainedPackage> {
+        self.package.clone()
+    }
+    pub(crate) fn manager_job(&self) -> &AdmittedManagerJob {
+        &self.job
+    }
     pub(crate) fn selection(&self) -> &crate::version_history::catalog::SelectionMetadata {
         self.package.selection()
     }
@@ -631,9 +1224,11 @@ impl ManagerChildAdmission {
     }
     pub(crate) fn verify_material(&self) -> io::Result<()> {
         let user = CurrentUser::capture()?;
-        if in_job(unsafe { GetCurrentProcess() })? {
-            return Err(blocked("manager lifetime became job-dependent"));
-        }
+        self.job.verify_current()?;
+        self._launch.verify(&user)?;
+        self._process.verify(&user)?;
+        self._disarm.verify(&user)?;
+        self._resume.verify(&user)?;
         self.bundle.verify(&user)?;
         self.package
             .verify_retained()
@@ -656,6 +1251,7 @@ impl ManagerChildAdmission {
 /// A historical acknowledgement is distinct from current handoff permission.
 pub(crate) struct ManagerReadyObservation {
     record: ManagerRecord,
+    job: ManagerJobIdentity,
 }
 impl ManagerReadyObservation {
     fn validate(
@@ -683,7 +1279,10 @@ impl ManagerReadyObservation {
         {
             return Err(blocked("manager readiness belongs to another handoff"));
         }
-        Ok(Self { record })
+        Ok(Self {
+            record,
+            job: launch.job.clone(),
+        })
     }
     pub(crate) fn reference(&self) -> &ManagerRecordReference {
         self.record.reference()
@@ -701,7 +1300,7 @@ impl ManagerReadyObservation {
         let resume_record =
             ManagerRecord::open(data_root.clone(), RESUME, expected_admission, user)?;
         let resume: ResumeBinding = resume_record.decode(user)?;
-        if resume.schema != 1
+        if resume.schema != 2
             || resume.transaction != transaction
             || resume.data_root != *data_root.directory().identity()
         {
@@ -712,15 +1311,17 @@ impl ManagerReadyObservation {
         let process_record =
             ManagerRecord::open(data_root.clone(), PROCESS, &resume.process, user)?;
         let process: ProcessBinding = process_record.decode(user)?;
-        if launch.schema != 1
-            || launch.transaction != transaction
-            || launch.data_root != resume.data_root
-            || process.schema != 1
-            || process.transaction != transaction
-            || process.launch != resume.launch
-        {
-            return Err(blocked("manager readiness receipt chain differs"));
-        }
+        let disarm_record = ManagerRecord::open(data_root.clone(), DISARM, &resume.disarm, user)?;
+        let disarm: DisarmBinding = disarm_record.decode(user)?;
+        verify_resume_chain(
+            transaction,
+            &data_root,
+            &resume,
+            &launch,
+            &process,
+            &disarm,
+            user,
+        )?;
         let record = ManagerRecord::open(data_root, READY, expected_ready, user)?;
         Self::validate(record, &launch, expected_admission, &process.process, user)
     }
@@ -732,6 +1333,7 @@ pub(crate) struct ManagerReadyReceipt {
     observation: ManagerReadyObservation,
     source: ExactProcess,
     manager: ExactProcess,
+    job: AdmittedManagerJob,
 }
 impl ManagerReadyReceipt {
     pub(crate) fn verify_for_source(
@@ -759,16 +1361,21 @@ impl ManagerReadyReceipt {
         source: &ProcessIdentity,
         manager: &ProcessIdentity,
     ) -> io::Result<Self> {
+        let manager = ExactProcess::reopen(manager)?;
+        let job = AdmittedManagerJob::open(&observation.job, &manager, &CurrentUser::capture()?)?;
         let result = Self {
             observation,
             source: ExactProcess::reopen(source)?,
-            manager: ExactProcess::reopen(manager)?,
+            manager,
+            job,
         };
         result.verify()?;
         Ok(result)
     }
     pub(crate) fn verify(&self) -> io::Result<()> {
-        self.observation.record.verify(&CurrentUser::capture()?)?;
+        let user = CurrentUser::capture()?;
+        self.observation.record.verify(&user)?;
+        self.job.verify_manager(&self.manager, &user)?;
         running(&self.source)?;
         running(&self.manager)
     }
@@ -795,6 +1402,93 @@ impl ManagerReadyReceipt {
     }
     pub(crate) fn reference(&self) -> &ManagerRecordReference {
         self.observation.reference()
+    }
+}
+
+/// Protected historical material, intentionally separate from child admission.
+/// A restarted process can inspect this owner but cannot publish Ready, resume
+/// a job, or recover a source-terminal/installer-terminal proof from it.
+pub(crate) struct RetainedManagerInspection {
+    bundle: ManagerBundle,
+    package: LocalPackageInspection,
+    records: [ManagerRecord; 4],
+}
+impl RetainedManagerInspection {
+    pub(crate) fn open(
+        data_root: Arc<PrivateDirectory>,
+        transaction: &str,
+        expected_bundle: &ManagerRecordReference,
+        expected_admission: &ManagerRecordReference,
+    ) -> io::Result<Self> {
+        valid_transaction(transaction)?;
+        let user = CurrentUser::capture()?;
+        user.require_unelevated()?;
+        data_root.verify(&user)?;
+        let resume_record =
+            ManagerRecord::open(data_root.clone(), RESUME, expected_admission, &user)?;
+        let resume: ResumeBinding = resume_record.decode(&user)?;
+        let launch_record = ManagerRecord::open(data_root.clone(), LAUNCH, &resume.launch, &user)?;
+        let launch: LaunchBinding = launch_record.decode(&user)?;
+        let process_record =
+            ManagerRecord::open(data_root.clone(), PROCESS, &resume.process, &user)?;
+        let process: ProcessBinding = process_record.decode(&user)?;
+        let disarm_record = ManagerRecord::open(data_root.clone(), DISARM, &resume.disarm, &user)?;
+        let disarm: DisarmBinding = disarm_record.decode(&user)?;
+        verify_resume_record(
+            transaction,
+            &data_root,
+            &resume,
+            &launch,
+            &process,
+            &disarm,
+            &user,
+        )?;
+        if &launch.bundle != expected_bundle {
+            return Err(blocked("manager recovery bundle reference differs"));
+        }
+        let bundle = ManagerBundle::reopen(data_root.clone(), transaction, expected_bundle, &user)?;
+        if sha256(
+            manager_command(&launch_path(handle(&bundle.image().file))?, transaction)?.as_bytes(),
+        ) != launch.command_digest
+        {
+            return Err(blocked("manager recovery command binding differs"));
+        }
+        let package_root = Arc::new(PrivateDirectory::open_existing(
+            data_root.directory().clone(),
+            name("package")?,
+            &user,
+        )?);
+        if package_root.directory().identity() != &launch.package_root {
+            return Err(blocked("manager recovery package root differs"));
+        }
+        let package =
+            LocalPackageInspection::open(package_root, transaction, &launch.package_digest)
+                .map_err(|_| blocked("manager recovery package inspection failed"))?;
+        let inspection = Self {
+            bundle,
+            package,
+            records: [resume_record, launch_record, process_record, disarm_record],
+        };
+        inspection.verify()?;
+        Ok(inspection)
+    }
+    pub(crate) fn bundle(&self) -> &ManagerBundle {
+        &self.bundle
+    }
+    pub(crate) fn diagnostic(
+        &self,
+    ) -> &crate::version_history::catalog::RetainedSelectionDiagnostic {
+        self.package.diagnostic()
+    }
+    pub(crate) fn verify(&self) -> io::Result<()> {
+        let user = CurrentUser::capture()?;
+        self.bundle.verify(&user)?;
+        for record in &self.records {
+            record.verify(&user)?;
+        }
+        self.package
+            .verify()
+            .map_err(|_| blocked("manager recovery package changed"))
     }
 }
 

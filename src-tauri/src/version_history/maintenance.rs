@@ -297,7 +297,8 @@ impl FrozenAdmissions {
 /// Central authoritative writes must already have completed before source exit.
 /// Afterwards, retained-file Windows flush and verified metadata/bytes must be
 /// positively established. Neither a store Ok nor source PID exit proves those.
-/// There is intentionally NO production constructor until those checks exist.
+/// Source admission accepts only the concrete coordinator's actual guards.
+/// Return admission requires its separately observed later process/job lineage.
 pub(crate) struct SnapshotBoundary {
     binding: JournalBinding,
     root_identities: BTreeMap<RootKind, String>,
@@ -316,7 +317,41 @@ impl LiveSnapshotGuards for FixtureSnapshotGuards {
         Ok(())
     }
 }
+#[cfg(windows)]
+impl LiveSnapshotGuards for super::windows::source_boundary::SourceSnapshotGuards {
+    fn verify_live(&self) -> Result<(), SafeError> {
+        super::windows::source_boundary::SourceSnapshotGuards::verify_live(self)
+    }
+}
+#[cfg(windows)]
+impl LiveSnapshotGuards for super::windows::return_boundary::ReturnSnapshotGuards {
+    fn verify_live(&self) -> Result<(), SafeError> {
+        super::windows::return_boundary::ReturnSnapshotGuards::verify_live(self)
+    }
+}
 impl SnapshotBoundary {
+    #[cfg(windows)]
+    pub(super) fn from_return(
+        guards: super::windows::return_boundary::ReturnSnapshotGuards,
+    ) -> Result<Self, SafeError> {
+        guards.verify_live()?;
+        Ok(Self {
+            binding: guards.binding().clone(),
+            root_identities: guards.roots().clone(),
+            held_platform_guards: Box::new(guards),
+        })
+    }
+    #[cfg(windows)]
+    pub(super) fn from_source(
+        guards: super::windows::source_boundary::SourceSnapshotGuards,
+    ) -> Result<Self, SafeError> {
+        guards.verify_live()?;
+        Ok(Self {
+            binding: guards.binding().clone(),
+            root_identities: guards.roots().clone(),
+            held_platform_guards: Box::new(guards),
+        })
+    }
     pub(crate) fn verify_live(&self) -> Result<(), SafeError> {
         self.held_platform_guards.verify_live()
     }

@@ -13,7 +13,8 @@ use windows::Win32::{
         TokenUser, WinBuiltinAdministratorsSid, WinCreatorOwnerSid, WinLocalSystemSid,
         ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION,
         OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-        SE_DACL_PROTECTED, SE_SELF_RELATIVE, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER,
+        SE_DACL_AUTO_INHERITED, SE_DACL_PRESENT, SE_DACL_PROTECTED, SE_SELF_RELATIVE,
+        TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER,
     },
     Storage::FileSystem::FILE_ALL_ACCESS,
     System::Threading::{GetCurrentProcess, OpenProcessToken},
@@ -61,6 +62,32 @@ pub(super) fn capture_file_descriptor(file: HANDLE) -> io::Result<Vec<u8>> {
         }
         Ok(std::slice::from_raw_parts(descriptor.0.cast::<u8>(), length).to_vec())
     }
+}
+
+/// Restoration-only comparison for descriptors captured from retained files.
+/// SetSecurityInfo converts legacy DACLs to the current inheritance model and
+/// sets SE_DACL_AUTO_INHERITED, including for protected DACLs. Accept only that
+/// observed clear-to-set transition; all other bytes (including ACL order,
+/// owner/group, SACL, presence, inheritance/protection flags and offsets) stay
+/// exact. In particular, clearing AUTO_INHERITED is not accepted. Raw capture,
+/// serialization, ordinary Eq and before/after stability checks stay unchanged.
+/// https://learn.microsoft.com/windows/win32/secauthz/automatic-propagation-of-inheritable-aces
+pub(crate) fn restored_file_descriptor_matches(expected: &[u8], actual: &[u8]) -> bool {
+    if expected == actual {
+        return true;
+    }
+    if expected.len() != actual.len() || !(20..=65536).contains(&expected.len()) || expected[0] != 1
+    {
+        return false;
+    }
+    let expected_control = u16::from_le_bytes([expected[2], expected[3]]);
+    let actual_control = u16::from_le_bytes([actual[2], actual[3]]);
+    let required = SE_SELF_RELATIVE.0 | SE_DACL_PRESENT.0;
+    expected_control & required == required
+        && expected_control & SE_DACL_AUTO_INHERITED.0 == 0
+        && actual_control == expected_control | SE_DACL_AUTO_INHERITED.0
+        && expected[..2] == actual[..2]
+        && expected[4..] == actual[4..]
 }
 
 /// Retains a copied SID, not a pointer into a temporary token buffer. Merely

@@ -83,11 +83,11 @@ impl LeaseFiles {
     }
     pub(crate) fn acquire_exclusive(&self, control: &ControlLease) -> io::Result<ExclusiveLease> {
         self.check_control(control)?;
-        Ok(ExclusiveLease(self.lock(
+        Ok(ExclusiveLease(Arc::new(self.lock(
             "lifetime.lock",
             &self.lifetime,
             true,
-        )?))
+        )?)))
     }
 }
 fn open_lock(root: &PrivateDirectory, name: &str, user: &CurrentUser) -> io::Result<PinnedFile> {
@@ -121,7 +121,20 @@ pub(crate) struct ControlLease {
     root: FileIdentity,
 }
 pub(crate) struct SharedLease(ByteLock);
-pub(crate) struct ExclusiveLease(ByteLock);
+pub(crate) struct ExclusiveLease(Arc<ByteLock>);
+/// Read-only lifetime witness. The non-cloneable ExclusiveLease still owns
+/// mutable process-launch admission; both retain the exact same OS byte lock.
+pub(crate) struct ExclusiveLeaseWitness(Arc<ByteLock>);
+impl ExclusiveLeaseWitness {
+    pub(crate) fn verify_root(&self, root: &PrivateDirectory) -> io::Result<()> {
+        self.0.file.verify()?;
+        root.directory().recheck()?;
+        if self.0.file.parent.identity() != root.directory().identity() {
+            return Err(blocked("foreign exclusive lifetime witness"));
+        }
+        Ok(())
+    }
+}
 
 impl SharedLease {
     pub(super) fn verify_root(&self, root: &PrivateDirectory) -> io::Result<()> {
@@ -150,6 +163,10 @@ impl ControlLease {
 }
 
 impl ExclusiveLease {
+    pub(crate) fn witness(&self) -> io::Result<ExclusiveLeaseWitness> {
+        self.verify()?;
+        Ok(ExclusiveLeaseWitness(self.0.clone()))
+    }
     pub(super) fn verify_root(&self, root: &PrivateDirectory) -> io::Result<()> {
         self.verify()?;
         root.directory().recheck()?;

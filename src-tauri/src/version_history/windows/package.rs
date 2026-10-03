@@ -8,7 +8,10 @@ use super::{
 };
 use crate::cli::{profiles::error, types::SafeError};
 use crate::version_history::{
-    catalog::{CatalogService, SelectionMetadata, MAX_CATALOG_BYTES},
+    catalog::{
+        inspect_retained_observation, CatalogService, RetainedSelectionDiagnostic,
+        SelectionMetadata, MAX_CATALOG_BYTES,
+    },
     download::PreparedHandoff,
     journal::validate_id,
     verified_package::{sha256, PublisherKey, MAX_PACKAGE_BYTES, MAX_SIGNATURE_BYTES},
@@ -284,6 +287,31 @@ impl RetainedPackage {
     pub(crate) fn root_identity(&self) -> &FileIdentity {
         self.root.directory().identity()
     }
+    /// Reopen only this exact sealed installer object. The returned handle is
+    /// still package evidence; the coordinator must separately admit scope,
+    /// journal intent, suspended process ownership and all live execution guards.
+    pub(crate) fn installer_image(&self) -> Result<PinnedFile, SafeError> {
+        self.verify_retained()?;
+        let image = {
+            let files = self.files.lock();
+            let expected = &files.package;
+            let image = self
+                .root
+                .directory()
+                .open_file(expected.file.name.clone(), FileAccess::Read)
+                .map_err(changed)?;
+            if image.identity() != &expected.binding.identity
+                || image.file.metadata().map_err(changed)?.len() != expected.binding.size
+                || image.digest().map_err(changed)? != expected.binding.digest
+            {
+                return Err(error("HISTORY_PACKAGE_CHANGED"));
+            }
+            image
+        };
+        self.verify_retained()?;
+        image.verify().map_err(changed)?;
+        Ok(image)
+    }
     /// Revalidates the exact retained objects/bytes used at transfer. Official
     /// metadata and publisher authentication are freshly re-established by
     /// reopen; this never changes package identity into installation authority.
@@ -312,62 +340,14 @@ impl RetainedPackage {
         expected_record_digest: &str,
         catalog: &CatalogService,
     ) -> Result<Self, SafeError> {
-        validate_id(transaction_id)?;
-        crate::version_history::journal::validate_digest(expected_record_digest)?;
+        let (binding, files) = reopen_files(&root, transaction_id, expected_record_digest)?;
         let user = CurrentUser::capture().map_err(storage)?;
-        user.require_unelevated().map_err(storage)?;
-        root.verify(&user).map_err(storage)?;
-        let file = root
-            .directory()
-            .open_file(name(BINDING)?, FileAccess::Read)
-            .map_err(changed)?;
-        let record_binding = ObjectBinding {
-            identity: file.identity().clone(),
-            size: file.file.metadata().map_err(changed)?.len(),
-            digest: expected_record_digest.into(),
-        };
-        if record_binding.size == 0 || record_binding.size > MAX_BINDING as u64 {
-            return Err(error("HISTORY_PACKAGE_CHANGED"));
-        }
-        let record = SealedFile {
-            file,
-            binding: record_binding,
-        };
-        let binding: TransferBinding =
-            serde_json::from_slice(&record.bytes(&user)?).map_err(changed)?;
-        if binding.schema != 1
-            || binding.transaction_id != transaction_id
-            || binding.preparation_id.len() != 32
-            || !binding
-                .preparation_id
-                .bytes()
-                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-            || binding.source_identity.is_empty()
-            || binding.source_identity.len() > 256
-        {
-            return Err(error("HISTORY_HANDOFF_CHANGED"));
-        }
-        let package = SealedFile::open(
-            &root,
-            name(PACKAGE)?,
-            binding.package.clone(),
-            MAX_PACKAGE_BYTES as usize,
-            &user,
-        )?;
-        let signature = SealedFile::open(
-            &root,
-            name(SIGNATURE)?,
-            binding.signature.clone(),
-            MAX_SIGNATURE_BYTES as usize,
-            &user,
-        )?;
-        let observation = SealedFile::open(
-            &root,
-            name(OBSERVATION)?,
-            binding.observation.clone(),
-            MAX_CATALOG_BYTES,
-            &user,
-        )?;
+        let RetainedFiles {
+            package,
+            signature,
+            observation,
+            record,
+        } = files;
         let selection = catalog.revalidate_retained_observation(&observation.bytes(&user)?)?;
         let signature_bytes = signature.bytes(&user)?;
         if signature_bytes.len() as u64 != selection.signature().size()
@@ -392,5 +372,143 @@ impl RetainedPackage {
                 record,
             }),
         })
+    }
+}
+
+/// Opens exact retained objects only. Neither a stored digest nor successful
+/// local byte inspection grants fresh selection or installation authority.
+fn reopen_files(
+    root: &Arc<PrivateDirectory>,
+    transaction_id: &str,
+    expected_record_digest: &str,
+) -> Result<(TransferBinding, RetainedFiles), SafeError> {
+    validate_id(transaction_id)?;
+    crate::version_history::journal::validate_digest(expected_record_digest)?;
+    let user = CurrentUser::capture().map_err(storage)?;
+    user.require_unelevated().map_err(storage)?;
+    root.verify(&user).map_err(storage)?;
+    let file = root
+        .directory()
+        .open_file(name(BINDING)?, FileAccess::Read)
+        .map_err(changed)?;
+    let record_binding = ObjectBinding {
+        identity: file.identity().clone(),
+        size: file.file.metadata().map_err(changed)?.len(),
+        digest: expected_record_digest.into(),
+    };
+    if record_binding.size == 0 || record_binding.size > MAX_BINDING as u64 {
+        return Err(error("HISTORY_PACKAGE_CHANGED"));
+    }
+    let record = SealedFile {
+        file,
+        binding: record_binding,
+    };
+    let binding: TransferBinding =
+        serde_json::from_slice(&record.bytes(&user)?).map_err(changed)?;
+    if binding.schema != 1
+        || binding.transaction_id != transaction_id
+        || binding.preparation_id.len() != 32
+        || !binding
+            .preparation_id
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        || binding.source_identity.is_empty()
+        || binding.source_identity.len() > 256
+    {
+        return Err(error("HISTORY_HANDOFF_CHANGED"));
+    }
+    let package = SealedFile::open(
+        root,
+        name(PACKAGE)?,
+        binding.package.clone(),
+        MAX_PACKAGE_BYTES as usize,
+        &user,
+    )?;
+    let signature = SealedFile::open(
+        root,
+        name(SIGNATURE)?,
+        binding.signature.clone(),
+        MAX_SIGNATURE_BYTES as usize,
+        &user,
+    )?;
+    let observation = SealedFile::open(
+        root,
+        name(OBSERVATION)?,
+        binding.observation.clone(),
+        MAX_CATALOG_BYTES,
+        &user,
+    )?;
+    Ok((
+        binding,
+        RetainedFiles {
+            package,
+            signature,
+            observation,
+            record,
+        },
+    ))
+}
+
+/// Read-only offline package inspection for the restarted manager. This owner
+/// deliberately has no installer-image or SelectionMetadata accessor.
+pub(crate) struct LocalPackageInspection {
+    root: Arc<PrivateDirectory>,
+    binding: TransferBinding,
+    diagnostic: RetainedSelectionDiagnostic,
+    files: Mutex<RetainedFiles>,
+}
+impl LocalPackageInspection {
+    pub(crate) fn open(
+        root: Arc<PrivateDirectory>,
+        transaction_id: &str,
+        expected_record_digest: &str,
+    ) -> Result<Self, SafeError> {
+        let (binding, files) = reopen_files(&root, transaction_id, expected_record_digest)?;
+        let user = CurrentUser::capture().map_err(storage)?;
+        let diagnostic = inspect_retained_observation(&files.observation.bytes(&user)?)?;
+        let signature = files.signature.bytes(&user)?;
+        if signature.len() as u64 != diagnostic.signature_size()
+            || sha256(&signature) != diagnostic.signature_digest()
+        {
+            return Err(error("HISTORY_PACKAGE_CHANGED"));
+        }
+        // Reestablish publisher authenticity from actual retained bytes, even
+        // when the remote release is unavailable. This mints no install owner.
+        PublisherKey::production()?.verify(
+            &files.package.bytes(&user)?,
+            &signature,
+            diagnostic.installer_digest(),
+            diagnostic.installer_size(),
+        )?;
+        let inspection = Self {
+            root,
+            binding,
+            diagnostic,
+            files: Mutex::new(files),
+        };
+        inspection.verify()?;
+        Ok(inspection)
+    }
+    pub(crate) fn diagnostic(&self) -> &RetainedSelectionDiagnostic {
+        &self.diagnostic
+    }
+    pub(crate) fn verify(&self) -> Result<(), SafeError> {
+        let user = CurrentUser::capture().map_err(storage)?;
+        self.root.verify(&user).map_err(storage)?;
+        let files = self.files.lock();
+        files.package.verify(&user)?;
+        files.signature.verify(&user)?;
+        files.observation.verify(&user)?;
+        if files.package.binding != self.binding.package
+            || files.signature.binding != self.binding.signature
+            || files.observation.binding != self.binding.observation
+            || files.record.bytes(&user)? != serde_json::to_vec(&self.binding).map_err(storage)?
+            || files.package.binding.digest != self.diagnostic.installer_digest()
+            || files.package.binding.size != self.diagnostic.installer_size()
+            || inspect_retained_observation(&files.observation.bytes(&user)?)? != self.diagnostic
+        {
+            return Err(error("HISTORY_PACKAGE_CHANGED"));
+        }
+        Ok(())
     }
 }

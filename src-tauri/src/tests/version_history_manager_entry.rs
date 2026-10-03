@@ -19,7 +19,6 @@ fn HistoryManagerEntry_ExactGrammar_001() {
     };
     assert_eq!(request.transaction_id(), id);
     for values in [
-        arguments(&["manager.exe"]),
         arguments(&["manager.exe", "--check-conpty", "report.json"]),
         arguments(&[
             "manager.exe",
@@ -60,4 +59,18 @@ fn HistoryManagerEntry_OriginalImageCannotSelectManager_002() {
         .unwrap(),
         DesktopEntryRequest::Ordinary
     ));
+}
+
+// Explorer double-click selects only protected-marker inspection; never ordinary App.
+#[test]
+fn HistoryManagerEntry_NoArgumentRecoveryOnly_003() {
+    assert!(matches!(
+        classify(
+            OsStr::new("CC-DESK-VERSION-MANAGER.EXE"),
+            &arguments(&["ignored-argv0.exe"]),
+        )
+        .unwrap(),
+        DesktopEntryRequest::ManagerReentry
+    ));
+    assert!(classify(OsStr::new("cc-desk-version-manager.exe"), &[]).is_err());
 }

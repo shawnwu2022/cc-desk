@@ -54,6 +54,8 @@ pub(crate) struct SourcePreflight {
 }
 impl SourcePreflight {
     pub(crate) fn admit(package: &VerifiedPackage, transaction: &str) -> Result<Self, SafeError> {
+        super::manager_process::require_job_free_source()
+            .map_err(|_| error("HISTORY_SOURCE_JOB_UNSUPPORTED"))?;
         let payload = PayloadAdmission::admit_begin(package)?;
         let frozen = process_admissions().freeze(transaction)?;
         let admission = Self {
@@ -158,6 +160,8 @@ fn prepare_and_handoff(
         .verify_root(startup.control().root())
         .map_err(blocked)?;
     space.verify()?;
+    super::manager_process::require_job_free_source()
+        .map_err(|_| error("HISTORY_SOURCE_JOB_UNSUPPORTED"))?;
     source_ui.retain_for_recovery()?;
     let data = Arc::new(TransactionDataRoot::create(
         startup.control().clone(),

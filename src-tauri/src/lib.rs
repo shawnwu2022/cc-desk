@@ -61,6 +61,10 @@ pub fn admit_desktop_startup() -> Result<DesktopStartup, String> {
 pub fn run_version_manager_entry() -> Result<bool, String> {
     match version_history::manager_entry::observed_request().map_err(|failure| failure.code)? {
         version_history::manager_entry::DesktopEntryRequest::Ordinary => Ok(false),
+        version_history::manager_entry::DesktopEntryRequest::ManagerReentry => {
+            version_history::manager_runtime::run_reentry(None).map_err(|failure| failure.code)?;
+            Ok(true)
+        }
         version_history::manager_entry::DesktopEntryRequest::Manager(request) => {
             version_history::manager_runtime::run(request).map_err(|failure| failure.code)?;
             Ok(true)

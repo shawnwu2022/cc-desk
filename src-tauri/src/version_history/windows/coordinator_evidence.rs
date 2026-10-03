@@ -13,11 +13,17 @@ use crate::{
 use parking_lot::Mutex;
 use std::{io, sync::Arc};
 
+#[derive(Clone)]
 pub(crate) struct VerifiedImageAbsence {
     directory: Arc<Directory>,
     name: ComponentName,
 }
 impl VerifiedImageAbsence {
+    pub(super) fn capture(directory: Arc<Directory>, name: ComponentName) -> io::Result<Self> {
+        let value = Self { directory, name };
+        value.verify()?;
+        Ok(value)
+    }
     pub(crate) fn verify(&self) -> io::Result<()> {
         self.directory.recheck()?;
         match self
@@ -31,6 +37,7 @@ impl VerifiedImageAbsence {
         self.directory.recheck()
     }
 }
+#[derive(Clone)]
 pub(crate) enum CurrentImageEvidence {
     Fenced(Arc<Mutex<ImageFence>>),
     Absent(VerifiedImageAbsence),
@@ -45,6 +52,22 @@ pub(crate) struct ReturnBoundary {
     current_image: CurrentImageEvidence,
 }
 impl ReturnBoundary {
+    pub(super) fn from_native(
+        guards: super::return_boundary::ReturnSnapshotGuards,
+        current_image: CurrentImageEvidence,
+    ) -> Result<Self, SafeError> {
+        guards.verify_live()?;
+        let installation = guards.installation().clone();
+        let image_name = guards.image_name().clone();
+        let value = Self {
+            snapshot: SnapshotBoundary::from_return(guards)?,
+            installation,
+            image_name,
+            current_image,
+        };
+        value.verify_current_image()?;
+        Ok(value)
+    }
     #[cfg(test)]
     pub(crate) fn fixture(
         snapshot: SnapshotBoundary,

@@ -22,12 +22,12 @@ use std::sync::Arc;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct HandoffManifest {
-    schema: u32,
-    binding: JournalBinding,
-    data: TransactionDataReference,
-    bundle: ManagerRecordReference,
-    resume: ManagerRecordReference,
+pub(super) struct HandoffManifest {
+    pub(super) schema: u32,
+    pub(super) binding: JournalBinding,
+    pub(super) data: TransactionDataReference,
+    pub(super) bundle: ManagerRecordReference,
+    pub(super) resume: ManagerRecordReference,
 }
 fn blocked(_: impl std::fmt::Debug) -> SafeError {
     error("HISTORY_HANDOFF_CHANGED")
@@ -128,7 +128,7 @@ pub(crate) fn publish_initial_handoff(
 
 pub(crate) struct InitialManager {
     pub(crate) installation: Arc<InstallationControl>,
-    pub(crate) data: TransactionDataRoot,
+    pub(crate) data: Arc<TransactionDataRoot>,
     pub(crate) binding: JournalBinding,
     pub(crate) child: ManagerChildAdmission,
 }
@@ -177,12 +177,12 @@ impl InitialManager {
         if handoff.schema != 1 || handoff.binding != binding {
             return Err(error("HISTORY_HANDOFF_CHANGED"));
         }
-        let data = TransactionDataRoot::reopen(
+        let data = Arc::new(TransactionDataRoot::reopen(
             installation.clone(),
             &control,
             request.transaction_id(),
             handoff.data,
-        )?;
+        )?);
         let bundle = ManagerBundle::reopen(
             data.root().clone(),
             request.transaction_id(),

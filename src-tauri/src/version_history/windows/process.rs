@@ -43,10 +43,11 @@ use windows::Win32::{
             CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcessId, GetExitCodeProcess,
             GetProcessId, GetProcessTimes, InitializeProcThreadAttributeList, OpenProcess,
             QueryFullProcessImageNameW, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
-            WaitForSingleObject, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-            EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_ACCESS_RIGHTS,
-            PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-            PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, PROC_THREAD_ATTRIBUTE_JOB_LIST, STARTUPINFOEXW,
+            WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, CREATE_SUSPENDED,
+            CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
+            PROCESS_ACCESS_RIGHTS, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
+            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+            PROC_THREAD_ATTRIBUTE_JOB_LIST, STARTUPINFOEXW,
         },
     },
 };
@@ -150,6 +151,11 @@ impl ExactProcess {
     pub(crate) fn identity(&self) -> &ProcessIdentity {
         &self.identity
     }
+    pub(super) fn is_in_job(&self, job: Option<HANDLE>) -> io::Result<bool> {
+        let mut assigned = BOOL(0);
+        unsafe { IsProcessInJob(handle(&self.process), job, &mut assigned) }.map_err(win_error)?;
+        Ok(assigned.as_bool())
+    }
     pub(crate) fn pid(&self) -> u32 {
         self.identity.pid
     }
@@ -171,6 +177,18 @@ impl ExactProcess {
             process,
             terminal,
             _image_parent: image_parent,
+        })
+    }
+    /// Retain terminal evidence from this same kernel object. Reopening a PID or
+    /// querying its image after exit is unnecessary and may no longer succeed.
+    pub(super) fn retain_terminal(&self) -> io::Result<TerminatedProcess> {
+        let terminal = self
+            .terminal(0)?
+            .ok_or_else(|| blocked("process has not exited"))?;
+        Ok(TerminatedProcess {
+            process: self.process.try_clone()?,
+            terminal,
+            _image_parent: self._image.parent.clone(),
         })
     }
     pub(crate) fn terminal(&self, timeout_ms: u32) -> io::Result<Option<TerminalReceipt>> {
@@ -199,6 +217,9 @@ pub(crate) struct TerminatedProcess {
     _image_parent: Arc<Directory>,
 }
 impl TerminatedProcess {
+    pub(crate) fn identity(&self) -> &ProcessIdentity {
+        &self.terminal.identity
+    }
     pub(crate) fn verify(&self) -> io::Result<()> {
         if unsafe { WaitForSingleObject(handle(&self.process), 0) } != WAIT_OBJECT_0 {
             return Err(blocked("retained terminal process evidence changed"));
@@ -736,6 +757,20 @@ impl DurableProcessIdentity {
         self.record.verify()?;
         ExactProcess::reopen(&self.binding.process)
     }
+    /// Actual held receipt bytes for protected journal observation, never a
+    /// filename reopen or a replacement process authority.
+    pub(crate) fn record_bytes(&self) -> io::Result<&[u8]> {
+        self.record.verify()?;
+        Ok(self.record.bytes())
+    }
+    pub(crate) fn record_reference(&self) -> io::Result<(ComponentName, FileIdentity, String)> {
+        self.record.verify()?;
+        Ok((
+            self.record.name().clone(),
+            self.record.file_identity().clone(),
+            self.record.digest().into(),
+        ))
+    }
 }
 pub(crate) struct PreparedProcess<'lease> {
     process: ExactProcess,
@@ -750,6 +785,7 @@ pub(crate) struct PreparedProcess<'lease> {
     resume_intent: Option<DurableRecord>,
     historical_lifetime: Option<DurableRecord>,
     lease: &'lease mut ExclusiveLease,
+    manager_job: Option<&'lease super::manager_process::AdmittedManagerJob>,
 }
 impl<'lease> PreparedProcess<'lease> {
     /// Low-level creation primitive. The later coordinator must supply validated
@@ -762,6 +798,31 @@ impl<'lease> PreparedProcess<'lease> {
         root: Arc<PrivateDirectory>,
         user: &CurrentUser,
         lease: &'lease mut ExclusiveLease,
+    ) -> io::Result<Self> {
+        Self::create_suspended_inner(image, command, kind, root, user, lease, None)
+    }
+    /// Only an admitted copied manager can request explicit breakaway into its
+    /// installer/historical dedicated job. The general primitive never escapes.
+    pub(crate) fn create_suspended_from_manager(
+        image: PinnedFile,
+        command: CommandLine,
+        kind: JobKind,
+        root: Arc<PrivateDirectory>,
+        user: &CurrentUser,
+        lease: &'lease mut ExclusiveLease,
+        manager_job: &'lease super::manager_process::AdmittedManagerJob,
+    ) -> io::Result<Self> {
+        manager_job.verify_current()?;
+        Self::create_suspended_inner(image, command, kind, root, user, lease, Some(manager_job))
+    }
+    fn create_suspended_inner(
+        image: PinnedFile,
+        command: CommandLine,
+        kind: JobKind,
+        root: Arc<PrivateDirectory>,
+        user: &CurrentUser,
+        lease: &'lease mut ExclusiveLease,
+        manager_job: Option<&'lease super::manager_process::AdmittedManagerJob>,
     ) -> io::Result<Self> {
         lease.verify()?;
         root.verify(user)?;
@@ -809,6 +870,12 @@ impl<'lease> PreparedProcess<'lease> {
         let environment = command.environment.as_ref().map(|v| v.as_ptr().cast());
         #[cfg(not(test))]
         let environment = None;
+        let mut flags =
+            CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
+        if let Some(manager) = manager_job {
+            manager.verify_current()?;
+            flags |= CREATE_BREAKAWAY_FROM_JOB;
+        }
         unsafe {
             CreateProcessW(
                 PCWSTR(application.as_ptr()),
@@ -816,7 +883,7 @@ impl<'lease> PreparedProcess<'lease> {
                 None,
                 None,
                 false,
-                CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+                flags,
                 environment,
                 PCWSTR(current_directory.as_ptr()),
                 &startup.StartupInfo,
@@ -835,11 +902,16 @@ impl<'lease> PreparedProcess<'lease> {
             &image,
         )?;
         job.contains_handle(handle(pending.process.as_ref().expect("owned child")))?;
+        // Keep the explicit cleanup guard armed through every membership check.
         let process = ExactProcess {
-            process: pending.process.take().expect("owned child"),
+            process: pending.process.as_ref().expect("owned child").try_clone()?,
             identity: observed,
             _image: image,
         };
+        if let Some(manager) = manager_job {
+            manager.verify_child_outside(&process)?;
+        }
+        drop(pending.process.take());
         Ok(Self {
             process,
             thread,
@@ -853,6 +925,7 @@ impl<'lease> PreparedProcess<'lease> {
             resume_intent: None,
             historical_lifetime: None,
             lease,
+            manager_job,
         })
     }
     pub(crate) fn persist_identity(
@@ -902,6 +975,9 @@ impl<'lease> PreparedProcess<'lease> {
             return Err(blocked("resume lacks its exact durable process receipt"));
         }
         self.job.contains(&self.process)?;
+        if let Some(manager) = self.manager_job {
+            manager.verify_child_outside(&self.process)?;
+        }
         if self.process.terminal(0)?.is_some() {
             return Err(blocked("suspended process already terminated"));
         }
@@ -945,6 +1021,10 @@ impl<'lease> PreparedProcess<'lease> {
     pub(crate) fn resume(&mut self, receipt: &DurableProcessIdentity) -> io::Result<()> {
         self.commit_resume_intent(receipt)?;
         self.prepare_historical_lifetime(receipt)?;
+        self.job.contains(&self.process)?;
+        if let Some(manager) = self.manager_job {
+            manager.verify_child_outside(&self.process)?;
+        }
         let previous = unsafe { ResumeThread(handle(&self.thread)) };
         if previous != 1 {
             return Err(blocked("process resume outcome is unknown"));
@@ -1014,6 +1094,133 @@ impl<'lease> PreparedProcess<'lease> {
     pub(crate) fn probe_exact(&self) -> io::Result<ExactProcess> {
         ExactProcess::reopen(&self.process.identity)
     }
+    /// Retain terminal custody before releasing this owner's image and mutable
+    /// lease borrow. The exact process receipt is borrowed directly, avoiding a
+    /// sharing-conflicting reopen of its original durable writer.
+    pub(crate) fn observe_terminal_guard(
+        &self,
+        receipt: &DurableProcessIdentity,
+        user: &CurrentUser,
+    ) -> io::Result<Option<TerminalProcessJob>> {
+        self.lease.verify()?;
+        self.root.verify(user)?;
+        self.intent.verify()?;
+        receipt.record.verify()?;
+        let phase = self
+            .job
+            .phase
+            .ok_or_else(|| blocked("terminal job phase is unknown"))?;
+        if !self.identity_persisted
+            || !self.resume_attempted
+            || receipt.binding.schema != 3
+            || receipt.binding.launch != self.launch
+            || receipt.binding.process != self.process.identity
+            || receipt.binding.intent != self.intent.digest()
+            || receipt.binding.command_digest != self.command_digest
+            || receipt.binding.job != self.job.identity
+            || receipt.binding.job_phase != JobPhase::ArmedPreparation
+            || &receipt.binding.lease != self.lease.identity()
+            || receipt.record.root_identity() != self.root.directory().identity()
+            || self.intent.root_identity() != self.root.directory().identity()
+            || !matches!(
+                (self.job.identity.kind, phase),
+                (JobKind::Installer, JobPhase::ArmedPreparation)
+                    | (JobKind::HistoricalApplication, JobPhase::HistoricalLifetime)
+            )
+        {
+            return Err(blocked("terminal custody belongs to another launch"));
+        }
+        let intent: LaunchIntent =
+            serde_json::from_slice(self.intent.bytes()).map_err(io::Error::other)?;
+        if intent.schema != 3
+            || intent.launch != self.launch
+            || intent.image != self.process.identity.image
+            || intent.image_digest != self.process.identity.image_digest
+            || intent.command_digest != self.command_digest
+            || intent.job != self.job.identity
+            || intent.job_phase != JobPhase::ArmedPreparation
+            || &intent.lease != self.lease.identity()
+        {
+            return Err(blocked("terminal launch intent binding differs"));
+        }
+        let resume = self
+            .resume_intent
+            .as_ref()
+            .ok_or_else(|| blocked("terminal launch lacks resume intent"))?;
+        resume.verify()?;
+        let expected_resume = serde_json::to_vec(&serde_json::json!({
+            "schema": 2, "launch": self.launch, "processReceipt": receipt.record.digest(),
+            "operation": "resume", "fromJobPhase": JobPhase::ArmedPreparation
+        }))
+        .map_err(io::Error::other)?;
+        if resume.root_identity() != self.root.directory().identity()
+            || resume.bytes() != expected_resume.as_slice()
+        {
+            return Err(blocked("terminal resume intent differs"));
+        }
+        let historical_lifetime = if self.job.identity.kind == JobKind::HistoricalApplication {
+            let lifetime = self
+                .historical_lifetime
+                .as_ref()
+                .ok_or_else(|| blocked("terminal historical lifetime receipt missing"))?;
+            lifetime.verify()?;
+            let expected = serde_json::to_vec(&serde_json::json!({
+                "schema": 1, "launch": self.launch, "processReceipt": receipt.record.digest(),
+                "job": self.job.identity, "jobPhase": JobPhase::HistoricalLifetime,
+                "operation": "historical-job-disarmed"
+            }))
+            .map_err(io::Error::other)?;
+            if lifetime.root_identity() != self.root.directory().identity()
+                || lifetime.bytes() != expected.as_slice()
+            {
+                return Err(blocked("terminal historical lifetime receipt differs"));
+            }
+            Some(lifetime.digest().to_owned())
+        } else {
+            None
+        };
+        // Never query IsProcessInJob on a terminated process. Creation/resume
+        // already authenticated its membership; this is the same retained job.
+        let Some(terminal) = self.process.terminal(0)? else {
+            return Ok(None);
+        };
+        let job = PrivateJob::open_recorded(&self.job.identity, phase, user)?;
+        if job.active_processes()? != 0 {
+            return Ok(None);
+        }
+        let process = self.process.retain_terminal()?;
+        let binding = TerminalCustodyBinding {
+            schema: 1,
+            launch: self.launch.clone(),
+            root: self.root.directory().identity().clone(),
+            launch_intent: self.intent.digest().into(),
+            process_receipt: receipt.record.digest().into(),
+            process: terminal.identity,
+            exit_code: terminal.exit_code,
+            job: self.job.identity.clone(),
+            job_phase: phase,
+            active_processes: 0,
+            historical_lifetime,
+        };
+        let record = DurableRecord::create(
+            self.root.clone(),
+            ComponentName::new(OsStr::new(&format!(
+                "terminal-custody-{}.json",
+                self.launch
+            )))?,
+            &serde_json::to_vec(&binding).map_err(io::Error::other)?,
+            user,
+        )?;
+        let result = TerminalProcessJob {
+            process,
+            job,
+            record,
+            binding,
+            root: self.root.clone(),
+        };
+        result.verify()?;
+        Ok(Some(result))
+    }
     pub(crate) fn persist_terminal(&self, user: &CurrentUser) -> io::Result<DurableRecord> {
         if self.job.phase == Some(JobPhase::HistoricalLifetime) {
             self.historical_lifetime
@@ -1044,6 +1251,87 @@ impl<'lease> PreparedProcess<'lease> {
     }
     pub(crate) fn active_processes(&self) -> io::Result<u32> {
         self.job.active_processes()
+    }
+}
+
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TerminalCustodyBinding {
+    schema: u32,
+    launch: String,
+    root: FileIdentity,
+    launch_intent: String,
+    process_receipt: String,
+    process: ProcessIdentity,
+    exit_code: u32,
+    job: JobIdentity,
+    job_phase: JobPhase,
+    active_processes: u32,
+    historical_lifetime: Option<String>,
+}
+
+/// Exact terminal process, actual empty private job and durable custody record.
+/// This owns neither an image file nor an installation lease. It proves terminal
+/// custody only; an exit code is not itself installer or Return success.
+pub(crate) struct TerminalProcessJob {
+    process: TerminatedProcess,
+    job: PrivateJob,
+    record: DurableRecord,
+    binding: TerminalCustodyBinding,
+    root: Arc<PrivateDirectory>,
+}
+impl TerminalProcessJob {
+    pub(crate) fn verify(&self) -> io::Result<()> {
+        let user = CurrentUser::capture()?;
+        self.root.verify(&user)?;
+        self.process.verify()?;
+        self.record.verify()?;
+        user.verify_private_job(handle(&self.job.handle))?;
+        self.job.verify_limits()?;
+        let persisted: TerminalCustodyBinding =
+            serde_json::from_slice(self.record.bytes()).map_err(io::Error::other)?;
+        if persisted != self.binding
+            || self.binding.schema != 1
+            || self.record.root_identity() != self.root.directory().identity()
+            || &self.binding.root != self.root.directory().identity()
+            || &self.binding.process != self.process.identity()
+            || self.binding.exit_code != self.process.terminal.exit_code
+            || self.binding.job != self.job.identity
+            || self.job.phase != Some(self.binding.job_phase)
+            || self.binding.active_processes != 0
+            || self.job.active_processes()? != 0
+            || self.job.identity.owner != user.sid_text()
+        {
+            return Err(blocked("terminal process custody changed"));
+        }
+        Ok(())
+    }
+    pub(crate) fn job_kind(&self) -> JobKind {
+        self.binding.job.kind
+    }
+    pub(crate) fn root_identity(&self) -> &FileIdentity {
+        &self.binding.root
+    }
+    pub(crate) fn process_identity(&self) -> &ProcessIdentity {
+        self.process.identity()
+    }
+    /// Bind an actual newly acquired image fence to this original terminal
+    /// process object; serialized metadata never supplies execution authority.
+    pub(crate) fn verify_image(&self, identity: &FileIdentity, digest: &str) -> io::Result<()> {
+        self.verify()?;
+        if &self.binding.process.image != identity || self.binding.process.image_digest != digest {
+            return Err(blocked("image differs from terminal process custody"));
+        }
+        Ok(())
+    }
+    pub(crate) fn terminal_bytes(&self) -> &[u8] {
+        self.record.bytes()
+    }
+    pub(crate) fn terminal_reference(&self) -> (String, String) {
+        (
+            format!("terminal-custody-{}.json", self.binding.launch),
+            self.record.digest().into(),
+        )
     }
 }
 
@@ -1174,3 +1462,8 @@ impl RecoveredNeverResumed {
         self._receipt.verify()
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/version_history_process_terminal_windows.rs"]
+#[allow(non_snake_case)]
+mod terminal_tests;

@@ -59,6 +59,20 @@ impl ImageFence {
     pub(crate) fn identity(&self) -> &FileIdentity {
         self.image.identity()
     }
+    /// Exact retained parent/component after a successful no-replacement move.
+    /// observe_location remains the independent OS identity/full-path probe.
+    pub(crate) fn held_location(&self) -> io::Result<(FileIdentity, ComponentName)> {
+        self.verify()?;
+        self.image.parent.recheck()?;
+        Ok((
+            self.image.parent.identity().clone(),
+            self.image.name.clone(),
+        ))
+    }
+    pub(crate) fn digest(&self) -> io::Result<&str> {
+        self.verify()?;
+        Ok(&self.digest)
+    }
     /// Bundle capture reads the SAME exclusive image guard; it never reopens
     /// the protected name or weakens sharing to copy the executable.
     pub(super) fn context_metadata(&self) -> io::Result<super::files::Metadata> {

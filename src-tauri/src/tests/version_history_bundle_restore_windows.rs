@@ -1667,3 +1667,72 @@ fn BundleReturn_ConfidentialObjects_005() {
         "exclusive fence must check its actual image ACL too"
     );
 }
+
+// 检查完整安装恢复允许系统正向设置继承标记，但原始权限相等比较与其他权限字段保持严格。
+#[test]
+fn BundleReturn_SecurityContract_006() {
+    use windows::Win32::Security::SE_DACL_AUTO_INHERITED;
+
+    let temp = tempfile::tempdir().unwrap();
+    let user = CurrentUser::capture().unwrap();
+    let parent = Directory::open_absolute(temp.path()).unwrap();
+    let root = Arc::new(
+        PrivateDirectory::create_new(parent, component("contract").unwrap(), &user).unwrap(),
+    );
+    let tree =
+        HeldTree::capture_private(root.directory().clone(), SnapshotLimits::default(), &user)
+            .unwrap();
+    let mut original = tree.manifest.clone();
+    let PermissionRecord::Windows { descriptor, .. } =
+        &mut original.entries[0].metadata.permissions
+    else {
+        unreachable!()
+    };
+    let control = u16::from_le_bytes([descriptor[2], descriptor[3]]);
+    descriptor[2..4].copy_from_slice(&(control & !SE_DACL_AUTO_INHERITED.0).to_le_bytes());
+    let mut restored = original.clone();
+    let PermissionRecord::Windows { descriptor, .. } =
+        &mut restored.entries[0].metadata.permissions
+    else {
+        unreachable!()
+    };
+    descriptor[2..4].copy_from_slice(&(control | SE_DACL_AUTO_INHERITED.0).to_le_bytes());
+    assert_ne!(
+        original.entries[0].metadata.permissions,
+        restored.entries[0].metadata.permissions
+    );
+    assert_ne!(original.digest().unwrap(), restored.digest().unwrap());
+    verify_logical_restore(&original, &restored).unwrap();
+    assert!(verify_logical_restore(&restored, &original).is_err());
+    let expected = &original.entries[0].metadata.permissions;
+    let observed = &restored.entries[0].metadata.permissions;
+    assert!(restored_permissions_match(expected, observed));
+    let PermissionRecord::Windows { descriptor, .. } = observed else {
+        unreachable!()
+    };
+    for offset in 0..descriptor.len() {
+        for bit in 0..8 {
+            if offset == 3 && bit == 2 {
+                continue;
+            }
+            let mut changed = restored.clone();
+            let PermissionRecord::Windows { descriptor, .. } =
+                &mut changed.entries[0].metadata.permissions
+            else {
+                unreachable!()
+            };
+            descriptor[offset] ^= 1 << bit;
+            assert!(
+                verify_logical_restore(&original, &changed).is_err(),
+                "installation restoration accepted byte {offset}, bit {bit}"
+            );
+        }
+    }
+    let PermissionRecord::Windows { attributes, .. } =
+        &mut restored.entries[0].metadata.permissions
+    else {
+        unreachable!()
+    };
+    *attributes ^= windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY.0;
+    assert!(verify_logical_restore(&original, &restored).is_err());
+}

@@ -873,6 +873,27 @@ impl SwitchJournal {
     pub(crate) fn has_historical_uncertainty(&self) -> bool {
         !self.compensated.is_empty()
     }
+    /// Diagnostic prerequisite for the concrete source factory. This boolean
+    /// supplies no quiescence or filesystem authority on its own.
+    pub(crate) fn source_snapshot_candidate(&self) -> bool {
+        self.phase == JournalPhase::Reviewed
+            && !self.recovering
+            && !self.requires_reconciliation()
+            && !self.has_historical_uncertainty()
+            && !self.context_return_only
+            && !self.preinstall_return_only
+            && !self.later_return_only
+            && !self.bundle_return_only
+            && self.applied(EffectKind::FenceSourceImage)
+            && self.effects.values().all(|effect| {
+                matches!(
+                    effect.spec.kind,
+                    EffectKind::PrivateBackupEntry { .. }
+                        | EffectKind::VerifySourceBundleCopy
+                        | EffectKind::FenceSourceImage
+                )
+            })
+    }
 
     /// Validation is read-only. Commit changes only the indexed affected entry;
     /// failed validation never requires cloning/rolling back the entire history.
@@ -2149,7 +2170,40 @@ struct ProtectedManifest {
     #[cfg(test)]
     fixture: Option<FixtureManifest>,
     #[cfg(windows)]
-    windows: Option<super::windows::durability::DurableArtifact>,
+    windows: Option<std::sync::Arc<Mutex<super::windows::durability::DurableArtifact>>>,
+}
+/// Shares the actual protected artifact handle with the writer. Its mutex also
+/// serializes the shared Windows file cursor; no duplicate ambient file open or
+/// caller-supplied artifact digest can create this evidence.
+#[cfg(windows)]
+pub(crate) struct RetainedRoleGuard {
+    binding: JournalBinding,
+    role: ManifestRole,
+    root: std::sync::Arc<super::windows::files::PrivateDirectory>,
+    artifact: std::sync::Arc<Mutex<super::windows::durability::DurableArtifact>>,
+}
+#[cfg(windows)]
+impl RetainedRoleGuard {
+    pub(crate) fn verify(&self) -> Result<(), SafeError> {
+        self.artifact.lock().verify().map_err(storage_error)
+    }
+    pub(crate) fn read(&self) -> Result<Vec<u8>, SafeError> {
+        self.artifact.lock().read().map_err(storage_error)
+    }
+    pub(crate) fn verify_role(
+        &self,
+        binding: &JournalBinding,
+        role: ManifestRole,
+        root: &super::windows::files::PrivateDirectory,
+    ) -> Result<(), SafeError> {
+        if &self.binding != binding
+            || self.role != role
+            || self.root.directory().identity() != root.directory().identity()
+        {
+            return Err(error("HISTORY_MANIFEST_CHANGED"));
+        }
+        self.verify()
+    }
 }
 #[cfg(test)]
 struct FixtureManifest {
@@ -3782,7 +3836,7 @@ impl JournalStore {
             WriterTrust::HeldWindowsHandle => {
                 for held in self.dependencies.lock().values() {
                     if let Some(artifact) = &held.windows {
-                        artifact.verify().map_err(storage_error)?;
+                        artifact.lock().verify().map_err(storage_error)?;
                     }
                 }
                 Ok(())
@@ -4245,7 +4299,7 @@ impl JournalStore {
                     ProtectedManifest {
                         #[cfg(test)]
                         fixture: None,
-                        windows: Some(artifact),
+                        windows: Some(std::sync::Arc::new(Mutex::new(artifact))),
                     },
                 );
             }
@@ -4261,6 +4315,41 @@ impl JournalStore {
         drop(dependencies);
         let mut held = self.open_manifest(digest)?;
         self.read_protected_manifest(digest, &mut held)
+    }
+    #[cfg(windows)]
+    pub(crate) fn retain_role_guard(
+        &mut self,
+        root: std::sync::Arc<super::windows::files::PrivateDirectory>,
+        binding: &JournalBinding,
+        generation: u64,
+        role: ManifestRole,
+    ) -> Result<RetainedRoleGuard, SafeError> {
+        self.verify_windows_binding(&root, binding, generation)?;
+        let digest = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?
+            .journal
+            .manifest(role)
+            .ok_or_else(|| error("HISTORY_MANIFEST_INVALID"))?
+            .to_owned();
+        self.protect_manifest(&digest)?;
+        let artifact = self
+            .dependencies
+            .lock()
+            .get(&digest)
+            .and_then(|held| held.windows.as_ref())
+            .cloned()
+            .ok_or_else(|| error("HISTORY_MANIFEST_CHANGED"))?;
+        let retained = RetainedRoleGuard {
+            binding: binding.clone(),
+            role,
+            root: root.clone(),
+            artifact,
+        };
+        retained.verify_role(binding, role, &root)?;
+        self.verify_windows_binding(&root, binding, generation)?;
+        Ok(retained)
     }
     /// Acquire and hash-validate before the first frame that references this
     /// artifact. Existing dependencies share one retained handle per digest.
@@ -4284,7 +4373,9 @@ impl JournalStore {
             JournalStorage::Windows(storage) => Ok(ProtectedManifest {
                 #[cfg(test)]
                 fixture: None,
-                windows: Some(storage.open_artifact(digest).map_err(storage_error)?),
+                windows: Some(std::sync::Arc::new(Mutex::new(
+                    storage.open_artifact(digest).map_err(storage_error)?,
+                ))),
             }),
             #[cfg(test)]
             JournalStorage::Fixture { directory, .. } => {
@@ -4318,7 +4409,7 @@ impl JournalStore {
     ) -> Result<Vec<u8>, SafeError> {
         #[cfg(windows)]
         if let Some(artifact) = &held.windows {
-            return artifact.read().map_err(storage_error);
+            return artifact.lock().read().map_err(storage_error);
         }
         #[cfg(test)]
         {

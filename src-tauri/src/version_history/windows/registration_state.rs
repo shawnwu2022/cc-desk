@@ -827,6 +827,11 @@ impl RetainedRegistrationState {
         self.verify(journal)?;
         observed.recheck()
     }
+    /// Retained original authority survives intentional installer changes to
+    /// current registry values. The exact role and protected bytes still match.
+    pub(crate) fn verify_retained(&self, journal: &mut RegistrationJournal<'_>) -> io::Result<()> {
+        self.verify(journal)
+    }
 }
 fn safe<T>(result: Result<T, crate::cli::types::SafeError>) -> io::Result<T> {
     result.map_err(|_| blocked("registration journal unavailable"))

@@ -600,3 +600,47 @@ fn HistoryCatalog_IoExpiry_014() {
         "HISTORY_SELECTION_EXPIRED"
     );
 }
+
+// Offline diagnostics validate retained syntax and bindings, but mint no selection token.
+#[test]
+fn HistoryCatalog_RetainedDiagnostic_015() {
+    use crate::version_history::catalog::inspect_retained_observation;
+    let release = parse_catalog_page(OBSERVED).unwrap().remove(0);
+    let installer = release
+        .assets
+        .iter()
+        .find(|a| a.name.ends_with("-setup.exe"))
+        .unwrap();
+    let signature = release
+        .assets
+        .iter()
+        .find(|a| a.name.ends_with("-setup.exe.sig"))
+        .unwrap();
+    let observation = json!({
+        "schema": 1, "release": release,
+        "installer_id": installer.id, "signature_id": signature.id,
+    });
+    let diagnostic =
+        inspect_retained_observation(&serde_json::to_vec(&observation).unwrap()).unwrap();
+    assert_eq!(diagnostic.version(), "0.17.7");
+    assert_eq!(
+        diagnostic.installer_digest(),
+        installer
+            .digest
+            .as_ref()
+            .unwrap()
+            .strip_prefix("sha256:")
+            .unwrap()
+    );
+    for mutation in ["schema", "extra", "asset", "nested"] {
+        let mut changed = observation.clone();
+        match mutation {
+            "schema" => changed["schema"] = json!(2),
+            "extra" => changed["sourceExited"] = json!(true),
+            "asset" => changed["installer_id"] = json!(0),
+            "nested" => changed["release"]["downloadUrl"] = json!("C:/foreign"),
+            _ => unreachable!(),
+        }
+        assert!(inspect_retained_observation(&serde_json::to_vec(&changed).unwrap()).is_err());
+    }
+}

@@ -19,3 +19,24 @@ Claude/Codex 历史、凭据、配置和项目文件仍然共享，且不会回�
 Windows 准备存储在后端解析的 LocalAppData 下创建具有当前用户保护 ACL 的私有目录，从已固定的目录句柄派生能力。存储/平台条件不支持时关闭准备；该能力不构成安装范围或管理器准入证明。
 
 前端覆盖真实 UpdateSection → store → API → 文档桥组合、Rust 准备 DTO fixture、不可用列表、分页、取消/迟到响应、重挂载和文档失效。独立视觉场景使用合成内存传输并禁止真实宿主/网络调用；它生成供人工检查的未批准截图，不修改现有截图基线。Rust/Windows 实际目录能力、编译与命令边界测试仍需 Windows CI；DOM 测试不代表像素或真实安装验收。
+
+## 原生编排的源码状态与验收边界
+
+Windows 正常路径的源码已经连接：专用线程完成当前安装和上下文保存，创建全新 Desk/WebView 状态，启动已验证安装器，核对实际安装字节，启动历史应用，并单独接受用户确认。只有原历史进程及其实际私有 job 全部终止后才可请求返回。返回先保留后续上下文与安装状态，再恢复原始匹配上下文、完整应用、注册及快捷方式；所有实际读回一致后才发布并读回终态 marker。
+
+失败保留原生所有权。源上下文转移、后续应用备份准备和最终恢复读回均在检查完成后才交出 owner。进程启动后的日志、原生观察或管理器命令通道失败，会让专用线程保留原进程、job、回执及租约并报告需要恢复；不会把失败当作终止或自动重放。128 MiB 的真实最小中止保留空间只是一项有界余量，不保证全部恢复所需容量。
+
+这些连接仍不能作为 Windows 原生成功证据。生产切换门禁保持关闭。重新打开保留的管理器仅能读取受保护的状态，不能确认历史启动或执行返回；原管理器退出后，安装器/历史应用的真实终态、空 job、旧进程句柄不可用或仍有未知子进程时的重新准入尚未实现。不能用序列化标志、PID 消失或缺失 job 名称补造这些证明。
+
+正常路径仍需准确最终源码的 Windows 编译、测试、严格检查，以及真正独立未提权进程中的 0.17.7 安装/启动/返回验收。GitHub 托管 runner 的外部 job 限制不是可绕过的测试问题；不得改变其限制或移到未经授权的用户电脑执行。注册描述符和文件变更检测保持精确比较；文件恢复读回采用下述窄范围契约，诊断保留原始描述符的有界差异。
+
+
+## 文件安全描述符恢复读回
+
+真实 Windows run `37070989995` / job `111050123104` 的 `HistorySecurity_ReadbackProbe_001` 复现：`SetSecurityInfo` 后，继承描述符控制字从 `0x8004` 变为 `0x8404`，保护描述符从 `0x9004` 变为 `0x9404`；总长度、四个相对偏移、owner、group、DACL 与 SACL 均相同。差异只有系统设置的 `SE_DACL_AUTO_INHERITED` (`0x0400`)。Microsoft 的 [自动继承规则](https://learn.microsoft.com/en-us/windows/win32/secauthz/automatic-propagation-of-inheritable-aces) 将该位定义为转入当前继承模型的记录；[SetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo) 负责该转换，DACL 保护仍由 `SE_DACL_PROTECTED` (`0x1000`) 决定。
+
+恢复比较接受原始字节完全相同，或仅原始 `0x0400` 未设置、实际已设置的单向变化。清除该位、其他控制位变化、owner/group SID 变化、DACL/SACL 有无或 NULL 状态、ACE 内容/顺序/继承标志变化、相对偏移或长度变化均不能被该例外接受。DOS 属性仍完全一致。应用点仅限文件设置器的读回、完整安装的权限/属性与最终逻辑恢复验证，以及快捷方式恢复后的验证。原始捕获、序列化、摘要、普通 `PermissionRecord`/`ShortcutState` 相等比较、写入前与句柄转换后的稳定性检查不变。当前实际捕获/恢复范围仍是 owner/group/DACL；此修正不增加 SACL/audit 权限能力。
+
+继续使用固定目标句柄上的 `SetSecurityInfo` 和既有所有权/布局/边界检查，不切换至基于路径的旧 `SetFileSecurityW`。`SetSecurityDescriptorControl` 只改内存描述符，`SetSecurityInfo` 的参数不能要求清除该系统位。已核对 pinned `windows 0.61.3` 的 `NtSetSecurityObject` 声明与 Microsoft 用户态说明，但未验证其完整继承行为，不将底层 API 替换作为恢复捷径。
+
+回归包括真实继承/保护文件的生产设置器读回、完整 owner/group/DACL/SACL 描述符中除允许位外逐位变化的拒绝、清除允许位的拒绝、普通相等/摘要仍保留差异，以及完整安装最终恢复与快捷方式内容/属性检查。修正后的真实 Windows 编译和测试仍待准确源码验证；此源码说明不是成功验收证据。

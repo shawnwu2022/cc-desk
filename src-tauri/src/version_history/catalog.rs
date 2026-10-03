@@ -781,31 +781,7 @@ impl CatalogService {
         &self,
         bytes: &[u8],
     ) -> Result<SelectionMetadata, SafeError> {
-        bounded(bytes)?;
-        let observation: RetainedSelectionObservation =
-            serde_json::from_slice(bytes).map_err(|_| error("HISTORY_METADATA_INVALID"))?;
-        if observation.schema != 1 {
-            return Err(error("HISTORY_METADATA_INVALID"));
-        }
-        // Stored observations use our canonical projection. Reject extra keys,
-        // including nested keys that the public GitHub parser may safely ignore.
-        let supplied: serde_json::Value =
-            serde_json::from_slice(bytes).map_err(|_| error("HISTORY_METADATA_INVALID"))?;
-        if serde_json::to_value(&observation).map_err(|_| error("HISTORY_METADATA_INVALID"))?
-            != supplied
-        {
-            return Err(error("HISTORY_METADATA_INVALID"));
-        }
-        validate_release(&observation.release)?;
-        let expected = observation
-            .release
-            .bind(self.host)
-            .map_err(|_| error("HISTORY_RELEASE_BLOCKED"))?;
-        if expected.installer.id != observation.installer_id
-            || expected.signature.id != observation.signature_id
-        {
-            return Err(error("HISTORY_SELECTION_CHANGED"));
-        }
+        let (observation, expected) = parse_retained_observation(bytes, self.host)?;
         let current = self.source.release(expected.release_id)?;
         validate_release(&current)?;
         if current != observation.release || current.bind(self.host).as_ref() != Ok(&expected) {
@@ -814,6 +790,80 @@ impl CatalogService {
         Ok(expected)
     }
 }
+/// Display-only local facts. This type exposes neither a selection token nor a
+/// SelectionMetadata owner, so restart inspection cannot use it to install.
+#[derive(PartialEq, Eq)]
+pub(crate) struct RetainedSelectionDiagnostic {
+    version: String,
+    installer_digest: String,
+    installer_size: u64,
+    signature_digest: String,
+    signature_size: u64,
+}
+impl RetainedSelectionDiagnostic {
+    pub(crate) fn version(&self) -> &str {
+        &self.version
+    }
+    pub(crate) fn installer_digest(&self) -> &str {
+        &self.installer_digest
+    }
+    pub(crate) fn installer_size(&self) -> u64 {
+        self.installer_size
+    }
+    pub(crate) fn signature_digest(&self) -> &str {
+        &self.signature_digest
+    }
+    pub(crate) fn signature_size(&self) -> u64 {
+        self.signature_size
+    }
+}
+fn parse_retained_observation(
+    bytes: &[u8],
+    host: HostPlatform,
+) -> Result<(RetainedSelectionObservation, SelectionMetadata), SafeError> {
+    bounded(bytes)?;
+    let observation: RetainedSelectionObservation =
+        serde_json::from_slice(bytes).map_err(|_| error("HISTORY_METADATA_INVALID"))?;
+    if observation.schema != 1 {
+        return Err(error("HISTORY_METADATA_INVALID"));
+    }
+    // Stored observations use our canonical projection. Reject extra keys,
+    // including nested keys that the public GitHub parser may safely ignore.
+    let supplied: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| error("HISTORY_METADATA_INVALID"))?;
+    if serde_json::to_value(&observation).map_err(|_| error("HISTORY_METADATA_INVALID"))?
+        != supplied
+    {
+        return Err(error("HISTORY_METADATA_INVALID"));
+    }
+    validate_release(&observation.release)?;
+    let expected = observation
+        .release
+        .bind(host)
+        .map_err(|_| error("HISTORY_RELEASE_BLOCKED"))?;
+    if expected.installer.id != observation.installer_id
+        || expected.signature.id != observation.signature_id
+    {
+        return Err(error("HISTORY_SELECTION_CHANGED"));
+    }
+    Ok((observation, expected))
+}
+/// Offline inspection of previously retained metadata. The caller must still
+/// verify its protected record and actual publisher-signed package bytes. This
+/// does not claim that an official asset is still available or unchanged.
+pub(crate) fn inspect_retained_observation(
+    bytes: &[u8],
+) -> Result<RetainedSelectionDiagnostic, SafeError> {
+    let (_, selected) = parse_retained_observation(bytes, HostPlatform::WindowsX64)?;
+    Ok(RetainedSelectionDiagnostic {
+        version: selected.version,
+        installer_digest: selected.installer.sha256,
+        installer_size: selected.installer.size,
+        signature_digest: selected.signature.sha256,
+        signature_size: selected.signature.size,
+    })
+}
+
 fn opaque(value: &str) -> bool {
     value.len() == 32
         && value

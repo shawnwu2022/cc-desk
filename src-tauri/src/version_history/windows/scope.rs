@@ -1141,6 +1141,12 @@ pub(crate) struct FencedInstallation {
     _fence: Arc<parking_lot::Mutex<super::fence::ImageFence>>,
 }
 impl FencedInstallation {
+    pub(crate) fn source_process_identity(&self) -> &super::process::ProcessIdentity {
+        self.terminal.identity()
+    }
+    pub(crate) fn original_path(&self) -> &Path {
+        &self.spelling
+    }
     /// No mutex reacquisition: boundary verification may run while context
     /// holds the fence. Its caller also verifies_fence with that existing lock.
     pub(crate) fn verify(&self) -> ScopeResult<()> {

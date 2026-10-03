@@ -2871,20 +2871,38 @@ fn HistoryContextWindows_DurableReadmission_035() {
             // handles and flushed; this is no assertion of equality to original C0.
             context.verify_durable().unwrap();
         }
+        let moved = fixture
+            .temp
+            .path()
+            .join("quarantine/durable-retained")
+            .exists();
+        assert_eq!(fixture.temp.path().join("desk").exists(), !moved);
+        if !block_readmission {
+            assert!(
+                moved,
+                "the byte-drift case must exercise a real inverse move"
+            );
+        } else {
+            // The actual outside reader still denies a writable flush handle.
+            // This must fail readmission whether the forward rename happened
+            // or NTFS rejected it while that descendant handle was open.
+            assert!(copy
+                .reverse_context_root(&mut context, &boundary, &image, &fixture.user, &mut journal)
+                .is_err());
+            assert!(context.verify_durable().is_err());
+        }
         reader.borrow_mut().take();
-        let _failure = probe_copy_failure(CopyFault::AfterReverseMove);
-        let reversed =
-            copy.reverse_context_root(&mut context, &boundary, &image, &fixture.user, &mut journal);
-        eprintln!(
-            "HISTORY_DURABLE_REVERSE blocked_reader={} original={} quarantined={} succeeded={} error_kind={:?}",
-            block_readmission,
-            fixture.temp.path().join("desk").exists(),
-            fixture.temp.path().join("quarantine/durable-retained").exists(),
-            reversed.is_ok(),
-            reversed.as_ref().err().map(std::io::Error::kind),
-        );
-        assert!(reversed.is_err());
-        assert!(context.verify_durable().is_err());
+        if moved {
+            let _failure = probe_copy_failure(CopyFault::AfterReverseMove);
+            let failure = copy
+                .reverse_context_root(&mut context, &boundary, &image, &fixture.user, &mut journal)
+                .err()
+                .expect("the actual inverse move must reach its injected failure");
+            assert_eq!(failure.to_string(), "injected copy boundary failure");
+            assert!(context.verify_durable().is_err());
+        }
+        // A root that never left its original slot has no inverse move to
+        // fault. Its real retry must still flush current bytes and retain C1.
         copy.reverse_context_root(&mut context, &boundary, &image, &fixture.user, &mut journal)
             .unwrap();
         context.verify_durable().unwrap();

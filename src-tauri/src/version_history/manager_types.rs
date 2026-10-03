@@ -1,7 +1,7 @@
 //! Safe manager presentation DTOs. Offered actions are not effect authority:
 //! commands must re-admit the original document/generation and live OS proofs.
 use super::{
-    catalog::SelectionMetadata,
+    catalog::{RetainedSelectionDiagnostic, SelectionMetadata},
     journal::{JournalPhase, SwitchJournal},
 };
 use crate::cli::{
@@ -102,6 +102,29 @@ impl ManagerStatus {
             phase,
             blocked_reason,
             allowed_actions: offered.to_vec(),
+        })
+    }
+    /// A reopened protected transcript is diagnostic, never a replacement for
+    /// the original coordinator's live installer/job and source-terminal owner.
+    /// This projection cannot advertise confirm, restore or implicit success.
+    pub(crate) fn project_reentry(
+        journal: &SwitchJournal,
+        diagnostic: &RetainedSelectionDiagnostic,
+    ) -> Result<Self, SafeError> {
+        if journal.binding().target_package != diagnostic.installer_digest() {
+            return Err(error("HISTORY_TARGET_CHANGED"));
+        }
+        let phase = ManagerPhase::RecoveryRequired;
+        let allowed_actions = vec![ManagerAction::Refresh];
+        Self::validate_projection(phase, &allowed_actions)?;
+        Ok(Self {
+            transaction_id: journal.binding().transaction_id.clone(),
+            generation: WireU64::parse(&journal.generation().to_string())?,
+            source_version: env!("CARGO_PKG_VERSION").into(),
+            target_version: diagnostic.version().into(),
+            phase,
+            blocked_reason: Some(ManagerBlockReason::RecoveryEvidenceUnavailable),
+            allowed_actions,
         })
     }
     fn validate_projection(

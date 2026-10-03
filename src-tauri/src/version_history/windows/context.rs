@@ -58,6 +58,7 @@ pub(crate) type FreshContextRoots = switching::FreshContextRoots;
 pub(crate) type LaterContextRoots = switching::LaterContextRoots;
 pub(crate) type RestoredContextRoots = switching::RestoredContextRoots;
 pub(crate) type RetainedContextRoots = switching::RetainedContextRoots;
+pub(crate) type ReturnContextCustody = switching::ReturnContextCustody;
 
 const MAX_MANIFEST_BYTES: usize = 32 * 1024 * 1024;
 
@@ -684,6 +685,37 @@ pub(crate) struct HeldBundle {
     manifest: InstalledBundleManifest,
 }
 impl HeldBundle {
+    /// Complete read-only observation of the already installed bundle. The
+    /// coordinator supplies scope/process admission separately. Held readers
+    /// prevent payload replacement while an admitted child is being launched.
+    pub(crate) fn capture_installed(
+        root: Arc<Directory>,
+        image_name: ComponentName,
+        limits: SnapshotLimits,
+    ) -> io::Result<Self> {
+        let original_image_name = text(&image_name)?;
+        let image = root.open_file(image_name, FileAccess::Read)?;
+        let tree = HeldTree::admit(HeldRoot::Present(root), &mut Budget::new(limits)?, None)?;
+        let entry = tree
+            .manifest
+            .entries
+            .iter()
+            .find(|entry| entry.metadata.path == original_image_name)
+            .ok_or_else(|| blocked("installed image missing from complete bundle"))?;
+        if entry.metadata.object_identity != identity(image.identity())?
+            || entry.sha256 != Some(image.digest()?)
+        {
+            return Err(blocked("installed image differs from complete bundle"));
+        }
+        let manifest = InstalledBundleManifest {
+            schema: 1,
+            original_image_name,
+            fenced_image_location: identity(&(image.identity(), image.path()?))?,
+            tree: tree.manifest.clone(),
+        };
+        tree.verify()?;
+        Ok(Self { tree, manifest })
+    }
     /// Complete manager-bootstrap copy input while the source is still alive.
     /// The read guards and scope are rechecked, but this is not quiescence or a
     /// sealed source snapshot; the coordinator must compare it again after exit.

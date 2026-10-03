@@ -133,6 +133,38 @@ pub(crate) struct SnapshotManifest {
     pub(crate) roots: Vec<RootManifest>,
 }
 impl SnapshotManifest {
+    /// Data only: observe the complete actual durable M0 without asserting
+    /// process quiescence, registered scope or permission to rotate any root.
+    /// The coordinator must independently retain those concrete capabilities.
+    #[cfg(windows)]
+    pub(crate) fn observe_durable_context(
+        binding: &JournalBinding,
+        context: &super::windows::context::HeldContext,
+    ) -> Result<Self, SafeError> {
+        binding.validate()?;
+        context.verify_durable().map_err(io_error)?;
+        let roots = [RootKind::Desk, RootKind::WebView]
+            .into_iter()
+            .map(|root| {
+                let observed = context.tree(root).manifest();
+                RootManifest {
+                    root,
+                    location_identity: observed.location_identity.clone(),
+                    entries: observed.entries.clone(),
+                }
+            })
+            .collect();
+        let observed = Self {
+            schema: 1,
+            binding: binding.clone(),
+            context_id: binding.source_context.clone(),
+            roots,
+        };
+        let bytes = observed.encode()?;
+        let observed = Self::decode(&bytes, &sha256(&bytes), binding)?;
+        context.verify_durable().map_err(io_error)?;
+        Ok(observed)
+    }
     pub(crate) fn encode(&self) -> Result<Vec<u8>, SafeError> {
         let bytes = serde_json::to_vec(self).map_err(|_| error("HISTORY_MANIFEST_INVALID"))?;
         if bytes.len() > MAX_MANIFEST_BYTES {

@@ -15,6 +15,7 @@ impl ManagerRequest {
 pub(crate) enum DesktopEntryRequest {
     Ordinary,
     Manager(ManagerRequest),
+    ManagerReentry,
 }
 
 pub(crate) fn observed_request() -> Result<DesktopEntryRequest, SafeError> {
@@ -33,6 +34,12 @@ pub(crate) fn classify(
         .to_str()
         .is_some_and(|name| name.eq_ignore_ascii_case(MANAGER_NAME));
     if is_manager {
+        // Explorer can reopen the independently retained manager without an
+        // argument/shortcut. The protected active marker supplies the selector;
+        // the current exact copied image is verified before any UI is created.
+        if arguments.len() == 1 {
+            return Ok(DesktopEntryRequest::ManagerReentry);
+        }
         if arguments.len() != 3 || arguments[1] != OsStr::new("--version-manager") {
             return Err(error("HISTORY_MANAGER_ENTRY_INVALID"));
         }

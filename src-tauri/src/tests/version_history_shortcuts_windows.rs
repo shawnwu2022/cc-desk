@@ -220,7 +220,7 @@ fn HistoryShortcuts_RestoreConflict_001() {
     .unwrap();
     assert!(current
         .state(ShortcutSlot::Desktop)
-        .same_content_and_permissions(&source));
+        .matches_restored_content_and_permissions(&source));
     assert_eq!(
         current.state(ShortcutSlot::StartMenu),
         &ShortcutState::Absent
@@ -534,7 +534,7 @@ fn HistoryShortcuts_RecreateMissing_006() {
     .unwrap();
     assert!(current
         .state(ShortcutSlot::StartMenu)
-        .same_content_and_permissions(&original));
+        .matches_restored_content_and_permissions(&original));
 }
 
 // 检查私有冲突证据发生部分写入时不允许触碰原位置，并保持源证据可读。
@@ -661,7 +661,7 @@ fn HistoryShortcuts_InheritedDacl_008() {
     assert!(
         actual
             .state(ShortcutSlot::Desktop)
-            .same_content_and_permissions(&original),
+            .matches_restored_content_and_permissions(&original),
         "unprotected inherited owner/group/DACL and bytes must exactly match the source"
     );
 }
@@ -962,7 +962,7 @@ fn HistoryShortcuts_RestoreAttributes_012() {
         let current = HeldProductShortcuts::capture_at(destinations).unwrap();
         assert!(current
             .state(ShortcutSlot::Desktop)
-            .same_content_and_permissions(&original));
+            .matches_restored_content_and_permissions(&original));
         let preserved: serde_json::Value =
             serde_json::from_slice(&store.read_manifest(receipt.preserved_current()).unwrap())
                 .unwrap();
@@ -1023,11 +1023,14 @@ fn HistoryShortcuts_AttributeCapacity_013() {
     assert_eq!(current.state(ShortcutSlot::Desktop), &before);
 }
 
-// 检查生产描述符设置器在独立 NTFS 文件上精确恢复继承与保护权限，仅输出有界差异。
+// 检查生产描述符设置器在独立 NTFS 文件上恢复继承与保护权限，仅允许系统正向设置继承标记。
 #[test]
 fn HistorySecurity_ReadbackProbe_001() {
-    use crate::version_history::windows::shortcuts::{
-        probe_apply_descriptor, probe_capture_descriptor, probe_descriptor_difference,
+    use crate::version_history::windows::{
+        security::restored_file_descriptor_matches,
+        shortcuts::{
+            probe_apply_descriptor, probe_capture_descriptor, probe_descriptor_difference,
+        },
     };
     use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt};
     use windows::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
@@ -1059,7 +1062,11 @@ fn HistorySecurity_ReadbackProbe_001() {
         let restored = probe_apply_descriptor(&file, &expected);
         let actual = probe_capture_descriptor(&file).unwrap();
         probe_descriptor_difference(case, &expected, &actual);
-        outcomes.push((case, restored.is_ok(), actual == expected));
+        outcomes.push((
+            case,
+            restored.is_ok(),
+            restored_file_descriptor_matches(&expected, &actual),
+        ));
         drop(file);
         assert_eq!(
             std::fs::read(&path).unwrap(),
@@ -1071,7 +1078,131 @@ fn HistorySecurity_ReadbackProbe_001() {
     assert!(
         outcomes
             .iter()
-            .all(|(_, restored, exact)| *restored && *exact),
-        "each descriptor must restore exactly; (case, setter_success, exact_readback)={outcomes:?}"
+            .all(|(_, restored, matches)| *restored && *matches),
+        "each descriptor must satisfy the restoration contract; (case, setter_success, readback_matches)={outcomes:?}"
     );
+}
+
+// 检查仅恢复后的 DACL 自动继承标记可从未设置变为设置，其余每个字节和控制位仍须一致。
+#[test]
+fn HistorySecurity_RestoreContract_002() {
+    use crate::version_history::windows::security::restored_file_descriptor_matches;
+    use windows::Win32::{
+        Foundation::{LocalFree, HLOCAL},
+        Security::{
+            Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
+            PSECURITY_DESCRIPTOR, SE_DACL_AUTO_INHERITED,
+        },
+    };
+
+    // A complete descriptor includes owner/group and ordered DACL/SACL ACEs.
+    // Conversion does not install an audit ACL or require audit privileges.
+    let sddl: Vec<u16> = "O:SYG:BAD:P(A;;FA;;;SY)(A;;FR;;;BA)S:P(AU;SA;FR;;;WD)"
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let expected = unsafe {
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        let mut length = 0;
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            windows_core::PCWSTR(sddl.as_ptr()),
+            1,
+            &mut descriptor,
+            Some(&mut length),
+        )
+        .unwrap();
+        let bytes = std::slice::from_raw_parts(descriptor.0.cast::<u8>(), length as usize).to_vec();
+        let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+        bytes
+    };
+    let control = u16::from_le_bytes([expected[2], expected[3]]);
+    assert_eq!(control & SE_DACL_AUTO_INHERITED.0, 0);
+    let mut restored = expected.clone();
+    restored[2..4].copy_from_slice(&(control | SE_DACL_AUTO_INHERITED.0).to_le_bytes());
+    assert_ne!(
+        expected, restored,
+        "raw capture/equality must retain OS evidence"
+    );
+    assert!(restored_file_descriptor_matches(&expected, &expected));
+    assert!(restored_file_descriptor_matches(&expected, &restored));
+    assert!(restored_file_descriptor_matches(&restored, &restored));
+    assert!(
+        !restored_file_descriptor_matches(&restored, &expected),
+        "clearing AUTO_INHERITED is not the observed SetSecurityInfo transition"
+    );
+    // Includes owner/group SIDs, ACE access masks/SIDs/inheritance flags/order,
+    // ACL sizes and offsets, DACL/SACL PRESENT, and both PROTECTED control bits.
+    for offset in 0..restored.len() {
+        for bit in 0..8 {
+            if offset == 3 && bit == 2 {
+                continue;
+            }
+            let mut changed = restored.clone();
+            changed[offset] ^= 1 << bit;
+            assert!(
+                !restored_file_descriptor_matches(&expected, &changed),
+                "restoration accepted another change at byte {offset}, bit {bit}"
+            );
+        }
+    }
+    let mut extended = restored.clone();
+    extended.push(0);
+    assert!(!restored_file_descriptor_matches(&expected, &extended));
+    assert!(!restored_file_descriptor_matches(
+        &expected,
+        &restored[..19]
+    ));
+}
+
+// 检查只读快捷方式比较仍区分系统继承标记，恢复比较仅允许正向的系统转换。
+#[test]
+fn HistorySecurity_ShortcutContract_003() {
+    use crate::version_history::windows::shortcuts::probe_capture_descriptor;
+    use windows::Win32::Security::SE_DACL_AUTO_INHERITED;
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("shortcut-contract");
+    std::fs::write(&path, b"shortcut fixture").unwrap();
+    let user = CurrentUser::capture().unwrap();
+    set_dacl(&path, &format!("D:P(A;;FA;;;{})", user.sid_text()));
+    let descriptor = probe_capture_descriptor(&std::fs::File::open(&path).unwrap()).unwrap();
+    let original = ShortcutState::Present {
+        identity: Directory::open_absolute(temp.path())
+            .unwrap()
+            .identity()
+            .clone(),
+        attributes: windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_ARCHIVE.0,
+        bytes: b"shortcut fixture".to_vec(),
+        sha256: "fixture digest".into(),
+        descriptor,
+    };
+    let mut restored = original.clone();
+    let ShortcutState::Present { descriptor, .. } = &mut restored else {
+        unreachable!()
+    };
+    let control = u16::from_le_bytes([descriptor[2], descriptor[3]]);
+    descriptor[2..4].copy_from_slice(&(control | SE_DACL_AUTO_INHERITED.0).to_le_bytes());
+    assert_ne!(restored, original);
+    assert!(!restored.same_content_and_permissions(&original));
+    assert!(restored.matches_restored_content_and_permissions(&original));
+    assert!(!original.matches_restored_content_and_permissions(&restored));
+    for field in 0..3 {
+        let mut changed = restored.clone();
+        let ShortcutState::Present {
+            bytes,
+            sha256,
+            attributes,
+            ..
+        } = &mut changed
+        else {
+            unreachable!()
+        };
+        match field {
+            0 => bytes.push(0),
+            1 => sha256.push('0'),
+            2 => *attributes ^= windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY.0,
+            _ => unreachable!(),
+        }
+        assert!(!changed.matches_restored_content_and_permissions(&original));
+    }
 }

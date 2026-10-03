@@ -10,7 +10,7 @@ use super::{
     },
     handle,
     lease::ExclusiveLease,
-    security::{capture_file_descriptor, CurrentUser},
+    security::{capture_file_descriptor, restored_file_descriptor_matches, CurrentUser},
     win_error,
 };
 use crate::cli::types::SafeError;
@@ -133,6 +133,35 @@ impl ShortcutState {
                     ..
                 },
             ) => a == b && ah == bh && ad == bd && aa == ba,
+            _ => false,
+        }
+    }
+    /// Directional post-restoration check against the retained original. The
+    /// ordinary comparison above still detects every change before mutation.
+    pub(crate) fn matches_restored_content_and_permissions(&self, original: &Self) -> bool {
+        match (self, original) {
+            (Self::Absent, Self::Absent) => true,
+            (
+                Self::Present {
+                    bytes,
+                    sha256,
+                    descriptor,
+                    attributes,
+                    ..
+                },
+                Self::Present {
+                    bytes: expected_bytes,
+                    sha256: expected_sha256,
+                    descriptor: expected_descriptor,
+                    attributes: expected_attributes,
+                    ..
+                },
+            ) => {
+                bytes == expected_bytes
+                    && sha256 == expected_sha256
+                    && attributes == expected_attributes
+                    && restored_file_descriptor_matches(expected_descriptor, descriptor)
+            }
             _ => false,
         }
     }
@@ -473,6 +502,16 @@ pub(crate) struct RetainedProductShortcuts {
     destinations: [Destination; 2],
 }
 impl RetainedProductShortcuts {
+    /// Keep original manifest and destination authority while the installer may
+    /// legitimately replace the current shortcut bytes at those same slots.
+    pub(crate) fn verify_retained(&self) -> io::Result<()> {
+        self.manifest.validate(&self.manifest.binding)?;
+        self.source.verify(&self.destinations)?;
+        for (destination, entry) in self.destinations.iter().zip(&self.manifest.entries) {
+            destination.matches(entry)?;
+        }
+        Ok(())
+    }
     /// Re-observe both original product slots immediately before installation.
     /// Only this retained capability selects the resolver and held parents;
     /// callers cannot substitute states, paths or digests. Temporary file read
@@ -801,7 +840,10 @@ impl RetainedProductShortcuts {
                         file.file.sync_all()?;
                         fault(ShortcutFault::AfterPermissions)?;
                         let observed = destination.entry(slot, &held)?;
-                        if !observed.state.same_content_and_permissions(&source.state) {
+                        if !observed
+                            .state
+                            .matches_restored_content_and_permissions(&source.state)
+                        {
                             return Err(blocked("shortcut permission readback changed"));
                         }
                         Ok(observed)
@@ -816,7 +858,11 @@ impl RetainedProductShortcuts {
         drop(held.take());
         held = destination.open(false)?;
         let observed = destination.entry(slot, &held)?;
-        if observed != before || !observed.state.same_content_and_permissions(&source.state) {
+        if observed != before
+            || !observed
+                .state
+                .matches_restored_content_and_permissions(&source.state)
+        {
             return Err(blocked("shortcut changed at final verification"));
         }
         let pending = journal.begin(
@@ -1184,7 +1230,7 @@ fn apply_descriptor(file: &File, bytes: &[u8]) -> io::Result<()> {
     }
     .map_err(win_error)?;
     let actual = capture_file_descriptor(handle(file))?;
-    if actual != bytes {
+    if !restored_file_descriptor_matches(bytes, &actual) {
         #[cfg(test)]
         probe_descriptor_difference("shortcut", bytes, &actual);
         return Err(blocked("shortcut owner/group/DACL readback changed"));
@@ -1193,7 +1239,7 @@ fn apply_descriptor(file: &File, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// Bounded diagnostics for disposable Windows tests. Never emit paths, SIDs,
-/// ACE contents, or raw descriptors; the exact production comparison is intact.
+/// ACE contents, or raw descriptors; raw capture bytes remain intact.
 #[cfg(test)]
 pub(crate) fn probe_descriptor_difference(label: &'static str, expected: &[u8], actual: &[u8]) {
     fn offset(bytes: &[u8], field: usize) -> Option<usize> {

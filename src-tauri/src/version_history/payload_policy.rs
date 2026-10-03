@@ -352,6 +352,17 @@ pub(crate) struct VerifiedInstalledPayload<'a> {
 
 #[cfg(windows)]
 impl PayloadAdmission {
+    /// Measured policy evidence for the copied manager's retained package.
+    /// This does not pass the ordinary begin/roundtrip coordinator gate.
+    pub(crate) fn admit_retained(
+        package: &super::windows::package::RetainedPackage,
+    ) -> Result<Self, SafeError> {
+        package.verify_retained()?;
+        let admission = Self::for_selection(package.selection())?;
+        package.verify_retained()?;
+        Ok(admission)
+    }
+
     pub(crate) fn retain_source(
         &self,
         source: &super::windows::context::HeldBundle,

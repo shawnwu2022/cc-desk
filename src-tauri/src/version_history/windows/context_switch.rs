@@ -7,6 +7,10 @@ use crate::version_history::{
     snapshot::SnapshotManifest,
 };
 
+#[cfg(test)]
+#[path = "../../tests/version_history_context_custody_windows.rs"]
+mod custody_tests;
+
 /// Source quiescence is usable only after the journal positively admitted the
 /// no-launch return path. Normal return requires the distinct current-image
 /// and historical-process boundary; an original image guard cannot replace it.
@@ -128,17 +132,159 @@ pub(crate) struct RetainedContextRoots {
     origins: BTreeMap<RootKind, OriginSlot>,
     retained: BTreeMap<RootKind, TreeManifest>,
 }
+
+/// Immutable backup custody for Return admission. Only private copy trees and
+/// original slot parents are shared: original/current descendant readers must
+/// remain movable by the context executor's guarded release/re-admission gap.
+pub(crate) struct ReturnContextCustody {
+    copies: BTreeMap<RootKind, PrivateTreeCopy>,
+    expected: SnapshotManifest,
+    origins: BTreeMap<RootKind, OriginSlot>,
+}
+impl ReturnContextCustody {
+    pub(crate) fn verify(&self, user: &CurrentUser) -> io::Result<()> {
+        if self.copies.len() != 2 || self.origins.len() != 2 {
+            return Err(blocked("incomplete original context custody"));
+        }
+        for kind in [RootKind::Desk, RootKind::WebView] {
+            let copy = &self.copies[&kind];
+            copy.verify(user)?;
+            let source = &copy.manifest()?.source;
+            let expected = self
+                .expected
+                .roots
+                .iter()
+                .find(|root| root.root == kind)
+                .ok_or_else(|| blocked("missing original context root"))?;
+            if source.entries != expected.entries
+                || source.location_identity != expected.location_identity
+            {
+                return Err(blocked("original context copy differs"));
+            }
+            self.origins[&kind].parent.recheck()?;
+        }
+        Ok(())
+    }
+    pub(crate) fn snapshot(&self) -> &SnapshotManifest {
+        &self.expected
+    }
+    pub(crate) fn verify_data_root(&self, data: &PrivateDirectory) -> io::Result<()> {
+        for copy in self.copies.values() {
+            if copy.parent.directory().identity() != data.directory().identity() {
+                return Err(blocked("original context belongs to another recovery root"));
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn capture_current(&self, user: &CurrentUser) -> io::Result<HeldContext> {
+        self.verify(user)?;
+        let context = HeldContext::capture_durable(
+            observe_renameable(&self.origins[&RootKind::Desk])?,
+            observe_renameable(&self.origins[&RootKind::WebView])?,
+            SnapshotLimits::default(),
+        )?;
+        self.verify(user)?;
+        Ok(context)
+    }
+}
 impl RetainedContextRoots {
+    pub(crate) fn retain_return_custody(
+        &self,
+        user: &CurrentUser,
+    ) -> io::Result<ReturnContextCustody> {
+        self.verify(user)?;
+        let mut copies = BTreeMap::new();
+        for kind in [RootKind::Desk, RootKind::WebView] {
+            let original = &self.copies[&kind];
+            let held = original
+                .tree
+                .as_ref()
+                .ok_or_else(|| blocked("original copy is incomplete"))?;
+            let entries = held
+                .entries
+                .iter()
+                .map(|(path, entry)| {
+                    let entry = match entry {
+                        HeldEntry::Directory(root) => HeldEntry::Directory(root.clone()),
+                        HeldEntry::File(FileGuard::Ordinary(file)) => {
+                            HeldEntry::File(FileGuard::Ordinary(file.clone()))
+                        }
+                        HeldEntry::File(FileGuard::Fenced(_)) => {
+                            return Err(blocked("source image cannot be context copy custody"))
+                        }
+                    };
+                    Ok((path.clone(), entry))
+                })
+                .collect::<io::Result<BTreeMap<_, _>>>()?;
+            if held.detached_image.is_some() || held.fenced_location.is_some() {
+                return Err(blocked("context backup contains an image fence"));
+            }
+            copies.insert(
+                kind,
+                PrivateTreeCopy {
+                    parent: original.parent.clone(),
+                    name: original.name.clone(),
+                    tree: Some(HeldTree {
+                        root: held.root.clone(),
+                        manifest: held.manifest.clone(),
+                        entries,
+                        limits: held.limits,
+                        detached_image: None,
+                        fenced_location: None,
+                        flush_required: held.flush_required,
+                        durably_flushed: held.durably_flushed,
+                    }),
+                    manifest: Some(original.manifest()?.clone()),
+                    attempted: true,
+                    plan_generation: None,
+                    rotation_attempted: false,
+                    rotation: None,
+                    recovery_copy: None,
+                    retained_recovery_attempts: BTreeMap::new(),
+                },
+            );
+        }
+        let custody = ReturnContextCustody {
+            copies,
+            expected: self.expected.clone(),
+            origins: self.origins.clone(),
+        };
+        custody.verify(user)?;
+        self.verify(user)?;
+        Ok(custody)
+    }
     pub(crate) fn admit(
         source: HeldContext,
-        copies: BTreeMap<RootKind, PrivateTreeCopy>,
-        readmitted: BTreeMap<RootKind, ReadmittedRoot>,
+        mut copies: BTreeMap<RootKind, PrivateTreeCopy>,
+        mut readmitted: BTreeMap<RootKind, ReadmittedRoot>,
         expected: SnapshotManifest,
         boundary: &SnapshotBoundary,
         user: &CurrentUser,
     ) -> io::Result<Self> {
+        Self::admit_retaining(
+            &mut Some(source),
+            &mut copies,
+            &mut readmitted,
+            &expected,
+            boundary,
+            user,
+        )
+    }
+    /// Validate all live evidence before taking custody. A rejected admission
+    /// leaves every rotated source, copy, and readmission proof with its caller.
+    pub(crate) fn admit_retaining(
+        source: &mut Option<HeldContext>,
+        copies: &mut BTreeMap<RootKind, PrivateTreeCopy>,
+        readmitted: &mut BTreeMap<RootKind, ReadmittedRoot>,
+        expected: &SnapshotManifest,
+        boundary: &SnapshotBoundary,
+        user: &CurrentUser,
+    ) -> io::Result<Self> {
+        let held_source = source
+            .as_ref()
+            .ok_or_else(|| blocked("original context custody missing"))?;
         safe(boundary.verify_live())?;
-        source.verify_durable()?;
+        held_source.verify_durable()?;
         let bytes = safe(expected.encode())?;
         let expected = safe(SnapshotManifest::decode(
             &bytes,
@@ -167,11 +313,12 @@ impl RetainedContextRoots {
                 return Err(blocked("original snapshot does not describe C0"));
             }
             let origin = if root.entries.is_empty() {
-                if readmitted.contains_key(&kind) || !source.tree(kind).manifest.entries.is_empty()
+                if readmitted.contains_key(&kind)
+                    || !held_source.tree(kind).manifest.entries.is_empty()
                 {
                     return Err(blocked("original absence differs"));
                 }
-                let HeldRoot::Absent { parent, name } = &source.tree(kind).root else {
+                let HeldRoot::Absent { parent, name } = &held_source.tree(kind).root else {
                     return Err(blocked("missing source absence guard"));
                 };
                 OriginSlot {
@@ -182,12 +329,12 @@ impl RetainedContextRoots {
                 let proof = readmitted
                     .get(&kind)
                     .ok_or_else(|| blocked("missing same-object root readmission"))?;
-                proof.verify(&source, copy, user)?;
+                proof.verify(held_source, copy, user)?;
                 let HeldRoot::Absent { parent, name } = &proof.live_location else {
                     return Err(blocked("original live slot is not absent"));
                 };
                 if proof.before != copy.manifest()?.source
-                    || proof.after != source.tree(kind).manifest
+                    || proof.after != held_source.tree(kind).manifest
                 {
                     return Err(blocked(
                         "readmitted root does not describe original snapshot",
@@ -200,7 +347,7 @@ impl RetainedContextRoots {
             };
             origin.absent().verify()?;
             origins.insert(kind, origin);
-            retained.insert(kind, source.tree(kind).manifest.clone());
+            retained.insert(kind, held_source.tree(kind).manifest.clone());
         }
         if readmitted.len()
             != expected
@@ -211,25 +358,42 @@ impl RetainedContextRoots {
         {
             return Err(blocked("extra root readmission"));
         }
+        Self::verify_parts(held_source, copies, &origins, &retained, user)?;
+        safe(boundary.verify_live())?;
+        // No fallible operation may follow the first custody transfer.
         let result = Self {
-            source,
-            copies,
+            source: source.take().expect("validated original custody"),
+            copies: std::mem::take(copies),
             expected,
             origins,
             retained,
         };
-        result.verify(user)?;
-        safe(boundary.verify_live())?;
+        readmitted.clear();
         Ok(result)
     }
     /// Original absence is sealed historical evidence once fresh state exists.
     /// Live-slot existence is checked separately by fresh/preserve/restore steps.
     pub(crate) fn verify(&self, user: &CurrentUser) -> io::Result<()> {
+        Self::verify_parts(
+            &self.source,
+            &self.copies,
+            &self.origins,
+            &self.retained,
+            user,
+        )
+    }
+    fn verify_parts(
+        source: &HeldContext,
+        copies: &BTreeMap<RootKind, PrivateTreeCopy>,
+        origins: &BTreeMap<RootKind, OriginSlot>,
+        retained: &BTreeMap<RootKind, TreeManifest>,
+        user: &CurrentUser,
+    ) -> io::Result<()> {
         for kind in [RootKind::Desk, RootKind::WebView] {
-            let copy = &self.copies[&kind];
+            let copy = &copies[&kind];
             copy.verify(user)?;
-            let expected = &self.retained[&kind];
-            let actual = self.source.tree(kind);
+            let expected = &retained[&kind];
+            let actual = source.tree(kind);
             if actual.manifest != *expected
                 || actual.manifest.entries != copy.manifest()?.source.entries
             {
@@ -241,7 +405,7 @@ impl RetainedContextRoots {
                     return Err(blocked("original tree has no current file flush evidence"));
                 }
             }
-            self.origins[&kind].parent.recheck()?;
+            origins[&kind].parent.recheck()?;
         }
         Ok(())
     }
@@ -592,6 +756,16 @@ impl FreshContextRoots {
         user: &CurrentUser,
         journal: &mut ContextJournal<'_>,
     ) -> io::Result<()> {
+        self.verify_for_launch(originals, user, journal)
+    }
+    /// Keep all created-root guards held if any launch check fails. The caller
+    /// releases this owner only after this complete validation succeeds.
+    pub(crate) fn verify_for_launch(
+        &self,
+        originals: &RetainedContextRoots,
+        user: &CurrentUser,
+        journal: &mut ContextJournal<'_>,
+    ) -> io::Result<()> {
         self.verify(originals, user)?;
         require_phase(journal, &[JournalPhase::FreshReady])?;
         require_role(
@@ -600,8 +774,6 @@ impl FreshContextRoots {
             &sha256(&self.manifest_bytes(originals, user)?),
         )?;
         journal.verify()?;
-        // Dropping these guards permits old binaries to open their own roots.
-        // Future recovery captures actual roots again under new live quiescence.
         Ok(())
     }
     /// Transfer retained create handles into a new complete current observation.
@@ -1361,12 +1533,25 @@ impl ContextRestoration {
         originals: RetainedContextRoots,
         later: LaterContextRoots,
     ) -> io::Result<Self> {
-        if originals.expected.context_id != later.binding.source_context {
+        Self::new_retaining(&mut Some(originals), &mut Some(later))
+    }
+    /// Both owners remain in their original slots if admission is rejected.
+    pub(crate) fn new_retaining(
+        originals: &mut Option<RetainedContextRoots>,
+        later: &mut Option<LaterContextRoots>,
+    ) -> io::Result<Self> {
+        let held_originals = originals
+            .as_ref()
+            .ok_or_else(|| blocked("original return custody missing"))?;
+        let held_later = later
+            .as_ref()
+            .ok_or_else(|| blocked("later return custody missing"))?;
+        if held_originals.expected.context_id != held_later.binding.source_context {
             return Err(blocked("return context binding differs"));
         }
         Ok(Self {
-            originals,
-            later,
+            originals: originals.take().expect("validated original return custody"),
+            later: later.take().expect("validated later return custody"),
             moves: BTreeMap::new(),
             completed: BTreeSet::new(),
         })
@@ -1699,10 +1884,22 @@ impl ContextRestoration {
         Ok(())
     }
     pub(crate) fn finish(self, user: &CurrentUser) -> io::Result<RestoredContextRoots> {
-        self.verify_final(user)?;
+        Self::finish_retaining(&mut Some(self), user)
+    }
+    /// A failed final readback must retain the entire restoration, including
+    /// incomplete moves and both original and later user-state owners.
+    pub(crate) fn finish_retaining(
+        restoration: &mut Option<Self>,
+        user: &CurrentUser,
+    ) -> io::Result<RestoredContextRoots> {
+        restoration
+            .as_ref()
+            .ok_or_else(|| blocked("context restoration custody missing"))?
+            .verify_final(user)?;
+        let restored = restoration.take().expect("validated context restoration");
         Ok(RestoredContextRoots {
-            originals: self.originals,
-            later: self.later,
+            originals: restored.originals,
+            later: restored.later,
         })
     }
 }

@@ -104,47 +104,49 @@ mod native_cli_terminal_input;
 
 mod version_history_catalog;
 mod version_history_commands;
-
-mod version_history_download;
-
-mod version_history_runtime;
-mod version_history_transaction;
-
-#[cfg(windows)]
-mod version_history_journal_windows;
-#[cfg(windows)]
-mod version_history_webview;
-#[cfg(windows)]
-mod version_history_windows;
-
-#[cfg(target_os = "windows")]
-mod version_history_payload;
-
-#[cfg(windows)]
-mod version_history_context_windows;
-#[cfg(windows)]
-mod version_history_scope;
-
-mod version_history_registration_journal;
-
-#[cfg(windows)]
-mod version_history_classes_alias;
-
+#[cfg(test)]
 mod version_history_manager_document;
 mod version_history_manager_entry;
 mod version_history_manager_wire;
 mod version_history_source_document;
-#[cfg(windows)]
-mod version_history_startup_windows;
 
 mod version_history_begin_switch;
-mod version_history_private_abort;
+mod version_history_download;
+
+#[cfg(windows)]
+mod version_history_classes_alias;
+mod version_history_registration_journal;
+mod version_history_runtime;
+mod version_history_transaction;
 
 #[cfg(windows)]
 mod version_history_registration_windows;
 #[cfg(windows)]
 mod version_history_registry_state_windows;
 #[cfg(windows)]
+mod version_history_shortcuts_windows;
+#[cfg(windows)]
+mod version_history_startup_windows;
+
+#[cfg(windows)]
+mod version_history_context_windows;
+#[cfg(windows)]
+mod version_history_journal_windows;
+#[cfg(target_os = "windows")]
+mod version_history_payload;
+#[cfg(windows)]
+mod version_history_scope;
+#[cfg(windows)]
 mod version_history_scope_context_windows;
 #[cfg(windows)]
-mod version_history_shortcuts_windows;
+mod version_history_webview;
+#[cfg(windows)]
+mod version_history_windows;
+
+mod version_history_private_abort;
+
+#[cfg(windows)]
+mod version_history_role_guard_windows;
+
+#[cfg(windows)]
+mod version_history_source_boundary_windows;

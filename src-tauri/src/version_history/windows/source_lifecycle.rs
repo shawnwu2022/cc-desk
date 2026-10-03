@@ -1,6 +1,7 @@
 //! Original source controller ownership. UI-only COM observations remain on
 //! the event-loop thread until matched browser exits have been journaled.
 use super::{
+    durability::MarkerStore,
     files::{ComponentName, Directory},
     lease::ExclusiveLease,
     manager_process::{launch_path, ManagerReadyReceipt},
@@ -21,7 +22,7 @@ use crate::{
         types::SafeError,
     },
     version_history::{
-        journal::{JournalBinding, JournalEvent, JournalStore, ManifestRole},
+        journal::{JournalBinding, JournalEvent, JournalPhase, JournalStore, ManifestRole},
         maintenance::FrozenAdmissions,
     },
 };
@@ -632,6 +633,21 @@ impl SourceHandoff {
                 .last_valid
                 .as_ref()
                 .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?;
+            if journal.phase() != JournalPhase::Reviewed || journal.requires_reconciliation() {
+                return Err(error("HISTORY_RECOVERY_REQUIRED"));
+            }
+            let mut marker = MarkerStore::open_existing(installation.root().clone(), &control)
+                .map_err(blocked)?
+                .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?;
+            crate::version_history::maintenance::ActiveContextMarker::decode(
+                marker.current().map_err(blocked)?,
+            )?
+            .validate_checkpoint(
+                journal,
+                inspection
+                    .head()
+                    .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?,
+            )?;
             if journal.manifest(ManifestRole::SourceHandoffExit).is_some() {
                 return Err(error("HISTORY_RECONCILIATION_REQUIRED"));
             }
@@ -658,6 +674,12 @@ impl SourceHandoff {
                     digest,
                 },
             )?;
+            let checkpoint =
+                crate::version_history::maintenance::ActiveContextMarker::transition_from(
+                    &store.inspect(journal_binding)?,
+                )?;
+            marker.append(&checkpoint, &mut store).map_err(blocked)?;
+            control.verify_root(installation.root()).map_err(blocked)?;
             let permission = SourceExitPermission {
                 caller: self.caller.clone(),
                 transaction: self.transaction.clone(),
