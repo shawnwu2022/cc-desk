@@ -24,7 +24,7 @@ describe('retained version manager read-only entry boundary', () => {
 
   it('VersionManager_ReentryRegistersOnlyAuthenticatedInspection_002', () => {
     const commands = host().match(/tauri::generate_handler!\[([^\]]+)\]/)?.[1]
-    expect(commands?.split(',').map(value => value.trim()).filter(Boolean)).toEqual(['inspect_version_switch'])
+    expect(commands?.split(',').map(value => value.trim()).filter(Boolean)).toEqual(['self::inspect_version_switch'])
     expect(host()).toContain('manager_document::build_manager(')
     expect(host()).not.toContain('.plugin(')
     expect(host()).not.toContain('pin_initial_handoff')

@@ -396,7 +396,7 @@ mod reentry_runtime {
             .manage(runtime)
             // Deliberately no confirmation or return command in this host.
             // Retained diagnostics cannot acquire live operation authority.
-            .invoke_handler(tauri::generate_handler![inspect_version_switch])
+            .invoke_handler(tauri::generate_handler![self::inspect_version_switch])
             .setup(move |app| {
                 let data_directory = setup.ui.data_directory()?;
                 let bound = manager_document::build_manager(

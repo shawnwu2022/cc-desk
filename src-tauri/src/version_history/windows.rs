@@ -58,8 +58,6 @@ pub(crate) mod source_boundary;
 #[cfg(windows)]
 pub(crate) mod source_failure;
 #[cfg(windows)]
-pub(crate) mod source_failure;
-#[cfg(windows)]
 pub(crate) mod source_lifecycle;
 #[cfg(windows)]
 pub(crate) mod source_session;

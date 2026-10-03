@@ -1069,12 +1069,13 @@ impl SourceExecution {
             .as_mut()
             .ok_or_else(|| error("HISTORY_EARLY_ABORT_BLOCKED"))?
             .invalidate_before_process_intent();
+        let before = (
+            self.parts.package.record_digest(),
+            self.parts.scope.directory().identity().clone(),
+        );
         let pending = self.begin(
             EffectKind::InstallerCreateSuspended,
-            &(
-                self.parts.package.record_digest(),
-                self.parts.scope.directory().identity(),
-            ),
+            &before,
             &(JobKind::Installer, command.text()),
         )?;
         let manager_job = owner.child.manager_job();
@@ -1239,8 +1240,12 @@ impl SourceExecution {
             .payload
             .verify_installed(target.tree(), &self.parts.companions)?
             .verify()?;
+        let before = (
+            self.parts.payload.inventory_digest().to_owned(),
+            self.parts.package.record_digest(),
+        );
         let pending = self.begin(EffectKind::VerifyTargetBundle,
-            &(self.parts.payload.inventory_digest(), self.parts.package.record_digest()),
+            &before,
             &"complete actual installed inventory equals reviewed payload plus preserved companions")?;
         self.parts
             .payload
