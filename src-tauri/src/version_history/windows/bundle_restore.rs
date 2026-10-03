@@ -872,6 +872,38 @@ pub(crate) struct BundleRestoration {
     pending_restored: Option<RestoredInstallationBundle>,
 }
 impl BundleRestoration {
+    /// 封存仅接受已完整保存、且没有开始任何恢复效果的原始计划。
+    pub(crate) fn verify_return_checkpoint(
+        &self,
+        user: &CurrentUser,
+        journal: &mut ContextJournal<'_>,
+    ) -> io::Result<()> {
+        if self.attempted
+            || self.quarantine.is_some()
+            || !self.moved.is_empty()
+            || self.writes.len() != 1
+            || !self.writes.contains_key("")
+            || self.directories.len() != 1
+            || !self.directories.contains_key("")
+            || self.pending_readback.is_some()
+            || self.pending_result_record.is_some()
+            || self.pending_restored.is_some()
+        {
+            return Err(blocked("installation restoration has already started"));
+        }
+        let root = &self.directories[""];
+        root.recheck()?;
+        if root.identity() != self.original.directory.identity()
+            || super::super::files::metadata(handle(&self.writes[""]))?.identity != *root.identity()
+        {
+            return Err(blocked("prepared installation root owners changed"));
+        }
+        self.verify_dependencies(user, journal)?;
+        self.current
+            .as_ref()
+            .ok_or_else(|| blocked("current installation guards missing"))?
+            .verify()
+    }
     /// The return factory has reconciled the exact installer, historical App,
     /// browser and owned children and minted fresh lease/quiescence evidence.
     /// A source SnapshotBoundary cannot be substituted here.

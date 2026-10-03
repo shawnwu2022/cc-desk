@@ -432,6 +432,18 @@ fn exact_drive_path(value: &OsStr) -> io::Result<String> {
     Ok(text)
 }
 
+// 启动工作目录保留同一对象的盘符路径；卷 GUID 路径只用于身份核对。
+fn launch_directory(parent: &Arc<Directory>) -> io::Result<(Arc<Directory>, OsString)> {
+    parent.recheck()?;
+    let path = super::manager_process::launch_path(parent.raw())?;
+    let retained = Directory::open_absolute(Path::new(&path))?;
+    if retained.identity() != parent.identity() {
+        return Err(blocked("process current directory changed identity"));
+    }
+    parent.recheck()?;
+    Ok((retained, path))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct JobIdentity {
@@ -871,7 +883,8 @@ impl<'lease> PreparedProcess<'lease> {
         if line.len() > 32767 {
             return Err(blocked("command line exceeds Windows limit"));
         }
-        let current_directory: Vec<_> = image.parent.path()?.encode_wide().chain(Some(0)).collect();
+        let (_current_directory_guard, current_directory) = launch_directory(&image.parent)?;
+        let current_directory: Vec<_> = current_directory.encode_wide().chain(Some(0)).collect();
         let mut information = PROCESS_INFORMATION::default();
         #[cfg(test)]
         let environment = command.environment.as_ref().map(|v| v.as_ptr().cast());
@@ -1613,6 +1626,10 @@ pub(crate) struct TerminalProcessJob {
     cancellation: Option<CancellationEvidence>,
 }
 impl TerminalProcessJob {
+    /// 仅区分已有原生终态的来源，不为尚未终止的进程创建权限。
+    pub(crate) fn was_cancelled_before_resume(&self) -> bool {
+        self.cancellation.is_some()
+    }
     pub(crate) fn verify(&self) -> io::Result<()> {
         let user = CurrentUser::capture()?;
         self.root.verify(&user)?;

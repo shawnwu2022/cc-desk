@@ -88,7 +88,10 @@ fn CancelBeforeResume_OriginalReceiptAndActualCustody_001() {
                 .observe_cancelled_before_resume(Some(&receipt), user)
                 .is_err());
             assert!(process.resume(&receipt).is_err());
-            cancelled.into_terminal().verify().unwrap();
+            let terminal = cancelled.into_terminal();
+            terminal.verify().unwrap();
+            // 首次resume前清理的live返回不能进入正常运行终态的重启检查点协议。
+            assert!(terminal.was_cancelled_before_resume());
             assert!(!marker.exists());
         });
     }

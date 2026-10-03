@@ -31,6 +31,7 @@ use super::{
         FailedInstallerReturnInputs, ReturnBoundaryAttempt, ReturnBoundaryInputs,
         ReturnBoundaryPreparation,
     },
+    return_checkpoint::LiveReturnCheckpoint,
     scope::{ConfiguredExclusions, FencedInstallation},
     security::CurrentUser,
     shortcuts::{RetainedProductShortcuts, ShortcutJournal, ShortcutRestoreReceipt},
@@ -2076,6 +2077,50 @@ impl SourceExecution {
             &mut self.parts.store,
         )
     }
+    fn with_return_checkpoint(
+        &mut self,
+        apply: impl FnOnce(&mut JournalStore, &LiveReturnCheckpoint<'_>, u64) -> Result<u64, SafeError>,
+    ) -> Result<u64, SafeError> {
+        self.verify()?;
+        if self.historical_launch.is_some() {
+            return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+        }
+        let evidence = LiveReturnCheckpoint {
+            binding: &self.parts.binding,
+            installation: &self.parts.installation,
+            data: &self.parts.data,
+            exclusive: &self.parts.exclusive,
+            source: &self.parts.terminal,
+            scope: &self.parts.scope,
+            installer: self
+                .installer
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_INSTALLER_OUTCOME_UNKNOWN"))?,
+            historical: self
+                .historical
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_SOURCE_EXIT_UNCONFIRMED"))?,
+            boundary: self
+                .return_boundary
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_RETURN_BOUNDARY_BLOCKED"))?,
+            attempt: self
+                .return_attempt
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_RETURN_BOUNDARY_BLOCKED"))?,
+            context: self
+                .context_restoration
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_CONTEXT_CHANGED"))?,
+            bundle: self
+                .bundle_restoration
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_CONTEXT_CHANGED"))?,
+            registration: &self.parts.registration,
+            shortcuts: &self.parts.shortcuts,
+        };
+        apply(&mut self.parts.store, &evidence, self.parts.generation)
+    }
     fn return_previous(
         &mut self,
         command: &AcceptedManagerReturn,
@@ -2276,6 +2321,33 @@ impl SourceExecution {
                 .map_err(blocked)?,
         );
         self.phase(JournalPhase::Restoring)?;
+        // 从未创建历史程序或在首次resume前取消的旧live返回保持原证明路径。
+        if self
+            .historical
+            .as_ref()
+            .is_some_and(|terminal| !terminal.was_cancelled_before_resume())
+        {
+            // 原受管进程已终止。废弃启动permit，封存完整返回点，再持久化唯一执行claim。
+            drop(self.historical_launch.take());
+            self.parts.generation =
+                self.with_return_checkpoint(|store, evidence, generation| {
+                    store.seal_live_return_checkpoint(evidence, generation)
+                })?;
+            self.checkpoint()?;
+            let marker = {
+                let retained = MarkerStore::open_existing(
+                    self.parts.installation.root().clone(),
+                    &self.parts.control,
+                )
+                .map_err(blocked)?
+                .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?;
+                ActiveContextMarker::decode(retained.current().map_err(blocked)?)?
+            };
+            self.parts.generation =
+                self.with_return_checkpoint(|store, evidence, generation| {
+                    store.claim_live_return_checkpoint(evidence, &marker, generation)
+                })?;
+        }
         progress.publish(&mut self.parts.store, None, &[ManagerAction::Refresh])?;
         // Restore matching Desk/WebView context while the startup marker and
         // lifetime lease still block the feature-bearing original application.

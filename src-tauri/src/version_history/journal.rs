@@ -1,6 +1,7 @@
 //! Append-only, individually flushed records and immutable manifests. A record
 //! proves an observed transcript, never authority to replay an OS operation.
 //! No multi-file/registry atomicity or Windows directory durability is implied.
+mod return_checkpoint;
 #[cfg(test)]
 use super::maintenance::DirectoryDurability;
 use super::verified_package::sha256;
@@ -513,6 +514,13 @@ pub(crate) struct BundleBackupPlan {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum JournalEvent {
+    ReturnCheckpointSealed {
+        checkpoint: String,
+    },
+    ReturnExecutionClaimed {
+        checkpoint: String,
+        attempt_id: String,
+    },
     RetainSourcePartial {
         effect_id: String,
         intent_generation: u64,
@@ -794,6 +802,8 @@ struct EffectRecord {
 }
 
 pub(crate) struct SwitchJournal {
+    return_checkpoint: Option<(String, u64)>,
+    return_claim: Option<String>,
     binding: JournalBinding,
     generation: u64,
     phase: JournalPhase,
@@ -833,6 +843,8 @@ impl SwitchJournal {
         binding.validate()?;
         capacity.validate(Limits::default(), 0)?;
         Ok(Self {
+            return_checkpoint: None,
+            return_claim: None,
             binding,
             generation: 0,
             phase: JournalPhase::Reviewed,
@@ -939,7 +951,46 @@ impl SwitchJournal {
         ) {
             return Err(error("HISTORY_TRANSACTION_TERMINAL"));
         }
+        // 已封存的受管启动集合不能再扩大；首次恢复效果必须在唯一claim之后。
+        if self.return_checkpoint.is_some() {
+            match event {
+                JournalEvent::Intent { effect }
+                    if self.return_claim.is_none() || !self.return_effect_allowed(effect) =>
+                {
+                    return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+                }
+                JournalEvent::Manifest { .. }
+                | JournalEvent::PrivateBackupPlan { .. }
+                | JournalEvent::PrepareLaterBackup { .. }
+                | JournalEvent::PrepareBundleBackup { .. }
+                | JournalEvent::AdmitBundleStart { .. } => {
+                    return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+                }
+                _ => {}
+            }
+        }
         match event {
+            JournalEvent::ReturnCheckpointSealed { checkpoint } => {
+                validate_digest(checkpoint)?;
+                if !self.return_checkpoint_candidate() {
+                    return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+                }
+            }
+            JournalEvent::ReturnExecutionClaimed {
+                checkpoint,
+                attempt_id,
+            } => {
+                validate_digest(checkpoint)?;
+                validate_id(attempt_id)?;
+                if self.return_claim.is_some()
+                    || self.phase != JournalPhase::Restoring
+                    || self.return_checkpoint.as_ref()
+                        != Some(&(checkpoint.clone(), self.generation))
+                    || self.requires_reconciliation()
+                {
+                    return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+                }
+            }
             JournalEvent::Begin { .. } => return Err(error("HISTORY_JOURNAL_INVALID")),
             JournalEvent::RetainSourcePartial {
                 effect_id,
@@ -1667,6 +1718,12 @@ impl SwitchJournal {
         self.generation += 1;
         self.recovering |= self.lane(&event) == WriteLane::Recovery;
         match event {
+            JournalEvent::ReturnCheckpointSealed { checkpoint } => {
+                self.return_checkpoint = Some((checkpoint, self.generation));
+            }
+            JournalEvent::ReturnExecutionClaimed { attempt_id, .. } => {
+                self.return_claim = Some(attempt_id);
+            }
             JournalEvent::Begin { .. } => unreachable!("genesis is not an appended event"),
             JournalEvent::RetainSourcePartial { effect_id, .. } => {
                 let effect = self
@@ -3828,6 +3885,8 @@ impl JournalStore {
         if matches!(
             event,
             JournalEvent::AbortPreContext { .. }
+                | JournalEvent::ReturnCheckpointSealed { .. }
+                | JournalEvent::ReturnExecutionClaimed { .. }
                 | JournalEvent::CompensateUnknown { .. }
                 | JournalEvent::AdmitRootReverse { .. }
                 | JournalEvent::ConfirmRootReturned { .. }
@@ -4243,6 +4302,13 @@ impl JournalStore {
         identity: &str,
     ) -> Result<(), SafeError> {
         match event {
+            JournalEvent::ReturnCheckpointSealed { checkpoint } => {
+                self.validate_return_checkpoint_artifact(journal, checkpoint, head, identity)?;
+            }
+            JournalEvent::ReturnExecutionClaimed { checkpoint, .. } => {
+                // 签发时已逐项验证anchor；claim仍重新保护实际记录和依赖文件。
+                self.read_manifest(checkpoint)?;
+            }
             JournalEvent::RetainSourcePartial {
                 effect_id,
                 intent_generation,

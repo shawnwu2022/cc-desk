@@ -154,3 +154,5 @@ mod version_history_role_guard_windows;
 
 #[cfg(windows)]
 mod version_history_source_boundary_windows;
+
+mod version_history_return_checkpoint;

@@ -28,6 +28,31 @@ fn await_empty(process: &PreparedProcess<'_>) {
     }
 }
 
+// 检查进程工作目录使用同一持有目录的盘符路径，避免卷 GUID 路径触发启动延迟。
+#[test]
+fn TerminalGuard_CurrentDirectoryIdentity_009() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = Directory::open_absolute(temporary.path()).unwrap();
+    let (guard, current_directory) = launch_directory(&parent).unwrap();
+    let units: Vec<_> = current_directory.encode_wide().collect();
+
+    validate_absolute(&units).unwrap();
+    assert!(current_directory
+        .to_string_lossy()
+        .as_bytes()
+        .get(1..3)
+        .is_some_and(|prefix| prefix == b":\\"));
+    assert_eq!(guard.identity(), parent.identity());
+    assert_eq!(
+        Directory::open_absolute(Path::new(&current_directory))
+            .unwrap()
+            .identity(),
+        parent.identity()
+    );
+    guard.recheck().unwrap();
+    parent.recheck().unwrap();
+}
+
 // 检查两个角色的存活进程返回待定，且未创建终态托管回执。
 #[test]
 fn TerminalGuard_LivePending_001() {
@@ -150,6 +175,7 @@ fn TerminalGuard_ReleaseImageLease_002() {
             .unwrap()
             .unwrap();
         guard.verify().unwrap();
+        assert!(!guard.was_cancelled_before_resume());
         assert_eq!(guard.job_kind(), kind);
         assert_eq!(guard.root_identity(), root.directory().identity());
         assert_eq!(guard.process_identity(), &expected_identity);

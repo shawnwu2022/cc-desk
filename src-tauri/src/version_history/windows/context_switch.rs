@@ -1761,6 +1761,21 @@ pub(crate) struct RestoredContextRoots {
     later: LaterContextRoots,
 }
 impl ContextRestoration {
+    /// 仅在第一次恢复效果之前核验原始与后来内容，不创建恢复计划。
+    pub(crate) fn verify_return_checkpoint(
+        &self,
+        user: &CurrentUser,
+    ) -> io::Result<(Vec<u8>, Vec<u8>)> {
+        if !self.moves.is_empty() || !self.completed.is_empty() {
+            return Err(blocked("context restoration has already started"));
+        }
+        self.originals.verify(user)?;
+        self.later.verify_preserved(&self.originals, user)?;
+        Ok((
+            safe(self.originals.snapshot().encode())?,
+            self.later.manifest_bytes(&self.originals, user)?,
+        ))
+    }
     pub(crate) fn new(
         originals: RetainedContextRoots,
         later: LaterContextRoots,

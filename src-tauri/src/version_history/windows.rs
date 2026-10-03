@@ -46,6 +46,8 @@ pub(crate) mod registry;
 #[cfg(windows)]
 pub(crate) mod return_boundary;
 #[cfg(windows)]
+pub(crate) mod return_checkpoint;
+#[cfg(windows)]
 pub(crate) mod scope;
 #[cfg(windows)]
 pub(crate) mod security;

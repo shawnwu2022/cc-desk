@@ -410,6 +410,10 @@ fn BundleReturn_CompleteRestore_002() {
         let mut restore =
             BundleRestoration::prepare(original.clone(), boundary.clone(), &user, &mut journal)
                 .unwrap();
+        // 准备阶段持有原根写权限和目录，但尚未产生恢复效果，必须能封存检查点。
+        restore
+            .verify_return_checkpoint(&user, &mut journal)
+            .unwrap();
         {
             let role = ManifestRole::RetainedTargetContext;
             let digest = journal
