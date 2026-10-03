@@ -252,16 +252,17 @@ describe('loadAppConfig theme', () => {
 
 describe('setTerminalTheme', () => {
   // 设置合法 id 更新 store 并持久化
-  it('SetTerminalTheme_UpdatesValueAndPersists_001', () => {
+  it('SetTerminalTheme_UpdatesValueAndPersists_001', async () => {
     const updates: Array<Record<string, unknown>> = []
     mockIPC((cmd, args) => {
+      if (cmd === 'get_app_config') return { terminalTheme: 'cc-box-dark' }
       if (cmd === 'update_app_config') {
         updates.push((args as { updates: Record<string, unknown> }).updates)
         return null
       }
     })
     const store = useAppStore()
-    store.setTerminalTheme('cc-box-light')
+    await store.setTerminalTheme('cc-box-light')
     expect(store.terminalTheme).toBe('cc-box-light')
     expect(updates.some(u => u.terminalTheme === 'cc-box-light')).toBe(true)
   })

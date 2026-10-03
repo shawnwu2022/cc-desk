@@ -1,14 +1,17 @@
 //! Owned output routes around the single-execution coordinator.
 #![allow(dead_code)] // Live IPC still awaits document-lifetime authentication.
 
+#[cfg(test)]
 use super::invocation::build_invocation;
 use super::launch::LaunchCoordinator;
 use super::profiles::error;
 use super::run_registry::LaunchStatus;
 use super::snapshot::{CallerIdentity, LaunchSnapshot};
 use super::types::{LaunchRequest, SafeError};
+#[cfg(test)]
 use crate::platform::launch::resolve_process;
 use crate::platform::owned_pty::OwnedPty;
+#[cfg(test)]
 use portable_pty::PtySize;
 use std::cell::RefCell;
 use std::io::{self, Read};
@@ -75,6 +78,7 @@ impl<P, L> LaunchCoordinator<RoutedResource<P, L>> {
     }
 }
 
+#[cfg(test)]
 impl<L> LaunchCoordinator<RoutedResource<OwnedPty, L>> {
     pub(crate) fn start_pty<F, C>(
         &self,

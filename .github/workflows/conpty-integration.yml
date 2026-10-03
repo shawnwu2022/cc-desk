@@ -14,6 +14,22 @@ on:
       - .github/workflows/conpty-integration.yml
   pull_request:
     paths:
+      # Unified UX changes need the final installed Windows package gate too.
+      - src/**
+      - src-tauri/src/commands.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/src/store.rs
+      - src-tauri/src/tests/store.rs
+      - src-tauri/tauri.conf.json
+      - package.json
+      - package-lock.json
+      - build/**
+      - vite.config.ts
+      - tsconfig*.json
+      - tests/components/**
+      - tests/stores/**
+      - tests/native-cli/**
+      - tests/config/**
       - src-tauri/src/main.rs
       - src-tauri/src/conpty_runtime.rs
       - src-tauri/conpty/**
@@ -34,7 +50,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt
       - name: Verify formatting and retain any diff
@@ -63,7 +79,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -131,11 +147,11 @@ jobs:
           if ($installers.Count -ne 1) { throw 'Expected one NSIS installer' }
           $stage = New-Item -ItemType Directory -Force -Path test-package
           $shortSha = '${{ github.sha }}'.Substring(0, 12)
-          $name = "CC-Desk-Native-CLI-v3-test-$shortSha-x64-setup.exe"
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $name = "CC-Desk-$version-test-$shortSha-x64-setup.exe"
           $target = Join-Path $stage.FullName $name
           Copy-Item -LiteralPath $installers[0].FullName -Destination $target
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLowerInvariant()
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $manifest = [ordered]@{
             schemaVersion = 1
             product = 'CC Desk'

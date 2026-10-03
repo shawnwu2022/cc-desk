@@ -1,0 +1,13 @@
+{
+  "build": {
+    "beforeBuildCommand": "node scripts/prepare-conpty.mjs && npm run build",
+    "beforeDevCommand": "node scripts/prepare-conpty.mjs && npm run dev"
+  },
+  "bundle": {
+    "resources": {
+      "conpty/runtime/conpty.dll": "conpty.dll",
+      "conpty/runtime/OpenConsole.exe": "OpenConsole.exe",
+      "conpty/runtime/LICENSE-Microsoft-ConPTY.txt": "LICENSE-Microsoft-ConPTY.txt"
+    }
+  }
+}

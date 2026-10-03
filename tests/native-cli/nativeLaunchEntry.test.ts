@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { useNativeTabsStore } from '@/stores/nativeTabs'
 import type { CliProfile } from '@/types/profile'
 import type { LaunchAttempt, LaunchStatus } from '@/api/cliLaunchAttempt'
 import { createNativeLaunchEntry } from '@/terminal/nativeLaunchEntry'
@@ -46,13 +48,44 @@ function input(overrides: Record<string, unknown> = {}) {
 }
 
 describe('D23 native launch/recovery user entry', () => {
+  // NativeCliTerminal 传入真实 Pinia tab.action；代理对象必须经过字段校验生成独立请求。
+  it.each(['claude', 'codex'] as const)('Launch_RealStoreAction_010: %s', async cli => {
+    setActivePinia(createPinia())
+    const tabs = useNativeTabsStore()
+    const created = tabs.create({ cli, projectId: 'project', projectPath: 'C:\\repo', profileId: `${cli}-main`, profileRevision: '7', action: { kind: 'new' } })
+    const tab = tabs.tab(created.tabId)!
+    let captured: unknown
+    const entry = createNativeLaunchEntry({ selectedProfile: () => profile(`${cli}-main`, cli), createAttempt: request => {
+      captured = request.action
+      return { start: async () => running(request.requestId, request.runId, request.generation), recover: vi.fn(), cancel: vi.fn(), latest: vi.fn() }
+    } })
+    await expect(entry.start({ ...input(), requestId: tab.requestId, tabId: tab.tabId, runId: tab.runId, generation: tab.generation, cli, action: tab.action }, {} as any))
+      .resolves.toMatchObject({ phase: 'running', requestId: tab.requestId })
+    expect(captured).toEqual({ kind: 'new' })
+    expect(captured).not.toBe(tab.action)
+  })
+  // raw argv 从响应式数组复制后，后续界面更改不能改变已冻结的启动请求。
+  it('Launch_ReactiveArgvSnapshot_011', async () => {
+    setActivePinia(createPinia())
+    const tabs = useNativeTabsStore()
+    const created = tabs.create({ cli: 'codex', projectId: 'project', projectPath: 'C:\\repo', profileId: 'codex-main', profileRevision: '7', action: { kind: 'raw', argv: ['two words', '', '--literal= x'] } })
+    const tab = tabs.tab(created.tabId)!
+    let captured: unknown
+    const entry = createNativeLaunchEntry({ selectedProfile: () => profile('codex-main', 'codex'), createAttempt: request => {
+      captured = request.action
+      return { start: async () => running(request.requestId, request.runId, request.generation), recover: vi.fn(), cancel: vi.fn(), latest: vi.fn() }
+    } })
+    await entry.start({ ...input(), cli: 'codex', action: tab.action }, {} as any)
+    if (tab.action.kind === 'raw') tab.action.argv.splice(0, 3, 'changed')
+    expect(captured).toEqual({ kind: 'raw', argv: ['two words', '', '--literal= x'] })
+  })
   it('D23_Launch_FreezesSelectedProfileRevisionIntoOneAttempt_01', async () => {
     const selected = { claude: profile('claude-main', 'claude', '9'), codex: profile('codex-main', 'codex', '4') }
     let captured: any
     const attempt: LaunchAttempt = {
       start: vi.fn(async () => running('request-1', 'run-1', 1)),
       recover: vi.fn(),
-      latest: vi.fn(),
+      cancel: vi.fn(), latest: vi.fn(),
     }
     const createAttempt = vi.fn((request: any, _channel: any) => {
       captured = request
@@ -83,7 +116,7 @@ describe('D23 native launch/recovery user entry', () => {
   it('D23_Launch_LostStartResponseRecoversOriginalAttemptWithoutRespawn_02', async () => {
     const start = vi.fn(async () => { throw new Error('LAUNCH_STATE_UNKNOWN') })
     const recover = vi.fn(async () => running('request-1', 'run-1', 1))
-    const createAttempt = vi.fn(() => ({ start, recover, latest: vi.fn() }))
+    const createAttempt = vi.fn(() => ({ start, recover, cancel: vi.fn(), latest: vi.fn() }))
     const entry = createNativeLaunchEntry({
       selectedProfile: () => profile('claude-main', 'claude'),
       createAttempt,
@@ -99,7 +132,7 @@ describe('D23 native launch/recovery user entry', () => {
 
   it('D23_Launch_DuplicateRequestIdNeverCreatesSecondAttempt_03', async () => {
     const start = vi.fn(async () => running('request-1', 'run-1', 1))
-    const createAttempt = vi.fn(() => ({ start, recover: vi.fn(), latest: vi.fn() }))
+    const createAttempt = vi.fn(() => ({ start, recover: vi.fn(), cancel: vi.fn(), latest: vi.fn() }))
     const entry = createNativeLaunchEntry({
       selectedProfile: () => profile('claude-main', 'claude'),
       createAttempt,
@@ -119,7 +152,7 @@ describe('D23 native launch/recovery user entry', () => {
     const createAttempt = vi.fn(() => ({
       start: vi.fn(async () => running('request-1', 'run-1', 1)),
       recover: vi.fn(),
-      latest: vi.fn(),
+      cancel: vi.fn(), latest: vi.fn(),
     }))
     const entry = createNativeLaunchEntry({
       selectedProfile: () => profile('claude-main', 'claude'),
@@ -163,7 +196,7 @@ describe('D23 native launch/recovery user entry', () => {
         return {
           start: vi.fn(async () => running(request.requestId, request.runId, request.generation)),
           recover: vi.fn(),
-          latest: vi.fn(),
+          cancel: vi.fn(), latest: vi.fn(),
         }
       },
     })
@@ -204,7 +237,7 @@ describe('D23 native launch/recovery user entry', () => {
     const createAttempt = vi.fn(() => ({
       start,
       recover: vi.fn(),
-      latest: vi.fn(),
+      cancel: vi.fn(), latest: vi.fn(),
     }))
     entry = createNativeLaunchEntry({
       selectedProfile: () => profile('claude-main', 'claude'),

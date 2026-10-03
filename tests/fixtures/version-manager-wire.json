@@ -1,0 +1,94 @@
+{
+  "preparing": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "17",
+    "sourceVersion": "0.18.0",
+    "targetVersion": "0.17.7",
+    "phase": "preparing",
+    "blockedReason": "SOURCE_STILL_RUNNING",
+    "allowedActions": [
+      "refresh"
+    ]
+  },
+  "installing": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "17",
+    "sourceVersion": "0.18.0",
+    "targetVersion": "0.17.7",
+    "phase": "installing",
+    "blockedReason": null,
+    "allowedActions": [
+      "refresh"
+    ]
+  },
+  "installedUnconfirmed": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "17",
+    "sourceVersion": "0.18.0",
+    "targetVersion": "0.17.7",
+    "phase": "installed-unconfirmed",
+    "blockedReason": null,
+    "allowedActions": [
+      "refresh",
+      "confirm-historical-version",
+      "return-to-previous"
+    ]
+  },
+  "historicalActive": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "17",
+    "sourceVersion": "0.18.0",
+    "targetVersion": "0.17.7",
+    "phase": "historical-active",
+    "blockedReason": null,
+    "allowedActions": [
+      "refresh",
+      "return-to-previous"
+    ]
+  },
+  "returning": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "17",
+    "sourceVersion": "0.18.0",
+    "targetVersion": "0.17.7",
+    "phase": "returning",
+    "blockedReason": null,
+    "allowedActions": [
+      "refresh"
+    ]
+  },
+  "recoveryRequired": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "17",
+    "sourceVersion": "0.18.0",
+    "targetVersion": "0.17.7",
+    "phase": "recovery-required",
+    "blockedReason": "INSTALLER_OUTCOME_UNKNOWN",
+    "allowedActions": [
+      "refresh",
+      "return-to-previous"
+    ]
+  },
+  "restored": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "17",
+    "sourceVersion": "0.18.0",
+    "targetVersion": "0.17.7",
+    "phase": "restored",
+    "blockedReason": null,
+    "allowedActions": [
+      "refresh"
+    ]
+  },
+  "preContextAborted": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "17",
+    "sourceVersion": "0.18.0",
+    "targetVersion": "0.17.7",
+    "phase": "pre-context-aborted",
+    "blockedReason": null,
+    "allowedActions": [
+      "refresh"
+    ]
+  }
+}

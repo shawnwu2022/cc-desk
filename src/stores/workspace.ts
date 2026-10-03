@@ -1,9 +1,11 @@
+import { safeUserErrorCode } from '@/utils/userError'
 import { createNativeProjectionClient } from '@/api/tauri'
 import { projectionErrorCode } from '@/api/nativeProjection'
 import type { ProjectionResult } from '@/types/nativeProjection'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { listRegisteredProjects, registerProject, patchProject, removeProject } from '@/api/workspace'
+import { normalizePath, sameProjectPath } from '@/utils/path'
 import { parseU64 } from '@/utils/nativeIdentity'
 import type { SafeError } from '@/types/cli'
 import type { ProfileOverride } from '@/types/profile'
@@ -81,7 +83,7 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
   const metadata = ref<Record<string, ProjectMetadata>>({})
   const warnings = ref<string[]>([])
   const status = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
-  const lastError = ref<unknown>(null)
+  const lastError = ref<string | null>(null)
   let epoch = 0
   let initialized = false
   let mutationTail: Promise<void> = Promise.resolve()
@@ -109,15 +111,27 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
     } catch (error) {
       if (current === epoch) {
         status.value = 'error'
-        lastError.value = error
+        lastError.value = safeUserErrorCode(error)
       }
       throw error
     }
   }
 
-  function mutate(operation: () => Promise<ProjectList>): Promise<ProjectList> {
+  function mutate(operation: () => Promise<ProjectList>, beforeMutation?: () => void): Promise<ProjectList> {
     homeOwner = {}
-    const next = mutationTail.then(() => execute(operation))
+    const next = mutationTail.then(async () => {
+      // Queued work is not admitted yet. Recheck its explicit owner before
+      // starting execute so cancellation is not published as a registry failure.
+      beforeMutation?.()
+      try { return await execute(operation) }
+      catch (failure) {
+        const code = failure && typeof failure === 'object' && 'code' in failure ? failure.code : null
+        if (code === 'REVISION_CONFLICT' || code === 'COMMIT_STATE_UNKNOWN') {
+          await execute(listRegisteredProjects).catch(() => undefined)
+        }
+        throw failure
+      }
+    })
     mutationTail = next.then(() => undefined, () => undefined)
     return next
   }
@@ -134,6 +148,25 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
     return result.projectId!
   }
 
+  const registrationTails = new Map<string, Promise<string>>()
+  /** Explicit-create prerequisite, never called by bootstrap or history reads. */
+  function ensureRegistered(selectedPath: string): Promise<string> {
+    const key = normalizePath(selectedPath)
+    const existing = registrationTails.get(key)
+    if (existing) return existing
+    const operation = (async () => {
+      if (status.value !== 'loaded') await load()
+      const matches = projects.value.filter(project => sameProjectPath(project.selectedPath, selectedPath))
+      if (matches.length > 1) throw new Error('PROJECT_REGISTRATION_FAILED')
+      if (matches.length === 1) return matches[0].projectId
+      try { return await register(selectedPath) }
+      catch { await load().catch(() => undefined); throw new Error('PROJECT_REGISTRATION_FAILED') }
+    })()
+    registrationTails.set(key, operation)
+    void operation.finally(() => { if (registrationTails.get(key) === operation) registrationTails.delete(key) }).catch(() => undefined)
+    return operation
+  }
+
   function patch(projectId: string, changes: ProjectChanges): Promise<ProjectList> {
     return mutate(() => {
       if (!initialized) throw { code: 'WORKSPACE_NOT_LOADED', retryable: false } satisfies SafeError
@@ -141,11 +174,11 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
     })
   }
 
-  function remove(projectId: string): Promise<ProjectList> {
+  function remove(projectId: string, beforeMutation?: () => void): Promise<ProjectList> {
     return mutate(() => {
       if (!initialized) throw { code: 'WORKSPACE_NOT_LOADED', retryable: false } satisfies SafeError
       return removeProject(projectId, revision.value)
-    })
+    }, beforeMutation)
   }
 
   // The registry is authoritative. Native reads add observations and never alter projects.
@@ -188,5 +221,5 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
     await execute(listRegisteredProjects, () => homeOwner === selected)
     if (homeOwner === selected) await enrich(frozen)
   }
-  return { projects, revision, metadata, warnings, status, lastError, load, register, patch, remove, enrichment, enrich, loadNativeHome }
+  return { projects, revision, metadata, warnings, status, lastError, load, register, ensureRegistered, patch, remove, enrichment, enrich, loadNativeHome }
 })

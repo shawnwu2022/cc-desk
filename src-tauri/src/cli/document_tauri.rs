@@ -81,6 +81,22 @@ where
 }
 
 impl<R> DocumentBinding<R> {
+    pub(crate) fn admit_window<T: Runtime>(
+        &self,
+        window: &WebviewWindow<T>,
+        headers: &HeaderMap,
+    ) -> Result<CallerIdentity, SafeError> {
+        let url = window.url().map_err(|_| error("FORBIDDEN"))?;
+        self.admit(
+            &window.resources_table(),
+            &NativeContext {
+                window_label: window.label(),
+                webview_label: window.label(),
+                url: &url,
+            },
+            headers,
+        )
+    }
     pub(crate) fn admit_native<T: Runtime>(
         &self,
         webview: &Webview<T>,

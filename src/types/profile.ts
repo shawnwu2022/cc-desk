@@ -44,3 +44,14 @@ export interface ProfileList {
   revision: string
   profiles: CliProfile[]
 }
+
+export type LaunchConfigurationEditorRequest =
+  | { kind: 'create'; cli: 'claude' | 'codex' }
+  | { kind: 'edit' | 'copy' | 'rename'; profileId: string }
+
+/** A frozen editor submission, separate from a runtime's launch snapshot. */
+export interface LaunchConfigurationSave {
+  expectedRevision: string
+  source?: { id: string; revision: string }
+  patch: Exclude<ProfilePatch, { op: 'delete' }>
+}

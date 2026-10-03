@@ -1,21 +1,20 @@
+import { isOrdinaryUpdateEligible } from '@/utils/updatePolicy'
+import { isResourceProjectPath } from '@/utils/projectResources'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { getAllAgents, getAllMcpServers, getAllPlugins, getAllSkills } from '@/api/tauri'
+import type { ResourceItem } from '@/types/nativeProjection'
+import type { ProjectResourceKind } from '@/types/projectResources'
+import { sameProjectPath } from '@/utils/path'
 import type { AgentInfo, McpServerInfo, PluginInfo, SkillInfo, UpdateInfo } from '@/types'
 
 export type SidebarPanelType = 'sessions' | 'skills' | 'agents' | 'mcp' | 'plugins' | null
-export type SettingsSection = 'appearance' | 'startup' | 'shortcuts' | 'update' | 'about'
-
-const SETTINGS_SECTIONS: readonly SettingsSection[] = [
-  'appearance',
-  'startup',
-  'shortcuts',
-  'update',
-  'about',
-]
-
-function isSettingsSection(value: string): value is SettingsSection {
-  return SETTINGS_SECTIONS.includes(value as SettingsSection)
+export const SETTINGS_SECTIONS = ['general', 'appearance', 'terminal', 'launch-configurations', 'shortcuts', 'update', 'about'] as const
+export type SettingsSection = typeof SETTINGS_SECTIONS[number]
+/** Compatibility input mapping only; the public navigation still has seven IDs. */
+export function normalizeSettingsSection(value: string): SettingsSection {
+  if (value === 'startup') return 'general'
+  return SETTINGS_SECTIONS.includes(value as SettingsSection) ? value as SettingsSection : 'general'
 }
 
 export const useSidebarStore = defineStore('sidebar', () => {
@@ -23,9 +22,9 @@ export const useSidebarStore = defineStore('sidebar', () => {
   const panelVisible = ref(false)
 
   const showSettings = ref(false)
-  const activeSettingsSection = ref<SettingsSection>('appearance')
+  const activeSettingsSection = ref<SettingsSection>('general')
   const updateInfo = ref<UpdateInfo | null>(null)
-  const updateAvailable = computed(() => updateInfo.value?.hasUpdate ?? false)
+  const updateAvailable = computed(() => !!updateInfo.value?.hasUpdate && isOrdinaryUpdateEligible(updateInfo.value))
 
   function setUpdateInfo(info: UpdateInfo) {
     updateInfo.value = info
@@ -122,6 +121,22 @@ export const useSidebarStore = defineStore('sidebar', () => {
     }
   }
 
+  /** Exact-project, read-only compatibility observations. Ambient user roots and
+   * global/plugin subresources do not establish the selected session's authority.
+   * Return per-request values, never race the legacy sidebar's shared arrays. */
+  async function readProjectResources(cwd: string, kind: ProjectResourceKind): Promise<ResourceItem[]> {
+    if (!isResourceProjectPath(cwd)) throw { code: 'SOURCE_UNAVAILABLE' }
+    switch (kind) {
+      case 'skills': return (await getAllSkills(cwd)).filter(row => row.sourceType === 'project').slice(0, 200)
+        .map(row => ({ type: 'skill', name: row.displayName || row.name, description: row.description ?? '', origin: 'project' }))
+      case 'agents': return (await getAllAgents(cwd)).filter(row => row.sourceType === 'project').slice(0, 200)
+        .map(row => ({ type: 'agent', name: row.displayName || row.name, description: row.description ?? '', model: row.model ?? null, origin: 'project' }))
+      case 'plugins': return (await getAllPlugins(cwd)).filter(row => row.scope === 'project' && typeof row.projectPath === 'string' && sameProjectPath(row.projectPath, cwd)).slice(0, 200)
+        .map(row => ({ type: 'plugin', id: row.id, name: row.name, version: row.version ?? null, enabled: typeof row.enabled === 'boolean' ? row.enabled : null, installed: true, origin: 'project' }))
+      default: throw { code: 'SOURCE_UNSUPPORTED' }
+    }
+  }
+
   function togglePanel(panel: SidebarPanelType) {
     if (showSettings.value) {
       showSettings.value = false
@@ -143,7 +158,7 @@ export const useSidebarStore = defineStore('sidebar', () => {
     activePanel.value = null
     showSettings.value = true
     if (section) {
-      activeSettingsSection.value = isSettingsSection(section) ? section : 'appearance'
+      activeSettingsSection.value = normalizeSettingsSection(section)
     }
   }
 
@@ -183,6 +198,7 @@ export const useSidebarStore = defineStore('sidebar', () => {
   }
 
   return {
+    readProjectResources,
     activePanel,
     panelVisible,
     showSettings,

@@ -57,6 +57,8 @@ pub struct SessionDetails {
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
+    #[serde(rename = "shortcutBindings")]
+    pub shortcut_bindings: Option<HashMap<String, Option<String>>>,
     #[serde(rename = "defaultContinue")]
     pub default_continue: Option<bool>,
     #[serde(rename = "defaultSkipPermissions")]
@@ -64,10 +66,30 @@ pub struct AppConfig {
     #[serde(rename = "defaultCustomArgs")]
     pub default_custom_args: Option<String>,
     pub theme: Option<String>,
+    #[serde(rename = "guiThemeMode")]
+    pub gui_theme_mode: Option<String>,
+    #[serde(rename = "guiDensity")]
+    pub gui_density: Option<String>,
+    #[serde(rename = "sidebarWidth")]
+    pub sidebar_width: Option<u16>,
+    #[serde(rename = "startupDestination")]
+    pub startup_destination: Option<String>,
+    #[serde(rename = "defaultNewCli")]
+    pub default_new_cli: Option<String>,
     #[serde(rename = "terminalTheme")]
     pub terminal_theme: Option<String>,
     #[serde(rename = "fontSize")]
     pub font_size: Option<u16>,
+    #[serde(rename = "terminalFontFamily")]
+    pub terminal_font_family: Option<String>,
+    #[serde(rename = "terminalLineHeight")]
+    pub terminal_line_height: Option<f64>,
+    #[serde(rename = "terminalCursorStyle")]
+    pub terminal_cursor_style: Option<String>,
+    #[serde(rename = "terminalCursorBlink")]
+    pub terminal_cursor_blink: Option<bool>,
+    #[serde(rename = "webglRenderer")]
+    pub webgl_renderer: Option<bool>,
     #[serde(rename = "autoConnectIde")]
     pub auto_connect_ide: Option<bool>,
     #[serde(rename = "hiddenProjects")]
@@ -1560,23 +1582,56 @@ pub fn get_app_config() -> Result<AppConfig> {
 
 /// 更新应用配置
 pub fn update_app_config(updates: serde_json::Value) -> Result<()> {
-    let config_path = get_gui_config_path()?;
+    update_app_config_at(&get_gui_config_path()?, updates)
+}
+
+/// Preserve stored compatibility/future keys that are not part of the read DTO.
+/// The write contract remains an explicit top-level delta, never a DTO replacement.
+pub(crate) fn update_app_config_at(config_path: &Path, updates: serde_json::Value) -> Result<()> {
+    update_app_config_admitted(
+        config_path,
+        updates,
+        &crate::version_history::maintenance::process_admissions(),
+        |path, bytes| fs::write(path, bytes),
+    )
+}
+
+pub(crate) fn update_app_config_admitted(
+    config_path: &Path,
+    updates: serde_json::Value,
+    gate: &crate::version_history::maintenance::AdmissionGate,
+    write: impl FnOnce(&Path, &[u8]) -> std::io::Result<()>,
+) -> Result<()> {
+    let mut admission = gate
+        .begin_mutation()
+        .map_err(|e| anyhow::anyhow!(e.code))?
+        .preparing();
     let config_dir = config_path
         .parent()
         .context("Could not get parent directory of config path")?;
-
     if !config_dir.exists() {
         fs::create_dir_all(config_dir)?;
     }
-
-    let existing = get_app_config()?;
-    let existing_json = serde_json::to_value(existing)?;
-
+    let existing_json = if config_path.exists() {
+        let content = fs::read_to_string(config_path)?;
+        let existing: serde_json::Value =
+            serde_json::from_str(&content).context("Failed to parse config.json")?;
+        if !existing.is_object() {
+            bail!("App config must be an object");
+        }
+        existing
+    } else {
+        serde_json::json!({
+            "defaultContinue": true, "defaultSkipPermissions": false,
+            "defaultCustomArgs": "", "theme": "light", "fontSize": 12,
+            "hiddenProjects": []
+        })
+    };
     let merged = merge_json_values(existing_json, updates);
-
     let content = serde_json::to_string_pretty(&merged)?;
-    fs::write(&config_path, content)?;
-
+    let ticket = admission.begin_write();
+    write(config_path, content.as_bytes())?;
+    ticket.completed_authoritative_write();
     Ok(())
 }
 
@@ -1604,6 +1659,32 @@ pub(crate) fn merge_json_values(
 /// 与 config.json 分开存储，仅承载前端派生的视图状态。
 /// displayNames 容错：缺失/null/非 object 返空 map；object 内非 string 值跳过该条目，
 /// 避免旧/损坏文件的单个坏值导致整体解析失败 -> 启动加载门禁误判。
+pub(crate) const MAX_SESSION_UI_RECORDS: usize = 10_000;
+pub(crate) const MAX_LAUNCH_PREFERENCES: usize = 10_000;
+const MAX_SESSION_TITLE_CHARS: usize = 200;
+const MAX_ID_CHARS: usize = 256;
+const MAX_PROJECT_PATH_CHARS: usize = 32_768;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUiRecord {
+    pub runtime: String,
+    pub cli: String,
+    pub project_path: String,
+    pub adapter_session_id: String,
+    pub native_session_id: Option<String>,
+    pub title: String,
+    pub last_activity_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectLaunchPreference {
+    pub last_cli: String,
+    pub claude_launch_config_id: Option<String>,
+    pub codex_launch_config_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProjectsState {
     #[serde(rename = "pinnedProjects", default)]
@@ -1616,6 +1697,18 @@ pub struct ProjectsState {
         deserialize_with = "deserialize_display_names"
     )]
     pub display_names: HashMap<String, String>,
+    #[serde(
+        rename = "sessionRecords",
+        default,
+        deserialize_with = "deserialize_session_records"
+    )]
+    pub session_records: HashMap<String, SessionUiRecord>,
+    #[serde(
+        rename = "launchPreferences",
+        default,
+        deserialize_with = "deserialize_launch_preferences"
+    )]
+    pub launch_preferences: HashMap<String, ProjectLaunchPreference>,
 }
 
 /// displayNames 容错反序列化：
@@ -1643,6 +1736,124 @@ where
         // displayNames 是数组/数字/字符串等非 object -> 容错返空
         Some(_) => Ok(HashMap::new()),
     }
+}
+
+fn valid_bounded_text(value: &str, maximum: usize, allow_empty: bool) -> bool {
+    (allow_empty || !value.is_empty()) && !value.contains('\0') && value.chars().count() <= maximum
+}
+
+pub(crate) fn validate_session_record_key(value: &str) -> Result<()> {
+    if !valid_bounded_text(value, 8_192, false) {
+        bail!("invalid session record key");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_project_path_identity(value: &str) -> Result<()> {
+    if !valid_bounded_text(value, MAX_PROJECT_PATH_CHARS, false) {
+        bail!("invalid project path");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_session_ui_record(value: &SessionUiRecord) -> Result<()> {
+    if !matches!(value.runtime.as_str(), "legacy-claude" | "native-cli") {
+        bail!("invalid session runtime");
+    }
+    if !matches!(value.cli.as_str(), "claude" | "codex") {
+        bail!("invalid session cli");
+    }
+    validate_project_path_identity(&value.project_path)?;
+    if !valid_bounded_text(&value.adapter_session_id, MAX_ID_CHARS, false) {
+        bail!("invalid adapter session id");
+    }
+    if let Some(native_session_id) = value.native_session_id.as_deref() {
+        if !valid_bounded_text(native_session_id, MAX_ID_CHARS, false) {
+            bail!("invalid native session id");
+        }
+    }
+    if !valid_bounded_text(&value.title, MAX_SESSION_TITLE_CHARS, true) {
+        bail!("invalid session title");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_project_launch_preference(value: &ProjectLaunchPreference) -> Result<()> {
+    if !matches!(value.last_cli.as_str(), "claude" | "codex") {
+        bail!("invalid launch preference cli");
+    }
+    for id in [
+        value.claude_launch_config_id.as_deref(),
+        value.codex_launch_config_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !valid_bounded_text(id, MAX_ID_CHARS, false) {
+            bail!("invalid launch configuration id");
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn deserialize_session_records<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, SessionUiRecord>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    let Some(serde_json::Value::Object(map)) = opt else {
+        return Ok(HashMap::new());
+    };
+    let mut entries: Vec<_> = map.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out = HashMap::new();
+    for (key, raw) in entries {
+        if out.len() >= MAX_SESSION_UI_RECORDS {
+            break;
+        }
+        if validate_session_record_key(&key).is_err() {
+            continue;
+        }
+        let Ok(record) = serde_json::from_value::<SessionUiRecord>(raw) else {
+            continue;
+        };
+        if validate_session_ui_record(&record).is_ok() {
+            out.insert(key, record);
+        }
+    }
+    Ok(out)
+}
+
+pub(crate) fn deserialize_launch_preferences<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, ProjectLaunchPreference>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    let Some(serde_json::Value::Object(map)) = opt else {
+        return Ok(HashMap::new());
+    };
+    let mut entries: Vec<_> = map.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out = HashMap::new();
+    for (project_path, raw) in entries {
+        if out.len() >= MAX_LAUNCH_PREFERENCES {
+            break;
+        }
+        if validate_project_path_identity(&project_path).is_err() {
+            continue;
+        }
+        let Ok(preference) = serde_json::from_value::<ProjectLaunchPreference>(raw) else {
+            continue;
+        };
+        if validate_project_launch_preference(&preference).is_ok() {
+            out.insert(project_path, preference);
+        }
+    }
+    Ok(out)
 }
 
 /// 读取指定路径的 projects 状态（注入路径，便于单元测试）
@@ -3390,6 +3601,46 @@ pub(crate) fn canonicalize_state(s: &mut ProjectsState) {
         dn.entry(nk).or_insert(v);
     }
     s.display_names = dn;
+
+    // sessionRecords: canonicalize the stored project path and retain only validated,
+    // deterministically ordered records within the hard catalog limit.
+    let mut records: Vec<(String, SessionUiRecord)> = s.session_records.drain().collect();
+    records.sort_by(|a, b| a.0.cmp(&b.0));
+    s.session_records = records
+        .into_iter()
+        .filter_map(|(key, mut record)| {
+            if validate_session_record_key(&key).is_err()
+                || validate_session_ui_record(&record).is_err()
+            {
+                return None;
+            }
+            record.project_path = normalize_path_str(&record.project_path);
+            Some((key, record))
+        })
+        .take(MAX_SESSION_UI_RECORDS)
+        .collect();
+
+    // launchPreferences: normalize project keys; on equivalent-key conflicts keep
+    // the value from the lexicographically smallest original key, matching displayNames.
+    let mut preferences: Vec<(String, ProjectLaunchPreference, String)> = s
+        .launch_preferences
+        .drain()
+        .map(|(key, value)| (normalize_path_str(&key), value, key))
+        .collect();
+    preferences.sort_by(|a, b| a.2.cmp(&b.2));
+    let mut canonical_preferences = HashMap::new();
+    for (normalized, preference, _original) in preferences {
+        if canonical_preferences.len() >= MAX_LAUNCH_PREFERENCES {
+            break;
+        }
+        if normalized.is_empty() || validate_project_launch_preference(&preference).is_err() {
+            continue;
+        }
+        canonical_preferences
+            .entry(normalized)
+            .or_insert(preference);
+    }
+    s.launch_preferences = canonical_preferences;
 }
 
 // ---------- 锁内读改写 helper（排他写 / 共享读）----------
@@ -3405,6 +3656,27 @@ pub(crate) fn with_projects_state_locked<F, T>(
 where
     F: FnOnce(&mut ProjectsState) -> Result<T>,
 {
+    with_projects_state_admitted(
+        data_path,
+        lock_path,
+        &crate::version_history::maintenance::process_admissions(),
+        apply,
+    )
+}
+
+pub(crate) fn with_projects_state_admitted<F, T>(
+    data_path: &Path,
+    lock_path: &Path,
+    gate: &crate::version_history::maintenance::AdmissionGate,
+    apply: F,
+) -> Result<ProjectsState>
+where
+    F: FnOnce(&mut ProjectsState) -> Result<T>,
+{
+    let mut admission = gate
+        .begin_mutation()
+        .map_err(|e| anyhow::anyhow!(e.code))?
+        .preparing();
     ensure_parent(lock_path)?;
     let lock_file = fs::OpenOptions::new()
         .read(true)
@@ -3417,8 +3689,12 @@ where
     let result: Result<ProjectsState> = (|| {
         let mut state = get_projects_state_at(data_path)?; // 不存在 -> default
         canonicalize_state(&mut state);
+        // This callback can delete CLI history before returning an error. From
+        // this point failures are partial/unknown, never inferred to be no-ops.
+        let ticket = admission.begin_write();
         apply(&mut state)?;
         write_json_atomic(data_path, &serde_json::to_value(&state)?)?;
+        ticket.completed_authoritative_write();
         Ok(state)
     })();
     let _ = lock_file.unlock();

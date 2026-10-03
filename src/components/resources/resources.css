@@ -1,0 +1,11 @@
+.project-resources { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.project-resources .resource-controls { display: flex; align-items: end; gap: 8px; min-width: 0; }
+.project-resources .resource-controls .ui-field { flex: 1; min-width: 0; }
+.project-resources .resource-controls select { width: 100%; min-width: 0; }
+.project-resources .resource-list { display: flex; flex-direction: column; gap: 10px; padding: 0; margin: 0; list-style: none; min-width: 0; }
+.project-resources .resource-card { border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; min-width: 0; overflow-wrap: anywhere; }
+.project-resources .resource-card h3, .project-resources dt { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.project-resources .resource-card p, .project-resources dd { margin: 5px 0 0; font-size: 12px; line-height: 1.5; }
+.project-resources .resource-detail, .project-resources .resource-origin, .project-resources .resource-privacy { color: var(--text-secondary); }
+.project-resources .resource-document, .project-resources .resource-description { white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-resources .resource-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }

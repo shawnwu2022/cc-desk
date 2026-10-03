@@ -1,0 +1,169 @@
+{
+  "schemaVersion": 1,
+  "approved": true,
+  "approvedFor": "Linux Chromium screenshot baselines",
+  "reviewDate": "2026-10-01",
+  "actualPixelsInspected": 6,
+  "independentPixelReviewCount": 2,
+  "rejectedImages": 0,
+  "sourceHead": "0a0f246952f68281ab33a6bdb82c93507359644f",
+  "testedCommit": "eb030d455c7cc12fdea05fd5fd54aafc569f6c11",
+  "workflowRunId": "36882380587",
+  "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/36882380587",
+  "artifactId": "11174921424",
+  "artifactZipSha256": "00699d05fc86b9fdaf681ec6f77c698d41594f85bf44d9c7a057ea22588119cd",
+  "environment": {
+    "node": "v22.23.3",
+    "playwright": "1.63.0",
+    "browser": "Google Chrome for Testing 153.0.8010.12",
+    "platform": "ubuntu-24.04-linux-chromium"
+  },
+  "verificationBeforeBaselineAcceptance": {
+    "total": 146,
+    "geometryAndInteractionPassed": 133,
+    "unchangedSnapshotsPassed": 7,
+    "changedSnapshotFailures": 6,
+    "otherFailures": 0,
+    "fullVerification": "failed-reviewed-snapshot-differences"
+  },
+  "finalNoUpdateVerification": {
+    "status": "pending",
+    "required": "All 146 screenshot, geometry and interaction cases with updateSnapshots none and maxDiffPixels 0 after this reviewed baseline update"
+  },
+  "acceptanceLimits": [
+    "Exact inspected Linux Chromium pixels and hashes only",
+    "Not Windows WebView2 or native OS scaling certification",
+    "Windows manual acceptance remains pending",
+    "D20 real CLI certification remains pending",
+    "Not screen-reader certification or release approval"
+  ],
+  "entries": [
+    {
+      "name": "archived-sessions.png",
+      "width": 1366,
+      "height": 768,
+      "sha256": "bf52e313ed554f469d1117347475ac652fda287cf49e163f31181d850453a935",
+      "bytes": 46068,
+      "reviewVerdict": "approve",
+      "provenance": "reviewed actual image from current artifact"
+    },
+    {
+      "name": "confirm-stop-and-archive.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "89515ecad7352d6a4787a36a3b2b3bdff8b8e94df029db023926ae89fcf32eb2",
+      "bytes": 55118,
+      "reviewVerdict": "approve",
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
+    },
+    {
+      "name": "new-session-dialog.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "860bf64ad66e1a13b6961105f5dc837d407d587c2496b6a0fe118bd42a9dcfd5",
+      "bytes": 64616,
+      "reviewVerdict": "approve",
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
+    },
+    {
+      "name": "projects-150-percent.png",
+      "width": 1920,
+      "height": 1080,
+      "sha256": "6856d244952f044beca763d1bd93c61e8f0a092cbd74eab4f394c9b5835d7017",
+      "bytes": 59941,
+      "reviewVerdict": "approve",
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
+    },
+    {
+      "name": "settings-launch-configurations.png",
+      "width": 1280,
+      "height": 720,
+      "sha256": "6d0af32f96ab86bd2a057dad3518ed7ba3043e16a1505c3c691bc52a9ea48213",
+      "bytes": 52709,
+      "reviewVerdict": "approve",
+      "provenance": "reviewed actual image from current artifact"
+    },
+    {
+      "name": "settings-terminal-light-gui-dark-terminal.png",
+      "width": 1440,
+      "height": 900,
+      "sha256": "5232c5d346f4cab41d352cbf897f35acd750e4904d4bfcdff6613b517382357d",
+      "bytes": 84496,
+      "reviewVerdict": "approve",
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
+    },
+    {
+      "name": "tooltip-transformed-1024.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "8a97e74b687dd55ebee851f9f52a7de0792f08fa24a7939ca62538816b4ec6a4",
+      "bytes": 47725,
+      "reviewVerdict": "approve",
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
+    },
+    {
+      "name": "workspace-dark-gui-light-terminal.png",
+      "width": 1280,
+      "height": 720,
+      "sha256": "94712d839f58768fce2eee34a82bdc1c7f8aef45c63cfa745b8b4451391d80a0",
+      "bytes": 58002,
+      "reviewVerdict": "approve",
+      "provenance": "reviewed actual image from current artifact"
+    },
+    {
+      "name": "workspace-empty-1024-zh.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "1883535cbdf3b05adfa0d4da8eed9eb60027884a3a193761a2677451b1c82d1d",
+      "bytes": 24179,
+      "reviewVerdict": "approve",
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
+    },
+    {
+      "name": "workspace-hover-action-1366-en.png",
+      "width": 1366,
+      "height": 768,
+      "sha256": "f22fd29b54ad5fd1c09845f014fb9e58905a7593fa89893d7a9174a00c06974f",
+      "bytes": 59606,
+      "reviewVerdict": "approve",
+      "provenance": "reviewed actual image from current artifact"
+    },
+    {
+      "name": "workspace-menu-1024-en.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "01a070d5b43ecc4f8b130c8809599eb738e8f87155e9446f4b54876542b972ac",
+      "bytes": 54468,
+      "reviewVerdict": "approve",
+      "provenance": "reviewed actual image from current artifact"
+    },
+    {
+      "name": "workspace-mixed-1366-zh.png",
+      "width": 1366,
+      "height": 768,
+      "sha256": "f05b81b81425f04c23fafce189b69fe529d39651bf3d041f58f2ecd49d58110b",
+      "bytes": 58363,
+      "reviewVerdict": "approve",
+      "provenance": "reviewed actual image from current artifact"
+    },
+    {
+      "name": "workspace-resources-overlay-1024.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "251500b610bfb19683ecb8cbbd4b13111b3be5d73156010639afc231d6d53ca1",
+      "bytes": 66594,
+      "reviewVerdict": "approve",
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
+    }
+  ],
+  "unchangedVerifiedSnapshots": 7,
+  "previousAcceptance": {
+    "sourceHead": "d90ec90db9f2a27f1e77f747fecd62c6f716d233",
+    "testedCommit": "2ce9e19545318a35a79094c7aea179ddb434fcd0",
+    "workflowRunId": "36845204924",
+    "artifactId": "11153226557",
+    "artifactZipSha256": "8559c2be34ebc3fcd8f1b33a2381ceca331873faadc20cb626ba753dbbb0ddd9",
+    "finalNoUpdateRun": "36847655055",
+    "finalNoUpdateResult": "138/138 passed"
+  }
+}

@@ -280,6 +280,42 @@ impl<R> RunRegistry<R> {
         Ok(record.status.clone())
     }
 
+    /// Cancel this exact authenticated request before its spawn commit point.
+    /// An absent request receives a retained tombstone, so a preparation already
+    /// in flight cannot reserve/spawn later. Once begin wins, only a real process
+    /// exit can establish a terminal outcome; cancellation returns that receipt.
+    pub(crate) fn cancel(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+    ) -> Result<LaunchStatus, SafeError> {
+        request.validate()?;
+        // reserve checks the full fingerprint, owner, run and generation. Keep a
+        // new ticket alive until after publishing cancellation under the same
+        // lock used by begin. Neither path calls external code under this lock.
+        let ticket = match self.reserve(caller, request)? {
+            Reservation::New(ticket) => Some(ticket),
+            Reservation::Existing(_) => None,
+        };
+        let result = {
+            let mut state = self.state.lock();
+            self.authorize(&state, caller)?;
+            let key = (caller.webview_epoch.get(), request.request_id.clone());
+            let record = state
+                .records
+                .get_mut(&key)
+                .expect("reservation is retained");
+            if record.status.phase == LaunchPhase::Reserved {
+                record.transition(LaunchPhase::Cancelled, None);
+                record.in_flight = false;
+                record.retired = true;
+            }
+            record.status.clone()
+        };
+        drop(ticket);
+        Ok(result)
+    }
+
     /// Validate that the current authenticated document owns this exact run.
     /// Unlike resource(), this remains valid after process handles are retired so
     /// a still-active document can explicitly abort an output drain.
@@ -412,6 +448,10 @@ impl<R> Ticket<'_, R> {
             .records
             .get_mut(&self.key)
             .expect("ticket owns retained record");
+        if record.status.phase == LaunchPhase::Cancelled {
+            self.finished = true;
+            return false;
+        }
         if !authorized {
             record.transition(LaunchPhase::Cancelled, None);
             record.in_flight = false;
@@ -429,7 +469,10 @@ impl<R> Ticket<'_, R> {
             .records
             .get_mut(&self.key)
             .expect("ticket owns retained record");
-        if record.status.phase != LaunchPhase::Exited {
+        if !matches!(
+            record.status.phase,
+            LaunchPhase::Exited | LaunchPhase::Cancelled
+        ) {
             record.transition(LaunchPhase::Failed, Some(failure));
             record.retired = true;
         }

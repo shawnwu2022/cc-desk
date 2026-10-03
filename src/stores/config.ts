@@ -1,3 +1,4 @@
+import { isResourceProjectPath } from '@/utils/projectResources'
 import { useNativeProjectionStore } from './nativeProjection'
 import type { ResourceKind, ScopeTarget } from '@/types/nativeProjection'
 import { defineStore } from 'pinia'
@@ -74,7 +75,14 @@ export const useConfigStore = defineStore('config', () => {
     await nativeProjection.load(target, kind)
   }
 
+  /** No ambient cwd/default-home selection and no shared compatibility cache. */
+  async function readProjectConfig(projectPath: string): Promise<ProjectConfigResult> {
+    if (!isResourceProjectPath(projectPath)) throw { code: 'SOURCE_UNAVAILABLE' }
+    return getProjectConfig(projectPath)
+  }
+
   return {
+    readProjectConfig,
     nativeProjection,
     loadNativeResources,
     projectConfig,

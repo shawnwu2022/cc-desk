@@ -9,7 +9,11 @@ describe('D28 native terminal async attempt isolation', () => {
     expect(terminal).toContain('captureNativeAttempt')
     expect(terminal).toContain('matchesNativeAttempt')
     expect(guards.length).toBeGreaterThanOrEqual(4)
-    expect(terminal).toContain('if (!tabs.applyLaunchStatus(props.tabId, result)) return')
+    const receiptHelper = terminal.slice(terminal.indexOf('function applyReceipt('), terminal.indexOf('async function recover('))
+    expect(receiptHelper).toContain('if (!attemptIsCurrent(attempt) || !tabs.applyLaunchStatus(props.tabId, result)) return false')
+    expect(terminal.match(/tabs\.applyLaunchStatus\(props\.tabId, result\)/g)).toHaveLength(1)
+    expect(terminal).toContain('if (!applyReceipt(attempt, result)) return')
+    expect(terminal).toContain("if (!applyReceipt(attempt, result)) throw new Error('NATIVE_STOP_UNCONFIRMED')")
     expect(terminal).toContain('markInputFailure(attempt)')
   })
 

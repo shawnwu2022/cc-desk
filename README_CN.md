@@ -2,7 +2,7 @@
 
 CC Desk 是面向 **Claude Code 与 Codex CLI** 的桌面工作台，技术栈为 Tauri 2、Vue 3、xterm.js 与 Rust。
 
-它不替代 CLI 的单会话交互，而是让真实 CLI 继续负责命令、权限、认证、MCP、扩展与未来版本行为；CC Desk 负责多项目、多标签页、稳定运行身份、恢复、终端传输和只读资源投影。
+它不替代 CLI 的单会话交互，而是让真实 CLI 继续负责命令、权限、认证、MCP、扩展与未来版本行为；CC Desk 负责多项目、多会话、稳定运行身份、恢复、终端传输和只读资源投影。
 
 > Native CLI v3 的代码侧实现已推进到 D27。D20 真实 Claude Code / Codex CLI Layer-C 认证仍需要一个明确授权的目标环境。CI 的宿主测试不能被表述为真实 CLI 认证。
 
@@ -22,13 +22,15 @@ CC Desk 是面向 **Claude Code 与 Codex CLI** 的桌面工作台，技术栈�
 CC Desk **不负责** Provider/API Key 切换，也不把自己变成原生 CLI 配置写入器。
 
 - Provider/配置切换由 Claude Code、Codex CLI 或 cc-switch 等外部工具负责。
-- Native CLI 工作区中的资源面板为只读投影。
+- 当前项目/会话的资源抽屉仅提供只读投影。
 - observer 失败不会杀死或重启 CLI。
 - 启动或输入结果不确定时，不会自动重放或偷偷再启动一次。
 
-## Native CLI 工作区
+## 统一工作区
 
-标题栏和欢迎页都可进入 **Native CLI** 工作区。
+一级入口只有**工作区、项目、设置**。同一项目/会话树在项目下混排 Claude Code 与 Codex CLI 会话；资源抽屉按当前项目/会话展示说明文档、设置、MCP、Skills、Agents 和 Plugins 六类结构化只读内容。
+
+新建与恢复使用统一对话框；设置提供启动配置、带静态预览的终端偏好、应用快捷键、更新与安全诊断复制。GUI 与终端主题独立，切换页面或颜色不会重启会话或清空终端滚动记录。
 
 | 能力 | Claude Code | Codex CLI |
 |---|---:|---:|
@@ -37,13 +39,13 @@ CC Desk **不负责** Provider/API Key 切换，也不把自己变成原生 CLI 
 | 指定 session ID 恢复 | 支持 | 支持 |
 | 精确 raw argv | 支持 | 支持 |
 | 注册项目选择 | 支持 | 支持 |
-| 独立 Profile | 支持 | 支持 |
+| 独立启动配置 | 支持 | 支持 |
 | 原生资源只读投影 | 支持 | 支持 |
 | 有序分段输入 | 支持 | 支持 |
 | 有界输出 + ACK | 支持 | 支持 |
 | Claude observer overlay | 可选 | 不注入 |
 
-仓库仍保留旧 Claude 工作区用于兼容。新的双 CLI 功能必须走鉴权 Native CLI 路径，禁止回退到旧 `ptySpawn` / `ptyInput` / `ptyKill`。
+旧 Claude 历史与会话由同一外壳内的 Legacy adapter 保持兼容；新的 Claude/Codex 会话走鉴权 Native adapter。独立 Native 产品页与旧启动分流已移除，Native 操作禁止回退到旧 `ptySpawn` / `ptyInput` / `ptyKill`。
 
 完整架构见 [docs/native-cli-v3.md](docs/native-cli-v3.md)。
 

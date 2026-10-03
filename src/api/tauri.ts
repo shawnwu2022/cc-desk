@@ -1,4 +1,6 @@
+import { excludedArtifactChannel } from '@/utils/updatePolicy';
 import { createProjectionClient } from './nativeProjection'
+import { createHistoryClient } from './versionHistory'
 import { createLaunchAttempt } from './cliLaunchAttempt';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -31,6 +33,8 @@ import type {
   SessionSearchResult,
   AppConfig,
   ProjectsState,
+  SessionUiRecord,
+  ProjectLaunchPreference,
   DefaultClaudeOptions,
   ProjectConfigResult,
   AgentInfo,
@@ -57,6 +61,8 @@ export type {
   SessionSearchResult,
   AppConfig,
   ProjectsState,
+  SessionUiRecord,
+  ProjectLaunchPreference,
   DefaultClaudeOptions,
   ProjectConfigResult,
   AgentInfo,
@@ -218,6 +224,21 @@ export const deleteSessions = (projectPath: string, sessionIds: string[]): Promi
 export const setDisplayName = (path: string, alias: string): Promise<ProjectsState> =>
   invoke<ProjectsState>('set_display_name', { path, alias });
 
+export const upsertSessionUiRecord = (
+  recordKey: string,
+  record: SessionUiRecord,
+): Promise<ProjectsState> =>
+  invoke<ProjectsState>('upsert_session_ui_record', { recordKey, record });
+
+export const removeSessionUiRecord = (recordKey: string): Promise<ProjectsState> =>
+  invoke<ProjectsState>('remove_session_ui_record', { recordKey });
+
+export const setProjectLaunchPreference = (
+  projectPath: string,
+  preference: ProjectLaunchPreference,
+): Promise<ProjectsState> =>
+  invoke<ProjectsState>('set_project_launch_preference', { projectPath, preference });
+
 export const getDefaultClaudeOptions = (): Promise<DefaultClaudeOptions> =>
   invoke<DefaultClaudeOptions>('get_default_claude_options');
 
@@ -271,7 +292,9 @@ export const checkForUpdates = async (): Promise<UpdateInfo> => {
       platformAsset: null,
     };
   }
-  return {
+  const summary: UpdateInfo = {
+    channel: excludedArtifactChannel(update.rawJson),
+    installEligible: false,
     version: update.version,
     currentVersion: __APP_VERSION__,
     hasUpdate: true,
@@ -279,6 +302,8 @@ export const checkForUpdates = async (): Promise<UpdateInfo> => {
     downloadUrl: '',
     platformAsset: null,
   };
+  if (typeof update.close === 'function') await update.close().catch(() => { /* Read-only resource cleanup does not change update eligibility. */ });
+  return summary;
 };
 
 // ============================================
@@ -302,13 +327,13 @@ export const logMessage = (level: 'error' | 'warn' | 'info' | 'debug', message: 
 // Dialog (Tauri dialog plugin)
 // ============================================
 
-export const selectDirectory = async (): Promise<{ path: string } | null> => {
+export const selectDirectory = async (options: { register?: boolean } = {}): Promise<{ path: string } | null> => {
   const result = await open({
     directory: true,
     multiple: false,
     title: 'Select Project Directory'
   } as any);
-  if (result && typeof result === 'string' && await registerSelectedDirectory(result)) {
+  if (result && typeof result === 'string' && (options.register === false || await registerSelectedDirectory(result))) {
     return { path: result };
   }
   return null;
@@ -446,6 +471,7 @@ export function createCliLaunchAttempt<E>(
   return createLaunchAttempt(request, bridge.instanceId, {
     start: (frozen) => bridge.invoke('cli_start', frozen, channel),
     status: (requestId) => bridge.invoke('cli_get_launch_status', { requestId }),
+    cancel: (frozen) => bridge.invoke('cli_cancel_launch', frozen),
   });
 }
 
@@ -457,4 +483,9 @@ export async function nativeGetScope(target: import('@/types/nativeProjection').
 }
 export async function nativeListResources(request: import('@/types/nativeProjection').ReadRequest): Promise<import('@/types/nativeProjection').ProjectionResult> {
   return createNativeProjectionClient().read(request);
+}
+
+export function createNativeHistoryClient(): import('./versionHistory').HistoryClient {
+  const bridge = nativeDocumentBridge()
+  return createHistoryClient(bridge, () => nativeDocumentBridge() === bridge)
 }

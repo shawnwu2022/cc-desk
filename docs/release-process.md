@@ -40,6 +40,12 @@ Candidate signing uses:
 
 The private key must never be committed, logged, copied into documentation, or included in support bundles.
 
+## Reproducible 0.18.0 test compiler
+
+Ordinary CI and Windows test packaging (including formatting) use Rust **1.98.1**. This is the exact compiler that passed source `444c2df` in CI `36861864297` and package `36861864197`. A later floating `stable` download changed to 1.99.0 during the same repair batch and introduced `Atomic::fetch_update` deprecation errors under the unchanged `-D warnings` gate.
+
+The pin keeps strict Clippy and the declared Rust 1.89 MSRV unchanged; it does not suppress warnings or modify atomic ownership/transport logic. Compiler upgrades require an intentional validated change. The [official action supports exact version refs](https://github.com/dtolnay/rust-toolchain), and its `1.98.1` action definition explicitly selects that compiler. Other standalone harness workflows and public-promotion policy are outside this narrow repair.
+
 ## Version consistency
 
 When a version change is intentionally prepared, keep these files consistent:

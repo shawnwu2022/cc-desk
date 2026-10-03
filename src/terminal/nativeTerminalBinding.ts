@@ -21,10 +21,12 @@ export interface NativeTerminalLike extends XtermProvenanceSource {
 export interface NativeTerminalBindingOptions extends RunKey {
   term: NativeTerminalLike
   currentTarget: () => InputTarget
+  isUserInputAllowed?: () => boolean
   writeUser: (frame: NativeInputFrame) => Promise<InputWriteReceipt>
   writeProtocol: (run: RunKey, bytes: Uint8Array) => Promise<ProtocolWriteReceipt>
   ackOutput: (ack: OutputAck) => Promise<unknown>
   onDegraded?: (reason: string) => void
+  onActivity?: () => void
 }
 
 export interface NativeTerminalBinding {
@@ -48,6 +50,7 @@ export function createNativeTerminalBinding(
 
   const provenance = bindXtermInputProvenance(options.term, {
     user: async data => {
+      if (options.isUserInputAllowed?.() === false) return
       const leave = host.beginUserEvent()
       let operation: Promise<void>
       try {
@@ -60,6 +63,7 @@ export function createNativeTerminalBinding(
         leave()
       }
       await operation
+      if (!disposed && data.length) options.onActivity?.()
     },
     protocol: async data => {
       const leave = host.beginParserOutput()
@@ -79,6 +83,7 @@ export function createNativeTerminalBinding(
     generation: options.generation,
     write(bytes, parsed) {
       options.term.write(bytes, parsed)
+      options.onActivity?.()
     },
     ack: options.ackOutput,
     onDegraded: options.onDegraded,
@@ -93,17 +98,22 @@ export function createNativeTerminalBinding(
 
     sendUserText(data) {
       if (disposed) return Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED'))
-      return host.sendUserText(data)
+      if (options.isUserInputAllowed?.() === false) return Promise.reject(new Error('NATIVE_TERMINAL_HIDDEN'))
+      return host.sendUserText(data).then(() => { if (!disposed && data.length) options.onActivity?.() })
     },
 
     reserveUserPaste(produce) {
-      if (disposed) {
+      if (disposed || options.isUserInputAllowed?.() === false) {
         return {
           inputSeq: '0',
           settled: Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED')),
         }
       }
-      return host.reserveUserPaste(produce)
+      let hasBytes = false
+      const reserved = host.reserveUserPaste(async () => {
+        const bytes = await produce(); hasBytes = bytes.length > 0; return bytes
+      })
+      return { inputSeq: reserved.inputSeq, settled: reserved.settled.then(() => { if (!disposed && hasBytes) options.onActivity?.() }) }
     },
 
     drainInput() {

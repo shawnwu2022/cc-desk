@@ -6,7 +6,7 @@ use crate::cli::snapshot::CallerIdentity;
 use crate::cli::types::{CliKind, LaunchAction, LaunchRequest, WireU64};
 use parking_lot::Mutex;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,11 +37,27 @@ struct Probe {
 }
 
 impl Probe {
+    // Only fixed test stages, counters and flags; never proof, paths or IPC data.
+    fn progress(&self, stage: &'static str) {
+        let report = self.report.lock();
+        eprintln!(
+            "\nD11_NATIVE_PROGRESS stage={stage} events={} observations={} failed={} mainLoaded={} peerLoaded={} ending={} destroyed={}",
+            report.events.len(),
+            report.observations.len(),
+            report.failure.is_some(),
+            self.main_loaded.load(Ordering::SeqCst),
+            self.peer_loaded.load(Ordering::SeqCst),
+            self.ending.load(Ordering::SeqCst),
+            self.destroyed.load(Ordering::SeqCst),
+        );
+    }
+
     fn fail(&self, app: &AppHandle, code: &str) {
         self.report
             .lock()
             .failure
             .get_or_insert_with(|| code.into());
+        self.progress("failed");
         app.exit(1);
     }
 
@@ -55,6 +71,8 @@ impl Probe {
             return Err(code);
         }
         report.observations.push((name.into(), actual.into()));
+        drop(report);
+        self.progress("observation-recorded");
         Ok(())
     }
 }
@@ -122,6 +140,7 @@ async fn d11_peer(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), St
         state.fail(&app, "PEER_BEFORE_MAIN_CASES");
         return Err("PEER_BEFORE_MAIN_CASES".into());
     }
+    state.progress("peer-build-start");
     WebviewWindowBuilder::new(&app, "peer", WebviewUrl::App("probe.html".into()))
         .visible(false)
         .data_directory(state.root.join("peer-webview"))
@@ -130,6 +149,7 @@ async fn d11_peer(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), St
             state.fail(&app, "PEER_BUILD_FAILED");
             "PEER_BUILD_FAILED".to_owned()
         })?;
+    state.progress("peer-built");
     Ok(())
 }
 
@@ -145,6 +165,7 @@ async fn d11_end(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), Str
         return Err("PEER_REVOKED_MAIN".into());
     }
     let window = app.get_webview_window("main").ok_or("MAIN_MISSING")?;
+    state.progress("lifecycle-request");
     let action = if state.mode == "reload" {
         window.eval("location.reload()")
     } else {
@@ -154,6 +175,7 @@ async fn d11_end(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), Str
         state.fail(&app, "NATIVE_LIFECYCLE_ACTION_FAILED");
         return Err("NATIVE_LIFECYCLE_ACTION_FAILED".into());
     }
+    state.progress("lifecycle-requested");
     let state = state.inner().clone();
     std::thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -161,6 +183,7 @@ async fn d11_end(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), Str
             // Observe real callbacks; the test never calls authority.revoke().
             let revoked = state.registry.check_caller(&caller).is_err();
             if revoked && (state.mode == "reload" || state.destroyed.load(Ordering::SeqCst)) {
+                state.progress("lifecycle-revoked");
                 if state.mode == "reload" {
                     let proof = state.proof.lock().clone().unwrap();
                     let script = format!(
@@ -190,6 +213,7 @@ async fn d11_end(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), Str
 
 #[tauri::command]
 fn d11_finish(app: AppHandle, state: State<'_, Arc<Probe>>) {
+    state.progress("finish-request");
     let result = verify(&state.report.lock(), &state.mode);
     match result {
         Ok(()) => app.exit(0),
@@ -231,7 +255,20 @@ fn D11_Webview_Live_001() {
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("native WebView worker timed out: {mode}");
+                // The final report is written only after the event loop exits.
+                // Retain bounded safe progress even if the worker never exits.
+                let mut bytes = Vec::new();
+                if let Ok(log) = File::open(&log_path) {
+                    let _ = log.take(65536).read_to_end(&mut bytes);
+                }
+                let text = String::from_utf8_lossy(&bytes);
+                let progress = text
+                    .lines()
+                    .filter(|line| line.starts_with("D11_NATIVE_PROGRESS "))
+                    .take(128)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                panic!("native WebView worker timed out: {mode}\n{progress}");
             }
             std::thread::sleep(Duration::from_millis(20));
         };
@@ -255,6 +292,7 @@ fn D11_Webview_Live_001() {
 #[test]
 #[ignore = "subprocess worker explicitly invoked by D11_Webview_Live_001"]
 fn D11_Webview_Worker_099() {
+    eprintln!("\nD11_NATIVE_PROGRESS stage=worker-start");
     let root = PathBuf::from(std::env::var_os("CC_DESK_D11_NATIVE_ROOT").unwrap());
     let mode = std::env::var("CC_DESK_D11_NATIVE_MODE").unwrap();
     assert!(root.is_absolute() && matches!(mode.as_str(), "reload" | "destroy"));
@@ -307,6 +345,7 @@ fn D11_Webview_Worker_099() {
             d11_probe, d11_peer, d11_end, d11_finish, d11_abort
         ])
         .setup(move |app| {
+            setup_state.progress("main-build-start");
             let config = WindowConfig {
                 label: "main".into(),
                 url: WebviewUrl::App("probe.html".into()),
@@ -322,6 +361,7 @@ fn D11_Webview_Worker_099() {
             )
             .map_err(|_| "NATIVE_MAIN_BUILD_FAILED")?;
             *setup_state.binding.lock() = Some(Arc::new(bound.binding));
+            setup_state.progress("main-binding-attached");
             Ok(())
         })
         .on_window_event(move |window, event| {
@@ -342,6 +382,8 @@ fn D11_Webview_Worker_099() {
                     return;
                 }
                 report.events.push(event.into());
+                drop(report);
+                pages.progress(event);
             }
             if !matches!(payload.event(), PageLoadEvent::Finished) {
                 return;

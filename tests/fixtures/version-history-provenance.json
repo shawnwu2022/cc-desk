@@ -1,0 +1,6 @@
+{
+  "source": "https://api.github.com/repos/shawnwu2022/cc-desk/releases?per_page=100",
+  "observedAt": "2026-10-02T04:57:00Z",
+  "scope": "Nine official public releases observed by the implementation controller; only public release and asset metadata is retained",
+  "verification": "Metadata fixture only; package bytes, publisher signature and installed payload identity have not been verified"
+}

@@ -17,9 +17,18 @@ async function runLaunchProbe(request, mode) {
       if (code !== 'NATIVE_RUNTIME_NOT_READY') throw new Error('gate')
       const query = await bridge.invoke('cli_get_launch_status', {requestId: request.requestId}).then(() => 'FOUND', e => e.code)
       if (query !== 'LAUNCH_NOT_FOUND') throw new Error('gate query')
-      await bridge.invoke('d11_launch_closed', {})
+      const cancelled = await bridge.invoke('cli_cancel_launch', request)
+      const replay = await bridge.invoke('cli_start', request, channel)
+      if (cancelled.phase !== 'cancelled' || JSON.stringify(replay) !== JSON.stringify(cancelled)) throw new Error('gate cancellation')
+      await bridge.invoke('d11_launch_closed', cancelled)
       return
     }
+    stage = 'cancel-before-start'
+    const cancelledRequest = { ...request, requestId: `${request.requestId}-cancelled`, tabId: `${request.tabId}-cancelled`, runId: `${request.runId}-cancelled` }
+    const cancelled = await bridge.invoke('cli_cancel_launch', cancelledRequest)
+    const fenced = await bridge.invoke('cli_start', cancelledRequest, channel)
+    if (cancelled.phase !== 'cancelled' || JSON.stringify(fenced) !== JSON.stringify(cancelled)) throw new Error('cancellation fence')
+    await bridge.invoke('d11_launch_cancelled', cancelled)
     stage = 'concurrent-start'
     // Intentionally ignore every start response, then recover using the original ID.
     await Promise.all(Array.from({length:100}, () => bridge.invoke('cli_start',request,channel)))

@@ -19,11 +19,13 @@ export interface LaunchStatus {
 export interface LaunchAttemptTransport {
   start(request: LaunchRequest): Promise<unknown>
   status(requestId: string): Promise<unknown>
+  cancel?(request: LaunchRequest): Promise<unknown>
 }
 
 export interface LaunchAttempt {
   start(): Promise<LaunchStatus>
   recover(): Promise<LaunchStatus>
+  cancel(): Promise<LaunchStatus>
   latest(): LaunchStatus | undefined
 }
 
@@ -87,6 +89,34 @@ function canAdvance(previous: LaunchPhase, next: LaunchPhase): boolean {
   }
 }
 
+// Only structured backend diagnostics survive this boundary. They describe the
+// rejection, not proof of process absence; cleanup still needs an exact receipt.
+const START_DENIAL_CODES = new Set([
+  'FORBIDDEN', 'DOCUMENT_BRIDGE_UNAVAILABLE', 'INVALID_REQUEST',
+  'PROGRAM_TRUST_REQUIRED', 'PROGRAM_UNAVAILABLE', 'WORKING_DIRECTORY_UNAVAILABLE',
+  'PROFILE_NOT_FOUND', 'PROFILE_CLI_MISMATCH', 'PROFILE_MISMATCH', 'REVISION_CONFLICT',
+  'NATIVE_RUNTIME_NOT_READY', 'RUN_SUPERVISOR_STOPPING',
+])
+
+function startRejection(value: unknown): never {
+  let code = 'LAUNCH_STATE_UNKNOWN'
+  try {
+    if (value && typeof value === 'object' && !(value instanceof Error)) {
+      const fields = Object.getOwnPropertyDescriptors(value)
+      const candidate = fields.code?.value
+      if (Reflect.ownKeys(fields).every(key => ['code', 'retryable', 'field', 'index'].includes(String(key)))
+        && Object.values(fields).every(field => 'value' in field)
+        && typeof candidate === 'string' && START_DENIAL_CODES.has(candidate)
+        && (fields.field === undefined || typeof fields.field.value === 'string' && fields.field.value.length <= 128)
+        && (fields.index === undefined || Number.isSafeInteger(fields.index.value) && fields.index.value >= 0)
+        && (fields.retryable === undefined || fields.retryable.value === false)) {
+        code = candidate
+      }
+    }
+  } catch { /* Hostile property/proxy errors cannot supply a diagnostic code. */ }
+  throw new Error(code)
+}
+
 export function createLaunchAttempt(
   input: LaunchRequest,
   instanceId: string,
@@ -130,7 +160,7 @@ export function createLaunchAttempt(
     start(): Promise<LaunchStatus> {
       // Assign before invoking the transport, including synchronous re-entry.
       if (!started) {
-        started = Promise.resolve().then(() => transport.start(request)).then(accept, unknownOutcome)
+        started = Promise.resolve().then(() => transport.start(request)).then(accept, startRejection)
       }
       return started
     },
@@ -138,6 +168,11 @@ export function createLaunchAttempt(
       if (!started) return Promise.reject(new Error('LAUNCH_NOT_STARTED'))
       // Never resend start, even if status is missing or the backend restarted.
       return Promise.resolve().then(() => transport.status(request.requestId)).then(accept, unknownOutcome)
+    },
+    cancel(): Promise<LaunchStatus> {
+      if (!started) return Promise.reject(new Error('LAUNCH_NOT_STARTED'))
+      if (!transport.cancel) return Promise.reject(new Error('LAUNCH_CANCEL_UNAVAILABLE'))
+      return Promise.resolve().then(() => transport.cancel!(request)).then(accept, unknownOutcome)
     },
     latest(): LaunchStatus | undefined {
       return current

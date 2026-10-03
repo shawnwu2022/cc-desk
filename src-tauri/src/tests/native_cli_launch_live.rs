@@ -27,6 +27,7 @@ use tauri::{AppHandle, Manager, State, Webview, WebviewUrl, WebviewWindowBuilder
 mod bundled_runtime;
 
 const READY: &[&str] = &[
+    "cancelled-request-fenced",
     "single-child",
     "receipt-recovered",
     "profile-snapshot-frozen",
@@ -36,7 +37,7 @@ const READY: &[&str] = &[
     "destroy-revoked",
     "owned-child-reaped",
 ];
-const CLOSED: &[&str] = &["unready-rejected-before-io"];
+const CLOSED: &[&str] = &["unready-rejected-before-io", "unready-cancelled-without-io"];
 
 #[derive(Default)]
 struct Consumer {
@@ -202,6 +203,38 @@ fn size() -> PtySize {
         pixel_width: 0,
         pixel_height: 0,
     }
+}
+
+// 正式取消命令的回执来自实际文档鉴权与登记，且没有创建 PTY 子进程。
+#[tauri::command]
+async fn d11_launch_cancelled(
+    app: AppHandle,
+    webview: Webview,
+    request: Request<'_>,
+    state: State<'_, Arc<Probe>>,
+) -> Result<(), String> {
+    let caller = state
+        .runtime
+        .binding()
+        .unwrap()
+        .admit_native(&webview, request.headers())
+        .map_err(|_| state.fail(&app, "CANCEL_WRONG_OWNER"))?;
+    let receipt = state
+        .service
+        .registry()
+        .status(&caller, &format!("{}-cancelled", state.request.request_id))
+        .map_err(|_| state.fail(&app, "CANCEL_RECEIPT_MISSING"))?;
+    if receipt.phase != LaunchPhase::Cancelled
+        || raw_value(&request)? != serde_json::to_value(receipt).unwrap()
+        || state.consumer.calls.load(Ordering::SeqCst) != 0
+        || fs::read_dir(state.root.join("work"))
+            .unwrap()
+            .next()
+            .is_some()
+    {
+        return Err(state.fail(&app, "CANCEL_NOT_FENCED"));
+    }
+    state.record(&app, "cancelled-request-fenced")
 }
 
 #[tauri::command]
@@ -420,7 +453,7 @@ async fn d11_launch_closed(
     request: Request<'_>,
     state: State<'_, Arc<Probe>>,
 ) -> Result<(), String> {
-    state
+    let caller = state
         .runtime
         .binding()
         .unwrap()
@@ -430,6 +463,17 @@ async fn d11_launch_closed(
         return Err(state.fail(&app, "GATE_DID_IO"));
     }
     state.record(&app, "unready-rejected-before-io")?;
+    let receipt = state
+        .service
+        .registry()
+        .status(&caller, &state.request.request_id)
+        .map_err(|_| state.fail(&app, "UNREADY_CANCEL_MISSING"))?;
+    if receipt.phase != LaunchPhase::Cancelled
+        || raw_value(&request)? != serde_json::to_value(receipt).unwrap()
+    {
+        return Err(state.fail(&app, "UNREADY_CANCEL_NOT_FENCED"));
+    }
+    state.record(&app, "unready-cancelled-without-io")?;
     app.exit(0);
     Ok(())
 }
@@ -437,6 +481,7 @@ async fn d11_launch_closed(
 fn d11_launch_abort(app: AppHandle, stage: String, state: State<'_, Arc<Probe>>) {
     let safe = if [
         "initial",
+        "cancel-before-start",
         "gate",
         "concurrent-start",
         "status",

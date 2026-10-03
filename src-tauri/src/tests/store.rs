@@ -2325,6 +2325,163 @@ fn WithLocked_WritesCamelCase_001() {
     assert_eq!(reparsed.pinned_projects, vec!["a"]);
 }
 
+// ==================== unified workspace projects state compatibility ====================
+
+#[test]
+#[allow(non_snake_case)]
+fn ProjectsState_OldFileDefaultsNewFields_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    std::fs::write(
+        &path,
+        r#"{"pinnedProjects":["D:/Work/Game"],"archivedSessions":{},"displayNames":{}}"#,
+    )
+    .unwrap();
+
+    let state = get_projects_state_at(&path).unwrap();
+    assert!(state.session_records.is_empty());
+    assert!(state.launch_preferences.is_empty());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn ProjectsState_RoundTripsSessionRecords_002() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    std::fs::write(
+        &data,
+        r#"{
+          "pinnedProjects":[],
+          "archivedSessions":{},
+          "displayNames":{},
+          "sessionRecords":{
+            "native-key":{
+              "runtime":"native-cli",
+              "cli":"codex",
+              "projectPath":"D:/Work/Game/",
+              "adapterSessionId":"tab-1",
+              "nativeSessionId":"native-1",
+              "title":"修复登录",
+              "lastActivityAt":1234
+            }
+          },
+          "launchPreferences":{
+            "D:/Work/Game/":{
+              "lastCli":"codex",
+              "claudeLaunchConfigId":null,
+              "codexLaunchConfigId":"codex-default"
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let state = with_projects_state_locked(&data, &lock, |_| Ok::<(), anyhow::Error>(())).unwrap();
+    let record = state.session_records.get("native-key").unwrap();
+    assert_eq!(record.title, "修复登录");
+    assert_eq!(record.project_path, "d:/work/game");
+    assert_eq!(record.native_session_id.as_deref(), Some("native-1"));
+    let preference = state.launch_preferences.get("d:/work/game").unwrap();
+    assert_eq!(preference.last_cli, "codex");
+    assert_eq!(
+        preference.codex_launch_config_id.as_deref(),
+        Some("codex-default")
+    );
+
+    let reparsed = get_projects_state_at(&data).unwrap();
+    assert_eq!(reparsed.session_records.len(), 1);
+    assert_eq!(reparsed.launch_preferences.len(), 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn ProjectsState_SkipsMalformedSessionRecord_003() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("projects.json");
+    let mut records = serde_json::Map::new();
+    for i in 0..10_005usize {
+        records.insert(
+            format!("valid-{i:05}"),
+            json!({
+                "runtime": "native-cli",
+                "cli": "codex",
+                "projectPath": "/work/game",
+                "adapterSessionId": format!("tab-{i}"),
+                "nativeSessionId": null,
+                "title": "ok",
+                "lastActivityAt": i,
+            }),
+        );
+    }
+    records.insert(
+        "too-long".into(),
+        json!({
+            "runtime": "native-cli",
+            "cli": "codex",
+            "projectPath": "/work/game",
+            "adapterSessionId": "tab-long",
+            "nativeSessionId": null,
+            "title": "x".repeat(201),
+            "lastActivityAt": 1,
+        }),
+    );
+    records.insert(
+        "nul-title".into(),
+        json!({
+            "runtime": "legacy-claude",
+            "cli": "claude",
+            "projectPath": "/work/game",
+            "adapterSessionId": "legacy-1",
+            "nativeSessionId": null,
+            "title": "bad\0title",
+            "lastActivityAt": 1,
+        }),
+    );
+    let value = json!({
+        "pinnedProjects": [],
+        "archivedSessions": {},
+        "displayNames": {},
+        "sessionRecords": records,
+        "launchPreferences": {
+            "/valid": { "lastCli": "claude", "claudeLaunchConfigId": "default", "codexLaunchConfigId": null },
+            "/bad": { "lastCli": "shell", "claudeLaunchConfigId": null, "codexLaunchConfigId": null }
+        }
+    });
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    let state = get_projects_state_at(&path).unwrap();
+    assert_eq!(state.session_records.len(), 10_000);
+    assert!(!state.session_records.contains_key("too-long"));
+    assert!(!state.session_records.contains_key("nul-title"));
+    assert!(state.launch_preferences.contains_key("/valid"));
+    assert!(!state.launch_preferences.contains_key("/bad"));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn ProjectsState_PreservesUnknownTopLevelDataOnlyWhereAlreadySupported_004() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    std::fs::write(
+        &data,
+        r#"{
+          "pinnedProjects":["/work/game"],
+          "archivedSessions":{"/work/game":["legacy-1"]},
+          "displayNames":{"/work/game":"Game"},
+          "futureField":{"secret":"must-not-be-reflected"}
+        }"#,
+    )
+    .unwrap();
+
+    with_projects_state_locked(&data, &lock, |_| Ok::<(), anyhow::Error>(())).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&data).unwrap()).unwrap();
+    assert_eq!(value["pinnedProjects"], json!(["/work/game"]));
+    assert_eq!(value["displayNames"]["/work/game"], "Game");
+    assert!(value.get("futureField").is_none());
+}
+
 // ==================== compute_project_startup_state ====================
 
 // 无项目：has_any=false, has_visible=false, last_info=None
@@ -2573,6 +2730,7 @@ fn ProjectsState_DisplayNames_Roundtrip_001() {
         pinned_projects: vec!["/p-a".into()],
         archived_sessions: HashMap::new(),
         display_names: m,
+        ..ProjectsState::default()
     };
     let json = serde_json::to_string(&state).unwrap();
     assert!(
@@ -3722,4 +3880,125 @@ fn Delete_EmptyList_007() {
     let lock = dir.path().join("projects.json.lock");
     let state = delete_sessions_inner(&data, &lock, dir.path(), "E:\\Foo", &[]).unwrap();
     assert_eq!(state.archived_sessions.len(), 1);
+}
+
+// Task17 GUI设置字段可往返；终端与旧启动键保持独立。
+#[test]
+fn AppConfig_GuiSettings_Roundtrip_001() {
+    let config: AppConfig = serde_json::from_value(json!({
+        "theme": "dark", "terminalTheme": "dracula", "defaultContinue": true,
+        "guiThemeMode": "system", "guiDensity": "compact", "sidebarWidth": 320,
+        "startupDestination": "projects", "defaultNewCli": "codex", "language": "zh"
+    }))
+    .unwrap();
+    let result = serde_json::to_value(&config).unwrap();
+    assert_eq!(result["guiThemeMode"], "system");
+    assert_eq!(result["guiDensity"], "compact");
+    assert_eq!(result["sidebarWidth"], 320);
+    assert_eq!(result["startupDestination"], "projects");
+    assert_eq!(result["defaultNewCli"], "codex");
+    assert_eq!(result["theme"], "dark");
+    assert_eq!(result["terminalTheme"], "dracula");
+    assert_eq!(result["defaultContinue"], true);
+}
+
+// 旧配置缺少新增字段时仍可读取，不把旧自动继续键改成GUI默认启动。
+#[test]
+fn AppConfig_GuiSettings_LegacyDefaults_002() {
+    let config: AppConfig = serde_json::from_value(json!({
+        "theme": "dark", "defaultContinue": true, "defaultSkipPermissions": true,
+        "defaultCustomArgs": "--old exact value", "autoConnectIde": true
+    }))
+    .unwrap();
+    assert!(config.gui_theme_mode.is_none());
+    assert!(config.gui_density.is_none());
+    assert!(config.sidebar_width.is_none());
+    assert!(config.startup_destination.is_none());
+    assert!(config.default_new_cli.is_none());
+    assert_eq!(config.default_continue, Some(true));
+    assert_eq!(
+        config.default_custom_args.as_deref(),
+        Some("--old exact value")
+    );
+    assert_eq!(config.auto_connect_ide, Some(true));
+}
+
+// GUI增量保存不经类型化重序列化丢掉旧/未来字段。
+#[test]
+fn AppConfig_GuiSettings_PreserveStoredKeys_003() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let original = json!({
+        "defaultContinue": true, "defaultSkipPermissions": true,
+        "defaultCustomArgs": "--old exact value", "autoConnectIde": true,
+        "terminalTheme": "dracula", "webglRenderer": true,
+        "hiddenProjects": ["/keep"], "legacyExtra": { "enabled": true }
+    });
+    std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+    crate::store::update_app_config_at(&path, json!({"sidebarWidth": 320})).unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for (key, value) in original.as_object().unwrap() {
+        assert_eq!(
+            &result[key], value,
+            "existing key {key} must remain unchanged"
+        );
+    }
+    assert_eq!(result["sidebarWidth"], 320);
+}
+
+// 新终端偏好字段保持可选，旧配置无需新增字段即可读取。
+#[test]
+fn AppConfig_TerminalPreferences_Optional_001() {
+    let config: AppConfig =
+        serde_json::from_str(r#"{"terminalTheme":"cc-box-light","fontSize":12}"#).unwrap();
+    assert_eq!(config.terminal_font_family, None);
+    assert_eq!(config.terminal_line_height, None);
+    assert_eq!(config.terminal_cursor_style, None);
+    assert_eq!(config.terminal_cursor_blink, None);
+    assert_eq!(config.webgl_renderer, None);
+}
+
+// camelCase读取和序列化保留显式false与其他终端偏好。
+#[test]
+fn AppConfig_TerminalPreferences_RoundTrip_002() {
+    let input = json!({ "terminalTheme": "nord", "fontSize": 18, "terminalFontFamily": "Fira Code",
+        "terminalLineHeight": 1.5, "terminalCursorStyle": "underline", "terminalCursorBlink": false, "webglRenderer": true });
+    let config: AppConfig = serde_json::from_value(input.clone()).unwrap();
+    assert_eq!(config.terminal_font_family.as_deref(), Some("Fira Code"));
+    assert_eq!(config.terminal_line_height, Some(1.5));
+    assert_eq!(config.terminal_cursor_style.as_deref(), Some("underline"));
+    assert_eq!(config.terminal_cursor_blink, Some(false));
+    assert_eq!(config.webgl_renderer, Some(true));
+    let output = serde_json::to_value(config).unwrap();
+    for (key, value) in input.as_object().unwrap() {
+        assert_eq!(&output[key], value);
+    }
+}
+
+// 快捷键为可选字段，旧配置兼容，null明确禁用的绑定保持往返。
+#[test]
+fn AppConfig_ShortcutBindings_RoundTrip_001() {
+    let old: AppConfig = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
+    assert_eq!(old.shortcut_bindings, None);
+    let input = json!({ "shortcutBindings": { "new-session": "Mod+KeyN", "close-session": null } });
+    let config: AppConfig = serde_json::from_value(input.clone()).unwrap();
+    let output = serde_json::to_value(config).unwrap();
+    assert_eq!(output["shortcutBindings"], input["shortcutBindings"]);
+}
+
+// 整组快捷键增量保存不删除旧启动、终端或未来字段。
+#[test]
+fn AppConfig_ShortcutBindings_PreserveExisting_002() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let original = json!({ "defaultContinue": true, "terminalTheme": "nord", "futurePreference": { "keep": true } });
+    std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+    let bindings = json!({ "new-session": "Mod+KeyK", "close-session": null });
+    crate::store::update_app_config_at(&path, json!({ "shortcutBindings": bindings.clone() }))
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for (key, value) in original.as_object().unwrap() {
+        assert_eq!(&result[key], value);
+    }
+    assert_eq!(result["shortcutBindings"], bindings);
 }

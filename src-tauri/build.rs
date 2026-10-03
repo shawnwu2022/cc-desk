@@ -1,4 +1,22 @@
 fn main() {
+    if std::env::var_os("CARGO_FEATURE_HISTORY_ROUNDTRIP_ACCEPTANCE").is_some() {
+        assert_ne!(
+            std::env::var("PROFILE").as_deref(),
+            Ok("release"),
+            "roundtrip acceptance is forbidden in release builds"
+        );
+        assert_eq!(
+            std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+            Ok("windows"),
+            "roundtrip acceptance requires Windows"
+        );
+        assert_eq!(
+            std::env::var("CARGO_CFG_TARGET_ARCH").as_deref(),
+            Ok("x86_64"),
+            "roundtrip acceptance requires x64"
+        );
+        println!("cargo:rerun-if-changed=../tests/fixtures/version-history-roundtrip/target.json");
+    }
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let manifest_dir = std::path::Path::new(&manifest_dir);
     let package_json_path = manifest_dir.parent().unwrap().join("package.json");

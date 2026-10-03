@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.18.0] - 2026-10-01 (unreleased test build)
 
 ### Features
 - Add the Native CLI workspace for Claude Code and Codex CLI with independent profiles, registered projects, native new/resume/raw launch entry, authenticated terminal control, and read-only native resource projections
@@ -13,10 +13,19 @@
 - Keep native UI behind the authenticated document bridge, remove legacy PTY fallback, redact native diagnostics, and lock native resource panels to projection-only behavior
 
 ### Changed
-- Make Native CLI a first-class welcome-screen entry while retaining the legacy Claude workspace as an explicit compatibility path
+- Unify Claude Code and Codex CLI in one project/session workspace; preserve existing Claude history through its runtime adapter
 - Localize Native CLI workspace controls in English and Chinese and expose both Claude Code and Codex documentation from About
 - Align product, architecture, persistence, roadmap, and release documentation with the dual-CLI boundary
 - Keep release automation candidate-only; public publishing remains disabled pending an explicit promotion design
+
+### Fixes
+- Copy validated native launch actions without cloning reactive store proxies, fixing new Claude and Codex session startup
+- Refresh the shared workspace revision before creating a missing safe CLI profile, fixing sequential first-time setup of both CLIs
+- Hand off selection after closing an active session and acknowledge failed action requests without discarding newer requests
+
+### User feedback
+- Use explicit native titlebar drag targets, corresponding CLI application marks and circular session status icons
+- Remove project expand/collapse tooltip bubbles and center the empty workspace guidance
 
 ### Verification
 - Record D22-D27 execution evidence in the repository

@@ -20,6 +20,7 @@ mod terminal_input;
 mod terminal_transport;
 #[cfg(test)]
 mod tests;
+mod version_history;
 
 #[cfg(target_os = "macos")]
 use tauri::menu::MenuBuilder;
@@ -39,6 +40,37 @@ static CHECK_RESULTS: LazyLock<Mutex<Vec<checks::CheckResult>>> = LazyLock::new(
     }
     Mutex::new(result.checks)
 });
+
+/// Opaque ordinary-startup capability. main obtains it before loading ConPTY;
+/// the Tauri application retains the same shared lease for its whole lifetime.
+#[cfg(windows)]
+pub struct DesktopStartup {
+    admission: std::sync::Arc<version_history::windows::startup::OrdinaryStartup>,
+}
+#[cfg(windows)]
+pub fn admit_desktop_startup() -> Result<DesktopStartup, String> {
+    version_history::windows::startup::admit_ordinary()
+        .map(|admission| DesktopStartup {
+            admission: std::sync::Arc::new(admission),
+        })
+        .map_err(|failure| failure.code)
+}
+/// Dispatch the independent manager before ordinary startup and diagnostic DLL
+/// loading. A UUID selector alone cannot pass its protected child admission.
+#[cfg(windows)]
+pub fn run_version_manager_entry() -> Result<bool, String> {
+    match version_history::manager_entry::observed_request().map_err(|failure| failure.code)? {
+        version_history::manager_entry::DesktopEntryRequest::Ordinary => Ok(false),
+        version_history::manager_entry::DesktopEntryRequest::ManagerReentry => {
+            version_history::manager_runtime::run_reentry(None).map_err(|failure| failure.code)?;
+            Ok(true)
+        }
+        version_history::manager_entry::DesktopEntryRequest::Manager(request) => {
+            version_history::manager_runtime::run(request).map_err(|failure| failure.code)?;
+            Ok(true)
+        }
+    }
+}
 
 /// 获取缓存的检查结果
 pub fn get_check_results() -> Vec<checks::CheckResult> {
@@ -61,23 +93,58 @@ pub fn rerun_checks() -> Vec<checks::CheckResult> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(initial_dir: Option<String>) {
+    #[cfg(windows)]
+    {
+        let startup =
+            admit_desktop_startup().expect("ordinary startup requires maintenance admission");
+        run_admitted(initial_dir, startup);
+    }
+    #[cfg(not(windows))]
+    run_ordinary(initial_dir);
+}
+
+#[cfg(windows)]
+pub fn run_admitted(initial_dir: Option<String>, startup: DesktopStartup) {
+    run_ordinary(initial_dir, startup)
+}
+
+fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopStartup) {
     let mut context = tauri::generate_context!();
     let main_config = cli::native_runtime::take_main_config(context.config_mut())
         .expect("main window configuration unavailable");
+    let admission = version_history::maintenance::process_admissions();
     let native_runtime = std::sync::Arc::new(
-        cli::native_runtime::NativeRuntime::production().expect("native workspace unavailable"),
+        cli::native_runtime::NativeRuntime::production(admission.clone())
+            .expect("native workspace unavailable"),
     );
     let native_setup = native_runtime.clone();
     let native_shutdown = native_runtime.clone();
     let native_exit_shutdown = native_runtime.clone();
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(windows)]
+    let builder = builder.manage(startup.admission);
+    let app = builder
         .manage(native_runtime)
+        .manage(std::sync::Arc::new(
+            version_history::commands::HistoryService::default(),
+        ))
+        .manage(admission.clone())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .on_window_event(move |window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main"
+                    && native_shutdown
+                        .binding()
+                        .is_ok_and(|binding| binding.blocks_handoff_exit())
+                {
+                    api.prevent_close();
+                    return;
+                }
+            }
             if window.label() == "main"
                 && matches!(event, tauri::WindowEvent::CloseRequested { .. })
             {
@@ -101,7 +168,7 @@ pub fn run(initial_dir: Option<String>) {
                 let _ = app.set_menu(menu);
             }
 
-            pty::init_pty_manager(app.handle().clone());
+            pty::init_pty_manager(app.handle().clone(), admission.clone());
             log::info!("PTY manager initialized");
 
             // Windows: 移除原生标题栏（UI 相关，尽早执行）
@@ -163,10 +230,18 @@ pub fn run(initial_dir: Option<String>) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            version_history::commands::list_history,
+            version_history::commands::select_history,
+            version_history::commands::begin_prepare_history,
+            version_history::commands::prepare_history,
+            version_history::commands::cancel_prepare_history,
+            version_history::commands::begin_switch,
+            version_history::commands::inspect_switch,
             commands::native_get_scope,
             commands::native_list_resources,
             cli::commands::cli_start,
             cli::commands::cli_get_launch_status,
+            cli::commands::cli_cancel_launch,
             cli::commands::cli_ack_output,
             cli::commands::cli_input_begin,
             cli::commands::cli_input_chunk,
@@ -205,6 +280,9 @@ pub fn run(initial_dir: Option<String>) {
             commands::archive_session,
             commands::restore_session,
             commands::set_display_name,
+            commands::upsert_session_ui_record,
+            commands::remove_session_ui_record,
+            commands::set_project_launch_preference,
             commands::delete_sessions,
             commands::get_default_claude_options,
             commands::save_default_claude_options,
@@ -223,6 +301,15 @@ pub fn run(initial_dir: Option<String>) {
         .build(context)
         .expect("error while building tauri application");
     app.run(move |_app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { ref api, .. } = event {
+            if native_exit_shutdown
+                .binding()
+                .is_ok_and(|binding| binding.blocks_handoff_exit())
+            {
+                api.prevent_exit();
+                return;
+            }
+        }
         if matches!(
             event,
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit

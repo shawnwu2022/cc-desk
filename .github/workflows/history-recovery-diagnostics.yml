@@ -1,0 +1,115 @@
+name: Historical recovery focused checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/history-recovery-diagnostics.yml'
+      - 'src-tauri/src/version_history/**'
+      - 'src-tauri/src/tests/version_history*'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  recovery:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+      - name: Prepare verified Windows runtime
+        id: runtime
+        working-directory: .
+        run: node scripts/prepare-conpty.mjs
+      - name: Record tested source
+        run: git rev-parse HEAD
+      - name: Diagnose four native CLI PTY probes
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::native_cli_harness::NativeCliHarness_ -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath native-cli-pty-probes.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path native-cli-pty-probes.log -Pattern '^running 4 tests$' -Quiet)) {
+            if ($result -ne 0) { exit $result }
+            throw 'Expected exactly four native CLI PTY probes'
+          }
+          exit $result
+      - name: Verify exact filesystem security restoration
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_shortcuts_windows::HistorySecurity_ReadbackProbe_001 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath descriptor-probe.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path descriptor-probe.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected one exact descriptor test' }
+          exit $result
+      - name: Verify durable context readmission
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_context_windows::HistoryContextWindows_DurableReadmission_035 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath durable-readmission.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path durable-readmission.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected one exact readmission test' }
+          exit $result
+      - name: Verify separate journal and recovery namespaces
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_scope_context_windows::HistoryScopeContext_DurableRotation_001 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath scope-context.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path scope-context.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected one exact scope test' }
+          exit $result
+      - name: Verify source failure journal protocol
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_source_failure_journal:: -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath source-failure-journal.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path source-failure-journal.log -Pattern 'running 11 tests' -Quiet)) { throw 'Expected 11 selected test(s)' }
+          exit $result
+      - name: Verify post-capture custody retention
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib version_history::windows::context::switching::preinstall_custody_tests::HistoryPreinstallCustody_PostCaptureFailureRetainsContext_005 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath post-capture-custody.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path post-capture-custody.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected 1 selected test(s)' }
+          exit $result
+      - name: Diagnose exact shortcut attribute restoration
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_shortcuts_windows::HistoryShortcuts_RestoreAttributes_012 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath shortcut-attributes.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path shortcut-attributes.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected 1 selected test(s)' }
+          exit $result
+      - name: Verify interrupted shortcut metadata never replays
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_shortcuts_windows::HistoryShortcuts_UnknownNoReplay_003 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath shortcut-no-replay.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path shortcut-no-replay.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected one shortcut no-replay test' }
+          exit $result
+      - name: Observe exact historical job lifetime for restart evidence
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib RestartLifetime_ -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath restart-lifetime.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path restart-lifetime.log -Pattern 'running 2 tests' -Quiet)) { throw 'Expected 2 selected test(s)' }
+          $records = @(Get-Content -LiteralPath restart-lifetime.log | ForEach-Object {
+            if ($_ -match 'HISTORY_RESTART_LIFETIME (\{.*\})\s*$') { $Matches[1] | ConvertFrom-Json }
+          })
+          foreach ($case in @('liveRoot', 'terminalRoot')) {
+            foreach ($stage in @('fixtureAdmission', 'originalOwnerDropped', 'exactRootTerminal', 'completed')) {
+              if (!($records | Where-Object { $_.schema -eq 1 -and $_.case -eq $case -and $_.stage -eq $stage -and $_.recoveryAuthority -eq $false })) { throw "Missing $case/$stage lifetime evidence" }
+            }
+            if (!($records | Where-Object { $_.case -eq $case -and $_.stage -eq 'completed' -and $_.observation.status -eq 'observed' })) { throw "Incomplete $case lifetime observation" }
+            if (!($records | Where-Object { $_.case -eq $case -and $_.stage -eq 'fixtureAdmission' -and $_.observation.installedProductAcceptance -eq $false })) { throw "Invalid $case acceptance boundary" }
+          }
+          exit $result

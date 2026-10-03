@@ -1,3 +1,4 @@
+import { isOrdinaryUpdateEligible } from '@/utils/updatePolicy'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { DownloadProgress, UpdateInfo } from '@/types'
@@ -14,7 +15,7 @@ export const useUpdateStore = defineStore('update', () => {
   })
   const downloadError = ref('')
 
-  const hasUpdate = computed(() => updateInfo.value?.hasUpdate ?? false)
+  const hasUpdate = computed(() => !!updateInfo.value?.hasUpdate && isOrdinaryUpdateEligible(updateInfo.value))
 
   function setUpdateInfo(info: UpdateInfo | null) {
     updateInfo.value = info

@@ -8,7 +8,7 @@ CC Desk is a desktop workspace for **Claude Code and Codex CLI**. The native pat
 
 CC Desk adds the host capabilities that a normal terminal does not provide well:
 
-- multiple projects and concurrent tabs;
+- one project/session tree with concurrent Claude/Codex sessions;
 - stable project/profile/run identity;
 - exact launch/recovery semantics;
 - authenticated read-only native-resource projection;
@@ -18,16 +18,30 @@ CC Desk adds the host capabilities that a normal terminal does not provide well:
 
 CC Desk does **not** own Provider/API-key configuration. Provider/configuration switching belongs to the native CLI or external tools such as cc-switch. The native resource panels are projection-only.
 
-## Two execution paths
+## One product shell, two runtime adapters
 
-The repository currently contains:
+`AppShell` exposes only Workspace, Projects and Settings. The project/session tree
+mixes Claude Code and Codex CLI directly below projects and is the only tab system.
+There is no independent Native page, title-bar switch or development-only Legacy
+startup route. Welcome and project-empty states live inside the unified views.
 
-1. **Legacy Claude workspace** — the existing Claude-specific UI and compatibility storage.
-2. **Native CLI workspace** — the authenticated Claude/Codex runtime introduced by D01–D27.
+`useUnifiedWorkspaceRuntime` performs read-only bootstrap and explicit action
+dispatch through the two adapters:
 
-New dual-CLI work must use the native path. It must not fall back to legacy `ptySpawn`, `ptyInput`, `ptyKill`, legacy Claude roots, or deleted Provider/mutating resource APIs.
+1. **Legacy Claude adapter** preserves existing history and PTY ownership through
+   one content-only `TerminalView` / `XTermTerminal` aggregate.
+2. **Native CLI adapter** uses `nativeTabs`, `cliProfiles`, `cliWorkspace` and the
+   authenticated Claude/Codex runtime introduced by D01–D27.
 
-The native entry is exposed from the title bar and the welcome screen. Native startup is intentionally independent of the legacy Claude startup gate.
+New sessions use the Native adapter. New dual-CLI work must not fall back to legacy
+`ptySpawn`, `ptyInput`, `ptyKill`, legacy Claude roots or deleted mutating resource
+APIs. A missing CLI leaves the other CLI and global navigation usable. Mounting or
+switching views never implicitly launches a process.
+
+The old `NativeCliWorkbench` component and its unused coordinating store are
+removed. Their runtime/API dependencies remain because the unified adapters own
+them. Settings use the user-facing name “Launch configurations” / “启动配置”;
+profile IDs/revisions and Native/Legacy identity stay internal or diagnostic.
 
 ## Native launch identity
 
@@ -76,7 +90,17 @@ Native resource reads:
 - return kind-specific projection DTOs only;
 - do not return raw env values, headers, credential material, arbitrary argv, or unbounded native errors.
 
-Profile/project changes invalidate stale projection scopes.
+The contextual drawer renders six structured categories: instructions, settings,
+MCP, skills, agents and plugins. It prefers exact active-run authority; a missing or
+invalid run never falls back to current defaults. Profile/project changes reject
+stale completions. Legacy project-only observations, unavailable categories and
+bounded partial pages are labeled explicitly. No raw resource JSON is rendered.
+See [project resource contracts](project-resources.md).
+
+GUI appearance and terminal preferences remain independent. Both adapters share
+the same computed terminal options; color/cursor changes preserve terminal identity,
+and metric changes fit visible terminals with deferred hidden fits. Renderer choice
+applies to new terminals only. See [terminal preferences](terminal-preferences.md).
 
 ## Input path
 
@@ -120,7 +144,7 @@ Observer delivery is optional metadata, not process ownership.
 
 Native UI surfaces are interpolation-only: no `v-html` / `innerHTML` execution path.
 
-Public diagnostics use a fixed safe-code allowlist. Arbitrary exception text, serde errors, secret-looking codes, paths, env values, and user payloads are not reflected into the native workbench.
+Public diagnostics use a fixed safe-code allowlist. Arbitrary exception text, serde errors, secret-looking codes, paths, env values, and user payloads are not reflected into terminal/resource views or notifications.
 
 ## Windows runtime
 

@@ -184,6 +184,26 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
     }
   }
 
+  /** Registration is trusted-main-window and profile-independent. A supplied
+   * launch identity is validated, never created or inferred from another CLI. */
+  async function ensureNativeProjectRegistration(input: {
+    path: string
+    cli?: NativeCliKind
+    profile?: { id: string; revision: string; cli: NativeCliKind } | null
+  }): Promise<string> {
+    const profile = input.profile ? { ...input.profile } : null
+    const validate = () => {
+      if (!profile) return
+      if (input.cli !== profile.cli) throw new Error('PROFILE_CLI_MISMATCH')
+      const actual = profiles.profile(profile.id)
+      if (!actual || actual.cli !== profile.cli || actual.revision !== profile.revision) throw new Error('PROFILE_SELECTION_CHANGED')
+    }
+    validate()
+    const id = await projectsStore.ensureRegistered(input.path)
+    validate()
+    return id
+  }
+
   async function loadResource(
     kind: ResourceKind,
     options: {
@@ -261,6 +281,7 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
     resource,
     open,
     registerProject,
+    ensureNativeProjectRegistration,
     loadResource,
     clear,
   }

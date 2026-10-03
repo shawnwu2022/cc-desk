@@ -1,0 +1,21 @@
+{
+  "source": "https://raw.githubusercontent.com/jedisct1/rust-minisign-verify/0.2.5/src/lib.rs",
+  "version": "0.2.5",
+  "sourceTests": [
+    "verify",
+    "verify_prehashed"
+  ],
+  "license": "MIT",
+  "retrievedAt": "2026-10-02",
+  "payload": "The exact four ASCII bytes test, without a newline",
+  "transform": "The Tauri fixtures are standard base64 wrappers of the upstream public key and detached prehashed signature; line endings normalized to LF with a final LF",
+  "scope": "Public cryptographic vectors only. This is not a CC Desk installer and proves no historical installer or package identity",
+  "sha256": {
+    "payload.bin": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "public-key.pub": "d8ca6fc08b3ac208888164b3dee8aab0c1569ac29a74fd03dfd209ffd0ec1efe",
+    "prehashed.minisig": "b33357ddd83425411e901a3e17d1a7799ff0f202aff3fd52272c127b7cedc40d",
+    "legacy.minisig": "f43d47e05497b52fbd661b5470e94da9c6cb13dd6bd9c178ed87504c6d8010e0",
+    "tauri-signature.sig": "75f27ada7fc909c6f1b1fa6cc33eddf43704ff57d7342a9e6f75682bc67bff0c",
+    "tauri-public-key.txt": "eeafe1b13f3bb2a6fc55dfe1aa971830d59956f962ccb64a63875dfd0dc28057"
+  }
+}

@@ -4,6 +4,7 @@
 use super::profiles::{error, Profile};
 use super::types::{SafeError, WireU64};
 use super::workspace::RegisteredProject;
+use crate::version_history::maintenance::{process_admissions, AdmissionGate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -57,6 +58,7 @@ pub(crate) enum Patch {
 #[derive(Debug, Clone)]
 pub(crate) struct WorkspaceRepository {
     path: PathBuf,
+    admission: AdmissionGate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,11 +69,23 @@ pub(crate) enum WriteStage {
 }
 
 impl WorkspaceRepository {
+    #[cfg(test)]
     pub(crate) fn open(path: PathBuf) -> Result<Self, SafeError> {
+        Self::open_admitted(path, AdmissionGate::new())
+    }
+
+    pub(crate) fn open_admitted(
+        path: PathBuf,
+        admission: AdmissionGate,
+    ) -> Result<Self, SafeError> {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err(SafeError::invalid("workspacePath"));
         }
-        Ok(Self { path })
+        Ok(Self { path, admission })
+    }
+
+    pub(crate) fn admission(&self) -> &AdmissionGate {
+        &self.admission
     }
 
     pub(crate) fn metadata_directory(&self) -> &Path {
@@ -80,7 +94,10 @@ impl WorkspaceRepository {
 
     pub(crate) fn production() -> Result<Self, SafeError> {
         let home = dirs::home_dir().ok_or_else(|| error("HOME_UNAVAILABLE"))?;
-        Self::open(home.join(".cc-box").join("cli-workspace.v1.json"))
+        Self::open_admitted(
+            home.join(".cc-box").join("cli-workspace.v1.json"),
+            process_admissions(),
+        )
     }
 
     fn lock(&self) -> Result<File, SafeError> {
@@ -138,28 +155,7 @@ impl WorkspaceRepository {
         file.take(MAX_FILE_BYTES + 1)
             .read_to_end(&mut bytes)
             .map_err(|_| error("STORAGE_IO"))?;
-        if bytes.len() as u64 > MAX_FILE_BYTES {
-            return Err(error("WORKSPACE_TOO_LARGE"));
-        }
-        let raw: Value = serde_json::from_slice(&bytes).map_err(|_| error("WORKSPACE_INVALID"))?;
-        if raw.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
-            return Err(error("UNSUPPORTED_SCHEMA"));
-        }
-        let document: WorkspaceDocument =
-            serde_json::from_value(raw).map_err(|_| error("WORKSPACE_INVALID"))?;
-        for (id, profile) in &document.profiles {
-            if id != &profile.id || profile.revision.get() > document.revision.get() {
-                return Err(error("WORKSPACE_INVALID"));
-            }
-            profile.validate().map_err(|_| error("WORKSPACE_INVALID"))?;
-        }
-        for (id, project) in &document.registered_projects {
-            if id != &project.project_id {
-                return Err(error("WORKSPACE_INVALID"));
-            }
-            project.validate().map_err(|_| error("WORKSPACE_INVALID"))?;
-        }
-        Ok(document)
+        decode_workspace(&bytes)
     }
 
     /// A narrow, lock-held transaction; callers may mutate project records, never profile data.
@@ -168,6 +164,7 @@ impl WorkspaceRepository {
         expected_revision: Option<WireU64>,
         update: impl FnOnce(&mut BTreeMap<String, RegisteredProject>) -> Result<(T, bool), SafeError>,
     ) -> Result<T, SafeError> {
+        let mut admission = self.admission.begin_mutation()?.preparing();
         let _lock = self.lock()?;
         let mut document = self.read_locked()?;
         if expected_revision.is_some_and(|revision| revision != document.revision) {
@@ -193,7 +190,9 @@ impl WorkspaceRepository {
         if bytes.len() as u64 > MAX_FILE_BYTES {
             return Err(error("WORKSPACE_TOO_LARGE"));
         }
+        let ticket = admission.begin_write();
         self.write_atomic(&bytes, |_| Ok(()))?;
+        ticket.completed_authoritative_write();
         Ok(result)
     }
 
@@ -227,6 +226,7 @@ impl WorkspaceRepository {
         patch: Patch,
         observe: impl Fn(WriteStage) -> std::io::Result<()>,
     ) -> Result<WorkspaceDocument, SafeError> {
+        let mut admission = self.admission.begin_mutation()?.preparing();
         let _lock = self.lock()?;
         let mut document = self.read_locked()?;
         if document.revision != expected_revision {
@@ -270,7 +270,9 @@ impl WorkspaceRepository {
         if bytes.len() as u64 > MAX_FILE_BYTES {
             return Err(error("WORKSPACE_TOO_LARGE"));
         }
+        let ticket = admission.begin_write();
         self.write_atomic(&bytes, observe)?;
+        ticket.completed_authoritative_write();
         Ok(document)
     }
 
@@ -304,6 +306,33 @@ impl WorkspaceRepository {
             .map_err(|_| error("COMMIT_STATE_UNKNOWN"))?;
         Ok(())
     }
+}
+
+/// Pure bounded workspace decoding for held read-only admission inputs. Ordinary
+/// repository reads use the same validation after acquiring their existing lock.
+pub(crate) fn decode_workspace(bytes: &[u8]) -> Result<WorkspaceDocument, SafeError> {
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(error("WORKSPACE_TOO_LARGE"));
+    }
+    let raw: Value = serde_json::from_slice(bytes).map_err(|_| error("WORKSPACE_INVALID"))?;
+    if raw.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+        return Err(error("UNSUPPORTED_SCHEMA"));
+    }
+    let document: WorkspaceDocument =
+        serde_json::from_value(raw).map_err(|_| error("WORKSPACE_INVALID"))?;
+    for (id, profile) in &document.profiles {
+        if id != &profile.id || profile.revision.get() > document.revision.get() {
+            return Err(error("WORKSPACE_INVALID"));
+        }
+        profile.validate().map_err(|_| error("WORKSPACE_INVALID"))?;
+    }
+    for (id, project) in &document.registered_projects {
+        if id != &project.project_id {
+            return Err(error("WORKSPACE_INVALID"));
+        }
+        project.validate().map_err(|_| error("WORKSPACE_INVALID"))?;
+    }
+    Ok(document)
 }
 
 struct TemporaryPath(PathBuf);

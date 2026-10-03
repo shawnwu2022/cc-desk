@@ -1,77 +1,22 @@
 # 交互规则
 
-## 核心原则
+## 应用级快捷键与统一路由
 
-**终端输入直接发送到 PTY，由 Claude CLI 处理；应用级快捷键由 `useAppShortcuts.ts` 通过 DOM `keydown` capturing phase 统一处理。**
+`config/appShortcuts.ts` 定义五项可配置应用动作，`useAppShortcuts` 在 window 的捕获阶段读取同一份已保存绑定。匹配后阻止事件继续进入终端，由 App 发统一动作请求；未匹配的输入交给实际终端。
 
-```
-用户按键 → window keydown (capturing phase)
-                ↓
-       匹配应用快捷键？
-       ├─ 是 → preventDefault + stopPropagation → 执行应用操作
-       └─ 否 → 正常传递到 xterm.js.onData → PTY → Claude CLI
-```
+| 默认绑定 | 应用动作 |
+|---|---|
+| Mod+N | 当前项目新建会话；无项目时进入添加流程 |
+| Mod+W | 请求关闭当前会话，运行态使用精确所有权确认 |
+| Mod+P | 项目管理 |
+| Mod+, | 设置 |
+| F2 | 当前会话重命名 |
 
-## 快捷键处理架构
+Mod 在 Windows/Linux 为 Ctrl，在 macOS 为 Cmd。设置中的快捷键编辑器支持取消绑定、冲突确认和恢复默认。普通编辑字段、IME、重复按键及共享模态框阻止全局捕获；终端 helper 输入遵循应用绑定。列表重命名使用同一绑定。旧兼容快捷键路由和独立标签切换已退役。
 
-### 架构：DOM capturing phase → useAppShortcuts.ts
+## 终端输入边界
 
-所有应用快捷键在 `src/composables/useAppShortcuts.ts` 中注册，通过 `window.addEventListener('keydown', handler, true)` 在 capturing phase 拦截：
-
-```typescript
-// useAppShortcuts.ts
-function handleGlobalKeydown(e: KeyboardEvent) {
-  const mod = e.ctrlKey
-  // 匹配 → e.preventDefault() + e.stopPropagation()
-  // 不匹配 → 传递到 xterm.js → PTY → Claude CLI
-}
-
-function setupShortcutListeners(): (() => void)[] {
-  window.addEventListener('keydown', handleGlobalKeydown, true)
-  return [() => window.removeEventListener('keydown', handleGlobalKeydown, true)]
-}
-```
-
-### 终端视图可见性检查
-
-部分快捷键（Alt+N/R、Alt+↑↓、Ctrl+Shift+H）仅在终端视图可见时生效：
-
-```typescript
-function isTerminalVisible(): boolean {
-  const terminalView = document.querySelector('[data-terminal-view]')
-  return terminalView !== null && terminalView.checkVisibility()
-}
-```
-
-### 三种输入场景
-
-| 场景 | 焦点位置 | 应用快捷键 | 终端输入 |
-|------|---------|-----------|----------|
-| **1. 终端聚焦** | xterm.js | DOM capturing → 执行 | xterm.js → PTY |
-| **2. 标题栏点击** | 窗口框架 | DOM capturing → 执行（正常工作） | 无法输入 |
-| **3. 窗口不在前台** | 其他应用 | OS 不派发 keydown → 不触发 | 正常 |
-
-## 应用级快捷键
-
-所有应用级快捷键在 `src/composables/useAppShortcuts.ts` 中定义：
-
-| 快捷键 | 功能 | 作用域 |
-|--------|------|--------|
-| Ctrl+, | 打开设置 | 全局 |
-| Ctrl+Shift+N | 新建应用实例 | 全局 |
-| Ctrl+Shift+← | 窗口左移半屏 | 全局 |
-| Ctrl+Shift+→ | 窗口右移半屏 | 全局 |
-| Ctrl+Shift+R | 重启应用 | 全局 |
-| Ctrl+Shift+H | 回到项目列表 | 全局 |
-| Ctrl+= | 增大字体 | 全局 |
-| Ctrl+- | 缩小字体 | 全局 |
-| Ctrl+0 | 重置字体 | 全局 |
-| Alt+N | 新建会话 | 终端可见时 |
-| Alt+R | 重启会话 | 终端可见时 |
-| Alt+↑ | 上一个标签 | 终端可见时 |
-| Alt+↓ | 下一个标签 | 终端可见时 |
-
-**Ctrl++ 特殊处理**：物理键盘上 `Ctrl++` 实际是 `Ctrl+Shift+=`，代码中 `e.key === '='` 匹配两种情况。
+Native Claude/Codex 输入经过 authenticated document bridge，Legacy Claude 输入保留自己的 PTY adapter。应用快捷键之外的 CLI 快捷键由对应 CLI 解释。后台终端只接收已识别的协议回复，用户输入仍受可见性和精确运行身份约束。下列旧 Claude 输入说明仅描述其终端路径，不能替代 Native 输入契约或真实 CLI 验收。
 
 ## 终端快捷键（Claude CLI 处理）
 
@@ -84,7 +29,7 @@ function isTerminalVisible(): boolean {
 | Ctrl+L | 清屏 | xterm.js → PTY → Claude CLI |
 | Ctrl+R | 反向搜索历史 | xterm.js → PTY → Claude CLI |
 | Ctrl+B | 后台运行任务 | xterm.js → PTY → Claude CLI |
-| Ctrl+W | 删除前一个单词 | xterm.js → `\x17` → PTY |
+| Ctrl+W | 默认属于应用关闭会话；解除该绑定后才进入 CLI | 应用绑定优先 |
 | Alt+P | 切换模型 | xterm.js → PTY → Claude CLI |
 | Alt+T | 扩展思考 | xterm.js → PTY → Claude CLI |
 | Ctrl+A/E | 行首/行尾 | xterm.js → PTY → Claude CLI |
@@ -92,7 +37,7 @@ function isTerminalVisible(): boolean {
 
 ### Ctrl+W 处理
 
-Tauri 无特殊绑定，xterm.js 原生处理：用户按 Ctrl+W → `term.onData('\x17')` → PTY → Claude CLI readline 删除前一个单词。无需额外代码。
+默认 Mod+W 由应用请求关闭当前会话；运行中的会话先进入统一确认。只有用户取消或改设此应用绑定后，未匹配的 Ctrl+W 才继续交给终端/CLI。
 
 ### Ctrl+V 粘贴处理
 
@@ -213,13 +158,7 @@ const onInput = (e: Event) => {
 
 ## 视图切换
 
-| 场景 | 触发 |
-|------|------|
-| 启动无收藏 | → WelcomeView |
-| 启动有收藏 | → ProjectSelectView |
-| 选择项目 | → TerminalView |
-| 点击返回 | → ProjectSelectView |
-| Ctrl+Shift+H | 终端 ↔ 项目列表 |
+AppShell 是所有构建的唯一外壳，一级入口为工作区、项目、设置。启动目的地遵循保存的界面偏好，不启动 CLI。项目与会话选择只更新统一上下文；工作区及其终端宿主在跨页导航时保持挂载。空状态在 Workspace/Projects 内展示，没有独立欢迎页或 Native 页面。
 
 ## 鼠标交互
 

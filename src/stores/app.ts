@@ -1,5 +1,6 @@
+import { DEFAULT_SHORTCUT_BINDINGS, readShortcutBindings, validShortcutBindings, type ShortcutBindings } from '@/config/appShortcuts'
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, reactive, computed, onScopeDispose } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   getAppConfig,
@@ -11,13 +12,38 @@ import {
   getCheckResults,
   runChecks,
 } from '@/api/tauri'
+import { normalizeTerminalFont, normalizeTerminalFontSize, normalizeTerminalLineHeight, normalizeTerminalCursor, readTerminalSettings, terminalPreferences as computeTerminalPreferences, type TerminalSettingFields, type TerminalFont, type TerminalCursorStyle } from '@/config/terminalPreferences'
 import { normalizeTerminalThemeId } from '@/config/terminalThemes'
 import { normalizePath } from '@/utils/path'
+import { useShellStore } from '@/stores/shell'
+import type { AppConfig, GuiThemeMode, GuiDensity, StartupDestination } from '@/types/app'
+import type { UnifiedCliKind } from '@/types/unifiedSession'
+import { useWorkspaceStore } from '@/stores/workspace'
+import { useCliWorkspaceStore } from '@/stores/cliWorkspace'
+import type { UnifiedProjectIdentity } from '@/types/unifiedSession'
 import { applyThemeToDom } from '@/utils/theme'
 import i18n from '@/i18n'
 
 import type { ClaudeOptions, DefaultClaudeOptions, CheckResult, Project, ProjectStartupState, SessionInfo } from '@/types'
 
+interface SimpleSettings extends TerminalSettingFields {
+  shortcutBindings: ShortcutBindings
+  guiThemeMode: GuiThemeMode
+  guiDensity: GuiDensity
+  sidebarWidth: number
+  language: 'en' | 'zh'
+  startupDestination: StartupDestination
+  defaultNewCli: UnifiedCliKind
+}
+interface AppConfigRead {
+  config: AppConfig
+  sequence: number
+  intents: Record<keyof SimpleSettings, number>
+  commits: Record<keyof SimpleSettings, number>
+  visibilityVersion: number
+}
+const simpleSettingKeys = ['shortcutBindings', 'guiThemeMode', 'guiDensity', 'sidebarWidth', 'language', 'startupDestination', 'defaultNewCli',
+  'terminalTheme', 'terminalFontFamily', 'fontSize', 'terminalLineHeight', 'terminalCursorStyle', 'terminalCursorBlink', 'webglRenderer'] as const
 const PAGE_SIZE = 12
 
 /** 默认环境变量（代码中定义，用户可重置） */
@@ -38,14 +64,174 @@ export interface PendingResume {
 }
 
 export const useAppStore = defineStore('app', () => {
+  const shell = useShellStore()
+  const shortcutBindings = ref<ShortcutBindings>({ ...DEFAULT_SHORTCUT_BINDINGS })
+  const guiThemeMode = ref<GuiThemeMode>('light')
+  const guiDensity = ref<GuiDensity>('standard')
+  const sidebarWidth = computed(() => shell.sidebarWidth)
+  const startupDestination = ref<StartupDestination>('workspace')
+  const defaultNewCli = ref<UnifiedCliKind>('claude')
   const cwd = ref<string>('')
   const theme = ref<string>('light')
   const terminalTheme = ref<string>('cc-box-light')
   const fontSize = ref<number>(12)
   const webglRenderer = ref<boolean>(false)
+  const terminalFontFamily = ref<TerminalFont>('system')
+  const terminalLineHeight = ref(1.2)
+  const terminalCursorStyle = ref<TerminalCursorStyle>('bar')
+  const terminalCursorBlink = ref(true)
+  const terminalPreferences = computed(() => computeTerminalPreferences({ terminalTheme: terminalTheme.value,
+    terminalFontFamily: terminalFontFamily.value, fontSize: fontSize.value, terminalLineHeight: terminalLineHeight.value,
+    terminalCursorStyle: terminalCursorStyle.value, terminalCursorBlink: terminalCursorBlink.value, webglRenderer: webglRenderer.value }))
   const language = ref<'en' | 'zh'>('en')
   const alwaysOnTop = ref<boolean>(false)
   const claudeEnvVars = ref<Record<string, string>>({})
+
+  const systemTheme = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null
+  const systemDark = ref(systemTheme?.matches ?? false)
+  function publishGuiTheme() {
+    theme.value = guiThemeMode.value === 'system' ? systemDark.value ? 'dark' : 'light' : guiThemeMode.value
+    applyThemeToDom(theme.value)
+  }
+  function onSystemTheme(event: MediaQueryListEvent) {
+    systemDark.value = event.matches
+    if (guiThemeMode.value === 'system') publishGuiTheme()
+  }
+  if (systemTheme?.addEventListener) systemTheme.addEventListener('change', onSystemTheme)
+  else systemTheme?.addListener?.(onSystemTheme)
+  onScopeDispose(() => {
+    if (systemTheme?.removeEventListener) systemTheme.removeEventListener('change', onSystemTheme)
+    else systemTheme?.removeListener?.(onSystemTheme)
+  })
+
+  function simpleSettings(): SimpleSettings {
+    return { shortcutBindings: shortcutBindings.value, guiThemeMode: guiThemeMode.value, guiDensity: guiDensity.value, sidebarWidth: shell.sidebarWidth,
+      language: language.value, startupDestination: startupDestination.value, defaultNewCli: defaultNewCli.value,
+      terminalTheme: terminalTheme.value, terminalFontFamily: terminalFontFamily.value, fontSize: fontSize.value, terminalLineHeight: terminalLineHeight.value,
+      terminalCursorStyle: terminalCursorStyle.value, terminalCursorBlink: terminalCursorBlink.value, webglRenderer: webglRenderer.value }
+  }
+  function applySimpleSettings(next: SimpleSettings) {
+    shortcutBindings.value = { ...next.shortcutBindings }
+    guiThemeMode.value = next.guiThemeMode
+    guiDensity.value = next.guiDensity
+    shell.setSidebarWidth(next.sidebarWidth)
+    language.value = next.language
+    startupDestination.value = next.startupDestination
+    defaultNewCli.value = next.defaultNewCli
+    terminalTheme.value = next.terminalTheme; terminalFontFamily.value = next.terminalFontFamily; fontSize.value = next.fontSize
+    terminalLineHeight.value = next.terminalLineHeight; terminalCursorStyle.value = next.terminalCursorStyle
+    terminalCursorBlink.value = next.terminalCursorBlink; webglRenderer.value = next.webglRenderer
+    i18n.global.locale.value = next.language
+    document.documentElement.dataset.density = next.guiDensity
+    publishGuiTheme()
+  }
+  let confirmedSettings = simpleSettings()
+  const settingIntents = Object.fromEntries(simpleSettingKeys.map(key => [key, 0])) as Record<keyof SimpleSettings, number>
+  const settingCommits = { ...settingIntents }
+  const pendingSettings = reactive({ ...settingIntents })
+  const shortcutBindingsSaving = computed(() => pendingSettings.shortcutBindings > 0)
+  const settingsErrors = ref<Partial<Record<keyof SimpleSettings, string>>>({})
+  const shortcutBindingsError = computed(() => settingsErrors.value.shortcutBindings ?? null)
+  const settingsSaveError = computed(() => Object.values(settingsErrors.value).find(Boolean) ?? null)
+  let settingsLoaded = false
+  let settingsUnconfirmed = false
+  let settingsPublicationSequence = 0
+  let settingsLoad: Promise<void> | null = null
+  let settingsMutationTail: Promise<void> = Promise.resolve()
+  function widthValue(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) ? Math.round(Math.max(240, Math.min(360, value))) : 288
+  }
+  function hydrateSimpleSettings({ config, intents, commits, sequence }: AppConfigRead) {
+    // Publication follows underlying read order, not the order in which callers joined it.
+    if (sequence < settingsPublicationSequence) return
+    const terminalValues = readTerminalSettings(config)
+    // Legacy GUI-based inference is initial migration only. Later recovery reads
+    // with that field still absent must not couple terminal colors to a GUI write.
+    if (settingsLoaded && (config.terminalTheme == null || config.terminalTheme === '')) terminalValues.terminalTheme = confirmedSettings.terminalTheme
+    const values: SimpleSettings = {
+      shortcutBindings: readShortcutBindings(config.shortcutBindings),
+      guiThemeMode: config.guiThemeMode === 'system' || config.guiThemeMode === 'dark' || config.guiThemeMode === 'light'
+        ? config.guiThemeMode : config.theme === 'dark' ? 'dark' : 'light',
+      guiDensity: config.guiDensity === 'compact' ? 'compact' : 'standard', sidebarWidth: widthValue(config.sidebarWidth),
+      language: config.language === 'zh' || config.language === 'en' ? config.language : detectSystemLocale(),
+      startupDestination: config.startupDestination === 'projects' ? 'projects' : 'workspace',
+      defaultNewCli: config.defaultNewCli === 'codex' ? 'codex' : 'claude',
+      ...terminalValues,
+    }
+    const next = simpleSettings()
+    for (const key of simpleSettingKeys) {
+      // A pending intention may need the read's confirmed baseline for rollback,
+      // but an older read can never overwrite a newer acknowledged write or UI choice.
+      if (settingCommits[key] !== commits[key]) continue
+      Object.assign(confirmedSettings, { [key]: values[key] })
+      if (settingIntents[key] === intents[key] && !pendingSettings[key]) Object.assign(next, { [key]: values[key] })
+    }
+    applySimpleSettings(next)
+    settingsPublicationSequence = sequence
+    settingsLoaded = true
+  }
+  function loadSettingsPreferences(force = false): Promise<void> {
+    if (settingsLoaded && !force) return Promise.resolve()
+    if (settingsLoad) return force ? settingsLoad.catch(() => undefined).then(() => loadSettingsPreferences(true)) : settingsLoad
+    settingsLoad = readAppConfig(force).then(read => {
+      const { config } = read
+      if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('APP_CONFIG_UNAVAILABLE')
+      hydrateSimpleSettings(read)
+    }).finally(() => { settingsLoad = null })
+    return settingsLoad
+  }
+  function isUnknownSettingsCommit(failure: unknown): boolean {
+    return !!failure && typeof failure === 'object'
+      && Object.prototype.hasOwnProperty.call(failure, 'code')
+      && (failure as { code?: unknown }).code === 'COMMIT_STATE_UNKNOWN'
+  }
+  async function ensureSettingsWriteReady() {
+    // Every participant in the lane, including startup migration, honors uncertainty.
+    await loadSettingsPreferences(settingsUnconfirmed)
+    settingsUnconfirmed = false
+  }
+  async function reconcileUnconfirmedSettings() {
+    settingsUnconfirmed = true
+    try {
+      await loadSettingsPreferences(true)
+      settingsUnconfirmed = false
+    } catch { /* Keep the barrier until a later explicit operation obtains a fresh read. */ }
+  }
+  function saveSimpleSetting<K extends keyof SimpleSettings>(key: K, value: SimpleSettings[K]): Promise<boolean> {
+    const intent = ++settingIntents[key]
+    ++pendingSettings[key]
+    settingsErrors.value = { ...settingsErrors.value, [key]: undefined }
+    applySimpleSettings({ ...simpleSettings(), [key]: value })
+    const operation = settingsMutationTail.then(async () => {
+      let submitted = false
+      try {
+        await ensureSettingsWriteReady()
+        // Exactly one submitted delta per explicit choice. No full config replacement.
+        const updates: Record<string, unknown> = { [key]: value }
+        if (key === 'guiThemeMode' && value !== 'system') updates.theme = value
+        submitted = true
+        await updateAppConfig(updates)
+        Object.assign(confirmedSettings, { [key]: value })
+        ++settingCommits[key]
+        return true
+      } catch (failure) {
+        const unknown = submitted && isUnknownSettingsCommit(failure)
+        if (unknown) {
+          // Reconcile inside this writer lane; never automatically resubmit the delta.
+          await reconcileUnconfirmedSettings()
+          if (!settingsUnconfirmed) ++settingCommits[key]
+        }
+        if (settingIntents[key] === intent) {
+          if (!settingsUnconfirmed) applySimpleSettings({ ...simpleSettings(), [key]: confirmedSettings[key] })
+          settingsErrors.value = { ...settingsErrors.value, [key]: settingsUnconfirmed ? 'settingsSaveReloadFailed'
+            : unknown ? 'settingsSaveUnconfirmed' : submitted ? 'settingsSaveFailed' : 'settingsSaveReadFailed' }
+        }
+        return false
+      } finally { --pendingSettings[key] }
+    })
+    settingsMutationTail = operation.then(() => undefined)
+    return operation
+  }
 
   // 启动控制
   const pendingResume = ref<PendingResume | null>(null)
@@ -92,6 +278,113 @@ export const useAppStore = defineStore('app', () => {
   // 然 setCwdLocal 若与 persist 交错可能短暂错乱；串行化保证读-写原子）。
   let lastOpenedOpLock: Promise<void> = Promise.resolve()
 
+  const managedProjectsStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const removingProjectPaths = ref(new Set<string>())
+  const visibilityChangingPaths = ref(new Set<string>())
+  const projectAdmissionVersions = new Map<string, number>()
+  let visibilityVersion = 0
+  let configRead: Promise<AppConfigRead> | null = null
+  let configReadSequence = 0
+  function readAppConfig(fresh = false): Promise<AppConfigRead> {
+    if (configRead && fresh) return configRead.catch(() => undefined).then(() => readAppConfig())
+    if (configRead) return configRead
+    configRead = Promise.resolve().then(async () => {
+      // Shared waiters inherit the actual request's ownership fence, never their later join time.
+      const origin = { sequence: ++configReadSequence, intents: { ...settingIntents }, commits: { ...settingCommits }, visibilityVersion }
+      return { config: await getAppConfig(), ...origin }
+    }).finally(() => { configRead = null })
+    return configRead
+  }
+  let visibilityFailed = false
+  let visibilityLoaded = false
+  let visibilityLoad: Promise<void> | null = null
+  let managedLoad: Promise<void> | null = null
+  const addTails = new Map<string, Promise<UnifiedProjectIdentity>>()
+
+  /** Visibility-only read: does not migrate settings, create profiles or launch a CLI. */
+  function loadProjectVisibility(force = false): Promise<void> {
+    if (!force && (visibilityLoaded || loadStatus.value === 'loaded' && !visibilityFailed)) return Promise.resolve()
+    if (visibilityLoad) return visibilityLoad
+    const version = visibilityVersion
+    visibilityLoad = readAppConfig().then(({ config, visibilityVersion: originVersion }) => {
+      if (originVersion !== visibilityVersion) return
+      hiddenProjects.value = new Set(config.hiddenProjects ?? [])
+      visibilityLoaded = true
+      visibilityFailed = false
+      ++visibilityVersion
+    }).catch(failure => { if (version === visibilityVersion) { visibilityFailed = true; visibilityLoaded = false }; throw failure }).finally(() => { visibilityLoad = null })
+    return visibilityLoad
+  }
+  function loadManagedProjects(): Promise<void> {
+    if (managedLoad) return managedLoad
+    managedProjectsStatus.value = 'loading'
+    managedLoad = getProjects().then(rows => {
+      // Preserve explicitly added empty projects while history discovery is in flight.
+      const existing = [...cachedProjects.value]
+      cachedProjects.value = rows
+      for (const row of existing) if (!cachedProjects.value.some(project => normalizePath(project.path) === normalizePath(row.path))) cachedProjects.value.push(row)
+      managedProjectsStatus.value = 'ready'
+    }).catch(failure => { managedProjectsStatus.value = 'error'; throw failure })
+      .finally(() => { managedLoad = null })
+    return managedLoad
+  }
+  function addManagedProject(path: string): Promise<UnifiedProjectIdentity> {
+    const key = normalizePath(path)
+    if (isProjectAdmissionBlocked(path)) return Promise.reject(new Error('PROJECT_REMOVAL_IN_PROGRESS'))
+    const pending = addTails.get(key)
+    if (pending) return pending
+    const operation = (async () => {
+      await loadProjectVisibility()
+      const registry = useWorkspaceStore()
+      const id = await useCliWorkspaceStore().ensureNativeProjectRegistration({ path })
+      const registered = registry.projects.find(project => project.projectId === id)
+      if (!registered) throw new Error('PROJECT_REGISTRATION_FAILED')
+      await setManagedHidden(registered.selectedPath, false)
+      ensureProjectInList(registered.selectedPath)
+      return { projectKey: normalizePath(registered.selectedPath), projectPath: registered.selectedPath }
+    })()
+    addTails.set(key, operation)
+    void operation.finally(() => { if (addTails.get(key) === operation) addTails.delete(key) }).catch(() => undefined)
+    return operation
+  }
+  async function setManagedHidden(path: string, hidden: boolean, admit: () => void = () => {}): Promise<void> {
+    await loadProjectVisibility()
+    try { await setHidden(path, hidden, admit) }
+    catch (failure) {
+      if (failure instanceof Error && failure.message === 'PROJECT_HAS_OPEN_SESSIONS') throw failure
+      // Unknown acknowledgements may already have committed. Reconcile, never replay.
+      await loadProjectVisibility(true).catch(() => { visibilityLoaded = false })
+      throw failure
+    }
+  }
+  function isProjectRemoving(path: string): boolean { return removingProjectPaths.value.has(normalizePath(path)) }
+  function isProjectAdmissionBlocked(path: string): boolean {
+    const key = normalizePath(path)
+    return removingProjectPaths.value.has(key) || visibilityChangingPaths.value.has(key)
+  }
+  /** Every caller freezes its own barrier version, preserving restore cancellation. */
+  function captureProjectAdmission(path: string): () => boolean {
+    const key = normalizePath(path)
+    const version = projectAdmissionVersions.get(key) ?? 0
+    const allowed = !isProjectAdmissionBlocked(path)
+    return () => allowed && version === (projectAdmissionVersions.get(key) ?? 0) && !isProjectAdmissionBlocked(path)
+  }
+  function markProjectVisibilityChanging(path: string, changing: boolean) {
+    const key = normalizePath(path)
+    const next = new Set(visibilityChangingPaths.value)
+    if (changing) { next.add(key); projectAdmissionVersions.set(key, (projectAdmissionVersions.get(key) ?? 0) + 1) }
+    else next.delete(key)
+    visibilityChangingPaths.value = next
+  }
+  function markProjectRemoving(path: string, removing: boolean) {
+    const next = new Set(removingProjectPaths.value)
+    if (removing) {
+      const key = normalizePath(path)
+      next.add(key); projectAdmissionVersions.set(key, (projectAdmissionVersions.get(key) ?? 0) + 1)
+    } else next.delete(normalizePath(path))
+    removingProjectPaths.value = next
+  }
+
   const currentProject = computed(() => {
     if (!cwd.value) return null
     const parts = cwd.value.replace(/\\/g, '/').split('/')
@@ -103,18 +396,10 @@ export const useAppStore = defineStore('app', () => {
   async function loadAppConfig() {
     loadStatus.value = 'loading'
     try {
-      const config = await getAppConfig()
-      theme.value = config.theme || 'light'
-      fontSize.value = config.fontSize || 12
-      webglRenderer.value = config.webglRenderer ?? false
-      language.value = config.language === 'zh' ? 'zh' : config.language === 'en' ? 'en' : detectSystemLocale()
-      i18n.global.locale.value = language.value
-
-      // 终端主题：归一化 + 迁移推断（缺失时按 GUI 映射）
-      const inferredTerminalTheme = config.terminalTheme
-        ? normalizeTerminalThemeId(config.terminalTheme)
-        : (config.theme === 'dark' ? 'cc-box-dark' : 'cc-box-light')
-      terminalTheme.value = inferredTerminalTheme
+      const read = await readAppConfig()
+      const { config, visibilityVersion: version } = read
+      hydrateSimpleSettings(read)
+      const inferredTerminalTheme = confirmedSettings.terminalTheme
 
       // 加载环境变量（首次使用默认值）
       claudeEnvVars.value = Object.keys(config.claudeEnvVars ?? {}).length > 0
@@ -124,10 +409,28 @@ export const useAppStore = defineStore('app', () => {
       // 启动持久化：env + terminalTheme（仅当需修正/迁移时写 terminalTheme）合并为一次调用，
       // 避免多次读-改-写加剧既有竞态（见 spec「已知限制」）
       const needWriteTheme = inferredTerminalTheme !== config.terminalTheme
-      await updateAppConfig({
-        claudeEnvVars: claudeEnvVars.value,
-        ...(needWriteTheme ? { terminalTheme: inferredTerminalTheme } : {}),
+      const migrationEnv = { ...claudeEnvVars.value }
+      // Startup migration and simple GUI changes share submission ordering.
+      // Hydration is already available, so this cannot wait on its own migration.
+      const migration = settingsMutationTail.then(async () => {
+        await ensureSettingsWriteReady()
+        // Recheck at actual submission: a late startup read must not rewrite a
+        // newer terminal choice, confirmed value, or recovery snapshot.
+        const migrateTheme = needWriteTheme && settingIntents.terminalTheme === read.intents.terminalTheme
+          && settingCommits.terminalTheme === read.commits.terminalTheme && settingsPublicationSequence === read.sequence
+        try {
+          await updateAppConfig({ claudeEnvVars: migrationEnv, ...(migrateTheme ? { terminalTheme: inferredTerminalTheme } : {}) })
+          if (migrateTheme) { confirmedSettings.terminalTheme = inferredTerminalTheme; ++settingCommits.terminalTheme }
+        } catch (failure) {
+          if (isUnknownSettingsCommit(failure)) {
+            await reconcileUnconfirmedSettings()
+            if (migrateTheme && !settingsUnconfirmed) ++settingCommits.terminalTheme
+          }
+          throw failure
+        }
       })
+      settingsMutationTail = migration.then(() => undefined, () => undefined)
+      await migration
 
       defaultClaudeOptions.value = {
         skipPermissions: config.defaultSkipPermissions ?? false,
@@ -141,7 +444,13 @@ export const useAppStore = defineStore('app', () => {
 
       // 启动状态源：读 lastOpenedProject + hiddenProjects（v5-T3）
       lastOpenedProject.value = config.lastOpenedProject ?? ''
-      hiddenProjects.value = new Set(config.hiddenProjects ?? [])
+      // A newer visibility read/write owns publication, even while startup migration awaits.
+      if (version === visibilityVersion) {
+        hiddenProjects.value = new Set(config.hiddenProjects ?? [])
+        visibilityLoaded = true
+        visibilityFailed = false
+        ++visibilityVersion
+      }
 
       loadStatus.value = 'loaded'
     } catch (err) {
@@ -274,13 +583,14 @@ export const useAppStore = defineStore('app', () => {
    * - 幂等：状态未变则不持久化。
    * - persist-first：成功后才改本地；失败抛错，hiddenProjects 不变。
    */
-  async function setHidden(path: string, hidden: boolean): Promise<void> {
+  async function setHidden(path: string, hidden: boolean, admit: () => void = () => {}): Promise<void> {
     // cwd 保护：隐藏当前 cwd 破坏「隐藏项目不能成 cwd」不变量，直接拒绝（不抛错以兼容 UI 幂等调用，
     // 管理页按钮已 disabled，此处为 domain 层兜底防绕过）。隐藏=false（取消隐藏）不受限。
     if (hidden && cwd.value && normalizePath(path) === normalizePath(cwd.value)) {
       return
     }
     return withHiddenLock(async () => {
+      if (hidden && cwd.value && normalizePath(path) === normalizePath(cwd.value)) return
       const n = normalizePath(path)
       const next = new Set<string>()
       let existed = false
@@ -291,9 +601,12 @@ export const useAppStore = defineStore('app', () => {
       if (hidden) next.add(path)
       // 幂等：状态未变则跳过持久化
       if (hidden === existed) return
+      // Admit at the actual serialized write boundary, after every earlier await.
+      admit()
       // persist-first：失败抛错，本地不变
       await updateAppConfig({ hiddenProjects: [...next] })
       hiddenProjects.value = next
+      ++visibilityVersion
     })
   }
 
@@ -333,42 +646,34 @@ export const useAppStore = defineStore('app', () => {
     saveLastProject(path)
   }
 
-  function setTheme(newTheme: string) {
-    theme.value = newTheme
-    // 同步应用到 DOM
-    applyThemeToDom(newTheme)
-    // 持久化
-    updateAppConfig({ theme: newTheme })
+  function setTheme(newTheme: string): Promise<boolean> {
+    return saveSimpleSetting('guiThemeMode', newTheme === 'system' || newTheme === 'dark' ? newTheme : 'light')
   }
+  function setGuiDensity(value: string): Promise<boolean> { return saveSimpleSetting('guiDensity', value === 'compact' ? 'compact' : 'standard') }
+  function setSidebarWidth(value: number): Promise<boolean> { return saveSimpleSetting('sidebarWidth', widthValue(value)) }
+  function setStartupDestination(value: string): Promise<boolean> { return saveSimpleSetting('startupDestination', value === 'projects' ? 'projects' : 'workspace') }
+  function setShortcutBindings(value: unknown): Promise<boolean> {
+    if (!validShortcutBindings(value)) { settingsErrors.value = { ...settingsErrors.value, shortcutBindings: 'shortcutBindingInvalid' }; return Promise.resolve(false) }
+    return saveSimpleSetting('shortcutBindings', readShortcutBindings(value))
+  }
+  function setDefaultNewCli(value: string): Promise<boolean> { return saveSimpleSetting('defaultNewCli', value === 'codex' ? 'codex' : 'claude') }
 
-  function setTerminalTheme(id: string) {
-    const normalized = normalizeTerminalThemeId(id)
-    terminalTheme.value = normalized
-    updateAppConfig({ terminalTheme: normalized })
-  }
-
-  function setFontSize(size: number) {
-    fontSize.value = Math.max(10, Math.min(24, size))
-    updateAppConfig({ fontSize: size })
-  }
-
-  // 渲染后端开关：true=WebGL（高频滚动流畅，但 CJK glyph atlas 可能留白/错位），
-  // false=DOM（默认，稳定）。仅对新开终端生效（renderer 在 term.open 时设定）。
-  function setWebglRenderer(enabled: boolean) {
-    webglRenderer.value = enabled
-    updateAppConfig({ webglRenderer: enabled })
-  }
+  function setTerminalTheme(id: string): Promise<boolean> { return saveSimpleSetting('terminalTheme', normalizeTerminalThemeId(id)) }
+  function setFontSize(size: number): Promise<boolean> { return saveSimpleSetting('fontSize', normalizeTerminalFontSize(size)) }
+  function setTerminalFontFamily(value: string): Promise<boolean> { return saveSimpleSetting('terminalFontFamily', normalizeTerminalFont(value)) }
+  function setTerminalLineHeight(value: number): Promise<boolean> { return saveSimpleSetting('terminalLineHeight', normalizeTerminalLineHeight(value)) }
+  function setTerminalCursorStyle(value: string): Promise<boolean> { return saveSimpleSetting('terminalCursorStyle', normalizeTerminalCursor(value)) }
+  function setTerminalCursorBlink(value: boolean): Promise<boolean> { return saveSimpleSetting('terminalCursorBlink', value === true) }
+  // Existing terminals keep their renderer; only options/metrics update live.
+  function setWebglRenderer(enabled: boolean): Promise<boolean> { return saveSimpleSetting('webglRenderer', enabled === true) }
 
   function detectSystemLocale(): 'en' | 'zh' {
     const browserLang = navigator.language || 'en'
     return browserLang.toLowerCase().startsWith('zh') ? 'zh' : 'en'
   }
 
-  function setLanguage(lang: string) {
-    const normalized = lang === 'zh' ? 'zh' : 'en'
-    language.value = normalized
-    updateAppConfig({ language: normalized })
-    i18n.global.locale.value = normalized
+  function setLanguage(lang: string): Promise<boolean> {
+    return saveSimpleSetting('language', lang === 'zh' ? 'zh' : 'en')
   }
 
   /** 同步当前 claudeEnvVars 到 CC Desk config */
@@ -468,8 +773,11 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     cwd,
+    guiThemeMode, guiDensity, sidebarWidth, startupDestination, defaultNewCli, settingsSaveError, loadSettingsPreferences,
+    setGuiDensity, setSidebarWidth, setStartupDestination, setDefaultNewCli, shortcutBindings, setShortcutBindings, shortcutBindingsSaving, shortcutBindingsError,
     theme,
-    terminalTheme,
+    terminalTheme, terminalPreferences, terminalFontFamily, terminalLineHeight, terminalCursorStyle, terminalCursorBlink,
+    setTerminalFontFamily, setTerminalLineHeight, setTerminalCursorStyle, setTerminalCursorBlink,
     fontSize,
     webglRenderer,
     language,
@@ -482,6 +790,7 @@ export const useAppStore = defineStore('app', () => {
     checkResults,
     checkFailed,
     failedChecks,
+    managedProjectsStatus, loadManagedProjects, loadProjectVisibility, addManagedProject, setManagedHidden, isProjectRemoving, markProjectRemoving, isProjectAdmissionBlocked, captureProjectAdmission, markProjectVisibilityChanging,
     cachedProjects,
     cachedRecentSessions,
     cacheLoaded,

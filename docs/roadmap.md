@@ -1,100 +1,65 @@
 # CC Desk roadmap
 
-This roadmap reflects the Native CLI v3 direction. Older plans for Provider CRUD, bundled CLI installation, or an independent MCP client are superseded.
+The current product is the unified Workspace / Projects / Settings shell for real
+Claude Code and Codex CLI sessions. Provider CRUD, bundled CLI installation and an
+independent MCP client remain out of scope.
 
-## Current milestone — Native CLI v3 code-side completion
+## Current milestone: source integrated, acceptance incomplete
 
-### Completed
+Tasks 1–22 and 24 have source/host checkpoints. Task 23 has a reviewed fixture and
+regression harness checkpoint, but remains **BLOCKED_VISUAL**. Task 25 is local
+validation and evidence preparation, not a declaration of full freeze or acceptance.
+The current evidence matrix is [U01–U10](superpowers/execution/U01-U10.md).
 
-| Area | Status |
-|---|---|
-| Native profile/workspace storage and compatibility boundary | Done |
-| Independent project registration and authenticated document bridge | Done |
-| Scoped read-only native projections | Done |
-| Owned launch lifecycle and exact run identity | Done |
-| Optional observer isolation | Done |
-| Bounded output transport and ACK protocol | Done |
-| Ordered/staged input with no-replay failure semantics | Done |
-| Clipboard/keyboard/IME arbitration | Done |
-| Terminal protocol provenance routing | Done |
-| Native Claude/Codex workbench integration | Done |
-| New/resume/session-ID/raw-argv launch entry | Done |
-| Mixed-version rollback safety | Done |
-| Log/DOM/IPC security hardening | Done |
-| Low-resource fairness and fault stress | Done |
-| Tested Windows installed ConPTY runtime behavior | Done for the tested target |
+Implemented boundaries include:
 
-Detailed execution evidence is recorded under `docs/superpowers/execution/`.
+- One shell and project/session tree, mixing both CLIs; duplicated Native and Legacy product pages are retired
+- Authenticated Native lifecycle, exact attempt/source identity, ordered input and bounded output/ACK; Legacy compatibility remains isolated
+- Shared New/Resume flows, explicit consequential confirmations and safe error feedback
+- Project registration/visibility guards and six read-only scoped resource categories
+- Seven Settings sections, independent GUI/terminal preferences and one serialized compatible settings writer
+- Additive display/archive/launch-preference metadata; Desk rename never sends CLI input
+- Responsive/accessibility contracts and deterministic fixtures using production components
+- Migration/adversarial tests plus 50-project, 100-session and 30-descriptor host stress
 
-## External certification gate — D20
+These source tests do not certify real disk migration, 30 concurrent real CLI
+processes, rendered geometry, screen readers or installed application behavior.
+Earlier Native v3 D21 Windows runtime evidence remains valid only for its recorded
+historical target; it is not an installed-package PASS for the unified UX head.
 
-**Status: BLOCKED pending an authorized real target environment.**
+## Remaining acceptance sequence
 
-The harness and target-machine command are implemented. A real PASS requires both Claude Code and Codex CLI to run the complete four-cell matrix with:
+1. Complete local full-suite/typecheck/build and independent full-branch review
+2. Resolve the Task 23 rendering block through an explicitly authorized final workflow/target; retain the genuine missing-baseline failure
+3. Inspect all 13 candidate PNGs, repair demonstrated defects, commit only reviewed baselines, and obtain a no-diff/geometry/interaction PASS
+4. Bind final ordinary CI and Windows test-package evidence to the exact source and tested PR merge commit
+5. Validate old data, mixed runtime sessions, real creation/resume and operations, all GUI/terminal combinations, CJK/emoji and Windows 1024×640 at 100%/125%/150%; also macOS/Linux functional rendering
+6. Record independent review, installer hash, install/reinstall/relocation and manual acceptance results before claiming U10 complete
 
-- an explicitly authorized test account;
-- isolated HOME/config/project/report roots;
-- the actual CLI binary identity and SHA-256;
-- CC Desk observer off/on;
-- system-terminal observer off/on;
-- raw hook evidence and host-payload provenance.
+The visual workflow has no development push trigger. A new workflow that exists only
+on this feature branch cannot receive `workflow_dispatch` until present on the default
+branch. Its PR trigger is prepared for the eventual stacked PR into
+`feat/native-cli-finalization`; opening that PR also triggers ordinary CI. Because
+pixels remain unavailable locally, that would change the original visual-freeze-before-CI
+sequence. The owner approved that final draft/CI sequence on 2026-10-01, with independent
+review before the parent performs external actions. Actual runs and pixel acceptance
+remain pending. No workflow publication to the default branch is included.
 
-Unavailable or unverifiable cells remain BLOCKED. Synthetic hooks, screen scraping, model echo, and writer-success receipts are not substitutes.
+## External certification: D20
 
-## Finalization before merge/release
-
-Code-side closeout consists of:
-
-1. keep the Native CLI workspace visible as a first-class entry;
-2. keep product/developer/release documentation aligned with the implemented boundary;
-3. maintain regression gates against deleted Provider/mutating-resource/legacy-PTY fallbacks;
-4. run one final unified CI on the finalization PR;
-5. perform owner review of the stacked diff.
-
-No release is implied by these steps.
+**BLOCKED_EXTERNAL_TARGET** until an authorized real target supplies the separate
+Claude Code and Codex CLI four-cell matrix: Desk/system terminal × observer off/on.
+It requires isolated roots, actual binary identities/hashes, raw hook evidence and
+host-payload provenance. Synthetic hooks, model echo, screen scraping, mocked host
+receipts and screenshots cannot substitute for missing cells.
 
 ## Release track
 
-Current release automation is candidate-only.
+Signed candidates and test-only installer artifacts do not grant promotion.
+`scripts/release-policy.mjs` stays fail-closed; no version bump, tag, GitHub Release or
+updater publication is part of this UX work. Future public promotion needs a separate
+explicit decision, immutable artifact/evidence identity and rollback design.
 
-Before public promotion is implemented:
-
-- `scripts/release-policy.mjs` must continue to deny publishing;
-- the workflow may build signed candidates and upload artifacts;
-- no workflow may silently create or update a GitHub Release;
-- an explicit promotion design must define required evidence, immutable artifact identity, updater manifest verification, and rollback behavior.
-
-## Post-v3 roadmap
-
-After D20 and owner approval:
-
-### UX consolidation
-
-- native workbench as the primary discoverable path;
-- accessibility, keyboard-navigation and safe error-code explanation polish;
-- project/profile onboarding without exposing secrets;
-- clear legacy-workspace migration/deprecation messaging.
-
-### Compatibility
-
-- selected-version Claude Code regression matrix;
-- selected-version Codex CLI regression matrix;
-- terminal/editor/authentication edge cases on real OS targets;
-- future CLI-version drift handling without hardcoding internal CLI behavior.
-
-### Operations
-
-- explicit release promotion workflow;
-- dependency/advisory triage as a separate reviewed change;
-- signed-candidate retention and reproducibility documentation;
-- support bundles that retain metadata but never user prompts/secrets.
-
-## Non-goals
-
-CC Desk will not become:
-
-- a Provider/API-key manager;
-- a bundled installer for Claude Code or Codex CLI;
-- a native-config editor that competes with the CLI;
-- an independent MCP runtime;
-- a structured chat client that replaces the terminal.
+After these gates and owner review, consider selected-version CLI compatibility,
+any separate Legacy deprecation plan, dependency/advisory triage, and explicit
+candidate-to-release promotion. None is silently bundled into this refactor.

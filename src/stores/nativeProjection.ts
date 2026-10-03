@@ -38,5 +38,24 @@ export const useNativeProjectionStore = defineStore('native-projection', () => {
       if (owner === selected) isLoading.value = false
     }
   }
-  return { source, result, error, isLoading, requestEpoch, clear, load }
+  /** Independent one-page read for an exact owning session. Does not share the
+   * compatibility panel's mutable result slot or clear its in-flight request. */
+  async function readScoped(target: ScopeTarget, kind: ResourceKind, identity: {
+    cli: 'claude' | 'codex'; profileId: string; profileRevision: string
+  }, isCurrent: () => boolean = () => true): Promise<ProjectionResult> {
+    if (sequence === BigInt('18446744073709551615')) throw { code: 'SCOPE_EPOCH_EXHAUSTED' }
+    const epoch = (++sequence).toString()
+    const frozenTarget = { ...target }
+    const expected = { ...identity }
+    const client = createNativeProjectionClient()
+    const selected = await client.scope(frozenTarget)
+    if (!isCurrent()) throw { code: 'SOURCE_CHANGED' }
+    if (selected.cli !== expected.cli || selected.profileId !== expected.profileId || selected.profileRevision !== expected.profileRevision) {
+      throw { code: 'SOURCE_INVALID' }
+    }
+    // The protocol has no cross-page snapshot token. A bounded page explicitly
+    // marked hasMore must not be presented as a complete resource observation.
+    return client.read({ source: selected, resourceKind: kind, requestEpoch: epoch, limit: 200, offset: 0 })
+  }
+  return { source, result, error, isLoading, requestEpoch, clear, load, readScoped }
 })

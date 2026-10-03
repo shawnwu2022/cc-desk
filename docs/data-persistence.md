@@ -65,6 +65,27 @@ Important separation rules:
 - Codex never reads legacy Claude secret/env values as its profile state;
 - legacy user files are preserved rather than deleted during native migration.
 
+## Compatible application preferences
+
+`config.json` retains old/future keys through the existing raw incremental writer.
+Optional read DTO fields add GUI mode/density/sidebar width/startup destination/default
+CLI, terminal font/line-height/cursor/renderer, and configurable shortcut bindings.
+They do not replace `cli-workspace.v1.json` or import Legacy env values into Codex.
+
+`app.ts` serializes simple-setting writes with initial migration. Per-field intent and
+confirmed-commit ownership plus underlying read sequence prevent stale hydration or
+an older failure from replacing a newer choice. Known failures roll back the current
+field to its confirmed baseline. An uncertain acknowledgement only rereads inside
+the same lane; failed recovery prevents subsequent writes until a fresh read succeeds.
+
+Compatibility keys `theme`, `terminalTheme`, `fontSize`, `webglRenderer` remain. Missing
+terminal theme may use old GUI state during initial migration only; later GUI changes
+never redefine it. Existing palette IDs retain their values and invalid settings use
+bounded defaults. Shortcut hydration validates the complete five-action map and falls
+back to defaults for malformed/duplicate bindings; explicit conflict replacement is
+confirmed in the UI. Startup destination restores only Workspace or Projects and does
+not resume a process. Detailed preference behavior is in [terminal preferences](terminal-preferences.md).
+
 ## Project/session data
 
 Claude Code's own session/history data remains native CLI-owned data. Legacy UI readers may project it for compatibility.
@@ -81,16 +102,54 @@ Native project registration records the stable project identity and selected pat
 
 A project path received from the frontend is not, by itself, read authority. Resource access requires the authenticated document/project/scope chain held by the backend.
 
-## Legacy project UI state
+## Shared project UI state
 
-The legacy workspace still persists CC Desk-owned project presentation state such as:
+The compatibility `projects.json` file now supplies both adapters with CC Desk-owned project presentation state such as:
 
-- pinned/archived project state;
+- pinned projects and per-project archived session keys;
 - display names;
 - last-opened project;
 - other compatibility UI preferences.
 
 Concurrent project-state mutations use the existing lock + read-latest + canonicalize + atomic-write path.
+
+### Unified display names
+
+`projectsState` is the sole frontend writer for `projects.json`, including optional
+`sessionRecords` and per-project launch preferences. Both adapters consume saved
+names when projecting discovered history or an existing terminal. Saving a name
+does not change a native Session ID, write CLI history, send terminal input, or
+restart a process. The normal Workspace history row supports the same rename
+operation as a live row.
+
+Native history metadata uses the full `native-history-v2` catalog identity,
+including CLI, launch configuration ID/revision, registered project ID/path and
+authenticated source session key. A resumed terminal keeps that identity for its
+display name, so refresh, close and a fresh application-store load retain the name.
+Legacy metadata binds the normalized project path and Legacy session ID. Records
+with a key whose runtime, CLI, project or session fields disagree are not applied.
+Raw IDs and ambiguous old Native keys are never guessed into another origin.
+
+A new or raw Native terminal without a known authenticated history association
+can only save its name under its exact tab identity. It retains the name across a
+restart of that tab, but independently discovered CLI history after application
+restart keeps its own title. No safe association can be inferred from a raw ID,
+title, current configuration or default root. Optional metadata alone never
+creates a catalog row or restores a process.
+
+Rename saves freeze the source and current attempt. Both the adapter and the
+canonical writer revalidate ownership after their queues, immediately before IPC;
+an invalidated historical row or replaced Native/Legacy attempt cannot submit the
+old name. A cancellation before submission is not an uncertain write and triggers
+no reconciliation. Conflicting or uncertain issued writes use the existing
+read-only reconciliation and require a fresh explicit action, without replay.
+
+The frontend tolerates malformed optional containers and skips invalid individual
+records/preferences while retaining valid siblings. It uses the existing backend
+limits (10,000 records, 200-character session titles, bounded identity fields),
+with no new storage schema, tombstones or migration write during catalog bootstrap.
+The Task 24 migration tests exercise the frontend store boundary with host I/O
+fixtures; they do not execute or certify Rust deserialization or real disk writes.
 
 ## Native observer data
 
@@ -118,3 +177,25 @@ Migration is additive and fail-closed:
 - preserve unknown native schema-v1 extensions across native writes.
 
 See [native-cli-v3.md](native-cli-v3.md) and the D25 execution ledger for mixed-version rollback guarantees.
+
+
+## Unified migration evidence and remaining disk gate
+
+Optional `sessionRecords` and `launchPreferences` are additive. Pin/archive/display-name
+operations and their typed metadata mutations use one frontend writer and the backend
+`projects.json.lock` read-latest/atomic path. Archive hides a Desk catalog record, not
+CLI files. Project removal preserves archive/name/preferences/history while applying
+visibility and existing registration changes under admission guards. A failure after
+one confirmed step may leave a partial state; no automatic compensating mutation occurs.
+
+Task 25's full frontend run initially exposed two old session-tree fixtures whose
+failure readback returned empty disk data despite a previous successful pin/archive.
+They now provide the persisted snapshot and assert one readback plus exactly one
+mutation. Production reconciliation remains unchanged. Store tests cover malformed
+optional entries, valid sibling retention, multi-request ordering and no replay; they
+are not disk/Rust/multi-process execution evidence.
+
+The optional Rust DTO and metadata command tests remain NOT RUN in the current cloud
+checkout. Final Windows Rust CI and package testing must validate deserialization,
+atomic writes and old user data on the exact tested commit. See [U01–U10](superpowers/execution/U01-U10.md)
+for the unperformed gate inventory; no migration deletes old files or certifies D20.

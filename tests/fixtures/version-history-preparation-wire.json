@@ -1,0 +1,16 @@
+{
+  "ticket": {
+    "transactionId": "0123456789abcdef0123456789abcdef"
+  },
+  "prepared": {
+    "transactionId": "0123456789abcdef0123456789abcdef",
+    "version": "0.17.7",
+    "verification": "publisher-verified",
+    "installReady": false,
+    "blockedReason": "PACKAGE_IDENTITY_UNVERIFIED"
+  },
+  "cancelled": {
+    "transactionId": "0123456789abcdef0123456789abcdef",
+    "cancelled": true
+  }
+}

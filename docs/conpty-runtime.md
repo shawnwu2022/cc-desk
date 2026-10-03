@@ -44,6 +44,17 @@ as the runtime files are intentionally held open while it runs.
 binary verification failures. Windows `cargo test --locked --bin cc-desk
 ConptyRuntime_` checks the actual SHA-256 API, file locks and malformed components.
 
+The Rust native CLI test harness acts as a terminal during ConPTY startup: it
+answers the first `CSI c` / `CSI 0c` with xterm's `CSI ? 1 ; 2 c` reply, including
+queries split across output reads. If startup first requests the fresh PTY's
+cursor position, it answers `CSI 1 ; 1 R` before DA1. It then stops replying;
+focus/Win32 input mode requests are never echoed or treated as input encoding
+support. Reply and fixture input writes share one writer; captured output and
+exact input assertions remain unchanged. This avoids relying on the pinned
+[ConPTY startup's 3000 ms missing-DA1 fallback](https://github.com/microsoft/terminal/blob/v1.24.11911.0/src/host/VtIo.cpp#L163-L197).
+The harness retains its 5-second readiness and 20-second watchdog limits. Passing
+these fixture probes does not certify real Claude/Codex input or a WebView UI.
+
 `cc-desk.exe --check-conpty OUTPUT.json` is a noninteractive, pre-Tauri packaging
 probe. It verifies the pinned runtime and exercises portable-pty creation/resize/
 close, returning only backend/build/path metadata. It does not start Claude,

@@ -99,3 +99,15 @@ describe('TERMINAL_THEMES integrity', () => {
     expect(TERMINAL_THEMES.some(t => t.id === DEFAULT_TERMINAL_THEME_ID)).toBe(true)
   })
 })
+
+import * as themes from '@/config/terminalThemes'
+describe('Terminal theme compatibility migration', () => {
+  // 原有16个ID无损保留，缺失终端字段才使用旧GUI字段迁移一次。
+  it('TerminalTheme_LegacyMigration_001', () => {
+    const resolve = (themes as any).resolveTerminalThemeId
+    expect(typeof resolve).toBe('function')
+    for (const theme of TERMINAL_THEMES) expect(resolve(theme.id, 'dark')).toBe(theme.id)
+    expect(resolve(undefined, 'dark')).toBe('cc-box-dark'); expect(resolve(undefined, 'light')).toBe('cc-box-light')
+    expect(resolve('', 'light')).toBe('cc-box-light'); expect(resolve('unknown', 'light')).toBe(DEFAULT_TERMINAL_THEME_ID)
+  })
+})

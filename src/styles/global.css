@@ -74,6 +74,11 @@
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', monospace;
   --font-sans: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', sans-serif;
 
+  /* Shared control geometry: compact / normal / primary. */
+  --control-height-compact: 28px;
+  --control-height-normal: 32px;
+  --control-height-primary: 36px;
+
   /* 圆角系统 */
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -292,3 +297,161 @@ button:disabled, input:disabled {
     animation: none;
   }
 }
+
+/* Shared UI primitives. Static surfaces remain flat; only overlays use shadows. */
+.ui-control--compact { height: var(--control-height-compact); }
+.ui-control--normal { height: var(--control-height-normal); }
+.ui-control--primary { height: var(--control-height-primary); }
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: none;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+.ui-button:hover:not(:disabled) { background: var(--bg-hover); }
+.ui-button--primary {
+  color: var(--text-on-accent);
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+.ui-button--primary:hover:not(:disabled) { background: var(--accent-secondary); border-color: var(--accent-secondary); }
+.ui-button--ghost { background: transparent; border-color: transparent; }
+.ui-button--ghost:hover:not(:disabled) { background: var(--hover-bg); }
+.ui-button--danger { color: var(--status-error); border-color: var(--status-error); }
+.ui-button--danger:hover:not(:disabled) { background: var(--bg-hover); }
+.ui-icon-button { width: var(--control-height-compact); padding: 0; }
+.ui-icon-button.ui-control--normal { width: var(--control-height-normal); }
+.ui-icon-button.ui-control--primary { width: var(--control-height-primary); }
+.ui-button:disabled, .ui-input:disabled, .ui-select:disabled { opacity: 0.5; cursor: not-allowed; }
+.ui-button:focus-visible, .ui-input:focus-visible, .ui-select:focus-visible,
+.ui-menu-item:focus-visible, .ui-error-details summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.ui-field { display: grid; gap: 6px; min-width: 0; }
+.ui-field-label { color: var(--text-secondary); font-size: 13px; }
+.ui-input, .ui-select { width: 100%; min-width: 0; padding: 0 10px; box-shadow: none; }
+.ui-input[aria-invalid="true"], .ui-select[aria-invalid="true"] { border-color: var(--status-error); }
+.ui-tooltip-anchor { position: relative; display: inline-flex; }
+.ui-tooltip {
+  /* Body portal escapes transformed/clipped ancestors, including modal content. */
+  position: fixed;
+  z-index: 110;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  box-shadow: var(--shadow-md);
+}
+.ui-menu {
+  position: absolute;
+  z-index: 70;
+  width: 200px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-lg);
+}
+.ui-menu-item {
+  display: block;
+  width: 100%;
+  min-height: var(--control-height-normal);
+  padding: 6px 10px;
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  color: var(--text-primary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+.ui-menu-item:hover:not(:disabled) { background: var(--hover-bg); }
+.ui-menu-item:focus { background: var(--selected-bg); border-color: var(--selected-border); }
+.ui-menu-item--danger { color: var(--status-error); }
+.ui-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.28);
+}
+.ui-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100%);
+  min-width: 0;
+  max-height: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-xl);
+}
+.ui-dialog:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.ui-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; }
+.ui-dialog-header h2 { min-width: 0; overflow-wrap: anywhere; font-size: 16px; font-weight: 600; }
+.ui-dialog-body { min-height: 0; padding: 0 20px 20px; overflow-y: auto; }
+.ui-dialog-footer { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border-light); }
+.ui-dialog-footer .ui-button { max-width: 100%; min-width: 0; height: auto; min-height: var(--control-height-normal); padding-top: 4px; padding-bottom: 4px; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+.ui-dialog-footer .ui-control--compact { min-height: var(--control-height-compact); }
+.ui-dialog-footer .ui-control--primary { min-height: var(--control-height-primary); }
+.ui-modal-backdrop--drawer { justify-content: flex-end; padding: 0; }
+.ui-drawer { width: min(400px, calc(100vw - 48px)); height: 100%; border-radius: 0; }
+.ui-drawer .ui-dialog-body { flex: 1; }
+.ui-description { color: var(--text-secondary); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.ui-toast-host { position: fixed; z-index: 120; inset: auto 20px 20px auto; display: grid; gap: 8px; width: min(360px, calc(100vw - 40px)); pointer-events: none; }
+.ui-toast, .ui-notice { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-primary); box-shadow: none; }
+.ui-toast { pointer-events: auto; }
+.ui-toast p, .ui-notice p { min-width: 0; flex: 1; font-size: 13px; overflow-wrap: anywhere; }
+.ui-notice-mark { flex-shrink: 0; color: var(--status-info); font-weight: 600; }
+.ui-toast--success .ui-notice-mark, .ui-notice--success .ui-notice-mark { color: var(--status-success); }
+.ui-toast--warning .ui-notice-mark, .ui-notice--warning .ui-notice-mark { color: var(--status-warning); }
+.ui-toast--error .ui-notice-mark, .ui-notice--error .ui-notice-mark { color: var(--status-error); }
+.ui-empty-state { display: grid; justify-items: center; align-content: center; gap: 12px; padding: 32px 24px; text-align: center; box-shadow: none; }
+.ui-empty-state h3 { font-size: 15px; font-weight: 600; }
+.ui-loading-state { display: grid; gap: 8px; }
+.ui-skeleton { height: var(--control-height-primary); border-radius: var(--radius-sm); background: var(--bg-tertiary); animation: ui-skeleton-pulse 1.4s ease-in-out infinite alternate; }
+.ui-spinner { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: ui-spin 0.8s linear infinite; }
+.ui-error-details { margin-top: 8px; color: var(--text-secondary); font-size: 12px; }
+.ui-error-details summary { cursor: pointer; width: fit-content; border-radius: var(--radius-sm); }
+.ui-error-details code { display: block; padding-top: 8px; user-select: text; overflow-wrap: anywhere; }
+.ui-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+@keyframes ui-skeleton-pulse { from { opacity: 0.6; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .ui-spinner, .ui-skeleton { animation: none; }
+  .ui-button, .ui-menu-item, .ui-input, .ui-select { transition: none; }
+}
+
+/* GUI density affects navigation geometry only, never xterm/PTY preferences. */
+[data-density="compact"] .session-list .session-item { height: 34px; }
+[data-density="compact"] .project-node > .project-row { height: 36px; }
+[data-density="compact"] .projects-list .project-row { padding-top: 6px; padding-bottom: 6px; }
+[data-density="compact"] .workspace-view > .workspace-header { padding-top: 6px; padding-bottom: 6px; }

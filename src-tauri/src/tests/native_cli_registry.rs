@@ -597,3 +597,237 @@ fn D15_Registry_RunAuthoritySurvivesResourceRetirement_18() {
         "FORBIDDEN"
     );
 }
+
+// 未入登记的失败请求可写入精确取消墓碑，后续同一请求不得启动。
+#[test]
+fn Launch_CancelAbsent_001() {
+    let fixture = Fixture::new(8);
+    let registry = fixture.driver.registry();
+    let cancelled = registry.cancel(&fixture.caller, &fixture.request).unwrap();
+    assert_eq!(cancelled.phase, LaunchPhase::Cancelled);
+    assert_eq!(fixture.start(&fixture.request).unwrap(), cancelled);
+    assert_eq!(fixture.prepares.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.spawns.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture.start(&fixture.next_request()).unwrap().phase,
+        LaunchPhase::Running
+    );
+}
+
+// 取消发生在准备期间时，迟到的准备结果不得创建路由或进程。
+#[test]
+fn Launch_CancelDuringPrepare_002() {
+    let fixture = Fixture::new(8);
+    let registry = fixture.driver.registry();
+    let started = fixture
+        .driver
+        .start(
+            &fixture.caller,
+            &fixture.request,
+            || {
+                let snapshot = fixture.freeze(&fixture.request)?;
+                assert_eq!(
+                    registry.cancel(&fixture.caller, &fixture.request)?.phase,
+                    LaunchPhase::Cancelled
+                );
+                Ok(snapshot)
+            },
+            |_| panic!("cancelled preparation must not connect"),
+            |_| panic!("cancelled preparation must not spawn"),
+        )
+        .unwrap();
+    assert_eq!(started.phase, LaunchPhase::Cancelled);
+}
+
+// 路由建立期间取消必须阻止 begin，路由失败也不能覆盖取消墓碑。
+#[test]
+fn Launch_CancelDuringConnect_003() {
+    for connect_fails in [false, true] {
+        let fixture = Fixture::new(8);
+        let registry = fixture.driver.registry();
+        let started = fixture
+            .driver
+            .start(
+                &fixture.caller,
+                &fixture.request,
+                || fixture.freeze(&fixture.request),
+                |_| {
+                    assert_eq!(
+                        registry.cancel(&fixture.caller, &fixture.request)?.phase,
+                        LaunchPhase::Cancelled
+                    );
+                    if connect_fails {
+                        Err(error("PRIVATE_ROUTE_FAILURE"))
+                    } else {
+                        Ok(())
+                    }
+                },
+                |_| panic!("cancelled route must not spawn"),
+            )
+            .unwrap();
+        assert_eq!(started.phase, LaunchPhase::Cancelled);
+        assert_eq!(fixture.start(&fixture.request).unwrap(), started);
+    }
+}
+
+// begin 已经提交后取消不能伪造无进程状态，实际进程保留直至退出。
+#[test]
+fn Launch_CancelAfterBegin_004() {
+    let fixture = Fixture::new(8);
+    let registry = fixture.driver.registry();
+    let running = fixture
+        .driver
+        .start(
+            &fixture.caller,
+            &fixture.request,
+            || fixture.freeze(&fixture.request),
+            |_| Ok(()),
+            |_| {
+                assert_eq!(
+                    registry.cancel(&fixture.caller, &fixture.request)?.phase,
+                    LaunchPhase::Starting
+                );
+                Ok(42)
+            },
+        )
+        .unwrap();
+    assert_eq!(running.phase, LaunchPhase::Running);
+    assert_eq!(
+        registry.cancel(&fixture.caller, &fixture.request).unwrap(),
+        running
+    );
+    assert_eq!(
+        *registry.resource(&fixture.caller, &running.run).unwrap(),
+        42
+    );
+    registry.mark_exited(&running.run).unwrap();
+    assert_eq!(
+        registry
+            .cancel(&fixture.caller, &fixture.request)
+            .unwrap()
+            .phase,
+        LaunchPhase::Exited
+    );
+}
+
+// 取消检查完整请求、文档所有者和代次，不能取消另一条已启动记录。
+#[test]
+fn Launch_CancelRejectsConflict_005() {
+    let fixture = Fixture::new(8);
+    let registry = fixture.driver.registry();
+    fixture.start(&fixture.request).unwrap();
+    let mut changed = fixture.request.clone();
+    changed.cols += 1;
+    assert_eq!(
+        registry.cancel(&fixture.caller, &changed).unwrap_err().code,
+        "REQUEST_CONFLICT"
+    );
+    changed = fixture.request.clone();
+    changed.generation += 1;
+    assert_eq!(
+        registry.cancel(&fixture.caller, &changed).unwrap_err().code,
+        "REQUEST_CONFLICT"
+    );
+    let mut forged = fixture.caller.clone();
+    forged.window_label = "other".into();
+    assert_eq!(
+        registry.cancel(&forged, &fixture.request).unwrap_err().code,
+        "FORBIDDEN"
+    );
+    registry.activate_window("main").unwrap();
+    assert_eq!(
+        registry
+            .cancel(&fixture.caller, &fixture.request)
+            .unwrap_err()
+            .code,
+        "FORBIDDEN"
+    );
+}
+
+// spawn 中断留下的未知状态不得被取消伪造成已结束。
+#[test]
+fn Launch_CancelIndeterminate_006() {
+    let fixture = Fixture::new(8);
+    let registry = fixture.driver.registry();
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        fixture.driver.start(
+            &fixture.caller,
+            &fixture.request,
+            || fixture.freeze(&fixture.request),
+            |_| Ok(()),
+            |_| panic!("spawn outcome lost"),
+        )
+    }));
+    assert_eq!(
+        registry
+            .cancel(&fixture.caller, &fixture.request)
+            .unwrap()
+            .phase,
+        LaunchPhase::Indeterminate
+    );
+}
+
+// 跨线程暂停准备后取消，恢复准备线程仍只返回取消回执。
+#[test]
+fn Launch_CancelConcurrentPrepare_007() {
+    let fixture = Fixture::new(8);
+    let barrier = Barrier::new(2);
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            fixture
+                .driver
+                .start(
+                    &fixture.caller,
+                    &fixture.request,
+                    || {
+                        let snapshot = fixture.freeze(&fixture.request)?;
+                        barrier.wait();
+                        barrier.wait();
+                        Ok(snapshot)
+                    },
+                    |_| panic!("cancelled pending preparation must not connect"),
+                    |_| panic!("cancelled pending preparation must not spawn"),
+                )
+                .unwrap()
+        });
+        barrier.wait();
+        let cancelled = fixture
+            .driver
+            .registry()
+            .cancel(&fixture.caller, &fixture.request)
+            .unwrap();
+        barrier.wait();
+        assert_eq!(worker.join().unwrap(), cancelled);
+        assert_eq!(cancelled.phase, LaunchPhase::Cancelled);
+    });
+}
+
+// 路由回调在取消后中断，ticket 析构不能覆盖取消墓碑或阻止下一代次。
+#[test]
+fn Launch_CancelSurvivesRoutePanic_008() {
+    let fixture = Fixture::new(8);
+    let registry = fixture.driver.registry();
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        fixture.driver.start(
+            &fixture.caller,
+            &fixture.request,
+            || fixture.freeze(&fixture.request),
+            |_| {
+                registry.cancel(&fixture.caller, &fixture.request).unwrap();
+                panic!("route lost after cancellation");
+            },
+            |_| panic!("cancelled request must not spawn"),
+        )
+    }));
+    assert_eq!(
+        registry
+            .status(&fixture.caller, &fixture.request.request_id)
+            .unwrap()
+            .phase,
+        LaunchPhase::Cancelled
+    );
+    assert_eq!(
+        fixture.start(&fixture.next_request()).unwrap().phase,
+        LaunchPhase::Running
+    );
+}

@@ -55,11 +55,19 @@ impl NativeRuntime {
         }
     }
 
-    pub(crate) fn production() -> Result<Self, SafeError> {
+    pub(crate) fn production(
+        admission: crate::version_history::maintenance::AdmissionGate,
+    ) -> Result<Self, SafeError> {
         let transports = Arc::new(TerminalTransports::new());
         let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
         let mut service = LaunchService::new(
-            WorkspaceRepository::production()?,
+            WorkspaceRepository::open_admitted(
+                dirs::home_dir()
+                    .ok_or_else(|| error("HOME_UNAVAILABLE"))?
+                    .join(".cc-box")
+                    .join("cli-workspace.v1.json"),
+                admission,
+            )?,
             None,
             Some(supervisor.clone()),
         );
@@ -102,13 +110,17 @@ impl NativeRuntime {
     ) -> Result<LaunchStatus, SafeError> {
         let binding = self.binding()?;
         let (caller, launch) = binding.start_native(&webview, &request)?;
+        if let Some(status) = self.service.registry().existing(&caller, &launch)? {
+            return Ok(status);
+        }
+        let admission = self.service.admit_start()?;
         let descriptor = parse_channel(request.headers());
         let proof = request.headers()[DOCUMENT_HEADER].clone();
         let service = self.service.clone();
         // Keep only validated routing metadata, not the raw body or arbitrary
         // request headers. A replay never evaluates the connect closure.
         tauri::async_runtime::spawn_blocking(move || {
-            service.start(&caller, &launch, |_| {
+            service.start_admitted(admission, &caller, &launch, |_| {
                 let id = descriptor?;
                 let mut headers = HeaderMap::new();
                 headers.insert(DOCUMENT_HEADER, proof);
@@ -130,6 +142,16 @@ impl NativeRuntime {
         request: &Request<'_>,
     ) -> Result<LaunchStatus, SafeError> {
         self.binding()?.query_native(webview, request)
+    }
+    pub(crate) fn cancel_launch<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<LaunchStatus, SafeError> {
+        // Identical document admission and strict full-request decoding as start;
+        // cancellation never reads a new profile or rebuilds a launch snapshot.
+        let (caller, launch) = self.binding()?.start_native(webview, request)?;
+        self.service.registry().cancel(&caller, &launch)
     }
     pub(crate) fn ack_output<T: Runtime>(
         &self,

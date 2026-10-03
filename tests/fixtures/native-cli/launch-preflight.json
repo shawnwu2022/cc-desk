@@ -1,0 +1,79 @@
+[
+  {
+    "profile": {
+      "id": "desk-safe-claude",
+      "revision": "0",
+      "cli": "claude",
+      "name": "Claude Code",
+      "launcher": {
+        "kind": "native"
+      },
+      "programPath": {
+        "mode": "inherit"
+      },
+      "defaultArgs": {
+        "mode": "set",
+        "value": []
+      },
+      "skipPermissions": {
+        "mode": "set",
+        "value": false
+      },
+      "observer": {
+        "mode": "set",
+        "value": false
+      },
+      "env": {}
+    },
+    "availability": {
+      "profileId": "desk-safe-claude",
+      "profileRevision": "1",
+      "cli": "claude",
+      "state": "configuration-required",
+      "hostStatus": "available",
+      "certified": false,
+      "issue": {
+        "code": "PROGRAM_TRUST_REQUIRED",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "profile": {
+      "id": "desk-safe-codex",
+      "revision": "0",
+      "cli": "codex",
+      "name": "Codex CLI",
+      "launcher": {
+        "kind": "native"
+      },
+      "programPath": {
+        "mode": "inherit"
+      },
+      "defaultArgs": {
+        "mode": "set",
+        "value": []
+      },
+      "skipPermissions": {
+        "mode": "inherit"
+      },
+      "observer": {
+        "mode": "set",
+        "value": false
+      },
+      "env": {}
+    },
+    "availability": {
+      "profileId": "desk-safe-codex",
+      "profileRevision": "1",
+      "cli": "codex",
+      "state": "configuration-required",
+      "hostStatus": "available",
+      "certified": false,
+      "issue": {
+        "code": "PROGRAM_TRUST_REQUIRED",
+        "retryable": false
+      }
+    }
+  }
+]
