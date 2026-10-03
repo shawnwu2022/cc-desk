@@ -79,6 +79,13 @@ jobs:
           $result = $LASTEXITCODE
           if (!(Select-String -Path shortcut-attributes.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected 1 selected test(s)' }
           exit $result
+      - name: Verify interrupted shortcut metadata never replays
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_shortcuts_windows::HistoryShortcuts_UnknownNoReplay_003 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath shortcut-no-replay.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path shortcut-no-replay.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected one shortcut no-replay test' }
+          exit $result
       - name: Observe exact historical job lifetime for restart evidence
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: |

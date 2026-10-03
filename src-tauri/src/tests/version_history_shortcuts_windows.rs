@@ -316,6 +316,7 @@ fn HistoryShortcuts_UnknownNoReplay_003() {
         ShortcutFault::AfterWrite,
         ShortcutFault::AfterAttributes,
         ShortcutFault::AfterPermissions,
+        ShortcutFault::AfterPermissionAttributes,
         ShortcutFault::AfterRemove,
     ] {
         let temp = tempfile::tempdir().unwrap();
@@ -332,7 +333,12 @@ fn HistoryShortcuts_UnknownNoReplay_003() {
         let path = temp.path().join("desktop/CC Desk.lnk");
         if fault != ShortcutFault::AfterRemove {
             std::fs::write(&path, b"original source bytes").unwrap();
-            if fault == ShortcutFault::AfterAttributes {
+            if matches!(
+                fault,
+                ShortcutFault::AfterAttributes
+                    | ShortcutFault::AfterPermissions
+                    | ShortcutFault::AfterPermissionAttributes
+            ) {
                 use std::os::windows::ffi::OsStrExt;
                 use windows::Win32::Storage::FileSystem::{
                     SetFileAttributesW, FILE_ATTRIBUTE_NORMAL,
@@ -379,7 +385,10 @@ fn HistoryShortcuts_UnknownNoReplay_003() {
         let generation = journal.generation();
         drop(journal);
         let after = std::fs::read(&path).ok();
-        if fault == ShortcutFault::AfterAttributes {
+        if matches!(
+            fault,
+            ShortcutFault::AfterAttributes | ShortcutFault::AfterPermissionAttributes
+        ) {
             use std::os::windows::ffi::OsStrExt;
             use windows::Win32::Storage::FileSystem::{GetFileAttributesW, FILE_ATTRIBUTE_NORMAL};
             let path: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -391,14 +400,22 @@ fn HistoryShortcuts_UnknownNoReplay_003() {
         let inspected = store.inspect(&binding()).unwrap();
         let state = inspected.last_valid.unwrap();
         assert!(state.requires_reconciliation());
-        if fault == ShortcutFault::AfterAttributes {
+        if matches!(
+            fault,
+            ShortcutFault::AfterAttributes
+                | ShortcutFault::AfterPermissions
+                | ShortcutFault::AfterPermissionAttributes
+        ) {
             let pending = state.pending_effect().unwrap();
+            let expected_operation = if fault == ShortcutFault::AfterAttributes {
+                crate::version_history::journal::ShortcutOperation::SetAttributes
+            } else {
+                crate::version_history::journal::ShortcutOperation::SetPermissions
+            };
             assert!(matches!(
-                pending.kind,
-                EffectKind::RecoveryShortcutEntry {
-                    operation: crate::version_history::journal::ShortcutOperation::SetAttributes,
-                    ..
-                }
+                &pending.kind,
+                EffectKind::RecoveryShortcutEntry { operation, .. }
+                    if operation == &expected_operation
             ));
             assert_eq!(
                 state.effect_observation(&pending.effect_id),

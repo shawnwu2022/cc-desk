@@ -839,6 +839,26 @@ impl RetainedProductShortcuts {
                         apply_descriptor(&file.file, descriptor)?;
                         file.file.sync_all()?;
                         fault(ShortcutFault::AfterPermissions)?;
+                        // Permission application can set ARCHIVE after the prior
+                        // attribute effect. Reassert the retained flags through
+                        // this same held object before the full metadata receipt.
+                        // The existing permission intent owns any partial result;
+                        // failure remains Unknown and cannot replay this effect.
+                        let basic = FILE_BASIC_INFO {
+                            FileAttributes: *attributes,
+                            ..Default::default()
+                        };
+                        unsafe {
+                            SetFileInformationByHandle(
+                                handle(&file.file),
+                                FileBasicInfo,
+                                (&basic as *const FILE_BASIC_INFO).cast(),
+                                size_of::<FILE_BASIC_INFO>() as u32,
+                            )
+                        }
+                        .map_err(win_error)?;
+                        file.file.sync_all()?;
+                        fault(ShortcutFault::AfterPermissionAttributes)?;
                         let observed = destination.entry(slot, &held)?;
                         if !observed
                             .state
@@ -1347,6 +1367,7 @@ pub(crate) enum ShortcutFault {
     AfterWrite,
     AfterAttributes,
     AfterPermissions,
+    AfterPermissionAttributes,
     AfterRemove,
 }
 #[cfg(test)]
