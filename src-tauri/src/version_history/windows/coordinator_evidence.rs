@@ -52,6 +52,23 @@ pub(crate) struct ReturnBoundary {
     current_image: CurrentImageEvidence,
 }
 impl ReturnBoundary {
+    /// 新检查点协议的重开证明；不重建旧进程或Job句柄。
+    pub(super) fn from_recovered(
+        guards: super::reentry::RecoveredSnapshotGuards,
+        current_image: CurrentImageEvidence,
+    ) -> Result<Self, SafeError> {
+        guards.verify_live()?;
+        let installation = guards.installation().clone();
+        let image_name = guards.image_name().clone();
+        let value = Self {
+            snapshot: SnapshotBoundary::from_recovered_return(guards)?,
+            installation,
+            image_name,
+            current_image,
+        };
+        value.verify_current_image()?;
+        Ok(value)
+    }
     pub(super) fn from_native(
         guards: super::return_boundary::ReturnSnapshotGuards,
         current_image: CurrentImageEvidence,

@@ -1039,3 +1039,85 @@ fn HistoryRegistryState_CapacityBeforeMutation_011() {
         .pending_effect()
         .is_none());
 }
+
+// 检查完成核对只读接受恢复后合法保留的共享父键，且拒绝缺失回执及之后的修改。
+#[test]
+fn HistoryRegistryState_CompletedReadback_014() {
+    let temp = tempfile::tempdir().unwrap();
+    let user = CurrentUser::capture().unwrap();
+    let root = private(temp.path(), &user);
+    let leases = LeaseFiles::open(root.clone(), &user).unwrap();
+    let control = leases.acquire_control().unwrap();
+    let exclusive = leases.acquire_exclusive(&control).unwrap();
+    let binding = binding();
+    let mut store = JournalStore::open_windows(root.clone()).unwrap();
+    store
+        .initialize(
+            binding.clone(),
+            CapacityPlan::for_effects(100, 100, 100, 16384).unwrap(),
+        )
+        .unwrap();
+    let fixture = Fixture::new();
+    let installation = Directory::open_absolute(temp.path()).unwrap();
+    let source =
+        HeldRegistrationState::fixture_capture(fixture.root, installation.clone()).unwrap();
+    let original = source.encode().unwrap();
+    let mut journal =
+        RegistrationJournal::new(&mut store, root.clone(), &exclusive, binding.clone(), 0).unwrap();
+    let retained = source.retain(&mut journal).unwrap();
+    let mut generation = journal.generation();
+    drop(journal);
+    fixture.value(PRODUCT, "Later", REG_BINARY, b"installer registration");
+    restoring(&mut store, &binding, &mut generation);
+    let journal_bytes = || std::fs::read(temp.path().join("private/journal.log")).unwrap();
+    let record_count = || {
+        std::fs::read_dir(temp.path().join("private"))
+            .unwrap()
+            .count()
+    };
+    let before = (journal_bytes(), record_count());
+    let mut journal =
+        RegistrationJournal::new(&mut store, root, &exclusive, binding, generation).unwrap();
+    assert!(retained.reopen_completed(&mut journal).is_err());
+    assert_eq!(generation, journal.generation());
+    assert_eq!(before, (journal_bytes(), record_count()));
+    let receipt = retained.restore(&mut journal).unwrap();
+    receipt.verify().unwrap();
+    drop(receipt);
+
+    let generation = journal.generation();
+    let before = (journal_bytes(), record_count());
+    let reopened = retained.reopen_completed(&mut journal).unwrap();
+    reopened.recheck().unwrap();
+    assert_ne!(
+        original,
+        reopened.encode().unwrap(),
+        "shared parents legitimately remain"
+    );
+    assert!(retained.verify_original(&mut journal).is_err());
+    assert_eq!(generation, journal.generation());
+    assert_eq!(before, (journal_bytes(), record_count()));
+
+    fixture.value(
+        PRODUCT,
+        "Unexpected",
+        REG_BINARY,
+        b"changed after completion",
+    );
+    assert!(reopened.recheck().is_err());
+    drop(reopened);
+    let changed = HeldRegistrationState::fixture_capture(fixture.root, installation.clone())
+        .unwrap()
+        .encode()
+        .unwrap();
+    assert!(retained.reopen_completed(&mut journal).is_err());
+    assert_eq!(generation, journal.generation());
+    assert_eq!(before, (journal_bytes(), record_count()));
+    assert_eq!(
+        changed,
+        HeldRegistrationState::fixture_capture(fixture.root, installation)
+            .unwrap()
+            .encode()
+            .unwrap()
+    );
+}

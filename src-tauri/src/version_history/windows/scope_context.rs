@@ -6,7 +6,7 @@ use crate::version_history::{
     snapshot::{ContextReader, EntryType},
     verified_package::sha256,
     windows::{
-        context::{HeldContext, HeldRoot},
+        context::{ContextRestoration, HeldContext, HeldRoot},
         files::PrivateDirectory,
     },
 };
@@ -53,6 +53,7 @@ pub(crate) struct ConfiguredExclusions {
     paths: Vec<ObservedPath>,
     legacy_history: LegacyProjectInputs,
     roots: BTreeMap<RootKind, HeldRoot>,
+    return_slots: BTreeMap<RootKind, HeldRoot>,
     original_locations: BTreeMap<RootKind, String>,
     original_manifests: BTreeMap<RootKind, String>,
     configuration_identity: String,
@@ -102,6 +103,30 @@ fn capture<'a>(
                 .map_err(|_| ScopeBlock::PathUnsupported)?;
         }
     }
+    let configured = read_configuration(context, home, environment)?;
+    let result = ContextConfiguredInventory {
+        context,
+        host,
+        paths: configured.paths,
+        legacy_history: configured.legacy_history,
+        configuration_identity: configured.identity,
+    };
+    result.recheck()?;
+    Ok(result)
+}
+
+struct ConfigurationRead {
+    paths: Vec<ObservedPath>,
+    legacy_history: LegacyProjectInputs,
+    identity: String,
+}
+
+/// 只读取调用方已经持有的实际文件。初始捕获与重开custody分别负责完整树准入。
+fn read_configuration(
+    context: &mut HeldContext,
+    home: &Path,
+    environment: &EnvMap,
+) -> ScopeResult<ConfigurationRead> {
     let mut bound_entries = Vec::new();
     let mut inputs = Vec::new();
     for (name, maximum) in INPUTS {
@@ -171,17 +196,13 @@ fn capture<'a>(
         .into_iter()
         .map(|candidate| ObservedPath::observe(&candidate.path, candidate.kind))
         .collect::<ScopeResult<Vec<_>>>()?;
-    let result = ContextConfiguredInventory {
-        context,
-        host,
+    Ok(ConfigurationRead {
         paths,
         legacy_history,
-        configuration_identity: sha256(
+        identity: sha256(
             &serde_json::to_vec(&bound_entries).map_err(|_| ScopeBlock::InputMalformed)?,
         ),
-    };
-    result.recheck()?;
-    Ok(result)
+    })
 }
 
 fn require_desk_location(root: &HeldRoot, home: &Arc<Directory>) -> ScopeResult<()> {
@@ -234,6 +255,7 @@ impl ContextConfiguredInventory<'_> {
             paths: self.paths,
             legacy_history: self.legacy_history,
             roots,
+            return_slots: BTreeMap::new(),
             original_locations: self.context.root_identities(),
             original_manifests,
             configuration_identity: self.configuration_identity,
@@ -254,6 +276,108 @@ impl ContextConfiguredInventory<'_> {
 }
 
 impl ConfiguredExclusions {
+    /// 只有实际上下文执行器的custody允许从已旋转的后来根重建排除观察。
+    pub(crate) fn reopen_for_return(
+        context: &mut ContextRestoration,
+        installation: Arc<Directory>,
+        recovery: Arc<PrivateDirectory>,
+        expected_configuration: &str,
+        user: &CurrentUser,
+    ) -> ScopeResult<Self> {
+        let host = HostObservation::capture()?;
+        let home = host.home.clone();
+        let environment = host.environment.clone();
+        Self::reopen_return_under(
+            context,
+            installation,
+            recovery,
+            expected_configuration,
+            user,
+            &home,
+            &environment,
+            host,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reopen_return_under(
+        context: &mut ContextRestoration,
+        installation: Arc<Directory>,
+        recovery: Arc<PrivateDirectory>,
+        expected_configuration: &str,
+        user: &CurrentUser,
+        home: &Path,
+        environment: &EnvMap,
+        host: HostObservation,
+    ) -> ScopeResult<Self> {
+        let mut custody = context
+            .return_configuration_custody(user)
+            .map_err(|_| ScopeBlock::InputChanged)?;
+        let slots = custody.original_slots();
+        let home_root = Directory::open_absolute(home).map_err(|_| ScopeBlock::InputUnavailable)?;
+        require_desk_location(&slots[&RootKind::Desk], &home_root)?;
+        let configured = read_configuration(custody.context_mut(), home, environment)?;
+        if configured.identity != expected_configuration {
+            return Err(ScopeBlock::InputChanged);
+        }
+        let result = Self {
+            host,
+            paths: configured.paths,
+            legacy_history: configured.legacy_history,
+            roots: custody.retained_roots(),
+            return_slots: slots,
+            original_locations: custody
+                .original_locations()
+                .map_err(|_| ScopeBlock::InputChanged)?,
+            original_manifests: custody
+                .original_manifests()
+                .map_err(|_| ScopeBlock::InputChanged)?,
+            configuration_identity: configured.identity,
+            installation,
+            recovery,
+        };
+        // 原槽位、安装与恢复根仍须彼此隔离。保留根位于恢复目录内是既有设计。
+        let mut original_roots = result
+            .return_slots
+            .values()
+            .map(root_components)
+            .collect::<ScopeResult<Vec<_>>>()?;
+        original_roots.push(directory_components(&result.installation)?);
+        original_roots.push(directory_components(result.recovery.directory())?);
+        for (index, left) in original_roots.iter().enumerate() {
+            for right in &original_roots[..index] {
+                if components_overlap(left, right)? {
+                    return Err(ScopeBlock::Overlap);
+                }
+            }
+        }
+        custody.verify(user).map_err(|_| ScopeBlock::InputChanged)?;
+        result.verify_external()?;
+        Ok(result)
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fixture_reopen_for_return(
+        context: &mut ContextRestoration,
+        installation: Arc<Directory>,
+        recovery: Arc<PrivateDirectory>,
+        expected_configuration: &str,
+        user: &CurrentUser,
+        home: &Path,
+        environment: EnvMap,
+    ) -> ScopeResult<Self> {
+        Self::reopen_return_under(
+            context,
+            installation,
+            recovery,
+            expected_configuration,
+            user,
+            home,
+            &environment,
+            HostObservation::capture()?,
+        )
+    }
     #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
     pub(crate) fn acceptance_require_disjoint(&self, evidence: &ObservedPath) -> ScopeResult<()> {
         self.verify_external()?;
@@ -322,6 +446,7 @@ impl ConfiguredExclusions {
         let mut roots = self
             .roots
             .values()
+            .chain(self.return_slots.values())
             .map(root_components)
             .collect::<ScopeResult<Vec<_>>>()?;
         roots.push(directory_components(&self.installation)?);

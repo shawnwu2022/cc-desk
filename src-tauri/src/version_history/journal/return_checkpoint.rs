@@ -24,6 +24,168 @@ pub(crate) struct ReturnCheckpointInspection {
 
 #[cfg(any(test, windows))]
 impl JournalStore {
+    #[cfg(windows)]
+    pub(crate) fn applied_effect_expected(&self, kind: &EffectKind) -> Result<Vec<u8>, SafeError> {
+        // 共用完整Applied receipt验证；返回的expected仍只是受保护记录，不授予效果权限。
+        let (effect_id, _) = self.applied_effect_observation(kind)?;
+        let state = &self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?
+            .journal;
+        let effect = state
+            .effects
+            .get(&effect_id)
+            .ok_or_else(|| error("HISTORY_RECEIPT_INVALID"))?;
+        self.protect_manifest(&effect.spec.expected_postconditions)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn applied_effect_observation(
+        &self,
+        kind: &EffectKind,
+    ) -> Result<(String, Vec<u8>), SafeError> {
+        self.check_writer_current()?;
+        let state = &self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?
+            .journal;
+        let mut matches = state
+            .effects
+            .values()
+            .filter(|entry| &entry.spec.kind == kind);
+        let effect = matches
+            .next()
+            .ok_or_else(|| error("HISTORY_RECEIPT_INVALID"))?;
+        if matches.next().is_some() || state.requires_reconciliation() {
+            return Err(error("HISTORY_RECEIPT_INVALID"));
+        }
+        let result = effect
+            .result
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_RECEIPT_INVALID"))?;
+        let receipt: EffectReceipt = serde_json::from_slice(
+            &self.read_manifest(
+                result
+                    .receipt
+                    .as_deref()
+                    .ok_or_else(|| error("HISTORY_RECEIPT_INVALID"))?,
+            )?,
+        )
+        .map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
+        if result.observation != Observation::Applied
+            || receipt.schema != 1
+            || receipt.transaction_id != state.binding.transaction_id
+            || receipt.effect_id != effect.spec.effect_id
+            || receipt.intent_generation != effect.intent_generation
+            || receipt.expected_postconditions != effect.spec.expected_postconditions
+            || receipt.observation != Observation::Applied
+        {
+            return Err(error("HISTORY_RECEIPT_INVALID"));
+        }
+        Ok((
+            effect.spec.effect_id.clone(),
+            self.protect_manifest(&receipt.observed_manifest)?,
+        ))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn inspect_completed_return_checkpoint(
+        &self,
+        binding: &JournalBinding,
+        marker: &super::super::maintenance::ActiveContextMarker,
+    ) -> Result<ReturnCheckpointInspection, SafeError> {
+        let inspection = self.inspect(binding)?;
+        let state = inspection
+            .last_valid
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_RETURN_CHECKPOINT_BLOCKED"))?;
+        if inspection.blocked
+            || state.return_claim.is_none()
+            || state.phase != JournalPhase::Restored
+            || state.requires_reconciliation()
+        {
+            return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+        }
+        marker.validate_checkpoint(
+            state,
+            inspection
+                .head()
+                .ok_or_else(|| error("HISTORY_RETURN_CHECKPOINT_BLOCKED"))?,
+        )?;
+        if !marker.is_terminal() {
+            return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+        }
+        let (digest, _) = state
+            .return_checkpoint
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_RETURN_CHECKPOINT_BLOCKED"))?;
+        let checkpoint = self.read_return_checkpoint(digest)?;
+        Ok(ReturnCheckpointInspection {
+            digest: digest.clone(),
+            generation: state.generation,
+            materials: self.protect_manifest(&checkpoint.materials)?,
+        })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn claim_reentered_return_checkpoint(
+        &mut self,
+        evidence: &super::super::windows::reentry::ReenteredReturnCheckpoint<'_>,
+        marker: &super::super::maintenance::ActiveContextMarker,
+        generation: u64,
+    ) -> Result<u64, SafeError> {
+        let materials = evidence.verify(self, generation)?;
+        let checkpoint = self.inspect_return_checkpoint(evidence.binding(), marker)?;
+        if checkpoint.generation != generation || checkpoint.materials != materials {
+            return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+        }
+        self.append_admitted(
+            generation,
+            JournalEvent::ReturnExecutionClaimed {
+                checkpoint: checkpoint.digest,
+                attempt_id: uuid::Uuid::new_v4().to_string(),
+            },
+        )
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn verify_unclaimed_return_checkpoint_bundle_plan(
+        &self,
+        binding: &JournalBinding,
+        expected: &super::super::windows::manager_bundle::ManagerRecordReference,
+    ) -> Result<(), SafeError> {
+        let inspection = self.inspect(binding)?;
+        let state = inspection
+            .last_valid
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_RETURN_CHECKPOINT_BLOCKED"))?;
+        let (digest, generation) = state
+            .return_checkpoint
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_RETURN_CHECKPOINT_BLOCKED"))?;
+        if inspection.blocked
+            || state.return_claim.is_some()
+            || state.generation != *generation
+            || state.phase != JournalPhase::Restoring
+            || state.requires_reconciliation()
+        {
+            return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+        }
+        let checkpoint = self.read_return_checkpoint(digest)?;
+        let materials: super::super::windows::return_checkpoint::ReturnCheckpointMaterials =
+            serde_json::from_slice(&self.protect_manifest(&checkpoint.materials)?)
+                .map_err(|_| error("HISTORY_RETURN_CHECKPOINT_BLOCKED"))?;
+        if materials.schema != 1
+            || &materials.binding != binding
+            || &materials.bundle_plan != expected
+        {
+            return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+        }
+        Ok(())
+    }
+
     fn read_return_checkpoint(&self, digest: &str) -> Result<ReturnCheckpoint, SafeError> {
         let bytes = self.protect_manifest(digest)?;
         if bytes.len() > MAX_CHECKPOINT_BYTES {

@@ -202,4 +202,40 @@ describe('isolated historical version recovery manager', () => {
     expect(wrapper.find('[data-manager-confirm]').exists()).toBe(false)
     expect(wrapper.find('[data-manager-return]').exists()).toBe(true)
   })
+
+  // 重开后的返回仍需二次确认；请求未完成时只轮询真实状态，不重复派发。
+  it('ManagerUI_ReentryReturnProgress_015', async () => {
+    vi.useFakeTimers()
+    invoke.mockResolvedValue({ ...wire.recoveryRequired, blockedReason: null,
+      allowedActions: ['refresh', 'return-to-previous'] })
+    const wrapper = render(); await flushPromises()
+    await wrapper.get('[data-manager-return]').trigger('click'); await flushPromises()
+    expect(invoke.mock.calls.filter(([command]) => command === 'restore_previous_version')).toHaveLength(0)
+    let finish!: (value: unknown) => void
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    document.querySelector<HTMLButtonElement>('[data-manager-submit]')!.click(); await flushPromises()
+    invoke.mockResolvedValue({ ...wire.returning, generation: '18' })
+    await vi.advanceTimersByTimeAsync(1500); await flushPromises()
+    expect(invoke).toHaveBeenLastCalledWith('inspect_version_switch', {})
+    expect(wrapper.get('[data-phase]').attributes('data-phase')).toBe('returning')
+    expect(wrapper.find('[data-manager-return]').exists()).toBe(false)
+    expect(wrapper.get('[data-manager-refresh]').attributes('disabled')).toBeDefined()
+    invoke.mockResolvedValue({ ...wire.restored, generation: '19' })
+    finish({ ...wire.restored, generation: '19' }); await flushPromises()
+    expect(wrapper.get('[data-manager-phase]').text()).toContain('Previous version restored')
+    expect(invoke.mock.calls.filter(([command]) => command === 'restore_previous_version')).toHaveLength(1)
+  })
+
+  // 已claim或证据未知的重开状态只有检查；已完成投影也不再次显示恢复。
+  it('ManagerUI_ReentryBlockedAndCompletedAreReadOnly_016', async () => {
+    invoke.mockResolvedValue({ ...wire.recoveryRequired, blockedReason: 'RECOVERY_EVIDENCE_UNAVAILABLE', allowedActions: ['refresh'] })
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.find('[data-manager-return]').exists()).toBe(false)
+    expect(wrapper.find('[data-manager-confirm]').exists()).toBe(false)
+    invoke.mockResolvedValue({ ...wire.restored, generation: '19' })
+    await wrapper.get('[data-manager-refresh]').trigger('click'); await flushPromises()
+    expect(wrapper.get('[data-manager-phase]').text()).toContain('Previous version restored')
+    expect(wrapper.find('[data-manager-return]').exists()).toBe(false)
+    expect(invoke.mock.calls.every(([command]) => command === 'inspect_version_switch')).toBe(true)
+  })
 })

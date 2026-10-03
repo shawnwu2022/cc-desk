@@ -827,6 +827,33 @@ impl RetainedRegistrationState {
         self.verify(journal)?;
         observed.recheck()
     }
+    /// 完成核对仅重开实际对象，逐 slot 验证完整 Applied 快照及原始目标，不写注册表。
+    pub(crate) fn reopen_completed(
+        &self,
+        journal: &mut RegistrationJournal<'_>,
+    ) -> io::Result<HeldRegistrationState> {
+        self.verify(journal)?;
+        let observed = HeldRegistrationState::observe(self.root, self.installation.clone())?;
+        if !observed.snapshot.equivalent(&self.manifest.snapshot) {
+            return Err(blocked(
+                "completed registration differs from retained source",
+            ));
+        }
+        let current = encode(&observed.snapshot)?;
+        let expected = encode(&self.manifest.snapshot)?;
+        for slot in SLOTS.into_iter().chain([RegistrationSlot::OwnedRun]) {
+            let kind = EffectKind::VerifyRegistrationRestore { slot };
+            let (_, receipt) = safe(journal.store.applied_effect_observation(&kind))?;
+            if receipt != current || safe(journal.store.applied_effect_expected(&kind))? != expected
+            {
+                return Err(blocked("completed registration receipt or object changed"));
+            }
+        }
+        observed.recheck()?;
+        self.verify(journal)?;
+        observed.recheck()?;
+        Ok(observed)
+    }
     /// Retained original authority survives intentional installer changes to
     /// current registry values. The exact role and protected bytes still match.
     pub(crate) fn verify_retained(&self, journal: &mut RegistrationJournal<'_>) -> io::Result<()> {

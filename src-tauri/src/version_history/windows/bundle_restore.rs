@@ -915,6 +915,169 @@ impl BundleRestoration {
     ) -> io::Result<Self> {
         BundlePreparationAttempt::new(original, boundary).prepare(user, journal)
     }
+    /// Reacquire only the original, complete, sealed preparation. The caller
+    /// separately verifies the real checkpoint marker and return boundary;
+    /// this constructor neither claims execution nor repeats preparation.
+    pub(crate) fn reopen_prepared(
+        original: Arc<RetainedInstallationBundle>,
+        boundary: Arc<ReturnBoundary>,
+        expected: &ManagerRecordReference,
+        user: &CurrentUser,
+        journal: &mut ContextJournal<'_>,
+    ) -> io::Result<Self> {
+        journal.verify()?;
+        safe(
+            journal
+                .store
+                .verify_unclaimed_return_checkpoint_bundle_plan(&journal.binding, expected),
+        )?;
+        let reopened = Self::reopen_prepared_objects(original, boundary, expected, user, journal)?;
+        safe(
+            journal
+                .store
+                .verify_unclaimed_return_checkpoint_bundle_plan(&journal.binding, expected),
+        )?;
+        Ok(reopened)
+    }
+
+    fn reopen_prepared_objects(
+        original: Arc<RetainedInstallationBundle>,
+        boundary: Arc<ReturnBoundary>,
+        expected: &ManagerRecordReference,
+        user: &CurrentUser,
+        journal: &mut ContextJournal<'_>,
+    ) -> io::Result<Self> {
+        original.verify(user)?;
+        original.verify_journal(journal)?;
+        require_phase(journal, &[JournalPhase::Restoring])?;
+        journal.exclusive()?.verify_root(&journal.root)?;
+        safe(boundary.verify_current_image())?;
+        if boundary.binding() != &journal.binding
+            || boundary.installation().identity() != original.directory.identity()
+            || text(boundary.image_name())? != original.saved.source.original_image_name
+            || safe(journal.store.latest_bundle_backup())?.is_some()
+        {
+            return Err(blocked("prepared installation boundary or attempt changed"));
+        }
+        let plan_record = ManagerRecord::open(original.data.clone(), RETURN_PLAN, expected, user)?;
+        let plan: ReturnPlan = plan_record.decode(user)?;
+        if plan.schema != 1
+            || plan.attempt != AttemptNames::default()
+            || !plan.history.is_empty()
+            || plan.transaction != journal.binding.transaction_id
+            || plan.source != *original.reference()
+            || plan.slot != original.saved.slot
+            || plan.current != plan.later_copy.source
+        {
+            return Err(blocked("original prepared installation plan changed"));
+        }
+        plan.slot.verify(&original.directory)?;
+        original
+            .directory
+            .require_same_volume(original.data.directory())?;
+        for name in [LATER_OBJECTS, RETURN_RESULT] {
+            HeldRoot::Absent {
+                parent: original.data.directory().clone(),
+                name: component(name)?,
+            }
+            .verify()?;
+        }
+        let (seed_generation, seed_digest) = safe(journal.store.latest_bundle_seed())?
+            .ok_or_else(|| blocked("prepared installation seed missing"))?;
+        let seed: BundleSeed =
+            serde_json::from_slice(&safe(journal.store.read_manifest(&seed_digest))?)?;
+        if seed.schema != 1
+            || seed.transaction != plan.transaction
+            || seed.data_root != *original.data.directory().identity()
+            || seed.original != plan.source
+            || seed.slot != plan.slot
+            || seed.current != plan.current
+        {
+            return Err(blocked("prepared installation seed differs"));
+        }
+        let later = PrivateTreeCopy::reopen(
+            original.data.clone(),
+            component(LATER_COPY)?,
+            plan.later_copy.clone(),
+            user,
+            SnapshotLimits::default(),
+        )?;
+        let receipts = safe(
+            journal
+                .store
+                .bundle_copy_receipts(seed_generation, &seed.current.digest()?),
+        )?;
+        let mut copied = BTreeSet::new();
+        for (index, digest) in &receipts {
+            let saved: ManifestEntry =
+                serde_json::from_slice(&safe(journal.store.read_manifest(digest))?)?;
+            let source = plan
+                .current
+                .entries
+                .get(*index as usize)
+                .ok_or_else(|| blocked("prepared installation copy index changed"))?;
+            if !copied.insert(*index)
+                || saved.metadata.path != source.metadata.path
+                || plan.later_copy.copy.entries.get(*index as usize) != Some(&saved)
+            {
+                return Err(blocked("prepared installation copy receipt changed"));
+            }
+        }
+        if receipts.len() != plan.current.entries.len() {
+            return Err(blocked("prepared installation copy is incomplete"));
+        }
+        let (fenced, image_identity) = match boundary.current_image() {
+            CurrentImageEvidence::Fenced(fence) => (
+                Some((boundary.image_name().clone(), fence.clone())),
+                Some(fence.lock().identity().clone()),
+            ),
+            CurrentImageEvidence::Absent(absence) => {
+                absence.verify()?;
+                (None, None)
+            }
+        };
+        let current = HeldTree::admit(
+            HeldRoot::Present(original.directory.clone()),
+            &mut Budget::new(SnapshotLimits::default())?,
+            fenced,
+        )?;
+        if current.manifest != plan.current
+            || current.detached_image != plan.detached_image
+            || image_identity != plan.image_identity
+            || (image_identity.is_none()
+                && current.manifest.entries.iter().any(|entry| {
+                    entry
+                        .metadata
+                        .path
+                        .eq_ignore_ascii_case(&original.saved.source.original_image_name)
+                }))
+        {
+            return Err(blocked("prepared installation objects changed"));
+        }
+        verify_bundle_confidential(&current, user)?;
+        let writes = BTreeMap::from([(String::new(), open_root_permissions(&original.directory)?)]);
+        let directories = BTreeMap::from([(String::new(), original.directory.clone())]);
+        let reopened = Self {
+            original,
+            boundary,
+            later,
+            current: Some(current),
+            plan_record,
+            plan,
+            quarantine: None,
+            moved: BTreeMap::new(),
+            writes,
+            directories,
+            attempted: false,
+            history: BundleHistory::default(),
+            admitted_generation: None,
+            pending_readback: None,
+            pending_result_record: None,
+            pending_restored: None,
+        };
+        reopened.verify_return_checkpoint(user, journal)?;
+        Ok(reopened)
+    }
     pub(crate) fn plan_reference(&self) -> &ManagerRecordReference {
         self.plan_record.reference()
     }
@@ -1761,7 +1924,87 @@ pub(crate) struct RestoredInstallationBundle {
     record: ManagerRecord,
     result: ReturnResult,
 }
+
+/// Selectors read from an Applied result and matched to the actual canonical
+/// image. These are observations only; acquire a fresh fence and reopen the
+/// complete restored bundle before treating them as completion evidence.
+pub(crate) struct BundleCompletionObservation {
+    pub(crate) record: ManagerRecordReference,
+    pub(crate) image_identity: FileIdentity,
+    pub(crate) image_digest: String,
+}
 impl RestoredInstallationBundle {
+    pub(crate) fn observe_completed(
+        original: &RetainedInstallationBundle,
+        expected_plan: &ManagerRecordReference,
+        user: &CurrentUser,
+        journal: &mut ContextJournal<'_>,
+    ) -> io::Result<BundleCompletionObservation> {
+        original.verify(user)?;
+        original.verify_journal(journal)?;
+        require_phase(journal, &[JournalPhase::Restoring, JournalPhase::Restored])?;
+        if safe(journal.store.latest_bundle_backup())?.is_some() {
+            return Err(blocked("completed original installation attempt changed"));
+        }
+        let (effect_id, bytes) = safe(
+            journal
+                .store
+                .applied_effect_observation(&EffectKind::VerifySourceBundleRestore),
+        )?;
+        let (reference, observed): (ManagerRecordReference, ReturnResult) =
+            serde_json::from_slice(&bytes)?;
+        let record = ManagerRecord::open(original.data.clone(), RETURN_RESULT, &reference, user)?;
+        let result: ReturnResult = record.decode(user)?;
+        let plan_record =
+            ManagerRecord::open(original.data.clone(), RETURN_PLAN, expected_plan, user)?;
+        let plan: ReturnPlan = plan_record.decode(user)?;
+        if encoded(&result)? != encoded(&observed)?
+            || result.schema != 1
+            || plan.schema != 1
+            || result.effect_id != effect_id
+            || result.transaction != journal.binding.transaction_id
+            || plan.transaction != result.transaction
+            || result.source != *original.reference()
+            || plan.source != result.source
+            || result.plan != *expected_plan
+            || result.attempt != AttemptNames::default()
+            || plan.attempt != result.attempt
+            || !result.history.is_empty()
+            || !plan.history.is_empty()
+            || plan.slot != original.saved.slot
+            || result.later != plan.later_copy
+            || plan.current != plan.later_copy.source
+        {
+            return Err(blocked("completed installation receipt differs"));
+        }
+        plan.slot.verify(&original.directory)?;
+        result.restored.encode()?;
+        verify_logical_restore(&original.saved.source.tree, &result.restored)?;
+        let image = result
+            .restored
+            .entries
+            .iter()
+            .find(|entry| entry.metadata.path == original.saved.source.original_image_name)
+            .filter(|entry| entry.metadata.kind == EntryType::File)
+            .ok_or_else(|| blocked("completed installation image missing"))?;
+        let current = original.directory.open_file(
+            component(&original.saved.source.original_image_name)?,
+            FileAccess::Read,
+        )?;
+        let image_digest = current.digest()?;
+        if image.metadata.object_identity != identity(current.identity())?
+            || image.sha256.as_ref() != Some(&image_digest)
+        {
+            return Err(blocked("completed installation image changed"));
+        }
+        current.verify()?;
+        journal.verify()?;
+        Ok(BundleCompletionObservation {
+            record: reference,
+            image_identity: current.identity().clone(),
+            image_digest,
+        })
+    }
     /// Reopen only a positively journaled final receipt. A result file written
     /// before a lost journal receipt cannot mint completion on restart.
     pub(crate) fn reopen(
@@ -2617,3 +2860,8 @@ mod tests;
 #[cfg(test)]
 #[path = "../../tests/version_history_bundle_preparation_windows.rs"]
 mod preparation_tests;
+
+#[cfg(test)]
+#[path = "../../tests/version_history_bundle_reopen_windows.rs"]
+#[allow(non_snake_case)]
+mod reopen_tests;

@@ -1,6 +1,6 @@
 //! Independent manager hosts. Neither initializes ordinary repositories,
 //! NativeRuntime, ConPTY, logger, plugins, or the ordinary command table.
-//! Recovery has its own read-only host and never recreates initial handoff.
+//! Recovery has its own authenticated host and never recreates initial handoff.
 use super::{
     manager_document::{
         self, ManagerDocumentBinding, ManagerDocumentRegistry, MANAGER_DOCUMENT_HEADER,
@@ -321,8 +321,7 @@ pub(crate) fn run(request: ManagerRequest) -> Result<(), SafeError> {
     Ok(())
 }
 
-/// Independent reopening admits retained diagnostic material only. An optional
-/// selector must agree with the protected marker; it is never child authority.
+/// 重开使用独立原生恢复入口。选择器只能与受保护标记匹配，不能充当子进程权限。
 pub(crate) fn run_reentry(request: Option<&ManagerRequest>) -> Result<(), SafeError> {
     reentry_runtime::run(request)
 }
@@ -330,9 +329,10 @@ pub(crate) fn run_reentry(request: Option<&ManagerRequest>) -> Result<(), SafeEr
 mod reentry_runtime {
     use super::{
         admit_request, error, manager_document, manager_url, Arc, InspectManagerRequest,
-        ManagerDocumentBinding, ManagerDocumentRegistry, ManagerRequest, ManagerStatus,
-        ManagerUiEnvironment, Mutex, OnceLock, Request, SafeError, State, Webview,
+        ManagerActionRequest, ManagerDocumentBinding, ManagerDocumentRegistry, ManagerRequest,
+        ManagerStatus, ManagerUiEnvironment, Mutex, OnceLock, Request, SafeError, State, Webview,
     };
+    use crate::version_history::manager_worker::{ReentryCommandState, ReentryReturnOperation};
     use crate::version_history::windows::reentry::ReenteredManager;
 
     struct ReenteredManagerRuntime {
@@ -341,6 +341,7 @@ mod reentry_runtime {
         ui: ManagerUiEnvironment,
         document: OnceLock<Arc<ManagerDocumentBinding>>,
         inspection: Arc<tokio::sync::Semaphore>,
+        progress: Arc<Mutex<ReentryCommandState>>,
     }
 
     #[tauri::command]
@@ -351,6 +352,18 @@ mod reentry_runtime {
     ) -> Result<ManagerStatus, SafeError> {
         let (document, _): (_, InspectManagerRequest) =
             admit_request(&runtime.document, &runtime.transaction, webview, &request)?;
+        document.check()?;
+        // 运行中的恢复持有实际对象锁，UI只读取该工作刚发布的诊断缓存。
+        // 缓存从不授予写权限，也不阻塞正在等待主线程验证文档的原生工作。
+        {
+            let progress = runtime.progress.lock();
+            if progress.returning() {
+                let result = progress.status();
+                drop(progress);
+                document.check()?;
+                return result;
+            }
+        }
         // At most one read may be pending or running. Keep filesystem/hash work
         // off the UI thread and retain the permit if the requesting future dies.
         let permit = runtime
@@ -359,14 +372,64 @@ mod reentry_runtime {
             .try_acquire_owned()
             .map_err(|_| error("HISTORY_OPERATION_PENDING"))?;
         let owner = runtime.owner.clone();
+        let progress = runtime.progress.clone();
         let observed_document = document.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
             let _permit = permit;
             let document = observed_document;
             document.check()?;
-            let result = owner.lock().inspect();
+            let status = owner.lock().inspect()?;
             document.check()?;
-            result
+            let mut progress = progress.lock();
+            progress.publish(status)?;
+            progress.status()
+        })
+        .await
+        .map_err(|_| error("HISTORY_RECOVERY_REQUIRED"))?;
+        document.check()?;
+        result
+    }
+
+    #[tauri::command]
+    async fn restore_previous_version(
+        webview: Webview,
+        request: Request<'_>,
+        runtime: State<'_, Arc<ReenteredManagerRuntime>>,
+    ) -> Result<ManagerStatus, SafeError> {
+        let (document, body): (_, ManagerActionRequest) =
+            admit_request(&runtime.document, &runtime.transaction, webview, &request)?;
+        document.check()?;
+        // 检查和恢复共用单次许可；真正的后台工作结束前不会因为IPC取消而释放。
+        let permit = runtime
+            .inspection
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| error("HISTORY_OPERATION_PENDING"))?;
+        let operation =
+            ReentryReturnOperation::begin(&runtime.progress, body.expected_generation.get())?;
+        let owner = runtime.owner.clone();
+        let progress = runtime.progress.clone();
+        let observed_document = document.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            let _permit = permit;
+            let document = observed_document;
+            let result = (|| {
+                document.check()?;
+                let result = owner.lock().return_previous(
+                    document.clone(),
+                    body.expected_generation.get(),
+                    |status| {
+                        let mut progress = progress.lock();
+                        if let Err(failure) = progress.publish(status) {
+                            // 原生发布失败不能被当作可用的新恢复按钮。
+                            progress.fail(failure);
+                        }
+                    },
+                );
+                document.check()?;
+                result
+            })();
+            operation.finish(result)
         })
         .await
         .map_err(|_| error("HISTORY_RECOVERY_REQUIRED"))?;
@@ -379,12 +442,14 @@ mod reentry_runtime {
         let transaction = owner.transaction_id().to_owned();
         let ui = ManagerUiEnvironment::prepare(owner.data())
             .map_err(|_| error("HISTORY_MANAGER_UI_UNAVAILABLE"))?;
+        let progress = Arc::new(Mutex::new(ReentryCommandState::new(&transaction)));
         let runtime = Arc::new(ReenteredManagerRuntime {
             owner: Arc::new(Mutex::new(owner)),
             transaction,
             ui,
             document: OnceLock::new(),
             inspection: Arc::new(tokio::sync::Semaphore::new(1)),
+            progress,
         });
         let mut context = tauri::generate_context!();
         for window in &mut context.config_mut().app.windows {
@@ -392,11 +457,13 @@ mod reentry_runtime {
         }
         let expected_url = manager_url(context.config())?;
         let setup = runtime.clone();
+        let events = runtime.clone();
         let app = tauri::Builder::default()
             .manage(runtime)
-            // Deliberately no confirmation or return command in this host.
-            // Retained diagnostics cannot acquire live operation authority.
-            .invoke_handler(tauri::generate_handler![self::inspect_version_switch])
+            .invoke_handler(tauri::generate_handler![
+                self::inspect_version_switch,
+                self::restore_previous_version
+            ])
             .setup(move |app| {
                 let data_directory = setup.ui.data_directory()?;
                 let bound = manager_document::build_manager(
@@ -411,12 +478,26 @@ mod reentry_runtime {
                     .document
                     .set(Arc::new(bound.binding))
                     .map_err(|_| error("DOCUMENT_WINDOW_UNAVAILABLE"))?;
+                let progress = setup.progress.clone();
+                bound.window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        if progress.lock().returning() {
+                            api.prevent_close();
+                        }
+                    }
+                });
                 Ok(())
             })
             .build(context)
             .map_err(|_| error("HISTORY_MANAGER_UI_UNAVAILABLE"))?;
-        // Diagnostics neither pin close nor wait for a former source process.
-        app.run(|_, _| {});
+        // 只读检查不阻止关闭；已接收的恢复继续持有原文档与后台工作寿命。
+        app.run(move |_, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if events.progress.lock().returning() {
+                    api.prevent_exit();
+                }
+            }
+        });
         Ok(())
     }
 }

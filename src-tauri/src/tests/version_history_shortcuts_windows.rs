@@ -1045,6 +1045,109 @@ fn HistoryShortcuts_AttributeCapacity_013() {
     assert_eq!(current.state(ShortcutSlot::Desktop), &before);
 }
 
+// 检查完成核对只读接受实际恢复后的新文件身份，缺少 Applied 或再次替换都拒绝。
+#[test]
+fn HistoryShortcuts_CompletedReadback_014() {
+    let temp = tempfile::tempdir().unwrap();
+    let user = CurrentUser::capture().unwrap();
+    let parent = Directory::open_absolute(temp.path()).unwrap();
+    let desktop =
+        Arc::new(PrivateDirectory::create_new(parent.clone(), name("desktop"), &user).unwrap());
+    let programs =
+        Arc::new(PrivateDirectory::create_new(parent.clone(), name("programs"), &user).unwrap());
+    let records = Arc::new(PrivateDirectory::create_new(parent, name("records"), &user).unwrap());
+    let destinations = [desktop.directory().clone(), programs.directory().clone()];
+    let link = temp.path().join("desktop/CC Desk.lnk");
+    let dacl = format!("D:P(A;;FA;;;{})(A;;FR;;;SY)", user.sid_text());
+    std::fs::write(&link, b"original product shortcut").unwrap();
+    set_dacl(&link, &dacl);
+    let captured = HeldProductShortcuts::capture_at(destinations.clone()).unwrap();
+    let original = captured.state(ShortcutSlot::Desktop).clone();
+    let leases = LeaseFiles::open(records.clone(), &user).unwrap();
+    let control = leases.acquire_control().unwrap();
+    let exclusive = leases.acquire_exclusive(&control).unwrap();
+    let mut store = JournalStore::open_windows(records.clone()).unwrap();
+    store
+        .initialize(
+            binding(),
+            CapacityPlan::for_effects(30, 30, 20, 4096).unwrap(),
+        )
+        .unwrap();
+    let mut journal =
+        ShortcutJournal::new(&mut store, records.clone(), &exclusive, binding(), 0).unwrap();
+    let retained = captured.retain(&mut journal).unwrap();
+    let generation = journal.generation();
+    drop(journal);
+    std::fs::rename(&link, temp.path().join("desktop/original.fixture")).unwrap();
+    let generation = enter_restore(&mut store, generation);
+    let journal_bytes = || std::fs::read(temp.path().join("records/journal.log")).unwrap();
+    let record_count = || {
+        std::fs::read_dir(temp.path().join("records"))
+            .unwrap()
+            .count()
+    };
+    let before = (journal_bytes(), record_count());
+    assert!(retained.reopen_completed(&store).is_err());
+    assert_eq!(before, (journal_bytes(), record_count()));
+
+    let mut journal = ShortcutJournal::new(
+        &mut store,
+        records.clone(),
+        &exclusive,
+        binding(),
+        generation,
+    )
+    .unwrap();
+    let desktop_receipt = retained
+        .restore(ShortcutSlot::Desktop, &mut journal)
+        .unwrap();
+    let generation = journal.generation();
+    drop(journal);
+    drop(desktop_receipt);
+    let before = (journal_bytes(), record_count());
+    assert!(retained.reopen_completed(&store).is_err());
+    assert_eq!(before, (journal_bytes(), record_count()));
+    let mut journal =
+        ShortcutJournal::new(&mut store, records, &exclusive, binding(), generation).unwrap();
+    let receipt = retained
+        .restore(ShortcutSlot::StartMenu, &mut journal)
+        .unwrap();
+    drop(journal);
+    drop(receipt);
+
+    let before = (journal_bytes(), record_count());
+    let reopened = retained.reopen_completed(&store).unwrap();
+    reopened.verify().unwrap();
+    assert!(reopened
+        .state(ShortcutSlot::Desktop)
+        .matches_restored_content_and_permissions(&original));
+    let (
+        ShortcutState::Present { identity: old, .. },
+        ShortcutState::Present { identity: new, .. },
+    ) = (&original, reopened.state(ShortcutSlot::Desktop))
+    else {
+        panic!("fixture requires a restored shortcut")
+    };
+    assert_ne!(old, new);
+    assert!(retained.verify_original().is_err());
+    assert!(std::fs::write(&link, b"blocked writer").is_err());
+    assert_eq!(before, (journal_bytes(), record_count()));
+    drop(reopened);
+
+    std::fs::rename(&link, temp.path().join("desktop/completed.fixture")).unwrap();
+    std::fs::write(&link, b"original product shortcut").unwrap();
+    set_dacl(&link, &dacl);
+    let replacement = HeldProductShortcuts::capture_at(destinations).unwrap();
+    assert!(replacement
+        .state(ShortcutSlot::Desktop)
+        .matches_restored_content_and_permissions(&original));
+    drop(replacement);
+    assert!(retained.reopen_completed(&store).is_err());
+    std::fs::write(&link, b"changed after completion").unwrap();
+    assert!(retained.reopen_completed(&store).is_err());
+    assert_eq!(before, (journal_bytes(), record_count()));
+}
+
 // 检查生产描述符设置器在独立 NTFS 文件上恢复继承与保护权限，仅允许系统正向设置继承标记。
 #[test]
 fn HistorySecurity_ReadbackProbe_001() {

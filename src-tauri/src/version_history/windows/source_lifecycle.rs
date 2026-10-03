@@ -91,6 +91,42 @@ pub(crate) struct SourceHandoffExitManifest {
     browser: WebViewExitReference,
     udf_selector: String,
 }
+impl SourceHandoffExitManifest {
+    /// 仅重开原记录定位的父对象；上下文模块仍须核对seal中的实际父ID与完整树。
+    pub(super) fn recovery_context_parents(
+        &self,
+        binding: &JournalBinding,
+    ) -> Result<
+        std::collections::BTreeMap<crate::version_history::journal::RootKind, Arc<Directory>>,
+        SafeError,
+    > {
+        use crate::version_history::journal::RootKind;
+        if self.schema != 1 || &self.binding != binding {
+            return Err(error("HISTORY_HANDOFF_CHANGED"));
+        }
+        let home = dirs::home_dir().ok_or_else(|| error("HISTORY_ROOT_CHANGED"))?;
+        let udf = std::path::Path::new(&self.udf_selector);
+        // file_name也必须有效；拒绝根路径或不完整的受保护选择器。
+        ComponentName::new(
+            udf.file_name()
+                .ok_or_else(|| error("HISTORY_ROOT_CHANGED"))?,
+        )
+        .map_err(blocked)?;
+        Ok(std::collections::BTreeMap::from([
+            (
+                RootKind::Desk,
+                Directory::open_absolute(&home).map_err(blocked)?,
+            ),
+            (
+                RootKind::WebView,
+                Directory::open_absolute(
+                    udf.parent().ok_or_else(|| error("HISTORY_ROOT_CHANGED"))?,
+                )
+                .map_err(blocked)?,
+            ),
+        ]))
+    }
+}
 pub(crate) struct SourceHandoffTerminal {
     binding: JournalBinding,
     exit: SourceExitFenceEvidence,

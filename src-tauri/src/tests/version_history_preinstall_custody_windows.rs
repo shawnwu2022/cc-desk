@@ -27,6 +27,9 @@ impl Fixture {
         Self::setup(present_udf, true)
     }
     fn setup(present_udf: bool, sealed: bool) -> Self {
+        Self::setup_named(present_udf, sealed, "desk")
+    }
+    fn setup_named(present_udf: bool, sealed: bool, desk_name: &str) -> Self {
         let temporary = tempfile::tempdir().unwrap();
         let user = CurrentUser::capture().unwrap();
         let parent = Directory::open_absolute(temporary.path()).unwrap();
@@ -41,9 +44,13 @@ impl Fixture {
             target_payload: "4".repeat(64),
             roots: "5".repeat(64),
         };
-        let desk =
-            PrivateDirectory::create_renameable_new(parent.clone(), name("desk"), &user).unwrap();
-        std::fs::write(temporary.path().join("desk/state"), b"original desk").unwrap();
+        let desk = PrivateDirectory::create_renameable_new(parent.clone(), name(desk_name), &user)
+            .unwrap();
+        std::fs::write(
+            temporary.path().join(desk_name).join("state"),
+            b"original desk",
+        )
+        .unwrap();
         let udf = present_udf.then(|| {
             PrivateDirectory::create_renameable_new(parent.clone(), name("udf"), &user).unwrap()
         });
@@ -106,7 +113,7 @@ impl Fixture {
         let mut copies = BTreeMap::new();
         let mut readmitted = BTreeMap::new();
         for (kind, origin, retained, backup) in [
-            (RootKind::Desk, "desk", "desk-old", "desk-copy"),
+            (RootKind::Desk, desk_name, "desk-old", "desk-copy"),
             (RootKind::WebView, "udf", "udf-old", "udf-copy"),
         ] {
             let mut copy = PrivateTreeCopy::new(copies_root.clone(), name(backup));
@@ -246,6 +253,184 @@ impl Fixture {
         drop(injected);
         self.generation = journal.generation();
         Some(fresh)
+    }
+}
+
+// 重开从实际已保留的后来树解配置；恢复后原槽已存在，历史absence仍须由完整副本核对。
+#[test]
+fn HistoryReentryExclusions_RetainedAndCompleted_001() {
+    use crate::cli::environment::EnvMap;
+    use crate::version_history::windows::scope::{ConfiguredExclusions, ConfiguredInventory};
+    use std::ffi::OsString;
+    for later_present in [false, true] {
+        let mut fixture = Fixture::setup_named(true, true, ".cc-box");
+        std::fs::create_dir(fixture.temporary.path().join("installation")).unwrap();
+        let installation =
+            Directory::open_absolute(&fixture.temporary.path().join("installation")).unwrap();
+        let environment = EnvMap::from([(
+            OsString::from("USERPROFILE"),
+            fixture.temporary.path().as_os_str().to_owned(),
+        )]);
+        let mut fresh = if later_present {
+            fixture.fresh(None)
+        } else {
+            Some(
+                FreshContextRoots::new(fixture.originals.as_ref().unwrap(), &fixture.binding)
+                    .unwrap(),
+            )
+        };
+        if later_present {
+            std::fs::write(fixture.temporary.path().join(".cc-box/config.json"), b"{}").unwrap();
+        }
+        let mut later = None;
+        FreshContextRoots::observe_for_return_retaining(
+            &mut fresh,
+            &mut later,
+            fixture.originals.as_ref().unwrap(),
+            fixture.quarantine.clone(),
+            &fixture.boundary,
+            &fixture.user,
+        )
+        .unwrap();
+        let expected = ConfiguredInventory::fixture_for_context(
+            &mut later.as_mut().unwrap().context,
+            fixture.temporary.path(),
+            environment.clone(),
+        )
+        .unwrap()
+        .into_exclusions(installation.clone(), fixture.quarantine.clone())
+        .unwrap()
+        .configuration_identity()
+        .to_owned();
+        let originals = fixture.originals.as_ref().unwrap();
+        let mut journal = ContextJournal::new(
+            &mut fixture.store,
+            fixture.records.clone(),
+            &fixture.lease,
+            fixture.binding.clone(),
+            fixture.generation,
+        )
+        .unwrap();
+        later
+            .as_ref()
+            .unwrap()
+            .admit_preinstall_return(
+                originals,
+                &fixture.boundary,
+                &fixture.fence,
+                &fixture.user,
+                &mut journal,
+            )
+            .unwrap();
+        later
+            .as_mut()
+            .unwrap()
+            .preserve(
+                originals,
+                &fixture.boundary,
+                &fixture.fence,
+                &fixture.user,
+                &mut journal,
+            )
+            .unwrap();
+        fixture.generation = journal.generation();
+        drop(journal);
+        let bytes = later
+            .as_ref()
+            .unwrap()
+            .manifest_bytes(originals, &fixture.user)
+            .unwrap();
+        let digest = fixture.store.retain_manifest(&bytes).unwrap();
+        fixture.generation = fixture
+            .store
+            .append(
+                fixture.generation,
+                JournalEvent::Manifest {
+                    role: ManifestRole::RetainedTargetContext,
+                    digest,
+                },
+            )
+            .unwrap();
+        fixture.generation = fixture
+            .store
+            .append(
+                fixture.generation,
+                JournalEvent::Phase {
+                    phase: JournalPhase::Restoring,
+                },
+            )
+            .unwrap();
+        let mut returning =
+            ContextRestoration::new_retaining(&mut fixture.originals, &mut later).unwrap();
+        assert!(ConfiguredExclusions::fixture_reopen_for_return(
+            &mut returning,
+            installation.clone(),
+            fixture.quarantine.clone(),
+            &"f".repeat(64),
+            &fixture.user,
+            fixture.temporary.path(),
+            environment.clone(),
+        )
+        .is_err());
+        let exclusions = ConfiguredExclusions::fixture_reopen_for_return(
+            &mut returning,
+            installation.clone(),
+            fixture.quarantine.clone(),
+            &expected,
+            &fixture.user,
+            fixture.temporary.path(),
+            environment.clone(),
+        )
+        .unwrap();
+        exclusions.verify_external().unwrap();
+        let mut overlaps = environment.clone();
+        overlaps.insert(
+            OsString::from("CODEX_HOME"),
+            fixture.temporary.path().join(".cc-box").into_os_string(),
+        );
+        assert!(ConfiguredExclusions::fixture_reopen_for_return(
+            &mut returning,
+            installation.clone(),
+            fixture.quarantine.clone(),
+            &expected,
+            &fixture.user,
+            fixture.temporary.path(),
+            overlaps,
+        )
+        .is_err());
+        let mut journal = ContextJournal::new(
+            &mut fixture.store,
+            fixture.records.clone(),
+            &fixture.lease,
+            fixture.binding.clone(),
+            fixture.generation,
+        )
+        .unwrap();
+        returning
+            .restore(
+                &fixture.boundary,
+                &fixture.fence,
+                &fixture.user,
+                &mut journal,
+            )
+            .unwrap();
+        drop(journal);
+        assert!(fixture.temporary.path().join(".cc-box/state").exists());
+        assert!(fixture.temporary.path().join("udf/state").exists());
+        exclusions.verify_external().unwrap();
+        let completed = ConfiguredExclusions::fixture_reopen_for_return(
+            &mut returning,
+            installation,
+            fixture.quarantine.clone(),
+            &expected,
+            &fixture.user,
+            fixture.temporary.path(),
+            environment,
+        )
+        .unwrap();
+        completed.verify_external().unwrap();
+        std::fs::create_dir(fixture.temporary.path().join(".claude")).unwrap();
+        assert!(completed.verify_external().is_err());
     }
 }
 

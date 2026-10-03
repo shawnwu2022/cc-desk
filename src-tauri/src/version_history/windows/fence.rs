@@ -18,6 +18,19 @@ pub(crate) struct ImageFence {
     original_name: ComponentName,
 }
 impl ImageFence {
+    /// 仅接受已核对seal及Applied移动记录的原位置绑定，不能把隔离父目录冒充原安装位置。
+    pub(super) fn reopen_return_checkpoint(
+        origin: &super::reentry::VerifiedRecoveryImageOrigin,
+    ) -> io::Result<Self> {
+        origin.verify()?;
+        let (parent, name, identity, digest) = origin.retained_image()?;
+        let mut fence = Self::acquire(parent, name, identity, digest)?;
+        origin.verify()?;
+        fence.original_parent = origin.installation().clone();
+        fence.original_name = origin.image_name().clone();
+        fence.verify()?;
+        Ok(fence)
+    }
     /// Only the initial exclusive open reported a sharing conflict. No fence
     /// was acquired and no mutation occurred. This is not evidence that the
     /// unknown holder will exit, or permission to retry any later failure.

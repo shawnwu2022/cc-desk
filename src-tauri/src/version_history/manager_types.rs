@@ -127,6 +127,47 @@ impl ManagerStatus {
             allowed_actions,
         })
     }
+    /// 原生重开路径完成对象重验后才能调用。这里只检查投影与日志阶段吻合，
+    /// 不会从日志或按钮本身构造恢复权限；完成状态须另行核对真实恢复结果。
+    pub(crate) fn project_recovered_return(
+        journal: &SwitchJournal,
+        diagnostic: &RetainedSelectionDiagnostic,
+        phase: ManagerPhase,
+        actions: &[ManagerAction],
+    ) -> Result<Self, SafeError> {
+        let allowed_phase = matches!(
+            (journal.phase(), phase),
+            (
+                JournalPhase::Restoring,
+                ManagerPhase::RecoveryRequired | ManagerPhase::Returning
+            ) | (
+                JournalPhase::RecoveryRequired,
+                ManagerPhase::RecoveryRequired
+            ) | (JournalPhase::Restored, ManagerPhase::Restored)
+        );
+        if !allowed_phase
+            || actions.contains(&ManagerAction::ConfirmHistoricalVersion)
+            || (actions.contains(&ManagerAction::ReturnToPrevious)
+                && (journal.phase() != JournalPhase::Restoring
+                    || phase != ManagerPhase::RecoveryRequired
+                    || journal.requires_reconciliation()))
+            || (phase == ManagerPhase::Restored && journal.requires_reconciliation())
+        {
+            return Err(error("HISTORY_INVALID_STATUS"));
+        }
+        Self::validate_projection(phase, actions)?;
+        let mut status = Self::project_reentry(journal, diagnostic)?;
+        status.phase = phase;
+        status.allowed_actions = actions.to_vec();
+        status.blocked_reason = if phase == ManagerPhase::RecoveryRequired
+            && !actions.contains(&ManagerAction::ReturnToPrevious)
+        {
+            Some(ManagerBlockReason::RecoveryEvidenceUnavailable)
+        } else {
+            None
+        };
+        Ok(status)
+    }
     fn validate_projection(
         phase: ManagerPhase,
         actions: &[ManagerAction],

@@ -11,7 +11,7 @@ const host = () => {
   return runtime.slice(start)
 }
 
-describe('retained version manager read-only entry boundary', () => {
+describe('retained version manager authenticated recovery boundary', () => {
   it('VersionManager_ReentryNeverReplaysInitialChild_001', () => {
     const library = readFileSync('src-tauri/src/lib.rs', 'utf8')
     expect(library).toContain('manager_runtime::run_reentry(None)')
@@ -22,16 +22,16 @@ describe('retained version manager read-only entry boundary', () => {
     }
   })
 
-  it('VersionManager_ReentryRegistersOnlyAuthenticatedInspection_002', () => {
+  it('VersionManager_ReentryRegistersAuthenticatedReadAndReturn_002', () => {
     const commands = host().match(/tauri::generate_handler!\[([^\]]+)\]/)?.[1]
-    expect(commands?.split(',').map(value => value.trim()).filter(Boolean)).toEqual(['self::inspect_version_switch'])
+    expect(commands?.split(',').map(value => value.trim()).filter(Boolean)).toEqual(['self::inspect_version_switch', 'self::restore_previous_version'])
     expect(host()).toContain('manager_document::build_manager(')
     expect(host()).not.toContain('.plugin(')
     expect(host()).not.toContain('pin_initial_handoff')
   })
 
   it('VersionManager_ReentryRechecksDocumentAroundFreshRead_003', () => {
-    const inspect = host().slice(host().indexOf('async fn inspect_version_switch('), host().indexOf('pub(super) fn run('))
+    const inspect = host().slice(host().indexOf('async fn inspect_version_switch('), host().indexOf('async fn restore_previous_version('))
     expect(inspect.indexOf('admit_request(')).toBeGreaterThan(0)
     expect(inspect.indexOf('admit_request(')).toBeLessThan(inspect.indexOf('spawn_blocking('))
     const read = inspect.indexOf('owner.lock().inspect()')
@@ -42,13 +42,13 @@ describe('retained version manager read-only entry boundary', () => {
     expect(host()).toContain('tokio::sync::Semaphore::new(1)')
   })
 
-  it('VersionManager_ReentryCannotMutateDurableTransaction_004', () => {
+  it('VersionManager_ReentryCannotRecreateFormerLiveAuthority_004', () => {
     expect(native).toContain('RetainedManagerInspection::open(')
     expect(native).toContain('ManagerStatus::project_reentry(')
-    for (const authority of ['InitialManager', 'ManagerChildAdmission', 'OwnedJob', 'LiveCoordinator', 'bind_existing(', '.append(', '.reconcile(', '.resume(', 'publish_ready(', 'CreateProcess']) {
+    for (const authority of ['InitialManager', 'ManagerChildAdmission', 'OwnedJob', 'LiveCoordinator', '.resume(', 'publish_ready(', 'CreateProcess']) {
       expect(native).not.toContain(authority)
     }
-    const projection = readFileSync('src-tauri/src/version_history/manager_types.rs', 'utf8').split('pub(crate) fn project_reentry(')[1].split('fn validate_projection')[0]
+    const projection = readFileSync('src-tauri/src/version_history/manager_types.rs', 'utf8').split('pub(crate) fn project_reentry(')[1].split('pub(crate) fn project_recovered_return(')[0]
     expect(projection).toContain('ManagerPhase::RecoveryRequired')
     expect(projection).toContain('vec![ManagerAction::Refresh]')
     expect(projection).toContain('ManagerBlockReason::RecoveryEvidenceUnavailable')
@@ -63,5 +63,21 @@ describe('retained version manager read-only entry boundary', () => {
     expect(admission).toContain('bytes.len() > 1024')
     expect(admission).toContain('transaction != expected_transaction')
     expect(admission).toContain('ManagerDocumentProof::admit(')
+  })
+
+  it('VersionManager_ReentryReturnRetainsNativeWorkerLifetime_006', () => {
+    const restore = host().split('async fn restore_previous_version(')[1].split('pub(super) fn run(')[0]
+    expect(restore.indexOf('admit_request(')).toBeLessThan(restore.indexOf('ReentryReturnOperation::begin('))
+    expect(restore.indexOf('try_acquire_owned()')).toBeLessThan(restore.indexOf('spawn_blocking('))
+    expect(restore).toContain('body.expected_generation.get()')
+    expect(restore).toContain('let _permit = permit;')
+    expect(restore).toContain('owner.lock().return_previous(')
+    expect(restore).toContain('document.clone()')
+    expect(restore).toContain('operation.finish(result)')
+    expect(host()).toContain('api.prevent_close()')
+    expect(host()).toContain('api.prevent_exit()')
+    const inspect = host().split('async fn inspect_version_switch(')[1].split('async fn restore_previous_version(')[0]
+    expect(inspect.indexOf('progress.returning()')).toBeLessThan(inspect.indexOf('owner.lock().inspect()'))
+    expect(inspect).toContain('let result = progress.status();')
   })
 })

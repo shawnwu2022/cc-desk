@@ -501,6 +501,7 @@ fn BundleReturn_CompleteRestore_002() {
             receipt.later_manifest().copy.entries.len()
         );
         let expected = receipt.reference().clone();
+        let expected_plan = restore.plan_reference().clone();
         let generation = journal.generation;
         assert!(
             restore.restore(&user, &mut journal).is_err(),
@@ -510,6 +511,21 @@ fn BundleReturn_CompleteRestore_002() {
         drop(receipt);
         drop(restore);
         drop(boundary);
+        let completed = RestoredInstallationBundle::observe_completed(
+            &original,
+            &expected_plan,
+            &user,
+            &mut journal,
+        )
+        .unwrap();
+        assert_eq!(completed.record, expected);
+        assert!(RestoredInstallationBundle::observe_completed(
+            &original,
+            original.reference(),
+            &user,
+            &mut journal,
+        )
+        .is_err());
         // Restart readmission proves complete current objects and applied receipt.
         let image = install
             .directory()
@@ -517,6 +533,8 @@ fn BundleReturn_CompleteRestore_002() {
             .unwrap();
         let image_id = image.identity().clone();
         let image_digest = image.digest().unwrap();
+        assert_eq!(completed.image_identity, image_id);
+        assert_eq!(completed.image_digest, image_digest);
         drop(image);
         let fence = Arc::new(Mutex::new(
             ImageFence::acquire(

@@ -329,7 +329,24 @@ impl LiveSnapshotGuards for super::windows::return_boundary::ReturnSnapshotGuard
         super::windows::return_boundary::ReturnSnapshotGuards::verify_live(self)
     }
 }
+#[cfg(windows)]
+impl LiveSnapshotGuards for super::windows::reentry::RecoveredSnapshotGuards {
+    fn verify_live(&self) -> Result<(), SafeError> {
+        super::windows::reentry::RecoveredSnapshotGuards::verify_live(self)
+    }
+}
 impl SnapshotBoundary {
+    #[cfg(windows)]
+    pub(super) fn from_recovered_return(
+        guards: super::windows::reentry::RecoveredSnapshotGuards,
+    ) -> Result<Self, SafeError> {
+        guards.verify_live()?;
+        Ok(Self {
+            binding: guards.binding().clone(),
+            root_identities: guards.roots().clone(),
+            held_platform_guards: Box::new(guards),
+        })
+    }
     #[cfg(windows)]
     pub(super) fn from_return(
         guards: super::windows::return_boundary::ReturnSnapshotGuards,

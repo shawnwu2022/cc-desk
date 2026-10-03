@@ -1760,7 +1760,89 @@ pub(crate) struct RestoredContextRoots {
     originals: RetainedContextRoots,
     later: LaterContextRoots,
 }
+
+/// 只借用已核对的完整后来树与私有副本，不将历史absence当作当前槽位absence。
+pub(crate) struct ReturnConfigurationCustody<'a> {
+    context: &'a mut ContextRestoration,
+}
+impl ReturnConfigurationCustody<'_> {
+    pub(crate) fn verify(&self, user: &CurrentUser) -> io::Result<()> {
+        let context = &self.context;
+        context.originals.verify(user)?;
+        context.later.verify_retained(&context.originals, user)?;
+        for kind in [RootKind::Desk, RootKind::WebView] {
+            let original = &context.originals.origins[&kind];
+            let later = &context.later.origins[&kind];
+            original.parent.recheck()?;
+            if original.parent.identity() != later.parent.identity() || original.name != later.name
+            {
+                return Err(blocked("return configuration original slot differs"));
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn context_mut(&mut self) -> &mut HeldContext {
+        &mut self.context.later.context
+    }
+    pub(crate) fn original_slots(&self) -> BTreeMap<RootKind, HeldRoot> {
+        self.context
+            .originals
+            .origins
+            .iter()
+            .map(|(kind, slot)| (*kind, slot.absent()))
+            .collect()
+    }
+    pub(crate) fn retained_roots(&self) -> BTreeMap<RootKind, HeldRoot> {
+        self.context
+            .later
+            .context
+            .trees
+            .iter()
+            .map(|(kind, tree)| (*kind, tree.root.clone()))
+            .collect()
+    }
+    pub(crate) fn original_locations(&self) -> io::Result<BTreeMap<RootKind, String>> {
+        self.context
+            .later
+            .copies
+            .iter()
+            .map(|(kind, copy)| Ok((*kind, copy.manifest()?.source.location_identity.clone())))
+            .collect()
+    }
+    pub(crate) fn original_manifests(&self) -> io::Result<BTreeMap<RootKind, String>> {
+        self.context
+            .later
+            .copies
+            .iter()
+            .map(|(kind, copy)| Ok((*kind, copy.manifest()?.source.digest()?)))
+            .collect()
+    }
+}
 impl ContextRestoration {
+    pub(crate) fn return_configuration_custody(
+        &mut self,
+        user: &CurrentUser,
+    ) -> io::Result<ReturnConfigurationCustody<'_>> {
+        let custody = ReturnConfigurationCustody { context: self };
+        custody.verify(user)?;
+        Ok(custody)
+    }
+    pub(crate) fn reopen_return_exclusions(
+        &mut self,
+        installation: Arc<Directory>,
+        recovery: Arc<PrivateDirectory>,
+        expected_configuration: &str,
+        user: &CurrentUser,
+    ) -> io::Result<super::super::scope::ConfiguredExclusions> {
+        super::super::scope::ConfiguredExclusions::reopen_for_return(
+            self,
+            installation,
+            recovery,
+            expected_configuration,
+            user,
+        )
+        .map_err(|_| blocked("return configured exclusions changed"))
+    }
     /// 仅在第一次恢复效果之前核验原始与后来内容，不创建恢复计划。
     pub(crate) fn verify_return_checkpoint(
         &self,

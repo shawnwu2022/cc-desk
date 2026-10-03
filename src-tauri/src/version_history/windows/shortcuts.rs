@@ -540,6 +540,41 @@ impl RetainedProductShortcuts {
         drop(observed);
         Ok(())
     }
+    /// 完成后的只读核对绑定每个实际 Applied 回执；不复用安装前的旧文件身份。
+    pub(crate) fn reopen_completed(
+        &self,
+        store: &JournalStore,
+    ) -> io::Result<HeldProductShortcuts> {
+        self.verify_retained()?;
+        verify_registered_manifest(store, &self.manifest.binding, &self.digest)?;
+        if safe(store.read_manifest(&self.digest))? != encode(&self.manifest)? {
+            return Err(blocked("retained shortcut source changed"));
+        }
+        let observed = HeldProductShortcuts::capture(
+            [
+                self.destinations[0].parent.clone(),
+                self.destinations[1].parent.clone(),
+            ],
+            self.source,
+        )?;
+        for (index, slot) in SLOTS.into_iter().enumerate() {
+            let kind = EffectKind::RestoreShortcut { slot };
+            let (_, receipt) = safe(store.applied_effect_observation(&kind))?;
+            if safe(store.applied_effect_expected(&kind))?
+                != encode(&self.manifest.entries[index].state)?
+                || receipt != encode(&observed.entries[index])?
+                || !observed.entries[index]
+                    .state
+                    .matches_restored_content_and_permissions(&self.manifest.entries[index].state)
+            {
+                return Err(blocked("completed shortcut receipt or object changed"));
+            }
+        }
+        self.verify_retained()?;
+        verify_registered_manifest(store, &self.manifest.binding, &self.digest)?;
+        observed.verify()?;
+        Ok(observed)
+    }
     pub(crate) fn digest(&self) -> &str {
         &self.digest
     }

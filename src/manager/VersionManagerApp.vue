@@ -127,6 +127,23 @@ function scheduleRefresh() {
     timer = setTimeout(() => { void refresh() }, 1500)
   }
 }
+function scheduleActionProgress(request: number) {
+  clearTimer()
+  if (!alive || request !== sequence || busy.value !== 'action') return
+  timer = setTimeout(async () => {
+    if (!alive || request !== sequence || busy.value !== 'action' || !client?.isCurrent()) return
+    try {
+      const next = await client.inspect()
+      if (!alive || request !== sequence || busy.value !== 'action') return
+      status.value = next; fresh.value = true
+    } catch {
+      // 进度读取失败不代表后台请求结束，更不能重新发送恢复操作。
+      if (alive && request === sequence && busy.value === 'action') fresh.value = false
+    } finally {
+      if (alive && request === sequence && busy.value === 'action') scheduleActionProgress(request)
+    }
+  }, 1500)
+}
 async function refresh() {
   if (!alive || busy.value) return
   clearTimer()
@@ -165,12 +182,22 @@ async function submitReview() {
   // heading gives keyboard users a destination after the submitted action leaves.
   if (!alive || request !== sequence) return
   statusHeading.value?.focus()
+  scheduleActionProgress(request)
   try {
-    const next = await client.act(intent.action, intent.status)
+    let next: ManagerStatus
+    try {
+      next = await client.act(intent.action, intent.status)
+    } catch (error) {
+      // 进行中的较新只读响应可能先到达；操作回执过期时只重新读取，不重试写入。
+      if (!alive || request !== sequence) return
+      if (codeOf(error) !== 'MANAGER_STALE_RESPONSE') throw error
+      next = await client.inspect()
+    }
     if (!alive || request !== sequence) return
     status.value = next; fresh.value = true
   } catch (error) {
     if (!alive || request !== sequence) return
+    fresh.value = false
     errorKey.value = !client.isCurrent() || codeOf(error) === 'MANAGER_DOCUMENT_CHANGED' ? 'documentFailure' : 'actionFailure'
   } finally {
     if (alive && request === sequence) { busy.value = null; scheduleRefresh() }
@@ -202,6 +229,7 @@ onBeforeUnmount(() => { alive = false; ++sequence; clearTimer(); systemTheme?.re
       <section class="manager-status" aria-labelledby="manager-status-title" :data-phase="fresh ? status?.phase : 'unknown'">
         <h2 id="manager-status-title" ref="statusHeading" tabindex="-1" data-manager-phase role="status" aria-live="polite" aria-atomic="true">{{ title }}</h2>
         <p v-if="busy === 'action'">{{ t('pendingDetail') }}</p>
+        <p v-if="busy === 'action' && fresh && status">{{ t(`phases.${status.phase}.detail`) }}</p>
         <p v-else-if="status && fresh">{{ t(`phases.${status.phase}.detail`) }}</p>
         <p v-else-if="status">{{ t('lastKnown', { state: t(`phases.${status.phase}.title`) }) }}</p>
         <p v-if="errorKey" class="manager-warning" data-manager-error role="alert">{{ t(errorKey) }}</p>

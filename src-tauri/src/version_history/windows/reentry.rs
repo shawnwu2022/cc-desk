@@ -1,6 +1,5 @@
-//! Bounded read-only recovery entry after the initial manager process is gone.
-//! Retained records locate actual protected material; they never recreate live
-//! child/job/terminal authority. No installer, restore or marker write is exposed.
+//! 原管理器退出后的有界入口。普通receipt仍只读；新协议的完整返回检查点
+//! 必须重新取得实际对象与独占权，再由新文档确认授权唯一返回。
 use super::{
     durability::MarkerStore,
     manager_handoff::HandoffManifest,
@@ -19,6 +18,10 @@ use crate::{
     },
 };
 use std::sync::Arc;
+mod return_execution;
+pub(crate) use return_execution::{
+    RecoveredSnapshotGuards, ReenteredReturnCheckpoint, VerifiedRecoveryImageOrigin,
+};
 
 fn unavailable(_: impl std::fmt::Debug) -> SafeError {
     error("HISTORY_RECOVERY_REQUIRED")
@@ -125,6 +128,9 @@ impl ReenteredManager {
     /// released before returning. Missing old process/job proof is never inferred
     /// from PIDs, absent handles, durable booleans, digests or elapsed time.
     pub(crate) fn inspect(&self) -> Result<ManagerStatus, SafeError> {
+        if let Ok(status) = self.inspect_recovered_return() {
+            return Ok(status);
+        }
         let control = self.installation.acquire_control()?;
         self.data.verify_installation(&self.installation)?;
         self.material.verify().map_err(unavailable)?;

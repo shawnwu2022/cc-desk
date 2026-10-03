@@ -47,6 +47,122 @@ impl ManagerDocumentProof {
         }
         Ok(())
     }
+    pub(crate) fn check_transaction(&self, binding: &JournalBinding) -> Result<(), SafeError> {
+        self.check()?;
+        if self.transaction != binding.transaction_id {
+            return Err(error("FORBIDDEN"));
+        }
+        Ok(())
+    }
+}
+
+/// 重开的命令状态仅负责排重与显示；缓存不能代替原生检查点和独占控制。
+pub(crate) struct ReentryCommandState {
+    transaction: String,
+    latest: ActionResult,
+    spent_through: Option<u64>,
+    returning: bool,
+}
+impl ReentryCommandState {
+    pub(crate) fn new(transaction: &str) -> Self {
+        Self {
+            transaction: transaction.into(),
+            latest: Err(error("HISTORY_MANAGER_NOT_READY")),
+            spent_through: None,
+            returning: false,
+        }
+    }
+    pub(crate) fn returning(&self) -> bool {
+        self.returning
+    }
+    pub(crate) fn status(&self) -> ActionResult {
+        self.latest.clone()
+    }
+    pub(crate) fn fail(&mut self, failure: SafeError) {
+        self.latest = Err(failure);
+    }
+    pub(crate) fn publish(&mut self, mut status: ManagerStatus) -> Result<(), SafeError> {
+        if status.transaction_id != self.transaction {
+            return Err(error("FORBIDDEN"));
+        }
+        if self
+            .latest
+            .as_ref()
+            .is_ok_and(|previous| previous.generation.get() > status.generation.get())
+        {
+            return Err(error("HISTORY_GENERATION_CHANGED"));
+        }
+        // 已发送/运行中的同一代次不能因为旧的只读投影重新获得按钮。
+        if self.returning
+            || self
+                .spent_through
+                .is_some_and(|generation| status.generation.get() <= generation)
+        {
+            status.allowed_actions = vec![ManagerAction::Refresh];
+        }
+        self.latest = Ok(status);
+        Ok(())
+    }
+}
+
+/// 守卫由真正的阻塞工作持有，请求 future 丢失不会提前释放执行中标记。
+pub(crate) struct ReentryReturnOperation {
+    state: Option<Arc<Mutex<ReentryCommandState>>>,
+}
+impl ReentryReturnOperation {
+    pub(crate) fn begin(
+        state: &Arc<Mutex<ReentryCommandState>>,
+        expected_generation: u64,
+    ) -> Result<Self, SafeError> {
+        let mut current = state.lock();
+        if current.returning {
+            return Err(error("HISTORY_OPERATION_PENDING"));
+        }
+        let status = current.latest.as_ref().map_err(Clone::clone)?;
+        if status.generation.get() != expected_generation {
+            return Err(error("HISTORY_GENERATION_CHANGED"));
+        }
+        if !status
+            .allowed_actions
+            .contains(&ManagerAction::ReturnToPrevious)
+            || current
+                .spent_through
+                .is_some_and(|generation| expected_generation <= generation)
+        {
+            return Err(error("HISTORY_RETURN_CHECKPOINT_BLOCKED"));
+        }
+        current.spent_through = Some(expected_generation);
+        current.returning = true;
+        if let Ok(status) = &mut current.latest {
+            status.allowed_actions = vec![ManagerAction::Refresh];
+        }
+        Ok(Self {
+            state: Some(state.clone()),
+        })
+    }
+    pub(crate) fn finish(mut self, result: ActionResult) -> ActionResult {
+        let state = self.state.take().expect("owned return operation");
+        let mut state = state.lock();
+        // 完成回执也不能携带新的写入动作。再次操作必须经过新的只读检查。
+        let result = result.and_then(|status| {
+            state.publish(status)?;
+            state.status()
+        });
+        if let Err(failure) = &result {
+            state.latest = Err(failure.clone());
+        }
+        state.returning = false;
+        result
+    }
+}
+impl Drop for ReentryReturnOperation {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            let mut state = state.lock();
+            state.latest = Err(error("HISTORY_RECOVERY_REQUIRED"));
+            state.returning = false;
+        }
+    }
 }
 
 /// A queued command is still only a request. It cannot authorize an effect
