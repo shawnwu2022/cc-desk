@@ -11,6 +11,10 @@ use crate::version_history::{
 #[path = "../../tests/version_history_context_custody_windows.rs"]
 mod custody_tests;
 
+#[cfg(test)]
+#[path = "../../tests/version_history_preinstall_custody_windows.rs"]
+mod preinstall_custody_tests;
+
 /// Source quiescence is usable only after the journal positively admitted the
 /// no-launch return path. Normal return requires the distinct current-image
 /// and historical-process boundary; an original image guard cannot replace it.
@@ -176,16 +180,34 @@ impl ReturnContextCustody {
         }
         Ok(())
     }
-    pub(crate) fn capture_current(&self, user: &CurrentUser) -> io::Result<HeldContext> {
+    /// The caller stores the complete capture before the final custody check,
+    /// so a failure there cannot silently release current namespace readers.
+    pub(crate) fn capture_current_retaining(
+        &self,
+        retained: &mut Option<HeldContext>,
+        user: &CurrentUser,
+    ) -> io::Result<()> {
+        if retained.is_some() {
+            return Err(blocked("current context custody is already retained"));
+        }
         self.verify(user)?;
-        let context = HeldContext::capture_durable(
+        *retained = Some(HeldContext::capture_durable(
             observe_renameable(&self.origins[&RootKind::Desk])?,
             observe_renameable(&self.origins[&RootKind::WebView])?,
             SnapshotLimits::default(),
-        )?;
+        )?);
+        #[cfg(test)]
+        if CONTEXT_CAPTURE_FAILURE.replace(false) {
+            return Err(blocked("injected post-capture custody verification"));
+        }
         self.verify(user)?;
-        Ok(context)
+        Ok(())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static CONTEXT_CAPTURE_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 impl RetainedContextRoots {
     pub(crate) fn retain_return_custody(
@@ -484,6 +506,142 @@ impl RetainedContextRoots {
         }
         Ok(())
     }
+    /// Complete only the non-mutating preservation observations interrupted
+    /// before SourceSealed. The same roots/copies and their protected plans are
+    /// read again; no prior phase or filesystem action is invented or replayed.
+    pub(crate) fn complete_preservation_for_return(
+        &self,
+        boundary: &SnapshotBoundary,
+        fence: &ImageFence,
+        no_launch: &super::super::source_failure::SourceNoLaunch,
+        user: &CurrentUser,
+        journal: &mut ContextJournal<'_>,
+    ) -> io::Result<()> {
+        safe(no_launch.verify(&journal.binding, journal.store, journal.generation))?;
+        self.complete_preservation_observations(boundary, fence, user, journal)
+    }
+
+    fn complete_preservation_observations(
+        &self,
+        boundary: &SnapshotBoundary,
+        fence: &ImageFence,
+        user: &CurrentUser,
+        journal: &mut ContextJournal<'_>,
+    ) -> io::Result<()> {
+        self.admit_operation(boundary, fence, user, journal)?;
+        safe(
+            journal
+                .store
+                .verify_no_source_launch(&journal.binding, journal.generation),
+        )?;
+        require_role(
+            journal,
+            ManifestRole::SourceContext,
+            &safe(self.expected.digest())?,
+        )?;
+        for kind in [RootKind::Desk, RootKind::WebView] {
+            let before = journal.retain(&self.copies[&kind].manifest()?.source)?;
+            let after = journal.retain(&self.retained[&kind])?;
+            let copy = journal.retain(self.copies[&kind].manifest()?)?;
+            let current = self.source.tree(kind);
+            let (retained, object, rotation_effect) = if let HeldRoot::Present(root) = &current.root
+            {
+                let ticket = self.copies[&kind]
+                    .rotation
+                    .as_ref()
+                    .ok_or_else(|| blocked("source rotation ticket missing"))?;
+                (
+                    Some(RootSlotRecord {
+                        parent: ticket.quarantine.directory().identity().clone(),
+                        name: text(&ticket.quarantine_name)?,
+                    }),
+                    Some(root.identity().clone()),
+                    Some(ticket.effect_id.clone()),
+                )
+            } else {
+                (None, None, None)
+            };
+            let actual = PreservedSourcePlan {
+                schema: 1,
+                root: kind,
+                context_id: journal.binding.source_context.clone(),
+                snapshot: safe(self.expected.digest())?,
+                before: before.clone(),
+                after: after.clone(),
+                copy: CopyReference {
+                    parent: self.copies[&kind].parent.directory().identity().clone(),
+                    name: text(&self.copies[&kind].name)?,
+                    manifest: copy.clone(),
+                },
+                origin: self.origins[&kind].record()?,
+                retained,
+                object,
+                rotation_effect,
+            };
+            let observed = safe(journal.store.source_preservation(kind))?;
+            let pending = if let Some((effect, generation, observation)) = observed {
+                let plan: PreservedSourcePlan =
+                    serde_json::from_slice(&safe(journal.store.read_manifest(&effect.before))?)?;
+                if encoded(&plan)? != encoded(&actual)?
+                    || safe(journal.store.read_manifest(&effect.expected_postconditions))?
+                        != encoded(&(&after, &copy))?
+                {
+                    return Err(blocked(
+                        "source preservation plan differs from retained owners",
+                    ));
+                }
+                self.admit_operation(boundary, fence, user, journal)?;
+                if observation == Some(Observation::Applied) {
+                    continue;
+                }
+                if !matches!(observation, None | Some(Observation::Unknown))
+                    || safe(journal.store.context_pending())?.as_ref().is_none_or(
+                        |(pending, pending_generation)| {
+                            pending.effect_id != effect.effect_id
+                                || *pending_generation != generation
+                        },
+                    )
+                {
+                    return Err(blocked(
+                        "source preservation is not the exact pending observation",
+                    ));
+                }
+                PendingEffect {
+                    id: effect.effect_id,
+                    generation,
+                }
+            } else {
+                require_phase(
+                    journal,
+                    &[JournalPhase::Reviewed, JournalPhase::RecoveryRequired],
+                )?;
+                // No fresh namespace may have been admitted while either
+                // original preservation record is still missing.
+                for origin in self.origins.values() {
+                    origin.absent().verify()?;
+                }
+                journal.begin(
+                    EffectKind::PreserveRoot {
+                        context: journal.binding.source_context.clone(),
+                        root: kind,
+                    },
+                    &actual,
+                    &(&after, &copy),
+                )?
+            };
+            self.admit_operation(boundary, fence, user, journal)?;
+            for origin in self.origins.values() {
+                origin.absent().verify()?;
+            }
+            copy_fault(CopyFault::BeforeReceipt)?;
+            journal.applied(
+                pending,
+                &(&before, &after, &copy, "complete-original-retained"),
+            )?;
+            self.admit_operation(boundary, fence, user, journal)?;
+        }
+        Ok(())
+    }
     fn admit_operation(
         &self,
         boundary: &SnapshotBoundary,
@@ -519,6 +677,7 @@ pub(crate) struct FreshContextRoots {
     binding: JournalBinding,
     origins: BTreeMap<RootKind, OriginSlot>,
     attempts: BTreeMap<RootKind, FreshRootAttempt>,
+    return_roots: BTreeMap<RootKind, HeldRoot>,
 }
 impl FreshContextRoots {
     pub(crate) fn new(
@@ -532,6 +691,7 @@ impl FreshContextRoots {
             binding: binding.clone(),
             origins: originals.origins.clone(),
             attempts: BTreeMap::new(),
+            return_roots: BTreeMap::new(),
         })
     }
     pub(crate) fn create(
@@ -542,7 +702,10 @@ impl FreshContextRoots {
         user: &CurrentUser,
         journal: &mut ContextJournal<'_>,
     ) -> io::Result<()> {
-        if self.binding != journal.binding || !self.attempts.is_empty() {
+        if self.binding != journal.binding
+            || !self.attempts.is_empty()
+            || !self.return_roots.is_empty()
+        {
             return Err(blocked("fresh creation is one attempt"));
         }
         originals.admit_operation(boundary, fence, user, journal)?;
@@ -779,26 +942,58 @@ impl FreshContextRoots {
     /// Transfer retained create handles into a new complete current observation.
     /// No created object is deleted and an unacknowledged root is not replayed.
     pub(crate) fn observe_for_return(
-        mut self,
+        self,
         originals: &RetainedContextRoots,
         quarantine: Arc<PrivateDirectory>,
         boundary: &SnapshotBoundary,
         user: &CurrentUser,
     ) -> io::Result<LaterContextRoots> {
+        let mut fresh = Some(self);
+        let mut later = None;
+        Self::observe_for_return_retaining(
+            &mut fresh, &mut later, originals, quarantine, boundary, user,
+        )?;
+        Ok(later.expect("observed later context retained"))
+    }
+    /// Preserve every original create handle until a complete durable later
+    /// observation has been stored and checked. A failed read must not consume
+    /// either the partial fresh owner or a newly captured later owner.
+    pub(crate) fn observe_for_return_retaining(
+        fresh: &mut Option<Self>,
+        later: &mut Option<LaterContextRoots>,
+        originals: &RetainedContextRoots,
+        quarantine: Arc<PrivateDirectory>,
+        boundary: &SnapshotBoundary,
+        user: &CurrentUser,
+    ) -> io::Result<()> {
+        if later.is_some() {
+            return Err(blocked("later observation already retained"));
+        }
+        let source = fresh
+            .as_mut()
+            .ok_or_else(|| blocked("fresh create custody missing"))?;
+        if &source.binding != boundary.binding() {
+            return Err(blocked("fresh return boundary differs"));
+        }
         safe(boundary.verify_live())?;
         originals.verify(user)?;
         quarantine.verify(user)?;
         let mut roots = BTreeMap::new();
         for kind in [RootKind::Desk, RootKind::WebView] {
-            let held = self
+            if let Some(root) = source.return_roots.get(&kind) {
+                roots.insert(kind, root.clone());
+                continue;
+            }
+            let held = source
                 .attempts
-                .remove(&kind)
-                .and_then(|attempt| attempt.tree)
-                .map(|tree| tree.root);
+                .get(&kind)
+                .and_then(|attempt| attempt.tree.as_ref())
+                .map(|tree| tree.root.clone());
             let root = match held {
                 Some(HeldRoot::Present(root)) => HeldRoot::Present(root),
-                _ => observe_renameable(&self.origins[&kind])?,
+                _ => observe_renameable(&source.origins[&kind])?,
             };
+            source.return_roots.insert(kind, root.clone());
             roots.insert(kind, root);
         }
         let context = HeldContext::capture_durable(
@@ -806,10 +1001,10 @@ impl FreshContextRoots {
             roots.remove(&RootKind::WebView).expect("UDF observed"),
             SnapshotLimits::default(),
         )?;
-        let result = LaterContextRoots {
-            binding: self.binding,
+        *later = Some(LaterContextRoots {
+            binding: source.binding.clone(),
             context,
-            origins: self.origins,
+            origins: source.origins.clone(),
             copies: BTreeMap::new(),
             complete_copies: BTreeMap::new(),
             moved: BTreeMap::new(),
@@ -817,10 +1012,14 @@ impl FreshContextRoots {
             absent_preserved: BTreeSet::new(),
             absent_attempts: BTreeMap::new(),
             previous_copies: BTreeMap::new(),
-        };
-        result.verify_actual(originals, user)?;
+        });
+        later
+            .as_ref()
+            .expect("later observation retained before verification")
+            .verify_actual(originals, user)?;
         safe(boundary.verify_live())?;
-        Ok(result)
+        drop(fresh.take());
+        Ok(())
     }
 }
 fn observe_renameable(slot: &OriginSlot) -> io::Result<HeldRoot> {

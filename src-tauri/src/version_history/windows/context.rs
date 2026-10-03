@@ -1744,6 +1744,97 @@ impl ReadmittedRoot {
     }
 }
 impl PrivateTreeCopy {
+    /// Read-only selector for the live source-failure coordinator. A ticket is
+    /// retained even if its rename/readmission/receipt failed; it is never
+    /// inferred from a pathname or an Applied-only journal result.
+    pub(crate) fn has_source_rotation(&self) -> bool {
+        self.rotation.is_some()
+    }
+    pub(crate) fn source_plan_generation(&self) -> Option<u64> {
+        self.plan_generation
+    }
+    /// Seal an actual failed source-copy destination for abandonment. Only the
+    /// matching original plan may select this object. Keep its root guard while
+    /// replacing incomplete writable descendants with a complete flushed read
+    /// observation; no copy entry is resumed, removed, or overwritten.
+    pub(crate) fn observe_partial_for_source_abort(
+        &mut self,
+        data: &PrivateDirectory,
+        plan_generation: u64,
+        user: &CurrentUser,
+    ) -> io::Result<()> {
+        self.parent.verify(user)?;
+        if self.parent.directory().identity() != data.directory().identity()
+            || self.plan_generation != Some(plan_generation)
+            || self.rotation.is_some()
+            || !self.attempted
+        {
+            return Err(blocked("partial source copy ownership differs"));
+        }
+        let tree = self
+            .tree
+            .as_mut()
+            .ok_or_else(|| blocked("missing partial copy root"))?;
+        let root = match &tree.root {
+            HeldRoot::Present(root) => HeldRoot::Present(root.clone()),
+            HeldRoot::Absent { .. } => {
+                HeldRoot::observe(self.parent.directory().clone(), self.name.clone())?
+            }
+        };
+        let mut budget = Budget::new(tree.limits)?;
+        budget.flush_files = true;
+        tree.durably_flushed = false;
+        tree.entries.clear();
+        // The root owner survives a failed re-admission as well.
+        tree.root = root.clone();
+        *tree = HeldTree::admit(root, &mut budget, None)?;
+        self.partial_source_observation(data, plan_generation, user)?;
+        Ok(())
+    }
+    pub(crate) fn partial_source_observation(
+        &self,
+        data: &PrivateDirectory,
+        plan_generation: u64,
+        user: &CurrentUser,
+    ) -> io::Result<Vec<u8>> {
+        self.parent.verify(user)?;
+        data.verify(user)?;
+        if self.parent.directory().identity() != data.directory().identity()
+            || self.plan_generation != Some(plan_generation)
+            || self.rotation.is_some()
+            || !self.attempted
+        {
+            return Err(blocked("partial source copy ownership differs"));
+        }
+        let tree = self
+            .tree
+            .as_ref()
+            .ok_or_else(|| blocked("missing retained partial copy"))?;
+        if !tree.durably_flushed {
+            return Err(blocked("partial source copy is not durable"));
+        }
+        tree.verify()?;
+        verify_private_tree(tree, user)?;
+        match &tree.root {
+            HeldRoot::Present(root) => {
+                let (parent, name) = root.held_location()?;
+                if parent.identity() != self.parent.directory().identity() || name != self.name {
+                    return Err(blocked("partial source copy slot changed"));
+                }
+            }
+            HeldRoot::Absent { parent, name } => {
+                if parent.identity() != self.parent.directory().identity() || name != &self.name {
+                    return Err(blocked("partial source copy absent slot changed"));
+                }
+            }
+        }
+        encoded(&(
+            self.parent.directory().identity(),
+            text(&self.name)?,
+            plan_generation,
+            &tree.manifest,
+        ))
+    }
     /// The coordinator supplies the original live parent/name and a separate
     /// retained private quarantine parent. No fresh root is created here.
     #[allow(clippy::too_many_arguments)]

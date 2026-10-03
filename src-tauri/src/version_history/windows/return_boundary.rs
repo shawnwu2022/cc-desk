@@ -1,6 +1,6 @@
-//! Native post-launch Return admission. Protected records describe the exact
-//! observed owners; only live terminal jobs, held scope/lease and file objects
-//! can mint the boundary. A source boundary or serialized receipt cannot.
+//! Native Return admission. Post-launch Return requires both terminal jobs;
+//! failed-installer Return instead requires the live one-way no-launch custody.
+//! A source boundary, serialized receipt or absent PID cannot mint either.
 use super::{
     context::{
         bundle_restore::RetainedInstallationBundle, ContextJournal, HeldContext, HeldRoot,
@@ -11,6 +11,7 @@ use super::{
     files::{ComponentName, Directory, FileAccess, PrivateDirectory},
     lease::{ExclusiveLease, ExclusiveLeaseWitness},
     manager_bundle::{ManagerRecord, ManagerRecordReference},
+    no_historical_launch::{ClaimedNoHistoricalLaunch, NoHistoricalLaunch},
     package::RetainedPackage,
     process::{JobKind, TerminalProcessJob},
     registration_state::{RegistrationJournal, RetainedRegistrationState},
@@ -69,13 +70,102 @@ pub(crate) struct ReturnBoundaryInputs<'a> {
     pub(crate) shortcuts: &'a RetainedProductShortcuts,
 }
 
+/// This distinct input cannot replace a historical terminal with None. The
+/// installer guard positively retains its terminal process and empty private
+/// job; the separate live permit proves historical creation never began.
+pub(crate) struct FailedInstallerReturnInputs<'a> {
+    pub(crate) binding: JournalBinding,
+    pub(crate) installation: Arc<InstallationControl>,
+    pub(crate) data: Arc<TransactionDataRoot>,
+    pub(crate) exclusive: &'a ExclusiveLease,
+    pub(crate) installer: Arc<TerminalProcessJob>,
+    pub(crate) no_historical: NoHistoricalLaunch,
+    pub(crate) package: Arc<RetainedPackage>,
+    pub(crate) scope: Arc<FencedInstallation>,
+    pub(crate) original_bundle: Arc<RetainedInstallationBundle>,
+    pub(crate) original_context: &'a RetainedContextRoots,
+    pub(crate) registration: &'a RetainedRegistrationState,
+    pub(crate) shortcuts: &'a RetainedProductShortcuts,
+}
+
+#[derive(Clone)]
+enum HistoricalReturnCustody {
+    Terminal(Arc<TerminalProcessJob>),
+    NeverCreated(Arc<ClaimedNoHistoricalLaunch>),
+}
+impl HistoricalReturnCustody {
+    fn verify(
+        &self,
+        binding: &JournalBinding,
+        installation: &Arc<InstallationControl>,
+        data: &Arc<TransactionDataRoot>,
+        scope: &Arc<FencedInstallation>,
+        installer: &TerminalProcessJob,
+    ) -> Result<(), SafeError> {
+        match self {
+            Self::Terminal(historical) => {
+                historical.verify().map_err(blocked)?;
+                if historical.job_kind() != JobKind::HistoricalApplication
+                    || historical.root_identity() != data.root().directory().identity()
+                    || installer.process_identity() == historical.process_identity()
+                {
+                    return Err(blocked("foreign historical terminal custody"));
+                }
+                Ok(())
+            }
+            Self::NeverCreated(proof) => proof.verify_custody(binding, installation, data, scope),
+        }
+    }
+    fn verify_image(&self, fence: &ImageFence) -> Result<(), SafeError> {
+        match self {
+            Self::Terminal(historical) => historical
+                .verify_image(fence.identity(), fence.digest().map_err(blocked)?)
+                .map_err(blocked),
+            // A failed installer may leave any partial payload. Its observed
+            // image is protected by this actual exclusive fence, without a
+            // claimed successful payload or a nonexistent historical process.
+            Self::NeverCreated(proof) => proof.verify_live(),
+        }
+    }
+    fn verify_journal(&self, store: &mut JournalStore, generation: u64) -> Result<(), SafeError> {
+        match self {
+            Self::Terminal(_) => Ok(()),
+            Self::NeverCreated(proof) => proof.verify_journal(store, generation),
+        }
+    }
+    fn observation(&self) -> Result<serde_json::Value, SafeError> {
+        match self {
+            // Preserve the existing post-launch record shape.
+            Self::Terminal(historical) => {
+                serde_json::to_value(historical.terminal_reference()).map_err(blocked)
+            }
+            Self::NeverCreated(proof) => proof.observation(),
+        }
+    }
+}
+
+struct PreparationInputs<'a> {
+    binding: JournalBinding,
+    installation: Arc<InstallationControl>,
+    data: Arc<TransactionDataRoot>,
+    exclusive: &'a ExclusiveLease,
+    installer: Arc<TerminalProcessJob>,
+    historical: HistoricalReturnCustody,
+    package: Arc<RetainedPackage>,
+    scope: Arc<FencedInstallation>,
+    original_bundle: Arc<RetainedInstallationBundle>,
+    original_context: &'a RetainedContextRoots,
+    registration: &'a RetainedRegistrationState,
+    shortcuts: &'a RetainedProductShortcuts,
+}
+
 struct ReturnDependencies {
     binding: JournalBinding,
     installation: Arc<InstallationControl>,
     data: Arc<TransactionDataRoot>,
     exclusive: ExclusiveLeaseWitness,
     installer: Arc<TerminalProcessJob>,
-    historical: Arc<TerminalProcessJob>,
+    historical: HistoricalReturnCustody,
     package: Arc<RetainedPackage>,
     package_root: Arc<PrivateDirectory>,
     scope: Arc<FencedInstallation>,
@@ -92,12 +182,15 @@ impl ReturnDependencies {
         self.data.verify_installation(&self.installation)?;
         self.scope.verify().map_err(blocked)?;
         self.installer.verify().map_err(blocked)?;
-        self.historical.verify().map_err(blocked)?;
+        self.historical.verify(
+            &self.binding,
+            &self.installation,
+            &self.data,
+            &self.scope,
+            &self.installer,
+        )?;
         if self.installer.job_kind() != JobKind::Installer
-            || self.historical.job_kind() != JobKind::HistoricalApplication
             || self.installer.root_identity() != self.data.root().directory().identity()
-            || self.historical.root_identity() != self.data.root().directory().identity()
-            || self.installer.process_identity() == self.historical.process_identity()
             || self.data.transaction_id() != self.binding.transaction_id
             || self.package.transaction_id() != self.binding.transaction_id
             || self.package.root_identity() != self.package_root.directory().identity()
@@ -197,12 +290,113 @@ impl AdmittedReturnBoundary {
         (self.boundary, self.desk, self.webview, self.generation)
     }
 }
-impl ReturnBoundaryAttempt {
-    /// No installed-image or context mutation occurs during preparation.
-    pub(crate) fn prepare(
+/// Preparation itself retains irreversible branch claims and newly acquired
+/// native observations before any later fallible read/capture. The coordinator
+/// stores this owner before calling either one-use preparation method.
+pub(crate) struct ReturnBoundaryPreparation {
+    attempted: bool,
+    candidate: Option<NoHistoricalLaunch>,
+    historical: Option<HistoricalReturnCustody>,
+    dependencies: Option<Arc<ReturnDependencies>>,
+    context: Option<HeldContext>,
+    image: Option<CurrentImageEvidence>,
+    quarantine: Option<Arc<PrivateDirectory>>,
+    prepared: Option<ReturnBoundaryAttempt>,
+}
+impl ReturnBoundaryPreparation {
+    pub(crate) fn new() -> Self {
+        Self {
+            attempted: false,
+            candidate: None,
+            historical: None,
+            dependencies: None,
+            context: None,
+            image: None,
+            quarantine: None,
+            prepared: None,
+        }
+    }
+    pub(crate) fn prepare_normal(
+        &mut self,
         inputs: ReturnBoundaryInputs<'_>,
         store: &mut JournalStore,
-    ) -> Result<Self, SafeError> {
+    ) -> Result<ReturnBoundaryAttempt, SafeError> {
+        if self.attempted {
+            return Err(blocked("Return preparation requires reconciliation"));
+        }
+        self.attempted = true;
+        self.historical = Some(HistoricalReturnCustody::Terminal(inputs.historical));
+        self.prepare_custody(
+            PreparationInputs {
+                binding: inputs.binding,
+                installation: inputs.installation,
+                data: inputs.data,
+                exclusive: inputs.exclusive,
+                installer: inputs.installer,
+                historical: self
+                    .historical
+                    .as_ref()
+                    .expect("retained historical terminal")
+                    .clone(),
+                package: inputs.package,
+                scope: inputs.scope,
+                original_bundle: inputs.original_bundle,
+                original_context: inputs.original_context,
+                registration: inputs.registration,
+                shortcuts: inputs.shortcuts,
+            },
+            store,
+        )
+    }
+    pub(crate) fn prepare_failed_installer(
+        &mut self,
+        inputs: FailedInstallerReturnInputs<'_>,
+        store: &mut JournalStore,
+    ) -> Result<ReturnBoundaryAttempt, SafeError> {
+        if self.attempted {
+            return Err(blocked("Return preparation requires reconciliation"));
+        }
+        self.attempted = true;
+        self.candidate = Some(inputs.no_historical);
+        inputs.installer.verify().map_err(blocked)?;
+        if inputs.installer.job_kind() != JobKind::Installer
+            || inputs.installer.root_identity() != inputs.data.root().directory().identity()
+        {
+            return Err(blocked("foreign installer terminal custody"));
+        }
+        self.historical = Some(HistoricalReturnCustody::NeverCreated(Arc::new(
+            self.candidate
+                .as_ref()
+                .expect("retained no-launch candidate")
+                .claim_return()?,
+        )));
+        self.prepare_custody(
+            PreparationInputs {
+                binding: inputs.binding,
+                installation: inputs.installation,
+                data: inputs.data,
+                exclusive: inputs.exclusive,
+                installer: inputs.installer,
+                historical: self
+                    .historical
+                    .as_ref()
+                    .expect("retained return claim")
+                    .clone(),
+                package: inputs.package,
+                scope: inputs.scope,
+                original_bundle: inputs.original_bundle,
+                original_context: inputs.original_context,
+                registration: inputs.registration,
+                shortcuts: inputs.shortcuts,
+            },
+            store,
+        )
+    }
+    fn prepare_custody(
+        &mut self,
+        inputs: PreparationInputs<'_>,
+        store: &mut JournalStore,
+    ) -> Result<ReturnBoundaryAttempt, SafeError> {
         inputs
             .exclusive
             .verify_root(inputs.installation.root())
@@ -245,6 +439,7 @@ impl ReturnBoundaryAttempt {
         }
         let generation = state.generation();
         store.verify_windows_binding(inputs.installation.root(), &inputs.binding, generation)?;
+        inputs.historical.verify_journal(store, generation)?;
         let original_bundle = {
             let mut journal = ContextJournal::new(
                 store,
@@ -335,22 +530,29 @@ impl ReturnBoundaryAttempt {
             }
             roles.push((role, guard));
         }
-        // Terminal custody is checked before capturing any current data. The
-        // private jobs positively account for the historical browser/children.
+        // Terminal custody is checked before capturing any current data. Each
+        // launched process retains its actual empty authenticated private job.
         inputs.installer.verify().map_err(blocked)?;
-        inputs.historical.verify().map_err(blocked)?;
-        if inputs.installer.job_kind() != JobKind::Installer
-            || inputs.historical.job_kind() != JobKind::HistoricalApplication
-        {
+        inputs.historical.verify(
+            &inputs.binding,
+            &inputs.installation,
+            &inputs.data,
+            &inputs.scope,
+            &inputs.installer,
+        )?;
+        if inputs.installer.job_kind() != JobKind::Installer {
             return Err(blocked("wrong terminal job kind"));
         }
-        let mut context = original_context.capture_current(&user).map_err(blocked)?;
-        let exclusions = ConfiguredInventory::capture_for_context(&mut context)
+        original_context
+            .capture_current_retaining(&mut self.context, &user)
+            .map_err(blocked)?;
+        let context = self.context.as_mut().expect("retained current context");
+        let exclusions = ConfiguredInventory::capture_for_context(context)
             .map_err(blocked)?
             .into_exclusions(inputs.scope.directory().clone(), inputs.data.root().clone())
             .map_err(blocked)?;
-        exclusions.verify_context(&context).map_err(blocked)?;
-        let dependencies = Arc::new(ReturnDependencies {
+        exclusions.verify_context(context).map_err(blocked)?;
+        self.dependencies = Some(Arc::new(ReturnDependencies {
             binding: inputs.binding,
             installation: inputs.installation,
             data: inputs.data,
@@ -364,36 +566,47 @@ impl ReturnBoundaryAttempt {
             original_context,
             exclusions,
             roles,
-        });
+        }));
+        let dependencies = self
+            .dependencies
+            .as_ref()
+            .expect("retained return dependencies");
         dependencies.verify()?;
-        let image = capture_image(&dependencies)?;
+        capture_image(dependencies, &mut self.image)?;
         let attempt = uuid::Uuid::new_v4().simple().to_string();
-        let quarantine = Arc::new(
+        self.quarantine = Some(Arc::new(
             PrivateDirectory::create_new(
                 dependencies.data.root().directory().clone(),
                 name(&format!("return-image-{attempt}"))?,
                 &user,
             )
             .map_err(blocked)?,
-        );
+        ));
+        let quarantine = self.quarantine.as_ref().expect("retained image quarantine");
         dependencies
             .scope
             .directory()
             .require_same_volume(quarantine.directory())
             .map_err(blocked)?;
-        let result = Self {
-            dependencies,
-            context: Some(context),
-            image,
-            quarantine,
+        self.prepared = Some(ReturnBoundaryAttempt {
+            dependencies: dependencies.clone(),
+            context: self.context.take(),
+            image: self.image.take().expect("retained current image"),
+            quarantine: quarantine.clone(),
             record_name: format!("return-boundary-{attempt}.json"),
             record: None,
             generation,
             attempted: false,
-        };
-        result.verify_before_effect(store)?;
-        Ok(result)
+        });
+        self.prepared
+            .as_ref()
+            .expect("retained prepared Return")
+            .verify_before_effect(store)?;
+        Ok(self.prepared.take().expect("verified prepared Return"))
     }
+}
+
+impl ReturnBoundaryAttempt {
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
@@ -404,6 +617,9 @@ impl ReturnBoundaryAttempt {
             &self.dependencies.binding,
             self.generation,
         )?;
+        self.dependencies
+            .historical
+            .verify_journal(store, self.generation)?;
         let context = self
             .context
             .as_ref()
@@ -416,10 +632,7 @@ impl ReturnBoundaryAttempt {
             CurrentImageEvidence::Fenced(fence) => {
                 let fence = fence.lock();
                 fence.verify().map_err(blocked)?;
-                self.dependencies
-                    .historical
-                    .verify_image(fence.identity(), fence.digest().map_err(blocked)?)
-                    .map_err(blocked)?;
+                self.dependencies.historical.verify_image(&fence)?;
             }
             CurrentImageEvidence::Absent(absence) => absence.verify().map_err(blocked)?,
         }
@@ -441,7 +654,7 @@ impl ReturnBoundaryAttempt {
                 "installation": self.dependencies.scope.directory().identity(),
                 "image": self.image_observation()?,
                 "installer": self.dependencies.installer.terminal_reference(),
-                "historical": self.dependencies.historical.terminal_reference(),
+                "historical": self.dependencies.historical.observation()?,
             }),
         )?;
         let expected = self.retain(store, &serde_json::json!({
@@ -499,7 +712,7 @@ impl ReturnBoundaryAttempt {
                     "originalBundle": self.dependencies.original_bundle.reference(),
                     "originalContext": self.dependencies.original_context.snapshot(),
                     "installer": self.dependencies.installer.terminal_reference(),
-                    "historical": self.dependencies.historical.terminal_reference(),
+                    "historical": self.dependencies.historical.observation()?,
                     "image": observed_image, "quarantine": self.quarantine.directory().identity(),
                     "configuredExclusions": self.dependencies.exclusions.configuration_identity(),
                 }),
@@ -578,35 +791,82 @@ impl ReturnBoundaryAttempt {
     }
 }
 
-fn capture_image(dependencies: &ReturnDependencies) -> Result<CurrentImageEvidence, SafeError> {
+fn capture_image(
+    dependencies: &ReturnDependencies,
+    retained: &mut Option<CurrentImageEvidence>,
+) -> Result<(), SafeError> {
     dependencies.verify()?;
     let directory = dependencies.scope.directory().clone();
     let name = dependencies.scope.image_name().clone();
+    let historical = match &dependencies.historical {
+        HistoricalReturnCustody::Terminal(historical) => Some(historical.as_ref()),
+        HistoricalReturnCustody::NeverCreated(proof) => {
+            proof.verify_live()?;
+            None
+        }
+    };
+    capture_current_image(retained, directory, name, historical)?;
+    dependencies.verify()?;
+    if let Some(CurrentImageEvidence::Fenced(fence)) = retained.as_ref() {
+        dependencies.historical.verify_image(&fence.lock())?;
+    }
+    Ok(())
+}
+
+/// Actual image observation only; this helper cannot mint Return admission.
+/// Callers supply terminal equality exclusively for the post-launch branch.
+fn capture_current_image(
+    retained: &mut Option<CurrentImageEvidence>,
+    directory: Arc<Directory>,
+    name: ComponentName,
+    historical: Option<&TerminalProcessJob>,
+) -> Result<(), SafeError> {
+    if retained.is_some() {
+        return Err(blocked("current image custody is already retained"));
+    }
     match directory.open_file(name.clone(), FileAccess::Read) {
         Ok(image) => {
             let identity = image.identity().clone();
             let digest = image.digest().map_err(blocked)?;
-            dependencies
-                .historical
-                .verify_image(&identity, &digest)
-                .map_err(blocked)?;
+            if let Some(historical) = historical {
+                historical
+                    .verify_image(&identity, &digest)
+                    .map_err(blocked)?;
+            }
             drop(image);
             let fence =
                 ImageFence::acquire(directory, name, &identity, &digest).map_err(blocked)?;
-            dependencies.verify()?;
-            dependencies
-                .historical
-                .verify_image(fence.identity(), fence.digest().map_err(blocked)?)
-                .map_err(blocked)?;
-            Ok(CurrentImageEvidence::Fenced(Arc::new(Mutex::new(fence))))
+            // The caller's preparation owns the exclusive guard before every
+            // fallible post-acquisition identity/dependency check.
+            *retained = Some(CurrentImageEvidence::Fenced(Arc::new(Mutex::new(fence))));
+            #[cfg(test)]
+            if IMAGE_CAPTURE_FAILURE.replace(false) {
+                return Err(blocked("injected post-acquisition image verification"));
+            }
+            let Some(CurrentImageEvidence::Fenced(fence)) = retained.as_ref() else {
+                unreachable!("exclusive image retained before verification")
+            };
+            let fence = fence.lock();
+            if let Some(historical) = historical {
+                historical
+                    .verify_image(fence.identity(), fence.digest().map_err(blocked)?)
+                    .map_err(blocked)?;
+            }
+            Ok(())
         }
         Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => {
-            Ok(CurrentImageEvidence::Absent(
+            *retained = Some(CurrentImageEvidence::Absent(
                 VerifiedImageAbsence::capture(directory, name).map_err(blocked)?,
-            ))
+            ));
+            Ok(())
         }
         Err(failure) => Err(blocked(failure)),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static IMAGE_CAPTURE_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]

@@ -26,9 +26,13 @@ pub(crate) mod manager_process;
 #[cfg(windows)]
 pub(crate) mod manager_ui;
 #[cfg(windows)]
+pub(crate) mod no_historical_launch;
+#[cfg(windows)]
 pub(crate) mod package;
 #[cfg(windows)]
 pub(crate) mod pre_context_abort;
+#[cfg(windows)]
+pub(crate) mod preinstall_return;
 #[cfg(windows)]
 pub(crate) mod process;
 #[cfg(windows)]
@@ -51,6 +55,10 @@ pub(crate) mod shortcuts;
 pub(crate) mod source_begin;
 #[cfg(windows)]
 pub(crate) mod source_boundary;
+#[cfg(windows)]
+pub(crate) mod source_failure;
+#[cfg(windows)]
+pub(crate) mod source_failure;
 #[cfg(windows)]
 pub(crate) mod source_lifecycle;
 #[cfg(windows)]

@@ -8,7 +8,7 @@ use super::{
     context::{
         ContextJournal, ContextRestoration, FreshContextRoots, HeldBundle, HeldContext, HeldRoot,
         LaterContextRoots, PrivateTreeCopy, ReadmittedRoot, RestoredContextRoots,
-        RetainedContextRoots,
+        RetainedContextRoots, ReturnedRoot,
     },
     coordinator_evidence::ReturnBoundary,
     durability::MarkerStore,
@@ -16,17 +16,29 @@ use super::{
     files::{ComponentName, Directory, FileAccess, PrivateDirectory},
     lease::{ControlLease, ExclusiveLease},
     manager_handoff::InitialManager,
+    no_historical_launch::HistoricalLaunchPermit,
     package::RetainedPackage,
-    process::{CommandLine, DurableProcessIdentity, JobKind, PreparedProcess, TerminalProcessJob},
+    preinstall_return::PreinstallReturnAttempt,
+    process::{
+        CancelledBeforeResume, CommandLine, DurableProcessIdentity, JobKind, PreparedProcess,
+        TerminalProcessJob,
+    },
     recovery_space::{AbortReserve, PartialAbortReserve},
     registration_state::{
         RegistrationJournal, RestoredRegistrationReceipt, RetainedRegistrationState,
     },
-    return_boundary::{ReturnBoundaryAttempt, ReturnBoundaryInputs},
+    return_boundary::{
+        FailedInstallerReturnInputs, ReturnBoundaryAttempt, ReturnBoundaryInputs,
+        ReturnBoundaryPreparation,
+    },
     scope::{ConfiguredExclusions, FencedInstallation},
     security::CurrentUser,
     shortcuts::{RetainedProductShortcuts, ShortcutJournal, ShortcutRestoreReceipt},
     source_boundary::{AdmittedSourceSnapshot, SourceSnapshotInputs},
+    source_failure::{
+        publish_source_abort, retain_source_partial, reverse_source_fence, SourceAbortInputs,
+        SourceNoLaunch, SourceReturnInputs,
+    },
     source_lifecycle::SourceHandoffTerminal,
     source_session::AcquiredSourceParts,
     startup::{InstallationControl, TransactionDataRoot},
@@ -40,7 +52,7 @@ use crate::{
         },
         maintenance::{ActiveContextMarker, SnapshotBoundary},
         manager_types::{ManagerAction, ManagerBlockReason, ManagerStatus},
-        manager_worker::{AuthenticatedManagerCommand, ProgressPublisher},
+        manager_worker::{AcceptedManagerReturn, ProgressPublisher},
         payload_policy::{PayloadAdmission, PreservedCompanions},
         snapshot::{SnapshotLimits, SnapshotManifest},
     },
@@ -79,6 +91,35 @@ fn readmit_source_bundle(
         return Err(error("HISTORY_SOURCE_SNAPSHOT_BLOCKED"));
     }
     Ok(observed)
+}
+
+// Expands to disjoint field borrows so the source's HKEY/native owners stay on
+// this thread while its separate journal/generation can be mutated explicitly.
+macro_rules! source_return_inputs {
+    ($source:expr) => {
+        SourceReturnInputs {
+            no_launch: $source
+                .no_source_launch
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_EARLY_ABORT_BLOCKED"))?,
+            binding: &$source.parts.binding,
+            installation: &$source.parts.installation,
+            data: &$source.parts.data,
+            terminal: &$source.parts.terminal,
+            scope: &$source.parts.scope,
+            fence: &$source.parts.fence,
+            original_bundle: &$source.parts.original_bundle,
+            registration: &$source.parts.registration,
+            shortcuts: &$source.parts.shortcuts,
+            exclusive: &$source.parts.exclusive,
+            control: &$source.parts.control,
+        }
+    };
+}
+
+enum InstallerStage {
+    Installed,
+    ReturnRequested,
 }
 
 struct Pending {
@@ -120,7 +161,14 @@ struct SourceExecution {
     fresh: Option<FreshContextRoots>,
     installer: Option<Arc<TerminalProcessJob>>,
     historical: Option<Arc<TerminalProcessJob>>,
+    historical_launch: Option<HistoricalLaunchPermit>,
     installed: Option<HeldBundle>,
+    requested_return: Option<AcceptedManagerReturn>,
+    failure_recovery_started: bool,
+    no_source_launch: Option<SourceNoLaunch>,
+    preinstall_return: Option<PreinstallReturnAttempt>,
+    reversed_roots: BTreeMap<RootKind, ReturnedRoot>,
+    return_preparation: Option<ReturnBoundaryPreparation>,
     return_attempt: Option<ReturnBoundaryAttempt>,
     return_boundary: Option<Arc<ReturnBoundary>>,
     return_roots: Option<(HeldRoot, HeldRoot)>,
@@ -180,7 +228,14 @@ impl SourceExecution {
             fresh: None,
             installer: None,
             historical: None,
+            historical_launch: None,
             installed: None,
+            requested_return: None,
+            failure_recovery_started: false,
+            no_source_launch: None,
+            preinstall_return: None,
+            reversed_roots: BTreeMap::new(),
+            return_preparation: None,
             return_attempt: None,
             return_boundary: None,
             return_roots: None,
@@ -774,6 +829,150 @@ fn park_process_failure<T>(owners: T, progress: &ProgressPublisher, failure: Saf
         }
     }
 }
+struct UnstartedReturnContext<'a> {
+    kind: JobKind,
+    installation: &'a InstallationControl,
+    control: &'a ControlLease,
+    binding: &'a JournalBinding,
+    store: &'a mut JournalStore,
+    generation: &'a mut u64,
+    user: &'a CurrentUser,
+    progress: &'a ProgressPublisher,
+}
+
+/// Returns false only when cleanup is unavailable. No process is terminated
+/// until a current original-document Return has been accepted. Every acquired
+/// cancellation owner and command is stored on the caller's retaining stack.
+fn request_unstarted_return(
+    process: &mut PreparedProcess<'_>,
+    receipt: Option<&DurableProcessIdentity>,
+    cancelled: &mut Option<CancelledBeforeResume>,
+    accepted: &mut Option<AcceptedManagerReturn>,
+    context: UnstartedReturnContext<'_>,
+) -> Result<bool, SafeError> {
+    if !process.can_cancel_before_resume().map_err(blocked)? {
+        return Ok(false);
+    }
+    let UnstartedReturnContext {
+        kind,
+        installation,
+        control,
+        binding,
+        store,
+        generation,
+        user,
+        progress,
+    } = context;
+    store.verify_windows_binding(installation.root(), binding, *generation)?;
+    let (create_kind, resume_kind, terminal_kind) = match kind {
+        JobKind::Installer => (
+            EffectKind::InstallerCreateSuspended,
+            EffectKind::InstallerResume,
+            EffectKind::InstallerTerminalOutcome,
+        ),
+        JobKind::HistoricalApplication => (
+            EffectKind::HistoricalCreateSuspended,
+            EffectKind::HistoricalResume,
+            EffectKind::HistoricalTerminalOutcome,
+        ),
+    };
+    if let Some((effect, _)) = store.context_pending()? {
+        if effect.kind != create_kind && effect.kind != resume_kind {
+            return Err(error("HISTORY_RECONCILIATION_REQUIRED"));
+        }
+    }
+    *generation = store.append(
+        *generation,
+        JournalEvent::Phase {
+            phase: JournalPhase::RecoveryRequired,
+        },
+    )?;
+    publish_checkpoint(installation, control, binding, store)?;
+    progress.publish(
+        store,
+        None,
+        &[ManagerAction::Refresh, ManagerAction::ReturnToPrevious],
+    )?;
+    loop {
+        let command = progress.recv_command()?;
+        if command.action() != ManagerAction::ReturnToPrevious {
+            command.finish(Err(error("HISTORY_OPERATION_PENDING")));
+            continue;
+        }
+        match command.accept_return(binding, store) {
+            Ok(command) => {
+                *accepted = Some(command);
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+    let command = accepted.as_ref().expect("accepted unstarted Return");
+    command.verify(binding, store, *generation)?;
+    if !process.can_cancel_before_resume().map_err(blocked)? {
+        return Err(error("HISTORY_INSTALLER_OUTCOME_UNKNOWN"));
+    }
+    // Existing typed cleanup rejects every attempted/unknown/successful resume
+    // and spends its own one-attempt guard before native termination.
+    process.cancel_before_resume().map_err(blocked)?;
+    loop {
+        if let Some(observed) = process
+            .observe_cancelled_before_resume(receipt, user)
+            .map_err(blocked)?
+        {
+            *cancelled = Some(observed);
+            break;
+        }
+        // A completed primary alone cannot prove that its actual job is empty.
+        if let Some(extra) = progress.recv_command_timeout(std::time::Duration::from_millis(200))? {
+            extra.finish(Err(error("HISTORY_OPERATION_PENDING")));
+        }
+    }
+    let proof = cancelled.as_ref().expect("retained unstarted terminal");
+    proof.verify().map_err(blocked)?;
+    if proof.terminal().job_kind() != kind {
+        return Err(error("HISTORY_INSTALLER_OUTCOME_UNKNOWN"));
+    }
+    command.verify(binding, store, *generation)?;
+    if let Some((effect, intent_generation)) = store.context_pending()? {
+        let (observation, bytes) = if effect.kind == create_kind {
+            // The actual child existed. Never relabel creation NotApplied.
+            (
+                Observation::Applied,
+                proof.creation_bytes().map_err(blocked)?,
+            )
+        } else if effect.kind == resume_kind {
+            // Only this unforgeable pre-resume cancellation outcome proves the
+            // original resume was never attempted; generic terminal is not enough.
+            (Observation::NotApplied, proof.terminal_bytes())
+        } else {
+            return Err(error("HISTORY_RECONCILIATION_REQUIRED"));
+        };
+        let observed = store.retain_manifest(bytes)?;
+        let receipt = store.retain_effect_receipt(&effect.effect_id, observation, &observed)?;
+        proof.verify().map_err(blocked)?;
+        *generation = store.append(
+            *generation,
+            JournalEvent::Observed {
+                effect_id: effect.effect_id,
+                intent_generation,
+                result: ObservedResult {
+                    observation,
+                    receipt: Some(receipt),
+                },
+            },
+        )?;
+    }
+    proof.verify().map_err(blocked)?;
+    let pending = record_intent(store, generation, terminal_kind, &process.launch_record(),
+        &"explicit Return cleaned exact never-resumed child; actual terminal and empty authenticated job")?;
+    record_applied(store, generation, pending, proof.terminal_bytes())?;
+    publish_checkpoint(installation, control, binding, store)?;
+    command.verify(binding, store, *generation)?;
+    progress.publish(store, None, &[ManagerAction::Refresh])?;
+    Ok(true)
+}
+
 /// A failed publication/resume never releases a live native owner early. Waits
 /// observe the original process handle and exact owned job; time grants no proof.
 fn await_terminal(
@@ -808,9 +1007,22 @@ impl SourceExecution {
         &mut self,
         owner: &InitialManager,
         progress: &ProgressPublisher,
-    ) -> Result<(), SafeError> {
+    ) -> Result<InstallerStage, SafeError> {
         self.verify()?;
         let user = CurrentUser::capture().map_err(blocked)?;
+        if self.historical_launch.is_some() {
+            return Err(error("HISTORY_OPERATION_PENDING"));
+        }
+        self.historical_launch = Some(HistoricalLaunchPermit::acquire(
+            self.parts.binding.clone(),
+            self.parts.installation.clone(),
+            self.parts.data.clone(),
+            &self.parts.exclusive,
+            self.parts.terminal.clone(),
+            self.parts.scope.clone(),
+            &mut self.parts.store,
+            self.parts.generation,
+        )?);
         // Fresh roots are durably recorded before dropping their create handles.
         {
             let mut journal = ContextJournal::new(
@@ -853,6 +1065,10 @@ impl SourceExecution {
             self.parts.scope.original_path().as_os_str(),
         )
         .map_err(blocked)?;
+        self.no_source_launch
+            .as_mut()
+            .ok_or_else(|| error("HISTORY_EARLY_ABORT_BLOCKED"))?
+            .invalidate_before_process_intent();
         let pending = self.begin(
             EffectKind::InstallerCreateSuspended,
             &(
@@ -926,23 +1142,65 @@ impl SourceExecution {
             )?;
             Ok::<_, SafeError>(exit_code)
         })();
+        let mut cancelled = None;
+        let mut accepted = None;
         let exit_code = match outcome {
-            Ok(exit_code) => exit_code,
-            Err(failure) => park_process_failure(
-                (&process, &receipt, &terminal_owner, owner),
-                progress,
-                failure,
-            ),
+            Ok(exit_code) => Some(exit_code),
+            Err(failure) => {
+                let cleanup = request_unstarted_return(
+                    &mut process,
+                    receipt.as_ref(),
+                    &mut cancelled,
+                    &mut accepted,
+                    UnstartedReturnContext {
+                        kind: JobKind::Installer,
+                        installation: &self.parts.installation,
+                        control: &self.parts.control,
+                        binding: &self.parts.binding,
+                        store: &mut self.parts.store,
+                        generation: &mut self.parts.generation,
+                        user: &user,
+                        progress,
+                    },
+                );
+                match cleanup {
+                    Ok(true) => {
+                        terminal_owner = Some(Arc::new(
+                            cancelled
+                                .take()
+                                .expect("verified unstarted installer")
+                                .into_terminal(),
+                        ));
+                        None
+                    }
+                    outcome => {
+                        let failure = outcome.err().unwrap_or(failure);
+                        if let Some(command) = accepted.take() {
+                            command.finish(Err(failure.clone()));
+                        }
+                        park_process_failure(
+                            (&process, &receipt, &terminal_owner, &cancelled, owner),
+                            progress,
+                            failure,
+                        )
+                    }
+                }
+            }
         };
         // Every fallible process operation above keeps the exact process/job,
         // receipt, and exclusive lease borrow alive on failure.
         drop(process);
         self.installer = terminal_owner;
+        self.requested_return = accepted;
         self.checkpoint()?;
+        let Some(exit_code) = exit_code else {
+            return Ok(InstallerStage::ReturnRequested);
+        };
         if exit_code != 0 {
             return Err(error("HISTORY_INSTALLER_FAILED"));
         }
-        self.verify_target(progress)
+        self.verify_target(progress)?;
+        Ok(InstallerStage::Installed)
     }
     fn verify_target(&mut self, progress: &ProgressPublisher) -> Result<(), SafeError> {
         self.verify()?;
@@ -1018,7 +1276,7 @@ impl SourceExecution {
         &mut self,
         owner: &InitialManager,
         progress: &ProgressPublisher,
-    ) -> Result<AuthenticatedManagerCommand, SafeError> {
+    ) -> Result<AcceptedManagerReturn, SafeError> {
         self.verify()?;
         let user = CurrentUser::capture().map_err(blocked)?;
         self.installer
@@ -1041,6 +1299,10 @@ impl SourceExecution {
             .open_file(self.parts.scope.image_name().clone(), FileAccess::Read)
             .map_err(blocked)?;
         let command = CommandLine::historical(&image.path().map_err(blocked)?).map_err(blocked)?;
+        self.historical_launch
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_NO_HISTORICAL_LAUNCH_CHANGED"))?
+            .begin_historical_creation()?;
         let pending = self.begin(
             EffectKind::HistoricalCreateSuspended,
             &(image.identity(), image.digest().map_err(blocked)?),
@@ -1212,19 +1474,65 @@ impl SourceExecution {
                 confirmed = true;
             }
         })();
+        let mut cancelled = None;
+        let mut accepted = None;
         if let Err(failure) = launched {
-            park_process_failure(
-                (&process, &receipt, &terminal_owner, owner),
-                progress,
-                failure,
+            let cleanup = request_unstarted_return(
+                &mut process,
+                receipt.as_ref(),
+                &mut cancelled,
+                &mut accepted,
+                UnstartedReturnContext {
+                    kind: JobKind::HistoricalApplication,
+                    installation: &self.parts.installation,
+                    control: &self.parts.control,
+                    binding: &self.parts.binding,
+                    store: &mut self.parts.store,
+                    generation: &mut self.parts.generation,
+                    user: &user,
+                    progress,
+                },
             );
+            match cleanup {
+                Ok(true) => {
+                    terminal_owner = Some(Arc::new(
+                        cancelled
+                            .take()
+                            .expect("verified unstarted historical child")
+                            .into_terminal(),
+                    ));
+                }
+                outcome => {
+                    let failure = outcome.err().unwrap_or(failure);
+                    if let Some(command) = accepted.take() {
+                        command.finish(Err(failure.clone()));
+                    }
+                    park_process_failure(
+                        (&process, &receipt, &terminal_owner, &cancelled, owner),
+                        progress,
+                        failure,
+                    )
+                }
+            }
         }
         drop(process);
         // Releasing the process image plus complete target readers is necessary
         // before the later factory obtains its own exclusive image fence.
         drop(self.installed.take());
         self.historical = terminal_owner;
+        self.requested_return = accepted;
         self.checkpoint()?;
+        if let Some(command) = self.requested_return.as_ref() {
+            command.verify(
+                &self.parts.binding,
+                &self.parts.store,
+                self.parts.generation,
+            )?;
+            return Ok(self
+                .requested_return
+                .take()
+                .expect("retained accepted Return"));
+        }
         progress.publish(
             &mut self.parts.store,
             None,
@@ -1237,7 +1545,7 @@ impl SourceExecution {
                 continue;
             }
             if command.action() == ManagerAction::ReturnToPrevious {
-                return Ok(command);
+                return command.accept_return(&self.parts.binding, &self.parts.store);
             }
             command.finish(Err(error("HISTORY_OPERATION_PENDING")));
         }
@@ -1245,45 +1553,450 @@ impl SourceExecution {
 }
 
 impl SourceExecution {
-    fn return_previous(
+    fn recover_source_failure(&mut self, progress: &ProgressPublisher) -> Result<(), SafeError> {
+        if self.failure_recovery_started {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
+        self.failure_recovery_started = true;
+        if self.return_attempt.is_some()
+            || self.return_boundary.is_some()
+            || self.preinstall_return.is_some()
+        {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
+        source_return_inputs!(self).verify(&mut self.parts.store, self.parts.generation)?;
+        self.enter_failure_phase()?;
+        progress.publish(
+            &mut self.parts.store,
+            None,
+            &[ManagerAction::Refresh, ManagerAction::ReturnToPrevious],
+        )?;
+        loop {
+            let command = progress.recv_command()?;
+            if let Err(failure) = command.check(&self.parts.binding, &self.parts.store) {
+                command.finish(Err(failure));
+                continue;
+            }
+            if command.action() != ManagerAction::ReturnToPrevious {
+                command.finish(Err(error("HISTORY_OPERATION_PENDING")));
+                continue;
+            }
+            let command = match command.accept_return(&self.parts.binding, &self.parts.store) {
+                Ok(command) => command,
+                Err(_) => continue,
+            };
+            let result = if self.originals.is_some() {
+                self.return_before_installer(&command, progress)
+            } else {
+                self.abort_source_before_seal(&command, progress)
+            };
+            let outcome = result.as_ref().map(|_| ()).map_err(Clone::clone);
+            command.finish(result);
+            return outcome;
+        }
+    }
+    fn release_abort_space(&mut self) -> Result<(), SafeError> {
+        // A failed reserve construction is never upgraded to capacity proof.
+        // Before source mutation, missing reserve is compatible with a verified
+        // unchanged-source abort. Actual journal writes can still fail closed.
+        if let Some(reserve) = &mut self.reserve {
+            reserve.verify_for(
+                &self.parts.data,
+                &self.parts.installation,
+                &self.parts.binding,
+            )?;
+            reserve.release_once(&self.parts.control)?;
+        }
+        Ok(())
+    }
+    fn return_before_installer(
         &mut self,
-        command: &AuthenticatedManagerCommand,
+        command: &AcceptedManagerReturn,
         progress: &ProgressPublisher,
     ) -> Result<ManagerStatus, SafeError> {
-        command.check(&self.parts.binding, &self.parts.store)?;
-        self.verify()?;
+        command.verify(
+            &self.parts.binding,
+            &self.parts.store,
+            self.parts.generation,
+        )?;
+        source_return_inputs!(self).verify(&mut self.parts.store, self.parts.generation)?;
+        self.release_abort_space()?;
+        if self.preinstall_return.is_some() {
+            return Err(error("HISTORY_CONTEXT_RETURN_BLOCKED"));
+        }
+        // Infallible adoption precedes every fallible context recovery step.
+        self.preinstall_return = Some(PreinstallReturnAttempt::new(
+            self.originals.take(),
+            self.fresh.take(),
+        ));
+        let inputs = source_return_inputs!(self);
+        let boundary = self
+            .boundary
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_SOURCE_SNAPSHOT_BLOCKED"))?;
+        let attempt = self
+            .preinstall_return
+            .as_mut()
+            .expect("retained preinstall return");
+        attempt.restore(
+            &inputs,
+            boundary,
+            &mut self.parts.store,
+            &mut self.parts.generation,
+        )?;
+        let proof = attempt.verify_restored(
+            &inputs,
+            boundary,
+            &mut self.parts.store,
+            self.parts.generation,
+        )?;
+        self.parts.generation = self.parts.store.append(
+            self.parts.generation,
+            JournalEvent::Phase {
+                phase: JournalPhase::Restored,
+            },
+        )?;
+        proof.verify(
+            &inputs,
+            boundary,
+            &mut self.parts.store,
+            self.parts.generation,
+        )?;
+        let terminal =
+            ActiveContextMarker::restored(&self.parts.store.inspect(&self.parts.binding)?)?;
+        {
+            let mut marker = MarkerStore::open_existing(
+                self.parts.installation.root().clone(),
+                &self.parts.control,
+            )
+            .map_err(blocked)?
+            .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?;
+            let prior = ActiveContextMarker::decode(marker.current().map_err(blocked)?)?;
+            if prior.binding() != &self.parts.binding || prior.is_terminal() {
+                return Err(error("HISTORY_RECOVERY_REQUIRED"));
+            }
+            proof.verify(
+                &inputs,
+                boundary,
+                &mut self.parts.store,
+                self.parts.generation,
+            )?;
+            marker
+                .append(&terminal, &mut self.parts.store)
+                .map_err(blocked)?;
+            if marker.current().map_err(blocked)? != terminal.encode()? {
+                return Err(error("HISTORY_RECOVERY_REQUIRED"));
+            }
+        }
+        proof.verify(
+            &inputs,
+            boundary,
+            &mut self.parts.store,
+            self.parts.generation,
+        )?;
+        progress.publish(&mut self.parts.store, None, &[ManagerAction::Refresh])
+    }
+    fn abort_source_before_seal(
+        &mut self,
+        command: &AcceptedManagerReturn,
+        progress: &ProgressPublisher,
+    ) -> Result<ManagerStatus, SafeError> {
+        command.verify(
+            &self.parts.binding,
+            &self.parts.store,
+            self.parts.generation,
+        )?;
+        source_return_inputs!(self).verify(&mut self.parts.store, self.parts.generation)?;
+        self.release_abort_space()?;
         let user = CurrentUser::capture().map_err(blocked)?;
-        self.return_attempt = Some(ReturnBoundaryAttempt::prepare(
-            ReturnBoundaryInputs {
-                binding: self.parts.binding.clone(),
-                installation: self.parts.installation.clone(),
-                data: self.parts.data.clone(),
-                exclusive: &self.parts.exclusive,
-                installer: self
-                    .installer
+        if let Some((effect, _)) = self.parts.store.context_pending()? {
+            if let EffectKind::PrivateBackupEntry {
+                plan_generation, ..
+            } = effect.kind
+            {
+                let copy = self.copies.values_mut().find(|copy| {
+                    copy.source_plan_generation() == Some(plan_generation)
+                        && !copy.has_source_rotation()
+                });
+                if let Some(copy) = copy {
+                    let inputs = SourceAbortInputs {
+                        owners: source_return_inputs!(self),
+                        current_bundle: self
+                            .current_bundle
+                            .as_ref()
+                            .ok_or_else(|| error("HISTORY_SOURCE_SNAPSHOT_BLOCKED"))?,
+                        context: self
+                            .context
+                            .as_ref()
+                            .ok_or_else(|| error("HISTORY_CONTEXT_CHANGED"))?,
+                        exclusions: &self.exclusions,
+                    };
+                    retain_source_partial(
+                        &inputs,
+                        copy,
+                        &mut self.parts.store,
+                        &mut self.parts.generation,
+                    )?;
+                }
+                // A nested C1 copy belongs to its original root-rotation owner
+                // and is reconciled only by reverse_context_root below.
+            }
+        }
+        for root in [RootKind::Desk, RootKind::WebView] {
+            let Some(copy) = self
+                .copies
+                .get_mut(&root)
+                .filter(|copy| copy.has_source_rotation())
+            else {
+                continue;
+            };
+            let context = self
+                .context
+                .as_mut()
+                .ok_or_else(|| error("HISTORY_CONTEXT_CHANGED"))?;
+            let boundary = self
+                .boundary
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_SOURCE_SNAPSHOT_BLOCKED"))?;
+            let mut journal = ContextJournal::new(
+                &mut self.parts.store,
+                self.parts.installation.root().clone(),
+                &self.parts.exclusive,
+                self.parts.binding.clone(),
+                self.parts.generation,
+            )
+            .map_err(blocked)?;
+            let returned = copy.reverse_context_root(
+                context,
+                boundary,
+                &self.parts.fence.lock(),
+                &user,
+                &mut journal,
+            );
+            self.parts.generation = journal.generation();
+            drop(journal);
+            self.reversed_roots.insert(root, returned.map_err(blocked)?);
+        }
+        {
+            let inputs = SourceAbortInputs {
+                owners: source_return_inputs!(self),
+                current_bundle: self
+                    .current_bundle
                     .as_ref()
-                    .ok_or_else(|| error("HISTORY_INSTALLER_OUTCOME_UNKNOWN"))?
-                    .clone(),
-                historical: self
-                    .historical
-                    .as_ref()
-                    .ok_or_else(|| error("HISTORY_SOURCE_EXIT_UNCONFIRMED"))?
-                    .clone(),
-                package: self.parts.package.clone(),
-                scope: self.parts.scope.clone(),
-                original_bundle: self.parts.original_bundle.clone(),
-                original_context: self
-                    .originals
+                    .ok_or_else(|| error("HISTORY_SOURCE_SNAPSHOT_BLOCKED"))?,
+                context: self
+                    .context
                     .as_ref()
                     .ok_or_else(|| error("HISTORY_CONTEXT_CHANGED"))?,
-                registration: &self.parts.registration,
-                shortcuts: &self.parts.shortcuts,
-            },
+                exclusions: &self.exclusions,
+            };
+            reverse_source_fence(&inputs, &mut self.parts.store, &mut self.parts.generation)?;
+        }
+        let returned_bundle = readmit_source_bundle(
+            self.current_bundle
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_SOURCE_SNAPSHOT_BLOCKED"))?,
+            self.parts.scope.directory().clone(),
+            self.parts.scope.image_name().clone(),
+            self.parts.fence.clone(),
+            &self.parts.binding.source_bundle,
+        )?;
+        self.current_bundle = Some(returned_bundle);
+        let inputs = SourceAbortInputs {
+            owners: source_return_inputs!(self),
+            current_bundle: self
+                .current_bundle
+                .as_ref()
+                .expect("readmitted original bundle"),
+            context: self
+                .context
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_CONTEXT_CHANGED"))?,
+            exclusions: &self.exclusions,
+        };
+        publish_source_abort(inputs, &mut self.parts.store, &mut self.parts.generation)?;
+        progress.publish(&mut self.parts.store, None, &[ManagerAction::Refresh])
+    }
+    /// A known installer terminal is distinct from historical launch. This
+    /// branch requires its actual empty private job and the live unspent permit.
+    fn recover_failed_installer(&mut self, progress: &ProgressPublisher) -> Result<(), SafeError> {
+        if self.failure_recovery_started {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
+        self.failure_recovery_started = true;
+        if self.return_attempt.is_some()
+            || self.return_boundary.is_some()
+            || self.historical.is_some()
+        {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
+        self.installer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_INSTALLER_OUTCOME_UNKNOWN"))?
+            .verify()
+            .map_err(blocked)?;
+        let no_historical = self
+            .historical_launch
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_NO_HISTORICAL_LAUNCH_CHANGED"))?
+            .witness()?;
+        self.enter_failure_phase()?;
+        // The typed never-created branch will acquire its own exclusive current
+        // image fence; ordinary measured readers must be released for that cut.
+        drop(self.installed.take());
+        self.return_preparation = Some(ReturnBoundaryPreparation::new());
+        self.return_attempt = Some(
+            self.return_preparation
+                .as_mut()
+                .expect("retained failed Return preparation")
+                .prepare_failed_installer(
+                    FailedInstallerReturnInputs {
+                        binding: self.parts.binding.clone(),
+                        installation: self.parts.installation.clone(),
+                        data: self.parts.data.clone(),
+                        exclusive: &self.parts.exclusive,
+                        installer: self
+                            .installer
+                            .as_ref()
+                            .expect("observed installer terminal")
+                            .clone(),
+                        no_historical,
+                        package: self.parts.package.clone(),
+                        scope: self.parts.scope.clone(),
+                        original_bundle: self.parts.original_bundle.clone(),
+                        original_context: self
+                            .originals
+                            .as_ref()
+                            .ok_or_else(|| error("HISTORY_CONTEXT_CHANGED"))?,
+                        registration: &self.parts.registration,
+                        shortcuts: &self.parts.shortcuts,
+                    },
+                    &mut self.parts.store,
+                )?,
+        );
+        progress.publish(
             &mut self.parts.store,
-        )?);
+            None,
+            &[ManagerAction::Refresh, ManagerAction::ReturnToPrevious],
+        )?;
+        if let Some(command) = self.requested_return.take() {
+            let result = self.return_previous(&command, progress);
+            let outcome = result.as_ref().map(|_| ()).map_err(Clone::clone);
+            command.finish(result);
+            return outcome;
+        }
+        loop {
+            let command = progress.recv_command()?;
+            if let Err(failure) = command.check(&self.parts.binding, &self.parts.store) {
+                command.finish(Err(failure));
+                continue;
+            }
+            if command.action() != ManagerAction::ReturnToPrevious {
+                command.finish(Err(error("HISTORY_OPERATION_PENDING")));
+                continue;
+            }
+            let command = match command.accept_return(&self.parts.binding, &self.parts.store) {
+                Ok(command) => command,
+                Err(_) => continue,
+            };
+            let result = self.return_previous(&command, progress);
+            let outcome = result.as_ref().map(|_| ()).map_err(Clone::clone);
+            command.finish(result);
+            return outcome;
+        }
+    }
+    fn enter_failure_phase(&mut self) -> Result<(), SafeError> {
+        self.parts.store.verify_windows_binding(
+            self.parts.installation.root(),
+            &self.parts.binding,
+            self.parts.generation,
+        )?;
+        let inspected = self.parts.store.inspect(&self.parts.binding)?;
+        let journal = inspected
+            .last_valid
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?;
+        if inspected.blocked
+            || matches!(
+                journal.phase(),
+                JournalPhase::Restored | JournalPhase::PreContextAborted
+            )
+        {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
+        if journal.phase() != JournalPhase::RecoveryRequired {
+            self.parts.generation = self.parts.store.append(
+                self.parts.generation,
+                JournalEvent::Phase {
+                    phase: JournalPhase::RecoveryRequired,
+                },
+            )?;
+        }
+        publish_checkpoint(
+            &self.parts.installation,
+            &self.parts.control,
+            &self.parts.binding,
+            &mut self.parts.store,
+        )
+    }
+    fn return_previous(
+        &mut self,
+        command: &AcceptedManagerReturn,
+        progress: &ProgressPublisher,
+    ) -> Result<ManagerStatus, SafeError> {
+        command.verify(
+            &self.parts.binding,
+            &self.parts.store,
+            self.parts.generation,
+        )?;
+        self.verify()?;
+        let user = CurrentUser::capture().map_err(blocked)?;
+        if self.return_attempt.is_none() {
+            if self.return_preparation.is_some() {
+                return Err(error("HISTORY_RECOVERY_REQUIRED"));
+            }
+            self.return_preparation = Some(ReturnBoundaryPreparation::new());
+            self.return_attempt = Some(
+                self.return_preparation
+                    .as_mut()
+                    .expect("retained normal Return preparation")
+                    .prepare_normal(
+                        ReturnBoundaryInputs {
+                            binding: self.parts.binding.clone(),
+                            installation: self.parts.installation.clone(),
+                            data: self.parts.data.clone(),
+                            exclusive: &self.parts.exclusive,
+                            installer: self
+                                .installer
+                                .as_ref()
+                                .ok_or_else(|| error("HISTORY_INSTALLER_OUTCOME_UNKNOWN"))?
+                                .clone(),
+                            historical: self
+                                .historical
+                                .as_ref()
+                                .ok_or_else(|| error("HISTORY_SOURCE_EXIT_UNCONFIRMED"))?
+                                .clone(),
+                            package: self.parts.package.clone(),
+                            scope: self.parts.scope.clone(),
+                            original_bundle: self.parts.original_bundle.clone(),
+                            original_context: self
+                                .originals
+                                .as_ref()
+                                .ok_or_else(|| error("HISTORY_CONTEXT_CHANGED"))?,
+                            registration: &self.parts.registration,
+                            shortcuts: &self.parts.shortcuts,
+                        },
+                        &mut self.parts.store,
+                    )?,
+            );
+        }
         // Review generation and original native document are checked again at
         // the first return mutation. A stale queued click cannot start fencing.
-        command.check(&self.parts.binding, &self.parts.store)?;
+        command.verify(
+            &self.parts.binding,
+            &self.parts.store,
+            self.parts.generation,
+        )?;
         self.reserve
             .as_ref()
             .ok_or_else(|| error("HISTORY_ABORT_RESERVE_UNAVAILABLE"))?
@@ -1572,21 +2285,62 @@ pub(crate) fn run_acquired(
     owner: Arc<Mutex<InitialManager>>,
     progress: ProgressPublisher,
 ) -> Result<(), CoordinatorFailure> {
+    let no_source_launch = SourceNoLaunch::capture(&parts);
     let mut source = Box::new(SourceExecution::new(parts));
+    let no_source_launch = match no_source_launch {
+        Ok(proof) => proof,
+        Err(failure) => {
+            progress.fail(failure.clone());
+            return Err(CoordinatorFailure {
+                error: failure,
+                source,
+            });
+        }
+    };
+    source.no_source_launch = Some(no_source_launch);
     let result = (|| {
         source.prepare_source(&progress)?;
         source.seal_and_create_fresh(&progress)?;
         let initial = owner.lock();
-        source.install(&initial, &progress)?;
+        if matches!(
+            source.install(&initial, &progress)?,
+            InstallerStage::ReturnRequested
+        ) {
+            return source.recover_failed_installer(&progress);
+        }
         let command = source.launch_and_wait_for_return(&initial, &progress)?;
         let result = source.return_previous(&command, &progress);
         let outcome = result.as_ref().map(|_| ()).map_err(Clone::clone);
         command.finish(result);
         outcome
     })();
+    let result = match result {
+        Err(_)
+            if !source.failure_recovery_started
+                && source.installer.is_some()
+                && source.historical.is_none()
+                && source.return_attempt.is_none()
+                && source.return_boundary.is_none() =>
+        {
+            source.recover_failed_installer(&progress)
+        }
+        Err(_)
+            if !source.failure_recovery_started
+                && source.installer.is_none()
+                && source.historical.is_none()
+                && source.return_attempt.is_none()
+                && source.return_boundary.is_none() =>
+        {
+            source.recover_source_failure(&progress)
+        }
+        result => result,
+    };
     match result {
         Ok(()) => Ok(()),
         Err(failure) => {
+            if let Some(command) = source.requested_return.take() {
+                command.finish(Err(failure.clone()));
+            }
             progress.fail(failure.clone());
             Err(CoordinatorFailure {
                 error: failure,

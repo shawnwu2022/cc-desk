@@ -117,6 +117,9 @@ mod version_history_download;
 mod version_history_classes_alias;
 mod version_history_registration_journal;
 mod version_history_runtime;
+mod version_history_source_failure_journal;
+#[cfg(windows)]
+mod version_history_source_partial_windows;
 mod version_history_transaction;
 
 #[cfg(windows)]

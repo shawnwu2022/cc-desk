@@ -157,6 +157,10 @@ pub(crate) fn validate_id(value: &str) -> Result<(), SafeError> {
 type ContextInverse = (Option<String>, Option<(EffectSpec, u64)>);
 #[cfg(windows)]
 type ContextRootOutcome = Option<(EffectSpec, u64, bool)>;
+#[cfg(windows)]
+type SourcePreservationOutcome = Option<(EffectSpec, u64, Option<Observation>)>;
+#[cfg(windows)]
+type SourceFenceOutcome = Option<(EffectSpec, u64, String)>;
 
 pub(super) fn validate_digest(value: &str) -> Result<(), SafeError> {
     if value.len() != 64
@@ -509,6 +513,13 @@ pub(crate) struct BundleBackupPlan {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum JournalEvent {
+    RetainSourcePartial {
+        effect_id: String,
+        intent_generation: u64,
+        partial_manifest: String,
+        source_manifest: String,
+        receipt: String,
+    },
     AdmitBundleStart {
         seed: String,
         current_manifest: String,
@@ -650,6 +661,16 @@ struct AbortReceipt {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SourcePartialReceipt {
+    schema: u32,
+    anchor: AdmissionAnchor,
+    effect_id: String,
+    intent_generation: u64,
+    partial_manifest: String,
+    source_manifest: String,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CompensationReceipt {
     schema: u32,
     anchor: AdmissionAnchor,
@@ -735,20 +756,26 @@ pub(crate) struct PreContextAbortProof<'a> {
     guards: Box<dyn LiveAbortGuards + 'a>,
 }
 trait LiveAbortGuards {
-    fn verify(&self) -> Result<(), SafeError>;
+    fn verify(&self, store: &mut JournalStore) -> Result<(), SafeError>;
 }
 #[cfg(test)]
 struct FixtureAbortGuards;
 #[cfg(test)]
 impl LiveAbortGuards for FixtureAbortGuards {
-    fn verify(&self) -> Result<(), SafeError> {
+    fn verify(&self, _store: &mut JournalStore) -> Result<(), SafeError> {
         Ok(())
     }
 }
 #[cfg(windows)]
 impl LiveAbortGuards for super::windows::pre_context_abort::PrivateAbortEvidence<'_> {
-    fn verify(&self) -> Result<(), SafeError> {
+    fn verify(&self, _store: &mut JournalStore) -> Result<(), SafeError> {
         super::windows::pre_context_abort::PrivateAbortEvidence::verify(self)
+    }
+}
+#[cfg(windows)]
+impl LiveAbortGuards for super::windows::source_failure::SourceAbortEvidence<'_> {
+    fn verify(&self, store: &mut JournalStore) -> Result<(), SafeError> {
+        super::windows::source_failure::SourceAbortEvidence::verify_current(self, store)
     }
 }
 /// No production constructor or Deserialize. Missing process/job identity must
@@ -914,6 +941,32 @@ impl SwitchJournal {
         }
         match event {
             JournalEvent::Begin { .. } => return Err(error("HISTORY_JOURNAL_INVALID")),
+            JournalEvent::RetainSourcePartial {
+                effect_id,
+                intent_generation,
+                partial_manifest,
+                source_manifest,
+                receipt,
+            } => {
+                for digest in [partial_manifest, source_manifest, receipt] {
+                    validate_digest(digest)?;
+                }
+                let effect = self
+                    .effects
+                    .get(effect_id)
+                    .ok_or_else(|| error("HISTORY_EFFECT_CHANGED"))?;
+                if !self.source_return_phase()
+                    || self.pending.as_deref() != Some(effect_id.as_str())
+                    || effect.intent_generation != *intent_generation
+                    || !matches!(effect.spec.kind, EffectKind::PrivateBackupEntry { .. })
+                    || effect
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| result.observation != Observation::Unknown)
+                {
+                    return Err(error("HISTORY_EARLY_ABORT_BLOCKED"));
+                }
+            }
             JournalEvent::PrivateBackupPlan {
                 manifest,
                 effects,
@@ -1064,7 +1117,7 @@ impl SwitchJournal {
                         .copied()
                         .unwrap_or(0),
                 );
-                if !self.source_was_sealed
+                if (!self.source_was_sealed && !self.preinstall_return_only)
                     || !self.manifests.contains_key(&ManifestRole::SourceContext)
                     || self
                         .manifests
@@ -1139,8 +1192,18 @@ impl SwitchJournal {
                 if roots.len() != 2
                     || !roots.contains_key(&RootKind::Desk)
                     || !roots.contains_key(&RootKind::WebView)
-                    || !self.source_was_sealed
+                    || (!self.source_was_sealed
+                        && (!matches!(
+                            self.phase,
+                            JournalPhase::Reviewed | JournalPhase::RecoveryRequired
+                        ) || self
+                            .manifests
+                            .contains_key(&ManifestRole::FreshTargetContext)
+                            || self.effects.values().any(|effect| {
+                                matches!(effect.spec.kind, EffectKind::CreateFreshRoot { .. })
+                            })))
                     || !self.preserved(&self.binding.source_context)
+                    || !self.applied(EffectKind::VerifySourceBundleCopy)
                     || ![
                         ManifestRole::SourceContext,
                         ManifestRole::SourceBundle,
@@ -1152,7 +1215,8 @@ impl SwitchJournal {
                     || !self.applied(EffectKind::FenceSourceImage)
                     || !matches!(
                         self.phase,
-                        JournalPhase::SourceSealed
+                        JournalPhase::Reviewed
+                            | JournalPhase::SourceSealed
                             | JournalPhase::FreshReady
                             | JournalPhase::RecoveryRequired
                     )
@@ -1247,7 +1311,7 @@ impl SwitchJournal {
                 if !matches!(original.spec.kind, EffectKind::RotateSourceRoot { .. })
                     || original.intent_generation != plan.original_intent_generation
                     || !self.admitted_root_reversals.contains_key(&plan.original_effect_id)
-                    || !self.context_return_only || !self.pre_context_phase()
+                    || !self.context_return_only || !self.source_return_phase()
                     || plan.effects == 0 || plan.effects > 100_000
                     || plan.recovery_dependencies as usize != remaining
                     || prior.map(|(generation, _)| *generation) != plan.prior_plan_generation
@@ -1295,7 +1359,7 @@ impl SwitchJournal {
                         .is_some_and(|result| result.observation != Observation::Unknown)
                     || self.returned_reversals.contains(effect_id)
                     || !self.context_return_only
-                    || !self.pre_context_phase()
+                    || !self.source_return_phase()
                 {
                     return Err(error("HISTORY_CONTEXT_REVERSE_BLOCKED"));
                 }
@@ -1322,7 +1386,7 @@ impl SwitchJournal {
                     })
                     || self.admitted_root_reversals.contains_key(effect_id)
                     || self.has_historical_uncertainty()
-                    || !self.pre_context_phase()
+                    || !self.source_return_phase()
                 {
                     return Err(error("HISTORY_CONTEXT_REVERSE_BLOCKED"));
                 }
@@ -1591,6 +1655,7 @@ impl SwitchJournal {
                     | JournalEvent::CompleteLaterBackup { .. }
                     | JournalEvent::PrepareBundleBackup { .. }
                     | JournalEvent::AdmitBundleStart { .. }
+                    | JournalEvent::RetainSourcePartial { .. }
             )
         {
             WriteLane::Recovery
@@ -1603,6 +1668,21 @@ impl SwitchJournal {
         self.recovering |= self.lane(&event) == WriteLane::Recovery;
         match event {
             JournalEvent::Begin { .. } => unreachable!("genesis is not an appended event"),
+            JournalEvent::RetainSourcePartial { effect_id, .. } => {
+                let effect = self
+                    .effects
+                    .get_mut(&effect_id)
+                    .expect("validated private effect");
+                if effect.result.is_none() {
+                    effect.result = Some(ObservedResult {
+                        observation: Observation::Unknown,
+                        receipt: None,
+                    });
+                }
+                self.pending = None;
+                self.context_return_only = true;
+                self.phase = JournalPhase::RecoveryRequired;
+            }
             JournalEvent::PrivateBackupPlan {
                 manifest,
                 recovery_dependencies,
@@ -1901,7 +1981,7 @@ impl SwitchJournal {
     }
     fn can_abort_pre_context(&self) -> bool {
         if self.has_historical_uncertainty()
-            || !self.pre_context_phase()
+            || !self.source_return_phase()
             || self.pending.as_ref().is_some_and(|pending| {
                 !matches!(
                     self.effects[pending].spec.kind,
@@ -1928,6 +2008,32 @@ impl SwitchJournal {
                 _ => false,
             }
         })
+    }
+    /// SourceContext is an observation captured before the first root move.
+    /// Its presence alone is not evidence that the source was sealed. Only
+    /// same-process native guards may admit this broader pre-seal abort lane.
+    fn source_return_phase(&self) -> bool {
+        matches!(
+            self.phase,
+            JournalPhase::Reviewed | JournalPhase::RecoveryRequired
+        ) && !self.source_was_sealed
+            && ![
+                ManifestRole::FreshTargetContext,
+                ManifestRole::RetainedTargetContext,
+            ]
+            .into_iter()
+            .any(|role| self.manifests.contains_key(&role))
+            && self.effects.values().all(|effect| {
+                matches!(
+                    effect.spec.kind,
+                    EffectKind::PrivateBackupEntry { .. }
+                        | EffectKind::VerifySourceBundleCopy
+                        | EffectKind::FenceSourceImage
+                        | EffectKind::RotateSourceRoot { .. }
+                        | EffectKind::ReverseSourceRoot { .. }
+                        | EffectKind::ReverseSourceFence { .. }
+                )
+            })
     }
     fn can_abort_private_only(&self) -> bool {
         self.pre_context_phase()
@@ -1981,6 +2087,9 @@ impl SwitchJournal {
                 self.phase == JournalPhase::Restoring
                     && self.manifests.get(&ManifestRole::Shortcuts) == Some(manifest)
             }
+            EffectKind::ReverseSourceFence { .. } => {
+                self.preinstall_return_only && self.phase == JournalPhase::Restoring
+            }
             EffectKind::VerifySourceBundleRestore
             | EffectKind::RestoreSourceRoot { .. }
             | EffectKind::VerifyRegistrationRestore { .. }
@@ -1996,6 +2105,7 @@ impl SwitchJournal {
                 context == &self.binding.source_context && self.phase == JournalPhase::Restoring
             }
             EffectKind::RestoreSourceRoot { .. }
+            | EffectKind::ReverseSourceFence { .. }
             | EffectKind::VerifySourceBundleRestore
             | EffectKind::RecoveryRegistrationEntry { .. }
             | EffectKind::RecoveryShortcutEntry { .. }
@@ -2379,6 +2489,107 @@ impl JournalStore {
             return Err(error("HISTORY_CONTEXT_RETURN_BLOCKED"));
         }
         Ok(())
+    }
+    /// Actual intent history, including failed/unknown creation, closes the
+    /// no-launch lane. A missing process owner is never negative evidence.
+    #[cfg(windows)]
+    pub(crate) fn verify_no_historical_launch(
+        &self,
+        exact_generation: u64,
+    ) -> Result<(), SafeError> {
+        self.check_writer_current()?;
+        let journal = &self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?
+            .journal;
+        if journal.generation != exact_generation
+            || journal.effects.values().any(|effect| {
+                matches!(
+                    effect.spec.kind,
+                    EffectKind::HistoricalCreateSuspended
+                        | EffectKind::HistoricalResume
+                        | EffectKind::HistoricalTerminalOutcome
+                        | EffectKind::ConfirmFirstLaunch
+                )
+            })
+        {
+            return Err(error("HISTORY_CONTEXT_RETURN_BLOCKED"));
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    pub(crate) fn verify_no_source_launch(
+        &self,
+        binding: &JournalBinding,
+        exact_generation: u64,
+    ) -> Result<(), SafeError> {
+        self.verify_no_historical_launch(exact_generation)?;
+        let journal = &self.writer.as_ref().expect("checked writer").journal;
+        if journal.binding() != binding
+            || journal.effects.values().any(|effect| {
+                matches!(
+                    effect.spec.kind,
+                    EffectKind::InstallerCreateSuspended
+                        | EffectKind::InstallerResume
+                        | EffectKind::InstallerTerminalOutcome
+                        | EffectKind::VerifyTargetBundle
+                )
+            })
+        {
+            return Err(error("HISTORY_EARLY_ABORT_BLOCKED"));
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    pub(crate) fn source_fence_for_reverse(
+        &self,
+        binding: &JournalBinding,
+        generation: u64,
+    ) -> Result<SourceFenceOutcome, SafeError> {
+        self.verify_no_source_launch(binding, generation)?;
+        let journal = &self.writer.as_ref().expect("checked writer").journal;
+        if !(journal.source_return_phase()
+            || (journal.preinstall_return_only && journal.phase == JournalPhase::Restoring))
+            || journal.pending.is_some()
+            || journal
+                .effects
+                .values()
+                .any(|effect| matches!(effect.spec.kind, EffectKind::ReverseSourceFence { .. }))
+        {
+            return Err(error("HISTORY_EARLY_ABORT_BLOCKED"));
+        }
+        let mut fences = journal
+            .effects
+            .values()
+            .filter(|effect| effect.spec.kind == EffectKind::FenceSourceImage);
+        let Some(original) = fences.next() else {
+            return Ok(None);
+        };
+        if fences.next().is_some() {
+            return Err(error("HISTORY_EARLY_ABORT_BLOCKED"));
+        }
+        let result = original
+            .result
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_EARLY_ABORT_BLOCKED"))?;
+        if result.observation != Observation::Applied {
+            return Err(error("HISTORY_EARLY_ABORT_BLOCKED"));
+        }
+        let receipt: EffectReceipt = serde_json::from_slice(
+            &self.read_manifest(
+                result
+                    .receipt
+                    .as_ref()
+                    .ok_or_else(|| error("HISTORY_EARLY_ABORT_BLOCKED"))?,
+            )?,
+        )
+        .map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
+        Ok(Some((
+            original.spec.clone(),
+            original.intent_generation,
+            receipt.observed_manifest,
+        )))
     }
     #[cfg(windows)]
     pub(crate) fn admit_context_capacity(
@@ -3105,6 +3316,31 @@ impl JournalStore {
             .cloned())
     }
     #[cfg(windows)]
+    pub(crate) fn source_preservation(
+        &self,
+        root: RootKind,
+    ) -> Result<SourcePreservationOutcome, SafeError> {
+        self.check_writer_current()?;
+        let journal = &self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?
+            .journal;
+        let mut matches = journal.effects.values().filter(|effect| matches!(&effect.spec.kind,
+            EffectKind::PreserveRoot { context, root: observed } if context == &journal.binding.source_context && *observed == root));
+        let result = matches.next().map(|effect| {
+            (
+                effect.spec.clone(),
+                effect.intent_generation,
+                effect.result.as_ref().map(|result| result.observation),
+            )
+        });
+        if matches.next().is_some() {
+            return Err(error("HISTORY_CONTEXT_CHANGED"));
+        }
+        Ok(result)
+    }
+    #[cfg(windows)]
     pub(crate) fn latest_context_root_effect(
         &self,
         kind: &EffectKind,
@@ -3602,6 +3838,7 @@ impl JournalStore {
                 | JournalEvent::CompleteLaterBackup { .. }
                 | JournalEvent::PrepareBundleBackup { .. }
                 | JournalEvent::AdmitBundleStart { .. }
+                | JournalEvent::RetainSourcePartial { .. }
         ) {
             return Err(error("HISTORY_LIVE_EVIDENCE_REQUIRED"));
         }
@@ -3644,12 +3881,89 @@ impl JournalStore {
             guards: Box::new(evidence),
         })
     }
+    #[cfg(windows)]
+    pub(crate) fn admit_source_abort<'a>(
+        &mut self,
+        evidence: super::windows::source_failure::SourceAbortEvidence<'a>,
+    ) -> Result<PreContextAbortProof<'a>, SafeError> {
+        self.check_writer_current()?;
+        let state = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?;
+        if evidence.binding() != state.journal.binding() || !state.journal.can_abort_pre_context() {
+            return Err(error("HISTORY_EARLY_ABORT_BLOCKED"));
+        }
+        let anchor = AdmissionAnchor {
+            binding: state.journal.binding.clone(),
+            generation: state.journal.generation,
+            head: state.head.clone(),
+            journal_identity: state.identity.clone(),
+        };
+        evidence.verify_writer(self, anchor.generation)?;
+        let [bundle, roots, registration, quiescence] = evidence.observations(self)?;
+        let unchanged = UnchangedSourceObservations {
+            bundle: self.retain_manifest_in_lane(&bundle, true)?,
+            roots: self.retain_manifest_in_lane(&roots, true)?,
+            registration: self.retain_manifest_in_lane(&registration, true)?,
+            quiescence: self.retain_manifest_in_lane(&quiescence, true)?,
+        };
+        evidence.verify_writer(self, anchor.generation)?;
+        Ok(PreContextAbortProof {
+            anchor,
+            unchanged,
+            guards: Box::new(evidence),
+        })
+    }
+    #[cfg(windows)]
+    pub(crate) fn retain_source_partial(
+        &mut self,
+        evidence: &super::windows::source_failure::SourcePartialEvidence<'_>,
+    ) -> Result<u64, SafeError> {
+        let request = evidence.verify(self)?;
+        self.admit_context_capacity_lane(request.generation, 1, 3, true)?;
+        let state = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?;
+        let anchor = AdmissionAnchor {
+            binding: state.journal.binding.clone(),
+            generation: state.journal.generation,
+            head: state.head.clone(),
+            journal_identity: state.identity.clone(),
+        };
+        let partial_manifest = self.retain_manifest_in_lane(&request.partial, true)?;
+        let source_manifest = self.retain_manifest_in_lane(&request.source, true)?;
+        let receipt = SourcePartialReceipt {
+            schema: 1,
+            anchor,
+            effect_id: request.effect_id.clone(),
+            intent_generation: request.intent_generation,
+            partial_manifest: partial_manifest.clone(),
+            source_manifest: source_manifest.clone(),
+        };
+        let receipt = self.retain_manifest_in_lane(
+            &serde_json::to_vec(&receipt).map_err(|_| error("HISTORY_RECEIPT_INVALID"))?,
+            true,
+        )?;
+        evidence.verify(self)?;
+        self.append_admitted(
+            request.generation,
+            JournalEvent::RetainSourcePartial {
+                effect_id: request.effect_id,
+                intent_generation: request.intent_generation,
+                partial_manifest,
+                source_manifest,
+                receipt,
+            },
+        )
+    }
     pub(crate) fn abort_pre_context(
         &mut self,
         proof: &PreContextAbortProof<'_>,
     ) -> Result<u64, SafeError> {
         self.check_admission_anchor(&proof.anchor)?;
-        proof.guards.verify()?;
+        proof.guards.verify(self)?;
         let receipt = AbortReceipt {
             schema: 1,
             anchor: proof.anchor.clone(),
@@ -3669,7 +3983,7 @@ impl JournalStore {
         }
         self.retain_manifest_in_lane(&bytes, true)?;
         let generation = self.append_admitted(proof.anchor.generation, event)?;
-        proof.guards.verify()?;
+        proof.guards.verify(self)?;
         Ok(generation)
     }
     pub(crate) fn compensate_unknown(
@@ -3929,6 +4243,28 @@ impl JournalStore {
         identity: &str,
     ) -> Result<(), SafeError> {
         match event {
+            JournalEvent::RetainSourcePartial {
+                effect_id,
+                intent_generation,
+                partial_manifest,
+                source_manifest,
+                receipt,
+            } => {
+                let saved: SourcePartialReceipt =
+                    serde_json::from_slice(&self.protect_manifest(receipt)?)
+                        .map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
+                if saved.schema != 1
+                    || !saved.anchor.matches(journal, head, identity)
+                    || &saved.effect_id != effect_id
+                    || saved.intent_generation != *intent_generation
+                    || &saved.partial_manifest != partial_manifest
+                    || &saved.source_manifest != source_manifest
+                {
+                    return Err(error("HISTORY_RECEIPT_INVALID"));
+                }
+                self.protect_manifest(partial_manifest)?;
+                self.protect_manifest(source_manifest)?;
+            }
             JournalEvent::PrivateBackupPlan {
                 manifest: digest, ..
             }

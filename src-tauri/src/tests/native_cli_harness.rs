@@ -182,7 +182,22 @@ pub(crate) fn spawn_probe(
     watchdog
         .join()
         .map_err(|_| "probe watchdog thread panicked".to_string())?;
-    write_result?;
+    if let Err(failure) = write_result {
+        // The fixture output may contain paths or inherited environment error
+        // text. Report only bounded observations, never raw terminal contents.
+        let bytes = output.lock().map_err(|_| "output lock poisoned")?;
+        return Err(format!(
+            "{failure}; ready_timeout_ms={}; ready_after_wait={}; report_exists={}; child_exit={:?}; output_bytes={}; probe_error_marker={}; node_error_marker={}; cursor_query={}",
+            PROBE_READY_TIMEOUT.as_millis(),
+            ready_path.exists(),
+            report_path.exists(),
+            status.as_ref().ok().map(|status| status.exit_code()),
+            bytes.len(),
+            find_subslice(&bytes, b"probe error:").is_some(),
+            find_subslice(&bytes, b"node:internal").is_some(),
+            find_subslice(&bytes, b"\x1b[6n").is_some(),
+        ));
+    }
     reader_result?;
     let status = status?;
     let exit_code = status.exit_code();

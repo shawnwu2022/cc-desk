@@ -23,7 +23,10 @@ use std::{
         io::OwnedHandle,
     },
     path::Path,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 use windows::Win32::{
     Foundation::{
@@ -782,6 +785,10 @@ pub(crate) struct PreparedProcess<'lease> {
     intent: DurableRecord,
     identity_persisted: bool,
     resume_attempted: bool,
+    cancel_attempted: bool,
+    cancel_identity: Option<Arc<DurableProcessIdentity>>,
+    cancel_intent: Option<Arc<DurableRecord>>,
+    cancel_custody_attempted: AtomicBool,
     resume_intent: Option<DurableRecord>,
     historical_lifetime: Option<DurableRecord>,
     lease: &'lease mut ExclusiveLease,
@@ -922,6 +929,10 @@ impl<'lease> PreparedProcess<'lease> {
             intent,
             identity_persisted: false,
             resume_attempted: false,
+            cancel_attempted: false,
+            cancel_identity: None,
+            cancel_intent: None,
+            cancel_custody_attempted: AtomicBool::new(false),
             resume_intent: None,
             historical_lifetime: None,
             lease,
@@ -932,7 +943,7 @@ impl<'lease> PreparedProcess<'lease> {
         &mut self,
         user: &CurrentUser,
     ) -> io::Result<DurableProcessIdentity> {
-        if self.identity_persisted || self.resume_attempted {
+        if self.identity_persisted || self.resume_attempted || self.cancel_attempted {
             return Err(blocked("process identity was already persisted"));
         }
         self.intent.verify()?;
@@ -958,11 +969,18 @@ impl<'lease> PreparedProcess<'lease> {
         Ok(DurableProcessIdentity { record, binding })
     }
     fn commit_resume_intent(&mut self, receipt: &DurableProcessIdentity) -> io::Result<()> {
+        if self.resume_attempted || self.cancel_attempted {
+            return Err(blocked(
+                "process resume or cancellation was already attempted",
+            ));
+        }
+        // A failed call is still an attempt. Set this BEFORE validation or a
+        // durable record write can fail; no such failure authorizes cleanup.
+        self.resume_attempted = true;
         self.lease.verify()?;
         receipt.record.verify()?;
         self.intent.verify()?;
-        if self.resume_attempted
-            || !self.identity_persisted
+        if !self.identity_persisted
             || receipt.binding.launch != self.launch
             || receipt.binding.process != self.process.identity
             || receipt.binding.intent != self.intent.digest()
@@ -993,7 +1011,6 @@ impl<'lease> PreparedProcess<'lease> {
         // before-disarm/call from after-call. Never explicitly terminate or retry
         // from this state. The still-armed job remains safe until disarm starts:
         // ResumeThread is unreachable before disarm and its successful readback.
-        self.resume_attempted = true;
         Ok(())
     }
     fn prepare_historical_lifetime(&mut self, receipt: &DurableProcessIdentity) -> io::Result<()> {
@@ -1032,13 +1049,101 @@ impl<'lease> PreparedProcess<'lease> {
         Ok(())
     }
     pub(crate) fn cancel_before_resume(&mut self) -> io::Result<TerminalReceipt> {
-        if self.resume_attempted {
+        if self.resume_attempted || self.cancel_attempted {
             return Err(blocked("historical process may have begun user work"));
         }
+        // Spend before ALL native/record work. A failed cleanup write or call
+        // cannot be retried, resumed, or silently repeated by Drop.
+        self.cancel_attempted = true;
+        let user = CurrentUser::capture()?;
+        self.verify_never_resumed_owner(&user)?;
+        let binding = self.created_identity_binding();
+        let record = DurableRecord::create(
+            self.root.clone(),
+            ComponentName::new(OsStr::new(&format!("cancel-identity-{}.json", self.launch)))?,
+            &serde_json::to_vec(&binding).map_err(io::Error::other)?,
+            &user,
+        )?;
+        self.cancel_identity = Some(Arc::new(DurableProcessIdentity { record, binding }));
+        let identity = self
+            .cancel_identity
+            .as_ref()
+            .expect("held cancellation identity");
+        let intent = CancellationIntentBinding {
+            schema: 1,
+            launch: self.launch.clone(),
+            identity_receipt: identity.record.digest().into(),
+            operation: "cancel-never-resumed".into(),
+        };
+        self.cancel_intent = Some(Arc::new(DurableRecord::create(
+            self.root.clone(),
+            ComponentName::new(OsStr::new(&format!("cancel-intent-{}.json", self.launch)))?,
+            &serde_json::to_vec(&intent).map_err(io::Error::other)?,
+            &user,
+        )?));
+        self.verify_never_resumed_owner(&user)?;
         stop_never_resumed(handle(&self.process.process))?;
         self.process
             .terminal(0)?
             .ok_or_else(|| blocked("never-resumed cleanup is unresolved"))
+    }
+    /// Derived only from this original creation owner, never a caller boolean
+    /// or missing PID/record. No attempted resume or cancellation is eligible.
+    pub(crate) fn can_cancel_before_resume(&self) -> io::Result<bool> {
+        if self.resume_attempted || self.cancel_attempted {
+            return Ok(false);
+        }
+        self.verify_never_resumed_owner(&CurrentUser::capture()?)?;
+        Ok(true)
+    }
+    fn created_identity_binding(&self) -> IdentityBinding {
+        IdentityBinding {
+            schema: 3,
+            launch: self.launch.clone(),
+            intent: self.intent.digest().into(),
+            process: self.process.identity.clone(),
+            command_digest: self.command_digest.clone(),
+            job: self.job.identity.clone(),
+            job_phase: JobPhase::ArmedPreparation,
+            lease: self.lease.identity().clone(),
+        }
+    }
+    fn verify_never_resumed_owner(&self, user: &CurrentUser) -> io::Result<()> {
+        self.lease.verify()?;
+        self.root.verify(user)?;
+        self.intent.verify()?;
+        self.process._image.verify()?;
+        user.verify_private_job(handle(&self.job.handle))?;
+        self.job.verify_limits()?;
+        let intent: LaunchIntent =
+            serde_json::from_slice(self.intent.bytes()).map_err(io::Error::other)?;
+        if self.resume_attempted
+            || self.resume_intent.is_some()
+            || self.historical_lifetime.is_some()
+            || self.job.phase != Some(JobPhase::ArmedPreparation)
+            || self.job.identity.owner != user.sid_text()
+            || self.intent.root_identity() != self.root.directory().identity()
+            || intent.schema != 3
+            || intent.launch != self.launch
+            || intent.image != self.process.identity.image
+            || intent.image_digest != self.process.identity.image_digest
+            || intent.command_digest != self.command_digest
+            || intent.job != self.job.identity
+            || intent.job_phase != JobPhase::ArmedPreparation
+            || &intent.lease != self.lease.identity()
+        {
+            return Err(blocked("never-resumed original creation custody changed"));
+        }
+        if self.process.terminal(0)?.is_none() {
+            self.job.contains(&self.process)?;
+            if self.job.only_member()? != self.process.pid() {
+                return Err(blocked("never-resumed private job has another child"));
+            }
+            if let Some(manager) = self.manager_job {
+                manager.verify_child_outside(&self.process)?;
+            }
+        }
+        Ok(())
     }
     pub(crate) fn launch_record(&self) -> (String, String) {
         (
@@ -1102,6 +1207,9 @@ impl<'lease> PreparedProcess<'lease> {
         receipt: &DurableProcessIdentity,
         user: &CurrentUser,
     ) -> io::Result<Option<TerminalProcessJob>> {
+        if self.cancel_attempted {
+            return self.observe_cancelled_terminal(Some(receipt), user);
+        }
         self.lease.verify()?;
         self.root.verify(user)?;
         self.intent.verify()?;
@@ -1201,6 +1309,7 @@ impl<'lease> PreparedProcess<'lease> {
             job_phase: phase,
             active_processes: 0,
             historical_lifetime,
+            cancellation_intent: None,
         };
         let record = DurableRecord::create(
             self.root.clone(),
@@ -1217,6 +1326,142 @@ impl<'lease> PreparedProcess<'lease> {
             record,
             binding,
             root: self.root.clone(),
+            cancellation: None,
+        };
+        result.verify()?;
+        Ok(Some(result))
+    }
+    /// A distinct typed result proves cancellation preceded every resume call.
+    /// The ordinary terminal guard alone must never justify NotApplied resume.
+    pub(crate) fn observe_cancelled_before_resume(
+        &self,
+        receipt: Option<&DurableProcessIdentity>,
+        user: &CurrentUser,
+    ) -> io::Result<Option<CancelledBeforeResume>> {
+        if !self.cancel_attempted || self.resume_attempted {
+            return Err(blocked("owned never-resumed cancellation was not admitted"));
+        }
+        let terminal = match receipt {
+            Some(receipt) => self.observe_terminal_guard(receipt, user)?,
+            None => self.observe_cancelled_terminal(None, user)?,
+        };
+        terminal
+            .map(|terminal| {
+                let result = CancelledBeforeResume { terminal };
+                result.verify()?;
+                Ok(result)
+            })
+            .transpose()
+    }
+    fn observe_cancelled_terminal(
+        &self,
+        receipt: Option<&DurableProcessIdentity>,
+        user: &CurrentUser,
+    ) -> io::Result<Option<TerminalProcessJob>> {
+        self.verify_never_resumed_owner(user)?;
+        if !self.cancel_attempted {
+            return Err(blocked("cancellation has not been attempted"));
+        }
+        let identity = self
+            .cancel_identity
+            .as_ref()
+            .ok_or_else(|| blocked("cancellation identity is unresolved"))?;
+        let intent = self
+            .cancel_intent
+            .as_ref()
+            .ok_or_else(|| blocked("cancellation intent is unresolved"))?;
+        identity.record.verify()?;
+        intent.verify()?;
+        if identity.binding != self.created_identity_binding()
+            || identity.record.root_identity() != self.root.directory().identity()
+            || intent.root_identity() != self.root.directory().identity()
+        {
+            return Err(blocked("cancellation belongs to another creation"));
+        }
+        let expected_intent = CancellationIntentBinding {
+            schema: 1,
+            launch: self.launch.clone(),
+            identity_receipt: identity.record.digest().into(),
+            operation: "cancel-never-resumed".into(),
+        };
+        if serde_json::from_slice::<CancellationIntentBinding>(intent.bytes())
+            .map_err(io::Error::other)?
+            != expected_intent
+        {
+            return Err(blocked("cancellation intent binding differs"));
+        }
+        let original_process_receipt = match receipt {
+            Some(receipt) => {
+                receipt.record.verify()?;
+                if !self.identity_persisted
+                    || receipt.binding != identity.binding
+                    || receipt.record.root_identity() != self.root.directory().identity()
+                {
+                    return Err(blocked("cancellation process receipt differs"));
+                }
+                Some(receipt.record.digest().to_owned())
+            }
+            None => {
+                if self.identity_persisted {
+                    return Err(blocked("existing exact process receipt must be retained"));
+                }
+                None
+            }
+        };
+        let Some(terminal) = self.process.terminal(0)? else {
+            return Ok(None);
+        };
+        if self.job.active_processes()? != 0 {
+            return Ok(None);
+        }
+        // Spend before reopening custody or writing its record. Failure cannot
+        // repeat cancellation or overwrite/recreate an uncertain receipt.
+        if self.cancel_custody_attempted.swap(true, Ordering::SeqCst) {
+            return Err(blocked(
+                "cancellation terminal custody was already attempted",
+            ));
+        }
+        let job = PrivateJob::open_recorded(&self.job.identity, JobPhase::ArmedPreparation, user)?;
+        if job.active_processes()? != 0 {
+            return Err(blocked("cancelled private job changed"));
+        }
+        let process = self.process.retain_terminal()?;
+        let binding = TerminalCustodyBinding {
+            schema: 1,
+            launch: self.launch.clone(),
+            root: self.root.directory().identity().clone(),
+            launch_intent: self.intent.digest().into(),
+            process_receipt: original_process_receipt
+                .clone()
+                .unwrap_or_else(|| identity.record.digest().into()),
+            process: terminal.identity,
+            exit_code: terminal.exit_code,
+            job: self.job.identity.clone(),
+            job_phase: JobPhase::ArmedPreparation,
+            active_processes: 0,
+            historical_lifetime: None,
+            cancellation_intent: Some(intent.digest().into()),
+        };
+        let record = DurableRecord::create(
+            self.root.clone(),
+            ComponentName::new(OsStr::new(&format!(
+                "terminal-custody-{}.json",
+                self.launch
+            )))?,
+            &serde_json::to_vec(&binding).map_err(io::Error::other)?,
+            user,
+        )?;
+        let result = TerminalProcessJob {
+            process,
+            job,
+            record,
+            binding,
+            root: self.root.clone(),
+            cancellation: Some(CancellationEvidence {
+                identity: identity.clone(),
+                intent: intent.clone(),
+                original_process_receipt,
+            }),
         };
         result.verify()?;
         Ok(Some(result))
@@ -1268,6 +1513,92 @@ struct TerminalCustodyBinding {
     job_phase: JobPhase,
     active_processes: u32,
     historical_lifetime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cancellation_intent: Option<String>,
+}
+
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CancellationIntentBinding {
+    schema: u32,
+    launch: String,
+    identity_receipt: String,
+    operation: String,
+}
+struct CancellationEvidence {
+    identity: Arc<DurableProcessIdentity>,
+    intent: Arc<DurableRecord>,
+    original_process_receipt: Option<String>,
+}
+impl CancellationEvidence {
+    fn verify(&self, binding: &TerminalCustodyBinding, root: &PrivateDirectory) -> io::Result<()> {
+        self.identity.record.verify()?;
+        self.intent.verify()?;
+        let identity: IdentityBinding =
+            serde_json::from_slice(self.identity.record.bytes()).map_err(io::Error::other)?;
+        let intent: CancellationIntentBinding =
+            serde_json::from_slice(self.intent.bytes()).map_err(io::Error::other)?;
+        if identity != self.identity.binding
+            || identity.schema != 3
+            || identity.launch != binding.launch
+            || identity.intent != binding.launch_intent
+            || identity.process != binding.process
+            || identity.job != binding.job
+            || identity.job_phase != JobPhase::ArmedPreparation
+            || binding.job_phase != JobPhase::ArmedPreparation
+            || binding.historical_lifetime.is_some()
+            || binding.cancellation_intent.as_deref() != Some(self.intent.digest())
+            || binding.process_receipt
+                != self
+                    .original_process_receipt
+                    .as_deref()
+                    .unwrap_or(self.identity.record.digest())
+            || self.identity.record.root_identity() != root.directory().identity()
+            || self.intent.root_identity() != root.directory().identity()
+            || intent.schema != 1
+            || intent.launch != binding.launch
+            || intent.identity_receipt != self.identity.record.digest()
+            || intent.operation != "cancel-never-resumed"
+        {
+            return Err(blocked("never-resumed cancellation custody changed"));
+        }
+        Ok(())
+    }
+}
+
+/// Nonserializable original-owner proof that an actual created child was
+/// cancelled before any resume call and its authenticated private job is empty.
+pub(crate) struct CancelledBeforeResume {
+    terminal: TerminalProcessJob,
+}
+impl CancelledBeforeResume {
+    pub(crate) fn verify(&self) -> io::Result<()> {
+        self.terminal.verify()?;
+        if self.terminal.cancellation.is_none() {
+            return Err(blocked(
+                "terminal custody is not never-resumed cancellation",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn creation_bytes(&self) -> io::Result<&[u8]> {
+        self.verify()?;
+        self.terminal
+            .cancellation
+            .as_ref()
+            .expect("verified cancellation")
+            .identity
+            .record_bytes()
+    }
+    pub(crate) fn terminal_bytes(&self) -> &[u8] {
+        self.terminal.terminal_bytes()
+    }
+    pub(crate) fn terminal(&self) -> &TerminalProcessJob {
+        &self.terminal
+    }
+    pub(crate) fn into_terminal(self) -> TerminalProcessJob {
+        self.terminal
+    }
 }
 
 /// Exact terminal process, actual empty private job and durable custody record.
@@ -1279,6 +1610,7 @@ pub(crate) struct TerminalProcessJob {
     record: DurableRecord,
     binding: TerminalCustodyBinding,
     root: Arc<PrivateDirectory>,
+    cancellation: Option<CancellationEvidence>,
 }
 impl TerminalProcessJob {
     pub(crate) fn verify(&self) -> io::Result<()> {
@@ -1303,6 +1635,11 @@ impl TerminalProcessJob {
             || self.job.identity.owner != user.sid_text()
         {
             return Err(blocked("terminal process custody changed"));
+        }
+        match &self.cancellation {
+            Some(cancellation) => cancellation.verify(&self.binding, &self.root)?,
+            None if self.binding.cancellation_intent.is_none() => {}
+            None => return Err(blocked("missing original cancellation custody")),
         }
         Ok(())
     }
@@ -1337,7 +1674,7 @@ impl TerminalProcessJob {
 
 impl Drop for PreparedProcess<'_> {
     fn drop(&mut self) {
-        if !self.resume_attempted {
+        if !self.resume_attempted && !self.cancel_attempted {
             // Failure is not success evidence. The armed job also cleans up on
             // final handle closure. Its vanished name never proves success.
             let _ = stop_never_resumed(handle(&self.process.process));
@@ -1467,3 +1804,13 @@ impl RecoveredNeverResumed {
 #[path = "../../tests/version_history_process_terminal_windows.rs"]
 #[allow(non_snake_case)]
 mod terminal_tests;
+
+#[cfg(test)]
+#[path = "../../tests/version_history_process_cancel_windows.rs"]
+#[allow(non_snake_case)]
+mod cancel_tests;
+
+#[cfg(test)]
+#[path = "../../tests/version_history_restart_lifetime_windows.rs"]
+#[allow(non_snake_case)]
+mod restart_lifetime_tests;

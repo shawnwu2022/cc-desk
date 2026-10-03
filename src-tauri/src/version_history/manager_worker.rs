@@ -89,6 +89,62 @@ impl AuthenticatedManagerCommand {
         let result = self.document.check().and(result);
         let _ = self.completed.send(result);
     }
+    /// Converts a current, explicit Return into one native operation. Later
+    /// cleanup/restore stages recheck the original document and the backend's
+    /// actual journal generation without pretending the UI sent a new request.
+    pub(crate) fn accept_return(
+        self,
+        binding: &JournalBinding,
+        store: &JournalStore,
+    ) -> Result<AcceptedManagerReturn, SafeError> {
+        let result = self.check(binding, store).and_then(|()| {
+            if self.action != ManagerAction::ReturnToPrevious {
+                return Err(error("FORBIDDEN"));
+            }
+            Ok(())
+        });
+        if let Err(failure) = result {
+            self.finish(Err(failure.clone()));
+            return Err(failure);
+        }
+        Ok(AcceptedManagerReturn {
+            command: self,
+            binding: binding.clone(),
+        })
+    }
+}
+
+/// Never deserialized or constructed from a status/generation projection.
+/// Cleanup of an owned unstarted child and the matching Return share this one
+/// original authenticated intent; it cannot authorize another transaction.
+pub(crate) struct AcceptedManagerReturn {
+    command: AuthenticatedManagerCommand,
+    binding: JournalBinding,
+}
+impl AcceptedManagerReturn {
+    pub(crate) fn verify(
+        &self,
+        binding: &JournalBinding,
+        store: &JournalStore,
+        actual_generation: u64,
+    ) -> Result<(), SafeError> {
+        self.command.document.check()?;
+        if &self.binding != binding || self.command.document.transaction != binding.transaction_id {
+            return Err(error("FORBIDDEN"));
+        }
+        let inspected = store.inspect(binding)?;
+        let journal = inspected
+            .last_valid
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?;
+        if inspected.blocked || journal.generation() != actual_generation {
+            return Err(error("HISTORY_GENERATION_CHANGED"));
+        }
+        self.command.document.check()
+    }
+    pub(crate) fn finish(self, result: ActionResult) {
+        self.command.finish(result);
+    }
 }
 
 #[derive(Default)]
