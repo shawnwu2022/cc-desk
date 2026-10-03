@@ -844,6 +844,12 @@ impl RetainedProductShortcuts {
                             .state
                             .matches_restored_content_and_permissions(&source.state)
                         {
+                            #[cfg(test)]
+                            probe_state_difference(
+                                "permissionReadback",
+                                &source.state,
+                                &observed.state,
+                            );
                             return Err(blocked("shortcut permission readback changed"));
                         }
                         Ok(observed)
@@ -1236,6 +1242,46 @@ fn apply_descriptor(file: &File, bytes: &[u8]) -> io::Result<()> {
         return Err(blocked("shortcut owner/group/DACL readback changed"));
     }
     Ok(())
+}
+
+/// Identify the failing field without printing shortcut contents, hashes,
+/// identities, paths or permission principals. This never changes comparison.
+#[cfg(test)]
+fn probe_state_difference(label: &'static str, expected: &ShortcutState, actual: &ShortcutState) {
+    if let (
+        ShortcutState::Present {
+            bytes: expected_bytes,
+            sha256: expected_hash,
+            descriptor: expected_descriptor,
+            attributes: expected_attributes,
+            ..
+        },
+        ShortcutState::Present {
+            bytes,
+            sha256,
+            descriptor,
+            attributes,
+            ..
+        },
+    ) = (expected, actual)
+    {
+        eprintln!(
+            "shortcut-readback {label}: bytes_equal={}; lengths={:?}; hash_equal={}; attributes={:x?}; descriptor_exact={}; descriptor_restore_matches={}",
+            expected_bytes == bytes,
+            (expected_bytes.len(), bytes.len()),
+            expected_hash == sha256,
+            (expected_attributes, attributes),
+            expected_descriptor == descriptor,
+            restored_file_descriptor_matches(expected_descriptor, descriptor),
+        );
+        probe_descriptor_difference(label, expected_descriptor, descriptor);
+    } else {
+        eprintln!(
+            "shortcut-readback {label}: expected_present={}; actual_present={}",
+            matches!(expected, ShortcutState::Present { .. }),
+            matches!(actual, ShortcutState::Present { .. }),
+        );
+    }
 }
 
 /// Bounded diagnostics for disposable Windows tests. Never emit paths, SIDs,

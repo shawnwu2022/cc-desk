@@ -58,3 +58,41 @@ jobs:
           $result = $LASTEXITCODE
           if (!(Select-String -Path scope-context.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected one exact scope test' }
           exit $result
+      - name: Verify source failure journal protocol
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_source_failure_journal:: -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath source-failure-journal.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path source-failure-journal.log -Pattern 'running 11 tests' -Quiet)) { throw 'Expected 11 selected test(s)' }
+          exit $result
+      - name: Verify post-capture custody retention
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib version_history::windows::context::switching::preinstall_custody_tests::HistoryPreinstallCustody_PostCaptureFailureRetainsContext_005 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath post-capture-custody.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path post-capture-custody.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected 1 selected test(s)' }
+          exit $result
+      - name: Diagnose exact shortcut attribute restoration
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::version_history_shortcuts_windows::HistoryShortcuts_RestoreAttributes_012 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath shortcut-attributes.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path shortcut-attributes.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected 1 selected test(s)' }
+          exit $result
+      - name: Observe exact historical job lifetime for restart evidence
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib RestartLifetime_ -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath restart-lifetime.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path restart-lifetime.log -Pattern 'running 2 tests' -Quiet)) { throw 'Expected 2 selected test(s)' }
+          $records = @(Get-Content -LiteralPath restart-lifetime.log | ForEach-Object {
+            if ($_ -match 'HISTORY_RESTART_LIFETIME (\{.*\})\s*$') { $Matches[1] | ConvertFrom-Json }
+          })
+          foreach ($case in @('liveRoot', 'terminalRoot')) {
+            foreach ($stage in @('fixtureAdmission', 'originalOwnerDropped', 'exactRootTerminal', 'completed')) {
+              if (!($records | Where-Object { $_.schema -eq 1 -and $_.case -eq $case -and $_.stage -eq $stage -and $_.recoveryAuthority -eq $false })) { throw "Missing $case/$stage lifetime evidence" }
+            }
+            if (!($records | Where-Object { $_.case -eq $case -and $_.stage -eq 'completed' -and $_.observation.status -eq 'observed' })) { throw "Incomplete $case lifetime observation" }
+            if (!($records | Where-Object { $_.case -eq $case -and $_.stage -eq 'fixtureAdmission' -and $_.observation.installedProductAcceptance -eq $false })) { throw "Invalid $case acceptance boundary" }
+          }
+          exit $result

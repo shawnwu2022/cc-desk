@@ -629,23 +629,70 @@ fn HistoryPreinstallCustody_PostCaptureFailureRetainsContext_005() {
         .unwrap()
         .retain_return_custody(&fixture.user)
         .unwrap();
-    let _fresh = fixture.fresh(None);
+    let fresh = fixture.fresh(None).unwrap();
+    let originals = fixture.originals.as_ref().unwrap();
+    let bytes = fresh.manifest_bytes(originals, &fixture.user).unwrap();
+    let digest = fixture.store.retain_manifest(&bytes).unwrap();
+    fixture.generation = fixture
+        .store
+        .append(
+            fixture.generation,
+            JournalEvent::Manifest {
+                role: ManifestRole::FreshTargetContext,
+                digest,
+            },
+        )
+        .unwrap();
+    fixture.generation = fixture
+        .store
+        .append(
+            fixture.generation,
+            JournalEvent::Phase {
+                phase: JournalPhase::FreshReady,
+            },
+        )
+        .unwrap();
+    let mut journal = ContextJournal::new(
+        &mut fixture.store,
+        fixture.records.clone(),
+        &fixture.lease,
+        fixture.binding.clone(),
+        fixture.generation,
+    )
+    .unwrap();
+    fresh
+        .verify_for_launch(originals, &fixture.user, &mut journal)
+        .unwrap();
+    drop(journal);
+    // Production releases these create handles after the same verified launch
+    // check. Keeping their DELETE access here blocks even the first root read,
+    // so the post-capture failure would never be reached. No process is launched.
+    drop(fresh);
     let path = fixture.temporary.path().join("desk/current-data");
     std::fs::write(&path, b"current target context").unwrap();
     let mut captured = None;
     CONTEXT_CAPTURE_FAILURE.set(true);
-    assert!(custody
+    let error = custody
         .capture_current_retaining(&mut captured, &fixture.user)
-        .is_err());
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "injected post-capture custody verification"
+    );
+    assert!(!CONTEXT_CAPTURE_FAILURE.get());
     let context = captured
         .as_ref()
         .expect("completed context capture must remain owned");
     context.verify_durable().unwrap();
     let identities = context.root_identities();
     assert!(std::fs::write(&path, b"lost custody").is_err());
-    assert!(custody
-        .capture_current_retaining(&mut captured, &fixture.user)
-        .is_err());
+    assert_eq!(
+        custody
+            .capture_current_retaining(&mut captured, &fixture.user)
+            .unwrap_err()
+            .to_string(),
+        "current context custody is already retained"
+    );
     assert_eq!(captured.as_ref().unwrap().root_identities(), identities);
     drop(captured);
     std::fs::write(&path, b"reader released explicitly").unwrap();

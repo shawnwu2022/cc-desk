@@ -22,7 +22,13 @@ fn journal() -> SwitchJournal {
     .unwrap()
 }
 fn source_observation(journal: &mut SwitchJournal) {
-    for role in [ManifestRole::SourceHandoffExit, ManifestRole::SourceContext] {
+    // Reducer-only envelopes follow the real handoff order; none supplies live
+    // manager, source-terminal, or no-launch authority.
+    for role in [
+        ManifestRole::ManagerHandoff,
+        ManifestRole::SourceHandoffExit,
+        ManifestRole::SourceContext,
+    ] {
         journal
             .apply(JournalEvent::Manifest {
                 role,
@@ -366,4 +372,26 @@ fn HistorySourceFailure_ProtectedPartialAdmissionCannotBeAppendedFromData_010() 
         },
     );
     assert!(rejected.is_err());
+}
+
+// 缺少 manager handoff 的退出记录必须被拒绝，且不能改变 journal 状态。
+#[test]
+fn HistorySourceFailure_ExitNeedsHandoff_011() {
+    let mut journal = journal();
+    let generation = journal.generation();
+    let error = journal
+        .apply(JournalEvent::Manifest {
+            role: ManifestRole::SourceHandoffExit,
+            digest: "a".repeat(64),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "HISTORY_HANDOFF_CHANGED");
+    assert_eq!(journal.generation(), generation);
+    assert_eq!(journal.phase(), JournalPhase::Reviewed);
+    assert_eq!(journal.manifest(ManifestRole::SourceHandoffExit), None);
+    assert!(journal.fixture_private_abort_eligible());
+
+    source_observation(&mut journal);
+    assert!(!journal.fixture_private_abort_eligible());
+    abort(&mut journal).unwrap();
 }

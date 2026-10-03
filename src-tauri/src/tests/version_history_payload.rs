@@ -3,7 +3,7 @@
 #[path = "version_history_payload/inventory.rs"]
 mod inventory;
 #[path = "version_history_payload/token.rs"]
-mod token;
+pub(crate) mod token;
 
 use crate::cli::{profiles::error, snapshot::CallerIdentity, types::WireU64};
 use crate::version_history::{

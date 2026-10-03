@@ -1,7 +1,14 @@
 //! Test-only capability probe. This never changes an account, credential, UAC,
 //! policy, session, or production token. Unsupported restricted tokens block.
 use super::{blocked, bounded_read, report};
-use crate::version_history::{verified_package::sha256, windows::process::ExactProcess};
+use crate::version_history::{
+    verified_package::sha256,
+    windows::{
+        files::{ComponentName, Directory, PrivateDirectory},
+        process::ExactProcess,
+        security::CurrentUser,
+    },
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
@@ -343,6 +350,63 @@ fn medium_request(before: &Observation, parent: &Observation) -> io::Result<Obse
     Ok(requested)
 }
 
+// The payload gate remains separate from the two fixed lifetime diagnostics.
+// Only run_restart_lifetime can supply the borrowed freshly owned directory.
+enum WorkerScope<'a> {
+    Payload,
+    RestartLifetime {
+        owned: &'a PrivateDirectory,
+        live: bool,
+    },
+}
+impl WorkerScope<'_> {
+    fn require_creation(&self) -> io::Result<()> {
+        match self {
+            Self::Payload => {
+                super::fixture_root()?; // Preserve the dedicated payload workflow gate.
+                Ok(())
+            }
+            Self::RestartLifetime { owned, .. } => {
+                if !cfg!(target_arch = "x86_64") {
+                    return Err(blocked("restart lifetime fixture requires Windows x64"));
+                }
+                owned.verify(&CurrentUser::capture()?)
+            }
+        }
+    }
+    fn require_root(&self, root: &Path) -> io::Result<()> {
+        match self {
+            Self::Payload => {
+                if super::fixture_root()? != root {
+                    return Err(blocked("fixture label evidence root differs"));
+                }
+            }
+            Self::RestartLifetime { owned, .. } => {
+                self.require_creation()?;
+                if Directory::open_absolute(root)?.identity() != owned.directory().identity() {
+                    return Err(blocked(
+                        "restart fixture root differs from its owned directory",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    fn worker_test(&self) -> &'static str {
+        match self {
+            Self::Payload => "tests::version_history_payload::HistoryPayload_Worker_002",
+            Self::RestartLifetime { live, .. } => restart_worker_test(*live),
+        }
+    }
+}
+fn restart_worker_test(live: bool) -> &'static str {
+    if live {
+        "version_history::windows::process::restart_lifetime_tests::RestartWorker_Live_003"
+    } else {
+        "version_history::windows::process::restart_lifetime_tests::RestartWorker_Terminal_004"
+    }
+}
+
 /// No from-handle constructor exists. The sole constructor creates a new token
 /// for this test worker and drops the parent handle before any label operation.
 /// This type and its sole mutating API are compiled only within the test module.
@@ -352,8 +416,8 @@ struct RestrictedWorkerToken {
     admitted: Option<Observation>,
 }
 impl RestrictedWorkerToken {
-    fn create(parent: &Observation) -> io::Result<Self> {
-        super::fixture_root()?; // Only the explicitly gated disposable CI fixture.
+    fn create(parent: &Observation, scope: &WorkerScope<'_>) -> io::Result<Self> {
+        scope.require_creation()?;
         if current()? != *parent {
             return Err(blocked("parent token changed before restricted creation"));
         }
@@ -396,10 +460,13 @@ impl RestrictedWorkerToken {
     fn observe(&self) -> io::Result<Observation> {
         observe(raw(&self.token))
     }
-    fn lower_to_medium(&mut self, root: &Path, parent: &Observation) -> io::Result<()> {
-        if super::fixture_root()? != root {
-            return Err(blocked("fixture label evidence root differs"));
-        }
+    fn lower_to_medium(
+        &mut self,
+        root: &Path,
+        parent: &Observation,
+        scope: &WorkerScope<'_>,
+    ) -> io::Result<()> {
+        scope.require_root(root)?;
         if self.lowering_attempted || self.admitted.is_some() {
             return Err(blocked("fixture label operation cannot be replayed"));
         }
@@ -522,12 +589,70 @@ impl Drop for Child {
     }
 }
 pub(super) fn run_worker(root: &Path) -> io::Result<()> {
+    run_scoped_worker(root, WorkerScope::Payload)
+}
+
+/// Exactly two diagnostic entrypoints, always in a new fixture-owned directory.
+/// No caller-supplied executable, command, root, token or job is accepted.
+pub(crate) fn run_restart_lifetime(live: bool) -> io::Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path().join("restart-worker");
+    let user = CurrentUser::capture()?;
+    let owned = PrivateDirectory::create_new(
+        Directory::open_absolute(temporary.path())?,
+        ComponentName::new(std::ffi::OsStr::new("restart-worker"))?,
+        &user,
+    )?;
+    let result = run_scoped_worker(
+        &root,
+        WorkerScope::RestartLifetime {
+            owned: &owned,
+            live,
+        },
+    );
+    owned.verify(&user)?;
+    result
+}
+
+/// Called before either child probe. Its current directory is assigned at
+/// creation, never by changing the parent process or shared environment.
+pub(crate) fn verify_restart_worker(live: bool) -> io::Result<()> {
+    let root = std::env::current_dir()?;
+    let user = CurrentUser::capture()?;
+    user.require_unelevated()?;
+    let owned = PrivateDirectory::open_existing(
+        Directory::open_absolute(
+            root.parent()
+                .ok_or_else(|| blocked("missing fixture parent"))?,
+        )?,
+        ComponentName::new(
+            root.file_name()
+                .ok_or_else(|| blocked("missing fixture name"))?,
+        )?,
+        &user,
+    )?;
+    let admission: serde_json::Value =
+        serde_json::from_slice(&bounded_read(&root.join("worker-admission.json"), 65536)?)?;
+    let exact = ExactProcess::capture_observed(std::process::id())?;
+    exact.verify_current_user(&user)?;
+    if admission["workerTest"] != restart_worker_test(live)
+        || admission["process"] != serde_json::to_value(exact.identity())?
+    {
+        return Err(blocked(
+            "restart worker differs from its exact fixture admission",
+        ));
+    }
+    verify_worker(&root)?;
+    owned.verify(&user)
+}
+
+fn run_scoped_worker(root: &Path, scope: WorkerScope<'_>) -> io::Result<()> {
     let parent = current()?;
     report(root, "parent-token.json", &parent)?;
-    let mut restricted = RestrictedWorkerToken::create(&parent)?;
+    let mut restricted = RestrictedWorkerToken::create(&parent, &scope)?;
     let candidate = restricted.observe()?;
     report(root, "restricted-candidate-token.json", &candidate)?;
-    restricted.lower_to_medium(root, &parent)?;
+    restricted.lower_to_medium(root, &parent, &scope)?;
     let executable = std::env::current_exe()?;
     let image = executable
         .to_str()
@@ -540,7 +665,14 @@ pub(super) fn run_worker(root: &Path) -> io::Result<()> {
         .encode_wide()
         .chain(Some(0))
         .collect();
-    let command = format!("\"{image}\" --exact tests::version_history_payload::HistoryPayload_Worker_002 --ignored --nocapture --test-threads=1");
+    let worker_test = scope.worker_test();
+    let command =
+        format!("\"{image}\" --exact {worker_test} --ignored --nocapture --test-threads=1");
+    let working_directory: Vec<_> = root.as_os_str().encode_wide().chain(Some(0)).collect();
+    let current_directory = match &scope {
+        WorkerScope::Payload => PCWSTR::null(),
+        WorkerScope::RestartLifetime { .. } => PCWSTR(working_directory.as_ptr()),
+    };
     let mut line: Vec<_> = command.encode_utf16().chain(Some(0)).collect();
     let startup = STARTUPINFOW {
         cb: size_of::<STARTUPINFOW>() as u32,
@@ -575,7 +707,7 @@ pub(super) fn run_worker(root: &Path) -> io::Result<()> {
             false,
             CREATE_SUSPENDED,
             None,
-            PCWSTR::null(),
+            current_directory,
             &startup,
             &mut output,
         )
@@ -597,7 +729,7 @@ pub(super) fn run_worker(root: &Path) -> io::Result<()> {
     report(
         root,
         "worker-admission.json",
-        &json!({"pid":output.dwProcessId,"token":actual,"process":exact.identity(),"fixtureRoot":root,"sameUserRestrictedProbe":true}),
+        &json!({"pid":output.dwProcessId,"token":actual,"process":exact.identity(),"fixtureRoot":root,"sameUserRestrictedProbe":true,"workerTest":worker_test}),
     )?;
     report(
         root,

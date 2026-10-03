@@ -136,7 +136,7 @@ mod version_history_context_windows;
 #[cfg(windows)]
 mod version_history_journal_windows;
 #[cfg(target_os = "windows")]
-mod version_history_payload;
+pub(crate) mod version_history_payload;
 #[cfg(windows)]
 mod version_history_scope;
 #[cfg(windows)]

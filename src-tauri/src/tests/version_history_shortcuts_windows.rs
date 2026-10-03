@@ -903,6 +903,11 @@ fn HistoryShortcuts_RestoreAttributes_012() {
         (FILE_ATTRIBUTE_NORMAL, None),
         (FILE_ATTRIBUTE_ARCHIVE, None),
     ] {
+        eprintln!(
+            "shortcut-attribute-case: source={:x}; later={:x?}",
+            source_attributes.0,
+            later_attributes.map(|attributes| attributes.0),
+        );
         let temp = tempfile::tempdir().unwrap();
         let user = CurrentUser::capture().unwrap();
         let parent = Directory::open_absolute(temp.path()).unwrap();

@@ -2,7 +2,10 @@
 //! A successful test means the controlled observations completed, not that
 //! restart Return is admitted. No production recovery owner is constructed.
 use super::*;
-use crate::version_history::windows::lease::LeaseFiles;
+use crate::{
+    tests::version_history_payload::token::{run_restart_lifetime, verify_restart_worker},
+    version_history::windows::lease::LeaseFiles,
+};
 use std::{path::PathBuf, time::Duration};
 
 fn name(value: &str) -> ComponentName {
@@ -127,6 +130,15 @@ fn observe_owner_loss(reopen_while_live: bool) {
     };
     let temporary = tempfile::tempdir().unwrap();
     let user = CurrentUser::capture().unwrap();
+    user.require_unelevated().unwrap();
+    evidence(
+        case,
+        "fixtureAdmission",
+        serde_json::json!({
+            "sameUserMediumChild": true, "outerJobContainmentUnchanged": true,
+            "installedProductAcceptance": false,
+        }),
+    );
     let parent = Directory::open_absolute(temporary.path()).unwrap();
     let root = Arc::new(PrivateDirectory::create_new(parent, name("private"), &user).unwrap());
     let leases = LeaseFiles::open(root.clone(), &user).unwrap();
@@ -272,11 +284,27 @@ fn observe_owner_loss(reopen_while_live: bool) {
 // 检查真实历史进程仍存活时，正确解除清理的 job 是否能重开并持续观察至退出。
 #[test]
 fn RestartLifetime_LiveRootObservation_001() {
-    observe_owner_loss(true);
+    run_restart_lifetime(true).expect("confined Medium diagnostic worker must complete");
 }
 
 // 检查原 owner 已释放且进程先退出后，首次重开 job 的实际结果，不推定成功或不存在。
 #[test]
 fn RestartLifetime_TerminalBeforeReopen_002() {
+    run_restart_lifetime(false).expect("confined Medium diagnostic worker must complete");
+}
+
+// 检查指定的未提升子进程通过精确回执后，才采集存活根进程的 job 生命周期证据。
+#[test]
+#[ignore = "private restricted-token diagnostic child; requires exact controller receipt"]
+fn RestartWorker_Live_003() {
+    verify_restart_worker(true).unwrap();
+    observe_owner_loss(true);
+}
+
+// 检查指定的未提升子进程通过精确回执后，才采集根进程退出后的 job 重开证据。
+#[test]
+#[ignore = "private restricted-token diagnostic child; requires exact controller receipt"]
+fn RestartWorker_Terminal_004() {
+    verify_restart_worker(false).unwrap();
     observe_owner_loss(false);
 }
