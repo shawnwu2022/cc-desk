@@ -167,6 +167,30 @@ pub(crate) fn spawn_probe(
     } else {
         Ok(())
     };
+    // 仅在 Windows 查询退出状态，避免 Unix try_wait 回收子进程并改变后续清理语义。
+    let (
+        child_state_before_kill,
+        child_exit_before_kill,
+        output_bytes_before_kill,
+        ready_before_kill,
+    ) = if write_result.is_err() {
+        #[cfg(windows)]
+        let (state, exit_code) = match child.try_wait() {
+            Ok(Some(status)) => ("exited", Some(status.exit_code())),
+            Ok(None) => ("running", None),
+            Err(_) => ("query-failed", None),
+        };
+        #[cfg(not(windows))]
+        let (state, exit_code) = ("not-sampled", None::<u32>);
+        (
+            state,
+            exit_code,
+            output.lock().ok().map(|bytes| bytes.len()),
+            Some(ready_path.exists()),
+        )
+    } else {
+        ("not-sampled", None, None, None)
+    };
     if write_result.is_err() {
         let _ = child.kill();
     }
@@ -187,15 +211,28 @@ pub(crate) fn spawn_probe(
         // text. Report only bounded observations, never raw terminal contents.
         let bytes = output.lock().map_err(|_| "output lock poisoned")?;
         return Err(format!(
-            "{failure}; ready_timeout_ms={}; ready_after_wait={}; report_exists={}; child_exit={:?}; output_bytes={}; probe_error_marker={}; node_error_marker={}; cursor_query={}",
+            "{failure}; ready_timeout_ms={}; child_state_before_kill={}; child_exit_before_kill={:?}; output_bytes_before_kill={:?}; ready_before_kill={:?}; ready_after_wait={}; report_exists={}; child_exit={:?}; output_bytes={}; reader_ok={}; probe_error_marker={}; node_error_marker={}; cursor_query={}; da1_query={}; focus_enable={}; focus_disable={}; win32_input_enable={}; win32_input_disable={}; window_show={}; window_hide={}",
             PROBE_READY_TIMEOUT.as_millis(),
+            child_state_before_kill,
+            child_exit_before_kill,
+            output_bytes_before_kill,
+            ready_before_kill,
             ready_path.exists(),
             report_path.exists(),
             status.as_ref().ok().map(|status| status.exit_code()),
             bytes.len(),
+            reader_result.is_ok(),
             find_subslice(&bytes, b"probe error:").is_some(),
             find_subslice(&bytes, b"node:internal").is_some(),
             find_subslice(&bytes, b"\x1b[6n").is_some(),
+            find_subslice(&bytes, b"\x1b[c").is_some()
+                || find_subslice(&bytes, b"\x1b[0c").is_some(),
+            find_subslice(&bytes, b"\x1b[?1004h").is_some(),
+            find_subslice(&bytes, b"\x1b[?1004l").is_some(),
+            find_subslice(&bytes, b"\x1b[?9001h").is_some(),
+            find_subslice(&bytes, b"\x1b[?9001l").is_some(),
+            find_subslice(&bytes, b"\x1b[1t").is_some(),
+            find_subslice(&bytes, b"\x1b[2t").is_some(),
         ));
     }
     reader_result?;

@@ -37,6 +37,16 @@ jobs:
         run: node scripts/prepare-conpty.mjs
       - name: Record tested source
         run: git rev-parse HEAD
+      - name: Diagnose four native CLI PTY probes
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cargo test --locked --lib tests::native_cli_harness::NativeCliHarness_ -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath native-cli-pty-probes.log
+          $result = $LASTEXITCODE
+          if (!(Select-String -Path native-cli-pty-probes.log -Pattern '^running 4 tests$' -Quiet)) {
+            if ($result -ne 0) { exit $result }
+            throw 'Expected exactly four native CLI PTY probes'
+          }
+          exit $result
       - name: Verify exact filesystem security restoration
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: |
