@@ -1,9 +1,72 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8')
 const present = (path) => existsSync(new URL(`../../${path}`, import.meta.url))
+
+function releaseRejectionStep() {
+  const workflow = read('.github/workflows/ci.yml').replace(/\r\n/g, '\n')
+  const match = workflow.match(/      - name: Require feature release rejection from the policy guard\n        working-directory: src-tauri\n        run: \|\n((?:          .*\n)+)/)
+  assert.ok(match, 'actual release rejection workflow step must exist')
+  return match[1].replace(/^ {10}/gm, '')
+}
+
+test('release rejection exits successfully only after both denial assertions', () => {
+  const step = releaseRejectionStep()
+  assert.match(step, /if \(\$result -eq 0\) \{ throw 'Acceptance feature entered a release build' \}/)
+  assert.match(step, /if \(\(\$output -join "`n"\) -notmatch 'roundtrip acceptance is forbidden in release builds'\) \{\n  throw 'Release failed for an unrelated reason; exclusion remains unverified'\n\}/)
+  assert.match(step, /\nexit 0\n$/, 'acknowledge only the verified expected native-command failure')
+  assert.equal((step.match(/\bexit 0\b/g) ?? []).length, 1)
+})
+
+test('actual release rejection step preserves GitHub pwsh wrapper outcomes', t => {
+  const available = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' })
+  if (available.error?.code === 'ENOENT') {
+    t.skip('PowerShell unavailable: executable GitHub wrapper contract remains unrun')
+    return
+  }
+  assert.equal(available.status, 0, `PowerShell version probe failed: ${available.stderr}`)
+  const step = releaseRejectionStep()
+  const cargo = 'cargo build --locked --release --features history-roundtrip-acceptance'
+  assert.equal(step.split(cargo).length, 2, 'replace only the actual native build invocation')
+  const temporary = mkdtempSync(join(tmpdir(), 'ccdesk-release-policy-'))
+  const quote = value => `'${value.replaceAll("'", "''")}'`
+  try {
+    const fixture = join(temporary, 'native-build.cjs')
+    writeFileSync(fixture, "process.stdout.write(process.argv[3] + '\\n'); process.exit(Number(process.argv[2]));\n")
+    const run = (body, code, output) => {
+      const script = join(temporary, 'step.ps1')
+      const command = `${quote(process.execPath)} ${quote(fixture)} ${code} ${quote(output)}`
+      // Match the runner's prefix, suffix and dot-source invocation, not pwsh -File semantics.
+      // https://github.com/actions/runner/blob/main/src/Runner.Worker/Handlers/ScriptHandlerHelpers.cs
+      const wrapped = "$ErrorActionPreference = 'stop'\n" + body.replace(cargo, command) +
+        '\nif ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }\n'
+      writeFileSync(script, wrapped)
+      const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', `. ${quote(script)}`], { encoding: 'utf8', timeout: 30_000 })
+      assert.ifError(result.error)
+      assert.notEqual(result.status, null, 'wrapper must terminate with an exit status')
+      return { status: result.status, output: result.stdout + result.stderr }
+    }
+    const marker = 'roundtrip acceptance is forbidden in release builds'
+    const denied = run(step, 101, marker)
+    assert.equal(denied.status, 0, denied.output)
+    const succeeded = run(step, 0, marker)
+    assert.notEqual(succeeded.status, 0, 'an unexpected successful build must fail the step')
+    assert.match(succeeded.output, /Acceptance feature entered a release build/)
+    const unrelated = run(step, 101, 'unrelated build fixture failure')
+    assert.notEqual(unrelated.status, 0, 'an unrelated build failure must fail the step')
+    assert.match(unrelated.output, /Release failed for an unrelated reason/)
+    const missingAcknowledgement = run(step.replace(/\nexit 0\n$/, '\n'), 101, marker)
+    // pwsh -Command 会将被调用脚本的非 0/1 退出码映射为 1。
+    assert.equal(missingAcknowledgement.status, 1, 'the runner suffix must expose an unacknowledged native failure')
+  } finally {
+    rmSync(temporary, { recursive: true, force: true })
+  }
+})
 
 test('acceptance feature is opt-in, debug-only, Windows x64 and excluded from unit-test authority', () => {
   const cargo = read('src-tauri/Cargo.toml')

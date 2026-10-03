@@ -164,6 +164,7 @@ jobs:
           if (($output -join "`n") -notmatch 'roundtrip acceptance is forbidden in release builds') {
             throw 'Release failed for an unrelated reason; exclusion remains unverified'
           }
+          exit 0
       - name: Build both inert embedded acceptance scenarios without packages
         run: |
           $path = 'tests/fixtures/version-history-roundtrip/target.json'
