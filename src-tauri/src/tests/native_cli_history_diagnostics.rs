@@ -98,6 +98,16 @@ fn HistoryDiagnostics_HostAliases_005() {
     }
 }
 
+// Explorer 内部变量通过同一生产历史 scope 链路，两种 CLI 都应可读取测试目录。
+#[cfg(windows)]
+#[test]
+fn HistoryDiagnostics_ExplorerReserved_006() {
+    let inherited = [("=::".into(), "fixture".into())].into_iter().collect();
+    for result in history_with_environment(inherited) {
+        result.unwrap();
+    }
+}
+
 #[test]
 fn HistoryDiagnostics_SharedInvalidEnvironmentFailsBothProviders_002() {
     let mut inherited = EnvMap::new();

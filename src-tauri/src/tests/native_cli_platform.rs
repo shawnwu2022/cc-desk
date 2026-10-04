@@ -355,6 +355,25 @@ fn D10_Cmd_SafeShellAndShimRoundTrip_09() {
 
 #[cfg(windows)]
 #[test]
+fn D10_Environment_ExplorerReservedRoundTrip_15() {
+    for shim in [false, true] {
+        let args = &["reserved-environment-probe"];
+        let mut fixture = Fixture::new(args);
+        fixture.inherited.insert("=::".into(), "::\\".into());
+        if shim {
+            fixture.runner(Dialect::Cmd, true);
+        }
+        let spec = fixture.resolve().unwrap();
+        assert_eq!(
+            spec.command().unwrap().get_env("=::"),
+            Some(OsStr::new("::\\"))
+        );
+        roundtrip(&fixture, args);
+    }
+}
+
+#[cfg(windows)]
+#[test]
 fn D10_Cmd_DiscoveredCanonicalShimRoundTrip_14() {
     use crate::cli::program_discovery::{discover_programs, DiscoveryRequest};
     use crate::cli::storage::{Patch, WorkspaceRepository};

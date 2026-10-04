@@ -353,6 +353,8 @@ fn D08_Environment_WindowsHostDefaultProfiles_014() {
     let mut nul_names = 0;
     let mut drive_names = 0;
     let mut other_leading_equals = 0;
+    let mut pseudo_drive_names = 0;
+    let mut command_status_names = 0;
     let mut interior_equals = 0;
     let mut non_unicode_names = 0;
     let mut empty_values = 0;
@@ -372,6 +374,11 @@ fn D08_Environment_WindowsHostDefaultProfiles_014() {
                 drive_names += 1;
             } else {
                 other_leading_equals += 1;
+                pseudo_drive_names += usize::from(name == "=::");
+                command_status_names += usize::from(crate::cli::environment::same_name(
+                    name,
+                    OsStr::new("=ExitCode"),
+                ));
             }
         } else {
             interior_equals += usize::from(units.contains(&(b'=' as u16)));
@@ -406,16 +413,23 @@ fn D08_Environment_WindowsHostDefaultProfiles_014() {
         }
     }
     eprintln!("host_resolution first_alias_matches_os={first_alias_matches_os}");
-    let captured = crate::cli::environment::capture_environment().unwrap();
+    let captured =
+        crate::cli::environment::capture_windows_environment(raw, |name| std::env::var_os(name));
     let mut passed = true;
+    let mut outcomes = Vec::new();
     for cli in [CliKind::Claude, CliKind::Codex] {
-        let result = build_environment(
-            &captured,
-            &EnvMap::new(),
-            &Profile::new("synthetic", cli),
-            None,
-            None,
-        );
+        let result = captured
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|environment| {
+                build_environment(
+                    environment,
+                    &EnvMap::new(),
+                    &Profile::new("synthetic", cli),
+                    None,
+                    None,
+                )
+            });
         let category = match result
             .as_ref()
             .err()
@@ -425,10 +439,51 @@ fn D08_Environment_WindowsHostDefaultProfiles_014() {
             Some("environment.name") => "environment.name",
             Some("environment.value") => "environment.value",
             Some("environment.aliasConflict") => "environment.aliasConflict",
+            Some("environment.changed") => "environment.changed",
             _ => "other-fixed-category",
         };
         eprintln!("default_profile cli={} category={category}", cli.as_str());
+        outcomes.push(json!({"cli":cli.as_str(), "category":category}));
         passed &= result.is_ok();
+    }
+    // A caller-owned marker opts into a bounded report for hidden Explorer launches.
+    // Never read application settings or serialize inherited entries.
+    let directory = std::env::current_dir().unwrap();
+    if directory.join("ccdesk-host-probe.request").is_file() {
+        use windows::Win32::{
+            Foundation::CloseHandle,
+            System::Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+                TH32CS_SNAPPROCESS,
+            },
+        };
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.unwrap();
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut parent_pid = None;
+        let mut next = unsafe { Process32FirstW(snapshot, &mut entry) };
+        while next.is_ok() {
+            if entry.th32ProcessID == std::process::id() {
+                parent_pid = Some(entry.th32ParentProcessID);
+                break;
+            }
+            next = unsafe { Process32NextW(snapshot, &mut entry) };
+        }
+        unsafe { CloseHandle(snapshot) }.unwrap();
+        let report = json!({"pid":std::process::id(), "parentPid":parent_pid,
+            "entries":inherited.len(), "emptyNames":empty_names, "nulNames":nul_names,
+            "driveNames":drive_names, "otherLeadingEquals":other_leading_equals,
+            "pseudoDriveNames":pseudo_drive_names, "commandStatusNames":command_status_names,
+            "interiorEquals":interior_equals, "nonUnicodeNames":non_unicode_names,
+            "emptyValues":empty_values, "nulValues":nul_values, "nonUnicodeValues":non_unicode_values,
+            "aliasConflicts":alias_conflicts, "profiles":outcomes});
+        std::fs::write(
+            directory.join("ccdesk-host-environment.json"),
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
     }
     assert!(
         passed,
@@ -518,4 +573,77 @@ fn D08_Environment_HostSnapshot_017() {
     )
     .unwrap();
     assert_eq!(result, captured);
+}
+
+// Explorer 可继承非盘符形式的内部变量；两个 CLI 应保留其 OS 字符串。
+#[cfg(windows)]
+#[test]
+fn D08_Environment_WindowsReserved_018() {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+    let mut inherited = env(&[
+        ("=::", r"::\"),
+        ("=ExitCode", "00000000"),
+        ("=Reserved", "fixture"),
+    ]);
+    inherited.insert(OsString::from_wide(&[b'=' as u16, 0xd800]), "opaque".into());
+    for cli in [CliKind::Claude, CliKind::Codex] {
+        let result = build_environment(
+            &inherited,
+            &EnvMap::new(),
+            &Profile::new("synthetic", cli),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result, inherited);
+    }
+}
+
+// 前导等号仅供 Windows 继承层使用，配置、terminal、legacy、observer 不能注入。
+#[cfg(windows)]
+#[test]
+fn D08_Environment_ReservedBoundary_019() {
+    let inherited = env(&[("=::", "fixture")]);
+    let mut profile = Profile::new("synthetic", CliKind::Claude);
+    assert!(build_environment(&EnvMap::new(), &inherited, &profile, None, None).is_err());
+    profile.env.insert("=::".into(), literal("fixture"));
+    assert!(build_environment(&EnvMap::new(), &EnvMap::new(), &profile, None, None).is_err());
+    let legacy = Profile::new("legacyClaude", CliKind::Claude);
+    assert!(build_environment(
+        &EnvMap::new(),
+        &EnvMap::new(),
+        &legacy,
+        Some(&json!({"claudeEnvVars":{"=::":"fixture"}})),
+        None
+    )
+    .is_err());
+    assert!(crate::cli::environment::overlay_observer(
+        &EnvMap::new(),
+        &ObserverEnv { values: inherited }
+    )
+    .is_err());
+    for name in ["=", "==x", "=x=y", "x=y", "=x\0tail", ""] {
+        assert!(build_environment(
+            &env(&[(name, "fixture")]),
+            &EnvMap::new(),
+            &legacy,
+            None,
+            None
+        )
+        .is_err());
+    }
+}
+
+// 非 Windows 环境不接受 Windows 内部变量名。
+#[cfg(not(windows))]
+#[test]
+fn D08_Environment_ReservedWindowsOnly_020() {
+    assert!(build_environment(
+        &env(&[("=::", "fixture")]),
+        &EnvMap::new(),
+        &Profile::new("synthetic", CliKind::Codex),
+        None,
+        None
+    )
+    .is_err());
 }

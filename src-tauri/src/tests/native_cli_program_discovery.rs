@@ -54,14 +54,16 @@ fn ProgramDiscovery_FindsBothClisWithoutTrustingOrExecuting_001() {
         #[cfg(windows)]
         let env = {
             let effective = env[std::ffi::OsStr::new("PATH")].clone();
-            crate::cli::environment::capture_windows_environment(
+            let mut captured = crate::cli::environment::capture_windows_environment(
                 vec![
                     ("Path".into(), project.selected_path.as_os_str().into()),
                     ("PATH".into(), effective.clone()),
                 ],
                 |_| Some(effective.clone()),
             )
-            .unwrap()
+            .unwrap();
+            captured.insert("=::".into(), "fixture".into());
+            captured
         };
         let result = discover_programs(&repo, "main", &request, &env).unwrap();
         assert_eq!(result.candidates.len(), 1);

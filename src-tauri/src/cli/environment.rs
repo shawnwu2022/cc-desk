@@ -103,19 +103,18 @@ fn contains_nul(value: &OsStr) -> bool {
 }
 
 fn validate_name(name: &OsStr, inherited: bool) -> Result<(), SafeError> {
-    // Windows may inherit its native per-drive current-directory entries.
-    let drive_entry = cfg!(windows)
+    // Windows's environment block permits an initial '=' in inherited names,
+    // including Explorer's '=::' and command state, not only drive entries.
+    // Authored layers may not introduce these reserved names.
+    let reserved_entry = cfg!(windows)
         && inherited
-        && name.to_str().is_some_and(|value| {
-            let bytes = value.as_bytes();
-            bytes.len() == 3
-                && bytes[0] == b'='
-                && bytes[1].is_ascii_alphabetic()
-                && bytes[2] == b':'
-        });
+        && name
+            .as_encoded_bytes()
+            .strip_prefix(b"=")
+            .is_some_and(|tail| !tail.is_empty() && !tail.contains(&b'='));
     if name.is_empty()
         || contains_nul(name)
-        || (name.as_encoded_bytes().contains(&b'=') && !drive_entry)
+        || (name.as_encoded_bytes().contains(&b'=') && !reserved_entry)
     {
         return Err(SafeError::invalid("environment.name"));
     }
