@@ -1,4 +1,5 @@
 //! Formal D11 commands -> real WebView2 -> actual PTY. No CLI accounts or product hooks.
+use super::native_cli_launch_diagnostics::{self as diagnostics, Code, Diagnostics, Mode};
 use crate::cli::document::DOCUMENT_HEADER;
 use crate::cli::launch_service::{LaunchService, NativeRun, RunAccess, RunSupervisor};
 use crate::cli::native_runtime::{take_main_config, NativeRuntime};
@@ -105,9 +106,11 @@ impl RunSupervisor for Consumer {
     }
 }
 impl Consumer {
-    fn cleanup(&self, service: &LaunchService) -> Result<(), SafeError> {
+    fn cleanup(&self, service: &LaunchService, diagnostics: &Diagnostics) -> Result<(), SafeError> {
+        diagnostics.mark(Code::CleanupStarted);
         let runs = std::mem::take(&mut *self.runs.lock());
         for (key, resource) in runs {
+            diagnostics.mark(Code::ChildCleanupStarted);
             if resource.process.pty.try_wait()?.is_none() {
                 resource.process.pty.terminate_root()?;
             }
@@ -118,14 +121,21 @@ impl Consumer {
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
+            diagnostics.mark(Code::RootWaitStarted);
             resource.process.pty.wait()?;
+            diagnostics.mark(Code::RootWaitComplete);
             service.registry().mark_exited(&key)?;
             service.registry().retire(&key)?;
+            diagnostics.mark(Code::RegistryRetired);
             drop(resource); // Close the master before joining its EOF reader.
+            diagnostics.mark(Code::ChildCleanupComplete);
         }
         for thread in std::mem::take(&mut *self.readers.lock()) {
+            diagnostics.mark(Code::ReaderJoinStarted);
             thread.join().map_err(|_| error("TEST_READER_PANIC"))?;
+            diagnostics.mark(Code::ReaderJoinComplete);
         }
+        diagnostics.mark(Code::CleanupComplete);
         Ok(())
     }
 }
@@ -138,6 +148,7 @@ struct Probe {
     service: Arc<LaunchService>,
     runtime: Arc<NativeRuntime>,
     consumer: Arc<Consumer>,
+    diagnostics: Arc<Diagnostics>,
     access: Mutex<Option<RunAccess>>,
     proof: Mutex<Option<String>>,
     observations: Mutex<Vec<String>>,
@@ -155,6 +166,7 @@ impl Probe {
         }
     }
     fn fail(&self, app: &AppHandle, code: &str) -> String {
+        self.diagnostics.failure(code);
         self.failure.lock().get_or_insert_with(|| code.into());
         app.exit(1);
         code.into()
@@ -165,6 +177,7 @@ impl Probe {
             return Err(self.fail(app, "OBSERVATION_ORDER"));
         }
         observations.push(name.into());
+        self.diagnostics.observation(name);
         Ok(())
     }
     fn receipt(&self, webview: &Webview, request: &Request<'_>) -> Result<Value, String> {
@@ -436,7 +449,11 @@ async fn d11_launch_bytes(
         if state.record(&app, "destroy-revoked").is_err() {
             return;
         }
-        if state.consumer.cleanup(&state.service).is_err() {
+        if state
+            .consumer
+            .cleanup(&state.service, &state.diagnostics)
+            .is_err()
+        {
             state.fail(&app, "REAP_FAILED");
             return;
         }

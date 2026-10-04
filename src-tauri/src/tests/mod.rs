@@ -87,6 +87,8 @@ mod paste_framing;
 mod native_cli_launch_service;
 mod native_cli_route_lifetime;
 
+mod native_cli_launch_diagnostics;
+
 #[cfg(windows)]
 mod native_cli_launch_live;
 

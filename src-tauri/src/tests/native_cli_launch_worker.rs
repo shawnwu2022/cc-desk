@@ -29,7 +29,11 @@ fn D11_Launch_Native_001() {
             if Instant::now() > deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("native launch worker timeout");
+                let evidence = diagnostics::snapshot(
+                    &root.path().join(diagnostics::FILE_NAME),
+                    Mode::parse(mode).unwrap(),
+                );
+                panic!("native launch worker timeout; bounded stages:\n{evidence}");
             }
             std::thread::sleep(Duration::from_millis(20));
         };
@@ -57,10 +61,17 @@ fn D11_Launch_Native_001() {
 #[test]
 #[ignore = "subprocess worker explicitly invoked by D11_Launch_Native_001"]
 fn D11_Launch_Worker_099() {
-    bundled_runtime::initialize().unwrap();
     let root = PathBuf::from(std::env::var_os("CC_DESK_D11_LAUNCH_ROOT").unwrap());
     let mode = std::env::var("CC_DESK_D11_LAUNCH_MODE").unwrap();
     assert!(["ready", "closed"].contains(&mode.as_str()));
+    let diagnostics = Arc::new(Diagnostics::new(
+        &root.join(diagnostics::FILE_NAME),
+        Mode::parse(&mode).unwrap(),
+    ));
+    diagnostics.mark(Code::WorkerStarted);
+    diagnostics.mark(Code::InitializeStarted);
+    bundled_runtime::initialize().unwrap();
+    diagnostics.mark(Code::InitializeComplete);
     fs::create_dir(root.join("work")).unwrap();
     let repository = WorkspaceRepository::open(root.join("metadata/workspace.json")).unwrap();
     let mut profile = Profile::new("live-profile", CliKind::Codex);
@@ -135,6 +146,7 @@ fn D11_Launch_Worker_099() {
         service,
         runtime: runtime.clone(),
         consumer,
+        diagnostics: diagnostics.clone(),
         access: Mutex::new(None),
         proof: Mutex::new(None),
         observations: Mutex::new(vec![]),
@@ -153,8 +165,10 @@ fn D11_Launch_Worker_099() {
     });
     let main = take_main_config(context.config_mut()).unwrap();
     let setup = runtime.clone();
+    let setup_diagnostics = diagnostics.clone();
     let pages = probe.clone();
     let windows = probe.clone();
+    diagnostics.mark(Code::AppBuildStarted);
     let app = tauri::Builder::default()
         .any_thread()
         .manage(runtime)
@@ -174,7 +188,9 @@ fn D11_Launch_Worker_099() {
             super::d11_launch_abort,
         ])
         .setup(move |app| {
+            setup_diagnostics.mark(Code::AppSetupStarted);
             setup.initialize_main(app, &main)?;
+            setup_diagnostics.mark(Code::MainInitialized);
             Ok(())
         })
         .on_window_event(move |window, event| {
@@ -185,11 +201,13 @@ fn D11_Launch_Worker_099() {
         .on_page_load(move |webview, payload| {
             if !matches!(payload.event(), PageLoadEvent::Finished) { return; }
             let script = if webview.label() == "main" && !pages.loaded.swap(true, Ordering::SeqCst) {
+                pages.diagnostics.mark(Code::MainPageLoaded);
                 format!("{}\nrunLaunchProbe({},{});",
                     include_str!("fixtures/document/launch.js"),
                     serde_json::to_string(&pages.request).unwrap(),
                     serde_json::to_string(&pages.mode).unwrap())
             } else if webview.label() == "peer" && !pages.peer_loaded.swap(true, Ordering::SeqCst) {
+                pages.diagnostics.mark(Code::PeerPageLoaded);
                 let proof = serde_json::to_string(pages.proof.lock().as_ref().unwrap()).unwrap();
                 let id = serde_json::to_string(&json!({"requestId":pages.request.request_id})).unwrap();
                 let key = serde_json::to_string(&json!({"runId":pages.request.run_id,"generation":pages.request.generation})).unwrap();
@@ -200,15 +218,22 @@ fn D11_Launch_Worker_099() {
         })
         .build(context)
         .expect("isolated native launch application");
+    diagnostics.mark(Code::AppBuilt);
+    diagnostics.mark(Code::RunReturnStarted);
     let exit = app.run_return(|_, _| {});
+    diagnostics.mark(Code::RunReturned);
     drop(probe.access.lock().take());
-    let cleanup = probe.consumer.cleanup(&probe.service);
+    let cleanup = probe.consumer.cleanup(&probe.service, &probe.diagnostics);
+    if cleanup.is_err() {
+        diagnostics.mark(Code::CleanupFailed);
+    }
     let report = json!({"mode":probe.mode,"engineVersion":tauri::webview_version().unwrap(),"observations":probe.observations.lock().clone(),"failure":probe.failure.lock().clone()});
     fs::write(
         root.join("report.json"),
         serde_json::to_vec(&report).unwrap(),
     )
     .unwrap();
+    diagnostics.mark(Code::ReportWritten);
     assert!(cleanup.is_ok(), "cleanup failed");
     assert_eq!(exit, 0, "{report}");
     assert_eq!(report["observations"], json!(probe.expected()), "{report}");
