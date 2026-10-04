@@ -251,7 +251,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         for (let i = 0; i < contexts.length && current(); i += 2) {
           await Promise.all(contexts.slice(i, i + 2).map(context => settle(context.cli === 'claude' ? 'claude-history' : 'codex-history', async () => {
             const entry = await history.load(context)
-            if (entry.error) warnings.add(context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error })
+            if (entry.error) warnings.add(context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error, stage: entry.diagnosticStage })
           })))
         }
       }),

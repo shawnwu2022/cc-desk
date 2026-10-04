@@ -22,6 +22,33 @@ beforeEach(() => setActivePinia(createPinia()))
 afterEach(() => { Reflect.deleteProperty(window, '__CC_DESK_DOCUMENT__') })
 
 describe('Workspace diagnostics through the real document and projection clients', () => {
+  it.each(['scope-request-decode', 'scope-profile-validation', 'scope-environment', 'scope-project-registration', 'scope-capability'])(
+    'preserves only the allowlisted backend stage %s with the original error code', async stage => {
+      bridge(async () => { throw { code: 'INVALID_REQUEST', stage, field: '/private/config', message: 'secret contents' } })
+      const warnings = createWorkspaceSourceWarnings()
+      await useNativeHistoryStore().load(context).catch(failure => warnings.add('codex-history', failure))
+      expect(warnings.items).toEqual([{ source: 'codex-history', code: 'INVALID_REQUEST', stage }])
+      expect(JSON.stringify(warnings.items)).not.toMatch(/private|secret|contents/)
+    })
+
+  it('rejects an arbitrary backend stage and distinguishes a read invoke failure', async () => {
+    bridge(async command => {
+      if (command === 'native_get_scope') return source
+      throw { code: 'INVALID_REQUEST', stage: '/private/source', field: 'secret' }
+    })
+    const warnings = createWorkspaceSourceWarnings()
+    await useNativeHistoryStore().load(context).catch(failure => warnings.add('codex-history', failure))
+    expect(warnings.items).toEqual([{ source: 'codex-history', code: 'INVALID_REQUEST', stage: 'read-invoke' }])
+  })
+
+  it.each(['STORAGE_IO', 'STORAGE_BUSY', 'WORKSPACE_TOO_LARGE', 'UNSUPPORTED_SCHEMA', 'UNSAFE_WORKSPACE_PATH', 'INVALID_PATH', 'RUN_NOT_FOUND', 'RUN_NOT_READY', 'STALE_GENERATION'])(
+    'retains the actual scope dependency error %s', async code => {
+      bridge(async () => { throw { code, stage: 'scope-profile-validation', field: 'private', index: 42 } })
+      const warnings = createWorkspaceSourceWarnings()
+      await useNativeHistoryStore().load(context).catch(failure => warnings.add('codex-history', failure))
+      expect(warnings.items).toEqual([{ source: 'codex-history', code, stage: 'scope-profile-validation' }])
+    })
+
   it('keeps the Rust safe-error envelope code after authenticated raw transport rejects a scope', async () => {
     const calls: string[] = []
     bridge(async (command, bytes, options) => {
@@ -34,7 +61,7 @@ describe('Workspace diagnostics through the real document and projection clients
     const warnings = createWorkspaceSourceWarnings()
     await history.load(context).catch(failure => warnings.add('codex-history', failure))
     expect(history.get(context)?.error).toBe('FORBIDDEN')
-    expect(warnings.items).toEqual([{ source: 'codex-history', code: 'FORBIDDEN' }])
+    expect(warnings.items).toEqual([{ source: 'codex-history', code: 'FORBIDDEN', stage: 'scope-invoke' }])
     expect(calls).toEqual(['native_get_scope'])
   })
 
@@ -49,11 +76,11 @@ describe('Workspace diagnostics through the real document and projection clients
     const history = useNativeHistoryStore()
     const warnings = createWorkspaceSourceWarnings()
     const entry = await history.load(context)
-    warnings.add('codex-history', { code: entry.error })
-    expect(warnings.items).toEqual([{ source: 'codex-history', code: 'SOURCE_TOO_LARGE' }])
+    warnings.add('codex-history', { code: entry.error, stage: entry.diagnosticStage })
+    expect(warnings.items).toEqual([{ source: 'codex-history', code: 'SOURCE_TOO_LARGE', stage: 'read-source-enumeration' }])
     malformed = true
     await history.load({ ...context, force: true }).catch(failure => warnings.add('codex-history', failure))
-    expect(warnings.items[1]).toEqual({ source: 'codex-history', code: 'INVALID_PROJECTION' })
+    expect(warnings.items[1]).toEqual({ source: 'codex-history', code: 'INVALID_PROJECTION', stage: 'read-response-validation' })
     expect(JSON.stringify(warnings.items)).not.toContain('private')
   })
 

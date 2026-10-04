@@ -1,4 +1,4 @@
-import { projectionErrorCode } from '@/api/nativeProjection'
+import { projectionErrorCode, projectionErrorStage, type ProjectionStage } from '@/api/nativeProjection'
 
 export const workspaceSourceLabels = {
   'project-metadata': 'sourceWarningProjectMetadata',
@@ -11,7 +11,7 @@ export const workspaceSourceLabels = {
   catalog: 'sourceWarningCatalog',
 } as const
 export type WorkspaceWarningSource = keyof typeof workspaceSourceLabels
-export interface WorkspaceSourceWarning { source: WorkspaceWarningSource; code: string }
+export interface WorkspaceSourceWarning { source: WorkspaceWarningSource; code: string; stage?: ProjectionStage }
 const responseCodes = new Set(['INVALID_PROFILE_RESPONSE', 'INVALID_WORKSPACE_RESPONSE', 'INVALID_PROJECTION', 'RAW_BODY_REQUIRED', 'REQUEST_TOO_LARGE', 'CLOCK_UNAVAILABLE'])
 const MAX_SOURCE_WARNINGS = 12
 
@@ -28,11 +28,12 @@ export function createWorkspaceSourceWarnings(initial: readonly WorkspaceSourceW
     truncated,
     add(source: WorkspaceWarningSource, failure?: unknown) {
       const code = safeCode(failure)
-      if (result.items.some(row => row.source === source && row.code === code)) return
+      const stage = projectionErrorStage(failure)
+      if (result.items.some(row => row.source === source && row.code === code && row.stage === stage)) return
       if (result.items.length === MAX_SOURCE_WARNINGS) { result.truncated = true; return }
-      result.items.push({ source, code })
+      result.items.push({ source, code, ...(stage ? { stage } : {}) })
     },
   }
-  for (const row of initial) result.add(row.source, { code: row.code })
+  for (const row of initial) result.add(row.source, { code: row.code, stage: row.stage })
   return result
 }

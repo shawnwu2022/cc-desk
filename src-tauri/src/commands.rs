@@ -552,8 +552,10 @@ pub(crate) async fn native_get_scope(
     webview: tauri::Webview,
     request: tauri::ipc::Request<'_>,
     runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,
-) -> std::result::Result<crate::cli::native_projection::wire::SourceRef, crate::cli::types::SafeError>
-{
+) -> std::result::Result<
+    crate::cli::native_projection::wire::SourceRef,
+    crate::cli::native_projection::diagnostics::ProjectionFailure,
+> {
     runtime.projection_scope(&webview, &request).await
 }
 #[tauri::command]
@@ -563,7 +565,7 @@ pub(crate) async fn native_list_resources(
     runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,
 ) -> std::result::Result<
     crate::cli::native_projection::wire::ProjectionResult,
-    crate::cli::types::SafeError,
+    crate::cli::native_projection::diagnostics::ProjectionFailure,
 > {
     runtime.projection_read(&webview, &request).await
 }

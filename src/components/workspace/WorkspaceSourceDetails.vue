@@ -9,8 +9,8 @@ const { t } = useI18n()
   <details v-if="warnings.length" class="ui-error-details source-warning-details" data-workspace-source-details>
     <summary>{{ t('toggleDetails') }}</summary>
     <ul>
-      <li v-for="warning in warnings" :key="`${warning.source}:${warning.code}`">
-        {{ t(workspaceSourceLabels[warning.source]) }}: <code>{{ warning.code }}</code>
+      <li v-for="warning in warnings" :key="`${warning.source}:${warning.stage}:${warning.code}`">
+        {{ t(workspaceSourceLabels[warning.source]) }}: <code>{{ warning.code }}<template v-if="warning.stage"> / {{ warning.stage }}</template></code>
       </li>
     </ul>
     <p v-if="truncated">{{ t('sourceWarningMore') }}</p>

@@ -1,4 +1,5 @@
 //! Binds directory capabilities to D11's live document/run registry and Desk revisions.
+use super::diagnostics::{ProjectionFailure, ProjectionStage};
 use super::registry::{Grant, Owner, ScopeRegistry};
 use super::scoped_fs::{ReadResult, Root};
 use super::selection::{locations, Locations};
@@ -24,12 +25,32 @@ impl ProjectionService {
             registry: ScopeRegistry::new(64),
         }
     }
+    #[cfg(test)]
     pub(crate) fn scope(
         &self,
         caller: &CallerIdentity,
         target: &ScopeTarget,
     ) -> Result<SourceRef, SafeError> {
+        self.scope_diagnosed(caller, target)
+            .map_err(|failure| failure.cause)
+    }
+    pub(crate) fn scope_diagnosed(
+        &self,
+        caller: &CallerIdentity,
+        target: &ScopeTarget,
+    ) -> Result<SourceRef, ProjectionFailure> {
+        let mut stage = ProjectionStage::ScopeCapability;
+        self.scope_inner(caller, target, &mut stage)
+            .map_err(|error| stage.failure(error))
+    }
+    fn scope_inner(
+        &self,
+        caller: &CallerIdentity,
+        target: &ScopeTarget,
+        stage: &mut ProjectionStage,
+    ) -> Result<SourceRef, SafeError> {
         self.launch.registry().check_caller(caller)?;
+        *stage = ProjectionStage::ScopeRequestValidation;
         target.validate()?;
         let grant = match target {
             ScopeTarget::Profile {
@@ -37,12 +58,14 @@ impl ProjectionService {
                 expected_profile_revision,
                 project_id,
             } => {
+                *stage = ProjectionStage::ScopeProfileValidation;
                 let profile = self.launch.repository().get_profile(profile_id)?;
                 if profile.revision != *expected_profile_revision {
                     return Err(error("REVISION_CONFLICT"));
                 }
-                let (env, selected) = profile_locations(&self.launch, &profile)?;
+                let (env, selected) = profile_locations_diagnosed(&self.launch, &profile, stage)?;
                 drop(env); // Never retain an ambient environment snapshot in an IPC DTO.
+                *stage = ProjectionStage::ScopeProjectRegistration;
                 let project = project_id
                     .as_ref()
                     .map(|id| {
@@ -95,6 +118,7 @@ impl ProjectionService {
                     }
                     Ok(())
                 });
+                *stage = ProjectionStage::ScopeSourceRoot;
                 Grant {
                     owner: owner(caller),
                     cli: profile.cli,
@@ -115,6 +139,7 @@ impl ProjectionService {
                 }
             }
             ScopeTarget::Run { run_id, generation } => {
+                *stage = ProjectionStage::ScopeCapability;
                 let run = RunKey {
                     run_id: run_id.clone(),
                     generation: *generation,
@@ -131,8 +156,10 @@ impl ProjectionService {
                 {
                     return Err(error("SCOPE_UNKNOWN"));
                 }
+                *stage = ProjectionStage::ScopeSourceSelection;
                 let selected =
                     locations(snapshot.request().cli, snapshot.environment()).map_err(error)?;
+                *stage = ProjectionStage::ScopeSourceRoot;
                 // Only a new no-extra-args launch authorizes its frozen requested cwd for project resources.
                 // Resume/picker can choose another cwd; they expose root-wide observations only.
                 let (project, project_paths) =
@@ -178,8 +205,26 @@ impl ProjectionService {
                 }
             }
         };
+        *stage = ProjectionStage::ScopeCapability;
         self.launch.registry().check_caller(caller)?;
         self.registry.register(grant)
+    }
+    pub(crate) fn read_diagnosed(
+        &self,
+        caller: &CallerIdentity,
+        request: &ReadRequest,
+    ) -> Result<ProjectionResult, ProjectionFailure> {
+        request
+            .validate()
+            .map_err(|e| ProjectionStage::ReadRequestValidation.failure(e))?;
+        self.read(caller, request).map_err(|e| {
+            let stage = if e.code.starts_with("SCOPE_") || e.code == "FORBIDDEN" {
+                ProjectionStage::ReadCapability
+            } else {
+                ProjectionStage::ReadSourceEnumeration
+            };
+            stage.failure(e)
+        })
     }
     pub(crate) fn read(
         &self,
@@ -204,6 +249,18 @@ fn profile_locations(
     service: &LaunchService,
     profile: &Profile,
 ) -> Result<(EnvMap, Locations), SafeError> {
+    profile_locations_diagnosed(
+        service,
+        profile,
+        &mut ProjectionStage::ScopeProfileValidation,
+    )
+}
+fn profile_locations_diagnosed(
+    service: &LaunchService,
+    profile: &Profile,
+    stage: &mut ProjectionStage,
+) -> Result<(EnvMap, Locations), SafeError> {
+    *stage = ProjectionStage::ScopeProfileValidation;
     if profile.cli == CliKind::Shell
         || !matches!(profile.launcher, Launcher::Native)
         || matches!(&profile.default_args,Override::Set(args) if !args.is_empty())
@@ -223,6 +280,7 @@ fn profile_locations(
             }
         }
     }
+    *stage = ProjectionStage::ScopeEnvironment;
     let env = build_environment(
         &service.inherited_environment(),
         &EnvMap::new(),
@@ -230,6 +288,7 @@ fn profile_locations(
         legacy.as_ref(),
         None,
     )?;
+    *stage = ProjectionStage::ScopeSourceSelection;
     let selected = locations(profile.cli, &env).map_err(error)?;
     Ok((env, selected))
 }

@@ -2,6 +2,24 @@ import type { ProjectionResult, ReadRequest, ResourceItem, ResourceKind, ScopeTa
 export interface ProjectionBridge { readonly instanceId: string; invoke(command: string, payload: unknown): Promise<unknown> }
 export interface ProjectionClient { scope(target: ScopeTarget): Promise<SourceRef>; read(request: ReadRequest): Promise<ProjectionResult> }
 const kinds: ResourceKind[] = ['history', 'messages', 'search', 'config', 'mcp', 'skills', 'agents', 'plugins', 'instructions']
+const diagnosticStages = ['frontend-bridge', 'frontend-serialization',
+  'scope-invoke', 'scope-document-admission', 'scope-request-decode', 'scope-request-validation', 'scope-profile-validation',
+  'scope-environment', 'scope-project-registration', 'scope-source-selection', 'scope-source-root', 'scope-capability', 'scope-task', 'scope-response-admission', 'scope-response-validation',
+  'read-invoke', 'read-document-admission', 'read-request-decode', 'read-request-validation', 'read-capability', 'read-source-enumeration', 'read-task', 'read-response-admission', 'read-response-validation'] as const
+export type ProjectionStage = typeof diagnosticStages[number]
+export function projectionErrorStage(value: unknown): ProjectionStage | undefined {
+  const stage = value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'stage') ? (value as { stage: unknown }).stage : undefined
+  return diagnosticStages.includes(stage as ProjectionStage) ? stage as ProjectionStage : undefined
+}
+const diagnosticCodes = new Set(['INVALID_PROJECTION', 'RAW_BODY_REQUIRED', 'REQUEST_TOO_LARGE', 'CLOCK_UNAVAILABLE',
+  'WORKSPACE_INVALID', 'PROFILE_INVALID', 'ENV_SOURCE_MISSING', 'LEGACY_INVALID', 'LEGACY_READ_FAILED', 'LEGACY_TOO_LARGE',
+  'STORAGE_IO', 'STORAGE_BUSY', 'WORKSPACE_TOO_LARGE', 'UNSUPPORTED_SCHEMA', 'UNSAFE_WORKSPACE_PATH', 'INVALID_PATH',
+  'RUN_NOT_FOUND', 'RUN_NOT_READY', 'STALE_GENERATION'])
+export function projectionFailure(value: unknown, fallback: ProjectionStage): Error & { code: string; stage: ProjectionStage } {
+  const code = projectionErrorCode(value)
+  // Construct a fresh bounded error; never retain raw fields, values or parser messages.
+  return Object.assign(new Error(code), { code, stage: projectionErrorStage(value) ?? fallback })
+}
 const reasons = new Set(['SCOPE_UNKNOWN', 'SCOPE_STALE', 'SCOPE_REVOKED', 'SCOPE_CAPACITY', 'SCOPE_EPOCH_EXHAUSTED', 'SCOPE_UNAVAILABLE',
   'SOURCE_UNSUPPORTED', 'SOURCE_INVALID', 'SOURCE_INVALID_TEXT', 'SOURCE_PATH_REJECTED', 'SOURCE_CHANGED', 'SOURCE_NOT_REGULAR',
   'SOURCE_TOO_LARGE', 'SOURCE_TOO_MANY_ENTRIES', 'SOURCE_BUDGET_EXCEEDED', 'SOURCE_READ_FAILED', 'SOURCE_READ_FORBIDDEN',
@@ -118,20 +136,32 @@ export function createProjectionClient(bridge: ProjectionBridge): ProjectionClie
   const instance = id(bridge.instanceId)
   return {
     async scope(value) {
-      const query = target(value)
-      const received = source(await bridge.invoke('native_get_scope', query))
-      if (received.instanceId !== instance || JSON.stringify(received.target) !== JSON.stringify(query)) return invalid()
-      return received
+      let stage: ProjectionStage = 'scope-request-validation'
+      try {
+        const query = target(value)
+        stage = 'scope-invoke'
+        const response = await bridge.invoke('native_get_scope', query)
+        stage = 'scope-response-validation'
+        const received = source(response)
+        if (received.instanceId !== instance || JSON.stringify(received.target) !== JSON.stringify(query)) return invalid()
+        return received
+      } catch (failure) { throw projectionFailure(failure, stage) }
     },
     async read(value) {
-      const query = readRequest(value)
-      if (query.source.instanceId !== instance) return invalid()
-      return result(await bridge.invoke('native_list_resources', query), query)
+      let stage: ProjectionStage = 'read-request-validation'
+      try {
+        const query = readRequest(value)
+        if (query.source.instanceId !== instance) return invalid()
+        stage = 'read-invoke'
+        const response = await bridge.invoke('native_list_resources', query)
+        stage = 'read-response-validation'
+        return result(response, query)
+      } catch (failure) { throw projectionFailure(failure, stage) }
     },
   }
 }
 /** Never reflect arbitrary transport exception messages (which may contain native values). */
 export function projectionErrorCode(value: unknown): string {
-  const code = value && typeof value === 'object' && 'code' in value ? (value as { code: unknown }).code : null
-  return typeof code === 'string' && reasons.has(code) ? code : 'SOURCE_UNAVAILABLE'
+  const code = value && typeof value === 'object' && 'code' in value ? (value as { code: unknown }).code : value instanceof Error ? value.message : null
+  return typeof code === 'string' && (reasons.has(code) || diagnosticCodes.has(code)) ? code : 'SOURCE_UNAVAILABLE'
 }

@@ -72,4 +72,11 @@ describe('D11 document-scoped bootstrap', () => {
     await expect(context.__CC_DESK_DOCUMENT__.invoke('cli_start', {})).rejects.toMatchObject({ code: 'TRANSPORT_LOST' })
     expect(count).toBe(1)
   })
+
+  it('projection serialization has a fixed diagnostic stage and never invokes', async () => {
+    const { context, calls } = realm()
+    const payload: any = { private: 'must never appear' }; payload.circular = payload
+    await expect(context.__CC_DESK_DOCUMENT__.invoke('native_get_scope', payload)).rejects.toEqual({ code: 'INVALID_REQUEST', stage: 'frontend-serialization' })
+    expect(calls).toHaveLength(0)
+  })
 })

@@ -23,6 +23,7 @@
           headers['x-cc-desk-output-channel'] = descriptor
         }
       } catch {
+        if (command === 'native_get_scope' || command === 'native_list_resources') throw { code: 'INVALID_REQUEST', stage: 'frontend-serialization' }
         throw { code: 'INVALID_REQUEST' }
       }
       const internals = window.__TAURI_INTERNALS__

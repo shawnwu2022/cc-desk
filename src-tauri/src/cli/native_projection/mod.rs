@@ -1,5 +1,6 @@
 //! Authenticated, read-only native observations. The CLI remains the configuration authority.
 pub(crate) mod catalog;
+pub(crate) mod diagnostics;
 pub(crate) mod registry;
 pub(crate) mod scoped_fs;
 pub(crate) mod selection;

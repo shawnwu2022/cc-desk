@@ -168,34 +168,61 @@ impl NativeRuntime {
         &self,
         webview: &Webview<T>,
         request: &Request<'_>,
-    ) -> Result<super::native_projection::wire::SourceRef, SafeError> {
-        let caller = self.binding()?.admit_native(webview, request.headers())?;
+    ) -> Result<
+        super::native_projection::wire::SourceRef,
+        super::native_projection::diagnostics::ProjectionFailure,
+    > {
+        use super::native_projection::diagnostics::ProjectionStage as Stage;
+        let caller = self
+            .binding()
+            .and_then(|binding| binding.admit_native(webview, request.headers()))
+            .map_err(|e| Stage::ScopeDocumentAdmission.failure(e))?;
         let target: super::native_projection::wire::ScopeTarget =
-            decode_projection(request.body(), 4096)?;
-        target.validate()?;
+            decode_projection(request.body(), 4096)
+                .map_err(|e| Stage::ScopeRequestDecode.failure(e))?;
+        target
+            .validate()
+            .map_err(|e| Stage::ScopeRequestValidation.failure(e))?;
         let service = self.projections.clone();
         let admitted = caller.clone();
-        let value = tauri::async_runtime::spawn_blocking(move || service.scope(&admitted, &target))
-            .await
-            .map_err(|_| error("SOURCE_TASK_FAILED"))??;
-        self.projections.check_caller(&caller)?;
+        let value = tauri::async_runtime::spawn_blocking(move || {
+            service.scope_diagnosed(&admitted, &target)
+        })
+        .await
+        .map_err(|_| Stage::ScopeTask.failure(error("SOURCE_TASK_FAILED")))??;
+        self.projections
+            .check_caller(&caller)
+            .map_err(|e| Stage::ScopeResponseAdmission.failure(e))?;
         Ok(value)
     }
     pub(crate) async fn projection_read<T: Runtime>(
         &self,
         webview: &Webview<T>,
         request: &Request<'_>,
-    ) -> Result<super::native_projection::wire::ProjectionResult, SafeError> {
-        let caller = self.binding()?.admit_native(webview, request.headers())?;
+    ) -> Result<
+        super::native_projection::wire::ProjectionResult,
+        super::native_projection::diagnostics::ProjectionFailure,
+    > {
+        use super::native_projection::diagnostics::ProjectionStage as Stage;
+        let caller = self
+            .binding()
+            .and_then(|binding| binding.admit_native(webview, request.headers()))
+            .map_err(|e| Stage::ReadDocumentAdmission.failure(e))?;
         let query: super::native_projection::wire::ReadRequest =
-            decode_projection(request.body(), 16384)?;
-        query.validate()?;
+            decode_projection(request.body(), 16384)
+                .map_err(|e| Stage::ReadRequestDecode.failure(e))?;
+        query
+            .validate()
+            .map_err(|e| Stage::ReadRequestValidation.failure(e))?;
         let service = self.projections.clone();
         let admitted = caller.clone();
-        let value = tauri::async_runtime::spawn_blocking(move || service.read(&admitted, &query))
-            .await
-            .map_err(|_| error("SOURCE_TASK_FAILED"))??;
-        self.projections.check_caller(&caller)?;
+        let value =
+            tauri::async_runtime::spawn_blocking(move || service.read_diagnosed(&admitted, &query))
+                .await
+                .map_err(|_| Stage::ReadTask.failure(error("SOURCE_TASK_FAILED")))??;
+        self.projections
+            .check_caller(&caller)
+            .map_err(|e| Stage::ReadResponseAdmission.failure(e))?;
         Ok(value)
     }
     fn admit_run_key<T: Runtime>(

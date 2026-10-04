@@ -65,7 +65,7 @@ describe('Workspace source warning diagnostics', () => {
     expect(runtime.error.value).toBe('workspaceRuntimePartial')
     expect(runtime.sourceWarnings?.value).toEqual([
       { source: 'project-discovery', code: 'SOURCE_UNAVAILABLE' },
-      { source: 'codex-history', code: 'FORBIDDEN' },
+      { source: 'codex-history', code: 'FORBIDDEN', stage: 'scope-invoke' },
     ])
     expect(runtime.openSessions.value.some(row => row.adapterSessionId === tab.tabId)).toBe(true)
     expect(JSON.stringify(runtime.sourceWarnings?.value)).not.toMatch(/private|token|secret|title/i)
@@ -74,7 +74,7 @@ describe('Workspace source warning diagnostics', () => {
   it('retains an unavailable history reason and clears its warning only after a successful refresh', async () => {
     io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_TOO_LARGE', items: [], hasMore: false })
     const { runtime } = render(); await flushPromises()
-    expect(runtime.sourceWarnings?.value).toEqual([{ source: 'codex-history', code: 'SOURCE_TOO_LARGE' }])
+    expect(runtime.sourceWarnings?.value).toEqual([{ source: 'codex-history', code: 'SOURCE_TOO_LARGE', stage: 'read-source-enumeration' }])
     expect(runtime.error.value).toBe('workspaceRuntimePartial')
     io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false })
     await runtime.refresh()
@@ -94,7 +94,7 @@ describe('Workspace source warning diagnostics', () => {
   })
 
   it('shows the failed source and safe code in collapsed details in the actual App warning', async () => {
-    io.scope.mockRejectedValue({ code: 'SOURCE_READ_FORBIDDEN', field: '/private/path', message: 'raw-secret' })
+    io.scope.mockRejectedValue({ code: 'SOURCE_READ_FORBIDDEN', stage: 'scope-source-root', field: '/private/path', message: 'raw-secret' })
     const w = mount(App, { global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } })
     wrappers.push(w); await flushPromises()
     const details = w.find('[data-workspace-source-details]')
@@ -102,6 +102,7 @@ describe('Workspace source warning diagnostics', () => {
     expect(details.attributes('open')).toBeUndefined()
     expect(details.text()).toContain('Codex CLI history')
     expect(details.text()).toContain('SOURCE_READ_FORBIDDEN')
+    expect(details.text()).toContain('scope-source-root')
     expect(details.text()).not.toMatch(/private|raw-secret/)
     expect(w.text()).toContain(en.workspaceRuntimePartial)
   })

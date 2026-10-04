@@ -3,7 +3,7 @@ import { reactive } from 'vue'
 import { createNativeProjectionClient } from '@/api/tauri'
 import type { NativeCliKind } from '@/types/cli'
 import type { ResourceItem } from '@/types/nativeProjection'
-import { projectionErrorCode } from '@/api/nativeProjection'
+import { projectionFailure, type ProjectionStage } from '@/api/nativeProjection'
 import { normalizePath } from '@/utils/path'
 
 export interface NativeHistoryContext {
@@ -24,6 +24,7 @@ export interface NativeHistoryEntry {
   loading: boolean
   loaded: boolean
   error: string | null
+  diagnosticStage?: ProjectionStage
   requestEpoch: string
   /** Only one complete authenticated response can prove absence. Offset pages
    * have no common snapshot token and are positive discovery only. */
@@ -94,8 +95,10 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
     }
     entries.set(key, entry)
 
+    let stage: ProjectionStage = 'frontend-bridge'
     try {
       const client = createNativeProjectionClient()
+      stage = 'scope-invoke'
       const source = await client.scope({
         kind: 'profile',
         profileId: context.profileId,
@@ -107,10 +110,12 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
       const sessions = new Map<string, NativeHistorySession>()
       let offset = 0
       while (true) {
+        stage = 'read-invoke'
         const result = await client.read({ source, resourceKind: 'history', requestEpoch: epoch, limit: 200, offset })
         if (owners.get(key) !== owner) return entries.get(key) ?? entry
         if (result.state !== 'ready') {
           entry.error = result.reason ?? 'SOURCE_UNAVAILABLE'
+          entry.diagnosticStage = 'read-source-enumeration'
           entry.sessions = []
           break
         }
@@ -129,10 +134,12 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
       return entry
     } catch (failure) {
       if (owners.get(key) !== owner) return entries.get(key) ?? entry
-      entry.error = projectionErrorCode(failure)
+      const diagnostic = projectionFailure(failure, stage)
+      entry.error = diagnostic.code
+      entry.diagnosticStage = diagnostic.stage
       entry.sessions = []
       entry.loaded = true
-      throw failure
+      throw diagnostic
     } finally {
       if (owners.get(key) === owner) entry.loading = false
     }

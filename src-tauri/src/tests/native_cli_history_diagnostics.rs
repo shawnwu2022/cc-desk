@@ -45,7 +45,15 @@ fn history_with_environment(extra: EnvMap) -> Vec<Result<(), crate::cli::types::
             }
             let target: ScopeTarget =
                 serde_json::from_slice(&serde_json::to_vec(&target).unwrap()).unwrap();
-            let result = service.scope(&caller, &target).and_then(|source| {
+            let scoped = service.scope_diagnosed(&caller, &target);
+            if let Err(failure) = &scoped {
+                let diagnostic = serde_json::to_value(failure).unwrap();
+                assert_eq!(
+                    diagnostic,
+                    json!({"code":"INVALID_REQUEST", "stage":"scope-environment", "retryable":false})
+                );
+            }
+            let result = scoped.map_err(|failure| failure.cause).and_then(|source| {
                 let request: ReadRequest = serde_json::from_slice(
                     &serde_json::to_vec(&json!({
                         "source": source, "resourceKind": "history", "requestEpoch": "1",
@@ -93,6 +101,53 @@ fn HistoryDiagnostics_OldProfileSchemaFailureIsWorkspaceInvalid_003() {
         assert_eq!(
             decode_workspace(&bytes).unwrap_err().code,
             "WORKSPACE_INVALID"
+        );
+    }
+}
+
+#[test]
+fn HistoryDiagnostics_ProfileProjectAndWireStagesRemainDistinct_004() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = WorkspaceRepository::open(temp.path().join("desk/workspace.json")).unwrap();
+    let profile = Profile::new("fixture", crate::cli::types::CliKind::Codex);
+    let document = repo
+        .apply(repo.read().unwrap().revision, Patch::Create { profile })
+        .unwrap();
+    let mut env = EnvMap::new();
+    env.insert("HOME".into(), temp.path().as_os_str().into());
+    env.insert("USERPROFILE".into(), temp.path().as_os_str().into());
+    let launch = Arc::new(LaunchService::new(repo, Some(env), None));
+    let caller = launch.registry().activate_window("main").unwrap();
+    let service = ProjectionService::new(launch);
+    for (profile_id, project_id, code, stage) in [
+        (
+            "bad/id",
+            None,
+            "INVALID_REQUEST",
+            "scope-request-validation",
+        ),
+        (
+            "missing",
+            None,
+            "PROFILE_NOT_FOUND",
+            "scope-profile-validation",
+        ),
+        (
+            "fixture",
+            Some("missing-project"),
+            "PROJECT_NOT_FOUND",
+            "scope-project-registration",
+        ),
+    ] {
+        let target = ScopeTarget::Profile {
+            profile_id: profile_id.into(),
+            expected_profile_revision: document.profiles["fixture"].revision,
+            project_id: project_id.map(String::from),
+        };
+        let failure = service.scope_diagnosed(&caller, &target).unwrap_err();
+        assert_eq!(
+            serde_json::to_value(failure).unwrap(),
+            json!({"code":code, "stage":stage, "retryable":false})
         );
     }
 }
