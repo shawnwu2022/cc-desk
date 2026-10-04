@@ -111,9 +111,24 @@ impl Drop for ReleaseOnDrop {
     }
 }
 
-fn await_marker(marker: &Path) {
+fn await_marker(case: &str, marker: &Path, owner: &PreparedProcess<'_>) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !marker.exists() {
+        if std::time::Instant::now() >= deadline {
+            // 仅在原有启动期限耗尽时采集精确进程状态，不改变等待或清理协议。
+            match owner.process.terminal(0) {
+                Ok(terminal) => evidence(
+                    case,
+                    "markerDeadline",
+                    serde_json::json!({
+                        "exactRootTerminal": terminal.is_some(),
+                        "exitCode": terminal.map(|value| value.exit_code()),
+                    }),
+                ),
+                Err(error) => io_evidence(case, "markerDeadline", &error),
+            }
+            let _ = observe_count(case, "markerDeadlineJob", &owner.job);
+        }
         assert!(
             std::time::Instant::now() < deadline,
             "controlled worker did not start"
@@ -165,7 +180,7 @@ fn observe_owner_loss(reopen_while_live: bool) {
     .unwrap();
     let receipt = owner.persist_identity(&user).unwrap();
     owner.resume(&receipt).unwrap();
-    await_marker(&marker);
+    await_marker(case, &marker, &owner);
 
     // Bind the observed post-disarm phase to the exact original durable
     // lifetime receipt, not the preparation phase in the process receipt.

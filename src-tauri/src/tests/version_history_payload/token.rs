@@ -766,6 +766,11 @@ fn run_scoped_worker(root: &Path, scope: WorkerScope<'_>) -> io::Result<()> {
         &json!({"process":exact.identity(),"exitCode":code,"activeProcesses":accounting.ActiveProcesses}),
     )?;
     if code != 0 || accounting.ActiveProcesses != 0 {
+        // 仅输出有界状态，区分子测试失败和结束后的 Job 计数，保留原有拒绝。
+        eprintln!(
+            "HISTORY_CONFINED_WORKER_TERMINAL {{\"exitCode\":{code},\"activeProcesses\":{}}}",
+            accounting.ActiveProcesses
+        );
         return Err(blocked("worker failed or owned job not empty"));
     }
     Ok(())
