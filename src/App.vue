@@ -36,6 +36,7 @@ import { useAppStore } from '@/stores/app'
 import { useSidebarStore, type SettingsSection } from '@/stores/sidebar'
 import { applyThemeToDom } from '@/utils/theme'
 import { projectBasename } from '@/utils/displayName'
+import { mapSafeUserError } from '@/utils/userError'
 import { sameProjectPath } from '@/utils/path'
 import { onMenuSettings, onMenuShortcuts, onConfigFontSize, onOpenDirectory, onTerminalRestart } from '@/api/tauri'
 import type { NewSessionRequest, UnifiedProjectIdentity } from '@/types/unifiedSession'
@@ -240,7 +241,10 @@ onUnmounted(() => {
             :warnings="runtime.sourceWarnings?.value ?? []" :truncated="runtime.sourceWarningsTruncated?.value ?? false" />
         </InlineNotice>
         <InlineNotice v-if="sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED'" data-launch-preparation kind="warning"
-          :message="t('launchPreparationConfigurationRequired')" :action-label="t('launchConfigEditAction')" @action="editPreparationConfiguration" />
+          :message="t(mapSafeUserError(sessions.activeSession.preparationIssueCode ?? 'GENERIC_UNAVAILABLE', 'launch').messageKey)"
+          :action-label="t('launchConfigEditAction')" @action="editPreparationConfiguration">
+          <ErrorDetails :code="sessions.activeSession.preparationIssueCode ?? 'GENERIC_UNAVAILABLE'" context="launch" />
+        </InlineNotice>
         <InlineNotice v-if="sessions.activeSession?.safeErrorCode === 'NEW_SESSION_PREPARATION_FAILED'" kind="warning"
           :message="t('newSessionPreparationFailed')" :action-label="t('newSessionMoreOptions')"
           @action="newSessionDraft.open(sessions.activeSession!, sessions.activeSession!.cli)" />

@@ -454,6 +454,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       row.preparationState = creation.preparing ? 'failed' : 'unknown'
       if (creation.preparing && failure instanceof LaunchConfigurationRequiredError) {
         row.safeErrorCode = 'LAUNCH_CONFIGURATION_REQUIRED'
+        row.preparationIssueCode = failure.issueCode
         row.launchConfigId = failure.profileId
       } else row.safeErrorCode = creation.preparing ? 'NEW_SESSION_PREPARATION_FAILED' : 'LAUNCH_STATE_UNKNOWN'
       sessions.value = sessions.value.map(session => session.id === id ? { ...row } : session)

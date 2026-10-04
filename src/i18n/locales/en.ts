@@ -250,6 +250,7 @@ export default {
   newSessionContinueRestore: "Continue to restore",
   newSessionPreparationFailed: "The project or launch configuration could not be prepared safely. Retry explicitly, or choose an existing configuration in More options. Launches are never retried automatically.",
   launchPreparationConfigurationRequired: "Choose the CLI program and check this launch configuration before starting a session. Save your changes, then explicitly retry or create a session.",
+  launchPreparationConfigurationUnavailable: "The launch configuration check failed. View the error details, correct the configuration, then explicitly retry.",
   launchPreparationWorkingDirectoryUnavailable: "The project's working folder is unavailable. Check that it still exists and is accessible.",
 
   workspaceRuntimePartial: 'Some session sources could not be loaded. Open sessions remain available.',

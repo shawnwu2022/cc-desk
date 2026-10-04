@@ -71,6 +71,8 @@ export interface UnifiedSession {
   launchConfigId?: string | null
   nativeOrigin?: NativeSessionOrigin
   safeErrorCode?: string | null
+  /** Allowlisted preflight code only; never raw errors or configuration values. */
+  preparationIssueCode?: string | null
   renameState?: SessionRenameState
 }
 

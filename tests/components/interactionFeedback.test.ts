@@ -462,6 +462,21 @@ it('Feedback_SettingsDeleteKeepsRun_019', async () => {
   expect(document.querySelector('[data-live-terminal]')).not.toBeNull()
 })
 
+// 不同预检失败不能都提示用户重新选择程序；仅保留固定错误码。
+it.each(['PROGRAM_UNAVAILABLE', 'RUNNER_UNAVAILABLE', 'ENV_SOURCE_MISSING', 'INVALID_REQUEST'])('LaunchPreparation_PreservesActualFailure_002: %s', async code => {
+  io.availability.mockImplementation(async (profileId, profileRevision) => ({ profileId, profileRevision, cli: 'codex', state: 'unavailable', hostStatus: 'available', certified: false,
+    issue: { code, retryable: false, field: '/private/SECRET', message: 'PRIVATE_TOKEN' } }))
+  render(); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'create-session', input: { cli: 'codex', projectKey: '/repo', projectPath: '/repo', launchConfigId: 'cx', launchConfigRevision: '7' } })
+  await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  const notice = document.querySelector('[data-launch-preparation]')
+  expect(notice?.textContent).not.toContain('Choose the CLI program')
+  expect(notice?.textContent).toContain(code)
+  expect(notice?.textContent).not.toMatch(/PRIVATE_TOKEN|private\/SECRET/)
+  expect(useUnifiedSessionsStore().activeSession).toMatchObject({ preparationIssueCode: code, launchConfigId: 'cx' })
+})
+
 // 未选择可信程序时，真实新建入口停在可关闭的准备行，并直达同一配置编辑器。
 it('LaunchPreparation_ConfigurationActionDoesNotAdmit_001', async () => {
   io.availability.mockImplementation(async (profileId, profileRevision) => ({ profileId, profileRevision, cli: 'codex', state: 'configuration-required', hostStatus: 'available', certified: false, issue: { code: 'PROGRAM_TRUST_REQUIRED', retryable: false } }))

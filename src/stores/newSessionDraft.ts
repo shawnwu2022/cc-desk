@@ -166,7 +166,7 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
       if (profiles.profile(profileId)?.revision !== profileRevision || availability.cli !== input.cli) {
         throw new Error('PROFILE_SELECTION_CHANGED')
       }
-      if (availability.state !== 'available-unverified') throw new LaunchConfigurationRequiredError(profileId)
+      if (availability.state !== 'available-unverified') throw new LaunchConfigurationRequiredError(profileId, availability.issue)
       if (availability.hostStatus === 'unavailable') throw new Error('NEW_SESSION_PREPARATION_FAILED')
       return { ...input, launchConfigId: selected.id, launchConfigRevision: selected.revision }
     } catch (failure) {

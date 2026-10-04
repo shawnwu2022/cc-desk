@@ -25,6 +25,7 @@ export function projectSessionDiagnostics(row: UnifiedSession, open: boolean, ge
     open,
     preparing,
     generation: Number.isSafeInteger(generation) && generation! > 0 && generation! <= 0xffffffff ? generation! : null,
-    errorCode: row.safeErrorCode ? mapSafeUserError(row.safeErrorCode, 'session').detailCode : null,
+    errorCode: row.safeErrorCode ? mapSafeUserError(row.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED'
+      ? row.preparationIssueCode ?? row.safeErrorCode : row.safeErrorCode, 'session').detailCode : null,
   }
 }
