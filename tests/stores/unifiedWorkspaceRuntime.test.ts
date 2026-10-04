@@ -6,6 +6,8 @@ import App from '@/App.vue'
 import ArchivedSessionsDrawer from '@/components/sessions/ArchivedSessionsDrawer.vue'
 import { createI18n } from 'vue-i18n'
 import en from '@/i18n/locales/en'
+import zh from '@/i18n/locales/zh'
+import LaunchConfigurationEditor from '@/components/settings/LaunchConfigurationEditor.vue'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
@@ -57,6 +59,148 @@ function render() {
   return { runtime, port }
 }
 describe('Workspace source warning diagnostics', () => {
+  // 关闭只收起提示，加载中的空错误及相同重试结果不能重置关闭状态。
+  it('Warnings_DismissRetry_001', async () => {
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_TOO_LARGE', items: [], hasMore: false })
+    const { runtime } = render(); await flushPromises()
+    expect(runtime.sourceNoticeDismissed?.value).toBe(false)
+    runtime.dismissSourceNotice()
+    expect(runtime.sourceNoticeDismissed.value).toBe(true)
+    expect(runtime.error.value).toBe('workspaceRuntimePartial')
+    expect(runtime.sourceWarnings.value[0].code).toBe('SOURCE_TOO_LARGE')
+    let finish!: (value: unknown) => void
+    io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const refresh = runtime.refresh(); await flushPromises()
+    expect(runtime.sourceNoticeDismissed.value).toBe(true)
+    finish({ state: 'unavailable', reason: 'SOURCE_TOO_LARGE', items: [], hasMore: false }); await refresh
+    expect(runtime.sourceNoticeDismissed.value).toBe(true)
+  })
+
+  // 新代码必须重新提示，成功检查之后相同失败复发也必须重新提示。
+  it('Warnings_NewAndRecur_002', async () => {
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_TOO_LARGE', items: [], hasMore: false })
+    const { runtime } = render(); await flushPromises(); runtime.dismissSourceNotice()
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_UNSUPPORTED', items: [], hasMore: false })
+    await runtime.refresh(); expect(runtime.sourceNoticeDismissed.value).toBe(false)
+    runtime.dismissSourceNotice()
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+    await runtime.refresh(); expect(runtime.sourceWarnings.value).toEqual([])
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_UNSUPPORTED', items: [], hasMore: false })
+    await runtime.refresh(); expect(runtime.sourceNoticeDismissed.value).toBe(false)
+  })
+
+  // canonical配置名称不参与身份；同码新增配置不能继承另一个配置的关闭记录。
+  it('Warnings_ProfileIdentity_003', async () => {
+    io.scope.mockRejectedValue({ code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation', profileId: 'forged', name: 'raw-secret' })
+    const { runtime } = render(); await flushPromises()
+    expect(runtime.sourceWarningConfigurations.value.map(row => row.name)).toEqual(['CX'])
+    expect(JSON.stringify(runtime.sourceWarningConfigurations.value)).not.toContain('raw-secret')
+    runtime.dismissSourceNotice()
+    const original = structuredClone(io.profiles.mock.results[0].value instanceof Promise ? await io.profiles.mock.results[0].value : {})
+    original.profiles[0].name = 'Renamed CX'
+    io.profiles.mockResolvedValue(original); await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(true)
+    io.profiles.mockResolvedValue({ ...original, profiles: [...original.profiles, { ...original.profiles[0], id: 'cx-second', name: 'Second CX' }] })
+    await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(false)
+    expect(runtime.sourceWarningConfigurations.value.map(row => row.name)).toEqual(['Renamed CX', 'Second CX'])
+    expect(runtime.sourceWarnings.value).toEqual([{ source: 'codex-history', code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation' }])
+  })
+
+  // 两个来源中一个恢复不重新提示未变化的另一个，前者再次失败则重新提示。
+  it('Warnings_SubsetRecur_006', async () => {
+    io.projects.mockRejectedValue({ code: 'SOURCE_BUSY' })
+    io.scope.mockRejectedValue({ code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation' })
+    const { runtime } = render(); await flushPromises(); runtime.dismissSourceNotice()
+    io.projects.mockResolvedValue([{ path: '/legacy', name: 'Legacy' }]); await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(true)
+    expect(runtime.sourceWarnings.value).toHaveLength(1)
+    io.projects.mockRejectedValue({ code: 'SOURCE_BUSY' }); await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(false)
+  })
+
+  // 同一个后台catalog失败保持收起；后台出现新的固定代码则重新提示。
+  it('Warnings_CatalogRepeat_007', async () => {
+    io.scope.mockRejectedValue({ code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation' })
+    const { runtime } = render(); await flushPromises(); runtime.dismissSourceNotice()
+    vi.spyOn(useUnifiedSessionsStore(), 'refresh').mockRejectedValue({ code: 'SOURCE_BUSY' })
+    const tab = useNativeTabsStore().create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    await flushPromises(); expect(runtime.sourceNoticeDismissed.value).toBe(false)
+    runtime.dismissSourceNotice()
+    tab.title = 'Updated'; await flushPromises()
+    expect(runtime.sourceNoticeDismissed.value).toBe(true)
+    expect(runtime.sourceWarnings.value).toHaveLength(2)
+  })
+
+  // 同源同码在两个配置间交换仍是新的受影响配置，不能把警告键和配置键拆成两个集合。
+  it('Warnings_ProfileSwap_008', async () => {
+    const original = await io.profiles()
+    io.profiles.mockResolvedValue({ ...original, profiles: [...original.profiles, { ...original.profiles[0], id: 'cx-second', name: 'Second CX' }] })
+    let swap = false
+    io.scope.mockImplementation(async (target: { profileId: string }) => { throw { code: (target.profileId === 'cx') !== swap ? 'SCOPE_UNKNOWN' : 'SCOPE_STALE', stage: 'scope-profile-validation' } })
+    const { runtime } = render(); await flushPromises(); runtime.dismissSourceNotice()
+    swap = true; await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(false)
+  })
+
+  // 十二条显示上限之外的新代码和新配置同样重新提示，显示集合保持不变。
+  it('Warnings_OmittedIdentity_009', async () => {
+    const codes = ['SCOPE_UNKNOWN', 'SCOPE_STALE', 'SCOPE_REVOKED', 'SCOPE_CAPACITY', 'SCOPE_EPOCH_EXHAUSTED', 'SCOPE_UNAVAILABLE', 'SOURCE_UNSUPPORTED', 'SOURCE_INVALID', 'SOURCE_INVALID_TEXT', 'SOURCE_PATH_REJECTED', 'SOURCE_CHANGED', 'SOURCE_NOT_REGULAR', 'SOURCE_TOO_LARGE', 'SOURCE_TOO_MANY_ENTRIES', 'SOURCE_UNSUPPORTED']
+    const original = await io.profiles()
+    const profiles = codes.map((_code, index) => ({ ...original.profiles[0], id: `cx-${index}`, name: `Configuration ${index}` }))
+    io.profiles.mockResolvedValue({ ...original, profiles: profiles.slice(0, 13) })
+    io.scope.mockImplementation(async (target: { profileId: string }) => { throw { code: codes[Number(target.profileId.slice(3))] ?? 'SOURCE_UNSUPPORTED', stage: 'scope-profile-validation' } })
+    const { runtime } = render(); await flushPromises(); runtime.dismissSourceNotice()
+    const visible = structuredClone(runtime.sourceWarnings.value.map(row => ({ ...row })))
+    expect(visible).toHaveLength(12)
+    io.profiles.mockResolvedValue({ ...original, profiles: profiles.slice(0, 14) }); await runtime.refresh()
+    expect(runtime.sourceWarnings.value).toEqual(visible)
+    expect(runtime.sourceNoticeDismissed.value).toBe(false)
+    runtime.dismissSourceNotice()
+    io.profiles.mockResolvedValue({ ...original, profiles }); await runtime.refresh()
+    expect(runtime.sourceWarnings.value).toEqual(visible)
+    expect(runtime.sourceNoticeDismissed.value).toBe(false)
+    runtime.dismissSourceNotice()
+    io.profiles.mockResolvedValue({ ...original, profiles: [...profiles].reverse() }); await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(true)
+    expect(runtime.sourceWarnings.value).toEqual(visible)
+    io.profiles.mockResolvedValue({ ...original, profiles: [...profiles.slice(0, 14), { ...profiles[14], id: 'cx-16' }] }); await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(false)
+    expect(runtime.sourceWarnings.value).toEqual(visible)
+  })
+
+  // 真实App收起后保留诊断和重试；切换语言不重新弹出，配置入口绑定canonical配置。
+  it('Warnings_AppCollapseLocale_004', async () => {
+    io.scope.mockRejectedValue({ code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation', field: '/private/path', name: 'raw-secret' })
+    const i18n = createI18n({ legacy: false, locale: 'en', messages: { en, zh } })
+    const w = mount(App, { attachTo: document.body, global: { plugins: [i18n], stubs: { NativeCliTerminal: true, SettingsView: true, LaunchConfigurationEditor: true } } })
+    wrappers.push(w); await flushPromises()
+    expect(w.find('[data-workspace-source-notice]').exists()).toBe(true)
+    expect(w.find('[data-workspace-source-details]').text()).toContain('CX')
+    expect(w.find('[data-workspace-source-details]').text()).toContain(en.sourceWarningScopeUnknown)
+    ;(w.find('[data-dismiss-source-notice]').element as HTMLElement).focus()
+    await w.find('[data-dismiss-source-notice]').trigger('click'); await flushPromises()
+    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
+    expect(w.find('[data-workspace-source-compact]').exists()).toBe(true)
+    const details = w.find('[data-workspace-source-details]')
+    expect(document.activeElement).toBe(details.find('summary').element)
+    ;(details.find('summary').element as HTMLElement).click()
+    expect((details.element as HTMLDetailsElement).open).toBe(true)
+    ;(details.find('summary').element as HTMLElement).click()
+    expect((details.element as HTMLDetailsElement).open).toBe(false)
+    ;(details.find('summary').element as HTMLElement).click()
+    expect((details.element as HTMLDetailsElement).open).toBe(true)
+    expect(details.text()).toContain('SCOPE_UNKNOWN')
+    expect(details.text()).not.toMatch(/raw-secret|private\/path/)
+    i18n.global.locale.value = 'zh'; await flushPromises()
+    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
+    expect(w.find('[data-workspace-source-details]').text()).toContain(zh.sourceWarningScopeUnknown)
+    await w.find('[data-source-warning-retry]').trigger('click'); await flushPromises()
+    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
+    await w.find('[data-source-warning-configuration]').trigger('click'); await flushPromises()
+    expect(w.findComponent(LaunchConfigurationEditor).props('request')).toEqual({ kind: 'edit', profileId: 'cx' })
+  })
+
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {
     io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false, historyMetadataIncomplete: true })
     const { runtime } = render(); await flushPromises()

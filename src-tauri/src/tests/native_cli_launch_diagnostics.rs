@@ -252,7 +252,7 @@ fn snapshot_from(reader: impl Read, mode: Mode) -> Result<String, SnapshotError>
     };
     let mut output = format!("mode={} diagnostics={state}", mode.name());
     let mut last_elapsed = 0;
-    for (index, record) in bytes.chunks_exact(RECORD_BYTES).enumerate() {
+    for (index, record) in bytes.as_chunks::<RECORD_BYTES>().0.iter().enumerate() {
         let code = ALL_CODES
             .get(record[7] as usize)
             .ok_or(SnapshotError::Invalid)?;

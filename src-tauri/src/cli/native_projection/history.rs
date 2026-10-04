@@ -112,9 +112,12 @@ fn walk(
     for entry in c.entries(c.root, path, b)? {
         let p = child(path, &entry.name);
         if entry.is_dir {
-            // Subagent transcripts are independently stored beneath a main session;
-            // they are not main-session history and must not be traversed here.
-            if c.cli == CliKind::Claude && depth == 0 && entry.name == "subagents" {
+            // Subagent transcripts and spilled tool results live beneath a main
+            // session; neither directory is main-session history to traverse.
+            if c.cli == CliKind::Claude
+                && depth == 0
+                && matches!(entry.name.as_str(), "subagents" | "tool-results")
+            {
                 continue;
             }
             if depth == 0 {

@@ -508,6 +508,124 @@ fn HistoryMetadata_ClaudeSubagentsAreNotMainSessions_001() {
     assert_eq!(items[0]["title"], "main session");
 }
 
+// 会话旁存在 tool-results 目录时，三个历史读取入口仍返回主会话内容。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryTools_KeepMainSession_001() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main session", t.path());
+    fs::create_dir_all(t.path().join("projects/encoded/same-id/tool-results")).unwrap();
+    for (kind, query, id, expected) in [
+        (ResourceKind::History, None, None, 1),
+        (ResourceKind::Messages, None, Some("same-id"), 2),
+        (ResourceKind::Search, Some("needle"), None, 1),
+    ] {
+        let items = list(t.path(), CliKind::Claude, None, kind, query, id).unwrap();
+        assert_eq!(items.as_array().unwrap().len(), expected);
+        assert_eq!(items[0]["nativeSessionId"], "same-id");
+    }
+}
+
+// tool-results 中损坏的 JSONL 和深层目录不会进入主会话扫描。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryTools_SkipStoredResults_002() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main session", t.path());
+    put(
+        t.path(),
+        "projects/encoded/same-id/tool-results/broken.jsonl",
+        "{broken",
+    );
+    put(
+        t.path(),
+        "projects/encoded/same-id/tool-results/nested/deeper/result.jsonl",
+        "{broken",
+    );
+    let items = list(
+        t.path(),
+        CliKind::Claude,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(items[0]["title"], "main session");
+}
+
+// 排除 tool-results 后，同层未支持目录仍使整个来源不可用。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryTools_RejectUnknownSibling_003() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main session", t.path());
+    fs::create_dir_all(t.path().join("projects/encoded/same-id/tool-results")).unwrap();
+    fs::create_dir_all(t.path().join("projects/encoded/same-id/unknown-directory")).unwrap();
+    assert_eq!(
+        list(
+            t.path(),
+            CliKind::Claude,
+            None,
+            ResourceKind::History,
+            None,
+            None
+        )
+        .err(),
+        Some("SOURCE_UNSUPPORTED")
+    );
+}
+
+// Codex 的最大深度目录即使同名 tool-results 也不得套用 Claude 排除规则。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryTools_KeepCodexDepthGuard_004() {
+    let t = tempfile::tempdir().unwrap();
+    codex(t.path(), t.path());
+    fs::create_dir_all(t.path().join("sessions/2026/09/23/session/tool-results")).unwrap();
+    assert_eq!(
+        list(
+            t.path(),
+            CliKind::Codex,
+            None,
+            ResourceKind::History,
+            None,
+            None
+        )
+        .err(),
+        Some("SOURCE_UNSUPPORTED")
+    );
+}
+
+// 名为 tool-results 的符号链接仍被拒绝，不被当作可排除的真实目录。
+#[cfg(unix)]
+#[test]
+#[allow(non_snake_case)]
+fn HistoryTools_RejectSymlink_005() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main session", t.path());
+    fs::create_dir_all(t.path().join("projects/encoded/same-id")).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(
+        outside.path(),
+        t.path().join("projects/encoded/same-id/tool-results"),
+    )
+    .unwrap();
+    assert_eq!(
+        list(
+            t.path(),
+            CliKind::Claude,
+            None,
+            ResourceKind::History,
+            None,
+            None
+        )
+        .err(),
+        Some("SOURCE_NOT_REGULAR")
+    );
+}
+
 #[test]
 #[allow(non_snake_case)]
 fn HistoryMetadata_LargeCodexTranscriptStillListsSession_002() {

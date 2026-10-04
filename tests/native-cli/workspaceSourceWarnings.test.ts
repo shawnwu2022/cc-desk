@@ -22,6 +22,17 @@ beforeEach(() => setActivePinia(createPinia()))
 afterEach(() => { Reflect.deleteProperty(window, '__CC_DESK_DOCUMENT__') })
 
 describe('Workspace diagnostics through the real document and projection clients', () => {
+  // 超过十二条时选取稳定的有界集合，异步完成顺序不能制造新警告。
+  it('Warnings_BoundedOrder_005', () => {
+    const codes = ['SCOPE_UNKNOWN', 'SCOPE_STALE', 'SCOPE_REVOKED', 'SCOPE_CAPACITY', 'SCOPE_EPOCH_EXHAUSTED', 'SCOPE_UNAVAILABLE', 'SOURCE_UNSUPPORTED', 'SOURCE_INVALID', 'SOURCE_INVALID_TEXT', 'SOURCE_PATH_REJECTED', 'SOURCE_CHANGED', 'SOURCE_NOT_REGULAR', 'SOURCE_TOO_LARGE']
+    const first = createWorkspaceSourceWarnings(), reverse = createWorkspaceSourceWarnings()
+    for (const code of codes) first.add('codex-history', { code })
+    for (const code of [...codes].reverse()) reverse.add('codex-history', { code })
+    expect(first.items).toEqual(reverse.items)
+    expect(first.items).toHaveLength(12)
+    expect(first.truncated).toBe(true)
+  })
+
   it.each(['scope-request-decode', 'scope-profile-validation', 'scope-environment', 'scope-project-registration', 'scope-capability'])(
     'preserves only the allowlisted backend stage %s with the original error code', async stage => {
       bridge(async () => { throw { code: 'INVALID_REQUEST', stage, field: '/private/config', message: 'secret contents' } })

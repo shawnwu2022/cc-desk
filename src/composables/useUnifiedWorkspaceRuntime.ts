@@ -18,7 +18,7 @@ import { createNativeCliAdapter, type NativeRuntimeCreateInput } from '@/session
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
 import { sameProjectPath } from '@/utils/path'
-import { createWorkspaceSourceWarnings, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
+import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceSourceConfiguration, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { UnifiedCliKind } from '@/types/unifiedSession'
 
@@ -39,6 +39,22 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const error = ref<string | null>(null)
   const sourceWarnings = ref<WorkspaceSourceWarning[]>([])
   const sourceWarningsTruncated = ref(false)
+  // Configuration identities come from admitted load contexts, never error fields.
+  const sourceConfigurationOwners = ref<Omit<WorkspaceSourceConfiguration, 'name'>[]>([])
+  const sourceWarningConfigurations = computed<WorkspaceSourceConfiguration[]>(() => sourceConfigurationOwners.value.flatMap(owner => {
+    const profile = profiles.profile(owner.profileId)
+    return profile && profile.revision === owner.profileRevision ? [{ ...owner, name: profile.name }] : []
+  }))
+  const acknowledgedSourceWarnings = ref(new Set<string>())
+  // Replaced per owned refresh, deduped per canonical profile and fixed triple.
+  // Never accumulate historical profiles or raw errors, including omitted rows.
+  const sourceNoticeKeys = ref<string[]>([])
+  const sourceNoticeDismissed = computed(() => sourceNoticeKeys.value.length > 0
+    && sourceNoticeKeys.value.every(key => acknowledgedSourceWarnings.value.has(key)))
+  function dismissSourceNotice() {
+    acknowledgedSourceWarnings.value = new Set(sourceNoticeKeys.value)
+  }
+
   const historyMetadataPartial = computed(() => history.all().some(entry => entry.loaded && !entry.error && entry.metadataIncomplete
     && profiles.profile(entry.context.profileId)?.revision === entry.context.profileRevision
     && workspace.projects.some(project => project.projectId === entry.context.projectId && sameProjectPath(project.selectedPath, entry.context.projectPath))))
@@ -223,6 +239,14 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     loading.value = true
     error.value = null
     const warnings = createWorkspaceSourceWarnings()
+    const configurationOwners = new Map<string, Omit<WorkspaceSourceConfiguration, 'name'>>()
+    const addHistoryWarning = (context: { cli: UnifiedCliKind; profileId: string; profileRevision: string }, failure: unknown) => {
+      const warning = warnings.add(context.cli === 'claude' ? 'claude-history' : 'codex-history', failure)
+      const warningKey = workspaceWarningKey(warning)
+      configurationOwners.set(JSON.stringify([warningKey, context.profileId]), {
+        warningKey, profileId: context.profileId, profileRevision: context.profileRevision,
+      })
+    }
     const settle = async (source: WorkspaceWarningSource, operation: () => Promise<unknown>) => {
       try { await operation() } catch (failure) { warnings.add(source, failure) }
     }
@@ -252,10 +276,12 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         })))
         // Match the backend's two-reader budget; isolate each source failure.
         for (let i = 0; i < contexts.length && current(); i += 2) {
-          await Promise.all(contexts.slice(i, i + 2).map(context => settle(context.cli === 'claude' ? 'claude-history' : 'codex-history', async () => {
-            const entry = await history.load(context)
-            if (entry.error) warnings.add(context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error, stage: entry.diagnosticStage })
-          })))
+          await Promise.all(contexts.slice(i, i + 2).map(async context => {
+            try {
+              const entry = await history.load(context)
+              if (entry.error) addHistoryWarning(context, { code: entry.error, stage: entry.diagnosticStage })
+            } catch (failure) { addHistoryWarning(context, failure) }
+          }))
         }
       }),
     ])
@@ -269,6 +295,16 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     loading.value = false
     sourceWarnings.value = warnings.items
     sourceWarningsTruncated.value = warnings.truncated
+    sourceConfigurationOwners.value = [...configurationOwners.values()].filter(owner => warnings.items.some(warning => workspaceWarningKey(warning) === owner.warningKey))
+    sourceNoticeKeys.value = warnings.identityKeys().flatMap(key => {
+      const owners = [...configurationOwners.values()].filter(owner => owner.warningKey === key)
+      return owners.length ? owners.map(owner => JSON.stringify([key, owner.profileId])) : [key]
+    })
+    if (warnings.truncated) sourceNoticeKeys.value.push('truncated')
+    // Only a completed owned check retires acknowledgements. Loading's temporary
+    // error=null and background catalog publication cannot resurrect a notice.
+    const currentKeys = new Set(sourceNoticeKeys.value)
+    acknowledgedSourceWarnings.value = new Set([...acknowledgedSourceWarnings.value].filter(key => currentKeys.has(key)))
     error.value = warnings.items.length && !fatal.value ? 'workspaceRuntimePartial' : null
   }
 
@@ -431,7 +467,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     try { await catalog.refresh() } catch (failure) {
       if (disposed || owner !== refreshOwner || loading.value) return
       const warnings = createWorkspaceSourceWarnings(sourceWarnings.value, sourceWarningsTruncated.value)
-      warnings.add('catalog', failure)
+      const warning = warnings.add('catalog', failure)
+      sourceNoticeKeys.value = [...new Set([...sourceNoticeKeys.value, workspaceWarningKey(warning), ...(warnings.truncated ? ['truncated'] : [])])]
       sourceWarnings.value = warnings.items
       sourceWarningsTruncated.value = warnings.truncated
       error.value = 'workspaceRuntimePartial'
@@ -447,5 +484,5 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     void refresh()
   })
   onUnmounted(() => { disposed = true; ++refreshOwner })
-  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, historyMetadataPartial, refresh, retryAction }
+  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, dismissSourceNotice, historyMetadataPartial, refresh, retryAction }
 }

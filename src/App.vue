@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, provide, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, provide, defineAsyncComponent, onMounted, onUnmounted, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/shell/AppShell.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
@@ -31,6 +31,8 @@ import ProjectManagementDialogs from '@/components/projects/ProjectManagementDia
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import AppButton from '@/components/ui/AppButton.vue'
 import { useShellStore, type WorkspaceRequest } from '@/stores/shell'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useAppStore } from '@/stores/app'
@@ -83,6 +85,20 @@ function confirmDiscoveredProgram(confirmation: ConfirmedLaunchProgram) {
 const sessionSidebar = ref<InstanceType<typeof SidebarPanel> | null>(null)
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
 const runtime = useUnifiedWorkspaceRuntime(terminalHost)
+const sourceConfigurationEditor = ref<LaunchConfigurationEditorRequest | null>(null)
+const sourceNoticeArea = ref<HTMLElement | null>(null)
+watch(() => [shell.section, sessions.activeSessionId], () => { sourceConfigurationEditor.value = null }, { flush: 'sync' })
+function editSourceConfiguration(profileId: string) {
+  const owner = runtime.sourceWarningConfigurations.value.find(row => row.profileId === profileId)
+  if (shell.section !== 'workspace' || !owner || configurations.profile(profileId)?.revision !== owner.profileRevision) return
+  sourceConfigurationEditor.value = { kind: 'edit', profileId }
+}
+async function dismissSourceNotice() {
+  const restoreFocus = sourceNoticeArea.value?.contains(document.activeElement) ?? false
+  runtime.dismissSourceNotice()
+  await nextTick()
+  if (restoreFocus && shell.section === 'workspace') sourceNoticeArea.value?.querySelector<HTMLElement>('summary')?.focus()
+}
 const configFailed = ref(false)
 const settingsLoaded = ref(false)
 const startupNavigation = shell.navigationSequence
@@ -244,11 +260,21 @@ onUnmounted(() => {
         <InlineNotice v-if="sessions.actionFeedback && sessions.actionFeedback.detailCode !== 'LAUNCH_CONFIGURATION_REQUIRED'" data-action-feedback :kind="sessions.actionFeedback.severity" :message="t(sessions.actionFeedback.messageKey)" :action-label="sessions.actionFeedback.retryable ? t('retry') : t('refresh')" @action="runtime.retryAction?.()">
           <ErrorDetails :code="sessions.actionFeedback.detailCode" context="session" />
         </InlineNotice>
-        <InlineNotice v-if="runtime.error.value" class="workspace-source-notice" kind="warning" :message="t(runtime.error.value)"
-          :action-label="t('retry')" @action="request({ kind: 'refresh' })">
-          <WorkspaceSourceDetails v-if="runtime.error.value === 'workspaceRuntimePartial'"
-            :warnings="runtime.sourceWarnings?.value ?? []" :truncated="runtime.sourceWarningsTruncated?.value ?? false" />
-        </InlineNotice>
+        <InlineNotice v-if="runtime.error.value && runtime.error.value !== 'workspaceRuntimePartial'" kind="warning" :message="t(runtime.error.value)"
+          :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
+        <div v-if="runtime.sourceWarnings?.value.length && !runtime.fatal?.value" ref="sourceNoticeArea">
+          <InlineNotice v-if="!runtime.sourceNoticeDismissed?.value" data-workspace-source-notice class="workspace-source-notice" kind="warning" :message="t('workspaceRuntimePartial')"
+            :action-label="t('retry')" @action="request({ kind: 'refresh' })">
+            <IconButton data-dismiss-source-notice :label="t('sourceWarningDismiss')" @click="dismissSourceNotice"><span>×</span></IconButton>
+            <WorkspaceSourceDetails :warnings="runtime.sourceWarnings.value" :truncated="runtime.sourceWarningsTruncated.value"
+              :configurations="runtime.sourceWarningConfigurations?.value ?? []" @configure="editSourceConfiguration" />
+          </InlineNotice>
+          <div v-else data-workspace-source-compact class="workspace-source-compact">
+            <WorkspaceSourceDetails compact :warnings="runtime.sourceWarnings.value" :truncated="runtime.sourceWarningsTruncated.value"
+              :configurations="runtime.sourceWarningConfigurations?.value ?? []" @configure="editSourceConfiguration" />
+            <AppButton data-source-warning-retry variant="ghost" size="compact" :disabled="runtime.loading.value" @click="request({ kind: 'refresh' })">{{ t('retry') }}</AppButton>
+          </div>
+        </div>
         <InlineNotice v-if="runtime.historyMetadataPartial?.value" data-history-metadata-partial kind="info" :message="t('workspaceHistoryMetadataPartial')" />
         <LaunchProgramDiscovery v-if="shell.section === 'workspace' && !preparationEditor && sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED' && sessions.activeSession.preparationIssueCode === 'PROGRAM_TRUST_REQUIRED'"
           :key="`${sessions.activeSession.id}:${shell.navigationSequence}:${shell.requestSequence}`" :session="sessions.activeSession" @edit="editPreparationConfiguration" @confirmed="confirmDiscoveredProgram" />
@@ -273,6 +299,7 @@ onUnmounted(() => {
     <NewSessionDialog :active="shell.section === 'workspace'" @create="request({ kind: 'create-session', input: $event })"
       @restore="request({ kind: 'restore-session', ...$event })" />
     <LaunchConfigurationEditor v-if="preparationEditor" :request="preparationEditor" :active="shell.section === 'workspace'" @close="preparationEditor = null" />
+    <LaunchConfigurationEditor v-if="sourceConfigurationEditor" :request="sourceConfigurationEditor" :active="shell.section === 'workspace'" @close="sourceConfigurationEditor = null" />
     <ProjectConfirmDialog :request="configurations.deleteConfirmation" :active="shell.section === 'settings'" :busy="configurations.deleteBusy" :error-key="configurations.deleteError?.messageKey" @confirm="configurations.confirmDelete" @cancel="configurations.closeDeleteConfirmation" />
     <SessionDiagnosticsDialog :diagnostics="runtime.diagnostics?.value ?? null" @close="runtime.closeDiagnostics()" />
     <SessionConfirmDialog :active="shell.section === 'workspace'" />
@@ -293,4 +320,6 @@ onUnmounted(() => {
 
 <style scoped>
 .workspace-source-notice { flex-wrap: wrap; }
+.workspace-source-compact { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; }
+.workspace-source-compact :deep(.source-warning-details) { flex: 1; }
 </style>

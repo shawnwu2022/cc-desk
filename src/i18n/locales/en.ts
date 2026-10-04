@@ -262,6 +262,10 @@ export default {
 
   workspaceRuntimePartial: 'Some session sources could not be loaded. Open sessions remain available.',
   workspaceHistoryMetadataPartial: 'Some history is shown from limited summaries; the list may be incomplete.',
+  sourceWarningDismiss: 'Collapse source warning',
+  sourceWarningDiagnostics: 'Source diagnostics (still unavailable)',
+  sourceWarningConfiguration: 'Launch configuration: {name}',
+  sourceWarningScopeUnknown: 'History access cannot safely determine the source for this launch configuration. A custom launcher or non-empty default arguments may change the source. Check the configuration; terminal access can still work. Nothing is changed automatically.',
   sourceWarningProjectMetadata: 'Saved project details',
   sourceWarningProjectDiscovery: 'Discovered projects',
   sourceWarningConfigurations: 'Launch configurations',

@@ -262,6 +262,10 @@ export default {
 
   workspaceRuntimePartial: '部分会话来源暂时无法加载，已打开的会话仍可使用。',
   workspaceHistoryMetadataPartial: '部分历史仅显示摘要，列表可能不完整。',
+  sourceWarningDismiss: '收起来源警告',
+  sourceWarningDiagnostics: '来源诊断（仍不可用）',
+  sourceWarningConfiguration: '启动配置：{name}',
+  sourceWarningScopeUnknown: '此启动配置的历史来源无法安全确定：自定义启动器或非空默认参数可能改变来源。请检查配置；终端仍可能正常使用。不会自动修改配置。',
   sourceWarningProjectMetadata: '已保存的项目信息',
   sourceWarningProjectDiscovery: '发现的项目',
   sourceWarningConfigurations: '启动配置',

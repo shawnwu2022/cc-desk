@@ -44,7 +44,10 @@ fn LaunchDiag_Redaction_002() {
     assert!(output.contains("code=EVAL_FAILED"));
     assert!(output.contains("code=unready-rejected-before-io"));
     for forbidden in ["secret-value", "private", "password", "PTY", "\u{1b}"] {
-        assert!(!output.contains(forbidden), "unexpected payload: {forbidden}");
+        assert!(
+            !output.contains(forbidden),
+            "unexpected payload: {forbidden}"
+        );
     }
     drop(diagnostics);
     std::fs::remove_file(path).unwrap();
@@ -65,7 +68,7 @@ fn LaunchDiag_ModeAndOrder_003() {
         diagnostics.mark(Code::RunReturned);
         let bytes = std::fs::read(&path).unwrap();
         let mut last_elapsed = 0;
-        for (index, record) in bytes.chunks_exact(RECORD_BYTES).enumerate() {
+        for (index, record) in bytes.as_chunks::<RECORD_BYTES>().0.iter().enumerate() {
             assert_eq!(record[6] as usize, index + 1);
             let elapsed = u64::from_le_bytes(record[8..16].try_into().unwrap());
             assert!(elapsed >= last_elapsed);
