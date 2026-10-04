@@ -283,4 +283,58 @@ describe('ordinary historical switch composition', () => {
     expect(w.findAll('[data-history-row]')).toHaveLength(1)
   })
 
+  // 契约允许清理回执不提供取消权限；保存的通用错误不能覆盖未知或已交接状态提示。
+  it.each([
+    ['en', 'withheld', 'HISTORY_TASK_FAILED'], ['zh', 'withheld', 'HISTORY_TASK_FAILED'],
+    ['en', 'issued', 'HISTORY_TASK_FAILED'], ['zh', 'issued', 'HISTORY_TASK_FAILED'],
+    ['en', 'withheld', 'HISTORY_SIGNATURE_INVALID'], ['zh', 'withheld', 'HISTORY_SIGNATURE_INVALID'],
+    ['en', 'issued', 'HISTORY_SIGNATURE_INVALID'], ['zh', 'issued', 'HISTORY_SIGNATURE_INVALID'],
+  ])('HistorySwitch_RetainedFailure_017: %s %s %s', async (locale, receipt, code) => {
+    const messages = locale === 'en' ? en : zh
+    const original = io.invoke.getMockImplementation()!
+    let reads = 0
+    review = receipt === 'issued' ? wire.reviews[4] : { ...wire.reviews[0], allowedActions: ['refresh'] }
+    io.invoke.mockImplementation((command, payload) => {
+      if (command === 'prepare_history') return Promise.reject({ code, details: '/private SECRET' })
+      if (command === 'inspect_switch' && ++reads === 1) return { ...wire.reviews[0], preparationId: preparation.ticket.transactionId }
+      return original(command, payload)
+    })
+    const w = await preparedPanel(locale)
+    const expected = code === 'HISTORY_SIGNATURE_INVALID' ? messages.historyErrorVerification
+      : receipt === 'issued' ? messages.historyHandoffIssued : messages.historyOwnershipUnknown
+    expect(w.get('[data-history-status]').text()).toBe(receipt === 'issued' ? messages.historyHandoffIssued : messages.historyOwnershipUnknown)
+    expect(w.get('[data-history-error] p').text()).toBe(expected)
+    expect(w.get('[data-history-refresh]').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-history-cancel]').exists()).toBe(false)
+    expect(w.find('[data-history-prepare]').exists()).toBe(false)
+    expect(w.get('[data-history-inspect]').attributes('disabled')).toBeUndefined()
+    review = wire.reviews[4]
+    await w.get('[data-history-inspect]').trigger('click'); await flushPromises()
+    expect(w.get('[data-history-error] p').text()).toBe(code === 'HISTORY_SIGNATURE_INVALID' ? messages.historyErrorVerification : messages.historyHandoffIssued)
+    expect(useVersionHistoryStore().transactionId).toBe(wire.ticket.transactionId)
+    expect(w.text()).not.toMatch(/private|SECRET/)
+    expect(w.find('[data-history-cancel]').exists()).toBe(false)
+    expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'begin_prepare_history')).toHaveLength(1)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'prepare_history')).toHaveLength(1)
+    expect(io.invoke.mock.calls.some(([command]) => ['begin_switch', 'cancel_prepare_history'].includes(command))).toBe(false)
+  })
+
+  // 准备失败后明确取消成功仍保留原目录重试提示，不得改成所有权未知。
+  it.each(['en', 'zh'])('HistorySwitch_CancelledFailure_018: %s', async locale => {
+    const original = io.invoke.getMockImplementation()!
+    review = wire.reviews[0]
+    io.invoke.mockImplementation((command, payload) => command === 'prepare_history'
+      ? Promise.reject({ code: 'HISTORY_TASK_FAILED' }) : original(command, payload))
+    const w = await preparedPanel(locale)
+    const messages = locale === 'en' ? en : zh
+    expect(w.get('[data-history-status]').text()).toBe(messages.historyPreparationFailed)
+    expect(w.get('[data-history-error] p').text()).toBe(messages.historyErrorUnavailable)
+    expect(w.get('[data-history-refresh]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-history-inspect]').exists()).toBe(false)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cancel_prepare_history')).toHaveLength(1)
+    expect(io.invoke.mock.calls.some(([command]) => command === 'begin_switch')).toBe(false)
+  })
+
 })

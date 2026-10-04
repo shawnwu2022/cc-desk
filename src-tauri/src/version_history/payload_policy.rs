@@ -25,50 +25,216 @@ struct MeasuredPayload {
     installed_inventory: &'static [MeasuredFile],
     installed_bytes: u64,
 }
-// Accepted clean + seeded disposable installer evidence: source
-// a5e409966888bb0c6c766a6dbed49dd1fe51fb6b, workflow run 37053252570.
-// Exact production PrepareService/Minisign-verified installer bytes yielded
-// these five identical exports in both cases (exit 0, owned job empty). The
-// seeded source-only companion is NOT a target-produced output. This does not
-// attest source-to-binary correspondence, app launch or a complete roundtrip.
-const REVIEWED: &[MeasuredPayload] = &[MeasuredPayload {
-    version: "0.17.7",
-    installer_digest: "e9ffbc5ba627f0c133a4385db404342a7344729339185e6f9b8ee6b5969086ac",
-    installer_size: 4_966_193,
-    installed_inventory: &[
-        MeasuredFile {
-            path: "LICENSE-Microsoft-ConPTY.txt",
-            size: 1_116,
-            sha256: "5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b",
-            attributes: 32,
-        },
-        MeasuredFile {
-            path: "OpenConsole.exe",
-            size: 1_066_296,
-            sha256: "b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160",
-            attributes: 32,
-        },
-        MeasuredFile {
-            path: "cc-desk.exe",
-            size: 17_342_976,
-            sha256: "07d55b6b0841bd84357e71fd306a6a4265546181ccead573f3e756617a943719",
-            attributes: 32,
-        },
-        MeasuredFile {
-            path: "conpty.dll",
-            size: 109_920,
-            sha256: "39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8",
-            attributes: 32,
-        },
-        MeasuredFile {
-            path: "uninstall.exe",
-            size: 79_267,
-            sha256: "1b80e884a3a5106a7ccb5309940edc955c5def6448b9576777427717988a0381",
-            attributes: 32,
-        },
-    ],
-    installed_bytes: 18_599_575,
-}];
+// Reviewed clean + seeded disposable evidence: source
+// b708427aaae52c81d6d8c821ca08c097e4258108, workflow 37199938820, attempts 1/2.
+// All nine exact PrepareService/Minisign-verified packages have paired matching
+// outputs (exit 0, owned job empty). Public measurements and immutable artifact
+// identities are in tests/fixtures/version-history-payload/reviewed-measurements.json.
+// The first entry retains the exact prior 0.17.7 policy: source
+// a5e409966888bb0c6c766a6dbed49dd1fe51fb6b, workflow 37053252570. Source-only
+// companions are NOT target-produced outputs.
+// These constants do not attest source-to-binary correspondence, app launch or
+// a complete roundtrip. No runtime fixture import or broader package fallback.
+const REVIEWED: &[MeasuredPayload] = &[
+    MeasuredPayload {
+        version: "0.17.7",
+        installer_digest: "e9ffbc5ba627f0c133a4385db404342a7344729339185e6f9b8ee6b5969086ac",
+        installer_size: 4_966_193,
+        installed_inventory: &[
+            MeasuredFile {
+                path: "LICENSE-Microsoft-ConPTY.txt",
+                size: 1_116,
+                sha256: "5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "OpenConsole.exe",
+                size: 1_066_296,
+                sha256: "b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "cc-desk.exe",
+                size: 17_342_976,
+                sha256: "07d55b6b0841bd84357e71fd306a6a4265546181ccead573f3e756617a943719",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "conpty.dll",
+                size: 109_920,
+                sha256: "39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "uninstall.exe",
+                size: 79_267,
+                sha256: "1b80e884a3a5106a7ccb5309940edc955c5def6448b9576777427717988a0381",
+                attributes: 32,
+            },
+        ],
+        installed_bytes: 18_599_575,
+    },
+    MeasuredPayload {
+        version: "0.14.0",
+        installer_digest: "826b44d86bd4ff610119f762b30cc30e9e532c502517b2910dd5a489064a0249",
+        installer_size: 6_007_615,
+        installed_inventory: &[
+            MeasuredFile {
+                path: "cc-desk.exe",
+                size: 22_103_552,
+                sha256: "218a562fa82e4fc8e0f67db42a30e8e190a2f6fc4026a7f5080220b6ad364e23",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "uninstall.exe",
+                size: 79_152,
+                sha256: "abbb77aff7c1b2b7b9d86224225b119049050086523cbc427dfc884a512adc62",
+                attributes: 32,
+            },
+        ],
+        installed_bytes: 22_182_704,
+    },
+    MeasuredPayload {
+        version: "0.15.0",
+        installer_digest: "14f86e0858467ef397b61ba165993dd3b3c2d26744aaa9c8737f7dd63a80155a",
+        installer_size: 6_004_307,
+        installed_inventory: &[
+            MeasuredFile {
+                path: "cc-desk.exe",
+                size: 22_103_552,
+                sha256: "ca5a98ba3409925dd2fbe752264ecaf32cadf8249272eb37ddd2a2557985b9d9",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "uninstall.exe",
+                size: 79_152,
+                sha256: "b34235dac0e1aa0fa2f7a6f856cfed5f05a626dd22a2a8386298d3346f8a9692",
+                attributes: 32,
+            },
+        ],
+        installed_bytes: 22_182_704,
+    },
+    MeasuredPayload {
+        version: "0.16.0",
+        installer_digest: "547d9251286f0a3e78199590617913ac26d0ef2614325ad54a885ac75fd4fd3a",
+        installer_size: 6_102_539,
+        installed_inventory: &[
+            MeasuredFile {
+                path: "cc-desk.exe",
+                size: 22_434_816,
+                sha256: "eae2d87f1a9f8add5b8bc74976765b0451bbe097f99f7b2ad2c46b7f94547afd",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "uninstall.exe",
+                size: 79_152,
+                sha256: "c6d09b95a12320a5bfcf83b6a98e672d55f957ca07323f929cd84b87d62061cf",
+                attributes: 32,
+            },
+        ],
+        installed_bytes: 22_513_968,
+    },
+    MeasuredPayload {
+        version: "0.17.0",
+        installer_digest: "81a649eae03c2b248bae512f5db0f0e6d28ffac66691d0db9dbc5f9e95b9c61b",
+        installer_size: 6_072_998,
+        installed_inventory: &[
+            MeasuredFile {
+                path: "cc-desk.exe",
+                size: 22_344_704,
+                sha256: "5bc6a2842ed2c52ce221a01256602da8b4901fc721d23dad78a1a15412ad3fce",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "uninstall.exe",
+                size: 79_152,
+                sha256: "f17a915e43a458255466e20035f0a4fcb4dd26a8a20e910e83bb65cac51ff7e7",
+                attributes: 32,
+            },
+        ],
+        installed_bytes: 22_423_856,
+    },
+    MeasuredPayload {
+        version: "0.17.1",
+        installer_digest: "2d9eca64b6f0cdd43ce63bf674b4544ec9e0d01b79d70eacb42ffc37be04377c",
+        installer_size: 6_068_768,
+        installed_inventory: &[
+            MeasuredFile {
+                path: "cc-desk.exe",
+                size: 22_344_192,
+                sha256: "ce1d00dd1df825a07376396a0544bcb7820d7a921ebd3f391abba246e0856fb5",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "uninstall.exe",
+                size: 79_152,
+                sha256: "9cfcd224c391bee115d4579feed05e0fa7fdb4bf0b1d4e1968e4edc50dd95abf",
+                attributes: 32,
+            },
+        ],
+        installed_bytes: 22_423_344,
+    },
+    MeasuredPayload {
+        version: "0.17.2",
+        installer_digest: "d54c7854f716fd05c2617300e08dd46303e06588818c0122412401e57ca7b094",
+        installer_size: 6_078_917,
+        installed_inventory: &[
+            MeasuredFile {
+                path: "cc-desk.exe",
+                size: 22_345_216,
+                sha256: "a8316650a3d34c7ee2b1055495320cade04c951fce8bcbcb9a063033cc4e87a7",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "uninstall.exe",
+                size: 79_152,
+                sha256: "cb097cd05caa037e7e5dfa3bf09a5fbcaf87895a7a97024359188d1309a98821",
+                attributes: 32,
+            },
+        ],
+        installed_bytes: 22_424_368,
+    },
+    MeasuredPayload {
+        version: "0.17.5",
+        installer_digest: "e23df98c3bd789cc199fa80aae805acad2c668bcd7c0417815c347553e1b8041",
+        installer_size: 4_485_401,
+        installed_inventory: &[
+            MeasuredFile {
+                path: "cc-desk.exe",
+                size: 17_276_416,
+                sha256: "461b97e8b38ddee0d08bf5e565ec54b83d9acf3cc0ccfa4c7c3471403e451005",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "uninstall.exe",
+                size: 79_152,
+                sha256: "2d608670e23e0c0fd0dca701a181a1f05d7354677d0898cbef2753696584a57d",
+                attributes: 32,
+            },
+        ],
+        installed_bytes: 17_355_568,
+    },
+    MeasuredPayload {
+        version: "0.17.6",
+        installer_digest: "a0df0178b4d4c4ab08f1229bbdf9b6d4c2c2e402139cbeaf9acd6bb9eb053afd",
+        installer_size: 4_486_992,
+        installed_inventory: &[
+            MeasuredFile {
+                path: "cc-desk.exe",
+                size: 17_280_512,
+                sha256: "093ffc84ad8dde074fc1efbcd4d731c7b40d5dc3c701dcc4dd11bb6cc80a0020",
+                attributes: 32,
+            },
+            MeasuredFile {
+                path: "uninstall.exe",
+                size: 79_152,
+                sha256: "e373f7d5adc7c32c0af960582776acc46f0bb9673717814683dd0f0af007551e",
+                attributes: 32,
+            },
+        ],
+        installed_bytes: 17_359_664,
+    },
+];
 
 // Enabled only with the complete reviewed source/installer/return composition
 // and its disposable native roundtrip acceptance. A measured installer alone

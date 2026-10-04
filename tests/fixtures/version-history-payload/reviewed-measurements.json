@@ -1,0 +1,646 @@
+{
+  "schema": 1,
+  "scope": "Reviewed static payload measurements only; no runtime import, source-to-binary attestation, app-launch or roundtrip acceptance. Case-specific identities and security descriptors are omitted.",
+  "evidence": {
+    "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+    "fixtureSourceURL": "https://github.com/shawnwu2022/cc-desk/tree/b708427aaae52c81d6d8c821ca08c097e4258108",
+    "runId": 37199938820,
+    "attempts": [
+      {
+        "attempt": 1,
+        "url": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/attempts/1"
+      },
+      {
+        "attempt": 2,
+        "url": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/attempts/2"
+      }
+    ],
+    "inputSha256": {
+      "measured-summary.json": "5624e91c9a3a9c36dc5a96dce980302ecee4faf437940bdbe397315dc6950676",
+      "static-payload-fields-for-review.json": "bd0fcee28c7f34f681d8fc19029147cf62a57887c23f8e8709201c75b0601cbf"
+    },
+    "fixtureCatalogSha256": "dc8a954bd64a896cdea7a731bde959913af2f55915c2e8f1e9c48da8ea0cb95b",
+    "releaseCatalogSha256": "d7e6cedb53b416317a692f034cd3c8a652e7da9c340437052cf642430dceef4d",
+    "actualSuccessArtifactCount": 18,
+    "attempt1SuccessArtifacts": 15,
+    "attempt2SuccessArtifacts": 3,
+    "retainedBlockedArtifactCount": 3,
+    "totalActualArtifactsReviewed": 21,
+    "allObservationCheckCount": 1847,
+    "checkFailures": 0,
+    "completePairs": 9,
+    "priorBlockedEvidence": [
+      {
+        "version": "0.16.0",
+        "case": "seeded-existing",
+        "artifactId": 11302826627,
+        "artifactSha256": "5e1a8c3af113b6c9bd3872163daef2c969b6f6d26bce355f978ad06e1e25c416",
+        "jobId": 111429378676,
+        "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378676",
+        "runAttempt": 1,
+        "error": "HISTORY_RATE_LIMITED",
+        "installerStarted": false
+      },
+      {
+        "version": "0.17.6",
+        "case": "clean",
+        "artifactId": 11302319384,
+        "artifactSha256": "5eefd498fc97d1143652437be99b996fcac36e5e51146394a5b8b7c12c8b8ff2",
+        "jobId": 111429378684,
+        "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378684",
+        "runAttempt": 1,
+        "error": "HISTORY_RATE_LIMITED",
+        "installerStarted": false
+      },
+      {
+        "version": "0.17.1",
+        "case": "seeded-existing",
+        "artifactId": 11302104526,
+        "artifactSha256": "9e7583972f7ba7cb7379aac775da4399707759f10b80272467d4cfbeea799b96",
+        "jobId": 111429378665,
+        "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378665",
+        "runAttempt": 1,
+        "error": "HISTORY_RATE_LIMITED",
+        "installerStarted": false
+      }
+    ]
+  },
+  "payloads": [
+    {
+      "version": "0.14.0",
+      "installer_digest": "826b44d86bd4ff610119f762b30cc30e9e532c502517b2910dd5a489064a0249",
+      "installer_size": 6007615,
+      "installed_inventory": [
+        {
+          "path": "cc-desk.exe",
+          "size": 22103552,
+          "sha256": "218a562fa82e4fc8e0f67db42a30e8e190a2f6fc4026a7f5080220b6ad364e23",
+          "attributes": 32
+        },
+        {
+          "path": "uninstall.exe",
+          "size": 79152,
+          "sha256": "abbb77aff7c1b2b7b9d86224225b119049050086523cbc427dfc884a512adc62",
+          "attributes": 32
+        }
+      ],
+      "installed_bytes": 22182704,
+      "inventory_digest": "c8f14df09a9c35dc57c4fdf2e16d517531dbffe01d2a22bbf04640a2ccab616e",
+      "provenance": {
+        "releaseSourceCommit": "ee62c337f5ef9d98144f5c01ad9c3676f2622fab",
+        "releaseSourceURL": "https://github.com/shawnwu2022/cc-desk/tree/ee62c337f5ef9d98144f5c01ad9c3676f2622fab",
+        "fixtureFingerprint": "8172e015cd0c9dbc28f223f6f650a4fc866fb6850bd0053148f1935537b5cf81",
+        "cases": {
+          "clean": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302723325,
+            "artifactSha256": "202d2b351639e15623be79301a4abde467f889a1ed9a79316fa8919350995e35",
+            "artifactSize": 14423570,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302723325",
+            "jobId": 111429378670,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378670",
+            "fileCount": 2,
+            "entryCount": 3,
+            "payloadTotalBytes": 22182704,
+            "checksPassed": 93,
+            "checkCount": 93
+          },
+          "seeded-existing": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302758094,
+            "artifactSha256": "14cce2a65eb1de1ef83d25d1dcc72a16517dd25fe5d604caf7954d1a9b1583ac",
+            "artifactSize": 14437934,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302758094",
+            "jobId": 111429378657,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378657",
+            "fileCount": 3,
+            "entryCount": 4,
+            "payloadTotalBytes": 22182760,
+            "checksPassed": 103,
+            "checkCount": 103
+          }
+        }
+      }
+    },
+    {
+      "version": "0.15.0",
+      "installer_digest": "14f86e0858467ef397b61ba165993dd3b3c2d26744aaa9c8737f7dd63a80155a",
+      "installer_size": 6004307,
+      "installed_inventory": [
+        {
+          "path": "cc-desk.exe",
+          "size": 22103552,
+          "sha256": "ca5a98ba3409925dd2fbe752264ecaf32cadf8249272eb37ddd2a2557985b9d9",
+          "attributes": 32
+        },
+        {
+          "path": "uninstall.exe",
+          "size": 79152,
+          "sha256": "b34235dac0e1aa0fa2f7a6f856cfed5f05a626dd22a2a8386298d3346f8a9692",
+          "attributes": 32
+        }
+      ],
+      "installed_bytes": 22182704,
+      "inventory_digest": "545accccabb70fed3755a64b0dd125ff804c36c51b092f554db4452c5314da3e",
+      "provenance": {
+        "releaseSourceCommit": "e0036735a1dcb5b5297c9f528518bca6dc22501b",
+        "releaseSourceURL": "https://github.com/shawnwu2022/cc-desk/tree/e0036735a1dcb5b5297c9f528518bca6dc22501b",
+        "fixtureFingerprint": "f26149aabd23572eb0b8dcafce412e83e43a8a0418a85c22721dfbdfe2003aa9",
+        "cases": {
+          "clean": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302474038,
+            "artifactSha256": "3fbfec2c882789e04ac9d426ecadcd0dfba4316a71d83f7f7fc46f7dee620167",
+            "artifactSize": 14419340,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302474038",
+            "jobId": 111429378523,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378523",
+            "fileCount": 2,
+            "entryCount": 3,
+            "payloadTotalBytes": 22182704,
+            "checksPassed": 93,
+            "checkCount": 93
+          },
+          "seeded-existing": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302494380,
+            "artifactSha256": "60f545f4f48e52515f51f090bb96a47232acf35405b299966b79b1affc49d1ac",
+            "artifactSize": 14433743,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302494380",
+            "jobId": 111429378679,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378679",
+            "fileCount": 3,
+            "entryCount": 4,
+            "payloadTotalBytes": 22182760,
+            "checksPassed": 103,
+            "checkCount": 103
+          }
+        }
+      }
+    },
+    {
+      "version": "0.16.0",
+      "installer_digest": "547d9251286f0a3e78199590617913ac26d0ef2614325ad54a885ac75fd4fd3a",
+      "installer_size": 6102539,
+      "installed_inventory": [
+        {
+          "path": "cc-desk.exe",
+          "size": 22434816,
+          "sha256": "eae2d87f1a9f8add5b8bc74976765b0451bbe097f99f7b2ad2c46b7f94547afd",
+          "attributes": 32
+        },
+        {
+          "path": "uninstall.exe",
+          "size": 79152,
+          "sha256": "c6d09b95a12320a5bfcf83b6a98e672d55f957ca07323f929cd84b87d62061cf",
+          "attributes": 32
+        }
+      ],
+      "installed_bytes": 22513968,
+      "inventory_digest": "5241d2f77579924df5c5a15f7141a45de187d3561d74268d409a67150dc974c0",
+      "provenance": {
+        "releaseSourceCommit": "4e7b3e9cddfe219b198e9b3a3d9541bc2fb30515",
+        "releaseSourceURL": "https://github.com/shawnwu2022/cc-desk/tree/4e7b3e9cddfe219b198e9b3a3d9541bc2fb30515",
+        "fixtureFingerprint": "ab4a9a45dfb6060aff4363f2fc60167186d8b6a466ed12ee43901d4702d0e4b7",
+        "cases": {
+          "clean": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302307870,
+            "artifactSha256": "3dd2705e77ff791d65d92cd11420cd37443271d0b08b71aab6ebdf3a88b893a2",
+            "artifactSize": 14645903,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302307870",
+            "jobId": 111429378663,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378663",
+            "fileCount": 2,
+            "entryCount": 3,
+            "payloadTotalBytes": 22513968,
+            "checksPassed": 93,
+            "checkCount": 93
+          },
+          "seeded-existing": {
+            "runId": 37199938820,
+            "runAttempt": 2,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11304570938,
+            "artifactSha256": "96b46d3eaca065fece952d25b37f9a97c6a511fd24262d5809116ce9b71e8039",
+            "artifactSize": 14660158,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11304570938",
+            "jobId": 111441692115,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111441692115",
+            "fileCount": 3,
+            "entryCount": 4,
+            "payloadTotalBytes": 22514024,
+            "checksPassed": 103,
+            "checkCount": 103
+          }
+        }
+      }
+    },
+    {
+      "version": "0.17.0",
+      "installer_digest": "81a649eae03c2b248bae512f5db0f0e6d28ffac66691d0db9dbc5f9e95b9c61b",
+      "installer_size": 6072998,
+      "installed_inventory": [
+        {
+          "path": "cc-desk.exe",
+          "size": 22344704,
+          "sha256": "5bc6a2842ed2c52ce221a01256602da8b4901fc721d23dad78a1a15412ad3fce",
+          "attributes": 32
+        },
+        {
+          "path": "uninstall.exe",
+          "size": 79152,
+          "sha256": "f17a915e43a458255466e20035f0a4fcb4dd26a8a20e910e83bb65cac51ff7e7",
+          "attributes": 32
+        }
+      ],
+      "installed_bytes": 22423856,
+      "inventory_digest": "f6da6bd2f8cb637db7ca751eec4dff156038b6baa23d8aabb2934bc933faf9d7",
+      "provenance": {
+        "releaseSourceCommit": "af068629c79095b9dc7d1935a9b6397975e98ae0",
+        "releaseSourceURL": "https://github.com/shawnwu2022/cc-desk/tree/af068629c79095b9dc7d1935a9b6397975e98ae0",
+        "fixtureFingerprint": "2152ac6b1bb9109a427456dd2ce4344501372d9440f8b8512da82678d60c4a2d",
+        "cases": {
+          "clean": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302533928,
+            "artifactSha256": "a73cebb06212599932817ebf9546a1665847b546aaa0b1ca6542a901a60de008",
+            "artifactSize": 14590546,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302533928",
+            "jobId": 111429378658,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378658",
+            "fileCount": 2,
+            "entryCount": 3,
+            "payloadTotalBytes": 22423856,
+            "checksPassed": 93,
+            "checkCount": 93
+          },
+          "seeded-existing": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302613769,
+            "artifactSha256": "8958cde58ab12d12c01763fc9b310433b3be8cb4ee0d6eaa3be0c7371de2125f",
+            "artifactSize": 14604883,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302613769",
+            "jobId": 111429378668,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378668",
+            "fileCount": 3,
+            "entryCount": 4,
+            "payloadTotalBytes": 22423912,
+            "checksPassed": 103,
+            "checkCount": 103
+          }
+        }
+      }
+    },
+    {
+      "version": "0.17.1",
+      "installer_digest": "2d9eca64b6f0cdd43ce63bf674b4544ec9e0d01b79d70eacb42ffc37be04377c",
+      "installer_size": 6068768,
+      "installed_inventory": [
+        {
+          "path": "cc-desk.exe",
+          "size": 22344192,
+          "sha256": "ce1d00dd1df825a07376396a0544bcb7820d7a921ebd3f391abba246e0856fb5",
+          "attributes": 32
+        },
+        {
+          "path": "uninstall.exe",
+          "size": 79152,
+          "sha256": "9cfcd224c391bee115d4579feed05e0fa7fdb4bf0b1d4e1968e4edc50dd95abf",
+          "attributes": 32
+        }
+      ],
+      "installed_bytes": 22423344,
+      "inventory_digest": "34b1de40b620e777e9182368450284e58f785f7fc38c6b85ba09d5e883cd0e27",
+      "provenance": {
+        "releaseSourceCommit": "83ee6e03d62a425f375c43841b35ae56fa7fbba6",
+        "releaseSourceURL": "https://github.com/shawnwu2022/cc-desk/tree/83ee6e03d62a425f375c43841b35ae56fa7fbba6",
+        "fixtureFingerprint": "d3fc849b97bf98a8fadd2409860f5ab2153e3a50ec74a5234eba88d3a1ddcfc3",
+        "cases": {
+          "clean": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302758850,
+            "artifactSha256": "79a2dbef990e174e5a057616b6f5549bdb3d1d956e84f1487eb15ce46b77ec78",
+            "artifactSize": 14586371,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302758850",
+            "jobId": 111429378703,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378703",
+            "fileCount": 2,
+            "entryCount": 3,
+            "payloadTotalBytes": 22423344,
+            "checksPassed": 93,
+            "checkCount": 93
+          },
+          "seeded-existing": {
+            "runId": 37199938820,
+            "runAttempt": 2,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11304336583,
+            "artifactSha256": "6debf3d4e2e6790ac2352db6e57bfe3582d56f1e893fc2e7e12619690ec4a258",
+            "artifactSize": 14600627,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11304336583",
+            "jobId": 111441692171,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111441692171",
+            "fileCount": 3,
+            "entryCount": 4,
+            "payloadTotalBytes": 22423400,
+            "checksPassed": 103,
+            "checkCount": 103
+          }
+        }
+      }
+    },
+    {
+      "version": "0.17.2",
+      "installer_digest": "d54c7854f716fd05c2617300e08dd46303e06588818c0122412401e57ca7b094",
+      "installer_size": 6078917,
+      "installed_inventory": [
+        {
+          "path": "cc-desk.exe",
+          "size": 22345216,
+          "sha256": "a8316650a3d34c7ee2b1055495320cade04c951fce8bcbcb9a063033cc4e87a7",
+          "attributes": 32
+        },
+        {
+          "path": "uninstall.exe",
+          "size": 79152,
+          "sha256": "cb097cd05caa037e7e5dfa3bf09a5fbcaf87895a7a97024359188d1309a98821",
+          "attributes": 32
+        }
+      ],
+      "installed_bytes": 22424368,
+      "inventory_digest": "5588d448e92bc6cdef19c298c3e66a347b681372fa488e4d90c90786c848e094",
+      "provenance": {
+        "releaseSourceCommit": "a3776147a89703a2880e734b951d071c29afe68c",
+        "releaseSourceURL": "https://github.com/shawnwu2022/cc-desk/tree/a3776147a89703a2880e734b951d071c29afe68c",
+        "fixtureFingerprint": "309ce3bebfa4c24134876dd921531d5f6ec434559b3d1a64229319a806403ec7",
+        "cases": {
+          "clean": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302394185,
+            "artifactSha256": "0af097fcdff991020715cffee20d67576b41c4925140a64a029d516916e92ef6",
+            "artifactSize": 14597741,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302394185",
+            "jobId": 111429378640,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378640",
+            "fileCount": 2,
+            "entryCount": 3,
+            "payloadTotalBytes": 22424368,
+            "checksPassed": 93,
+            "checkCount": 93
+          },
+          "seeded-existing": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302622490,
+            "artifactSha256": "2ad038e4fdf68b7bb661766c3949a0e3e51f2f53b000df7b10974e6e3f41f05a",
+            "artifactSize": 14611992,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302622490",
+            "jobId": 111429378720,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378720",
+            "fileCount": 3,
+            "entryCount": 4,
+            "payloadTotalBytes": 22424424,
+            "checksPassed": 103,
+            "checkCount": 103
+          }
+        }
+      }
+    },
+    {
+      "version": "0.17.5",
+      "installer_digest": "e23df98c3bd789cc199fa80aae805acad2c668bcd7c0417815c347553e1b8041",
+      "installer_size": 4485401,
+      "installed_inventory": [
+        {
+          "path": "cc-desk.exe",
+          "size": 17276416,
+          "sha256": "461b97e8b38ddee0d08bf5e565ec54b83d9acf3cc0ccfa4c7c3471403e451005",
+          "attributes": 32
+        },
+        {
+          "path": "uninstall.exe",
+          "size": 79152,
+          "sha256": "2d608670e23e0c0fd0dca701a181a1f05d7354677d0898cbef2753696584a57d",
+          "attributes": 32
+        }
+      ],
+      "installed_bytes": 17355568,
+      "inventory_digest": "3bbd1e9063d63ecac460cbc05ba7d100a1fa73cab140351f9189eb756f569e3f",
+      "provenance": {
+        "releaseSourceCommit": "b4f7658c847a070cf64e9dba978c4e325a09bdce",
+        "releaseSourceURL": "https://github.com/shawnwu2022/cc-desk/tree/b4f7658c847a070cf64e9dba978c4e325a09bdce",
+        "fixtureFingerprint": "4d86e9dbe211319f2aafa548539d995af4c62be7b753ae6431e4b002531089a9",
+        "cases": {
+          "clean": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302713316,
+            "artifactSha256": "752fed2658369b1108332e71ccdc09dabebd607a88476a68db24f8cdefbb7ade",
+            "artifactSize": 10830504,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302713316",
+            "jobId": 111429378689,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378689",
+            "fileCount": 2,
+            "entryCount": 3,
+            "payloadTotalBytes": 17355568,
+            "checksPassed": 93,
+            "checkCount": 93
+          },
+          "seeded-existing": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302348122,
+            "artifactSha256": "86eedb33442544196e7ebc6ce8a9ae1c6db00624963782d62e2f9cc714183745",
+            "artifactSize": 10844831,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302348122",
+            "jobId": 111429378706,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378706",
+            "fileCount": 3,
+            "entryCount": 4,
+            "payloadTotalBytes": 17355624,
+            "checksPassed": 103,
+            "checkCount": 103
+          }
+        }
+      }
+    },
+    {
+      "version": "0.17.6",
+      "installer_digest": "a0df0178b4d4c4ab08f1229bbdf9b6d4c2c2e402139cbeaf9acd6bb9eb053afd",
+      "installer_size": 4486992,
+      "installed_inventory": [
+        {
+          "path": "cc-desk.exe",
+          "size": 17280512,
+          "sha256": "093ffc84ad8dde074fc1efbcd4d731c7b40d5dc3c701dcc4dd11bb6cc80a0020",
+          "attributes": 32
+        },
+        {
+          "path": "uninstall.exe",
+          "size": 79152,
+          "sha256": "e373f7d5adc7c32c0af960582776acc46f0bb9673717814683dd0f0af007551e",
+          "attributes": 32
+        }
+      ],
+      "installed_bytes": 17359664,
+      "inventory_digest": "f2ae408196dbbfedbaa8ae8cfebeef67ed5ed70ccf73cc0cd6f4486128f7516d",
+      "provenance": {
+        "releaseSourceCommit": "e67fcd87cc282ad1de7f3de693b8693485b9abf5",
+        "releaseSourceURL": "https://github.com/shawnwu2022/cc-desk/tree/e67fcd87cc282ad1de7f3de693b8693485b9abf5",
+        "fixtureFingerprint": "bb8dcc4af32d4241d7d768b6d42300db43e2b376aaa529ae382c77ffaf99bef2",
+        "cases": {
+          "clean": {
+            "runId": 37199938820,
+            "runAttempt": 2,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11304740078,
+            "artifactSha256": "5bd94f3260a1d2e9f8d0dbd26386b5584d87cc0cd6a83f466be2e2fa007cf781",
+            "artifactSize": 10832947,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11304740078",
+            "jobId": 111441692175,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111441692175",
+            "fileCount": 2,
+            "entryCount": 3,
+            "payloadTotalBytes": 17359664,
+            "checksPassed": 93,
+            "checkCount": 93
+          },
+          "seeded-existing": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302104617,
+            "artifactSha256": "5b444a139ecee33ae2e1ed6e0d0492e421edf4079efb898e85444ca0d787805e",
+            "artifactSize": 10847204,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302104617",
+            "jobId": 111429378710,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378710",
+            "fileCount": 3,
+            "entryCount": 4,
+            "payloadTotalBytes": 17359720,
+            "checksPassed": 103,
+            "checkCount": 103
+          }
+        }
+      }
+    },
+    {
+      "version": "0.17.7",
+      "installer_digest": "e9ffbc5ba627f0c133a4385db404342a7344729339185e6f9b8ee6b5969086ac",
+      "installer_size": 4966193,
+      "installed_inventory": [
+        {
+          "path": "LICENSE-Microsoft-ConPTY.txt",
+          "size": 1116,
+          "sha256": "5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b",
+          "attributes": 32
+        },
+        {
+          "path": "OpenConsole.exe",
+          "size": 1066296,
+          "sha256": "b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160",
+          "attributes": 32
+        },
+        {
+          "path": "cc-desk.exe",
+          "size": 17342976,
+          "sha256": "07d55b6b0841bd84357e71fd306a6a4265546181ccead573f3e756617a943719",
+          "attributes": 32
+        },
+        {
+          "path": "conpty.dll",
+          "size": 109920,
+          "sha256": "39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8",
+          "attributes": 32
+        },
+        {
+          "path": "uninstall.exe",
+          "size": 79267,
+          "sha256": "1b80e884a3a5106a7ccb5309940edc955c5def6448b9576777427717988a0381",
+          "attributes": 32
+        }
+      ],
+      "installed_bytes": 18599575,
+      "inventory_digest": "f08d0a928d4a817cbb848a94fb267f48b18991360d9884d2b13f25619f3b6828",
+      "provenance": {
+        "releaseSourceCommit": "77707e3b03187aa2ed96f5ab780f62f14c1e4ffc",
+        "releaseSourceURL": "https://github.com/shawnwu2022/cc-desk/tree/77707e3b03187aa2ed96f5ab780f62f14c1e4ffc",
+        "fixtureFingerprint": "f172778a0396ed1028b845e09de6aeb346bb7e26840ca70c75af9565c6dd0c89",
+        "cases": {
+          "clean": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302940626,
+            "artifactSha256": "8564b1541abd0c4136659c085fa52e2c42c7ec32eb91efc472c0b846fe2de02c",
+            "artifactSize": 11959961,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302940626",
+            "jobId": 111429378713,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378713",
+            "fileCount": 5,
+            "entryCount": 6,
+            "payloadTotalBytes": 18599575,
+            "checksPassed": 100,
+            "checkCount": 100
+          },
+          "seeded-existing": {
+            "runId": 37199938820,
+            "runAttempt": 1,
+            "fixtureSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "compiledSourceCommit": "b708427aaae52c81d6d8c821ca08c097e4258108",
+            "artifactId": 11302841471,
+            "artifactSha256": "0a450509ca42d2345fc39d8967304f86eac6a837110acdfd3a3917762a30b26c",
+            "artifactSize": 11974186,
+            "artifactURL": "https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/11302841471",
+            "jobId": 111429378786,
+            "jobURL": "https://github.com/shawnwu2022/cc-desk/actions/runs/37199938820/job/111429378786",
+            "fileCount": 6,
+            "entryCount": 7,
+            "payloadTotalBytes": 18599631,
+            "checksPassed": 110,
+            "checkCount": 110
+          }
+        }
+      }
+    }
+  ]
+}

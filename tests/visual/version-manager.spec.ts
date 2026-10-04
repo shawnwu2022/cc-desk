@@ -72,7 +72,7 @@ for (const surface of surfaces) {
           await page.locator('[data-manager-boundary]').scrollIntoViewIfNeeded()
           await captureFixtureEvidence(page, testInfo, `manager-${surface.name}-${status.phase}-boundary-unapproved`)
           const handoff = page.locator('.manager-handoff')
-          await handoff.scrollIntoViewIfNeeded()
+          await page.locator('.manager-content').evaluate(element => { element.scrollTop = element.scrollHeight })
           await expect(handoff).toBeInViewport({ ratio: 1 })
           await captureFixtureEvidence(page, testInfo, `manager-${surface.name}-${status.phase}-ownership-warning-unapproved`)
         }

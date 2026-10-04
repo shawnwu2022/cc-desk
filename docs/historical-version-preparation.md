@@ -56,4 +56,8 @@ Windows 正常路径的源码已经连接：专用线程完成当前安装和上
 
 `tests/components/historicalSwitch.test.ts` 经真实面板、store 和文档客户端覆盖中英文未知回执、失败后的只读检查、已签发身份、迟到检查的成功/失败，以及目录读取仍可重试的边界。
 
-管理器视觉场景在 `installed-unconfirmed` 和 `recovery-required` 阶段，分别将真实 `.manager-handoff` 提示滚入可视区并检查完整可见，再保存独立的 `ownership-warning-unapproved` 截图。此捕获与断言已加入四种窗口/语言/缩放组合，用于避免仅拍摄上方共享数据段落而漏掉“关闭窗口不会取消切换”的说明。本次本地执行在浏览器启动阶段受阻：固定 Playwright Chromium 缺失，系统 Chromium 的 socket 创建被环境拒绝；尚未执行到页面断言或生成新增截图，仍待 CI 捕获与像素检查。生成后的新增截图仍需单独批准；合成 Chromium 证据不代表真实 Windows、原生安装/返回验收或基线批准。
+清理检查返回不提供取消权限的有效动作子集或已签发身份时，保存的通用准备错误也必须按发布时的 `unknown` / `handoff-issued` 状态显示；后续成功检查再次发布该错误时应用同一规则。只转换 `historyErrorUnavailable`，保留已识别诊断和原准备失败记录，明确取消完成与目录读取仍使用原提示。中英文回归经真实面板、文档客户端和严格解析器覆盖这些合法回执及零重放。这是前端契约回归，不是当前 Rust 普通用户流程的复现声明：当前 Rust 通常为失败、运行中或过期准备提供取消；无已签发身份且未取消的准备，只在 Ready 且切换准入进行中不提供取消权限。已签发身份则须经过切换预约。
+
+管理器视觉场景在 `installed-unconfirmed` 和 `recovery-required` 阶段，分别将真实 `.manager-handoff` 提示滚入可视区并检查完整可见，再保存独立的 `ownership-warning-unapproved` 截图。此捕获与断言已加入四种窗口/语言/缩放组合，用于避免仅拍摄上方共享数据段落而漏掉“关闭窗口不会取消切换”的说明。本次本地执行在浏览器启动阶段受阻：固定 Playwright Chromium 缺失，系统 Chromium 的 socket 创建被环境拒绝；该本地尝试未执行到页面断言或生成截图，CI 捕获与像素检查证据另行记录。生成后的新增截图仍需单独批准；合成 Chromium 证据不代表真实 Windows、原生安装/返回验收或基线批准。
+
+独立所有权提示截图改为将真实 `.manager-content` 滚到 `scrollHeight`，利用已有底部内边距留出完整行框空间；仍要求交叉比例 `1`，不改 CSS、文字或可见性阈值。此修正仍待 CI 渲染验证，不能由 DOM 单元测试或用例收集代替。

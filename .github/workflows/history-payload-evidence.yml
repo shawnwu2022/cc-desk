@@ -9,9 +9,12 @@ on:
       - .github/workflows/history-payload-evidence.yml
       - src-tauri/src/tests/version_history_payload.rs
       - src-tauri/src/tests/version_history_payload/**
+      - src-tauri/src/tests/version_history_payload_policy.rs
+      - src-tauri/src/version_history/payload_policy.rs
       - tests/fixtures/version-history-payload/**
       - tests/fixtures/version-history-releases.json
       - tests/scripts/historyPayloadFixture.node.mjs
+      - tests/scripts/historyPayloadPolicy.node.mjs
   workflow_dispatch:
     inputs:
       expected_sha:
@@ -71,7 +74,7 @@ jobs:
           components: rustfmt
 
       - name: Verify pinned fixture provenance
-        run: node --test tests/scripts/historyPayloadFixture.node.mjs
+        run: node --test tests/scripts/historyPayloadFixture.node.mjs tests/scripts/historyPayloadPolicy.node.mjs
 
       - name: Prepare verified build runtime
         run: node scripts/prepare-conpty.mjs
@@ -92,6 +95,8 @@ jobs:
           cargo test --locked --lib tests::version_history_payload::fixture:: -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --lib tests::version_history_payload::inventory::HistoryPayload_InventoryMatrix_024 -- --exact --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --lib version_history::payload_policy::tests:: -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run isolated capability gate and payload capture

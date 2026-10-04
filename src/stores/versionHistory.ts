@@ -45,6 +45,12 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
   let work: Preparation | null = null
   const busy = computed(() => loading.value || selecting.value || ['preparing', 'cancelling', 'switching'].includes(phase.value) || inspecting.value)
   const hasPreparation = computed(() => ['preparing', 'verified', 'cancelling', 'unknown', 'switching', 'handoff-issued', 'unavailable', 'aborted'].includes(phase.value))
+  // Keep saved diagnostic categories, but do not suggest replay while ownership is held.
+  function retainedError(message: string | null) {
+    if (message === 'historyErrorUnavailable' && phase.value === 'unknown') return 'historyOwnershipUnknown'
+    if (message === 'historyErrorUnavailable' && phase.value === 'handoff-issued') return 'historyHandoffIssued'
+    return message
+  }
   function owns(key: number, transport = client) {
     if (!active || key !== owner || !transport || transport !== client) return false
     if (!transport.isCurrent()) {
@@ -119,7 +125,7 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
       if (work !== item || epoch !== item.epoch) return
       if (status.transactionId) {
         retainIssued(item, status.transactionId)
-        if (active && client === item.client) { review.value = status; phase.value = status.phase }
+        if (active && client === item.client) { review.value = status; phase.value = status.phase; error.value = retainedError(error.value) }
         return
       }
       if (status.phase === 'cancelled') {
@@ -127,7 +133,7 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
         return
       }
       if (!status.allowedActions.includes('cancel-preparation')) {
-        phase.value = 'unknown'
+        phase.value = 'unknown'; error.value = retainedError(error.value)
         if (active && client === item.client) review.value = status
         return
       }
@@ -190,7 +196,7 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
       if (work !== item || serial !== inspection || epoch !== item.epoch || !owns(key, item.client)) return
       if (transactionId.value && result.transactionId !== transactionId.value) throw new Error('HISTORY_INVALID_RESPONSE')
       if (result.transactionId) retainIssued(item, result.transactionId)
-      review.value = result; phase.value = result.phase; error.value = item.failure
+      review.value = result; phase.value = result.phase; error.value = retainedError(item.failure)
       if (result.phase === 'cancelled' && !transactionId.value) {
         item.cancelConfirmed = true; finishCancellation(item)
       }
