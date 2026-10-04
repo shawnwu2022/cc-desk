@@ -4,14 +4,29 @@ const path = require('node:path');
 const { test } = require('node:test');
 const ts = require('typescript');
 const Module = require('node:module');
-const file = path.resolve(__dirname, '../../src/utils/pasteTrace.ts');
-const loaded = new Module(file, module);
-loaded.filename = file;
-loaded.paths = module.paths;
-loaded._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText, file);
-const { PasteTrace } = loaded.exports;
+const sourceRoot = path.resolve(__dirname, '../../src');
+
+// Resolve application imports to actual production sources. Each load graph is
+// isolated so observer state cannot leak between tests; only host APIs are stubbed.
+function loadSource(filename, imports = {}, cache = new Map(), source) {
+  if (cache.has(filename)) return cache.get(filename).exports;
+  const m = new Module(filename, module);
+  m.filename = filename;
+  cache.set(filename, m);
+  m.require = name => {
+    if (Object.hasOwn(imports, name)) return imports[name];
+    const dependency = name.startsWith('@/') ? path.join(sourceRoot, name.slice(2))
+      : name.startsWith('.') ? path.resolve(path.dirname(filename), name) : undefined;
+    if (!dependency) throw new Error(`Unexpected import: ${name}`);
+    return loadSource(dependency + '.ts', imports, cache);
+  };
+  m._compile(ts.transpileModule(source ?? fs.readFileSync(filename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, filename);
+  return m.exports;
+}
+
+const { PasteTrace } = loadSource(path.join(sourceRoot, 'utils/pasteTrace.ts'));
 
 function clocked(enabled = true) {
   let time = 0;
@@ -118,14 +133,7 @@ test('PasteTrace_NoExtraAwaitOrResend_010', async () => {
 });
 
 function loadPaste() {
-  const filename = path.resolve(__dirname, '../../src/utils/pasteText.ts');
-  const m = new Module(filename, module);
-  m.filename = filename;
-  m.paths = module.paths;
-  m._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText, filename);
-  return m.exports;
+  return loadSource(path.join(sourceRoot, 'utils/pasteText.ts'));
 }
 
 function attach(paste, trace) {
@@ -197,20 +205,17 @@ function productionApi(enabled, observed) {
   const paste = loadPaste();
   const trace = new PasteTrace();
   const filename = process.env.CC_TRACE_API_BASELINE || path.resolve(__dirname, '../../src/api/tauri.ts');
-  const m = new Module(filename, module);
-  m.filename = filename;
-  m.require = name => {
-    if (name === '@/utils/pasteTrace') return { pasteTrace: trace };
-    if (name === '@/utils/pasteText') return paste;
-    if (name === '@tauri-apps/api/core') return { invoke: (cmd, args) => { observed.push({ cmd, args }); return Promise.resolve(true); } };
-    if (name.startsWith('@tauri-apps/')) return {};
-    throw new Error(`Unexpected import: ${name}`);
-  };
   const source = fs.readFileSync(filename, 'utf8').replace('import.meta.env.VITE_CC_DESK_PASTE_TRACE', JSON.stringify(enabled ? '1' : ''));
-  m._compile(ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText, filename);
-  return { api: m.exports, paste };
+  const api = loadSource(filename, {
+    '@/utils/pasteTrace': { pasteTrace: trace },
+    '@/utils/pasteText': paste,
+    '@tauri-apps/api/core': { invoke: (cmd, args) => { observed.push({ cmd, args }); return Promise.resolve(true); } },
+    '@tauri-apps/api/event': {},
+    '@tauri-apps/plugin-dialog': {},
+    '@tauri-apps/plugin-updater': {},
+    '@tauri-apps/plugin-process': {},
+  }, new Map(), source);
+  return { api, paste };
 }
 
 test('PasteTrace_RealIpcWrapperCarriesReference_015', async () => {
@@ -233,4 +238,17 @@ test('PasteTrace_DefaultIpcUnchanged_016', async () => {
   await paste.commitPaste(async () => 'unchanged', () => ({ ptyId: 'a' }), value => value,
     (id, data) => api.ptyInput(id, data, 'clipboard-keyboard'));
   assert.deepEqual(observed, [{ cmd: 'pty_input', args: { id: 'a', data: 'unchanged', source: 'clipboard-keyboard' } }]);
+});
+
+// 独立 Node 加载链必须执行真实剪贴板策略，只有图片证据才能发送图片粘贴键。
+test('PasteTrace_EvidencePolicyLoaded_017', async () => {
+  const paste = loadPaste();
+  const sent = [];
+  const write = async (id, data) => { sent.push({ id, data }); };
+  await paste.commitPasteWithEvidence(async () => '', undefined, () => ({ ptyId: 'a' }),
+    value => value, write, () => '\x1bv');
+  assert.deepEqual(sent, [], 'empty text alone must not trigger the image-paste key');
+  await paste.commitPasteWithEvidence(async () => '', async () => true, () => ({ ptyId: 'a' }),
+    value => value, write, () => '\x1bv');
+  assert.deepEqual(sent, [{ id: 'a', data: '\x1bv' }]);
 });

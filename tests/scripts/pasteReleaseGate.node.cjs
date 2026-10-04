@@ -23,6 +23,8 @@ function generate(t, launchMode = 'direct') {
   fs.cpSync(path.join(repo, '.github/scripts'), path.join(root, '.github/scripts'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src/utils'), { recursive: true });
   fs.copyFileSync(path.join(repo, 'src/utils/pasteText.ts'), path.join(root, 'src/utils/pasteText.ts'));
+  fs.mkdirSync(path.join(root, 'src/terminal'), { recursive: true });
+  fs.copyFileSync(path.join(repo, 'src/terminal/inputPolicy.ts'), path.join(root, 'src/terminal/inputPolicy.ts'));
   fs.symlinkSync(path.join(repo, 'node_modules'), path.join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   const fixtureDir = path.join(root, 'src-tauri/tests/fixtures');
   fs.mkdirSync(fixtureDir, { recursive: true });

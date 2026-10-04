@@ -3,12 +3,19 @@ const path = require('node:path');
 
 const root = process.cwd();
 const ts = require(path.join(root, 'node_modules/typescript'));
-const compiled = ts.transpileModule(fs.readFileSync(path.join(root, 'src/utils/pasteText.ts'), 'utf8'), {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText;
 fs.mkdirSync(path.join(root, '.ci-claude'), { recursive: true });
+// Standalone Node has no Vite alias resolver. Keep the real clipboard policy
+// alongside pasteText instead of dropping or mocking its production import.
+for (const [source, target] of [
+  ['src/terminal/inputPolicy.ts', 'inputPolicy.cjs'],
+  ['src/utils/pasteText.ts', 'pasteText.cjs'],
+]) {
+  const compiled = ts.transpileModule(fs.readFileSync(path.join(root, source), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText.replace('require("@/terminal/inputPolicy")', 'require("./inputPolicy.cjs")');
+  fs.writeFileSync(path.join(root, '.ci-claude', target), compiled);
+}
 const compiledPath = path.join(root, '.ci-claude/pasteText.cjs');
-fs.writeFileSync(compiledPath, compiled);
 const { buildPastePayload } = require(compiledPath);
 const fixtures = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri/tests/fixtures/devtools-paste-framing.json'), 'utf8'));
 const launchMode = process.env.CC_PASTE_LAUNCH_MODE || 'direct';

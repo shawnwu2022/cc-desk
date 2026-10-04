@@ -8,6 +8,31 @@ Architecture: Rust owns release identities, verified bytes, maintenance admissio
 
 Spec: ../specs/2026-10-02-historical-versions-design.md
 
+## Reconciled status (2026-10-04)
+
+The original checkboxes below are the implementation brief, not a current claim
+that no work has started. This status review uses source
+`277d2bedb02da9f047a707a7ca8b0abb7afc907b` and the
+[local-to-cloud handoff](../../local-to-cloud-handoff-2026-10-04.md).
+Source-connected, host-tested and actual native acceptance are separate outcomes.
+
+| Task | Current source status | Acceptance still required |
+| --- | --- | --- |
+| 1: catalog | Implemented in `version_history/{catalog,policy,types,commands}.rs`; catalog and frontend contract tests cover the nine observed releases, bounds, platform filtering and selection ownership | Listing or publisher verification does not authorize installation; only 0.17.7 currently has measured payload policy |
+| 2: preparation | Implemented in `download.rs` and `verified_package.rs`, with real signature fixtures, bounded private storage, metadata/byte rechecks and document-bound cancellation | Keep exact-source Windows results separate from portable signature-fixture checks and from roundtrip admission |
+| 3: snapshots/journal | Normal context preservation/return, startup barrier, retained leases and durable journal are connected; transaction and native custody/checkpoint tests exist | General crash recovery remains incomplete: only sealed, unclaimed checkpoints with reacquired actual ownership can return; unknown/unsealed/claimed-interrupted states remain read-only |
+| 4: manager/installer | Restricted manager entry/document/worker and native handoff/coordinator/restore modules are connected; scope, process, fence, bundle, registration and shortcut tests exist | Independent unelevated manager survival, actual historical lifecycle, exact restore and final reopen remain unaccepted; do not bypass an external Job |
+| 5: UI | `HistoricalVersionsPanel.vue` uses shared dialogs; `src/manager/VersionManagerApp.vue` is the isolated recovery UI. Stores/contracts cover original-owner actions, stale requests, explicit review and no replay | The plan-only backup destination summary is not displayed; the approved design requires data-consequence disclosure, which is present, but does not require exposing a location. Actual WebView accessibility and history/manager pixel acceptance are not established |
+| 6: acceptance | Deny-only compile-time binding, disposable driver, pure contracts, hosted compile policy and synthetic visual fixtures exist | Both native scenarios are `BLOCKED_EXTERNAL_TARGET`; the nine-version install matrix is incomplete. History/manager PNGs are unapproved captures; 13 approved workspace baselines do not certify them |
+| 7: delivery | Draft PR34, test-package workflow and scoped recovery/handoff documentation exist | Final evidence must identify source, tested merge, workflow and artifact bytes. Test-only diagnostic changes do not require replacing the installed build; no final roundtrip-ready delivery is claimed |
+
+The Task6 proposal to use a hosted runner for genuine roundtrip acceptance is
+superseded by [the disposable-target contract](../../testing/historical-roundtrip-disposable.md).
+Hosted compile/fixture checks cannot establish a job-free native target. Keep
+`SUPPORTED_ROUNDTRIP_ENABLED=false`, ordinary publication disabled and PR34 draft.
+Do not create obsolete planned component filenames when the existing shared
+dialog and isolated manager already own those surfaces.
+
 ## Global constraints
 
 - Current repository/branch/PR: shawnwu2022/cc-desk, feat/unified-workspace-ux, Draft PR34; starting head006fa33; version0.18.0
