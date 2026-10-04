@@ -3,6 +3,8 @@ import type { ProfileList, ProfilePatch } from '@/types/profile'
 
 export { cliGetAvailability } from './cliAvailability'
 export type { CliAvailability } from './cliAvailability'
+export { cliDiscoverPrograms } from './programDiscovery'
+export type { ProgramCandidate, ProgramDiscovery } from './programDiscovery'
 
 /** Reads only Desk preferences; the backend does not project legacy credentials. */
 export function cliListProfiles(): Promise<ProfileList> {

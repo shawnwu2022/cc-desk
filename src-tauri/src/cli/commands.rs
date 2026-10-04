@@ -59,6 +59,28 @@ pub(crate) async fn cli_get_availability(
     .map_err(|_| error("AVAILABILITY_TASK_FAILED"))?
 }
 
+// Filesystem-only discovery. Project exclusions come from the backend repository.
+#[tauri::command]
+pub(crate) async fn cli_discover_programs(
+    window: WebviewWindow,
+    request: Value,
+) -> Result<super::program_discovery::ProgramDiscovery, SafeError> {
+    let caller = window.label().to_string();
+    authorize_profile_window(&caller)?;
+    let request: super::program_discovery::DiscoveryRequest =
+        serde_json::from_value(request).map_err(|_| SafeError::invalid("request"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        super::program_discovery::discover_programs(
+            &WorkspaceRepository::production()?,
+            &caller,
+            &request,
+            &std::env::vars_os().collect(),
+        )
+    })
+    .await
+    .map_err(|_| error("DISCOVERY_UNAVAILABLE"))?
+}
+
 // Raw document-authenticated launch boundary. No wire owner fields.
 #[tauri::command]
 pub(crate) async fn cli_start(

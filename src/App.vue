@@ -16,8 +16,9 @@ import ErrorDetails from '@/components/ui/ErrorDetails.vue'
 import NewSessionMenu from '@/components/sessions/NewSessionMenu.vue'
 import ResumeSessionDialog from '@/components/sessions/ResumeSessionDialog.vue'
 import NewSessionDialog from '@/components/sessions/NewSessionDialog.vue'
+import LaunchProgramDiscovery from '@/components/sessions/LaunchProgramDiscovery.vue'
 import LaunchConfigurationEditor from '@/components/settings/LaunchConfigurationEditor.vue'
-import type { LaunchConfigurationEditorRequest } from '@/types/profile'
+import type { ConfirmedLaunchProgram, LaunchConfigurationEditorRequest } from '@/types/profile'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
 import { SESSION_INTERACTION_OWNER } from '@/session/sessionInteraction'
@@ -70,6 +71,14 @@ function editPreparationConfiguration() {
   if (shell.section !== 'workspace' || session?.safeErrorCode !== 'LAUNCH_CONFIGURATION_REQUIRED') return
   if (profile && profile.cli === session.cli) preparationEditor.value = { kind: 'edit', profileId: profile.id }
   else { sidebar.activeSettingsSection = 'launch-configurations'; shell.navigate('settings') }
+}
+function confirmDiscoveredProgram(confirmation: ConfirmedLaunchProgram) {
+  const row = sessions.activeSession
+  if (shell.section !== 'workspace' || row?.id !== confirmation.sessionId || row.preparationState !== 'failed'
+    || row.preparationIssueCode !== 'PROGRAM_TRUST_REQUIRED' || !confirmation.canContinue()) return
+  const pending = sessions.retryConfirmedCreation(confirmation.sessionId, confirmation.profileId, confirmation.profileRevision, confirmation.canContinue)
+  const feedbackOwner = sessions.captureFeedbackOwner()
+  void pending.catch(error => sessions.publishActionFailure(() => confirmation.canContinue() && feedbackOwner(), error))
 }
 const sessionSidebar = ref<InstanceType<typeof SidebarPanel> | null>(null)
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
@@ -240,7 +249,9 @@ onUnmounted(() => {
           <WorkspaceSourceDetails v-if="runtime.error.value === 'workspaceRuntimePartial'"
             :warnings="runtime.sourceWarnings?.value ?? []" :truncated="runtime.sourceWarningsTruncated?.value ?? false" />
         </InlineNotice>
-        <InlineNotice v-if="sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED'" data-launch-preparation kind="warning"
+        <LaunchProgramDiscovery v-if="shell.section === 'workspace' && !preparationEditor && sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED' && sessions.activeSession.preparationIssueCode === 'PROGRAM_TRUST_REQUIRED'"
+          :key="`${sessions.activeSession.id}:${shell.navigationSequence}:${shell.requestSequence}`" :session="sessions.activeSession" @edit="editPreparationConfiguration" @confirmed="confirmDiscoveredProgram" />
+        <InlineNotice v-else-if="sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED'" data-launch-preparation kind="warning"
           :message="t(mapSafeUserError(sessions.activeSession.preparationIssueCode ?? 'GENERIC_UNAVAILABLE', 'launch').messageKey)"
           :action-label="t('launchConfigEditAction')" @action="editPreparationConfiguration">
           <ErrorDetails :code="sessions.activeSession.preparationIssueCode ?? 'GENERIC_UNAVAILABLE'" context="launch" />

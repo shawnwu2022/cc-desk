@@ -423,7 +423,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     }
   }
 
-  async function createSession(input: CreateUnifiedSessionInput, retryId?: string): Promise<UnifiedSession> {
+  async function createSession(input: CreateUnifiedSessionInput, retryId?: string, confirmationGuard?: () => boolean): Promise<UnifiedSession> {
     ++selectionEpoch
     const intentEpoch = ++selectionIntentEpoch
     const id = retryId ?? createNativeId('preparing')
@@ -436,11 +436,14 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     sessions.value = [...sessions.value.filter(session => session.id !== id), row]
     activeSessionId.value = id
     const current = () => creations.get(id)?.owner === owner
+    const canAdmit = () => current() && (!confirmationGuard || confirmationGuard()
+      && intentEpoch === selectionIntentEpoch && activeSessionId.value === id)
     try {
       const prepared = await prepareCreation(copyInput(creation.input))
-      if (!current()) throw new Error('NEW_SESSION_CANCELLED')
+      if (!canAdmit()) throw new Error('NEW_SESSION_CANCELLED')
+      if (confirmationGuard && (prepared.launchConfigId !== input.launchConfigId || prepared.launchConfigRevision !== input.launchConfigRevision)) throw new Error('PROFILE_SELECTION_CHANGED')
       creation.preparing = false
-      const created = await adapterForRuntime('native-cli').createSession(prepared)
+      const created = await adapterForRuntime('native-cli').createSession(prepared, canAdmit)
       creations.delete(id)
       sessions.value = [...sessions.value.filter(session => session.id !== id && session.id !== created.id), created]
       if (creation.selectionIntentEpoch === selectionIntentEpoch && activeSessionId.value === id) activeSessionId.value = created.id
@@ -526,6 +529,13 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     return enqueue(id, () => adapter.stopSession(id), () => refresh(session.projectKey))
+  }
+
+  function retryConfirmedCreation(id: string, profileId: string, profileRevision: string, canContinue: () => boolean): Promise<UnifiedSession> {
+    const creation = creations.get(id)
+    if (!canContinue() || activeSessionId.value !== id || !creation || creation.row.preparationState !== 'failed'
+      || creation.row.preparationIssueCode !== 'PROGRAM_TRUST_REQUIRED' || creation.row.launchConfigId !== profileId) return Promise.reject(new Error('NEW_SESSION_CANCELLED'))
+    return createSession({ ...copyInput(creation.input), launchConfigId: profileId, launchConfigRevision: profileRevision }, id, canContinue)
   }
 
   function restartSession(id: string, canContinue = () => true): Promise<UnifiedSession> {
@@ -670,6 +680,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     selectProjectContext,
     activateSession,
     createSession,
+    retryConfirmedCreation,
     resumeSession,
     stopSession,
     restartSession,

@@ -251,6 +251,13 @@ export default {
   newSessionPreparationFailed: "The project or launch configuration could not be prepared safely. Retry explicitly, or choose an existing configuration in More options. Launches are never retried automatically.",
   launchPreparationConfigurationRequired: "Choose the CLI program and check this launch configuration before starting a session. Save your changes, then explicitly retry or create a session.",
   launchPreparationConfigurationUnavailable: "The launch configuration check failed. View the error details, correct the configuration, then explicitly retry.",
+  launchDiscoverySearching: "Finding the installed CLI…",
+  launchDiscoveryConfirm: "Found the CLI. Confirm this program once; future sessions will use the saved selection.",
+  launchDiscoveryEmpty: "No CLI program was found. Check that it is installed, or edit the configuration for a custom location.",
+  launchDiscoveryFailed: "Automatic CLI detection could not finish. View details or edit the launch configuration.",
+  launchDiscoveryProgram: "Detected program",
+  launchDiscoveryRunner: "Script launcher",
+  launchDiscoveryUse: "Use and start session",
   launchPreparationWorkingDirectoryUnavailable: "The project's working folder is unavailable. Check that it still exists and is accessible.",
 
   workspaceRuntimePartial: 'Some session sources could not be loaded. Open sessions remain available.',

@@ -355,6 +355,49 @@ fn D10_Cmd_SafeShellAndShimRoundTrip_09() {
 
 #[cfg(windows)]
 #[test]
+fn D10_Cmd_DiscoveredCanonicalShimRoundTrip_14() {
+    use crate::cli::program_discovery::{discover_programs, DiscoveryRequest};
+    use crate::cli::storage::{Patch, WorkspaceRepository};
+    let args = &["a b", "--future"];
+    let mut fixture = Fixture::new(args);
+    fixture.runner(Dialect::Cmd, true);
+    fs::copy(
+        fixture.temp.path().join("probe.cmd"),
+        fixture.temp.path().join("codex.cmd"),
+    )
+    .unwrap();
+    let repo = WorkspaceRepository::open(fixture.temp.path().join("desk/workspace.json")).unwrap();
+    let project = crate::cli::workspace::register_project(&repo, &fixture.cwd).unwrap();
+    let document = repo
+        .apply(
+            repo.read().unwrap().revision,
+            Patch::Create {
+                profile: Profile::new("discovery", CliKind::Codex),
+            },
+        )
+        .unwrap();
+    let mut environment = EnvMap::new();
+    environment.insert("PATH".into(), fixture.temp.path().as_os_str().into());
+    environment.insert("ComSpec".into(), runner_path(&Dialect::Cmd).into());
+    let receipt = discover_programs(
+        &repo,
+        "main",
+        &DiscoveryRequest {
+            profile_id: "discovery".into(),
+            expected_revision: document.profiles["discovery"].revision,
+            project_id: project.project_id,
+        },
+        &environment,
+    )
+    .unwrap();
+    assert_eq!(receipt.candidates.len(), 1);
+    fixture.profile.program_path = Override::Set(receipt.candidates[0].program_path.clone());
+    fixture.profile.launcher = receipt.candidates[0].launcher.clone();
+    roundtrip(&fixture, args);
+}
+
+#[cfg(windows)]
+#[test]
 fn D10_Cmd_UnsafeInputIsNotRewritten_10() {
     for value in [
         "%TEMP%", "!x!", "^", "&", "|", "<", ">", "\"", "\n", "(echo x)",

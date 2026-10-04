@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
+import { LaunchConfigurationRequiredError } from '@/utils/launchPreparation'
 import type {
   CreateUnifiedSessionInput,
   ResumeUnifiedSessionInput,
@@ -92,6 +93,26 @@ function fakeAdapter(runtime: SessionRuntimeKind, initial: UnifiedSession[] = []
     setSessions(next: UnifiedSession[]) { current = [...next] },
   }
 }
+
+it.each(['navigation', 'selection', 'revision', 'success'] as const)('confirmed discovery pins revision and cancels stale preflight: %s', async reason => {
+  setActivePinia(createPinia())
+  const store = useUnifiedSessionsStore(), native = fakeAdapter('native-cli')
+  store.configureAdapters([native.adapter])
+  store.configureCreationPreparer(async () => { throw new LaunchConfigurationRequiredError('p', { code: 'PROGRAM_TRUST_REQUIRED' }) })
+  await expect(store.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo' })).rejects.toThrow('LAUNCH_CONFIGURATION_REQUIRED')
+  const id = store.activeSessionId!, pending = deferred<CreateUnifiedSessionInput>()
+  const prepare = vi.fn(() => pending.promise)
+  store.configureCreationPreparer(prepare)
+  let current = true
+  const retry = store.retryConfirmedCreation(id, 'p', '3', () => current)
+  const result = retry.then(() => 'admitted', () => 'cancelled')
+  expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ launchConfigId: 'p', launchConfigRevision: '3' }))
+  if (reason === 'navigation') current = false
+  if (reason === 'selection') { store.selectProjectContext('/other'); await store.activateSession(id) }
+  pending.resolve({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', launchConfigId: 'p', launchConfigRevision: reason === 'revision' ? '4' : '3' })
+  expect(await result).toBe(reason === 'success' ? 'admitted' : 'cancelled')
+  expect(native.adapter.createSession).toHaveBeenCalledTimes(reason === 'success' ? 1 : 0)
+})
 
 beforeEach(() => {
   vi.restoreAllMocks()

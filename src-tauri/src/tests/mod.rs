@@ -93,6 +93,7 @@ mod native_cli_launch_live;
 mod native_cli_scope;
 
 mod native_cli_history_diagnostics;
+mod native_cli_program_discovery;
 mod native_cli_projection_service;
 
 #[cfg(windows)]

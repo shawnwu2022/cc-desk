@@ -11,12 +11,13 @@ import { useNativeTabsStore, matchesNativeAttempt } from '@/stores/nativeTabs'
 import { useSessionStore } from '@/stores/session'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import en from '@/i18n/locales/en'
-const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn(), availability: vi.fn() }))
+const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn(), availability: vi.fn(), discovery: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getProjectsState: io.state, getProjects: io.projects, getSessions: io.sessions,
   getAppConfig: async () => ({ language: 'en', theme: 'light', terminalTheme: 'cc-box-light' }), updateAppConfig: async () => {}, onHookEvent: async () => () => {}, archiveSession: io.archive, pinProject: io.pin,
   createNativeProjectionClient: () => ({ scope: async () => ({ cli: 'codex' }), read: async () => ({ state: 'ready', items: [{ type: 'session', sessionKey: 'source', nativeSessionId: 'saved', title: 'Saved', cwd: '/repo' }], hasMore: false }) }) }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patch }))
 vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: io.availability }))
+vi.mock('@/api/programDiscovery', () => ({ cliDiscoverPrograms: io.discovery }))
 vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, removeProject: io.remove }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.write }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
@@ -31,6 +32,7 @@ beforeEach(() => {
   io.state.mockResolvedValue({ pinnedProjects: [], archivedSessions: {} })
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'Work', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/codex' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.availability.mockImplementation(async (profileId, profileRevision) => ({ profileId, profileRevision, cli: 'codex', state: 'available-unverified', hostStatus: 'available', certified: false }))
+  io.discovery.mockImplementation(async (profileId, profileRevision, projectId) => ({ profileId, profileRevision, projectId, cli: 'codex', workspaceRevision: '7', candidates: [] }))
   io.stop.mockResolvedValue(undefined); io.recover.mockResolvedValue(undefined)
   io.archive.mockImplementation(async (path, id) => ({ pinnedProjects: [], archivedSessions: { [path]: [id] } }))
 })
@@ -487,7 +489,7 @@ it('LaunchPreparation_ConfigurationActionDoesNotAdmit_001', async () => {
   expect(useNativeTabsStore().tabs.size).toBe(0)
   expect(useUnifiedSessionsStore().activeSession).toMatchObject({ processState: 'failed', safeErrorCode: 'LAUNCH_CONFIGURATION_REQUIRED', launchConfigId: 'cx' })
   const notice = document.querySelector('[data-launch-preparation]')
-  expect(notice?.textContent).toContain('Choose the CLI program')
+  expect(notice?.textContent).toContain('No CLI program was found')
   ;(notice!.querySelector('button') as HTMLButtonElement).click(); await flushPromises()
   expect(document.querySelector<HTMLInputElement>('[data-launch-name]')?.value).toBe('Work')
   expect(document.querySelector('[data-launch-save]')).not.toBeNull()
@@ -518,4 +520,42 @@ it('LaunchPreparation_ConfigurationActionDoesNotAdmit_001', async () => {
   expect([...useNativeTabsStore().tabs.values()][0]).toMatchObject({ profileId: 'cx', profileRevision: '9' })
   await useUnifiedSessionsStore().closeSession(useUnifiedSessionsStore().activeSessionId!)
   expect(document.querySelector('[data-live-terminal]')).toBeNull()
+})
+
+it.each(['direct', 'navigation-return', 'editor-cancel'] as const)('LaunchPreparation_AutoDiscoveryConfirmedOnceThenReused_003_%s', async entry => {
+  const { useCliProfilesStore } = await import('@/stores/cliProfiles')
+  const initial = await io.profiles(); initial.profiles[0].programPath = { mode: 'inherit' }; io.profiles.mockResolvedValue(initial)
+  io.availability.mockImplementation(async (profileId, profileRevision) => {
+    const configured = useCliProfilesStore().profile(profileId)?.programPath.mode === 'set'
+    return { profileId, profileRevision, cli: 'codex', state: configured ? 'available-unverified' : 'configuration-required', hostStatus: 'available', certified: false,
+      ...(configured ? {} : { issue: { code: 'PROGRAM_TRUST_REQUIRED', retryable: false } }) }
+  })
+  io.discovery.mockResolvedValue({ profileId: 'cx', profileRevision: '7', projectId: 'project', cli: 'codex', workspaceRevision: '7', candidates: [{ programPath: '/installed/codex', launcher: { kind: 'native' } }] })
+  io.patch.mockImplementation(async (_revision, patch) => {
+    const saved = { revision: '8', profiles: [{ ...initial.profiles[0], ...patch.changes, revision: '8' }] }
+    io.profiles.mockResolvedValue(saved); return saved
+  })
+  render(); await flushPromises()
+  const input = { cli: 'codex' as const, projectKey: '/repo', projectPath: '/repo' }
+  useShellStore().requestWorkspaceAction({ kind: 'create-session', input }); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  expect(io.patch).not.toHaveBeenCalled()
+  expect(document.querySelector('[data-program-discovery]')?.textContent).toContain('/installed/codex')
+  if (entry === 'navigation-return') {
+    useShellStore().navigate('settings'); await flushPromises()
+    expect(document.querySelector('[data-program-discovery]')).toBeNull()
+    useShellStore().navigate('workspace'); await flushPromises()
+  } else if (entry === 'editor-cancel') {
+    ;(document.querySelector('[data-program-discovery] button') as HTMLButtonElement).click(); await flushPromises()
+    expect(document.querySelector('[data-program-discovery]')).toBeNull()
+    ;(document.querySelector('[data-launch-cancel]') as HTMLButtonElement).click(); await flushPromises()
+  }
+  expect(io.patch).not.toHaveBeenCalled()
+  ;(document.querySelector('[data-program-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(1)
+  expect([...useNativeTabsStore().tabs.values()][0].profileRevision).toBe('8')
+  expect(io.patch).toHaveBeenCalledOnce()
+  useShellStore().requestWorkspaceAction({ kind: 'create-session', input }); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(2)
+  expect(io.discovery).toHaveBeenCalledTimes(entry === 'direct' ? 1 : 2)
 })

@@ -55,3 +55,11 @@ export interface LaunchConfigurationSave {
   source?: { id: string; revision: string }
   patch: Exclude<ProfilePatch, { op: 'delete' }>
 }
+
+/** In-memory confirmation; never sent over IPC or persisted. */
+export interface ConfirmedLaunchProgram {
+  sessionId: string
+  profileId: string
+  profileRevision: string
+  canContinue: () => boolean
+}
