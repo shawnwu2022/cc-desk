@@ -11,17 +11,21 @@ const catalog = JSON.parse(read('catalog.json'))
 const versions = ['0.14.0', '0.15.0', '0.16.0', '0.17.0', '0.17.1', '0.17.2', '0.17.5', '0.17.6', '0.17.7']
 
 test('reviewed payload policy checks run in ordinary CI and before native evidence collection', () => {
-  const ci = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8')
-  const evidence = readFileSync(new URL('../../.github/workflows/history-payload-evidence.yml', import.meta.url), 'utf8')
-  assert.match(ci, /name: Run Node policy tests\s+run: [^\n]*tests\/scripts\/historyPayloadPolicy\.node\.mjs/,
-    'ordinary CI must execute reviewed payload policy checks')
-  assert.match(evidence, /name: Verify pinned fixture provenance\s+run: [^\n]*tests\/scripts\/historyPayloadPolicy\.node\.mjs/)
-  assert.ok(evidence.includes('\n      - tests/scripts/historyPayloadPolicy.node.mjs\n'))
-  assert.ok(evidence.includes('\n      - src-tauri/src/version_history/payload_policy.rs\n'))
-  assert.ok(evidence.includes('\n      - src-tauri/src/tests/version_history_payload_policy.rs\n'))
-  const policyCommand = 'cargo test --locked --lib version_history::payload_policy::tests:: -- --test-threads=1'
-  assert.ok(evidence.includes(policyCommand), 'native policy contracts must run before installer observation')
-  assert.ok(evidence.indexOf(policyCommand) < evidence.indexOf('Run isolated capability gate and payload capture'))
+  const ciSource = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  const evidenceSource = readFileSync(new URL('../../.github/workflows/history-payload-evidence.yml', import.meta.url), 'utf8')
+  for (const ending of ['\n', '\r\n']) {
+    const ci = ciSource.replace(/\r?\n/g, ending)
+    const evidence = evidenceSource.replace(/\r?\n/g, ending)
+    assert.match(ci, /name: Run Node policy tests\s+run: [^\n]*tests\/scripts\/historyPayloadPolicy\.node\.mjs/,
+      'ordinary CI must execute reviewed payload policy checks')
+    assert.match(evidence, /name: Verify pinned fixture provenance\s+run: [^\n]*tests\/scripts\/historyPayloadPolicy\.node\.mjs/)
+    assert.match(evidence, /^      - tests\/scripts\/historyPayloadPolicy\.node\.mjs\r?$/m)
+    assert.match(evidence, /^      - src-tauri\/src\/version_history\/payload_policy\.rs\r?$/m)
+    assert.match(evidence, /^      - src-tauri\/src\/tests\/version_history_payload_policy\.rs\r?$/m)
+    const policyCommand = 'cargo test --locked --lib version_history::payload_policy::tests:: -- --test-threads=1'
+    assert.ok(evidence.includes(policyCommand), 'native policy contracts must run before installer observation')
+    assert.ok(evidence.indexOf(policyCommand) < evidence.indexOf('Run isolated capability gate and payload capture'))
+  }
 })
 
 // 检查九个静态条目逐字段匹配已审查证据；此源码一致性检查不执行 Rust 准入逻辑。

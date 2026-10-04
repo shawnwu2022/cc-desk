@@ -398,8 +398,7 @@ fn HistoryPayload_MatrixMismatch_011() {
                 }
                 _ => {}
             }
-            let catalog =
-                CatalogService::new(Arc::new(Source(release)), HostPlatform::WindowsX64);
+            let catalog = CatalogService::new(Arc::new(Source(release)), HostPlatform::WindowsX64);
             let caller = CallerIdentity {
                 instance_id: "payload-mismatch-test".into(),
                 window_label: "main".into(),
@@ -515,8 +514,7 @@ fn HistoryPayload_InventoryMatrix_013() {
             entry.sha256 = Some(file["sha256"].as_str().unwrap().into());
             installed.push(entry);
         }
-        validate_installed_inventory(measured, "Old Desk.exe", &source[..2], &installed)
-            .unwrap();
+        validate_installed_inventory(measured, "Old Desk.exe", &source[..2], &installed).unwrap();
         let clean = installed.clone();
         installed.push(source[2].clone());
         validate_installed_inventory(measured, "Old Desk.exe", &source, &installed).unwrap();
@@ -555,8 +553,7 @@ fn HistoryPayload_InventoryMatrix_013() {
         }
         for other in REVIEWED.iter().filter(|other| other.version != version) {
             assert!(
-                validate_installed_inventory(other, "Old Desk.exe", &source, &installed)
-                    .is_err(),
+                validate_installed_inventory(other, "Old Desk.exe", &source, &installed).is_err(),
                 "{version} inventory cannot satisfy {}",
                 other.version
             );
@@ -569,8 +566,7 @@ fn HistoryPayload_InventoryMatrix_013() {
                 _ => changed.push(source[1].clone()),
             }
             assert!(
-                validate_installed_inventory(measured, "Old Desk.exe", &source, &changed)
-                    .is_err(),
+                validate_installed_inventory(measured, "Old Desk.exe", &source, &changed).is_err(),
                 "{version} source preservation alteration {change} must be rejected"
             );
         }
