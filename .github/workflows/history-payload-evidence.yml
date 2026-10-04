@@ -76,13 +76,13 @@ jobs:
       - name: Prepare verified build runtime
         run: node scripts/prepare-conpty.mjs
 
-      - name: Compile without starting the app or ordinary Rust tests
+      - name: Check format and compile without starting the app or ordinary Rust tests
         working-directory: src-tauri
         shell: pwsh
         run: |
-          cargo test --locked --lib --no-run
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --lib --no-run
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check fixed tuple and inventory contracts without native effects

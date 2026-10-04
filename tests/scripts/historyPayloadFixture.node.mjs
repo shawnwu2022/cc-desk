@@ -143,6 +143,8 @@ test('payload workflow executes an exact nine by two matrix on independently fre
   assert.match(workflow, /CC_DESK_PAYLOAD_VERSION: \$\{\{ matrix.fixture_version \}\}/)
   assert.match(workflow, /CC_DESK_BUILD_SHA: \$\{\{.*inputs.expected_sha.*\}\}/)
   assert.match(workflow, /cargo test --locked --lib --no-run/)
+  assert.ok(workflow.indexOf('cargo fmt --check') < workflow.indexOf('cargo test --locked --lib --no-run'),
+    'reject formatting before duplicating expensive compilation across the matrix')
   assert.match(workflow, /if: \$\{\{ always\(\) \}\}/)
   assert.match(workflow, /name: historical-v\$\{\{ matrix.fixture_version \}\}-\$\{\{ matrix.fixture_case \}\}/)
   assert.ok(!workflow.includes('download-artifact'))

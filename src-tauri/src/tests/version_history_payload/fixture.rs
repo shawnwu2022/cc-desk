@@ -37,7 +37,9 @@ fn HistoryPayload_FixtureMutation_021() {
             4 => bad.selection.assets[0].size += 1,
             5 => bad.selection.assets[1].updated_at = "2026-10-04T00:00:00Z".into(),
             6 => bad.selection.assets[0].name = "other.exe".into(),
-            7 => bad.selection.assets[0].browser_download_url.push_str("?other"),
+            7 => bad.selection.assets[0]
+                .browser_download_url
+                .push_str("?other"),
             8 => bad.selection.assets[1] = bad.selection.assets[0].clone(),
             9 => bad.provenance.source_commit = "0".repeat(40),
             10 => bad.provenance.sources[0].sha256 = "0".repeat(64),
