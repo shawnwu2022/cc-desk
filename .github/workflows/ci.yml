@@ -81,6 +81,10 @@ jobs:
         if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' }}
         run: cargo test --locked --lib tests::native_cli_channel_live::D11_Channel_Native_011 -- --exact --nocapture --test-threads=1
 
+      - name: Diagnose native launch separately after an aggregate failure
+        if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' }}
+        run: cargo test --locked --lib tests::native_cli_launch_live::worker::D11_Launch_Native_001 -- --exact --nocapture --test-threads=1
+
       - name: Check formatting
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: cargo fmt --check

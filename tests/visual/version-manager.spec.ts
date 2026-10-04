@@ -71,6 +71,10 @@ for (const surface of surfaces) {
         if (status.phase === 'installed-unconfirmed' || status.phase === 'recovery-required') {
           await page.locator('[data-manager-boundary]').scrollIntoViewIfNeeded()
           await captureFixtureEvidence(page, testInfo, `manager-${surface.name}-${status.phase}-boundary-unapproved`)
+          const handoff = page.locator('.manager-handoff')
+          await handoff.scrollIntoViewIfNeeded()
+          await expect(handoff).toBeInViewport({ ratio: 1 })
+          await captureFixtureEvidence(page, testInfo, `manager-${surface.name}-${status.phase}-ownership-warning-unapproved`)
         }
       })
     }

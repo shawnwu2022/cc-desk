@@ -5,7 +5,8 @@ import type { HistoryClient } from '@/api/versionHistory'
 import type { HistoryRelease, HistorySelection, PreparedPackageSummary, SwitchReview, SwitchReviewAction } from '@/types/versionHistory'
 
 /** Only allowlisted categories reach localized UI. Backend diagnostic text is never shown. */
-export function historyErrorMessage(failure: unknown): string {
+export function historyErrorMessage(failure: unknown,
+  fallback: 'historyErrorUnavailable' | 'historyOwnershipUnknown' | 'historyHandoffIssued' = 'historyErrorUnavailable'): string {
   const code = failure && typeof failure === 'object'
     ? ('code' in failure ? (failure as { code: unknown }).code : failure instanceof Error ? failure.message : null) : null
   if (code === 'HISTORY_RATE_LIMITED') return 'historyErrorRateLimit'
@@ -15,7 +16,7 @@ export function historyErrorMessage(failure: unknown): string {
   if (['HISTORY_SIGNATURE_INVALID', 'HISTORY_DIGEST_MISMATCH', 'HISTORY_SIZE_MISMATCH', 'HISTORY_PACKAGE_CHANGED', 'HISTORY_REDIRECT_BLOCKED'].includes(String(code))) return 'historyErrorVerification'
   if (['FORBIDDEN', 'DOCUMENT_BRIDGE_UNAVAILABLE', 'BACKEND_INSTANCE_CHANGED'].includes(String(code))) return 'historyErrorDocument'
   if (['HISTORY_SELECTION_EXPIRED', 'HISTORY_SELECTION_CHANGED', 'HISTORY_SELECTION_UNKNOWN', 'HISTORY_CURSOR_EXPIRED', 'HISTORY_CURSOR_INVALID', 'HISTORY_CATALOG_CHANGED', 'HISTORY_PREPARE_EXPIRED'].includes(String(code))) return 'historyErrorSelection'
-  return 'historyErrorUnavailable'
+  return fallback
 }
 interface Preparation {
   client: HistoryClient
@@ -196,7 +197,8 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
     } catch (failure) {
       if (work === item && serial === inspection && epoch === item.epoch && active && key === owner) {
         ++item.epoch; review.value = null
-        phase.value = transactionId.value ? 'handoff-issued' : 'unknown'; error.value = historyErrorMessage(failure)
+        phase.value = transactionId.value ? 'handoff-issued' : 'unknown'
+        error.value = historyErrorMessage(failure, transactionId.value ? 'historyHandoffIssued' : 'historyOwnershipUnknown')
       }
     } finally { if (serial === inspection) inspecting.value = false }
   }
@@ -209,7 +211,8 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
       const issued = await item.client.beginSwitch(item.ticket)
       if (work === item) retainIssued(item, issued.transactionId)
     } catch (failure) {
-      if (work === item) { ++item.epoch; review.value = null; phase.value = 'unknown'; error.value = historyErrorMessage(failure) }
+      // Unknown mutation failures need inspection, not the generic request retry hint.
+      if (work === item) { ++item.epoch; review.value = null; phase.value = 'unknown'; error.value = historyErrorMessage(failure, 'historyOwnershipUnknown') }
     } finally { if (work === item) switching.value = false }
   }
   function prepareAgain(key: number) {

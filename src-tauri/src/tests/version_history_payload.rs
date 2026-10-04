@@ -1,5 +1,7 @@
 //! Disposable, explicitly scoped evidence fixture. Never a production admission table.
 //! The two ignored entrypoints are selected exactly; no normal application startup occurs.
+#[path = "version_history_payload/fixture.rs"]
+mod fixture;
 #[path = "version_history_payload/inventory.rs"]
 mod inventory;
 #[path = "version_history_payload/token.rs"]
@@ -7,7 +9,7 @@ pub(crate) mod token;
 
 use crate::cli::{profiles::error, snapshot::CallerIdentity, types::WireU64};
 use crate::version_history::{
-    catalog::{parse_release, CatalogService, CatalogSource, OfficialGitHub, ReleaseMetadata},
+    catalog::{CatalogService, CatalogSource, OfficialGitHub, ReleaseMetadata},
     download::PrepareService,
     policy::HostPlatform,
     verified_package::{sha256, verify_fixture_payload},
@@ -29,12 +31,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-const INPUT: &str =
-    include_str!("../../../tests/fixtures/version-history-payload/v0.17.7-selection.json");
-const PROVENANCE: &str =
-    include_str!("../../../tests/fixtures/version-history-payload/provenance.json");
-const INSTALLER_HASH: &str = "e9ffbc5ba627f0c133a4385db404342a7344729339185e6f9b8ee6b5969086ac";
-const SIGNATURE_HASH: &str = "30b26f21c76d8c30bf4ca042ff699f1dd5d181af54f0e8956a3bff10650b80e2";
 const MAX_REPORT: usize = 4 * 1024 * 1024;
 
 fn blocked(message: &'static str) -> io::Error {
@@ -65,9 +61,13 @@ fn report(root: &Path, file: &str, value: &impl serde::Serialize) -> io::Result<
     write_new(&root.join(file), &bytes)
 }
 fn fixture_root() -> io::Result<PathBuf> {
+    fixture_root_for(&fixture::Binding::from_environment()?)
+}
+fn fixture_root_for(binding: &fixture::Binding) -> io::Result<PathBuf> {
     if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
         || std::env::var("RUNNER_ENVIRONMENT").as_deref() != Ok("github-hosted")
-        || std::env::var("CC_DESK_PAYLOAD_FIXTURE").as_deref() != Ok("v0.17.7-evidence-only")
+        || std::env::var("CC_DESK_PAYLOAD_FIXTURE").as_deref()
+            != Ok("historical-payload-evidence-only")
         || !cfg!(target_arch = "x86_64")
     {
         return Err(blocked(
@@ -79,14 +79,15 @@ fn fixture_root() -> io::Result<PathBuf> {
             .ok_or_else(|| blocked("missing runner temporary directory"))?,
     );
     Directory::open_absolute(&temp)?;
-    Ok(temp.join("ccdesk-v0.17.7-payload-evidence"))
+    Ok(temp.join(binding.root_name()))
 }
 
 // 检查显式隔离作业通过真实受限子进程令牌门禁后才能进入安装证据采集。
 #[test]
 #[ignore = "only the dedicated disposable payload workflow; mutates fixture-owned HKCU slots"]
 fn HistoryPayload_Controller_001() {
-    let root = fixture_root().expect("dedicated disposable workflow gate");
+    let binding = fixture::Binding::from_environment().expect("fixed reviewed fixture binding");
+    let root = fixture_root_for(&binding).expect("dedicated disposable workflow gate");
     let user = CurrentUser::capture().unwrap();
     let parent = Directory::open_absolute(root.parent().unwrap()).unwrap();
     let owned = PrivateDirectory::create_new(
@@ -95,9 +96,11 @@ fn HistoryPayload_Controller_001() {
         &user,
     )
     .unwrap();
+    report(&root, "fixture-binding.json", &binding.record).unwrap();
+    write_new(&root.join("fixture-catalog.json"), fixture::catalog_bytes()).unwrap();
     let outcome = token::run_worker(&root);
     report(&root, "controller-outcome.json", &json!({
-        "schema":1, "status":if outcome.is_ok() {"worker-completed"} else {"blocked"},
+        "schema":1, "binding":binding.record, "status":if outcome.is_ok() {"worker-completed"} else {"blocked"},
         "error":outcome.as_ref().err().map(ToString::to_string),
         "productionAdmission":false, "historicalApplicationLaunched":false,
         "limits":"payload/effect observation only; no switch/return or shared-data compatibility claim"
@@ -112,26 +115,27 @@ fn HistoryPayload_Controller_001() {
 #[test]
 #[ignore = "private child entrypoint; must pass the controller token receipt"]
 fn HistoryPayload_Worker_002() {
-    let root = fixture_root().unwrap();
-    let result = worker(&root);
+    let binding = fixture::Binding::from_environment().unwrap();
+    let root = fixture_root_for(&binding).unwrap();
+    let result = worker(&root, &binding);
     report(&root, "worker-outcome.json", &json!({
-        "schema":1, "status":if result.is_ok() {"observed-for-review"} else {"blocked"},
+        "schema":1, "binding":binding.record, "status":if result.is_ok() {"observed-for-review"} else {"blocked"},
         "error":result.as_ref().err().map(ToString::to_string), "productionAdmission":false,
         "effectsCoverage":"complete owned install tree plus explicitly listed registration/shortcut/data locations; not a whole-system trace"
     })).unwrap();
     result.expect("fixture stopped; unknown results are evidence, never admission");
 }
 
-fn worker(root: &Path) -> io::Result<()> {
+fn worker(root: &Path, binding: &fixture::Binding) -> io::Result<()> {
+    binding.verify_record(root)?;
+    let fixture = &binding.fixture;
+    let case = binding.record.fixture_case.as_str();
     token::verify_worker(root)?; // Before download, profile seeding or installer effects.
     report(
         root,
         "environment.json",
         &json!({
-            "schema":1, "fixtureCase":std::env::var("CC_DESK_PAYLOAD_CASE").ok(),
-            "sourceCommit":std::env::var("CC_DESK_PAYLOAD_SOURCE_SHA").ok(),
-            "runId":std::env::var("GITHUB_RUN_ID").ok(),
-            "runAttempt":std::env::var("GITHUB_RUN_ATTEMPT").ok(),
+            "schema":1, "binding":binding.record,
             "runnerImage":std::env::var("ImageOS").ok(),
             "runnerImageVersion":std::env::var("ImageVersion").ok(),
             "architecture":std::env::consts::ARCH,"builtPackageVersion":env!("CARGO_PKG_VERSION"),
@@ -150,15 +154,7 @@ fn worker(root: &Path) -> io::Result<()> {
         name(root.file_name().unwrap().to_str().unwrap())?,
         &user,
     )?);
-    report(
-        root,
-        "source-provenance.json",
-        &serde_json::from_str::<serde_json::Value>(PROVENANCE)?,
-    )?;
-    let case = std::env::var("CC_DESK_PAYLOAD_CASE").unwrap_or_default();
-    if !matches!(case.as_str(), "clean" | "seeded-existing") {
-        return Err(blocked("unknown fixture case"));
-    }
+    report(root, "source-provenance.json", &fixture.provenance)?;
     // Source controls were reviewed separately from the measured output. No
     // installer-derived data or metadata adds a production policy entry.
     let scope = inventory::Scope::capture()?;
@@ -179,14 +175,10 @@ fn worker(root: &Path) -> io::Result<()> {
         PrivateDirectory::create_new(owned.directory().clone(), name("packages")?, &user)?;
     let package_path = root.join("packages");
     let source = Arc::new(OfficialGitHub::new().map_err(|e| io::Error::other(e.code))?);
-    let expected = safe(parse_release(INPUT.as_bytes()))?;
+    let expected = &fixture.selection;
     let actual = safe(source.release(expected.id))?;
-    check_selected_release(&expected, &actual)?;
-    report(
-        root,
-        "selection.json",
-        &serde_json::from_str::<serde_json::Value>(INPUT)?,
-    )?;
+    record_selected_release(root, "selection-before.json", binding, &actual)?;
+    report(root, "selection.json", expected)?;
     let catalog = Arc::new(CatalogService::new(
         source.clone(),
         HostPlatform::WindowsX64,
@@ -196,15 +188,16 @@ fn worker(root: &Path) -> io::Result<()> {
         window_label: "fixture".into(),
         webview_epoch: WireU64::parse("1").unwrap(),
     };
+    let asset_id = fixture.installer().id.to_string();
     let mut cursor = None;
     let selected = loop {
         let page = safe(catalog.list(&caller, cursor.as_deref()))?;
         if let Some(row) = page
             .rows
             .into_iter()
-            .find(|r| r.asset_id.as_deref() == Some("576637999"))
+            .find(|r| r.asset_id.as_deref() == Some(asset_id.as_str()))
         {
-            break safe(catalog.select(&caller, &row.release_id, "576637999"))?;
+            break safe(catalog.select(&caller, &row.release_id, &asset_id))?;
         }
         cursor = page.next_cursor;
         if cursor.is_none() {
@@ -220,25 +213,23 @@ fn worker(root: &Path) -> io::Result<()> {
     ))?;
     let ticket = safe(prepare.begin_prepare(&caller, &selected.selection_token))?;
     safe(prepare.prepare_history(&caller, &ticket.transaction_id))?;
-    check_selected_release(&expected, &safe(source.release(expected.id))?)?;
-    let executable = root.join("official-v0.17.7.exe");
+    record_selected_release(
+        root,
+        "selection-after.json",
+        binding,
+        &safe(source.release(expected.id))?,
+    )?;
+    let executable_name = format!("official-v{}.exe", fixture.version);
+    let executable = root.join(&executable_name);
     let pinned = safe(
         prepare.with_verified_package(&caller, &ticket.transaction_id, |package| {
-            if package.sha256() != INSTALLER_HASH
-                || package.size() != 4_966_193
-                || package.selection().signature().id() != 576_637_991
-                || package.selection().signature().sha256() != SIGNATURE_HASH
-                || package.payload_identity_authenticated()
-            {
-                return Err(error("HISTORY_FIXTURE_SELECTION_CHANGED"));
-            }
+            fixture.check_package(package)?;
             write_new(&executable, package.bytes())
                 .map_err(|_| error("HISTORY_FIXTURE_WRITE_FAILED"))?;
             let pinned = owned
                 .directory()
                 .open_file(
-                    name("official-v0.17.7.exe")
-                        .map_err(|_| error("HISTORY_FIXTURE_WRITE_FAILED"))?,
+                    name(&executable_name).map_err(|_| error("HISTORY_FIXTURE_WRITE_FAILED"))?,
                     FileAccess::Read,
                 )
                 .map_err(|_| error("HISTORY_FIXTURE_WRITE_FAILED"))?;
@@ -255,28 +246,31 @@ fn worker(root: &Path) -> io::Result<()> {
     // Preserve detached bytes from the bounded, private production store while
     // the service still retains its original verified package file object.
     let signature = find_signature(packages.directory().clone(), 0)?;
-    if signature.len() != 420 || sha256(&signature) != SIGNATURE_HASH {
+    if signature.len() as u64 != fixture.signature().size
+        || sha256(&signature) != fixture.signature_hash()
+    {
         return Err(blocked("retained signature identity differs"));
     }
     let config: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json"))?;
     let key = config["plugins"]["updater"]["pubkey"]
         .as_str()
         .ok_or_else(|| blocked("missing committed publisher key"))?;
-    let bytes = bounded_read(&executable, 4_966_193)?;
+    let bytes = bounded_read(&executable, fixture.installer().size)?;
     safe(verify_fixture_payload(
         &bytes,
         &signature,
         key,
-        INSTALLER_HASH,
-        4_966_193,
+        fixture.installer_hash(),
+        fixture.installer().size,
     ))?;
-    write_new(&root.join("official-v0.17.7.exe.sig"), &signature)?;
+    write_new(&root.join(format!("{executable_name}.sig")), &signature)?;
     report(
         root,
         "verified-bytes.json",
-        &json!({"installerSha256":INSTALLER_HASH,"installerSize":bytes.len(),"signatureSha256":SIGNATURE_HASH,"signatureSize":signature.len(),"committedPublicKeySha256":sha256(key.as_bytes()),"publisherKeyId":"4990489074065B06","verification":"production PrepareService and Minisign; exact copied file pinned through process consumption","installerFileIdentity":pinned.identity(),"payloadAdmission":false}),
+        &json!({"installerSha256":fixture.installer_hash(),"installerSize":bytes.len(),"signatureSha256":fixture.signature_hash(),"signatureSize":signature.len(),"committedPublicKeySha256":sha256(key.as_bytes()),"publisherKeyId":"4990489074065B06","verification":"production PrepareService and Minisign; exact copied file pinned through process consumption","installerFileIdentity":pinned.identity(),"payloadAdmission":false}),
     )?;
     drop(bytes);
+    binding.verify_record(root)?;
     scope.require_absent()?; // Downloads/build prep cannot silently bless changed profile state.
     if case == "seeded-existing" {
         scope.seed(&install_path)?;
@@ -292,13 +286,13 @@ fn worker(root: &Path) -> io::Result<()> {
     report(
         root,
         "command.json",
-        &json!({"application":executable,"commandLine":command.text(),"case":case,"installRoot":install_path,"sourceCommit":"77707e3b03187aa2ed96f5ab780f62f14c1e4ffc","historicalAppLaunch":false}),
+        &json!({"application":executable,"commandLine":command.text(),"case":case,"installRoot":install_path,"sourceCommit":fixture.provenance.source_commit,"binding":binding.record,"historicalAppLaunch":false}),
     )?;
     let intent = DurableRecord::create(
         control.clone(),
         name("fixture-effect-intent.json")?,
         &serde_json::to_vec(
-            &json!({"installerSha256":INSTALLER_HASH,"case":case,"installIdentity":install.directory().identity(),"effectScope":"fresh disposable owned fixture only"}),
+            &json!({"binding":binding.record,"installerSha256":fixture.installer_hash(),"case":case,"installIdentity":install.directory().identity(),"effectScope":"fresh disposable owned fixture only"}),
         )?,
         &user,
     )?;
@@ -352,30 +346,30 @@ fn worker(root: &Path) -> io::Result<()> {
             "official installer returned nonzero; preserved output is not admitted",
         ));
     }
-    inventory::check_observations(&case, &tree, &pe, &scope, &install_path)?;
+    inventory::check_observations(fixture, case, &tree, &pe, &scope, &install_path)?;
+    binding.verify_record(root)?;
     user.require_unelevated()?;
     packages.verify(&user)?;
     report(
         root,
         "review-required.json",
-        &json!({"schema":1,"version":"0.17.7","installerSha256":INSTALLER_HASH,"completeOwnedInstallInventory":true,"knownEffectsCaptured":true,"case":case,"productionAdmission":false,"unknowns":["compiled installer source correspondence is not independently attested","effects outside enumerated locations are not a whole-system trace","generated uninstaller reproducibility requires cross-case review","real switch and return remain a separate gate"]}),
+        &json!({"schema":1,"binding":binding.record,"version":fixture.version,"installerSha256":fixture.installer_hash(),"completeOwnedInstallInventory":true,"knownEffectsCaptured":true,"case":case,"productionAdmission":false,"unknowns":["compiled installer source correspondence is not independently attested","effects outside enumerated locations are not a whole-system trace","generated uninstaller reproducibility requires cross-case review","real switch and return remain a separate gate"]}),
     )
 }
 
-fn check_selected_release(expected: &ReleaseMetadata, actual: &ReleaseMetadata) -> io::Result<()> {
-    let mut selected = actual.clone();
-    selected
-        .assets
-        .retain(|a| [576_637_999, 576_637_991].contains(&a.id));
-    selected.assets.sort_by_key(|a| a.id);
-    let mut expected = expected.clone();
-    expected.assets.sort_by_key(|a| a.id);
-    if selected != expected {
-        return Err(blocked(
-            "official release or full selected asset tuple changed",
-        ));
-    }
-    Ok(())
+fn record_selected_release(
+    root: &Path,
+    file: &str,
+    binding: &fixture::Binding,
+    actual: &ReleaseMetadata,
+) -> io::Result<()> {
+    binding.verify_record(root)?;
+    report(
+        root,
+        file,
+        &json!({"binding":binding.record,"observedRelease":actual}),
+    )?;
+    binding.fixture.check_release(actual)
 }
 fn bounded_read(path: &Path, max: u64) -> io::Result<Vec<u8>> {
     let file = fs::File::open(path)?;
@@ -416,10 +410,11 @@ fn find_signature(dir: Arc<Directory>, depth: usize) -> io::Result<Vec<u8>> {
 // 检查签名或安装包完整元数据变化拒绝固定版本证据。
 #[test]
 fn HistoryPayload_Metadata_003() {
-    let expected = parse_release(INPUT.as_bytes()).unwrap();
-    check_selected_release(&expected, &expected).unwrap();
+    let fixture = fixture::load("0.17.7").unwrap();
+    let expected = &fixture.selection;
+    fixture.check_release(expected).unwrap();
     for field in ["id", "size", "updated_at", "digest", "browser_download_url"] {
-        let mut value: serde_json::Value = serde_json::from_str(INPUT).unwrap();
+        let mut value = serde_json::to_value(expected).unwrap();
         let asset = &mut value["assets"][1];
         asset[field] = match field {
             "id" => json!(576637992),
@@ -432,7 +427,7 @@ fn HistoryPayload_Metadata_003() {
         };
         let changed: ReleaseMetadata = serde_json::from_value(value).unwrap();
         assert!(
-            check_selected_release(&expected, &changed).is_err(),
+            fixture.check_release(&changed).is_err(),
             "changed {field} must block"
         );
     }

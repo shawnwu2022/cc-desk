@@ -1306,16 +1306,43 @@ pub(super) fn pe_identity(path: &Path) -> io::Result<Value> {
         json!({"machine":machine,"optionalHeaderMagic":magic,"fixedProductVersion":[fixed.dwProductVersionMS>>16,fixed.dwProductVersionMS&65535,fixed.dwProductVersionLS>>16,fixed.dwProductVersionLS&65535],"strings":strings,"fileSha256":file.digest()?}),
     )
 }
-pub(super) fn check_observations(
+const CONPTY_RESOURCES: [(&str, u64, &str); 3] = [
+    (
+        "conpty.dll",
+        109920,
+        "39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8",
+    ),
+    (
+        "OpenConsole.exe",
+        1066296,
+        "b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160",
+    ),
+    (
+        "LICENSE-Microsoft-ConPTY.txt",
+        1116,
+        "5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b",
+    ),
+];
+
+type ObservedEntry<'a> = (&'a str, bool, u64, Option<&'a str>);
+fn check_payload_shape(
+    fixture: &super::fixture::Fixture,
     case: &str,
-    tree: &[Entry],
+    entries: &[ObservedEntry<'_>],
     pe: &Value,
-    scope: &Scope,
-    install: &Path,
 ) -> io::Result<()> {
+    if !matches!(case, "clean" | "seeded-existing") {
+        return Err(blocked("unknown fixture case"));
+    }
+    let expected_version: Vec<_> = fixture
+        .version
+        .split('.')
+        .map(|part| part.parse::<u32>().unwrap())
+        .chain([0])
+        .collect();
     if pe["machine"] != json!(0x8664)
         || pe["optionalHeaderMagic"] != json!(0x20b)
-        || pe["fixedProductVersion"] != json!([0, 17, 7, 0])
+        || pe["fixedProductVersion"] != json!(expected_version)
     {
         return Err(blocked(
             "measured installed PE architecture or version differs",
@@ -1324,59 +1351,62 @@ pub(super) fn check_observations(
     let strings = pe["strings"]
         .as_object()
         .ok_or_else(|| blocked("missing PE resource strings"))?;
-    if strings.iter().any(|(k, v)| {
-        if k.ends_with("ProductName") {
-            v != "CC Desk"
+    if strings.iter().any(|(key, value)| {
+        if key.ends_with("ProductName") {
+            value != "CC Desk"
         } else {
-            v != "0.17.7" && v != "0.17.7.0"
+            value != fixture.version.as_str() && value != &json!(format!("{}.0", fixture.version))
         }
     }) {
         return Err(blocked("measured PE product/version strings differ"));
     }
-    for (path, size, hash) in [
-        (
-            "conpty.dll",
-            109920,
-            "39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8",
-        ),
-        (
-            "OpenConsole.exe",
-            1066296,
-            "b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160",
-        ),
-        (
-            "LICENSE-Microsoft-ConPTY.txt",
-            1116,
-            "5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b",
-        ),
-    ] {
-        if !tree
-            .iter()
-            .any(|e| e.path == path && e.size == size && e.sha256.as_deref() == Some(hash))
-        {
-            return Err(blocked(
-                "installed source-declared resource differs; retain measured inventory",
-            ));
+    let mut expected = vec!["", "cc-desk.exe", "uninstall.exe"];
+    if fixture.has_conpty() {
+        for (path, size, hash) in CONPTY_RESOURCES {
+            if !entries
+                .iter()
+                .any(|e| e.0 == path && !e.1 && e.2 == size && e.3 == Some(hash))
+            {
+                return Err(blocked(
+                    "installed source-declared resource differs; retain measured inventory",
+                ));
+            }
+            expected.push(path);
         }
     }
-    let mut expected = vec![
-        "",
-        "cc-desk.exe",
-        "uninstall.exe",
-        "conpty.dll",
-        "OpenConsole.exe",
-        "LICENSE-Microsoft-ConPTY.txt",
-    ];
     if case == "seeded-existing" {
         expected.push("source-only-leftover.txt");
     }
     expected.sort_unstable();
-    let actual: Vec<_> = tree.iter().map(|e| e.path.as_str()).collect();
-    if actual != expected {
+    let actual: Vec<_> = entries.iter().map(|entry| entry.0).collect();
+    if actual != expected || entries.iter().any(|entry| entry.1 != entry.0.is_empty()) {
         return Err(blocked(
             "unexplained installed file/directory; preserve inventory for review",
         ));
     }
+    Ok(())
+}
+
+pub(super) fn check_observations(
+    fixture: &super::fixture::Fixture,
+    case: &str,
+    tree: &[Entry],
+    pe: &Value,
+    scope: &Scope,
+    install: &Path,
+) -> io::Result<()> {
+    let entries: Vec<_> = tree
+        .iter()
+        .map(|entry| {
+            (
+                entry.path.as_str(),
+                entry.directory,
+                entry.size,
+                entry.sha256.as_deref(),
+            )
+        })
+        .collect();
+    check_payload_shape(fixture, case, &entries, pe)?;
     for (slot, _) in [SLOTS[4], SLOTS[5]] {
         for (view, _) in VIEWS {
             if RegistrationKey::open(slot, view, "")?.is_some() {
@@ -1444,4 +1474,77 @@ pub(super) fn export_tree(root: &Path, evidence: &Path, entries: &[Entry]) -> io
         held.verify()?;
     }
     Ok(())
+}
+
+// 固定版本和 case 只能接受完整精确目录，不能把旧版本套用 ConPTY 白名单。
+#[test]
+fn HistoryPayload_InventoryMatrix_024() {
+    for version in [
+        "0.14.0", "0.15.0", "0.16.0", "0.17.0", "0.17.1", "0.17.2", "0.17.5", "0.17.6", "0.17.7",
+    ] {
+        let fixture = super::fixture::load(version).unwrap();
+        let parts: Vec<_> = version
+            .split('.')
+            .map(|p| p.parse::<u32>().unwrap())
+            .chain([0])
+            .collect();
+        let pe = json!({"machine":0x8664,"optionalHeaderMagic":0x20b,"fixedProductVersion":parts,
+            "strings":{"ProductName":"CC Desk","FileVersion":version,"ProductVersion":format!("{version}.0")}});
+        for case in ["clean", "seeded-existing"] {
+            let mut entries = vec![
+                ("", true, 0, None),
+                ("cc-desk.exe", false, 123, Some("measured")),
+                ("uninstall.exe", false, 456, Some("measured")),
+            ];
+            if fixture.has_conpty() {
+                entries.extend(
+                    CONPTY_RESOURCES
+                        .iter()
+                        .map(|(p, s, h)| (*p, false, *s, Some(*h))),
+                );
+            }
+            if case == "seeded-existing" {
+                entries.push(("source-only-leftover.txt", false, 53, Some("measured")));
+            }
+            entries.sort_by_key(|entry| entry.0);
+            check_payload_shape(&fixture, case, &entries, &pe).unwrap();
+            let mut missing = entries.clone();
+            missing.pop();
+            assert!(check_payload_shape(&fixture, case, &missing, &pe).is_err());
+            let mut extra = entries.clone();
+            extra.push(("Old Desk.exe", false, 3, Some("measured")));
+            assert!(check_payload_shape(&fixture, case, &extra, &pe).is_err());
+            let mut wrong_kind = entries.clone();
+            wrong_kind[1].1 = true;
+            assert!(check_payload_shape(&fixture, case, &wrong_kind, &pe).is_err());
+            let mut wrong_pe = pe.clone();
+            wrong_pe["fixedProductVersion"] = json!([0, 18, 0, 0]);
+            assert!(check_payload_shape(&fixture, case, &entries, &wrong_pe).is_err());
+            wrong_pe = pe.clone();
+            wrong_pe["machine"] = json!(0x14c);
+            assert!(check_payload_shape(&fixture, case, &entries, &wrong_pe).is_err());
+            wrong_pe = pe.clone();
+            wrong_pe["strings"]["FileVersion"] = json!("0.18.0");
+            assert!(check_payload_shape(&fixture, case, &entries, &wrong_pe).is_err());
+            assert!(check_payload_shape(&fixture, "unknown", &entries, &pe).is_err());
+            if !fixture.has_conpty() {
+                let mut unexpected_resource = entries.clone();
+                unexpected_resource.push(("conpty.dll", false, 109920, Some("measured")));
+                unexpected_resource.sort_by_key(|entry| entry.0);
+                assert!(check_payload_shape(&fixture, case, &unexpected_resource, &pe).is_err());
+            }
+            let other = super::fixture::load(if version == "0.17.7" {
+                "0.17.6"
+            } else {
+                "0.17.7"
+            })
+            .unwrap();
+            assert!(check_payload_shape(&other, case, &entries, &pe).is_err());
+            if fixture.has_conpty() {
+                let mut changed = entries.clone();
+                changed.iter_mut().find(|e| e.0 == "conpty.dll").unwrap().3 = Some("wrong");
+                assert!(check_payload_shape(&fixture, case, &changed, &pe).is_err());
+            }
+        }
+    }
 }

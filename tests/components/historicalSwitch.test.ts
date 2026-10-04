@@ -34,13 +34,13 @@ beforeEach(() => {
   })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); delete (window as any).__CC_DESK_DOCUMENT__; document.body.innerHTML = '' })
-function render() {
+function render(locale = 'en') {
   const w = mount(HistoricalVersionsPanel, { props: { active: true }, attachTo: document.body,
-    global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+    global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })] } })
   wrappers.push(w); return w
 }
-async function preparedPanel() {
-  const w = render()
+async function preparedPanel(locale = 'en') {
+  const w = render(locale)
   await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
   await w.get('[data-history-select]').trigger('click'); await flushPromises()
   await w.get('[data-history-prepare]').trigger('click'); await flushPromises()
@@ -86,8 +86,8 @@ describe('ordinary historical switch composition', () => {
     expect(useVersionHistoryStore().transactionId).toBe(wire.ticket.transactionId)
   })
   // 已签发身份在后端错误、关闭面板和重新激活后仍只能刷新。
-  it('HistorySwitch_IssuedOwnerRetained_003', async () => {
-    const w = await preparedPanel()
+  it.each(['en', 'zh'])('HistorySwitch_IssuedOwner_003: %s', async locale => {
+    const w = await preparedPanel(locale)
     await w.get('[data-history-install]').trigger('click'); await flushPromises()
     dialogButton('[data-history-begin]').click(); await flushPromises()
     io.invoke.mockRejectedValueOnce({ code: 'HISTORY_NETWORK_UNAVAILABLE', details: '/private SECRET' })
@@ -96,6 +96,7 @@ describe('ordinary historical switch composition', () => {
     expect(useVersionHistoryStore().transactionId).toBe(wire.ticket.transactionId)
     review = wire.reviews[3] // A stale/contradictory response must not remove issued ownership.
     await w.get('[data-history-inspect]').trigger('click'); await flushPromises()
+    expect(w.get('[data-history-error] p').text()).toBe((locale === 'en' ? en : zh).historyHandoffIssued)
     expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
     expect(w.find('[data-history-cancel]').exists()).toBe(false)
     expect(w.text()).not.toMatch(/SECRET|private/)
@@ -112,6 +113,7 @@ describe('ordinary historical switch composition', () => {
     expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
     expect(w.find('[data-history-cancel]').exists()).toBe(false)
     expect(w.get('[data-history-status]').text()).toContain('unknown')
+    expect(w.get('[data-history-error] p').text()).toBe(en.historyErrorNetwork)
     review = wire.reviews[4]
     await w.get('[data-history-inspect]').trigger('click'); await flushPromises()
     expect(useVersionHistoryStore().transactionId).toBe(wire.ticket.transactionId)
@@ -148,21 +150,25 @@ describe('ordinary historical switch composition', () => {
     expect(w.get('[data-history-inspect]').attributes('disabled')).toBeDefined()
   })
   // 切换前发起的旧检查不得在切换结果未知后重新启用操作。
-  it('HistorySwitch_OldInspectCannotUnlock_008', async () => {
+  it.each([['en', 'resolve'], ['en', 'reject'], ['zh', 'resolve'], ['zh', 'reject']])('HistorySwitch_OldInspect_008: %s %s', async (locale, settle) => {
     const original = io.invoke.getMockImplementation()!
-    let reads = 0, finishOld!: (value: unknown) => void
+    let reads = 0, finishOld!: (value: unknown) => void, failOld!: (failure: unknown) => void
     io.invoke.mockImplementation((command, payload) => {
-      if (command === 'inspect_switch' && ++reads === 1) return new Promise(resolve => { finishOld = resolve })
+      if (command === 'inspect_switch' && ++reads === 1) return new Promise((resolve, reject) => { finishOld = resolve; failOld = reject })
       return original(command, payload)
     })
-    const w = await preparedPanel()
+    const w = await preparedPanel(locale)
     await w.get('[data-history-install]').trigger('click'); await flushPromises()
     io.invoke.mockRejectedValueOnce({ code: 'HISTORY_TASK_FAILED' })
     dialogButton('[data-history-begin]').click(); await flushPromises()
-    finishOld({ ...wire.reviews[3], preparationId: preparation.ticket.transactionId }); await flushPromises()
+    if (settle === 'resolve') finishOld({ ...wire.reviews[3], preparationId: preparation.ticket.transactionId })
+    else failOld({ code: 'HISTORY_SIGNATURE_INVALID' })
+    await flushPromises()
     expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
     expect(w.find('[data-history-cancel]').exists()).toBe(false)
-    expect(w.get('[data-history-status]').text()).toContain('unknown')
+    expect(w.get('[data-history-status]').text()).toBe((locale === 'en' ? en : zh).historyOwnershipUnknown)
+    expect(w.get('[data-history-error] p').text()).toBe((locale === 'en' ? en : zh).historyOwnershipUnknown)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'begin_switch')).toHaveLength(1)
   })
   // 切换在途时关闭面板，迟到签发回执仍保留，且不能触发准备清理。
   it('HistorySwitch_PendingUnmount_009', async () => {
@@ -232,6 +238,49 @@ describe('ordinary historical switch composition', () => {
     await w.setProps({ active: true }); await flushPromises()
     expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
     expect(w.find('[data-history-cancel]').exists()).toBe(false)
+  })
+
+  // 切换回执和后续检查均未知时，中英文提示只能引导只读检查，不能建议重试切换。
+  it.each(['en', 'zh'])('HistorySwitch_UnknownBanner_015: %s', async locale => {
+    const expected = locale === 'en'
+      ? 'The preparation or switch outcome is unknown. Refresh its status before taking another action.'
+      : '准备或切换结果未知。请先刷新状态，再执行其他操作。'
+    const w = await preparedPanel(locale)
+    await w.get('[data-history-install]').trigger('click'); await flushPromises()
+    io.invoke.mockRejectedValueOnce({ code: 'HISTORY_TASK_FAILED', details: '/private SECRET' })
+    dialogButton('[data-history-begin]').click(); await flushPromises()
+    expect(w.get('[data-history-error] p').text()).toBe(expected)
+    expect(w.get('[data-history-status]').text()).toBe(expected)
+    expect(w.get('[data-history-refresh]').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-history-prepare]').exists()).toBe(false)
+    expect(w.find('[data-history-cancel]').exists()).toBe(false)
+    expect(w.find('[data-history-prepare-again]').exists()).toBe(false)
+    expect(w.get('[data-history-inspect]').attributes('disabled')).toBeUndefined()
+    io.invoke.mockRejectedValueOnce({ code: 'HISTORY_TASK_FAILED', details: '/private SECRET' })
+    await w.get('[data-history-inspect]').trigger('click'); await flushPromises()
+    expect(w.get('[data-history-error] p').text()).toBe(expected)
+    expect(w.text()).not.toMatch(/SECRET|private/)
+    review = wire.reviews[4]
+    await w.get('[data-history-inspect]').trigger('click'); await flushPromises()
+    expect(w.find('[data-history-error]').exists()).toBe(false)
+    expect(useVersionHistoryStore().transactionId).toBe(wire.ticket.transactionId)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'begin_prepare_history')).toHaveLength(1)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'begin_switch')).toHaveLength(1)
+    expect(io.invoke.mock.calls.some(([command]) => command === 'cancel_prepare_history')).toBe(false)
+  })
+
+  // 未持有准备事务的目录读取仍保留原可重试提示和刷新入口。
+  it.each(['en', 'zh'])('HistorySwitch_CatalogueRetry_016: %s', async locale => {
+    const w = render(locale)
+    io.invoke.mockRejectedValueOnce({ code: 'HISTORY_TASK_FAILED' })
+    await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
+    expect(w.get('[data-history-error] p').text()).toBe((locale === 'en' ? en : zh).historyErrorUnavailable)
+    expect(w.get('[data-history-refresh]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-history-inspect]').exists()).toBe(false)
+    await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
+    expect(w.find('[data-history-error]').exists()).toBe(false)
+    expect(w.findAll('[data-history-row]')).toHaveLength(1)
   })
 
 })
