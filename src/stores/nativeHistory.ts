@@ -25,6 +25,7 @@ export interface NativeHistoryEntry {
   loaded: boolean
   error: string | null
   diagnosticStage?: ProjectionStage
+  metadataIncomplete?: boolean
   requestEpoch: string
   /** Only one complete authenticated response can prove absence. Offset pages
    * have no common snapshot token and are positive discovery only. */
@@ -109,6 +110,7 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
       if (source.cli !== context.cli) throw new Error('PROFILE_CLI_MISMATCH')
       const sessions = new Map<string, NativeHistorySession>()
       let offset = 0
+      let metadataIncomplete = false
       while (true) {
         stage = 'read-invoke'
         const result = await client.read({ source, resourceKind: 'history', requestEpoch: epoch, limit: 200, offset })
@@ -119,10 +121,12 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
           entry.sessions = []
           break
         }
+        metadataIncomplete ||= result.historyMetadataIncomplete === true
+        entry.metadataIncomplete = metadataIncomplete
         for (const item of result.items) if (item.type === 'session') sessions.set(item.sessionKey, item)
         if (!result.hasMore) {
           entry.sessions = [...sessions.values()]
-          if (offset === 0 && typeof source.sourceRootKey === 'string' && source.sourceRootKey) {
+          if (offset === 0 && !metadataIncomplete && typeof source.sourceRootKey === 'string' && source.sourceRootKey) {
             entry.absenceEvidence = { cli: source.cli, sourceRootKey: source.sourceRootKey }
           }
           break

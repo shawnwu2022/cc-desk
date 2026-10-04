@@ -47,6 +47,16 @@ impl Catalog<'_> {
         self.check()?;
         Ok(entries)
     }
+    fn history_prefix(
+        &self,
+        path: &str,
+        budget: &mut Budget,
+    ) -> ReadResult<Option<(Vec<u8>, bool)>> {
+        self.check()?;
+        let result = self.root.history_prefix(Path::new(path), budget)?;
+        self.check()?;
+        Ok(result)
+    }
 }
 pub(crate) fn read(
     catalog: &Catalog<'_>,

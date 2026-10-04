@@ -58,4 +58,17 @@ describe('native history cache', () => {
     expect(store.all()[0]?.sessions).toEqual([])
     expect(store.all()[0]?.loaded).toBe(true)
   })
+
+  it('does not infer absence from incomplete metadata even when every row was filtered out', async () => {
+    const s = source('codex', 'p', '1', 'x')
+    clients.push({ scope: vi.fn().mockResolvedValue(s), read: vi.fn().mockResolvedValue({
+      source: s, resourceKind: 'history', requestEpoch: '1', observedAt: '1', state: 'ready', reason: null,
+      items: [], hasMore: false, historyMetadataIncomplete: true,
+    }) })
+    const result = await useNativeHistoryStore().load({ cli: 'codex', profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' })
+    expect(result.error).toBeNull()
+    expect(result.sessions).toEqual([])
+    expect(result.absenceEvidence).toBeUndefined()
+    expect(result.metadataIncomplete).toBe(true)
+  })
 })

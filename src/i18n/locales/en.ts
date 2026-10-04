@@ -261,6 +261,7 @@ export default {
   launchPreparationWorkingDirectoryUnavailable: "The project's working folder is unavailable. Check that it still exists and is accessible.",
 
   workspaceRuntimePartial: 'Some session sources could not be loaded. Open sessions remain available.',
+  workspaceHistoryMetadataPartial: 'Some history is shown from limited summaries; the list may be incomplete.',
   sourceWarningProjectMetadata: 'Saved project details',
   sourceWarningProjectDiscovery: 'Discovered projects',
   sourceWarningConfigurations: 'Launch configurations',

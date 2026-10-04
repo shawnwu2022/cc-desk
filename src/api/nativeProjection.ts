@@ -120,16 +120,19 @@ function item(v: unknown, request: ReadRequest): ResourceItem {
   }
 }
 function result(v: unknown, request: Required<ReadRequest>): ProjectionResult {
-  const r = object(v, ['source', 'resourceKind', 'requestEpoch', 'observedAt', 'state', 'reason', 'items', 'hasMore'])
+  const r = object(v, ['source', 'resourceKind', 'requestEpoch', 'observedAt', 'state', 'reason', 'items', 'hasMore'], ['historyMetadataIncomplete'])
   const s = source(r.source)
   if (JSON.stringify(s) !== JSON.stringify(request.source) || kind(r.resourceKind) !== request.resourceKind || u64(r.requestEpoch) !== request.requestEpoch) return invalid()
   if (r.state !== 'ready' && r.state !== 'unavailable') return invalid()
+  const metadata = Object.prototype.hasOwnProperty.call(r, 'historyMetadataIncomplete')
+    ? { historyMetadataIncomplete: bool(r.historyMetadataIncomplete) } : {}
+  if ('historyMetadataIncomplete' in metadata && (request.resourceKind !== 'history' || r.state !== 'ready')) return invalid()
   if (!Array.isArray(r.items) || r.items.length > request.limit) return invalid()
   const reason = optionalText(r.reason, 128)
   if (r.state === 'ready' ? reason !== null : !reason || !reasons.has(reason) || r.items.length !== 0 || r.hasMore !== false) return invalid()
   if (new TextEncoder().encode(JSON.stringify(r)).length > 2 * 1024 * 1024) return invalid()
   return { source: s, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: u64(r.observedAt),
-    state: r.state, reason, items: r.items.map(v => item(v, request)), hasMore: bool(r.hasMore) }
+    state: r.state, reason, items: r.items.map(v => item(v, request)), hasMore: bool(r.hasMore), ...metadata }
 }
 /** Pins the admitted document transport. No retry or ambient/default-root invoke is allowed. */
 export function createProjectionClient(bridge: ProjectionBridge): ProjectionClient {

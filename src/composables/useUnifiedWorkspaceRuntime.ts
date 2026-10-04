@@ -39,6 +39,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const error = ref<string | null>(null)
   const sourceWarnings = ref<WorkspaceSourceWarning[]>([])
   const sourceWarningsTruncated = ref(false)
+  const historyMetadataPartial = computed(() => history.all().some(entry => entry.loaded && !entry.error && entry.metadataIncomplete
+    && profiles.profile(entry.context.profileId)?.revision === entry.context.profileRevision
+    && workspace.projects.some(project => project.projectId === entry.context.projectId && sameProjectPath(project.selectedPath, entry.context.projectPath))))
   const ready = ref(false)
   const loading = ref(false)
   const fatal = computed(() => ready.value && !loading.value && !projects.loaded
@@ -193,7 +196,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision, projectId: project.projectId, projectPath: project.selectedPath,
         })))
       for (let i = 0; i < contexts.length && !disposed; i += 2) await Promise.all(contexts.slice(i, i + 2).map(async context => {
-        try { if ((await history.load(context)).error) partial = true } catch { partial = true }
+        try { const entry = await history.load(context); if (entry.error || entry.metadataIncomplete) partial = true } catch { partial = true }
       }))
       return partial
     })
@@ -444,5 +447,5 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     void refresh()
   })
   onUnmounted(() => { disposed = true; ++refreshOwner })
-  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, refresh, retryAction }
+  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, historyMetadataPartial, refresh, retryAction }
 }

@@ -57,6 +57,15 @@ function render() {
   return { runtime, port }
 }
 describe('Workspace source warning diagnostics', () => {
+  it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {
+    io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false, historyMetadataIncomplete: true })
+    const { runtime } = render(); await flushPromises()
+    expect(runtime.error.value).toBeNull()
+    expect(runtime.historyMetadataPartial.value).toBe(true)
+    io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false })
+    await runtime.refresh()
+    expect(runtime.historyMetadataPartial.value).toBe(false)
+  })
   it('retains authenticated safe error codes while hiding private exception fields and preserving open sessions', async () => {
     io.projects.mockRejectedValue(new Error('private C:\\users\\secret token=hidden'))
     io.scope.mockRejectedValue({ code: 'FORBIDDEN', field: 'private-path', message: 'token=hidden', retryable: false })

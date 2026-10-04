@@ -76,6 +76,34 @@ fn file_and_aggregate_budgets_reject_without_truncation() {
         "SOURCE_TOO_LARGE"
     );
 }
+
+#[test]
+fn history_prefix_preserves_hard_budgets_and_does_not_redefine_full_reads() {
+    let t = tempfile::tempdir().unwrap();
+    fs::write(t.path().join("x"), b"12345").unwrap();
+    let r = Root::open(t.path()).unwrap();
+    let mut b = Budget::new(Limits {
+        file_bytes: 4,
+        total_bytes: 4,
+        entries: 10,
+    });
+    assert_eq!(
+        r.history_prefix(Path::new("x"), &mut b).unwrap(),
+        Some((b"1234".to_vec(), true))
+    );
+    assert!(b.history_metadata_incomplete());
+    assert_eq!(
+        r.history_prefix(Path::new("x"), &mut b).err(),
+        Some("SOURCE_TOO_LARGE")
+    );
+    assert!(r.history_prefix(Path::new("../x"), &mut budget()).is_err());
+    let mut b = budget();
+    assert_eq!(
+        r.history_prefix(Path::new("x"), &mut b).unwrap(),
+        Some((b"12345".to_vec(), false))
+    );
+    assert!(!b.history_metadata_incomplete());
+}
 #[test]
 fn enumeration_is_bounded_and_never_returns_partial_success() {
     let t = tempfile::tempdir().unwrap();
@@ -176,14 +204,13 @@ fn invalid_unicode_paths_and_stored_names_are_rejected() {
 #[cfg(windows)]
 #[test]
 fn windows_junction_escape_cannot_read_external_bytes() {
-    use std::process::Command;
     let t = tempfile::tempdir().unwrap();
     let inside = t.path().join("inside");
     let outside = t.path().join("outside");
     fs::create_dir(&inside).unwrap();
     fs::create_dir(&outside).unwrap();
     fs::write(outside.join("secret"), b"secret").unwrap();
-    let status = Command::new("cmd.exe")
+    let status = crate::platform::new_command("cmd.exe")
         .args(["/D", "/C", "mklink", "/J"])
         .arg(inside.join("escape"))
         .arg(&outside)

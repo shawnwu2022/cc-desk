@@ -26,6 +26,7 @@ pub(crate) struct Budget {
     bytes_left: usize,
     entries_left: usize,
     started: Instant,
+    history_metadata_incomplete: bool,
 }
 impl Budget {
     pub(crate) fn new(limits: Limits) -> Self {
@@ -35,6 +36,7 @@ impl Budget {
             bytes_left: limits.total_bytes.min(maximum.total_bytes),
             entries_left: limits.entries.min(maximum.entries),
             started: Instant::now(),
+            history_metadata_incomplete: false,
         }
     }
     pub(crate) fn checkpoint(&self) -> ReadResult<()> {
@@ -43,6 +45,9 @@ impl Budget {
             return Err("SOURCE_BUDGET_EXCEEDED");
         }
         Ok(())
+    }
+    pub(crate) fn history_metadata_incomplete(&self) -> bool {
+        self.history_metadata_incomplete
     }
     fn entry(&mut self) -> ReadResult<()> {
         self.checkpoint()?;
@@ -113,6 +118,23 @@ impl Root {
         Ok(())
     }
     pub(crate) fn read(&self, path: &Path, budget: &mut Budget) -> ReadResult<Option<Vec<u8>>> {
+        Ok(self
+            .read_bounded(path, budget, false)?
+            .map(|(bytes, _)| bytes))
+    }
+    pub(crate) fn history_prefix(
+        &self,
+        path: &Path,
+        budget: &mut Budget,
+    ) -> ReadResult<Option<(Vec<u8>, bool)>> {
+        self.read_bounded(path, budget, true)
+    }
+    fn read_bounded(
+        &self,
+        path: &Path,
+        budget: &mut Budget,
+        history_prefix: bool,
+    ) -> ReadResult<Option<(Vec<u8>, bool)>> {
         relative(path, false)?;
         budget.entry()?;
         self.current()?;
@@ -125,7 +147,7 @@ impl Root {
             return Err("SOURCE_NOT_REGULAR");
         }
         let cap = budget.file_bytes.min(budget.bytes_left);
-        if metadata.len() > cap as u64 {
+        if (history_prefix && cap == 0) || (!history_prefix && metadata.len() > cap as u64) {
             return Err("SOURCE_TOO_LARGE");
         }
         let mut options = OpenOptions::new();
@@ -141,28 +163,51 @@ impl Root {
         if !before.is_file() {
             return Err("SOURCE_NOT_REGULAR");
         }
-        if before.len() > cap as u64 {
+        if !history_prefix && before.len() > cap as u64 {
             return Err("SOURCE_TOO_LARGE");
         }
         let mut bytes = Vec::new();
+        let mut limit = if history_prefix {
+            cap.min(64 * 1024)
+        } else {
+            cap + 1
+        };
         (&file)
-            .take(cap as u64 + 1)
+            .take(limit as u64)
             .read_to_end(&mut bytes)
             .map_err(read_error)?;
+        // Codex's first session_meta record can include long base instructions.
+        // Extend only until a complete first record, within the original hard caps.
+        while history_prefix && !bytes.contains(&b'\n') && bytes.len() == limit && limit < cap {
+            budget.checkpoint()?;
+            let next = (cap - limit).min(64 * 1024);
+            (&file)
+                .take(next as u64)
+                .read_to_end(&mut bytes)
+                .map_err(read_error)?;
+            limit += next;
+        }
         if bytes.len() > cap {
             return Err("SOURCE_TOO_LARGE");
         }
         let after = file.metadata().map_err(read_error)?;
+        let expected = if history_prefix {
+            after.len().min(limit as u64)
+        } else {
+            after.len()
+        };
         if before.len() != after.len()
             || before.modified().ok() != after.modified().ok()
-            || bytes.len() as u64 != after.len()
+            || bytes.len() as u64 != expected
         {
             return Err("SOURCE_CHANGED");
         }
         budget.bytes_left -= bytes.len();
+        let incomplete = bytes.len() as u64 != after.len();
+        budget.history_metadata_incomplete |= history_prefix && incomplete;
         budget.checkpoint()?;
         self.current()?;
-        Ok(Some(bytes))
+        Ok(Some((bytes, incomplete)))
     }
     pub(crate) fn list(&self, path: &Path, budget: &mut Budget) -> ReadResult<Vec<Entry>> {
         relative(path, true)?;

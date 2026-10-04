@@ -483,6 +483,116 @@ fn unsupported_directory_depth_never_returns_a_partial_ready_catalog() {
         Some("SOURCE_UNSUPPORTED")
     );
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryMetadata_ClaudeSubagentsAreNotMainSessions_001() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main session", t.path());
+    put(
+        t.path(),
+        "projects/encoded/same-id/subagents/agent-child.jsonl",
+        "{\"type\":\"user\",\"message\":{\"content\":\"child task\"}}\n",
+    );
+    let items = list(
+        t.path(),
+        CliKind::Claude,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(items[0]["nativeSessionId"], "same-id");
+    assert_eq!(items[0]["title"], "main session");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryMetadata_LargeCodexTranscriptStillListsSession_002() {
+    let t = tempfile::tempdir().unwrap();
+    let body = format!(
+        "{}\n{}\n{}\n",
+        json!({"type":"session_meta","payload":{"id":"large-session","cwd":t.path().to_str().unwrap()}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"large task"}}),
+        json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x".repeat(2 * 1024 * 1024)}]}}),
+    );
+    put(t.path(), "sessions/2026/10/04/rollout-large.jsonl", &body);
+    let items = list(
+        t.path(),
+        CliKind::Codex,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(items[0]["nativeSessionId"], "large-session");
+    assert_eq!(items[0]["title"], "large task");
+    assert_eq!(items[0]["truncated"], true);
+    assert!(items[0]["updatedAt"].is_null());
+    assert_eq!(
+        list(
+            t.path(),
+            CliKind::Codex,
+            None,
+            ResourceKind::Messages,
+            None,
+            Some("large-session")
+        )
+        .err(),
+        Some("SOURCE_TOO_LARGE")
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryMetadata_LongHeaderAndCutRecordRemainBounded_003() {
+    let t = tempfile::tempdir().unwrap();
+    let header = json!({"type":"session_meta","payload":{"id":"long-header","cwd":t.path().to_str().unwrap(),"base_instructions":"x".repeat(70 * 1024)}});
+    let body = format!(
+        "{header}\n{}\n{}\n",
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"long header task"}}),
+        json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":"中".repeat(50 * 1024)}})
+    );
+    put(t.path(), "sessions/2026/10/04/rollout-long.jsonl", &body);
+    let items = list(
+        t.path(),
+        CliKind::Codex,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items[0]["nativeSessionId"], "long-header");
+    assert_eq!(items[0]["title"], "long header task");
+    assert_eq!(items[0]["truncated"], true);
+    for invalid in [
+        "{broken}\n",
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"different\"}}\n",
+    ] {
+        put(
+            t.path(),
+            "sessions/2026/10/04/rollout-long.jsonl",
+            &format!("{header}\n{invalid}{}", "x".repeat(200 * 1024)),
+        );
+        assert_eq!(
+            list(
+                t.path(),
+                CliKind::Codex,
+                None,
+                ResourceKind::History,
+                None,
+                None
+            )
+            .err(),
+            Some("SOURCE_INVALID")
+        );
+    }
+}
 #[test]
 fn unknown_plugin_scope_never_becomes_global() {
     let t = tempfile::tempdir().unwrap();

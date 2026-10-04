@@ -55,6 +55,50 @@ fn request(source: SourceRef) -> ReadRequest {
     }
 }
 #[test]
+fn incomplete_history_survives_filtering_and_empty_pages() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let mut g = grant(t.path(), "main", Arc::new(AtomicBool::new(true)));
+    fs::write(
+        t.path().join("projects/p/same.jsonl"),
+        format!(
+            "{{\"type\":\"custom-title\",\"customTitle\":\"main\"}}\n{}",
+            "x".repeat(80 * 1024)
+        ),
+    )
+    .unwrap();
+    g.project = Some(Root::open(t.path()).unwrap());
+    g.project_paths = vec![t.path().to_owned()];
+    let source = registry.register(g).unwrap();
+    let response = registry.read(&owner(), &request(source)).unwrap();
+    assert_eq!(response.state, ProjectionState::Ready);
+    assert!(response.items.is_empty());
+    assert_eq!(response.history_metadata_incomplete, Some(true));
+}
+#[test]
+fn incomplete_history_response_budget_remains_safe() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let g = grant(t.path(), "main", Arc::new(AtomicBool::new(true)));
+    let body = format!(
+        "{}\n{}\n",
+        serde_json::json!({"type":"user","cwd":format!("/{}", "x".repeat(24_000)),"message":{"content":"task"}}),
+        serde_json::json!({"type":"assistant","message":{"content":"x".repeat(80 * 1024)}})
+    );
+    for index in 0..100 {
+        fs::write(t.path().join(format!("projects/p/{index:03}.jsonl")), &body).unwrap();
+    }
+    let source = registry.register(g).unwrap();
+    let response = registry.read(&owner(), &request(source)).unwrap();
+    assert_eq!(response.state, ProjectionState::Unavailable);
+    assert_eq!(
+        response.reason.as_deref(),
+        Some("SOURCE_RESPONSE_TOO_LARGE")
+    );
+    assert!(response.items.is_empty());
+    assert_eq!(response.history_metadata_incomplete, None);
+}
+#[test]
 fn two_roots_with_same_native_id_have_separate_references_and_real_reads() {
     let t = tempfile::tempdir().unwrap();
     let registry = ScopeRegistry::new(4);

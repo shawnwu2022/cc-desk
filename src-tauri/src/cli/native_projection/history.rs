@@ -8,6 +8,7 @@ struct Transcript {
     title: String,
     updated: Option<String>,
     messages: Vec<(String, String)>,
+    metadata_incomplete: bool,
 }
 pub(super) fn read(
     c: &Catalog<'_>,
@@ -29,10 +30,23 @@ pub(super) fn read(
     let mut transcripts = Vec::new();
     let mut seen = BTreeSet::new();
     for path in files {
-        let Some(bytes) = c.bytes(c.root, &path, b)? else {
+        let observation = if o.kind == ResourceKind::History {
+            c.history_prefix(&path, b)?
+        } else {
+            c.bytes(c.root, &path, b)?.map(|bytes| (bytes, false))
+        };
+        let Some((bytes, incomplete)) = observation else {
             return Err("SOURCE_CHANGED");
         };
-        let transcript = parse(&path, c.cli, text(&bytes)?)?;
+        let transcript = if incomplete {
+            let end = bytes
+                .iter()
+                .rposition(|b| *b == b'\n')
+                .ok_or("SOURCE_TOO_LARGE")?;
+            parse_metadata(&path, c.cli, text(&bytes[..=end])?)?
+        } else {
+            parse(&path, c.cli, text(&bytes)?)?
+        };
         if !seen.insert(transcript.id.clone()) {
             return Err("SOURCE_AMBIGUOUS");
         }
@@ -59,7 +73,7 @@ pub(super) fn read(
                 session_key: key,
                 native_session_id: t.id,
                 title,
-                truncated,
+                truncated: truncated || t.metadata_incomplete,
                 cwd: t.cwd,
                 updated_at: t.updated,
             });
@@ -98,6 +112,11 @@ fn walk(
     for entry in c.entries(c.root, path, b)? {
         let p = child(path, &entry.name);
         if entry.is_dir {
+            // Subagent transcripts are independently stored beneath a main session;
+            // they are not main-session history and must not be traversed here.
+            if c.cli == CliKind::Claude && depth == 0 && entry.name == "subagents" {
+                continue;
+            }
             if depth == 0 {
                 return Err("SOURCE_UNSUPPORTED");
             }
@@ -127,6 +146,7 @@ fn parse(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
         title: String::new(),
         updated: None,
         messages: Vec::new(),
+        metadata_incomplete: false,
     };
     let mut recognized = false;
     let mut explicit_title = None;
@@ -254,6 +274,110 @@ fn parse(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
         })
         .unwrap_or_else(|| "Untitled".into());
     Ok(t)
+}
+// A bounded prefix is an observation of identity/title, not a complete message
+// stream. Do not compare paired event/response streams or claim its latest time.
+fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
+    let mut id = None;
+    let mut cwd = None;
+    let mut title = None;
+    let mut explicit_title = None;
+    let mut recognized = false;
+    for line in input.lines().filter(|line| !line.trim().is_empty()) {
+        let value: Value = serde_json::from_str(line).map_err(|_| "SOURCE_INVALID")?;
+        validate_value(&value)?;
+        if !value.is_object() {
+            return Err("SOURCE_INVALID");
+        }
+        let observed_cwd = match cli {
+            CliKind::Claude => {
+                recognized |= matches!(
+                    value["type"].as_str(),
+                    Some(
+                        "user"
+                            | "assistant"
+                            | "custom-title"
+                            | "summary"
+                            | "file-history-snapshot"
+                            | "queue-operation"
+                            | "progress"
+                            | "system",
+                    )
+                );
+                if value["type"] == "custom-title" {
+                    explicit_title = value["customTitle"].as_str().map(str::to_owned);
+                }
+                if title.is_none() && value["type"] == "user" && value["isMeta"] != true {
+                    let candidate = content(&value["message"]["content"]);
+                    if !candidate.is_empty() {
+                        title = Some(candidate);
+                    }
+                }
+                value["cwd"].as_str()
+            }
+            CliKind::Codex => {
+                if value["type"] == "session_meta" {
+                    recognized = true;
+                    let observed_id = value["payload"]["id"].as_str().ok_or("SOURCE_INVALID")?;
+                    if id.as_ref().is_some_and(|old| old != observed_id) {
+                        return Err("SOURCE_INVALID");
+                    }
+                    id = Some(observed_id.to_owned());
+                }
+                if title.is_none() {
+                    if value["type"] == "event_msg" && value["payload"]["type"] == "user_message" {
+                        title = value["payload"]["message"].as_str().map(str::to_owned);
+                    } else if value["type"] == "response_item"
+                        && value["payload"]["type"] == "message"
+                        && value["payload"]["role"] == "user"
+                    {
+                        let candidate = content(&value["payload"]["content"]);
+                        if !candidate.is_empty() {
+                            title = Some(candidate);
+                        }
+                    }
+                }
+                if value["type"] == "session_meta" {
+                    value["payload"]["cwd"].as_str()
+                } else {
+                    None
+                }
+            }
+            CliKind::Shell => return Err("SOURCE_UNSUPPORTED"),
+        };
+        if let Some(observed) = observed_cwd {
+            if cwd.as_ref().is_some_and(|old| old != observed) {
+                return Err("SOURCE_AMBIGUOUS");
+            }
+            cwd = Some(observed.to_owned());
+        }
+    }
+    if !recognized {
+        return Err("SOURCE_UNSUPPORTED");
+    }
+    let id = match cli {
+        CliKind::Claude => path
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(".jsonl")
+            .to_owned(),
+        CliKind::Codex => id.ok_or("SOURCE_UNSUPPORTED")?,
+        CliKind::Shell => return Err("SOURCE_UNSUPPORTED"),
+    };
+    if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+        return Err("SOURCE_INVALID");
+    }
+    Ok(Transcript {
+        id,
+        cwd,
+        title: explicit_title
+            .or(title)
+            .unwrap_or_else(|| "Untitled".into()),
+        updated: None,
+        messages: Vec::new(),
+        metadata_incomplete: true,
+    })
 }
 fn content(v: &Value) -> String {
     if let Some(s) = v.as_str() {

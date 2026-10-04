@@ -6,6 +6,17 @@ const source: SourceRef = { scopeId: 'scope-1', instanceId: 'instance', cli: 'cl
 const request = (): ReadRequest => ({ source: structuredClone(source), resourceKind: 'history', requestEpoch: '1', limit: 100, offset: 0 })
 const response = () => ({ source: structuredClone(source), resourceKind: 'history', requestEpoch: '1', observedAt: '2', state: 'ready', reason: null, items: [], hasMore: false })
 describe('D12 authenticated projection API', () => {
+  it('retains the bounded-history completeness flag and rejects malformed or misplaced flags', async () => {
+    const r = { ...response(), historyMetadataIncomplete: true }
+    const client = createProjectionClient({ instanceId: 'instance', invoke: async () => r })
+    expect((await client.read(request())).historyMetadataIncomplete).toBe(true)
+    for (const value of ['true', 1, null]) {
+      const bad = createProjectionClient({ instanceId: 'instance', invoke: async () => ({ ...r, historyMetadataIncomplete: value }) })
+      await expect(bad.read(request())).rejects.toThrow('INVALID_PROJECTION')
+    }
+    const misplaced = createProjectionClient({ instanceId: 'instance', invoke: async () => ({ ...r, resourceKind: 'config' }) })
+    await expect(misplaced.read({ ...request(), resourceKind: 'config' })).rejects.toThrow('INVALID_PROJECTION')
+  })
   it('uses exact native commands and retains the document bridge', async () => {
     const invoke = vi.fn(async (cmd: string) => cmd === 'native_get_scope' ? structuredClone(source) : response())
     const client = createProjectionClient({ instanceId: 'instance', invoke })

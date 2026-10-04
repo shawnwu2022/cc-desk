@@ -244,6 +244,9 @@ impl ScopeRegistry {
             reason,
             items,
             has_more,
+            history_metadata_incomplete: (state == ProjectionState::Ready
+                && budget.history_metadata_incomplete())
+            .then_some(true),
         };
         // Bound encoded IPC, not just input file bytes; JSON escaping can multiply size.
         let encoded = serde_json::to_vec(&response).map_err(|_| safe("SOURCE_INVALID"))?;
@@ -252,6 +255,7 @@ impl ScopeRegistry {
             response.reason = Some("SOURCE_RESPONSE_TOO_LARGE".into());
             response.items.clear();
             response.has_more = false;
+            response.history_metadata_incomplete = None;
         }
         (g.check)().map_err(safe)?;
         if response.state == ProjectionState::Ready {

@@ -23,4 +23,5 @@ export type ResourceItem =
 export interface ProjectionResult {
   source: SourceRef; resourceKind: ResourceKind; requestEpoch: string; observedAt: string
   state: 'ready' | 'unavailable'; reason: string | null; items: ResourceItem[]; hasMore: boolean
+  historyMetadataIncomplete?: boolean
 }

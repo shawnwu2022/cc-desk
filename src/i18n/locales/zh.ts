@@ -261,6 +261,7 @@ export default {
   launchPreparationWorkingDirectoryUnavailable: "项目工作目录不可用，请检查目录是否仍然存在并且可以访问。",
 
   workspaceRuntimePartial: '部分会话来源暂时无法加载，已打开的会话仍可使用。',
+  workspaceHistoryMetadataPartial: '部分历史仅显示摘要，列表可能不完整。',
   sourceWarningProjectMetadata: '已保存的项目信息',
   sourceWarningProjectDiscovery: '发现的项目',
   sourceWarningConfigurations: '启动配置',

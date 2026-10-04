@@ -249,6 +249,7 @@ onUnmounted(() => {
           <WorkspaceSourceDetails v-if="runtime.error.value === 'workspaceRuntimePartial'"
             :warnings="runtime.sourceWarnings?.value ?? []" :truncated="runtime.sourceWarningsTruncated?.value ?? false" />
         </InlineNotice>
+        <InlineNotice v-if="runtime.historyMetadataPartial?.value" data-history-metadata-partial kind="info" :message="t('workspaceHistoryMetadataPartial')" />
         <LaunchProgramDiscovery v-if="shell.section === 'workspace' && !preparationEditor && sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED' && sessions.activeSession.preparationIssueCode === 'PROGRAM_TRUST_REQUIRED'"
           :key="`${sessions.activeSession.id}:${shell.navigationSequence}:${shell.requestSequence}`" :session="sessions.activeSession" @edit="editPreparationConfiguration" @confirmed="confirmDiscoveredProgram" />
         <InlineNotice v-else-if="sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED'" data-launch-preparation kind="warning"
