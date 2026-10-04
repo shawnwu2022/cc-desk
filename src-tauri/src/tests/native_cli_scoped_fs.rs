@@ -204,13 +204,15 @@ fn invalid_unicode_paths_and_stored_names_are_rejected() {
 #[cfg(windows)]
 #[test]
 fn windows_junction_escape_cannot_read_external_bytes() {
+    use std::os::windows::process::CommandExt;
     let t = tempfile::tempdir().unwrap();
     let inside = t.path().join("inside");
     let outside = t.path().join("outside");
     fs::create_dir(&inside).unwrap();
     fs::create_dir(&outside).unwrap();
     fs::write(outside.join("secret"), b"secret").unwrap();
-    let status = crate::platform::new_command("cmd.exe")
+    let status = std::process::Command::new("cmd.exe")
+        .creation_flags(0x08000000)
         .args(["/D", "/C", "mklink", "/J"])
         .arg(inside.join("escape"))
         .arg(&outside)
