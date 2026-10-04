@@ -81,6 +81,23 @@ fn HistoryDiagnostics_MinimalProfilesAndWireDefaultsLoadBothProviders_001() {
     }
 }
 
+// Windows 继承别名规范化后，两种 CLI 的默认历史请求均可读取隔离的测试目录。
+#[cfg(windows)]
+#[test]
+fn HistoryDiagnostics_HostAliases_005() {
+    let captured = crate::cli::environment::capture_windows_environment(
+        vec![
+            ("Path".into(), "first".into()),
+            ("PATH".into(), "effective".into()),
+        ],
+        |_| Some("effective".into()),
+    )
+    .unwrap();
+    for result in history_with_environment(captured) {
+        result.unwrap();
+    }
+}
+
 #[test]
 fn HistoryDiagnostics_SharedInvalidEnvironmentFailsBothProviders_002() {
     let mut inherited = EnvMap::new();

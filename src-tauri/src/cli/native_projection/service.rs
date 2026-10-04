@@ -282,7 +282,7 @@ fn profile_locations_diagnosed(
     }
     *stage = ProjectionStage::ScopeEnvironment;
     let env = build_environment(
-        &service.inherited_environment(),
+        &service.inherited_environment()?,
         &EnvMap::new(),
         profile,
         legacy.as_ref(),

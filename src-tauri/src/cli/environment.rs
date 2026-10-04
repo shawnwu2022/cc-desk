@@ -17,6 +17,49 @@ pub(crate) const OBSERVER_ENV_NAMES: &[&str] = &[
 
 pub(crate) type EnvMap = BTreeMap<OsString, OsString>;
 
+/// Capture the host before a case-sensitive map can lose Windows aliases.
+/// Conflicting inherited aliases use the OS-effective value, not map ordering.
+pub(crate) fn capture_environment() -> Result<EnvMap, SafeError> {
+    #[cfg(windows)]
+    {
+        capture_windows_environment(std::env::vars_os().collect(), |name| std::env::var_os(name))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(std::env::vars_os().collect())
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn capture_windows_environment(
+    entries: Vec<(OsString, OsString)>,
+    mut effective_value: impl FnMut(&OsStr) -> Option<OsString>,
+) -> Result<EnvMap, SafeError> {
+    let mut result = EnvMap::new();
+    for (name, first) in &entries {
+        if lookup(&result, name).is_some() {
+            continue;
+        }
+        let aliases: Vec<_> = entries
+            .iter()
+            .filter(|(other, _)| same_name(name, other))
+            .map(|(_, value)| value)
+            .collect();
+        let value = if aliases.iter().any(|value| *value != first) {
+            let current =
+                effective_value(name).ok_or_else(|| SafeError::invalid("environment.changed"))?;
+            if !aliases.contains(&&current) {
+                return Err(SafeError::invalid("environment.changed"));
+            }
+            current
+        } else {
+            first.clone()
+        };
+        result.insert(name.clone(), value);
+    }
+    Ok(result)
+}
+
 /// Internal observer data, not an IPC type and deliberately not Debug/Serialize.
 pub(crate) struct ObserverEnv {
     pub(crate) values: EnvMap,

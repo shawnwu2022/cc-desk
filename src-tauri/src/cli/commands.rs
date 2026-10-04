@@ -52,7 +52,7 @@ pub(crate) async fn cli_get_availability(
     let request = parse_request(request)?;
     tauri::async_runtime::spawn_blocking(move || {
         let repository = WorkspaceRepository::production()?;
-        let inherited = std::env::vars_os().collect();
+        let inherited = super::environment::capture_environment()?;
         get_availability(&repository, &caller, &request, &inherited, probe_host)
     })
     .await
@@ -74,7 +74,7 @@ pub(crate) async fn cli_discover_programs(
             &WorkspaceRepository::production()?,
             &caller,
             &request,
-            &std::env::vars_os().collect(),
+            &super::environment::capture_environment()?,
         )
     })
     .await

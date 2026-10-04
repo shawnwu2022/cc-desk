@@ -340,3 +340,182 @@ fn D13_Observer_ParentCapabilityNeverLeaksIntoAnotherRun_013() {
         assert_eq!(result[OsStr::new("KEEP")], "yes");
     }
 }
+
+/// Opt-in host probe: never print inherited names, values, or private profiles.
+#[cfg(windows)]
+#[test]
+#[ignore = "reads only the test process environment; emits shape counts and fixed categories"]
+fn D08_Environment_WindowsHostDefaultProfiles_014() {
+    use std::os::windows::ffi::OsStrExt;
+    let raw: Vec<_> = std::env::vars_os().collect();
+    let inherited: EnvMap = raw.iter().cloned().collect();
+    let mut empty_names = 0;
+    let mut nul_names = 0;
+    let mut drive_names = 0;
+    let mut other_leading_equals = 0;
+    let mut interior_equals = 0;
+    let mut non_unicode_names = 0;
+    let mut empty_values = 0;
+    let mut nul_values = 0;
+    let mut non_unicode_values = 0;
+    let mut alias_conflicts = 0;
+    let mut first_alias_matches_os = 0;
+    for (index, (name, value)) in inherited.iter().enumerate() {
+        let units: Vec<_> = name.encode_wide().collect();
+        empty_names += usize::from(units.is_empty());
+        nul_names += usize::from(units.contains(&0));
+        if units.first() == Some(&(b'=' as u16)) {
+            if units.len() == 3
+                && u8::try_from(units[1]).is_ok_and(|c| c.is_ascii_alphabetic())
+                && units[2] == b':' as u16
+            {
+                drive_names += 1;
+            } else {
+                other_leading_equals += 1;
+            }
+        } else {
+            interior_equals += usize::from(units.contains(&(b'=' as u16)));
+        }
+        non_unicode_names += usize::from(name.to_str().is_none());
+        empty_values += usize::from(value.is_empty());
+        nul_values += usize::from(value.encode_wide().any(|unit| unit == 0));
+        non_unicode_values += usize::from(value.to_str().is_none());
+        alias_conflicts += inherited
+            .iter()
+            .take(index)
+            .filter(|(previous, old)| {
+                crate::cli::environment::same_name(previous, name) && *old != value
+            })
+            .count();
+    }
+    eprintln!("host_shape entries={} empty_names={empty_names} nul_names={nul_names} drive_names={drive_names} other_leading_equals={other_leading_equals} interior_equals={interior_equals} non_unicode_names={non_unicode_names} empty_values={empty_values} nul_values={nul_values} non_unicode_values={non_unicode_values} alias_conflicts={alias_conflicts}", inherited.len());
+    for (index, (name, value)) in raw.iter().enumerate() {
+        if raw
+            .iter()
+            .take(index)
+            .any(|(previous, _)| crate::cli::environment::same_name(previous, name))
+        {
+            continue;
+        }
+        if raw
+            .iter()
+            .skip(index + 1)
+            .any(|(next, other)| crate::cli::environment::same_name(next, name) && other != value)
+        {
+            first_alias_matches_os += usize::from(std::env::var_os(name).as_ref() == Some(value));
+        }
+    }
+    eprintln!("host_resolution first_alias_matches_os={first_alias_matches_os}");
+    let captured = crate::cli::environment::capture_environment().unwrap();
+    let mut passed = true;
+    for cli in [CliKind::Claude, CliKind::Codex] {
+        let result = build_environment(
+            &captured,
+            &EnvMap::new(),
+            &Profile::new("synthetic", cli),
+            None,
+            None,
+        );
+        let category = match result
+            .as_ref()
+            .err()
+            .and_then(|error| error.field.as_deref())
+        {
+            None if result.is_ok() => "ok",
+            Some("environment.name") => "environment.name",
+            Some("environment.value") => "environment.value",
+            Some("environment.aliasConflict") => "environment.aliasConflict",
+            _ => "other-fixed-category",
+        };
+        eprintln!("default_profile cli={} category={category}", cli.as_str());
+        passed &= result.is_ok();
+    }
+    assert!(
+        passed,
+        "default profiles rejected inherited host environment; see fixed categories"
+    );
+}
+
+// Windows 继承别名使用 OS 生效值，不能按名称排序覆盖，两个默认 CLI 都可构建环境。
+#[cfg(windows)]
+#[test]
+fn D08_Environment_HostAliases_015() {
+    use crate::cli::environment::{capture_windows_environment, lookup};
+    for names in [["Path", "PATH"], ["PATH", "PATH"]] {
+        for effective in ["first", ""] {
+            let mut reads = 0;
+            let captured = capture_windows_environment(
+                vec![
+                    (names[0].into(), "first".into()),
+                    (names[1].into(), "".into()),
+                ],
+                |_| {
+                    reads += 1;
+                    Some(effective.into())
+                },
+            )
+            .unwrap();
+            assert_eq!(reads, 1);
+            assert_eq!(captured.len(), 1);
+            for cli in [CliKind::Claude, CliKind::Codex] {
+                let result = build_environment(
+                    &captured,
+                    &EnvMap::new(),
+                    &Profile::new("default", cli),
+                    None,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(lookup(&result, OsStr::new("path")).unwrap(), effective);
+            }
+        }
+    }
+}
+
+// OS 值不属于已捕获冲突组时失败，不猜测环境值。
+#[cfg(windows)]
+#[test]
+fn D08_Environment_HostChanged_016() {
+    use crate::cli::environment::capture_windows_environment;
+    for effective in [None, Some("changed".into())] {
+        let error = capture_windows_environment(
+            vec![
+                ("Path".into(), "first".into()),
+                ("PATH".into(), "second".into()),
+            ],
+            |_| effective.clone(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "INVALID_REQUEST");
+        assert_eq!(error.field.as_deref(), Some("environment.changed"));
+    }
+}
+
+// 唯一项、同值别名、盘符项及非 Unicode 值保留快照，不重新读取全局环境。
+#[cfg(windows)]
+#[test]
+fn D08_Environment_HostSnapshot_017() {
+    use crate::cli::environment::capture_windows_environment;
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+    let raw = vec![
+        ("PATH".into(), "same".into()),
+        ("Path".into(), "same".into()),
+        ("=C:".into(), r"C:\fixture".into()),
+        ("EMPTY".into(), "".into()),
+        (
+            OsString::from_wide(&[0xd800]),
+            OsString::from_wide(&[0xdc00]),
+        ),
+    ];
+    let captured = capture_windows_environment(raw, |_| panic!("no conflicting values")).unwrap();
+    assert_eq!(captured.len(), 4);
+    let result = build_environment(
+        &captured,
+        &EnvMap::new(),
+        &Profile::new("default", CliKind::Codex),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(result, captured);
+}

@@ -44,7 +44,7 @@ fn observed_fixture(enabled: bool) -> (Fixture, Arc<ObserverRegistry>) {
     fixture.service = Arc::new(
         LaunchService::new(
             fixture.repository.clone(),
-            Some(fixture.service.inherited_environment()),
+            Some(fixture.service.inherited_environment().unwrap()),
             Some(fixture.consumer.clone()),
         )
         .with_observer(host),

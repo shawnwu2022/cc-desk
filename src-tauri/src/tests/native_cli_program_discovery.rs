@@ -50,6 +50,19 @@ fn ProgramDiscovery_FindsBothClisWithoutTrustingOrExecuting_001() {
             ])
             .unwrap(),
         );
+        // Windows host aliases resolve before discovery and its project exclusions.
+        #[cfg(windows)]
+        let env = {
+            let effective = env[std::ffi::OsStr::new("PATH")].clone();
+            crate::cli::environment::capture_windows_environment(
+                vec![
+                    ("Path".into(), project.selected_path.as_os_str().into()),
+                    ("PATH".into(), effective.clone()),
+                ],
+                |_| Some(effective.clone()),
+            )
+            .unwrap()
+        };
         let result = discover_programs(&repo, "main", &request, &env).unwrap();
         assert_eq!(result.candidates.len(), 1);
         assert_eq!(

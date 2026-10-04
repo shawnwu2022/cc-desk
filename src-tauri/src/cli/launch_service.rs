@@ -70,10 +70,11 @@ impl LaunchService {
     pub(crate) fn repository(&self) -> &WorkspaceRepository {
         &self.repository
     }
-    pub(crate) fn inherited_environment(&self) -> EnvMap {
-        self.inherited
-            .clone()
-            .unwrap_or_else(|| std::env::vars_os().collect())
+    pub(crate) fn inherited_environment(&self) -> Result<EnvMap, SafeError> {
+        match &self.inherited {
+            Some(environment) => Ok(environment.clone()),
+            None => super::environment::capture_environment(),
+        }
     }
     pub(crate) fn registry(&self) -> &Arc<RunRegistry<NativeRun>> {
         self.coordinator.registry()
@@ -125,10 +126,7 @@ impl LaunchService {
                 let profile = self.repository.get_profile(&request.profile_id)?;
                 let legacy = profile
                     .read_legacy(&self.repository.metadata_directory().join("config.json"))?;
-                let inherited = self
-                    .inherited
-                    .clone()
-                    .unwrap_or_else(|| std::env::vars_os().collect());
+                let inherited = self.inherited_environment()?;
                 freeze_launch(
                     request,
                     &profile,
