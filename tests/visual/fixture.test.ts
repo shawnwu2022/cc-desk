@@ -33,6 +33,29 @@ async function render(scenario: string, locale = 'en') {
   await flushPromises(); return wrapper
 }
 describe('Isolated production-component fixture', () => {
+  // 两个恢复入口共用真实对话框：单会话只呈现目标，全局保留检索列表；取消不调用宿主。
+  it.each(['en', 'zh'].flatMap(locale => ['resume-session', 'resume-history'].map(scenario => ({ locale, scenario }))))('Fixture_ResumeEntry_015: $scenario $locale', async ({ locale, scenario }) => {
+    const view = await render(scenario, locale)
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog).not.toBeNull()
+    if (scenario === 'resume-session') {
+      expect(dialog.querySelector('[data-resume-target]')?.textContent).toContain('Review terminal rendering')
+      expect(dialog.querySelector('[data-resume-query]')).toBeNull()
+      expect(dialog.querySelectorAll('[data-resume-result]')).toHaveLength(0)
+      expect(dialog.querySelector('[data-confirm-resume]')).not.toBeNull()
+    } else {
+      expect(dialog.querySelector('[data-resume-target]')).toBeNull()
+      expect(dialog.querySelector('[data-resume-query]')).not.toBeNull()
+      expect(dialog.querySelectorAll('[data-resume-result]')).toHaveLength(2)
+      expect(dialog.querySelector('[data-confirm-resume]')).toBeNull()
+    }
+    const cancel = [...dialog.querySelectorAll<HTMLButtonElement>('.resume-actions button')].find(button => button.textContent?.trim() === (locale === 'en' ? en.cancel : zh.cancel))!
+    cancel.click(); await flushPromises()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(view.findAll('.xterm')).toHaveLength(0)
+    expect(blockedHostCalls.value).toBe(0)
+  })
+
   // 独立状态场景必须是真正 opened 的对应 CLI/runtime 行，不能借历史或准备失败行代替。
   it.each([
     { variant: 'native-claude', runtime: 'native-cli', cli: 'claude' },
@@ -59,6 +82,15 @@ describe('Isolated production-component fixture', () => {
     expect(close.attributes('aria-label')).toBe(locale === 'en' ? 'Close' : '关闭')
     expect(close.get('svg path').attributes('d')).toBe('m6 6 12 12M18 6 6 18')
     ;(close.element as HTMLButtonElement).focus()
+    expect(document.activeElement).toBe(close.element)
+    await nextTick()
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(locale === 'en' ? 'Close' : '关闭')
+    // Match the browser's advancing clock after listeners mount. Do not use VTU
+    // trigger(): its private timestamp workaround masks frozen-clock event loss.
+    vi.setSystemTime(FIXTURE_TIME + 1)
+    close.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
     expect(document.activeElement).toBe(close.element)
     for (const entry of ['overflow', 'context', 'keyboard']) {
       if (entry === 'overflow') await row.get('.session-overflow-trigger button').trigger('click')

@@ -604,3 +604,11 @@ All three menu entry paths share the same model and omit Close and Stop. Running
 The × emits primary-action/close into the existing owning-store checks. Running, starting and unknown attempts retain the existing confirmation; closing an already ended attempt uses the existing direct-close path. Confirmation warns that closing terminates the process and clears the terminal display, asks users to copy needed output, and makes no promise to recover unsaved content. Saved CLI history is unaffected. No terminal-output persistence is added.
 
 The isolated visual fixture keeps the historical archive confirmation baseline and adds close-confirmation as separate unapproved evidence. Component/fixture tests are not rendered-browser or native-platform acceptance.
+
+## Targeted resume versus history search
+
+The tree already identifies the requested history session. Its activation and Resume action therefore open `mode: 'session'`, which requires that catalog ID and displays only the selected title, CLI, project and saved configuration with Cancel/Resume. It does not enumerate history again or offer a different source. The global restore-history entry still opens `mode: 'history'` with the existing search, filters and results.
+
+The dialog copies the selected record and native origin before confirmation. It reuses the same `resumeCatalogSession` and cancellation predicate; no adapter, storage or process state machine is replaced. Project navigation closes the pending dialog even when the shell stays in Workspace. Missing targets remain unavailable. Changes in saved identity/configuration are still rejected by the original admission checks; an already opened exact source is reused.
+
+Isolated bilingual `resume-session` and `resume-history` visual scenarios use a read-only in-memory history adapter. Every mutation fails closed. Their screenshots and cancellation checks demonstrate the rendered distinction, not a real CLI launch or native Windows acceptance.

@@ -7,6 +7,7 @@ import App from '@/App.vue'
 import { useShellStore } from '@/stores/shell'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import en from '@/i18n/locales/en'
+import zh from '@/i18n/locales/zh'
 const io = vi.hoisted(() => ({ read: vi.fn(), legacy: vi.fn(), profile: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
   getProjectsState: async () => ({ pinnedProjects: [], archivedSessions: {} }), getProjects: async () => [], getSessions: io.legacy,
@@ -203,4 +204,130 @@ it('Resume_ReconfirmAfterClose_012', async () => {
   finish({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this' }], hasMore: false }); await flushPromises()
   expect(useNativeTabsStore().tabs.size).toBe(1); expect(document.querySelector('[role=dialog]')).toBeNull()
   expect(w.find('[data-restored-tab]').exists()).toBe(true)
+})
+
+// 树中已选历史在两种语言、激活/恢复入口都只检查当前目标，不再次搜索或展示列表。
+it.each(['en', 'zh'] as const)('Resume_TargetOnlyBothRoutes_013_%s', async locale => {
+  const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })], stubs: { NativeCliTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const catalog = useUnifiedSessionsStore(); const row = catalog.sessions[0]
+  const readsBefore = io.read.mock.calls.length
+  for (const kind of ['activate', 'menu-action'] as const) {
+    useShellStore().requestWorkspaceAction(kind === 'activate' ? { kind, sessionId: row.id } : { kind, action: 'resume', sessionId: row.id }); await flushPromises()
+    const dialog = document.querySelector('[role=dialog]')!
+    expect(dialog.querySelector('[data-resume-query]')).toBeNull()
+    expect(dialog.querySelector('[data-resume-result]')).toBeNull()
+    expect(dialog.querySelector('[data-resume-cli]')).toBeNull()
+    expect(dialog.querySelector('[data-resume-scope]')).toBeNull()
+    expect(dialog.querySelector('[data-resume-age]')).toBeNull()
+    expect(dialog.textContent).toContain(row.title)
+    expect(dialog.textContent).toContain('Work config')
+    expect(dialog.textContent).toContain('repo')
+    expect(dialog.textContent).toContain((locale === 'en' ? en : zh).resumeConfirmHint)
+    expect(dialog.querySelector('[data-confirm-resume]')?.textContent).toBe((locale === 'en' ? en : zh).resumeConfirm)
+    expect(io.read.mock.calls.length).toBe(readsBefore)
+    ;(dialog.querySelector('.resume-actions button') as HTMLButtonElement).click(); await flushPromises()
+    expect(useNativeTabsStore().tabs.size).toBe(0)
+    expect(document.querySelector('[role=dialog]')).toBeNull()
+  }
+})
+
+// 当前目标重复检查恢复按钮只创建一个尝试，随后再次点击已打开行直接复用。
+it('Resume_TargetConfirmOnlyOnce_014', async () => {
+  const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: defineComponent({ props: ['tabId'], setup(props, { expose }) { expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} }); return () => h('div', { 'data-restored-tab': props.tabId }) } }), SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const catalog = useUnifiedSessionsStore(); const history = catalog.sessions[0]
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
+  const readsBefore = io.read.mock.calls.length
+  let finish!: (value: unknown) => void
+  io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  const confirm = document.querySelector('[data-confirm-resume]') as HTMLButtonElement
+  confirm.click(); confirm.click(); await flushPromises()
+  expect(confirm.disabled).toBe(true)
+  expect(io.read.mock.calls.length).toBe(readsBefore + 1)
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  finish({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo' }], hasMore: false }); await flushPromises()
+  const tab = [...useNativeTabsStore().tabs.values()][0]
+  useNativeTabsStore().markUnknown(tab.tabId); await flushPromises()
+  const readsAfter = io.read.mock.calls.length
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: 'native-tab:' + tab.tabId }); await flushPromises()
+  expect(document.querySelector('[role=dialog]')).toBeNull()
+  expect(useNativeTabsStore().tabs.size).toBe(1)
+  expect(catalog.activeSessionId).toBe('native-tab:' + tab.tabId)
+  expect(tab.generation).toBe(1)
+  expect(tab.status).toBe('unknown')
+  expect(io.read.mock.calls.length).toBe(readsAfter)
+})
+
+// 当前目标检查时取消或切换项目，迟到的历史读取不准入，保留新页面。
+it.each(['cancel', 'project'] as const)('Resume_TargetCancelsLateRead_015_%s', async change => {
+  const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: catalog.sessions[0].id }); await flushPromises()
+  let finish!: (value: unknown) => void
+  io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  ;(document.querySelector('[data-confirm-resume]') as HTMLButtonElement).click(); await flushPromises()
+  if (change === 'cancel') (document.querySelector('.resume-actions button') as HTMLButtonElement).click()
+  else { catalog.selectProjectContext('/other'); useShellStore().navigate('workspace') }
+  await flushPromises()
+  finish({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo' }], hasMore: false }); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  expect(document.querySelector('[role=dialog]')).toBeNull()
+})
+
+// 当前目标保持原项目和配置身份；检查期间修订或注册替换也不能借用新来源启动。
+it.each(['configuration', 'project'] as const)('Resume_TargetRetainsOrigin_016_%s', async change => {
+  const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
+  const { useCliProfilesStore } = await import('@/stores/cliProfiles')
+  const { useWorkspaceStore } = await import('@/stores/workspace')
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const catalog = useUnifiedSessionsStore(); const history = catalog.sessions[0]
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
+  let finish!: (value: unknown) => void
+  io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  ;(document.querySelector('[data-confirm-resume]') as HTMLButtonElement).click(); await flushPromises()
+  if (change === 'configuration') useCliProfilesStore().profiles[0].revision = '8'
+  else useWorkspaceStore().projects[0].projectId = 'replacement'
+  finish({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo' }], hasMore: false }); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  expect(document.querySelector('[role=dialog]')?.textContent).toContain(en.resumeConfigurationChanged)
+})
+
+// 新目标替代旧确认后，旧读取完成不得启动或关闭新目标的确认。
+it('Resume_TargetRejectsSuperseded_017', async () => {
+  const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
+  const secondKey = JSON.stringify(['local', 'codex', 'root', 'second-id'])
+  const items = [
+    { type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'First target', cwd: '/repo' },
+    { type: 'session', sessionKey: secondKey, nativeSessionId: 'second-id', title: 'Second target', cwd: '/repo' },
+  ]
+  io.read.mockResolvedValue({ state: 'ready', items, hasMore: false })
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  const first = catalog.sessions.find(row => row.nativeSessionId === 'history-id')!
+  const second = catalog.sessions.find(row => row.nativeSessionId === 'second-id')!
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: first.id }); await flushPromises()
+  let finish!: (value: unknown) => void
+  io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  ;(document.querySelector('[data-confirm-resume]') as HTMLButtonElement).click(); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: second.id }); await flushPromises()
+  finish({ state: 'ready', items, hasMore: false }); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  expect(document.querySelector('[data-resume-target]')?.textContent).toContain('Second target')
+  expect(document.querySelector('[data-resume-target]')?.textContent).not.toContain('First target')
+  expect((document.querySelector('[data-confirm-resume]') as HTMLButtonElement).disabled).toBe(false)
+})
+
+// 当前目标已从目录消失时，只给出无法恢复提示，不回退其他会话或直接恢复表单。
+it('Resume_TargetMissingStaysClosed_018', async () => {
+  const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  useUnifiedSessionsStore().openResumeDialog({ project: { projectKey: '/repo', projectPath: '/repo' }, cli: 'codex', mode: 'session', sessionId: 'missing-target' }); await flushPromises()
+  const dialog = document.querySelector('[role=dialog]')!
+  expect(dialog.textContent).toContain(en.resumeUnavailable)
+  expect(dialog.querySelector('[data-confirm-resume]')).toBeNull()
+  expect(dialog.querySelector('[data-resume-query]')).toBeNull()
+  expect(dialog.querySelector('[data-resume-config]')).toBeNull()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
 })

@@ -12,6 +12,7 @@ import ProjectResourcesDrawer from '@/components/workspace/ProjectResourcesDrawe
 import NewSessionDialog from '@/components/sessions/NewSessionDialog.vue'
 import ArchivedSessionsDrawer from '@/components/sessions/ArchivedSessionsDrawer.vue'
 import SessionConfirmDialog from '@/components/dialogs/SessionConfirmDialog.vue'
+import ResumeSessionDialog from '@/components/sessions/ResumeSessionDialog.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppTooltip from '@/components/ui/AppTooltip.vue'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -72,6 +73,24 @@ resources.kind = 'mcp'; resources.items = structuredClone(fixtureResources); res
 const draft = useNewSessionDraftStore()
 const project = { projectKey: projectPaths[0].toLowerCase(), projectPath: projectPaths[0] }
 const archived = ref(scenario === 'archived')
+// Inert history adapter keeps the real picker/filter rendering without any host or resume operation.
+if (scenario === 'resume-session' || scenario === 'resume-history') {
+  const rows = fixtureSessions().slice(0, 2).map((row, index) => ({ ...row,
+    id: `visual-history-${index}`, opened: false, processState: 'stopped' as const,
+    resumable: true, nativeSessionId: `visual-cli-session-${index}`, launchConfigId: `visual-${row.cli}-0`,
+  }))
+  const blockedMutation = async (): Promise<never> => { ++blockedHostCalls.value; throw new Error('VISUAL_RESUME_MUTATION_BLOCKED') }
+  catalog.configureAdapters([{ runtime: 'native-cli', listSessions: async () => structuredClone(rows),
+    createSession: blockedMutation, resumeSession: blockedMutation, activateSession: blockedMutation,
+    stopSession: blockedMutation, restartSession: blockedMutation, closeSession: blockedMutation,
+    renameSession: blockedMutation, archiveSession: blockedMutation, restoreArchivedSession: blockedMutation,
+  }])
+  catalog.sessions = rows; catalog.activeSessionId = null
+  catalog.openResumeDialog(scenario === 'resume-session'
+    ? { mode: 'session', project, cli: rows[0].cli, sessionId: rows[0].id }
+    : { mode: 'history', project })
+}
+
 if (scenario === 'projects') shell.navigate('projects')
 else if (scenario === 'terminal-settings' || scenario === 'launch-configurations' || scenario === 'historical-versions') {
   sidebar.activeSettingsSection = scenario === 'terminal-settings' ? 'terminal' : scenario === 'historical-versions' ? 'update' : 'launch-configurations'
@@ -104,6 +123,7 @@ onMounted(async () => { await nextTick(); ready.value = true })
     <NewSessionDialog />
     <ArchivedSessionsDrawer v-model:open="archived" :sessions="catalog.sessions" />
     <SessionConfirmDialog />
+    <ResumeSessionDialog v-if="scenario === 'resume-session' || scenario === 'resume-history'" />
     <div v-if="scenario === 'tooltip'" class="visual-tooltip-clipping" data-tooltip-clipping>
       <AppTooltip text="A long project description that must remain readable outside transformed and clipped ancestors, near the viewport edge."><AppButton data-tooltip-trigger>Inspect project</AppButton></AppTooltip>
     </div>

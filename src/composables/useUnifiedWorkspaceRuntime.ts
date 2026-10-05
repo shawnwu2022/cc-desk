@@ -352,7 +352,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const open = openSessions.value.some(value => value.id === session.id)
     if (request.kind === 'activate') {
       if (!open) {
-        if (shell.section === 'workspace') catalog.openResumeDialog({ project: session, cli: session.cli, mode: 'history', sessionId: session.id })
+        if (shell.section === 'workspace') catalog.openResumeDialog({ project: session, cli: session.cli, mode: 'session', sessionId: session.id })
         return true
       }
       await catalog.activateSession(session.id)
@@ -402,7 +402,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         await catalog.archiveSession(session.id); return true
       case 'resume':
         if (open) { await catalog.resumeCatalogSession(session.id); return true }
-        if (shell.section === 'workspace') catalog.openResumeDialog({ project: session, cli: session.cli, mode: 'history', sessionId: session.id })
+        if (shell.section === 'workspace') catalog.openResumeDialog({ project: session, cli: session.cli, mode: 'session', sessionId: session.id })
         return true
       case 'restore-archive': await catalog.restoreArchivedSession(session.id); return true
       case 'copy-session-id':

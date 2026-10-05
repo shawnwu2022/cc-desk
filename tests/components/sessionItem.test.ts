@@ -54,6 +54,24 @@ function styleRules() {
 }
 
 describe('Unified SessionItem', () => {
+  // 真实 IconButton/AppButton 组合切换焦点后，Escape 关闭提示但保留按钮焦点。
+  it('Row_CloseTooltipEscape_038', async () => {
+    const wrapper = row()
+    const close = wrapper.get('.session-primary-action button')
+    const overflow = wrapper.get('.session-overflow-trigger button')
+    ;(overflow.element as HTMLButtonElement).focus()
+    await nextTick()
+    ;(close.element as HTMLButtonElement).focus()
+    await nextTick()
+    expect(body.get('[role="tooltip"]').text()).toBe('Close')
+    close.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    expect(body.find('[role="tooltip"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(close.element)
+    expect(close.attributes('aria-describedby')).toBeUndefined()
+    expect(wrapper.emitted('primary-action')).toBeUndefined()
+  })
+
   // 两种运行时的所有已打开状态只通过行内关闭按钮退出，菜单不重复关闭或停止。
   it.each(['native-cli', 'legacy-claude'] as const)('Row_SingleClose_035: %s', async runtime => {
     for (const processState of ['starting', 'running', 'unknown', 'stopped', 'failed'] as const) {

@@ -42,14 +42,15 @@ export interface ResumeHistoryQuery {
   query?: string
   since?: number
 }
-export interface ResumeDialogRequest {
+export type ResumeDialogRequest = {
   project: UnifiedProjectIdentity
   cli?: UnifiedCliKind
-  mode: 'history' | 'resume-picker' | 'resume-id'
-  sessionId?: string
   launchConfigId?: string
   launchConfigRevision?: string
-}
+} & (
+  | { mode: 'session'; sessionId: string }
+  | { mode: 'history' | 'resume-picker' | 'resume-id'; sessionId?: string }
+)
 
 export interface UnifiedSession {
   id: string

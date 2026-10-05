@@ -30,7 +30,9 @@ const snapshots = [
 ] as const
 
 async function openFixture(page: Page, options: Record<string, string | number>) {
-  await page.clock.setFixedTime(new Date('2026-09-28T12:00:00Z'))
+  // Keep the fixture date reproducible while allowing Vue's event timestamps to advance.
+  // A frozen Date.now drops native key events after the tree's capture listener.
+  await page.clock.setSystemTime(new Date('2026-09-28T12:00:00Z'))
   await page.goto(`/__visual__/?${new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]))}`)
   await expect(page.locator('[data-visual-ready]')).toHaveAttribute('data-visual-ready', 'true')
   await page.evaluate(() => document.fonts.ready)
@@ -106,6 +108,7 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
         await overflow.focus()
         await page.keyboard.press('Shift+Tab')
         await expect(close).toBeFocused()
+        await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Close' : '关闭')
         await page.keyboard.press('Escape')
         await expect(page.getByRole('tooltip')).toHaveCount(0)
         await expect(close).toBeFocused()
@@ -137,6 +140,36 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
         await expect(page.getByRole('dialog')).toHaveCount(0)
         await expect(page.locator('.xterm, [data-native-tab], [data-terminal-view]')).toHaveCount(0)
       })
+    })
+  }
+}
+
+// Targeted resume and global history use the real dialog with an inert history adapter.
+for (const locale of ['en', 'zh']) {
+  for (const scenario of ['resume-session', 'resume-history']) {
+    test(`resume entry evidence ${scenario} ${locale}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width: 1024, height: 640 })
+      await openFixture(page, { scenario, locale, gui: locale === 'zh' ? 'dark' : 'light' })
+      const dialog = page.getByRole('dialog')
+      await expect(dialog).toBeVisible()
+      if (scenario === 'resume-session') {
+        await expect(dialog.locator('[data-resume-target]')).toContainText('Review terminal rendering')
+        await expect(dialog.locator('[data-resume-query], [data-resume-result]')).toHaveCount(0)
+        await expect(dialog.locator('[data-confirm-resume]')).toBeEnabled()
+      } else {
+        await expect(dialog.locator('[data-resume-target]')).toHaveCount(0)
+        await expect(dialog.locator('[data-resume-query]')).toBeVisible()
+        await expect(dialog.locator('[data-resume-result]')).toHaveCount(2)
+        await expect(dialog.locator('[data-confirm-resume]')).toHaveCount(0)
+      }
+      const cancel = dialog.getByRole('button', { name: locale === 'en' ? 'Cancel' : '取消', exact: true })
+      await expect(cancel).toBeInViewport({ ratio: 1 })
+      await page.mouse.move(1020, 636)
+      await captureFixtureEvidence(page, testInfo, `${scenario}-${locale}-unapproved`)
+      await cancel.click()
+      await expect(dialog).toHaveCount(0)
+      await expect(page.locator('.xterm, [data-native-tab], [data-terminal-view]')).toHaveCount(0)
+      await expect(page.locator('[data-blocked-host-calls]')).toHaveAttribute('data-blocked-host-calls', '0')
     })
   }
 }

@@ -143,6 +143,9 @@ describe('UiPrimitives_Interactions', () => {
     await wrapper.get('button').trigger('focus')
     expect(body.get('[role="tooltip"]').text()).toBe('More actions')
     expect(wrapper.get('button').attributes('aria-describedby')).toBe(body.get('[role="tooltip"]').attributes('id'))
+    wrapper.get('button').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    expect(body.find('[role="tooltip"]').exists()).toBe(false)
   })
 
   // 加载按钮阻止重复动作，并向辅助技术暴露 busy。

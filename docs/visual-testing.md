@@ -245,3 +245,12 @@ no-update run is required. New bilingual Close confirmation and opened-session
 state/menu captures remain separate unapproved evidence, not additional baseline
 approvals or proof of real process lifecycle, Windows WebView2 or screen-reader
 acceptance.
+
+The opened-state evidence run at source `c4b9cabe362895945ccb69a9f56bd3470b6d5581`
+passed all thirteen approved baseline comparisons. Its eighteen new keyboard cases
+failed before the focus/menu captures: freezing `Date.now()` made Vue's parent
+capture timestamp equal its child listener attachment time, so native Escape did
+not reach the button listener. Native-event fixture regressions reproduce that
+failure; the browser setup now sets the same initial system date while allowing
+time to progress. The Escape/tooltip/focus assertions, production UI and zero-pixel
+comparison remain unchanged. This repair still requires a fresh full browser run.

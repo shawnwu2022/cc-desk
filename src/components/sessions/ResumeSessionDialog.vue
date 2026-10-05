@@ -12,6 +12,7 @@ import CliAppIcon from './CliAppIcon.vue'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useShellStore } from '@/stores/shell'
 import { sameProjectPath } from '@/utils/path'
 import { projectBasename } from '@/utils/displayName'
 import type { CreateUnifiedSessionInput, UnifiedCliKind, UnifiedSession } from '@/types/unifiedSession'
@@ -21,6 +22,7 @@ const { t } = useI18n()
 const catalog = useUnifiedSessionsStore()
 const profiles = useCliProfilesStore()
 const workspace = useWorkspaceStore()
+const shell = useShellStore()
 const query = ref('')
 const cli = ref('')
 const scope = ref<'current-project' | 'all'>('current-project')
@@ -44,7 +46,7 @@ const open = computed({ get: () => !!catalog.resumeDialog, set: value => { if (!
 const mode = computed(() => catalog.resumeDialog?.mode ?? 'history')
 const configurations = computed(() => [{ value: '', label: t('resumeChooseConfiguration') }, ...profiles.profiles.filter(profile => profile.cli === cli.value).map(profile => ({ value: profile.id, label: profile.name }))])
 const registeredProjects = computed(() => [{ value: '', label: t('resumeChooseProject') }, ...workspace.projects.map(project => ({ value: project.projectId, label: projectBasename(project.selectedPath) }))])
-const title = computed(() => t(mode.value === 'resume-id' ? 'newSessionById' : mode.value === 'resume-picker' ? 'newSessionNativePicker' : 'newSessionRestore'))
+const title = computed(() => t(mode.value === 'session' ? 'resumeConfirm' : mode.value === 'resume-id' ? 'newSessionById' : mode.value === 'resume-picker' ? 'newSessionNativePicker' : 'newSessionRestore'))
 function safeMessage(failure: unknown) {
   const code = failure instanceof Error ? failure.message : failure && typeof failure === 'object' && 'code' in failure && typeof failure.code === 'string' ? failure.code : ''
   if (code === 'SESSION_NOT_FOUND') return 'errorSessionNotFound'
@@ -80,19 +82,23 @@ watch(() => [props.active, catalog.resumeDialog] as const, ([active, request]) =
   scope.value = 'current-project'; age.value = 'all'; rows.value = []; configId.value = request.launchConfigId ?? ''; configRevision.value = request.launchConfigRevision ?? ''; sessionId.value = ''; direct.value = null
   const matches = workspace.projects.filter(project => sameProjectPath(project.selectedPath, request.project.projectPath))
   projectId.value = matches.length === 1 ? matches[0].projectId : ''
-  selected.value = request.sessionId ? catalog.sessions.find(row => row.id === request.sessionId) ?? null : null
+  const target = request.sessionId ? catalog.sessions.find(row => row.id === request.sessionId) : null
+  selected.value = target ? { ...target, nativeOrigin: target.nativeOrigin ? { ...target.nativeOrigin } : undefined } : null
+  if (request.mode === 'session' && !selected.value) error.value = 'resumeUnavailable'
   initializing = false
   void search()
 }, { immediate: true, flush: 'sync' })
+// Project navigation can remain in Workspace, so active alone is not its lifetime.
+watch(() => shell.navigationSequence, () => catalog.closeResumeDialog(), { flush: 'sync' })
 watch([query, cli, scope, age], () => { if (initializing) return; selected.value = null; direct.value = null; error.value = ''; void search() }, { flush: 'sync' })
 watch(configId, id => { if (!initializing) configRevision.value = profiles.profile(id)?.revision ?? '' }, { flush: 'sync' })
-watch([configId, projectId, sessionId], () => { direct.value = null; error.value = '' })
+watch([configId, projectId, sessionId], () => { if (initializing) return; direct.value = null; error.value = '' }, { flush: 'sync' })
 function choose(row: UnifiedSession) { if (!busy.value) { selected.value = { ...row, nativeOrigin: row.nativeOrigin ? { ...row.nativeOrigin } : undefined }; error.value = ''; removing.value = false } }
 function prepareDirect() {
   const profile = profiles.profile(configId.value)
   const project = workspace.projects.find(row => row.projectId === projectId.value)
   const id = sessionId.value.trim()
-  if (!profile || profile.cli !== cli.value || !project || mode.value === 'history') { error.value = 'resumeChooseRequired'; return }
+  if (!profile || profile.cli !== cli.value || !project || !['resume-id', 'resume-picker'].includes(mode.value)) { error.value = 'resumeChooseRequired'; return }
   if (profile.revision !== configRevision.value) { error.value = 'resumeConfigurationChanged'; return }
   if (mode.value === 'resume-id' && (!id || id.length > 256 || /\p{Cc}/u.test(id))) { error.value = 'resumeInvalidId'; return }
   direct.value = { projectKey: project.selectedPath, projectPath: project.selectedPath, cli: cli.value as UnifiedCliKind,
@@ -129,9 +135,17 @@ onUnmounted(() => { ++searchEpoch; ++operationEpoch })
 </script>
 
 <template>
-  <AppDialog v-model:open="open" :title="title" class="resume-session-dialog">
+  <AppDialog v-model:open="open" :title="title" class="resume-session-dialog" :class="{ 'resume-session-dialog--target': mode === 'session' }">
     <div class="resume-fields">
-      <template v-if="mode === 'history'">
+      <div v-if="mode === 'session' && selected" data-resume-target class="resume-target">
+        <CliAppIcon :cli="selected.cli" />
+        <div class="resume-result-copy">
+          <strong>{{ selected.title }}</strong>
+          <small>{{ projectBasename(selected.projectPath) }}</small>
+          <small v-if="selected.launchConfigId">{{ profiles.profile(selected.launchConfigId)?.name }}</small>
+        </div>
+      </div>
+      <template v-else-if="mode === 'history'">
         <AppInput v-model="query" data-resume-query :label="t('resumeSearch')" :disabled="busy" />
         <div class="resume-filters">
           <AppSelect v-model="cli" data-resume-cli :label="t('newSessionTool')" :disabled="busy" :options="[{ value: '', label: t('resumeAllTools') }, { value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }]" />
@@ -147,7 +161,7 @@ onUnmounted(() => { ++searchEpoch; ++operationEpoch })
           </AppButton>
         </div>
       </template>
-      <template v-else>
+      <template v-else-if="mode !== 'session'">
         <AppSelect v-model="cli" data-resume-cli :label="t('newSessionTool')" :disabled="busy" :options="[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }]" />
         <AppSelect v-model="projectId" data-resume-project :label="t('newSessionProject')" :options="registeredProjects" :disabled="busy" />
         <AppSelect v-model="configId" data-resume-config :label="t('newSessionConfiguration')" :options="configurations" :disabled="busy" />
@@ -157,7 +171,7 @@ onUnmounted(() => { ++searchEpoch; ++operationEpoch })
         <AppButton v-if="!direct" data-prepare-resume :disabled="busy" @click="prepareDirect">{{ t('newSessionContinueRestore') }}</AppButton>
       </template>
       <InlineNotice v-if="selected || direct" :message="t(removing ? 'resumeRemoveHint' : 'resumeConfirmHint')" />
-      <p v-if="selected" class="resume-confirm-title">{{ selected.title }}</p>
+      <p v-if="selected && mode !== 'session'" class="resume-confirm-title">{{ selected.title }}</p>
       <InlineNotice v-if="error" kind="warning" :message="t(error)">
         <AppButton v-if="error === 'errorSessionNotFound' && !removing" data-remove-record :disabled="busy" @click="removing = true">{{ t('removeHistoryRecord') }}</AppButton>
       </InlineNotice>
@@ -172,6 +186,8 @@ onUnmounted(() => { ++searchEpoch; ++operationEpoch })
 
 <style scoped>
 .resume-session-dialog { width: min(640px, calc(100vw - 32px)); }
+.resume-session-dialog--target { width: min(480px, calc(100vw - 32px)); }
+.resume-target { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .resume-fields { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .resume-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .resume-results { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; min-width: 0; }
