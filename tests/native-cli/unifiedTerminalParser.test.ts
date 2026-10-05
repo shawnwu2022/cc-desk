@@ -463,3 +463,86 @@ it('Native_RecoverRestartsAfterTimeout_019', async () => {
   expect(reads).toBe(3)
   expect(tabs.tab(tab.tabId)?.status).toBe('exited')
 })
+
+// 第一条 writer 挂起时排队第二条；真实 parser 跨批往返后必须暂停，不能因终值相同继续发送。
+it.each([
+  ['applicationCursorKeysMode', '\x1b[?1h', '\x1b[?1l'],
+  ['sendFocusMode', '\x1b[?1004h', '\x1b[?1004l'],
+  ['bracketedPasteMode', '\x1b[?2004h', '\x1b[?2004l'],
+] as const)('Native_ParsedModeFencesQueue_020 %s', async (mode, enable, disable) => {
+  let releaseFirst!: () => void
+  const blocked = new Promise<void>(resolve => { releaseFirst = resolve })
+  io.user.mockImplementation(async input => {
+    if (input.generation === 1 && input.inputSeq === '1') await blocked
+    return { ...input, state: 'host-written', confirmedBytes: String(input.bytes.length) }
+  })
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const term = io.terminals[0]
+  const originalRun = { runId: tab.runId, generation: tab.generation }
+  term.input('first', true)
+  await vi.waitFor(() => expect(io.user).toHaveBeenCalledTimes(1))
+  term.input('second', true)
+  let offset = 0
+  for (const output of [enable, disable]) {
+    const parsed = new Promise<void>(resolve => {
+      const subscription = term.onWriteParsed(() => { subscription.dispose(); resolve() })
+    })
+    const bytes = [...new TextEncoder().encode(output)]
+    io.channels[0].channel.onmessage({ ...originalRun, streamEpoch: '1', offset: String(offset), bytes })
+    offset += bytes.length
+    await parsed
+  }
+  expect(term.modes[mode]).toBe(false)
+  await vi.waitFor(() => expect(io.ack).toHaveBeenCalledTimes(2))
+  const activity = vi.spyOn(tabs, 'touch')
+  const diagnostics = vi.spyOn(tabs, 'setDiagnostic')
+  releaseFirst(); await flushPromises()
+  expect(io.user).toHaveBeenCalledTimes(1)
+  expect(tabs.tab(tab.tabId)?.errorCode).toBe('NATIVE_INPUT_PAUSED')
+  expect(activity).not.toHaveBeenCalled()
+  expect(diagnostics.mock.calls).toEqual([[tab.tabId, 'NATIVE_INPUT_PAUSED']])
+  term.input('third', true); await flushPromises()
+  expect(io.user).toHaveBeenCalledTimes(1)
+  expect(diagnostics).toHaveBeenCalledTimes(1)
+
+  // 新 generation 使用独立 tracker/queue；旧输出不能改变新 run 的 mode 身份。
+  tabs.tab(tab.tabId)!.status = 'exited'
+  tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' }); await flushPromises()
+  expect(io.terminals).toHaveLength(1)
+  expect(io.channels).toHaveLength(2)
+  io.channels[0].channel.onmessage({ ...originalRun, streamEpoch: '1', offset: String(offset), bytes: [...new TextEncoder().encode(enable)] })
+  term.input('new generation', true); await flushPromises()
+  expect(io.user).toHaveBeenCalledTimes(2)
+  expect(io.user.mock.calls[1][0]).toMatchObject({ generation: 2, inputSeq: '1', modeEpoch: '1' })
+  expect(term.modes[mode]).toBe(false)
+})
+
+// 旧 writer 仍挂起时重启，新 generation 独立发送；旧完成不能放行排队输入或覆盖新诊断。
+it('Native_PendingInputGeneration_021', async () => {
+  let releaseFirst!: () => void
+  const blocked = new Promise<void>(resolve => { releaseFirst = resolve })
+  io.user.mockImplementation(async input => {
+    if (input.generation === 1) await blocked
+    return { ...input, state: 'host-written', confirmedBytes: String(input.bytes.length) }
+  })
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const term = io.terminals[0]
+  term.input('first', true)
+  await vi.waitFor(() => expect(io.user).toHaveBeenCalledTimes(1))
+  term.input('queued old input', true)
+  tabs.tab(tab.tabId)!.status = 'exited'
+  tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' }); await flushPromises()
+  term.input('new generation', true); await flushPromises()
+  expect(io.user.mock.calls.map(([input]) => [input.generation, input.inputSeq, input.modeEpoch])).toEqual([[1, '1', '1'], [2, '1', '1']])
+  const diagnostics = vi.spyOn(tabs, 'setDiagnostic')
+  const activity = vi.spyOn(tabs, 'touch')
+  releaseFirst(); await flushPromises()
+  expect(io.user).toHaveBeenCalledTimes(2)
+  expect(diagnostics).not.toHaveBeenCalled()
+  expect(activity).not.toHaveBeenCalled()
+  expect(tabs.tab(tab.tabId)).toMatchObject({ generation: 2, status: 'running', errorCode: null })
+})

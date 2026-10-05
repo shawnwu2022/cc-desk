@@ -48,6 +48,22 @@ export function createNativeTerminalBinding(
     writeProtocol: options.writeProtocol,
   })
 
+  let disposed = false
+  let inputPauseReported = false
+  const completeUserOperation = (hasBytes: boolean) => {
+    if (disposed) return
+    // flush() resolves when the queue pauses, so promise rejection alone cannot
+    // report failed input. Keep feedback bounded to the first pause of this run.
+    if (host.snapshot().state === 'paused') {
+      if (!inputPauseReported) {
+        inputPauseReported = true
+        options.onDegraded?.('NATIVE_INPUT_PAUSED')
+      }
+      return
+    }
+    if (hasBytes) options.onActivity?.()
+  }
+
   const provenance = bindXtermInputProvenance(options.term, {
     user: async data => {
       if (options.isUserInputAllowed?.() === false) return
@@ -63,7 +79,7 @@ export function createNativeTerminalBinding(
         leave()
       }
       await operation
-      if (!disposed && data.length) options.onActivity?.()
+      completeUserOperation(data.length > 0)
     },
     protocol: async data => {
       const leave = host.beginParserOutput()
@@ -89,7 +105,6 @@ export function createNativeTerminalBinding(
     onDegraded: options.onDegraded,
   })
 
-  let disposed = false
   return {
     acceptOutput(frame) {
       if (disposed) return false
@@ -99,7 +114,7 @@ export function createNativeTerminalBinding(
     sendUserText(data) {
       if (disposed) return Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED'))
       if (options.isUserInputAllowed?.() === false) return Promise.reject(new Error('NATIVE_TERMINAL_HIDDEN'))
-      return host.sendUserText(data).then(() => { if (!disposed && data.length) options.onActivity?.() })
+      return host.sendUserText(data).then(() => completeUserOperation(data.length > 0))
     },
 
     reserveUserPaste(produce) {
@@ -113,7 +128,7 @@ export function createNativeTerminalBinding(
       const reserved = host.reserveUserPaste(async () => {
         const bytes = await produce(); hasBytes = bytes.length > 0; return bytes
       })
-      return { inputSeq: reserved.inputSeq, settled: reserved.settled.then(() => { if (!disposed && hasBytes) options.onActivity?.() }) }
+      return { inputSeq: reserved.inputSeq, settled: reserved.settled.then(() => completeUserOperation(hasBytes)) }
     },
 
     drainInput() {

@@ -196,6 +196,8 @@ struct StreamState {
     acked: u64,
     frame_ends: VecDeque<u64>,
     throttled: bool,
+    #[cfg(test)]
+    waiting_for_capacity: bool,
 }
 
 struct TransportCore {
@@ -291,6 +293,8 @@ impl TerminalTransports {
                 acked: 0,
                 frame_ends: VecDeque::new(),
                 throttled: false,
+                #[cfg(test)]
+                waiting_for_capacity: false,
             }),
             degraded: AtomicBool::new(false),
             changed: Condvar::new(),
@@ -368,6 +372,11 @@ impl TerminalStream {
         wire(self.state.lock().sent)
     }
 
+    #[cfg(test)]
+    pub(crate) fn waiting_for_local_capacity(&self) -> bool {
+        self.state.lock().waiting_for_capacity
+    }
+
     fn progress(&self) -> Option<Arc<dyn OutputProgress>> {
         self.progress.as_ref().and_then(Weak::upgrade)
     }
@@ -389,7 +398,15 @@ impl TerminalStream {
                 if outstanding <= core.limits.run_low_water {
                     state.throttled = false;
                 } else {
+                    #[cfg(test)]
+                    {
+                        state.waiting_for_capacity = true;
+                    }
                     self.changed.wait(&mut state);
+                    #[cfg(test)]
+                    {
+                        state.waiting_for_capacity = false;
+                    }
                     continue;
                 }
             }
@@ -398,7 +415,15 @@ impl TerminalStream {
                 .is_none_or(|value| value > core.limits.run_high_water)
             {
                 state.throttled = true;
+                #[cfg(test)]
+                {
+                    state.waiting_for_capacity = true;
+                }
                 self.changed.wait(&mut state);
+                #[cfg(test)]
+                {
+                    state.waiting_for_capacity = false;
+                }
                 continue;
             }
             return Ok(());
@@ -450,6 +475,10 @@ impl TerminalStream {
             };
             state.sent = end;
             state.frame_ends.push_back(end);
+            if state.sent.saturating_sub(state.acked) as usize >= core.limits.run_high_water {
+                // Latch before an ACK can arrive ahead of the next capacity check.
+                state.throttled = true;
+            }
             (offset, end)
         };
         let frame = OutputFrame {

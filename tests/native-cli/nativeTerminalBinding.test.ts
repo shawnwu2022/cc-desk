@@ -261,3 +261,67 @@ describe('D19 native terminal binding', () => {
   })
 
 })
+
+// 首次队列暂停通过现有诊断通道可见，键盘/显式输入/粘贴都不发布成功活动。
+it.each(['keyboard', 'explicit', 'paste'] as const)('Native_ReportInputPaused_018 %s', async source => {
+  const xterm = fakeXterm()
+  const diagnostics: string[] = []; const writes: string[] = []; const activity: string[] = []
+  const binding = createNativeTerminalBinding({
+    term: xterm.term, runId: 'run-a', generation: 2,
+    currentTarget: () => ({ runId: 'run-a', generation: 2, modeEpoch: '4' }),
+    writeUser: async input => {
+      writes.push(input.inputSeq)
+      return { ...input, state: 'partial-or-unknown', confirmedBytes: '0' }
+    },
+    writeProtocol: async (_run, bytes) => ({ state: 'host-written', confirmedBytes: String(bytes.length) }),
+    ackOutput: async () => {},
+    onDegraded: reason => diagnostics.push(reason), onActivity: () => activity.push('activity'),
+  })
+  if (source === 'keyboard') {
+    xterm.user.fire(); xterm.data.fire('first'); await binding.drainInput()
+  } else if (source === 'explicit') await binding.sendUserText('first')
+  else await binding.reserveUserPaste(async () => new TextEncoder().encode('first')).settled
+  expect(diagnostics).toEqual(['NATIVE_INPUT_PAUSED'])
+  expect(activity).toEqual([])
+  await binding.sendUserText('second')
+  await binding.reserveUserPaste(async () => new TextEncoder().encode('third')).settled
+  xterm.user.fire(); xterm.data.fire('fourth'); await binding.drainInput()
+  expect(writes).toEqual(['1'])
+  expect(diagnostics).toEqual(['NATIVE_INPUT_PAUSED'])
+  expect(activity).toEqual([])
+  binding.dispose()
+})
+
+// 异步剪贴板失败仍报告一次固定暂停码，不将剪贴板错误内容显示给用户。
+it('Native_ReportPasteFailure_019', async () => {
+  const xterm = fakeXterm(); const diagnostics: string[] = []; const activity: string[] = []
+  const binding = createNativeTerminalBinding({
+    term: xterm.term, runId: 'run-a', generation: 2,
+    currentTarget: () => ({ runId: 'run-a', generation: 2, modeEpoch: '4' }),
+    writeUser: async input => ({ ...input, state: 'host-written', confirmedBytes: String(input.bytes.length) }),
+    writeProtocol: async (_run, bytes) => ({ state: 'host-written', confirmedBytes: String(bytes.length) }),
+    ackOutput: async () => {},
+    onDegraded: reason => diagnostics.push(reason), onActivity: () => activity.push('activity'),
+  })
+  await binding.reserveUserPaste(async () => { throw new Error('private clipboard payload') }).settled
+  expect(diagnostics).toEqual(['NATIVE_INPUT_PAUSED'])
+  expect(activity).toEqual([])
+  binding.dispose()
+})
+
+// 协议与二进制异步失败必须仍在 drain 中返回，不被 user 暂停反馈吞掉。
+it.each(['protocol', 'binary'] as const)('Native_PreserveRouteFailure_020 %s', async route => {
+  const xterm = fakeXterm(); const diagnostics: string[] = []
+  const binding = createNativeTerminalBinding({
+    term: xterm.term, runId: 'run-a', generation: 2,
+    currentTarget: () => ({ runId: 'run-a', generation: 2, modeEpoch: '4' }),
+    writeUser: async input => ({ ...input, state: 'host-written', confirmedBytes: String(input.bytes.length) }),
+    writeProtocol: async () => { await Promise.resolve(); throw new Error('protocol write failed') },
+    ackOutput: async () => {}, onDegraded: reason => diagnostics.push(reason),
+  })
+  if (route === 'protocol') xterm.data.fire('\x1b[0n')
+  else xterm.binary.fire(String.fromCharCode(0, 128, 255))
+  await expect(binding.drainInput()).rejects.toThrow('protocol write failed')
+  expect(diagnostics).toEqual([])
+  binding.dispose()
+})

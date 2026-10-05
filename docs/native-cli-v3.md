@@ -180,3 +180,11 @@ D20's harness and target-machine command are implemented and tested, but real pr
 The repository currently builds **signed candidate packages only**. `scripts/release-policy.mjs` returns false for publishing and the release workflow has no GitHub Release publish path.
 
 Do not describe a candidate build as a published release, and do not re-enable publishing merely because code-side CI is green. Real-CLI evidence and an explicit promotion decision are separate gates.
+
+## 0.18.1 consolidation boundaries
+
+The shared frontend logging command now reduces untrusted string content to its UTF-8 byte count before every severity sink. This is a backend entry-point guarantee for both runtime frontends; it does not depend on every caller remembering to redact. Existing backend diagnostic channels retain their own allowlisted contracts.
+
+Transport high-water hysteresis is latched when a frame reaches the high watermark, under the same accounting lock. An intervening ACK above the low watermark cannot admit another read. Exact ACK ownership, per-stream accounting, FIFO global budgets, revocation and cleanup retain their existing semantics. Production-source core regressions cover this ordering and 32 concurrent streams sharing a 16-byte budget; such host tests do not substitute for real CLI or native-platform acceptance.
+
+Native input receipts are correlated against the frozen run, generation, sequence, mode epoch and expected byte count. The xterm 5.5.0 mode tracker observes nine public modes after parsed write batches; it detects changes across batches, not a mode round trip wholly inside one batch. Exhaustion and disposal permanently reject further epochs. A paused write produces a fixed localized diagnostic and never automatically replays pending input; inspect the session before deciding whether to restart. These changes do not add backend/schema fields or change queue admission and recovery semantics.

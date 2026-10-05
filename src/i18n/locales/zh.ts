@@ -96,6 +96,7 @@ export default {
   configurationDeleteConfirm: "删除配置",
   errorSessionChanged: "发起操作后，会话已发生变化。请检查当前状态后重试。",
   errorActionCancelled: "操作已取消，不会继续执行后续更改。",
+  errorNativeInputPaused: "输入已暂停。待处理输入不会自动重发。请先检查会话，再决定是否重启。",
   errorStopUnconfirmed: "尚未确认会话已停止。请先检查状态，再重试。",
   errorConfigurationInUse: "会话仍在准备或尚未确认启动。请先检查或取消该尝试，再删除此启动配置。",
   errorSessionNotResumable: "此会话尚无已验证的历史记录可供归档，已保留终端。",

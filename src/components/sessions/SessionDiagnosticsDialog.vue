@@ -2,6 +2,7 @@
 import { useI18n } from 'vue-i18n'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import ErrorDetails from '@/components/ui/ErrorDetails.vue'
+import InlineNotice from '@/components/ui/InlineNotice.vue'
 import type { SessionDiagnostics } from '@/utils/sessionDiagnostics'
 
 defineProps<{ diagnostics: SessionDiagnostics | null }>()
@@ -26,6 +27,11 @@ const { t } = useI18n()
           </template>
         </dl>
       </details>
+      <InlineNotice
+        v-if="diagnostics.errorCode === 'NATIVE_INPUT_PAUSED'"
+        kind="warning"
+        :message="t('errorNativeInputPaused')"
+      />
       <ErrorDetails v-if="diagnostics.errorCode" :code="diagnostics.errorCode" context="session" />
     </template>
   </AppDialog>

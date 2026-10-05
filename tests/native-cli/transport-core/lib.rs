@@ -120,10 +120,11 @@ mod tests {
     use super::types::{SafeError, WireU64};
     use parking_lot::Mutex;
     use serde_json::{json, Value};
+    use std::collections::HashSet;
     use std::io::{self, Read};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Barrier};
-    use std::time::Duration;
+    use std::sync::{mpsc, Arc, Barrier};
+    use std::time::{Duration, Instant};
 
     fn owner() -> CallerIdentity {
         CallerIdentity {
@@ -238,6 +239,156 @@ mod tests {
         hub.ack(&owner(), &ack("a", &epoch, "4")).unwrap();
         assert_eq!(worker.join().unwrap().unwrap(), 4);
         assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    // 达到 12 字节高水位后，先 ACK 至余量 8 仍禁止读取，余量 4 时才恢复。
+    #[test]
+    fn D14_Core_HighWaterLatchesUntilLow_010() {
+        let hub = TerminalTransports::with_limits(TransportLimits::new(4, 12, 4, 16).unwrap());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let stream = hub
+            .attach(owner(), run("latched"), route(events.clone()))
+            .unwrap();
+        for value in 1..=3 {
+            stream.send(&[value; 4]).unwrap();
+        }
+        let epoch = stream.stream_epoch().to_string();
+        assert_eq!(hub.budgeted_bytes(), 12);
+        assert_eq!(hub.ack(&owner(), &ack("latched", &epoch, "4")).unwrap(), 4);
+
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = {
+            let stream = stream.clone();
+            let reads = reads.clone();
+            std::thread::spawn(move || {
+                done_tx
+                    .send(stream.pump_once(&mut Probe { reads }))
+                    .unwrap();
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !stream.waiting_for_local_capacity() && !worker.is_finished() {
+            assert!(
+                Instant::now() < deadline,
+                "pump must reach a credit wait or complete"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            0,
+            "a small ACK after reaching high water must not allow another read"
+        );
+        assert_eq!(
+            events.lock().len(),
+            3,
+            "the fourth frame must wait for low water"
+        );
+        assert_eq!(
+            hub.budgeted_bytes(),
+            8,
+            "blocked reads must not reserve app credit"
+        );
+
+        assert_eq!(hub.ack(&owner(), &ack("latched", &epoch, "8")).unwrap(), 4);
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap(),
+            4,
+            "reaching low water must resume the pending read"
+        );
+        worker.join().unwrap();
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert_eq!(events.lock()[3]["offset"], "12");
+        assert_eq!(events.lock()[3]["bytes"], json!([7, 7, 7, 7]));
+        assert_eq!(hub.ack(&owner(), &ack("latched", &epoch, "16")).unwrap(), 8);
+        assert_eq!(hub.budgeted_bytes(), 0);
+    }
+
+    // 32 个并发 run 争用 16 字节预算，28 个排队后逐帧 ACK，最终全部完成且预算归零。
+    #[test]
+    fn D27_Core_32RunsShare16ByteBudget_011() {
+        const RUNS: usize = 32;
+        let hub = TerminalTransports::with_limits(TransportLimits::new(4, 8, 4, 16).unwrap());
+        let (frames_tx, frames_rx) = mpsc::channel();
+        let barrier = Arc::new(Barrier::new(RUNS + 1));
+        let mut streams = Vec::new();
+        let mut epochs = Vec::new();
+        for index in 0..RUNS {
+            let frames_tx = frames_tx.clone();
+            let output = Arc::new(OutputRoute::new(move |frame: OutputFrame| {
+                frames_tx.send((index, frame)).unwrap();
+                Ok(())
+            }));
+            let stream = hub
+                .attach(owner(), run(&format!("stress-{index}")), output)
+                .unwrap();
+            epochs.push(stream.stream_epoch().to_string());
+            streams.push(stream);
+        }
+        drop(frames_tx);
+        let workers: Vec<_> = streams
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, stream)| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    stream.send(&[index as u8; 4])
+                })
+            })
+            .collect();
+        barrier.wait();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while hub.waiting_streams() != RUNS - 4 {
+            assert!(
+                Instant::now() < deadline,
+                "28 runs must queue behind the four reserved frames"
+            );
+            assert!(
+                hub.budgeted_bytes() <= 16,
+                "global payload must never exceed 16 bytes"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            hub.budgeted_bytes(),
+            16,
+            "four frames must fill the shared budget"
+        );
+
+        let mut seen = HashSet::new();
+        for _ in 0..RUNS {
+            let (index, frame) = frames_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("each run must receive credit after preceding frames are ACKed");
+            assert!(seen.insert(index), "each run must emit exactly one frame");
+            assert_eq!(frame.run_id, format!("stress-{index}"));
+            assert_eq!(frame.generation, 1);
+            assert_eq!(frame.stream_epoch.to_string(), epochs[index]);
+            assert_eq!(frame.offset.to_string(), "0");
+            assert_eq!(frame.bytes, vec![index as u8; 4]);
+            assert!(
+                hub.budgeted_bytes() <= 16,
+                "global payload must never exceed 16 bytes"
+            );
+            assert_eq!(
+                hub.ack(&owner(), &ack(&frame.run_id, &epochs[index], "4"))
+                    .unwrap(),
+                4
+            );
+        }
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert_eq!(seen.len(), RUNS);
+        assert_eq!(hub.waiting_streams(), 0);
+        assert_eq!(hub.budgeted_bytes(), 0);
     }
 
     #[test]

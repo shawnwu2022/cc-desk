@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { resolve } from 'node:path'
 import { bindXtermInputProvenance } from '@/terminal/xtermProvenance'
 
 type Listener<T> = (value: T) => void
@@ -125,4 +128,36 @@ describe('D19 xterm provenance bridge', () => {
     binding.dispose()
   })
 
+})
+
+// 内部 provenance tap 的锁文件与实际运行依赖都必须保持已验证的 xterm 5.5.0。
+it('Native_PinXtermProvenance_014', () => {
+  const lock = JSON.parse(readFileSync(resolve('package-lock.json'), 'utf8'))
+  const require = createRequire(resolve('package.json'))
+  const installed = JSON.parse(readFileSync(require.resolve('@xterm/xterm/package.json'), 'utf8'))
+  expect(lock.packages['node_modules/@xterm/xterm'].version).toBe('5.5.0')
+  expect(installed.version).toBe('5.5.0')
+})
+
+// 已安装真实 xterm 的 input、解析器 DSR 和 8-bit 输出仍通过本项目 provenance tap 正确分流。
+it('Native_RealXtermProvenance_015', async () => {
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+  const { Terminal } = await import('@xterm/xterm')
+  canvas.mockRestore()
+  const term = new Terminal({ allowProposedApi: true })
+  const users: string[] = []; const protocol: string[] = []; const binary: number[][] = []
+  const binding = bindXtermInputProvenance(term as any, {
+    user: value => { users.push(value) },
+    protocol: value => { protocol.push(value) },
+    binary: value => { binary.push([...value].map(char => char.charCodeAt(0))) },
+  })
+  try {
+    term.input('typed', true)
+    await new Promise<void>(resolve => term.write('\x1b[6n', resolve))
+    ;(term as any)._core.coreService.triggerBinaryEvent(String.fromCharCode(0, 128, 255))
+    await binding.drain()
+    expect(users).toEqual(['typed'])
+    expect(protocol).toEqual(['\x1b[1;1R'])
+    expect(binary).toEqual([[0, 128, 255]])
+  } finally { binding.dispose(); term.dispose() }
 })

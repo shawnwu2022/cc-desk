@@ -27,9 +27,15 @@ export interface NativeTerminalHostProtocol {
   snapshot(): InputQueueSnapshot
 }
 
-function parseConfirmedBytes(value: string): bigint {
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new Error('INVALID_CONFIRMED_BYTES')
-  return BigInt(value)
+const MAX_U64 = BigInt('18446744073709551615')
+
+function parseConfirmedBytes(value: unknown): bigint {
+  if (typeof value !== 'string' || value.length > 20 || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new Error('INVALID_CONFIRMED_BYTES')
+  }
+  const parsed = BigInt(value)
+  if (parsed > MAX_U64) throw new Error('INVALID_CONFIRMED_BYTES')
+  return parsed
 }
 
 function requireExactHostWrite(
@@ -37,7 +43,7 @@ function requireExactHostWrite(
   expectedBytes: number,
 ): void {
   if (
-    receipt.state !== 'host-written'
+    !receipt || receipt.state !== 'host-written'
     || parseConfirmedBytes(receipt.confirmedBytes) !== BigInt(expectedBytes)
   ) {
     throw new Error('NATIVE_INPUT_WRITE_INCOMPLETE')
@@ -78,21 +84,26 @@ export function createTerminalHostProtocol(
     generation: options.generation,
     currentTarget: options.currentTarget,
     send: async intent => {
+      // Freeze the actual dispatch identity before handing the frame to the
+      // asynchronous writer. A receipt cannot acknowledge a different intent.
+      const { runId, generation, inputSeq, modeEpoch } = intent
+      const expectedBytes = intent.bytes.byteLength
       const receipt = await options.writeUser({
-        runId: intent.runId,
-        generation: intent.generation,
-        inputSeq: intent.inputSeq,
-        modeEpoch: intent.modeEpoch,
-        bytes: intent.bytes,
+        runId, generation, inputSeq, modeEpoch, bytes: intent.bytes,
       })
-      requireExactHostWrite(receipt, intent.bytes.byteLength)
+      if (!receipt || receipt.runId !== runId || receipt.generation !== generation
+        || receipt.inputSeq !== inputSeq || receipt.modeEpoch !== modeEpoch) {
+        throw new Error('NATIVE_INPUT_RECEIPT_MISMATCH')
+      }
+      requireExactHostWrite(receipt, expectedBytes)
     },
     sendProtocol: async input => {
+      const expectedBytes = input.bytes.byteLength
       const receipt = await options.writeProtocol(
         { runId: input.runId, generation: input.generation },
         input.bytes,
       )
-      requireExactHostWrite(receipt, input.bytes.byteLength)
+      requireExactHostWrite(receipt, expectedBytes)
     },
   })
 

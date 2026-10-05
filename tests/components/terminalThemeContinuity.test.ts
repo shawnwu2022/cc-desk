@@ -11,8 +11,9 @@ import { getTerminalTheme } from '@/config/terminalThemes'
 const io = vi.hoisted(() => ({ webglAttempt: vi.fn(), terms: [] as any[], fits: [] as any[], webgl: [] as any[], failWebgl: false,
   start: vi.fn(), input: vi.fn(), resize: vi.fn(), stop: vi.fn(), spawn: vi.fn(), output: null as any, config: vi.fn() }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
-  options: any; element!: HTMLElement; textarea!: HTMLTextAreaElement; cols = 80; rows = 24; output = ''; selection = 'selected text'; modes = { bracketedPasteMode: false }; unicode = { activeVersion: '6' }; buffer = { active: { length: 1 } }
+  options: any; element!: HTMLElement; textarea!: HTMLTextAreaElement; cols = 80; rows = 24; output = ''; selection = 'selected text'; modes = { applicationCursorKeysMode: false, applicationKeypadMode: false, bracketedPasteMode: false, insertMode: false, mouseTrackingMode: 'none', originMode: false, reverseWraparoundMode: false, sendFocusMode: false, wraparoundMode: true }; unicode = { activeVersion: '6' }; buffer = { active: { length: 1 } }
   dispose = vi.fn(); focus = vi.fn(); refresh = vi.fn(); data: any
+  onWriteParsed() { return { dispose() {} } }
   constructor(options: any) { this.options = options; io.terms.push(this) }
   open(el: HTMLElement) { this.element = el; this.textarea = document.createElement('textarea'); el.append(this.textarea) }
   loadAddon(addon: any) { addon.activate?.(this) } onData(fn: any) { this.data ??= fn; return { dispose() {} } } onResize() {} attachCustomKeyEventHandler() {} getSelection() { return this.selection } write(text: string) { this.output += text }

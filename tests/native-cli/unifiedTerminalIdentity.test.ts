@@ -13,27 +13,30 @@ import { useHookStore, type ObservationHandler } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 
-const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], bindings: [] as any[], channels: [] as any[], observers: [] as any[], scope: vi.fn(), read: vi.fn(), start: vi.fn(), recover: vi.fn(), cancel: vi.fn(), stop: vi.fn(), copy: vi.fn(), resize: vi.fn() }))
+const io = vi.hoisted(() => ({ failBinding: false, terms: [] as any[], fits: [] as any[], bindings: [] as any[], channels: [] as any[], observers: [] as any[], scope: vi.fn(), read: vi.fn(), start: vi.fn(), recover: vi.fn(), cancel: vi.fn(), stop: vi.fn(), copy: vi.fn(), resize: vi.fn() }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: any; element!: HTMLElement; textarea!: HTMLTextAreaElement
-  cols = 80; rows = 24; modes = { bracketedPasteMode: false }; output = ''; focus = vi.fn(); dispose = vi.fn(); key: any; selection = ''
+  cols = 80; rows = 24; modes = { applicationCursorKeysMode: false, applicationKeypadMode: false, bracketedPasteMode: false, insertMode: false, mouseTrackingMode: 'none', originMode: false, reverseWraparoundMode: false, sendFocusMode: false, wraparoundMode: true }; output = ''; focus = vi.fn(); dispose = vi.fn(); key: any; selection = ''
   constructor(options: any) { this.options = options; io.terms.push(this) }
   loadAddon() {} open(el: HTMLElement) { this.element = el; this.textarea = document.createElement('textarea'); el.append(this.textarea) }
+  parsed = new Set<() => void>(); parsedRegistrations = 0
+  onWriteParsed(callback: () => void) { this.parsedRegistrations++; this.parsed.add(callback); return { dispose: () => this.parsed.delete(callback) } }
   onData() { return { dispose() {} } } attachCustomKeyEventHandler(fn: any) { this.key = fn } getSelection() { return this.selection }
-  write(data: string) { this.output += data }
+  write(data: string) { this.output += data; this.parsed.forEach(callback => callback()) }
 } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit = vi.fn(); constructor() { io.fits.push(this) } } }))
 vi.mock('@tauri-apps/api/core', () => ({ Channel: class { onmessage: any; constructor() { io.channels.push(this) } }, invoke: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), cliResize: io.resize, cliStop: io.stop, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }) }))
 vi.mock('@/terminal/nativeLaunchEntry', async original => ({ ...await original<object>(), createNativeLaunchEntry: () => ({ start: io.start, recover: io.recover, cancel: io.cancel, latest: vi.fn() }) }))
 vi.mock('@/terminal/deskNativeTerminal', () => ({ createDeskNativeTerminalBinding: (options: any) => {
+  if (io.failBinding) throw new Error('XTERM_USER_INPUT_PROVENANCE_UNAVAILABLE')
   const binding = { options, acceptOutput: (frame: any) => { options.term.write(frame.data); return true }, dispose: vi.fn(), sendUserText: vi.fn().mockResolvedValue(undefined), reserveUserPaste: vi.fn(() => ({ inputSeq: '1', settled: Promise.resolve() })) }
   io.bindings.push(binding); return binding
 } }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.copy }))
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
-  setActivePinia(createPinia()); vi.clearAllMocks()
+  setActivePinia(createPinia()); vi.clearAllMocks(); io.failBinding = false
   io.terms.length = 0; io.fits.length = 0; io.bindings.length = 0; io.channels.length = 0; io.observers.length = 0
   vi.stubGlobal('ResizeObserver', class { constructor(fn: any) { io.observers.push(fn) } observe() {} disconnect() {} })
   vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { fn(0); return 1 })
@@ -286,4 +289,41 @@ describe('Unified native terminal identity', () => {
     subscribe.mockRestore()
   })
 
+})
+
+// 每个 run 仅持有一个模式监听，重启/卸载释放；隐藏、主题与普通输出保持同一 tracker 和滚动内容。
+it('Native_ModeTrackerLifetime_020', async () => {
+  const { tab, wrapper } = open(); await flushPromises()
+  const term = io.terms[0]
+  const firstTarget = io.bindings[0].options.currentTarget
+  expect(term.parsed.size).toBe(1)
+  expect(firstTarget().modeEpoch).toBe('1')
+  term.modes.sendFocusMode = true; term.write('retained scrollback')
+  expect(firstTarget().modeEpoch).toBe('2')
+  await wrapper.setProps({ active: false })
+  useAppStore().terminalTheme = 'cc-box-dark'; await flushPromises()
+  term.write(' ordinary output')
+  expect(firstTarget().modeEpoch).toBe('2')
+  expect(term.parsed.size).toBe(1)
+  const tabs = useNativeTabsStore(); tabs.tab(tab.tabId)!.status = 'exited'
+  tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' }); await flushPromises()
+  expect(io.terms).toHaveLength(1)
+  expect(term.parsed.size).toBe(1)
+  expect(term.output).toBe('retained scrollback ordinary output')
+  expect(() => firstTarget()).toThrow('NATIVE_RUN_NOT_WRITABLE')
+  const secondTarget = io.bindings[1].options.currentTarget
+  expect(secondTarget()).toMatchObject({ generation: 2, modeEpoch: '1' })
+  wrapper.unmount()
+  expect(term.parsed.size).toBe(0)
+  expect(() => secondTarget()).toThrow('NATIVE_RUN_NOT_WRITABLE')
+})
+
+// binding 工厂失败时释放已经创建的模式监听，且不能提交启动。
+it('Native_FailedBindingDisposesMode_021', async () => {
+  io.failBinding = true
+  const { tab } = open(); await flushPromises()
+  expect(io.terms[0].parsedRegistrations).toBe(1)
+  expect(io.terms[0].parsed.size).toBe(0)
+  expect(io.start).not.toHaveBeenCalled()
+  expect(useNativeTabsStore().tab(tab.tabId)?.status).toBe('failed')
 })

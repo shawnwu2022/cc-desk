@@ -92,9 +92,11 @@ It should consume an already verified immutable candidate set and require explic
 
 Until that workflow exists, publishing stays disabled.
 
-## Optional mirrors
+## Disabled legacy publisher
 
-Legacy scripts may still contain optional mirror helpers for maintainers. They are not the default release channel and must not be treated as an alternative way to bypass the promotion gate.
+`scripts/release.js`, `npm run release` and `npm run release:oss` deliberately exit with failure. The legacy publisher and updater/OSS generator have been retired; their historical test commands now enforce the current fail-closed policy. No flag enables a fallback publisher, reads credentials, clears proxies or changes Git state.
+
+The current workflow still builds signed candidates only. Public promotion is not enabled. A future verified promotion path must satisfy the source, candidate, acceptance, approval and rollback requirements above; do not use a mirror or legacy script to bypass them.
 
 ## Rollback
 

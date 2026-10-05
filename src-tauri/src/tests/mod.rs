@@ -7,6 +7,8 @@ mod commands;
 #[cfg(test)]
 mod env;
 #[cfg(test)]
+mod frontend_logging;
+#[cfg(test)]
 mod hook_events;
 #[cfg(test)]
 mod native_cli_availability;

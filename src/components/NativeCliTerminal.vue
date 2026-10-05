@@ -18,6 +18,7 @@ import { createNativeLaunchEntry, NativeLaunchNotSubmittedError } from '@/termin
 import type { LaunchStatus } from '@/api/cliLaunchAttempt'
 import { createDeskNativeTerminalBinding } from '@/terminal/deskNativeTerminal'
 import type { NativeTerminalBinding } from '@/terminal/nativeTerminalBinding'
+import { createXtermModeEpoch, type XtermModeEpoch } from '@/terminal/modeEpoch'
 import { buildPastePayload, imagePasteBytes } from '@/utils/pasteText'
 import { classifyClipboardSnapshot, createImeInputPolicy } from '@/terminal/inputPolicy'
 import { platform } from '@/utils/platform'
@@ -55,8 +56,7 @@ let resizeObserver: ResizeObserver | null = null
 let pasteListener: ((event: ClipboardEvent) => void) | null = null
 let imeCleanup: (() => void) | null = null
 let runToken: object = {}
-let observedBracketed = false
-let modeEpoch = BigInt(1)
+let modeTracker: XtermModeEpoch | null = null
 let launched = false
 let inputEnabled = false
 let stopObservation: (() => void) | null = null
@@ -97,16 +97,6 @@ function safeLaunchCode(error: unknown): string {
   return publicNativeErrorCode(error, 'NATIVE_LAUNCH_FAILED')
 }
 
-function refreshModeEpoch(): string {
-  if (!term) return modeEpoch.toString()
-  const current = term.modes.bracketedPasteMode
-  if (current !== observedBracketed) {
-    observedBracketed = current
-    modeEpoch += BigInt(1)
-  }
-  return modeEpoch.toString()
-}
-
 function stopStatusSync() {
   if (statusTimer) clearInterval(statusTimer)
   statusTimer = null
@@ -122,6 +112,8 @@ function disposeRunBinding() {
   stopObservation?.(); stopObservation = null
   binding?.dispose()
   binding = null
+  modeTracker?.dispose()
+  modeTracker = null
 }
 
 function markInputFailure(attempt: NativeAttemptIdentity) {
@@ -263,8 +255,6 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   disposeRunBinding()
   runToken = token
   const publication = receiptPublication
-  observedBracketed = term.modes.bracketedPasteMode
-  modeEpoch = BigInt(1)
 
   const runId = tab.runId
   const generation = tab.generation
@@ -278,6 +268,8 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   } catch { /* Optional observation must never block the authoritative terminal. */ }
 
   try {
+    const tracker = createXtermModeEpoch(term)
+    modeTracker = tracker
     binding = createDeskNativeTerminalBinding({
       term: term as any,
       runId,
@@ -287,7 +279,7 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
         return {
           runId,
           generation,
-          modeEpoch: refreshModeEpoch(),
+          modeEpoch: tracker.current(),
         }
       },
       isUserInputAllowed: () => props.active && inputEnabled && attemptIsCurrent(attempt),
@@ -302,6 +294,8 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
       },
     })
   } catch (error) {
+    modeTracker?.dispose()
+    modeTracker = null
     if (runToken === token && attemptIsCurrent(attempt)) tabs.markError(props.tabId, safeLaunchCode(error))
     return
   }

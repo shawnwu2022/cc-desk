@@ -96,6 +96,7 @@ export default {
   configurationDeleteConfirm: "Delete configuration",
   errorSessionChanged: "This session has changed since the action was requested. Review its current state and try again.",
   errorActionCancelled: "The action was canceled. No further changes will be made.",
+  errorNativeInputPaused: "Input is paused. Pending input will not be resent automatically. Check the session before deciding whether to restart it.",
   errorStopUnconfirmed: "The session has not been confirmed stopped. Check its status before trying again.",
   errorConfigurationInUse: "A session is still preparing or its launch has not been confirmed. Resolve or cancel that attempt before deleting this configuration.",
   errorSessionNotResumable: "This session does not yet have a verified history record to archive. Its terminal has been kept.",
