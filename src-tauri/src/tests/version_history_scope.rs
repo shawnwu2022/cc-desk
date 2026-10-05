@@ -253,7 +253,7 @@ impl RegistryFixture {
             ("DisplayName", "CC Desk".to_owned()),
             ("Publisher", "shawnwu2022".into()),
             ("MainBinaryName", "cc-desk.exe".into()),
-            ("DisplayVersion", "0.18.0".into()),
+            ("DisplayVersion", env!("CARGO_PKG_VERSION").into()),
             ("InstallLocation", format!("\"{}\"", directory.display())),
             (
                 "DisplayIcon",
@@ -781,4 +781,50 @@ fn HistoryScope_RegistrationAliasRefusal_022() {
     }
     assert!(observed.recheck().is_err());
     assert!(InstallRegistryObservation::fixture_hives(registry.user, registry.machine).is_err());
+}
+
+// 检查有效 x64 image 只接受当前编译版本的注册，旧版本注册仍明确拒绝。
+#[test]
+fn HistoryScope_RegistryVersion_023() {
+    use crate::version_history::windows::{
+        registry::InstallRegistryObservation, scope::fixture_registration_location,
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    let image = temporary.path().join("cc-desk.exe");
+    let mut pe = vec![0u8; 512];
+    pe[..2].copy_from_slice(b"MZ");
+    pe[0x3c..0x40].copy_from_slice(&128u32.to_le_bytes());
+    pe[128..132].copy_from_slice(b"PE\0\0");
+    pe[132..134].copy_from_slice(&0x8664u16.to_le_bytes());
+    pe[152..154].copy_from_slice(&0x20bu16.to_le_bytes());
+    std::fs::write(&image, pe).unwrap();
+    let registry = RegistryFixture::new();
+    registry.install(temporary.path(), false);
+    {
+        let observed =
+            InstallRegistryObservation::fixture_hives(registry.user, registry.machine).unwrap();
+        assert_eq!(
+            fixture_registration_location(&observed, &image).err(),
+            None,
+            "current-version registration with a valid x64 image must be accepted"
+        );
+    }
+    let wrong_version = if env!("CARGO_PKG_VERSION") == "0.18.0" {
+        "0.18.1"
+    } else {
+        "0.18.0"
+    };
+    registry.string(
+        false,
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CC Desk",
+        "DisplayVersion",
+        wrong_version,
+    );
+    let observed =
+        InstallRegistryObservation::fixture_hives(registry.user, registry.machine).unwrap();
+    assert_eq!(
+        fixture_registration_location(&observed, &image).err(),
+        Some(ScopeBlock::UnsupportedRegistration),
+        "a different DisplayVersion must be rejected despite an otherwise valid installation"
+    );
 }

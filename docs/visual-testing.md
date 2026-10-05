@@ -254,3 +254,36 @@ not reach the button listener. Native-event fixture regressions reproduce that
 failure; the browser setup now sets the same initial system date while allowing
 time to progress. The Escape/tooltip/focus assertions, production UI and zero-pixel
 comparison remain unchanged. This repair still requires a fresh full browser run.
+
+## 0.18.1 version-label baseline review
+
+Run [37351948916](https://github.com/shawnwu2022/cc-desk/actions/runs/37351948916)
+tested source `6aa9b2ca99ddcd479587063da75c4da171cf922b`, merge
+`d879db0105691e2bdc4779142555c949f209bd38`: 224 of 226 cases passed. All 213
+non-snapshot cases and eleven unchanged screenshot comparisons passed; only the
+two Settings screenshots differed. The original full comparison remains RED.
+
+Two independent reviewers opened all six expected/diff/actual PNGs at original
+dimensions. Both changes are confined to the last digit of the Settings footer,
+`CC Desk v0.18.0` → `CC Desk v0.18.1`, supplied by the production
+`SettingsView.vue` compile-time version from `package.json` through Vite. Exact
+RGBA comparison found 52 changed pixels in each image, within inclusive bounds
+`x=131–137, y=876–883` for the 1440×900 terminal screenshot and
+`x=131–137, y=696–703` for the 1280×720 launch-configurations screenshot.
+Playwright's comparison highlighted 18 and 14 pixels respectively. Every pixel
+outside those bounds is identical; no clock, terminal, layout or other UI
+difference was found.
+
+Only these two reviewed actual PNGs were copied byte-for-byte from artifact
+`11363191338` (ZIP SHA256
+`d8d767d10b9aedae6aca609c35616cffceed5e63dfb526450447383488f6944f`).
+The approval manifest records the exact new hashes and retains earlier approval
+provenance. The other eleven baseline images are byte-identical, the inventory
+remains thirteen, and no masks, tolerance, production CSS or clock changes were
+made. The original artifact remains untouched. Other captured evidence remains
+unapproved.
+
+A fresh full no-update run of all 226 current cases is required after committing
+this reviewed baseline update. Accepting these version-label pixels does not
+make the original failed run pass, certify Windows WebView2 or real CLI behavior,
+or authorize release/updater promotion.

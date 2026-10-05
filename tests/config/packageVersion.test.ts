@@ -38,4 +38,21 @@ describe('prepared package version', () => {
     expect(headings.find(match => match[1] === '0.18.0')?.[2])
       .toBe('2026-10-01 (unreleased test build)')
   })
+
+  // 普通 Windows scope fixture 跟随编译版本，避免版本准备先于路径检查拒绝测试数据。
+  it('PackageVersion_ScopeFixture_003', () => {
+    const fixture = readFileSync('src-tauri/src/tests/version_history_scope.rs', 'utf8')
+    expect(fixture).toMatch(/\("DisplayVersion",\s*env!\("CARGO_PKG_VERSION"\)\.into\(\)\)/)
+    expect(fixture).not.toMatch(/\("DisplayVersion",\s*"\d+\.\d+\.\d+"\.into\(\)\)/)
+  })
+
+  // fixture 更新不能放宽生产注册版本匹配，也不能改写已有 0.18.0 roundtrip 绑定。
+  it('PackageVersion_ScopeAdmission_004', () => {
+    const scope = readFileSync('src-tauri/src/version_history/windows/scope.rs', 'utf8')
+    const registration = scope.split('fn registered_directory(')[1]?.split('fn verify_x64_header(')[0]
+    expect(registration).toMatch(/\|\| text_field\(record, "DisplayVersion"\)\?\.as_deref\(\) != Some\(env!\("CARGO_PKG_VERSION"\)\)/)
+    expect(registration).toMatch(/"DisplayVersion"[\s\S]*?\{\s*return Err\(ScopeBlock::UnsupportedRegistration\);\s*\}/)
+    const acceptance = readFileSync('src-tauri/src/version_history/acceptance.rs', 'utf8')
+    expect(acceptance).toContain('env!("CARGO_PKG_VERSION") != "0.18.0"')
+  })
 })
