@@ -4,6 +4,7 @@ export type SessionProcessState = 'starting' | 'running' | 'unknown' | 'stopped'
 export type SessionAttentionState = 'none' | 'needs-user'
 export type SessionVisualState = 'starting' | 'running' | 'needs-user' | 'confirming' | 'ended' | 'failed'
 export type SessionPrimaryAction =
+  | 'close'
   | 'cancel-start'
   | 'stop'
   | 'confirm-status'

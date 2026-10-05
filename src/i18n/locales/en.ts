@@ -83,8 +83,8 @@ export default {
 
   feedbackProjectRenamed: 'Project renamed',
   confirmCloseTitle: "Close this running session?",
-  confirmCloseDescription: "The current process will be stopped before this session is closed. Its history will remain available.",
-  confirmCloseAction: "Stop and close",
+  confirmCloseDescription: "Closing terminates the current process and clears its terminal display. Copy any output you need first. Saved CLI history is unaffected, but unsaved content may not be recoverable.",
+  confirmCloseAction: "Close",
   confirmArchiveTitle: "Stop and archive this session?",
   confirmArchiveDescription: "The current process will be stopped and its record moved to the archive. CLI history files will not be deleted.",
   confirmArchiveAction: "Stop and archive",

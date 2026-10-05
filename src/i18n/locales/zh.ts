@@ -83,8 +83,8 @@ export default {
 
   feedbackProjectRenamed: '项目已重命名',
   confirmCloseTitle: "关闭正在运行的会话？",
-  confirmCloseDescription: "将先停止当前进程，再关闭会话。历史记录仍会保留。",
-  confirmCloseAction: "停止并关闭",
+  confirmCloseDescription: "关闭会终止当前进程并清除终端显示，请先复制需要的输出。CLI 已保存的历史不受影响，但未保存的内容可能无法恢复。",
+  confirmCloseAction: "关闭",
   confirmArchiveTitle: "停止并归档此会话？",
   confirmArchiveDescription: "将停止当前进程，并把记录移到归档。不会删除 CLI 历史文件。",
   confirmArchiveAction: "停止并归档",

@@ -54,6 +54,27 @@ function styleRules() {
 }
 
 describe('Unified SessionItem', () => {
+  // 两种运行时的所有已打开状态只通过行内关闭按钮退出，菜单不重复关闭或停止。
+  it.each(['native-cli', 'legacy-claude'] as const)('Row_SingleClose_035: %s', async runtime => {
+    for (const processState of ['starting', 'running', 'unknown', 'stopped', 'failed'] as const) {
+      const wrapper = row({ ...base, runtime, processState })
+      const button = wrapper.get('.session-primary-action button')
+      expect(button.attributes('aria-label')).toBe('Close')
+      expect(button.attributes('disabled')).toBeUndefined()
+      ;(button.element as HTMLButtonElement).focus()
+      expect(document.activeElement).toBe(button.element)
+      await button.trigger('keydown', { key: 'Enter' })
+      await button.trigger('click')
+      expect(wrapper.emitted('primary-action')).toEqual([[base.id, 'close']])
+      expect(wrapper.emitted('activate')).toBeUndefined()
+      await wrapper.trigger('keydown', { key: 'F10', shiftKey: true })
+      expect(menuIds()).not.toContain('close')
+      expect(menuIds()).not.toContain('stop')
+      if (processState === 'running') expect(menuIds()).not.toContain('archive')
+      await wrapper.setProps({ surfaceActive: false })
+    }
+  })
+
   // 生产样式固定五列与尾部覆盖层；不把 jsdom 的 CSS 检查当作真实布局验收。
   it('Row_FixedGeometry_001', () => {
     const rules = styleRules()
@@ -105,16 +126,18 @@ describe('Unified SessionItem', () => {
     expect(wrapper.get('.session-time').text()).toBe('now')
   })
 
-  // 每个运行状态最多保留一个高频动作；需要回复及不可恢复会话保留时间。
+  // 已打开会话所有状态共用关闭入口，归档条目仍提供恢复。
   it.each([
-    { name: 'Row_StartingAction_003', session: { ...base, processState: 'starting' }, action: 'cancel-start' },
-    { name: 'Row_RunningAction_004', session: base, action: 'stop' },
-    { name: 'Row_AttentionAction_005', session: { ...base, attentionState: 'needs-user' }, action: null },
-    { name: 'Row_UnknownAction_006', session: { ...base, processState: 'unknown' }, action: 'confirm-status' },
-    { name: 'Row_StoppedAction_007', session: { ...base, processState: 'stopped' }, action: 'resume' },
-    { name: 'Row_FailedAction_008', session: { ...base, processState: 'failed' }, action: 'retry' },
+    { name: 'Row_StartingAction_003', session: { ...base, processState: 'starting' }, action: 'close' },
+    { name: 'Row_RunningAction_004', session: base, action: 'close' },
+    { name: 'Row_AttentionAction_005', session: { ...base, attentionState: 'needs-user' }, action: 'close' },
+    { name: 'Row_UnknownAction_006', session: { ...base, processState: 'unknown' }, action: 'close' },
+    { name: 'Row_StoppedAction_007', session: { ...base, processState: 'stopped' }, action: 'close' },
+    { name: 'Row_FailedAction_008', session: { ...base, processState: 'failed' }, action: 'close' },
+    { name: 'Row_PreparingCancel_036', session: { ...base, opened: false, preparationState: 'pending', processState: 'starting' }, action: 'cancel-start' },
+    { name: 'Row_PreparingRetry_037', session: { ...base, opened: false, preparationState: 'failed', processState: 'failed' }, action: 'retry' },
     { name: 'Row_ArchivedAction_009', session: { ...base, processState: 'stopped', archived: true }, action: 'restore-archive' },
-    { name: 'Row_NotResumable_010', session: { ...base, processState: 'stopped', resumable: false }, action: null },
+    { name: 'Row_NotResumable_010', session: { ...base, processState: 'stopped', resumable: false }, action: 'close' },
   ] as const)('$name', async ({ session, action }) => {
     const wrapper = row(session)
     expect(wrapper.findAll('.session-primary-action button')).toHaveLength(action ? 1 : 0)
@@ -365,12 +388,12 @@ describe('Unified session menu model', () => {
   const common: SessionMenuAction[] = ['rename', 'copy-session-id', 'open-project-directory', 'view-diagnostics']
   // 每个状态提供完整能力并把危险动作排在最后；未知态禁止再次启动。
   it.each([
-    { name: 'Menu_Running_018', session: base, actions: [...common, 'stop', 'restart', 'close', 'archive'] },
-    { name: 'Menu_Stopped_019', session: { ...base, processState: 'stopped' }, actions: [...common, 'resume', 'restart', 'close', 'archive'] },
-    { name: 'Menu_Failed_020', session: { ...base, processState: 'failed' }, actions: [...common, 'retry', 'restart', 'close', 'archive'] },
+    { name: 'Menu_Running_018', session: base, actions: [...common, 'restart'] },
+    { name: 'Menu_Stopped_019', session: { ...base, processState: 'stopped' }, actions: [...common, 'resume', 'restart', 'archive'] },
+    { name: 'Menu_Failed_020', session: { ...base, processState: 'failed' }, actions: [...common, 'retry', 'restart', 'archive'] },
     { name: 'Menu_Archived_021', session: { ...base, processState: 'stopped', archived: true }, actions: [...common, 'restore-archive'] },
-    { name: 'Menu_Unknown_022', session: { ...base, processState: 'unknown' }, actions: [...common, 'confirm-status', 'close'] },
-    { name: 'Menu_Starting_023', session: { ...base, processState: 'starting' }, actions: [...common, 'cancel-start', 'close'] },
+    { name: 'Menu_Unknown_022', session: { ...base, processState: 'unknown' }, actions: [...common, 'confirm-status'] },
+    { name: 'Menu_Starting_023', session: { ...base, processState: 'starting' }, actions: [...common, 'cancel-start'] },
   ] as const)('$name', ({ session, actions }) => {
     const definitions = selectSessionMenuActions(session)
     expect(definitions.map((action) => action.id).sort()).toEqual([...actions].sort())
@@ -388,22 +411,22 @@ describe('Unified session menu model', () => {
       expect(ids).not.toContain('close')
       expect(ids).toContain('resume')
       expect(ids).toContain('archive')
-      expect(selectSessionMenuActions({ ...history, opened: true }).map(action => action.id)).toEqual(expect.arrayContaining(['restart', 'close']))
+      expect(selectSessionMenuActions({ ...history, opened: true }).map(action => action.id)).toEqual(expect.arrayContaining(['restart']))
     }
   })
 
-  // 运行态归档文字明确停止后归档，英中菜单文案均完整；组件只发出 typed 动作。
+  // 非运行历史的英中归档文案完整；组件只发出 typed 动作。
   it('Menu_LocalizedLabels_024', async () => {
     const wrapper = mount(SessionOverflowMenu, { attachTo: document.body,
-      props: { open: true, actions: selectSessionMenuActions(base), anchor: { x: 10, y: 10 } },
+      props: { open: true, actions: selectSessionMenuActions({ ...base, opened: false, processState: 'stopped' }), anchor: { x: 10, y: 10 } },
       global: { plugins: [i18n] },
     })
     mounted.push(wrapper)
     await nextTick()
-    expect(document.querySelector('[data-item-id="archive"]')!.textContent).toBe('Stop and archive')
+    expect(document.querySelector('[data-item-id="archive"]')!.textContent).toBe('Archive')
     i18n.global.locale.value = 'zh'
     await nextTick()
-    expect(document.querySelector('[data-item-id="archive"]')!.textContent).toBe('停止并归档')
+    expect(document.querySelector('[data-item-id="archive"]')!.textContent).toBe('归档')
     expect(document.querySelector('[role="menu"]')!.textContent).not.toMatch(/sessionAction|Profile|Native|Legacy/)
     document.querySelector<HTMLElement>('[data-item-id="open-project-directory"]')!.click()
     await nextTick()
@@ -419,13 +442,13 @@ describe('SessionList unified boundary', () => {
     await wrapper.get('.session-item').trigger('click')
     await wrapper.get('.session-primary-action button').trigger('click')
     expect(wrapper.emitted('activate')).toEqual([[base.id]])
-    expect(wrapper.emitted('primary-action')).toEqual([[base.id, 'stop']])
+    expect(wrapper.emitted('primary-action')).toEqual([[base.id, 'close']])
     expect(wrapper.get('.session-item').classes('active')).toBe(true)
   })
 
   // ProjectNode now provides unified identities only; no old events or legacy attention store are retained.
   it('List_UnifiedMenuAndRenameOnly_026', async () => {
-    const history = { ...base, id: 'history-2', title: 'History', processState: 'stopped' as const }
+    const history = { ...base, id: 'history-2', title: 'History', opened: false, processState: 'stopped' as const }
     const wrapper = mount(SessionList, { attachTo: document.body,
       props: { sessions: [base, history], selectedId: base.id }, global: { plugins: [i18n] },
     })

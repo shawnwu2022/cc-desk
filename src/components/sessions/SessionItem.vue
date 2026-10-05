@@ -192,7 +192,7 @@ function onMenuAction(action: SessionMenuAction) {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path v-if="primary === 'save-rename'" d="m5 12 4 4L19 6" />
             <rect v-else-if="primary === 'stop'" x="6" y="6" width="12" height="12" rx="1" />
-            <path v-else-if="primary === 'cancel-start'" d="m6 6 12 12M18 6 6 18" />
+            <path v-else-if="primary === 'cancel-start' || primary === 'close'" d="m6 6 12 12M18 6 6 18" />
             <path v-else-if="primary === 'confirm-status'" d="M9 9a3 3 0 1 1 5 2c-1.5 1-2 1.5-2 3m0 3h.01" />
             <path v-else-if="primary === 'resume'" d="m9 5 11 7-11 7Z" />
             <path v-else d="M20 7v5h-5m5 0a8 8 0 1 0-2 6" />

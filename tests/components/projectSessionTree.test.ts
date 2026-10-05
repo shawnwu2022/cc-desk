@@ -199,15 +199,14 @@ describe('Unified project session tree', () => {
     expect(wrapper.emitted('project-action')?.[1]).toEqual([{ action: 'remove-project', projectKey: '/work/game', projectPath: '/work/game' }])
   })
 
-  // Running archive must bypass raw lifecycle actions and ask the caller to confirm stop-and-archive.
+  // 运行会话不提供停止并归档入口，非运行历史仍可独立归档。
   it('Tree_RunningArchiveConfirmation_004', async () => {
     const store = useUnifiedSessionsStore()
     const stop = vi.spyOn(store, 'stopSession'); const archive = vi.spyOn(store, 'archiveSession')
     const wrapper = node()
     await wrapper.get('.session-item').trigger('contextmenu')
-    expect(document.querySelector('[data-item-id="archive"]')!.textContent).toBe('Stop and archive')
-    await selectMenu('archive')
-    expect(wrapper.emitted('confirmation-request')).toEqual([[{ kind: 'stop-and-archive', sessionId: 'claude-1', projectKey: '/work/game', projectPath: '/work/game' }]])
+    expect(document.querySelector('[data-item-id="archive"]')).toBeNull()
+    expect(wrapper.emitted('confirmation-request')).toBeUndefined()
     expect(wrapper.emitted('menu-action')).toBeUndefined()
     expect(stop).not.toHaveBeenCalled(); expect(archive).not.toHaveBeenCalled()
     await wrapper.setProps({ project: group([session({ processState: 'stopped' })]) })

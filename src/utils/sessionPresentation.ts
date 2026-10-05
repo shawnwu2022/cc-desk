@@ -62,12 +62,13 @@ export function deriveSessionVisualState(session: UnifiedSession): SessionVisual
 export function selectSessionPrimaryAction(session: UnifiedSession): SessionPrimaryAction | null {
   if (session.renameState === 'editing' || session.renameState === 'saving') return 'save-rename'
   if (session.archived) return 'restore-archive'
+  if (session.opened) return 'close'
 
   switch (session.processState) {
     case 'starting':
       return 'cancel-start'
     case 'running':
-      return session.attentionState === 'needs-user' ? null : 'stop'
+      return null
     case 'unknown':
       return 'confirm-status'
     case 'failed':
@@ -88,14 +89,14 @@ const isState = (...states: UnifiedSession['processState'][]) =>
 export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
   { id: 'rename', labelKey: 'sessionActionRename', visible: (session) => !session.preparationState },
   { id: 'cancel-start', labelKey: 'sessionActionCancelStart', danger: true, visible: isState('starting') },
-  { id: 'stop', labelKey: 'sessionActionStop', danger: true, visible: isState('running') },
+  { id: 'stop', labelKey: 'sessionActionStop', danger: true, visible: () => false },
   { id: 'confirm-status', labelKey: 'sessionActionConfirmStatus', visible: isState('unknown') },
   { id: 'resume', labelKey: 'sessionActionResume', visible: (session) => isState('stopped')(session) && session.resumable },
   { id: 'retry', labelKey: 'sessionActionRetry', visible: isState('failed') },
   { id: 'restart', labelKey: 'sessionActionRestart', danger: true, visible: (session) => isOpened(session) && isState('running', 'stopped', 'failed')(session) },
-  { id: 'close', labelKey: 'sessionActionClose', danger: true, visible: isOpened },
+  { id: 'close', labelKey: 'sessionActionClose', danger: true, visible: () => false },
   { id: 'discard-creation', labelKey: 'sessionActionDiscardCreation', danger: true, visible: (session) => !session.archived && !session.opened && session.preparationState === 'failed' && session.processState === 'failed' },
-  { id: 'archive', labelKey: 'sessionActionArchive', danger: true, visible: (session) => !session.preparationState && isState('running', 'stopped', 'failed')(session) },
+  { id: 'archive', labelKey: 'sessionActionArchive', danger: true, visible: (session) => !session.preparationState && isState('stopped', 'failed')(session) },
   { id: 'restore-archive', labelKey: 'sessionActionRestoreArchive', visible: (session) => session.archived },
   { id: 'copy-session-id', labelKey: 'sessionActionCopyId', visible: () => true },
   { id: 'open-project-directory', labelKey: 'sessionActionOpenProject', visible: () => true },

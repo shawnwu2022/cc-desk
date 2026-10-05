@@ -594,3 +594,13 @@ marks the actual metadata IPC boundary: after issuance, selection changes and
 stale second submissions cannot invalidate or undo that save. Source/attempt guards
 remain authoritative before and after writes. Deselecting removes the old editor
 without focusing its row; temporarily hiding the selected surface preserves drafts.
+
+## Single session Close entry
+
+Open Native and Legacy session rows use the right-side × as their single Close entry. It is a native button with a localized accessible name, keyboard focus and the existing hover/focus presentation. Every open process state keeps that entry; editing temporarily replaces it with Save. Unopened preparation/history and archived rows retain their own cancel/retry/resume/restore actions.
+
+All three menu entry paths share the same model and omit Close and Stop. Running-session archive is omitted; stopped/failed history archive remains independent. Rename, restart and status-recovery actions preserve their existing eligibility.
+
+The × emits primary-action/close into the existing owning-store checks. Running, starting and unknown attempts retain the existing confirmation; closing an already ended attempt uses the existing direct-close path. Confirmation warns that closing terminates the process and clears the terminal display, asks users to copy needed output, and makes no promise to recover unsaved content. Saved CLI history is unaffected. No terminal-output persistence is added.
+
+The isolated visual fixture keeps the historical archive confirmation baseline and adds close-confirmation as separate unapproved evidence. Component/fixture tests are not rendered-browser or native-platform acceptance.

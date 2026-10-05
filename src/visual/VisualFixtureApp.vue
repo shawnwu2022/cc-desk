@@ -65,7 +65,7 @@ else if (scenario === 'terminal-settings' || scenario === 'launch-configurations
 }
 if (scenario === 'resources') shell.drawerVisible = true
 if (scenario === 'new-session') { draft.open(project, 'codex'); draft.title = 'Review terminal continuity' }
-if (scenario === 'confirmation') catalog.sessionConfirmation = { kind: 'stop-and-archive', sessionId: 'visual-session-0', title: 'Review terminal rendering' }
+if (scenario === 'confirmation' || scenario === 'close-confirmation') catalog.sessionConfirmation = { kind: scenario === 'close-confirmation' ? 'close-running' : 'stop-and-archive', sessionId: 'visual-session-0', title: 'Review terminal rendering' }
 const ready = ref(false)
 onMounted(async () => { await nextTick(); ready.value = true })
 </script>

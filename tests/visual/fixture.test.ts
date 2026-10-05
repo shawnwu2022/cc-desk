@@ -32,6 +32,16 @@ async function render(scenario: string) {
   await flushPromises(); return wrapper
 }
 describe('Isolated production-component fixture', () => {
+  // 关闭提示明确终止与输出丢失边界，不承诺未保存历史可恢复。
+  it('Fixture_CloseWarning_007', async () => {
+    await render('close-confirmation')
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain(en.confirmCloseDescription)
+    expect(dialog.textContent).toContain('Copy any output you need first')
+    expect(dialog.querySelector('[data-session-confirm]')!.textContent).toBe('Close')
+    expect(blockedHostCalls.value).toBe(0)
+  })
+
   // 每个固定场景只使用内存数据和真实UI组件，不创建终端实例或调用宿主。
   it.each(['empty', 'mixed', 'hover', 'resources', 'projects', 'new-session', 'archived', 'terminal-settings', 'launch-configurations', 'confirmation'])('Fixture_NoHostAccess_001: %s', async scenario => {
     const view = await render(scenario)
@@ -124,6 +134,10 @@ describe('Isolated production-component fixture', () => {
     await flushPromises()
     expect(document.querySelector('[role="menu"]')).not.toBeNull()
     expect(document.querySelector('[role="menu"]')!.contains(document.activeElement)).toBe(true)
+    expect(document.querySelector('[data-item-id="close"]')).toBeNull()
+    expect(document.querySelector('[data-item-id="stop"]')).toBeNull()
+    expect(document.querySelector('[data-item-id="archive"]')).toBeNull()
+    expect(document.querySelector('[data-session-row] .session-primary-action button')?.getAttribute('aria-label')).toBe('Close')
     expect(blockedHostCalls.value).toBe(0)
   })
   // 截图准备完成后移除临时焦点，已有 tabindex 必须原样保留。

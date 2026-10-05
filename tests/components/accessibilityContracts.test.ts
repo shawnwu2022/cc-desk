@@ -63,7 +63,7 @@ it.each(['en', 'zh'] as const)('A11y_RowKeyboard_004_%s', async locale => {
   await icon.trigger('keydown', { key: 'Escape' }); await w.trigger('keydown', { key: 'ContextMenu' }); await flushPromises()
   const menu = document.querySelector<HTMLElement>('[role="menu"]')!
   expect(menu).not.toBeNull(); menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
-  expect(document.activeElement).toBe(menu.querySelector('[data-item-id="archive"]'))
+  expect(document.activeElement).toBe(menu.querySelector('[data-item-id="view-diagnostics"]'))
   menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await flushPromises()
   expect(document.querySelector('[role="menu"]')).toBeNull(); expect(document.activeElement).toBe(w.element)
   await w.trigger('keydown', { key: 'ContextMenu' }); await flushPromises()

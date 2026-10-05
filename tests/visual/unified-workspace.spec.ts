@@ -60,6 +60,16 @@ for (const sample of snapshots) {
 }
 
 
+// Close-only feedback has separate unapproved evidence; historical baselines stay untouched.
+for (const locale of ['en', 'zh']) {
+  test(`close-only confirmation evidence ${locale}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 640 })
+    await openFixture(page, { scenario: 'close-confirmation', locale })
+    await expect(page.locator('[data-session-confirm]')).toHaveText(locale === 'en' ? 'Close' : '关闭')
+    await captureFixtureEvidence(page, testInfo, `close-only-confirmation-${locale}-unapproved`)
+  })
+}
+
 // New history pixels are evidence for review, not automatically approved baselines.
 // Keep the existing committed snapshot inventory and all of its assertions intact.
 for (const locale of ['en', 'zh']) {

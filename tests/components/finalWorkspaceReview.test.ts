@@ -85,12 +85,12 @@ describe('Final workspace review regressions', () => {
     document.querySelector<HTMLElement>('[data-item-id="rename"]')!.click(); await flushPromises()
     expect(useUnifiedSessionsStore().sessions.find(s => s.id === `native-tab:${tab.tabId}`)?.renameState).toBe('editing')
   })
-  it('POINTER: a mouse menu click must dispatch stop, without a following row activation', async () => {
+  it('POINTER: a mouse menu click must dispatch restart, without a following row activation', async () => {
     const w = renderApp(); const { row } = await openNativeRow(w)
-    const stop = vi.spyOn(useUnifiedSessionsStore(), 'stopSession').mockResolvedValue(undefined)
+    const restart = vi.spyOn(useUnifiedSessionsStore(), 'restartSession').mockResolvedValue(useUnifiedSessionsStore().sessions.find(session => session.id === row.attributes('data-session-row'))!)
     await row.get('.session-overflow-trigger button').trigger('click'); await flushPromises()
-    document.querySelector<HTMLElement>('[data-item-id="stop"]')!.click(); await flushPromises()
-    expect(stop).toHaveBeenCalledTimes(1)
+    document.querySelector<HTMLElement>('[data-item-id="restart"]')!.click(); await flushPromises()
+    expect(restart).toHaveBeenCalledTimes(1)
     expect((w.emitted('workspace-request') ?? []).map(event => (event[0] as any).kind)).toEqual(['menu-action'])
   })
   it('KEYBOARD: ArrowDown from an expanded session row moves within the tree', async () => {
@@ -122,10 +122,15 @@ describe('Final workspace review regressions', () => {
       tabs.tab(tab.tabId)!.action = { kind: 'resume-id', nativeSessionId: 'history-id' }
       tabs.tab(tab.tabId)!.sourceSessionKey = 'root-key'; await flushPromises()
     }
-    await row.get('.session-overflow-trigger button').trigger('click'); await flushPromises()
-    const item = document.querySelector<HTMLElement>(`[data-item-id="${action}"]`)!
-    expect(row.element.contains(item), 'normal menus teleport outside the clickable row').toBe(false)
-    item.click(); await flushPromises()
+    if (action === 'close') {
+      await row.get('.session-primary-action button').trigger('click'); await flushPromises()
+    } else {
+      await row.get('.session-overflow-trigger button').trigger('click'); await flushPromises()
+      expect(document.querySelector('[data-item-id="archive"]')).toBeNull()
+      // 移除界面入口不改变既有底层确认契约。
+      useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: `native-tab:${tab.tabId}`, action: 'archive' })
+      await flushPromises()
+    }
     const catalog = useUnifiedSessionsStore()
     expect(catalog.sessionConfirmation?.kind).toBe(action === 'close' ? 'close-running' : 'stop-and-archive')
     expect(io.nativeStop).not.toHaveBeenCalled(); expect(io.archive).not.toHaveBeenCalled()
