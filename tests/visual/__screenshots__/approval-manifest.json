@@ -2,16 +2,16 @@
   "schemaVersion": 1,
   "approved": true,
   "approvedFor": "Linux Chromium screenshot baselines",
-  "reviewDate": "2026-10-01",
-  "actualPixelsInspected": 6,
+  "reviewDate": "2026-10-05",
+  "actualPixelsInspected": 2,
   "independentPixelReviewCount": 2,
   "rejectedImages": 0,
-  "sourceHead": "0a0f246952f68281ab33a6bdb82c93507359644f",
-  "testedCommit": "eb030d455c7cc12fdea05fd5fd54aafc569f6c11",
-  "workflowRunId": "36882380587",
-  "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/36882380587",
-  "artifactId": "11174921424",
-  "artifactZipSha256": "00699d05fc86b9fdaf681ec6f77c698d41594f85bf44d9c7a057ea22588119cd",
+  "sourceHead": "553bd3fd58ad88c1d0cb9c501d565c056319ae64",
+  "testedCommit": "eb3a4c1f1ee28d20e055308e040092aae7881fa3",
+  "workflowRunId": "37318672270",
+  "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/37318672270",
+  "artifactId": "11349467522",
+  "artifactZipSha256": "b0d1c8253952ca6284afc8477cb89b815cb91aa4eb3e58fb0b8f3e03cb0bf535",
   "environment": {
     "node": "v22.23.3",
     "playwright": "1.63.0",
@@ -19,16 +19,16 @@
     "platform": "ubuntu-24.04-linux-chromium"
   },
   "verificationBeforeBaselineAcceptance": {
-    "total": 146,
-    "geometryAndInteractionPassed": 133,
-    "unchangedSnapshotsPassed": 7,
-    "changedSnapshotFailures": 6,
+    "total": 204,
+    "nonSnapshotCasesPassed": 191,
+    "unchangedSnapshotsPassed": 11,
+    "changedSnapshotFailures": 2,
     "otherFailures": 0,
     "fullVerification": "failed-reviewed-snapshot-differences"
   },
   "finalNoUpdateVerification": {
     "status": "pending",
-    "required": "All 146 screenshot, geometry and interaction cases with updateSnapshots none and maxDiffPixels 0 after this reviewed baseline update"
+    "required": "Every committed screenshot, geometry, interaction and evidence case with updateSnapshots none and maxDiffPixels 0 after this reviewed baseline update"
   },
   "acceptanceLimits": [
     "Exact inspected Linux Chromium pixels and hashes only",
@@ -45,7 +45,7 @@
       "sha256": "bf52e313ed554f469d1117347475ac652fda287cf49e163f31181d850453a935",
       "bytes": 46068,
       "reviewVerdict": "approve",
-      "provenance": "reviewed actual image from current artifact"
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
     },
     {
       "name": "confirm-stop-and-archive.png",
@@ -81,7 +81,7 @@
       "sha256": "6d0af32f96ab86bd2a057dad3518ed7ba3043e16a1505c3c691bc52a9ea48213",
       "bytes": 52709,
       "reviewVerdict": "approve",
-      "provenance": "reviewed actual image from current artifact"
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
     },
     {
       "name": "settings-terminal-light-gui-dark-terminal.png",
@@ -108,7 +108,7 @@
       "sha256": "94712d839f58768fce2eee34a82bdc1c7f8aef45c63cfa745b8b4451391d80a0",
       "bytes": 58002,
       "reviewVerdict": "approve",
-      "provenance": "reviewed actual image from current artifact"
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
     },
     {
       "name": "workspace-empty-1024-zh.png",
@@ -123,8 +123,8 @@
       "name": "workspace-hover-action-1366-en.png",
       "width": 1366,
       "height": 768,
-      "sha256": "f22fd29b54ad5fd1c09845f014fb9e58905a7593fa89893d7a9174a00c06974f",
-      "bytes": 59606,
+      "sha256": "572ccf2570ec6a09af5b60df6e4a69be43e630604802855debaf09875fcb7d47",
+      "bytes": 59688,
       "reviewVerdict": "approve",
       "provenance": "reviewed actual image from current artifact"
     },
@@ -132,8 +132,8 @@
       "name": "workspace-menu-1024-en.png",
       "width": 1024,
       "height": 640,
-      "sha256": "01a070d5b43ecc4f8b130c8809599eb738e8f87155e9446f4b54876542b972ac",
-      "bytes": 54468,
+      "sha256": "7bb91cd1f2c49d25613fc7ecf455e037e898048f7dbe45318df4e750ce13337b",
+      "bytes": 57449,
       "reviewVerdict": "approve",
       "provenance": "reviewed actual image from current artifact"
     },
@@ -144,7 +144,7 @@
       "sha256": "f05b81b81425f04c23fafce189b69fe529d39651bf3d041f58f2ecd49d58110b",
       "bytes": 58363,
       "reviewVerdict": "approve",
-      "provenance": "reviewed actual image from current artifact"
+      "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
     },
     {
       "name": "workspace-resources-overlay-1024.png",
@@ -156,14 +156,45 @@
       "provenance": "previously reviewed bytes, unchanged screenshot verification passed in current run"
     }
   ],
-  "unchangedVerifiedSnapshots": 7,
+  "unchangedVerifiedSnapshots": 11,
   "previousAcceptance": {
-    "sourceHead": "d90ec90db9f2a27f1e77f747fecd62c6f716d233",
-    "testedCommit": "2ce9e19545318a35a79094c7aea179ddb434fcd0",
-    "workflowRunId": "36845204924",
-    "artifactId": "11153226557",
-    "artifactZipSha256": "8559c2be34ebc3fcd8f1b33a2381ceca331873faadc20cb626ba753dbbb0ddd9",
-    "finalNoUpdateRun": "36847655055",
-    "finalNoUpdateResult": "138/138 passed"
+    "reviewDate": "2026-10-01",
+    "actualPixelsInspected": 6,
+    "independentPixelReviewCount": 2,
+    "rejectedImages": 0,
+    "sourceHead": "0a0f246952f68281ab33a6bdb82c93507359644f",
+    "testedCommit": "eb030d455c7cc12fdea05fd5fd54aafc569f6c11",
+    "workflowRunId": "36882380587",
+    "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/36882380587",
+    "artifactId": "11174921424",
+    "artifactZipSha256": "00699d05fc86b9fdaf681ec6f77c698d41594f85bf44d9c7a057ea22588119cd",
+    "environment": {
+      "node": "v22.23.3",
+      "playwright": "1.63.0",
+      "browser": "Google Chrome for Testing 153.0.8010.12",
+      "platform": "ubuntu-24.04-linux-chromium"
+    },
+    "verificationBeforeBaselineAcceptance": {
+      "total": 146,
+      "geometryAndInteractionPassed": 133,
+      "unchangedSnapshotsPassed": 7,
+      "changedSnapshotFailures": 6,
+      "otherFailures": 0,
+      "fullVerification": "failed-reviewed-snapshot-differences"
+    },
+    "finalNoUpdateVerification": {
+      "status": "pending",
+      "required": "All 146 screenshot, geometry and interaction cases with updateSnapshots none and maxDiffPixels 0 after this reviewed baseline update"
+    },
+    "unchangedVerifiedSnapshots": 7,
+    "previousAcceptance": {
+      "sourceHead": "d90ec90db9f2a27f1e77f747fecd62c6f716d233",
+      "testedCommit": "2ce9e19545318a35a79094c7aea179ddb434fcd0",
+      "workflowRunId": "36845204924",
+      "artifactId": "11153226557",
+      "artifactZipSha256": "8559c2be34ebc3fcd8f1b33a2381ceca331873faadc20cb626ba753dbbb0ddd9",
+      "finalNoUpdateRun": "36847655055",
+      "finalNoUpdateResult": "138/138 passed"
+    }
   }
 }

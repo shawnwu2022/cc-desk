@@ -49,6 +49,20 @@ metadata.loaded = true
 profiles.profiles = structuredClone(fixtureProfiles); profiles.status = 'loaded'; profiles.revision = '1'
 profiles.select('claude', 'visual-claude-0'); profiles.select('codex', 'visual-codex-0')
 catalog.sessions = emptyWorkspace ? [] : fixtureSessions()
+// One fabricated opened row per evidence case; never attach a runtime adapter or terminal.
+if (scenario === 'close-state') {
+  const runtime = parameters.get('runtime'), state = parameters.get('state')
+  if (runtime !== 'native-claude' && runtime !== 'native-codex' && runtime !== 'legacy-claude') throw new Error('VISUAL_CLOSE_RUNTIME_INVALID')
+  if (state !== 'starting' && state !== 'running' && state !== 'needs-user' && state !== 'unknown' && state !== 'stopped' && state !== 'failed') throw new Error('VISUAL_CLOSE_STATE_INVALID')
+  catalog.sessions = [{
+    ...fixtureSessions()[0],
+    id: `visual-close-${runtime}-${state}`, adapterSessionId: `visual-tab-${runtime}-${state}`,
+    title: `${runtime === 'native-claude' ? 'Native Claude' : runtime === 'native-codex' ? 'Native Codex' : 'Legacy Claude'} · ${state}`,
+    runtime: runtime === 'legacy-claude' ? 'legacy-claude' : 'native-cli', cli: runtime === 'native-codex' ? 'codex' : 'claude',
+    processState: state === 'needs-user' ? 'running' : state, attentionState: state === 'needs-user' ? 'needs-user' : 'none',
+    opened: true, resumable: state === 'stopped' || state === 'failed',
+  }]
+}
 catalog.activeSessionId = catalog.sessions[0]?.id ?? null
 app.cachedProjects = scenario === 'empty' ? [] : projectPaths.map((path, index) => ({ path, name: ['cc-desk', 'Atlas design system', longProjectName, 'Empty project'][index], lastDuration: 0 }))
 metadata.displayNames.set(projectPaths[2].toLowerCase(), longProjectName)

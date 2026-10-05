@@ -3,6 +3,7 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { nextTick } from 'vue'
+import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import VisualFixtureApp from '@/visual/VisualFixtureApp.vue'
 import { FIXTURE_TIME, longProjectName, longSessionTitle } from '@/visual/fixtures'
 import { blockedHostCalls, invoke } from '@/visual/tauriStub'
@@ -26,12 +27,57 @@ beforeEach(() => {
   setActivePinia(createPinia()); localStorage.clear(); blockedHostCalls.value = 0
 })
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; document.body.innerHTML = ''; vi.useRealTimers() })
-async function render(scenario: string) {
-  history.replaceState({}, '', `/__visual__/?scenario=${scenario}&locale=en`)
+async function render(scenario: string, locale = 'en') {
+  history.replaceState({}, '', `/__visual__/?scenario=${scenario}&locale=${locale}`)
   wrapper = mount(VisualFixtureApp, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
   await flushPromises(); return wrapper
 }
 describe('Isolated production-component fixture', () => {
+  // 独立状态场景必须是真正 opened 的对应 CLI/runtime 行，不能借历史或准备失败行代替。
+  it.each([
+    { variant: 'native-claude', runtime: 'native-cli', cli: 'claude' },
+    { variant: 'native-codex', runtime: 'native-cli', cli: 'codex' },
+    { variant: 'legacy-claude', runtime: 'legacy-claude', cli: 'claude' },
+  ].flatMap((variant, index) => ['starting', 'running', 'needs-user', 'unknown', 'stopped', 'failed'].map((state, offset) => ({
+    ...variant, state, locale: (index + offset) % 2 ? 'zh' : 'en',
+  }))))('Fixture_OpenedCloseState_014: $variant $state $locale', async ({ variant, runtime, cli, state, locale }) => {
+    const view = await render(`close-state&runtime=${variant}&state=${state}`, locale)
+    const sessions = useUnifiedSessionsStore().sessions
+    expect(sessions, 'each evidence case must contain exactly its requested opened session').toHaveLength(1)
+    expect(sessions[0]).toMatchObject({ runtime, cli, opened: true, archived: false,
+      processState: state === 'needs-user' ? 'running' : state,
+      attentionState: state === 'needs-user' ? 'needs-user' : 'none',
+    })
+    expect(sessions[0].preparationState, 'opened failed is not an unadmitted preparation failure').toBeUndefined()
+    for (const toggle of view.findAll('.project-node > .project-row .expand-arrow')) await toggle.trigger('click')
+    expect(view.findAll('[data-session-row]')).toHaveLength(1)
+    const row = view.get('[data-session-row]')
+    expect(row.attributes('data-session-row')).toBe(`visual-close-${variant}-${state}`)
+    expect(row.get('.session-status-icon').classes()).toContain(`session-status-icon--${state === 'unknown' ? 'confirming' : state === 'stopped' ? 'ended' : state}`)
+    const close = row.get('.session-primary-action button')
+    expect(row.findAll('.session-primary-action button')).toHaveLength(1)
+    expect(close.attributes('aria-label')).toBe(locale === 'en' ? 'Close' : '关闭')
+    expect(close.get('svg path').attributes('d')).toBe('m6 6 12 12M18 6 6 18')
+    ;(close.element as HTMLButtonElement).focus()
+    expect(document.activeElement).toBe(close.element)
+    for (const entry of ['overflow', 'context', 'keyboard']) {
+      if (entry === 'overflow') await row.get('.session-overflow-trigger button').trigger('click')
+      else if (entry === 'context') await row.trigger('contextmenu')
+      else await row.trigger('keydown', { key: 'F10', shiftKey: true })
+      await flushPromises()
+      const menu = document.querySelector('[role="menu"]')!
+      expect(menu, `${entry} must render the actual menu`).not.toBeNull()
+      expect(menu.querySelector('[data-item-id="close"], [data-item-id="stop"]')).toBeNull()
+      expect(!!menu.querySelector('[data-item-id="archive"]')).toBe(state === 'stopped' || state === 'failed')
+      menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await flushPromises()
+      expect(document.querySelector('[role="menu"]')).toBeNull()
+    }
+    expect(view.findAllComponents({ name: 'NativeCliTerminal' })).toHaveLength(0)
+    expect(view.findAllComponents({ name: 'TerminalView' })).toHaveLength(0)
+    expect(blockedHostCalls.value).toBe(0)
+  })
+
   // 关闭提示明确终止与输出丢失边界，不承诺未保存历史可恢复。
   it('Fixture_CloseWarning_007', async () => {
     await render('close-confirmation')

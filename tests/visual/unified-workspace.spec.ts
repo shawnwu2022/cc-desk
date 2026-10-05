@@ -34,7 +34,7 @@ async function openFixture(page: Page, options: Record<string, string | number>)
   await page.goto(`/__visual__/?${new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]))}`)
   await expect(page.locator('[data-visual-ready]')).toHaveAttribute('data-visual-ready', 'true')
   await page.evaluate(() => document.fonts.ready)
-  if (['mixed', 'hover', 'menu'].includes(String(options.scenario))) {
+  if (['mixed', 'hover', 'menu', 'close-state'].includes(String(options.scenario))) {
     await expandFixtureProjects(page)
   }
 }
@@ -68,6 +68,77 @@ for (const locale of ['en', 'zh']) {
     await expect(page.locator('[data-session-confirm]')).toHaveText(locale === 'en' ? 'Close' : '关闭')
     await captureFixtureEvidence(page, testInfo, `close-only-confirmation-${locale}-unapproved`)
   })
+}
+
+// Opened-state evidence is separate from approved snapshots and never invokes Close.
+// Each fabricated row uses real hover/focus CSS and all three production menu entry points.
+for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-claude'].entries()) {
+  for (const [stateIndex, state] of ['starting', 'running', 'needs-user', 'unknown', 'stopped', 'failed'].entries()) {
+    const locale = (variantIndex + stateIndex) % 2 ? 'zh' : 'en'
+    test.describe(`close-state evidence ${variant} ${state} ${locale}`, () => {
+      test.use({ viewport: { width: 1024, height: 640 }, deviceScaleFactor: 1 })
+      test('captures row Close and deduplicated menus', async ({ page }, testInfo) => {
+        await openFixture(page, { scenario: 'close-state', runtime: variant, state, locale, gui: locale === 'zh' ? 'dark' : 'light' })
+        await expect(page.locator('[data-session-row]')).toHaveCount(1)
+        const row = page.locator(`[data-session-row="visual-close-${variant}-${state}"]`)
+        const primary = row.locator('.session-primary-action')
+        const close = primary.getByRole('button', { name: locale === 'en' ? 'Close' : '关闭', exact: true })
+        const overflow = row.locator('.session-overflow-trigger button')
+        const evidenceName = `close-state-${variant}-${state}-${locale}`
+        await expect(primary.getByRole('button')).toHaveCount(1)
+        await expect(close).toBeEnabled()
+        await expect(close.locator('svg path')).toHaveAttribute('d', 'm6 6 12 12M18 6 6 18')
+        await expect(row.locator('.session-status-icon')).toHaveClass(`session-status-icon session-status-icon--${state === 'unknown' ? 'confirming' : state === 'stopped' ? 'ended' : state}`)
+        await expect(row.locator('.cli-app-icon')).toHaveAttribute('aria-label', variant === 'native-codex' ? 'Codex CLI' : 'Claude Code')
+
+        // Opacity is explicit: Playwright visibility alone would also accept an invisible button.
+        await page.mouse.move(1020, 636)
+        await expect(primary).toHaveCSS('opacity', '0')
+        await row.hover({ position: { x: 4, y: 4 } })
+        await expect(primary).toHaveCSS('opacity', '1')
+        await expect(primary).toHaveCSS('pointer-events', 'auto')
+        await expect(close).toBeInViewport({ ratio: 1 })
+        await expect(page.getByRole('tooltip')).toHaveCount(0)
+        await captureFixtureEvidence(page, testInfo, `${evidenceName}-hover-unapproved`)
+
+        await page.mouse.move(1020, 636)
+        await expect(primary).toHaveCSS('opacity', '0')
+        await overflow.focus()
+        await page.keyboard.press('Shift+Tab')
+        await expect(close).toBeFocused()
+        await page.keyboard.press('Escape')
+        await expect(page.getByRole('tooltip')).toHaveCount(0)
+        await expect(close).toBeFocused()
+        await expect(close).toHaveCSS('outline-style', 'solid')
+        await expect(primary).toHaveCSS('opacity', '1')
+        await expect(primary).toHaveCSS('pointer-events', 'auto')
+        await captureFixtureEvidence(page, testInfo, `${evidenceName}-focus-unapproved`)
+
+        for (const entry of ['overflow', 'context', 'keyboard']) {
+          await row.focus()
+          if (entry === 'overflow') await overflow.click()
+          else if (entry === 'context') await row.click({ button: 'right', position: { x: 4, y: 4 } })
+          else await page.keyboard.press('Shift+F10')
+          const menu = page.getByRole('menu')
+          await expect(menu).toHaveCount(1)
+          await expect(menu).toBeVisible()
+          await expect(menu).toBeInViewport({ ratio: 1 })
+          await expect(menu.locator('[data-item-id="close"], [data-item-id="stop"]')).toHaveCount(0)
+          await expect(menu.getByRole('menuitem', { name: /^(Close|Stop|Stop and archive|关闭|停止|停止并归档)$/ })).toHaveCount(0)
+          await expect(menu.locator('[data-item-id="archive"]')).toHaveCount(state === 'stopped' || state === 'failed' ? 1 : 0)
+          await page.mouse.move(1020, 636)
+          await expect(page.getByRole('tooltip')).toHaveCount(0)
+          await captureFixtureEvidence(page, testInfo, `${evidenceName}-${entry}-menu-unapproved`)
+          await page.keyboard.press('Escape')
+          await expect(menu).toHaveCount(0)
+          await expect(entry === 'overflow' ? overflow : row).toBeFocused()
+        }
+        await expect(row).toHaveCount(1)
+        await expect(page.getByRole('dialog')).toHaveCount(0)
+        await expect(page.locator('.xterm, [data-native-tab], [data-terminal-view]')).toHaveCount(0)
+      })
+    })
+  }
 }
 
 // New history pixels are evidence for review, not automatically approved baselines.

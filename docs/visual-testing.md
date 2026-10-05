@@ -227,3 +227,21 @@ Both Playwright producer pipelines explicitly select `shell: bash`, including th
 [Run 36861864182](https://github.com/shawnwu2022/cc-desk/actions/runs/36861864182) tested source `444c2dfed9ed11305ea77fc14063caf17155d1a8`, merge `e7eebee57566b4f13de8b2c69a606ec1f48fc3b8`. All 133 geometry/interaction cases and five unchanged screenshots passed; eight screenshots differed only in the requested marks/status/chevrons, centered guidance and version text. The run remains a failed comparison, not a full PASS.
 
 All eight actual PNGs were independently inspected by two reviewers at original dimensions and accepted. They were copied byte-for-byte from artifact `11162500482` (ZIP SHA256 `2a3007d155f4fbc4f3ead6e5bf1d3d950367d0cb5ee37bee889368849b84b2c7`); five existing PNGs remain unchanged. The approval manifest records both generations of provenance. No image editing, masks or tolerance changes were used. A fresh full 146-case no-update run is required after committing this update.
+
+## Single Close control baseline review
+
+Run [37318672270](https://github.com/shawnwu2022/cc-desk/actions/runs/37318672270)
+verified source `553bd3fd58ad88c1d0cb9c501d565c056319ae64`, tested merge
+`eb3a4c1f1ee28d20e055308e040092aae7881fa3`: 202 cases passed and two screenshot
+comparisons failed. Two independent pixel reviews accepted only the intended
+Stop-to-× replacement (44 pixels) and removal of Stop, Close and Stop and archive
+from the running-session menu (1590 pixels). The actual images are copied
+byte-for-byte from artifact `11349467522`; the approval manifest records hashes
+and provenance. The other eleven baseline images are unchanged. No tolerance,
+mask, production CSS or snapshot inventory changes are used.
+
+The original failed comparison remains RED evidence. A subsequent complete
+no-update run is required. New bilingual Close confirmation and opened-session
+state/menu captures remain separate unapproved evidence, not additional baseline
+approvals or proof of real process lifecycle, Windows WebView2 or screen-reader
+acceptance.
