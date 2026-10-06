@@ -18,13 +18,14 @@ import ResumeSessionDialog from '@/components/sessions/ResumeSessionDialog.vue'
 import NewSessionDialog from '@/components/sessions/NewSessionDialog.vue'
 import LaunchProgramDiscovery from '@/components/sessions/LaunchProgramDiscovery.vue'
 import LaunchConfigurationEditor from '@/components/settings/LaunchConfigurationEditor.vue'
-import type { ConfirmedLaunchProgram, LaunchConfigurationEditorRequest } from '@/types/profile'
+import type { ConfirmedLaunchProgram } from '@/types/profile'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
 import { SESSION_INTERACTION_OWNER } from '@/session/sessionInteraction'
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import { APP_RENAME_SHORTCUT, type AppShortcutAction } from '@/config/appShortcuts'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
+import { useLaunchConfigurationEditor } from '@/composables/useLaunchConfigurationEditor'
 import type { UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import ProjectsView from '@/components/projects/ProjectsView.vue'
 import ProjectManagementDialogs from '@/components/projects/ProjectManagementDialogs.vue'
@@ -65,13 +66,19 @@ provide(APP_RENAME_SHORTCUT, computed(() => app.shortcutBindings.rename))
 const sidebar = useSidebarStore()
 const management = useProjectManagementStore()
 const configurations = useCliProfilesStore()
-const preparationEditor = ref<LaunchConfigurationEditorRequest | null>(null)
-watch(() => [shell.section, sessions.activeSessionId], () => { preparationEditor.value = null }, { flush: 'sync' })
+const { editor: configurationEditor, opening: configurationEditorOpening, error: configurationEditorError,
+  open: openConfigurationEditor, close: closeConfigurationEditor } = useLaunchConfigurationEditor(() => shell.section === 'workspace')
+watch(() => [shell.section, shell.navigationSequence, shell.requestSequence, sessions.activeSessionId], closeConfigurationEditor, { flush: 'sync' })
 function editPreparationConfiguration() {
   const session = sessions.activeSession
   const profile = session?.launchConfigId ? configurations.profile(session.launchConfigId) : undefined
   if (shell.section !== 'workspace' || session?.safeErrorCode !== 'LAUNCH_CONFIGURATION_REQUIRED') return
-  if (profile && profile.cli === session.cli) preparationEditor.value = { kind: 'edit', profileId: profile.id }
+  if (profile && profile.cli === session.cli) {
+    const owns = sessions.captureSessionOwnership(session.id), selected = sessions.captureSelectionOwnership()
+    void openConfigurationEditor({ kind: 'edit', profileId: profile.id }, () => owns() && selected()
+      && sessions.activeSessionId === session.id && sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED'
+      && sessions.activeSession.launchConfigId === profile.id && configurations.profile(profile.id)?.cli === session.cli)
+  }
   else { sidebar.activeSettingsSection = 'launch-configurations'; shell.navigate('settings') }
 }
 function confirmDiscoveredProgram(confirmation: ConfirmedLaunchProgram) {
@@ -85,13 +92,14 @@ function confirmDiscoveredProgram(confirmation: ConfirmedLaunchProgram) {
 const sessionSidebar = ref<InstanceType<typeof SidebarPanel> | null>(null)
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
 const runtime = useUnifiedWorkspaceRuntime(terminalHost)
-const sourceConfigurationEditor = ref<LaunchConfigurationEditorRequest | null>(null)
 const sourceNoticeArea = ref<HTMLElement | null>(null)
-watch(() => [shell.section, sessions.activeSessionId], () => { sourceConfigurationEditor.value = null }, { flush: 'sync' })
 function editSourceConfiguration(profileId: string) {
   const owner = runtime.sourceWarningConfigurations.value.find(row => row.profileId === profileId)
   if (shell.section !== 'workspace' || !owner || configurations.profile(profileId)?.revision !== owner.profileRevision) return
-  sourceConfigurationEditor.value = { kind: 'edit', profileId }
+  const selected = sessions.captureSelectionOwnership()
+  void openConfigurationEditor({ kind: 'edit', profileId }, () => selected()
+    && runtime.sourceWarningConfigurations.value.some(row => row.profileId === profileId
+      && row.profileRevision === owner.profileRevision && row.warningKey === owner.warningKey))
 }
 async function dismissSourceNotice() {
   const restoreFocus = sourceNoticeArea.value?.contains(document.activeElement) ?? false
@@ -262,7 +270,7 @@ onUnmounted(() => {
         </InlineNotice>
         <InlineNotice v-if="runtime.error.value && runtime.error.value !== 'workspaceRuntimePartial'" kind="warning" :message="t(runtime.error.value)"
           :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
-        <div v-if="runtime.sourceWarnings?.value.length && !runtime.fatal?.value" ref="sourceNoticeArea">
+        <div v-if="runtime.sourceWarnings?.value.length && !runtime.fatal?.value" ref="sourceNoticeArea" :inert="configurationEditorOpening || undefined">
           <InlineNotice v-if="!runtime.sourceNoticeDismissed?.value" data-workspace-source-notice class="workspace-source-notice" kind="warning" :message="t('workspaceRuntimePartial')"
             :action-label="t('retry')" @action="request({ kind: 'refresh' })">
             <IconButton data-dismiss-source-notice :label="t('sourceWarningDismiss')" @click="dismissSourceNotice"><span>×</span></IconButton>
@@ -276,9 +284,10 @@ onUnmounted(() => {
           </div>
         </div>
         <InlineNotice v-if="runtime.historyMetadataPartial?.value" data-history-metadata-partial kind="info" :message="t('workspaceHistoryMetadataPartial')" />
-        <LaunchProgramDiscovery v-if="shell.section === 'workspace' && !preparationEditor && sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED' && sessions.activeSession.preparationIssueCode === 'PROGRAM_TRUST_REQUIRED'"
+        <LaunchProgramDiscovery v-if="shell.section === 'workspace' && !configurationEditor && sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED' && sessions.activeSession.preparationIssueCode === 'PROGRAM_TRUST_REQUIRED'"
+          :inert="configurationEditorOpening || undefined"
           :key="`${sessions.activeSession.id}:${shell.navigationSequence}:${shell.requestSequence}`" :session="sessions.activeSession" @edit="editPreparationConfiguration" @confirmed="confirmDiscoveredProgram" />
-        <InlineNotice v-else-if="sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED'" data-launch-preparation kind="warning"
+        <InlineNotice v-else-if="sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED'" data-launch-preparation kind="warning" :inert="configurationEditorOpening || undefined"
           :message="t(mapSafeUserError(sessions.activeSession.preparationIssueCode ?? 'GENERIC_UNAVAILABLE', 'launch').messageKey)"
           :action-label="t('launchConfigEditAction')" @action="editPreparationConfiguration">
           <ErrorDetails :code="sessions.activeSession.preparationIssueCode ?? 'GENERIC_UNAVAILABLE'" context="launch" />
@@ -298,8 +307,9 @@ onUnmounted(() => {
       :anchor="newMenuAnchor" :availability="newSessionDraft.cliAvailability" @select="chooseNewSession" />
     <NewSessionDialog :active="shell.section === 'workspace'" @create="request({ kind: 'create-session', input: $event })"
       @restore="request({ kind: 'restore-session', ...$event })" />
-    <LaunchConfigurationEditor v-if="preparationEditor" :request="preparationEditor" :active="shell.section === 'workspace'" @close="preparationEditor = null" />
-    <LaunchConfigurationEditor v-if="sourceConfigurationEditor" :request="sourceConfigurationEditor" :active="shell.section === 'workspace'" @close="sourceConfigurationEditor = null" />
+    <InlineNotice v-if="configurationEditorOpening" data-configuration-prepare :message="t('loading')" :action-label="t('cancel')" @action="closeConfigurationEditor" />
+    <InlineNotice v-if="configurationEditorError" :kind="configurationEditorError.severity" :message="t(configurationEditorError.messageKey)" />
+    <LaunchConfigurationEditor v-if="configurationEditor" :request="configurationEditor" :active="shell.section === 'workspace'" @close="closeConfigurationEditor" />
     <ProjectConfirmDialog :request="configurations.deleteConfirmation" :active="shell.section === 'settings'" :busy="configurations.deleteBusy" :error-key="configurations.deleteError?.messageKey" @confirm="configurations.confirmDelete" @cancel="configurations.closeDeleteConfirmation" />
     <SessionDiagnosticsDialog :diagnostics="runtime.diagnostics?.value ?? null" @close="runtime.closeDiagnostics()" />
     <SessionConfirmDialog :active="shell.section === 'workspace'" />

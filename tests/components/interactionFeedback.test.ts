@@ -10,11 +10,12 @@ import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useNativeTabsStore, matchesNativeAttempt } from '@/stores/nativeTabs'
 import { useSessionStore } from '@/stores/session'
 import { useProjectManagementStore } from '@/stores/projectManagement'
+import { useCliProfilesStore } from '@/stores/cliProfiles'
 import en from '@/i18n/locales/en'
-const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn(), availability: vi.fn(), discovery: vi.fn() }))
+const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn(), availability: vi.fn(), discovery: vi.fn(), scope: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getProjectsState: io.state, getProjects: io.projects, getSessions: io.sessions,
   getAppConfig: async () => ({ language: 'en', theme: 'light', terminalTheme: 'cc-box-light' }), updateAppConfig: async () => {}, onHookEvent: async () => () => {}, archiveSession: io.archive, pinProject: io.pin,
-  createNativeProjectionClient: () => ({ scope: async () => ({ cli: 'codex' }), read: async () => ({ state: 'ready', items: [{ type: 'session', sessionKey: 'source', nativeSessionId: 'saved', title: 'Saved', cwd: '/repo' }], hasMore: false }) }) }))
+  createNativeProjectionClient: () => ({ scope: io.scope, read: async () => ({ state: 'ready', items: [{ type: 'session', sessionKey: 'source', nativeSessionId: 'saved', title: 'Saved', cwd: '/repo' }], hasMore: false }) }) }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patch }))
 vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: io.availability }))
 vi.mock('@/api/programDiscovery', () => ({ cliDiscoverPrograms: io.discovery }))
@@ -27,6 +28,7 @@ beforeEach(() => {
   vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID })
   setActivePinia(createPinia()); vi.clearAllMocks(); localStorage.clear()
   io.projects.mockResolvedValue([])
+  io.scope.mockResolvedValue({ cli: 'codex' })
   io.sessions.mockResolvedValue([])
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.state.mockResolvedValue({ pinnedProjects: [], archivedSessions: {} })
@@ -520,6 +522,56 @@ it('LaunchPreparation_ConfigurationActionDoesNotAdmit_001', async () => {
   expect([...useNativeTabsStore().tabs.values()][0]).toMatchObject({ profileId: 'cx', profileRevision: '9' })
   await useUnifiedSessionsStore().closeSession(useUnifiedSessionsStore().activeSessionId!)
   expect(document.querySelector('[data-live-terminal]')).toBeNull()
+})
+
+// 工作区的准备失败与来源警告两个入口也必须先读取共享工作区修订，再冻结编辑快照。
+it.each(['preparation', 'source'] as const)('LaunchEditor_RefreshAppEntry_010_%s', async entry => {
+  if (entry === 'source') io.scope.mockRejectedValue({ code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation' })
+  else io.availability.mockImplementation(async (profileId, profileRevision) => ({ profileId, profileRevision, cli: 'codex', state: 'configuration-required', hostStatus: 'available', certified: false, issue: { code: 'PROGRAM_TRUST_REQUIRED', retryable: false } }))
+  render(); await flushPromises()
+  if (entry === 'preparation') {
+    useShellStore().requestWorkspaceAction({ kind: 'create-session', input: { cli: 'codex', projectKey: '/repo', projectPath: '/repo', launchConfigId: 'cx', launchConfigRevision: '7' } })
+    await flushPromises()
+  }
+  const latest = { ...await io.profiles(), revision: '8' }
+  io.profiles.mockResolvedValue(latest)
+  const attempted: string[] = []
+  io.patch.mockImplementation(async (expected, patch) => {
+    attempted.push(expected)
+    if (expected !== '8') throw { code: 'REVISION_CONFLICT' }
+    return { revision: '9', profiles: latest.profiles.map((row: any) => ({ ...row, ...patch.changes, revision: '9' })) }
+  })
+  ;(document.querySelector(entry === 'preparation' ? '[data-launch-preparation] button' : '[data-source-warning-configuration]') as HTMLButtonElement).click(); await flushPromises()
+  const name = document.querySelector<HTMLInputElement>('[data-launch-name]')!
+  name.value = 'Fresh workspace snapshot'; name.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises()
+  ;(document.querySelector('[data-launch-save]') as HTMLButtonElement).click(); await flushPromises()
+  expect(attempted).toEqual(['8'])
+  expect(useCliProfilesStore().profile('cx')?.name).toBe('Fresh workspace snapshot')
+  expect(document.querySelector('[data-launch-save]')).toBeNull(); expect(useNativeTabsStore().tabs.size).toBe(0)
+})
+
+// 工作区离开再返回会撤销旧准备，迟到读取不能弹回已失去上下文的编辑器。
+it.each((['preparation', 'source'] as const).flatMap(entry => (['navigation', 'same-section', 'request', 'selection', 'cancel'] as const).map(change => ({ entry, change }))))('LaunchEditor_AppReadOwner_011_$entry_$change', async ({ entry, change }) => {
+  if (entry === 'source') io.scope.mockRejectedValue({ code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation' })
+  else io.availability.mockImplementation(async (profileId, profileRevision) => ({ profileId, profileRevision, cli: 'codex', state: 'configuration-required', hostStatus: 'available', certified: false, issue: { code: 'PROGRAM_TRUST_REQUIRED', retryable: false } }))
+  render(); await flushPromises()
+  if (entry === 'preparation') {
+    useShellStore().requestWorkspaceAction({ kind: 'create-session', input: { cli: 'codex', projectKey: '/repo', projectPath: '/repo', launchConfigId: 'cx', launchConfigRevision: '7' } })
+    await flushPromises()
+  }
+  const latest = { ...await io.profiles(), revision: '8' }
+  let release!: (value: unknown) => void
+  io.profiles.mockReturnValueOnce(new Promise(resolve => { release = resolve }))
+  ;(document.querySelector(entry === 'preparation' ? '[data-launch-preparation] button' : '[data-source-warning-configuration]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector('[data-launch-save]')).toBeNull()
+  if (change === 'navigation') { useShellStore().navigate('projects'); await flushPromises(); useShellStore().navigate('workspace') }
+  else if (change === 'same-section') useShellStore().navigate('workspace')
+  else if (change === 'request') useShellStore().requestWorkspaceAction({ kind: 'rename-cancel', sessionId: useUnifiedSessionsStore().activeSessionId ?? 'missing' })
+  else if (change === 'selection') useUnifiedSessionsStore().selectProjectContext('/other')
+  else (document.querySelector('[data-configuration-prepare] button') as HTMLButtonElement).click()
+  await flushPromises()
+  release(latest); await flushPromises()
+  expect(document.querySelector('[data-launch-save]')).toBeNull(); expect(io.patch).not.toHaveBeenCalled()
 })
 
 it.each(['direct', 'navigation-return', 'editor-cancel'] as const)('LaunchPreparation_AutoDiscoveryConfirmedOnceThenReused_003_%s', async entry => {

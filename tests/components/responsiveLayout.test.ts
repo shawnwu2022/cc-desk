@@ -4,6 +4,7 @@ import { h, defineComponent } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { readFileSync } from 'node:fs'
+import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import AppShell from '@/components/shell/AppShell.vue'
 import ProjectNode from '@/components/sessions/ProjectNode.vue'
 import SettingsView from '@/components/settings/SettingsView.vue'
@@ -16,7 +17,7 @@ import zh from '@/i18n/locales/zh'
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isMaximized: async () => false, onResized: async () => () => {} }) }))
 const wrappers: VueWrapper[] = []
 beforeEach(() => { setActivePinia(createPinia()) })
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; document.documentElement.removeAttribute('data-theme'); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; document.documentElement.removeAttribute('data-theme'); clearMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 // 把逻辑 viewport 与 DPR 作为独立输入；jsdom 不证明 Windows 实际缩放或像素几何。
 const matrix = [[1024, 640], [1280, 720], [1366, 768], [1440, 900], [1920, 1080]].flatMap(([width, height]) => [1, 1.25, 1.5].flatMap(scale => ['en', 'zh'].flatMap(locale => ['light', 'dark'].map(theme => ({ width, height, scale, locale, theme, label: `${width}_${scale}_${locale}_${theme}` })))))
 it.each(matrix)('Layout_Matrix_001_$label', async ({ width, height, scale, locale, theme }) => {
@@ -56,6 +57,10 @@ it('Layout_PinnedBreakpoints_002', async () => {
 it('Layout_SettingsModalOwnership_003', async () => {
   const shell = useShellStore(); shell.navigate('settings'); useSidebarStore().activeSettingsSection = 'launch-configurations'
   const profiles = useCliProfilesStore(); profiles.status = 'loaded'; profiles.profiles = [{ id: 'cc', revision: '1', cli: 'claude', name: 'P'.repeat(80), launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }]
+  mockIPC(command => {
+    if (command === 'cli_list_profiles') return { revision: '1', profiles: profiles.profiles }
+    throw new Error(`unexpected:${command}`)
+  })
   const composition = defineComponent({ setup: () => () => h(AppShell, {}, { default: () => h(SettingsView, { active: shell.section === 'settings', style: { display: shell.section === 'settings' ? '' : 'none' } }) }) })
   const w = mount(composition, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } }); wrappers.push(w)
   const edit = w.get('[data-launch-edit]').element as HTMLButtonElement; edit.focus(); edit.click(); await flushPromises()
