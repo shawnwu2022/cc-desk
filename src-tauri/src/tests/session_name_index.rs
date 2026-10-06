@@ -1608,7 +1608,9 @@ fn Flush_CasExhausted_CleansTemps_042() {
         None,
         Some(before_exclusive),
         None,
-    );
+    )
+    // CAS 次数与清理不依赖墙钟；累计预算和真实锁等待分别由 043 与 041 覆盖。
+    .with_flush_elapsed_for_test(|| Duration::ZERO);
 
     let error = store
         .flush_pending(PendingIndexFlush {
@@ -1620,7 +1622,18 @@ fn Flush_CasExhausted_CleansTemps_042() {
         })
         .unwrap_err();
 
-    assert!(error.to_string().contains("CAS exhausted"));
+    let category = match error.to_string().as_str() {
+        "session name index whole-file CAS exhausted" => "cas_exhausted",
+        "session name index flush budget exhausted" => "flush_budget_exhausted",
+        message if message.contains("session-name-index.json lock timeout") => "lock_timeout",
+        _ => "other_io",
+    };
+    assert!(
+        error.kind() == std::io::ErrorKind::WouldBlock && category == "cas_exhausted",
+        "expected CAS exhausted; kind={:?}, category={category}, attempts={}",
+        error.kind(),
+        attempts.load(Ordering::SeqCst)
+    );
     assert_eq!(attempts.load(Ordering::SeqCst), 4);
     assert!(std::fs::read_dir(dir.path())
         .unwrap()
@@ -1632,6 +1645,115 @@ fn Flush_CasExhausted_CleansTemps_042() {
         })
         .collect::<Vec<_>>()
         .is_empty());
+}
+
+// 累计预算必须允许恰好用尽后的无争用 CAS，并在超限时清理已准备的临时文件。
+#[test]
+fn Flush_CasRetryBudget_CleansTemps_043() {
+    for (before_exclusive_ms, after_conflict_ms, expected_prepared, expected_compares) in
+        [(500, 0, 3, 2), (0, 1_100, 1, 1)]
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = SessionNameIndexPaths {
+            data: dir.path().join("session-name-index.json"),
+            lock: dir.path().join("session-name-index.json.lock"),
+        };
+        let bytes = serde_json::to_vec(&SessionNameIndex::empty()).unwrap();
+        std::fs::write(&paths.data, &bytes).unwrap();
+        let elapsed_ms = Arc::new(AtomicU64::new(0));
+        let elapsed_before_exclusive = Arc::clone(&elapsed_ms);
+        let prepared_attempts = Arc::new(AtomicU64::new(0));
+        let captured_attempts = Arc::clone(&prepared_attempts);
+        let data_path = paths.data.clone();
+        let before_exclusive = Arc::new(move |attempt: usize| {
+            captured_attempts.fetch_add(1, Ordering::SeqCst);
+            elapsed_before_exclusive.fetch_add(before_exclusive_ms, Ordering::SeqCst);
+            let mut index = SessionNameIndex::empty();
+            index.projects.insert(
+                format!("concurrent-{attempt}"),
+                BTreeMap::from([(
+                    "session.jsonl".to_string(),
+                    SessionNameEntry {
+                        name: format!("Concurrent {attempt}"),
+                        observed_length: attempt as u64,
+                        modified_secs: 1,
+                        modified_nanos: 1,
+                        cached_at_ms: attempt as u64,
+                    },
+                )]),
+            );
+            std::fs::write(&data_path, serde_json::to_vec(&index).unwrap()).unwrap();
+        });
+        let cas_compares = Arc::new(AtomicU64::new(0));
+        let captured_compares = Arc::clone(&cas_compares);
+        let elapsed_after_conflict = Arc::clone(&elapsed_ms);
+        let probe = Arc::new(move |stage, _| {
+            if stage == FlushStage::LockedRawCompare {
+                captured_compares.fetch_add(1, Ordering::SeqCst);
+            }
+            if stage == FlushStage::ExclusiveHold {
+                elapsed_after_conflict.fetch_add(after_conflict_ms, Ordering::SeqCst);
+            }
+        });
+        let health = Arc::new(IndexHealth::new(|| 1_000, |_| {}));
+        let store = SessionNameIndexStore::new(
+            paths,
+            IndexLimits::default(),
+            health,
+            Duration::from_millis(100),
+        )
+        .with_flush_test_config(
+            Duration::from_secs(1),
+            4,
+            Some(probe),
+            Some(before_exclusive),
+            None,
+        )
+        .with_flush_elapsed_for_test(move || {
+            Duration::from_millis(elapsed_ms.load(Ordering::SeqCst))
+        });
+
+        let error = store
+            .flush_pending(PendingIndexFlush {
+                base_raw: RawIndexSnapshot::Bytes(bytes),
+                delta: SessionNameIndexDelta {
+                    request_compaction: true,
+                    ..SessionNameIndexDelta::default()
+                },
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut,
+            "expected cumulative flush budget exhaustion"
+        );
+        assert!(
+            error.to_string() == "session name index flush budget exhausted",
+            "expected fixed flush budget error category"
+        );
+        assert_eq!(
+            prepared_attempts.load(Ordering::SeqCst),
+            expected_prepared,
+            "unexpected prepared attempt count for before={before_exclusive_ms}, after={after_conflict_ms}"
+        );
+        assert_eq!(
+            cas_compares.load(Ordering::SeqCst),
+            expected_compares,
+            "expected CAS conflicts through equality, then no compare after budget exhaustion"
+        );
+        assert!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .all(|path| !path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("session-name-index.json.tmp.")),
+            "flush budget exhaustion must clean every prepared temporary file"
+        );
+    }
 }
 
 // 五档紧凑索引只量化锁外 serde parse，不把 CPU 成本混入排他持锁时间。

@@ -272,6 +272,8 @@ pub(crate) struct SessionNameIndexStore {
     shared_lock_timeout: Duration,
     flush_budget: Duration,
     flush_attempts: usize,
+    #[cfg(test)]
+    flush_elapsed: Option<Arc<dyn Fn() -> Duration + Send + Sync>>,
     probe: Option<Arc<dyn Fn(FlushStage, bool) + Send + Sync>>,
     before_exclusive: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     replace: Arc<ReplaceFileFn>,
@@ -292,6 +294,8 @@ impl SessionNameIndexStore {
             shared_lock_timeout,
             flush_budget: DEFAULT_FLUSH_BUDGET,
             flush_attempts: DEFAULT_FLUSH_ATTEMPTS,
+            #[cfg(test)]
+            flush_elapsed: None,
             probe: None,
             before_exclusive: None,
             replace: Arc::new(|temporary, target| {
@@ -317,6 +321,15 @@ impl SessionNameIndexStore {
         if let Some(replace) = replace {
             self.replace = replace;
         }
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_flush_elapsed_for_test(
+        mut self,
+        elapsed: impl Fn() -> Duration + Send + Sync + 'static,
+    ) -> Self {
+        self.flush_elapsed = Some(Arc::new(elapsed));
         self
     }
 
@@ -407,7 +420,7 @@ impl SessionNameIndexStore {
                 return Ok(metrics);
             }
 
-            let remaining = match remaining_budget(flush_started, self.flush_budget) {
+            let remaining = match self.remaining_flush_budget(flush_started) {
                 Ok(remaining) => remaining,
                 Err(error) => {
                     self.health.record_write_failure(&error.to_string());
@@ -488,7 +501,7 @@ impl SessionNameIndexStore {
                 before_exclusive(attempt);
             }
 
-            let remaining = match remaining_budget(flush_started, self.flush_budget) {
+            let remaining = match self.remaining_flush_budget(flush_started) {
                 Ok(remaining) => remaining,
                 Err(error) => {
                     let _ = std::fs::remove_file(&temporary);
@@ -584,6 +597,22 @@ impl SessionNameIndexStore {
         );
         self.health.record_write_failure(&error.to_string());
         Err(error)
+    }
+
+    fn remaining_flush_budget(&self, started: Instant) -> io::Result<Duration> {
+        #[cfg(test)]
+        let elapsed = self
+            .flush_elapsed
+            .as_ref()
+            .map_or_else(|| started.elapsed(), |elapsed| elapsed());
+        #[cfg(not(test))]
+        let elapsed = started.elapsed();
+        self.flush_budget.checked_sub(elapsed).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "session name index flush budget exhausted",
+            )
+        })
     }
 
     fn observe_stage(
@@ -730,15 +759,6 @@ impl SessionNameIndexStore {
             }
         }
     }
-}
-
-fn remaining_budget(started: Instant, budget: Duration) -> io::Result<Duration> {
-    budget.checked_sub(started.elapsed()).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            "session name index flush budget exhausted",
-        )
-    })
 }
 
 fn raw_snapshot_len(raw: &RawIndexSnapshot) -> u64 {
