@@ -1,6 +1,8 @@
 //! Test-only capability probe. This never changes an account, credential, UAC,
 //! policy, session, or production token. Unsupported restricted tokens block.
 use super::{blocked, bounded_read, report};
+#[path = "terminal_diagnostics.rs"]
+mod terminal_diagnostics;
 use crate::version_history::{
     verified_package::sha256,
     windows::{
@@ -19,9 +21,12 @@ use std::{
         io::{AsRawHandle, FromRawHandle, OwnedHandle},
     },
     path::Path,
+    time::{Duration, Instant},
 };
 use windows::Win32::{
-    Foundation::{LocalFree, ERROR_INSUFFICIENT_BUFFER, HANDLE, HLOCAL, WAIT_OBJECT_0},
+    Foundation::{
+        LocalFree, ERROR_INSUFFICIENT_BUFFER, HANDLE, HLOCAL, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    },
     Security::{
         Authorization::ConvertSidToStringSidW, CreateRestrictedToken, CreateWellKnownSid,
         GetTokenInformation, IsValidSid, SetTokenInformation, TokenElevation, TokenGroups,
@@ -33,7 +38,8 @@ use windows::Win32::{
     System::{
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
-            JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+            JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
+            QueryInformationJobObject, SetInformationJobObject,
             JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         },
@@ -740,7 +746,10 @@ fn run_scoped_worker(root: &Path, scope: WorkerScope<'_>) -> io::Result<()> {
     if unsafe { ResumeThread(raw(&child.thread)) } != 1 {
         return Err(blocked("worker resume outcome unknown"));
     }
-    if unsafe { WaitForSingleObject(raw(&child.process), 300_000) } != WAIT_OBJECT_0 {
+    let worker_wait_started = Instant::now();
+    if unsafe { WaitForSingleObject(raw(&child.process), terminal_diagnostics::WORKER_WINDOW_MS) }
+        != WAIT_OBJECT_0
+    {
         return Err(blocked(
             "worker did not terminate within bounded fixture window",
         ));
@@ -771,10 +780,100 @@ fn run_scoped_worker(root: &Path, scope: WorkerScope<'_>) -> io::Result<()> {
             "HISTORY_CONFINED_WORKER_TERMINAL {{\"exitCode\":{code},\"activeProcesses\":{}}}",
             accounting.ActiveProcesses
         );
+        if matches!(&scope, WorkerScope::RestartLifetime { .. }) {
+            observe_worker_terminal_failure(
+                &job,
+                &child.process,
+                output.dwProcessId,
+                worker_wait_started,
+            );
+        }
         return Err(blocked("worker failed or owned job not empty"));
     }
     Ok(())
 }
+
+fn observe_worker_terminal_failure(
+    job: &OwnedHandle,
+    process: &OwnedHandle,
+    worker_id: u32,
+    worker_wait_started: Instant,
+) {
+    // The first failure remains final. Keep every owned handle and cleanup rule;
+    // these queries cannot admit recovery, retry work, or turn a later zero green.
+    // Start no new sample after either the original 300s window or 20ms expires.
+    let diagnostic_started = Instant::now();
+    terminal_diagnostics::sample_failure(
+        || {
+            terminal_diagnostics::remaining_ms(
+                worker_wait_started.elapsed(),
+                diagnostic_started.elapsed(),
+            )
+        },
+        |ms| std::thread::sleep(Duration::from_millis(u64::from(ms))),
+        |sample| {
+            let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            let active = unsafe {
+                QueryInformationJobObject(
+                    Some(raw(job)),
+                    JobObjectBasicAccountingInformation,
+                    (&mut accounting as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                    size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                    None,
+                )
+            }
+            .ok()
+            .map(|()| accounting.ActiveProcesses);
+            let terminal = match unsafe { WaitForSingleObject(raw(process), 0) } {
+                WAIT_OBJECT_0 => Some(true),
+                WAIT_TIMEOUT => Some(false),
+                _ => None,
+            };
+            // Fixed-capacity layout of JOBOBJECT_BASIC_PROCESS_ID_LIST. No growth,
+            // process reopening, PID logging, or inference from a partial list.
+            #[repr(C)]
+            #[derive(Default)]
+            struct BoundedMembers {
+                assigned: u32,
+                listed: u32,
+                members: [usize; 8],
+            }
+            let mut list = BoundedMembers::default();
+            let membership = match unsafe {
+                QueryInformationJobObject(
+                    Some(raw(job)),
+                    JobObjectBasicProcessIdList,
+                    (&mut list as *mut BoundedMembers).cast(),
+                    size_of::<BoundedMembers>() as u32,
+                    None,
+                )
+            } {
+                Ok(()) => terminal_diagnostics::summarize_members(
+                    list.assigned,
+                    list.listed,
+                    &list.members,
+                    worker_id as usize,
+                ),
+                Err(_) => terminal_diagnostics::MembershipSummary::unknown(),
+            };
+            eprintln!(
+                "HISTORY_CONFINED_WORKER_OBSERVATION {}",
+                json!({
+                    "schema": 1,
+                    "sample": sample,
+                    "elapsedMs": diagnostic_started.elapsed().as_millis(),
+                    "activeProcesses": active,
+                    "workerTerminal": terminal,
+                    "memberListComplete": membership.complete,
+                    "workerListed": membership.worker_listed,
+                    "otherMemberCount": membership.other_members,
+                    "snapshotAtomic": false,
+                })
+            );
+        },
+    );
+}
+
 pub(super) fn verify_worker(root: &Path) -> io::Result<()> {
     let admission: serde_json::Value =
         serde_json::from_slice(&bounded_read(&root.join("worker-admission.json"), 65536)?)?;
