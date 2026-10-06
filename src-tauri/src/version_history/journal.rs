@@ -758,11 +758,13 @@ struct BundleBackupReceipt {
 /// The private-only production factory retains exact live unchanged-source
 /// ownership. A stronger reversed-context factory must additionally establish
 /// real quiescence; hashes alone cannot construct either proof.
+#[cfg(any(test, windows))]
 pub(crate) struct PreContextAbortProof<'a> {
     anchor: AdmissionAnchor,
     unchanged: UnchangedSourceObservations,
     guards: Box<dyn LiveAbortGuards + 'a>,
 }
+#[cfg(any(test, windows))]
 trait LiveAbortGuards {
     fn verify(&self, store: &mut JournalStore) -> Result<(), SafeError>;
 }
