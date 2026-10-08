@@ -1,0 +1,130 @@
+name: Reviewed 0.18.1 signed build and backed-up branch cleanup
+
+on:
+  push:
+    branches: [ops/0181-cloud-build-20261008]
+    paths:
+      - .github/workflows/0181-cloud-build-cleanup.yml
+      - .github/scripts/signed-build-0181.py
+      - .github/scripts/backup-cleanup-0181.py
+      - .github/scripts/cleanup-0181-branches.json
+      - tests/scripts/test_signed_build_0181.py
+      - tests/scripts/test_backup_cleanup_0181.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reviewed-0181-cloud-build-cleanup
+  cancel-in-progress: false
+
+jobs:
+  controller-tests:
+    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/ops/0181-cloud-build-20261008'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Install public signature verifier
+        run: sudo apt-get update && sudo apt-get install -y minisign
+      - name: Test fixed-source and backup refusal paths
+        run: python3 -m unittest discover -s tests/scripts -p 'test_*0181.py' -v
+
+  signed-build:
+    if: github.run_attempt == 1
+    needs: controller-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Install public signature verifier
+        run: sudo apt-get update && sudo apt-get install -y minisign
+      - name: Dispatch existing signed build once at fixed source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/signed-build-0181.py dispatch
+      - name: Wait for that exact build and validate its provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/signed-build-0181.py wait
+      - name: Verify original candidate archives and public-key signatures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/signed-build-0181.py verify
+      - name: Persist exact dispatch and build observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-0181-signed-build-state-${{ github.run_id }}
+          path: signed-build-state/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Persist verified signed candidates without publishing a release
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-0181-verified-signed-candidates-${{ github.run_id }}
+          path: verified-signed-candidates/
+          if-no-files-found: error
+          retention-days: 30
+
+  backup:
+    needs: controller-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      artifact-id: ${{ steps.persist.outputs.artifact-id }}
+      artifact-digest: ${{ steps.persist.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Back up every current head and tag and restore-test the bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/backup-cleanup-0181.py backup --output backup --controller-sha "$GITHUB_SHA"
+      - name: Persist recoverable backup before deletion becomes eligible
+        id: persist
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-0181-all-refs-backup-${{ github.run_id }}
+          path: backup/
+          if-no-files-found: error
+          retention-days: 90
+
+  cleanup:
+    needs: backup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Restore the persisted artifact and delete only unchanged reviewed refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_ARTIFACT_ID: ${{ needs.backup.outputs.artifact-id }}
+          BACKUP_ARTIFACT_DIGEST: ${{ needs.backup.outputs.artifact-digest }}
+        run: >-
+          python3 .github/scripts/backup-cleanup-0181.py delete
+          --artifact-id "$BACKUP_ARTIFACT_ID"
+          --artifact-digest "$BACKUP_ARTIFACT_DIGEST"
+          --run-id "$GITHUB_RUN_ID"
+          --controller-sha "$GITHUB_SHA"
+      - name: Persist cleanup outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-0181-branch-cleanup-result-${{ github.run_id }}
+          path: cleanup-result.json
+          if-no-files-found: warn
+          retention-days: 90

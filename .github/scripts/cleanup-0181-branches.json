@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "repository": "shawnwu2022/cc-desk",
+  "observed_at": "2026-10-08T06:16:00Z",
+  "source_sha": "5ed35db9a560e093a91a5ef32a1eb6dd171f27fd",
+  "controller_branch": "ops/0181-cloud-build-20261008",
+  "keep_branches": {
+    "main": "77707e3b03187aa2ed96f5ab780f62f14c1e4ffc",
+    "feat/unified-workspace-ux": "5ed35db9a560e093a91a5ef32a1eb6dd171f27fd",
+    "release/0.18.1-source-5ed35db": "5ed35db9a560e093a91a5ef32a1eb6dd171f27fd"
+  },
+  "delete_branches": [
+    {
+      "branch": "codex/release-v0.17.7",
+      "expected_sha": "38f22121019336f6ffc2b00eda8f3bb3ce35a877",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-acceptance-gate",
+      "expected_sha": "9cf16e446386458dc3188471ca07ba34780020fd",
+      "disposition": "delete_rejected_release_experiment"
+    },
+    {
+      "branch": "feat/native-cli-evidence-gate",
+      "expected_sha": "f1a6bc5867f3d59d8eda4fe7dc6ea498ab984f93",
+      "disposition": "delete_rejected_release_experiment"
+    },
+    {
+      "branch": "feat/native-cli-evidence-gate-ci",
+      "expected_sha": "2981ccaea7619e515432cadfc30882ab34337265",
+      "disposition": "delete_rejected_release_experiment"
+    },
+    {
+      "branch": "feat/native-cli-evidence-harness",
+      "expected_sha": "dbdc4d4d23ead3ec034e2334415487479bc87d5d",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-final-release-hardening",
+      "expected_sha": "3eee6f11c7aea79682233c128b51cac7973f1384",
+      "disposition": "delete_rejected_release_experiment"
+    },
+    {
+      "branch": "feat/native-cli-finalization",
+      "expected_sha": "7e31cff37b199ba3b10cadf2fe038ed03fed45c2",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-input-arbitration",
+      "expected_sha": "b7ce01ee80e8b78121c9949c5113b3c923238df4",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-input-policy",
+      "expected_sha": "06cc748fa8d2a817cf6ee439d3d8b5086954febe",
+      "disposition": "delete_semantically_superseded_runtime"
+    },
+    {
+      "branch": "feat/native-cli-input-queue",
+      "expected_sha": "838e5bdcf6e76dcda680e424f0fb3cdf1e7de2f1",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-input-writer",
+      "expected_sha": "3b6499194ffdf798033ba83c66944b18530e5417",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-launch-snapshot",
+      "expected_sha": "df9d6e75a4f7f5a2ea1580256af1087a88305a93",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-os-bridge",
+      "expected_sha": "308dd3a087fede4d838fdeaccf5cbdd5586e6376",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-output-lifecycle",
+      "expected_sha": "77c995999e62510fce028559e8e0c085a148547f",
+      "disposition": "delete_semantically_superseded_runtime"
+    },
+    {
+      "branch": "feat/native-cli-output-transport",
+      "expected_sha": "3b6499194ffdf798033ba83c66944b18530e5417",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-platform-launcher",
+      "expected_sha": "53c59cb74f4499a20b9a83e8e9e58bbcf26f3559",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-product-integration",
+      "expected_sha": "5eebcfe277dbb9a2f43886612fcf67a572289c5b",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-profile-storage",
+      "expected_sha": "54b1f918fabe199f9e4e4a80c8e9c6f3140f546d",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-project-registry",
+      "expected_sha": "4070c3ceac24564e96a31942ff5d2468a746af49",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-release-gate",
+      "expected_sha": "687c9b792312f0098b7474077bccb4bf09759a8e",
+      "disposition": "delete_rejected_release_experiment"
+    },
+    {
+      "branch": "feat/native-cli-release-guard",
+      "expected_sha": "c6e269af543a0ad3351cd5f9e4a95cc78b5b4b21",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-release-promotion",
+      "expected_sha": "8af5fb091c9c999baba801c61ed158114bfdcf14",
+      "disposition": "delete_rejected_release_experiment"
+    },
+    {
+      "branch": "feat/native-cli-release-promotion-v2",
+      "expected_sha": "132c1230a11bd16f0afb0eec67714fc0ad238ac8",
+      "disposition": "delete_rejected_release_experiment"
+    },
+    {
+      "branch": "feat/native-cli-resilience-security",
+      "expected_sha": "2fe7693ef4b3706644fc9af5bc848c269f7f8c6c",
+      "disposition": "delete_semantically_superseded_runtime"
+    },
+    {
+      "branch": "feat/native-cli-rollback-security-stress",
+      "expected_sha": "6bdec882b54e59b502fa42c6b13ca487fc27e2d8",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-run-registry",
+      "expected_sha": "bc8ef7362328227cff49859d86a10eaf894bc3c7",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-source-scope",
+      "expected_sha": "8c8c7ff698efb86919d7f2d7b4f231e50d0e35ba",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-terminal-host",
+      "expected_sha": "525d3ae4514c14520e7aaa08ec978eb0cddb779f",
+      "disposition": "delete_semantically_superseded_runtime"
+    },
+    {
+      "branch": "feat/native-cli-terminal-protocol",
+      "expected_sha": "36be21d0a68f98088a964323d9a3852b9cf0717b",
+      "disposition": "delete_semantically_superseded_runtime"
+    },
+    {
+      "branch": "feat/native-cli-terminal-protocol-corrected",
+      "expected_sha": "f590e38cd134f4710fe09923dd90a5f8e6919cd5",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-wire-contracts",
+      "expected_sha": "c2a19af5ecc2a219fe570b58bf70856997cc6a4c",
+      "disposition": "delete_exact_ancestor"
+    },
+    {
+      "branch": "feat/native-cli-workspace-w0",
+      "expected_sha": "eedd94bf3d69e67ac2015de6f314477b31026849",
+      "disposition": "delete_exact_ancestor"
+    }
+  ],
+  "tags": {
+    "refs/tags/v0.1.0": "11bb6b95067544e4ac6b8c0744f8204776b7130b",
+    "refs/tags/v0.10.0": "a52bb211277077cd3716f7cfc1011e95e9e168a5",
+    "refs/tags/v0.10.1": "9335c7acf7309c4f2854805d974ef37ba56e2b7a",
+    "refs/tags/v0.10.2": "fffeb7ef4a82c9f4f28b7ec0c13b6831e46dfe15",
+    "refs/tags/v0.10.3": "b38ebabb8da553ec1fc91bac1417299c1703fc39",
+    "refs/tags/v0.10.4": "92a125d0bef3781a5317fe2afc03d5ef6b58daac",
+    "refs/tags/v0.10.5": "d1f72080216edc25926ca9c3cfc5850bd8b1e0f6",
+    "refs/tags/v0.10.6": "da329e0198235d95426b48425e7e062ba9e7f935",
+    "refs/tags/v0.10.8": "3de95c609b5160bc4d65d9bb830fb2d2e2bd5eef",
+    "refs/tags/v0.10.9": "0a405f08bb8e7470972499cc7e5ae1e5d5cbba83",
+    "refs/tags/v0.11.0": "fcc6d3bbce0851b3c650a4e3d0b4554f15eef113",
+    "refs/tags/v0.11.1": "d6e069bae935e000e47c0865233ba8080f7a3d5d",
+    "refs/tags/v0.12.0": "77cc8847418bc17b1024e0c14837ce60e24ac642",
+    "refs/tags/v0.12.1": "34ffffbc7822b4fc1f55182206f54eb27f7b9fc8",
+    "refs/tags/v0.12.2": "1d6e5b020aa9499069f2f63ac950698c43e23307",
+    "refs/tags/v0.12.4": "5983480fb0b0ada6defee2c70a5769d5d7460bfe",
+    "refs/tags/v0.12.8": "198d0e97bd2fc6bbcb532dcc9321b059b9d5b09c",
+    "refs/tags/v0.13.0": "da182a7ceacec9ecab9753509ca4702fbba41a30",
+    "refs/tags/v0.13.1": "cc54077d4e372ea4d7303fcebc49cf8f8d0ae335",
+    "refs/tags/v0.14.0": "22b866243fede9f09748199098ac6cfde0ab8156",
+    "refs/tags/v0.15.0": "351ffaff96c03ab6f9c253f064acba9b1aa154e0",
+    "refs/tags/v0.16.0": "59aacac58dca6bdc7f8311c12ce7cdf353d2a4c1",
+    "refs/tags/v0.17.0": "095a54aeff9fb28ba1fc4527b42f52e72cfe1d14",
+    "refs/tags/v0.17.1": "4c11aaba7e53d69e506b749023fe0af2b394c52c",
+    "refs/tags/v0.17.2": "6c97b47622610c5b2d25105b60e27eb1c2223c8d",
+    "refs/tags/v0.17.5": "b4f7658c847a070cf64e9dba978c4e325a09bdce",
+    "refs/tags/v0.17.6": "e67fcd87cc282ad1de7f3de693b8693485b9abf5",
+    "refs/tags/v0.17.7": "77707e3b03187aa2ed96f5ab780f62f14c1e4ffc",
+    "refs/tags/v0.2.0": "540bb393d03f26fdc847045c96f936e5d0db1212",
+    "refs/tags/v0.2.1": "e217bbe5c56a39bfcb7b87d20a450b8816e8a57f",
+    "refs/tags/v0.2.2": "2fc12d79aefc3971489cc2502c6e2756c647ee9b",
+    "refs/tags/v0.2.3": "d66380230c518695dea119b8f742937f29548944",
+    "refs/tags/v0.2.4": "e800cc220d2231f23e3182d2bf1cc0f659539f16",
+    "refs/tags/v0.2.5": "2aea488fe9be25f036c85517da446b4f247aae84",
+    "refs/tags/v0.2.6": "6592082d244452326a5e5cca201c9afeb5369290",
+    "refs/tags/v0.2.7": "ac411cb244c6f5e3ecd089598f001368c3369b78",
+    "refs/tags/v0.2.8": "32f5b90a242de933b61cf1e2a2d0f2ea8b4c470f",
+    "refs/tags/v0.2.9": "63989eda9a2b87b781ba64fef84a59e171cc7060",
+    "refs/tags/v0.3.0": "3acaee7f338830ad11c45354f9cd5becf8ff5150",
+    "refs/tags/v0.3.1": "f8d2450e8aa8fee3ccac60da02f18332fef63139",
+    "refs/tags/v0.3.3": "838139cec10af889e60aee763a2b6d27a6bbd0b9",
+    "refs/tags/v0.3.4": "2f5978a13e87ddf5b239b7eb03949b78496462fe",
+    "refs/tags/v0.3.5": "1195fc3adcab32bc0a2d4d550c1362af8b33f49e",
+    "refs/tags/v0.3.6": "e1e71edb0444a8e03bff7354d757d602f41e7189",
+    "refs/tags/v0.3.7": "27f4fabbfec1882fa74796a308e8adf15f11efa6",
+    "refs/tags/v0.3.8": "2bfdcadbe17d2778ad53fc26b1a5986dae8e15e0",
+    "refs/tags/v0.3.9": "ff62290f68dffb8058fbea2404df9274518b267d",
+    "refs/tags/v0.4.0": "794057886305d8190a14dfe5952a0f177a77202a",
+    "refs/tags/v0.4.2": "64d98d51a1186b4d62961823974aa83b2c6c3368",
+    "refs/tags/v0.4.5": "4f6730964be227c7a6596088a97f546bc687358b",
+    "refs/tags/v0.4.6": "7c603af7332e06342efde956b8b5b1edd4a68b13",
+    "refs/tags/v0.5.0": "03277eab961753b647f5c0782e853ddd86679cb7",
+    "refs/tags/v0.5.1": "397619205d4f1608811bd0b099911d102e9c6040",
+    "refs/tags/v0.5.2": "a7222e6e6bfc6e2202cf4704561c949f167c8079",
+    "refs/tags/v0.6.0": "c64d08ec56c69828c3cadba1140670c0470cea97",
+    "refs/tags/v0.6.1": "c28d0ec09fc7a2aaea44127db00f3f142a48250d",
+    "refs/tags/v0.6.2": "740db6bc6f7fd1abc82773a83e0351c514165a34",
+    "refs/tags/v0.6.3": "986e588ed9cc2402c79d64e8b94539df6263c34f",
+    "refs/tags/v0.6.4": "07ed9d314bbb80ad2bbed626ad1c5a2b4e9612f5",
+    "refs/tags/v0.7.0": "d1100ae5c52575df5b95a4997b82a8641e3bc88d",
+    "refs/tags/v0.8.0": "9df1b9833bfadcb85bf291e55a1f23f5b8691294",
+    "refs/tags/v0.9.0": "ffe0942a2fcd7d1103f6636fbd24b159e5bf5a80",
+    "refs/tags/v0.9.1": "b832ab71e9dd430ee76040a8735a1c270301beb0",
+    "refs/tags/v0.9.2": "4ee201e6e79755df265d3f59510c31805646c5f6",
+    "refs/tags/v0.9.3": "db2d793f6713e8cfec67bf88b99bcb85a99b36f1"
+  }
+}
