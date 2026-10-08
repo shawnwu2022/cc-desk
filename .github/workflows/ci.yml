@@ -70,20 +70,26 @@ jobs:
         run: node scripts/prepare-conpty.mjs
 
       - name: Verify native manager process boundary
-        run: cargo test --locked --lib version_history::windows::manager_process::tests::HistoryManagerProcess_SuspendedIdentity_001 -- --exact --nocapture --test-threads=1
+        id: manager_gate
+        run: ../scripts/windows-rust-tests.ps1 -Action CompileAndGate
 
       - name: Run remaining Rust tests after the explicit manager boundary gate
-        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' && steps.manager_gate.outputs.compiled == 'true' }}
         id: rust_tests
-        run: cargo test --locked -- --skip version_history::windows::manager_process::tests::HistoryManagerProcess_SuspendedIdentity_001
+        run: ../scripts/windows-rust-tests.ps1 -Action All
 
       - name: Diagnose native Channel separately after an aggregate failure
         if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' }}
-        run: cargo test --locked --lib tests::native_cli_channel_live::D11_Channel_Native_011 -- --exact --nocapture --test-threads=1
+        run: ../scripts/windows-rust-tests.ps1 -Action Channel
 
       - name: Diagnose native launch separately after an aggregate failure
         if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' }}
-        run: cargo test --locked --lib tests::native_cli_launch_live::worker::D11_Launch_Native_001 -- --exact --nocapture --test-threads=1
+        run: ../scripts/windows-rust-tests.ps1 -Action Launch
+
+      - name: Test Windows Rust CI entry contracts
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        working-directory: .
+        run: pwsh -NoProfile -File tests/scripts/windowsRustTests.ps1
 
       - name: Check formatting
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
