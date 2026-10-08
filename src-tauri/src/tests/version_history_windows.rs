@@ -286,6 +286,27 @@ fn HistoryWindows_SuspendedJob_012() {
 fn HistoryWindows_ProcessWorker_013() {
     let path = std::env::var_os("CC_DESK_HISTORY_PROBE_MARKER")
         .expect("supervised test child requires its marker");
+    let typed_fault = std::env::var("CC_DESK_MANAGER_TEST_CHECKPOINT").unwrap_or_default();
+    // Only the explicit manager failure fixture withholds its actual marker.
+    // Cleanup uses the existing controlled-child release, never a real CLI.
+    if typed_fault == "typed-marker-timeout" {
+        let mut gate = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(std::path::Path::new(&path).with_extension("gate-entered"))
+            .unwrap();
+        gate.write_all(b"waiting-before-marker").unwrap();
+        gate.sync_all().unwrap();
+        drop(gate);
+        let release = std::env::var_os("CC_DESK_HISTORY_PROBE_RELEASE").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !std::path::Path::new(&release).try_exists().unwrap() {
+            if std::time::Instant::now() >= deadline {
+                std::process::exit(124);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
     {
         let mut file = std::fs::OpenOptions::new()
             .create_new(true)
@@ -300,6 +321,11 @@ fn HistoryWindows_ProcessWorker_013() {
                     std::process::exit(124);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if typed_fault == "typed-self-timeout"
+                && std::fs::read(&release).unwrap() == b"timeout-124"
+            {
+                std::process::exit(124);
             }
         }
         if std::env::var_os("CC_DESK_HISTORY_PROBE_WAIT").is_some() {

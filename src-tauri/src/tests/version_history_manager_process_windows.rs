@@ -31,6 +31,8 @@ const WORKER: &str =
 const CHECKPOINT_ENV: &str = "CC_DESK_MANAGER_TEST_CHECKPOINT";
 const DIRECTORY_ENV: &str = "CC_DESK_MANAGER_TEST_DIRECTORY";
 const MODE_ENV: &str = "CC_DESK_MANAGER_TEST_MODE";
+#[path = "version_history_manager_typed_probe.rs"]
+mod typed_probe;
 static CHECKPOINT_PID: AtomicU32 = AtomicU32::new(0);
 thread_local! {
     static CONCURRENT_CHILD: std::cell::RefCell<Option<ExactProcess>> = const { std::cell::RefCell::new(None) };
@@ -303,6 +305,7 @@ pub(super) fn manager_checkpoint(label: &str, process: Option<HANDLE>) -> io::Re
 struct Worker {
     child: Child,
     directory: PathBuf,
+    cleanup_armed: bool,
 }
 impl Worker {
     fn spawn(directory: &Path, mode: &str, checkpoint: &str) -> Self {
@@ -317,6 +320,7 @@ impl Worker {
                 .spawn()
                 .expect("spawn exact manager wrapper worker"),
             directory: directory.to_owned(),
+            cleanup_armed: true,
         }
     }
     fn await_file(&mut self, path: &Path) {
@@ -353,6 +357,9 @@ impl Worker {
 }
 impl Drop for Worker {
     fn drop(&mut self) {
+        if !self.cleanup_armed {
+            return;
+        }
         if self.child.try_wait().ok().flatten().is_none() {
             // On assertion failure, first let the bounded fixture clean up a
             // disarmed child before resorting to hard source termination.
@@ -376,6 +383,7 @@ impl Drop for Worker {
 struct ObservedChild {
     exact: ExactProcess,
     cleanup: OwnedHandle,
+    cleanup_armed: bool,
 }
 impl ObservedChild {
     fn capture(pid: u32) -> Self {
@@ -391,11 +399,18 @@ impl ObservedChild {
         // The first exact handle keeps the process object alive while the
         // termination handle is opened, so this cannot select a reused PID.
         assert!(exact.terminal(0).unwrap().is_none());
-        Self { exact, cleanup }
+        Self {
+            exact,
+            cleanup,
+            cleanup_armed: true,
+        }
     }
 }
 impl Drop for ObservedChild {
     fn drop(&mut self) {
+        if !self.cleanup_armed {
+            return;
+        }
         if self.exact.terminal(0).ok().flatten().is_none() {
             let _ = stop_suspended(&self.cleanup);
         }
@@ -548,6 +563,7 @@ fn HistoryManager_UniqueJobs_008() {
 #[ignore = "supervised by manager production-wrapper tests; requires private fixture environment"]
 fn HistoryManager_AtomicWorker_090() {
     require_job_free_source().expect("worker inherited containment; this is not a positive result");
+    let preparation = Instant::now() + typed_probe::PREPARATION;
     let directory = PathBuf::from(std::env::var_os(DIRECTORY_ENV).expect("private test directory"));
     let mode = std::env::var(MODE_ENV).expect("explicit worker mode");
     let user = CurrentUser::capture().unwrap();
@@ -579,6 +595,7 @@ fn HistoryManager_AtomicWorker_090() {
         job.disarm().unwrap();
         let admitted = AdmittedManagerJob::open(&job.identity, &current, &user).unwrap();
         admitted.verify_current().unwrap();
+        typed_probe::check(preparation, "worker preparation admission");
         let root = Arc::new(root);
         let leases = LeaseFiles::open(root.clone(), &user).unwrap();
         let control = leases.acquire_control().unwrap();
@@ -611,6 +628,7 @@ fn HistoryManager_AtomicWorker_090() {
             !ordinary_marker.exists(),
             "default child ran before admission"
         );
+        typed_probe::check(preparation, "worker ordinary child");
 
         let marker = directory.join("typed-child");
         let kind = if mode == "typed-installer" {
@@ -631,6 +649,14 @@ fn HistoryManager_AtomicWorker_090() {
         )
         .unwrap();
         let exact = child.probe_exact().unwrap();
+        typed_probe::check(preparation, "worker typed identity");
+        let observed = typed_probe::record(&exact);
+        typed_probe::custody(&directory, &observed, preparation);
+        let fault = std::env::var(CHECKPOINT_ENV).unwrap();
+        if fault == "typed-fail-suspended" {
+            std::fs::write(directory.join("typed-injected-failure"), fault.as_bytes()).unwrap();
+            panic!("injected typed suspended failure");
+        }
         assert!(
             exact.is_in_job(None).unwrap(),
             "typed child escaped its dedicated job"
@@ -639,23 +665,59 @@ fn HistoryManager_AtomicWorker_090() {
         let receipt = child.persist_identity(&user).unwrap();
         child.resume(&receipt).unwrap();
         assert!(child.resume(&receipt).is_err(), "typed child resumed twice");
+        typed_probe::check(preparation, "worker resume");
         let deadline = Instant::now() + Duration::from_secs(20);
-        while !marker.exists() {
+        typed_probe::publish(&directory.join("typed-ready.json"), &observed);
+        if fault == "typed-fail-running" {
+            std::fs::write(directory.join("typed-injected-failure"), fault.as_bytes()).unwrap();
+            panic!("injected typed running failure");
+        }
+        loop {
+            typed_probe::check(deadline, "worker marker");
+            let exists = marker.try_exists().unwrap();
+            typed_probe::check(deadline, "worker marker query");
+            if exists {
+                break;
+            }
             assert!(
                 exact.terminal(0).unwrap().is_none(),
                 "typed child exited before executing"
             );
+            typed_probe::check(deadline, "worker marker terminal");
             assert!(Instant::now() < deadline, "typed child did not execute");
             std::thread::sleep(Duration::from_millis(10));
         }
-        let bytes = serde_json::to_vec(&serde_json::json!({"pid": exact.pid()})).unwrap();
-        std::fs::write(directory.join("typed.tmp"), bytes).unwrap();
-        std::fs::rename(directory.join("typed.tmp"), directory.join("typed.json")).unwrap();
+        typed_probe::publish(&directory.join("typed.json"), &observed);
+        typed_probe::check(
+            deadline + Duration::from_secs(5),
+            "worker report publication",
+        );
+        if fault == "typed-fallback" {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !directory.join("typed-fallback-go").try_exists().unwrap() {
+                typed_probe::check(deadline, "injected fallback custody");
+                if directory.join("cleanup").try_exists().unwrap() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            typed_probe::fallback(&directory);
+            std::fs::write(marker.with_extension("release"), b"fallback").unwrap();
+            typed_probe::publish(&directory.join("typed-fallback-released.json"), &observed);
+            // Keep this exact source available for the normal parent hard kill;
+            // only the real fallback-provenance assertion may reject this case.
+            while !directory.join("cleanup").try_exists().unwrap() {
+                typed_probe::check(deadline, "injected fallback cleanup");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            return;
+        }
         let deadline = Instant::now() + Duration::from_secs(30);
         while !directory.join("release").exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         // Bounded fallback if the supervisor fails; no disposable child remains.
+        typed_probe::fallback(&directory);
         std::fs::write(marker.with_extension("release"), b"release").unwrap();
         assert!(exact.terminal(5000).unwrap().is_some());
         return;
@@ -776,6 +838,7 @@ fn HistoryManager_AtomicWorker_090() {
     .unwrap();
     let cleanup = ObservedChild {
         exact: ExactProcess::reopen(process.identity()).unwrap(),
+        cleanup_armed: true,
         cleanup: pending
             .0
             .as_ref()
@@ -1118,38 +1181,7 @@ fn HistoryManager_AdmittedJob_010() {
 // 检查专用 installer 仍受 kill-on-close 保护，历史应用离开管理者 job 后独立结束。
 #[test]
 fn HistoryManager_TypedChildren_011() {
-    require_job_free_source().expect("typed-child probe requires a job-free Windows host");
-    for mode in ["typed-installer", "typed-historical"] {
-        let temp = tempfile::tempdir().unwrap();
-        let mut source = Worker::spawn(temp.path(), mode, "");
-        source.await_file(&temp.path().join("typed.json"));
-        let record: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(temp.path().join("typed.json")).unwrap())
-                .unwrap();
-        let child = ObservedChild::capture(u32::try_from(record["pid"].as_u64().unwrap()).unwrap());
-        source.hard_kill();
-        if mode == "typed-installer" {
-            assert!(
-                child.exact.terminal(5000).unwrap().is_some(),
-                "installer outlived its last dedicated-job owner"
-            );
-            assert!(
-                !temp.path().join("typed-child.completed").exists(),
-                "installer completed rather than being stopped by job close"
-            );
-        } else {
-            assert!(
-                child.exact.terminal(250).unwrap().is_none(),
-                "historical app was tied to manager lifetime"
-            );
-            std::fs::write(temp.path().join("typed-child.release"), b"user-finished").unwrap();
-            assert_eq!(child.exact.terminal(5000).unwrap().unwrap().exit_code(), 0);
-            assert!(
-                temp.path().join("typed-child.completed").exists(),
-                "historical app did not finish its own work"
-            );
-        }
-    }
+    typed_probe::normal();
 }
 
 // 检查 durable create-new 冲突既不覆盖记录，也不把已解除的 job 重新装备。
