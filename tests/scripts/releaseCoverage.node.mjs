@@ -109,7 +109,7 @@ function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = (
         return { name, data, signature: Buffer.from(`untrusted comment: fixture\n${signedPacket.toString('base64')}\ntrusted comment: ${comment}\n${global.toString('base64')}\n`).toString('base64') }
       })
       mkdirSync(join(directory, 'scripts')); mkdirSync(join(directory, 'src-tauri')); mkdirSync(join(directory, 'artifacts'))
-      for (const file of ['release-preflight.mjs', 'release-policy.mjs', 'windows-native-validation.mjs', 'windows-native-scope.json',
+      for (const file of ['release-preflight.mjs', 'release-policy.mjs', 'windows-native-validation.mjs', 'windows-native-scope.json', 'windows-rust-shards.mjs',
         'release-coverage-archive.mjs', 'release-draft-recovery.mjs', 'verify-updater-manifest.js', 'updater-signature.js']) {
         copyFileSync(new URL(`../../scripts/${file}`, import.meta.url), join(directory, 'scripts', file))
       }

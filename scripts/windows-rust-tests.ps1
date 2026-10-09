@@ -1,5 +1,5 @@
 #Requires -Version 7.0
-param([Parameter(Mandatory)][ValidateSet('Compile', 'HostedSuite', 'CompileAndGate', 'All', 'Channel', 'Launch')][string]$Action)
+param([Parameter(Mandatory)][ValidateSet('Probe', 'Compile', 'HostedSuite', 'CompileAndGate', 'All', 'Channel', 'Launch')][string]$Action)
 $ErrorActionPreference = 'Stop'
 
 function Read-TestTargets([string[]]$Lines, [string]$Manifest) {
@@ -201,6 +201,7 @@ if (![WindowsRustCiJob]::IsProcessInJob([WindowsRustCiJob]::GetCurrentProcess(),
 }
 Write-Host "WINDOWS_RUST_CI_PARENT pid=$PID inJob=$contained"
 if ($env:GITHUB_OUTPUT) { Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "job_free=$((!$contained).ToString().ToLowerInvariant())" }
+if ($Action -eq 'Probe') { exit 0 }
 if ($contained -and $Action -in @('CompileAndGate', 'All', 'Channel', 'Launch')) { throw 'Ordinary PowerShell is contained in an external Job; direct native tests are blocked' }
 
 $manifest = (Resolve-Path 'Cargo.toml').Path

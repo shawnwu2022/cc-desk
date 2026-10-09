@@ -85,6 +85,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: windows-test-package-no-lto
+          cache-workspace-crates: false
           cache-on-failure: true
 
       - name: Install locked frontend dependencies
@@ -205,3 +207,4 @@ jobs:
             npm-audit.json
           retention-days: 14
           if-no-files-found: error
+          compression-level: 0

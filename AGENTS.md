@@ -232,6 +232,8 @@ npm run tauri:build        # 生产构建
 
 ### 测试要求
 
+- **CI 性能与来源**：Windows 普通 Rust CI 一次编译四个原始 harness，以同 source SHA/run/attempt 绑定的编译包确定性分为 8 片；`Rust checks` 在全片成功、完整名称与原始忽略集合及原始输出计数核对后才通过。18 条 Job-free 专项仍按原政策披露为未验证，不增排除。roundtrip 的普通 release 与惰性 debug 场景并行，原 required policy 聚合全部成功。发布候选可在同源 CI 等待期间构建，正式发布仍受原完整来源、coverage 与平台签名门控。详见 [docs/ci-performance.md](docs/ci-performance.md)。
+
 - **开发必须搭配测试**：新增功能、修改逻辑、修复 bug 时，同步编写或更新对应测试。遵循 [测试编写原则](docs/测试编写原则.md)
 - **Bug 修复必须先写测试**：修复 bug 时，先编写测试复现问题，确认测试失败，然后修复代码直至测试通过
 - **自动测试优先**：能用自动测试覆盖的场景，必须写成自动测试，不要写入手动测试文档

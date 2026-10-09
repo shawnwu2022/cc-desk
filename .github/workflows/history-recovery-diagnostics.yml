@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: history-recovery-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   recovery:
     runs-on: windows-2022
@@ -30,6 +34,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: windows-debug-runtime
+          cache-workspace-crates: false
           cache-on-failure: true
       - name: Prepare verified Windows runtime
         id: runtime

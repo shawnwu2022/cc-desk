@@ -25,6 +25,11 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Explicit reviewed-source dispatches retain their independent evidence runs.
+  group: history-payload-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   payload:
     if: >-
@@ -72,6 +77,14 @@ jobs:
         uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt
+
+      - name: Cache compiled dependencies, never fixture or evidence outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: historical-payload-debug
+          cache-workspace-crates: false
+          cache-on-failure: true
 
       - name: Verify pinned fixture provenance
         run: node --test tests/scripts/historyPayloadFixture.node.mjs tests/scripts/historyPayloadPolicy.node.mjs

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateShardExecution, validateRustShardRun } from './windows-rust-shards.mjs';
 
 export const VALIDATION_POLICY = 'required-checks-and-disclosed-host-unverified-v1';
 export const REPORT_FILENAME = 'windows-native-coverage.json';
@@ -54,6 +55,7 @@ export function validateNativeCoverage(report, context) {
   requireThat(Array.isArray(report.harnesses) && report.harnesses.length === scope.harnesses.length, 'default harness coverage missing');
   const identities = report.harnesses.map(h => `${h.identity?.kind}:${h.identity?.name}`);
   requireThat(new Set(identities).size === identities.length && same(identities, scope.harnesses.map(h => `${h.kind}:${h.name}`)), 'default harness identity mismatch');
+  if (report.rustShardRun !== undefined || report.harnesses.some(h => h.shards !== undefined)) validateRustShardRun(report, expected);
   const counts = { passed: 0, failed: 0, ignored: 0, measured: 0, filteredOut: 0, totalInventory: 0, selected: 0, executed: 0, excluded: 0 };
   const allLogs = [];
   for (const h of report.harnesses) {
@@ -149,6 +151,9 @@ export function readNativeCoverageArtifact(directory, context) {
     requireThat(same(ignored.map(t => t.name), h.ignored) && same(selected.map(t => t.name), h.selected), 'raw selected/ignored log differs from report');
     requireThat([...ignored, ...selected].every(t => full.some(original => original.name === t.name && original.type === t.type)), 'raw inventory type changed');
     const execution = readLog(h.logs.execution).replaceAll('\r\n', '\n');
+    if (h.shards !== undefined || execution.startsWith('CCDESK_SHARD_START ')) {
+      validateShardExecution(h, execution, parseLibtestListing, parseLibtestResult);
+    }
     const actual = parseLibtestResult(execution);
     requireThat(Object.entries(actual).every(([k, v]) => h.result[k] === v), 'raw outer result differs from report');
     const observedIgnored = new Map([...execution.matchAll(/^test (.+) \.\.\. ignored(?:, (.*))?$/gm)].map(m => [m[1], m[2] ?? null]));

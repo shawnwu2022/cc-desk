@@ -42,6 +42,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: windows-debug-runtime
+          cache-workspace-crates: false
           cache-on-failure: true
       - name: Prepare verified Windows runtime
         run: node scripts/prepare-conpty.mjs

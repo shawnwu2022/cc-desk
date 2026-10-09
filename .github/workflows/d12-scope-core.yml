@@ -9,6 +9,9 @@ on:
       - '.github/workflows/d12-scope-core.yml'
 permissions:
   contents: read
+concurrency:
+  group: d12-scope-core-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   core:
     strategy:
@@ -24,6 +27,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tests/native-cli/scope-core
+          shared-key: scope-core
+          cache-workspace-crates: false
+          cache-on-failure: true
       - name: Test actual production reader modules with locked dependencies
         run: cargo test --locked --manifest-path tests/native-cli/scope-core/Cargo.toml
       - name: Lint actual production reader modules
