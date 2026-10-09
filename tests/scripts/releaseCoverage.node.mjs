@@ -259,6 +259,35 @@ test('ReleaseCoverage_PreparedDraftBindsSameRunAndRefusesPartialUploads_024', ()
   }
 })
 
+test('ReleaseCoverage_ExplicitPreparedRepairRetainsFullSameRunGates_026', () => {
+  const input = { stage: true, preparedPhase: true,
+    extraArgs: ['--artifacts', '--repair-prepared-release-id', String(OLD_DRAFT_ID)],
+    mutate: f => { f.staged.tag_name = 'untagged-dce9f75805136bcd2e47' } }
+  const good = preflight(input)
+  assert.equal(good.status, 0, good.stderr)
+  assert.match(good.notes, /cc-desk-stage:/)
+  for (const mutate of [f => f.staged.target_commitish = OLD_SOURCE,
+    f => f.staged.body = f.staged.body.replace(':42:1:', ':43:1:'),
+    f => f.staged.body += ' changed', f => f.staged.assets[0].digest = `sha256:${'f'.repeat(64)}`,
+    f => f.staged.assets.push({ id: 999, name: 'unknown' }),
+    f => f.staged.tag_name = 'untagged-invalid', f => f.main.sha = OLD_SOURCE,
+    f => f.ci.conclusion = 'failure', f => f.tagExists = true,
+    f => f.platformArtifacts.pop(), f => f.releaseRun.head_sha = OLD_SOURCE,
+    f => f.releases.push({ id: 999, tag_name: 'v0.18.1' }),
+  ]) {
+    const bad = preflight({ ...input, mutate: f => { input.mutate(f); mutate(f) } })
+    assert.equal(bad.status, 1, bad.stdout)
+  }
+})
+
+test('ReleaseCoverage_UntaggedReviewedDraftCannotLookLikeUnusedVersion_027', () => {
+  for (const extraArgs of [[], ['--prepare-draft-recovery']]) {
+    const result = preflight({ stage: true, preparedPhase: true, extraArgs,
+      mutate: f => { f.staged.tag_name = 'untagged-dce9f75805136bcd2e47' } })
+    assert.equal(result.status, 1, result.stdout)
+  }
+})
+
 test('ReleaseCoverage_RecoveryFlagRetainsOrdinaryUnusedVersionPromotion_025', () => {
   const ordinary = { stage: true, extraArgs: ['--prepare-draft-recovery'], mutate: fixture => { fixture.releases = [] },
     mutateLocal: directory => {

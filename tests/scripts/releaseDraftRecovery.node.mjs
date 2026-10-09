@@ -393,3 +393,117 @@ test('DraftRecovery_PublicationReportsActualPermissionRejectionWithoutRetry_021'
   }, fixture.binding, 406663556), /PATCH HTTP 403/)
   assert.equal(patches, 1)
 })
+
+function metadataFixture() {
+  const snapshot = oldDraft()
+  snapshot.created_at = '2026-10-08T00:00:00Z'
+  const binding = { sha, runId: 9, attempt: 1, tag: 'v0.18.1', inventory: [] }
+  binding.body = `Exact validation disclosure\n${api().stageMarker(binding)}\n`
+  const current = { ...structuredClone(snapshot), target_commitish: sha, assets: preservedFixtureAssets() }
+  return { snapshot, binding, current }
+}
+
+test('DraftRecovery_MetadataPatchKeepsExplicitVersionAndSource_022', async () => {
+  const fixture = metadataFixture()
+  let writes = 0
+  await api().replacePreservedDraftMetadata(async (path, optional, method, body) => {
+    if (path === 'branches/main') return { protected: true, commit: { sha } }
+    if (path.startsWith('git/ref/')) return null
+    if (method === 'PATCH') {
+      writes++
+      Object.assign(fixture.current, body)
+      // Reproduce the observed API normalization when these fields are absent.
+      if (!body.tag_name || !body.target_commitish) fixture.current.tag_name = 'untagged-dce9f75805136bcd2e47'
+    }
+    return structuredClone(fixture.current)
+  }, fixture.snapshot, fixture.binding)
+  api().assertPreparedDraft(fixture.current, fixture.binding)
+  assert.equal(writes, 1)
+})
+
+test('DraftRecovery_MetadataMismatchReportsHTTPAndSafeFieldDifference_023', async () => {
+  const fixture = metadataFixture()
+  let writes = 0
+  await assert.rejects(api().replacePreservedDraftMetadata(async (path, optional, method, body) => {
+    if (path === 'branches/main') return { protected: true, commit: { sha } }
+    if (path.startsWith('git/ref/')) return null
+    if (method === 'PATCH') {
+      writes++
+      Object.assign(fixture.current, body, { tag_name: 'untagged-dce9f75805136bcd2e47' })
+      return api().readDraftApiResponse(new Response(JSON.stringify(fixture.current), { status: 200 }), method)
+    }
+    return structuredClone(fixture.current)
+  }, fixture.snapshot, fixture.binding), error => {
+    assert.match(error.message, /PATCH HTTP 200/)
+    assert.match(error.message, /tag_name/)
+    assert.match(error.message, /untagged-dce9f75805136bcd2e47/)
+    assert.doesNotMatch(error.message, /Exact validation disclosure|permission|Bearer/)
+    return true
+  })
+  assert.equal(writes, 1)
+})
+
+test('DraftRecovery_PreparedRepairUsesExactBackupAndBindingWithoutReplaying_024', async () => {
+  const fixture = metadataFixture()
+  Object.assign(fixture.current, { body: fixture.binding.body, tag_name: 'untagged-dce9f75805136bcd2e47' })
+  let writes = 0
+  const request = async (path, optional, method, body) => {
+    if (path === 'branches/main') return { protected: true, commit: { sha } }
+    if (path.startsWith('git/ref/')) return null
+    if (method === 'PATCH') {
+      writes++
+      Object.assign(fixture.current, body)
+      throw new Error('acknowledgement lost after repair')
+    }
+    return structuredClone(fixture.current)
+  }
+  assert.equal(typeof api().repairPreparedDraftMetadata, 'function', 'explicit same-binding repair must be implemented')
+  await api().repairPreparedDraftMetadata(request, fixture.snapshot, fixture.binding)
+  api().assertPreparedDraft(fixture.current, fixture.binding)
+  await api().repairPreparedDraftMetadata(request, fixture.snapshot, fixture.binding)
+  assert.equal(writes, 1, 'observed complete state must not repeat the unknown write')
+})
+
+test('DraftRecovery_PreparedRepairRejectsSourceRunInventoryOrSnapshotDrift_025', async () => {
+  assert.equal(typeof api().repairPreparedDraftMetadata, 'function', 'explicit same-binding repair must be implemented')
+  for (const mutate of [
+    f => f.current.target_commitish = oldSource,
+    f => f.binding.runId++, f => f.binding.attempt++,
+    f => f.binding.inventory.push({ name: 'other.bin', size: 1, sha256: 'b'.repeat(64) }),
+    f => f.current.body += ' concurrent disclosure', f => f.current.name += ' changed',
+    f => f.current.created_at = '2026-10-09T00:00:00Z',
+    f => f.current.tag_name = 'v0.18.0', f => f.current.tag_name = 'untagged-invalid',
+    f => f.current.assets[0].id++, f => f.current.assets[0].digest = `sha256:${'b'.repeat(64)}`,
+    f => f.current.assets[0].label = 'changed', f => f.current.assets[0].content_type = 'changed',
+    f => f.current.assets.push({ ...f.current.assets[0], id: 1 }),
+    f => f.current.draft = false, f => f.current.published_at = '2026-10-09T00:00:00Z',
+    f => f.mainSha = oldSource, f => f.tag = { object: { type: 'commit', sha } },
+  ]) {
+    const fixture = metadataFixture()
+    Object.assign(fixture.current, { body: fixture.binding.body, tag_name: 'untagged-dce9f75805136bcd2e47' })
+    mutate(fixture)
+    let writes = 0
+    await assert.rejects(api().repairPreparedDraftMetadata(async (path, optional, method) => {
+      if (path === 'branches/main') return { protected: true, commit: { sha: fixture.mainSha ?? sha } }
+      if (path.startsWith('git/ref/')) return fixture.tag ?? null
+      if (method === 'PATCH') writes++
+      return structuredClone(fixture.current)
+    }, fixture.snapshot, fixture.binding))
+    assert.equal(writes, 0)
+  }
+})
+
+test('DraftRecovery_UntaggedOriginalDraftRemainsAnUnusedVersionConflict_026', () => {
+  const draft = oldDraft(); draft.tag_name = 'untagged-dce9f75805136bcd2e47'
+  assert.equal(api().recoveryCandidateChecks({ ...context(), releaseExists: false }, [draft], null), false)
+})
+
+test('DraftRecovery_HTTPReceiptsKeepConcreteSuccessAndFailureStatus_027', async () => {
+  assert.equal(typeof api().readDraftApiResponse, 'function', 'HTTP response decoder must preserve receipt status')
+  const receipt = await api().readDraftApiResponse(new Response('{"id":406663556}', { status: 200 }), 'PATCH')
+  assert.equal(receipt[api().API_HTTP_STATUS], 200)
+  assert.equal(JSON.stringify(receipt), '{"id":406663556}', 'receipt metadata must not change snapshot comparison')
+  await assert.rejects(api().readDraftApiResponse(new Response('{}', { status: 403 }), 'PATCH'), error => {
+    assert.equal(error.status, 403); assert.match(error.message, /PATCH API HTTP 403/); return true
+  })
+})

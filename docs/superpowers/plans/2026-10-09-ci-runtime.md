@@ -16,4 +16,4 @@
 
 Review focus: exact selected-name union and duplicate execution; ignored workers and eighteen exclusions; cache/artifact contamination across commits or attempts; missing/failed/cancelled shards; release candidate build admission and final provenance revalidation.
 
-- [ ] Final measured sixteen-shard comparison, including exact coverage, warm cache, wall time and runner minutes; preserve the completed eight-shard control.
+- [x] Final measured sixteen-shard comparison: run 37908893484, exact 1277/0/35 plus 18 unverified coverage, true warm cache, 12:22 wall and 87.52 runner minutes. Keep sixteen; ten minutes remains unmet and no additional benchmark batch is authorized.

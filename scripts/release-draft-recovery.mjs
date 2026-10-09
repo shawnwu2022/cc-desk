@@ -7,6 +7,8 @@ import { REPORT_FILENAME, VALIDATION_POLICY } from './windows-native-validation.
 
 export const OLD_DRAFT_ID = 406663556
 export const OLD_SOURCE = '5ed35db9a560e093a91a5ef32a1eb6dd171f27fd'
+export const UNTAGGED_DRAFT_TAG = 'untagged-dce9f75805136bcd2e47'
+export const API_HTTP_STATUS = Symbol('draft API HTTP status')
 export const PRESERVED_LABEL = 'Preserved previous unpublished candidate (source 5ed35db9); not a current installer'
 export const OLD_ASSETS = Object.freeze([
   [621380125, 'CC.Desk_0.18.1_aarch64.dmg', 8127924, 'd28b5b177aed7848b4cccc7de852b114cbfb38f0a80c9566781d9520597db6ba'],
@@ -41,6 +43,23 @@ export function assertPreparedDraft(release, binding) {
   preservedAssets(release)
 }
 
+export function assertRepairablePreparedDraft(release, binding) {
+  requireThat(release?.tag_name === binding.tag || release?.tag_name === UNTAGGED_DRAFT_TAG,
+    'unreviewed prepared draft tag')
+  assertPreparedDraft({ ...release, tag_name: binding.tag }, binding)
+}
+
+export async function readDraftApiResponse(response, method) {
+  if (!response.ok) {
+    const error = new Error(`Draft transaction: ${method} API HTTP ${response.status}`)
+    error.status = response.status
+    throw error
+  }
+  const result = await response.json()
+  Object.defineProperty(result, API_HTTP_STATUS, { value: response.status })
+  return result
+}
+
 function requireThat(value, message) { if (!value) throw new Error(`Draft recovery: ${message}`) }
 export function hash(bytes) { return createHash('sha256').update(bytes).digest('hex') }
 export function assertReviewedOldDraft(release) {
@@ -60,7 +79,7 @@ export function assertReviewedOldDraft(release) {
 export function recoveryCandidateChecks(context, releases, tagRef) {
   if (!sourceChecksPassed(context) || context.tag !== 'v0.18.1' || context.tagExists !== false || tagRef !== null) return false
   if (!Array.isArray(releases)) return false
-  const conflicts = releases.filter(release => release.tag_name === context.tag)
+  const conflicts = releases.filter(release => release.tag_name === context.tag || release.id === OLD_DRAFT_ID)
   if (!conflicts.length) return context.releaseExists === false
   if (conflicts.length !== 1 || context.releaseExists !== true) return false
   try { assertReviewedOldDraft(conflicts[0]); return true } catch { return false }
@@ -265,20 +284,48 @@ function preservedSnapshot(snapshot, sha) {
 }
 
 export async function replacePreservedDraftMetadata(api, snapshot, binding) {
+  assertReviewedOldDraft(snapshot)
   const before = await api(`releases/${OLD_DRAFT_ID}`)
   const expected = preservedSnapshot(snapshot, binding.sha)
   requireThat(JSON.stringify(stableRelease(before)) === JSON.stringify(stableRelease(expected)), 'draft metadata changed after preservation')
+  await writePreparedMetadata(api, expected, binding)
+}
+
+// An explicit repair accepts only the exact same prepared source/run/inventory.
+// The immutable original backup still pins every retained snapshot/asset field.
+export async function repairPreparedDraftMetadata(api, snapshot, binding) {
+  assertReviewedOldDraft(snapshot)
+  const before = await api(`releases/${OLD_DRAFT_ID}`)
+  assertRepairablePreparedDraft(before, binding)
+  const expected = { ...preservedSnapshot(snapshot, binding.sha), tag_name: binding.tag,
+    name: 'CC Desk 0.18.1', body: binding.body, draft: true }
+  requireThat(JSON.stringify(stableRelease({ ...before, tag_name: binding.tag })) === JSON.stringify(stableRelease(expected)),
+    'prepared metadata differs from the immutable original backup')
+  await writePreparedMetadata(api, expected, binding, before.tag_name === binding.tag)
+}
+
+async function writePreparedMetadata(api, expected, binding, alreadyPrepared = false) {
+  assertPreparedDraft({ ...expected, tag_name: binding.tag, name: 'CC Desk 0.18.1', body: binding.body }, binding)
   const main = await api('branches/main')
   requireThat(main.protected === true && main.commit?.sha === binding.sha, 'main changed before metadata update')
   requireThat(await api(`git/ref/tags/${binding.tag}`, true) === null, 'tag appeared before metadata update')
-  const patch = { name: 'CC Desk 0.18.1', body: binding.body, draft: true }
-  let failure
-  try { await api(`releases/${OLD_DRAFT_ID}`, false, 'PATCH', patch) }
+  if (alreadyPrepared) return // A completed unknown acknowledgement is never replayed.
+  const patch = { tag_name: binding.tag, target_commitish: binding.sha, name: 'CC Desk 0.18.1', body: binding.body, draft: true }
+  let failure, receipt
+  try { receipt = await api(`releases/${OLD_DRAFT_ID}`, false, 'PATCH', patch) }
   catch (error) { failure = error }
   const observed = await api(`releases/${OLD_DRAFT_ID}`)
-  const status = Number.isSafeInteger(failure?.status) ? ` (PATCH HTTP ${failure.status})` : failure ? ' (PATCH receipt unknown)' : ''
-  requireThat(JSON.stringify(stableRelease(observed)) === JSON.stringify(stableRelease({ ...expected, ...patch })),
-    `metadata update unresolved or concurrent changes${status}`)
+  const httpStatus = failure?.status ?? receipt?.[API_HTTP_STATUS]
+  const status = Number.isSafeInteger(httpStatus) ? ` (PATCH HTTP ${httpStatus})` : ' (PATCH receipt unknown)'
+  const wanted = stableRelease({ ...expected, ...patch }), actual = stableRelease(observed)
+  const differences = Object.keys(wanted).filter(field => JSON.stringify(wanted[field]) !== JSON.stringify(actual[field]))
+  const safeFields = ['id', 'tag_name', 'target_commitish', 'draft', 'prerelease', 'published_at', 'created_at']
+  const detail = differences.map(field => safeFields.includes(field)
+    ? { field, expected: wanted[field], observed: actual[field] }
+    : { field, expectedSha256: hash(Buffer.from(JSON.stringify(wanted[field]) ?? 'null')),
+      observedSha256: hash(Buffer.from(JSON.stringify(actual[field]) ?? 'null')) })
+  requireThat(differences.length === 0,
+    `metadata update unresolved or concurrent changes${status}; changed fields: ${JSON.stringify(detail)}`)
   assertPreparedDraft(observed, binding)
 }
 

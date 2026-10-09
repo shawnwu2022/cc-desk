@@ -390,7 +390,1080 @@
       }
     ]
   },
-  "finalOptimization": null,
+  "finalOptimization": {
+    "headSha": "82dd9a9636895a8936d503df223d69e76e0b89a9",
+    "testedMergeSha": "cfe016174db2fe00b0ab01e1acd1372cca50a397",
+    "runId": "37908893484",
+    "runAttempt": 1,
+    "status": "completed",
+    "conclusion": "success",
+    "start": "2026-10-09T09:04:10Z",
+    "end": "2026-10-09T09:16:32Z",
+    "apiUpdatedAt": "2026-10-09T09:16:33Z",
+    "wallSeconds": 742,
+    "apiElapsedSeconds": 743,
+    "runnerSeconds": 5251,
+    "cache": "warm-true-hit",
+    "cacheBytes": 682047390,
+    "compilerSeconds": 247,
+    "maxShardSeconds": 436,
+    "planHash": "63edf7780c53b3e182bc3002cc2250ba09705cfe24f9492531486d83fcdfc16e",
+    "bundlePayloadBytes": 125498242,
+    "counts": {
+      "passed": 1277,
+      "failed": 0,
+      "ignored": 35,
+      "unverified": 18
+    },
+    "coverage": {
+      "artifactId": "11605619583",
+      "name": "windows-native-coverage-cfe016174db2fe00b0ab01e1acd1372cca50a397-37908893484-1",
+      "zipBytes": 168627,
+      "sha256": "ac156bfbb565506087e9b840a5d4478f2544c10a9f74e81a4701e59968b87490",
+      "aggregateJobId": "113753211518",
+      "aggregateConclusion": "success",
+      "evidence": "strict same-source/run/attempt aggregate downloaded and validated all sixteen receipts and raw logs; authenticated job stdout publishes exact counts; local artifact URL download returned 403"
+    },
+    "aggregate": {
+      "action": "aggregate",
+      "planHash": "63edf7780c53b3e182bc3002cc2250ba09705cfe24f9492531486d83fcdfc16e",
+      "artifactName": "windows-rust-bundle-cfe016174db2fe00b0ab01e1acd1372cca50a397-37908893484-1",
+      "sourceSha": "cfe016174db2fe00b0ab01e1acd1372cca50a397",
+      "runId": "37908893484",
+      "runAttempt": 1,
+      "completed": true,
+      "harnesses": [
+        {
+          "identity": {
+            "name": "cc_desk",
+            "kind": "lib"
+          },
+          "full": 1311,
+          "selected": 1293,
+          "result": {
+            "exitCode": 0,
+            "passed": 1261,
+            "failed": 0,
+            "ignored": 32,
+            "measured": 0,
+            "filteredOut": 18
+          },
+          "shards": [
+            {
+              "index": 0,
+              "selected": 58,
+              "durationSeconds": 148.8598092,
+              "result": {
+                "exitCode": 0,
+                "passed": 55,
+                "failed": 0,
+                "ignored": 3,
+                "measured": 0,
+                "filteredOut": 1253
+              }
+            },
+            {
+              "index": 1,
+              "selected": 59,
+              "durationSeconds": 223.2282844,
+              "result": {
+                "exitCode": 0,
+                "passed": 57,
+                "failed": 0,
+                "ignored": 2,
+                "measured": 0,
+                "filteredOut": 1252
+              }
+            },
+            {
+              "index": 2,
+              "selected": 61,
+              "durationSeconds": 99.7729569,
+              "result": {
+                "exitCode": 0,
+                "passed": 59,
+                "failed": 0,
+                "ignored": 2,
+                "measured": 0,
+                "filteredOut": 1250
+              }
+            },
+            {
+              "index": 3,
+              "selected": 61,
+              "durationSeconds": 188.2024291,
+              "result": {
+                "exitCode": 0,
+                "passed": 59,
+                "failed": 0,
+                "ignored": 2,
+                "measured": 0,
+                "filteredOut": 1250
+              }
+            },
+            {
+              "index": 4,
+              "selected": 61,
+              "durationSeconds": 329.6671854,
+              "result": {
+                "exitCode": 0,
+                "passed": 58,
+                "failed": 0,
+                "ignored": 3,
+                "measured": 0,
+                "filteredOut": 1250
+              }
+            },
+            {
+              "index": 5,
+              "selected": 90,
+              "durationSeconds": 407.6127739,
+              "result": {
+                "exitCode": 0,
+                "passed": 88,
+                "failed": 0,
+                "ignored": 2,
+                "measured": 0,
+                "filteredOut": 1221
+              }
+            },
+            {
+              "index": 6,
+              "selected": 90,
+              "durationSeconds": 169.4067525,
+              "result": {
+                "exitCode": 0,
+                "passed": 89,
+                "failed": 0,
+                "ignored": 1,
+                "measured": 0,
+                "filteredOut": 1221
+              }
+            },
+            {
+              "index": 7,
+              "selected": 90,
+              "durationSeconds": 160.3341998,
+              "result": {
+                "exitCode": 0,
+                "passed": 88,
+                "failed": 0,
+                "ignored": 2,
+                "measured": 0,
+                "filteredOut": 1221
+              }
+            },
+            {
+              "index": 8,
+              "selected": 90,
+              "durationSeconds": 317.4292491,
+              "result": {
+                "exitCode": 0,
+                "passed": 87,
+                "failed": 0,
+                "ignored": 3,
+                "measured": 0,
+                "filteredOut": 1221
+              }
+            },
+            {
+              "index": 9,
+              "selected": 90,
+              "durationSeconds": 138.1452195,
+              "result": {
+                "exitCode": 0,
+                "passed": 90,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 1221
+              }
+            },
+            {
+              "index": 10,
+              "selected": 90,
+              "durationSeconds": 295.2692308,
+              "result": {
+                "exitCode": 0,
+                "passed": 89,
+                "failed": 0,
+                "ignored": 1,
+                "measured": 0,
+                "filteredOut": 1221
+              }
+            },
+            {
+              "index": 11,
+              "selected": 90,
+              "durationSeconds": 213.328536,
+              "result": {
+                "exitCode": 0,
+                "passed": 86,
+                "failed": 0,
+                "ignored": 4,
+                "measured": 0,
+                "filteredOut": 1221
+              }
+            },
+            {
+              "index": 12,
+              "selected": 91,
+              "durationSeconds": 284.0449728,
+              "result": {
+                "exitCode": 0,
+                "passed": 90,
+                "failed": 0,
+                "ignored": 1,
+                "measured": 0,
+                "filteredOut": 1220
+              }
+            },
+            {
+              "index": 13,
+              "selected": 91,
+              "durationSeconds": 136.5748847,
+              "result": {
+                "exitCode": 0,
+                "passed": 88,
+                "failed": 0,
+                "ignored": 3,
+                "measured": 0,
+                "filteredOut": 1220
+              }
+            },
+            {
+              "index": 14,
+              "selected": 91,
+              "durationSeconds": 262.5768057,
+              "result": {
+                "exitCode": 0,
+                "passed": 89,
+                "failed": 0,
+                "ignored": 2,
+                "measured": 0,
+                "filteredOut": 1220
+              }
+            },
+            {
+              "index": 15,
+              "selected": 90,
+              "durationSeconds": 144.1570274,
+              "result": {
+                "exitCode": 0,
+                "passed": 89,
+                "failed": 0,
+                "ignored": 1,
+                "measured": 0,
+                "filteredOut": 1221
+              }
+            }
+          ]
+        },
+        {
+          "identity": {
+            "name": "cc-desk",
+            "kind": "bin"
+          },
+          "full": 6,
+          "selected": 6,
+          "result": {
+            "exitCode": 0,
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filteredOut": 0
+          },
+          "shards": [
+            {
+              "index": 0,
+              "selected": 1,
+              "durationSeconds": 0.0208729,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 5
+              }
+            },
+            {
+              "index": 1,
+              "selected": 1,
+              "durationSeconds": 0.0233336,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 5
+              }
+            },
+            {
+              "index": 2,
+              "selected": 1,
+              "durationSeconds": 0.0207199,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 5
+              }
+            },
+            {
+              "index": 3,
+              "selected": 1,
+              "durationSeconds": 0.0238619,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 5
+              }
+            },
+            {
+              "index": 4,
+              "selected": 1,
+              "durationSeconds": 0.0252216,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 5
+              }
+            },
+            {
+              "index": 5,
+              "selected": 1,
+              "durationSeconds": 0.0237728,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 5
+              }
+            }
+          ]
+        },
+        {
+          "identity": {
+            "name": "paste_transport",
+            "kind": "test"
+          },
+          "full": 8,
+          "selected": 8,
+          "result": {
+            "exitCode": 0,
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filteredOut": 0
+          },
+          "shards": [
+            {
+              "index": 0,
+              "selected": 1,
+              "durationSeconds": 3.4534828,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 7
+              }
+            },
+            {
+              "index": 1,
+              "selected": 1,
+              "durationSeconds": 4.2147712,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 7
+              }
+            },
+            {
+              "index": 2,
+              "selected": 1,
+              "durationSeconds": 13.7638992,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 7
+              }
+            },
+            {
+              "index": 3,
+              "selected": 1,
+              "durationSeconds": 4.011812,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 7
+              }
+            },
+            {
+              "index": 4,
+              "selected": 1,
+              "durationSeconds": 4.017753,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 7
+              }
+            },
+            {
+              "index": 5,
+              "selected": 1,
+              "durationSeconds": 4.0148117,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 7
+              }
+            },
+            {
+              "index": 6,
+              "selected": 1,
+              "durationSeconds": 0.0263305,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 7
+              }
+            },
+            {
+              "index": 7,
+              "selected": 1,
+              "durationSeconds": 3.0969276,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 7
+              }
+            }
+          ]
+        },
+        {
+          "identity": {
+            "name": "paste_claude_e2e",
+            "kind": "test"
+          },
+          "full": 5,
+          "selected": 5,
+          "result": {
+            "exitCode": 0,
+            "passed": 2,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filteredOut": 0
+          },
+          "shards": [
+            {
+              "index": 0,
+              "selected": 1,
+              "durationSeconds": 0.0177268,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 4
+              }
+            },
+            {
+              "index": 1,
+              "selected": 1,
+              "durationSeconds": 0.0200147,
+              "result": {
+                "exitCode": 0,
+                "passed": 1,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 4
+              }
+            },
+            {
+              "index": 2,
+              "selected": 1,
+              "durationSeconds": 0.0190809,
+              "result": {
+                "exitCode": 0,
+                "passed": 0,
+                "failed": 0,
+                "ignored": 1,
+                "measured": 0,
+                "filteredOut": 4
+              }
+            },
+            {
+              "index": 3,
+              "selected": 1,
+              "durationSeconds": 0.0207802,
+              "result": {
+                "exitCode": 0,
+                "passed": 0,
+                "failed": 0,
+                "ignored": 1,
+                "measured": 0,
+                "filteredOut": 4
+              }
+            },
+            {
+              "index": 4,
+              "selected": 1,
+              "durationSeconds": 0.0213948,
+              "result": {
+                "exitCode": 0,
+                "passed": 0,
+                "failed": 0,
+                "ignored": 1,
+                "measured": 0,
+                "filteredOut": 4
+              }
+            }
+          ]
+        }
+      ],
+      "doctests": {
+        "command": "cargo test --locked --doc",
+        "exitCode": 0,
+        "result": {
+          "exitCode": 0,
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filteredOut": 0
+        },
+        "logs": [
+          "logs/doctests.log"
+        ]
+      },
+      "nativeJobSuite": {
+        "status": "unverified",
+        "reason": "external_job",
+        "unverifiedNames": [
+          "version_history::windows::manager_process::tests::HistoryManagerProcess_SuspendedIdentity_001",
+          "version_history::windows::manager_process::tests::HistoryManagerProcess_ReadyChain_002",
+          "version_history::windows::manager_process::tests::HistoryManager_SourceCrash_004",
+          "version_history::windows::manager_process::tests::HistoryManager_ContainedSources_005",
+          "version_history::windows::manager_process::tests::HistoryManager_DisarmUnknown_006",
+          "version_history::windows::manager_process::tests::HistoryManager_JobCollision_007",
+          "version_history::windows::manager_process::tests::HistoryManager_UniqueJobs_008",
+          "version_history::windows::manager_process::tests::HistoryManager_RejectReceiptMix_009",
+          "version_history::windows::manager_process::tests::HistoryManager_AdmittedJob_010",
+          "version_history::windows::manager_process::tests::HistoryManager_TypedChildren_011",
+          "version_history::windows::manager_process::tests::HistoryManager_LifetimeCollision_012",
+          "version_history::windows::manager_process::tests::HistoryManager_ConcurrentHostJob_013",
+          "version_history::windows::manager_process::tests::typed_probe::HistoryManager_PrepareTimeout_015",
+          "version_history::windows::manager_process::tests::typed_probe::HistoryManager_MarkerTimeout_016",
+          "version_history::windows::manager_process::tests::typed_probe::HistoryManager_SuspendedFailure_017",
+          "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RunningFailure_018",
+          "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RejectFallback_019",
+          "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RejectExit124_020"
+        ]
+      }
+    },
+    "workflows": [
+      {
+        "id": 37908893613,
+        "name": "D12 retained directory core",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:04:15Z",
+        "end": "2026-10-09T09:05:27Z",
+        "runnerSeconds": 99,
+        "jobs": [
+          {
+            "id": 113748971184,
+            "name": "core (ubuntu-22.04)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:15Z",
+            "end": "2026-10-09T09:04:34Z",
+            "seconds": 19
+          },
+          {
+            "id": 113748971388,
+            "name": "core (macos-14)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:36Z",
+            "end": "2026-10-09T09:05:05Z",
+            "seconds": 29
+          },
+          {
+            "id": 113748971526,
+            "name": "core (windows-2022)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:36Z",
+            "end": "2026-10-09T09:05:27Z",
+            "seconds": 51
+          }
+        ]
+      },
+      {
+        "id": 37908893508,
+        "name": "Real Claude paste acceptance",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:04:14Z",
+        "end": "2026-10-09T09:15:31Z",
+        "runnerSeconds": 1273,
+        "jobs": [
+          {
+            "id": 113748969308,
+            "name": "Real CLI (2.1.274, bundled ConPTY)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:15:31Z",
+            "seconds": 677
+          },
+          {
+            "id": 113748969599,
+            "name": "Real CLI (2.1.268, bundled ConPTY)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:14:10Z",
+            "seconds": 596
+          }
+        ]
+      },
+      {
+        "id": 37908893371,
+        "name": "D14 output transport core",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:04:13Z",
+        "end": "2026-10-09T09:04:59Z",
+        "runnerSeconds": 94,
+        "jobs": [
+          {
+            "id": 113748968679,
+            "name": "transport (windows-2022)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:13Z",
+            "end": "2026-10-09T09:04:59Z",
+            "seconds": 46
+          },
+          {
+            "id": 113748968986,
+            "name": "transport (ubuntu-22.04)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:04:35Z",
+            "seconds": 21
+          },
+          {
+            "id": 113748969079,
+            "name": "transport (macos-14)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:18Z",
+            "end": "2026-10-09T09:04:45Z",
+            "seconds": 27
+          }
+        ]
+      },
+      {
+        "id": 37908893333,
+        "name": "D17 input staging core",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:04:14Z",
+        "end": "2026-10-09T09:05:31Z",
+        "runnerSeconds": 95,
+        "jobs": [
+          {
+            "id": 113748968689,
+            "name": "input (windows-2022)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:45Z",
+            "end": "2026-10-09T09:05:31Z",
+            "seconds": 46
+          },
+          {
+            "id": 113748968837,
+            "name": "input (ubuntu-22.04)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:04:34Z",
+            "seconds": 20
+          },
+          {
+            "id": 113748968970,
+            "name": "input (macos-14)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:20Z",
+            "end": "2026-10-09T09:04:49Z",
+            "seconds": 29
+          }
+        ]
+      },
+      {
+        "id": 37908893423,
+        "name": "D13 observer isolation",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:04:14Z",
+        "end": "2026-10-09T09:05:06Z",
+        "runnerSeconds": 101,
+        "jobs": [
+          {
+            "id": 113748969314,
+            "name": "observer (ubuntu-22.04)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:04:34Z",
+            "seconds": 20
+          },
+          {
+            "id": 113748969649,
+            "name": "observer (macos-14)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:19Z",
+            "end": "2026-10-09T09:04:48Z",
+            "seconds": 29
+          },
+          {
+            "id": 113748969757,
+            "name": "observer (windows-2022)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:05:06Z",
+            "seconds": 52
+          }
+        ]
+      },
+      {
+        "id": 37908893338,
+        "name": "Unified workspace visual evidence",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:04:15Z",
+        "end": "2026-10-09T09:06:58Z",
+        "runnerSeconds": 163,
+        "jobs": [
+          {
+            "id": 113748968657,
+            "name": "visual",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:15Z",
+            "end": "2026-10-09T09:06:58Z",
+            "seconds": 163
+          }
+        ]
+      },
+      {
+        "id": 37908893345,
+        "name": "Historical recovery focused checks",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:04:14Z",
+        "end": "2026-10-09T09:10:47Z",
+        "runnerSeconds": 393,
+        "jobs": [
+          {
+            "id": 113748968831,
+            "name": "recovery",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:10:47Z",
+            "seconds": 393
+          }
+        ]
+      },
+      {
+        "id": 37908893498,
+        "name": "Windows test package and bundled ConPTY integration",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:04:14Z",
+        "end": "2026-10-09T09:14:10Z",
+        "runnerSeconds": 610,
+        "jobs": [
+          {
+            "id": 113748970554,
+            "name": "formatting",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:04:28Z",
+            "seconds": 14
+          },
+          {
+            "id": 113748970858,
+            "name": "installer",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:14:10Z",
+            "seconds": 596
+          }
+        ]
+      },
+      {
+        "id": 37908893484,
+        "name": "CI",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:04:14Z",
+        "end": "2026-10-09T09:16:32Z",
+        "runnerSeconds": 5251,
+        "jobs": [
+          {
+            "id": 113748969739,
+            "name": "Rust compile and static checks",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:08:21Z",
+            "seconds": 247
+          },
+          {
+            "id": 113748969983,
+            "name": "Frontend checks",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:15Z",
+            "end": "2026-10-09T09:06:18Z",
+            "seconds": 123
+          },
+          {
+            "id": 113748970142,
+            "name": "Roundtrip inert debug scenarios",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:10:35Z",
+            "seconds": 381
+          },
+          {
+            "id": 113748970201,
+            "name": "Roundtrip ordinary release exclusion",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:04:14Z",
+            "end": "2026-10-09T09:12:53Z",
+            "seconds": 519
+          },
+          {
+            "id": 113750429822,
+            "name": "Rust test shard 10",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:13:45Z",
+            "seconds": 321
+          },
+          {
+            "id": 113750429823,
+            "name": "Rust test shard 4",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:14:25Z",
+            "seconds": 361
+          },
+          {
+            "id": 113750429825,
+            "name": "Rust test shard 5",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:15:40Z",
+            "seconds": 436
+          },
+          {
+            "id": 113750429848,
+            "name": "Rust test shard 2",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:10:47Z",
+            "seconds": 143
+          },
+          {
+            "id": 113750429898,
+            "name": "Rust test shard 13",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:23Z",
+            "end": "2026-10-09T09:11:06Z",
+            "seconds": 163
+          },
+          {
+            "id": 113750429899,
+            "name": "Rust test shard 3",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:11:59Z",
+            "seconds": 215
+          },
+          {
+            "id": 113750429940,
+            "name": "Rust test shard 15",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:11:16Z",
+            "seconds": 172
+          },
+          {
+            "id": 113750429941,
+            "name": "Rust test shard 0",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:11:17Z",
+            "seconds": 173
+          },
+          {
+            "id": 113750429946,
+            "name": "Rust test shard 1",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:12:38Z",
+            "seconds": 254
+          },
+          {
+            "id": 113750429978,
+            "name": "Rust test shard 12",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:13:30Z",
+            "seconds": 306
+          },
+          {
+            "id": 113750430003,
+            "name": "Rust test shard 7",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:11:37Z",
+            "seconds": 193
+          },
+          {
+            "id": 113750430006,
+            "name": "Rust test shard 6",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:11:39Z",
+            "seconds": 195
+          },
+          {
+            "id": 113750430010,
+            "name": "Rust test shard 11",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:12:24Z",
+            "seconds": 240
+          },
+          {
+            "id": 113750430055,
+            "name": "Rust test shard 8",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:10:37Z",
+            "end": "2026-10-09T09:16:18Z",
+            "seconds": 341
+          },
+          {
+            "id": 113750430067,
+            "name": "Rust test shard 14",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:10:49Z",
+            "end": "2026-10-09T09:15:40Z",
+            "seconds": 291
+          },
+          {
+            "id": 113750430074,
+            "name": "Rust test shard 9",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:08:24Z",
+            "end": "2026-10-09T09:11:08Z",
+            "seconds": 164
+          },
+          {
+            "id": 113752006602,
+            "name": "Disposable roundtrip compile-only policy (no native acceptance)",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:12:56Z",
+            "end": "2026-10-09T09:12:58Z",
+            "seconds": 2
+          },
+          {
+            "id": 113753211518,
+            "name": "Rust checks",
+            "status": "completed",
+            "conclusion": "success",
+            "start": "2026-10-09T09:16:21Z",
+            "end": "2026-10-09T09:16:32Z",
+            "seconds": 11
+          }
+        ]
+      }
+    ],
+    "allTriggeredWorkflowRunnerSeconds": 8079
+  },
   "eightShardWarmOptimization": {
     "headSha": "edcfd281877dde6c5012a09360ffc6cf117fde5d",
     "testedMergeSha": "d51cba93b6876fedaf3c4e08d1df1bc1ba0e7d8c",

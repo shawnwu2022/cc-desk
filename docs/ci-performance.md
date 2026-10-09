@@ -197,8 +197,8 @@ The follow-up also removes generated plans/results/executable bundles before
 Rust cache post-save, clears any restored old bundle before new planning, and
 prints harness start/end, durations, results and slow-case warnings. Raw
 source/run/attempt evidence is recorded in `docs/ci-runtime-evidence.json`.
-Ten minutes remains unmet on this first cold run; the final revised warm run
-must be measured before making a stronger runtime claim.
+Ten minutes remained unmet on this first cold run. The completed controls and
+final sixteen-shard measurement below record the observed improvement.
 
 
 ## Eight-shard warm control and final placement experiment
@@ -228,6 +228,59 @@ all statements/assertions and exact argument tuples. The original fixture roots
 are independent and fault guards remain thread-local. The pinned-base body and
 inventory conservation check now covers all 59 scenarios; the original 55 are
 unchanged. The case split raises total passing tests by three, without changing
-the 35 ignores or eighteen exclusions. Final hosted source/run measurements
-will be recorded in the Draft PR without another documentation-only full-CI
-batch; this section intentionally does not claim that unobserved result.
+the 35 ignores or eighteen exclusions.
+
+## Final measured configuration
+
+Keep sixteen shards. Head `82dd9a9636895a8936d503df223d69e76e0b89a9`, tested
+merge `cfe016174db2fe00b0ab01e1acd1372cca50a397`, run
+[37908893484](https://github.com/shawnwu2022/cc-desk/actions/runs/37908893484),
+attempt 1 completed all 22 jobs successfully. Workflow start 09:04:10 UTC to
+last required job completion 09:16:32 UTC is **12:22**; API completion metadata
+updated one second later (**12:23**). Summed job elapsed time is **87.52 runner
+minutes** (5,251 seconds), not a rounded billing estimate. The true warm cache
+hit restored 682,047,390 bytes. Compiler/static checks took **4:07**; the longest
+shard took **7:16**. Shards 8 and 14 waited about 2:13 and 2:25 after the matrix
+became runnable, and shard 8 determined the final tail.
+
+| Ordinary CI configuration | Wall time | Runner minutes | Cache |
+| --- | ---: | ---: | --- |
+| Original complete suite, run 37894886145 | 50:31 | 68.00 | Warm, old namespace |
+| Eight shards, run 37902592210 | 24:27 | 94.68 | Cold, new profile/namespaces |
+| Eight shards, run 37906391876 | 18:57 | 90.07 | Warm |
+| Final sixteen shards, run 37908893484 | 12:22 | 87.52 | Warm |
+
+Final wall time is 75.5% shorter than the original measured complete suite and
+34.7% shorter than the warm eight-shard control. Runner time is 2.8% lower than
+the eight-shard control, but 28.7% higher than the original unsharded run.
+Parallelism buys latency with existing standard runners; it is not a claim of
+lower total compute than the original configuration.
+
+The strict aggregate validated all sixteen bound receipts and their raw logs:
+library inventory 1,311, selected 1,293, **1,261 passed / 0 failed / 32 original
+ignored / 18 filtered-out Job-free names**; bin 6 passed, paste transport 8
+passed, real-paste harness 2 passed and 3 original ignored. Total **1,277 passed,
+0 failed, 35 original ignored, 18 unverified**. The 47 additional passing test
+names are the independently extracted original scenarios. No assertion, fault
+tuple, original ignore, or unavailable-specialist scope was removed. The
+coverage artifact is `11605619583`, 168,627 bytes, SHA-256
+`ac156bfbb565506087e9b840a5d4478f2544c10a9f74e81a4701e59968b87490`.
+Its source/run/attempt and plan hash are recorded in `ci-runtime-evidence.json`.
+Authenticated aggregate stdout provides exact counts; local artifact download
+returned HTTP 403, so local ZIP inspection is not claimed.
+
+All nine PR-triggered workflows passed. Job spans: D12 1:12, D13 0:52, D14 0:46,
+D17 1:17, visual 2:43, focused recovery 6:33, Windows package/ConPTY 9:56 and
+real Claude 11:17. The split roundtrip policy finished its required aggregate
+8:48 after workflow start. All nine workflows together used **134.65 runner
+minutes** (8,079 seconds). This measures the triggered PR set; official signed
+Release, qualified native acceptance and manual diagnostics were not executed
+on this branch and have no new timing claim.
+
+The ten-minute target is still unmet. Compile plus the longest durability-heavy
+shard already exceeds ten minutes before queueing, and real Claude acceptance
+also exceeds ten minutes. Real FlushFileBuffers/readback, copy/hash, journal
+verification, registry durability, ACL/TOCTOU guards, shared UI resource leases
+and original time assertions remain intact. Do not increase shards or launch
+more benchmark batches from this result. A later production-safe algorithmic
+change or changed hosted runner capacity needs separate evidence.

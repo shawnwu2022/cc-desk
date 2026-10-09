@@ -37,6 +37,34 @@ The existing release job performs the authorized transaction only after all thre
 
 Backup failure leaves the original draft unchanged. Mutation failures leave the draft unpublished; preserve its source/run identity and reconcile authenticated reads before any further action. Unknown PATCH/POST acknowledgements are resolved by exact metadata, asset IDs and bytes; they are never automatically replayed. The five original asset IDs and bytes are retained even beyond artifact expiry. Recovery can use the independently checked metadata snapshot and original bytes; restoring the previous target SHA may need additional workflow permission if it changes `.github/workflows` relative to the default branch. Do not promise an automatic exact source rollback with the ordinary token, introduce an archival tag to change permission checks, or delete conflicting assets. Deletion of the five original IDs requires separate concrete authorization after verified backups and current staging evidence exist.
 
+Every preparation metadata PATCH explicitly includes `tag_name`, exact current
+`target_commitish`, title, disclosure and `draft: true`. Its concrete HTTP status
+is retained and logged. A mismatched authenticated read reports the changed
+snapshot fields; disclosure and asset metadata are represented by hashes.
+An HTTP 200 followed by a tag mismatch is not classified as a permission error.
+The exact original draft ID remains a 0.18.1 conflict even if GitHub normalizes
+its tag name to the observed `untagged-dce9f75805136bcd2e47`.
+
+An explicit `release-draft-transaction.mjs repair-metadata --directory <verified
+backup directory> --backup-artifact-id <exact immutable artifact ID>` repairs
+only that reviewed tag normalization on an otherwise completely prepared,
+unpublished original draft. It requires the existing workflow authentication,
+same protected-main SHA, same release run/attempt, fresh successful exact-source
+CI/coverage, all three same-run candidate artifacts and the exact preparation
+inventory/disclosure marker. It independently checks the original same-run
+backup metadata and all five original bytes, then compares every stable
+snapshot/asset field with that backup. Extra uploads, changed assets, source,
+run, attempt, marker, title or disclosure are rejected before mutation. The
+repair changes no asset and creates no Git tag. A complete state observed after
+an unknown acknowledgement is accepted without repeating the write.
+
+This explicit entry is not automatically invoked by ordinary publication or
+candidate preparation. It refuses an earlier preparation after main advances
+or a new release run/attempt begins; old signed artifacts or CI cannot become
+evidence for a new source. Such a transition needs its own reviewed recovery
+plan and newly validated current-source outputs. This change alone does not
+authorize rerunning or publishing the previously failed release.
+
 After public publication, do not delete/recreate or retarget an existing tag. A failed post-publication check is a failed release workflow requiring investigation; it must not be described as a verified updater channel. Prefer a separately verified new version for repair. No workflow can make the branch read, external release mutation and later verification atomic, so preserve the recorded source/run binding and investigate any concurrent external mutation.
 
 ## Acceptance boundaries
