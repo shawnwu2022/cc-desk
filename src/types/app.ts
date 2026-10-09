@@ -96,6 +96,9 @@ export interface PlatformAsset {
 }
 
 export interface UpdateInfo {
+  admissionId?: string | null
+  officialRelease?: { id: number; tag: string; sourceSha: string } | null
+  eligibilityReason?: string | null
   channel?: UpdateChannel
   installEligible?: boolean
   version: string

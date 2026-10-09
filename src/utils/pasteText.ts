@@ -209,7 +209,8 @@ export function bindNativePaste(options: NativePasteOptions): () => void {
     event.stopPropagation()
     const text = event.clipboardData?.getData('text/plain') ?? ''
     const types = Array.from(event.clipboardData?.types ?? [])
-    const snapshot = classifyClipboardSnapshot({ text, types })
+    const items = Array.from(event.clipboardData?.items ?? [], item => ({ kind: item.kind, type: item.type }))
+    const snapshot = classifyClipboardSnapshot({ text, types, items })
     commitPasteWithEvidence(
       async () => snapshot.kind === 'text' ? snapshot.text : '',
       snapshot.kind === 'image' ? async () => true : undefined,

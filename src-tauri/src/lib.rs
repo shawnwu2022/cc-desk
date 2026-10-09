@@ -1,6 +1,7 @@
 mod checks;
 mod cli;
 mod commands;
+mod desktop_updater;
 mod hook_config;
 mod hook_events;
 mod hook_server;
@@ -20,6 +21,8 @@ mod terminal_input;
 mod terminal_transport;
 #[cfg(test)]
 mod tests;
+mod updater_http;
+mod updater_policy;
 mod version_history;
 
 #[cfg(target_os = "macos")]
@@ -124,6 +127,7 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
     #[cfg(windows)]
     let builder = builder.manage(startup.admission);
     let app = builder
+        .manage(desktop_updater::UpdaterService::default())
         .manage(native_runtime)
         .manage(std::sync::Arc::new(
             version_history::commands::HistoryService::default(),
@@ -230,6 +234,10 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_updater::get_updater_settings,
+            desktop_updater::save_updater_settings,
+            desktop_updater::check_desktop_update,
+            desktop_updater::install_desktop_update,
             version_history::commands::list_history,
             version_history::commands::select_history,
             version_history::commands::begin_prepare_history,

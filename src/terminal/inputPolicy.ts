@@ -2,6 +2,7 @@ export interface ClipboardSnapshot {
   text?: string
   textError?: unknown
   types?: readonly string[]
+  items?: readonly { kind: string; type: string }[]
 }
 
 export type ClipboardClassification =
@@ -45,7 +46,7 @@ export function classifyClipboardSnapshot(snapshot: ClipboardSnapshot): Clipboar
     return { kind: 'text', text: snapshot.text }
   }
 
-  if (hasImageMime(snapshot.types)) {
+  if (hasImageMime(snapshot.types) || snapshot.items?.some(item => item.kind === 'file' && hasImageMime([item.type]))) {
     return { kind: 'image' }
   }
 

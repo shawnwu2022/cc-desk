@@ -104,6 +104,8 @@ pub struct AppConfig {
     pub git_bash_path: Option<String>,
     #[serde(rename = "claudeEnvVars")]
     pub claude_env_vars: Option<std::collections::HashMap<String, String>>,
+    #[serde(rename = "updaterProxy")]
+    pub updater_proxy: Option<String>,
     pub language: Option<String>,
 }
 

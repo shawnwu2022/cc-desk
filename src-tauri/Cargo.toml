@@ -1,6 +1,6 @@
 [package]
 name = "cc-desk"
-version = "0.18.1"
+version = "0.18.2"
 description = "CC Desk - a multi-project, multi-session desktop workspace for Claude Code"
 authors = ["shawnwu2022"]
 license = "MIT"
@@ -24,6 +24,11 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-updater = "2"
+# Unify the locked updater client's optional OS proxy support. Explicit app
+# proxy and inherited process env remain available when OS proxy is disabled.
+reqwest-updater = { package = "reqwest", version = "=0.13.2", default-features = false, features = ["system-proxy"] }
+semver = "=1.0.28"
+url = "=2.5.8"
 tauri-plugin-process = "2"
 portable-pty = "=0.8.1"
 serde = { version = "1", features = ["derive"] }

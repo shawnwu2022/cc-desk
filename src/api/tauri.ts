@@ -1,11 +1,9 @@
-import { excludedArtifactChannel } from '@/utils/updatePolicy';
 import { createProjectionClient } from './nativeProjection'
 import { createHistoryClient } from './versionHistory'
 import { createLaunchAttempt } from './cliLaunchAttempt';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
-import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { pasteTrace } from '@/utils/pasteTrace';
 import { setPasteObserver } from '@/utils/pasteText';
@@ -277,34 +275,17 @@ export const openInFileManager = (path: string): Promise<void> =>
 // Updater (Tauri official plugin)
 // ============================================
 
-export type { Update } from '@tauri-apps/plugin-updater';
-export { check, relaunch };
+export { relaunch };
 
-export const checkForUpdates = async (): Promise<UpdateInfo> => {
-  const update = await check();
-  if (!update) {
-    return {
-      version: __APP_VERSION__,
-      currentVersion: __APP_VERSION__,
-      hasUpdate: false,
-      releaseNotes: '',
-      downloadUrl: '',
-      platformAsset: null,
-    };
-  }
-  const summary: UpdateInfo = {
-    channel: excludedArtifactChannel(update.rawJson),
-    installEligible: false,
-    version: update.version,
-    currentVersion: __APP_VERSION__,
-    hasUpdate: true,
-    releaseNotes: update.body || '',
-    downloadUrl: '',
-    platformAsset: null,
-  };
-  if (typeof update.close === 'function') await update.close().catch(() => { /* Read-only resource cleanup does not change update eligibility. */ });
-  return summary;
-};
+export const checkForUpdates = (): Promise<UpdateInfo> =>
+  invoke<UpdateInfo>('check_desktop_update');
+
+export const getUpdaterSettings = (): Promise<{ proxy: string | null }> =>
+  invoke('get_updater_settings');
+export const saveUpdaterSettings = (proxy: string | null): Promise<void> =>
+  invoke('save_updater_settings', { proxy });
+export const installDesktopUpdate = (admissionId: string): Promise<void> =>
+  invoke('install_desktop_update', { admissionId });
 
 // ============================================
 // App Instance

@@ -40,10 +40,10 @@ import { safeDispose } from '@/utils/dispose'
 import { relativizePath } from '@/utils/path'
 import { PtyIndex } from '@/utils/ptyIndex'
 import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
-import { bindNativePaste, buildPastePayload, commitPasteWithEvidence, imagePasteBytes } from '@/utils/pasteText'
+import { bindNativePaste, imagePasteBytes } from '@/utils/pasteText'
 import type { XtermProvenanceSource } from '@/terminal/xtermProvenance'
 import { createImeInputPolicy, isPasteShortcut } from '@/terminal/inputPolicy'
-import { readImage, readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
+import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 
@@ -438,26 +438,10 @@ function createTerminal(tabId: string): Terminal {
       return false
     }
 
-    // Ctrl+V / Cmd+V 粘贴
-    if (isPasteShortcut(event)) {
-      event.preventDefault()
-      // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
-      // 触发光标回行首、后续覆盖前面（表现为"只显尾部"）。这里用 commitPaste 走完整
-      // 流程：capture ptyId → readText → isPasteStale 复核（防 restart 重建后写到新 PTY）
-      // → 构造 payload（原文规范化 LF + bracketed 包装，见 utils/pasteText.ts）。
-      // JSON 不再自动压缩；Windows 粘贴帧由 Rust 生产 writer 保护。
-      // 剪贴板无文本（截图场景 readText reject）时经 imageFallback 转发 CLI 图片粘贴键
-      // 字节，由 CLI 自行读剪贴板插 [Image #N]（键位契约见 docs/interaction.md）。
-      commitPasteWithEvidence(
-        readText,
-        readImage,
-        () => isVisibleTab(tabId) ? terminalInstances.get(tabId) : undefined,
-        text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
-        (id, payload) => ptyInput(id, payload, 'clipboard-keyboard'),
-        () => imagePasteBytes(platform),
-      ).catch(() => {})
-      return false
-    }
+    // Let the browser produce one DOM paste event with text and file MIME
+    // metadata. The already-bound capture listener owns the paste and prevents
+    // xterm from sending it again; no clipboard-image permission is required.
+    if (isPasteShortcut(event)) return true
 
     // Shift+Enter => 插入换行（模拟 \ + Enter）
     if (event.shiftKey && event.key === 'Enter') {

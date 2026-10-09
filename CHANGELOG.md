@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.18.2] - 2026-10-09 (unreleased candidate)
+
+- Add an optional HTTP/HTTPS proxy for update checks and downloads, separate from CLI launch environment settings; blank uses inherited process/system proxy behavior
+- Show fixed update failure codes and stages for network, timeout, manifest, platform, source and signature failures, with upstream updater log details redacted
+- Admit official signed releases through their exact tag/source, existing trust key and uploaded asset digests; retain the update in the backend for one confirmed installation after all session owners are quiescent
+- Recognize image MIME metadata in clipboard file items for both terminal runtimes; route a single native CLI image-paste shortcut without reading or saving image data
+
+Version preparation does not publish a release. Actual Windows updater installation/restart and real Claude/Codex image-paste acceptance remain separate platform checks.
+
 ## [0.18.1] - 2026-10-05 (unreleased candidate)
 
 This entry summarizes changes since the last public release, 0.17.7, including the unreleased 0.18.0 test build. Version preparation does not mean a public release has been published.

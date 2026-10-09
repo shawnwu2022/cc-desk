@@ -7,6 +7,11 @@ import {
 } from '@/terminal/inputPolicy'
 
 describe('D18 clipboard arbitration', () => {
+  it('D18_Clipboard_FileItemsExposeImageMime_010', () => {
+    expect(classifyClipboardSnapshot({ text: '', types: ['Files'], items: [{ kind: 'file', type: 'image/png' }] })).toEqual({ kind: 'image' })
+    expect(classifyClipboardSnapshot({ text: '', types: ['Files'], items: [{ kind: 'file', type: 'application/pdf' }] })).toEqual({ kind: 'empty' })
+    expect(classifyClipboardSnapshot({ text: 'caption', types: ['Files'], items: [{ kind: 'file', type: 'image/png' }] })).toEqual({ kind: 'text', text: 'caption' })
+  })
   it('D18_Clipboard_TextWinsOverImageEvidence_001', () => {
     expect(classifyClipboardSnapshot({
       text: 'hello',

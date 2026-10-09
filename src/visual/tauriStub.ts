@@ -3,7 +3,17 @@
 import { ref } from 'vue'
 export const blockedHostCalls = ref(0)
 function blocked(): never { ++blockedHostCalls.value; throw new Error('VISUAL_HOST_ACCESS_BLOCKED') }
-export const invoke = blocked, listen = blocked, open = blocked, check = blocked, relaunch = blocked
+// Synthetic read-only settings and an inert progress subscription keep the
+// production UpdateSection renderable. Every effectful update command is blocked.
+export function invoke(command: string) {
+  if (command === 'get_updater_settings') return Promise.resolve({ proxy: null })
+  return blocked()
+}
+export function listen(event: string) {
+  if (event === 'desktop-update-progress') return Promise.resolve(() => {})
+  return blocked()
+}
+export const open = blocked, check = blocked, relaunch = blocked
 export const writeText = blocked, readText = blocked, readImage = blocked, message = blocked
 export class Channel { constructor() { blocked() } }
 export const getCurrentWebview = blocked

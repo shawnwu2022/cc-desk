@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, commitPasteWithEvidence, imagePasteBytes, bindNativePaste } from '@/utils/pasteText'
 
-function pasteEvent(text: string, types: string[] = ['text/plain']): ClipboardEvent {
+function pasteEvent(text: string, types: string[] = ['text/plain'], items: { kind: string; type: string }[] = []): ClipboardEvent {
   const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
   Object.defineProperty(event, 'clipboardData', {
-    value: { types, getData: (type: string) => type === 'text/plain' ? text : '' },
+    value: { types, items, getData: (type: string) => type === 'text/plain' ? text : '' },
   })
   return event
 }
@@ -37,6 +37,19 @@ function nativePasteFixture(ptyId: string, bracketedPasteMode: boolean) {
 }
 
 describe('bindNativePaste', () => {
+  it('PasteNative_FileItemImageIsSentOnceAndOtherFilesAreNotImages_006', async () => {
+    const { textarea, write, xtermPaste, unbind } = nativePasteFixture('pty-files', true)
+    textarea.dispatchEvent(pasteEvent('', ['Files'], [{ kind: 'file', type: 'image/png' }]))
+    await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith('pty-files', '\x1bv'))
+    expect(xtermPaste).not.toHaveBeenCalled()
+    write.mockClear()
+    textarea.dispatchEvent(pasteEvent('', ['Files'], [{ kind: 'file', type: 'application/pdf' }]))
+    await Promise.resolve(); await Promise.resolve()
+    expect(write).not.toHaveBeenCalled()
+    textarea.dispatchEvent(pasteEvent('caption', ['Files'], [{ kind: 'file', type: 'image/png' }]))
+    await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith('pty-files', '\x1b[200~caption\x1b[201~'))
+    unbind()
+  })
   it('PasteNative_Text_CaptureAndSendOnce_001', async () => {
     const { textarea, write, xtermPaste, unbind } = nativePasteFixture('pty-1', true)
 
