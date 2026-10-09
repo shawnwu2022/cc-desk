@@ -10,6 +10,7 @@ import { useCliProfilesStore } from '@/stores/cliProfiles'
 const io = vi.hoisted(() => ({
   terminals: [] as import('@xterm/xterm').Terminal[], channels: [] as any[],
   user: vi.fn(), protocol: vi.fn(), ack: vi.fn(), stop: vi.fn(), legacyInput: vi.fn(), output: null as any,
+  observation: null as ((payload: import('@/types/hook').HookEventPayload) => void) | null,
 }))
 // Keep the installed xterm 5.5 parser, CoreService, input(), onUserInput and onData.
 // Only DOM open/focus/render geometry and addon lifecycle are omitted; jsdom
@@ -32,6 +33,7 @@ vi.mock('@xterm/xterm', async original => {
   } }
 })
 vi.mock('@tauri-apps/api/core', async original => ({ ...await original<object>(), Channel: class { onmessage: any } }))
+vi.mock('@/api/observer', () => ({ onNativeObservation: async (handler: typeof io.observation) => { io.observation = handler; return () => {} } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { activate() {} dispose() {} fit() {} } }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readText: vi.fn(), readImage: vi.fn(), writeText: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMinimized: async () => false }) }))
@@ -46,6 +48,7 @@ vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
 let wrapper: VueWrapper | null = null
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks(); io.terminals.length = 0; io.channels.length = 0
+  io.observation = null
   // Keep the real component -> launch entry -> attempt chain; stop at authenticated IPC.
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
     instanceId: 'test-backend',
@@ -73,6 +76,36 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = null; Reflect.deleteProperty(window, '__CC_DESK_DOCUMENT__'); vi.unstubAllGlobals(); vi.useRealTimers(); document.body.innerHTML = ''; if (vi.isMockFunction(Date.now)) vi.mocked(Date.now).mockRestore() })
 
 describe('Unified host with pinned real xterm parser', () => {
+  // 真实host→现有Native bus→mapper→store；通知不把无序activity变成completed。
+  it('Native_ReceiptCompositionOwnsExactAttempt_018', async () => {
+    useCliProfilesStore().profiles = [{ ...useCliProfilesStore().profiles[0], id: 'claude-main', cli: 'claude' }]
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'claude-main', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+    const payload = { ptyId: null, sessionId: 'provider', eventName: 'Stop', state: 'unknown', timestamp: 1,
+      runId: tab.runId, generation: tab.generation, eventId: 'receipt-old', observerSource: 'claude-hook',
+      detail: { type: 'stop', data: { lastAssistantMessage: 'SECRET' } } } as import('@/types/hook').HookEventPayload
+    expect(io.observation).not.toBeNull()
+    io.observation!(payload)
+    expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'running', activityState: 'unknown', attentionState: 'none',
+      observationNotice: { recent: { kind: 'reply-ended', eventId: 'receipt-old' }, unreadReplyEnd: { eventId: 'receipt-old' } } })
+    expect(JSON.stringify(tabs.tab(tab.tabId)?.observationNotice)).not.toContain('SECRET')
+    expect(tabs.applyLaunchStatus(tab.tabId, { instanceId: 'test-backend', requestId: tab.requestId,
+      run: { runId: tab.runId, generation: tab.generation }, phase: 'exited', revision: '3', failure: null })).toBe(true)
+    const next = tabs.restart(tab.tabId, { profileId: 'claude-main', profileRevision: '7' }); await flushPromises()
+    // The real parser fence must settle before the new launch/subscription owns events.
+    await vi.waitFor(() => {
+      expect(io.channels).toHaveLength(2)
+      expect(tabs.tab(next.tabId)?.status).toBe('running')
+    })
+    io.observation!(payload)
+    expect(tabs.tab(next.tabId)?.observationNotice?.unreadReplyEnd ?? null).toBeNull()
+    io.observation!({ ...payload, eventId: 'receipt-new', runId: next.runId, generation: next.generation })
+    expect(tabs.tab(next.tabId)?.observationNotice?.unreadReplyEnd?.eventId).toBe('receipt-new')
+    wrapper.unmount(); wrapper = null
+    io.observation!({ ...payload, eventId: 'late-unmounted', runId: next.runId, generation: next.generation })
+    expect(tabs.tab(next.tabId)?.observationNotice?.unreadReplyEnd?.eventId).toBe('receipt-new')
+  })
   // 真实组件、Pinia、启动入口和请求冻结共同运行；同一尝试再次start不得重发。
   it.each(['claude', 'codex'] as const)('Native_RealLaunchComposition_006: %s', async cli => {
     useCliProfilesStore().profiles = [{ ...useCliProfilesStore().profiles[0], id: `${cli}-main`, cli }]

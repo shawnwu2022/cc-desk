@@ -7,6 +7,7 @@
 - Move Archive to a trailing quick button for ended/failed rows, remove the duplicate menu entry and keep existing running/unknown safeguards
 - Reset Native terminal parser state safely on the first restart so old VT modes, partial control sequences, UTF-8 fragments and queued protocol replies cannot contaminate the new run; activation, recovery, theme changes and hidden terminals retain their content
 - Restore historical working/idle/permission/completed/error/closed status distinctions, detail vocabulary, collapsed project counts and the global error/permission badge; share exact-owned window attention and acknowledge only visible, selected, focused non-error causes
+- Show separate recent Native Claude event notices and unread reply-end receipts from the existing authenticated optional observer; bind and acknowledge the exact attempt, deduplicate bounded IDs, and request window attention without claiming current completion
 
 Live Native completion/current activity still needs source-owned ordering and explicit turn evidence; observer defaults and unordered-event rejection stay unchanged. See `docs/session-status-semantics.md`. This candidate is not a public release; native platform/rendering and real CLI acceptance remain separate.
 

@@ -315,6 +315,9 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   try {
     stopObservation = useHookStore().subscribeObservation({ cli: tab.cli, runId, generation, enabled: true }, (_event, state) => {
       if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservation(props.tabId, attempt, state)
+    }, { onNotice: notice => {
+      if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservationNotice(props.tabId, attempt, notice)
+    }
     })
   } catch { /* Optional observation must never block the authoritative terminal. */ }
 

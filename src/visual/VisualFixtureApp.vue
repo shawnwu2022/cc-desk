@@ -65,6 +65,15 @@ if (scenario === 'close-state') {
     opened: true, resumable: state === 'stopped' || state === 'failed',
   }]
 }
+// Synthetic occurrence evidence exercises production rendering only; no source,
+// observer, current activity or live taskbar acceptance is certified here.
+if (scenario === 'native-notice') {
+  const notice = { kind: 'reply-ended' as const, eventId: 'visual-receipt-id',
+    receivedAt: Date.now(), runId: 'visual-receipt-run', generation: 1 }
+  catalog.sessions = [{ ...fixtureSessions()[0], id: 'visual-native-notice',
+    activityState: 'unknown', attentionState: 'none', observationState: 'active',
+    observationNotice: { recent: notice, unreadReplyEnd: parameters.get('notice') === 'read' ? null : notice } }]
+}
 catalog.activeSessionId = catalog.sessions[0]?.id ?? null
 app.cachedProjects = scenario === 'empty' ? [] : projectPaths.map((path, index) => ({ path, name: ['cc-desk', 'Atlas design system', longProjectName, 'Empty project'][index], lastDuration: 0 }))
 metadata.displayNames.set(projectPaths[2].toLowerCase(), longProjectName)

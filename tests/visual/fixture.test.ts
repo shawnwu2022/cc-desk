@@ -33,6 +33,18 @@ async function render(scenario: string, locale = 'en') {
   await flushPromises(); return wrapper
 }
 describe('Isolated production-component fixture', () => {
+  it.each(['en', 'zh'])('Fixture_NativeReceiptStaysIndependent_020 %s', async locale => {
+    const view = await render('native-notice', locale)
+    for (const toggle of view.findAll('.project-node > .project-row .expand-arrow')) await toggle.trigger('click')
+    const marker = view.get('[data-native-observation-notice]')
+    expect(marker.attributes('data-unread')).toBe('true')
+    expect(marker.attributes('aria-label')).toBe(locale === 'en'
+      ? 'Reply-end notice received (unread); current activity unverified'
+      : '收到回复结束通知（未读）；当前活动尚未验证')
+    expect(view.get('.session-status-icon').attributes('aria-label')).toBe(locale === 'en' ? 'Activity unknown' : '活动未知')
+    expect(view.html()).not.toContain('visual-receipt-id')
+    expect(blockedHostCalls.value).toBe(0)
+  })
   it('Fixture_SettingsVersionIsStableSyntheticData_019', async () => {
     const view = await render('terminal-settings')
     expect(view.text()).toContain('CC Desk v0.18.1')

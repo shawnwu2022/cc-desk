@@ -7,8 +7,9 @@ import { useStatusMonitor } from '@/composables/useStatusMonitor'
 import { useUnifiedWindowAttention } from '@/composables/useUnifiedWindowAttention'
 import { useAttentionStore } from '@/stores/attention'
 import { useSessionStore } from '@/stores/session'
-import { useNativeTabsStore, captureNativeAttempt } from '@/stores/nativeTabs'
+import { useNativeTabsStore, captureNativeAttempt, type NativeCliTab } from '@/stores/nativeTabs'
 import type { HookEventPayload } from '@/types/hook'
+import type { NativeObservationNotice } from '@/types/nativeObservationNotice'
 
 const io = vi.hoisted(() => ({ focused: false, attention: vi.fn(), readFocus: vi.fn(), subscribe: vi.fn(), unlisten: vi.fn(), focus: null as null | ((event: { payload: boolean }) => void) }))
 vi.mock('@tauri-apps/api/window', () => ({ UserAttentionType: { Critical: 2 }, getCurrentWindow: () => ({
@@ -127,4 +128,153 @@ it('Attention_DeferredSubscriptionDisposes_007', async () => {
   expect(io.unlisten).toHaveBeenCalledOnce()
   expect(io.readFocus).not.toHaveBeenCalled()
   expect(io.attention).not.toHaveBeenCalled()
+})
+
+// These are host-boundary receipt fixtures, independent of the optional activity
+// projection. Authenticating their producer is tested at its own boundary.
+function nativeNoticeOwner(extra: Partial<NativeCliTab> = {}): NativeCliTab {
+  const tabs = useNativeTabsStore()
+  const created = tabs.create({ cli: 'claude', action: { kind: 'new' }, projectId: 'project', projectPath: '/repo', profileId: 'claude', profileRevision: '1' })
+  const tab = tabs.tab(created.tabId)!
+  Object.assign(tab, { status: 'running', observationState: 'active', activityState: 'unknown' }, extra)
+  return tab
+}
+function unreadReply(tab: NativeCliTab, eventId = 'reply-one', extra: Partial<NativeObservationNotice> = {}) {
+  const notice: NativeObservationNotice = { kind: 'reply-ended', eventId, receivedAt: 1, runId: tab.runId, generation: tab.generation, ...extra }
+  useNativeTabsStore().applyObservationNotice(tab.tabId, captureNativeAttempt(tab), notice)
+  return notice
+}
+const flashes = () => io.attention.mock.calls.filter(([kind]) => kind === 2)
+
+describe('Native unread reply receipt attention', () => {
+  // Without the receipt path this fails even though activity remains unknown;
+  // later activity changes must neither manufacture completion nor repeat it.
+  it('NativeNotice_FlashesOncePerEventIndependentOfWaiting_008', async () => {
+    render(); await flushPromises()
+    const tab = nativeNoticeOwner()
+    const firstNotice = unreadReply(tab); await flushPromises()
+    expect(flashes()).toHaveLength(1)
+    expect(tab.activityState).toBe('unknown')
+    expect(tab.attentionState).toBe('none')
+    expect(tab.status).toBe('running')
+    tab.title = 'Renamed'; await flushPromises()
+    tab.activityState = 'waiting'; await flushPromises()
+    expect(flashes()).toHaveLength(2)
+    unreadReply(tab, 'reply-two', { receivedAt: 2 }); await flushPromises()
+    expect(flashes()).toHaveLength(3)
+    expect(tab.activityState).toBe('waiting')
+    tab.observationNotice = { recent: firstNotice, unreadReplyEnd: firstNotice }; await flushPromises()
+    io.focus!({ payload: true }); io.focus!({ payload: false }); await flushPromises()
+    expect(flashes()).toHaveLength(3)
+  })
+  it.each(['active', 'off', 'unavailable'] as const)('NativeNotice_AcknowledgesOnlyActualView_%s_009', async observationState => {
+    io.focused = true
+    const tab = nativeNoticeOwner(), notice = unreadReply(tab), other = nativeNoticeOwner()
+    tab.observationState = observationState
+    const { visible } = render(`native-tab:${tab.tabId}`); visible.value = false
+    await flushPromises()
+    expect(tab.observationNotice?.unreadReplyEnd).toEqual(notice)
+    visible.value = true; await flushPromises()
+    expect(tab.observationNotice?.unreadReplyEnd).toEqual(notice)
+    expect(useNativeTabsStore().activeTabId).toBe(other.tabId)
+    useNativeTabsStore().setActive(tab.tabId); await flushPromises()
+    expect(tab.observationNotice?.unreadReplyEnd).toBeNull()
+    expect(tab.observationNotice?.recent).toEqual(notice)
+    expect(tab.activityState).toBe('unknown')
+    expect(flashes()).toHaveLength(0)
+  })
+  it('NativeNotice_UnprovenInitialFocusCannotAcknowledge_010', async () => {
+    const tab = nativeNoticeOwner(), notice = unreadReply(tab)
+    let finish!: (focused: boolean) => void
+    io.readFocus.mockImplementationOnce(() => new Promise<boolean>(resolve => { finish = resolve }))
+    render(`native-tab:${tab.tabId}`); await flushPromises()
+    expect(tab.observationNotice?.unreadReplyEnd).toEqual(notice)
+    expect(flashes()).toHaveLength(0)
+    finish(false); await flushPromises()
+    expect(flashes()).toHaveLength(1)
+    expect(tab.observationNotice?.unreadReplyEnd).toEqual(notice)
+    io.focus!({ payload: true }); await flushPromises()
+    expect(tab.observationNotice?.unreadReplyEnd).toBeNull()
+  })
+  it.each([
+    { cli: 'codex' }, { action: { kind: 'raw', argv: [] } },
+    { status: 'starting' }, { status: 'unknown' }, { status: 'stopped' }, { status: 'exited' }, { status: 'failed' },
+    { observationState: 'off' }, { observationState: 'connecting' }, { observationState: 'unavailable' },
+  ] as Partial<NativeCliTab>[])('NativeNotice_RejectsUnsupportedOrInactiveOwner_011 %j', async extra => {
+    render(); await flushPromises()
+    const tab = nativeNoticeOwner(), notice = unreadReply(tab)
+    Object.assign(tab, extra)
+    await flushPromises()
+    expect(flashes()).toHaveLength(0)
+    expect(tab.observationNotice?.unreadReplyEnd).toEqual(notice)
+  })
+  it.each([{ runId: 'old-run' }, { generation: 99 }, { kind: 'tool-ended' } as const])('NativeNotice_RejectsWrongReceiptOwner_012 %j', async extra => {
+    const tab = nativeNoticeOwner(), valid = unreadReply(tab), notice = { ...valid, ...extra }
+    tab.observationNotice = { recent: notice, unreadReplyEnd: notice }
+    render(`native-tab:${tab.tabId}`)
+    await flushPromises()
+    expect(flashes()).toHaveLength(0)
+    io.focus!({ payload: true }); await flushPromises()
+    expect(tab.observationNotice?.unreadReplyEnd).toEqual(notice)
+  })
+  it('NativeNotice_FocusedBackgroundRemainsUnreadUntilAttentionOrActualView_013', async () => {
+    io.focused = true
+    const tab = nativeNoticeOwner(); nativeNoticeOwner()
+    render(); await flushPromises()
+    const notice = unreadReply(tab); await flushPromises()
+    expect(flashes()).toHaveLength(0)
+    expect(tab.observationNotice?.unreadReplyEnd).toEqual(notice)
+    io.focus!({ payload: false }); await flushPromises()
+    expect(flashes()).toHaveLength(1)
+    io.focus!({ payload: true }); io.focus!({ payload: false }); await flushPromises()
+    expect(flashes()).toHaveLength(1)
+  })
+  it('NativeNotice_RestartAndUnmountRejectOldReceipt_014', async () => {
+    const { wrapper } = render(); await flushPromises()
+    const tabs = useNativeTabsStore(), tab = nativeNoticeOwner(), oldNotice = unreadReply(tab)
+    await flushPromises()
+    expect(flashes()).toHaveLength(1)
+    tab.status = 'exited'; tabs.restart(tab.tabId, { profileId: 'claude', profileRevision: '1' })
+    Object.assign(tab, { status: 'running', observationState: 'active' })
+    tab.observationNotice = { recent: oldNotice, unreadReplyEnd: oldNotice }; await flushPromises()
+    expect(flashes()).toHaveLength(1)
+    unreadReply(tab); await flushPromises()
+    expect(flashes()).toHaveLength(2)
+    wrapper.unmount(); wrappers.splice(wrappers.indexOf(wrapper), 1)
+    unreadReply(tab, 'reply-after-unmount'); await flushPromises()
+    expect(flashes()).toHaveLength(2)
+  })
+  it('NativeNotice_RejectsReplacedRequestWithSameRunAndGeneration_016', async () => {
+    const tab = nativeNoticeOwner(), notice = unreadReply(tab)
+    tab.requestId = 'replacement-request'
+    render(`native-tab:${tab.tabId}`); await flushPromises()
+    expect(flashes()).toHaveLength(0)
+    io.focus!({ payload: true }); await flushPromises()
+    expect(tab.observationNotice?.unreadReplyEnd).toEqual(notice)
+  })
+  it('NativeNotice_ClosedTabCannotDeliverRetainedOrLateReceipt_017', async () => {
+    io.focused = true
+    const tabs = useNativeTabsStore(), tab = nativeNoticeOwner(), notice = unreadReply(tab)
+    const attempt = captureNativeAttempt(tab)
+    render(); await flushPromises()
+    expect(tab.observationNotice?.unreadReplyEnd).toEqual(notice)
+    tabs.close(tab.tabId)
+    expect(tabs.applyObservationNotice(tab.tabId, attempt, { ...notice, eventId: 'late-reply' })).toBe(false)
+    io.focus!({ payload: false }); await flushPromises()
+    expect(flashes()).toHaveLength(0)
+    expect(tabs.tab(tab.tabId)).toBeUndefined()
+  })
+  it('NativeNotice_RemembersSentEventAcrossUnavailableAndBoundsDedup_015', async () => {
+    render(); await flushPromises()
+    const tab = nativeNoticeOwner()
+    unreadReply(tab); await flushPromises()
+    expect(flashes()).toHaveLength(1)
+    tab.observationState = 'unavailable'; await flushPromises()
+    tab.observationState = 'active'; await flushPromises()
+    expect(flashes()).toHaveLength(1)
+    for (let index = 1; index < 1025; ++index) { unreadReply(tab, `reply-${index}`); await flushPromises() }
+    expect(flashes()).toHaveLength(1024)
+    unreadReply(tab, 'reply-one'); await flushPromises()
+    expect(flashes()).toHaveLength(1024)
+  })
 })

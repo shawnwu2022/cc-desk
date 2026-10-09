@@ -61,6 +61,19 @@ Its localized accessible description remains outside the decorative icon glyph.
 - Existing observer event-ID bounds, canonical monotone `sourceSequence`
   validation, duplicate/reordered rejection and exact-run binding are unchanged.
   No sequence or turn status is inferred from HTTP arrival order.
+- Native occurrence notices use the existing authenticated Claude hook envelope
+  independently of the ordered activity reducer. They retain only a fixed kind,
+  opaque event ID, host receipt time and run/generation. The hook subscription
+  owns the existing observer lifetime; the tab store privately binds the current
+  request/run/generation and validates that published notices were accepted by
+  that owner. Codex/raw and ended/uncertain tabs cannot publish these notices.
+- A starting tab holds at most the latest receipt and latest unread reply-end
+  receipt, publishing them only after its exact running launch receipt. Unknown,
+  failure/end, restart and close clear published/pending notices. The latest
+  unread reply-end event survives a later prompt/tool receipt until actual
+  visible, selected and focused ownership acknowledges its exact event ID. Each
+  hook owner and tab attempt retains at most 1024 accepted IDs; exhaustion rejects
+  further events without evicting IDs and allowing replay.
 
 ## Current native evidence gap
 
@@ -79,6 +92,15 @@ counter, timer, last output, process exit or raw hook kind cannot supply that
 proof. Keep any capability-specific source integration and actual authenticated
 Claude/Codex acceptance separate from this host/UI repair.
 
+The Native row now shows a separate localized event marker. An unread `Stop`
+receipt is described as “Reply-end notice received (unread); current activity
+unverified”. It never becomes `attentionKind: completed` or changes the current
+activity icon. Other allowlisted hooks show recent prompt, tool, permission,
+input, subagent or compaction events. These are receipt observations in host
+arrival order, not proof of provider event order or present activity. The five
+existing optional observer capabilities remain `partial`; observation defaults,
+profile fields, CLI launch arguments and permissions are unchanged.
+
 ## Smallest follow-up choices
 
 The current gap is at the producer/DTO boundary, not at the icon renderer:
@@ -94,20 +116,20 @@ Shell have no Claude source and must keep their own capability boundary.
    projecting it. Parallel hook processes and server arrival counters cannot
    supply this contract. Certify the actual selected CLI before enabling it; do
    not change CLI flags or optional observer defaults as a UI repair.
-2. **Smaller product compromise: unread event notices:** retain authenticated
-   explicit `idle_prompt`, permission and `stopFailure` reason in a separate
-   exact-run receipt DTO/model. Display “Completion notice received; current
-   activity unverified”, rather than claiming current completed state. Deduplicate
-   event ID, bind it to the owning request/run/generation and backend observer
-   lease, acknowledge only an actually visible/focused selected owner, and allow
-   that unread notice to request taskbar attention. Keep the current activity
-   reducer and its unknown result unchanged. This requires a small reason/receipt
-   transport extension plus actual authenticated hook acceptance; it is a
-   concrete follow-up proposal, **not implemented or certified by this patch**.
+2. **Implemented bounded compromise: occurrence notices:** use the existing
+   authenticated hook envelope and subscription to keep independent recent and
+   unread reply-end receipts, with exact request/run/generation ownership and
+   bounded deduplication. The unified attention coordinator requests window
+   attention once for each owned unread reply-end receipt only while the observer
+   is active and the owner is not actually viewed. A truly visible/focused
+   selected owner may acknowledge an already owned receipt even if observation
+   has since become off/unavailable. Actual authenticated CLI delivery and OS
+   taskbar behavior remain uncertified by host fixtures.
 
-The first option supplies the missing proof. The second supplies useful explicit
-notifications without presenting stale event receipt as the latest CLI state.
-Neither uses Stop, silence, process lifetime or fabricated sequence numbers.
+The first option supplies the missing current-state proof. The second supplies
+useful explicit event notices without presenting a receipt as the latest CLI
+state. Neither creates completion from Stop, silence, process lifetime or
+fabricated sequence numbers.
 
 ## Regression evidence
 
@@ -124,6 +146,13 @@ Neither uses Stop, silence, process lifetime or fabricated sequence numbers.
 - `tests/components/sessionStatusSemantics.test.ts` checks the actual bundled
   geometry and English/Chinese accessible labels, work/permission pulse and
   reduced-motion rules, and collapsed project cause/count priority.
+- `tests/stores/nativeTabObservationNotice.test.ts` verifies receipt ownership,
+  starting publication, invalidation, replay bounds, exact acknowledgment,
+  defensive copies and unified projection with unknown current activity.
+  `tests/components/nativeObservationNoticeRow.test.ts` verifies the distinct
+  accessible marker, both languages and all twelve receipt kinds. Mapper,
+  hook-bus, Native terminal composition and unified window-attention tests cover
+  their respective receipt lifetime boundaries without launching a real CLI.
 - Existing observer, native tab, adapter, session row/tree and localization tests
   remain required. These tests use fabricated trusted inputs at host boundaries;
   they do not certify authenticated real CLI behavior, taskbar flash delivery,

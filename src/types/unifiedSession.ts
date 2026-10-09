@@ -1,3 +1,5 @@
+import type { NativeObservationNoticeState } from './nativeObservationNotice'
+
 export type UnifiedCliKind = 'claude' | 'codex'
 export type SessionRuntimeKind = 'legacy-claude' | 'native-cli'
 export type SessionProcessState = 'starting' | 'running' | 'unknown' | 'stopped' | 'failed'
@@ -74,6 +76,8 @@ export interface UnifiedSession {
   observationState?: SessionObservationState
   /** An explicit attention cause; completion must come from a completion event. */
   attentionKind?: SessionAttentionKind
+  /** Authenticated recent/unread event receipts, never a current activity claim. */
+  observationNotice?: NativeObservationNoticeState
   lastActivityAt: number
   archived: boolean
   /** UI projection only; runtime actions must still check the owning store. */

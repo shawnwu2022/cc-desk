@@ -36,9 +36,40 @@ async function openFixture(page: Page, options: Record<string, string | number>)
   await page.goto(`/__visual__/?${new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]))}`)
   await expect(page.locator('[data-visual-ready]')).toHaveAttribute('data-visual-ready', 'true')
   await page.evaluate(() => document.fonts.ready)
-  if (['mixed', 'hover', 'menu', 'close-state'].includes(String(options.scenario))) {
+  if (['mixed', 'hover', 'menu', 'close-state', 'native-notice'].includes(String(options.scenario))) {
     await expandFixtureProjects(page)
   }
+}
+
+// These synthetic receipt captures are unapproved evidence, separate from the
+// thirteen historical pixel baselines and actual authenticated CLI acceptance.
+for (const locale of ['en', 'zh']) for (const notice of ['unread', 'read']) {
+  test(`native receipt marker ${locale} ${notice}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 640 })
+    await openFixture(page, { scenario: 'native-notice', locale, notice })
+    const row = page.locator('[data-session-row="visual-native-notice"]')
+    const marker = row.locator('[data-native-observation-notice]')
+    const label = notice === 'unread'
+      ? locale === 'en' ? 'Reply-end notice received (unread); current activity unverified' : '收到回复结束通知（未读）；当前活动尚未验证'
+      : locale === 'en' ? 'Recent notice: reply-end event; current activity unverified' : '最近收到：回复结束事件；当前活动尚未验证'
+    await expect(marker).toHaveAttribute('aria-label', label)
+    await expect(marker).toHaveAttribute('data-unread', String(notice === 'unread'))
+    await expect(row.locator('.session-status-icon')).toHaveAttribute('aria-label', locale === 'en' ? 'Activity unknown' : '活动未知')
+    await expect(row.locator('.session-primary-action button')).toHaveAttribute('aria-label', locale === 'en' ? 'Close' : '关闭')
+    await marker.focus()
+    await expect(marker).toBeFocused()
+    await expect(marker).toBeInViewport({ ratio: 1 })
+    await expect(page.getByRole('tooltip')).toHaveText(label)
+    await expect(page.getByRole('tooltip')).toBeInViewport({ ratio: 1 })
+    await captureFixtureEvidence(page, testInfo, `native-receipt-${locale}-${notice}-unapproved`)
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('tooltip')).toHaveCount(0)
+    await expect(marker).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(row.locator('input')).toHaveCount(0)
+    await expect(page.locator('[role="dialog"]')).toHaveCount(0)
+    await expect(row.locator('.session-status-icon')).toHaveAttribute('aria-label', locale === 'en' ? 'Activity unknown' : '活动未知')
+  })
 }
 
 for (const sample of snapshots) {

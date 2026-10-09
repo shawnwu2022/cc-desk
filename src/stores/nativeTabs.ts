@@ -5,6 +5,7 @@ import type { LaunchAction, NativeCliKind } from '@/types/cli'
 import { parseU64 } from '@/utils/nativeIdentity'
 import type { ObservationState } from '@/integrations/registry'
 import { createNativeId } from '@/utils/nativeId'
+import type { NativeObservationNotice, NativeObservationNoticeState } from '@/types/nativeObservationNotice'
 
 export type NativeTabStatus =
   | 'stopped'
@@ -36,6 +37,7 @@ export interface NativeCliTab {
   attentionState?: 'none' | 'needs-user'
   activityState?: ObservationState['activity']
   observationState?: ObservationState['observation']
+  observationNotice?: NativeObservationNoticeState
 }
 
 export interface NativeAttemptIdentity {
@@ -108,10 +110,29 @@ function copyAction(action: LaunchAction): LaunchAction {
   }
 }
 
+const noticeKinds = new Set<NativeObservationNotice['kind']>([
+  'prompt-submitted', 'tool-started', 'tool-ended', 'tool-failed', 'reply-ended', 'reply-failed',
+  'permission-requested', 'input-requested', 'subagent-started', 'subagent-ended', 'compaction-started', 'compaction-ended',
+])
+function emptyNotices(): NativeObservationNoticeState { return { recent: null, unreadReplyEnd: null } }
+function copyNotice(notice: NativeObservationNotice): NativeObservationNotice {
+  return { kind: notice.kind, eventId: notice.eventId, receivedAt: notice.receivedAt, runId: notice.runId, generation: notice.generation }
+}
+function copyNotices(state: NativeObservationNoticeState): NativeObservationNoticeState {
+  return { recent: state.recent && copyNotice(state.recent), unreadReplyEnd: state.unreadReplyEnd && copyNotice(state.unreadReplyEnd) }
+}
+function validNotice(notice: NativeObservationNotice, attempt: NativeAttemptIdentity): boolean {
+  return Boolean(notice && noticeKinds.has(notice.kind) && typeof notice.eventId === 'string'
+    && notice.eventId.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(notice.eventId)
+    && Number.isSafeInteger(notice.receivedAt) && notice.receivedAt >= 0
+    && notice.runId === attempt.runId && notice.generation === attempt.generation)
+}
+
 function snapshot(tab: NativeCliTab): NativeCliTab {
   return {
     ...tab,
     action: copyAction(tab.action),
+    ...(tab.observationNotice ? { observationNotice: copyNotices(tab.observationNotice) } : {}),
   }
 }
 
@@ -145,6 +166,54 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   const frozenLaunchReceipts = new Map<string, string>()
   // At most one safe latest projection per starting tab, bound to the exact attempt.
   const pendingAttention = new Map<string, { attempt: NativeAttemptIdentity; state: ObservationState }>()
+  const pendingNotices = new Map<string, { attempt: NativeAttemptIdentity; state: NativeObservationNoticeState }>()
+  // Never evict IDs within an attempt: at the cap, fail closed rather than allow replay.
+  const noticeLedgers = new Map<string, { attempt: NativeAttemptIdentity; seen: Map<string, NativeObservationNotice> }>()
+  function clearNoticeProjection(tabId: string): void {
+    pendingNotices.delete(tabId)
+    const value = tabs.get(tabId)
+    if (value) value.observationNotice = emptyNotices()
+  }
+  /** Receipt proof binds the private request identity omitted from the safe DTO. */
+  function hasOwnedObservationNotice(tabId: string, attempt: NativeAttemptIdentity): boolean {
+    const value = tabs.get(tabId), ledger = noticeLedgers.get(tabId)
+    if (!value || value.status !== 'running' || value.cli !== 'claude' || value.action.kind === 'raw'
+      || !matchesNativeAttempt(value, attempt) || !ledger || !matchesNativeAttempt(value, ledger.attempt)) return false
+    const notices = [value.observationNotice?.recent, value.observationNotice?.unreadReplyEnd].filter(Boolean) as NativeObservationNotice[]
+    return notices.length > 0 && notices.every(notice => {
+      const accepted = ledger.seen.get(notice.eventId)
+      return validNotice(notice, attempt) && !!accepted && accepted.kind === notice.kind && accepted.receivedAt === notice.receivedAt
+    }) && (!value.observationNotice?.unreadReplyEnd || value.observationNotice.unreadReplyEnd.kind === 'reply-ended')
+  }
+  function applyObservationNotice(tabId: string, attempt: NativeAttemptIdentity, notice: NativeObservationNotice): boolean {
+    const value = tabs.get(tabId)
+    if (!value || !matchesNativeAttempt(value, attempt) || value.cli !== 'claude' || value.action.kind === 'raw'
+      || !['starting', 'running'].includes(value.status) || !validNotice(notice, attempt)) return false
+    let ledger = noticeLedgers.get(tabId)
+    if (ledger && !matchesNativeAttempt(value, ledger.attempt)) { clearNoticeProjection(tabId); return false }
+    if (!ledger) {
+      ledger = { attempt: captureNativeAttempt(value), seen: new Map() }
+      noticeLedgers.set(tabId, ledger)
+    }
+    if (ledger.seen.has(notice.eventId) || ledger.seen.size >= 1024) return false
+    ledger.seen.set(notice.eventId, copyNotice(notice))
+    const pending = pendingNotices.get(tabId)
+    const previous = value.status === 'starting' ? pending && matchesNativeAttempt(value, pending.attempt) ? pending.state : emptyNotices()
+      : value.observationNotice ?? emptyNotices()
+    const state = { recent: copyNotice(notice), unreadReplyEnd: notice.kind === 'reply-ended' ? copyNotice(notice)
+      : previous.unreadReplyEnd && copyNotice(previous.unreadReplyEnd) }
+    if (value.status === 'starting') pendingNotices.set(tabId, { attempt: captureNativeAttempt(value), state })
+    else { value.observationNotice = state; value.lastActivityAt = Date.now() }
+    return true
+  }
+  function ackReplyEndNotice(tabId: string, attempt: NativeAttemptIdentity, eventId: string): boolean {
+    const value = tabs.get(tabId)
+    if (!value || !hasOwnedObservationNotice(tabId, attempt)) return false
+    const state = value.observationNotice, unread = state?.unreadReplyEnd
+    if (!unread || unread.kind !== 'reply-ended' || unread.eventId !== eventId || !validNotice(unread, attempt)) return false
+    value.observationNotice = { recent: state.recent && copyNotice(state.recent), unreadReplyEnd: null }
+    return true
+  }
   const frozenIdentity = (tab: NativeCliTab) => JSON.stringify([tab.requestId, tab.runId, tab.generation,
     tab.cli, tab.profileId, tab.profileRevision, tab.projectId, tab.projectPath, tab.sourceSessionKey, tab.action])
   /** Positive receipt proof only; a locally assigned status is not admission evidence. */
@@ -248,6 +317,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     unstartedAttempts.delete(tabId)
     frozenLaunchReceipts.delete(tabId)
     pendingAttention.delete(tabId)
+    clearNoticeProjection(tabId)
     if (value.status !== 'starting' || value.errorCode !== null) value.lastActivityAt = Date.now()
     value.status = 'starting'
     value.attentionState = 'none'
@@ -261,6 +331,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (!value) throw new Error('TAB_NOT_FOUND')
     unstartedAttempts.delete(tabId)
     pendingAttention.delete(tabId)
+    clearNoticeProjection(tabId)
     if (value.status !== 'unknown' || value.errorCode !== 'LAUNCH_STATE_UNKNOWN') value.lastActivityAt = Date.now()
     value.status = 'unknown'
     value.attentionState = 'none'
@@ -274,6 +345,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (!value) throw new Error('TAB_NOT_FOUND')
     unstartedAttempts.delete(tabId)
     pendingAttention.delete(tabId)
+    clearNoticeProjection(tabId)
     const next = text(code, 'ERROR_CODE_REQUIRED')
     if (value.status !== 'failed' || value.errorCode !== next) value.lastActivityAt = Date.now()
     value.status = 'failed'
@@ -302,6 +374,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     }
     unstartedAttempts.delete(tabId)
     const next = statusFromLaunch(launch)
+    const ledger = noticeLedgers.get(tabId)
+    if (ledger && !matchesNativeAttempt(value, ledger.attempt)) clearNoticeProjection(tabId)
     const changed = value.launchRevision === null || value.status !== next.status
       || next.errorCode !== null && value.errorCode !== next.errorCode
     value.status = next.status
@@ -316,6 +390,11 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       value.observationState = 'off'
     }
     if (next.status !== 'starting') pendingAttention.delete(tabId)
+    const pendingNotice = pendingNotices.get(tabId)
+    if (next.status === 'running' && pendingNotice && matchesNativeAttempt(value, pendingNotice.attempt)) {
+      value.observationNotice = copyNotices(pendingNotice.state)
+    } else if (next.status !== 'running' && next.status !== 'starting') clearNoticeProjection(tabId)
+    if (next.status !== 'starting') pendingNotices.delete(tabId)
     // A repeated healthy poll cannot erase a transport diagnostic or count as activity.
     if (changed) value.errorCode = next.errorCode
     value.launchRevision = launch.revision
@@ -357,6 +436,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.errorCode = null
     value.launchRevision = null
     pendingAttention.delete(tabId)
+    clearNoticeProjection(tabId)
+    noticeLedgers.delete(tabId)
     frozenLaunchReceipts.delete(tabId)
     value.lastActivityAt = Date.now()
     unstartedAttempts.set(tabId, captureNativeAttempt(value))
@@ -366,6 +447,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
 
   function close(tabId: string): void {
     pendingAttention.delete(tabId)
+    pendingNotices.delete(tabId)
+    noticeLedgers.delete(tabId)
     frozenLaunchReceipts.delete(tabId)
     unstartedAttempts.delete(tabId)
     if (!tabs.delete(tabId)) return
@@ -376,6 +459,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
 
   function clear(): void {
     pendingAttention.clear()
+    pendingNotices.clear()
+    noticeLedgers.clear()
     frozenLaunchReceipts.clear()
     unstartedAttempts.clear()
     tabs.clear()
@@ -387,6 +472,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     activeTabId,
     hasUnstartedAttempt,
     hasFrozenLaunchReceipt,
+    hasOwnedObservationNotice,
     create,
     tab,
     byProject,
@@ -397,6 +483,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     setDiagnostic,
     touch,
     applyObservation,
+    applyObservationNotice,
+    ackReplyEndNotice,
     rename,
     applyLaunchStatus,
     restart,

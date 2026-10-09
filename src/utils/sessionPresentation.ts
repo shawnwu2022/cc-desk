@@ -7,6 +7,7 @@ import type {
   SessionVisualState,
   UnifiedSession,
 } from '@/types/unifiedSession'
+import type { NativeObservationNoticeKind } from '@/types/nativeObservationNotice'
 
 function requiredIdentity(value: string, code: string): string {
   const text = value.trim()
@@ -63,6 +64,23 @@ export function deriveSessionVisualState(session: UnifiedSession, selected = fal
   if (session.attentionKind === 'completed') return selected ? 'running' : 'completed'
   if (session.attentionState === 'needs-user' || activity === 'waiting' || activity === 'waiting_input') return selected ? 'running' : 'needs-user'
   return activity === 'idle' ? 'running' : 'unknown'
+}
+
+const noticeLabelKeys: Record<NativeObservationNoticeKind, string> = {
+  'prompt-submitted': 'nativeNoticePromptSubmitted', 'tool-started': 'nativeNoticeToolStarted',
+  'tool-ended': 'nativeNoticeToolEnded', 'tool-failed': 'nativeNoticeToolFailed',
+  'reply-ended': 'nativeNoticeReplyEnded', 'reply-failed': 'nativeNoticeReplyFailed',
+  'permission-requested': 'nativeNoticePermissionRequested', 'input-requested': 'nativeNoticeInputRequested',
+  'subagent-started': 'nativeNoticeSubagentStarted', 'subagent-ended': 'nativeNoticeSubagentEnded',
+  'compaction-started': 'nativeNoticeCompactionStarted', 'compaction-ended': 'nativeNoticeCompactionEnded',
+}
+/** Occurrence metadata stays separate from the current activity/status icon. */
+export function selectSessionObservationNotice(session: UnifiedSession): { labelKey: string; unread: boolean } | null {
+  if (session.runtime !== 'native-cli' || session.cli !== 'claude' || session.processState !== 'running' || session.archived) return null
+  const notice = session.observationNotice
+  if (notice?.unreadReplyEnd?.kind === 'reply-ended') return { labelKey: 'nativeNoticeReplyEndUnread', unread: true }
+  const labelKey = notice?.recent && noticeLabelKeys[notice.recent.kind]
+  return labelKey ? { labelKey, unread: false } : null
 }
 
 export function selectSessionPrimaryAction(session: UnifiedSession): SessionPrimaryAction | null {
