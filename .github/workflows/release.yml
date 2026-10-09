@@ -1,11 +1,8 @@
-# Build signed cross-platform candidate packages. Publishing remains disabled until
-# the native CLI acceptance gate and explicit promotion workflow are implemented.
-name: Signed candidate packages
+# Promote a single signed platform set only from the exact protected main source.
+name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
     branches:
       - main
     paths:
@@ -14,13 +11,37 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: candidate-${{ github.ref }}
+  group: release-main
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      tag: ${{ steps.gate.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run release recovery fixtures
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs
+      - name: Require protected main and complete matching CI
+        id: gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-preflight.mjs
+
   build:
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +71,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -58,7 +82,7 @@ jobs:
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: ${{ matrix.target }}
 
@@ -125,3 +149,57 @@ jobs:
           name: cc-desk-candidate-${{ github.sha }}-${{ matrix.name }}
           path: ${{ matrix.patterns }}
           if-no-files-found: error
+
+  release:
+    needs: [preflight, build]
+    if: github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Recheck current main, full CI and same-run platform artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-preflight.mjs --artifacts
+      - name: Download this run's three platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cc-desk-candidate-${{ github.sha }}-*
+          path: artifacts
+          merge-multiple: false
+      - name: Generate updater manifest and verify all three actual signatures
+        run: node scripts/generate-updater-manifest.js artifacts latest.json "${{ needs.preflight.outputs.tag }}"
+      - name: Recheck source immediately before publishing
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-preflight.mjs --artifacts
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: CC Desk ${{ needs.preflight.outputs.version }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.exe.sig
+            artifacts/**/*.dmg
+            artifacts/**/*.app.tar.gz
+            artifacts/**/*.app.tar.gz.sig
+            artifacts/**/*.AppImage
+            artifacts/**/*.AppImage.sig
+            latest.json
+      - name: Verify published update channel bytes and signatures
+        run: node scripts/verify-updater-manifest.js "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" "${{ needs.preflight.outputs.version }}"

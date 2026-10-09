@@ -2,6 +2,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const { verifyUpdaterSignature } = require('./updater-signature.js')
 
 const PLATFORM_MATCHERS = {
   'windows-x86_64': /-setup\.exe$/i,
@@ -17,7 +18,7 @@ function toPublishedAssetName(name) {
   return name.replaceAll(' ', '.')
 }
 
-function buildUpdaterManifest({ repository, tag, assets, notes = '', pubDate = new Date().toISOString() }) {
+function buildUpdaterManifest({ repository, tag, assets, pubkey, notes = '', pubDate = new Date().toISOString() }) {
   if (!repository || !tag) throw new Error('repository and tag are required')
   if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(tag)) {
     throw new Error(`invalid release tag: ${tag}`)
@@ -25,9 +26,11 @@ function buildUpdaterManifest({ repository, tag, assets, notes = '', pubDate = n
 
   const platforms = {}
   for (const [platform, matcher] of Object.entries(PLATFORM_MATCHERS)) {
-    const asset = assets.find(item => matcher.test(item.name))
-    if (!asset) throw new Error(`missing updater asset for ${platform}`)
+    const matches = assets.filter(item => matcher.test(item.name))
+    if (matches.length !== 1) throw new Error(`expected exactly one updater asset for ${platform}, received ${matches.length}`)
+    const asset = matches[0]
     if (!asset.signature) throw new Error(`missing signature for ${asset.name}`)
+    verifyUpdaterSignature(asset.data, asset.signature, pubkey)
 
     platforms[platform] = {
       signature: asset.signature.trim(),
@@ -59,6 +62,7 @@ function collectAssets(root) {
       if (!fs.existsSync(signaturePath)) throw new Error(`missing signature file: ${signaturePath}`)
       return {
         name: path.basename(file),
+        data: fs.readFileSync(file),
         signature: fs.readFileSync(signaturePath, 'utf8'),
       }
     })
@@ -73,6 +77,7 @@ function main() {
     repository,
     tag,
     assets: collectAssets(artifactsDir),
+    pubkey: JSON.parse(fs.readFileSync(path.join(__dirname, '../src-tauri/tauri.conf.json'), 'utf8')).plugins.updater.pubkey,
   })
   fs.writeFileSync(outputPath, `${JSON.stringify(manifest, null, 2)}\n`)
   console.log(`Wrote updater manifest: ${outputPath}`)

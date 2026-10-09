@@ -185,16 +185,16 @@ npm run tauri:build        # 生产构建
 - **GitHub**：`https://github.com/shawnwu2022/cc-desk`
 - 项目源自 `orczh-hj/cc-box`，现按独立产品方向维护；来源与版权说明见 `NOTICE.md`
 - `~/.cc-box/`、`CC_BOX_*` 与 `cc-box-light` / `cc-box-dark` 暂作为兼容标识保留，避免旧用户配置和插件协议失效
-- 当前只产出 CC Desk signed candidate artifacts；公开 GitHub Release/updater promotion 仍禁用，不得借 Gitee/OSS 绕过
+- 公开发布只允许经过授权的 protected-main promotion；不得借 Gitee/OSS 绕过门禁
 - signed candidate 使用 CC Desk 自有 Tauri signing secret；私钥只存 GitHub Secrets，禁止提交到仓库、日志或支持包
-### 版本/发布边界（当前：signed candidates only）
+### 版本/发布边界（授权恢复：protected main promotion）
 
 - 普通开发 PR 只跑验证，不做版本 bump/tag/release。
-- `.github/workflows/release.yml` 当前只构建并上传 signed candidate artifacts。
-- `scripts/release-policy.mjs` 必须保持 fail-closed（`mayPublish() === false`）。
-- 不得因为 CI 全绿就恢复 GitHub Release/updater 发布路径。
+- `.github/workflows/release.yml` 只从当前 protected main 的精确 SHA 构建并发布同一 workflow run 的三个平台产物。
+- `scripts/release-policy.mjs` 必须保持 fail-closed：版本一致、完整匹配 main CI 成功、tag/release/draft 无冲突，并在发布前重新检查。
+- 这次恢复依据用户明确授权；普通 PR、feature branch、失败或未完成的 CI 均不可发布。
 - 真实 Claude Code / Codex CLI Layer-C 证据属于 D20，和普通代码 CI 分层记录。
-- 公开发布必须另行设计显式 promotion：绑定不可变候选产物、真实 CLI 证据、审批与回滚。
+- updater 必须验证三个实际文件的签名；既有 draft 替换要求 hash-verified backup 和明确 recovery transaction。客户端自动安装策略保持不变。
 
 详细流程 → [docs/release-process.md](docs/release-process.md)
 

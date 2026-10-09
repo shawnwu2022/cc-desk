@@ -133,16 +133,16 @@ describe('CC Desk product boundary', () => {
     }
   })
 
-  test('release documentation matches the enforced candidate-only policy', () => {
+  test('release documentation matches the protected-main promotion policy', () => {
     const release = read('.github/workflows/release.yml')
     const policy = read('scripts/release-policy.mjs')
     const docs = read('docs/release-process.md')
     expect(policy).toContain('return false')
     expect(release).toContain('Upload candidate artifacts')
-    expect(release).not.toContain('softprops/action-gh-release')
-    expect(release).not.toContain('contents: write')
-    expect(docs).toContain('signed candidates only')
-    expect(docs).toContain('publishing stays disabled')
+    expect(release).toContain('node scripts/release-preflight.mjs --artifacts')
+    expect(release).toContain("github.ref == 'refs/heads/main' && github.ref_protected")
+    expect(docs).toContain('protected main')
+    expect(docs).toContain('full CI')
   })
   test('package and installer metadata describe the dual-CLI product', () => {
     const packageJson = JSON.parse(read('package.json')) as {

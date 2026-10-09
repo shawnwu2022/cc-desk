@@ -33,7 +33,7 @@ jobs:
         run: npm run test:ci
 
       - name: Run Node policy tests
-        run: node --test tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs
 
       - name: Build frontend
         run: npm run build

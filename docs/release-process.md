@@ -1,105 +1,35 @@
 # Release process
 
-## Current policy: signed candidates only
+The user-authorized recovery path promotes one signed platform set from **protected main**. Feature revisions remain candidates until they are merged and the actual merged main SHA passes full CI. Package metadata changes and manual dispatch can start the release workflow; tags and feature branches cannot promote.
 
-Publishing is intentionally disabled while Native CLI v3 real-CLI certification and promotion policy remain incomplete.
+`release-preflight.mjs` enforces the same `release-policy.mjs` used by fixture tests:
 
-Two repository controls enforce this:
+- The workflow SHA equals the current protected main SHA.
+- `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json` declare the same stable version.
+- The latest ordinary `ci.yml` push run for that main SHA is completed and successful, including every job and exactly one Frontend checks and Rust checks job. Failed native hosted Rust checks keep this gate red; diagnostic runs and local fixtures cannot substitute.
+- No tag, release or draft already uses the version.
+- Exactly three immutable candidate artifacts, named with the source SHA and platform, belong to this release workflow run and main SHA.
 
-1. `scripts/release-policy.mjs` returns `false` for every publish decision.
-2. `.github/workflows/release.yml` builds signed candidate packages and uploads workflow artifacts, but contains no GitHub Release publishing job.
+Preflight runs before signing/building, again before download, and immediately before publishing. If CI has not completed yet, the gate fails; after CI succeeds, dispatch the workflow on the same still-current main SHA. No automatic retry bypasses the gate. Global release concurrency serializes promotions; main advancing makes an older run ineligible.
 
-Do not describe a candidate artifact as a published release.
+The build job has read permissions and references only `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` from GitHub Secrets. Never read, log or copy those values. Only the release job receives `contents: write`; `actions: read` allows source/run-bound artifact and CI verification. Repository protections and client automatic-install policy remain unchanged. The retired `release.js` and npm release/OSS entry points remain refusal shims.
 
-## Candidate workflow
+The release job downloads the Windows x64 NSIS installer, macOS arm64 app archive/DMG and Linux x64 AppImage from its own run. Manifest generation rejects duplicate/missing updater coverage and cryptographically verifies every artifact signature against the public key in Tauri configuration before publishing. Both legacy Ed25519 and prehashed BLAKE2b-512 minisign signatures and their trusted-comment signatures are checked. Post-publication verification downloads all three updater payloads and checks their bytes/signatures again; URL availability alone is insufficient. See the [minisign verifier](https://github.com/jedisct1/minisign/blob/master/src/minisign.c) and [Tauri signature encoding](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-cli/src/helpers/updater_signature.rs).
 
-The workflow can run on:
+Use Rust 1.98.1 consistently for candidate builds and current ordinary CI. Keep strict Clippy and native process gates. Version changes also synchronize both lockfile root identities and the changelog before merging.
 
-- `main` when `package.json` changes;
-- a `v*` tag;
-- manual `workflow_dispatch`.
+## Existing draft recovery and rollback
 
-It builds signed packages for Windows, macOS, and Linux.
+Ordinary promotion refuses existing tags, releases and drafts. Draft `406663556` for old source `5ed35db9a560e093a91a5ef32a1eb6dd171f27fd` and its five assets must remain untouched by this patch or an ordinary run; they are not merged-main outputs.
 
-Expected candidate artifacts:
+A separate reviewed recovery transaction is required before replacing that draft: capture the full release/tag metadata and every original asset; record name, asset ID, byte count and SHA-256; download the assets to durable backup; independently verify every backup hash and restoration inventory; and bind a new complete three-platform set to the actual merged main SHA and one successful workflow run. If the backup or any new gate fails, stop with the draft unchanged. Never mix original assets with new outputs and never move an existing tag. The transaction must define draft-only staging, exact publication commit/tag, failure recovery and hash-verified restoration before any old asset can be removed. This document does not execute or approve that transaction.
 
-| Platform | Candidate |
-|---|---|
-| Windows x64 | NSIS `.exe` + signature |
-| macOS arm64 | `.dmg`, `.app.tar.gz`, signature |
-| Linux x64 | `.AppImage` + signature |
+After public publication, do not delete/recreate or retarget an existing tag. A failed post-publication check is a failed release workflow requiring investigation; it must not be described as a verified updater channel. Prefer a separately verified new version for repair. No workflow can make the branch read, external release mutation and later verification atomic, so preserve the recorded source/run binding and investigate any concurrent external mutation.
 
-Candidate artifact names include the commit SHA so the package can be tied to the exact source revision.
+## Acceptance boundaries
 
-## Required secrets
+D20 real Claude Code/Codex CLI target certification remains separate and BLOCKED unless actual source-bound evidence exists. Local Node fixtures, isolated native diagnostics and runner registration are not hosted CI or D20 certification. The recovery patch changes publication gating only; it never enables automatic client installation or disabled historical roundtrip admission.
 
-Candidate signing uses:
+Run the blocking release fixtures with:
 
-- `TAURI_SIGNING_PRIVATE_KEY`
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-
-The private key must never be committed, logged, copied into documentation, or included in support bundles.
-
-## Reproducible 0.18.0 test compiler
-
-Ordinary CI and Windows test packaging (including formatting) use Rust **1.98.1**. This is the exact compiler that passed source `444c2df` in CI `36861864297` and package `36861864197`. A later floating `stable` download changed to 1.99.0 during the same repair batch and introduced `Atomic::fetch_update` deprecation errors under the unchanged `-D warnings` gate.
-
-The pin keeps strict Clippy and the declared Rust 1.89 MSRV unchanged; it does not suppress warnings or modify atomic ownership/transport logic. Compiler upgrades require an intentional validated change. The [official action supports exact version refs](https://github.com/dtolnay/rust-toolchain), and its `1.98.1` action definition explicitly selects that compiler. Other standalone harness workflows and public-promotion policy are outside this narrow repair.
-
-## Version consistency
-
-When a version change is intentionally prepared, keep these files consistent:
-
-- `package.json`
-- `package-lock.json`
-- `src-tauri/Cargo.toml`
-- `src-tauri/Cargo.lock`
-- `src-tauri/tauri.conf.json`
-- `CHANGELOG.md`
-
-A version bump does **not** authorize publishing.
-
-## Native CLI promotion gate
-
-Before a public release path is re-enabled, the project must have an explicit promotion design that answers:
-
-- which exact source commit is being promoted;
-- which signed candidate artifacts are immutable inputs;
-- what code-side CI is required;
-- what D20 real Claude Code / Codex CLI evidence is required;
-- which target OSes/architectures are covered;
-- how updater manifests are generated and verified;
-- how a failed or revoked promotion is rolled back;
-- who performs the explicit approval.
-
-Layer A/B CI alone cannot satisfy the D20 Layer-C requirement.
-
-## Current D20 status
-
-The real-CLI harness and target command are implemented:
-
-`scripts/native-cli/run-real-cli-certification.mjs`
-
-A PASS requires real Claude Code and Codex CLI execution in an explicitly authorized isolated target environment.
-
-If either product, account, binary identity, hook schema, lane driver, or evidence binding is unavailable/unverifiable, the result remains BLOCKED.
-
-## Future publishing workflow
-
-A future publishing workflow should be separate from ordinary build/test CI and separate from candidate creation.
-
-It should consume an already verified immutable candidate set and require explicit approval. It must not rebuild different binaries during promotion.
-
-Until that workflow exists, publishing stays disabled.
-
-## Disabled legacy publisher
-
-`scripts/release.js`, `npm run release` and `npm run release:oss` deliberately exit with failure. The legacy publisher and updater/OSS generator have been retired; their historical test commands now enforce the current fail-closed policy. No flag enables a fallback publisher, reads credentials, clears proxies or changes Git state.
-
-The current workflow still builds signed candidates only. Public promotion is not enabled. A future verified promotion path must satisfy the source, candidate, acceptance, approval and rollback requirements above; do not use a mirror or legacy script to bypass them.
-
-## Rollback
-
-Because publishing is currently disabled, rollback applies to candidate artifacts and branches rather than a production channel.
-
-Once public promotion is implemented, the rollback procedure must be defined together with updater-channel semantics; do not reuse the historical delete-and-republish procedure without a reviewed design.
+`node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs`

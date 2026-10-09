@@ -44,16 +44,15 @@ test('D02_PackageChange_DoesNotPublish_01', async () => {
   }
 })
 
-test('D02_ReleaseWorkflow_HasNoPublishPath_02', () => {
+test('D02_ReleaseWorkflow_RequiresProtectedMainAndFullCI_02', () => {
   const workflow = readFileSync(releaseWorkflowPath, 'utf8')
 
-  assert.doesNotMatch(workflow, /^\s{2}release:\s*$/m)
-  assert.doesNotMatch(workflow, /softprops\/action-gh-release/)
-  assert.doesNotMatch(workflow, /contents:\s*write/)
-  assert.doesNotMatch(workflow, /make_latest:\s*true/)
-  assert.doesNotMatch(workflow, /Generate updater manifest/)
-  assert.doesNotMatch(workflow, /Publish GitHub Release/)
-  assert.doesNotMatch(workflow, /Verify published update channel/)
+  assert.match(workflow, /needs: \[preflight, build\]/)
+  assert.match(workflow, /github\.ref == 'refs\/heads\/main' && github\.ref_protected/)
+  assert.match(workflow, /node scripts\/release-preflight\.mjs --artifacts/)
+  assert.match(workflow, /pattern: cc-desk-candidate-\$\{\{ github\.sha \}\}-\*/)
+  assert.equal((workflow.match(/contents: write/g) ?? []).length, 1)
+  assert.match(workflow, /fail_on_unmatched_files: true/)
 })
 
 test('D02_ReleaseWorkflow_StillBuildsSignedCandidates_03', () => {

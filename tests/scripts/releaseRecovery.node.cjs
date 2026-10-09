@@ -1,0 +1,101 @@
+const assert = require('node:assert/strict')
+const { createHash, generateKeyPairSync, sign } = require('node:crypto')
+const { readFileSync } = require('node:fs')
+const { resolve } = require('node:path')
+const test = require('node:test')
+const { buildUpdaterManifest } = require('../../scripts/generate-updater-manifest.js')
+const { verifyUpdaterManifest } = require('../../scripts/verify-updater-manifest.js')
+
+const sha = '1'.repeat(40)
+const names = ['CC.Desk_1.2.3_x64-setup.exe', 'CC.Desk.app.tar.gz', 'CC.Desk_1.2.3_amd64.AppImage']
+const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+const keyId = Buffer.from('0102030405060708', 'hex')
+const publicPacket = Buffer.concat([Buffer.from('Ed'), keyId, publicKey.export({ type: 'spki', format: 'der' }).subarray(-32)])
+const pubkey = Buffer.from(`untrusted comment: fixture public key\n${publicPacket.toString('base64')}\n`).toString('base64')
+function signedAsset(name, algorithm = 'ED') {
+  const data = Buffer.from(`fixture bytes ${name}`)
+  const signature = sign(null, algorithm === 'ED' ? createHash('blake2b512').update(data).digest() : data, privateKey)
+  const packet = Buffer.concat([Buffer.from(algorithm), keyId, signature])
+  const comment = `timestamp:1\tfile:${name}`
+  const global = sign(null, Buffer.concat([signature, Buffer.from(comment)]), privateKey)
+  const text = `untrusted comment: fixture\n${packet.toString('base64')}\ntrusted comment: ${comment}\n${global.toString('base64')}\n`
+  return { name, data, signature: Buffer.from(text).toString('base64') }
+}
+function input() { return { repository: 'shawnwu2022/cc-desk', tag: 'v1.2.3', assets: names.map(name => signedAsset(name)), pubkey } }
+
+test('ReleaseRecovery_AllThreeSignatures_001', () => {
+  const manifest = buildUpdaterManifest(input())
+  assert.equal(Object.keys(manifest.platforms).length, 3)
+})
+test('ReleaseRecovery_DuplicateAndMissingCoverage_002', () => {
+  const duplicate = input(); duplicate.assets.push(signedAsset('Other_x64-setup.exe'))
+  assert.throws(() => buildUpdaterManifest(duplicate), /exactly one|duplicate/)
+  const missing = input(); missing.assets.pop()
+  assert.throws(() => buildUpdaterManifest(missing), /missing|exactly one/)
+})
+for (let index = 0; index < 3; index++) {
+  test(`ReleaseRecovery_TamperedPlatform_${index + 3}`, () => {
+    const value = input(); value.assets[index].data = Buffer.from('tampered')
+    assert.throws(() => buildUpdaterManifest(value), /signature/)
+  })
+}
+test('ReleaseRecovery_KeyAndCommentRefusal_006', () => {
+  const value = input()
+  const text = Buffer.from(value.assets[0].signature, 'base64').toString().replace('timestamp:1', 'timestamp:2')
+  value.assets[0].signature = Buffer.from(text).toString('base64')
+  assert.throws(() => buildUpdaterManifest(value), /signature/)
+  const wrong = input(); wrong.pubkey = ''
+  assert.throws(() => buildUpdaterManifest(wrong), /public key|pubkey/)
+})
+test('ReleaseRecovery_LegacySignature_007', () => {
+  const value = input(); value.assets = names.map(name => signedAsset(name, 'Ed'))
+  assert.equal(Object.keys(buildUpdaterManifest(value).platforms).length, 3)
+})
+async function policy() { return import('../../scripts/release-policy.mjs') }
+function context() {
+  return { event: 'workflow_dispatch', ref: 'refs/heads/main', sha, main: { sha, protected: true },
+    versions: ['1.2.3', '1.2.3', '1.2.3'], tag: 'v1.2.3', tagExists: false, releaseExists: false,
+    ci: { head_sha: sha, head_branch: 'main', event: 'push', status: 'completed', conclusion: 'success', path: '.github/workflows/ci.yml' },
+    jobs: [{ name: 'Frontend checks', status: 'completed', conclusion: 'success' }, { name: 'Rust checks', status: 'completed', conclusion: 'success' }],
+  }
+}
+test('ReleaseRecovery_ExactMainCI_008', async () => {
+  const { mayPublish } = await policy()
+  assert.equal(mayPublish(context()), true)
+  for (const mutate of [
+    v => { v.main.sha = '2'.repeat(40) }, v => { v.main.protected = false },
+    v => { v.ref = 'refs/heads/dev' }, v => { v.ci.head_sha = '2'.repeat(40) },
+    v => { v.ci.event = 'pull_request' }, v => { v.ci.conclusion = 'failure' },
+    v => { v.jobs[1].conclusion = 'failure' }, v => { v.jobs.pop() },
+    v => { v.versions[1] = '1.2.4' }, v => { v.tagExists = true },
+    v => { v.releaseExists = true }, v => { v.ci.path = '.github/workflows/diagnostic.yml' },
+  ]) { const value = context(); mutate(value); assert.equal(mayPublish(value), false, JSON.stringify(value)) }
+})
+test('ReleaseRecovery_ArtifactRunBinding_009', async () => {
+  const { validateArtifacts } = await policy()
+  const artifacts = ['windows', 'macos', 'linux'].map(platform => ({ name: `cc-desk-candidate-${sha}-${platform}`, expired: false, workflow_run: { id: 42, head_sha: sha, head_branch: 'main' } }))
+  assert.doesNotThrow(() => validateArtifacts(artifacts, sha, 42))
+  assert.throws(() => validateArtifacts(artifacts.slice(0, 2), sha, 42), /artifact/)
+  const mixed = structuredClone(artifacts); mixed[1].workflow_run.id = 43
+  assert.throws(() => validateArtifacts(mixed, sha, 42), /artifact/)
+})
+test('ReleaseRecovery_WorkflowGateWiring_010', () => {
+  const workflow = readFileSync(resolve(__dirname, '../../.github/workflows/release.yml'), 'utf8')
+  assert.match(workflow, /needs: \[preflight, build\]/)
+  assert.match(workflow, /node scripts\/release-preflight\.mjs/)
+  assert.match(workflow, /pattern: cc-desk-candidate-\$\{\{ github\.sha \}\}-\*/)
+  assert.match(workflow, /node --test tests\/scripts\/releaseRecovery\.node\.cjs/)
+})
+test('ReleaseRecovery_DownloadedSignatures_011', async () => {
+  const value = input()
+  const manifest = buildUpdaterManifest(value)
+  const request = async url => {
+    const asset = value.assets.find(asset => url.endsWith(asset.name))
+    return { ok: true, arrayBuffer: async () => asset.data }
+  }
+  await verifyUpdaterManifest(manifest, '1.2.3', pubkey, value.repository, request)
+  await assert.rejects(verifyUpdaterManifest(manifest, '1.2.3', pubkey, value.repository,
+    async () => ({ ok: true, arrayBuffer: async () => Buffer.from('tampered download') })), /signature/)
+  const incomplete = structuredClone(manifest); delete incomplete.platforms['linux-x86_64']
+  await assert.rejects(verifyUpdaterManifest(incomplete, '1.2.3', pubkey, value.repository, request), /coverage/)
+})

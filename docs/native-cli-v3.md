@@ -177,9 +177,9 @@ D20's harness and target-machine command are implemented and tested, but real pr
 
 ## Release boundary
 
-The repository currently builds **signed candidate packages only**. `scripts/release-policy.mjs` returns false for publishing and the release workflow has no GitHub Release publish path.
+The authorized release recovery path builds one signed candidate set and promotes it only from the exact current protected main commit after full matching main CI succeeds. The three platform artifacts must belong to the same release workflow run; all updater signatures are verified against the actual bytes and configured public key. Existing tags, releases and drafts block ordinary promotion. See [release-process.md](release-process.md).
 
-Do not describe a candidate build as a published release, and do not re-enable publishing merely because code-side CI is green. Real-CLI evidence and an explicit promotion decision are separate gates.
+A candidate build is not a published release. D20 real-CLI certification remains separate and BLOCKED unless its actual target evidence exists. Restoring publication does not certify D20 or enable automatic client installation.
 
 ## 0.18.1 consolidation boundaries
 
