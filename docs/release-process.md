@@ -1,6 +1,6 @@
 # Release process
 
-The user-authorized recovery path promotes one signed platform set from **protected main**. Feature revisions remain candidates until they are merged and the actual merged main SHA passes every required CI job with a validated disclosure of unavailable native checks. Package metadata changes and manual dispatch can start the release workflow; tags and feature branches cannot promote.
+The user-authorized recovery path promotes one signed platform set from **protected main**. Feature revisions remain candidates until they are merged and the actual merged main SHA passes full CI under the required-checks policy, with a validated disclosure of unavailable native checks. Required CI success does not prove original unfiltered native All or real installation/return roundtrip acceptance. Package metadata changes and manual dispatch can start the release workflow; tags and feature branches cannot promote.
 
 `release-preflight.mjs` enforces the same `release-policy.mjs` used by fixture tests:
 
