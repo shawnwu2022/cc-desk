@@ -5,6 +5,7 @@ import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { matchProjectQuery, projectBasename } from '@/utils/displayName'
 import { normalizePath, sameProjectPath } from '@/utils/path'
+import { compareProjectGroups } from '@/utils/projectGroupOrder'
 import AppInput from '@/components/ui/AppInput.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -95,8 +96,7 @@ const allGroups = computed<UnifiedProjectGroup[]>(() => {
       sessions: [], pinned: pinned.has(key), hidden: false, runningCount: 0,
       needsUserCount: 0, lastActivityAt: session.lastActivityAt })
   }
-  return groups.sort((a, b) => Number(b.pinned) - Number(a.pinned)
-    || b.lastActivityAt - a.lastActivityAt || a.name.localeCompare(b.name))
+  return groups.sort(compareProjectGroups)
 })
 const displayedGroups = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()

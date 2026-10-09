@@ -18,6 +18,7 @@ import type { ToastInput } from '@/stores/notifications'
 import { makeSessionCatalogKey, makeSessionRenameOwnerKey } from '@/utils/sessionPresentation'
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
 import { normalizePath } from '@/utils/path'
+import { compareProjectGroups } from '@/utils/projectGroupOrder'
 import { LaunchConfigurationRequiredError } from '@/utils/launchPreparation'
 
 function projectName(path: string): string {
@@ -290,11 +291,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       )
     }
 
-    return [...groups.values()].sort((a, b) =>
-      Number(b.pinned) - Number(a.pinned)
-      || b.lastActivityAt - a.lastActivityAt
-      || a.name.localeCompare(b.name),
-    )
+    return [...groups.values()].sort(compareProjectGroups)
   })
 
   function configureAdapters(next: SessionAdapter[]): void {
