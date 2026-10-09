@@ -191,7 +191,7 @@ npm run tauri:build        # 生产构建
 
 - 普通开发 PR 只跑验证，不做版本 bump/tag/release。
 - `.github/workflows/release.yml` 只从当前 protected main 的精确 SHA 构建并发布同一 workflow run 的三个平台产物。
-- `scripts/release-policy.mjs` 必须保持 fail-closed：版本一致、完整匹配 main CI 成功、tag/release/draft 无冲突，并在发布前重新检查。
+- `scripts/release-policy.mjs` 必须保持 fail-closed：版本一致、当前 protected main 的强制 CI 检查成功、tag/release/draft 无冲突，并在发布前重新检查。用户允许无法自然验证的宿主专项不阻断完整功能发布；仅源码审核的 18 个 Job-free 测试可在实际外部 Job 中明确列为未验证，其余原测试库存必须执行并核对。发布须验证同 SHA/run/attempt 的精确 CI artifact 实际字节、报告及原始日志；不得把正常套件成功宣称为原 All 或真实往返验收通过，不能使用调用者本地 JSON 或任意排除项替代证据。
 - 这次恢复依据用户明确授权；普通 PR、feature branch、失败或未完成的 CI 均不可发布。
 - 真实 Claude Code / Codex CLI Layer-C 证据属于 D20，和普通代码 CI 分层记录。
 - updater 必须验证三个实际文件的签名；既有 draft 替换要求 hash-verified backup 和明确 recovery transaction。客户端自动安装策略保持不变。

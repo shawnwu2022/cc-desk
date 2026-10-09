@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "reason": "external_job",
+  "jobFreeTests": [
+    "version_history::windows::manager_process::tests::HistoryManagerProcess_SuspendedIdentity_001",
+    "version_history::windows::manager_process::tests::HistoryManagerProcess_ReadyChain_002",
+    "version_history::windows::manager_process::tests::HistoryManager_SourceCrash_004",
+    "version_history::windows::manager_process::tests::HistoryManager_ContainedSources_005",
+    "version_history::windows::manager_process::tests::HistoryManager_DisarmUnknown_006",
+    "version_history::windows::manager_process::tests::HistoryManager_JobCollision_007",
+    "version_history::windows::manager_process::tests::HistoryManager_UniqueJobs_008",
+    "version_history::windows::manager_process::tests::HistoryManager_RejectReceiptMix_009",
+    "version_history::windows::manager_process::tests::HistoryManager_AdmittedJob_010",
+    "version_history::windows::manager_process::tests::HistoryManager_TypedChildren_011",
+    "version_history::windows::manager_process::tests::HistoryManager_LifetimeCollision_012",
+    "version_history::windows::manager_process::tests::HistoryManager_ConcurrentHostJob_013",
+    "version_history::windows::manager_process::tests::typed_probe::HistoryManager_PrepareTimeout_015",
+    "version_history::windows::manager_process::tests::typed_probe::HistoryManager_MarkerTimeout_016",
+    "version_history::windows::manager_process::tests::typed_probe::HistoryManager_SuspendedFailure_017",
+    "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RunningFailure_018",
+    "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RejectFallback_019",
+    "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RejectExit124_020"
+  ],
+  "requiredSelectedTests": [
+    "version_history::windows::manager_process::tests::HistoryManagerProcess_CommandGrammar_003",
+    "version_history::windows::manager_process::tests::HistoryManager_RejectJobQueryError_014",
+    "tests::native_cli_channel_live::D11_Channel_Native_011",
+    "tests::native_cli_document_live::D11_Webview_Live_001",
+    "tests::native_cli_launch_live::worker::D11_Launch_Native_001",
+    "tests::native_cli_projection_live::D12_Webview_FormalCommands_001",
+    "tests::version_history_webview::HistoryWebView_Exit_001"
+  ],
+  "harnesses": [
+    { "name": "cc_desk", "kind": "lib" },
+    { "name": "cc-desk", "kind": "bin" },
+    { "name": "paste_transport", "kind": "test" },
+    { "name": "paste_claude_e2e", "kind": "test" }
+  ]
+}

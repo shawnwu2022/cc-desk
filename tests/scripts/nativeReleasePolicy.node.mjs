@@ -44,12 +44,14 @@ test('D02_PackageChange_DoesNotPublish_01', async () => {
   }
 })
 
-test('D02_ReleaseWorkflow_RequiresProtectedMainAndFullCI_02', () => {
+test('D02_ReleaseWorkflow_RequiresProtectedMainAndDisclosedCI_02', () => {
   const workflow = readFileSync(releaseWorkflowPath, 'utf8')
 
   assert.match(workflow, /needs: \[preflight, build\]/)
   assert.match(workflow, /github\.ref == 'refs\/heads\/main' && github\.ref_protected/)
   assert.match(workflow, /node scripts\/release-preflight\.mjs --artifacts/)
+  assert.match(workflow, /--coverage coverage\/windows-native-coverage\.json/)
+  assert.match(workflow, /--resolve-coverage/)
   assert.match(workflow, /pattern: cc-desk-candidate-\$\{\{ github\.sha \}\}-\*/)
   assert.equal((workflow.match(/contents: write/g) ?? []).length, 1)
   assert.match(workflow, /fail_on_unmatched_files: true/)

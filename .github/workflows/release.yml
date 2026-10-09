@@ -33,12 +33,29 @@ jobs:
         with:
           node-version: '22'
       - name: Run release recovery fixtures
-        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs
-      - name: Require protected main and complete matching CI
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs
+      - name: Resolve coverage from current protected main required CI
+        id: coverage
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-preflight.mjs --resolve-coverage
+      - name: Download exact CI coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.coverage.outputs.coverage_artifact_id }}
+          run-id: ${{ steps.coverage.outputs.ci_run }}
+          github-token: ${{ github.token }}
+          path: coverage
+          merge-multiple: true
+      - name: Require protected main, successful required CI and disclosed coverage
         id: gate
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/release-preflight.mjs
+        run: |
+          node scripts/release-preflight.mjs --coverage coverage/windows-native-coverage.json \
+            --ci-run "${{ steps.coverage.outputs.ci_run }}" --ci-attempt "${{ steps.coverage.outputs.ci_attempt }}" \
+            --coverage-artifact-id "${{ steps.coverage.outputs.coverage_artifact_id }}" \
+            --coverage-artifact-name "${{ steps.coverage.outputs.coverage_artifact_name }}"
 
   build:
     needs: preflight
@@ -165,10 +182,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Recheck current main, full CI and same-run platform artifacts
+      - name: Resolve latest exact CI coverage before promotion
+        id: coverage
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/release-preflight.mjs --artifacts
+        run: node scripts/release-preflight.mjs --resolve-coverage
+      - name: Download exact CI coverage artifact for publication
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.coverage.outputs.coverage_artifact_id }}
+          run-id: ${{ steps.coverage.outputs.ci_run }}
+          github-token: ${{ github.token }}
+          path: coverage
+          merge-multiple: true
+      - name: Recheck main, required CI, coverage and same-run platform artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release-preflight.mjs --artifacts --coverage coverage/windows-native-coverage.json \
+            --ci-run "${{ steps.coverage.outputs.ci_run }}" --ci-attempt "${{ steps.coverage.outputs.ci_attempt }}" \
+            --coverage-artifact-id "${{ steps.coverage.outputs.coverage_artifact_id }}" \
+            --coverage-artifact-name "${{ steps.coverage.outputs.coverage_artifact_name }}"
       - name: Download this run's three platform artifacts
         uses: actions/download-artifact@v4
         with:
@@ -180,7 +214,12 @@ jobs:
       - name: Recheck source immediately before publishing
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/release-preflight.mjs --artifacts
+        run: |
+          node scripts/release-preflight.mjs --artifacts --coverage coverage/windows-native-coverage.json \
+            --ci-run "${{ steps.coverage.outputs.ci_run }}" --ci-attempt "${{ steps.coverage.outputs.ci_attempt }}" \
+            --coverage-artifact-id "${{ steps.coverage.outputs.coverage_artifact_id }}" \
+            --coverage-artifact-name "${{ steps.coverage.outputs.coverage_artifact_name }}" \
+            --notes release-validation-notes.md
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -191,6 +230,7 @@ jobs:
           prerelease: false
           make_latest: true
           generate_release_notes: true
+          body_path: release-validation-notes.md
           fail_on_unmatched_files: true
           files: |
             artifacts/**/*.exe
@@ -201,5 +241,6 @@ jobs:
             artifacts/**/*.AppImage
             artifacts/**/*.AppImage.sig
             latest.json
+            coverage/windows-native-coverage.json
       - name: Verify published update channel bytes and signatures
         run: node scripts/verify-updater-manifest.js "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" "${{ needs.preflight.outputs.version }}"

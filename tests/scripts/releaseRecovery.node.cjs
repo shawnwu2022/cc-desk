@@ -57,13 +57,15 @@ async function policy() { return import('../../scripts/release-policy.mjs') }
 function context() {
   return { event: 'workflow_dispatch', ref: 'refs/heads/main', sha, main: { sha, protected: true },
     versions: ['1.2.3', '1.2.3', '1.2.3'], tag: 'v1.2.3', tagExists: false, releaseExists: false,
-    ci: { head_sha: sha, head_branch: 'main', event: 'push', status: 'completed', conclusion: 'success', path: '.github/workflows/ci.yml' },
-    jobs: [{ name: 'Frontend checks', status: 'completed', conclusion: 'success' }, { name: 'Rust checks', status: 'completed', conclusion: 'success' }],
+    ci: { id: 7, run_attempt: 2, head_sha: sha, head_branch: 'main', event: 'push', status: 'completed', conclusion: 'success', path: '.github/workflows/ci.yml' },
+    jobs: ['Frontend checks', 'Rust checks', 'Disposable roundtrip compile-only policy (no native acceptance)']
+      .map(name => ({ name, status: 'completed', conclusion: 'success' })),
   }
 }
 test('ReleaseRecovery_ExactMainCI_008', async () => {
-  const { mayPublish } = await policy()
-  assert.equal(mayPublish(context()), true)
+  const { requiredChecksPassed, mayPublish } = await policy()
+  assert.equal(requiredChecksPassed(context()), true)
+  assert.equal(mayPublish(context()), false, 'CI success without bound downloaded native coverage cannot promote')
   for (const mutate of [
     v => { v.main.sha = '2'.repeat(40) }, v => { v.main.protected = false },
     v => { v.ref = 'refs/heads/dev' }, v => { v.ci.head_sha = '2'.repeat(40) },
@@ -71,7 +73,8 @@ test('ReleaseRecovery_ExactMainCI_008', async () => {
     v => { v.jobs[1].conclusion = 'failure' }, v => { v.jobs.pop() },
     v => { v.versions[1] = '1.2.4' }, v => { v.tagExists = true },
     v => { v.releaseExists = true }, v => { v.ci.path = '.github/workflows/diagnostic.yml' },
-  ]) { const value = context(); mutate(value); assert.equal(mayPublish(value), false, JSON.stringify(value)) }
+    v => { v.jobs.pop() }, v => { v.ci.run_attempt = 0 },
+  ]) { const value = context(); mutate(value); assert.equal(requiredChecksPassed(value), false, JSON.stringify(value)) }
 })
 test('ReleaseRecovery_ArtifactRunBinding_009', async () => {
   const { validateArtifacts } = await policy()
@@ -105,17 +108,19 @@ test('ReleaseRecovery_PreflightAPIRefusal_012', () => {
   const version = JSON.parse(readFileSync(resolve(__dirname, '../../package.json'), 'utf8')).version
   const script = `
     const sha = '${sha}';
-    const run = { id: 7, head_sha: sha, head_branch: 'main', event: 'push', status: 'completed', conclusion: process.env.FIXTURE_CI, path: '.github/workflows/ci.yml' };
+    const run = { id: 7, run_attempt: 2, head_sha: sha, head_branch: 'main', event: 'push', status: 'completed', conclusion: process.env.FIXTURE_CI, path: '.github/workflows/ci.yml' };
     globalThis.fetch = async url => {
       let value;
       if (url.includes('/branches/main')) value = { protected: true, commit: { sha } };
       else if (url.includes('/actions/workflows/ci.yml/runs')) value = { workflow_runs: [run] };
-      else if (url.includes('/actions/runs/7/jobs')) value = { jobs: ['Frontend checks', 'Rust checks'].map(name => ({ name, status: 'completed', conclusion: 'success' })) };
+      else if (url.includes('/actions/runs/7/attempts/2/jobs')) value = { jobs: ['Frontend checks', 'Rust checks', 'Disposable roundtrip compile-only policy (no native acceptance)'].map(name => ({ name, status: 'completed', conclusion: 'success' })) };
+      else if (url.includes('/actions/runs/7/artifacts')) value = { artifacts: [{id: 90, name: 'windows-native-coverage-' + sha + '-7-2', expired: false, expires_at: '2099-01-01T00:00:00Z', workflow_run: {id:7, head_sha:sha, head_branch:'main'}}] };
       else if (url.includes('/git/ref/tags/')) return { status: 404 };
       else if (url.endsWith('/releases?per_page=100&page=1')) value = process.env.FIXTURE_DRAFT === 'yes' ? [{ tag_name: 'v${version}', draft: true }] : [];
       else throw new Error('unexpected fixture API route');
       return { ok: true, json: async () => value };
     };
+    process.argv = ['node', 'release-preflight.mjs', '--resolve-coverage'];
     await import('./scripts/release-preflight.mjs');
   `
   for (const [conclusion, draft, expected] of [['success', 'no', 0], ['failure', 'no', 1], ['success', 'yes', 1]]) {
@@ -127,6 +132,7 @@ test('ReleaseRecovery_PreflightAPIRefusal_012', () => {
     assert.ifError(result.error)
     assert.equal(result.status, expected, result.stderr)
     if (expected === 1) assert.match(result.stderr, /release gate blocked/)
+    else { assert.match(result.stdout, /Resolved native coverage artifact/); assert.doesNotMatch(result.stdout, /preflight passed|promotion passed/i) }
   }
 })
 test('ReleaseRecovery_ActualManifestCLI_013', () => {
