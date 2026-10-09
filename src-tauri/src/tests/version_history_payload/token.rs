@@ -769,12 +769,44 @@ fn run_scoped_worker(root: &Path, scope: WorkerScope<'_>) -> io::Result<()> {
         )
         .map_err(win)?;
     }
+    // Process signaling may precede Job accounting. Keep the exact owned Job
+    // handle and require a successful empty query inside the original window.
+    // This waits for termination evidence; it never retries worker execution.
+    let drain = if code == 0 && accounting.ActiveProcesses != 0 {
+        let drain_started = Instant::now();
+        terminal_diagnostics::await_owned_job_empty(
+            || {
+                terminal_diagnostics::owned_job_remaining_ms(
+                    worker_wait_started.elapsed(),
+                    drain_started.elapsed(),
+                )
+            },
+            |ms| std::thread::sleep(Duration::from_millis(u64::from(ms))),
+            || {
+                let mut observed = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+                unsafe {
+                    QueryInformationJobObject(
+                        Some(raw(&job)),
+                        JobObjectBasicAccountingInformation,
+                        (&mut observed as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                        size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                        None,
+                    )
+                    .map_err(win)?;
+                }
+                accounting = observed;
+                Ok(accounting.ActiveProcesses)
+            },
+        )
+    } else {
+        Ok(())
+    };
     report(
         root,
         "worker-terminal.json",
         &json!({"process":exact.identity(),"exitCode":code,"activeProcesses":accounting.ActiveProcesses}),
     )?;
-    if code != 0 || accounting.ActiveProcesses != 0 {
+    if code != 0 || accounting.ActiveProcesses != 0 || drain.is_err() {
         // 仅输出有界状态，区分子测试失败和结束后的 Job 计数，保留原有拒绝。
         eprintln!(
             "HISTORY_CONFINED_WORKER_TERMINAL {{\"exitCode\":{code},\"activeProcesses\":{}}}",
@@ -788,7 +820,9 @@ fn run_scoped_worker(root: &Path, scope: WorkerScope<'_>) -> io::Result<()> {
                 worker_wait_started,
             );
         }
-        return Err(blocked("worker failed or owned job not empty"));
+        return Err(drain
+            .err()
+            .unwrap_or_else(|| blocked("worker failed or owned job not empty")));
     }
     Ok(())
 }

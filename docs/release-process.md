@@ -58,12 +58,46 @@ run, attempt, marker, title or disclosure are rejected before mutation. The
 repair changes no asset and creates no Git tag. A complete state observed after
 an unknown acknowledgement is accepted without repeating the write.
 
-This explicit entry is not automatically invoked by ordinary publication or
-candidate preparation. It refuses an earlier preparation after main advances
-or a new release run/attempt begins; old signed artifacts or CI cannot become
-evidence for a new source. Such a transition needs its own reviewed recovery
-plan and newly validated current-source outputs. This change alone does not
-authorize rerunning or publishing the previously failed release.
+The same-run metadata repair is not automatically invoked by ordinary
+publication. A separate reviewed transition handles the actual partially
+prepared draft observed on 2026-10-09. `release-prepared-recovery.json` pins its
+entire stable snapshot: draft 406663556, target db517757, exact previous stage
+marker for release run 37899773556/attempt 1, disclosure, creation timestamp and
+all five preserved asset IDs/metadata. Only that exact snapshot is admitted as
+a read-only recovery candidate alongside full **current-source** main CI and
+coverage. Changed or unknown partial states remain conflicts.
+
+After this code is merged under the parent's release coordination, a new
+protected-main release run can reprepare that exact state:
+
+1. Complete CI for the new exact main SHA, resolve and independently validate
+   its actual coverage/log bytes, and build all three signed platforms in the
+   new release run. Generate and verify the new updater manifest.
+2. Independently download original backup artifact **11604434521** from old
+   release run **37899773556**. Its immutable name, 23,403,408-byte ZIP size,
+   SHA-256 `13832bc28f24c33cfbdac192f6ba81a4dcb278ce1255da7e2141acae3c734434`,
+   source db517757, run and attempt remain original provenance. Verify the
+   backup's original release JSON hash and all five original file hashes. The
+   failed old run is not new CI or new signing evidence.
+3. The workflow routes only the exact reviewed partial snapshot to
+   `release-draft-transaction.mjs reprepare --directory verified-old-draft-backup
+   --backup-artifact-id 11604434521`. The transaction authenticates that old
+   artifact and run separately, rechecks fresh current main/CI/coverage and the
+   new run's three platform artifact identities, verifies all three new actual
+   updater signatures again, and compares every retained stable snapshot field
+   with the original backup before writing.
+4. One explicit metadata PATCH rebinds the existing draft to the new exact main
+   SHA and new run/attempt/inventory/disclosure. The five original asset IDs,
+   bytes and preserved names remain untouched. Unknown acknowledgements are
+   resolved by an exact authenticated post-state read; completed writes are not
+   replayed. Continue the existing nine-asset stage, actual byte/signature
+   revalidation and current-main/CI/coverage/tag checks before publication.
+
+An expired/missing/changed original backup or any concurrent snapshot/asset/tag
+change blocks this route before mutation. No old platform artifact is used by
+the new run, no old CI result becomes current proof, no original asset is
+deleted, and the old failed release is not rerun. This engineering task does
+not itself merge, start a formal release or change the live draft/tag.
 
 After public publication, do not delete/recreate or retarget an existing tag. A failed post-publication check is a failed release workflow requiring investigation; it must not be described as a verified updater channel. Prefer a separately verified new version for repair. No workflow can make the branch read, external release mutation and later verification atomic, so preserve the recorded source/run binding and investigate any concurrent external mutation.
 

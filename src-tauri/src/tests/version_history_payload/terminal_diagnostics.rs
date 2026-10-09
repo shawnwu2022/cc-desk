@@ -1,7 +1,40 @@
-//! Pure, test-only policy for bounded observations after an already failed worker.
-use std::time::Duration;
+//! Pure, test-only policy for owned-job draining and bounded failure observations.
+use std::{io, time::Duration};
 
 pub(super) const WORKER_WINDOW_MS: u32 = 300_000;
+
+pub(super) fn owned_job_remaining_ms(worker_elapsed: Duration, drain_elapsed: Duration) -> u32 {
+    let worker = Duration::from_millis(u64::from(WORKER_WINDOW_MS)).saturating_sub(worker_elapsed);
+    let drain = Duration::from_secs(5).saturating_sub(drain_elapsed);
+    worker.min(drain).as_millis() as u32
+}
+
+pub(super) fn await_owned_job_empty(
+    mut remaining: impl FnMut() -> u32,
+    mut pause: impl FnMut(u32),
+    mut query: impl FnMut() -> io::Result<u32>,
+) -> io::Result<()> {
+    loop {
+        if remaining() == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "owned job drain deadline reached",
+            ));
+        }
+        let active = query()?;
+        let budget = remaining();
+        if budget == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "owned job drain deadline reached",
+            ));
+        }
+        if active == 0 {
+            return Ok(());
+        }
+        pause(budget.min(10));
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct MembershipSummary {

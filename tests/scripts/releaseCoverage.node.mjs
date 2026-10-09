@@ -14,6 +14,7 @@ import { OLD_ASSETS, OLD_SOURCE, OLD_DRAFT_ID, PRESERVED_LABEL, preservedAssetNa
 import { buildUpdaterManifest } from '../../scripts/generate-updater-manifest.js'
 
 const sha = '1'.repeat(40)
+const reviewedPrepared = JSON.parse(readFileSync(new URL('../fixtures/release-prepared-406663556.json', import.meta.url)))
 const ci = { id: 7, run_attempt: 2, head_sha: sha, head_branch: 'main' }
 const name = `windows-native-coverage-${sha}-7-2`
 function artifact() {
@@ -91,6 +92,11 @@ function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = (
       releaseRun: { head_sha: sha, head_branch: 'main', path: '.github/workflows/release.yml' },
       platformArtifacts: ['windows', 'macos', 'linux'].map(platform => ({ name: `cc-desk-candidate-${sha}-${platform}`,
         expired: false, workflow_run: { id: 42, head_sha: sha, head_branch: 'main' } })) }
+    const b = reviewedPrepared.backup
+    api.originalBackup = { id: b.id, name: b.name, digest: b.digest, size_in_bytes: b.size, expired: false,
+      expires_at: '2099-01-01T00:00:00Z', workflow_run: { id: b.runId, head_sha: b.sha, head_branch: 'main' } }
+    api.originalRun = { id: b.runId, head_sha: b.sha, head_branch: 'main', event: 'push', run_attempt: b.attempt,
+      path: '.github/workflows/release.yml', status: 'completed', conclusion: 'failure' }
     mutateReport(value)
     writeFixture(directory, value)
     const entries = [REPORT_FILENAME, ...value.harnesses.flatMap(h => Object.values(h.logs)), ...value.doctests.logs]
@@ -110,7 +116,7 @@ function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = (
       })
       mkdirSync(join(directory, 'scripts')); mkdirSync(join(directory, 'src-tauri')); mkdirSync(join(directory, 'artifacts'))
       for (const file of ['release-preflight.mjs', 'release-policy.mjs', 'windows-native-validation.mjs', 'windows-native-scope.json', 'windows-rust-shards.mjs',
-        'release-coverage-archive.mjs', 'release-draft-recovery.mjs', 'verify-updater-manifest.js', 'updater-signature.js']) {
+        'release-coverage-archive.mjs', 'release-draft-recovery.mjs', 'release-prepared-recovery.json', 'verify-updater-manifest.js', 'updater-signature.js']) {
         copyFileSync(new URL(`../../scripts/${file}`, import.meta.url), join(directory, 'scripts', file))
       }
       writeFileSync(join(directory, 'package.json'), JSON.stringify({ version: '0.18.1' }))
@@ -156,7 +162,9 @@ function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = (
         if(url.includes('/actions/artifacts/90/zip')) return new Response(Buffer.from(process.env.FIXTURE_ARCHIVE,'base64'),{status:200});
         if (fixture.queryError && url.includes('/artifacts')) return {ok:false,status:503};
         let value;
-        if(url.includes('/branches/main')) value={protected:fixture.main.protected,commit:{sha:fixture.main.sha}};
+        if(url.endsWith('/actions/artifacts/11604434521')) value=fixture.originalBackup;
+        else if(url.endsWith('/actions/runs/37899773556')) value=fixture.originalRun;
+        else if(url.includes('/branches/main')) value={protected:fixture.main.protected,commit:{sha:fixture.main.sha}};
         else if(url.includes('/actions/workflows/ci.yml/runs')) value={workflow_runs:fixture.runs ?? [fixture.ci]};
         else if(url.includes('/jobs')) value={jobs:fixture.jobs};
         else if(url.includes('/actions/runs/42/artifacts')) value={artifacts:fixture.platformArtifacts};
@@ -285,6 +293,26 @@ test('ReleaseCoverage_UntaggedReviewedDraftCannotLookLikeUnusedVersion_027', () 
     const result = preflight({ stage: true, preparedPhase: true, extraArgs,
       mutate: f => { f.staged.tag_name = 'untagged-dce9f75805136bcd2e47' } })
     assert.equal(result.status, 1, result.stdout)
+  }
+})
+
+test('ReleaseCoverage_ReviewedPartialRecoveryUsesNewCIAndOnlyOldBackupProvenance_028', () => {
+  const input = { stage: true, extraArgs: ['--artifacts', '--prepare-draft-recovery'],
+    mutate: f => { f.releases = [structuredClone(reviewedPrepared.release)] } }
+  const result = preflight(input)
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.outputs, /recovery_mode=reprepare\n/)
+  assert.match(result.outputs, /recovery_backup_id=11604434521\n/)
+  assert.match(result.outputs, /recovery_backup_run=37899773556\n/)
+  assert.match(result.notes, /Source: 1111111111111111111111111111111111111111/)
+  assert.doesNotMatch(result.notes, /37899773504|db517757/)
+  for (const mutate of [f => f.originalBackup.digest = 'changed', f => f.originalBackup.expired = true,
+    f => f.originalBackup.workflow_run.head_sha = sha, f => f.originalRun.run_attempt = 2,
+    f => f.originalRun.head_sha = sha, f => f.releases[0].body += 'changed',
+    f => f.ci.head_sha = reviewedPrepared.preparation.sha, f => f.ci.conclusion = 'failure',
+    f => f.platformArtifacts[0].workflow_run.head_sha = reviewedPrepared.preparation.sha]) {
+    const bad = preflight({ ...input, mutate: f => { input.mutate(f); mutate(f) } })
+    assert.equal(bad.status, 1, bad.stdout)
   }
 })
 

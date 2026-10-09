@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "release": {
+    "id": 406663556,
+    "tag_name": "untagged-dce9f75805136bcd2e47",
+    "target_commitish": "db517757eefd323b3eaa4c69224bdd8f74b7feb6",
+    "name": "CC Desk 0.18.1",
+    "body": "Validation policy: required-checks-and-disclosed-host-unverified-v1\n\nSource: db517757eefd323b3eaa4c69224bdd8f74b7feb6\nCI run: 37899773504, attempt: 1\nCoverage artifact: 11604610919 (windows-native-coverage-db517757eefd323b3eaa4c69224bdd8f74b7feb6-37899773504-1)\n\nRequired frontend, Rust normal-suite/build/lint, and roundtrip compile-only policy jobs succeeded.\nNative normal suite: 1230 executed (1230 passed, 0 failed, 0 measured); 35 original ignored tests; 18 unavailable Job-free manager tests unverified.\n\nOriginal unfiltered native All: unverified. Native installation/return roundtrip acceptance is not proven by this coverage.\n\nReal native installation/return roundtrip was not executed by this CI validation; the report discloses the observed host limits.\nCurrent available reviewed official signed Windows historical packages support installation and preserved-current return with FreshSettings. Shared Claude/Codex configuration, history and project-file changes are not rolled back. Future packages require their own reviewed version/digest/size/inventory admission.\n\nUnverified tests (observed external Windows Job):\n- version_history::windows::manager_process::tests::HistoryManagerProcess_SuspendedIdentity_001\n- version_history::windows::manager_process::tests::HistoryManagerProcess_ReadyChain_002\n- version_history::windows::manager_process::tests::HistoryManager_SourceCrash_004\n- version_history::windows::manager_process::tests::HistoryManager_ContainedSources_005\n- version_history::windows::manager_process::tests::HistoryManager_DisarmUnknown_006\n- version_history::windows::manager_process::tests::HistoryManager_JobCollision_007\n- version_history::windows::manager_process::tests::HistoryManager_UniqueJobs_008\n- version_history::windows::manager_process::tests::HistoryManager_RejectReceiptMix_009\n- version_history::windows::manager_process::tests::HistoryManager_AdmittedJob_010\n- version_history::windows::manager_process::tests::HistoryManager_TypedChildren_011\n- version_history::windows::manager_process::tests::HistoryManager_LifetimeCollision_012\n- version_history::windows::manager_process::tests::HistoryManager_ConcurrentHostJob_013\n- version_history::windows::manager_process::tests::typed_probe::HistoryManager_PrepareTimeout_015\n- version_history::windows::manager_process::tests::typed_probe::HistoryManager_MarkerTimeout_016\n- version_history::windows::manager_process::tests::typed_probe::HistoryManager_SuspendedFailure_017\n- version_history::windows::manager_process::tests::typed_probe::HistoryManager_RunningFailure_018\n- version_history::windows::manager_process::tests::typed_probe::HistoryManager_RejectFallback_019\n- version_history::windows::manager_process::tests::typed_probe::HistoryManager_RejectExit124_020\n\nAttached windows-native-coverage.json SHA256: 930e2056511a92e1baa895537cc5cb346f0abc78a26f4ff2e3448391af7d4ec3. This is the report validated for this promotion. Client automatic-install policy and runtime historical-installation guards remain unchanged.\n\nPrevious unpublished candidate assets are preserved as five labelled .bin backups (source 5ed35db9), separately from this run's nine current assets.\n<!-- cc-desk-stage:db517757eefd323b3eaa4c69224bdd8f74b7feb6:37899773556:1:1cb01f2215504274e1e89cf3d76c282224686e8845f7b8e5f26696b4a5b9859e -->\n",
+    "draft": true,
+    "prerelease": false,
+    "published_at": null,
+    "created_at": "2026-10-08T09:38:05Z",
+    "assets": [
+      {
+        "id": 621380125,
+        "name": "preserved-5ed35db9-621380125.bin",
+        "size": 8127924,
+        "digest": "sha256:d28b5b177aed7848b4cccc7de852b114cbfb38f0a80c9566781d9520597db6ba",
+        "state": "uploaded",
+        "label": "Preserved previous unpublished candidate (source 5ed35db9); not a current installer",
+        "content_type": "application/octet-stream"
+      },
+      {
+        "id": 621381531,
+        "name": "preserved-5ed35db9-621381531.bin",
+        "size": 7625049,
+        "digest": "sha256:2917784d637be33c02ce2071dae33ca60eb824aef1caec5f89047ba087de12d0",
+        "state": "uploaded",
+        "label": "Preserved previous unpublished candidate (source 5ed35db9); not a current installer",
+        "content_type": "application/octet-stream"
+      },
+      {
+        "id": 621382673,
+        "name": "preserved-5ed35db9-621382673.bin",
+        "size": 404,
+        "digest": "sha256:c1cbae7b3c254a20d5cea64d8bc2fa02c60c51eb02160e357cb9f96066daeca1",
+        "state": "uploaded",
+        "label": "Preserved previous unpublished candidate (source 5ed35db9); not a current installer",
+        "content_type": "application/octet-stream"
+      },
+      {
+        "id": 621382810,
+        "name": "preserved-5ed35db9-621382810.bin",
+        "size": 7722804,
+        "digest": "sha256:72915dbe6aa8c6d73e4eeb99f05af74d8bbac3c12640d4b8d9b5ec9b8ffa7195",
+        "state": "uploaded",
+        "label": "Preserved previous unpublished candidate (source 5ed35db9); not a current installer",
+        "content_type": "application/octet-stream"
+      },
+      {
+        "id": 621384505,
+        "name": "preserved-5ed35db9-621384505.bin",
+        "size": 420,
+        "digest": "sha256:913ea1ea2efd9db4fc4323ba288dfac699f995a49aaf469bfa70ca0c86b605d5",
+        "state": "uploaded",
+        "label": "Preserved previous unpublished candidate (source 5ed35db9); not a current installer",
+        "content_type": "application/octet-stream"
+      }
+    ]
+  },
+  "preparation": {
+    "sha": "db517757eefd323b3eaa4c69224bdd8f74b7feb6",
+    "runId": 37899773556,
+    "attempt": 1,
+    "tag": "v0.18.1",
+    "marker": "<!-- cc-desk-stage:db517757eefd323b3eaa4c69224bdd8f74b7feb6:37899773556:1:1cb01f2215504274e1e89cf3d76c282224686e8845f7b8e5f26696b4a5b9859e -->"
+  },
+  "backup": {
+    "id": 11604434521,
+    "name": "cc-desk-old-draft-backup-db517757eefd323b3eaa4c69224bdd8f74b7feb6-37899773556-1",
+    "digest": "sha256:13832bc28f24c33cfbdac192f6ba81a4dcb278ce1255da7e2141acae3c734434",
+    "size": 23403408,
+    "sha": "db517757eefd323b3eaa4c69224bdd8f74b7feb6",
+    "runId": 37899773556,
+    "attempt": 1
+  },
+  "observedDate": "2026-10-09"
+}

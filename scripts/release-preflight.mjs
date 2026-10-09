@@ -2,7 +2,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname } from 'node:path'
 import { mayPublish, sourceChecksPassed, coverageChecksPassed, requiredChecksPassed, resolveCoverageArtifact, validateArtifacts, validateCoverageBinding } from './release-policy.mjs'
-import { OLD_DRAFT_ID, backupArtifactName, recoveryCandidateChecks, assertPreparedDraft, assertRepairablePreparedDraft, assertStagedRelease, collectStageFiles, verifyStagedReleaseBytes, validationNotes, stagedValidationNotes } from './release-draft-recovery.mjs'
+import { OLD_DRAFT_ID, backupArtifactName, recoveryCandidateChecks, assertReviewedOldDraft, assertReviewedPreparedDraft, preparedRecoveryBackup, validatePreparedRecoveryBackup, assertPreparedDraft, assertRepairablePreparedDraft, assertStagedRelease, collectStageFiles, verifyStagedReleaseBytes, validationNotes, stagedValidationNotes } from './release-draft-recovery.mjs'
 import { REPORT_FILENAME, VALIDATION_POLICY } from './windows-native-validation.mjs'
 import { fetchCoverageArchive, validateFetchedCoverage } from './release-coverage-archive.mjs'
 
@@ -80,6 +80,18 @@ if (inPlacePhase) {
 } else if (!(requiredChecksPassed(context) || (args.has('--prepare-draft-recovery') && recoveryCandidateChecks(context, releases, tagRef)))) {
   throw new Error('release gate blocked: require current protected main, matching versions, successful required CI and unused tag/release')
 }
+let recoveryMode = '', recoveryBackup
+if (args.has('--prepare-draft-recovery') && context.releaseExists) {
+  const original = releases.find(release => release.id === OLD_DRAFT_ID)
+  try { assertReviewedOldDraft(original); recoveryMode = 'original' }
+  catch {
+    assertReviewedPreparedDraft(original)
+    recoveryMode = 'reprepare'
+    recoveryBackup = preparedRecoveryBackup()
+    validatePreparedRecoveryBackup(await api(`actions/artifacts/${recoveryBackup.id}`),
+      await api(`actions/runs/${recoveryBackup.runId}`))
+  }
+}
 const artifact = resolveCoverageArtifact(await pages(`actions/runs/${ci.id}/artifacts`, 'artifacts'), ci, sha)
 const binding = { sourceSha: sha, runId: String(ci.id), runAttempt: ci.run_attempt, artifactId: artifact.id, artifactName: artifact.name }
 if (args.has('--resolve-coverage')) {
@@ -140,6 +152,7 @@ if (args.has('--resolve-coverage')) {
   }
   if (args.has('--notes')) writeFileSync(args.get('--notes'), repairPhase ? prepared.binding.body : expectedNotes)
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT,
-    `version=${packageVersion}\ntag=${tag}\nci_run=${ci.id}\nrecovery_draft=${args.has('--prepare-draft-recovery') && context.releaseExists ? OLD_DRAFT_ID : ''}\n`)
+    `version=${packageVersion}\ntag=${tag}\nci_run=${ci.id}\nrecovery_draft=${args.has('--prepare-draft-recovery') && context.releaseExists ? OLD_DRAFT_ID : ''}\n` +
+    `recovery_mode=${recoveryMode}\nrecovery_backup_id=${recoveryBackup?.id ?? ''}\nrecovery_backup_run=${recoveryBackup?.runId ?? ''}\n`)
   console.log(`${args.has('--prepare-draft-recovery') ? 'Read-only recovery candidate' : 'Release'} preflight passed for ${sha}, CI run ${ci.id}, attempt ${ci.run_attempt}, ${tag}; ${summary.counts.executed} native tests executed, ${summary.counts.ignored} original ignored, ${summary.unverifiedNames.length} unverified; native All ${summary.nativeAllStatus}`)
 }

@@ -242,13 +242,13 @@ jobs:
       - name: Generate updater manifest and verify all three actual signatures
         run: node scripts/generate-updater-manifest.js artifacts latest.json "${{ needs.preflight.outputs.tag }}"
       - name: Download and hash every original draft asset without mutation
-        if: steps.promotion.outputs.recovery_draft == '406663556'
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'original'
         id: backup
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/release-draft-transaction.mjs backup --directory old-draft-backup
       - name: Preserve immutable recovery backup before any release mutation
-        if: steps.promotion.outputs.recovery_draft == '406663556'
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'original'
         id: backup_upload
         uses: actions/upload-artifact@v4
         with:
@@ -257,19 +257,35 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Independently download the exact durable backup
-        if: steps.promotion.outputs.recovery_draft == '406663556'
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'original'
         uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ steps.backup_upload.outputs.artifact-id }}
           path: verified-old-draft-backup
           merge-multiple: true
       - name: Recheck backup and prepare the original draft on this exact main source
-        if: steps.promotion.outputs.recovery_draft == '406663556'
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'original'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           node scripts/release-draft-transaction.mjs prepare --directory verified-old-draft-backup \
             --backup-artifact-id "${{ steps.backup_upload.outputs.artifact-id }}"
+      - name: Independently download the reviewed original preparation backup
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'reprepare'
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.promotion.outputs.recovery_backup_id }}
+          run-id: ${{ steps.promotion.outputs.recovery_backup_run }}
+          github-token: ${{ github.token }}
+          path: verified-old-draft-backup
+          merge-multiple: true
+      - name: Reprepare the exact reviewed partial draft with this new signed run
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'reprepare'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release-draft-transaction.mjs reprepare --directory verified-old-draft-backup \
+            --backup-artifact-id "${{ steps.promotion.outputs.recovery_backup_id }}"
       - name: Stage this run's nine new assets without overwriting originals
         if: steps.promotion.outputs.recovery_draft == '406663556'
         env:

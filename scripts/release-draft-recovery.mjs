@@ -9,6 +9,7 @@ export const OLD_DRAFT_ID = 406663556
 export const OLD_SOURCE = '5ed35db9a560e093a91a5ef32a1eb6dd171f27fd'
 export const UNTAGGED_DRAFT_TAG = 'untagged-dce9f75805136bcd2e47'
 export const API_HTTP_STATUS = Symbol('draft API HTTP status')
+const reviewedPrepared = JSON.parse(readFileSync(new URL('./release-prepared-recovery.json', import.meta.url), 'utf8'))
 export const PRESERVED_LABEL = 'Preserved previous unpublished candidate (source 5ed35db9); not a current installer'
 export const OLD_ASSETS = Object.freeze([
   [621380125, 'CC.Desk_0.18.1_aarch64.dmg', 8127924, 'd28b5b177aed7848b4cccc7de852b114cbfb38f0a80c9566781d9520597db6ba'],
@@ -82,7 +83,31 @@ export function recoveryCandidateChecks(context, releases, tagRef) {
   const conflicts = releases.filter(release => release.tag_name === context.tag || release.id === OLD_DRAFT_ID)
   if (!conflicts.length) return context.releaseExists === false
   if (conflicts.length !== 1 || context.releaseExists !== true) return false
-  try { assertReviewedOldDraft(conflicts[0]); return true } catch { return false }
+  try { assertReviewedOldDraft(conflicts[0]); return true } catch {}
+  try { assertReviewedPreparedDraft(conflicts[0]); return true } catch { return false }
+}
+
+export function preparedRecoveryBackup() { return structuredClone(reviewedPrepared.backup) }
+
+export function assertReviewedPreparedDraft(release) {
+  requireThat(JSON.stringify(stableRelease(release)) === JSON.stringify(reviewedPrepared.release),
+    'reviewed partially prepared draft snapshot changed')
+  const markers = release.body.match(/<!-- cc-desk-stage:[^\n]*? -->/g)
+  requireThat(markers?.length === 1 && markers[0] === reviewedPrepared.preparation.marker,
+    'reviewed previous preparation marker changed')
+  preservedAssets(release)
+}
+
+export function validatePreparedRecoveryBackup(artifact, run, now = Date.now()) {
+  const b = reviewedPrepared.backup
+  requireThat(artifact?.id === b.id && artifact.name === b.name && artifact.digest === b.digest
+    && artifact.size_in_bytes === b.size && artifact.expired === false
+    && Number.isFinite(Date.parse(artifact.expires_at)) && Date.parse(artifact.expires_at) > now
+    && artifact.workflow_run?.id === b.runId && artifact.workflow_run.head_sha === b.sha
+    && artifact.workflow_run.head_branch === 'main', 'reviewed original backup artifact changed or expired')
+  requireThat(run?.id === b.runId && run.head_sha === b.sha && run.head_branch === 'main'
+    && run.run_attempt === b.attempt && run.path === '.github/workflows/release.yml'
+    && run.event === 'push' && run.status === 'completed', 'reviewed original backup workflow provenance changed')
 }
 export function stableRelease(release) {
   return { id: release.id, tag_name: release.tag_name, target_commitish: release.target_commitish,
@@ -304,8 +329,26 @@ export async function repairPreparedDraftMetadata(api, snapshot, binding) {
   await writePreparedMetadata(api, expected, binding, before.tag_name === binding.tag)
 }
 
+export async function reprepareReviewedDraft(api, snapshot, binding) {
+  assertReviewedOldDraft(snapshot)
+  requireThat(binding.runId !== reviewedPrepared.preparation.runId, 'previous release run cannot be reused as new preparation')
+  const previous = { ...preservedSnapshot(snapshot, reviewedPrepared.preparation.sha),
+    tag_name: reviewedPrepared.release.tag_name, name: reviewedPrepared.release.name, body: reviewedPrepared.release.body }
+  assertReviewedPreparedDraft(previous) // Independently verified original backup pins all other fields.
+  const before = await api(`releases/${OLD_DRAFT_ID}`)
+  const complete = { ...previous, tag_name: binding.tag, target_commitish: binding.sha,
+    name: 'CC Desk 0.18.1', body: binding.body, draft: true }
+  if (JSON.stringify(stableRelease(before)) === JSON.stringify(stableRelease(complete))) {
+    assertPreparedDraft(before, binding)
+    await writePreparedMetadata(api, previous, binding, true)
+    return
+  }
+  assertReviewedPreparedDraft(before)
+  await writePreparedMetadata(api, previous, binding)
+}
+
 async function writePreparedMetadata(api, expected, binding, alreadyPrepared = false) {
-  assertPreparedDraft({ ...expected, tag_name: binding.tag, name: 'CC Desk 0.18.1', body: binding.body }, binding)
+  assertPreparedDraft({ ...expected, tag_name: binding.tag, target_commitish: binding.sha, name: 'CC Desk 0.18.1', body: binding.body }, binding)
   const main = await api('branches/main')
   requireThat(main.protected === true && main.commit?.sha === binding.sha, 'main changed before metadata update')
   requireThat(await api(`git/ref/tags/${binding.tag}`, true) === null, 'tag appeared before metadata update')

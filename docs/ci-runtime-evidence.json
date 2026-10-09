@@ -2326,5 +2326,297 @@
         ]
       }
     ]
+  },
+  "postMeasurementValidation": {
+    "headSha": "4ca36892fb36898f92ccb202106754dabd02b2b9",
+    "testedMergeSha": "57acb8daa063402f640e9e8f10e9cdd38674ab23",
+    "runId": "37912313809",
+    "runAttempt": 1,
+    "conclusion": "failure",
+    "start": "2026-10-09T09:36:03Z",
+    "wallSeconds": 705,
+    "end": "2026-10-09T09:47:48Z",
+    "runnerSeconds": 5283,
+    "jobs": [
+      {
+        "id": 113760132928,
+        "name": "Rust compile and static checks",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:36:06Z",
+        "end": "2026-10-09T09:40:09Z",
+        "seconds": 243
+      },
+      {
+        "id": 113760133320,
+        "name": "Roundtrip ordinary release exclusion",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:36:06Z",
+        "end": "2026-10-09T09:44:47Z",
+        "seconds": 521
+      },
+      {
+        "id": 113760133333,
+        "name": "Roundtrip inert debug scenarios",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:36:06Z",
+        "end": "2026-10-09T09:42:06Z",
+        "seconds": 360
+      },
+      {
+        "id": 113760133402,
+        "name": "Frontend checks",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:36:07Z",
+        "end": "2026-10-09T09:37:43Z",
+        "seconds": 96
+      },
+      {
+        "id": 113761560619,
+        "name": "Rust test shard 3",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:13Z",
+        "end": "2026-10-09T09:42:55Z",
+        "seconds": 162
+      },
+      {
+        "id": 113761560625,
+        "name": "Rust test shard 0",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:13Z",
+        "end": "2026-10-09T09:45:22Z",
+        "seconds": 309
+      },
+      {
+        "id": 113761560639,
+        "name": "Rust test shard 7",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:12Z",
+        "end": "2026-10-09T09:43:09Z",
+        "seconds": 177
+      },
+      {
+        "id": 113761560692,
+        "name": "Rust test shard 5",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:13Z",
+        "end": "2026-10-09T09:47:37Z",
+        "seconds": 444
+      },
+      {
+        "id": 113761560697,
+        "name": "Rust test shard 1",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:12Z",
+        "end": "2026-10-09T09:44:18Z",
+        "seconds": 246
+      },
+      {
+        "id": 113761560730,
+        "name": "Rust test shard 8",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:12Z",
+        "end": "2026-10-09T09:46:01Z",
+        "seconds": 349
+      },
+      {
+        "id": 113761560753,
+        "name": "Rust test shard 15",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:14Z",
+        "end": "2026-10-09T09:43:07Z",
+        "seconds": 173
+      },
+      {
+        "id": 113761560756,
+        "name": "Rust test shard 9",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:13Z",
+        "end": "2026-10-09T09:43:17Z",
+        "seconds": 184
+      },
+      {
+        "id": 113761560781,
+        "name": "Rust test shard 12",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:14Z",
+        "end": "2026-10-09T09:43:59Z",
+        "seconds": 225
+      },
+      {
+        "id": 113761560808,
+        "name": "Rust test shard 10",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:14Z",
+        "end": "2026-10-09T09:45:36Z",
+        "seconds": 322
+      },
+      {
+        "id": 113761560824,
+        "name": "Rust test shard 6",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:13Z",
+        "end": "2026-10-09T09:43:34Z",
+        "seconds": 201
+      },
+      {
+        "id": 113761560825,
+        "name": "Rust test shard 4",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:13Z",
+        "end": "2026-10-09T09:44:33Z",
+        "seconds": 260
+      },
+      {
+        "id": 113761560830,
+        "name": "Rust test shard 11",
+        "status": "completed",
+        "conclusion": "failure",
+        "start": "2026-10-09T09:40:13Z",
+        "end": "2026-10-09T09:44:17Z",
+        "seconds": 244
+      },
+      {
+        "id": 113761560868,
+        "name": "Rust test shard 2",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:42:08Z",
+        "end": "2026-10-09T09:45:00Z",
+        "seconds": 172
+      },
+      {
+        "id": 113761560890,
+        "name": "Rust test shard 13",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:40:13Z",
+        "end": "2026-10-09T09:45:13Z",
+        "seconds": 300
+      },
+      {
+        "id": 113761560963,
+        "name": "Rust test shard 14",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:42:52Z",
+        "end": "2026-10-09T09:47:37Z",
+        "seconds": 285
+      },
+      {
+        "id": 113763165393,
+        "name": "Disposable roundtrip compile-only policy (no native acceptance)",
+        "status": "completed",
+        "conclusion": "success",
+        "start": "2026-10-09T09:44:50Z",
+        "end": "2026-10-09T09:44:53Z",
+        "seconds": 3
+      },
+      {
+        "id": 113764160047,
+        "name": "Rust checks",
+        "status": "completed",
+        "conclusion": "failure",
+        "start": "2026-10-09T09:47:41Z",
+        "end": "2026-10-09T09:47:48Z",
+        "seconds": 7
+      }
+    ],
+    "failedShard": {
+      "index": 11,
+      "jobId": "113761560830",
+      "nativeExitCode": 101,
+      "durationSeconds": 217.4522178,
+      "result": {
+        "passed": 85,
+        "failed": 1,
+        "ignored": 4,
+        "filteredOut": 1221
+      },
+      "test": "version_history::windows::process::restart_lifetime_tests::RestartLifetime_TerminalBeforeReopen_002",
+      "assertion": "confined Medium diagnostic worker must complete: worker failed or owned job not empty",
+      "artifact": {
+        "id": "11607626389",
+        "zipBytes": 9148,
+        "sha256": "a8964f38ade699fbb5097021b7d8d5c6dda8791226ae29ec76c2769500776e73"
+      },
+      "verifiedParentRawEvidence": {
+        "workerExitCode": 0,
+        "initialOwnedJobActiveProcesses": 1,
+        "subsequentDiagnosticSamples": [
+          {
+            "elapsedMs": 0,
+            "activeProcesses": 0
+          },
+          {
+            "elapsedMs": 5,
+            "activeProcesses": 0
+          },
+          {
+            "elapsedMs": 10,
+            "activeProcesses": 0
+          }
+        ],
+        "source": "Parent independently downloaded exact artifact, verified full ZIP SHA and supplied original failure and observation excerpt; local transfer proxy returned tunnel HTTP 403."
+      }
+    },
+    "otherEightWorkflows": [
+      {
+        "id": 37912313844,
+        "name": "D14 output transport core",
+        "conclusion": "success"
+      },
+      {
+        "id": 37912313814,
+        "name": "D13 observer isolation",
+        "conclusion": "success"
+      },
+      {
+        "id": 37912313808,
+        "name": "D12 retained directory core",
+        "conclusion": "success"
+      },
+      {
+        "id": 37912313842,
+        "name": "D17 input staging core",
+        "conclusion": "success"
+      },
+      {
+        "id": 37912313815,
+        "name": "Unified workspace visual evidence",
+        "conclusion": "success"
+      },
+      {
+        "id": 37912313867,
+        "name": "Historical recovery focused checks",
+        "conclusion": "success"
+      },
+      {
+        "id": 37912313816,
+        "name": "Windows test package and bundled ConPTY integration",
+        "conclusion": "success"
+      },
+      {
+        "id": 37912313829,
+        "name": "Real Claude paste acceptance",
+        "conclusion": "success"
+      }
+    ],
+    "note": "Failed required Rust aggregate is preserved; this run is not successful performance or complete passing coverage evidence."
   }
 }

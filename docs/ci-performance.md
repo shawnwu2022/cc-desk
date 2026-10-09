@@ -284,3 +284,25 @@ verification, registry durability, ACL/TOCTOU guards, shared UI resource leases
 and original time assertions remain intact. Do not increase shards or launch
 more benchmark batches from this result. A later production-safe algorithmic
 change or changed hosted runner capacity needs separate evidence.
+
+The subsequent release-fix validation, head `4ca36892`, tested merge
+`57acb8daa063402f640e9e8f10e9cdd38674ab23`, run
+[37912313809](https://github.com/shawnwu2022/cc-desk/actions/runs/37912313809),
+**failed**. All sixteen shards ran; shard 11 failed one selected original test,
+`RestartLifetime_TerminalBeforeReopen_002` (85 passed, 1 failed, 4 ignored).
+The required Rust aggregate correctly refused the failed receipt; all eight
+other workflows passed. This is not an additional successful performance
+result. Original failure artifact 11607626389 is 9,148 bytes, SHA-256
+`a8964f38ade699fbb5097021b7d8d5c6dda8791226ae29ec76c2769500776e73`.
+
+The verified raw failure showed inner worker exit 0 and owned Job count 1 at
+the first query, followed by count 0 at the 0/5/10 ms diagnostic observations.
+The test-only confinement helper previously rejected the first nonzero count
+immediately and used subsequent queries only for diagnostics. It now waits on
+the same retained owned Job handle for a successful empty observation, bounded
+by five seconds and the remaining original 300-second worker window. A failed
+worker, query error, persistent member, exhausted budget or late zero still
+fails. There is no worker retry, named-Job reopening, skipped original test or
+production confinement change. Five deterministic drain regressions plus all
+six original diagnostic-policy tests execute through the real Rust helper in
+Frontend checks; the actual Windows original case remains required in shards.
