@@ -12,6 +12,7 @@ import { createLaunchAttempt } from '@/api/cliLaunchAttempt'
 import { useHookStore, type ObservationHandler } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
+import { platform } from '@/utils/platform'
 
 const io = vi.hoisted(() => ({ failBinding: false, terms: [] as any[], fits: [] as any[], bindings: [] as any[], channels: [] as any[], observers: [] as any[], scope: vi.fn(), read: vi.fn(), start: vi.fn(), recover: vi.fn(), cancel: vi.fn(), stop: vi.fn(), copy: vi.fn(), resize: vi.fn() }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
@@ -70,7 +71,7 @@ describe('Unified native terminal identity', () => {
     }
     const event = image(); wrapper.get('textarea').element.dispatchEvent(event)
     expect(event.defaultPrevented).toBe(true)
-    expect(io.bindings[0].sendUserText).toHaveBeenCalledExactlyOnceWith('\x16')
+    expect(io.bindings[0].sendUserText).toHaveBeenCalledExactlyOnceWith(platform === 'windows' ? '\x1bv' : '\x16')
     expect(io.bindings[0].reserveUserPaste).not.toHaveBeenCalled()
     await wrapper.setProps({ active: false })
     const hidden = image(); wrapper.get('textarea').element.dispatchEvent(hidden)

@@ -5,6 +5,7 @@ import XTermTerminal from '@/components/XTermTerminal.vue'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
+import { platform } from '@/utils/platform'
 const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], input: vi.fn(), kill: vi.fn(), spawn: vi.fn(), output: null as any, exit: null as any, outputReady: vi.fn(), exitReady: vi.fn(), dragReady: vi.fn(), copy: vi.fn(), clip: vi.fn() }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: any; textarea!: HTMLTextAreaElement; element!: HTMLElement; cols = 80; rows = 24; output = ''; modes = { bracketedPasteMode: false }; unicode = { activeVersion: '6' }; buffer = { active: { length: 0 } }
@@ -40,7 +41,7 @@ describe('Legacy unified ownership', () => {
     const event = new Event('paste', { bubbles: true, cancelable: true })
     Object.defineProperty(event, 'clipboardData', { value: { getData: () => '', types: ['Files'], items: [{ kind: 'file', type: 'image/png' }] } })
     io.terms[0].textarea.dispatchEvent(event); await flushPromises()
-    expect(io.input).toHaveBeenCalledExactlyOnceWith(sessions.tabs.get(id)!.ptyId, '\x16', 'clipboard-dom')
+    expect(io.input).toHaveBeenCalledExactlyOnceWith(sessions.tabs.get(id)!.ptyId, platform === 'windows' ? '\x1bv' : '\x16', 'clipboard-dom')
     expect(io.clip).not.toHaveBeenCalled()
     // Ctrl+L stays an ordinary CLI input chord.
     expect(io.terms[0].key(new KeyboardEvent('keydown', { key: 'l', ctrlKey: true }))).toBe(true)
