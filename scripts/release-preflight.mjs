@@ -1,14 +1,15 @@
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname } from 'node:path'
-import { mayPublish, requiredChecksPassed, resolveCoverageArtifact, validateArtifacts, validateCoverageBinding } from './release-policy.mjs'
+import { mayPublish, sourceChecksPassed, coverageChecksPassed, requiredChecksPassed, resolveCoverageArtifact, validateArtifacts, validateCoverageBinding } from './release-policy.mjs'
+import { OLD_DRAFT_ID, backupArtifactName, recoveryCandidateChecks, assertPreparedDraft, assertStagedRelease, collectStageFiles, verifyStagedReleaseBytes, validationNotes, stagedValidationNotes } from './release-draft-recovery.mjs'
 import { REPORT_FILENAME, VALIDATION_POLICY } from './windows-native-validation.mjs'
 import { fetchCoverageArchive, validateFetchedCoverage } from './release-coverage-archive.mjs'
 
 const { GITHUB_REPOSITORY: repository, GITHUB_SHA: sha, GITHUB_REF: ref, GITHUB_EVENT_NAME: event, GITHUB_TOKEN: token } = process.env
 if (!/^[-\w.]+\/[-\w.]+$/.test(repository ?? '') || !token) throw new Error('workflow repository/token required')
-const flags = new Set(['--resolve-coverage', '--artifacts'])
-const values = new Set(['--coverage', '--ci-run', '--ci-attempt', '--coverage-artifact-id', '--coverage-artifact-name', '--notes'])
+const flags = new Set(['--resolve-coverage', '--artifacts', '--prepare-draft-recovery'])
+const values = new Set(['--coverage', '--ci-run', '--ci-attempt', '--coverage-artifact-id', '--coverage-artifact-name', '--notes', '--staged-release-id', '--prepared-release-id'])
 const args = new Map()
 for (let index = 2; index < process.argv.length; index++) {
   const name = process.argv[index]
@@ -17,7 +18,10 @@ for (let index = 2; index < process.argv.length; index++) {
   if (!value || (typeof value === 'string' && value.startsWith('--'))) throw new Error('missing release preflight argument')
   args.set(name, value)
 }
-if (args.has('--resolve-coverage') && args.size !== 1) throw new Error('coverage resolver does not perform promotion')
+if (args.has('--resolve-coverage') && args.size !== (args.has('--prepare-draft-recovery') ? 2 : 1)) throw new Error('coverage resolver does not perform promotion')
+const inPlacePhase = args.has('--staged-release-id') || args.has('--prepared-release-id')
+if (inPlacePhase && (!args.has('--artifacts') || !args.has('--coverage') || args.has('--prepare-draft-recovery') || args.has('--notes')
+  || (args.has('--staged-release-id') && args.has('--prepared-release-id')))) throw new Error('invalid staged publication preflight')
 
 async function api(path, optional = false) {
   const response = await fetch(`https://api.github.com/repos/${repository}/${path}`, {
@@ -43,17 +47,6 @@ function positiveInteger(value) {
   if (!/^[1-9]\d*$/.test(value ?? '') || !Number.isSafeInteger(Number(value))) throw new Error('invalid coverage binding integer')
   return Number(value)
 }
-function notes(summary, binding, reportHash) {
-  const c = summary.counts
-  return `Validation policy: ${VALIDATION_POLICY}\n\nSource: ${binding.sourceSha}\nCI run: ${binding.runId}, attempt: ${binding.runAttempt}\nCoverage artifact: ${binding.artifactId} (${binding.artifactName})\n\n` +
-    `Required frontend, Rust normal-suite/build/lint, and roundtrip compile-only policy jobs succeeded.\n` +
-    `Native normal suite: ${c.executed} executed (${c.passed} passed, ${c.failed} failed, ${c.measured} measured); ${c.ignored} original ignored tests; ${summary.unverifiedNames.length} unavailable Job-free manager tests unverified.\n\n` +
-    `Original unfiltered native All: ${summary.nativeAllStatus}. Native installation/return roundtrip acceptance is not proven by this coverage.\n\n` +
-    `Real native installation/return roundtrip was not executed by this CI validation; the report discloses the observed host limits.\n` +
-    `Current available reviewed official signed Windows historical packages support installation and preserved-current return with FreshSettings. Shared Claude/Codex configuration, history and project-file changes are not rolled back. Future packages require their own reviewed version/digest/size/inventory admission.\n\n` +
-    (summary.unverifiedNames.length ? `Unverified tests (observed external Windows Job):\n${summary.unverifiedNames.map(name => `- ${name}`).join('\n')}\n\n` : '') +
-    `Attached ${REPORT_FILENAME} SHA256: ${reportHash}. This is the report validated for this promotion. Client automatic-install policy and runtime historical-installation guards remain unchanged.\n`
-}
 const packageVersion = JSON.parse(readFileSync('package.json', 'utf8')).version
 const tauriVersion = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).version
 const cargoPackage = readFileSync('src-tauri/Cargo.toml', 'utf8').match(/\[package\]([\s\S]*?)(?=\n\[|$)/)?.[1]
@@ -69,7 +62,22 @@ const releases = await pages('releases', null)
 const context = { event, ref, sha, main: { sha: branch.commit?.sha, protected: branch.protected },
   versions: [packageVersion, cargoVersion, tauriVersion], tag, tagExists: tagRef !== null,
   releaseExists: releases.some(release => release.tag_name === tag), ci, jobs }
-if (!requiredChecksPassed(context)) throw new Error('release gate blocked: require current protected main, matching versions, successful required CI and unused tag/release')
+let staged, prepared
+if (inPlacePhase) {
+  if (!sourceChecksPassed(context)) throw new Error('release gate blocked: staged source/current CI changed')
+  const id = positiveInteger(args.get('--staged-release-id') ?? args.get('--prepared-release-id'))
+  if (id !== OLD_DRAFT_ID) throw new Error('invalid recovery draft ID')
+  const matches = releases.filter(release => release.tag_name === tag)
+  if (matches.length !== 1 || matches[0].id !== id || (tagRef !== null
+    && (tagRef.object?.type !== 'commit' || tagRef.object.sha !== sha))) throw new Error('release gate blocked: staged version conflict')
+  const { files, inventory } = collectStageFiles('artifacts', packageVersion, args.get('--coverage'), 'latest.json')
+  const phase = { release: matches[0], files, binding: { sha, tag, inventory,
+    runId: positiveInteger(process.env.GITHUB_RUN_ID), attempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT) } }
+  if (args.has('--prepared-release-id')) prepared = phase
+  else staged = phase
+} else if (!(requiredChecksPassed(context) || (args.has('--prepare-draft-recovery') && recoveryCandidateChecks(context, releases, tagRef)))) {
+  throw new Error('release gate blocked: require current protected main, matching versions, successful required CI and unused tag/release')
+}
 const artifact = resolveCoverageArtifact(await pages(`actions/runs/${ci.id}/artifacts`, 'artifacts'), ci, sha)
 const binding = { sourceSha: sha, runId: String(ci.id), runAttempt: ci.run_attempt, artifactId: artifact.id, artifactName: artifact.name }
 if (args.has('--resolve-coverage')) {
@@ -88,15 +96,47 @@ if (args.has('--resolve-coverage')) {
   const { report, summary, reportBytes } = validateFetchedCoverage(files,
     { sourceSha: sha, runId: binding.runId, runAttempt: binding.runAttempt }, dirname(coveragePath))
   const reportHash = createHash('sha256').update(reportBytes).digest('hex')
+  const expectedNotes = validationNotes(summary, binding, reportHash)
+  if (prepared || staged) {
+    const phase = prepared ?? staged
+    phase.binding.body = stagedValidationNotes(expectedNotes, phase.binding)
+    if (prepared) assertPreparedDraft(prepared.release, prepared.binding)
+    else assertStagedRelease(staged.release, staged.binding, staged.release.id)
+  }
   context.coverage = { binding: resolved, artifact, report }
-  if (!mayPublish(context)) throw new Error('release gate blocked: invalid native coverage')
+  if (!(inPlacePhase || args.has('--prepare-draft-recovery') ? coverageChecksPassed(context) : mayPublish(context))) throw new Error('release gate blocked: invalid native coverage')
   if (args.has('--artifacts')) {
     const runId = positiveInteger(process.env.GITHUB_RUN_ID)
     const run = await api(`actions/runs/${runId}`)
     if (run.head_sha !== sha || run.head_branch !== 'main' || run.path !== '.github/workflows/release.yml') throw new Error('release workflow source binding failed')
-    validateArtifacts(await pages(`actions/runs/${runId}/artifacts`, 'artifacts'), sha, runId)
+    const allArtifacts = await pages(`actions/runs/${runId}/artifacts`, 'artifacts')
+    const backupName = backupArtifactName(sha, runId, positiveInteger(process.env.GITHUB_RUN_ATTEMPT ?? '1'))
+    const backups = allArtifacts.filter(artifact => artifact.name === backupName)
+    if (backups.length > 1 || backups.some(artifact => artifact.expired !== false || artifact.workflow_run?.id !== runId
+      || artifact.workflow_run?.head_sha !== sha || artifact.workflow_run?.head_branch !== 'main')) throw new Error('draft backup artifact binding failed')
+    validateArtifacts(allArtifacts.filter(artifact => artifact.name !== backupName), sha, runId)
   }
-  if (args.has('--notes')) writeFileSync(args.get('--notes'), notes(summary, binding, reportHash))
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${packageVersion}\ntag=${tag}\nci_run=${ci.id}\n`)
-  console.log(`Release preflight passed for ${sha}, CI run ${ci.id}, attempt ${ci.run_attempt}, ${tag}; ${summary.counts.executed} native tests executed, ${summary.counts.ignored} original ignored, ${summary.unverifiedNames.length} unverified; native All ${summary.nativeAllStatus}`)
+  if (staged) {
+    await verifyStagedReleaseBytes(staged.release, staged.binding, staged.files, repository, token,
+      JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).plugins.updater.pubkey)
+    const latestBranch = await api('branches/main')
+    const latestRuns = await pages(`actions/workflows/ci.yml/runs?head_sha=${sha}&branch=main&event=push`, 'workflow_runs')
+    const latestCi = latestRuns.sort((a, b) => b.id - a.id)[0]
+    const latestJobs = latestCi ? await pages(`actions/runs/${latestCi.id}/attempts/${latestCi.run_attempt}/jobs`, 'jobs') : []
+    if (latestCi?.id !== ci.id || latestCi.run_attempt !== ci.run_attempt || !sourceChecksPassed({ ...context,
+      main: { sha: latestBranch.commit?.sha, protected: latestBranch.protected }, ci: latestCi, jobs: latestJobs })) {
+      throw new Error('release gate blocked: source/CI changed during staged asset verification')
+    }
+    const latestArtifact = resolveCoverageArtifact(await pages(`actions/runs/${latestCi.id}/artifacts`, 'artifacts'), latestCi, sha)
+    validateCoverageBinding(resolved, latestArtifact, latestCi, sha)
+    if (latestArtifact.digest !== artifact.digest) throw new Error('release gate blocked: coverage archive digest changed during staged verification')
+    const latestTag = await api(`git/ref/tags/${encodeURIComponent(tag)}`, true)
+    if (latestTag !== null && (latestTag.object?.type !== 'commit' || latestTag.object.sha !== sha)) {
+      throw new Error('release gate blocked: tag source changed during staged verification')
+    }
+  }
+  if (args.has('--notes')) writeFileSync(args.get('--notes'), expectedNotes)
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT,
+    `version=${packageVersion}\ntag=${tag}\nci_run=${ci.id}\nrecovery_draft=${args.has('--prepare-draft-recovery') && context.releaseExists ? OLD_DRAFT_ID : ''}\n`)
+  console.log(`${args.has('--prepare-draft-recovery') ? 'Read-only recovery candidate' : 'Release'} preflight passed for ${sha}, CI run ${ci.id}, attempt ${ci.run_attempt}, ${tag}; ${summary.counts.executed} native tests executed, ${summary.counts.ignored} original ignored, ${summary.unverifiedNames.length} unverified; native All ${summary.nativeAllStatus}`)
 }

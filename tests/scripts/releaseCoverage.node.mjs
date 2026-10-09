@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, copyFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { deflateRawSync } from 'node:zlib'
 import test from 'node:test'
 import * as policy from '../../scripts/release-policy.mjs'
-import { VALIDATION_POLICY, REPORT_FILENAME } from '../../scripts/windows-native-validation.mjs'
+import { VALIDATION_POLICY, REPORT_FILENAME, validateNativeCoverage } from '../../scripts/windows-native-validation.mjs'
 import { crc32, readCoverageZip, fetchCoverageArchive, MAX_ARCHIVE_BYTES } from '../../scripts/release-coverage-archive.mjs'
+import { OLD_ASSETS, OLD_SOURCE, OLD_DRAFT_ID, PRESERVED_LABEL, preservedAssetName, stageMarker, validationNotes, stagedValidationNotes } from '../../scripts/release-draft-recovery.mjs'
+import { buildUpdaterManifest } from '../../scripts/generate-updater-manifest.js'
 
 const sha = '1'.repeat(40)
 const ci = { id: 7, run_attempt: 2, head_sha: sha, head_branch: 'main' }
@@ -81,7 +83,7 @@ function zip(entries, { method = 8, descriptor = true } = {}) {
   end.writeUInt32LE(central.length, 12); end.writeUInt32LE(offset, 16)
   return Buffer.concat([...chunks, central, end])
 }
-function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = () => {}, args, extraArgs = [], missingLog = false } = {}) {
+function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = () => {}, args, extraArgs = [], missingLog = false, stage = false, inPlace = true, preparedPhase = false, omitNotes = false } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'ccdesk-release-coverage-'))
   try {
     const c = context(), value = report()
@@ -95,11 +97,62 @@ function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = (
       .map(name => [name, readFileSync(join(directory, name))])
     const archive = zip(entries)
     api.artifacts[0].digest = `sha256:${createHash('sha256').update(archive).digest('hex')}`
+    if (stage) {
+      const { publicKey, privateKey } = generateKeyPairSync('ed25519'), keyId = Buffer.alloc(8, 1)
+      const packet = Buffer.concat([Buffer.from('Ed'), keyId, publicKey.export({ type: 'spki', format: 'der' }).subarray(-32)])
+      const pubkey = Buffer.from(`untrusted comment: fixture\n${packet.toString('base64')}\n`).toString('base64')
+      const platformNames = ['CC.Desk_0.18.1_x64-setup.exe', 'CC.Desk.app.tar.gz', 'CC.Desk_0.18.1_amd64.AppImage']
+      const signed = platformNames.map(name => {
+        const data = Buffer.from(`new ${name}`), signature = sign(null, createHash('blake2b512').update(data).digest(), privateKey)
+        const signedPacket = Buffer.concat([Buffer.from('ED'), keyId, signature]), comment = `timestamp:1\tfile:${name}`
+        const global = sign(null, Buffer.concat([signature, Buffer.from(comment)]), privateKey)
+        return { name, data, signature: Buffer.from(`untrusted comment: fixture\n${signedPacket.toString('base64')}\ntrusted comment: ${comment}\n${global.toString('base64')}\n`).toString('base64') }
+      })
+      mkdirSync(join(directory, 'scripts')); mkdirSync(join(directory, 'src-tauri')); mkdirSync(join(directory, 'artifacts'))
+      for (const file of ['release-preflight.mjs', 'release-policy.mjs', 'windows-native-validation.mjs', 'windows-native-scope.json',
+        'release-coverage-archive.mjs', 'release-draft-recovery.mjs', 'verify-updater-manifest.js', 'updater-signature.js']) {
+        copyFileSync(new URL(`../../scripts/${file}`, import.meta.url), join(directory, 'scripts', file))
+      }
+      writeFileSync(join(directory, 'package.json'), JSON.stringify({ version: '0.18.1' }))
+      writeFileSync(join(directory, 'src-tauri/Cargo.toml'), '[package]\nversion = "0.18.1"\n')
+      writeFileSync(join(directory, 'src-tauri/tauri.conf.json'), JSON.stringify({ version: '0.18.1', plugins: { updater: { pubkey } } }))
+      const stagedFiles = new Map()
+      for (const asset of signed) {
+        stagedFiles.set(asset.name, asset.data); stagedFiles.set(`${asset.name}.sig`, Buffer.from(asset.signature))
+      }
+      stagedFiles.set('CC.Desk_0.18.1_aarch64.dmg', Buffer.from('new fixture dmg'))
+      for (const [name, bytes] of stagedFiles) writeFileSync(join(directory, 'artifacts', name), bytes)
+      const manifest = buildUpdaterManifest({ repository: 'shawnwu2022/cc-desk', tag: 'v0.18.1', assets: signed, pubkey })
+      const manifestBytes = Buffer.from(JSON.stringify(manifest)); writeFileSync(join(directory, 'latest.json'), manifestBytes)
+      stagedFiles.set('latest.json', manifestBytes); stagedFiles.set(REPORT_FILENAME, readFileSync(join(directory, REPORT_FILENAME)))
+      const inventory = [...stagedFiles].map(([name, bytes]) => ({ name, size: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex') })).sort((a, b) => a.name.localeCompare(b.name, 'en'))
+      api.staged = { id: OLD_DRAFT_ID, name: 'CC Desk 0.18.1', draft: true, published_at: null, prerelease: false, tag_name: 'v0.18.1', target_commitish: sha,
+        body: stagedValidationNotes(validationNotes(validateNativeCoverage(value, { sourceSha: sha, runId: '7', runAttempt: 2 }),
+          { sourceSha: sha, runId: '7', runAttempt: 2, artifactId: 90, artifactName: name },
+          createHash('sha256').update(readFileSync(join(directory, REPORT_FILENAME))).digest('hex')),
+          { sha, runId: 42, attempt: 1, tag: 'v0.18.1', inventory }),
+        assets: inventory.map((entry, index) => ({ id: 100 + index, name: entry.name, size: entry.size,
+          digest: `sha256:${entry.sha256}`, state: 'uploaded', fixtureBytes: stagedFiles.get(entry.name).toString('base64') })) }
+      if (inPlace) {
+        api.staged.id = OLD_DRAFT_ID
+        const originals = OLD_ASSETS.map(a => ({ id: a.id, name: preservedAssetName(a.id), label: PRESERVED_LABEL,
+          size: a.size, digest: `sha256:${a.sha256}`, state: 'uploaded' }))
+        api.staged.assets = [...originals, ...(preparedPhase ? [] : api.staged.assets)]
+      }
+      api.releases = [api.staged]
+    }
     mutate(api); mutateLocal(directory)
     if (missingLog) rmSync(join(directory, value.harnesses[0].logs.execution))
     const bootstrap = `
       const fixture = JSON.parse(process.env.FIXTURE_API);
+      let assetDownloads=0;
       globalThis.fetch = async url => {
+        if (url.includes('/releases/assets/')) {
+          assetDownloads++;
+          const id=Number(url.split('/').at(-1)),asset=fixture.staged.assets.find(a=>a.id===id);
+          return new Response(Buffer.from(asset.fixtureBytes,'base64'),{status:200});
+        }
         if(url.includes('/actions/artifacts/90/zip')) return new Response(Buffer.from(process.env.FIXTURE_ARCHIVE,'base64'),{status:200});
         if (fixture.queryError && url.includes('/artifacts')) return {ok:false,status:503};
         let value;
@@ -108,28 +161,120 @@ function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = (
         else if(url.includes('/jobs')) value={jobs:fixture.jobs};
         else if(url.includes('/actions/runs/42/artifacts')) value={artifacts:fixture.platformArtifacts};
         else if(url.endsWith('/actions/runs/42')) value=fixture.releaseRun;
-        else if(url.includes('/artifacts')) value={artifacts:fixture.artifacts};
-        else if(url.includes('/git/ref/tags/')) return fixture.tagExists ? {ok:true,json:async()=>({ref:'existing'})} : {status:404};
+        else if(url.includes('/artifacts')) value={artifacts:assetDownloads && fixture.expiredCoverageAfterAssets ? fixture.artifacts.map(a=>({...a,expired:true})) : assetDownloads && fixture.deletedCoverageAfterAssets ? [] : fixture.artifacts};
+        else if(url.includes('/git/ref/tags/')) return assetDownloads && fixture.badTagAfterAssets
+          ? {ok:true,json:async()=>({object:{type:'commit',sha:'2'.repeat(40)}})} : fixture.tagExists ? {ok:true,json:async()=>({ref:'existing'})} : {status:404};
         else if(url.includes('/releases?')) value=fixture.releases;
         else throw new Error('unexpected fixture API route');
         return {ok:true,json:async()=>value};
       };`
     const selectedArgs = args ?? ['--coverage', join(directory, REPORT_FILENAME), '--ci-run', '7', '--ci-attempt', '2',
-      '--coverage-artifact-id', '90', '--coverage-artifact-name', name, '--notes', join(directory, 'notes.md')]
+      '--coverage-artifact-id', '90', '--coverage-artifact-name', name, ...(omitNotes ? [] : ['--notes', join(directory, 'notes.md')])]
     const result = spawnSync(process.execPath, ['--import', `data:text/javascript;base64,${Buffer.from(bootstrap).toString('base64')}`,
       'scripts/release-preflight.mjs', ...selectedArgs, ...extraArgs], { encoding: 'utf8', timeout: 5000,
-      cwd: fileURLToPath(new URL('../..', import.meta.url)), env: { ...process.env, GITHUB_OUTPUT: join(directory, 'outputs'),
+      cwd: stage ? directory : fileURLToPath(new URL('../..', import.meta.url)), env: { ...process.env, GITHUB_OUTPUT: join(directory, 'outputs'),
         GITHUB_REPOSITORY: 'shawnwu2022/cc-desk', GITHUB_SHA: sha, GITHUB_REF: 'refs/heads/main',
-        GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ID: '42', GITHUB_TOKEN: 'synthetic-fixture-token',
+        GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1', GITHUB_TOKEN: 'synthetic-fixture-token',
         FIXTURE_API: JSON.stringify(api), FIXTURE_ARCHIVE: archive.toString('base64') } })
     assert.ifError(result.error)
-    return { ...result, notes: result.status === 0 && !args ? readFileSync(join(directory, 'notes.md'), 'utf8') : null,
+    return { ...result, notes: result.status === 0 && !args && !omitNotes ? readFileSync(join(directory, 'notes.md'), 'utf8') : null,
       outputs: result.status === 0 ? readFileSync(join(directory, 'outputs'), 'utf8') : null }
   } finally { rmSync(directory, { recursive: true, force: true }) }
 }
 
 test('ReleaseCoverage_ExactArtifact_001', () => {
   assert.deepEqual(policy.resolveCoverageArtifact([artifact()], ci, sha), artifact())
+})
+
+test('ReleaseCoverage_ReviewedDraftPreparationAuthenticatesCoverage_020', () => {
+  const draft = { id: 406663556, tag_name: 'v0.18.1', target_commitish: OLD_SOURCE, draft: true,
+    prerelease: false, published_at: null, body: 'old notes', name: 'old candidate',
+    assets: OLD_ASSETS.map(a => ({ ...a, digest: `sha256:${a.sha256}`, state: 'uploaded' })) }
+  const result = preflight({ extraArgs: ['--prepare-draft-recovery'], mutate: api => { api.releases = [draft] } })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /Read-only recovery candidate preflight passed/)
+  for (const mutate of [api => api.releases[0].assets.pop(), api => api.ci.conclusion = 'failure',
+    api => api.tagExists = true, api => api.artifacts[0].workflow_run.head_sha = '2'.repeat(40)]) {
+    const result = preflight({ extraArgs: ['--prepare-draft-recovery'], mutate: api => { api.releases = [structuredClone(draft)]; mutate(api) } })
+    assert.equal(result.status, 1, result.stdout)
+  }
+  const forged = preflight({ extraArgs: ['--prepare-draft-recovery'], mutate: api => { api.releases = [draft] },
+    mutateLocal: directory => { const path = join(directory, REPORT_FILENAME); writeFileSync(path, `${readFileSync(path)}\n`) } })
+  assert.equal(forged.status, 1)
+  assert.match(forged.stderr, /differs from authenticated archive|path\/size mismatch/)
+})
+test('ReleaseCoverage_CompleteStagedDraftVerifiesRealSignatures_021', () => {
+  const result = preflight({ stage: true, extraArgs: ['--artifacts', '--staged-release-id', String(OLD_DRAFT_ID)],
+    args: undefined })
+  // --notes is intentionally rejected for staged publication; it cannot rewrite the bound body.
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /invalid staged publication preflight/)
+  const args = ['--artifacts', '--staged-release-id', String(OLD_DRAFT_ID)]
+  // Preserve full authenticated coverage argument generation while omitting only notes.
+  const success = preflight({ stage: true, extraArgs: args, omitNotes: true })
+  assert.equal(success.status, 0, success.stderr)
+  for (const mutate of [api => api.staged.assets.pop(), api => api.staged.target_commitish = OLD_SOURCE,
+    api => api.staged.assets.find(asset => asset.name.endsWith('-setup.exe')).fixtureBytes = Buffer.from('tampered payload').toString('base64'),
+    api => api.staged.body = api.staged.body.replace(':42:1:', ':43:1:'),
+    api => api.staged.body = api.staged.body.replace(/Unverified tests[\s\S]*?Attached /, 'Attached '),
+    api => api.staged.name = 'Fully verified 0.18.1',
+    api => api.main.sha = OLD_SOURCE, api => api.ci.run_attempt = 3]) {
+    const result = preflight({ stage: true, extraArgs: args, omitNotes: true, mutate })
+    assert.equal(result.status, 1, result.stdout)
+  }
+})
+test('ReleaseCoverage_StagedFinalStateRechecksCoverageAndTag_022', () => {
+  for (const field of ['expiredCoverageAfterAssets', 'deletedCoverageAfterAssets', 'badTagAfterAssets']) {
+    const result = preflight({ stage: true, extraArgs: ['--artifacts', '--staged-release-id', String(OLD_DRAFT_ID)], omitNotes: true,
+      mutate: api => { api[field] = true } })
+    assert.equal(result.status, 1, `${field}: ${result.stdout}`)
+    assert.match(result.stderr, /coverage artifact|tag source changed/)
+  }
+})
+
+test('ReleaseCoverage_InPlaceSameDraftHasExactNewSetAndPreservedOriginals_023', () => {
+  const input = { stage: true, inPlace: true, omitNotes: true,
+    extraArgs: ['--artifacts', '--staged-release-id', String(OLD_DRAFT_ID)] }
+  const good = preflight(input)
+  assert.equal(good.status, 0, good.stderr)
+  for (const mutate of [f => f.staged.assets[0].name = OLD_ASSETS[0].name,
+    f => f.staged.assets[0].digest = `sha256:${'f'.repeat(64)}`,
+    f => f.staged.assets.pop(), f => f.staged.target_commitish = OLD_SOURCE]) {
+    const bad = preflight({ ...input, mutate })
+    assert.equal(bad.status, 1, bad.stdout)
+  }
+})
+
+test('ReleaseCoverage_PreparedDraftBindsSameRunAndRefusesPartialUploads_024', () => {
+  const input = { stage: true, inPlace: true, preparedPhase: true, omitNotes: true,
+    extraArgs: ['--artifacts', '--prepared-release-id', String(OLD_DRAFT_ID)] }
+  const good = preflight(input)
+  assert.equal(good.status, 0, good.stderr)
+  for (const mutate of [f => f.staged.body = 'unknown transaction',
+    f => f.staged.body = f.staged.body.replace(/Unverified tests[\s\S]*?Attached /, 'Attached '),
+    f => f.staged.name = 'Fully verified 0.18.1',
+    f => f.staged.assets.push({ id: 999, name: 'unknown' }), f => f.staged.draft = false]) {
+    const bad = preflight({ ...input, mutate })
+    assert.equal(bad.status, 1, bad.stdout)
+  }
+})
+
+test('ReleaseCoverage_RecoveryFlagRetainsOrdinaryUnusedVersionPromotion_025', () => {
+  const ordinary = { stage: true, extraArgs: ['--prepare-draft-recovery'], mutate: fixture => { fixture.releases = [] },
+    mutateLocal: directory => {
+      for (const path of ['package.json', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml']) {
+        const file = join(directory, path)
+        writeFileSync(file, readFileSync(file, 'utf8').replaceAll('0.18.1', '0.18.2'))
+      }
+    } }
+  const result = preflight(ordinary)
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.outputs, /version=0\.18\.2\n/)
+  assert.match(result.outputs, /recovery_draft=\n/)
+  const conflict = preflight({ ...ordinary, mutate: fixture => {
+    fixture.releases = [{ id: 999, tag_name: 'v0.18.2', draft: true }]
+  } })
+  assert.equal(conflict.status, 1)
 })
 test('ReleaseCoverage_MissingDuplicateExpired_002', () => {
   for (const artifacts of [[], [artifact(), artifact()], [{ ...artifact(), expired: true }],
@@ -161,7 +306,9 @@ test('ReleaseCoverage_WorkflowDownloadAndPublication_005', () => {
   assert.match(workflow, /artifact-ids: \$\{\{ steps\.coverage\.outputs\.coverage_artifact_id \}\}/)
   assert.match(workflow, /run-id: \$\{\{ steps\.coverage\.outputs\.ci_run \}\}/)
   assert.match(workflow, /--coverage coverage\/windows-native-coverage\.json/)
-  assert.match(workflow, /body_path: release-validation-notes\.md/)
+  assert.match(workflow, /node scripts\/release-draft-transaction\.mjs prepare/)
+  const transaction = readFileSync(new URL('../../scripts/release-draft-transaction.mjs', import.meta.url), 'utf8')
+  assert.match(transaction, /readFileSync\('release-validation-notes\.md', 'utf8'\)/)
   assert.match(workflow, /coverage\/windows-native-coverage\.json/)
 })
 test('ReleaseCoverage_ValidatedDisclosureRequired_006', () => {

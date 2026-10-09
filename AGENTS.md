@@ -195,6 +195,7 @@ npm run tauri:build        # 生产构建
 - 这次恢复依据用户明确授权；普通 PR、feature branch、失败或未完成的 CI 均不可发布。
 - 真实 Claude Code / Codex CLI Layer-C 证据属于 D20，和普通代码 CI 分层记录。
 - updater 必须验证三个实际文件的签名；既有 draft 替换要求 hash-verified backup 和明确 recovery transaction。客户端自动安装策略保持不变。
+- 0.18.1 精确恢复只认旧 draft `406663556` / source `5ed35db9a560e093a91a5ef32a1eb6dd171f27fd` 和五个固定资产。新三平台验签后先上传并独立下载复核同 run/attempt 备份，再将同一 draft 的 target_commitish 更新为实际 current main SHA、保留同一 v0.18.1 tag_name。旧五个资产只改为独立标注的 preserved .bin 名称，原 ID/字节保留；新九资产完整 staging、回下载核对哈希和三个 updater 签名，再重查 current main/CI/coverage 后发布原 draft ID。没有 archive tag、资产删除或自动重放未知回执。普通 unused-version gate 保留，read-only candidate recovery 不构成发布 waiver。详见发布流程。
 
 详细流程 → [docs/release-process.md](docs/release-process.md)
 

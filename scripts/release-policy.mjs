@@ -3,19 +3,22 @@ import { coverageArtifactName, validateNativeCoverage } from './windows-native-v
 export const REQUIRED_CI_JOBS = Object.freeze(['Frontend checks', 'Rust checks',
   'Disposable roundtrip compile-only policy (no native acceptance)'])
 
-export function requiredChecksPassed(context) {
+export function sourceChecksPassed(context) {
   const c = context
   if (!c || !['push', 'workflow_dispatch'].includes(c.event) || c.ref !== 'refs/heads/main') return false
   if (!/^[a-f0-9]{40}$/.test(c.sha ?? '') || c.main?.protected !== true || c.main.sha !== c.sha) return false
   if (!Array.isArray(c.versions) || c.versions.length !== 3 || !c.versions.every(v => v === c.versions[0])) return false
   if (!/^\d+\.\d+\.\d+$/.test(c.versions[0]) || c.tag !== `v${c.versions[0]}`) return false
-  if (c.tagExists !== false || c.releaseExists !== false) return false
   const ci = c.ci
   if (!Number.isSafeInteger(ci?.id) || ci.id <= 0 || !Number.isSafeInteger(ci.run_attempt) || ci.run_attempt <= 0) return false
   if (!ci || ci.path !== '.github/workflows/ci.yml' || ci.head_sha !== c.sha || ci.head_branch !== 'main' || ci.event !== 'push') return false
   if (ci.status !== 'completed' || ci.conclusion !== 'success') return false
   if (!Array.isArray(c.jobs) || !c.jobs.length || !c.jobs.every(j => j.status === 'completed' && j.conclusion === 'success')) return false
   return REQUIRED_CI_JOBS.every(name => c.jobs.filter(j => j.name === name).length === 1)
+}
+
+export function requiredChecksPassed(context) {
+  return sourceChecksPassed(context) && context.tagExists === false && context.releaseExists === false
 }
 
 export function resolveCoverageArtifact(artifacts, ci, sha, now = Date.now()) {
@@ -40,8 +43,8 @@ export function validateCoverageBinding(binding, artifact, ci, sha) {
   }
 }
 
-export function mayPublish(context) {
-  if (!requiredChecksPassed(context)) return false
+export function coverageChecksPassed(context) {
+  if (!sourceChecksPassed(context)) return false
   try {
     const { ci, sha, coverage } = context
     const artifact = resolveCoverageArtifact([coverage?.artifact], ci, sha)
@@ -49,6 +52,10 @@ export function mayPublish(context) {
     validateNativeCoverage(coverage.report, { sourceSha: sha, runId: String(ci.id), runAttempt: ci.run_attempt })
     return true
   } catch { return false }
+}
+
+export function mayPublish(context) {
+  return requiredChecksPassed(context) && coverageChecksPassed(context)
 }
 
 export function validateArtifacts(artifacts, sha, runId) {
