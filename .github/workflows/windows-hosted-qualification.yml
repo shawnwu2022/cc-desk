@@ -1,0 +1,130 @@
+name: Windows hosted qualification (diagnostic only)
+
+on:
+  push:
+    branches:
+      - feat/unified-workspace-ux
+    paths:
+      - .github/workflows/windows-hosted-qualification.yml
+
+permissions: {}
+
+jobs:
+  observe:
+    name: Observe ${{ matrix.image }} ordinary processes
+    runs-on: ${{ matrix.image }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [windows-2022, windows-2025]
+    steps:
+      - name: Read parent and ordinary child qualification
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probe = @'
+          $ErrorActionPreference = 'Stop'
+          Add-Type -TypeDefinition @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class HostedQualificationNative {
+            [StructLayout(LayoutKind.Sequential)]
+            public struct UserObjectFlags {
+              public int Inherit;
+              public int Reserved;
+              public uint Flags;
+            }
+            public static uint FlagsSize() { return (uint)Marshal.SizeOf(typeof(UserObjectFlags)); }
+            [DllImport("kernel32.dll", SetLastError = true)]
+            public static extern IntPtr GetCurrentProcess();
+            [DllImport("kernel32.dll", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool member);
+            [DllImport("user32.dll", SetLastError = true)]
+            public static extern IntPtr GetProcessWindowStation();
+            [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool GetUserObjectInformationW(IntPtr handle, int index, ref UserObjectFlags flags, uint length, out uint needed);
+            [DllImport("user32.dll", SetLastError = true)]
+            public static extern IntPtr OpenInputDesktop(uint flags, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint access);
+            [DllImport("user32.dll", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool CloseDesktop(IntPtr desktop);
+          }
+          "@
+          $current = [Diagnostics.Process]::GetCurrentProcess()
+          $member = $false
+          $jobOk = [HostedQualificationNative]::IsProcessInJob([HostedQualificationNative]::GetCurrentProcess(), [IntPtr]::Zero, [ref]$member)
+          $jobError = if ($jobOk) { $null } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+          $station = [HostedQualificationNative]::GetProcessWindowStation()
+          $stationError = if ($station -eq [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::GetLastWin32Error() } else { $null }
+          $stationFlags = [HostedQualificationNative+UserObjectFlags]::new()
+          [uint32]$needed = 0
+          $flagsOk = $false
+          $flagsError = $null
+          if ($station -ne [IntPtr]::Zero) {
+            $flagsOk = [HostedQualificationNative]::GetUserObjectInformationW($station, 1, [ref]$stationFlags, [HostedQualificationNative]::FlagsSize(), [ref]$needed)
+            if (-not $flagsOk) { $flagsError = [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+          }
+          # DESKTOP_READOBJECTS only; no write, switch, hook or desktop creation rights.
+          $desktop = [HostedQualificationNative]::OpenInputDesktop(0, $false, 1)
+          $desktopOpened = $desktop -ne [IntPtr]::Zero
+          $desktopError = if ($desktopOpened) { $null } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+          $desktopClosed = $null
+          $closeError = $null
+          if ($desktopOpened) {
+            $desktopClosed = [HostedQualificationNative]::CloseDesktop($desktop)
+            if (-not $desktopClosed) { $closeError = [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+          }
+          [ordered]@{
+            pid = $current.Id
+            sessionId = $current.SessionId
+            userInteractive = [Environment]::UserInteractive
+            jobApiSuccess = $jobOk
+            inJob = if ($jobOk) { $member } else { $null }
+            jobWin32Error = $jobError
+            windowStationHandleAvailable = $station -ne [IntPtr]::Zero
+            windowStationWin32Error = $stationError
+            windowStationFlagsApiSuccess = $flagsOk
+            windowStationVisible = if ($flagsOk) { ($stationFlags.Flags -band 1) -ne 0 } else { $null }
+            windowStationFlagsWin32Error = $flagsError
+            inputDesktopOpenedReadOnly = $desktopOpened
+            inputDesktopWin32Error = $desktopError
+            inputDesktopClosed = $desktopClosed
+            inputDesktopCloseWin32Error = $closeError
+          } | ConvertTo-Json -Depth 4 -Compress
+          '@
+          $parentObservation = & ([scriptblock]::Create($probe)) | ConvertFrom-Json
+          $start = [Diagnostics.ProcessStartInfo]::new([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+          $start.UseShellExecute = $false
+          $start.RedirectStandardOutput = $true
+          $start.RedirectStandardError = $true
+          foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe)))) {
+            $start.ArgumentList.Add($argument)
+          }
+          $child = [Diagnostics.Process]::Start($start)
+          try {
+            $stdout = $child.StandardOutput.ReadToEndAsync()
+            $stderr = $child.StandardError.ReadToEndAsync()
+            if (-not $child.WaitForExit(30000)) {
+              $child.Kill()
+              if (-not $child.WaitForExit(5000)) { throw 'Owned diagnostic child did not terminate' }
+              throw 'Ordinary diagnostic child timed out'
+            }
+            if ($child.ExitCode -ne 0) { throw "Ordinary diagnostic child exit=$($child.ExitCode)" }
+            $childObservation = $stdout.GetAwaiter().GetResult() | ConvertFrom-Json
+            if ($childObservation.pid -ne $child.Id) { throw 'Diagnostic child PID mismatch' }
+            if ($stderr.GetAwaiter().GetResult().Length -ne 0) { throw 'Diagnostic child reported stderr' }
+            [ordered]@{
+              imageOS = $env:ImageOS
+              imageVersion = $env:ImageVersion
+              parent = $parentObservation
+              ordinaryChild = $childObservation
+              bothJobFree = $parentObservation.jobApiSuccess -and $childObservation.jobApiSuccess -and -not $parentObservation.inJob -and -not $childObservation.inJob
+              observationOnly = $true
+              nativeAcceptanceProven = $false
+            } | ConvertTo-Json -Depth 6 -Compress
+          } finally {
+            $child.Dispose()
+          }
