@@ -9,6 +9,20 @@ on:
 permissions:
   contents: read
 
+# New PR commits supersede only their own verification, never main/release runs.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Symbols inflate every current-exe copy/hash in durability tests without changing assertions.
+env:
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  # Source hashes are byte-exact across Windows producers and the Linux aggregator.
+  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: 'false'
+
 jobs:
   frontend:
     name: Frontend checks
@@ -33,13 +47,13 @@ jobs:
         run: npm run test:ci
 
       - name: Run Node policy tests
-        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/windowsNativeValidation.node.mjs tests/scripts/historySignatureFixtures.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/windowsNativeValidation.node.mjs tests/scripts/historySignatureFixtures.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs tests/scripts/releaseBuildAdmission.node.mjs tests/scripts/windowsRustShards.node.mjs tests/scripts/windowsRustShardRunner.node.mjs tests/scripts/ownedJobDrain.node.mjs
 
       - name: Build frontend
         run: npm run build
 
-  rust:
-    name: Rust checks
+  rust-compile:
+    name: Rust compile and static checks
     runs-on: windows-2022
     defaults:
       run:
@@ -63,6 +77,7 @@ jobs:
         with:
           workspaces: src-tauri
           cache-on-failure: true
+          cache-workspace-crates: false
 
       - name: Prepare verified Windows runtime before direct cargo commands
         id: runtime
@@ -72,32 +87,6 @@ jobs:
       - name: Compile the complete original Windows test inventory
         id: compile
         run: ../scripts/windows-rust-tests.ps1 -Action Compile
-
-      - name: Run ordinary Rust suite with explicitly disclosed native scope
-        if: ${{ !cancelled() && steps.runtime.outcome == 'success' && steps.compile.outputs.compiled == 'true' }}
-        id: rust_tests
-        run: ../scripts/windows-rust-tests.ps1 -Action HostedSuite
-
-      - name: Verify exact manager boundary on a naturally Job-free host
-        if: ${{ !cancelled() && steps.rust_tests.outcome == 'success' && steps.compile.outputs.job_free == 'true' }}
-        run: ../scripts/windows-rust-tests.ps1 -Action CompileAndGate
-
-      - name: Preserve exact native validation scope and original logs
-        if: ${{ !cancelled() && steps.compile.outputs.compiled == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-native-coverage-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: src-tauri/target/windows-native-coverage/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Diagnose native Channel separately after an aggregate failure
-        if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' && steps.compile.outputs.job_free == 'true' }}
-        run: ../scripts/windows-rust-tests.ps1 -Action Channel
-
-      - name: Diagnose native launch separately after an aggregate failure
-        if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' && steps.compile.outputs.job_free == 'true' }}
-        run: ../scripts/windows-rust-tests.ps1 -Action Launch
 
       - name: Test Windows Rust CI entry contracts
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
@@ -140,8 +129,107 @@ jobs:
             if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
           }
 
-  roundtrip-build-policy:
-    name: Disposable roundtrip compile-only policy (no native acceptance)
+      - name: Run full unfiltered doctests and prepare exact compiled inventory
+        working-directory: .
+        run: |
+          $bundle = 'src-tauri/target/ci-rust-bundle'
+          if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
+          New-Item -ItemType Directory -Force "$bundle/logs" | Out-Null
+          Push-Location src-tauri
+          try {
+            cargo test --locked --doc 2>&1 | Tee-Object -FilePath 'target/ci-rust-bundle/logs/doctests.log'
+            if ($LASTEXITCODE -ne 0) { throw 'Unfiltered doctests failed' }
+          } finally { Pop-Location }
+          node scripts/windows-rust-shard-runner.mjs plan --in-job "${{ steps.compile.outputs.job_free != 'true' }}" --doc-exit-code 0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Share only verified same-run test executables and inventories
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/ci-rust-bundle/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Keep dependency cache free of source-bound results and executable bundles
+        if: ${{ always() }}
+        working-directory: .
+        run: |
+          foreach ($path in @('src-tauri/target/ci-rust-bundle', 'src-tauri/target/ci-test-artifacts.jsonl', 'src-tauri/target/windows-native-coverage')) {
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+          }
+
+  rust-tests:
+    name: Rust test shard ${{ matrix.shard }}
+    needs: rust-compile
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Observe ordinary host containment without a compiler or test
+        id: host
+        working-directory: src-tauri
+        run: ../scripts/windows-rust-tests.ps1 -Action Probe
+      - name: Download exact source/run/attempt compiled test bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/ci-rust-bundle
+      - name: Execute assigned full names and retain original ignores
+        run: node scripts/windows-rust-shard-runner.mjs run --index ${{ matrix.shard }} --in-job "${{ steps.host.outputs.job_free != 'true' }}" --artifact-name windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Preserve original selection, execution and timing even on failure
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-rust-shard-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/ci-rust-shard-${{ matrix.shard }}/
+          if-no-files-found: error
+          retention-days: 30
+
+  rust:
+    name: Rust checks
+    needs: [rust-compile, rust-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Require successful compilation and every shard
+        env:
+          COMPILE_RESULT: ${{ needs.rust-compile.result }}
+          SHARD_RESULT: ${{ needs.rust-tests.result }}
+        run: |
+          test "$COMPILE_RESULT" = success
+          test "$SHARD_RESULT" = success
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/ci-rust-bundle
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: windows-rust-shard-*-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/ci-rust-shards
+      - name: Reconcile every full name, raw outer result and original ignored reason
+        run: node scripts/windows-rust-shard-runner.mjs aggregate --shards src-tauri/target/ci-rust-shards
+      - name: Preserve exact native validation scope and original logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-coverage-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/windows-native-coverage/
+          if-no-files-found: error
+          retention-days: 30
+
+  roundtrip-release:
+    name: Roundtrip ordinary release exclusion
     runs-on: windows-2022
     steps:
       - name: Checkout repository
@@ -159,19 +247,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: roundtrip-compile-only
+          key: roundtrip-compile-only-release
       - name: Prepare frontend and verified runtime
         run: |
           npm ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/prepare-conpty.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check inert binding and ordinary admission with acceptance feature
-        working-directory: src-tauri
-        run: |
-          cargo test --locked --lib --features history-roundtrip-acceptance version_history_roundtrip_contract
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --lib --features history-roundtrip-acceptance version_history::payload_policy::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build ordinary embedded release without acceptance
         run: |
@@ -188,6 +269,40 @@ jobs:
             throw 'Release failed for an unrelated reason; exclusion remains unverified'
           }
           exit 0
+
+  roundtrip-debug:
+    name: Roundtrip inert debug scenarios
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - name: Cache isolated compile-only dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: roundtrip-compile-only-debug
+      - name: Prepare frontend and verified runtime
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/prepare-conpty.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check inert binding and ordinary admission with acceptance feature
+        working-directory: src-tauri
+        run: |
+          cargo test --locked --lib --features history-roundtrip-acceptance version_history_roundtrip_contract
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --lib --features history-roundtrip-acceptance version_history::payload_policy::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build both inert embedded acceptance scenarios without packages
         run: |
           $path = 'tests/fixtures/version-history-roundtrip/target.json'
@@ -221,3 +336,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File tests/scripts/historyRoundtripDriver.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  roundtrip-build-policy:
+    name: Disposable roundtrip compile-only policy (no native acceptance)
+    needs: [roundtrip-release, roundtrip-debug]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both ordinary release denial and both inert debug scenarios
+        env:
+          RELEASE_RESULT: ${{ needs.roundtrip-release.result }}
+          DEBUG_RESULT: ${{ needs.roundtrip-debug.result }}
+        run: |
+          test "$RELEASE_RESULT" = success
+          test "$DEBUG_RESULT" = success

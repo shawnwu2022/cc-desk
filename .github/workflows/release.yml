@@ -18,7 +18,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  admission:
+    if: github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Admit only the exact current protected main build source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-build-admission.mjs
+
   preflight:
+    needs: admission
     if: github.ref == 'refs/heads/main' && github.ref_protected
     runs-on: ubuntu-latest
     timeout-minutes: 130
@@ -34,7 +52,7 @@ jobs:
         with:
           node-version: '22'
       - name: Run release recovery fixtures
-        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/releaseBuildAdmission.node.mjs
       - name: Wait for this exact main SHA ordinary CI to finish
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -63,7 +81,9 @@ jobs:
             --coverage-artifact-name "${{ steps.coverage.outputs.coverage_artifact_name }}"
 
   build:
-    needs: preflight
+    # Compile while exact-SHA CI finishes. Only the original full preflight and
+    # three completed signed builds together can admit the publication job.
+    needs: admission
     strategy:
       fail-fast: false
       matrix:
@@ -137,6 +157,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: release-signed-${{ matrix.name }}-${{ matrix.target }}
+          cache-workspace-crates: false
 
       - name: Install frontend dependencies
         run: npm ci
@@ -171,6 +193,8 @@ jobs:
           name: cc-desk-candidate-${{ github.sha }}-${{ matrix.name }}
           path: ${{ matrix.patterns }}
           if-no-files-found: error
+          # The installer, disk image and updater archives are already compressed.
+          compression-level: 0
 
   release:
     needs: [preflight, build]
@@ -218,13 +242,13 @@ jobs:
       - name: Generate updater manifest and verify all three actual signatures
         run: node scripts/generate-updater-manifest.js artifacts latest.json "${{ needs.preflight.outputs.tag }}"
       - name: Download and hash every original draft asset without mutation
-        if: steps.promotion.outputs.recovery_draft == '406663556'
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'original'
         id: backup
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/release-draft-transaction.mjs backup --directory old-draft-backup
       - name: Preserve immutable recovery backup before any release mutation
-        if: steps.promotion.outputs.recovery_draft == '406663556'
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'original'
         id: backup_upload
         uses: actions/upload-artifact@v4
         with:
@@ -233,19 +257,35 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Independently download the exact durable backup
-        if: steps.promotion.outputs.recovery_draft == '406663556'
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'original'
         uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ steps.backup_upload.outputs.artifact-id }}
           path: verified-old-draft-backup
           merge-multiple: true
       - name: Recheck backup and prepare the original draft on this exact main source
-        if: steps.promotion.outputs.recovery_draft == '406663556'
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'original'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           node scripts/release-draft-transaction.mjs prepare --directory verified-old-draft-backup \
             --backup-artifact-id "${{ steps.backup_upload.outputs.artifact-id }}"
+      - name: Independently download the reviewed original preparation backup
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'reprepare'
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.promotion.outputs.recovery_backup_id }}
+          run-id: ${{ steps.promotion.outputs.recovery_backup_run }}
+          github-token: ${{ github.token }}
+          path: verified-old-draft-backup
+          merge-multiple: true
+      - name: Reprepare the exact reviewed partial draft with this new signed run
+        if: steps.promotion.outputs.recovery_draft == '406663556' && steps.promotion.outputs.recovery_mode == 'reprepare'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release-draft-transaction.mjs reprepare --directory verified-old-draft-backup \
+            --backup-artifact-id "${{ steps.promotion.outputs.recovery_backup_id }}"
       - name: Stage this run's nine new assets without overwriting originals
         if: steps.promotion.outputs.recovery_draft == '406663556'
         env:

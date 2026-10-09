@@ -1,0 +1,602 @@
+{
+  "schema": 1,
+  "baseCommit": "db517757eefd323b3eaa4c69224bdd8f74b7feb6",
+  "description": "Original independent Windows history scenario loops become explicit independently schedulable test cases. Helper bodies preserve all original statements and assertions apart from equivalent outer-loop continue becoming single-scenario helper return. Inner durability, retry, restart, generation and stale-journal sequences remain unchanged. No ignore/classification/exclusion changes.",
+  "originalTestCount": 12,
+  "splitTestCount": 59,
+  "mappings": [
+    {
+      "file": "src-tauri/src/tests/version_history_bundle_restore_windows.rs",
+      "originalTest": "BundleReturn_CompleteRestore_002",
+      "helper": "check_complete_restore",
+      "originalScenarioCount": 2,
+      "cases": [
+        {
+          "name": "BundleReturn_RestoreMissingImage_002",
+          "arguments": [
+            "false"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "BundleReturn_RestorePresentImage_002",
+          "arguments": [
+            "true"
+          ],
+          "originalIndex": 1
+        }
+      ],
+      "continueToReturnCount": 0,
+      "preservedBodyTokenSha256": "67bad3b6711e274d5a3dbbac00e6e0876bb183e1de4ffe1a78967b2a34dc55ce",
+      "originalBodyAssertionSites": 19
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_bundle_restore_windows.rs",
+      "originalTest": "BundleReturn_InterruptedNoReplay_003",
+      "helper": "check_interrupted_no_replay",
+      "originalScenarioCount": 20,
+      "cases": [
+        {
+          "name": "BundleReturn_CreateFault_003",
+          "arguments": [
+            "0",
+            "Some(BundleFault::BeforeCreate)"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "BundleReturn_WriteFault_003",
+          "arguments": [
+            "1",
+            "Some(BundleFault::AfterWrite)"
+          ],
+          "originalIndex": 1
+        },
+        {
+          "name": "BundleReturn_FlushFault_003",
+          "arguments": [
+            "2",
+            "Some(BundleFault::AfterFlush)"
+          ],
+          "originalIndex": 2
+        },
+        {
+          "name": "BundleReturn_PermissionFault_003",
+          "arguments": [
+            "3",
+            "Some(BundleFault::AfterPermissions)"
+          ],
+          "originalIndex": 3
+        },
+        {
+          "name": "BundleReturn_GuardReleaseFault_003",
+          "arguments": [
+            "4",
+            "Some(BundleFault::AfterGuardRelease)"
+          ],
+          "originalIndex": 4
+        },
+        {
+          "name": "BundleReturn_MoveFault_003",
+          "arguments": [
+            "5",
+            "Some(BundleFault::AfterMove)"
+          ],
+          "originalIndex": 5
+        },
+        {
+          "name": "BundleReturn_ReadmissionFault_003",
+          "arguments": [
+            "6",
+            "Some(BundleFault::BeforeReadmission)"
+          ],
+          "originalIndex": 6
+        },
+        {
+          "name": "BundleReturn_FinalReceiptFault_003",
+          "arguments": [
+            "7",
+            "Some(BundleFault::BeforeFinalReceipt)"
+          ],
+          "originalIndex": 7
+        },
+        {
+          "name": "BundleReturn_ObjectCollision_003",
+          "arguments": [
+            "8",
+            "None"
+          ],
+          "originalIndex": 8
+        },
+        {
+          "name": "BundleReturn_NewCurrentBytes_003",
+          "arguments": [
+            "9",
+            "None"
+          ],
+          "originalIndex": 9
+        },
+        {
+          "name": "BundleReturn_ImageRenameRace_003",
+          "arguments": [
+            "10",
+            "None"
+          ],
+          "originalIndex": 10
+        },
+        {
+          "name": "BundleReturn_KnownCopyChanged_003",
+          "arguments": [
+            "11",
+            "Some(BundleFault::BeforeCreate)"
+          ],
+          "originalIndex": 11
+        },
+        {
+          "name": "BundleReturn_KnownCopyMissing_003",
+          "arguments": [
+            "12",
+            "Some(BundleFault::BeforeCreate)"
+          ],
+          "originalIndex": 12
+        },
+        {
+          "name": "BundleReturn_MissingPlanCopyChanged_003",
+          "arguments": [
+            "13",
+            "Some(BundleFault::BeforeCreate)"
+          ],
+          "originalIndex": 13
+        },
+        {
+          "name": "BundleReturn_FreshCopyChanged_003",
+          "arguments": [
+            "14",
+            "Some(BundleFault::BeforeCreate)"
+          ],
+          "originalIndex": 14
+        },
+        {
+          "name": "BundleReturn_FreshCopyMissing_003",
+          "arguments": [
+            "15",
+            "Some(BundleFault::BeforeCreate)"
+          ],
+          "originalIndex": 15
+        },
+        {
+          "name": "BundleReturn_OldCopyChanged_003",
+          "arguments": [
+            "16",
+            "Some(BundleFault::BeforeCreate)"
+          ],
+          "originalIndex": 16
+        },
+        {
+          "name": "BundleReturn_OldCopyMissing_003",
+          "arguments": [
+            "17",
+            "Some(BundleFault::BeforeCreate)"
+          ],
+          "originalIndex": 17
+        },
+        {
+          "name": "BundleReturn_OldQuarantineChanged_003",
+          "arguments": [
+            "18",
+            "Some(BundleFault::BeforeCreate)"
+          ],
+          "originalIndex": 18
+        },
+        {
+          "name": "BundleReturn_OldQuarantineMissing_003",
+          "arguments": [
+            "19",
+            "Some(BundleFault::BeforeCreate)"
+          ],
+          "originalIndex": 19
+        }
+      ],
+      "continueToReturnCount": 2,
+      "preservedBodyTokenSha256": "ec3b119a887bdcf6b78a64600433a8e61d2daa4e62dd571de0d48d855087049a",
+      "originalBodyAssertionSites": 36
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_bundle_restore_windows.rs",
+      "originalTest": "BundleReturn_FirstCopySeed_004",
+      "helper": "check_first_copy_seed",
+      "originalScenarioCount": 5,
+      "cases": [
+        {
+          "name": "BundleReturn_FirstCreateFault_004",
+          "arguments": [
+            "CopyFault::BeforeCreate",
+            "false"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "BundleReturn_FirstWriteFault_004",
+          "arguments": [
+            "CopyFault::AfterWrite",
+            "false"
+          ],
+          "originalIndex": 1
+        },
+        {
+          "name": "BundleReturn_FirstFlushFault_004",
+          "arguments": [
+            "CopyFault::AfterFlush",
+            "false"
+          ],
+          "originalIndex": 2
+        },
+        {
+          "name": "BundleReturn_FirstReceiptFault_004",
+          "arguments": [
+            "CopyFault::BeforeReceipt",
+            "false"
+          ],
+          "originalIndex": 3
+        },
+        {
+          "name": "BundleReturn_FirstMissingRoot_004",
+          "arguments": [
+            "CopyFault::AfterWrite",
+            "true"
+          ],
+          "originalIndex": 4
+        }
+      ],
+      "continueToReturnCount": 1,
+      "preservedBodyTokenSha256": "440fb631b1aed7a735a856d8b2158637f91928a1bc79e258e9f21223e3672c53",
+      "originalBodyAssertionSites": 14
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_context_windows.rs",
+      "originalTest": "HistoryContextWindows_TwoRootReverse_022",
+      "helper": "check_two_root_reverse",
+      "originalScenarioCount": 2,
+      "cases": [
+        {
+          "name": "HistoryContext_TwoRootReturn_022",
+          "arguments": [
+            "false"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "HistoryContext_TwoRootCollision_022",
+          "arguments": [
+            "true"
+          ],
+          "originalIndex": 1
+        }
+      ],
+      "continueToReturnCount": 0,
+      "preservedBodyTokenSha256": "15c34761adad019ea89b846ea431c2dc851e03f7d15c68037d4ae22f46df6614",
+      "originalBodyAssertionSites": 5
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_context_windows.rs",
+      "originalTest": "HistoryContextWindows_RecoveryCopyFailure_026",
+      "helper": "check_recovery_copy_failure",
+      "originalScenarioCount": 8,
+      "cases": [
+        {
+          "name": "HistoryContext_LiveCreateLoss_026",
+          "arguments": [
+            "false",
+            "CopyFault::BeforeCreate"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "HistoryContext_LiveWriteLoss_026",
+          "arguments": [
+            "false",
+            "CopyFault::AfterWrite"
+          ],
+          "originalIndex": 1
+        },
+        {
+          "name": "HistoryContext_LiveFlushLoss_026",
+          "arguments": [
+            "false",
+            "CopyFault::AfterFlush"
+          ],
+          "originalIndex": 2
+        },
+        {
+          "name": "HistoryContext_LiveReceiptLoss_026",
+          "arguments": [
+            "false",
+            "CopyFault::BeforeReceipt"
+          ],
+          "originalIndex": 3
+        },
+        {
+          "name": "HistoryContext_ReopenCreateLoss_026",
+          "arguments": [
+            "true",
+            "CopyFault::BeforeCreate"
+          ],
+          "originalIndex": 4
+        },
+        {
+          "name": "HistoryContext_ReopenWriteLoss_026",
+          "arguments": [
+            "true",
+            "CopyFault::AfterWrite"
+          ],
+          "originalIndex": 5
+        },
+        {
+          "name": "HistoryContext_ReopenFlushLoss_026",
+          "arguments": [
+            "true",
+            "CopyFault::AfterFlush"
+          ],
+          "originalIndex": 6
+        },
+        {
+          "name": "HistoryContext_ReopenReceiptLoss_026",
+          "arguments": [
+            "true",
+            "CopyFault::BeforeReceipt"
+          ],
+          "originalIndex": 7
+        }
+      ],
+      "continueToReturnCount": 0,
+      "preservedBodyTokenSha256": "c85d534c62ecca772bc9b601cf91b2f98ef0bba3cc4e2af29ff6b57d8b666803",
+      "originalBodyAssertionSites": 19
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_context_windows.rs",
+      "originalTest": "HistoryContextWindows_PreinstallContextReturn_032",
+      "helper": "check_preinstall_context_return",
+      "originalScenarioCount": 4,
+      "cases": [
+        {
+          "name": "HistoryContext_FreshAbsentUdf_032",
+          "arguments": [
+            "false",
+            "None"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "HistoryContext_FreshCreateFault_032",
+          "arguments": [
+            "true",
+            "Some(CopyFault::BeforeFreshCreate)"
+          ],
+          "originalIndex": 1
+        },
+        {
+          "name": "HistoryContext_FreshCreatedFault_032",
+          "arguments": [
+            "true",
+            "Some(CopyFault::AfterFreshCreate)"
+          ],
+          "originalIndex": 2
+        },
+        {
+          "name": "HistoryContext_FreshReceiptFault_032",
+          "arguments": [
+            "true",
+            "Some(CopyFault::BeforeFreshReceipt)"
+          ],
+          "originalIndex": 3
+        }
+      ],
+      "continueToReturnCount": 0,
+      "preservedBodyTokenSha256": "4715124467968243187ad94c2a11168d9ac40799c387764142250e58903e42f8",
+      "originalBodyAssertionSites": 5
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_context_windows.rs",
+      "originalTest": "HistoryContextWindows_ContextMoveReceiptLoss_033",
+      "helper": "check_context_move_receipt_loss",
+      "originalScenarioCount": 2,
+      "cases": [
+        {
+          "name": "HistoryContext_LaterMoveLoss_033",
+          "arguments": [
+            "CopyFault::AfterLaterMove"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "HistoryContext_SourceMoveLoss_033",
+          "arguments": [
+            "CopyFault::AfterSourceRestoreMove"
+          ],
+          "originalIndex": 1
+        }
+      ],
+      "continueToReturnCount": 0,
+      "preservedBodyTokenSha256": "3b602d00cb011d30d82ad44de60fd0dd26d5a6679f627206a7463eb848a28f9c",
+      "originalBodyAssertionSites": 3
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_context_windows.rs",
+      "originalTest": "HistoryContextWindows_LaterCopyFailure_034",
+      "helper": "check_later_copy_failure",
+      "originalScenarioCount": 2,
+      "cases": [
+        {
+          "name": "HistoryContext_LaterWriteLoss_034",
+          "arguments": [
+            "CopyFault::AfterWrite",
+            "false"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "HistoryContext_LaterReceiptLoss_034",
+          "arguments": [
+            "CopyFault::BeforeReceipt",
+            "true"
+          ],
+          "originalIndex": 1
+        }
+      ],
+      "continueToReturnCount": 0,
+      "preservedBodyTokenSha256": "21ac45f01f67b3093f5f2b9ee64fecb433676b4adc5e973681bab9ac2fba34b8",
+      "originalBodyAssertionSites": 7
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_context_windows.rs",
+      "originalTest": "HistoryContextWindows_DurableReadmission_035",
+      "helper": "check_durable_readmission",
+      "originalScenarioCount": 2,
+      "cases": [
+        {
+          "name": "HistoryContext_DurableByteDrift_035",
+          "arguments": [
+            "false"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "HistoryContext_DurableReadBlocked_035",
+          "arguments": [
+            "true"
+          ],
+          "originalIndex": 1
+        }
+      ],
+      "continueToReturnCount": 0,
+      "preservedBodyTokenSha256": "d82def55d08c1da53ea79a4c53d40e9b02959f753e022f1196c06d579f48d7c9",
+      "originalBodyAssertionSites": 10
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_context_windows.rs",
+      "originalTest": "HistoryContextWindows_NormalReturnReopen_036",
+      "helper": "check_normal_return_reopen",
+      "originalScenarioCount": 3,
+      "cases": [
+        {
+          "name": "HistoryContext_ReturnMissingImage_036",
+          "arguments": [
+            "None"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "HistoryContext_ReturnLaterMoveLoss_036",
+          "arguments": [
+            "Some(CopyFault::AfterLaterMove)"
+          ],
+          "originalIndex": 1
+        },
+        {
+          "name": "HistoryContext_ReturnSourceMoveLoss_036",
+          "arguments": [
+            "Some(CopyFault::AfterSourceRestoreMove)"
+          ],
+          "originalIndex": 2
+        }
+      ],
+      "continueToReturnCount": 0,
+      "preservedBodyTokenSha256": "048a5ca28feb6c8d280ba219af35b08327dee3e5b88e3b8688f1252649be3c4f",
+      "originalBodyAssertionSites": 12
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_context_windows.rs",
+      "originalTest": "HistoryContextWindows_LaterHistoryIntegrity_039",
+      "helper": "check_later_history_integrity",
+      "originalScenarioCount": 5,
+      "cases": [
+        {
+          "name": "HistoryContext_SnapshotByteDrift_039",
+          "arguments": [
+            "\"snapshot-bytes\""
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "HistoryContext_SnapshotMissing_039",
+          "arguments": [
+            "\"snapshot-missing\""
+          ],
+          "originalIndex": 1
+        },
+        {
+          "name": "HistoryContext_SnapshotLiveAdd_039",
+          "arguments": [
+            "\"snapshot-live-add\""
+          ],
+          "originalIndex": 2
+        },
+        {
+          "name": "HistoryContext_UnpublishedByteDrift_039",
+          "arguments": [
+            "\"unpublished-bytes\""
+          ],
+          "originalIndex": 3
+        },
+        {
+          "name": "HistoryContext_UnpublishedIntact_039",
+          "arguments": [
+            "\"unpublished-positive\""
+          ],
+          "originalIndex": 4
+        }
+      ],
+      "continueToReturnCount": 2,
+      "preservedBodyTokenSha256": "e5101cc1d22038bb8f093318a8cc4f0e1021bf7730fd4bc16eaf0f8c898a5d55",
+      "originalBodyAssertionSites": 14
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_preinstall_custody_windows.rs",
+      "originalTest": "HistoryPreinstallCustody_RetainedContextReturn_002",
+      "helper": "check_retained_return",
+      "originalScenarioCount": 4,
+      "cases": [
+        {
+          "name": "HistoryCustody_ReturnAbsentNoFresh_002",
+          "arguments": [
+            "false",
+            "false",
+            "None"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "HistoryCustody_ReturnBeforeCreate_002",
+          "arguments": [
+            "true",
+            "true",
+            "Some(CopyFault::BeforeFreshCreate)"
+          ],
+          "originalIndex": 1
+        },
+        {
+          "name": "HistoryCustody_ReturnAfterCreate_002",
+          "arguments": [
+            "true",
+            "true",
+            "Some(CopyFault::AfterFreshCreate)"
+          ],
+          "originalIndex": 2
+        },
+        {
+          "name": "HistoryCustody_ReturnAbsentFresh_002",
+          "arguments": [
+            "false",
+            "true",
+            "None"
+          ],
+          "originalIndex": 3
+        }
+      ],
+      "continueToReturnCount": 0,
+      "preservedBodyTokenSha256": "91a09f678711eb9c838f3bac98160ba0c96f0dc2ca426a61cb35083c376f7f46",
+      "originalBodyAssertionSites": 6
+    }
+  ],
+  "bodyHashNormalization": "Original scenario body including local imports is wrapped in its extracted helper signature; outer scenario-loop continue is replaced with return; Rust 1.98.1 rustfmt edition 2021 normalizes layout, optional call trailing commas and closure block formatting. Tokens omit whitespace/comments while quoted string and character literal bytes stay exact. SHA256 uses UTF-8 JSON token arrays with ensure_ascii=false and compact separators."
+}

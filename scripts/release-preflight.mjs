@@ -2,14 +2,14 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname } from 'node:path'
 import { mayPublish, sourceChecksPassed, coverageChecksPassed, requiredChecksPassed, resolveCoverageArtifact, validateArtifacts, validateCoverageBinding } from './release-policy.mjs'
-import { OLD_DRAFT_ID, backupArtifactName, recoveryCandidateChecks, assertPreparedDraft, assertStagedRelease, collectStageFiles, verifyStagedReleaseBytes, validationNotes, stagedValidationNotes } from './release-draft-recovery.mjs'
+import { OLD_DRAFT_ID, backupArtifactName, recoveryCandidateChecks, assertReviewedOldDraft, assertReviewedPreparedDraft, preparedRecoveryBackup, validatePreparedRecoveryBackup, assertPreparedDraft, assertRepairablePreparedDraft, assertStagedRelease, collectStageFiles, verifyStagedReleaseBytes, validationNotes, stagedValidationNotes } from './release-draft-recovery.mjs'
 import { REPORT_FILENAME, VALIDATION_POLICY } from './windows-native-validation.mjs'
 import { fetchCoverageArchive, validateFetchedCoverage } from './release-coverage-archive.mjs'
 
 const { GITHUB_REPOSITORY: repository, GITHUB_SHA: sha, GITHUB_REF: ref, GITHUB_EVENT_NAME: event, GITHUB_TOKEN: token } = process.env
 if (!/^[-\w.]+\/[-\w.]+$/.test(repository ?? '') || !token) throw new Error('workflow repository/token required')
 const flags = new Set(['--resolve-coverage', '--artifacts', '--prepare-draft-recovery'])
-const values = new Set(['--coverage', '--ci-run', '--ci-attempt', '--coverage-artifact-id', '--coverage-artifact-name', '--notes', '--staged-release-id', '--prepared-release-id'])
+const values = new Set(['--coverage', '--ci-run', '--ci-attempt', '--coverage-artifact-id', '--coverage-artifact-name', '--notes', '--staged-release-id', '--prepared-release-id', '--repair-prepared-release-id'])
 const args = new Map()
 for (let index = 2; index < process.argv.length; index++) {
   const name = process.argv[index]
@@ -19,9 +19,11 @@ for (let index = 2; index < process.argv.length; index++) {
   args.set(name, value)
 }
 if (args.has('--resolve-coverage') && args.size !== (args.has('--prepare-draft-recovery') ? 2 : 1)) throw new Error('coverage resolver does not perform promotion')
-const inPlacePhase = args.has('--staged-release-id') || args.has('--prepared-release-id')
-if (inPlacePhase && (!args.has('--artifacts') || !args.has('--coverage') || args.has('--prepare-draft-recovery') || args.has('--notes')
-  || (args.has('--staged-release-id') && args.has('--prepared-release-id')))) throw new Error('invalid staged publication preflight')
+const repairPhase = args.has('--repair-prepared-release-id')
+const phases = ['--staged-release-id', '--prepared-release-id', '--repair-prepared-release-id'].filter(name => args.has(name))
+const inPlacePhase = phases.length > 0
+if (inPlacePhase && (!args.has('--artifacts') || !args.has('--coverage') || args.has('--prepare-draft-recovery')
+  || (args.has('--notes') && !repairPhase) || phases.length !== 1)) throw new Error('invalid staged publication preflight')
 
 async function api(path, optional = false) {
   const response = await fetch(`https://api.github.com/repos/${repository}/${path}`, {
@@ -61,22 +63,34 @@ const tagRef = await api(`git/ref/tags/${encodeURIComponent(tag)}`, true)
 const releases = await pages('releases', null)
 const context = { event, ref, sha, main: { sha: branch.commit?.sha, protected: branch.protected },
   versions: [packageVersion, cargoVersion, tauriVersion], tag, tagExists: tagRef !== null,
-  releaseExists: releases.some(release => release.tag_name === tag), ci, jobs }
+  releaseExists: releases.some(release => release.tag_name === tag || (tag === 'v0.18.1' && release.id === OLD_DRAFT_ID)), ci, jobs }
 let staged, prepared
 if (inPlacePhase) {
   if (!sourceChecksPassed(context)) throw new Error('release gate blocked: staged source/current CI changed')
-  const id = positiveInteger(args.get('--staged-release-id') ?? args.get('--prepared-release-id'))
+  const id = positiveInteger(args.get(phases[0]))
   if (id !== OLD_DRAFT_ID) throw new Error('invalid recovery draft ID')
-  const matches = releases.filter(release => release.tag_name === tag)
+  const matches = releases.filter(release => release.tag_name === tag || release.id === id)
   if (matches.length !== 1 || matches[0].id !== id || (tagRef !== null
-    && (tagRef.object?.type !== 'commit' || tagRef.object.sha !== sha))) throw new Error('release gate blocked: staged version conflict')
+    && (repairPhase || tagRef.object?.type !== 'commit' || tagRef.object.sha !== sha))) throw new Error('release gate blocked: staged version conflict')
   const { files, inventory } = collectStageFiles('artifacts', packageVersion, args.get('--coverage'), 'latest.json')
   const phase = { release: matches[0], files, binding: { sha, tag, inventory,
     runId: positiveInteger(process.env.GITHUB_RUN_ID), attempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT) } }
-  if (args.has('--prepared-release-id')) prepared = phase
+  if (args.has('--prepared-release-id') || repairPhase) prepared = phase
   else staged = phase
 } else if (!(requiredChecksPassed(context) || (args.has('--prepare-draft-recovery') && recoveryCandidateChecks(context, releases, tagRef)))) {
   throw new Error('release gate blocked: require current protected main, matching versions, successful required CI and unused tag/release')
+}
+let recoveryMode = '', recoveryBackup
+if (args.has('--prepare-draft-recovery') && context.releaseExists) {
+  const original = releases.find(release => release.id === OLD_DRAFT_ID)
+  try { assertReviewedOldDraft(original); recoveryMode = 'original' }
+  catch {
+    assertReviewedPreparedDraft(original)
+    recoveryMode = 'reprepare'
+    recoveryBackup = preparedRecoveryBackup()
+    validatePreparedRecoveryBackup(await api(`actions/artifacts/${recoveryBackup.id}`),
+      await api(`actions/runs/${recoveryBackup.runId}`))
+  }
 }
 const artifact = resolveCoverageArtifact(await pages(`actions/runs/${ci.id}/artifacts`, 'artifacts'), ci, sha)
 const binding = { sourceSha: sha, runId: String(ci.id), runAttempt: ci.run_attempt, artifactId: artifact.id, artifactName: artifact.name }
@@ -100,7 +114,8 @@ if (args.has('--resolve-coverage')) {
   if (prepared || staged) {
     const phase = prepared ?? staged
     phase.binding.body = stagedValidationNotes(expectedNotes, phase.binding)
-    if (prepared) assertPreparedDraft(prepared.release, prepared.binding)
+    if (repairPhase) assertRepairablePreparedDraft(prepared.release, prepared.binding)
+    else if (prepared) assertPreparedDraft(prepared.release, prepared.binding)
     else assertStagedRelease(staged.release, staged.binding, staged.release.id)
   }
   context.coverage = { binding: resolved, artifact, report }
@@ -135,8 +150,9 @@ if (args.has('--resolve-coverage')) {
       throw new Error('release gate blocked: tag source changed during staged verification')
     }
   }
-  if (args.has('--notes')) writeFileSync(args.get('--notes'), expectedNotes)
+  if (args.has('--notes')) writeFileSync(args.get('--notes'), repairPhase ? prepared.binding.body : expectedNotes)
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT,
-    `version=${packageVersion}\ntag=${tag}\nci_run=${ci.id}\nrecovery_draft=${args.has('--prepare-draft-recovery') && context.releaseExists ? OLD_DRAFT_ID : ''}\n`)
+    `version=${packageVersion}\ntag=${tag}\nci_run=${ci.id}\nrecovery_draft=${args.has('--prepare-draft-recovery') && context.releaseExists ? OLD_DRAFT_ID : ''}\n` +
+    `recovery_mode=${recoveryMode}\nrecovery_backup_id=${recoveryBackup?.id ?? ''}\nrecovery_backup_run=${recoveryBackup?.runId ?? ''}\n`)
   console.log(`${args.has('--prepare-draft-recovery') ? 'Read-only recovery candidate' : 'Release'} preflight passed for ${sha}, CI run ${ci.id}, attempt ${ci.run_attempt}, ${tag}; ${summary.counts.executed} native tests executed, ${summary.counts.ignored} original ignored, ${summary.unverifiedNames.length} unverified; native All ${summary.nativeAllStatus}`)
 }

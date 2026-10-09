@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
+const reviewedPrepared = JSON.parse(readFileSync(new URL('../fixtures/release-prepared-406663556.json', import.meta.url)))
 
 let recovery
 try { recovery = await import('../../scripts/release-draft-recovery.mjs') }
@@ -107,7 +108,7 @@ test('DraftRecovery_DownloadRedirectDoesNotForwardCredentials_007', async () => 
 test('DraftRecovery_NoDeleteOrCredentialCreationPath_009', () => {
   const transaction = readFileSync(new URL('../../scripts/release-draft-transaction.mjs', import.meta.url), 'utf8')
   assert.doesNotMatch(transaction, /['"]DELETE['"]|gh auth|credential|register.runner|git.*force/)
-  assert.match(transaction, /verifyBackup\(options.get\('--directory'\)\)/)
+  assert.match(transaction, /verifyBackup\(options.get\('--directory'\)(?:, provenance)?\)/)
   assert.match(transaction, /artifact.workflow_run\?\.head_sha === sha/)
   const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
   const helper = readFileSync(new URL('../../scripts/release-draft-recovery.mjs', import.meta.url), 'utf8')
@@ -375,7 +376,7 @@ test('DraftRecovery_RoutingUsesFreshWriteJobObservation_020', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
   assert.doesNotMatch(workflow, /needs\.preflight\.outputs\.recovery_draft/)
   assert.match(workflow, /name: Recheck main, required CI, coverage and same-run platform artifacts\n\s+id: promotion/)
-  assert.equal((workflow.match(/if: steps\.promotion\.outputs\.recovery_draft/g) ?? []).length, 8)
+  assert.equal((workflow.match(/if: steps\.promotion\.outputs\.recovery_draft/g) ?? []).length, 10)
   assert.match(workflow, /contents: write/)
 })
 
@@ -392,4 +393,209 @@ test('DraftRecovery_PublicationReportsActualPermissionRejectionWithoutRetry_021'
     return fixture.release
   }, fixture.binding, 406663556), /PATCH HTTP 403/)
   assert.equal(patches, 1)
+})
+
+function metadataFixture() {
+  const snapshot = oldDraft()
+  snapshot.created_at = '2026-10-08T00:00:00Z'
+  const binding = { sha, runId: 9, attempt: 1, tag: 'v0.18.1', inventory: [] }
+  binding.body = `Exact validation disclosure\n${api().stageMarker(binding)}\n`
+  const current = { ...structuredClone(snapshot), target_commitish: sha, assets: preservedFixtureAssets() }
+  return { snapshot, binding, current }
+}
+
+test('DraftRecovery_MetadataPatchKeepsExplicitVersionAndSource_022', async () => {
+  const fixture = metadataFixture()
+  let writes = 0
+  await api().replacePreservedDraftMetadata(async (path, optional, method, body) => {
+    if (path === 'branches/main') return { protected: true, commit: { sha } }
+    if (path.startsWith('git/ref/')) return null
+    if (method === 'PATCH') {
+      writes++
+      Object.assign(fixture.current, body)
+      // Reproduce the observed API normalization when these fields are absent.
+      if (!body.tag_name || !body.target_commitish) fixture.current.tag_name = 'untagged-dce9f75805136bcd2e47'
+    }
+    return structuredClone(fixture.current)
+  }, fixture.snapshot, fixture.binding)
+  api().assertPreparedDraft(fixture.current, fixture.binding)
+  assert.equal(writes, 1)
+})
+
+test('DraftRecovery_MetadataMismatchReportsHTTPAndSafeFieldDifference_023', async () => {
+  const fixture = metadataFixture()
+  let writes = 0
+  await assert.rejects(api().replacePreservedDraftMetadata(async (path, optional, method, body) => {
+    if (path === 'branches/main') return { protected: true, commit: { sha } }
+    if (path.startsWith('git/ref/')) return null
+    if (method === 'PATCH') {
+      writes++
+      Object.assign(fixture.current, body, { tag_name: 'untagged-dce9f75805136bcd2e47' })
+      return api().readDraftApiResponse(new Response(JSON.stringify(fixture.current), { status: 200 }), method)
+    }
+    return structuredClone(fixture.current)
+  }, fixture.snapshot, fixture.binding), error => {
+    assert.match(error.message, /PATCH HTTP 200/)
+    assert.match(error.message, /tag_name/)
+    assert.match(error.message, /untagged-dce9f75805136bcd2e47/)
+    assert.doesNotMatch(error.message, /Exact validation disclosure|permission|Bearer/)
+    return true
+  })
+  assert.equal(writes, 1)
+})
+
+test('DraftRecovery_PreparedRepairUsesExactBackupAndBindingWithoutReplaying_024', async () => {
+  const fixture = metadataFixture()
+  Object.assign(fixture.current, { body: fixture.binding.body, tag_name: 'untagged-dce9f75805136bcd2e47' })
+  let writes = 0
+  const request = async (path, optional, method, body) => {
+    if (path === 'branches/main') return { protected: true, commit: { sha } }
+    if (path.startsWith('git/ref/')) return null
+    if (method === 'PATCH') {
+      writes++
+      Object.assign(fixture.current, body)
+      throw new Error('acknowledgement lost after repair')
+    }
+    return structuredClone(fixture.current)
+  }
+  assert.equal(typeof api().repairPreparedDraftMetadata, 'function', 'explicit same-binding repair must be implemented')
+  await api().repairPreparedDraftMetadata(request, fixture.snapshot, fixture.binding)
+  api().assertPreparedDraft(fixture.current, fixture.binding)
+  await api().repairPreparedDraftMetadata(request, fixture.snapshot, fixture.binding)
+  assert.equal(writes, 1, 'observed complete state must not repeat the unknown write')
+})
+
+test('DraftRecovery_PreparedRepairRejectsSourceRunInventoryOrSnapshotDrift_025', async () => {
+  assert.equal(typeof api().repairPreparedDraftMetadata, 'function', 'explicit same-binding repair must be implemented')
+  for (const mutate of [
+    f => f.current.target_commitish = oldSource,
+    f => f.binding.runId++, f => f.binding.attempt++,
+    f => f.binding.inventory.push({ name: 'other.bin', size: 1, sha256: 'b'.repeat(64) }),
+    f => f.current.body += ' concurrent disclosure', f => f.current.name += ' changed',
+    f => f.current.created_at = '2026-10-09T00:00:00Z',
+    f => f.current.tag_name = 'v0.18.0', f => f.current.tag_name = 'untagged-invalid',
+    f => f.current.assets[0].id++, f => f.current.assets[0].digest = `sha256:${'b'.repeat(64)}`,
+    f => f.current.assets[0].label = 'changed', f => f.current.assets[0].content_type = 'changed',
+    f => f.current.assets.push({ ...f.current.assets[0], id: 1 }),
+    f => f.current.draft = false, f => f.current.published_at = '2026-10-09T00:00:00Z',
+    f => f.mainSha = oldSource, f => f.tag = { object: { type: 'commit', sha } },
+  ]) {
+    const fixture = metadataFixture()
+    Object.assign(fixture.current, { body: fixture.binding.body, tag_name: 'untagged-dce9f75805136bcd2e47' })
+    mutate(fixture)
+    let writes = 0
+    await assert.rejects(api().repairPreparedDraftMetadata(async (path, optional, method) => {
+      if (path === 'branches/main') return { protected: true, commit: { sha: fixture.mainSha ?? sha } }
+      if (path.startsWith('git/ref/')) return fixture.tag ?? null
+      if (method === 'PATCH') writes++
+      return structuredClone(fixture.current)
+    }, fixture.snapshot, fixture.binding))
+    assert.equal(writes, 0)
+  }
+})
+
+test('DraftRecovery_UntaggedOriginalDraftRemainsAnUnusedVersionConflict_026', () => {
+  const draft = oldDraft(); draft.tag_name = 'untagged-dce9f75805136bcd2e47'
+  assert.equal(api().recoveryCandidateChecks({ ...context(), releaseExists: false }, [draft], null), false)
+})
+
+test('DraftRecovery_HTTPReceiptsKeepConcreteSuccessAndFailureStatus_027', async () => {
+  assert.equal(typeof api().readDraftApiResponse, 'function', 'HTTP response decoder must preserve receipt status')
+  const receipt = await api().readDraftApiResponse(new Response('{"id":406663556}', { status: 200 }), 'PATCH')
+  assert.equal(receipt[api().API_HTTP_STATUS], 200)
+  assert.equal(JSON.stringify(receipt), '{"id":406663556}', 'receipt metadata must not change snapshot comparison')
+  await assert.rejects(api().readDraftApiResponse(new Response('{}', { status: 403 }), 'PATCH'), error => {
+    assert.equal(error.status, 403); assert.match(error.message, /PATCH API HTTP 403/); return true
+  })
+})
+
+function reviewedOriginalSnapshot() {
+  const snapshot = structuredClone(reviewedPrepared.release)
+  Object.assign(snapshot, { tag_name: 'v0.18.1', target_commitish: oldSource, body: 'Original backed-up disclosure' })
+  snapshot.assets = snapshot.assets.map(asset => ({ ...asset, name: assets.find(a => a[0] === asset.id)[1], label: null }))
+  return snapshot
+}
+
+test('DraftRecovery_ReviewedPartialStateAdmitsFreshCurrentSourceCandidate_028', () => {
+  assert.equal(api().recoveryCandidateChecks(context(), [reviewedPrepared.release], null), true)
+  for (const mutate of [d => d.body += ' changed', d => d.assets[0].content_type = 'changed',
+    d => d.assets[0].size++, d => d.target_commitish = sha, d => d.created_at = 'changed',
+    d => d.assets.push({ ...d.assets[0], id: 1 }), d => d.tag_name = 'other']) {
+    const changed = structuredClone(reviewedPrepared.release); mutate(changed)
+    assert.equal(api().recoveryCandidateChecks(context(), [changed], null), false)
+  }
+  assert.equal(api().recoveryCandidateChecks({ ...context(), ci: { ...context().ci, conclusion: 'failure' } }, [reviewedPrepared.release], null), false)
+})
+
+test('DraftRecovery_ReprepareReviewedStateRebindsOnlyFreshSourceAndInventory_029', async () => {
+  assert.equal(typeof api().reprepareReviewedDraft, 'function', 'reviewed partial-state transition must be implemented')
+  const snapshot = reviewedOriginalSnapshot(), binding = metadataFixture().binding
+  let current = structuredClone(reviewedPrepared.release), writes = 0
+  const request = async (path, optional, method, body) => {
+    if (path === 'branches/main') return { protected: true, commit: { sha } }
+    if (path.startsWith('git/ref/')) return null
+    if (method === 'PATCH') {
+      writes++; current = { ...current, ...body }; throw new Error('lost new preparation acknowledgement')
+    }
+    return structuredClone(current)
+  }
+  await api().reprepareReviewedDraft(request, snapshot, binding)
+  api().assertPreparedDraft(current, binding)
+  assert.deepEqual(current.assets, reviewedPrepared.release.assets)
+  assert.equal(current.created_at, snapshot.created_at)
+  assert.equal(current.target_commitish, sha)
+  assert.doesNotMatch(current.body, /37899773504|37899773556|db517757/)
+  await api().reprepareReviewedDraft(request, snapshot, binding)
+  assert.equal(writes, 1)
+})
+
+test('DraftRecovery_ReprepareRefusesOldEvidenceOrConcurrentChanges_030', async () => {
+  assert.equal(typeof api().reprepareReviewedDraft, 'function', 'reviewed partial-state transition must be implemented')
+  for (const mutate of [f => f.current.body += ' changed', f => f.current.assets[0].digest = 'changed',
+    f => f.snapshot.created_at = 'changed', f => f.snapshot.assets[0].content_type = 'changed',
+    f => f.binding.body = reviewedPrepared.release.body,
+    f => f.binding.runId = reviewedPrepared.preparation.runId,
+    f => f.mainSha = reviewedPrepared.preparation.sha, f => f.tag = { object: { type: 'commit', sha } },
+    f => f.current.assets.push({ ...f.current.assets[0], id: 1 })]) {
+    const fixture = { snapshot: reviewedOriginalSnapshot(), binding: metadataFixture().binding,
+      current: structuredClone(reviewedPrepared.release) }
+    mutate(fixture); let writes = 0
+    await assert.rejects(api().reprepareReviewedDraft(async (path, optional, method) => {
+      if (path === 'branches/main') return { protected: true, commit: { sha: fixture.mainSha ?? sha } }
+      if (path.startsWith('git/ref/')) return fixture.tag ?? null
+      if (method === 'PATCH') writes++
+      return structuredClone(fixture.current)
+    }, fixture.snapshot, fixture.binding))
+    assert.equal(writes, 0)
+  }
+})
+
+test('DraftRecovery_ReviewedOldBackupHasIndependentImmutableProvenance_031', () => {
+  assert.equal(typeof api().validatePreparedRecoveryBackup, 'function', 'immutable old-run backup validation must be implemented')
+  const b = reviewedPrepared.backup
+  const artifact = { id: b.id, name: b.name, digest: b.digest, size_in_bytes: b.size, expired: false,
+    expires_at: '2099-01-01T00:00:00Z', workflow_run: { id: b.runId, head_sha: b.sha, head_branch: 'main' } }
+  const run = { id: b.runId, head_sha: b.sha, head_branch: 'main', run_attempt: b.attempt,
+    path: '.github/workflows/release.yml', event: 'push', status: 'completed', conclusion: 'failure' }
+  assert.doesNotThrow(() => api().validatePreparedRecoveryBackup(artifact, run))
+  for (const mutate of [a => a.id++, a => a.name += '-other', a => a.digest = 'changed', a => a.size_in_bytes++,
+    a => a.expired = true, a => a.expires_at = '2020-01-01T00:00:00Z', a => a.workflow_run.head_sha = sha]) {
+    const changed = structuredClone(artifact); mutate(changed)
+    assert.throws(() => api().validatePreparedRecoveryBackup(changed, run))
+  }
+  assert.throws(() => api().validatePreparedRecoveryBackup(artifact, { ...run, run_attempt: 2 }))
+  assert.throws(() => api().validatePreparedRecoveryBackup(artifact, { ...run, head_sha: sha }))
+})
+
+test('DraftRecovery_WorkflowRepreparesWithOldBackupAndNewSignedRun_032', () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
+  const transaction = readFileSync(new URL('../../scripts/release-draft-transaction.mjs', import.meta.url), 'utf8')
+  assert.match(workflow, /run-id: \$\{\{ steps\.promotion\.outputs\.recovery_backup_run \}\}/)
+  assert.match(workflow, /artifact-ids: \$\{\{ steps\.promotion\.outputs\.recovery_backup_id \}\}/)
+  assert.equal((workflow.match(/recovery_mode == 'original'/g) ?? []).length, 4)
+  assert.equal((workflow.match(/recovery_mode == 'reprepare'/g) ?? []).length, 2)
+  assert.ok(workflow.indexOf('Generate updater manifest and verify all three actual signatures') < workflow.indexOf('reprepare --directory'))
+  assert.match(transaction, /validatePreparedRecoveryBackup\(artifact, await api/)
+  assert.match(transaction, /verifyBackup\(options.get\('--directory'\), provenance\)/)
+  assert.ok(transaction.indexOf('await verifyUpdaterManifest') < transaction.indexOf('await reprepareReviewedDraft'))
 })

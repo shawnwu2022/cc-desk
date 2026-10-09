@@ -59,6 +59,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: windows-real-paste-acceptance
+          cache-workspace-crates: false
           cache-on-failure: true
       - id: deps
         run: npm ci

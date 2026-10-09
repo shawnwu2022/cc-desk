@@ -30,12 +30,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: windows-paste-trace-no-lto
+          cache-workspace-crates: false
           cache-on-failure: true
       - run: npm ci
       - run: node scripts/prepare-conpty.mjs

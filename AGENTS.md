@@ -196,6 +196,7 @@ npm run tauri:build        # 生产构建
 - 真实 Claude Code / Codex CLI Layer-C 证据属于 D20，和普通代码 CI 分层记录。
 - updater 必须验证三个实际文件的签名；既有 draft 替换要求 hash-verified backup 和明确 recovery transaction。客户端自动安装策略保持不变。
 - 0.18.1 精确恢复只认旧 draft `406663556` / source `5ed35db9a560e093a91a5ef32a1eb6dd171f27fd` 和五个固定资产。新三平台验签后先上传并独立下载复核同 run/attempt 备份，再将同一 draft 的 target_commitish 更新为实际 current main SHA、保留同一 v0.18.1 tag_name。旧五个资产只改为独立标注的 preserved .bin 名称，原 ID/字节保留；新九资产完整 staging、回下载核对哈希和三个 updater 签名，再重查 current main/CI/coverage 后发布原 draft ID。没有 archive tag、资产删除或自动重放未知回执。普通 unused-version gate 保留，read-only candidate recovery 不构成发布 waiver。详见发布流程。
+- 用户另授权对实际部分准备状态进行精确重新准备：只认 `scripts/release-prepared-recovery.json` 固定的完整旧快照、db517757/37899773556/attempt1 marker 和原备份 artifact11604434521 的不可变 ID/名称/大小/SHA。独立复核原备份 JSON/五资产字节与当前 snapshot 后，可保留五个原资产，将同一 draft 绑定新的实际 protected main 和新 release run 的完整九资产清单。旧失败 run/旧 CI/旧签名只证明旧状态来源，不得作为新 main 的通过证据；新完整 CI/coverage 和新同 run 三平台实际签名必须重新验证，最终 staging/bytes/signatures/source/tag 检查不变。未知写入不重放，未知/改变/已增加资产的部分状态仍拒绝。
 
 详细流程 → [docs/release-process.md](docs/release-process.md)
 
@@ -231,6 +232,8 @@ npm run tauri:build        # 生产构建
 - 添加新 Tauri JS API 调用时，必须确认 `capabilities/default.json` 中有对应权限（`<plugin>:default` 不包含大部分写操作，需显式添加）→ 详见 [docs/capabilities.md](docs/capabilities.md)
 
 ### 测试要求
+
+- **CI 性能与来源**：Windows 普通 Rust CI 一次编译四个原始 harness，以同 source SHA/run/attempt 绑定的编译包确定性分为 16 片；`Rust checks` 在全片成功、完整名称与原始忽略集合及原始输出计数核对后才通过。18 条 Job-free 专项仍按原政策披露为未验证，不增排除。roundtrip 的普通 release 与惰性 debug 场景并行，原 required policy 聚合全部成功。发布候选可在同源 CI 等待期间构建，正式发布仍受原完整来源、coverage 与平台签名门控。详见 [docs/ci-performance.md](docs/ci-performance.md)。
 
 - **开发必须搭配测试**：新增功能、修改逻辑、修复 bug 时，同步编写或更新对应测试。遵循 [测试编写原则](docs/测试编写原则.md)
 - **Bug 修复必须先写测试**：修复 bug 时，先编写测试复现问题，确认测试失败，然后修复代码直至测试通过

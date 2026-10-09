@@ -1,15 +1,16 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { verifyUpdaterManifest } from './verify-updater-manifest.js'
 import { OLD_ASSETS, OLD_DRAFT_ID, assertReviewedOldDraft, hash, verifyInventoryFiles,
-  readRegularFiles, backupArtifactName, stageMarker, collectStageFiles, recoverSourcePreservingAssets, preserveOriginalAssets, replacePreservedDraftMetadata, stagedValidationNotes, stageNewAssets, publishVerifiedDraft } from './release-draft-recovery.mjs'
+  readRegularFiles, backupArtifactName, stageMarker, collectStageFiles, recoverSourcePreservingAssets, preserveOriginalAssets, replacePreservedDraftMetadata, repairPreparedDraftMetadata, reprepareReviewedDraft, preparedRecoveryBackup, validatePreparedRecoveryBackup, readDraftApiResponse, stagedValidationNotes, stageNewAssets, publishVerifiedDraft } from './release-draft-recovery.mjs'
 
 const { GITHUB_REPOSITORY: repository, GITHUB_TOKEN: token, GITHUB_SHA: sha } = process.env
 const runId = Number(process.env.GITHUB_RUN_ID), attempt = Number(process.env.GITHUB_RUN_ATTEMPT)
 const backupName = backupArtifactName(sha, runId, attempt)
 if (repository !== 'shawnwu2022/cc-desk' || !token) throw new Error('Draft transaction requires existing workflow authentication')
 const [mode, ...args] = process.argv.slice(2)
-if (!['backup', 'prepare', 'stage', 'publish'].includes(mode)) throw new Error('Unsupported draft transaction mode')
+if (!['backup', 'prepare', 'repair-metadata', 'reprepare', 'stage', 'publish'].includes(mode)) throw new Error('Unsupported draft transaction mode')
 const allowed = new Set(['--directory', '--backup-artifact-id', '--release-id'])
 const options = new Map()
 for (let i = 0; i < args.length; i += 2) {
@@ -26,8 +27,8 @@ async function api(path, optional = false, method = 'GET', body) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   })
   if (optional && response.status === 404) return null
-  if (!response.ok) { const error = new Error(`Draft transaction: ${method} API HTTP ${response.status}`); error.status = response.status; throw error }
-  return response.json()
+  if (method !== 'GET') console.log(`Draft transaction: ${method} API HTTP ${response.status}`)
+  return readDraftApiResponse(response, method)
 }
 async function pages(path, key) {
   const items = []
@@ -50,13 +51,13 @@ async function gate(extra = []) {
     '--ci-run', report.runId, '--ci-attempt', String(report.runAttempt), '--coverage-artifact-id', String(matches[0].id),
     '--coverage-artifact-name', name, ...extra], { stdio: 'inherit', env: { ...process.env, GITHUB_OUTPUT: '' } })
 }
-function verifyBackup(directory) {
+function verifyBackup(directory, provenance = { sha, runId, attempt, name: backupName }) {
   const files = readRegularFiles(directory)
   required(files.size === OLD_ASSETS.length + 2 && files.has('release.json') && files.has('backup.json'), 'backup file inventory changed')
   const metadata = files.get('release.json'), snapshot = JSON.parse(metadata), manifest = JSON.parse(files.get('backup.json'))
   assertReviewedOldDraft(snapshot)
-  required(manifest.schema === 1 && manifest.sourceSha === sha && manifest.runId === runId && manifest.attempt === attempt
-    && manifest.artifactName === backupName && manifest.metadataSha256 === hash(metadata)
+  required(manifest.schema === 1 && manifest.sourceSha === provenance.sha && manifest.runId === provenance.runId && manifest.attempt === provenance.attempt
+    && manifest.artifactName === provenance.name && manifest.metadataSha256 === hash(metadata)
     && JSON.stringify(manifest.inventory) === JSON.stringify(OLD_ASSETS), 'backup manifest binding changed')
   files.delete('release.json'); files.delete('backup.json'); verifyInventoryFiles(OLD_ASSETS, files)
   return snapshot
@@ -81,20 +82,40 @@ if (mode === 'backup') {
   verifyBackup(directory)
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `backup_name=${backupName}\n`)
   console.log(`Verified complete original draft backup ${OLD_DRAFT_ID}; no release or tag changed`)
-} else if (mode === 'prepare') {
+} else if (mode === 'prepare' || mode === 'repair-metadata' || mode === 'reprepare') {
   required(options.size === 2 && options.has('--directory') && options.has('--backup-artifact-id'), 'prepare requires downloaded immutable backup')
   const artifact = await api(`actions/artifacts/${id(options.get('--backup-artifact-id'))}`)
-  required(artifact.name === backupName && artifact.expired === false && artifact.workflow_run?.id === runId
+  const provenance = mode === 'reprepare' ? preparedRecoveryBackup() : { sha, runId, attempt, name: backupName }
+  if (mode === 'reprepare') validatePreparedRecoveryBackup(artifact, await api(`actions/runs/${provenance.runId}`))
+  else required(artifact.name === backupName && artifact.expired === false && artifact.workflow_run?.id === runId
     && artifact.workflow_run?.head_sha === sha && artifact.workflow_run?.head_branch === 'main', 'durable backup artifact binding changed')
-  const snapshot = verifyBackup(options.get('--directory'))
-  await gate(['--prepare-draft-recovery', '--notes', 'release-validation-notes.md'])
-  const { inventory } = collectStageFiles('artifacts', '0.18.1', 'coverage/windows-native-coverage.json', 'latest.json')
+  const snapshot = verifyBackup(options.get('--directory'), provenance)
+  await gate([...(mode === 'repair-metadata' ? ['--repair-prepared-release-id', String(OLD_DRAFT_ID)] : ['--prepare-draft-recovery']),
+    '--notes', 'release-validation-notes.md'])
+  const { files, inventory } = collectStageFiles('artifacts', '0.18.1', 'coverage/windows-native-coverage.json', 'latest.json')
   const binding = { sha, runId, attempt, tag: 'v0.18.1', inventory }
-  binding.body = stagedValidationNotes(readFileSync('release-validation-notes.md', 'utf8'), binding)
+  const notes = readFileSync('release-validation-notes.md', 'utf8')
+  binding.body = mode === 'repair-metadata' ? notes : stagedValidationNotes(notes, binding)
   writeFileSync('release-validation-notes.md', binding.body)
-  await recoverSourcePreservingAssets(api, snapshot, sha)
-  await preserveOriginalAssets(api, snapshot, sha)
-  await replacePreservedDraftMetadata(api, snapshot, binding)
+  if (mode === 'prepare') {
+    await recoverSourcePreservingAssets(api, snapshot, sha)
+    await preserveOriginalAssets(api, snapshot, sha)
+    await replacePreservedDraftMetadata(api, snapshot, binding)
+  } else if (mode === 'repair-metadata') await repairPreparedDraftMetadata(api, snapshot, binding)
+  else {
+    const manifest = JSON.parse(files.get('latest.json'))
+    for (const entry of Object.values(manifest.platforms ?? {})) {
+      const name = decodeURIComponent(new URL(entry.url).pathname.split('/').at(-1))
+      required(files.get(`${name}.sig`)?.toString('utf8').trim() === entry.signature, 'new manifest/signature file differs')
+    }
+    await verifyUpdaterManifest(manifest, '0.18.1', JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).plugins.updater.pubkey,
+      repository, async url => {
+        const bytes = files.get(decodeURIComponent(new URL(url).pathname.split('/').at(-1)))
+        required(bytes, 'new manifest payload missing')
+        return { ok: true, arrayBuffer: async () => bytes }
+      })
+    await reprepareReviewedDraft(api, snapshot, binding)
+  }
   console.log(`Prepared original draft ${OLD_DRAFT_ID} on current main ${sha}; five original IDs and bytes preserved, no tag or asset deletion`)
 } else if (mode === 'stage') {
   required(options.size === 0, 'stage takes no arguments')
