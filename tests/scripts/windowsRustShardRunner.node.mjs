@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const moduleUrl = new URL('../../scripts/windows-rust-shard-runner.mjs', import.meta.url);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-// 使用真实文件、git checkout 和可执行进程检查八个分片及旧版覆盖归档。
+// 使用真实文件、git checkout 和可执行进程检查十六个分片及旧版覆盖归档。
 test('RustRunner_ArtifactBinding_001', { skip: process.platform === 'win32' && 'Unix executable fixture; production binaries are Windows PE files' }, async t => {
   assert.equal(fs.existsSync(moduleUrl), true, 'the compiled-artifact runner must exist');
   const { createPlan, runShard, aggregateResults, verifyBundle, bundleArtifactName } = await import(moduleUrl);
@@ -48,7 +48,7 @@ test('RustRunner_ArtifactBinding_001', { skip: process.platform === 'win32' && '
   fs.writeFileSync(path.join(bundle, 'logs/doctests.log'), 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n');
   const options = { root, bundle, environment, inJob: true };
   const plan = createPlan(options);
-  assert.equal(plan.shardCount, 8, 'the fixed workflow must assign eight shards');
+  assert.equal(plan.shardCount, 16, 'the fixed workflow must assign sixteen shards');
   assert.equal(plan.artifactName, bundleArtifactName(sourceSha, '1234', 2));
   assert.equal(plan.harnesses[0].excluded.length, 18, 'only the reviewed Job-free inventory is excluded');
   assert.ok(plan.files.every(f => !f.path.endsWith('.pdb')), 'debug symbols must not enter the executable bundle');
@@ -64,7 +64,7 @@ test('RustRunner_ArtifactBinding_001', { skip: process.platform === 'win32' && '
   fs.writeFileSync(filename, original, { mode: 0o755 });
   fs.rmSync(path.join(root, 'src-tauri/target/debug'), { recursive: true });
   const shards = path.join(root, 'shards');
-  for (let index = 0; index < 8; index++) {
+  for (let index = 0; index < 16; index++) {
     const result = runShard({ ...options, index, output: path.join(shards, String(index)), artifactName: plan.artifactName });
     assert.equal(result.completed, true);
     assert.equal(result.harnesses[1].executed, index === 0, 'an originally empty harness executes once on shard zero');
@@ -77,7 +77,7 @@ test('RustRunner_ArtifactBinding_001', { skip: process.platform === 'win32' && '
   assert.equal(report.harnesses[0].defaultIgnored[0].reason, 'supervised only');
   assert.equal(report.nativeAll.status, 'unverified');
   assert.equal(report.nativeAcceptanceProven, false);
-  assert.equal(report.rustShardRun.shards.length, 8, 'archived run proof retains every empty shard receipt');
+  assert.equal(report.rustShardRun.shards.length, 16, 'archived run proof retains every empty shard receipt');
   assert.equal(fs.readdirSync(path.join(coverage, 'logs')).length, 17, 'legacy release archive keeps sixteen harness logs and the doctest log');
   const firstPath = path.join(shards, '0/shard-result.json'), first = JSON.parse(fs.readFileSync(firstPath, 'utf8'));
   fs.copyFileSync(firstPath, path.join(shards, 'duplicate-result.json'));
@@ -86,7 +86,7 @@ test('RustRunner_ArtifactBinding_001', { skip: process.platform === 'win32' && '
   assert.throws(() => aggregateResults({ ...options, shards, coverage }), /duplicate/, 'duplicate top-level shard indices reject even empty assignments');
   fs.rmSync(path.join(shards, 'duplicate'), { recursive: true });
   fs.renameSync(path.join(shards, '7/shard-result.json'), path.join(shards, '7/saved.json'));
-  assert.throws(() => aggregateResults({ ...options, shards, coverage }), /missing|indices/, 'all eight shard receipts are mandatory');
+  assert.throws(() => aggregateResults({ ...options, shards, coverage }), /missing|indices/, 'all sixteen shard receipts are mandatory');
   fs.renameSync(path.join(shards, '7/saved.json'), path.join(shards, '7/shard-result.json'));
   fs.writeFileSync(firstPath, JSON.stringify({ ...first, runAttempt: 3 }));
   assert.throws(() => aggregateResults({ ...options, shards, coverage }), /binding/, 'a shard from another attempt cannot complete this run');

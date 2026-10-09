@@ -81,14 +81,14 @@ test('WindowsRustShards_StableHarness_006: exact multi-name arguments exercise r
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
-test('WindowsRustShards_RunProof_007: all eight same-source receipts required, including empty slices', () => {
+test('WindowsRustShards_RunProof_007: all sixteen same-source receipts required, including empty slices', () => {
   const context = { sourceSha: 'a'.repeat(40), runId: '123', runAttempt: 1 };
   const artifactName = `windows-rust-bundle-${context.sourceSha}-123-1`;
   const harness = aggregateHarness(h, [slice(0, ['context_slow', 'worker']), slice(1, ['bundle_slow', 'ordinary_new'])], parseLibtestListing, parseLibtestResult);
   const binding = { ...context, planHash: 'b'.repeat(64), artifactName };
   const report = { ...context, host: { jobQuerySucceeded: true, inJob: true }, harnesses: [harness],
-    rustShardRun: { ...binding, policy: 'same-source-compiled-rust-shards-v1', shardCount: 8, compiler: { rustcVerbose: 'rustc 1.98.1 (fixture)' }, bundleFiles: [{path:'src-tauri/target/debug/deps/fixture.exe', bytes:1,sha256:'c'.repeat(64)}],
-      shards: Array.from({length:8}, (_, index) => ({ ...binding, index, host: {jobQuerySucceeded:true,inJob:true},completed:true,exitCode:0,durationSeconds:1,harnesses:[{identity:h.identity,names: index===0 ? ['context_slow','worker']:index===1?['bundle_slow','ordinary_new']:[],executed:index<2}]})) } };
+    rustShardRun: { ...binding, policy: 'same-source-compiled-rust-shards-v1', shardCount: 16, compiler: { rustcVerbose: 'rustc 1.98.1 (fixture)' }, bundleFiles: [{path:'src-tauri/target/debug/deps/fixture.exe', bytes:1,sha256:'c'.repeat(64)}],
+      shards: Array.from({length:16}, (_, index) => ({ ...binding, index, host: {jobQuerySucceeded:true,inJob:true},completed:true,exitCode:0,durationSeconds:1,harnesses:[{identity:h.identity,names: index===0 ? ['context_slow','worker']:index===1?['bundle_slow','ordinary_new']:[],executed:index<2}]})) } };
   validateRustShardRun(report, context);
   for (const mutate of [r=>r.rustShardRun.shards.pop(),r=>r.rustShardRun.shards[7].index=0,r=>r.rustShardRun.shards[0].runAttempt=2,r=>r.rustShardRun.shards[0].completed=false,r=>r.rustShardRun.shards[7].harnesses[0].executed=true,r=>r.rustShardRun.compiler.rustcVerbose='rustc 1.97.0 (fixture)']) {
     const broken=structuredClone(report);mutate(broken);assert.throws(()=>validateRustShardRun(broken,context),/shard|compiler|binding/);

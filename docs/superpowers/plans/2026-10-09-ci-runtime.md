@@ -12,6 +12,8 @@
 - [x] Reshape CI into compile, parallel shards and existing Rust checks aggregate; no required workflow-level path filters; bounded artifacts and phase timing summaries.
 - [x] Optimize remaining workflows with caches, scoped concurrency, compression settings, source-gated parallel release candidate build. Preserve final release preflight and same-platform signing.
 - [x] Run local Node/PowerShell contract tests, complete frontend suite/typecheck/build, Rust formatting and standalone core validation where supported.
-- [ ] Independent full-branch review, normal branch push and Draft PR; collect real GitHub wall clock, runner minutes, cache state and complete inventory evidence. Tune only from measured bottlenecks.
+- [x] Independent full-branch review, normal branch push and Draft PR; collect real GitHub wall clock, runner minutes, cache state and complete inventory evidence. Tune only from measured bottlenecks.
 
 Review focus: exact selected-name union and duplicate execution; ignored workers and eighteen exclusions; cache/artifact contamination across commits or attempts; missing/failed/cancelled shards; release candidate build admission and final provenance revalidation.
+
+- [ ] Final measured sixteen-shard comparison, including exact coverage, warm cache, wall time and runner minutes; preserve the completed eight-shard control.

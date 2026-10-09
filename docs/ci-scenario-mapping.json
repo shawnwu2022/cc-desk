@@ -2,8 +2,8 @@
   "schema": 1,
   "baseCommit": "db517757eefd323b3eaa4c69224bdd8f74b7feb6",
   "description": "Original independent Windows history scenario loops become explicit independently schedulable test cases. Helper bodies preserve all original statements and assertions apart from equivalent outer-loop continue becoming single-scenario helper return. Inner durability, retry, restart, generation and stale-journal sequences remain unchanged. No ignore/classification/exclusion changes.",
-  "originalTestCount": 11,
-  "splitTestCount": 55,
+  "originalTestCount": 12,
+  "splitTestCount": 59,
   "mappings": [
     {
       "file": "src-tauri/src/tests/version_history_bundle_restore_windows.rs",
@@ -549,6 +549,53 @@
       "continueToReturnCount": 2,
       "preservedBodyTokenSha256": "e5101cc1d22038bb8f093318a8cc4f0e1021bf7730fd4bc16eaf0f8c898a5d55",
       "originalBodyAssertionSites": 14
+    },
+    {
+      "file": "src-tauri/src/tests/version_history_preinstall_custody_windows.rs",
+      "originalTest": "HistoryPreinstallCustody_RetainedContextReturn_002",
+      "helper": "check_retained_return",
+      "originalScenarioCount": 4,
+      "cases": [
+        {
+          "name": "HistoryCustody_ReturnAbsentNoFresh_002",
+          "arguments": [
+            "false",
+            "false",
+            "None"
+          ],
+          "originalIndex": 0
+        },
+        {
+          "name": "HistoryCustody_ReturnBeforeCreate_002",
+          "arguments": [
+            "true",
+            "true",
+            "Some(CopyFault::BeforeFreshCreate)"
+          ],
+          "originalIndex": 1
+        },
+        {
+          "name": "HistoryCustody_ReturnAfterCreate_002",
+          "arguments": [
+            "true",
+            "true",
+            "Some(CopyFault::AfterFreshCreate)"
+          ],
+          "originalIndex": 2
+        },
+        {
+          "name": "HistoryCustody_ReturnAbsentFresh_002",
+          "arguments": [
+            "false",
+            "true",
+            "None"
+          ],
+          "originalIndex": 3
+        }
+      ],
+      "continueToReturnCount": 0,
+      "preservedBodyTokenSha256": "91a09f678711eb9c838f3bac98160ba0c96f0dc2ca426a61cb35083c376f7f46",
+      "originalBodyAssertionSites": 6
     }
   ],
   "bodyHashNormalization": "Original scenario body including local imports is wrapped in its extracted helper signature; outer scenario-loop continue is replaced with return; Rust 1.98.1 rustfmt edition 2021 normalizes layout, optional call trailing commas and closure block formatting. Tokens omit whitespace/comments while quoted string and character literal bytes stay exact. SHA256 uses UTF-8 JSON token arrays with ensure_ascii=false and compact separators."

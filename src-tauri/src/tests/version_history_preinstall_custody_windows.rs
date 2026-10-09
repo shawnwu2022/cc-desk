@@ -510,141 +510,149 @@ fn HistoryPreinstallCustody_FailedObservationRetainsOwners_001() {
 }
 
 // source 已封存但 fresh 未开始或部分创建失败，后续实际状态独立保留，原始对象准确归位。
-#[test]
-fn HistoryPreinstallCustody_RetainedContextReturn_002() {
-    for (present_udf, create, fault) in [
-        (false, false, None),
-        (true, true, Some(CopyFault::BeforeFreshCreate)),
-        (true, true, Some(CopyFault::AfterFreshCreate)),
-        (false, true, None),
-    ] {
-        let mut fixture = Fixture::new(present_udf);
-        let expected = fixture.originals.as_ref().unwrap().snapshot().clone();
-        let mut fresh = if create {
-            fixture.fresh(fault)
-        } else {
-            Some(
-                FreshContextRoots::new(fixture.originals.as_ref().unwrap(), &fixture.binding)
-                    .unwrap(),
-            )
-        };
-        if fixture.temporary.path().join("desk").exists() {
-            std::fs::write(
-                fixture.temporary.path().join("desk/later"),
-                b"retained later state",
-            )
-            .unwrap();
-        }
-        let mut later = None;
-        FreshContextRoots::observe_for_return_retaining(
-            &mut fresh,
-            &mut later,
-            fixture.originals.as_ref().unwrap(),
-            fixture.quarantine.clone(),
-            &fixture.boundary,
-            &fixture.user,
+fn check_retained_return(present_udf: bool, create: bool, fault: Option<CopyFault>) {
+    let mut fixture = Fixture::new(present_udf);
+    let expected = fixture.originals.as_ref().unwrap().snapshot().clone();
+    let mut fresh = if create {
+        fixture.fresh(fault)
+    } else {
+        Some(FreshContextRoots::new(fixture.originals.as_ref().unwrap(), &fixture.binding).unwrap())
+    };
+    if fixture.temporary.path().join("desk").exists() {
+        std::fs::write(
+            fixture.temporary.path().join("desk/later"),
+            b"retained later state",
         )
         .unwrap();
-        let originals = fixture.originals.as_ref().unwrap();
-        let mut journal = ContextJournal::new(
-            &mut fixture.store,
-            fixture.records.clone(),
-            &fixture.lease,
-            fixture.binding.clone(),
-            fixture.generation,
-        )
-        .unwrap();
-        later
-            .as_ref()
-            .unwrap()
-            .admit_preinstall_return(
-                originals,
-                &fixture.boundary,
-                &fixture.fence,
-                &fixture.user,
-                &mut journal,
-            )
-            .unwrap();
-        later
-            .as_mut()
-            .unwrap()
-            .preserve(
-                originals,
-                &fixture.boundary,
-                &fixture.fence,
-                &fixture.user,
-                &mut journal,
-            )
-            .unwrap();
-        fixture.generation = journal.generation();
-        drop(journal);
-        let bytes = later
-            .as_ref()
-            .unwrap()
-            .manifest_bytes(originals, &fixture.user)
-            .unwrap();
-        let digest = fixture.store.retain_manifest(&bytes).unwrap();
-        fixture.generation = fixture
-            .store
-            .append(
-                fixture.generation,
-                JournalEvent::Manifest {
-                    role: ManifestRole::RetainedTargetContext,
-                    digest,
-                },
-            )
-            .unwrap();
-        fixture.generation = fixture
-            .store
-            .append(
-                fixture.generation,
-                JournalEvent::Phase {
-                    phase: JournalPhase::Restoring,
-                },
-            )
-            .unwrap();
-        let mut restoration =
-            Some(ContextRestoration::new_retaining(&mut fixture.originals, &mut later).unwrap());
-        let mut journal = ContextJournal::new(
-            &mut fixture.store,
-            fixture.records.clone(),
-            &fixture.lease,
-            fixture.binding.clone(),
-            fixture.generation,
-        )
-        .unwrap();
-        restoration
-            .as_mut()
-            .unwrap()
-            .restore(
-                &fixture.boundary,
-                &fixture.fence,
-                &fixture.user,
-                &mut journal,
-            )
-            .unwrap();
-        let restored =
-            ContextRestoration::finish_retaining(&mut restoration, &fixture.user).unwrap();
-        assert!(restoration.is_none());
-        restored.verify(&fixture.user).unwrap();
-        assert_eq!(restored.original_snapshot(), &expected);
-        assert_eq!(
-            std::fs::read(fixture.temporary.path().join("desk/state")).unwrap(),
-            b"original desk"
-        );
-        assert_eq!(fixture.temporary.path().join("udf").exists(), present_udf);
-        assert!(!fixture.temporary.path().join("desk/later").exists());
-        if create && fault != Some(CopyFault::BeforeFreshCreate) {
-            assert!(restored
-                .later
-                .context
-                .tree(RootKind::Desk)
-                .manifest
-                .entries
-                .iter()
-                .any(|entry| entry.metadata.path == "later"));
-        }
     }
+    let mut later = None;
+    FreshContextRoots::observe_for_return_retaining(
+        &mut fresh,
+        &mut later,
+        fixture.originals.as_ref().unwrap(),
+        fixture.quarantine.clone(),
+        &fixture.boundary,
+        &fixture.user,
+    )
+    .unwrap();
+    let originals = fixture.originals.as_ref().unwrap();
+    let mut journal = ContextJournal::new(
+        &mut fixture.store,
+        fixture.records.clone(),
+        &fixture.lease,
+        fixture.binding.clone(),
+        fixture.generation,
+    )
+    .unwrap();
+    later
+        .as_ref()
+        .unwrap()
+        .admit_preinstall_return(
+            originals,
+            &fixture.boundary,
+            &fixture.fence,
+            &fixture.user,
+            &mut journal,
+        )
+        .unwrap();
+    later
+        .as_mut()
+        .unwrap()
+        .preserve(
+            originals,
+            &fixture.boundary,
+            &fixture.fence,
+            &fixture.user,
+            &mut journal,
+        )
+        .unwrap();
+    fixture.generation = journal.generation();
+    drop(journal);
+    let bytes = later
+        .as_ref()
+        .unwrap()
+        .manifest_bytes(originals, &fixture.user)
+        .unwrap();
+    let digest = fixture.store.retain_manifest(&bytes).unwrap();
+    fixture.generation = fixture
+        .store
+        .append(
+            fixture.generation,
+            JournalEvent::Manifest {
+                role: ManifestRole::RetainedTargetContext,
+                digest,
+            },
+        )
+        .unwrap();
+    fixture.generation = fixture
+        .store
+        .append(
+            fixture.generation,
+            JournalEvent::Phase {
+                phase: JournalPhase::Restoring,
+            },
+        )
+        .unwrap();
+    let mut restoration =
+        Some(ContextRestoration::new_retaining(&mut fixture.originals, &mut later).unwrap());
+    let mut journal = ContextJournal::new(
+        &mut fixture.store,
+        fixture.records.clone(),
+        &fixture.lease,
+        fixture.binding.clone(),
+        fixture.generation,
+    )
+    .unwrap();
+    restoration
+        .as_mut()
+        .unwrap()
+        .restore(
+            &fixture.boundary,
+            &fixture.fence,
+            &fixture.user,
+            &mut journal,
+        )
+        .unwrap();
+    let restored = ContextRestoration::finish_retaining(&mut restoration, &fixture.user).unwrap();
+    assert!(restoration.is_none());
+    restored.verify(&fixture.user).unwrap();
+    assert_eq!(restored.original_snapshot(), &expected);
+    assert_eq!(
+        std::fs::read(fixture.temporary.path().join("desk/state")).unwrap(),
+        b"original desk"
+    );
+    assert_eq!(fixture.temporary.path().join("udf").exists(), present_udf);
+    assert!(!fixture.temporary.path().join("desk/later").exists());
+    if create && fault != Some(CopyFault::BeforeFreshCreate) {
+        assert!(restored
+            .later
+            .context
+            .tree(RootKind::Desk)
+            .manifest
+            .entries
+            .iter()
+            .any(|entry| entry.metadata.path == "later"));
+    }
+}
+
+#[test]
+fn HistoryCustody_ReturnAbsentNoFresh_002() {
+    check_retained_return(false, false, None);
+}
+
+#[test]
+fn HistoryCustody_ReturnBeforeCreate_002() {
+    check_retained_return(true, true, Some(CopyFault::BeforeFreshCreate));
+}
+
+#[test]
+fn HistoryCustody_ReturnAfterCreate_002() {
+    check_retained_return(true, true, Some(CopyFault::AfterFreshCreate));
+}
+
+#[test]
+fn HistoryCustody_ReturnAbsentFresh_002() {
+    check_retained_return(false, true, None);
 }
 
 // 元数据回执缺失或 Unknown 只重读同一保留对象；不重放 rename，也不补造 SourceSealed。

@@ -1,4 +1,5 @@
 // Pure deterministic partitioning and fail-closed raw libtest reconciliation.
+export const RUST_SHARD_COUNT = 16;
 function requireThat(ok, message) { if (!ok) throw new Error(`Rust shards: ${message}`); }
 function unique(names) {
   requireThat(Array.isArray(names) && names.every(n => typeof n === 'string' && n.length > 0 && n.length <= 500 && !/[\r\n\0]/.test(n)), 'invalid inventory');
@@ -90,12 +91,12 @@ export function validateShardExecution(h, execution, parseListing, parseResult) 
 export function validateRustShardRun(report, context) {
   const run = report.rustShardRun;
   const artifact = `windows-rust-bundle-${context.sourceSha}-${context.runId}-${context.runAttempt}`;
-  requireThat(run?.policy === 'same-source-compiled-rust-shards-v1' && run.shardCount === 8 && /^[a-f0-9]{64}$/.test(run.planHash ?? ''), 'missing complete shard run/compiler proof');
+  requireThat(run?.policy === 'same-source-compiled-rust-shards-v1' && run.shardCount === RUST_SHARD_COUNT && /^[a-f0-9]{64}$/.test(run.planHash ?? ''), 'missing complete shard run/compiler proof');
   const bound = value => value?.sourceSha === context.sourceSha && value.runId === String(context.runId) && value.runAttempt === context.runAttempt && value.planHash === run.planHash && value.artifactName === artifact;
   requireThat(bound(run), 'shard run source/run/attempt/artifact binding mismatch');
   requireThat(typeof run.compiler?.rustcVerbose === 'string' && /^rustc 1\.98\.1(?: |\n)/.test(run.compiler.rustcVerbose), 'unexpected pinned compiler');
   requireThat(Array.isArray(run.bundleFiles) && run.bundleFiles.length > 0 && new Set(run.bundleFiles.map(f => f.path)).size === run.bundleFiles.length && run.bundleFiles.every(f => typeof f.path === 'string' && !f.path.includes('..') && !f.path.includes('\\') && Number.isSafeInteger(f.bytes) && f.bytes > 0 && /^[a-f0-9]{64}$/.test(f.sha256)), 'invalid compiler bundle commitment');
-  requireThat(Array.isArray(run.shards) && run.shards.length === 8 && new Set(run.shards.map(s => s.index)).size === 8 && run.shards.every(s => Number.isInteger(s.index) && s.index >= 0 && s.index < 8), 'missing or duplicate shard receipt index');
+  requireThat(Array.isArray(run.shards) && run.shards.length === RUST_SHARD_COUNT && new Set(run.shards.map(s => s.index)).size === RUST_SHARD_COUNT && run.shards.every(s => Number.isInteger(s.index) && s.index >= 0 && s.index < RUST_SHARD_COUNT), 'missing or duplicate shard receipt index');
   const identities = report.harnesses.map(h => `${h.identity.kind}:${h.identity.name}`);
   for (const s of run.shards) {
     requireThat(bound(s), 'shard receipt source/run/attempt/compiler binding mismatch');
@@ -110,5 +111,5 @@ export function validateRustShardRun(report, context) {
       requireThat(receipt.executed === execute && (execute ? actual && equal(actual.names, receipt.names) : actual === undefined), 'shard receipt execution/names differ from raw evidence');
     }
   }
-  for (const h of report.harnesses) requireThat(h.shards?.every(s => Number.isInteger(s.index) && s.index >= 0 && s.index < 8), 'unexpected raw shard index');
+  for (const h of report.harnesses) requireThat(h.shards?.every(s => Number.isInteger(s.index) && s.index >= 0 && s.index < RUST_SHARD_COUNT), 'unexpected raw shard index');
 }

@@ -104,7 +104,7 @@ Cargo profile environment overrides; debug assertions, production code, release
 profile, original deadlines and durability behavior are unchanged. This reduces
 the size of the real executable copies/hashes made by existing security tests.
 
-Eight Windows jobs restore the exact compiler artifact from their own SHA/run/
+Sixteen Windows jobs restore the exact compiler artifact from their own SHA/run/
 attempt. Source-file and payload hashes, original checkout path, observed Job
 containment, exact assigned libtest listings, native exit codes and final outer
 counts must agree. New unclassified tests are included automatically. Original
@@ -112,11 +112,11 @@ ignored workers remain ignored. Missing, repeated, cancelled or failed shard
 receipts fail the existing `Rust checks` aggregate. The coverage artifact retains
 its original report and seventeen raw-log filenames; execution logs include each
 actual shard listing/output and a verified aggregate summary. Authenticated
-release archive validation checks these raw proofs, all eight bound receipts,
+release archive validation checks these raw proofs, all sixteen bound receipts,
 and the exact eighteen unchanged Job-free disclosures.
 
-Eleven test-only scenario loops are now fifty-five independently schedulable
-cases (+44), with unchanged assertion sites and inner retry/recovery loops.
+Twelve test-only scenario loops are now fifty-nine independently schedulable
+cases (+47), with unchanged assertion sites and inner retry/recovery loops.
 `docs/ci-scenario-mapping.json` records every old name, tuple, new name and
 preserved body digest. The former roundtrip policy now runs ordinary release
 compilation/rejection and both inert debug scenarios in parallel, then gates the
@@ -199,3 +199,35 @@ prints harness start/end, durations, results and slow-case warnings. Raw
 source/run/attempt evidence is recorded in `docs/ci-runtime-evidence.json`.
 Ten minutes remains unmet on this first cold run; the final revised warm run
 must be measured before making a stronger runtime claim.
+
+
+## Eight-shard warm control and final placement experiment
+
+The second source was head `edcfd281877dde6c5012a09360ffc6cf117fde5d`, tested
+merge `d51cba93b6876fedaf3c4e08d1df1bc1ba0e7d8c`, run
+[37906391876](https://github.com/shawnwu2022/cc-desk/actions/runs/37906391876),
+attempt 1. Complete ordinary CI and its exact eight-receipt coverage aggregate
+succeeded in **18:57**, with **90.07 runner minutes**. The compiler/static-check
+job took **4:02**, restoring a true cache hit (682,047,390 bytes) in 22 seconds;
+complete no-run compilation was 98 seconds, Clippy 35 seconds and the actual
+application loader build/check 40 seconds. The complete roundtrip policy took
+7:44. The longest test shard remained **14:28**, now shard 0.
+
+The actual aggregate has library **1258 passed, 0 failed, 32 original ignored,
+18 filtered-out Job-free names** from a full 1308-name library inventory, and
+bin/integration inventories 6/8/5. Across all four harnesses it has **1274
+passed, 0 failed, 35 original ignored**; the same eighteen Job-free tests remain
+unverified. All raw proof and same-source/run/attempt checks passed. This is a
+successful complete measured control, not evidence for a ten-minute result.
+
+The final experiment uses sixteen existing standard Windows runners, with a
+single shared cardinality in the compiler planner and strict receipt validator.
+All sixteen distinct bound receipts remain mandatory. It also extracts the
+remaining retained-custody 002 outer loop's four independent cases, preserving
+all statements/assertions and exact argument tuples. The original fixture roots
+are independent and fault guards remain thread-local. The pinned-base body and
+inventory conservation check now covers all 59 scenarios; the original 55 are
+unchanged. The case split raises total passing tests by three, without changing
+the 35 ignores or eighteen exclusions. Final hosted source/run measurements
+will be recorded in the Draft PR without another documentation-only full-CI
+batch; this section intentionally does not claim that unobserved result.

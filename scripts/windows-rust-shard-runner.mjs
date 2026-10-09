@@ -4,11 +4,11 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { partitionNames, validatePartition, aggregateHarness } from './windows-rust-shards.mjs';
+import { RUST_SHARD_COUNT, partitionNames, validatePartition, aggregateHarness } from './windows-rust-shards.mjs';
 import { coverageArtifactName, JOB_FREE_TESTS, VALIDATION_POLICY, REPORT_FILENAME, parseLibtestListing, parseLibtestResult, validateNativeCoverage, readNativeCoverageArtifact } from './windows-native-validation.mjs';
 
 const POLICY = 'same-source-compiled-rust-shards-v1';
-const SHARD_COUNT = 8;
+const SHARD_COUNT = RUST_SHARD_COUNT;
 const MAX_LOG = 64 * 1024 * 1024;
 const MAX_JSON = 8 * 1024 * 1024;
 const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
