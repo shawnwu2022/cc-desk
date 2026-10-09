@@ -1,108 +1,36 @@
+<script setup lang="ts">
+import SessionItem from './SessionItem.vue'
+import type { SessionMenuAction, SessionMenuActionVisibility, SessionPrimaryAction, UnifiedSession } from '@/types/unifiedSession'
+
+withDefaults(defineProps<{
+  sessions: UnifiedSession[]
+  surfaceActive?: boolean
+  selectedId?: string | null
+  primaryActions?: Readonly<Record<string, SessionPrimaryAction | null>>
+  menuActionVisibility?: SessionMenuActionVisibility
+  menuTeleport?: boolean
+}>(), { surfaceActive: true, menuTeleport: true })
+const emit = defineEmits<{
+  activate: [id: string]
+  'primary-action': [id: string, action: SessionPrimaryAction]
+  'menu-action': [id: string, action: SessionMenuAction]
+  'rename-commit': [id: string, title: string]
+  'rename-cancel': [id: string]
+}>()
+</script>
+
 <template>
-  <div class="session-list">
-    <SessionItem
-      v-for="item in items"
-      :key="item.id"
-      :id="item.id"
-      :name="item.name"
-      :is-active="item.id === activeId"
-      :is-running="item.isRunning"
-      :is-stopped="item.isStopped"
-      :working="item.working"
-      :pending="item.pending"
-      :attention-kind="item.attentionKind"
-      :last-active-at="item.lastActiveAt"
-      :can-resume="item.canResume"
-      :closable="closable && item.isTab"
-      :archivable="!item.isTab"
-      :snippet="item.snippet"
-      :show-time="item.showTime"
-      @switch="(id) => $emit('switch', id)"
-      @rename="(id, name) => $emit('rename', id, name)"
-      @restart="(id) => $emit('restart', id)"
-      @close="(id) => $emit('close', id)"
-      @archive="(id) => $emit('archive', id)"
-    />
+  <div class="session-list" role="group">
+    <SessionItem v-for="session in sessions" :key="session.id" :session="session"
+      :selected="session.id === selectedId" :surface-active="surfaceActive" :primary-action="primaryActions?.[session.id]"
+      :menu-action-visibility="menuActionVisibility" :menu-teleport="menuTeleport" @activate="emit('activate', $event)"
+      @primary-action="(id, action) => emit('primary-action', id, action)"
+      @menu-action="(id, action) => emit('menu-action', id, action)"
+      @rename-commit="(id, title) => emit('rename-commit', id, title)"
+      @rename-cancel="emit('rename-cancel', $event)" />
   </div>
 </template>
 
-<script setup lang="ts">
-import { computed } from 'vue'
-import SessionItem from './SessionItem.vue'
-import type { TerminalTab, HistorySession } from '@/stores/session'
-import { useAttentionStore } from '@/stores/attention'
-import type { AttentionKind } from '@/composables/useAttentionQueue'
-
-const attentionStore = useAttentionStore()
-
-const props = defineProps<{
-  tabs?: TerminalTab[]
-  history?: HistorySession[]
-  activeId: string | null
-  runningTabIds?: string[]
-  closable?: boolean
-  snippetMap?: Map<string, string>
-}>()
-
-defineEmits<{
-  switch: [id: string]
-  rename: [id: string, name: string]
-  restart: [id: string]
-  close: [id: string]
-  archive: [id: string]
-}>()
-
-interface ListItem {
-  id: string
-  name: string
-  isRunning: boolean
-  isStopped: boolean
-  isTab: boolean
-  lastActiveAt: number
-  canResume?: boolean
-  snippet?: string
-  working?: boolean
-  pending?: boolean
-  attentionKind?: AttentionKind
-  showTime?: boolean
-}
-
-const items = computed<ListItem[]>(() => {
-  const snippets = props.snippetMap
-
-  const tabItems: ListItem[] = (props.tabs ?? []).map(tab => ({
-    id: tab.tabId,
-    name: tab.name,
-    isRunning: tab.status === 'running',
-    isStopped: tab.status === 'stopped',
-    isTab: true,
-    lastActiveAt: tab.lastActiveAt,
-    canResume: tab.status === 'stopped' ? !!tab.sessionId : undefined,
-    working: tab.status === 'running' ? tab.working : undefined,
-    pending: tab.status === 'running' ? tab.pending : undefined,
-    attentionKind: tab.ptyId ? attentionStore.getItem(tab.ptyId)?.kind : undefined,
-    showTime: false,
-  }))
-
-  const historyItems: ListItem[] = (props.history ?? []).map(s => ({
-    id: s.sessionId,
-    name: s.name,
-    isRunning: false,
-    isStopped: false,
-    isTab: false,
-    lastActiveAt: s.lastActiveAt,
-    snippet: snippets?.get(s.sessionId),
-    showTime: true,
-  }))
-
-  return [...tabItems, ...historyItems]
-})
-</script>
-
 <style scoped>
-.session-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
+.session-list { display: flex; flex-direction: column; gap: 2px; }
 </style>

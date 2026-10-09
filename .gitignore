@@ -54,3 +54,7 @@ releases/
 
 # Impeccable design-tool state (local cache, not part of the public project)
 .impeccable/
+
+# Local visual test output (reviewed baselines stay in tests/visual)
+test-results/
+playwright-report/

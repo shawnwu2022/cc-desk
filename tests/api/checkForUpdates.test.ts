@@ -52,4 +52,19 @@ describe('checkForUpdates 返回值', () => {
     expect(result.hasUpdate).toBe(true)
     expect(result.releaseNotes).toBe('')
   })
+  // 常规版本号/正文/单独的stable标记不能证明准入，现有测试包标记只能证明排除。
+  it.each(['stable', 'candidate', 'test-only'])('CheckForUpdates_ChannelExclusion_%s_004', async channel => {
+    mockCheck.mockResolvedValue({ version: '99.0.0', body: 'stable release', rawJson: { product: 'CC Desk', channel, publishable: false, updaterPublication: false } })
+    const result = await checkForUpdates()
+    expect(result.installEligible).toBe(false)
+    expect(result.channel).toBe(channel === 'stable' ? 'unverified' : channel)
+  })
+  // 普通检查释放仅供读取的updater资源，不下载或安装。
+  it('CheckForUpdates_ReleasesReadResource_005', async () => {
+    const close = vi.fn().mockResolvedValue(undefined)
+    mockCheck.mockResolvedValue({ version: '99.0.0', body: '', rawJson: { channel: 'stable' }, close })
+    const result = await checkForUpdates()
+    expect(result.channel).toBe('unverified'); expect(close).toHaveBeenCalledTimes(1)
+  })
+
 })

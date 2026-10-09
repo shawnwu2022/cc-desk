@@ -1,10 +1,8 @@
-# Build signed cross-platform packages and publish the version declared in package.json.
+# Promote a single signed platform set only from the exact protected main source.
 name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
     branches:
       - main
     paths:
@@ -13,13 +11,59 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-main
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      tag: ${{ steps.gate.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run release recovery fixtures
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs
+      - name: Wait for this exact main SHA ordinary CI to finish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-wait-for-ci.mjs
+      - name: Resolve coverage from current protected main required CI
+        id: coverage
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-preflight.mjs --resolve-coverage --prepare-draft-recovery
+      - name: Download exact CI coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.coverage.outputs.coverage_artifact_id }}
+          run-id: ${{ steps.coverage.outputs.ci_run }}
+          github-token: ${{ github.token }}
+          path: coverage
+          merge-multiple: true
+      - name: Require protected main, successful required CI and disclosed coverage
+        id: gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release-preflight.mjs --prepare-draft-recovery --coverage coverage/windows-native-coverage.json \
+            --ci-run "${{ steps.coverage.outputs.ci_run }}" --ci-attempt "${{ steps.coverage.outputs.ci_attempt }}" \
+            --coverage-artifact-id "${{ steps.coverage.outputs.coverage_artifact_id }}" \
+            --coverage-artifact-name "${{ steps.coverage.outputs.coverage_artifact_name }}"
+
   build:
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -49,6 +93,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -57,7 +104,7 @@ jobs:
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: ${{ matrix.target }}
 
@@ -105,7 +152,7 @@ jobs:
             exit 1
           fi
 
-      - name: Build application
+      - name: Build signed candidate
         shell: bash
         env:
           CC_DESK_BUILD_SHA: ${{ github.sha }}
@@ -118,78 +165,129 @@ jobs:
             npm run tauri build
           fi
 
-      - name: Upload artifacts
+      - name: Upload candidate artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cc-desk-${{ matrix.name }}
+          name: cc-desk-candidate-${{ github.sha }}-${{ matrix.name }}
           path: ${{ matrix.patterns }}
           if-no-files-found: error
 
   release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+    needs: [preflight, build]
+    if: github.ref == 'refs/heads/main' && github.ref_protected
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Resolve and validate release tag
-        id: meta
-        shell: bash
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            TAG="v${VERSION}"
-          fi
-          if [ "$TAG" != "v${VERSION}" ]; then
-            echo "::error::Tag $TAG does not match package.json version $VERSION"
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Download all artifacts
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Resolve latest exact CI coverage before promotion
+        id: coverage
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-preflight.mjs --resolve-coverage --prepare-draft-recovery
+      - name: Download exact CI coverage artifact for publication
         uses: actions/download-artifact@v4
         with:
+          artifact-ids: ${{ steps.coverage.outputs.coverage_artifact_id }}
+          run-id: ${{ steps.coverage.outputs.ci_run }}
+          github-token: ${{ github.token }}
+          path: coverage
+          merge-multiple: true
+      - name: Recheck main, required CI, coverage and same-run platform artifacts
+        id: promotion
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release-preflight.mjs --artifacts --prepare-draft-recovery --coverage coverage/windows-native-coverage.json \
+            --ci-run "${{ steps.coverage.outputs.ci_run }}" --ci-attempt "${{ steps.coverage.outputs.ci_attempt }}" \
+            --coverage-artifact-id "${{ steps.coverage.outputs.coverage_artifact_id }}" \
+            --coverage-artifact-name "${{ steps.coverage.outputs.coverage_artifact_name }}"
+      - name: Download this run's three platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cc-desk-candidate-${{ github.sha }}-*
           path: artifacts
-
-      - name: Generate updater manifest
-        run: node scripts/generate-updater-manifest.js artifacts latest.json "${{ steps.meta.outputs.tag }}"
-
-      - name: Publish GitHub Release
+          merge-multiple: false
+      - name: Generate updater manifest and verify all three actual signatures
+        run: node scripts/generate-updater-manifest.js artifacts latest.json "${{ needs.preflight.outputs.tag }}"
+      - name: Download and hash every original draft asset without mutation
+        if: steps.promotion.outputs.recovery_draft == '406663556'
+        id: backup
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-draft-transaction.mjs backup --directory old-draft-backup
+      - name: Preserve immutable recovery backup before any release mutation
+        if: steps.promotion.outputs.recovery_draft == '406663556'
+        id: backup_upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.backup.outputs.backup_name }}
+          path: old-draft-backup/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Independently download the exact durable backup
+        if: steps.promotion.outputs.recovery_draft == '406663556'
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.backup_upload.outputs.artifact-id }}
+          path: verified-old-draft-backup
+          merge-multiple: true
+      - name: Recheck backup and prepare the original draft on this exact main source
+        if: steps.promotion.outputs.recovery_draft == '406663556'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release-draft-transaction.mjs prepare --directory verified-old-draft-backup \
+            --backup-artifact-id "${{ steps.backup_upload.outputs.artifact-id }}"
+      - name: Stage this run's nine new assets without overwriting originals
+        if: steps.promotion.outputs.recovery_draft == '406663556'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-draft-transaction.mjs stage
+      - name: Verify staged bytes, current main and CI, then publish the original draft
+        if: steps.promotion.outputs.recovery_draft == '406663556'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-draft-transaction.mjs publish --release-id 406663556
+      - name: Recheck ordinary unused-version source immediately before publishing
+        if: steps.promotion.outputs.recovery_draft == ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release-preflight.mjs --artifacts --coverage coverage/windows-native-coverage.json \
+            --ci-run "${{ steps.coverage.outputs.ci_run }}" --ci-attempt "${{ steps.coverage.outputs.ci_attempt }}" \
+            --coverage-artifact-id "${{ steps.coverage.outputs.coverage_artifact_id }}" \
+            --coverage-artifact-name "${{ steps.coverage.outputs.coverage_artifact_name }}" \
+            --notes release-validation-notes.md
+      - name: Publish ordinary unused-version GitHub Release
+        if: steps.promotion.outputs.recovery_draft == ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: CC Desk ${{ steps.meta.outputs.version }}
+          name: CC Desk ${{ needs.preflight.outputs.version }}
           draft: false
           prerelease: false
           make_latest: true
           generate_release_notes: true
+          body_path: release-validation-notes.md
+          fail_on_unmatched_files: true
           files: |
-            artifacts/cc-desk-windows/**/*.exe
-            artifacts/cc-desk-windows/**/*.exe.sig
-            artifacts/cc-desk-macos/**/*.dmg
-            artifacts/cc-desk-macos/**/*.app.tar.gz
-            artifacts/cc-desk-macos/**/*.app.tar.gz.sig
-            artifacts/cc-desk-linux/**/*.AppImage
-            artifacts/cc-desk-linux/**/*.AppImage.sig
+            artifacts/**/*.exe
+            artifacts/**/*.exe.sig
+            artifacts/**/*.dmg
+            artifacts/**/*.app.tar.gz
+            artifacts/**/*.app.tar.gz.sig
+            artifacts/**/*.AppImage
+            artifacts/**/*.AppImage.sig
             latest.json
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify published update channel
-        env:
-          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
-        run: |
-          for attempt in {1..12}; do
-            if node scripts/verify-updater-manifest.js "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" "$EXPECTED_VERSION"; then
-              exit 0
-            fi
-            sleep 10
-          done
-          exit 1
+            coverage/windows-native-coverage.json
+      - name: Verify published update channel bytes and signatures
+        run: node scripts/verify-updater-manifest.js "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" "${{ needs.preflight.outputs.version }}"

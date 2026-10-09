@@ -1,0 +1,14 @@
+src-tauri/plugin/scripts/report-hook.sh text eol=lf
+scripts/native-cli/*.mjs text eol=lf
+
+# Reviewed source snapshots are hashed as exact bytes on every platform.
+tests/fixtures/version-history-payload/v0.17.7-installer.nsh -text
+tests/fixtures/version-history-payload/v*-tauri.conf.json -text
+tests/fixtures/version-history-payload/v0.17.7-tauri.windows.conf.json -text
+tests/fixtures/version-history-payload/tauri-2.10.1-installer.nsi -text
+tests/fixtures/version-history-payload/catalog.json -text
+tests/fixtures/version-history-payload/provenance.json -text
+tests/fixtures/version-history-releases.json -text
+
+# Public signature vectors and their provenance are hashed as canonical bytes.
+tests/fixtures/version-history-minisign/* -text

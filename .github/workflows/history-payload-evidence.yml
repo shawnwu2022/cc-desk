@@ -1,0 +1,132 @@
+name: Historical payload evidence
+
+# Isolated, branch-scoped evidence only. Ordinary cargo tests never execute installers.
+on:
+  pull_request:
+    branches: [feat/native-cli-finalization]
+    paths:
+      - .gitattributes
+      - .github/workflows/history-payload-evidence.yml
+      - src-tauri/src/tests/version_history_payload.rs
+      - src-tauri/src/tests/version_history_payload/**
+      - src-tauri/src/tests/version_history_payload_policy.rs
+      - src-tauri/src/version_history/payload_policy.rs
+      - tests/fixtures/version-history-payload/**
+      - tests/fixtures/version-history-releases.json
+      - tests/scripts/historyPayloadFixture.node.mjs
+      - tests/scripts/historyPayloadPolicy.node.mjs
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact reviewed 40-character source commit to execute
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  payload:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'feat/unified-workspace-ux' &&
+       github.event.pull_request.base.ref == 'feat/native-cli-finalization')
+    name: v${{ matrix.fixture_version }} payload (${{ matrix.fixture_case }})
+    runs-on: windows-2022
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture_version: [0.14.0, 0.15.0, 0.16.0, 0.17.0, 0.17.1, 0.17.2, 0.17.5, 0.17.6, 0.17.7]
+        fixture_case: [clean, seeded-existing]
+    env:
+      CC_DESK_PAYLOAD_FIXTURE: historical-payload-evidence-only
+      CC_DESK_PAYLOAD_VERSION: ${{ matrix.fixture_version }}
+      CC_DESK_PAYLOAD_CASE: ${{ matrix.fixture_case }}
+      CC_DESK_BUILD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.expected_sha }}
+      CC_DESK_PAYLOAD_SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.expected_sha }}
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: ${{ env.CC_DESK_PAYLOAD_SOURCE_SHA }}
+
+      - name: Verify exact reviewed commit
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ env.CC_DESK_PAYLOAD_SOURCE_SHA }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($env:EXPECTED_SOURCE_SHA -notmatch '^[0-9a-f]{40}$' -or $actual -cne $env:EXPECTED_SOURCE_SHA) {
+            throw 'This job requires the exact reviewed source commit'
+          }
+
+      - name: Set up Node for pinned ConPTY build preparation
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt
+
+      - name: Verify pinned fixture provenance
+        run: node --test tests/scripts/historyPayloadFixture.node.mjs tests/scripts/historyPayloadPolicy.node.mjs
+
+      - name: Prepare verified build runtime
+        run: node scripts/prepare-conpty.mjs
+
+      - name: Check format and compile without starting the app or ordinary Rust tests
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          cargo fmt --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --lib --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check fixed tuple and inventory contracts without native effects
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          cargo test --locked --lib tests::version_history_payload::fixture:: -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --lib tests::version_history_payload::inventory::HistoryPayload_InventoryMatrix_024 -- --exact --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --lib version_history::payload_policy::tests:: -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run isolated capability gate and payload capture
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          cargo test --locked --lib tests::version_history_payload::HistoryPayload_Controller_001 -- --exact --ignored --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $root = Join-Path $env:RUNNER_TEMP "ccdesk-v$($env:CC_DESK_PAYLOAD_VERSION)-$($env:CC_DESK_PAYLOAD_CASE)-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)-payload-evidence"
+          $receipt = Get-Content -LiteralPath (Join-Path $root 'review-required.json') -Raw | ConvertFrom-Json
+          if ($receipt.productionAdmission -ne $false -or $receipt.completeOwnedInstallInventory -ne $true -or
+              $receipt.version -cne $env:CC_DESK_PAYLOAD_VERSION -or $receipt.case -cne $env:CC_DESK_PAYLOAD_CASE -or
+              $receipt.binding.fixtureSourceCommit -cne $env:CC_DESK_PAYLOAD_SOURCE_SHA -or
+              $receipt.binding.compiledSourceCommit -cne $env:CC_DESK_BUILD_SHA -or
+              $receipt.binding.runId -cne $env:GITHUB_RUN_ID -or $receipt.binding.runAttempt -cne $env:GITHUB_RUN_ATTEMPT) {
+            throw 'Missing bounded observation receipt'
+          }
+
+      - name: Preserve observations and blockers for independent review
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-v${{ matrix.fixture_version }}-${{ matrix.fixture_case }}-${{ env.CC_DESK_PAYLOAD_SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ccdesk-v${{ matrix.fixture_version }}-${{ matrix.fixture_case }}-${{ github.run_id }}-${{ github.run_attempt }}-payload-evidence/*.json
+            ${{ runner.temp }}/ccdesk-v${{ matrix.fixture_version }}-${{ matrix.fixture_case }}-${{ github.run_id }}-${{ github.run_attempt }}-payload-evidence/*.exe
+            ${{ runner.temp }}/ccdesk-v${{ matrix.fixture_version }}-${{ matrix.fixture_case }}-${{ github.run_id }}-${{ github.run_attempt }}-payload-evidence/*.sig
+            ${{ runner.temp }}/ccdesk-v${{ matrix.fixture_version }}-${{ matrix.fixture_case }}-${{ github.run_id }}-${{ github.run_attempt }}-payload-evidence/*.lnk
+            ${{ runner.temp }}/ccdesk-v${{ matrix.fixture_version }}-${{ matrix.fixture_case }}-${{ github.run_id }}-${{ github.run_attempt }}-payload-evidence/control/*.json
+            ${{ runner.temp }}/ccdesk-v${{ matrix.fixture_version }}-${{ matrix.fixture_case }}-${{ github.run_id }}-${{ github.run_attempt }}-payload-evidence/captured-payload/
+          if-no-files-found: warn
+          retention-days: 7
+          include-hidden-files: false

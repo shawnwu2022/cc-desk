@@ -1,0 +1,6 @@
+{
+  "identifier": "version-manager",
+  "description": "Isolated historical-version manager; authenticated application commands only",
+  "windows": ["version-manager"],
+  "permissions": []
+}

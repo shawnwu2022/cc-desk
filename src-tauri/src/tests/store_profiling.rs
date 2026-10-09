@@ -5,8 +5,8 @@
 
 use crate::store::{
     assemble_home_data, extract_session_name, get_claude_dir, get_project_last_modified,
-    scan_home_projects_at, session_entry_from_path, HomeData, HomeProjectScan, Project,
-    ProjectPathMapping, SessionInfo, PROJECT_PATH_MAPPING,
+    scan_home_projects_at, session_entry_from_path, with_project_path_mapping_at, HomeData,
+    HomeProjectScan, Project, ProjectPathMapping, SessionInfo,
 };
 use anyhow::{bail, Result};
 use std::collections::{BTreeMap, HashMap};
@@ -174,35 +174,30 @@ fn profile_project_scan_at(
         timings.project_files += first.mapping.values().map(Vec::len).sum::<usize>();
 
         let lock_started = Instant::now();
-        let mut cache = PROJECT_PATH_MAPPING
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        timings.mapping_lock_ms += lock_started.elapsed().as_secs_f64() * 1000.0;
-
-        let second_started = Instant::now();
-        let second = scan_home_projects_legacy_at(projects_dir)?;
-        timings.project_scan_ms += second_started.elapsed().as_secs_f64() * 1000.0;
-        timings.project_files += second.mapping.values().map(Vec::len).sum::<usize>();
-        *cache = Some(second.mapping.clone());
-
-        return Ok(HomeProjectScan {
-            projects: first.projects,
-            mapping: second.mapping,
+        return with_project_path_mapping_at(projects_dir, |cache| {
+            timings.mapping_lock_ms += lock_started.elapsed().as_secs_f64() * 1000.0;
+            let second_started = Instant::now();
+            let second = scan_home_projects_legacy_at(projects_dir)?;
+            timings.project_scan_ms += second_started.elapsed().as_secs_f64() * 1000.0;
+            timings.project_files += second.mapping.values().map(Vec::len).sum::<usize>();
+            *cache = Some(second.mapping.clone());
+            Ok(HomeProjectScan {
+                projects: first.projects,
+                mapping: second.mapping,
+            })
         });
     }
 
     let lock_started = Instant::now();
-    let mut cache = PROJECT_PATH_MAPPING
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    timings.mapping_lock_ms += lock_started.elapsed().as_secs_f64() * 1000.0;
-
-    let scan_started = Instant::now();
-    let scan = scan_home_projects_at(projects_dir)?;
-    timings.project_scan_ms += scan_started.elapsed().as_secs_f64() * 1000.0;
-    timings.project_files += scan.mapping.values().map(Vec::len).sum::<usize>();
-    *cache = Some(scan.mapping.clone());
-    Ok(scan)
+    with_project_path_mapping_at(projects_dir, |cache| {
+        timings.mapping_lock_ms += lock_started.elapsed().as_secs_f64() * 1000.0;
+        let scan_started = Instant::now();
+        let scan = scan_home_projects_at(projects_dir)?;
+        timings.project_scan_ms += scan_started.elapsed().as_secs_f64() * 1000.0;
+        timings.project_files += scan.mapping.values().map(Vec::len).sum::<usize>();
+        *cache = Some(scan.mapping.clone());
+        Ok(scan)
+    })
 }
 
 fn profile_session_page(

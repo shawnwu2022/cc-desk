@@ -1,137 +1,86 @@
-use axum::body::Bytes;
-use axum::extract::Json;
-use axum::http::HeaderMap;
-use axum::{routing::post, Router};
-use serde_json::{json, Value};
-use std::net::SocketAddr;
-use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
-use tower::ServiceBuilder;
+//! Application wiring for the authenticated loopback observer. No legacy bypass.
+use crate::observer_host::{ObserverHost, PreparedObservation};
+use crate::observer_registry::{ObserverDelivery, ObserverRegistry, ObserverRun};
+use std::sync::{Arc, LazyLock, OnceLock};
+use tauri::{AppHandle, Emitter, EventTarget, Manager};
 
-use crate::hook_events::HookPayload;
-use crate::store::invalidate_project_path_mapping;
-
-/// session_id → pty_id 映射
-type SessionMap = Mutex<std::collections::HashMap<String, String>>;
-
-/// 同步存储端口
-static HOOK_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
-
-/// 异步会话映射
-static SESSIONS: once_cell::sync::Lazy<SessionMap> =
-    once_cell::sync::Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
-
-pub async fn init(app_handle: AppHandle) {
-    match start_server(app_handle).await {
-        Ok(port) => {
-            HOOK_PORT.set(port).ok();
-            log::info!("Hook server started on port {}", port);
-        }
-        Err(e) => {
-            log::error!(
-                "Failed to start hook server: {}. CC Desk will continue without hook monitoring.",
-                e
-            );
-        }
-    }
-}
-
-async fn start_server(app_handle: AppHandle) -> Result<u16, String> {
-    let app = Router::new()
-        .route("/hook", post(handle_hook))
-        .layer(ServiceBuilder::new());
-
-    let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("bind failed: {}", e))?;
-
-    let port = listener
-        .local_addr()
-        .map_err(|e| format!("local_addr: {}", e))?
-        .port();
-
-    tokio::spawn(async move {
-        let app = app.layer(axum::extract::Extension(app_handle));
-        if let Err(e) = axum::serve(listener, app).await {
-            log::error!("Hook server error: {}", e);
-        }
-    });
-
-    Ok(port)
-}
-
+static HOOK_PORT: OnceLock<u16> = OnceLock::new();
+static OBSERVERS: LazyLock<Arc<ObserverRegistry>> =
+    LazyLock::new(|| Arc::new(ObserverRegistry::new()));
 pub fn get_port() -> Option<u16> {
     HOOK_PORT.get().copied()
 }
 
-async fn handle_hook(
-    headers: HeaderMap,
-    axum::extract::Extension(app_handle): axum::extract::Extension<AppHandle>,
-    body: Bytes,
-) -> Json<Value> {
-    // 从原始字节转换为 UTF-8 字符串（处理可能的编码问题）
-    let body_str = match String::from_utf8(body.to_vec()) {
-        Ok(s) => s,
-        Err(e) => {
-            log::warn!("[hook-server] UTF-8 decode error: {}", e);
-            // 使用 lossy 转换作为 fallback
-            String::from_utf8_lossy(&body).into_owned()
+pub(crate) fn observer_host() -> Option<Arc<ObserverHost>> {
+    let plugin = dirs::home_dir()?.join(".cc-box/claude-plugin");
+    Some(Arc::new(ObserverHost::new(
+        OBSERVERS.clone(),
+        plugin,
+        Arc::new(get_port),
+    )))
+}
+
+/// Legacy Claude has a fresh UUID for each PTY. Its observer additionally retains
+/// this exact main-document lifetime; reloading a window cannot inherit authority.
+pub(crate) fn prepare_legacy(app: &AppHandle, pty_id: &str) -> Option<PreparedObservation> {
+    let runtime = app.try_state::<Arc<crate::cli::native_runtime::NativeRuntime>>()?;
+    let binding = runtime.binding().ok()?;
+    let weak = Arc::downgrade(&binding);
+    let authorize = Arc::new(move || {
+        weak.upgrade()
+            .is_some_and(|binding| binding.observation_alive())
+    });
+    observer_host()?
+        .prepare(
+            ObserverRun {
+                run_id: pty_id.into(),
+                generation: 1,
+            },
+            ObserverDelivery::legacy(pty_id),
+            authorize,
+        )
+        .ok()
+}
+
+pub async fn init(app: AppHandle) {
+    let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(_) => {
+            log::warn!("Observer unavailable: bind failed");
+            return;
         }
     };
-
-    let event: Value = match serde_json::from_str(&body_str) {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!(
-                "[hook-server] JSON parse error: {} (body length={})",
-                e,
-                body_str.len()
-            );
-            return Json(json!({}));
-        }
+    let Ok(address) = listener.local_addr() else {
+        return;
     };
-
-    // 从 header 获取 PTY ID
-    let pty_id = headers
-        .get("X-CC-Box-Session")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string());
-
-    let event_name = event
-        .get("hook_event_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    log::info!(
-        "[hook-server] received: {} pty={}",
-        event_name,
-        pty_id.as_deref().unwrap_or("?")
+    if HOOK_PORT.set(address.port()).is_err() {
+        return;
+    }
+    let publish = Arc::new(
+        move |delivery: &ObserverDelivery, payload: crate::hook_events::HookPayload| {
+            if delivery.legacy_pty.is_some() && payload.event_name == "SessionStart" {
+                // Cache invalidation only; event cwd/transcript never grants a read path.
+                crate::store::invalidate_project_path_mapping();
+            }
+            let topic = if delivery.legacy_pty.is_some() {
+                "hook-event"
+            } else {
+                "native-observation"
+            };
+            // Only the owner WebView, never an application-wide broadcast. No prompt,
+            // assistant text, raw errors or environment values reach this payload.
+            app.emit_to(
+                EventTarget::webview_window(delivery.window_label.clone()),
+                topic,
+                payload,
+            )
+            .map_err(|_| ())
+        },
     );
-
-    // 建立 session_id ↔ pty_id 映射
-    if let Some(ref sid) = event
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-    {
-        if let Some(ref pty) = pty_id {
-            let mut sessions = SESSIONS.lock().await;
-            sessions.insert(sid.to_string(), pty.clone());
+    let router = crate::observer_http::router(OBSERVERS.clone(), publish);
+    tokio::spawn(async move {
+        if axum::serve(listener, router).await.is_err() {
+            log::warn!("Observer unavailable: server ended");
         }
-    }
-
-    // 统一提取结构化数据并发送
-    let payload = HookPayload::from_raw(pty_id, event);
-
-    // SessionStart 时 invalidate 项目路径缓存（确保新项目会话可见）
-    if event_name == "SessionStart" {
-        invalidate_project_path_mapping();
-        log::info!("[hook-server] SessionStart received, invalidated project path cache");
-    }
-
-    let _ = app_handle.emit("hook-event", &payload);
-
-    Json(json!({}))
+    });
 }

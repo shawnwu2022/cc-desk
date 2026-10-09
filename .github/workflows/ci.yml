@@ -32,6 +32,12 @@ jobs:
       - name: Run frontend tests
         run: npm run test:ci
 
+      - name: Run Node policy tests
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/windowsNativeValidation.node.mjs tests/scripts/historySignatureFixtures.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs
+
+      - name: Build frontend
+        run: npm run build
+
   rust:
     name: Rust checks
     runs-on: windows-2022
@@ -48,7 +54,7 @@ jobs:
           node-version: 22
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
 
@@ -59,14 +65,159 @@ jobs:
           cache-on-failure: true
 
       - name: Prepare verified Windows runtime before direct cargo commands
+        id: runtime
         working-directory: .
         run: node scripts/prepare-conpty.mjs
 
+      - name: Compile the complete original Windows test inventory
+        id: compile
+        run: ../scripts/windows-rust-tests.ps1 -Action Compile
+
+      - name: Run ordinary Rust suite with explicitly disclosed native scope
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' && steps.compile.outputs.compiled == 'true' }}
+        id: rust_tests
+        run: ../scripts/windows-rust-tests.ps1 -Action HostedSuite
+
+      - name: Verify exact manager boundary on a naturally Job-free host
+        if: ${{ !cancelled() && steps.rust_tests.outcome == 'success' && steps.compile.outputs.job_free == 'true' }}
+        run: ../scripts/windows-rust-tests.ps1 -Action CompileAndGate
+
+      - name: Preserve exact native validation scope and original logs
+        if: ${{ !cancelled() && steps.compile.outputs.compiled == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-coverage-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/windows-native-coverage/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Diagnose native Channel separately after an aggregate failure
+        if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' && steps.compile.outputs.job_free == 'true' }}
+        run: ../scripts/windows-rust-tests.ps1 -Action Channel
+
+      - name: Diagnose native launch separately after an aggregate failure
+        if: ${{ !cancelled() && steps.rust_tests.outcome == 'failure' && steps.compile.outputs.job_free == 'true' }}
+        run: ../scripts/windows-rust-tests.ps1 -Action Launch
+
+      - name: Test Windows Rust CI entry contracts
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        working-directory: .
+        run: pwsh -NoProfile -File tests/scripts/windowsRustTests.ps1
+
       - name: Check formatting
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: cargo fmt --check
 
       - name: Lint
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: cargo clippy --locked --all-targets -- -D warnings
 
-      - name: Run Rust tests
-        run: cargo test --locked
+      - name: Build and check actual Windows application loader
+        run: |
+          cargo build --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $report = Join-Path ([IO.Path]::GetTempPath()) ("ccdesk-loader-" + [guid]::NewGuid() + ".json")
+          $start = [Diagnostics.ProcessStartInfo]::new((Resolve-Path 'target/debug/cc-desk.exe').Path)
+          $start.UseShellExecute = $false
+          $start.ArgumentList.Add('--check-conpty')
+          $start.ArgumentList.Add($report)
+          $process = [Diagnostics.Process]::Start($start)
+          try {
+            if (!$process.WaitForExit(30000)) {
+              $process.Kill()
+              $process.WaitForExit()
+              throw 'Application loader probe timed out'
+            }
+            if ($process.ExitCode -ne 0) { throw "Application loader failed: $($process.ExitCode)" }
+            if ((Get-Item -LiteralPath $report).Length -gt 65536) { throw 'Loader report too large' }
+            $value = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+            if ($value.ok -ne $true -or $value.ptyLifecycle -ne $true -or $value.backend -ne 'bundled') {
+              throw 'Application loader report did not pass'
+            }
+            Write-Output "D11_APPLICATION_LOADER ok=true backend=bundled ptyLifecycle=true"
+          } finally {
+            $process.Dispose()
+            if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
+          }
+
+  roundtrip-build-policy:
+    name: Disposable roundtrip compile-only policy (no native acceptance)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - name: Cache isolated compile-only dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: roundtrip-compile-only
+      - name: Prepare frontend and verified runtime
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/prepare-conpty.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check inert binding and ordinary admission with acceptance feature
+        working-directory: src-tauri
+        run: |
+          cargo test --locked --lib --features history-roundtrip-acceptance version_history_roundtrip_contract
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --lib --features history-roundtrip-acceptance version_history::payload_policy::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build ordinary embedded release without acceptance
+        run: |
+          npm run tauri -- build --no-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Require feature release rejection from the policy guard
+        working-directory: src-tauri
+        run: |
+          $output = & cargo build --locked --release --features history-roundtrip-acceptance 2>&1
+          $result = $LASTEXITCODE
+          $output | Write-Output
+          if ($result -eq 0) { throw 'Acceptance feature entered a release build' }
+          if (($output -join "`n") -notmatch 'roundtrip acceptance is forbidden in release builds') {
+            throw 'Release failed for an unrelated reason; exclusion remains unverified'
+          }
+          exit 0
+      - name: Build both inert embedded acceptance scenarios without packages
+        run: |
+          $path = 'tests/fixtures/version-history-roundtrip/target.json'
+          $original = [IO.File]::ReadAllBytes((Resolve-Path $path))
+          try {
+            foreach ($scenario in @('success', 'before-installer-resume')) {
+              $target = [Text.Encoding]::UTF8.GetString($original) | ConvertFrom-Json
+              if ($target.enabled -ne $false) { throw 'CI only admits the disabled binding' }
+              $target.scenario = $scenario
+              [IO.File]::WriteAllText((Resolve-Path $path), ($target | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+              npm run tauri -- build --debug --features history-roundtrip-acceptance --no-bundle
+              if ($LASTEXITCODE -ne 0) { throw "Inert acceptance build failed: $scenario" }
+              Get-FileHash src-tauri/target/debug/cc-desk.exe -Algorithm SHA256
+            }
+            Push-Location src-tauri
+            try {
+              cargo clippy --locked --all-targets --features history-roundtrip-acceptance -- -D warnings
+              if ($LASTEXITCODE -ne 0) { throw 'Acceptance compilation lint failed' }
+            } finally { Pop-Location }
+          } finally { [IO.File]::WriteAllBytes((Resolve-Path $path), $original) }
+      - name: Parse PowerShell and run effect-free driver contracts
+        run: |
+          foreach ($path in @('scripts/version-history/roundtrip.ps1', 'scripts/version-history/roundtrip-ui.ps1', 'tests/scripts/historyRoundtripDriver.ps1')) {
+            $tokens = $null; $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -ne 0) { throw ($errors | Out-String) }
+          }
+          . ./scripts/version-history/roundtrip-ui.ps1
+          Initialize-RoundtripNative
+          node --test tests/scripts/historyRoundtripBuild.node.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/scripts/historyRoundtripDriver.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

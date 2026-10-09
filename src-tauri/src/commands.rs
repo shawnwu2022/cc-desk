@@ -9,7 +9,8 @@ use crate::checks::CheckResult;
 use crate::pty::get_pty_manager;
 use crate::store::{
     AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project, ProjectConfig,
-    ProjectsState, SessionDetails, SessionInfo, SessionSearchResult, SkillInfo,
+    ProjectLaunchPreference, ProjectsState, SessionDetails, SessionInfo, SessionSearchResult,
+    SessionUiRecord, SkillInfo,
 };
 
 // ==================== PTY Commands ====================
@@ -381,6 +382,60 @@ pub async fn set_display_name(path: String, alias: String) -> Result<ProjectsSta
     .await
 }
 
+/// Upsert one bounded user-interface session record without replacing unrelated state.
+#[tauri::command]
+pub async fn upsert_session_ui_record(
+    record_key: String,
+    record: SessionUiRecord,
+) -> Result<ProjectsState, String> {
+    apply_projects_state_blocking(move |s| {
+        crate::store::validate_session_record_key(&record_key)?;
+        crate::store::validate_session_ui_record(&record)?;
+        if !s.session_records.contains_key(&record_key)
+            && s.session_records.len() >= crate::store::MAX_SESSION_UI_RECORDS
+        {
+            bail!("session record capacity reached");
+        }
+        let mut canonical = record;
+        canonical.project_path = crate::store::normalize_path_str(&canonical.project_path);
+        s.session_records.insert(record_key, canonical);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+}
+
+/// Remove one user-interface session record; missing keys are idempotent success.
+#[tauri::command]
+pub async fn remove_session_ui_record(record_key: String) -> Result<ProjectsState, String> {
+    apply_projects_state_blocking(move |s| {
+        crate::store::validate_session_record_key(&record_key)?;
+        s.session_records.remove(&record_key);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+}
+
+/// Store the last successful per-project CLI/config selection without exposing profiles in the shell.
+#[tauri::command]
+pub async fn set_project_launch_preference(
+    project_path: String,
+    preference: ProjectLaunchPreference,
+) -> Result<ProjectsState, String> {
+    apply_projects_state_blocking(move |s| {
+        crate::store::validate_project_path_identity(&project_path)?;
+        crate::store::validate_project_launch_preference(&preference)?;
+        let key = crate::store::normalize_path_str(&project_path);
+        if !s.launch_preferences.contains_key(&key)
+            && s.launch_preferences.len() >= crate::store::MAX_LAUNCH_PREFERENCES
+        {
+            bail!("launch preference capacity reached");
+        }
+        s.launch_preferences.insert(key, preference);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+}
+
 /// 永久删除已存档会话(尽力批,非原子):删文件 + 清标记。薄壳,核心在 store::delete_sessions_inner。
 #[tauri::command]
 pub async fn delete_sessions(
@@ -464,12 +519,13 @@ pub async fn get_all_plugins(project_path: String) -> Result<Vec<PluginInfo>, St
 /// 前端日志写入
 #[tauri::command]
 pub async fn log_message(level: String, message: String) {
+    let summary = crate::logger::frontend_message_summary(&message);
     match level.as_str() {
-        "error" => log::error!("[Frontend] {}", message),
-        "warn" => log::warn!("[Frontend] {}", message),
-        "info" => log::info!("[Frontend] {}", message),
-        "debug" => log::debug!("[Frontend] {}", message),
-        _ => log::info!("[Frontend] {}", message),
+        "error" => log::error!("[Frontend] {}", summary),
+        "warn" => log::warn!("[Frontend] {}", summary),
+        "info" => log::info!("[Frontend] {}", summary),
+        "debug" => log::debug!("[Frontend] {}", summary),
+        _ => log::info!("[Frontend] {}", summary),
     }
 }
 
@@ -489,4 +545,28 @@ pub fn spawn_new_instance() -> Result<(), String> {
     let mut cmd = crate::platform::new_command(&app_path.to_string_lossy());
     cmd.spawn().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ==================== Authenticated native observations (D12) ====================
+#[tauri::command]
+pub(crate) async fn native_get_scope(
+    webview: tauri::Webview,
+    request: tauri::ipc::Request<'_>,
+    runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,
+) -> std::result::Result<
+    crate::cli::native_projection::wire::SourceRef,
+    crate::cli::native_projection::diagnostics::ProjectionFailure,
+> {
+    runtime.projection_scope(&webview, &request).await
+}
+#[tauri::command]
+pub(crate) async fn native_list_resources(
+    webview: tauri::Webview,
+    request: tauri::ipc::Request<'_>,
+    runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,
+) -> std::result::Result<
+    crate::cli::native_projection::wire::ProjectionResult,
+    crate::cli::native_projection::diagnostics::ProjectionFailure,
+> {
+    runtime.projection_read(&webview, &request).await
 }

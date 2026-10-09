@@ -1,0 +1,279 @@
+//! Per-launch OS environment. Never mutates the process or executes a shell.
+#![allow(dead_code)]
+
+use super::profiles::{error, EnvValue, Override, Profile};
+use super::types::{CliKind, SafeError};
+use serde_json::Value;
+use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
+
+pub(crate) const OBSERVER_ENV_NAMES: &[&str] = &[
+    "CC_BOX_HOOK_PORT",
+    "CC_BOX_SESSION_ID",
+    "CC_DESK_OBSERVER_CAPABILITY",
+    "CC_DESK_OBSERVER_RUN",
+    "CC_DESK_OBSERVER_GENERATION",
+];
+
+pub(crate) type EnvMap = BTreeMap<OsString, OsString>;
+
+/// Capture the host before a case-sensitive map can lose Windows aliases.
+/// Conflicting inherited aliases use the OS-effective value, not map ordering.
+pub(crate) fn capture_environment() -> Result<EnvMap, SafeError> {
+    #[cfg(windows)]
+    {
+        capture_windows_environment(std::env::vars_os().collect(), |name| std::env::var_os(name))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(std::env::vars_os().collect())
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn capture_windows_environment(
+    entries: Vec<(OsString, OsString)>,
+    mut effective_value: impl FnMut(&OsStr) -> Option<OsString>,
+) -> Result<EnvMap, SafeError> {
+    let mut result = EnvMap::new();
+    for (name, first) in &entries {
+        if lookup(&result, name).is_some() {
+            continue;
+        }
+        let aliases: Vec<_> = entries
+            .iter()
+            .filter(|(other, _)| same_name(name, other))
+            .map(|(_, value)| value)
+            .collect();
+        let value = if aliases.iter().any(|value| *value != first) {
+            let current =
+                effective_value(name).ok_or_else(|| SafeError::invalid("environment.changed"))?;
+            if !aliases.contains(&&current) {
+                return Err(SafeError::invalid("environment.changed"));
+            }
+            current
+        } else {
+            first.clone()
+        };
+        result.insert(name.clone(), value);
+    }
+    Ok(result)
+}
+
+/// Internal observer data, not an IPC type and deliberately not Debug/Serialize.
+pub(crate) struct ObserverEnv {
+    pub(crate) values: EnvMap,
+}
+
+/// Delegate Windows key equivalence to the standard library's OS environment
+/// table. Constructing a Command does not execute it; no process is ever started.
+pub(crate) fn same_name(left: &OsStr, right: &OsStr) -> bool {
+    if left == right {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        let mut table = std::process::Command::new("environment-key-table-only");
+        table.env_clear().env(left, "").env(right, "");
+        table.get_envs().count() == 1
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+pub(crate) fn lookup<'a>(values: &'a EnvMap, name: &OsStr) -> Option<&'a OsString> {
+    values
+        .iter()
+        .find(|(key, _)| same_name(key, name))
+        .map(|(_, value)| value)
+}
+
+fn contains_nul(value: &OsStr) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        value.encode_wide().any(|unit| unit == 0)
+    }
+    #[cfg(not(windows))]
+    {
+        value.as_encoded_bytes().contains(&0)
+    }
+}
+
+fn validate_name(name: &OsStr, inherited: bool) -> Result<(), SafeError> {
+    // Windows's environment block permits an initial '=' in inherited names,
+    // including Explorer's '=::' and command state, not only drive entries.
+    // Authored layers may not introduce these reserved names.
+    let reserved_entry = cfg!(windows)
+        && inherited
+        && name
+            .as_encoded_bytes()
+            .strip_prefix(b"=")
+            .is_some_and(|tail| !tail.is_empty() && !tail.contains(&b'='));
+    if name.is_empty()
+        || contains_nul(name)
+        || (name.as_encoded_bytes().contains(&b'=') && !reserved_entry)
+    {
+        return Err(SafeError::invalid("environment.name"));
+    }
+    Ok(())
+}
+
+fn validated_layer(values: &EnvMap, inherited: bool) -> Result<EnvMap, SafeError> {
+    let mut result = EnvMap::new();
+    for (name, value) in values {
+        validate_name(name, inherited)?;
+        if contains_nul(value) {
+            return Err(SafeError::invalid("environment.value"));
+        }
+        if let Some(previous) = lookup(&result, name) {
+            if previous != value {
+                return Err(SafeError::invalid("environment.aliasConflict"));
+            }
+        } else {
+            result.insert(name.clone(), value.clone());
+        }
+    }
+    Ok(result)
+}
+
+fn replace(values: &mut EnvMap, name: &OsStr, value: Option<&OsStr>) {
+    values.retain(|key, _| !same_name(key, name));
+    if let Some(value) = value {
+        values.insert(name.to_owned(), value.to_owned());
+    }
+}
+
+fn merge(values: &mut EnvMap, layer: &EnvMap) {
+    for (name, value) in layer {
+        replace(values, name, Some(value));
+    }
+}
+
+fn permitted(name: &OsStr, names: &[&str]) -> bool {
+    names
+        .iter()
+        .any(|allowed| same_name(name, OsStr::new(allowed)))
+}
+
+pub(crate) fn observer_enabled(profile: &Profile) -> bool {
+    if profile.cli != CliKind::Claude {
+        return false;
+    }
+    match &profile.observer {
+        Override::Set(enabled) => *enabled,
+        Override::Unset => false,
+        // The legacy Claude path historically installed the Desk hook monitor.
+        // Inherit preserves that behavior; independent profiles remain off.
+        Override::Inherit => profile.is_legacy_claude(),
+    }
+}
+
+pub(crate) fn build_environment(
+    inherited: &EnvMap,
+    terminal: &EnvMap,
+    profile: &Profile,
+    legacy: Option<&Value>,
+    observer: Option<&ObserverEnv>,
+) -> Result<EnvMap, SafeError> {
+    profile.validate()?;
+    let original = validated_layer(inherited, true)?;
+    let mut result = original.clone();
+    let terminal = validated_layer(terminal, false)?;
+    for name in terminal.keys() {
+        if !permitted(
+            name,
+            &["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"],
+        ) {
+            return Err(SafeError::invalid("terminal.environment"));
+        }
+    }
+    merge(&mut result, &terminal);
+
+    if profile.is_legacy_claude() {
+        if let Some(values) = legacy.and_then(|value| value.get("claudeEnvVars")) {
+            if !values.is_null() {
+                let values = values.as_object().ok_or_else(|| error("LEGACY_INVALID"))?;
+                let mut layer = EnvMap::new();
+                for (name, value) in values {
+                    let value = value.as_str().ok_or_else(|| error("LEGACY_INVALID"))?;
+                    layer.insert(name.into(), value.into());
+                }
+                merge(&mut result, &validated_layer(&layer, false)?);
+            }
+        }
+    }
+
+    let mut seen: Vec<(&str, &Override<EnvValue>)> = Vec::new();
+    for (name, change) in &profile.env {
+        for (previous, previous_change) in &seen {
+            if same_name(OsStr::new(name), OsStr::new(previous)) && previous_change != &change {
+                return Err(SafeError::invalid("environment.aliasConflict"));
+            }
+        }
+        seen.push((name, change));
+        match change {
+            Override::Inherit => {}
+            Override::Unset => replace(&mut result, OsStr::new(name), None),
+            Override::Set(EnvValue::Literal { value, .. }) => {
+                replace(&mut result, OsStr::new(name), Some(OsStr::new(value)));
+            }
+            Override::Set(EnvValue::HostRef { name: source }) => {
+                let value = lookup(&original, OsStr::new(source))
+                    .ok_or_else(|| error("ENV_SOURCE_MISSING"))?;
+                replace(&mut result, OsStr::new(name), Some(value));
+            }
+        }
+    }
+
+    // These names are Desk-issued capabilities, not user CLI credentials. Never
+    // inherit an ancestor Desk run's observer authority into a new run.
+    result.retain(|name, _| !permitted(name, OBSERVER_ENV_NAMES));
+    if observer_enabled(profile) {
+        if let Some(observer) = observer {
+            let layer = validated_layer(&observer.values, false)?;
+            for name in layer.keys() {
+                if !permitted(
+                    name,
+                    &[
+                        "CC_BOX_HOOK_PORT",
+                        "CC_BOX_SESSION_ID",
+                        "CC_DESK_OBSERVER_CAPABILITY",
+                        "CC_DESK_OBSERVER_RUN",
+                        "CC_DESK_OBSERVER_GENERATION",
+                    ],
+                ) {
+                    return Err(SafeError::invalid("observer.environment"));
+                }
+            }
+            merge(&mut result, &layer);
+        }
+    }
+    Ok(result)
+}
+
+/// Add only backend-owned observer values to an already-frozen environment.
+pub(crate) fn overlay_observer(
+    frozen: &EnvMap,
+    observer: &ObserverEnv,
+) -> Result<EnvMap, SafeError> {
+    let layer = validated_layer(&observer.values, false)?;
+    for name in layer.keys() {
+        if !permitted(
+            name,
+            &[
+                "CC_BOX_HOOK_PORT",
+                "CC_DESK_OBSERVER_CAPABILITY",
+                "CC_DESK_OBSERVER_RUN",
+                "CC_DESK_OBSERVER_GENERATION",
+            ],
+        ) {
+            return Err(SafeError::invalid("observer.environment"));
+        }
+    }
+    let mut next = frozen.clone();
+    merge(&mut next, &layer);
+    Ok(next)
+}

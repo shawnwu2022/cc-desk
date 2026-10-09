@@ -48,6 +48,21 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     const tab = sessionStore.getTabByPtyId(ptyId)
     if (!tab || tab.status !== 'running') return
 
+    if ((tab.cli ?? 'claude') !== 'claude' || tab.observerEnabled === false) return
+    if (payload.observerSource === 'claude-hook') {
+      // These authenticated hooks are independent processes: receipt order is
+      // not CLI order. Preserve process state, but never invent current activity.
+      tab.observation = 'active'
+      tab.activity = 'unknown'
+      tab.working = false
+      turnEnded.delete(tab.tabId)
+      if (payload.detail.type === 'sessionStart' && payload.sessionId && !tab.sessionId) {
+        const data = payload.detail.data as { model?: string }
+        sessionStore.assignSessionIdByPtyId(ptyId, payload.sessionId, data.model)
+      }
+      return
+    }
+
     // sessionStart：直接分配 session_id
     if (payload.detail.type === 'sessionStart') {
       const sessionId = payload.sessionId
@@ -164,5 +179,6 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
   onUnmounted(() => {
     unsubscribe?.()
     unsubscribe = null
+    turnEnded.clear()
   })
 }

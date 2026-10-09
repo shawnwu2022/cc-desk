@@ -1,0 +1,9 @@
+# D10 Bash shim transition
+
+CI #162 (`35807011692`), source `d294039870356ea5fc56a06b2995f7682952dd3e`, tested merge `1edd679243c8ce39f701e0ea466162f73571b819`: full Rust job `107009998182` read. Compilation/Clippy passed; 438 passed / 1 failed / 15 ignored. All four formerly failing size-limit cases now passed, plus the Native large-environment positive guard. The sole behavior failure remained Bash; the test-only markers proved the direct shell variant completed successfully and the shim variant failed. A matches-pattern layout was the separate formatting failure.
+
+Root cause in our shim path: after the outer fixed script decoded its hex words, it exec'd the selected Git bin/bash.exe redirector again with raw values. That introduced a second native Windows-to-MSYS argument parse and recreated the apostrophe corruption. Fixing only the initial boundary was insufficient.
+
+Ruling: the selected runner remains the first process, unchanged and checked. For Windows Bash shims, re-enter the Bash interpreter already running behind that selected runner through Bash's own BASH identity, rather than re-entering a native redirector. This is interpreter self-invocation, not a PATH search, hardcoded sibling installation, or automatic fallback. A non-absolute BASH identity is refused with a fixed message. The selected script is still executed as a script, not sourced/eval'd/re-written; stdin/TTY remain attached. Unix continues to use the explicit frozen runner.
+
+The original exact receiving-process assertions and test-only variant markers remain. This correction requires both shell and shim GREEN before acceptance. No claim of arbitrary third-party wrapper correctness, real-agent compatibility or full D10 completion is made here. Corrected the one rustfmt layout from #162 without altering tests.

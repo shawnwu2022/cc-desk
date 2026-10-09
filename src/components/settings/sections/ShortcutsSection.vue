@@ -1,203 +1,101 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useAppStore } from '@/stores/app'
+import { APP_SHORTCUT_ACTIONS, DEFAULT_SHORTCUT_BINDINGS, SHORTCUT_LABELS, captureShortcut, formatShortcut, type AppShortcutAction, type ShortcutBindings } from '@/config/appShortcuts'
+import { isMac } from '@/utils/platform'
+import AppButton from '@/components/ui/AppButton.vue'
+import AppInput from '@/components/ui/AppInput.vue'
+import AppDialog from '@/components/ui/AppDialog.vue'
+import InlineNotice from '@/components/ui/InlineNotice.vue'
+const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
+const { t } = useI18n(); const app = useAppStore()
+const query = ref(''), capturing = ref<AppShortcutAction | null>(null), resetAll = ref(false), busy = ref(false), error = ref<string | null>(null)
+const pending = ref<{ action: AppShortcutAction; binding: string; conflict: AppShortcutAction; baseline: string } | null>(null)
+let owner = 0
+const ready = ref(false), reading = ref(false)
+const blocked = computed(() => !ready.value || reading.value || busy.value || app.shortcutBindingsSaving)
+async function reload(force = false) {
+  if (!props.active || reading.value) return
+  const version = owner; reading.value = true
+  try {
+    await app.loadSettingsPreferences(force || app.shortcutBindingsError === 'settingsSaveReloadFailed')
+    if (version === owner && props.active) { ready.value = true; error.value = null }
+  } catch { if (version === owner && props.active) { ready.value = false; error.value = 'settingsSaveReadFailed' } }
+  finally { if (version === owner) reading.value = false }
+}
+watch(() => app.shortcutBindingsError, value => { if (value === 'settingsSaveReloadFailed') ready.value = false })
+const rows = computed(() => APP_SHORTCUT_ACTIONS.map(action => ({ action, label: t(SHORTCUT_LABELS[action]), binding: formatShortcut(app.shortcutBindings[action], isMac) }))
+  .filter(row => `${row.label} ${row.binding}`.toLowerCase().includes(query.value.trim().toLowerCase())))
+function close() { ++owner; capturing.value = null; pending.value = null; resetAll.value = false; busy.value = false; error.value = null }
+watch(() => props.active, active => { if (!active) { close(); reading.value = false } else void reload() }, { immediate: true, flush: 'sync' }); onBeforeUnmount(close)
+function begin(action: AppShortcutAction) { if (!props.active || blocked.value) return; close(); capturing.value = action }
+async function save(bindings: ShortcutBindings) {
+  if (!props.active || blocked.value) return
+  const version = owner; busy.value = true; error.value = null
+  const saved = await app.setShortcutBindings(bindings)
+  if (version !== owner || !props.active) return
+  busy.value = false
+  if (saved) close()
+  else error.value = app.settingsSaveError ?? 'settingsSaveFailed'
+}
+function propose(action: AppShortcutAction, binding: string) {
+  if (!props.active || blocked.value) return
+  const conflict = APP_SHORTCUT_ACTIONS.find(other => other !== action && app.shortcutBindings[other] === binding)
+  if (conflict) { capturing.value = action; pending.value = { action, binding, conflict, baseline: JSON.stringify(app.shortcutBindings) }; error.value = null }
+  else void save({ ...app.shortcutBindings, [action]: binding })
+}
+function capture(event: KeyboardEvent) {
+  if (event.key === 'Escape' || event.key === 'Tab' || (!event.ctrlKey && !event.metaKey && !event.altKey && ['Enter', ' '].includes(event.key) && event.target instanceof HTMLElement && event.target.closest('button'))) return
+  event.preventDefault(); event.stopPropagation()
+  if (!capturing.value || busy.value) return
+  const binding = captureShortcut(event)
+  if (!binding) { if (!['Control', 'Meta', 'Alt', 'Shift'].includes(event.key)) error.value = 'shortcutBindingInvalid'; return }
+  propose(capturing.value, binding)
+}
+function replace() {
+  const choice = pending.value
+  if (!choice || blocked.value) return
+  if (choice.baseline !== JSON.stringify(app.shortcutBindings)) { pending.value = null; error.value = 'shortcutBindingsChanged'; return }
+  void save({ ...app.shortcutBindings, [choice.action]: choice.binding, [choice.conflict]: null })
+}
+function reset(action: AppShortcutAction) { if (blocked.value) return; close(); propose(action, DEFAULT_SHORTCUT_BINDINGS[action]!) }
+function requestResetAll() { if (props.active && !blocked.value) { close(); resetAll.value = true } }
+</script>
 <template>
-  <div class="section-content">
-    <h2 class="section-heading">{{ t('keyboardShortcuts') }}</h2>
-
-    <div class="shortcuts-group" v-for="group in filteredGroups" :key="group.title">
-      <h3 class="group-title">{{ group.title }}</h3>
-      <p v-if="group.hint" class="group-hint">{{ group.hint }}</p>
-      <div class="shortcuts-table">
-        <div class="shortcut-row" v-for="item in group.items" :key="item.key">
-          <kbd>{{ item.key }}</kbd>
-          <span class="shortcut-desc">{{ item.desc }}</span>
-        </div>
+  <section class="remaining-settings" data-settings-shortcuts>
+    <h2>{{ t('keyboardShortcuts') }}</h2>
+    <p class="settings-hint">{{ t('shortcutScopeHint') }}</p>
+    <AppInput v-model="query" data-shortcut-search :label="t('shortcutSearch')" />
+    <div class="shortcut-list">
+      <div v-for="row in rows" :key="row.action" class="shortcut-row" :data-shortcut-row="row.action">
+        <span class="shortcut-label">{{ row.label }}</span>
+        <AppButton :data-shortcut-edit="row.action" :aria-label="t('shortcutEdit', { action: row.label })" :disabled="blocked" @click="begin(row.action)"><kbd>{{ row.binding }}</kbd></AppButton>
+        <AppButton variant="ghost" size="compact" :data-shortcut-reset="row.action" :disabled="blocked" @click="reset(row.action)">{{ t('restoreDefault') }}</AppButton>
       </div>
     </div>
-  </div>
+    <InlineNotice v-if="error && !capturing && !resetAll" kind="warning" :message="t(error)" />
+    <AppButton v-if="!ready" :disabled="reading" @click="reload(true)">{{ t('refresh') }}</AppButton>
+    <AppButton data-shortcut-reset-all variant="secondary" :disabled="blocked" @click="requestResetAll">{{ t('shortcutResetAll') }}</AppButton>
+    <AppDialog :open="!!capturing && active" data-shortcut-capture :title="t('shortcutCaptureTitle')" :description="t('shortcutCaptureHint')" @close="close" @keydown="capture">
+      <p v-if="capturing">{{ t(SHORTCUT_LABELS[capturing]) }}</p>
+      <InlineNotice v-if="pending" data-shortcut-conflict kind="warning" :message="t('shortcutConflict', { key: formatShortcut(pending.binding, isMac), action: t(SHORTCUT_LABELS[pending.conflict]) })" />
+      <InlineNotice v-if="error" kind="warning" :message="t(error)" :action-label="!ready ? t('refresh') : undefined" @action="reload(true)" />
+      <template #footer><AppButton @click="close">{{ t('cancel') }}</AppButton><AppButton v-if="pending" data-shortcut-replace variant="danger" :disabled="blocked" @click="replace">{{ t('shortcutReplace') }}</AppButton></template>
+    </AppDialog>
+    <AppDialog :open="resetAll && active" :title="t('shortcutResetAll')" :description="t('shortcutResetAllConfirm')" @close="close">
+      <InlineNotice v-if="error" kind="warning" :message="t(error)" :action-label="!ready ? t('refresh') : undefined" @action="reload(true)" />
+      <template #footer><AppButton @click="close">{{ t('cancel') }}</AppButton><AppButton data-shortcut-reset-confirm variant="danger" :disabled="blocked" @click="save({ ...DEFAULT_SHORTCUT_BINDINGS })">{{ t('restoreDefault') }}</AppButton></template>
+    </AppDialog>
+  </section>
 </template>
-
-<script setup lang="ts">
-import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { ctrl, alt, cmd, isMac, isWindows } from '@/utils/platform'
-
-const { t } = useI18n()
-
-const filteredGroups = computed(() => [
-  {
-    title: t('applicationShortcuts'),
-    hint: '',
-    items: [
-      { key: `${cmd}+Shift+N`, desc: t('shortcut_openNewWindow') },
-      { key: `${cmd}+Shift+← / →`, desc: t('shortcut_snapWindow') },
-      { key: `${cmd}+Shift+R`, desc: t('shortcut_restartApp') },
-      { key: `${cmd}+Shift+H`, desc: t('shortcut_toggleHome') },
-      { key: `${cmd}+Shift+/`, desc: t('shortcut_showShortcuts') },
-      { key: `${cmd}+Shift+S`, desc: t('shortcut_toggleSessions') },
-      { key: `${cmd}+Shift+T`, desc: t('shortcut_toggleAlwaysOnTop') },
-      { key: `${cmd},`, desc: t('shortcut_toggleSettings') },
-      { key: `${cmd}+Plus / −`, desc: t('shortcut_fontSize') },
-      { key: `${cmd}+0`, desc: t('shortcut_resetFontSize') },
-    ]
-  },
-  {
-    title: t('sessionManagement'),
-    hint: t('sessionManagementHint'),
-    items: [
-      { key: `${alt}+N`, desc: t('shortcut_newSession') },
-      { key: `${alt}+R`, desc: t('shortcut_restartSession') },
-      { key: `${alt}+W`, desc: t('shortcut_closeTab') },
-      { key: `${ctrl}+Tab`, desc: t('shortcut_switchNext') },
-      { key: `${ctrl}+Shift+Tab`, desc: t('shortcut_switchPrev') },
-      { key: `${alt}+↑ / ↓`, desc: t('shortcut_switchAlt') },
-    ]
-  },
-  {
-    title: t('claudeCodeShortcuts'),
-    hint: t('claudeCodeShortcutsHint'),
-    items: [
-      { key: `${ctrl}+C`, desc: t('shortcut_cancelInput') },
-      { key: `${ctrl}+D`, desc: t('shortcut_exitSession') },
-      { key: `${alt}+P`, desc: t('shortcut_switchModel') },
-      { key: `${alt}+T`, desc: t('shortcut_toggleThinking') },
-      { key: `${alt}+O`, desc: t('shortcut_toggleFast') },
-      { key: `${ctrl}+L`, desc: t('shortcut_clearPrompt') },
-      { key: `${ctrl}+R`, desc: t('shortcut_reverseSearch') },
-      { key: `${ctrl}+O`, desc: t('shortcut_toggleTranscript') },
-      { key: `${ctrl}+B`, desc: t('shortcut_backgroundTask') },
-      { key: `${ctrl}+T`, desc: t('shortcut_toggleTaskList') },
-      { key: 'Esc Esc', desc: t('shortcut_rewind') },
-      { key: isWindows ? `${alt}+V` : `${ctrl}+V`, desc: t('shortcut_imagePaste') },
-    ]
-  },
-  {
-    title: t('textEditing'),
-    hint: '',
-    items: [
-      { key: `${ctrl}+A`, desc: t('shortcut_cursorStart') },
-      { key: `${ctrl}+E`, desc: t('shortcut_cursorEnd') },
-      { key: `${ctrl}+W`, desc: t('shortcut_deletePrevWord') },
-      { key: `${ctrl}+K`, desc: t('shortcut_deleteToEnd') },
-      { key: `${ctrl}+U`, desc: t('shortcut_deleteToStart') },
-      { key: `${ctrl}+Y`, desc: t('shortcut_pasteDeleted') },
-      { key: `${alt}+B`, desc: t('shortcut_moveBackWord') },
-      { key: `${alt}+F`, desc: t('shortcut_moveForwardWord') },
-    ]
-  },
-  {
-    title: t('multilineInput'),
-    hint: '',
-    items: [
-      { key: '\\ + Enter', desc: t('shortcut_insertNewline') },
-      { key: `${ctrl}+J`, desc: t('shortcut_insertNewlineAny') },
-      ...(isMac
-        ? [{ key: 'Shift+Enter', desc: t('shortcut_insertNewlineIterm') }]
-        : [{ key: 'Shift+Enter', desc: t('shortcut_insertNewlineSupported') }]
-      ),
-    ]
-  },
-  {
-    title: t('quickInput'),
-    hint: '',
-    items: [
-      { key: '/ at start', desc: t('shortcut_commandOrSkill') },
-      { key: '! at start', desc: t('shortcut_bashMode') },
-      { key: '@', desc: t('shortcut_fileMention') },
-    ]
-  },
-  {
-    title: t('slashCommands'),
-    hint: t('slashCommandsHint'),
-    items: [
-      { key: '/clear', desc: t('shortcut_slashClear') },
-      { key: '/compact', desc: t('shortcut_slashCompact') },
-      { key: '/model', desc: t('shortcut_slashModel') },
-      { key: '/cost', desc: t('shortcut_slashCost') },
-      { key: '/permissions', desc: t('shortcut_slashPermissions') },
-      { key: '/init', desc: t('shortcut_slashInit') },
-      { key: '/config', desc: t('shortcut_slashConfig') },
-      { key: '/resume', desc: t('shortcut_slashResume') },
-      { key: '/diff', desc: t('shortcut_slashDiff') },
-      { key: '/help', desc: t('shortcut_slashHelp') },
-      { key: '/context', desc: t('shortcut_slashContext') },
-      { key: '/doctor', desc: t('shortcut_slashDoctor') },
-      { key: '/theme', desc: t('shortcut_slashTheme') },
-      { key: '/memory', desc: t('shortcut_slashMemory') },
-      { key: '/rename', desc: t('shortcut_slashRename') },
-      { key: '/btw <q>', desc: t('shortcut_slashBug') },
-      { key: '/plan', desc: t('shortcut_slashPlan') },
-      { key: '/branch', desc: t('shortcut_slashBranch') },
-      { key: '/copy', desc: t('shortcut_slashCopy') },
-      { key: '/review', desc: t('shortcut_slashReview') },
-      { key: '/exit', desc: t('shortcut_slashExit') },
-    ]
-  },
-])
-</script>
-
 <style scoped>
-.section-content {
-  padding: 8px 0;
-}
-
-.section-heading {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 24px;
-}
-
-.shortcuts-group {
-  margin-bottom: 24px;
-}
-
-.group-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-}
-
-.group-hint {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-bottom: 12px;
-}
-
-.shortcuts-table {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.shortcut-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 6px 8px;
-  border-radius: 4px;
-}
-
-.shortcut-row:hover {
-  background: var(--bg-secondary);
-}
-
-kbd {
-  display: inline-block;
-  padding: 4px 10px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-primary);
-  min-width: 120px;
-  text-align: center;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-.shortcut-desc {
-  font-size: 13px;
-  color: var(--text-primary);
-}
+.remaining-settings { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; min-width: 0; width: 100%; max-width: 760px; }
+h2 { color: var(--text-primary); font-size: 20px; }
+.settings-hint { color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.shortcut-list { width: 100%; display: grid; gap: 6px; }
+.shortcut-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(90px, auto) auto; gap: 8px; align-items: center; min-width: 0; }
+.shortcut-label { overflow-wrap: anywhere; font-size: 13px; color: var(--text-primary); }
+kbd { font-family: var(--font-mono); overflow-wrap: anywhere; }
+@media (max-width: 760px) { .shortcut-row { grid-template-columns: minmax(0, 1fr) auto; } .shortcut-row > :last-child { grid-column: 2; } }
 </style>

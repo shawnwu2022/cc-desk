@@ -1,155 +1,64 @@
-<template>
-  <div class="section-content">
-    <h2 class="section-heading">{{ t('aboutTitle') }}</h2>
-
-    <div class="about-card">
-      <div class="about-logo">
-        <img src="@/assets/icons/app-icon.png" alt="CC Desk" class="logo-icon" />
-      </div>
-      <div class="about-details">
-        <span class="app-name">CC Desk</span>
-        <span class="app-version">{{ t('version', { version: currentVersion }) }}</span>
-        <span class="app-desc">{{ t('aboutDesc') }}</span>
-      </div>
-    </div>
-
-    <div class="links-group">
-      <a class="about-link" @click="openExternal('https://github.com/shawnwu2022/cc-desk')">
-        <div class="link-content">
-          <span class="link-title">{{ t('githubRepo') }}</span>
-          <span class="link-url">github.com/shawnwu2022/cc-desk</span>
-        </div>
-        <span class="link-arrow">→</span>
-      </a>
-      <a class="about-link" @click="openExternal('https://code.claude.com/docs')">
-        <div class="link-content">
-          <span class="link-title">{{ t('claudeDocs') }}</span>
-          <span class="link-url">code.claude.com/docs</span>
-        </div>
-        <span class="link-arrow">→</span>
-      </a>
-    </div>
-  </div>
-</template>
-
 <script setup lang="ts">
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { open } from '@tauri-apps/plugin-shell'
+import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { useI18n } from 'vue-i18n'
-
-const { t } = useI18n()
-const currentVersion = __APP_VERSION__
-
-function openExternal(url: string) {
-  open(url)
+import { useAppStore } from '@/stores/app'
+import { useNotificationsStore } from '@/stores/notifications'
+import { useOwnedSessionCounts } from '@/composables/useOwnedSessionCounts'
+import { platform } from '@/utils/platform'
+import { safeAppDiagnostics } from '@/utils/appDiagnostics'
+import AppButton from '@/components/ui/AppButton.vue'
+import InlineNotice from '@/components/ui/InlineNotice.vue'
+const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
+const { t } = useI18n(); const app = useAppStore(), notifications = useNotificationsStore(), counts = useOwnedSessionCounts()
+const version = __APP_VERSION__, buildCommit = /^[0-9a-f]{40}$/.test(__APP_BUILD_COMMIT__) ? __APP_BUILD_COMMIT__ : 'unknown'
+const links = [
+  { id: 'github', label: 'githubRepo', url: 'https://github.com/shawnwu2022/cc-desk' },
+  { id: 'claude', label: 'claudeDocs', url: 'https://code.claude.com/docs' },
+  { id: 'codex', label: 'codexDocs', url: 'https://developers.openai.com/learn/codex' },
+  { id: 'license', label: 'aboutLicense', url: 'https://github.com/shawnwu2022/cc-desk#license' },
+]
+const error = ref<string | null>(null), copying = ref(false)
+let owner = 0
+function invalidate() { ++owner; error.value = null; copying.value = false }
+watch(() => props.active, active => { if (!active) invalidate() }, { flush: 'sync' }); onBeforeUnmount(invalidate)
+async function external(id: string) {
+  const link = links.find(item => item.id === id)
+  if (!props.active || !link) return
+  const version = owner
+  try { await open(link.url) }
+  catch { if (version === owner && props.active) error.value = 'settingsExternalLinkFailed' }
+}
+async function copyDiagnostics() {
+  if (!props.active || copying.value) return
+  const versionOwner = ++owner; copying.value = true; error.value = null
+  const summary = safeAppDiagnostics({ version, commit: buildCommit, platform,
+    gui: { mode: app.guiThemeMode, density: app.guiDensity, sidebarWidth: app.sidebarWidth },
+    terminal: { theme: app.terminalTheme, font: app.terminalFontFamily, size: app.fontSize, lineHeight: app.terminalLineHeight,
+      cursor: app.terminalCursorStyle, blink: app.terminalCursorBlink, renderer: app.webglRenderer }, sessions: counts.value })
+  try {
+    await writeText(JSON.stringify(summary, null, 2))
+    if (versionOwner === owner && props.active) notifications.pushToast({ kind: 'success', messageKey: 'diagnosticsCopied' })
+  } catch { if (versionOwner === owner && props.active) error.value = 'diagnosticsCopyFailed' }
+  finally { if (versionOwner === owner) copying.value = false }
 }
 </script>
-
+<template>
+  <section class="remaining-settings" data-settings-about>
+    <h2>{{ t('aboutTitle') }}</h2>
+    <div class="about-card"><img src="@/assets/icons/app-icon.png" alt="CC Desk" /><div><strong>CC Desk</strong><p>{{ t('version', { version }) }}</p><p>{{ t('aboutDesc') }}</p></div></div>
+    <p data-build-commit class="build-commit">{{ t('aboutBuildCommit') }}: {{ buildCommit === 'unknown' ? t('aboutBuildUnknown') : buildCommit }}</p>
+    <p>MIT · {{ t('aboutLicense') }}</p>
+    <div class="about-links"><AppButton v-for="link in links" :key="link.id" :data-about-link="link.id" variant="ghost" @click="external(link.id)">{{ t(link.label) }} ↗</AppButton></div>
+    <p class="settings-hint">{{ t('diagnosticsPrivacyHint') }}</p>
+    <AppButton data-copy-diagnostics :disabled="copying || !active" @click="copyDiagnostics">{{ t('copyDiagnostics') }}</AppButton>
+    <InlineNotice v-if="error" kind="warning" :message="t(error)" />
+  </section>
+</template>
 <style scoped>
-.section-content {
-  padding: 8px 0;
-}
-
-.section-heading {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 24px;
-}
-
-.about-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 20px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  margin-bottom: 24px;
-}
-
-.about-logo {
-  width: 56px;
-  height: 56px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.logo-icon {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.about-details {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.app-name {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.app-version {
-  font-size: 13px;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.app-desc {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-top: 4px;
-}
-
-.links-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.about-link {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s ease;
-  text-decoration: none;
-  color: var(--text-primary);
-}
-
-.about-link:hover {
-  background: var(--bg-secondary);
-}
-
-.link-content {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.link-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.link-url {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-}
-
-.link-arrow {
-  color: var(--text-tertiary);
-  font-size: 14px;
-}
+.remaining-settings { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; min-width: 0; max-width: 760px; color: var(--text-primary); }
+h2 { font-size: 20px; } .about-card { display: flex; gap: 16px; align-items: center; min-width: 0; } .about-card img { width: 56px; height: 56px; flex-shrink: 0; }
+.about-card p, .build-commit, .settings-hint { font-size: 12px; line-height: 1.6; color: var(--text-secondary); overflow-wrap: anywhere; }
+.about-links { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; } .about-links :deep(button) { white-space: normal; }
 </style>

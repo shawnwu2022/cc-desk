@@ -1,6 +1,6 @@
 ---
 name: CC Desk
-description: 面向 Claude Code 重度用户的桌面多会话工作台 — 工匠终端视觉系统
+description: 面向 Claude Code 与 Codex CLI 重度用户的桌面多会话工作台 — 工匠终端视觉系统
 colors:
   paper-warm: "#faf9f6"
   sand-soft: "#f5f3ee"
@@ -109,12 +109,12 @@ components:
     backgroundColor: "transparent"
     textColor: "{colors.gray-mist}"
     rounded: "{rounded.md}"
-    size: "40px"
+    size: "32px"
   icon-button-active:
     backgroundColor: "rgba(212, 165, 116, 0.15)"
     textColor: "{colors.amber-gold}"
     rounded: "{rounded.md}"
-    size: "40px"
+    size: "32px"
   tag-type:
     backgroundColor: "#e3f2fd"
     textColor: "#1565c0"
@@ -131,6 +131,8 @@ components:
 
 ## Overview
 
+当前实现对应[冻结规格](docs/superpowers/specs/2026-09-28-unified-workspace-ux-design.md)。代码与组件契约已接入统一外壳；真实像素、Windows 缩放和安装验收尚未完成，状态见 [U01–U10 证据](docs/superpowers/execution/U01-U10.md)。
+
 **Creative North Star: "工匠终端 (Artisan Terminal)"**
 
 CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸面质感铺底，深邃墨蓝负责所有"可操作"的承诺，琥珀金像一枚黄铜镶件，只镶嵌在"当前激活"的位置上。GUI 是安静的工装，终端永远 是主角——Chrome 的视觉音量被刻意压到内容之下。
@@ -138,7 +140,7 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 这个系统的性格是"克制而精准"（用户确认）：描边优先于填充，hover 才浮现次要操作，圆角克制在 3–12px 之间，动效统一 0.15s。信息密度偏高（侧边栏 11–13px 文字阶梯），因为用户是熟练的多会话重度用户，密度即效率。双主题（浅色「温暖米灰」/ 暗色「温暖深炭」）是同一套语义的两套值：墨蓝与琥珀在暗色下整体提亮为"温暖墨蓝 + 璀璨琥珀"，暖棕倾向贯穿两套基底，避免纯中性灰的冷感。
 
 **Key Characteristics:**
-- 墨蓝 = 可交互（按钮、链接、焦点），琥珀金 = 激活态（选中、光标、徽标），两者职责绝不互换
+- 墨蓝 = 可交互（按钮、链接、焦点），琥珀金 = GUI 激活态（选中、徽标），两者职责绝不互换
 - 温暖中性色基底：米灰/深炭都带暖棕倾向，不用纯灰
 - 平铺为主 + 极轻阴影，深度靠背景三级分层表达
 - 高密度排版：10–16px 字号阶梯，14px 为全局基线
@@ -151,7 +153,7 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 
 ### Primary
 - **Ink Blue / 墨蓝** (#1e3a5f；暗色 Ink Blue Night #4a7aad): 主强调色。主按钮、链接、输入框聚焦边框、focus ring、info 语义。它是"可点击/可操作"的统一信号。次级墨蓝 Ink Blue Soft (#2a5082；暗色 #6a9acd) 用于 hover 递进与 info 状态。
-- **Amber Gold / 琥珀金** (#d4a574；暗色 Amber Glow #f0d4a8，深态 #b8956a): 特质色与激活色。终端光标、选中态背景与边框、图标激活指示条、"已激活 Provider"徽标。浅态 #e8c9a8 用于暗色下的奶色提亮。**作文字使用时**必须用 Amber Ink(#7a5c3a，暗色即 #f0d4a8)——琥珀金本身在浅色米灰底上仅 ~2:1，只作装饰与填充，不作文字。
+- **Amber Gold / 琥珀金** (#d4a574；暗色 Amber Glow #f0d4a8，深态 #b8956a): 特质色与激活色。GUI 选中态背景与边框、图标激活指示条、当前启动配置徽标。终端光标由所选终端主题决定。浅态 #e8c9a8 用于暗色下的奶色提亮。**作文字使用时**必须用 Amber Ink(#7a5c3a，暗色即 #f0d4a8)——琥珀金本身在浅色米灰底上仅 ~2:1，只作装饰与填充，不作文字。
 
 ### Secondary
 - **Status Green / 墨绿** (#3d8c6e；暗色 #5dad8e): 成功、运行中状态。
@@ -182,14 +184,14 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 **Character:** 纯系统栈，零外部字体加载——桌面工具的性能纪律。无衬线 UI 与等宽终端形成"操作面板 vs 机器输出"的材质对比；中英文混排通过中文回退字体保持等宽节奏。
 
 ### Hierarchy
-- **Headline** (600, 16px, 1.5): 欢迎页/设置区标题、弹窗标题。整个系统最大的字号。
-- **Title LG** (500, 15px, 1.5): 项目选择页的项目行主名。
-- **Title** (500, 14px, 1.5): 设置区列表条目主名称（Provider 名、卡片名称）。
+- **Headline** (600, 16px, 1.5): 空状态/设置区标题、弹窗标题。整个系统最大的字号。
+- **Title LG** (500, 15px, 1.5): 项目管理页的项目行主名。
+- **Title** (500, 14px, 1.5): 设置区列表条目主名称（启动配置名、卡片名称）。
 - **Title SM** (500, 13px, 1.5): 侧边栏条目主名（会话、Skill/Agent/MCP/Plugin 名）；主按钮文字也是 13px。
 - **Body** (400, 14px, 1.5): 正文、描述文字。全局 body 基线。
 - **Label** (500, 12px): 分组头、次级信息、表单标签。
 - **Label SM** (400, 11px): 侧边栏副文字（版本号、完整名、时间戳、路径）。
-- **Micro** (400, 10px): 类型标签 chip、徽标内文字。下限，不再更小。
+- **Micro** (400, 10px): 类型标签 chip、徽标内文字。当前会话日期尾槽为 9px 的固定宽度兼容例外，必须在最终真实缩放验收中检查可读性。
 - **Mono** (400, 14px): 终端内容、代码片段、路径。
 
 ### Named Rules
@@ -197,14 +199,14 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 
 ## Layout
 
-三栏空间模型：**IconBar (48px 固定) → 侧边栏面板 (可折叠) → 终端/内容区 (弹性)**。窗口本身使用自定义标题栏（Windows），无系统边框。
+唯一 `AppShell` 使用四列空间：**主导航 44px → 项目/会话栏 288px → 弹性主内容 → 可选资源栏 344px**。一级入口只有工作区、项目、设置；内容视图不复制全局导航。自定义标题栏保留平台窗口控件。
 
-- **密度**：高密度工具布局。列表条目紧凑（上下 padding 4–6px），分组间 8–12px。
+- **密度**：标准会话行 38px，紧凑行 34px；项目行 40px。状态、CLI 图标、标题、时间/快捷操作、菜单的五列固定保留。
 - **间距节奏**：4px 基数（4/6/8/12/16/24），组件内 gap 常用 4–6px，区块间 12–16px。
-- **分栏边界**：1px `--border-color` 分隔，不用阴影分栏。
-- **侧边栏**：无遮罩、不抢焦点（与 GUI 主区并存），面板宽约 280–320px。
-- **终端区**：占据剩余全部空间，`--radius-lg` 圆角容器，与 GUI 层之间由背景色差分层。
-- **响应式**：桌面固定窗口场景，无断点系统；窗口尺寸约束由 Tauri 配置管理。
+- **分栏边界**：1px `--border-color`，不使用常驻阴影。会话栏可设为 240–360px；资源栏约束为 300–420px。
+- **终端区**：使用剩余空间，隐藏时仍保留终端实例与后台输出；导航或抽屉开合不重建终端。
+- **响应式**：按逻辑 CSS 宽度判断。低于 1180px，资源使用共享模态抽屉覆盖；低于 900px，会话栏可折叠且不覆盖桌面宽度偏好。最小支持窗口为 1024×640；不再次按 DPR 乘宽度，不允许全局横向滚动。
+- **缩放证据**：5 种尺寸、DPR 1/1.25/1.5、中英文、浅暗主题矩阵已编写；jsdom 契约不能代替 Windows 100%/125%/150% 的真实渲染验收。
 
 ## Elevation & Depth
 
@@ -214,7 +216,7 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 - **shadow-sm** (`0 1px 2px rgba(26,24,22,0.04)`；暗色 `rgba(0,0,0,0.25)`): 微提示，极慎用。
 - **shadow-md** (`0 2px 8px rgba(26,24,22,0.06)`；暗色 0.35): 下拉菜单、小型 popover。
 - **shadow-lg** (`0 4px 16px rgba(26,24,22,0.08)`；暗色 0.45): 侧边栏浮层、较大菜单。
-- **shadow-xl** (`0 8px 32px rgba(26,24,22,0.12)`；暗色 0.55): 模态弹窗（Settings Overlay 等）。
+- **shadow-xl** (`0 8px 32px rgba(26,24,22,0.12)`；暗色 0.55): 共享模态弹窗（AppDialog/AppDrawer）。
 
 ### Named Rules
 **The Flat-First Rule.** 静态表面永远无阴影。阴影只作为对"临时浮起"（hover、弹出、模态）的响应出现，不作为卡片/面板的常驻装饰。
@@ -233,11 +235,13 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 - **Focus:** 全局 `outline: 2px solid var(--focus-ring); outline-offset: 2px`。
 - **Transition:** 统一 0.15s ease、具名属性列表（`background-color, color, border-color, opacity, transform, box-shadow`），不用 `transition: all`。
 
-### Icon Bar（签名组件）
-左侧 48px 窄条导航，`--bg-secondary` 底 + 1px 右边框。图标按钮 40×40px、6px 圆角、透明底。状态机：静默（`--text-secondary`）→ hover（`--hover-bg` + 主文字）→ **active（琥珀选中 `--selected-bg` + 琥珀金图标 + 左缘 3px 琥珀指示条）**。角标为 8px 圆点（2px 底色描边），`pulse 2s` 呼吸动画，红=错误/更新、琥珀=权限提醒。
+### Primary navigation
+44px 导航列内使用 32×32px 按钮，只包含工作区、项目、设置。静默态为 `--text-secondary`，hover 使用 `--hover-bg`，选中态为琥珀背景/图标与左侧 3px 指示条。旧 IconBar 和 Native 顶层入口已退役。
 
 ### Cards / List Items
-条目式卡片（Provider 卡、会话条目）：`--bg-tertiary` 或透明底、6–8px 圆角、1px 边框或无边框。名称 14px/500 主文字 + 12px tertiary 副文字的单行结构。**hover 才浮现操作区**（`opacity: 0 → 1`, 0.15s），激活条目带琥珀 `active-badge`（12px/600 琥珀深色文字）。
+项目和启动配置优先使用紧凑列表。会话行按状态图标、CLI 应用图标、标题、极简时间、尾部菜单排序；只有标题省略。时间使用 `刚刚`/`now`、`Nm`、`Nh`、`Nd`、`M/D`、`YY/M/D`，完整时间通过 Tooltip 提供。
+
+每行最多一个状态相关快捷动作，hover 或键盘 focus 后覆盖固定时间槽；其余动作在同一个共享菜单中，右键与 overflow 内容一致。状态使用六种自有轮廓图标及可访问名称，不增加状态文字，不仅靠颜色。CLI 标记为自有中性图形；图片失败时才使用 CC/CX 回退。
 
 ### Chips / Tags
 类型标签：10px 字号、2px 6px padding、4px 圆角、类型色淡底+同系深字（MCP 蓝 #e3f2fd/#1565c0、Skills 琥珀、Agents 紫；暗色换半透明底+亮字）。仅用于元数据分类，不做可交互筛选。
@@ -246,20 +250,22 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 `--bg-primary` 底、1px `--border-color`、6px 圆角，继承 14px 字号。聚焦：无 outline，`border-color → var(--focus-ring)` 墨蓝，0.15s 过渡。禁用 opacity 0.5。多行编辑用 CodeMirror（One Dark 仅限 JSON 编辑器）。
 
 ### Navigation
-项目树/会话列表：分组头 11–12px、条目 12–13px；选中态与 IconBar 同语言（`--selected-bg` 琥珀底或 `--hover-bg` 墨蓝底，视层级而定）。Tab 栏为终端切换器，激活 Tab 带状态色指示（运行=绿、pending=琥珀）。
+项目下直接混排 Claude Code 与 Codex CLI。项目/会话树是唯一会话 Tab 系统，没有第二个 Native Tab 栏。切换只改变显示/选择；归档是 Desk 索引状态，重命名是 Desk 显示元数据，都不改写 CLI 历史或向终端注入命令。
 
-### Status Indicators
-8px 圆点徽标（50% 圆角 + 2px 底色描边），语义色填充，重要事件 `pulse` 呼吸。会话状态：运行/思考/等待以圆点+颜色区分，绝不加文字噪音。
+### Shared interactions
+公共控件使用 `src/components/ui/`。compact/normal/primary 高度至少为 28/32/36px；会话尾部固定 20×28px。菜单支持方向键、Home/End、Enter/Escape；模态对话框陷阱焦点，危险操作不自动聚焦。长标签可以换行，不能压缩点击高度。Tooltip 的变换/裁切祖先真实像素检查仍待执行。
 
 ### Terminal（独立主题层）
-终端拥有独立于 GUI 的主题变量（`--terminal-*`）：浅色 GUI 下终端仍是 VS Code 风格浅灰（#f8f9fa/#1e1e1e 系），暗色 GUI 下为 #1e1e1e 底。唯一跨越两层的是琥珀金——终端光标恒为 `--accent-gold`。GUI 主题切换不重映射终端 ANSI 色。
+GUI 和终端主题独立，四种浅暗组合均受支持。`app.terminalPreferences` 同时供 Legacy Claude、Native Claude、Native Codex 使用；16 个原有终端主题保留自己的前景、背景、ANSI、光标和选区颜色，不把 GUI 琥珀强加到所有主题。
+
+纯颜色/光标修改原地更新 xterm options，不 fit、重启、清空缓冲、改变选择或重放输入。字体/字号/行高只对当前可见终端合并一次 fit，后台延迟至显示。renderer 选择只影响新建终端；WebGL 失败保留原终端及同一配色。设置预览是静态非 PTY 内容。旧主题 ID、fontSize、webglRenderer 继续兼容，详见[终端偏好](docs/terminal-preferences.md)。
 
 ## Do's and Don'ts
 
 ### Do:
 - **Do** 一律引用 CSS 自定义属性（`var(--accent-primary)`），新代码不得裸写色值；浅色/暗色两套值必须成对修改。
 - **Do** 用背景三级分层（bg-primary → secondary → tertiary）表达静态层级。
-- **Do** 次要操作藏进 hover 浮现（opacity 0→1, 0.15s），保持界面安静。
+- **Do** 次要操作在 hover/focus 时浮现（opacity 0→1, 0.15s），保持界面安静。
 - **Do** 所有过渡统一 0.15s ease，且具名属性列表（`background-color, color, border-color, opacity, transform, box-shadow`），禁用 `transition: all`（防 layout 属性泄漏）；徽标脉冲用 `pulse 2s ease-in-out infinite`。
 - **Do** 可交互元素用墨蓝、激活态用琥珀，焦点环保持 2px outline + 2px offset。
 
@@ -269,4 +275,4 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 - **Don't** 给静态卡片/面板加常驻阴影——阴影只给弹层与 hover 响应。
 - **Don't** 在 GUI 层模仿终端配色；终端主题独立（`--terminal-*`），两层不混用。
 - **Don't** 让琥珀金出现在非激活的可点击元素上。
-- **Don't** 使用小于 10px 的字号。
+- **Don't** 扩散小于 10px 的字号；当前会话日期尾槽的 9px 例外需实际像素验收。

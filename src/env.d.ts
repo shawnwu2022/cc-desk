@@ -2,6 +2,7 @@
 /// <reference types="vue/compiler-sfc" />
 
 declare const __APP_VERSION__: string
+declare const __APP_BUILD_COMMIT__: string
 
 declare module '*.vue' {
   import type { DefineComponent } from 'vue'
@@ -10,9 +11,7 @@ declare module '*.vue' {
 }
 
 // Tauri API 类型声明（由 @tauri-apps/api 提供，此处仅作补充）
-declare module '@tauri-apps/api/core' {
-  export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>
-}
+// Use the installed core declarations; an ambient replacement hid Channel.
 
 declare module '@tauri-apps/api/event' {
   export type UnlistenFn = () => void
@@ -37,4 +36,9 @@ declare module '@tauri-apps/plugin-dialog' {
   }
 
   export function open(options?: OpenOptions): Promise<string | string[] | null>
+  // Only the option subset used here is declared; dialog results are not interpreted by Desk.
+  export function message(
+    message: string,
+    options?: string | { title?: string; kind?: 'info' | 'warning' | 'error' },
+  ): Promise<unknown>
 }

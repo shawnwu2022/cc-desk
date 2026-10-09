@@ -1,0 +1,557 @@
+{
+  "schema": 1,
+  "releaseCatalogSha256": "d7e6cedb53b416317a692f034cd3c8a652e7da9c340437052cf642430dceef4d",
+  "fixtures": [
+    {
+      "version": "0.14.0",
+      "selection": {
+        "id": 356487748,
+        "tag_name": "v0.14.0",
+        "name": "v0.14.0",
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2026-07-21T03:11:43Z",
+        "updated_at": "2026-07-21T03:11:43Z",
+        "created_at": "2026-07-20T01:28:10Z",
+        "html_url": "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.14.0",
+        "assets": [
+          {
+            "id": 482997220,
+            "name": "CC.Desk_0.14.0_x64-setup.exe",
+            "state": "uploaded",
+            "size": 6007615,
+            "digest": "sha256:826b44d86bd4ff610119f762b30cc30e9e532c502517b2910dd5a489064a0249",
+            "created_at": "2026-07-20T03:21:59Z",
+            "updated_at": "2026-07-20T03:22:00Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.14.0/CC.Desk_0.14.0_x64-setup.exe"
+          },
+          {
+            "id": 482997216,
+            "name": "CC.Desk_0.14.0_x64-setup.exe.sig",
+            "state": "uploaded",
+            "size": 420,
+            "digest": "sha256:cc0fc5ff490c160b4971fd6478945bff488517c33954db1ba48c1e6871ed4e44",
+            "created_at": "2026-07-20T03:21:59Z",
+            "updated_at": "2026-07-20T03:21:59Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.14.0/CC.Desk_0.14.0_x64-setup.exe.sig"
+          }
+        ]
+      },
+      "provenance": {
+        "sourceCommit": "ee62c337f5ef9d98144f5c01ad9c3676f2622fab",
+        "windowsOverrideAbsent": true,
+        "windowsOverrideSource": "https://github.com/shawnwu2022/cc-desk/tree/ee62c337f5ef9d98144f5c01ad9c3676f2622fab/src-tauri",
+        "tauriCli": {
+          "version": "2.10.1",
+          "packageLockSha256": "8faab7f4ad639a2866d87fa61ef05a1b19b2171bac6a8ed5a9c896bc4804ba78",
+          "source": "https://github.com/shawnwu2022/cc-desk/blob/ee62c337f5ef9d98144f5c01ad9c3676f2622fab/package-lock.json"
+        },
+        "sources": [
+          {
+            "file": "v0.17.7-installer.nsh",
+            "path": "installer.nsh",
+            "sha256": "f4d2d53b35173e223d8191c511f7f357a234ebed4cbb32bb563c8d63721241a4",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/ee62c337f5ef9d98144f5c01ad9c3676f2622fab/src-tauri/installer.nsh"
+          },
+          {
+            "file": "v0.14.0-tauri.conf.json",
+            "path": "tauri.conf.json",
+            "sha256": "4095eb3f2132774b9679c46bad9510de5dfd626684a32b2bdc79071b97b846fd",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/ee62c337f5ef9d98144f5c01ad9c3676f2622fab/src-tauri/tauri.conf.json"
+          }
+        ]
+      }
+    },
+    {
+      "version": "0.15.0",
+      "selection": {
+        "id": 357097323,
+        "tag_name": "v0.15.0",
+        "name": "v0.15.0",
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2026-07-21T03:27:00Z",
+        "updated_at": "2026-07-21T13:28:40Z",
+        "created_at": "2026-07-21T03:15:41Z",
+        "html_url": "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.15.0",
+        "assets": [
+          {
+            "id": 484196910,
+            "name": "CC.Desk_0.15.0_x64-setup.exe",
+            "state": "uploaded",
+            "size": 6004307,
+            "digest": "sha256:14f86e0858467ef397b61ba165993dd3b3c2d26744aaa9c8737f7dd63a80155a",
+            "created_at": "2026-07-21T03:26:25Z",
+            "updated_at": "2026-07-21T03:26:26Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.15.0/CC.Desk_0.15.0_x64-setup.exe"
+          },
+          {
+            "id": 484196904,
+            "name": "CC.Desk_0.15.0_x64-setup.exe.sig",
+            "state": "uploaded",
+            "size": 420,
+            "digest": "sha256:614b33d5ec642fe5cca70258f6413b3891f21bc5ef639e3d3230ed137791d868",
+            "created_at": "2026-07-21T03:26:25Z",
+            "updated_at": "2026-07-21T03:26:25Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.15.0/CC.Desk_0.15.0_x64-setup.exe.sig"
+          }
+        ]
+      },
+      "provenance": {
+        "sourceCommit": "e0036735a1dcb5b5297c9f528518bca6dc22501b",
+        "windowsOverrideAbsent": true,
+        "windowsOverrideSource": "https://github.com/shawnwu2022/cc-desk/tree/e0036735a1dcb5b5297c9f528518bca6dc22501b/src-tauri",
+        "tauriCli": {
+          "version": "2.10.1",
+          "packageLockSha256": "0ba10a475e2294d2da8345da5ca2238566f1375ce1b391a519c312f1d9d15dcf",
+          "source": "https://github.com/shawnwu2022/cc-desk/blob/e0036735a1dcb5b5297c9f528518bca6dc22501b/package-lock.json"
+        },
+        "sources": [
+          {
+            "file": "v0.17.7-installer.nsh",
+            "path": "installer.nsh",
+            "sha256": "f4d2d53b35173e223d8191c511f7f357a234ebed4cbb32bb563c8d63721241a4",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/e0036735a1dcb5b5297c9f528518bca6dc22501b/src-tauri/installer.nsh"
+          },
+          {
+            "file": "v0.15.0-tauri.conf.json",
+            "path": "tauri.conf.json",
+            "sha256": "66bd2acfe4fb88138b10ab6165ffc6d5a1a27d5af0039d820feffe7f4b13c88b",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/e0036735a1dcb5b5297c9f528518bca6dc22501b/src-tauri/tauri.conf.json"
+          }
+        ]
+      }
+    },
+    {
+      "version": "0.16.0",
+      "selection": {
+        "id": 371509463,
+        "tag_name": "v0.16.0",
+        "name": "CC Desk v0.16.0",
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2026-08-17T03:31:34Z",
+        "updated_at": "2026-08-17T03:31:34Z",
+        "created_at": "2026-08-17T03:07:50Z",
+        "html_url": "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.16.0",
+        "assets": [
+          {
+            "id": 517547102,
+            "name": "CC.Desk_0.16.0_x64-setup.exe",
+            "state": "uploaded",
+            "size": 6102539,
+            "digest": "sha256:547d9251286f0a3e78199590617913ac26d0ef2614325ad54a885ac75fd4fd3a",
+            "created_at": "2026-08-17T03:19:32Z",
+            "updated_at": "2026-08-17T03:19:33Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.16.0/CC.Desk_0.16.0_x64-setup.exe"
+          },
+          {
+            "id": 517547099,
+            "name": "CC.Desk_0.16.0_x64-setup.exe.sig",
+            "state": "uploaded",
+            "size": 420,
+            "digest": "sha256:4c81621bde4d64ec6b4fa449b96ffb2cdfba54eb42c92d595366d38a56dddf15",
+            "created_at": "2026-08-17T03:19:32Z",
+            "updated_at": "2026-08-17T03:19:32Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.16.0/CC.Desk_0.16.0_x64-setup.exe.sig"
+          }
+        ]
+      },
+      "provenance": {
+        "sourceCommit": "4e7b3e9cddfe219b198e9b3a3d9541bc2fb30515",
+        "windowsOverrideAbsent": true,
+        "windowsOverrideSource": "https://github.com/shawnwu2022/cc-desk/tree/4e7b3e9cddfe219b198e9b3a3d9541bc2fb30515/src-tauri",
+        "tauriCli": {
+          "version": "2.10.1",
+          "packageLockSha256": "d906148186a3dcff454dfe9281178a3c2ddce041ff830d37d43560906241ba28",
+          "source": "https://github.com/shawnwu2022/cc-desk/blob/4e7b3e9cddfe219b198e9b3a3d9541bc2fb30515/package-lock.json"
+        },
+        "sources": [
+          {
+            "file": "v0.17.7-installer.nsh",
+            "path": "installer.nsh",
+            "sha256": "f4d2d53b35173e223d8191c511f7f357a234ebed4cbb32bb563c8d63721241a4",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/4e7b3e9cddfe219b198e9b3a3d9541bc2fb30515/src-tauri/installer.nsh"
+          },
+          {
+            "file": "v0.16.0-tauri.conf.json",
+            "path": "tauri.conf.json",
+            "sha256": "a92792b9fdc14a0fb31b8a3bdc35a89ed5f850acd379f7960972468ae52b11ac",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/4e7b3e9cddfe219b198e9b3a3d9541bc2fb30515/src-tauri/tauri.conf.json"
+          }
+        ]
+      }
+    },
+    {
+      "version": "0.17.0",
+      "selection": {
+        "id": 379042543,
+        "tag_name": "v0.17.0",
+        "name": "CC Desk v0.17.0",
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2026-08-29T16:49:47Z",
+        "updated_at": "2026-08-29T16:49:47Z",
+        "created_at": "2026-08-29T16:36:52Z",
+        "html_url": "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.17.0",
+        "assets": [
+          {
+            "id": 535461745,
+            "name": "CC.Desk_0.17.0_x64-setup.exe",
+            "state": "uploaded",
+            "size": 6072998,
+            "digest": "sha256:81a649eae03c2b248bae512f5db0f0e6d28ffac66691d0db9dbc5f9e95b9c61b",
+            "created_at": "2026-08-29T16:46:08Z",
+            "updated_at": "2026-08-29T16:46:08Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.0/CC.Desk_0.17.0_x64-setup.exe"
+          },
+          {
+            "id": 535461747,
+            "name": "CC.Desk_0.17.0_x64-setup.exe.sig",
+            "state": "uploaded",
+            "size": 420,
+            "digest": "sha256:d81fcb1b10cbe7d649be81cf0ecef7e5ecd66dfae3e316455712e696dbcf8370",
+            "created_at": "2026-08-29T16:46:08Z",
+            "updated_at": "2026-08-29T16:46:08Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.0/CC.Desk_0.17.0_x64-setup.exe.sig"
+          }
+        ]
+      },
+      "provenance": {
+        "sourceCommit": "af068629c79095b9dc7d1935a9b6397975e98ae0",
+        "windowsOverrideAbsent": true,
+        "windowsOverrideSource": "https://github.com/shawnwu2022/cc-desk/tree/af068629c79095b9dc7d1935a9b6397975e98ae0/src-tauri",
+        "tauriCli": {
+          "version": "2.10.1",
+          "packageLockSha256": "64252fa5f7a377c64a1a4fe21eb41360e060364aebb56abd0afe18f747d94bfe",
+          "source": "https://github.com/shawnwu2022/cc-desk/blob/af068629c79095b9dc7d1935a9b6397975e98ae0/package-lock.json"
+        },
+        "sources": [
+          {
+            "file": "v0.17.7-installer.nsh",
+            "path": "installer.nsh",
+            "sha256": "f4d2d53b35173e223d8191c511f7f357a234ebed4cbb32bb563c8d63721241a4",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/af068629c79095b9dc7d1935a9b6397975e98ae0/src-tauri/installer.nsh"
+          },
+          {
+            "file": "v0.17.0-tauri.conf.json",
+            "path": "tauri.conf.json",
+            "sha256": "2ed0a4580e9b5d5e3c030ec447c07f4ef3b6c119cdb19232841f663c38eac92e",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/af068629c79095b9dc7d1935a9b6397975e98ae0/src-tauri/tauri.conf.json"
+          }
+        ]
+      }
+    },
+    {
+      "version": "0.17.1",
+      "selection": {
+        "id": 379164112,
+        "tag_name": "v0.17.1",
+        "name": "CC Desk v0.17.1",
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2026-09-11T06:02:21Z",
+        "updated_at": "2026-09-11T06:02:21Z",
+        "created_at": "2026-08-30T02:40:30Z",
+        "html_url": "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.17.1",
+        "assets": [
+          {
+            "id": 536067366,
+            "name": "CC.Desk_0.17.1_x64-setup.exe",
+            "state": "uploaded",
+            "size": 6068768,
+            "digest": "sha256:2d9eca64b6f0cdd43ce63bf674b4544ec9e0d01b79d70eacb42ffc37be04377c",
+            "created_at": "2026-08-30T02:53:03Z",
+            "updated_at": "2026-08-30T02:53:04Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.1/CC.Desk_0.17.1_x64-setup.exe"
+          },
+          {
+            "id": 536067370,
+            "name": "CC.Desk_0.17.1_x64-setup.exe.sig",
+            "state": "uploaded",
+            "size": 420,
+            "digest": "sha256:bb6d86a8c93a58858a43e00434586ad9e69b18b0128b81da7c84ed6b7c2dba85",
+            "created_at": "2026-08-30T02:53:03Z",
+            "updated_at": "2026-08-30T02:53:03Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.1/CC.Desk_0.17.1_x64-setup.exe.sig"
+          }
+        ]
+      },
+      "provenance": {
+        "sourceCommit": "83ee6e03d62a425f375c43841b35ae56fa7fbba6",
+        "windowsOverrideAbsent": true,
+        "windowsOverrideSource": "https://github.com/shawnwu2022/cc-desk/tree/83ee6e03d62a425f375c43841b35ae56fa7fbba6/src-tauri",
+        "tauriCli": {
+          "version": "2.10.1",
+          "packageLockSha256": "0f9dc39d01f20c058863f04e6d73e1b6e66aaefac1b7c5cb01ccdf22946c0ca9",
+          "source": "https://github.com/shawnwu2022/cc-desk/blob/83ee6e03d62a425f375c43841b35ae56fa7fbba6/package-lock.json"
+        },
+        "sources": [
+          {
+            "file": "v0.17.7-installer.nsh",
+            "path": "installer.nsh",
+            "sha256": "f4d2d53b35173e223d8191c511f7f357a234ebed4cbb32bb563c8d63721241a4",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/83ee6e03d62a425f375c43841b35ae56fa7fbba6/src-tauri/installer.nsh"
+          },
+          {
+            "file": "v0.17.1-tauri.conf.json",
+            "path": "tauri.conf.json",
+            "sha256": "d8e2399ba6c3b319aa246316afeead01e7483096ab9b377c8308995b57cfd494",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/83ee6e03d62a425f375c43841b35ae56fa7fbba6/src-tauri/tauri.conf.json"
+          }
+        ]
+      }
+    },
+    {
+      "version": "0.17.2",
+      "selection": {
+        "id": 379176757,
+        "tag_name": "v0.17.2",
+        "name": "CC Desk v0.17.2",
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2026-08-30T04:10:28Z",
+        "updated_at": "2026-08-30T04:10:28Z",
+        "created_at": "2026-08-30T03:59:14Z",
+        "html_url": "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.17.2",
+        "assets": [
+          {
+            "id": 536124911,
+            "name": "CC.Desk_0.17.2_x64-setup.exe",
+            "state": "uploaded",
+            "size": 6078917,
+            "digest": "sha256:d54c7854f716fd05c2617300e08dd46303e06588818c0122412401e57ca7b094",
+            "created_at": "2026-08-30T04:08:05Z",
+            "updated_at": "2026-08-30T04:08:06Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.2/CC.Desk_0.17.2_x64-setup.exe"
+          },
+          {
+            "id": 536124912,
+            "name": "CC.Desk_0.17.2_x64-setup.exe.sig",
+            "state": "uploaded",
+            "size": 420,
+            "digest": "sha256:2b37be2165e11a1d979d950646b608530ea7ecbbd750d908266be2a56eb0487f",
+            "created_at": "2026-08-30T04:08:05Z",
+            "updated_at": "2026-08-30T04:08:06Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.2/CC.Desk_0.17.2_x64-setup.exe.sig"
+          }
+        ]
+      },
+      "provenance": {
+        "sourceCommit": "a3776147a89703a2880e734b951d071c29afe68c",
+        "windowsOverrideAbsent": true,
+        "windowsOverrideSource": "https://github.com/shawnwu2022/cc-desk/tree/a3776147a89703a2880e734b951d071c29afe68c/src-tauri",
+        "tauriCli": {
+          "version": "2.10.1",
+          "packageLockSha256": "2af29bfb62b37479a4f3e9abe2fc175c5b04ce150b9bd2d943d7012cc1a7fbcf",
+          "source": "https://github.com/shawnwu2022/cc-desk/blob/a3776147a89703a2880e734b951d071c29afe68c/package-lock.json"
+        },
+        "sources": [
+          {
+            "file": "v0.17.7-installer.nsh",
+            "path": "installer.nsh",
+            "sha256": "f4d2d53b35173e223d8191c511f7f357a234ebed4cbb32bb563c8d63721241a4",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/a3776147a89703a2880e734b951d071c29afe68c/src-tauri/installer.nsh"
+          },
+          {
+            "file": "v0.17.2-tauri.conf.json",
+            "path": "tauri.conf.json",
+            "sha256": "6a5250fcf101b93e8e493d0cf9a80d596f1721ec0135b292b50082467518dd9f",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/a3776147a89703a2880e734b951d071c29afe68c/src-tauri/tauri.conf.json"
+          }
+        ]
+      }
+    },
+    {
+      "version": "0.17.5",
+      "selection": {
+        "id": 386785364,
+        "tag_name": "v0.17.5",
+        "name": "CC Desk v0.17.5",
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2026-09-11T04:26:39Z",
+        "updated_at": "2026-09-11T06:13:15Z",
+        "created_at": "2026-09-11T04:15:44Z",
+        "html_url": "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.17.5",
+        "assets": [
+          {
+            "id": 556465127,
+            "name": "CC.Desk_0.17.5_x64-setup.exe",
+            "state": "uploaded",
+            "size": 4485401,
+            "digest": "sha256:e23df98c3bd789cc199fa80aae805acad2c668bcd7c0417815c347553e1b8041",
+            "created_at": "2026-09-11T04:26:36Z",
+            "updated_at": "2026-09-11T04:26:36Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.5/CC.Desk_0.17.5_x64-setup.exe"
+          },
+          {
+            "id": 556465121,
+            "name": "CC.Desk_0.17.5_x64-setup.exe.sig",
+            "state": "uploaded",
+            "size": 420,
+            "digest": "sha256:135d39dc3ca7222ae6fe501294a4414f68569094f382a552ddbc13df388449ef",
+            "created_at": "2026-09-11T04:26:36Z",
+            "updated_at": "2026-09-11T04:26:36Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.5/CC.Desk_0.17.5_x64-setup.exe.sig"
+          }
+        ]
+      },
+      "provenance": {
+        "sourceCommit": "b4f7658c847a070cf64e9dba978c4e325a09bdce",
+        "windowsOverrideAbsent": true,
+        "windowsOverrideSource": "https://github.com/shawnwu2022/cc-desk/tree/b4f7658c847a070cf64e9dba978c4e325a09bdce/src-tauri",
+        "tauriCli": {
+          "version": "2.10.1",
+          "packageLockSha256": "d77051aab63bdbcba45b00679d9d71448b6f287464013aa4b26bc000e7c04617",
+          "source": "https://github.com/shawnwu2022/cc-desk/blob/b4f7658c847a070cf64e9dba978c4e325a09bdce/package-lock.json"
+        },
+        "sources": [
+          {
+            "file": "v0.17.7-installer.nsh",
+            "path": "installer.nsh",
+            "sha256": "f4d2d53b35173e223d8191c511f7f357a234ebed4cbb32bb563c8d63721241a4",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/b4f7658c847a070cf64e9dba978c4e325a09bdce/src-tauri/installer.nsh"
+          },
+          {
+            "file": "v0.17.5-tauri.conf.json",
+            "path": "tauri.conf.json",
+            "sha256": "1eacd0079bbb0a4e0558fc5e2217f0d13d3b39facff9d1d2f0634e3ebfc6a5c3",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/b4f7658c847a070cf64e9dba978c4e325a09bdce/src-tauri/tauri.conf.json"
+          }
+        ]
+      }
+    },
+    {
+      "version": "0.17.6",
+      "selection": {
+        "id": 387003216,
+        "tag_name": "v0.17.6",
+        "name": "CC Desk 0.17.6",
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2026-09-11T12:00:23Z",
+        "updated_at": "2026-09-11T12:03:06Z",
+        "created_at": "2026-09-11T11:53:53Z",
+        "html_url": "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.17.6",
+        "assets": [
+          {
+            "id": 557169459,
+            "name": "CC.Desk_0.17.6_x64-setup.exe",
+            "state": "uploaded",
+            "size": 4486992,
+            "digest": "sha256:a0df0178b4d4c4ab08f1229bbdf9b6d4c2c2e402139cbeaf9acd6bb9eb053afd",
+            "created_at": "2026-09-11T12:00:19Z",
+            "updated_at": "2026-09-11T12:00:20Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.6/CC.Desk_0.17.6_x64-setup.exe"
+          },
+          {
+            "id": 557169462,
+            "name": "CC.Desk_0.17.6_x64-setup.exe.sig",
+            "state": "uploaded",
+            "size": 420,
+            "digest": "sha256:74a470b1966f5b4cdd6840efe0509fe587ec2c7a9445a4529ba81de1b2f8339d",
+            "created_at": "2026-09-11T12:00:19Z",
+            "updated_at": "2026-09-11T12:00:20Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.6/CC.Desk_0.17.6_x64-setup.exe.sig"
+          }
+        ]
+      },
+      "provenance": {
+        "sourceCommit": "e67fcd87cc282ad1de7f3de693b8693485b9abf5",
+        "windowsOverrideAbsent": true,
+        "windowsOverrideSource": "https://github.com/shawnwu2022/cc-desk/tree/e67fcd87cc282ad1de7f3de693b8693485b9abf5/src-tauri",
+        "tauriCli": {
+          "version": "2.10.1",
+          "packageLockSha256": "a93d1aceec4cd47574fd1452c7949f9fcd9c7e324fc25ac2d3d35d6ce75151b4",
+          "source": "https://github.com/shawnwu2022/cc-desk/blob/e67fcd87cc282ad1de7f3de693b8693485b9abf5/package-lock.json"
+        },
+        "sources": [
+          {
+            "file": "v0.17.7-installer.nsh",
+            "path": "installer.nsh",
+            "sha256": "f4d2d53b35173e223d8191c511f7f357a234ebed4cbb32bb563c8d63721241a4",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/e67fcd87cc282ad1de7f3de693b8693485b9abf5/src-tauri/installer.nsh"
+          },
+          {
+            "file": "v0.17.6-tauri.conf.json",
+            "path": "tauri.conf.json",
+            "sha256": "80689c27523c70ce25897faa112c8dad738641c889ab1bad219c7bf280875948",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/e67fcd87cc282ad1de7f3de693b8693485b9abf5/src-tauri/tauri.conf.json"
+          }
+        ]
+      }
+    },
+    {
+      "version": "0.17.7",
+      "selection": {
+        "id": 392398817,
+        "tag_name": "v0.17.7",
+        "name": "CC Desk 0.17.7",
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2026-09-20T10:45:00Z",
+        "updated_at": "2026-09-20T10:45:00Z",
+        "created_at": "2026-09-20T10:34:43Z",
+        "html_url": "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.17.7",
+        "assets": [
+          {
+            "id": 576637999,
+            "name": "CC.Desk_0.17.7_x64-setup.exe",
+            "state": "uploaded",
+            "size": 4966193,
+            "digest": "sha256:e9ffbc5ba627f0c133a4385db404342a7344729339185e6f9b8ee6b5969086ac",
+            "created_at": "2026-09-20T10:44:56Z",
+            "updated_at": "2026-09-20T10:44:57Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.7/CC.Desk_0.17.7_x64-setup.exe"
+          },
+          {
+            "id": 576637991,
+            "name": "CC.Desk_0.17.7_x64-setup.exe.sig",
+            "state": "uploaded",
+            "size": 420,
+            "digest": "sha256:30b26f21c76d8c30bf4ca042ff699f1dd5d181af54f0e8956a3bff10650b80e2",
+            "created_at": "2026-09-20T10:44:56Z",
+            "updated_at": "2026-09-20T10:44:56Z",
+            "browser_download_url": "https://github.com/shawnwu2022/cc-desk/releases/download/v0.17.7/CC.Desk_0.17.7_x64-setup.exe.sig"
+          }
+        ]
+      },
+      "provenance": {
+        "sourceCommit": "77707e3b03187aa2ed96f5ab780f62f14c1e4ffc",
+        "windowsOverrideAbsent": false,
+        "windowsOverrideSource": "https://github.com/shawnwu2022/cc-desk/tree/77707e3b03187aa2ed96f5ab780f62f14c1e4ffc/src-tauri",
+        "tauriCli": {
+          "version": "2.10.1",
+          "packageLockSha256": "30572dfd43cff9a9c5f468394e96e5fc838f01ad5eb7eba270e78a5127f4ab9a",
+          "source": "https://github.com/shawnwu2022/cc-desk/blob/77707e3b03187aa2ed96f5ab780f62f14c1e4ffc/package-lock.json"
+        },
+        "sources": [
+          {
+            "file": "v0.17.7-installer.nsh",
+            "path": "installer.nsh",
+            "sha256": "f4d2d53b35173e223d8191c511f7f357a234ebed4cbb32bb563c8d63721241a4",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/77707e3b03187aa2ed96f5ab780f62f14c1e4ffc/src-tauri/installer.nsh"
+          },
+          {
+            "file": "v0.17.7-tauri.conf.json",
+            "path": "tauri.conf.json",
+            "sha256": "006cbc199bff682ec5c7f8290bc08387a9a3b20359a9150de28d128278f1d6e8",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/77707e3b03187aa2ed96f5ab780f62f14c1e4ffc/src-tauri/tauri.conf.json"
+          },
+          {
+            "file": "v0.17.7-tauri.windows.conf.json",
+            "path": "tauri.windows.conf.json",
+            "sha256": "9160838b9b5359a55c71639f728046ea1363811e20a31ed6515120de4f65fb74",
+            "source": "https://github.com/shawnwu2022/cc-desk/blob/77707e3b03187aa2ed96f5ab780f62f14c1e4ffc/src-tauri/tauri.windows.conf.json"
+          }
+        ]
+      }
+    }
+  ],
+  "nsisTemplate": {
+    "file": "tauri-2.10.1-installer.nsi",
+    "sha256": "fdb6e40b4a1792bc51e126dbc57cf28275e51745a5c9496bb13a2ef22fc192b8",
+    "source": "https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi"
+  }
+}

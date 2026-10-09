@@ -1,5 +1,74 @@
 # Changelog
 
+## [0.18.1] - 2026-10-05 (unreleased candidate)
+
+This entry summarizes changes since the last public release, 0.17.7, including the unreleased 0.18.0 test build. Version preparation does not mean a public release has been published.
+
+### Workspace and CLI support
+- Run Claude Code and Codex CLI side by side in one project/session tree, with independent launch configurations and registered projects; preserve existing Claude history through its compatibility adapter
+- Replace separate workspace surfaces with one responsive Workspace, Projects and Settings shell, keeping terminal hosts and scrollback mounted across navigation
+- Add quick new-session menus, advanced launch options, configuration editing, installed-program discovery and explicit executable confirmation
+- Add a searchable cross-project history chooser and direct confirmation for the exact selected historical session; explicit resume of an ended open Claude session retains its original identity
+- Add project registration, pinning, display names, hiding and removal with open-session safeguards; project removal preserves project files and CLI history
+- Present instructions, settings, MCP, skills, agents and plugins as scoped, read-only resource summaries; provider, credentials and native CLI configuration remain outside Desk's management boundary
+
+### Settings and interaction
+- Unify General, Appearance, Terminal, Launch configurations, Shortcuts, Update and About settings in English and Chinese
+- Add independent GUI appearance and shared terminal preferences, 16 terminal themes, configurable keyboard shortcuts and allowlisted About diagnostics
+- Use shared accessible menus, dialogs, tooltips and notifications, with CLI application marks, circular session-status icons, keyboard navigation and responsive layouts
+- Make the trailing × button the sole row/menu Close entry for open sessions, retaining the existing shortcut and exact-owner confirmation; remove duplicate Close/Stop menu entries
+- Explain that Close terminates the owned process and clears its terminal display, distinguish saved CLI history from unsaved content, and select another open session or empty-workspace guidance afterward
+- Make workspace source warnings dismissible while retaining bounded diagnostic details; improve native titlebar drag targets and centered empty-workspace guidance
+
+### Reliability and security
+- Authenticate native document, launch, terminal and resource access; freeze configuration/project/request/run identities and reject stale completions without falling back to the legacy PTY path
+- Add ordered staged input, complete paste framing, evidence-based clipboard/IME handling, bounded output acknowledgements/backpressure and exact-owner process cleanup
+- Keep uncertain launches and partial/unknown input or storage writes fail-closed, with read-only recovery instead of automatic replay
+- Isolate optional observer metadata from process control and redact paths, credentials, prompt/output bodies and raw errors from public diagnostics
+- Fix reactive-proxy launch validation, first-time profile revision handling, Windows inherited environment aliases, bounded large-transcript metadata reads and subagent-history filtering
+- Add mixed-version storage protection, low-resource/fault coverage and reproducible Rust toolchain pinning for ordinary CI and Windows test packages
+
+- Reduce all frontend log messages to a UTF-8 byte-count summary at the backend entry point; latch transport backpressure immediately at the high watermark
+- Correlate native input receipts with frozen request identities and parser-batch mode epochs; show a fixed input-paused diagnostic without replaying pending input
+
+### Historical versions and release status
+- Add the official historical-release catalogue and signed-package download/verification, plus guarded Windows recovery foundations and an isolated recovery-manager interface
+- Historical-version installation, switching and return-to-previous-version remain unavailable to ordinary users: the production roundtrip gate stays disabled pending real Windows install/start/return acceptance
+- Keep the existing 0.18.0 roundtrip acceptance inputs pinned to their original version; they do not certify 0.18.1
+- Retain signed-candidate-only automation and disabled public Release/updater promotion; automatic update installation remains unavailable without a trusted promotion contract
+- Real Claude Code / Codex CLI Layer-C certification remains pending an authorized target environment. Host/unit CI and reviewed browser screenshots do not replace real CLI, native-platform or roundtrip acceptance
+
+## [0.18.0] - 2026-10-01 (unreleased test build)
+
+### Features
+- Add the Native CLI workspace for Claude Code and Codex CLI with independent profiles, registered projects, native new/resume/raw launch entry, authenticated terminal control, and read-only native resource projections
+
+### Reliability
+- Add exact request/run/generation recovery, ordered staged input, bounded output ACK/backpressure, observer isolation, mixed-version rollback protection, and low-resource/fault stress coverage
+- Keep ambiguous launch and partial/unknown input writes fail-closed without automatic replay
+
+### Security
+- Keep native UI behind the authenticated document bridge, remove legacy PTY fallback, redact native diagnostics, and lock native resource panels to projection-only behavior
+
+### Changed
+- Unify Claude Code and Codex CLI in one project/session workspace; preserve existing Claude history through its runtime adapter
+- Localize Native CLI workspace controls in English and Chinese and expose both Claude Code and Codex documentation from About
+- Align product, architecture, persistence, roadmap, and release documentation with the dual-CLI boundary
+- Keep release automation candidate-only; public publishing remains disabled pending an explicit promotion design
+
+### Fixes
+- Copy validated native launch actions without cloning reactive store proxies, fixing new Claude and Codex session startup
+- Refresh the shared workspace revision before creating a missing safe CLI profile, fixing sequential first-time setup of both CLIs
+- Hand off selection after closing an active session and acknowledge failed action requests without discarding newer requests
+
+### User feedback
+- Use explicit native titlebar drag targets, corresponding CLI application marks and circular session status icons
+- Remove project expand/collapse tooltip bubbles and center the empty workspace guidance
+
+### Verification
+- Record D22-D27 execution evidence in the repository
+- Keep D20 real Claude Code / Codex CLI Layer-C certification BLOCKED until an authorized target environment supplies real evidence
+
 ## [0.17.7] - 2026-09-20
 
 ### Fixed

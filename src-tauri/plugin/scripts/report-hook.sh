@@ -1,32 +1,57 @@
 #!/bin/bash
-# CC Desk Hook Reporter — 跨平台兼容，任何异常均 exit 0
-#
-# 作用：将 Claude Code 的 hook 事件通过 HTTP POST 发送给 CC Desk
-# 触发条件：由 cc-desk-monitor plugin 的 hooks.json 注册
-#
-# 环境变量（由 CC Desk spawn PTY 时注入）：
-# - CC_BOX_HOOK_PORT   CC Desk HTTP 服务器端口（未设置 = 非 CC Desk 会话）
-# - CC_BOX_SESSION_ID  当前 PTY 的唯一标识（用于区分多终端）
-#
-# 安全保障：
-# - CC_BOX_HOOK_PORT 未设置时静默退出，不影响 Claude
-# - curl 不可用时跳过
-# - 所有错误重定向到 /dev/null
-# - 超时 3 秒，hook timeout 5 秒作为二次保险
-#
-# UTF-8 修复（v1.0.2）：
-# - 使用 curl -d @- 直接从 stdin 读取数据
-# - 绕过 bash 变量处理，避免多字节 UTF-8 序列被截断
-
-[ -z "$CC_BOX_HOOK_PORT" ] && exit 0
-
+# Optional observer: silent, bounded, no native hook decisions or retries.
+# The CLI's five-second hook timeout is the outer deadline; curl has three seconds.
+[ -n "$CC_BOX_HOOK_PORT" ] &&
+[ -n "$CC_DESK_OBSERVER_CAPABILITY" ] &&
+[ -n "$CC_DESK_OBSERVER_RUN" ] &&
+[ -n "$CC_DESK_OBSERVER_GENERATION" ] || exit 0
+case "$CC_BOX_HOOK_PORT" in *[!0-9]*|'') exit 0 ;; esac
 command -v curl >/dev/null 2>&1 || exit 0
+command -v od >/dev/null 2>&1 || exit 0
+command -v tr >/dev/null 2>&1 || exit 0
 
-# 直接从 stdin 读取数据发送，不经过 bash 变量处理
-# 这避免了 Windows Git Bash 对 UTF-8 多字节序列的截断问题
-curl -s --max-time 3 -X POST "http://127.0.0.1:$CC_BOX_HOOK_PORT/hook" \
-  -H "Content-Type: application/json" \
-  -H "X-CC-Box-Session: ${CC_BOX_SESSION_ID:-}" \
-  -d @- >/dev/null 2>&1
+# Assignment does not remove an inherited export attribute. Keep all private
+# values out of child environments before invoking any external command.
+export -n capability run_id generation event_id payload port
+capability="$CC_DESK_OBSERVER_CAPABILITY"
+run_id="$CC_DESK_OBSERVER_RUN"
+generation="$CC_DESK_OBSERVER_GENERATION"
+port="$CC_BOX_HOOK_PORT"
+unset CC_DESK_OBSERVER_CAPABILITY CC_DESK_OBSERVER_RUN CC_DESK_OBSERVER_GENERATION
 
+# C locale counts bytes. NUL or reaching byte 65,537 returns success: reject both.
+# EOF returns nonzero and preserves whitespace, CR/LF, backslashes and UTF-8 bytes.
+LC_ALL=C IFS= read -r -d '' -n 65537 payload && exit 0
+[ -n "$payload" ] || exit 0
+# Unique invocation identity is for replay suppression, not CLI event ordering.
+event_id="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+[ "${#event_id}" = 32 ] || exit 0
+
+quote_config() {
+  local value="$1"
+  export -n value
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\t'/\\t}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\v'/\\v}
+  printf '"%s"' "$value"
+}
+# Windows-native curl cannot open Bash's /proc/.../fd process-substitution path.
+# Stream escaped config through stdin instead: no files, secrets in argv, or
+# double use of stdin. data-raw never interprets a leading @ as a file to read.
+{
+  for header in \
+    'Content-Type: application/json' \
+    "X-CC-Desk-Run: $run_id" \
+    "X-CC-Desk-Generation: $generation" \
+    "X-CC-Desk-Capability: $capability" \
+    "X-CC-Desk-Event: $event_id" \
+    'X-CC-Desk-Observer-Source: claude-hook'; do
+    printf 'header = '; quote_config "$header"; printf '\n'
+  done
+  printf 'data-raw = '; quote_config "$payload"; printf '\n'
+} | curl -q -s --max-time 3 --connect-timeout 1 --noproxy '*' --proto '=http' \
+  -X POST "http://127.0.0.1:$port/observer" --config - >/dev/null 2>&1
 exit 0

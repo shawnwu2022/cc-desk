@@ -1,3 +1,7 @@
+import { excludedArtifactChannel } from '@/utils/updatePolicy';
+import { createProjectionClient } from './nativeProjection'
+import { createHistoryClient } from './versionHistory'
+import { createLaunchAttempt } from './cliLaunchAttempt';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -5,6 +9,7 @@ import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { pasteTrace } from '@/utils/pasteTrace';
 import { setPasteObserver } from '@/utils/pasteText';
+import { persistProjectRegistration, registerSelectedDirectory } from './projectRegistration';
 
 // Diagnostic executable only. No user settings, hooks or clipboard are persisted.
 if (import.meta.env.VITE_CC_DESK_PASTE_TRACE === '1') {
@@ -28,6 +33,8 @@ import type {
   SessionSearchResult,
   AppConfig,
   ProjectsState,
+  SessionUiRecord,
+  ProjectLaunchPreference,
   DefaultClaudeOptions,
   ProjectConfigResult,
   AgentInfo,
@@ -54,6 +61,8 @@ export type {
   SessionSearchResult,
   AppConfig,
   ProjectsState,
+  SessionUiRecord,
+  ProjectLaunchPreference,
   DefaultClaudeOptions,
   ProjectConfigResult,
   AgentInfo,
@@ -88,6 +97,7 @@ export type PtyInputSource =
   | 'xterm-ondata-paste'
   | 'clipboard-keyboard'
   | 'clipboard-dom'
+  | 'ime-fallback'
   | 'other'
 
 export const ptyInput = async (
@@ -214,14 +224,31 @@ export const deleteSessions = (projectPath: string, sessionIds: string[]): Promi
 export const setDisplayName = (path: string, alias: string): Promise<ProjectsState> =>
   invoke<ProjectsState>('set_display_name', { path, alias });
 
+export const upsertSessionUiRecord = (
+  recordKey: string,
+  record: SessionUiRecord,
+): Promise<ProjectsState> =>
+  invoke<ProjectsState>('upsert_session_ui_record', { recordKey, record });
+
+export const removeSessionUiRecord = (recordKey: string): Promise<ProjectsState> =>
+  invoke<ProjectsState>('remove_session_ui_record', { recordKey });
+
+export const setProjectLaunchPreference = (
+  projectPath: string,
+  preference: ProjectLaunchPreference,
+): Promise<ProjectsState> =>
+  invoke<ProjectsState>('set_project_launch_preference', { projectPath, preference });
+
 export const getDefaultClaudeOptions = (): Promise<DefaultClaudeOptions> =>
   invoke<DefaultClaudeOptions>('get_default_claude_options');
 
 export const saveDefaultClaudeOptions = (options: Partial<DefaultClaudeOptions>): Promise<void> =>
   invoke<void>('save_default_claude_options', { options });
 
-export const saveLastProject = (path: string): Promise<void> =>
-  invoke<void>('save_last_project', { path });
+export const saveLastProject = async (path: string): Promise<void> => {
+  await persistProjectRegistration(path);
+  await invoke<void>('save_last_project', { path });
+};
 
 export const getProjectConfig = (projectPath: string): Promise<ProjectConfigResult> =>
   invoke<ProjectConfigResult>('get_project_config', { projectPath });
@@ -265,7 +292,9 @@ export const checkForUpdates = async (): Promise<UpdateInfo> => {
       platformAsset: null,
     };
   }
-  return {
+  const summary: UpdateInfo = {
+    channel: excludedArtifactChannel(update.rawJson),
+    installEligible: false,
     version: update.version,
     currentVersion: __APP_VERSION__,
     hasUpdate: true,
@@ -273,6 +302,8 @@ export const checkForUpdates = async (): Promise<UpdateInfo> => {
     downloadUrl: '',
     platformAsset: null,
   };
+  if (typeof update.close === 'function') await update.close().catch(() => { /* Read-only resource cleanup does not change update eligibility. */ });
+  return summary;
 };
 
 // ============================================
@@ -296,13 +327,13 @@ export const logMessage = (level: 'error' | 'warn' | 'info' | 'debug', message: 
 // Dialog (Tauri dialog plugin)
 // ============================================
 
-export const selectDirectory = async (): Promise<{ path: string } | null> => {
+export const selectDirectory = async (options: { register?: boolean } = {}): Promise<{ path: string } | null> => {
   const result = await open({
     directory: true,
     multiple: false,
     title: 'Select Project Directory'
   } as any);
-  if (result && typeof result === 'string') {
+  if (result && typeof result === 'string' && (options.register === false || await registerSelectedDirectory(result))) {
     return { path: result };
   }
   return null;
@@ -312,3 +343,149 @@ export const selectDirectory = async (): Promise<{ path: string } | null> => {
 // 右键菜单打开目录
 export const onOpenDirectory = (callback: (dir: string) => void): Promise<UnlistenFn> =>
   listen<string>('open-directory', (event) => callback(event.payload));
+
+// The native document bridge owns the proof and raw transport. Never fall back
+// to an unguarded invoke when this document has no authenticated bridge.
+interface NativeDocumentBridge {
+  readonly instanceId: string;
+  invoke(command: string, payload: unknown, channel?: unknown): Promise<unknown>;
+}
+
+function nativeDocumentBridge(): NativeDocumentBridge {
+  const bridge = (window as Window & { __CC_DESK_DOCUMENT__?: NativeDocumentBridge }).__CC_DESK_DOCUMENT__;
+  if (!bridge || typeof bridge.invoke !== 'function') {
+    throw { code: 'DOCUMENT_BRIDGE_UNAVAILABLE' };
+  }
+  return bridge;
+}
+
+export async function cliStart<E>(
+  request: import('@/types/cli').LaunchRequest,
+  channel: import('@tauri-apps/api/core').Channel<E>,
+): Promise<unknown> {
+  return nativeDocumentBridge().invoke('cli_start', request, channel);
+}
+
+export async function cliGetLaunchStatus(requestId: string): Promise<unknown> {
+  return nativeDocumentBridge().invoke('cli_get_launch_status', { requestId });
+}
+
+export async function cliAckOutput(
+  ack: import('@/types/terminal').OutputAck,
+): Promise<void> {
+  await nativeDocumentBridge().invoke('cli_ack_output', ack)
+}
+
+export async function cliStop(
+  run: import('@/types/terminal').RunKey,
+): Promise<void> {
+  await nativeDocumentBridge().invoke('cli_stop', run)
+}
+
+export async function cliResize(
+  run: import('@/types/terminal').RunKey,
+  cols: number,
+  rows: number,
+): Promise<void> {
+  if (!Number.isInteger(cols) || cols <= 0 || cols > 65535
+    || !Number.isInteger(rows) || rows <= 0 || rows > 65535) {
+    throw new Error('INVALID_TERMINAL_SIZE')
+  }
+  await nativeDocumentBridge().invoke('cli_resize', {
+    ...run,
+    cols,
+    rows,
+  })
+}
+
+
+export const NATIVE_INPUT_UPLOAD_CHUNK_BYTES = 64 * 1024
+
+export async function cliWriteInput(
+  input: import('@/types/terminal').NativeInputFrame,
+): Promise<import('@/types/terminal').InputWriteReceipt> {
+  const bridge = nativeDocumentBridge()
+  const key = {
+    runId: input.runId,
+    generation: input.generation,
+    inputSeq: input.inputSeq,
+  }
+
+  try {
+    await bridge.invoke('cli_input_begin', {
+      ...key,
+      modeEpoch: input.modeEpoch,
+      totalBytes: String(input.bytes.byteLength),
+    })
+
+    for (let offset = 0; offset < input.bytes.byteLength; offset += NATIVE_INPUT_UPLOAD_CHUNK_BYTES) {
+      const chunk = input.bytes.subarray(
+        offset,
+        Math.min(offset + NATIVE_INPUT_UPLOAD_CHUNK_BYTES, input.bytes.byteLength),
+      )
+      await bridge.invoke('cli_input_chunk', {
+        ...key,
+        offset: String(offset),
+        bytes: Array.from(chunk),
+      })
+    }
+  } catch (failure) {
+    try {
+      await bridge.invoke('cli_input_abort', key)
+    } catch {
+      // Staging-only cleanup is best effort. Never hide or replace the original
+      // transport failure and never retry the user payload automatically.
+    }
+    throw failure
+  }
+
+  return bridge.invoke('cli_input_commit', key) as Promise<
+    import('@/types/terminal').InputWriteReceipt
+  >
+}
+
+export async function cliWriteProtocol(
+  run: import('@/types/terminal').RunKey,
+  bytes: Uint8Array,
+): Promise<import('@/types/terminal').ProtocolWriteReceipt> {
+  if (bytes.byteLength === 0 || bytes.byteLength > NATIVE_INPUT_UPLOAD_CHUNK_BYTES) {
+    throw new Error('INVALID_PROTOCOL_INPUT_SIZE')
+  }
+  return nativeDocumentBridge().invoke('cli_input_protocol', {
+    ...run,
+    bytes: Array.from(bytes),
+  }) as Promise<import('@/types/terminal').ProtocolWriteReceipt>
+}
+
+
+export function createCliLaunchAttempt<E>(
+  request: import('@/types/cli').LaunchRequest,
+  channel: import('@tauri-apps/api/core').Channel<E>,
+): import('./cliLaunchAttempt').LaunchAttempt {
+  const bridge = nativeDocumentBridge();
+  if (typeof bridge.instanceId !== 'string' || !bridge.instanceId) {
+    throw new Error('DOCUMENT_BRIDGE_UNAVAILABLE');
+  }
+  // Keep the original bridge as well as the original Channel. A new document
+  // or backend cannot silently inherit and restart an uncertain old attempt.
+  return createLaunchAttempt(request, bridge.instanceId, {
+    start: (frozen) => bridge.invoke('cli_start', frozen, channel),
+    status: (requestId) => bridge.invoke('cli_get_launch_status', { requestId }),
+    cancel: (frozen) => bridge.invoke('cli_cancel_launch', frozen),
+  });
+}
+
+export function createNativeProjectionClient(): import('./nativeProjection').ProjectionClient {
+  return createProjectionClient(nativeDocumentBridge());
+}
+export async function nativeGetScope(target: import('@/types/nativeProjection').ScopeTarget): Promise<import('@/types/nativeProjection').SourceRef> {
+  return createNativeProjectionClient().scope(target);
+}
+export async function nativeListResources(request: import('@/types/nativeProjection').ReadRequest): Promise<import('@/types/nativeProjection').ProjectionResult> {
+  return createNativeProjectionClient().read(request);
+}
+
+export function createNativeHistoryClient(): import('./versionHistory').HistoryClient {
+  const bridge = nativeDocumentBridge()
+  return createHistoryClient(bridge, () => nativeDocumentBridge() === bridge)
+}

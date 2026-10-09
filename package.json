@@ -1,7 +1,7 @@
 {
   "name": "cc-desk",
-  "version": "0.17.7",
-  "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code",
+  "version": "0.18.1",
+  "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code and Codex CLI",
   "license": "MIT",
   "author": {
     "name": "shawnwu2022"
@@ -21,7 +21,9 @@
     "terminal",
     "gui",
     "multi-session",
-    "developer-tools"
+    "developer-tools",
+    "codex-cli",
+    "codex"
   ],
   "scripts": {
     "dev": "vite",
@@ -39,7 +41,9 @@
     "test": "vitest run",
     "test:ci": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "test:visual": "playwright test tests/visual/unified-workspace.spec.ts tests/visual/version-manager.spec.ts",
+    "test:visual:unit": "vitest run --config vitest.visual.config.ts"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",
@@ -72,10 +76,12 @@
     "vue-i18n": "^9.14.4"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@tauri-apps/cli": "^2",
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^26.1.1",
     "@vitejs/plugin-vue": "^5.0.0",
+    "@vue/test-utils": "^2.5.1",
     "jsdom": "^25.0.0",
     "typescript": "^5.4.0",
     "vite": "^5.4.0",

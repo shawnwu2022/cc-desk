@@ -49,3 +49,8 @@ export function isPersistFailedError(error: unknown): boolean {
     (error as { code: unknown }).code === PERSIST_FAILED_CODE
   )
 }
+
+/** Only explicitly enabled Claude observers have a SessionStart handshake. */
+export function shouldRegisterSessionStartWaiter(cli: string, observerEnabled: boolean): boolean {
+  return cli === 'claude' && observerEnabled
+}

@@ -1,3 +1,7 @@
+import type { UpdateChannel } from '@/utils/updatePolicy'
+import type { ShortcutBindings } from '@/config/appShortcuts'
+import type { SessionRuntimeKind, UnifiedCliKind } from './unifiedSession'
+
 // App 配置相关类型定义
 
 export interface CheckResult {
@@ -16,13 +20,27 @@ export interface HomeData {
   startupState: ProjectStartupState
 }
 
+export type GuiThemeMode = 'light' | 'dark' | 'system'
+export type GuiDensity = 'standard' | 'compact'
+export type StartupDestination = 'workspace' | 'projects'
+
 export interface AppConfig {
+  shortcutBindings?: ShortcutBindings
   defaultContinue?: boolean
   defaultSkipPermissions?: boolean
   defaultCustomArgs?: string
   theme?: 'light' | 'dark'
+  guiThemeMode?: GuiThemeMode
+  guiDensity?: GuiDensity
+  sidebarWidth?: number
+  startupDestination?: StartupDestination
+  defaultNewCli?: UnifiedCliKind
   terminalTheme?: string
   fontSize?: number
+  terminalFontFamily?: string
+  terminalLineHeight?: number
+  terminalCursorStyle?: 'bar' | 'block' | 'underline'
+  terminalCursorBlink?: boolean
   webglRenderer?: boolean
   autoConnectIde?: boolean
   hiddenProjects?: string[]
@@ -34,10 +52,28 @@ export interface AppConfig {
 
 // 项目置顶 + 会话存档 + 项目别名持久化状态（~/.cc-box/projects.json，与 config.json 分开存储）
 // 后端 merge 为顶层替换：写入时须发送完整 pinnedProjects / archivedSessions / displayNames
+export interface SessionUiRecord {
+  runtime: SessionRuntimeKind
+  cli: UnifiedCliKind
+  projectPath: string
+  adapterSessionId: string
+  nativeSessionId?: string | null
+  title: string
+  lastActivityAt: number
+}
+
+export interface ProjectLaunchPreference {
+  lastCli: UnifiedCliKind
+  claudeLaunchConfigId?: string | null
+  codexLaunchConfigId?: string | null
+}
+
 export interface ProjectsState {
   pinnedProjects: string[]
   archivedSessions: Record<string, string[]>
   displayNames?: Record<string, string>
+  sessionRecords?: Record<string, SessionUiRecord>
+  launchPreferences?: Record<string, ProjectLaunchPreference>
 }
 
 export interface DefaultClaudeOptions {
@@ -60,6 +96,8 @@ export interface PlatformAsset {
 }
 
 export interface UpdateInfo {
+  channel?: UpdateChannel
+  installEligible?: boolean
   version: string
   currentVersion: string
   hasUpdate: boolean

@@ -1,368 +1,327 @@
-# 终端集成架构
+# Terminal integration
 
-## 架构概述
+CC Desk contains a legacy Claude terminal path and the Native CLI v3 path for Claude Code and Codex CLI.
 
-使用 **Tauri 2 + xterm.js + portable-pty** 直接运行 Claude CLI，实现完全的原生终端体验。
+## Unified host
 
-### 核心依赖
+The normal App mounts `UnifiedTerminalHost` in its only Workspace terminal slot.
+The host keeps every open Native terminal and one Legacy aggregator mounted across
+selection, navigation, and GUI-theme changes. Only visible terminals fit/focus;
+background output and Native protocol replies/ACK remain live. Hidden Legacy
+keyboard, paste, IME, copy, drag/drop and compatibility-command input are rejected.
+The existing pinned xterm user-input provenance signal preserves parser replies
+without classifying payload bytes. xterm `disableStdin` is never used for hidden
+terminals because it suppresses parser replies before onData. Real pinned-xterm
+parser/component tests cover DSR response generation with initial and changed
+visibility. Ended Legacy terminals retain scrollback. First Legacy spawn waits
+for output/exit listener readiness, independently of optional drag/drop, and then
+rechecks the original tab owner.
 
-| 包名 | 版本 | 用途 |
-|------|------|------|
-| @xterm/xterm | ^5.5.0 | 终端 UI 渲染 |
-| @xterm/addon-fit | ^0.11.0 | 自动适应容器大小 |
-| @xterm/addon-search | ^0.16.0 | 终端内搜索 |
-| @xterm/addon-web-links | ^0.12.0 | 链接点击 |
-| @xterm/addon-serialize | ^0.14.0 | 会话序列化 |
-| portable-pty | ^0.8 | 伪终端进程管理（Rust） |
-| tauri | ^2 | 应用框架 |
+`useUnifiedWorkspaceRuntime` supplies the real adapter ports and read-only bootstrap.
+It admits typed shell requests once by sequence. Current creation/resume dialogs, project/resource stores and typed confirmations own preparation and authorization before existing adapter dispatch.
+Native stop/recover receives the request/run/generation captured by the caller.
+Restart and close revalidate ownership after awaits; unknown status reads remain
+unknown and never authorize replay. Queued facade actions capture ownership before
+waiting. A local Legacy PTY generation prevents a late start/stop/restart/archive
+from modifying a replacement instance. These are host/unit-tested boundaries,
+not real CLI or platform certification.
 
-## Rust 后端 PTY 模块 (src-tauri/src/pty.rs)
+## Native CLI v3 — forward path
 
-### 核心功能
-
-```rust
-pub fn spawn(&self, cwd: String, cols: u16, rows: u16, args: Option<Vec<String>>) -> Result<PtyInfo>
-pub fn write(&self, id: &str, data: &str) -> Result<()>
-pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<()>
-pub fn kill(&self, id: &str) -> Result<()>
-pub fn kill_all(&self)
+```text
+NativeCliTerminal (xterm)
+        ↕
+authenticated document bridge
+        ↕
+launch_service / terminal_input / terminal_transport
+        ↕
+owned PTY + run supervisor
+        ↕
+Claude Code | Codex CLI
 ```
 
-### Claude 进程启动
+The Native CLI frontend must not fall back to legacy `ptySpawn`, `ptyInput` or `ptyKill`.
 
-Claude CLI 有多种安装方式，启动命令构建需要智能检测启动类型：
+## Launch identity
 
-#### 安装方式与文件特征
+Every native tab freezes:
 
-| 安装方式 | 命令 | 文件类型 | Windows路径示例 | Mac/Linux路径示例 |
-|---------|------|---------|-----------------|-------------------|
-| Native Install | `curl -fsSL https://claude.ai/install.sh \| bash` | 编译后可执行文件 | `~/.local/bin/claude.exe` | `~/.local/bin/claude` |
-| npm | `npm install -g @anthropic-ai/claude-code` | Node.js脚本 | `...\node_global\node_modules\@anthropic-ai\claude-code\cli.js` | `.../node_modules/@anthropic-ai/claude-code/cli.js` |
-| Homebrew | `brew install --cask claude-code` | 编译后可执行文件 | - | `/usr/local/bin/claude` |
-| WinGet | `winget install Anthropic.ClaudeCode` | 编译后可执行文件 | 系统PATH | - |
+- CLI kind;
+- registered project;
+- profile ID and exact profile revision;
+- request ID;
+- run ID;
+- generation;
+- launch action.
 
-#### 启动类型检测逻辑
+Supported actions:
 
-检测优先级（检测结果保存到配置避免重复检测）：
+- new;
+- native resume picker;
+- known native session ID;
+- exact raw argv.
 
-```
-1. 检查扩展名
-   path.ends_with(".js") → node
-2. 检查文件内容（前5行）
-   "#!/usr/bin/env node" → node
-   "// (c) Anthropic" + "Version:" → node (cli.js特征)
-3. Mac/Linux: 解析符号链接
-   canonicalize(path).ends_with(".js") → node
-   真实文件内容检测 → node
-否则 → direct
-```
+Raw argv is represented as JSON `string[]` and preserved as argument boundaries. It is not parsed with whitespace splitting.
 
-#### 命令构建逻辑
+An uncertain launch is recovered by querying the original request. CC Desk never treats uncertainty as permission to spawn a second process.
 
-```rust
-// Windows
-if ends_with(".exe") { CommandBuilder::new(&claude_path) }
-else if needs_node_launcher() { CommandBuilder::new("node").arg(&claude_path) }
-else { CommandBuilder::new("cmd.exe").arg("/C").arg(&claude_path) }
+## Input transport
 
-// Mac/Linux
-if needs_node_launcher() { CommandBuilder::new("node").arg(&claude_path) }
-else { CommandBuilder::new(&claude_path) }
+Native input is ordered before async work begins.
+
+The queue reserves monotone intent sequence numbers so keyboard, IME, paste and protocol traffic cannot overtake each other merely because one path is asynchronous.
+
+Large input uses:
+
+```text
+begin -> chunk* -> commit
 ```
 
-#### 配置存储
+Properties:
 
-检测结果保存到 `~/.cc-box/config.json`：`{ "claudeLauncherType": "node" | "direct" }`
+- bounded action/run staging budgets;
+- one exclusive writer region for a committed frame;
+- host-written and partial-or-unknown receipts are distinct;
+- partial/unknown freezes later user input;
+- no automatic replay after partial/unknown;
+- protocol bytes share the PTY writer lock;
+- ambiguous xterm `onData` bytes are not classified by DSR/DA content heuristics.
 
-PTY 启动时优先从配置读取，无值时检测并保存。
+Clipboard arbitration preserves bracketed-paste framing and requires explicit handling for unsafe ambiguous multiline/escape payloads. Image-only handling uses a proven native CLI/system capability rather than synthesizing text.
 
-### 数据流
+## Output transport
 
-```
-PTY reader → PtyDecoder::decode()（跨 read 状态 + 贪心解码）→ emit('pty-output', { id, data }) → frontend
-PTY exit → PtyDecoder::flush() 刷出残留 → emit('pty-exit', { id, exit_code }) → frontend
-```
+Output is emitted as bounded binary frames with exact offsets.
 
-**输出编码处理**（`src-tauri/src/pty.rs::read_output_loop` + `src-tauri/src/pty_decoder.rs`）：
+The frontend acknowledges only parsed contiguous frame boundaries.
 
-PTY 是字节流，子进程可能输出 UTF-8 或 GBK（Windows 中文 cmd.exe、某些 git 输出）。两层抽象协同：
+The backend validates:
 
-1. **`PtyDecoder`**（有状态流式解码器，跨 read 边界）
-   - 每次 `reader.read()` 的字节通过 `decoder.decode(&buf[..n])` 处理
-   - 内部维护 `pending: Vec<u8>`，把末尾潜在不完整字符（UTF-8 续字节不足 / GBK 首字节缺次字节）保留到下次拼接
-   - `find_safe_boundary` 贪心扫描：合法 UTF-8 序列前进对应字节、合法 GBK 双字节前进 2、末尾孤立 GBK 首字节保留、单字节非法前进 1
-   - EOF 时调用 `decoder.flush()` 强制刷出残留（不完整 UTF-8 按 GBK 兜底，优于丢失）
+- caller ownership;
+- run ID;
+- generation;
+- stream epoch;
+- monotone ACK;
+- ACK not beyond sent data;
+- ACK on a known frame boundary.
 
-2. **`decode_output`**（无状态字节 → 字符串，`src-tauri/src/platform.rs:117`）
-   - 贪心扫描：ASCII 直解、合法 UTF-8 多字节序列优先、否则尝试 GBK 双字节、最后兜底 `U+FFFD`
-   - 保证 UTF-8 与 GBK 混合输出（Claude CLI UTF-8 + cmd.exe GBK）各自正确解码，互不污染
-   - 同时被 `installer.rs` 等一次性处理子进程 stdout 的场景复用
+Backpressure includes per-run high/low watermarks and a global payload budget with FIFO waiter progress.
 
-历史教训：
-- v0.12.2 之前用 `String::from_utf8_lossy`，Windows 中文子进程的 GBK 字节变成黑色方块乱码
-- v0.12.2 改为 UTF-8 优先 + 整体回退 GBK，但混合输出时整体 GBK 解码污染 UTF-8 内容
-- v0.12.3 改为贪心扫描 + PtyDecoder 状态机，三个根源（整体 GBK 污染、carry 中间非法字节、GBK 跨 read 损坏）一并解决
+Route revocation releases reserved credit and wakes blocked peers. One degraded stream cannot release another run's credit or poison its transport.
 
-回归测试：`src-tauri/src/tests/pty_decoder.rs`（PtyDecoder 行为）、`src-tauri/src/tests/pty.rs::PtyDecode_*`（decode_output 行为）。
+## Resize / stop / exit
 
-## IPC 通道 (Tauri Commands)
+Native resize and stop go through authenticated native commands.
 
-### PTY 操作命令
+Natural exits are adopted by the exact run/generation. Restart is explicit and increments generation with new request/run IDs.
 
-| 命令 | 方向 | 参数 | 返回 |
-|------|------|------|------|
-| pty_spawn | renderer→main | { cwd, cols, rows, type, args } | PtySpawnResult |
-| pty_input | renderer→main | { id, data } | boolean |
-| pty_resize | renderer→main | { id, cols, rows } | boolean |
-| pty_kill | renderer→main | { id } | boolean |
-| pty_kill_all | renderer→main | - | void |
+Observer or UI diagnostic degradation is not process failure.
 
-### PTY 事件
+## Terminal protocol replies
 
-| 事件 | 方向 | 数据 |
-|------|------|------|
-| pty:output | main→renderer | { id, data } |
-| pty:exit | main→renderer | { id, exit_code, signal? } |
+Terminal-generated replies must have source provenance. Byte patterns in ambiguous user `onData` are not guessed to be protocol traffic.
 
-## 前端 API (src/api/tauri.ts)
+Where xterm/public APIs cannot prove provenance, that capability stays blocked rather than using content heuristics.
 
-### PTY 操作
+## DOM and error boundary
 
-```typescript
-interface PtySpawnOptions {
-  cwd: string
-  cols: number
-  rows: number
-  type: 'claude' | 'shell'
-  args?: string[]
-}
+Native terminal and structured resource surfaces are interpolation-only:
 
-ptySpawn(options: PtySpawnOptions): Promise<PtySpawnResult>
-ptyInput(id: string, data: string): Promise<boolean>
-ptyResize(id: string, cols: number, rows: number): Promise<boolean>
-ptyKill(id: string): Promise<boolean>
-ptyKillAll(): Promise<void>
-```
+- no `v-html`;
+- no `innerHTML`;
+- no payload `console.*` / `logMessage` path.
 
-### PTY 事件监听
+Public native failures are mapped to fixed safe codes. Raw serde errors, native paths, environment values and arbitrary exception messages do not become UI diagnostics.
 
-```typescript
-onPtyOutput((payload) => { ... }): Promise<UnlistenFn>
-onPtyExit((payload) => { ... }): Promise<UnlistenFn>
-```
+## Legacy Claude terminal
 
-## 渲染进程终端组件 (XTermTerminal.vue)
+The existing `XTermTerminal.vue -> pty.rs -> Claude Code` path remains for compatibility and legacy project/session workflows.
 
-### xterm.js 配置
+It continues to use the older Claude-specific environment/check/hook integration. Do not extend this path for new Codex/native features.
 
-```typescript
-const term = new Terminal({
-  fontFamily: 'Cascadia Code, Fira Code, Consolas, monospace',
-  fontSize: 12,
-  lineHeight: 1.2,
-  cursorBlink: true,
-  cursorStyle: 'bar',
-  theme: lightTheme,
-  allowProposedApi: true,
-  macOptionIsMeta: true,
-})
-```
+## Windows ConPTY
 
-### 数据绑定
+Windows packages a verified private ConPTY runtime and fails closed when that runtime is missing/corrupt rather than silently falling back to the known-bad path.
 
-```typescript
-// 用户输入 → PTY
-term.onData(data => { ptyInput(instance.ptyId, data) })
+D21 includes installed-runtime evidence for the tested Windows Server 2022 target. That result is target-specific.
 
-// PTY 输出 → Terminal
-onPtyOutput(({ id, data }) => { instance.term.write(data) })
+## Evidence
 
-// resize 同步
-term.onResize(({ cols, rows }) => { ptyResize(instance.ptyId, cols, rows) })
-```
+Host/unit/OS CI validates transport and lifecycle mechanics.
 
-### 渲染器加载与分包
+Real installed Claude Code / Codex CLI behavior belongs to D20 Layer C and remains BLOCKED until an authorized target environment runs the certification matrix.
 
-- DOM renderer 为默认路径，Unicode 11 与 IME 修复在 `term.open` 后同步初始化。
-- 只有新终端创建时检测到 `webglRenderer=true`，才动态导入 `@xterm/addon-webgl`；导入或初始化失败会记录警告并回退 DOM，不让异步错误传播到终端启动调用方。
-- WebGL 的 context-loss reload、五分钟 atlas reload 与终端销毁清理保持不变。WebGL addon 单独生成动态 chunk，不与 `xterm-vendor` 合并。
+## Task 12: preparation before Native admission
 
-### Ctrl+V 粘贴处理
+The unified catalog creates a synthetic starting row synchronously before invoking
+its configured creation preparer. The normal runtime preparer selects/freezes the
+launch configuration and ensures registration using `workspace.ensureRegistered`.
+Only an explicit creation can call this helper or prepare the `desk-safe-claude` /
+`desk-safe-codex` configurations through existing profile patch/CAS APIs. Safe
+configurations use a native launcher, empty default argv/env, disabled observer, and
+standard Claude permission checks; Codex retains its own permission semantics.
+Read-only bootstrap never registers a project, creates a configuration, or starts a
+CLI. The existing availability endpoint is a read-only filesystem/config preflight.
 
-```typescript
-// src/components/XTermTerminal.vue
-term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-  if (event.type !== 'keydown') return true
+Preparation failures retain an addressable failed row with a fixed safe error code.
+Retry is explicit, and unknown mutation outcomes reload state without replaying the
+write. Local preparation/session controls dispatch even while unrelated bootstrap is
+pending. Cancel/close invalidates the preparation owner; its late completion cannot
+admit a Native tab. Close cannot discard an admission already in flight. After
+admission the real Native tab owns launch/recovery/stop; no new runtime protocol or
+Legacy fallback is introduced. A Native tab with `stopped` plus no launch receipt is
+projected as starting until the existing terminal starts it; its unstarted admission
+can be explicitly cancelled with an exact-owned close.
 
-  // Cmd+C (macOS) 复制选中内容
-  if (event.metaKey && !event.ctrlKey && event.key === 'c') {
-    const selection = term.getSelection()
-    if (selection) {
-      event.preventDefault()
-      writeText(selection).catch(() => {})
-      return false
-    }
-    return true
-  }
+Creation/retry freezes profile revision as well as the existing request/run/generation.
+Only a matching `running` receipt with launch revision records project+CLI success
+preference through canonical `projectsState.setLaunchPreference`, preserving the
+other CLI field at serialized write execution. Failed preference persistence reloads
+metadata under canonical writer queue ownership without repeating the write, cannot
+fail or restart the running process, and is caught separately from launch handling.
+A recovery read failure marks the snapshot unverified; a queued update must obtain
+a new authoritative read or fail before mutation, preserving other CLI fields. Tab creation, unknown outcome, failure, preflight availability, stale
+receipts, and replaced attempts cannot record success. Older preparation completion
+cannot steal unified selection or clear a newer shell request. Explicitly selecting
+the same placeholder updates its selection-intent owner; admission transfers that
+latest selection to the real row, but cannot supersede a newer selection elsewhere
+or a newer in-flight activation. Selection intent is separate from the existing
+lifecycle-invalidating epoch, so closing an unrelated ended row cannot revoke a
+still-selected placeholder’s transfer. Close/archive stale-action checks are unchanged. The Task11 hidden
+parser/protocol path, user-input provenance gates, Native authenticated bridge,
+Legacy core-listener readiness, terminal binding, and no-replay behavior are unchanged.
 
-  // Ctrl+C 复制（有选中）或 SIGINT（无选中）
-  if (event.ctrlKey && !event.metaKey && event.key === 'c' && !event.shiftKey) {
-    const selection = term.getSelection()
-    if (selection) {
-      event.preventDefault()
-      writeText(selection).catch(() => {})
-      return false
-    }
-    return true
-  }
+## Task 13: source-bound restore admission
 
-  // Ctrl+Shift+C 强制复制
-  if (event.ctrlKey && event.shiftKey && event.key === 'C') {
-    event.preventDefault()
-    const selection = term.getSelection()
-    if (selection) {
-      writeText(selection).catch(() => {})
-    }
-    return false
-  }
+Historical restore bypasses the new-session preparer. The Native adapter freezes
+CLI/profile ID/profile revision/project ID/path/sessionKey/native Session ID, performs
+a fresh read from that exact authenticated source, rechecks for an existing owned
+attempt after the read, then asks the existing runtime to admit the tab. The runtime
+checks the frozen profile revision and registered project again. A changed or missing
+origin fails closed with configuration guidance; no default substitution, registry
+mutation, profile mutation or Legacy PTY fallback occurs.
 
-  // Ctrl+V / Cmd+V 粘贴
-  if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
-    event.preventDefault()
-    // 不走 term.paste：xterm 会把 \r?\n 转成 \r（回车），在 Claude 的 Ink TUI 里
-    // 触发光标回行首、后续覆盖前面。commitPaste 走完整流程：同步捕获 ptyId →
-    // readText() → isPasteStale 复核（防 restart 重建后把旧粘贴写到新 PTY）→
-    // 构造 payload（规范化 LF + bracketed 包装）→ 写 PTY。
-    // 剪贴板无文本（截图场景 readText reject）时经 imageFallback 转发 CLI 图片
-    // 粘贴键字节，由 CLI 自行读剪贴板插 [Image #N]。
-    // 依赖注入，便于测试"重启重建后不写新 PTY"的竞态行为。
-    commitPaste(
-      readText,
-      () => terminalInstances.get(tabId),
-      text => buildPastePayload(text, term.modes.bracketedPasteMode, term.options.ignoreBracketedPasteMode ?? false),
-      ptyInput,
-      () => imagePasteBytes(platform),
-    ).catch(() => {})
-    return false
-  }
+Same-origin concurrent restores share one in-flight admission. Existing Native tabs,
+including starting and unknown attempts, are activated without allocating new
+request/run/generation values. Different CLI/source/profile/revision/registration
+identities do not collapse merely because a raw Session ID is the same. Legacy
+restores similarly coalesce and recheck project-scoped active claims after reading.
+The caller's cancellation guard prevents a delayed history check from admitting a
+tab after dialog dismissal/navigation. Unified selection epochs still prevent older
+admission from stealing a newer selection.
 
-  // Shift+Enter => 插入换行（模拟 \ + Enter）
-  if (event.shiftKey && event.key === 'Enter') {
-    event.preventDefault()
-    const instance = terminalInstances.get(tabId)
-    if (instance) {
-      ptyInput(instance.ptyId, '\\\r')
-    }
-    return false
-  }
+Direct-ID and native-picker restore use the already supported launch actions, an
+explicit configuration revision and explicit registered project identity. Their
+saved CLI settings remain authoritative; picker interaction and final Session ID
+availability are handled by the CLI. Host tests do not certify actual CLI restore
+behavior. Task11 parser/provenance/readiness, exact attempt ownership, authenticated
+transport and input/output no-replay paths are unchanged.
 
-  return true
-})
-```
+Review repair: an exhausted offset page chain is not a stable absence proof. Only a
+single complete authenticated response with the original sourceRootKey/sessionKey
+can authorize missing-record cleanup; changing root identity or multi-page negative
+results fail closed. Positive source-bound records are still usable. Coalescing uses
+independent per-caller cancellation ownership: a later explicit confirmation may
+own one admission, and canceled callers cannot publish its result as their own.
 
-`commitPaste` 的核心竞态守卫：`readText()` 是异步的，等待期间 restartTab 可能重建同 tabId 的新 PTY；实现先同步捕获按键瞬间的 ptyId，完成后复核当前实例仍是同一 ptyId（`isPasteStale`），否则丢弃过期粘贴。详见 `src/utils/pasteText.ts`。
+## Task 16: consequential action ownership
 
-剪贴板无文本（截图场景）时 `commitPaste` 经第 5 参 `imageFallback` 转发 CLI 图片粘贴键字节（Windows `\x1bv`、其余 `\x16`），详见 [docs/interaction.md](interaction.md) 的「图片粘贴分流」。
+The UI never interprets confirmation as evidence that an unknown Native launch is
+safe to repeat. For restart-unknown, the production runtime first calls the existing
+`recoverNative(tabId, exactAttempt)`, rechecks full ownership, refuses a still-unknown
+state, stops a known live attempt through `stopNative`, and requires a definite ended
+state with a launch receipt before the catalog's normal restart route. The existing
+Native terminal already verifies the stop receipt; no transport or retry protocol
+was introduced.
 
-## 终端缩放与布局刷新
+Confirmed close/archive freezes adapter ownership when the dialog opens and again
+when the queued action is admitted. Guards cover Native request/run/generation and
+profile/project/source/action identity. Legacy close awaits the existing exact-PTY
+stop before removing the tab; archive and async rename recheck the captured PTY and
+generation after awaits. Cancellation or replacement can leave an already-stopped
+original session open, but cannot close/archive a replacement or start a late run.
 
-### 三层架构
+Feedback ownership is separate from process ownership. A completed authorized action
+may still update its canonical source, but its stale success/error cannot be published
+for a newer user selection, shell request, navigation surface or runtime attempt.
+Canonical archive/restore/UI-record mutation recovery remains in `projectsState`'s
+single writer queue. Profile deletion similarly serializes read-only reconciliation
+within its own existing profile CAS queue. No successful reload automatically repeats
+a side effect, and no new Native code falls back to Legacy PTY commands.
 
-```
-容器尺寸变化（flexbox / 窗口缩放）
-  → ResizeObserver 检测 .xterm-container 尺寸变化
-    → fitCurrentTerminal()（debounce 50ms，仅 trailing）
-      → requestAnimationFrame → FitAddon.fit()
-        → xterm.js 计算新的 cols/rows
-          → term.onResize → ptyResize(ptyId, cols, rows)
-```
+Writer admission is the final synchronous boundary before IPC, after any canonical
+queue wait and initial metadata load. Both archive adapters pass an optional
+`beforeMutation(): void` guard through `projectsState.archiveSession`; the Legacy
+session store forwards it unchanged. The guard throws before mutation error handling,
+so a canceled or replaced owner causes no archive write, readback, or writer error.
+Issued writes retain existing read-only reconciliation and are never replayed.
+Project removal similarly guards `workspace.remove` inside its CAS queue, then guards
+queued `unpinProject` against cancellation, open sessions, and any replacement
+registration. Prior completed steps may remain (stopped session, hidden/unregistered
+project); cancellation never invents compensation or deletes project/history files.
 
-### 核心：fitCurrentTerminal（debounce）
 
-```typescript
-const fitCurrentTerminal = debounce(() => {
-  if (isMinimized || !currentDisplayTabId.value) return
-  const instance = terminalInstances.get(currentDisplayTabId.value)
-  if (instance) {
-    requestAnimationFrame(() => instance.fitAddon.fit())
-  }
-}, 50) // 仅 trailing，频繁调用时只有最后一次生效
-```
+## Saved configuration deletion and retained runs (Task 19)
 
-- **防抖**：侧边栏 CSS transition（250ms）期间连续触发只生效一次
-- **最小化守卫**：`isMinimized` 为 true 时跳过，避免无意义 fit
-- **仅当前 tab**：`fitCurrentTerminal` 只处理活跃 tab
+Deleting a saved configuration is a profile-repository CAS mutation and has no process
+side effect (`cli/profile_service.rs` → `cli/storage.rs`, Delete arm). Run resource
+scope in `cli/native_projection/service.rs` uses the retained launch snapshot and
+checks the same Arc through exact run/generation access; it does not reload the saved
+profile. Profile scopes still require that record and exact revision. This is source
+inspection evidence, not a new Rust or real-CLI certification run.
 
-### 10 个触发源
+The frontend admits deletion for an existing tab only when `nativeTabs` holds positive
+receipt evidence bound to its full attempt/profile/project/source/action identity.
+Local status strings or a non-null revision alone do not establish that evidence.
+Starting attempts, unadmitted tabs, uncertain attempts without a prior trustworthy
+receipt, and unified preparation before tab creation block deletion. Preparation with
+no selected configuration conservatively blocks deletion within the same CLI until it
+resolves. Queue admission rechecks the same profile and workspace CAS revisions.
+Saved edits/deletion never change current tab identity or terminal mount; restart or
+historical resume with a missing/changed original configuration fails closed with
+configuration guidance. No substitute default is chosen for those historical actions.
 
-| # | 触发源 | fit 路径 | rAF | 范围 |
-|---|--------|---------|-----|------|
-| 1 | **ResizeObserver** | `fitCurrentTerminal()` (debounced) | 是 | 仅当前 tab |
-| 2 | **侧边栏开关** | 经由 ResizeObserver（flex 布局重算） | 是 | 仅当前 tab |
-| 3 | **Tab 切换** | 直接 `fitAddon.fit()` | 是 | 目标 tab |
-| 4 | **字体大小改变** | watcher 直接 `fitAddon.fit()` | 否（同步） | **所有实例** |
-| 5 | **视图可见性恢复** | `fitCurrentTerminal()` via nextTick | 是 | 仅当前 tab |
-| 6 | **窗口缩放/最大化/半屏** | 经由 ResizeObserver | 是 | 仅当前 tab |
-| 7 | **新建 Tab** | `fitAddon.fit()` after `term.open()` | 是 | 新 tab |
-| 8 | **重启 Tab** | `fitAddon.fit()` after `term.open()` | 是 | 新 tab |
-| 9 | **Vue ref 回调** | `fitAddon.fit()` | 是 | 对应 tab |
-| 10 | **同 tab 重选** | `fitCurrentTerminal()` | 是 | 当前 tab |
+The last-default ruling is deliberate: delete clears the stale global UI preference
+and selects another existing same-CLI configuration if available. If none remains,
+the UI explicitly describes the safe fallback; only a subsequent explicit New session
+materializes it via the existing Task12 preparer. Deletion does not create a second
+configuration or process, and project last-success metadata is untouched.
 
-### 最小化/恢复处理
 
-```typescript
-win.onResized(async () => {
-  const minimized = await win.isMinimized()
-  if (isMinimized && !minimized) {
-    // 从最小化恢复
-    isMinimized = false
-    await nextTick()
-    instance.fitAddon.fit()
-    instance.term.refresh(0, instance.term.rows - 1) // 刷新渲染
-    instance.term.scrollToBottom()                     // 滚动到底部
-  } else {
-    isMinimized = minimized
-  }
-})
-```
+## Shared appearance without runtime replacement
 
-恢复时三步操作保证布局无变化：`fit()` 重算尺寸 → `refresh()` 刷新脏区域 → `scrollToBottom()` 保持滚动位置。
+Legacy Claude, Native Claude and Native Codex consume the same computed
+`app.terminalPreferences` through `terminalAppearanceOptions` / `applyTerminalAppearance`.
+Theme and cursor deltas update existing xterm options without resize, terminal
+recreation, process launch, scrollback/selection mutation or input. Font metrics
+request one coalesced visible fit; hidden terminals defer fitting until shown and
+recheck lifetime/visibility at the frame boundary. A new renderer choice affects only
+new terminals. WebGL load/context failure retains the terminal and latest colors.
 
-### PTY 初始尺寸
+The fixed Settings preview opens no xterm, bridge or PTY. GUI light/dark × terminal
+light/dark independence, hidden parser replies, exact output ACK and selection/host
+retention have frontend/real-pinned-xterm tests; actual CLI, GPU and OS glyph behavior
+remain separate. Full preference persistence rules are in [terminal preferences](terminal-preferences.md).
 
-`startTab` / `restartTab` 以 `cols: 80, rows: 24` 创建 PTY，随后 `fitAddon.fit()` 修正为实际容器尺寸。存在短暂窗口，PTY 可能在 resize 到达前输出内容。
+## Rename, stress and final evidence limits
 
-## 快捷键处理机制
+Unified history/live rename updates only `projectsState` display metadata. It neither
+sends Legacy `/rename` nor edits CLI transcripts. Canonical queue admission rechecks
+history identity and Native/Legacy attempts; late completions cannot name a replacement.
+New/raw Native tabs without authenticated history association retain tab-local names;
+no title/raw-ID/default inference associates later discovered history.
 
-**应用级快捷键由 `useAppShortcuts.ts` 通过 DOM `keydown` capturing phase 统一处理；终端快捷键由 xterm.js + PTY 原生处理。**
+Task 24 host tests cover 50 projects × 100 mixed sessions, 30 open descriptors and 120
+state/selection/layout cycles. They do not spawn 30 real CLIs or measure browser
+throughput. The current Task 25 frontend build/typecheck/full-suite result belongs to
+[U01–U10](superpowers/execution/U01-U10.md); earlier D21 installed ConPTY evidence is
+historical and cannot certify this new UX package. Rust is NOT RUN locally, rendered
+screenshots remain BLOCKED_VISUAL, and D20 remains BLOCKED_EXTERNAL_TARGET.
 
-- 应用快捷键：`window.addEventListener('keydown', handler, true)` → capturing phase 拦截 → 匹配后 `preventDefault` + `stopPropagation`
-- 终端快捷键：xterm.js 通过 `onData` 发送到 PTY，由 Claude CLI 处理
-- 终端视图可见性检查：`document.querySelector('[data-terminal-view]').checkVisibility()`
+## Native activity projection after final review
 
-### 应用级快捷键
+Native launch receipts update `lastActivityAt` only when launch/state/error meaning changes; identical healthy polls neither refresh activity nor clear a transport diagnostic. Accepted output and successfully admitted user keyboard/explicit-text/paste operations report activity through the existing terminal binding. Parser replies and ACKs do not count as user activity. The terminal checks its exact request/run/generation and binding lifetime before publishing, while `nativeTabs.touch` coalesces reactive input/output timestamps to at most one publication per second per attempt. No delayed timer keeps idle rows recent.
 
-| 快捷键 | 功能 |
-|--------|------|
-| Ctrl+, | 打开设置 |
-| Ctrl+Shift+N | 新建应用实例 |
-| Ctrl+Shift+←/→ | 窗口左移/右移半屏 |
-| Ctrl+Shift+R | 重启应用 |
-| Ctrl+Shift+H | 回到项目列表 |
-| Ctrl+=/- | 增大/减小字体 |
-| Ctrl+0 | 重置字体 |
-| Alt+N | 新建会话（终端可见时） |
-| Alt+R | 重启会话（终端可见时） |
-| Alt+↑/↓ | 切换标签（终端可见时） |
+Optional attention consumes the existing exact-run observer's projected state. Only an active ordered `waiting` projection means `needs-user`; unordered/raw events remain unknown. Repeated projected attention does not refresh timestamps, and unknown/failed/starting/stopped/replacement state clears previous attention. Subscriptions are passive and released with the run binding; they do not enable the backend observer or control a CLI. These are host/source contracts, not D20 real-CLI or throughput certification.
 
-详细快捷键架构 → [docs/interaction.md](interaction.md)
-
-## 进程生命周期
-
-```
-启动 → 环境检查 → PTY spawn → Claude CLI 运行
-                              ↓
-                       用户交互（双向数据流）
-                              ↓
-关闭窗口 → kill_all() → PTY 进程清理 → Claude CLI 退出
-```
+During a pending launch receipt, a starting tab retains one latest safe attention projection bound to its exact request/run/generation. It displays needs-user only after that same attempt is confirmed running. A newer unknown projection replaces waiting; unknown/failed/ended process state, restart, close and clear discard the pending projection. This bounded temporary state contains no raw observer event and cannot establish process state or input authority.

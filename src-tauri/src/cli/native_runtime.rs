@@ -1,0 +1,523 @@
+//! Application-owned document/launch composition. Never deserialized authority.
+use super::document::{native::build_main, DocumentBinding, DOCUMENT_HEADER};
+use super::launch_service::{LaunchService, NativeRun, RunAccess};
+use super::output_route::{parse_channel, CHANNEL_HEADER};
+use super::profiles::error;
+use super::run_registry::{LaunchStatus, RunKey};
+use super::snapshot::CallerIdentity;
+use super::storage::WorkspaceRepository;
+use super::types::SafeError;
+use crate::run_supervisor::NativeRunSupervisor;
+use crate::terminal_input::{
+    write_host_frame, InputAbortRequest, InputBeginRequest, InputChunkRequest, InputCommitRequest,
+    InputStager, InputWriteReceipt, ProtocolInputRequest, ProtocolWriteReceipt,
+};
+use crate::terminal_transport::{OutputAck, OutputFrame, TerminalTransports};
+use parking_lot::Mutex;
+use serde::Deserialize;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::http::HeaderMap;
+use tauri::ipc::{InvokeBody, Request};
+use tauri::utils::config::{Config, FrontendDist, WindowConfig};
+use tauri::{Manager, Runtime, Url, Webview, WebviewUrl, WebviewWindow};
+
+pub(crate) struct NativeRuntime {
+    service: Arc<LaunchService>,
+    projections: Arc<super::native_projection::service::ProjectionService>,
+    binding: Mutex<Option<Arc<DocumentBinding<NativeRun>>>>,
+    initialized: AtomicBool,
+    transports: Arc<TerminalTransports>,
+    inputs: Arc<InputStager>,
+    supervisor: Option<Arc<NativeRunSupervisor>>,
+}
+impl NativeRuntime {
+    #[allow(dead_code)] // Staged native WebView harnesses construct isolated runtimes.
+    pub(crate) fn new(service: Arc<LaunchService>) -> Self {
+        Self::with_components(service, Arc::new(TerminalTransports::new()), None)
+    }
+
+    fn with_components(
+        service: Arc<LaunchService>,
+        transports: Arc<TerminalTransports>,
+        supervisor: Option<Arc<NativeRunSupervisor>>,
+    ) -> Self {
+        Self {
+            projections: Arc::new(super::native_projection::service::ProjectionService::new(
+                service.clone(),
+            )),
+            service,
+            binding: Mutex::new(None),
+            initialized: AtomicBool::new(false),
+            transports,
+            inputs: Arc::new(InputStager::new()),
+            supervisor,
+        }
+    }
+
+    pub(crate) fn production(
+        admission: crate::version_history::maintenance::AdmissionGate,
+    ) -> Result<Self, SafeError> {
+        let transports = Arc::new(TerminalTransports::new());
+        let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+        let mut service = LaunchService::new(
+            WorkspaceRepository::open_admitted(
+                dirs::home_dir()
+                    .ok_or_else(|| error("HOME_UNAVAILABLE"))?
+                    .join(".cc-box")
+                    .join("cli-workspace.v1.json"),
+                admission,
+            )?,
+            None,
+            Some(supervisor.clone()),
+        );
+        if let Some(observer) = crate::hook_server::observer_host() {
+            service = service.with_observer(observer);
+        }
+        Ok(Self::with_components(
+            Arc::new(service),
+            transports,
+            Some(supervisor),
+        ))
+    }
+    pub(crate) fn initialize_main<T: Runtime, M: Manager<T>>(
+        &self,
+        manager: &M,
+        window: &WindowConfig,
+    ) -> Result<WebviewWindow<T>, SafeError> {
+        if self
+            .initialized
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(error("DOCUMENT_WINDOW_UNAVAILABLE"));
+        }
+        let url = expected_main_url(manager.config(), window, tauri::is_dev())?;
+        let bound = build_main(manager, window, url, self.service.registry().clone())?;
+        *self.binding.lock() = Some(Arc::new(bound.binding));
+        Ok(bound.window)
+    }
+    pub(crate) fn binding(&self) -> Result<Arc<DocumentBinding<NativeRun>>, SafeError> {
+        self.binding
+            .lock()
+            .clone()
+            .ok_or_else(|| error("FORBIDDEN"))
+    }
+    pub(crate) async fn start<T: Runtime>(
+        &self,
+        webview: Webview<T>,
+        request: Request<'_>,
+    ) -> Result<LaunchStatus, SafeError> {
+        let binding = self.binding()?;
+        let (caller, launch) = binding.start_native(&webview, &request)?;
+        if let Some(status) = self.service.registry().existing(&caller, &launch)? {
+            return Ok(status);
+        }
+        let admission = self.service.admit_start()?;
+        let descriptor = parse_channel(request.headers());
+        let proof = request.headers()[DOCUMENT_HEADER].clone();
+        let service = self.service.clone();
+        // Keep only validated routing metadata, not the raw body or arbitrary
+        // request headers. A replay never evaluates the connect closure.
+        tauri::async_runtime::spawn_blocking(move || {
+            service.start_admitted(admission, &caller, &launch, |_| {
+                let id = descriptor?;
+                let mut headers = HeaderMap::new();
+                headers.insert(DOCUMENT_HEADER, proof);
+                headers.insert(
+                    CHANNEL_HEADER,
+                    format!("__CHANNEL__:{id}")
+                        .parse()
+                        .map_err(|_| SafeError::invalid("outputChannel"))?,
+                );
+                binding.channel_native::<_, OutputFrame>(&webview, &headers)
+            })
+        })
+        .await
+        .map_err(|_| error("LAUNCH_STATE_UNKNOWN"))?
+    }
+    pub(crate) fn status<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<LaunchStatus, SafeError> {
+        self.binding()?.query_native(webview, request)
+    }
+    pub(crate) fn cancel_launch<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<LaunchStatus, SafeError> {
+        // Identical document admission and strict full-request decoding as start;
+        // cancellation never reads a new profile or rebuilds a launch snapshot.
+        let (caller, launch) = self.binding()?.start_native(webview, request)?;
+        self.service.registry().cancel(&caller, &launch)
+    }
+    pub(crate) fn ack_output<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let ack: OutputAck = decode_projection(request.body(), 1024)?;
+        self.transports.ack(&caller, &ack)?;
+        Ok(())
+    }
+
+    pub(crate) async fn projection_scope<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<
+        super::native_projection::wire::SourceRef,
+        super::native_projection::diagnostics::ProjectionFailure,
+    > {
+        use super::native_projection::diagnostics::ProjectionStage as Stage;
+        let caller = self
+            .binding()
+            .and_then(|binding| binding.admit_native(webview, request.headers()))
+            .map_err(|e| Stage::ScopeDocumentAdmission.failure(e))?;
+        let target: super::native_projection::wire::ScopeTarget =
+            decode_projection(request.body(), 4096)
+                .map_err(|e| Stage::ScopeRequestDecode.failure(e))?;
+        target
+            .validate()
+            .map_err(|e| Stage::ScopeRequestValidation.failure(e))?;
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let value = tauri::async_runtime::spawn_blocking(move || {
+            service.scope_diagnosed(&admitted, &target)
+        })
+        .await
+        .map_err(|_| Stage::ScopeTask.failure(error("SOURCE_TASK_FAILED")))??;
+        self.projections
+            .check_caller(&caller)
+            .map_err(|e| Stage::ScopeResponseAdmission.failure(e))?;
+        Ok(value)
+    }
+    pub(crate) async fn projection_read<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<
+        super::native_projection::wire::ProjectionResult,
+        super::native_projection::diagnostics::ProjectionFailure,
+    > {
+        use super::native_projection::diagnostics::ProjectionStage as Stage;
+        let caller = self
+            .binding()
+            .and_then(|binding| binding.admit_native(webview, request.headers()))
+            .map_err(|e| Stage::ReadDocumentAdmission.failure(e))?;
+        let query: super::native_projection::wire::ReadRequest =
+            decode_projection(request.body(), 16384)
+                .map_err(|e| Stage::ReadRequestDecode.failure(e))?;
+        query
+            .validate()
+            .map_err(|e| Stage::ReadRequestValidation.failure(e))?;
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let value =
+            tauri::async_runtime::spawn_blocking(move || service.read_diagnosed(&admitted, &query))
+                .await
+                .map_err(|_| Stage::ReadTask.failure(error("SOURCE_TASK_FAILED")))??;
+        self.projections
+            .check_caller(&caller)
+            .map_err(|e| Stage::ReadResponseAdmission.failure(e))?;
+        Ok(value)
+    }
+    fn admit_run_key<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<(CallerIdentity, RunKey), SafeError> {
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, headers)?;
+        let InvokeBody::Raw(bytes) = body else {
+            return Err(error("RAW_BODY_REQUIRED"));
+        };
+        if bytes.len() > 1024 {
+            return Err(error("REQUEST_TOO_LARGE"));
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Query {
+            run_id: String,
+            generation: u32,
+        }
+        let query: Query = serde_json::from_slice(bytes).map_err(|_| error("INVALID_REQUEST"))?;
+        if query.generation == 0 {
+            return Err(SafeError::invalid("generation"));
+        }
+        let run = RunKey {
+            run_id: query.run_id,
+            generation: query.generation,
+        };
+        self.service.registry().check_run(&caller, &run)?;
+        Ok((caller, run))
+    }
+
+    /// Shared native admission for later input/resize/snapshot adapters.
+    /// An acquired access rechecks caller/run ownership again at each operation.
+    #[allow(dead_code)] // D17 operation adapters use this authenticated port.
+    pub(crate) fn access<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<RunAccess, SafeError> {
+        let (caller, run) = self.admit_run_key(webview, headers, body)?;
+        self.service.access(&caller, &run)
+    }
+
+    pub(crate) fn input_begin<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: InputBeginRequest = decode_projection(request.body(), 4096)?;
+        let run = input_run_key(&input.run_id, input.generation)?;
+        let _access = self.service.access(&caller, &run)?;
+        self.inputs.begin(&caller, &input)
+    }
+
+    pub(crate) fn input_chunk<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: InputChunkRequest = decode_projection(request.body(), 512 * 1024)?;
+        let run = input_run_key(&input.run_id, input.generation)?;
+        let _access = self.service.access(&caller, &run)?;
+        self.inputs.chunk(&caller, &input)
+    }
+
+    pub(crate) fn input_abort<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: InputAbortRequest = decode_projection(request.body(), 4096)?;
+        let run = input_run_key(&input.run_id, input.generation)?;
+        self.service.registry().check_run(&caller, &run)?;
+        self.inputs.abort(&caller, &input)
+    }
+
+    pub(crate) async fn input_commit<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<InputWriteReceipt, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: InputCommitRequest = decode_projection(request.body(), 4096)?;
+        let run = input_run_key(&input.run_id, input.generation)?;
+        let access = self.service.access(&caller, &run)?;
+        let inputs = self.inputs.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            inputs.commit(&caller, &input, |bytes| {
+                let result = access.with_writer(|writer| Ok(write_host_frame(writer, bytes)))?;
+                Ok(result)
+            })
+        })
+        .await
+        .map_err(|_| error("INPUT_TASK_FAILED"))?
+    }
+
+    pub(crate) async fn input_protocol<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<ProtocolWriteReceipt, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: ProtocolInputRequest = decode_projection(request.body(), 512 * 1024)?;
+        self.inputs.validate_protocol(&caller, &input)?;
+        let run = input_run_key(&input.run_id, input.generation)?;
+        let access = self.service.access(&caller, &run)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let result = access.with_writer(|writer| Ok(write_host_frame(writer, &input.bytes)))?;
+            Ok(ProtocolWriteReceipt::from_host(result))
+        })
+        .await
+        .map_err(|_| error("INPUT_TASK_FAILED"))?
+    }
+
+    pub(crate) fn resize<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let input: ResizeRequest = decode_projection(request.body(), 4096)?;
+        if input.generation == 0 || input.cols == 0 || input.rows == 0 {
+            return Err(error("INVALID_REQUEST"));
+        }
+        let run = input_run_key(&input.run_id, input.generation)?;
+        let access = self.service.access(&caller, &run)?;
+        access.resize(portable_pty::PtySize {
+            rows: input.rows,
+            cols: input.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+    }
+
+    pub(crate) fn stop<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let (_caller, run) = self.admit_run_key(webview, request.headers(), request.body())?;
+        self.supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .stop(&run)
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.service.begin_shutdown();
+        // Revoke document/output authority before waiting for process reaping.
+        // A closing main-thread WebView must not be required to service new
+        // url/resource-table getters from an output sender while shutdown waits.
+        if let Some(binding) = self.binding.lock().as_ref().cloned() {
+            binding.revoke();
+        }
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.shutdown();
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResizeRequest {
+    run_id: String,
+    generation: u32,
+    cols: u16,
+    rows: u16,
+}
+
+fn input_run_key(run_id: &str, generation: u32) -> Result<RunKey, SafeError> {
+    if run_id.is_empty() || run_id.contains('\0') {
+        return Err(SafeError::invalid("runId"));
+    }
+    if generation == 0 {
+        return Err(SafeError::invalid("generation"));
+    }
+    Ok(RunKey {
+        run_id: run_id.to_string(),
+        generation,
+    })
+}
+
+/// Suppress only the automatic main window; preserve every other configuration.
+/// The same config is used by initialize_main during serialized backend setup.
+pub(crate) fn take_main_config(config: &mut Config) -> Result<WindowConfig, SafeError> {
+    if config
+        .app
+        .windows
+        .iter()
+        .filter(|window| window.label == "main")
+        .count()
+        != 1
+    {
+        return Err(error("DOCUMENT_WINDOW_UNAVAILABLE"));
+    }
+    let main = config
+        .app
+        .windows
+        .iter_mut()
+        .find(|window| window.label == "main")
+        .unwrap();
+    let original = main.clone();
+    main.create = false;
+    Ok(original)
+}
+
+/// Mirrors pinned Tauri 2.10.3 desktop App URL resolution, including its special
+/// index.html base-URL rule. Nonlocal external windows cannot become main here.
+fn expected_main_url(config: &Config, window: &WindowConfig, dev: bool) -> Result<Url, SafeError> {
+    let WebviewUrl::App(path) = &window.url else {
+        return Err(error("FORBIDDEN"));
+    };
+    let custom = if cfg!(any(windows, target_os = "android")) {
+        if window.use_https_scheme {
+            "https://tauri.localhost"
+        } else {
+            "http://tauri.localhost"
+        }
+    } else {
+        "tauri://localhost"
+    };
+    let mut base = if dev {
+        config.build.dev_url.clone()
+    } else {
+        None
+    };
+    if base.is_none() {
+        if let Some(FrontendDist::Url(url)) = &config.build.frontend_dist {
+            base = Some(url.clone());
+        }
+    }
+    let base = base.unwrap_or_else(|| custom.parse().expect("fixed local URL"));
+    if path.to_str() == Some("index.html") {
+        Ok(base)
+    } else {
+        base.join(&path.to_string_lossy())
+            .map_err(|_| error("FORBIDDEN"))
+    }
+}
+
+/// Called only after trusted native document admission. Parse errors never echo supplied values.
+fn decode_projection<T: serde::de::DeserializeOwned>(
+    body: &InvokeBody,
+    limit: usize,
+) -> Result<T, SafeError> {
+    let InvokeBody::Raw(bytes) = body else {
+        return Err(error("RAW_BODY_REQUIRED"));
+    };
+    if bytes.len() > limit {
+        return Err(error("REQUEST_TOO_LARGE"));
+    }
+    serde_json::from_slice(bytes).map_err(|_| error("INVALID_REQUEST"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn d11_startup_config_preserved_001() {
+        let mut config: Config = serde_json::from_value(serde_json::json!({"identifier":"d11.test","app":{"windows":[{"label":"main","width":987,"title":"same"},{"label":"peer"}]}})).unwrap();
+        let original = serde_json::to_value(&config.app.windows[0]).unwrap();
+        let main = take_main_config(&mut config).unwrap();
+        assert_eq!(serde_json::to_value(main).unwrap(), original);
+        assert!(!config.app.windows[0].create);
+        assert!(config.app.windows[1].create);
+    }
+    #[test]
+    fn d11_startup_desktop_url_parity_002() {
+        let mut config: Config = serde_json::from_value(serde_json::json!({"identifier":"d11.test","build":{"devUrl":"http://localhost:1420/sub/"}})).unwrap();
+        let mut window = WindowConfig::default();
+        assert_eq!(
+            expected_main_url(&config, &window, true).unwrap().as_str(),
+            "http://localhost:1420/sub/"
+        );
+        window.url = WebviewUrl::App("probe.html".into());
+        assert_eq!(
+            expected_main_url(&config, &window, true).unwrap().as_str(),
+            "http://localhost:1420/sub/probe.html"
+        );
+        config.build.dev_url = None;
+        assert!(expected_main_url(&config, &window, false)
+            .unwrap()
+            .as_str()
+            .ends_with("localhost/probe.html"));
+        window.url = WebviewUrl::External("https://example.com/".parse().unwrap());
+        assert_eq!(
+            expected_main_url(&config, &window, false).unwrap_err().code,
+            "FORBIDDEN"
+        );
+    }
+}

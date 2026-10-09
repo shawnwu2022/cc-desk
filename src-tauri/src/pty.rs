@@ -1,10 +1,12 @@
 //! PTY 管理模块
 //! 基于 portable-pty 实现 Claude CLI 进程管理
 
+use crate::platform::admitted_child::AdmittedChild;
+use crate::version_history::maintenance::{AdmissionGate, PreparingStart, RuntimeKind};
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use portable_pty::{
-    native_pty_system, Child, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize,
+    native_pty_system, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize,
 };
 use std::collections::HashMap;
 use std::env;
@@ -19,7 +21,7 @@ use uuid::Uuid;
 // 普通输入保留既有分块策略；Windows 完整粘贴帧走下方独立编码与真实管道排空。
 pub(crate) const PTY_WRITE_CHUNK_SIZE: usize = 4 * 1024;
 const PTY_WRITE_CHUNK_DELAY: Duration = Duration::from_millis(1);
-const PTY_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const PTY_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Match Windows Terminal paste semantics on Windows: submit the complete,
 /// unmodified bracketed-paste frame through one logical pipe write.
@@ -132,6 +134,7 @@ pub struct PtyErrorPayload {
 struct PtyInstanceData {
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    _observer: Option<crate::observer_registry::ObserverLease>,
 }
 
 /// 每个 PTY 独立的 writer 锁。全局 registry 锁只用于 O(1) 查找，
@@ -159,16 +162,18 @@ pub struct PtyManager {
     instances: Mutex<HashMap<String, PtyInstanceData>>,
     writers: PtyWriterRegistry,
     app_handle: AppHandle,
+    admission: AdmissionGate,
 }
 
 impl PtyManager {
     /// 创建 PTY 管理器
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub(crate) fn new(app_handle: AppHandle, admission: AdmissionGate) -> Self {
         log::info!("PTY Manager initialized");
         Self {
             instances: Mutex::new(HashMap::new()),
             writers: Mutex::new(HashMap::new()),
             app_handle,
+            admission,
         }
     }
 
@@ -196,15 +201,21 @@ impl PtyManager {
         self: &Arc<Self>,
         id: String,
         master: Box<dyn MasterPty + Send>,
-        child: Box<dyn Child + Send + Sync>,
+        child: AdmittedChild,
         writer: Box<dyn Write + Send>,
         reader: Box<dyn Read + Send>,
         reader_label: &'static str,
+        observer: Option<crate::observer_registry::ObserverLease>,
     ) -> Result<()> {
         let killer = child.clone_killer();
-        self.instances
-            .lock()
-            .insert(id.clone(), PtyInstanceData { master, killer });
+        self.instances.lock().insert(
+            id.clone(),
+            PtyInstanceData {
+                master,
+                killer,
+                _observer: observer,
+            },
+        );
         self.writers
             .lock()
             .insert(id.clone(), Arc::new(PtyWriterEntry::new(writer)));
@@ -213,12 +224,9 @@ impl PtyManager {
         let reader_id = id.clone();
         let reader_app = self.app_handle.clone();
         let reader_manager: Weak<Self> = Arc::downgrade(self);
-        let reader_thread = thread::Builder::new()
-            .name(format!(
-                "pty-reader-{}",
-                &reader_id[..8.min(reader_id.len())]
-            ))
-            .spawn(move || {
+        let reader_thread = spawn_pty_thread(
+            format!("pty-reader-{}", &reader_id[..8.min(reader_id.len())]),
+            move || {
                 log::debug!("[{}] {} reader thread started", reader_id, reader_label);
                 let failure = Self::read_output_loop(reader_id.clone(), reader, reader_app);
                 if let Some(error) = failure {
@@ -227,12 +235,13 @@ impl PtyManager {
                     }
                 }
                 let _ = reader_done_tx.send(());
-            });
+            },
+        );
 
         if let Err(error) = reader_thread {
             self.remove_registration(&id);
             let mut child = child;
-            Self::terminate_unregistered_child(&mut child);
+            let _ = Self::terminate_unregistered_child(&mut child);
             return Err(anyhow!(
                 "Failed to spawn reader thread for PTY {id}: {error}"
             ));
@@ -244,16 +253,15 @@ impl PtyManager {
         let waiter_child = child_slot.clone();
         let waiter_id = id.clone();
         let waiter_manager: Weak<Self> = Arc::downgrade(self);
-        let waiter_thread = thread::Builder::new()
-            .name(format!(
-                "pty-waiter-{}",
-                &waiter_id[..8.min(waiter_id.len())]
-            ))
-            .spawn(move || {
+        let waiter_thread = spawn_pty_thread(
+            format!("pty-waiter-{}", &waiter_id[..8.min(waiter_id.len())]),
+            move || {
                 let mut child = waiter_child
                     .lock()
                     .take()
                     .expect("PTY child slot already consumed");
+                // Settles the exact child ticket before output drain and even
+                // when the manager/registrations have already been dropped.
                 let status = child.wait();
 
                 // 保证 reader 已经把最终输出 emit 后，再发送 pty-exit。
@@ -263,12 +271,13 @@ impl PtyManager {
                 if let Some(manager) = waiter_manager.upgrade() {
                     manager.finish_natural_exit(&waiter_id, status);
                 }
-            });
+            },
+        );
 
         if let Err(error) = waiter_thread {
             self.remove_registration(&id);
             if let Some(mut child) = child_slot.lock().take() {
-                Self::terminate_unregistered_child(&mut child);
+                let _ = Self::terminate_unregistered_child(&mut child);
             }
             return Err(anyhow!(
                 "Failed to spawn waiter thread for PTY {id}: {error}"
@@ -278,9 +287,9 @@ impl PtyManager {
         Ok(())
     }
 
-    fn terminate_unregistered_child(child: &mut Box<dyn Child + Send + Sync>) {
+    fn terminate_unregistered_child(child: &mut AdmittedChild) -> std::io::Result<ExitStatus> {
         let _ = child.kill();
-        let _ = child.wait();
+        child.wait()
     }
 
     fn finish_natural_exit(&self, id: &str, status: std::io::Result<ExitStatus>) {
@@ -391,11 +400,17 @@ impl PtyManager {
                 }
             }
         }
+        // Strip only this application's capability namespace, never provider
+        // credentials. A fresh legacy Claude lease is applied after this step.
+        for name in crate::cli::environment::OBSERVER_ENV_NAMES {
+            cmd.env_remove(name);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
     fn spawn_command(
         self: &Arc<Self>,
+        mut admission: PreparingStart,
         id: String,
         cwd: &str,
         cols: u16,
@@ -403,6 +418,7 @@ impl PtyManager {
         pty_type: &str,
         cmd: CommandBuilder,
         description: &str,
+        observer: Option<crate::observer_registry::ObserverLease>,
     ) -> Result<PtyInfo> {
         let pty_system = native_pty_system();
         let PtyPair { master, slave } = pty_system
@@ -414,34 +430,35 @@ impl PtyManager {
             })
             .with_context(|| format!("Failed to open PTY with size {cols}x{rows}"))?;
 
-        let mut child = match slave.spawn_command(cmd) {
-            Ok(child) => child,
-            Err(error) => {
-                let message = format!("Failed to spawn {description}: {error}");
-                self.emit_error(&id, &message, "spawn");
-                return Err(anyhow!(message));
-            }
-        };
+        let mut child =
+            match AdmittedChild::spawn_native(slave.as_ref(), cmd, admission.begin_creation()) {
+                Ok(child) => child,
+                Err(error) => {
+                    let message = format!("Failed to spawn {description}: {error}");
+                    self.emit_error(&id, &message, "spawn");
+                    return Err(anyhow!(message));
+                }
+            };
 
         // 父进程绝不能继续持有 slave；否则 Unix master 可能永远收不到 EOF。
         drop(slave);
 
-        let writer = match master.take_writer() {
+        let writer = match acquire_legacy_writer(master.as_ref()) {
             Ok(writer) => writer,
             Err(error) => {
                 let message = format!("Failed to take PTY writer: {error}");
                 self.emit_error(&id, &message, "writer");
-                Self::terminate_unregistered_child(&mut child);
+                let _ = Self::terminate_unregistered_child(&mut child);
                 return Err(anyhow!(message));
             }
         };
 
-        let reader = match master.try_clone_reader() {
+        let reader = match acquire_legacy_reader(master.as_ref()) {
             Ok(reader) => reader,
             Err(error) => {
                 let message = format!("Failed to clone PTY reader: {error}");
                 self.emit_error(&id, &message, "reader");
-                Self::terminate_unregistered_child(&mut child);
+                let _ = Self::terminate_unregistered_child(&mut child);
                 return Err(anyhow!(message));
             }
         };
@@ -457,6 +474,7 @@ impl PtyManager {
             } else {
                 "Shell output"
             },
+            observer,
         )?;
 
         Ok(PtyInfo {
@@ -475,6 +493,11 @@ impl PtyManager {
         rows: u16,
         args: Option<Vec<String>>,
     ) -> Result<PtyInfo> {
+        let admission = self
+            .admission
+            .begin_start(RuntimeKind::Legacy)
+            .map_err(|e| anyhow!(e.code))?
+            .preparing();
         self.validate_spawn_request(&id, cwd).inspect_err(|error| {
             self.emit_error(&id, &error.to_string(), "validation");
         })?;
@@ -512,9 +535,15 @@ impl PtyManager {
             "claude".to_string()
         };
 
-        let plugin_dir = crate::hook_config::plugin_dir();
-        let claude_cmd = if plugin_dir.exists() {
-            format!("{} --plugin-dir \"{}\"", claude_cmd, plugin_dir.display())
+        // Preserve the legacy Claude observer preference, but never enable an
+        // unauthenticated fallback. This lease follows this exact spawned PTY.
+        let prepared = crate::hook_server::prepare_legacy(&self.app_handle, &id);
+        let claude_cmd = if let Some(observer) = &prepared {
+            format!(
+                "{} --plugin-dir \"{}\"",
+                claude_cmd,
+                observer.plugin_dir.display()
+            )
         } else {
             claude_cmd
         };
@@ -534,9 +563,10 @@ impl PtyManager {
         cmd.cwd(cwd);
         Self::apply_common_environment(&mut cmd, true);
 
-        if let Some(hook_port) = crate::hook_server::get_port() {
-            cmd.env("CC_BOX_HOOK_PORT", hook_port.to_string());
-            cmd.env("CC_BOX_SESSION_ID", &id);
+        if let Some(observer) = &prepared {
+            for (name, value) in &observer.environment.values {
+                cmd.env(name, value);
+            }
         }
 
         if cfg!(target_os = "windows") {
@@ -545,8 +575,17 @@ impl PtyManager {
             }
         }
 
-        log::debug!("Shell command: {:?}", claude_cmd);
-        self.spawn_command(id, cwd, cols, rows, "claude", cmd, "Claude shell command")
+        self.spawn_command(
+            admission,
+            id,
+            cwd,
+            cols,
+            rows,
+            "claude",
+            cmd,
+            "Claude shell command",
+            prepared.map(|prepared| prepared.lease),
+        )
     }
 
     /// 启动普通 Shell
@@ -557,6 +596,11 @@ impl PtyManager {
         cols: u16,
         rows: u16,
     ) -> Result<PtyInfo> {
+        let admission = self
+            .admission
+            .begin_start(RuntimeKind::Legacy)
+            .map_err(|e| anyhow!(e.code))?
+            .preparing();
         self.validate_spawn_request(&id, cwd).inspect_err(|error| {
             self.emit_error(&id, &error.to_string(), "validation");
         })?;
@@ -578,6 +622,7 @@ impl PtyManager {
         Self::apply_common_environment(&mut cmd, false);
 
         self.spawn_command(
+            admission,
             id,
             cwd,
             cols,
@@ -585,6 +630,7 @@ impl PtyManager {
             "shell",
             cmd,
             &format!("shell '{program}'"),
+            None,
         )
     }
 
@@ -803,8 +849,8 @@ impl PtyManager {
 static PTY_MANAGER: LazyLock<Mutex<Option<Arc<PtyManager>>>> = LazyLock::new(|| Mutex::new(None));
 
 /// 初始化 PTY 管理器
-pub fn init_pty_manager(app_handle: AppHandle) {
-    let manager = Arc::new(PtyManager::new(app_handle));
+pub(crate) fn init_pty_manager(app_handle: AppHandle, admission: AdmissionGate) {
+    let manager = Arc::new(PtyManager::new(app_handle, admission));
     *PTY_MANAGER.lock() = Some(manager);
     log::info!("PTY manager initialized");
 }
@@ -813,3 +859,40 @@ pub fn init_pty_manager(app_handle: AppHandle) {
 pub fn get_pty_manager() -> Option<Arc<PtyManager>> {
     PTY_MANAGER.lock().clone()
 }
+
+fn acquire_legacy_writer(master: &dyn MasterPty) -> Result<Box<dyn Write + Send>> {
+    #[cfg(all(test, windows))]
+    maintenance_tests::check_io("writer")?;
+    master.take_writer()
+}
+
+fn acquire_legacy_reader(master: &dyn MasterPty) -> Result<Box<dyn Read + Send>> {
+    #[cfg(all(test, windows))]
+    maintenance_tests::check_io("reader")?;
+    master.try_clone_reader()
+}
+
+fn spawn_pty_thread(
+    name: String,
+    run: impl FnOnce() + Send + 'static,
+) -> io::Result<thread::JoinHandle<()>> {
+    #[cfg(all(test, windows))]
+    {
+        if maintenance_tests::fail_thread(&name) {
+            return Err(io::Error::other("injected thread creation failure"));
+        }
+        let barrier = maintenance_tests::waiter_barrier(&name);
+        thread::Builder::new().name(name).spawn(move || {
+            if let Some(barrier) = barrier {
+                barrier.wait();
+            }
+            run();
+        })
+    }
+    #[cfg(not(all(test, windows)))]
+    thread::Builder::new().name(name).spawn(run)
+}
+
+#[cfg(all(test, windows))]
+#[path = "tests/version_history_legacy.rs"]
+mod maintenance_tests;

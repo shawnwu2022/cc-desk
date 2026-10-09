@@ -1,132 +1,201 @@
-# 数据持久化
+# Data persistence
 
-## 数据保存原则
+CC Desk currently carries two storage generations: the legacy Claude-compatible workspace and Native CLI v3.
 
-1. **原生数据只读** — Claude Code 原生配置只读取不修改
-2. **应用配置独立** — GUI 特有设置保存在 `~/.cc-box/`
-3. **不重复存储权威数据** — 项目列表和消息正文直接从原生数据读取；会话名称索引仅保存可删除重建的派生值
-4. **默认值持久化** — 用户偏好设置保存在应用配置
+## Principles
 
-## 文件路径
+1. Native CLI resources are **read-only projections** unless a specific CC Desk-owned workspace/profile operation is being performed.
+2. CC Desk does not own Provider/API-key configuration.
+3. Codex must never inherit legacy Claude secrets.
+4. Native writes use revision checks and atomic replacement; ambiguous commits are reconciled by reread, not blind replay.
+5. Existing legacy files are retained for compatibility and rollback safety.
 
-### Claude Code 原生文件（只读，Provider 激活时写入）
+## Native CLI workspace
 
-| 文件 | 用途 |
-|------|------|
-| `~/.claude.json` | 项目列表、用户偏好、会话信息 |
-| `~/.claude/settings.json` | 全局配置（MCP、权限、模型）—— **Provider 激活时完整替换写入** |
-| `~/.claude/projects/<encoded-path>/` | 项目会话数据 |
-| `<project>/.claude/settings.json` | 项目配置 |
+The authoritative Native CLI workspace file is:
 
-### 应用专属文件（读写）
-
-| 文件 | 用途 |
-|------|------|
-| `~/.cc-box/config.json` | GUI 配置（路径缓存、主题、字号、启动参数默认值） |
-| `~/.cc-box/providers.json` | **Provider 配置**（列表 + 通用配置 + 激活状态） |
-| `~/.cc-box/projects.json` | 项目置顶 + 会话存档 + 项目别名（displayNames） |
-| `~/.cc-box/session-name-index.json` | 会话名称派生索引（schema/parser 版本均为 1） |
-| `~/.cc-box/session-name-index.json.lock` | 名称索引跨进程永久锁文件 |
-| `~/.cc-box/claude-plugin/` | Hook Plugin 文件（运行时生成） |
-| `~/.cc-box/logs/` | 日志文件 |
-
-## ~/.cc-box/config.json 结构
-
-```json
-{
-  "claudePath": "C:\\Users\\xxx\\.local\\bin\\claude.exe",
-  "claudeLauncherType": "direct",
-  "gitBashPath": "C:\\Program Files\\Git\\bin\\bash.exe",
-  "defaultSkipPermissions": false,
-  "defaultCustomArgs": "",
-  "theme": "light",
-  "fontSize": 12,
-  "webglRenderer": false,
-  "lastOpenedProject": "D:/projects/my-app"
-}
+```text
+~/.cc-box/cli-workspace.v1.json
 ```
 
-字段说明：
+(The base compatibility directory remains `~/.cc-box/` for existing users.)
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `claudePath` | string? | Claude CLI 路径（检测后缓存） |
-| `claudeLauncherType` | "direct" \| "node"? | 启动类型（检测后缓存） |
-| `gitBashPath` | string? | Git Bash 路径（Windows，检测后缓存） |
-| `defaultSkipPermissions` | boolean | `--dangerously-skip-permissions` 默认值 |
-| `defaultCustomArgs` | string | 自定义参数默认值 |
-| `theme` | string | GUI 主题 |
-| `fontSize` | number | 终端字号 |
-| `webglRenderer` | boolean | 终端渲染后端：`false`=DOM（默认，稳定）/`true`=WebGL（高性能，CJK glyph atlas 可能留白/错位）。仅对新开终端生效 |
-| `lastOpenedProject` | string? | 上次打开的项目路径 |
+The native workspace contains CC Desk-owned metadata such as:
 
-## ~/.cc-box/projects.json 结构
+- schema version;
+- workspace revision;
+- Claude/Codex profiles;
+- profile revisions;
+- registered projects and selected paths;
+- forward-compatible unknown schema-v1 extensions.
 
-```json
-{
-  "pinnedProjects": ["/path/to/proj"],
-  "archivedSessions": { "/path/to/proj": ["sessionId1"] },
-  "displayNames": { "/normalized/path": "别名" }
-}
-```
+It must not become a dump of resolved secrets, ambient environment values, raw CLI config, or credentials.
 
-字段说明：
+### Override semantics
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `pinnedProjects` | string[] | 置顶项目路径列表（排序时置顶优先） |
-| `archivedSessions` | Record<string, string[]> | 项目路径 -> 已存档 sessionId 列表 |
-| `displayNames` | Record<string, string> | normalizedPath -> 项目别名（空/缺省 = 回退 basename） |
+Profile values use explicit modes:
 
-- **key 规范化**：`archivedSessions` 与 `displayNames` 的 key 均为 `normalizePath` 后的路径（Windows/macOS 大小写不敏感 lower，Linux 保留大小写；去尾斜杠）。删除前按等价 key 合并查找（存档用 `E:\Repo`、删除走 `e:/repo` 也能命中）；设置别名时删等价旧 key（避免 `E:\Repo` / `e:/repo` 双份）。
-- **永久删除语义**：存档（archive）只在该 map 加标记，不删会话文件；**永久删除（`delete_sessions`）才删文件 + 移除标记**，且不可恢复。`delete_sessions_inner` 在锁内校验文件名组件与「全部已存档」后，删会话文件（`jsonl` + `txt`，所有编码目录）并移除 `archivedSessions` 标记，返回最新 `ProjectsState`。**尽力批、非原子**：任一文件删除失败或校验失败则整体 Err、projects.json 不变（已删文件不恢复）；重试靠「文件不存在视为已删」与「目录消失仍清标记」双路径收敛。
-- **原子写**：apply 增量命令（pin/unpin/archive/restore/setDisplayName）在 `with_projects_state_locked` 锁内读最新 → canonicalize → 校验应用 → `write_json_atomic`（完整写入并 `sync_all` `.json.tmp` 后替换）。POSIX 使用覆盖语义的 `rename`；Windows 已有目标使用 `ReplaceFileW`（忽略 ACL 合并错误 + write-through），首次创建使用 rename；替换失败保留原文件。
-- **多实例并发安全**：写走后端独立 `projects.json.lock`（std `File::lock`）跨进程排他锁（写排他 / 读共享，有界超时；持锁进程被杀由 OS 自动释放），async command 在 `spawn_blocking` 内完成锁定 IO，apply 增量操作在锁内原子读改写，不再依赖前端完整快照覆盖。前端 `session.ts` 的 `opLock` 串行完整 action/reload request + apply；窗口聚焦 reload 共享锁读。config.json 的 hiddenProjects/lastOpened 暂未纳入（同 pattern 可扩展）；升级时须先关闭所有旧版本实例。
+- `inherit`;
+- `set(value)`;
+- `unset`.
 
-## 会话数据读取
+False, empty and unset values are authoritative states. Later legacy writes must not revive them.
 
-- `get_home_data` 只枚举一次 `~/.claude/projects`，同一快照同时生成项目条目和 `realPath -> encoded directories` 映射；近期会话从显式目录列表读取，不再触发第二次项目路径全扫。同一真实路径有多个编码目录时仍保留原有聚合与展示语义。
-- 项目路径解析按字节行读取 JSONL/TXT，在首个有效 `cwd` 后停止；损坏的 UTF-8 或 JSON 行被跳过。会话名称继续扫描到 EOF，保证末尾 `custom-title` 覆盖首条用户消息，峰值内存为 O(最大 JSONL 单行)。
-- `get_home_data`、`get_sessions`、`get_all_recent_sessions` command 通过 Tokio `spawn_blocking` 执行同步文件 IO，避免阻塞 Tauri async worker。三条路径每请求只读取一次名称索引快照；home/all-recent 跨项目共享同一 resolver，仍先枚举 metadata、排序/分页，再只解析命中页。
+### Concurrency and commit semantics
 
-### 会话名称派生索引
+Native storage uses:
 
-- 一级 key 是规范化后的 Claude 编码项目目录绝对路径，二级 key 是含扩展名的会话文件名；同一真实 cwd 的新旧编码目录互不覆盖。
-- 条目只保存名称、`observedLength`、mtime 秒/纳秒和 `cachedAtMs`，不保存消息正文。schema/parser 版本当前均为 1；名称优先级、过滤或截断语义变化时必须递增 parser 版本，旧版本整份按空索引处理。
-- exact-hit 要求长度、mtime 秒和纳秒完全相等，读取 0 JSONL bytes；append、truncate 或同长度 mtime 变化都扫描到 EOF full rebuild。扫描前后 stamp 不稳定时仍返回本次名称，但不生成 replacement。
-- command 先返回业务值，再把至多一个 `PendingIndexFlush` 放入 detached blocking job。后台在索引锁外复核 JSONL stamp、解析/合并/压缩/序列化/写临时文件/`sync_all`；排他锁内只以 64 KiB 缓冲比较 raw base 并原子替换。
-- 多实例通过 entry CAS、完整 bucket 清理 CAS、最多四次 whole-file raw CAS 收敛。写失败和同一损坏指纹在进程内退避 30 秒；这些失败只降低命中率，不改变成功的 IPC 返回。
-- 8 MiB 以上确定性批量淘汰旧条目直到不超过 6 MiB；16 MiB 为读取硬上限。索引可随时删除，下次访问从 Claude JSONL 自动重建；Claude JSONL 始终是权威来源。
+- an independent workspace lock;
+- expected-revision/CAS checks;
+- synchronized temporary writes;
+- atomic replacement;
+- fail-closed malformed/future-schema handling.
 
-## Store 命令 (IPC 通道)
+`COMMIT_STATE_UNKNOWN` is non-retryable. The caller rereads the workspace revision to determine whether the write committed; it does not replay the mutation automatically.
 
-| 命令 | 说明 |
-|------|------|
-| `get_home_data` | 单次项目扫描获取项目列表 + 近期会话；单 resolver + response-first 索引写回 |
-| `get_projects` | 项目列表（分页） |
-| `get_project_info` | 项目详情 |
-| `get_sessions` | 会话列表（分页）；复用路径映射和名称索引，阻塞 IO 在 `spawn_blocking` 中执行 |
-| `get_session_count` | 会话总数 |
-| `get_all_recent_sessions` | 跨项目近期会话；所有项目共享一次索引快照 |
-| `get_session_details` | 会话详情 |
-| `search_session_messages` | 搜索会话消息内容 |
-| `get_app_config` | 获取应用配置 |
-| `update_app_config` | 更新应用配置（合并更新） |
-| `get_default_claude_options` | 获取默认启动选项 |
-| `save_default_claude_options` | 保存默认启动选项 |
-| `save_last_project` | 保存上次项目 |
-| `get_project_config` | 获取项目 Claude 配置（只读） |
-| `get_all_agents` | 获取所有 Agents |
-| `get_all_skills` | 获取所有 Skills |
-| `get_all_mcp_servers` | 获取所有 MCP Servers |
-| `get_all_plugins` | 获取所有 Plugins |
-| `get_mcp_server_detail` | 获取 MCP Server 详情（通过协议） |
+## Legacy compatibility state
 
-## 兼容性
+Legacy Claude behavior still uses existing `~/.cc-box/` compatibility files such as `config.json` and `projects.json`.
 
-用户可随时回到 CLI：
+Important separation rules:
 
-- 项目列表由 Claude Code 自动维护
-- 会话数据存储在原生目录
-- GUI 配置不影响 CLI 行为
-- 启动选项只是 CLI 参数的便捷封装
+- native workspace writes do not mutate legacy files;
+- old-package writes to legacy files cannot mutate `cli-workspace.v1.json`;
+- legacy Claude resolution is restricted to the explicit compatibility path;
+- Codex never reads legacy Claude secret/env values as its profile state;
+- legacy user files are preserved rather than deleted during native migration.
+
+## Compatible application preferences
+
+`config.json` retains old/future keys through the existing raw incremental writer.
+Optional read DTO fields add GUI mode/density/sidebar width/startup destination/default
+CLI, terminal font/line-height/cursor/renderer, and configurable shortcut bindings.
+They do not replace `cli-workspace.v1.json` or import Legacy env values into Codex.
+
+`app.ts` serializes simple-setting writes with initial migration. Per-field intent and
+confirmed-commit ownership plus underlying read sequence prevent stale hydration or
+an older failure from replacing a newer choice. Known failures roll back the current
+field to its confirmed baseline. An uncertain acknowledgement only rereads inside
+the same lane; failed recovery prevents subsequent writes until a fresh read succeeds.
+
+Compatibility keys `theme`, `terminalTheme`, `fontSize`, `webglRenderer` remain. Missing
+terminal theme may use old GUI state during initial migration only; later GUI changes
+never redefine it. Existing palette IDs retain their values and invalid settings use
+bounded defaults. Shortcut hydration validates the complete five-action map and falls
+back to defaults for malformed/duplicate bindings; explicit conflict replacement is
+confirmed in the UI. Startup destination restores only Workspace or Projects and does
+not resume a process. Detailed preference behavior is in [terminal preferences](terminal-preferences.md).
+
+## Project/session data
+
+Claude Code's own session/history data remains native CLI-owned data. Legacy UI readers may project it for compatibility.
+
+Native CLI v3 accesses supported native resources through authenticated backend scopes. The frontend does not receive arbitrary filesystem authority simply because it knows a path.
+
+Projection kinds include the supported history/config-resource categories implemented by `cli/native_projection`. Returned DTOs are bounded and kind-specific.
+
+Raw values that may contain credentials—environment values, headers, arbitrary configuration blobs—must not be projected.
+
+## Project registry
+
+Native project registration records the stable project identity and selected path needed by the Native CLI workspace.
+
+A project path received from the frontend is not, by itself, read authority. Resource access requires the authenticated document/project/scope chain held by the backend.
+
+## Shared project UI state
+
+The compatibility `projects.json` file now supplies both adapters with CC Desk-owned project presentation state such as:
+
+- pinned projects and per-project archived session keys;
+- display names;
+- last-opened project;
+- other compatibility UI preferences.
+
+Concurrent project-state mutations use the existing lock + read-latest + canonicalize + atomic-write path.
+
+### Unified display names
+
+`projectsState` is the sole frontend writer for `projects.json`, including optional
+`sessionRecords` and per-project launch preferences. Both adapters consume saved
+names when projecting discovered history or an existing terminal. Saving a name
+does not change a native Session ID, write CLI history, send terminal input, or
+restart a process. The normal Workspace history row supports the same rename
+operation as a live row.
+
+Native history metadata uses the full `native-history-v2` catalog identity,
+including CLI, launch configuration ID/revision, registered project ID/path and
+authenticated source session key. A resumed terminal keeps that identity for its
+display name, so refresh, close and a fresh application-store load retain the name.
+Legacy metadata binds the normalized project path and Legacy session ID. Records
+with a key whose runtime, CLI, project or session fields disagree are not applied.
+Raw IDs and ambiguous old Native keys are never guessed into another origin.
+
+A new or raw Native terminal without a known authenticated history association
+can only save its name under its exact tab identity. It retains the name across a
+restart of that tab, but independently discovered CLI history after application
+restart keeps its own title. No safe association can be inferred from a raw ID,
+title, current configuration or default root. Optional metadata alone never
+creates a catalog row or restores a process.
+
+Rename saves freeze the source and current attempt. Both the adapter and the
+canonical writer revalidate ownership after their queues, immediately before IPC;
+an invalidated historical row or replaced Native/Legacy attempt cannot submit the
+old name. A cancellation before submission is not an uncertain write and triggers
+no reconciliation. Conflicting or uncertain issued writes use the existing
+read-only reconciliation and require a fresh explicit action, without replay.
+
+The frontend tolerates malformed optional containers and skips invalid individual
+records/preferences while retaining valid siblings. It uses the existing backend
+limits (10,000 records, 200-character session titles, bounded identity fields),
+with no new storage schema, tombstones or migration write during catalog bootstrap.
+The Task 24 migration tests exercise the frontend store boundary with host I/O
+fixtures; they do not execute or certify Rust deserialization or real disk writes.
+
+## Native observer data
+
+Observer capabilities and leases are runtime-scoped. They are not durable credentials and must not be persisted into general workspace/config files.
+
+Only bounded allowlisted metadata may reach the owner WebView. Prompt/response bodies, environment values, capability tokens and raw error payloads are excluded.
+
+## Files CC Desk must not create as configuration authorities
+
+Native v3 must not reintroduce:
+
+- `providers.json` as a Provider/API-key authority;
+- an independent MCP configuration database;
+- mirrored Claude/Codex installation/version state;
+- cached resolved secrets copied from CLI or host configuration.
+
+## Migration/rollback
+
+Migration is additive and fail-closed:
+
+- keep legacy compatibility files;
+- create/use the native workspace independently;
+- never delete user CLI data as part of migration;
+- never infer that a successful old-version write should update native state;
+- preserve unknown native schema-v1 extensions across native writes.
+
+See [native-cli-v3.md](native-cli-v3.md) and the D25 execution ledger for mixed-version rollback guarantees.
+
+
+## Unified migration evidence and remaining disk gate
+
+Optional `sessionRecords` and `launchPreferences` are additive. Pin/archive/display-name
+operations and their typed metadata mutations use one frontend writer and the backend
+`projects.json.lock` read-latest/atomic path. Archive hides a Desk catalog record, not
+CLI files. Project removal preserves archive/name/preferences/history while applying
+visibility and existing registration changes under admission guards. A failure after
+one confirmed step may leave a partial state; no automatic compensating mutation occurs.
+
+Task 25's full frontend run initially exposed two old session-tree fixtures whose
+failure readback returned empty disk data despite a previous successful pin/archive.
+They now provide the persisted snapshot and assert one readback plus exactly one
+mutation. Production reconciliation remains unchanged. Store tests cover malformed
+optional entries, valid sibling retention, multi-request ordering and no replay; they
+are not disk/Rust/multi-process execution evidence.
+
+The optional Rust DTO and metadata command tests remain NOT RUN in the current cloud
+checkout. Final Windows Rust CI and package testing must validate deserialization,
+atomic writes and old user data on the exact tested commit. See [U01–U10](superpowers/execution/U01-U10.md)
+for the unperformed gate inventory; no migration deletes old files or certifies D20.

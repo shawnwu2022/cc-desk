@@ -1,6 +1,8 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::observer_registry::{ObserverSource, ValidatedObserverEvent};
+
 /// 发送给前端的完整 hook 事件 payload
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -10,6 +12,14 @@ pub struct HookPayload {
     pub event_name: String,
     pub state: String,
     pub timestamp: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observer_source: Option<String>,
     pub detail: HookEventDetail,
 }
 
@@ -128,6 +138,33 @@ pub struct PostCompactData {
 // ---- 提取逻辑 ----
 
 impl HookPayload {
+    pub(crate) fn from_validated(validated: ValidatedObserverEvent) -> Self {
+        let event_name = validated
+            .event
+            .get("hook_event_name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let session_id = str_field(&validated.event, "session_id");
+        let detail = extract_detail(&event_name, &validated.event);
+        Self {
+            pty_id: None,
+            session_id,
+            event_name,
+            state: "unknown".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            run_id: Some(validated.run.run_id),
+            generation: Some(validated.run.generation),
+            event_id: Some(validated.event_id),
+            observer_source: Some(match validated.source {
+                ObserverSource::ClaudeHook => "claude-hook".to_string(),
+                ObserverSource::Unknown => "unknown".to_string(),
+            }),
+            detail,
+        }
+    }
+
+    #[cfg(test)]
     pub fn from_raw(pty_id: Option<String>, event: Value) -> Self {
         let event_name = event
             .get("hook_event_name")
@@ -145,6 +182,10 @@ impl HookPayload {
             event_name,
             state,
             timestamp: chrono::Utc::now().timestamp_millis(),
+            run_id: None,
+            generation: None,
+            event_id: None,
+            observer_source: None,
             detail,
         }
     }
@@ -216,6 +257,7 @@ pub(crate) fn extract_detail(event_name: &str, event: &Value) -> HookEventDetail
     }
 }
 
+#[cfg(test)]
 pub(crate) fn derive_state(event_name: &str, event: &Value) -> String {
     match event_name {
         "UserPromptSubmit" => "thinking".into(),

@@ -1,204 +1,141 @@
-<p align="center">
-  <img src="src-tauri/icons/128x128.png" alt="CC Desk" width="80" height="80">
-</p>
+# CC Desk
 
-<h1 align="center">CC Desk</h1>
+CC Desk is a desktop workspace for **Claude Code and Codex CLI** built with Tauri 2, Vue 3, xterm.js, and Rust.
 
-<p align="center">
-  <strong>A desktop app for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> — multi-project, multi-session management</strong><br>
-  One window. Multiple projects. Instant session switching.
-</p>
+It keeps the real CLI in charge of the interactive session and adds the host capabilities that become awkward in a normal terminal: multi-project navigation, multiple concurrent sessions, stable run identity, recovery, bounded terminal transport, and read-only native-resource projection.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue" alt="Platform">
-  <img src="https://img.shields.io/badge/Tauri-2.x-orange" alt="Tauri">
-  <img src="https://img.shields.io/badge/Vue-3-green" alt="Vue">
-  <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License">
-</p>
+> Native CLI v3 is currently code-complete through D27 on the development stack. Real Claude Code / Codex CLI Layer-C certification (D20) still requires an authorized target environment. Do not treat host CI as real-CLI certification.
 
----
+## What CC Desk does
 
-English | [简体中文](README_CN.md)
+- Run real **Claude Code** or **Codex CLI** processes in owned PTYs.
+- Keep multiple projects and sessions open in one desktop window.
+- Start a new session, open the CLI-native resume picker, resume a known native session ID, or launch exact raw argv.
+- Preserve exact argv boundaries; raw native argv is JSON `string[]`, not shell-split text.
+- Keep input ordered across keyboard, IME, paste, terminal replies, and native image-paste intent.
+- Apply bounded output backpressure with exact run/generation/stream ownership.
+- Project native history/resources through an authenticated, read-only backend scope.
+- Keep Claude observer metadata optional and isolated from process ownership.
 
----
+## What CC Desk does not own
 
-## Why CC Desk?
+CC Desk does **not** own Provider/API-key switching or native CLI configuration mutation.
 
-Claude Code's CLI is excellent for single-session work. But when you're managing **multiple projects** and need to **view, enter, and switch between sessions quickly** — the terminal alone becomes cumbersome.
+- Provider/configuration switching belongs to Claude Code, Codex CLI, or external tools such as cc-switch.
+- Skills, agents, MCP servers, plugins, history, and related native resources are projected read-only in the current project/session context.
+- Observer failure never kills or restarts a CLI.
+- A launch or input result that is ambiguous is never silently replayed.
 
-CC Desk is essentially a **desktop application for Claude Code**. It wraps the CLI with a native terminal experience and adds the things the CLI can't do well: multi-project management, session overview, and quick switching.
+## Unified workspace
 
-**Think of it as a desktop app purpose-built for Claude Code power users.**
+The three main destinations are **Workspace**, **Projects** and **Settings**. One
+project/session tree mixes Claude Code and Codex CLI sessions below each project.
+The contextual resource drawer shows instructions, settings, MCP, skills, agents
+and plugins as structured read-only content.
 
----
+New and Restore use shared dialogs. Settings include launch configurations,
+terminal preferences with a static preview, configurable application shortcuts,
+updates and safe diagnostic copying. GUI and terminal themes are independent.
+Switching views or colors preserves running sessions and terminal scrollback.
 
-## Screenshots
+The unified workspace supports:
 
-<p align="center">
-  <img src="screenshots/projectselect.png" alt="Project Selection" width="400">
-  <img src="screenshots/project.png" alt="Session Management" width="400">
-</p>
+| Capability | Claude Code | Codex CLI |
+|---|---:|---:|
+| New session | Yes | Yes |
+| Native resume picker | Yes | Yes |
+| Known session-ID resume | Yes | Yes |
+| Exact raw argv | Yes | Yes |
+| Registered project selection | Yes | Yes |
+| Independent launch configuration selection | Yes | Yes |
+| Read-only native resource projection | Yes | Yes |
+| Ordered staged input | Yes | Yes |
+| Bounded output + ACK | Yes | Yes |
+| Optional Claude observer overlay | Yes | No |
 
----
+Existing Claude history and sessions remain supported through the Legacy adapter in the same shell. New Claude/Codex sessions use the authenticated Native adapter. There is no separate Native product page or Legacy startup route, and Native operations never fall back to Legacy PTY APIs.
 
-## Highlights
+## Safety properties
 
-### Multi-Project Management
+The native path is intentionally fail-closed:
 
-Browse all your projects in one place. See which projects have active sessions, launch a new session with one click, and switch between projects instantly. No more `cd` between directories or managing multiple terminal windows.
+- profile/workspace writes use revision checks and atomic replacement;
+- explicit `unset` and false/empty values are not revived by legacy state;
+- Codex never inherits legacy Claude secrets;
+- native frontend commands go through the authenticated document bridge;
+- native UI uses interpolation only—no `v-html` or `innerHTML` sink;
+- public errors are fixed safe codes rather than arbitrary native exception text;
+- partial/unknown input writes are not replayed automatically;
+- wrong-owner or stale-generation output ACKs are rejected.
 
-### Multi-Session in One Window
+See [docs/native-cli-v3.md](docs/native-cli-v3.md) for the authoritative architecture.
 
-Open as many Claude Code sessions as you need — each runs independently in its own terminal tab. View all sessions in the sidebar, switch between them instantly, output is preserved when you switch back.
+## Verification status
 
-### Quick Launch with Presets
+The latest completed code-side stack through D27 has green host evidence for frontend, Rust, Windows loader, output transport, observer isolation, rollback/security boundaries, and low-resource stress.
 
-Set per-project startup options like `--resume`, `--model`, or custom flags. Launch sessions with your preferred configuration without typing the same arguments every time.
+D20 remains a separate gate. Its harness and target-machine command are implemented, but a PASS requires real Claude Code and real Codex CLI execution with an explicitly authorized test account.
 
-### Provider Management
+Synthetic fixtures, model echo, screen scraping, or host writer receipts cannot substitute for that evidence.
 
-Manage Provider presets directly or import existing entries from cc-switch. Activating a Provider is an explicit action that merges the selected env/model fields into `~/.claude/settings.json`; unrelated Claude settings are preserved.
+## Release status
 
-### Sidebar Panels
+The repository currently builds **signed candidate packages only**.
 
-A side drawer with contextual panels — no overlay, no focus stealing:
+Publishing is deliberately disabled:
 
-- **Sessions** — Browse, search, and switch between all sessions. Status indicators show running/thinking/waiting states.
-- **MCP Servers** — Inspect connected MCP servers, browse available tools and their input schemas
-- **Skills & Agents** — Quick access to your Claude Code skills and agent configurations
-- **Plugins** — View installed plugins and their components
+- `scripts/release-policy.mjs` returns false;
+- `.github/workflows/release.yml` builds and uploads candidate artifacts;
+- it does not publish a GitHub Release or updater manifest.
 
-### Native Terminal, Zero Compromise
+A green code-side CI run is not an authorization to publish.
 
-The app runs the real Claude CLI binary through a pseudo-terminal. Everything works exactly as in your terminal — slash commands, keyboard shortcuts, streaming output, colors, and interactive prompts.
+## Building from source
 
----
+### Requirements
 
-## Prerequisites
+- Node.js 20+
+- Rust stable
+- platform dependencies required by Tauri 2
+- the CLI(s) you intend to run installed and authenticated on the target machine
+- Windows: MSVC build tools / Windows SDK; the application packages its verified private ConPTY runtime
 
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated
-- **Windows only**: [Git for Windows](https://git-scm.com/download/win), Microsoft C++ Build Tools, and Windows SDK (provides Git Bash)
-
----
-
-## Quick Start
-
-### 1. Download & Install
-
-Head to the [**Releases**](https://github.com/shawnwu2022/cc-desk/releases) page and grab the installer for your platform:
-
-| Platform | File |
-|----------|------|
-| **Windows** | `.exe` (NSIS installer) |
-| **macOS** | `.dmg` (Apple silicon) |
-| **Linux** | `.AppImage` |
-
-### 2. Launch & Go
-
-1. Open the app
-2. Select or add a project directory
-3. A Claude Code session starts — just type as you would in the terminal
-4. Open more sessions from the sidebar, each runs independently
-
----
-
-## Building from Source
-
-<details>
-<summary>Click to expand</summary>
-
-### Prerequisites
-
-- [Node.js](https://nodejs.org/) 20+
-- [Rust](https://www.rust-lang.org/tools/install) stable toolchain (MSVC on Windows)
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- **Windows only**: [Git for Windows](https://git-scm.com/download/win), Microsoft C++ Build Tools, and Windows SDK
-
-### Setup
+### Commands
 
 ```bash
-git clone https://github.com/shawnwu2022/cc-desk.git
-cd cc-desk
-npm install
+npm ci
+npm run typecheck
+npm run test:ci
+npm run build
+
+cd src-tauri
+cargo test --locked
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
 ```
 
-### Development
+Run the desktop app with:
 
 ```bash
-npm run tauri:dev     # Start dev mode with hot reload
+npm run tauri:dev
 ```
 
-### Build
+## Project origin
 
-```bash
-npm run tauri:build   # Build for current platform
+CC Desk began as a fork of `orczh-hj/cc-box` and is now maintained independently. The original MIT attribution is preserved in [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
 
-# Or platform-specific:
-npm run build:win     # Windows (x86_64-pc-windows-msvc)
-npm run build:mac     # macOS (universal)
-npm run build:linux   # Linux (x86_64)
-```
+Legacy identifiers such as `~/.cc-box/` and some `CC_BOX_*` names remain where changing them would break compatibility. They are compatibility names, not product ownership boundaries.
 
-Output goes to `src-tauri/target/release/bundle/`.
+## Documentation
 
-</details>
-
----
-
-## FAQ
-
-<details>
-<summary><strong>Does this modify my Claude Code config?</strong></summary>
-
-CC Desk treats Claude session and history data as read-only. Most GUI settings stay in the legacy-compatible `~/.cc-box/` directory. The only deliberate native-config write is Provider activation, which merges the selected env/model fields into `~/.claude/settings.json` after an explicit user action. Existing unrelated settings are preserved.
-</details>
-
-<details>
-<summary><strong>Can I use all CLI features?</strong></summary>
-
-Yes. Slash commands, keyboard shortcuts, model switching, permission prompts — everything passes through to the real CLI transparently.
-</details>
-
-<details>
-<summary><strong>What's the performance like?</strong></summary>
-
-Built with Tauri 2 (Rust backend), the app is ~10 MB installed and uses minimal RAM. The terminal renders via xterm.js, matching native terminal performance.
-</details>
-
-<details>
-<summary><strong>Will it break when Claude Code updates?</strong></summary>
-
-The app runs the CLI binary directly — it doesn't depend on any internal API. As long as the CLI is on your PATH, it works with any version.
-</details>
-
----
-
-## Project Origin
-
-CC Desk began as a fork of [orczh-hj/cc-box](https://github.com/orczh-hj/cc-box). It has since evolved independently with a different product direction and is not presented as an official successor to the upstream project.
-
-The original MIT license and copyright notice are preserved in [LICENSE](LICENSE). Additional attribution details are recorded in [NOTICE.md](NOTICE.md).
-
-Because CC Desk uses a new application identifier, it installs independently from CC-Box. Existing settings are still reused from `~/.cc-box/`; uninstall the old application separately after confirming the new installation works.
-
----
-
-## Tech Stack
-
-Tauri 2 (Rust) + Vue 3 + TypeScript + xterm.js + portable-pty
-
----
+- [Native CLI v3 architecture](docs/native-cli-v3.md)
+- [Native CLI execution ledger](docs/superpowers/execution/)
+- [Real CLI certification command](docs/testing/d20-real-cli-command.md)
+- [Terminal integration](docs/terminal-integration.md)
+- [Data persistence](docs/data-persistence.md)
+- [Release process](docs/release-process.md)
+- [Roadmap](docs/roadmap.md)
 
 ## License
 
-[MIT](LICENSE)
-
-## Community
-
-- [Contributing](CONTRIBUTING.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Security Policy](SECURITY.md)
-- [Support](SUPPORT.md)
-- [Governance](GOVERNANCE.md)
-- [Issues](https://github.com/shawnwu2022/cc-desk/issues)
-- [Discussions](https://github.com/shawnwu2022/cc-desk/discussions)
+MIT.

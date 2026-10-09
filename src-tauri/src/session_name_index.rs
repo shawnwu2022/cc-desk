@@ -1,5 +1,6 @@
 //! 会话名称派生索引。
 
+pub(crate) use crate::cli::projection::legacy_project_index_key;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -17,7 +18,7 @@ static PRODUCTION_INDEX_HEALTH: OnceLock<Arc<IndexHealth>> = OnceLock::new();
 
 type ReplaceFileFn = dyn Fn(&Path, &Path) -> io::Result<()> + Send + Sync;
 
-pub(crate) const SESSION_NAME_INDEX_SCHEMA_VERSION: u32 = 1;
+pub(crate) const SESSION_NAME_INDEX_SCHEMA_VERSION: u32 = 2;
 pub(crate) const SESSION_NAME_PARSER_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,6 +272,8 @@ pub(crate) struct SessionNameIndexStore {
     shared_lock_timeout: Duration,
     flush_budget: Duration,
     flush_attempts: usize,
+    #[cfg(test)]
+    flush_elapsed: Option<Arc<dyn Fn() -> Duration + Send + Sync>>,
     probe: Option<Arc<dyn Fn(FlushStage, bool) + Send + Sync>>,
     before_exclusive: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     replace: Arc<ReplaceFileFn>,
@@ -291,6 +294,8 @@ impl SessionNameIndexStore {
             shared_lock_timeout,
             flush_budget: DEFAULT_FLUSH_BUDGET,
             flush_attempts: DEFAULT_FLUSH_ATTEMPTS,
+            #[cfg(test)]
+            flush_elapsed: None,
             probe: None,
             before_exclusive: None,
             replace: Arc::new(|temporary, target| {
@@ -316,6 +321,15 @@ impl SessionNameIndexStore {
         if let Some(replace) = replace {
             self.replace = replace;
         }
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_flush_elapsed_for_test(
+        mut self,
+        elapsed: impl Fn() -> Duration + Send + Sync + 'static,
+    ) -> Self {
+        self.flush_elapsed = Some(Arc::new(elapsed));
         self
     }
 
@@ -406,7 +420,7 @@ impl SessionNameIndexStore {
                 return Ok(metrics);
             }
 
-            let remaining = match remaining_budget(flush_started, self.flush_budget) {
+            let remaining = match self.remaining_flush_budget(flush_started) {
                 Ok(remaining) => remaining,
                 Err(error) => {
                     self.health.record_write_failure(&error.to_string());
@@ -487,7 +501,7 @@ impl SessionNameIndexStore {
                 before_exclusive(attempt);
             }
 
-            let remaining = match remaining_budget(flush_started, self.flush_budget) {
+            let remaining = match self.remaining_flush_budget(flush_started) {
                 Ok(remaining) => remaining,
                 Err(error) => {
                     let _ = std::fs::remove_file(&temporary);
@@ -583,6 +597,22 @@ impl SessionNameIndexStore {
         );
         self.health.record_write_failure(&error.to_string());
         Err(error)
+    }
+
+    fn remaining_flush_budget(&self, started: Instant) -> io::Result<Duration> {
+        #[cfg(test)]
+        let elapsed = self
+            .flush_elapsed
+            .as_ref()
+            .map_or_else(|| started.elapsed(), |elapsed| elapsed());
+        #[cfg(not(test))]
+        let elapsed = started.elapsed();
+        self.flush_budget.checked_sub(elapsed).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "session name index flush budget exhausted",
+            )
+        })
     }
 
     fn observe_stage(
@@ -729,15 +759,6 @@ impl SessionNameIndexStore {
             }
         }
     }
-}
-
-fn remaining_budget(started: Instant, budget: Duration) -> io::Result<Duration> {
-    budget.checked_sub(started.elapsed()).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            "session name index flush budget exhausted",
-        )
-    })
 }
 
 fn raw_snapshot_len(raw: &RawIndexSnapshot) -> u64 {
@@ -1076,16 +1097,14 @@ impl SessionNameResolver {
         path: &Path,
         initial_stamp: FileStamp,
     ) -> NameResolution {
-        let project_key = normalized_project_key(project_dir);
+        let project_key = legacy_project_index_key(project_dir);
         let file_name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let base = self
-            .snapshot
-            .index
-            .projects
-            .get(&project_key)
+        let base = project_key
+            .as_ref()
+            .and_then(|key| self.snapshot.index.projects.get(key))
             .and_then(|bucket| bucket.get(&file_name))
             .cloned();
         let resolution =
@@ -1104,7 +1123,9 @@ impl SessionNameResolver {
             .jsonl_bytes_read
             .saturating_add(resolution.jsonl_bytes_read);
 
-        if let Some(replacement) = resolution.replacement.clone() {
+        if let (Some(project_key), Some(replacement)) =
+            (project_key, resolution.replacement.clone())
+        {
             self.delta.mutations.push(IndexMutation {
                 project_key,
                 file_name,
@@ -1125,7 +1146,9 @@ impl SessionNameResolver {
         if !complete {
             return;
         }
-        let project_key = normalized_project_key(project_dir);
+        let Some(project_key) = legacy_project_index_key(project_dir) else {
+            return;
+        };
         let Some(base_bucket) = self.snapshot.index.projects.get(&project_key) else {
             return;
         };
@@ -1155,10 +1178,6 @@ impl SessionNameResolver {
             delta: self.delta,
         })
     }
-}
-
-fn normalized_project_key(project_dir: &Path) -> String {
-    crate::store::normalize_path_str(&project_dir.to_string_lossy())
 }
 
 #[derive(Debug, PartialEq, Eq)]

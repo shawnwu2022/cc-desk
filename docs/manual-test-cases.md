@@ -2370,3 +2370,99 @@
 - 终端内容颜色与光标（琥珀金）不受 GUI 主题切换影响
 
 **回归锁**：token 对比度由 `tests/designTokens.test.ts`（9 用例，WCAG AA ≥4.5:1）自动守护；本条目仅覆盖视觉观感主观确认
+
+## Task 12：新建会话最终平台检查（待执行）
+
+- 目标：Windows 最小 1024×640 窗口在 100%/125%/150% 缩放下验证新建菜单与高级对话框；macOS/Linux 做同等功能检查。
+- 前置：已获授权的目标机器、已配置真实 CLI 环境；真实 CLI/account/D20 验证须另行授权。自动化 jsdom 门禁不代表这项已通过。
+- 操作：项目＋后分别选择 Claude/Codex；在屏幕边缘打开菜单；用方向键、Enter、Escape 操作；打开更多选项并展开参数编辑；切换设置/项目导航；在启动准备失败后显式重试。
+- 预期：普通创建仅两次点击，先出现启动图标；菜单/对话框不越界，内容可滚动；失活界面不保留焦点陷阱；高级字段纵向排列，普通流无内部身份字段；失败行保留，unknown 不自动重启；JSON/逐行切换不改变参数边界。
+
+## Task 13：恢复会话最终平台检查（待执行）
+
+- 目标：在 Windows 1024×640、100%/125%/150% 缩放，以及 macOS/Linux 验证恢复窗口的真实布局和 CLI 行为。
+- 前置：授权目标机器、真实 Claude Code/Codex CLI 与两种来源历史；账户/实际 CLI 的 D20 检查需单独授权。当前自动化仅验证宿主协议边界，不代表此项通过。
+- 操作：从项目＋、历史行和高级三种恢复模式进入；以 200 字符标题/80 字符项目名、中英文、双主题搜索；在当前/全部项目、CLI、时间筛选间切换并用键盘选择/确认/取消。分别执行真实 CLI 历史恢复、按 ID 恢复、自带 picker（当前/全部范围）。
+- 预期：窗口内容可滚动，按钮/筛选不引入页面横向滚动；失活后焦点陷阱关闭；同源已打开会话只激活一个终端，输出/输入身份与滚动内容连续；CLI 自身负责 picker 和实际 ID 可用性，未知启动不自动重试。实际 Native/Legacy CLI 恢复、账号可用性及系统缩放结果必须另行记录。
+
+
+## Unified workspace Task 14: project management platform acceptance (not yet performed)
+
+- Goal: verify compact project management and runtime continuity on Windows 1024×640 at 100%, 125%, and 150% scaling, plus macOS/Linux functional smoke
+- Preconditions: 50 real project folders including an 80-character display name and long Windows path, both CLIs/configurations when available, one unavailable CLI scenario, running/stopped/unknown open terminals
+- Steps: add a folder once and re-add a normalized path variant; search/sort; open another project; open the folder in the OS file manager; pin/rename; hide/show a project with no open terminal; open the last row menu near the bottom edge; navigate away with a menu or rename/remove dialog open
+- Expected: one adopted registration and row; fixed activity/session/menu columns and middle path ellipsis without horizontal page scrolling; shared keyboard/focus behavior; unavailable CLI does not block other CLI/read-only management; navigation preserves every existing terminal process, output and exact ownership
+- Steps: attempt removal with any open/preparing terminal, then explicitly finish/close sessions and confirm removal; show hidden projects and re-add; simulate an uncertain write or revision conflict
+- Expected: open ownership blocks removal without stopping/closing a process; confirmed removal suppresses the ordinary list and unregisters where present, without deleting local files or CLI transcripts; archive/name/preferences survive re-add; unknown/conflict results reload and show safe partial-state feedback without automatically repeating the mutation
+- Limit: Legacy-only Remove persists the same visibility suppression as Hide; Show hidden/history or re-add remains available. This is intentional compatibility behavior without a new persistence marker
+
+## Unified workspace Task 15: project resources platform acceptance (not yet performed)
+
+- Goal: verify the single shell resource drawer on Windows 1024×640 at 100%, 125%, and 150% scaling, plus macOS/Linux functional rendering
+- Preconditions: authorized real Claude Code and Codex CLI sessions in two projects/configurations, Legacy compatibility sessions, long instruction text/resource names, known non-secret sample project settings, and an unavailable resource source
+- Steps: open resources from the workspace header; inspect all six categories; switch sessions/projects, refresh, close/reopen and switch Workspace/Projects/Settings; resize across the dock/overlay boundary; use keyboard category/refresh/close controls and Escape
+- Expected: same shell drawer/focus behavior, no second terminal tabs, no page-level horizontal scroll, no terminal process restart, scrollback loss or input replay; visible content follows the selected session; stale refresh data is visibly labeled and never retained for another owner
+- Steps: inspect a Native run launched with a configuration different from the current default; modify the saved configuration without restarting; inspect a never-admitted/historical session; make the source unavailable; inspect Legacy project-only and instruction states
+- Expected: live Native resources follow the frozen run snapshot; exact historical/profile identities never silently become current defaults; missing/unsupported sources differ from empty observations; bounded pages and instruction truncation are labeled; Legacy omits ambient user/global observations and labels project-only/partial, with instructions unavailable
+- Scope: do not insert real secrets to test privacy. Automated synthetic sentinels cover DOM filtering. Automated review regressions additionally cover actual Native terminal malformed-receipt handling with no profile fallback, and Legacy MCP/settings missing/ancestor/other-project source-path rejection. These manual checks do not replace separately authorized D20 real-account/CLI certification, and have not been performed by the Task 15 implementation
+
+## Task 16：确认与反馈最终平台检查（待执行）
+
+- 目标：Windows 1024×640 在 100%/125%/150% 缩放下，及 macOS/Linux 验证确认弹窗与反馈的真实渲染/可访问性。
+- 前置：已授权的真实 CLI/目标机器；准备运行、已结束和状态不明的会话。真实停止/恢复/重启与账号验证需单独授权，当前 jsdom/host 测试不代表通过。
+- 操作：用鼠标/键盘触发关闭运行会话、停止并归档、未知状态检查后重启、项目移除；等待时取消或切换导航/会话；在单工具缺失/未登录与全来源不可用场景检查反馈。在真实启动配置设置页验证编辑、复制、默认选择和删除确认。
+- 预期：默认焦点不落在危险按钮；长标题/中英文文案可滚动且无全页横向溢出；失活表面无残留焦点陷阱；工具故障不阻断另一工具；全工作区错误不卸载终端宿主；未知进程未确认停止时不重复启动；Toast 不覆盖新选择，诊断中没有原始路径、错误正文、环境值或凭据。
+- 排队检查：让另一元数据/注册写尚未完成，再确认停止并归档或项目移除；在 archive/unregister/unpin 发出前取消或替换原来源。预期：队列释放后不发出已失效步骤，Native/Legacy 均保留停止后的打开会话；取消未发出的写不显示存储失败或触发未知写恢复。已经完成的停止/隐藏/注销可以保留，应用不自动补偿或重放。
+
+
+## Unified workspace Task 17: settings platform acceptance (not yet performed)
+
+- Goal: verify the seven-section Settings shell and GUI-only preferences at Windows 1024×640 with 100%/125%/150% scaling, plus macOS/Linux functional smoke
+- Preconditions: existing mixed Claude Code/Codex CLI terminal owners with retained scrollback and selection; a config with old startup/terminal keys; system theme switching enabled; long English/Chinese labels
+- Steps: open Settings and Shortcuts through OS menus; visit all seven categories; change language, next-start page and default tool; restart the app and open the chooser/advanced form
+- Expected: General/Shortcuts routing is exact; the supported next-start surface opens without launching a CLI; the chosen default tool is preferred in the chooser/form while both tools remain independently available; old launch/env/terminal keys remain stored; no unsupported tray setting appears
+- Steps: switch GUI light/dark/system and system appearance, toggle density, and set sidebar widths at 240/288/360; navigate between Workspace/Projects/Settings with mixed owners and pending confirmations/resources
+- Expected: GUI colors/density/width update in the actual shell without horizontal page scrolling; terminal theme/font/renderer, scrollback, input identity, process ownership and active selection are preserved; fixed ink-blue/amber accents retain accessibility behavior
+- Steps: perform rapid successive preference changes, delay startup/read/write replies, reject a save, and simulate an unknown acknowledgement with a subsequent failed/successful reload
+- Expected: only current intents publish or roll back to confirmed values; old hydration cannot steal navigation or override a newer choice; startup migration is ordered with GUI writes; unknown deltas are never automatically resubmitted, raw transport details never render, and saved state must be read successfully before another write when reconciliation fails
+- Scope limit: Terminal and launch-configuration editing placeholders intentionally await Tasks 18–19. Existing shortcuts/update/about content awaits Task 20's expanded verification. This task does not certify actual Rust/backend persistence or real CLI/platform/scaling behavior
+
+## Unified workspace Task 18: terminal appearance/platform acceptance (not yet performed)
+
+- Goal: validate Settings Terminal and live continuity on Windows 1024×640 at 100%, 125%, 150%, with equivalent macOS/Linux functional checks
+- Preconditions: authorized installed app; one Legacy Claude, Native Claude and Native Codex session with output/scrollback and selected text; existing terminal theme preferences; optional GPU/WebGL availability
+- Steps: inspect all theme cards and inert preview in English/Chinese; exercise font family, size drafts, line height, cursor style/blink; check all four GUI light/dark × terminal light/dark combinations; keep one terminal hidden while changing metrics and show it afterward
+- Expected: shared preferences apply across runtimes; GUI choice does not change terminal colors; color/cursor changes preserve dimensions, process, scrollback and selection; visible metric updates fit once and hidden metrics fit only when shown; preview starts no CLI or PTY; controls wrap without global horizontal overflow
+- Steps: choose WebGL, check existing terminal stays unchanged, open another terminal, exercise supported context-loss/unavailable-GPU scenario; restart app with old cc-box theme IDs and explicit false blink setting
+- Expected: renderer preference affects new terminals only; DOM fallback keeps the same palette and live terminal content; legacy IDs/colors and stored preferences survive restart; missing fonts use platform CJK/emoji fallbacks without installation
+- Limit: mocked frontend tests do not establish real GPU, PTY/input/output/ACK or installed CLI behavior. Rust DTO tests are NOT RUN here because cargo/rustc are unavailable. Final platform/Rust/Windows gate remains separate and unperformed
+
+
+## Task 19: launch configuration platform acceptance (not yet performed)
+
+- Goal: verify the grouped configuration list/editor on Windows 1024×640 at 100%/125%/150% scaling and macOS/Linux functional rendering
+- Preconditions: authorized target machine and real CLI runs, long configuration names/program paths/arguments, both locales; use synthetic environment sentinels only
+- Steps: navigate to Launch configurations; use hover/keyboard edit, context/overflow actions, progressive details, per-line/JSON arguments, Save/Cancel, and navigate away with dialogs open
+- Expected: one quick action, retained name/default/menu columns, no horizontal page overflow, shared keyboard/focus behavior, no environment values or host-reference values in rendered UI
+- Steps: save edits and delete a configuration used by a confirmed running session; inspect the existing terminal and project resources; resolve an unadmitted launch before deletion; delete the last default and explicitly create another session
+- Expected: admitted process/scrollback/selection/run resource identity remain intact; unadmitted attempts block deletion, historical restart/resume never silently substitutes defaults, safe default is prepared only on the new explicit creation
+- These rendered/real-CLI checks are pending; automated host/component evidence does not certify the target platforms
+
+
+## Unified workspace Task 20: remaining settings acceptance (NOT RUN)
+
+- On authorized Windows 1024×640 at100%/125%/150%, plus macOS/Linux, exercise Ctrl/Cmd+N/W/P/comma and F2 with a real mixed project, selected Native Codex/Claude and Legacy sessions, terminal focus, an ordinary form field and an open confirmation. N opens the existing chooser; W retains Task16 running/unknown close confirmation; project/settings navigation preserves selection and terminal ownership; F2 opens the one row editor. With its project collapsed or hidden by search, type an unsaved F2 draft and refresh: the same-source editor/draft must stay visible; Escape restores the existing collapse/search state, and a replaced source/attempt discards the old editor. Verify keyboard cleanup after unmount and custom rename bindings for focused rows
+- In Shortcuts, search English/Chinese action names and displayed keys; capture a conflict, cancel and explicitly Replace; restore one binding into a conflict and restore all with confirmation. Delay/reject persistence and initial hydration, switch sections during saves and simulate an unknown write with failed/successful readback. Expect one explicit delta, latest confirmed rollback, disabled pending/unread editor, no implicit conflict overwrite or replay, no late modal/toast ownership transfer
+- In Update, inspect unverified, candidate and test-package observations with ordinary-looking versions and forged promotion markers. No ordinary badge or install is allowed under the current signed-candidates-only policy; the release-page link and explicit reason remain usable. Review current running/starting/unknown owner counts, including equal Legacy/Native IDs and process changes while reviewing. No test package is promoted and opening review stops no process. Do not perform actual updater install/relaunch during this development acceptance without separate authorization
+- In About, verify version/build commit, MIT, repository/Claude/Codex links and safe diagnostic clipboard. Use synthetic sentinels only to ensure paths, identities, credentials/env, prompts, terminal output and raw failures never enter the copy. Reject clipboard/browser access and switch sections before completion; only safe current feedback appears
+- These instructions are a future platform/real-CLI checklist. This implementation does not certify rendered scaling/accessibility, actual clipboard/browser/updater behavior, Rust DTO execution or target-machine filesystem persistence
+
+## Task 22: responsive and accessibility platform acceptance (pending)
+
+- Goal: render and interact with 1024×640, 1280×720, 1366×768, 1440×900 and 1920×1080 at Windows 100%/125%/150% scaling, Chinese/English, light/dark and different terminal themes; also functional macOS/Linux acceptance
+- Preconditions: authorized target platform, deterministic non-secret long-content fixtures (200-character session title, 80-character project name, long project path), keyboard and a screen reader; real CLI continuity uses separately authorized sessions
+- Steps: resize around 1180/900 logical CSS pixels, open/close resources, collapse/expand the tree, focus or hover edge icons/long names, scroll ancestors with a tooltip open, operate menus and nested dialogs by keyboard, expand developer details, then leave Settings with an editor open
+- Expected: no global horizontal scrolling; status/CLI/title/time/menu columns remain; names truncate with accessible full text; resource overlay preserves useful terminal space; tooltips remain in view; closed details are skipped by Tab; focus never returns to a hidden surface; nested visible dialog focus returns correctly; menus honor arrows/Home/End/Enter/Escape; long action labels wrap while controls retain usable sizes
+- Steps: enable reduced motion and check loading/status/collapse animations; inspect accessible names and visible focus outlines; change GUI/terminal theme independently while keeping a session selected
+- Expected: no nonessential motion, no status conveyed only by color or visible status text added to rows, stable terminal process/output/selection, and usable controls at every scale
+- Status: not executed in Task22. jsdom/source contracts and theme token arithmetic do not constitute rendered or OS acceptance; Task23 browser visuals are separate evidence

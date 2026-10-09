@@ -681,8 +681,8 @@ describe('session store - 全局树', () => {
     })
   })
 
-  // ==================== command 失败回滚（P1.3：始终 invoke 后端；reject 时本地未 apply） ====================
-  describe('persist 失败回滚', () => {
+  // Canonical writer reconciles failed receipts by reading disk; fixtures must model persisted state.
+  describe('persist 失败后只读协调', () => {
     // pin command reject -> 抛错 + 本地未 apply（返回值未到达）
     it('Pin_PersistFail_NoLocalChange_001', async () => {
       const { pinProject } = await import('@/api/tauri')
@@ -692,17 +692,23 @@ describe('session store - 全局树', () => {
       expect(store.isPinned('/p-a')).toBe(false)
     })
 
-    // unpin command reject -> 抛错 + 本地保持置顶（前一次 pin 返回值已 apply，unpin 返回值未到达）
+    // Failed unpin with an unchanged disk keeps the prior pin after the required readback.
     it('Unpin_PersistFail_KeepPinned_001', async () => {
-      const { pinProject, unpinProject } = await import('@/api/tauri')
-      ;(pinProject as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      const { getProjectsState, pinProject, unpinProject } = await import('@/api/tauri')
+      const persisted = {
         pinnedProjects: ['/p-a'], archivedSessions: {}, displayNames: {},
-      })
+      }
+      ;(pinProject as ReturnType<typeof vi.fn>).mockResolvedValueOnce(persisted)
       ;(unpinProject as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('io error'))
       const store = useSessionStore()
       await store.pinProject('/p-a')  // 先成功置顶（返回值已 apply）
+      ;(getProjectsState as ReturnType<typeof vi.fn>).mockResolvedValueOnce(persisted)
+      const reads = vi.mocked(getProjectsState).mock.calls.length
+      const writes = vi.mocked(unpinProject).mock.calls.length
       await expect(store.unpinProject('/p-a')).rejects.toThrow('io error')
       expect(store.isPinned('/p-a')).toBe(true)
+      expect(getProjectsState).toHaveBeenCalledTimes(reads + 1)
+      expect(unpinProject).toHaveBeenCalledTimes(writes + 1)
     })
 
     // archive command reject -> 抛错 + 本地存档不变（未 apply）
@@ -714,17 +720,23 @@ describe('session store - 全局树', () => {
       expect(store.getArchivedSessions('/p-a')).toEqual([])
     })
 
-    // restore command reject -> 抛错 + 本地仍保持存档（前一次 archive 已 apply）
+    // Failed restore with an unchanged disk keeps the archive; no mutation is replayed.
     it('Restore_PersistFail_KeepArchived_001', async () => {
-      const { archiveSession, restoreSession } = await import('@/api/tauri')
-      ;(archiveSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      const { getProjectsState, archiveSession, restoreSession } = await import('@/api/tauri')
+      const persisted = {
         pinnedProjects: [], archivedSessions: { '/p-a': ['sess-1'] }, displayNames: {},
-      })
+      }
+      ;(archiveSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce(persisted)
       ;(restoreSession as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('io error'))
       const store = useSessionStore()
       await store.archiveSession('/p-a', 'sess-1')  // 先成功存档
+      ;(getProjectsState as ReturnType<typeof vi.fn>).mockResolvedValueOnce(persisted)
+      const reads = vi.mocked(getProjectsState).mock.calls.length
+      const writes = vi.mocked(restoreSession).mock.calls.length
       await expect(store.restoreSession('/p-a', 'sess-1')).rejects.toThrow('io error')
       expect(store.getArchivedSessions('/p-a')).toContain('sess-1')
+      expect(getProjectsState).toHaveBeenCalledTimes(reads + 1)
+      expect(restoreSession).toHaveBeenCalledTimes(writes + 1)
     })
   })
 

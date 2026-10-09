@@ -1,492 +1,218 @@
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import AppButton from '@/components/ui/AppButton.vue'
+import AppMenu from '@/components/ui/AppMenu.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import SessionList from './SessionList.vue'
+import NewSessionMenu from './NewSessionMenu.vue'
+import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
+import type {
+  ProjectActionRequest, ProjectMenuAction, SessionMenuAction, SessionPrimaryAction,
+  SessionTreeConfirmationRequest, UnifiedProjectGroup, UnifiedProjectIdentity, NewSessionRequest,
+} from '@/types/unifiedSession'
+
+const props = withDefaults(defineProps<{
+  project: UnifiedProjectGroup
+  expanded: boolean
+  surfaceActive?: boolean
+  selectedId?: string | null
+  isCurrent?: boolean
+  /** Search expansion is temporary and must not alter explicit user state. */
+  disableToggle?: boolean
+}>(), { isCurrent: false, disableToggle: false, surfaceActive: true })
+const emit = defineEmits<{
+  'toggle-expand': [projectKey: string]
+  'new-session-request': [project: NewSessionRequest]
+  'project-action': [request: ProjectActionRequest]
+  activate: [id: string]
+  'primary-action': [id: string, action: SessionPrimaryAction]
+  'menu-action': [id: string, action: SessionMenuAction]
+  'rename-commit': [id: string, title: string]
+  'rename-cancel': [id: string]
+  'confirmation-request': [request: SessionTreeConfirmationRequest]
+}>()
+const { t } = useI18n()
+const row = ref<HTMLElement | null>(null)
+const menu = ref<InstanceType<typeof AppMenu> | null>(null)
+const menuOpen = ref(false)
+const newMenuOpen = ref(false)
+const newMenuAnchor = ref({ x: 8, y: 8 })
+const draft = useNewSessionDraftStore()
+function openNewMenu(event: MouseEvent) {
+  if (!props.surfaceActive) return
+  const target = event.currentTarget as HTMLElement
+  target.focus()
+  const rect = target.getBoundingClientRect()
+  newMenuAnchor.value = { x: rect.left, y: rect.bottom + 4 }
+  menuOpen.value = false
+  newMenuOpen.value = !newMenuOpen.value
+}
+const anchor = ref({ x: 8, y: 8 })
+const menuPosition = ref({ left: '8px', top: '8px' })
+const sessions = computed(() => props.project.sessions.filter(session => !session.archived))
+const projectIdentity = computed<UnifiedProjectIdentity>(() => ({
+  projectKey: props.project.projectKey, projectPath: props.project.projectPath,
+}))
+const menuItems = computed(() => [
+  { id: props.project.pinned ? 'unpin' : 'pin', label: t(props.project.pinned ? 'unpin' : 'pin') },
+  { id: 'rename', label: t('rename') },
+  { id: 'view-archive', label: t('archivedSessions') },
+  { id: 'open-project-directory', label: t('openFolder') },
+  { id: 'remove-project', label: t('removeProject'), danger: true },
+])
+function toggle() {
+  if (!props.disableToggle) emit('toggle-expand', props.project.projectKey)
+}
+function openOverflow(event: MouseEvent) {
+  newMenuOpen.value = false
+  if (!props.surfaceActive) return
+  if (menuOpen.value) { menuOpen.value = false; return }
+  const trigger = event.currentTarget as HTMLElement
+  trigger.focus()
+  const rect = trigger.getBoundingClientRect()
+  anchor.value = { x: rect.right - 200, y: rect.bottom + 4 }
+  menuOpen.value = true
+}
+function overflowPointerdown(event: PointerEvent) {
+  // An inactive opener must still dismiss another project's/session's menu.
+  if (menuOpen.value) event.stopPropagation()
+}
+function openContext(event: MouseEvent) {
+  newMenuOpen.value = false
+  if (!props.surfaceActive) return
+  event.preventDefault(); event.stopPropagation()
+  row.value?.focus()
+  anchor.value = { x: event.clientX, y: event.clientY }
+  menuOpen.value = true
+}
+function onRowKeydown(event: KeyboardEvent) {
+  if (!props.surfaceActive) return
+  if (event.target !== event.currentTarget) return
+  if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
+    newMenuOpen.value = false
+    event.preventDefault(); event.stopPropagation()
+    const rect = row.value!.getBoundingClientRect()
+    anchor.value = { x: rect.right - 200, y: rect.bottom + 4 }
+    menuOpen.value = true
+  } else if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault(); toggle()
+  }
+}
+function projectAction(id: string) {
+  const item = menuItems.value.find(item => item.id === id)
+  if (!item) return
+  emit('project-action', { ...projectIdentity.value, action: item.id as ProjectMenuAction })
+}
+function sessionMenuAction(id: string, action: SessionMenuAction) {
+  const session = sessions.value.find(session => session.id === id)
+  if (!session) return
+  if (action === 'archive' && session.processState === 'running') {
+    emit('confirmation-request', { kind: 'stop-and-archive', sessionId: id, ...projectIdentity.value })
+    return
+  }
+  // Recheck live state even if a now-stale menu originated in a stopped state.
+  if (action === 'archive' && (session.processState === 'unknown' || session.processState === 'starting')) return
+  emit('menu-action', id, action)
+}
+async function placeMenu() {
+  await nextTick()
+  if (!menuOpen.value) return
+  const element = menu.value?.$el
+  const rect = element instanceof HTMLElement ? element.getBoundingClientRect() : null
+  const width = rect?.width || 200
+  const height = rect?.height || menuItems.value.length * 32 + 8
+  menuPosition.value = {
+    left: `${Math.max(8, Math.min(anchor.value.x, window.innerWidth - width - 8))}px`,
+    top: `${Math.max(8, Math.min(anchor.value.y, window.innerHeight - height - 8))}px`,
+  }
+}
+watch(() => [menuOpen.value, anchor.value.x, anchor.value.y, menuItems.value], () => { void placeMenu() }, { immediate: true })
+watch(menuOpen, open => {
+  if (open) window.addEventListener('resize', placeMenu)
+  else window.removeEventListener('resize', placeMenu)
+})
+watch(() => props.project.projectKey, () => { menuOpen.value = false; newMenuOpen.value = false })
+watch(() => props.surfaceActive, active => { if (!active) menuOpen.value = false }, { flush: 'sync' })
+onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
+</script>
+
 <template>
-  <div class="project-node" :class="{ current: isCurrent }">
-    <!-- 项目行：整行点击 = 展开/折叠（v3：点项目不切换，切换靠点会话节点） -->
-    <div class="project-row">
-      <!-- ▸ 展开箭头：独立命中区，与整行点击合并触发 toggleExpand -->
-      <button
-        class="expand-arrow"
-        :class="{ expanded: expanded }"
-        @click.stop="onToggle"
-        :title="expanded ? t('collapse') : t('expand')"
-      >
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-          <polyline points="9 6 15 12 9 18" />
-        </svg>
-      </button>
-
-      <!-- 项目名区：整行点击展开/折叠 -->
-      <div
-        class="project-main"
-        role="button"
-        tabindex="0"
-        @click="onToggle"
-        @keydown.enter.prevent="onToggle"
-        @keydown.space.prevent="onToggle"
-      >
-        <input
-          v-if="editState !== 'idle'"
-          ref="renameInputRef"
-          v-model="renameValue"
-          class="rename-input"
-          :maxlength="32"
-          :disabled="editState === 'submitting'"
-          :placeholder="t('aliasPlaceholder')"
-          @click.stop
-          @keydown.stop
-          @keyup.enter="onRenameSubmit"
-          @keyup.escape="onRenameCancel"
-          @blur="onRenameSubmit"
-        />
-        <span v-else class="project-name">{{ project.name }}</span>
-        <!-- 错误提示（error 态） -->
-        <span v-if="renameError" class="rename-error">{{ renameError }}</span>
-        <!-- 置顶标记 -->
-        <span v-if="project.isPinned" class="pin-mark" :title="t('pinned')">
-          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a5.927 5.927 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707-.195-.195.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a5.922 5.922 0 0 1 1.013.16l3.134-3.133a2.772 2.772 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146z"/>
-          </svg>
-        </span>
-        <!-- 状态徽标：按最高 severity 取（!error / ?permission / ✓completed / ●running） -->
-        <span v-if="attentionSummary.error > 0" class="badge error" :title="t('attentionKind_error')">!{{ attentionSummary.error }}</span>
-        <span v-else-if="attentionSummary.permission > 0" class="badge permission" :title="t('attentionKind_permission')">?{{ attentionSummary.permission }}</span>
-        <span v-else-if="attentionSummary.completed > 0" class="badge completed" :title="t('attentionKind_completed')">✓{{ attentionSummary.completed }}</span>
-        <span v-else-if="project.runningCount > 0" class="badge running">●{{ project.runningCount }}</span>
-        <span v-if="project.isOrphan" class="orphan-tag">{{ t('uncollected') }}</span>
+  <div class="project-node" :class="{ current: isCurrent }" role="treeitem" :aria-expanded="expanded" :aria-label="project.name">
+    <div ref="row" :data-project-key="project.projectKey" class="project-row" role="button" :aria-expanded="expanded" :aria-label="project.name" tabindex="0"
+      @contextmenu="openContext" @keydown="onRowKeydown">
+      <AppButton class="expand-arrow" :class="{ expanded }" variant="ghost" size="compact" :aria-label="expanded ? t('collapse') : t('expand')"
+        :aria-expanded="expanded" :disabled="disableToggle" @click.stop="toggle">
+        <svg aria-hidden="true" focusable="false" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18" /></svg>
+      </AppButton>
+      <div class="project-main" role="button" tabindex="0" :aria-label="project.name" :aria-description="project.projectPath" :aria-expanded="expanded"
+        @click.stop="toggle" @keydown.enter.self.prevent.stop="toggle" @keydown.space.self.prevent.stop="toggle">
+        <span class="project-name">{{ project.name }}</span>
+        <span v-if="project.pinned" class="pin-mark" :aria-label="t('pinned')">⌖</span>
       </div>
-
-      <!-- hover 操作 -->
-      <div class="hover-actions">
-        <button class="action-btn" @click.stop="$emit('newSessionIn', project.projectPath)" :title="t('newSessionTitle')">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
-        <button class="action-btn" @click.stop="menuOpen = !menuOpen" :title="t('more')">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="19" r="1" />
-          </svg>
-        </button>
-      </div>
-
-      <!-- ⋯ 菜单 -->
-      <div v-if="menuOpen" class="menu" @click.stop>
-        <button v-if="!project.isPinned" @click="onMenu('pin')">{{ t('pin') }}</button>
-        <button v-else @click="onMenu('unpin')">{{ t('unpin') }}</button>
-        <button @click="onMenu('rename')">{{ t('rename') }}</button>
-        <button @click="onMenu('showArchived')">{{ t('archivedSessions') }}</button>
-        <button @click="onMenu('closeAll')">{{ t('closeAllSessions') }}</button>
-        <button @click="onMenu('openInExplorer')">{{ t('openFolder') }}</button>
-      </div>
-
-      <!-- 已存档会话弹层（v-if，不新建子组件） -->
-      <div v-if="archivedOpen" class="archived-panel" @click.stop>
-        <div class="archived-header">
-          <span class="archived-title">{{ t('archivedSessions') }}</span>
-          <button class="archived-close" @click="archivedOpen = false" :title="t('close')">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-        <div v-if="archivedList.length === 0" class="archived-empty">{{ t('noArchivedSessions') }}</div>
-        <div v-else class="archived-list">
-          <div v-for="item in archivedList" :key="item.sessionId" class="archived-item">
-            <div class="archived-info">
-              <span class="archived-name" :title="item.name">{{ item.name }}</span>
-              <span v-if="item.lastActiveAt > 0" class="archived-time">{{ timeAgo(item.lastActiveAt) }}</span>
-            </div>
-            <button class="restore-btn" @click="onRestore(item.sessionId)" :title="t('restore')">{{ t('restore') }}</button>
-            <button
-              class="delete-btn"
-              @click.stop="onDeleteArchived(item.sessionId)"
-              :disabled="isRunning(item.sessionId)"
-              :title="isRunning(item.sessionId) ? t('runningSessionHint') : t('deleteSession')"
-            >{{ t('deleteSession') }}</button>
-          </div>
-        </div>
+      <span v-if="!expanded && project.needsUserCount > 0" class="project-attention" data-project-attention
+        role="img" :aria-label="t('projectNeedsReplyCount', { count: project.needsUserCount })" />
+      <span v-else class="project-attention-slot" aria-hidden="true" />
+      <IconButton class="project-new-session" data-project-quick-action="new-session" :label="t('newSessionTitle')"
+        aria-haspopup="menu" :aria-expanded="newMenuOpen" @pointerdown="newMenuOpen && $event.stopPropagation()" @click.stop="openNewMenu">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" /></svg>
+      </IconButton>
+      <div class="project-overflow-trigger" @pointerdown="overflowPointerdown">
+        <IconButton :label="t('projectActionsLabel')" aria-haspopup="menu" :aria-expanded="menuOpen" @click.stop="openOverflow">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
+        </IconButton>
       </div>
     </div>
-
-    <!-- 会话列表（展开时） -->
     <div v-if="expanded" class="session-sub">
-      <SessionList
-        :tabs="project.tabs"
-        :history="history"
-        :active-id="activeTabId"
-        :closable="true"
-        @switch="onSessionSwitch"
-        @rename="(id, name) => emit('renameSession', id, name)"
-        @restart="(id) => emit('restartSession', id)"
-        @close="(id) => emit('closeTab', id)"
-        @archive="(id) => emit('archiveSession', project.projectPath, id)"
-      />
-      <div v-if="project.tabs.length === 0 && history.length === 0 && !loading" class="empty-hint">
-        {{ t('noHistorySessions') }}
-      </div>
-      <div v-if="loading" class="loading-indicator">{{ t('loading') }}</div>
-      <div v-else-if="error" class="history-error">
-        <span class="history-error-msg">{{ t('loadHistoryFailed') }}</span>
-        <button class="history-error-retry" @click="onRetryHistory">{{ t('retry') }}</button>
-      </div>
+      <SessionList :sessions="sessions" :selected-id="selectedId" :surface-active="surfaceActive" @activate="emit('activate', $event)"
+        @primary-action="(id, action) => emit('primary-action', id, action)" @menu-action="sessionMenuAction"
+        @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)" />
+      <div v-if="sessions.length === 0" class="empty-hint">{{ t('noHistorySessions') }}</div>
     </div>
+    <NewSessionMenu v-model:open="newMenuOpen" :active="surfaceActive" :anchor="newMenuAnchor" :availability="draft.availabilityFor(projectIdentity)"
+      @select="emit('new-session-request', { ...projectIdentity, intent: $event })" />
+    <Teleport to="body">
+      <AppMenu ref="menu" v-model:open="menuOpen" class="project-menu" :style="menuPosition"
+        :label="t('projectActionsLabel')" :items="menuItems" @select="projectAction" />
+    </Teleport>
   </div>
 </template>
 
-<script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { useI18n } from 'vue-i18n'
-import SessionList from './SessionList.vue'
-import { useSessionStore } from '@/stores/session'
-import { useAttentionStore } from '@/stores/attention'
-import { summarizeAttention } from '@/utils/attentionSummary'
-import { editReducer, validateDisplayName, type EditState } from '@/utils/displayName'
-import type { ProjectGroup, HistorySession } from '@/stores/session'
-
-const { t } = useI18n()
-const sessionStore = useSessionStore()
-const attentionStore = useAttentionStore()
-const props = defineProps<{
-  project: ProjectGroup
-  expanded: boolean
-  isCurrent: boolean
-  activeTabId: string | null
-  history: HistorySession[]
-  loading?: boolean
-  /** 该项目历史加载错误（per-project；非空且非 loading 时显示重试入口） */
-  error?: string | null
-  matchedHistoryIds?: string[]
-  /** 禁用整行/箭头点击的展开切换（搜索模式临时展开不污染手动展开状态，spec §4.4） */
-  disableToggle?: boolean
-}>()
-
-// <script setup> 中 defineEmits 只能调用一次；用 const 取得 emit 函数
-const emit = defineEmits<{
-  toggleExpand: [projectPath: string]
-  newSessionIn: [projectPath: string]
-  switchSession: [tabId: string]
-  renameSession: [tabId: string, name: string]
-  restartSession: [tabId: string]
-  closeTab: [tabId: string]
-  resumeSession: [sessionId: string, name?: string]
-  closeAllSessions: [projectPath: string]
-  openInExplorer: [projectPath: string]
-  // v3 新增：置顶 / 存档
-  pinProject: [projectPath: string]
-  unpinProject: [projectPath: string]
-  archiveSession: [projectPath: string, sessionId: string]
-  restoreSession: [projectPath: string, sessionId: string]
-  showArchived: [projectPath: string]
-}>()
-
-const menuOpen = ref(false)
-const archivedOpen = ref(false)
-
-// 项目别名编辑（单实例 editState，无 editingPath：ProjectNode 每实例只管自身项目）
-const editState = ref<EditState>('idle')
-const renameValue = ref('')
-const renameError = ref('')
-const renameInputRef = ref<HTMLInputElement | null>(null)
-let renameRequestId = 0
-
-// 该项目的已存档会话信息列表（响应式：restore 后 store 更新则自动收缩）
-// name/lastActiveAt 从 historyCacheMap 查；未加载则 name 回退 ID 截断
-const archivedList = computed(() => sessionStore.getArchivedSessionInfos(props.project.projectPath))
-
-// 项目内 attention 聚合（error/permission/completed 计数），供徽标按最高 severity 渲染
-const attentionSummary = computed(() =>
-  summarizeAttention(
-    props.project.tabs.map((t) => (t.ptyId ? attentionStore.getItem(t.ptyId)?.kind : undefined))
-  )
-)
-
-// 点击外部关闭菜单与已存档弹层：⋯ 按钮 / 菜单 / 弹层内部已 @click.stop，不会触发此处
-function closeOnOutside() {
-  menuOpen.value = false
-  archivedOpen.value = false
-}
-
-onMounted(() => {
-  document.addEventListener('click', closeOnOutside)
-})
-
-onUnmounted(() => {
-  document.removeEventListener('click', closeOnOutside)
-})
-
-function onMenu(action: 'closeAll' | 'openInExplorer' | 'pin' | 'unpin' | 'showArchived' | 'rename') {
-  menuOpen.value = false
-  const path = props.project.projectPath
-  if (action === 'rename') { startRename(); return }
-  if (action === 'closeAll') emit('closeAllSessions', path)
-  else if (action === 'openInExplorer') emit('openInExplorer', path)
-  else if (action === 'pin') emit('pinProject', path)
-  else if (action === 'unpin') emit('unpinProject', path)
-  else if (action === 'showArchived') {
-    emit('showArchived', path)
-    archivedOpen.value = true
-  }
-}
-
-/** 进入重命名：作废在途请求 + 预填当前别名（或 basename） + 焦点入 input */
-function startRename() {
-  renameRequestId++  // 作废先前在途请求
-  renameValue.value = sessionStore.getDisplayName(props.project.projectPath)
-  renameError.value = ''
-  // 显式重置 editing（v6-T5 Fix Round 1：修复卡死--submitting 态 reducer start 不变致 input 永久禁用；
-  // renameRequestId++ 已作废旧 persist，旧请求完成时 myId!==renameRequestId 早 return 不改 editState，安全）
-  editState.value = 'editing'
-  nextTick(() => renameInputRef.value?.focus())
-}
-
-/**
- * 提交别名：仅 editing/error 态生效（submitting 幂等忽略；idle 忽略；blur 在 submitting/error 态被拦截不重入）。
- * 校验失败 -> error（保留 input + 错误）；persist 失败 -> error；成功才关 input。
- * request id 防 cancel-during-submit 后旧 success 覆盖 idle。
- */
-async function onRenameSubmit() {
-  // 仅 editing/error 态提交（submitting 幂等；idle 忽略）
-  const next = editReducer(editState.value, { type: 'submit' })
-  if (next === editState.value) return
-  editState.value = next  // -> submitting
-  const raw = renameValue.value
-  const v = validateDisplayName(raw)
-  if (!v.ok) {
-    // 校验失败进 error（codex #5）：submitting -> error + 错误提示
-    renameError.value = v.error === 'tooLong' ? t('aliasTooLong') : t('aliasInvalid')
-    editState.value = editReducer(editState.value, { type: 'fail' })
-    return
-  }
-  const trimmed = raw.trim()
-  const path = props.project.projectPath
-  // no-op：值未变（含 basename 回退场景）则直接成功关闭，不持久化
-  if (trimmed === sessionStore.getDisplayName(path)) {
-    editState.value = editReducer(editState.value, { type: 'success' })
-    renameError.value = ''
-    return
-  }
-  const myId = ++renameRequestId
-  try {
-    await sessionStore.setDisplayName(path, trimmed)
-    if (myId !== renameRequestId) return  // 旧请求作废（codex #6 request id）
-    editState.value = editReducer(editState.value, { type: 'success' })  // 成功才关
-    renameError.value = ''
-  } catch {
-    if (myId !== renameRequestId) return  // 旧请求作废
-    renameError.value = t('aliasPersistFailed')
-    editState.value = editReducer(editState.value, { type: 'fail' })  // -> error 保留 input
-  }
-}
-
-/** 取消重命名：作废在途 + 清错 + 回 idle（不改） */
-function onRenameCancel() {
-  renameRequestId++  // 作废在途
-  renameError.value = ''
-  editState.value = editReducer(editState.value, { type: 'cancel' })
-}
-
-/**
- * 整行/箭头点击展开切换。
- * 搜索模式 disableToggle=true：不触发 toggleExpand，避免污染手动展开状态（spec §4.4）。
- */
-function onToggle() {
-  if (props.disableToggle) return
-  emit('toggleExpand', props.project.projectPath)
-}
-
-/** 历史加载失败重试：force 重新拉取该项目历史 */
-function onRetryHistory() {
-  sessionStore.loadHistorySessions(props.project.projectPath, true)
-}
-
-function onRestore(sessionId: string) {
-  emit('restoreSession', props.project.projectPath, sessionId)
-}
-
-/** 该会话是否运行中（claimed），运行中禁止删除 */
-function isRunning(id: string): boolean {
-  return sessionStore.claimedSessionIds.has(id)
-}
-
-/** 删除单个已存档会话：运行中前置检查 → 确认 → 重查运行态(TOCTOU) → 直调 store */
-async function onDeleteArchived(sessionId: string) {
-  if (isRunning(sessionId)) return
-  if (!window.confirm(t('confirmBatchDelete', { count: 1 }))) return
-  if (isRunning(sessionId)) return // 确认等待期间可能变成运行态,重查
-  try {
-    // 该组件的 props 是 defineProps 定义,须经 props.project 访问(见 archivedList 的同款写法)
-    await sessionStore.deleteSessions(props.project.projectPath, [sessionId])
-  } catch (err) {
-    console.error('[ProjectNode] deleteSessions failed:', err)
-  }
-}
-
-// 已存档弹层的相对时间（与 SessionItem 的 timeAgo 口径一致）
-function timeAgo(ts: number): string {
-  const diff = Date.now() - ts
-  const minutes = Math.floor(diff / 60000)
-  const hours = Math.floor(diff / 3600000)
-  const days = Math.floor(diff / 86400000)
-  if (minutes < 1) return t('justNow')
-  if (minutes < 60) return `${minutes}m`
-  if (hours < 24) return `${hours}h`
-  return `${days}d`
-}
-
-function resumeName(sessionId: string): string | undefined {
-  return props.history.find(s => s.sessionId === sessionId)?.name
-}
-
-/**
- * SessionList 统一 emit switch(id)；区分 id 是 tabId（在 tabs 里）还是 sessionId（历史）：
- * tab -> switchSession；历史 -> resumeSession（带 name）。
- */
-function onSessionSwitch(id: string) {
-  if (props.project.tabs.some(t => t.tabId === id)) {
-    emit('switchSession', id)
-  } else {
-    emit('resumeSession', id, resumeName(id))
-  }
-}
-</script>
-
 <style scoped>
-.project-node { position: relative; }
+.project-node { min-width: 0; }
 .project-row {
-  display: flex; align-items: center; gap: 4px;
-  padding: 4px 4px 4px 0; border-radius: 6px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 20px 28px 28px;
+  column-gap: 4px;
+  align-items: center;
+  height: 40px;
+  min-width: 0;
+  padding: 0 4px;
+  border-radius: var(--radius-md);
 }
 .project-row:hover { background: var(--hover-bg); }
-.project-node.current .project-name { color: var(--accent-color); font-weight: 600; }
-.expand-arrow {
-  width: 18px; height: 18px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  border: none; background: transparent; color: var(--text-tertiary);
-  cursor: pointer; transition: transform 0.15s ease;
-}
-.expand-arrow.expanded { transform: rotate(90deg); }
-.project-main {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
-  cursor: pointer; padding: 4px 6px;
-}
+.project-row:focus-visible, .project-main:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.project-row > :deep(.ui-tooltip-anchor) { min-width: 0; }
+.project-main { display: flex; align-items: center; gap: 4px; min-width: 0; cursor: pointer; }
 .project-name {
-  font-size: 13px; font-weight: 500; color: var(--text-primary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.rename-input {
-  flex: 1; min-width: 0;
-  font-size: 13px; padding: 2px 4px;
-  border: 1px solid var(--accent-primary);
-  border-radius: 3px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  outline: none;
-}
-.rename-input:disabled { opacity: 0.6; }
-.rename-error {
-  font-size: 10px; color: var(--status-error);
-  flex-shrink: 0; margin-left: 4px;
-}
-.pin-mark {
-  display: flex; align-items: center; flex-shrink: 0;
-  color: var(--accent-color);
-}
-.badge { font-size: 11px; flex-shrink: 0; }
-.badge.running { color: var(--status-success); }
-.badge.error { color: var(--status-error); }
-.badge.permission { color: var(--accent-gold); animation: status-pulse 2s ease-in-out infinite; }
-.badge.completed { color: var(--status-success); }
-.orphan-tag {
-  font-size: 10px; color: var(--text-tertiary);
-  border: 1px solid var(--border-color); border-radius: 3px; padding: 0 4px;
-}
-.hover-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s ease; }
-.project-row:hover .hover-actions { opacity: 1; }
-.action-btn {
-  width: 20px; height: 20px; border: none; background: transparent;
-  color: var(--text-secondary); cursor: pointer; border-radius: 3px;
-  display: flex; align-items: center; justify-content: center;
-}
-.action-btn:hover { background: var(--bg-secondary); color: var(--text-primary); }
-.menu {
-  position: absolute; right: 8px; top: 28px; z-index: 10;
-  background: var(--bg-primary); border: 1px solid var(--border-color);
-  border-radius: 6px; box-shadow: var(--shadow-md); padding: 4px; min-width: 140px;
-}
-.menu button {
-  display: block; width: 100%; text-align: left; padding: 6px 8px;
-  border: none; background: transparent; color: var(--text-primary);
-  cursor: pointer; font-size: 12px; border-radius: 4px;
-}
-.menu button:hover { background: var(--hover-bg); }
-/* 已存档会话弹层 */
-.archived-panel {
-  position: absolute; right: 8px; top: 28px; z-index: 11;
-  background: var(--bg-primary); border: 1px solid var(--border-color);
-  border-radius: 6px; box-shadow: var(--shadow-md); padding: 6px; min-width: 200px; max-width: 280px;
-}
-.archived-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 2px 4px 6px; gap: 8px;
-}
-.archived-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
-.archived-close {
-  width: 20px; height: 20px; border: none; background: transparent;
-  color: var(--text-secondary); cursor: pointer; border-radius: 3px;
-  display: flex; align-items: center; justify-content: center;
-}
-.archived-close:hover { background: var(--bg-secondary); color: var(--text-primary); }
-.archived-empty { padding: 8px; font-size: 11px; color: var(--text-tertiary); text-align: center; }
-.archived-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
-.archived-item {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 4px 6px; border-radius: 4px;
-}
-.archived-item:hover { background: var(--hover-bg); }
-.archived-info {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
+  display: block;
+  min-width: 0;
   overflow: hidden;
-}
-.archived-name {
-  font-size: 11px; color: var(--text-secondary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.archived-time { font-size: 10px; color: var(--text-tertiary); flex-shrink: 0; }
-.restore-btn {
-  border: 1px solid var(--border-color); background: transparent;
-  color: var(--text-primary); cursor: pointer; border-radius: 3px;
-  font-size: 11px; padding: 2px 6px; flex-shrink: 0;
-}
-.restore-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
-.delete-btn {
-  border: 1px solid var(--border-color); background: transparent;
-  color: var(--text-secondary); cursor: pointer; border-radius: 3px;
-  font-size: 11px; padding: 2px 6px; flex-shrink: 0;
-}
-.delete-btn:hover:not(:disabled) { border-color: var(--status-error); color: var(--status-error); }
-.delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.session-sub { padding-left: 22px; }
-.empty-hint, .loading-indicator { padding: 8px; font-size: 11px; color: var(--text-tertiary); text-align: center; }
-.history-error {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 8px;
-}
-.history-error-msg { font-size: 11px; color: var(--status-error); }
-.history-error-retry {
-  padding: 2px 10px;
-  border: 1px solid var(--border-color);
-  background: transparent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-primary);
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 11px;
-  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  font-size: 13px;
+  font-weight: 600;
 }
-.history-error-retry:hover {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
-}
-@keyframes status-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+.project-node.current .project-name { color: var(--accent-color); }
+.pin-mark { flex-shrink: 0; color: var(--text-tertiary); }
+.project-attention { width: 8px; height: 8px; justify-self: center; border-radius: 50%; background: var(--accent-gold); }
+.project-row :deep(.ui-icon-button) { width: 28px; min-width: 28px; height: 28px; padding: 0; }
+.project-row :deep(.expand-arrow) { width: 20px; min-width: 20px; padding: 0; }
+.expand-arrow :deep(svg) { transition: transform 0.15s ease; }
+.expand-arrow.expanded :deep(svg) { transform: rotate(90deg); }
+.session-sub { padding-left: 8px; min-width: 0; }
+.empty-hint { padding: 12px 8px; font-size: 12px; color: var(--text-secondary); }
+.project-menu { position: fixed; max-height: calc(100vh - 16px); }
+@media (prefers-reduced-motion: reduce) { .expand-arrow :deep(svg) { transition: none; } }
 </style>

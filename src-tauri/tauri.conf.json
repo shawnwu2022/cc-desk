@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "CC Desk",
-  "version": "0.17.7",
+  "version": "0.18.1",
   "identifier": "io.github.shawnwu2022.ccdesk",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "CC Desk",
-        "width": 800,
-        "height": 600,
-        "minWidth": 500,
-        "minHeight": 400,
+        "width": 1024,
+        "height": 640,
+        "minWidth": 1024,
+        "minHeight": 640,
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
@@ -40,8 +40,8 @@
     "publisher": "shawnwu2022",
     "copyright": "Copyright © 2025 orczh; © 2026 CC Desk contributors",
     "category": "Developer Tool",
-    "shortDescription": "CC Desk — Multi-project desktop workspace for Claude Code",
-    "longDescription": "A multi-project, multi-session desktop workspace for Claude Code power users, with native terminal sessions, project navigation, status monitoring, and workflow tools.",
+    "shortDescription": "CC Desk — Multi-project workspace for Claude Code and Codex CLI",
+    "longDescription": "A multi-project, multi-session desktop workspace for Claude Code and Codex CLI, with native terminal sessions, project navigation, bounded transport, recovery, and read-only native resource projections.",
     "createUpdaterArtifacts": true,
     "macOS": {
       "frameworks": [],

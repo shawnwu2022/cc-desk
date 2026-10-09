@@ -1,5 +1,13 @@
 #![allow(non_snake_case)]
 
+// Native GUI supervisors share the hosted desktop. Acquire only in the parent,
+// before spawning a worker; child workers keep their original deadlines.
+#[cfg(windows)]
+pub(super) static NATIVE_WEBVIEW_TEST_LEASE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+#[cfg(all(test, windows))]
+pub(crate) mod fixture_process;
+
 #[cfg(test)]
 mod checks;
 #[cfg(test)]
@@ -7,7 +15,67 @@ mod commands;
 #[cfg(test)]
 mod env;
 #[cfg(test)]
+mod frontend_logging;
+#[cfg(test)]
 mod hook_events;
+#[cfg(test)]
+mod native_cli_availability;
+#[cfg(all(test, windows))]
+mod native_cli_channel_live;
+#[cfg(test)]
+mod native_cli_document;
+#[cfg(test)]
+mod native_cli_document_edges;
+#[cfg(all(test, windows))]
+mod native_cli_document_live;
+#[cfg(test)]
+mod native_cli_document_report;
+#[cfg(test)]
+mod native_cli_environment;
+#[cfg(test)]
+pub(crate) mod native_cli_harness;
+#[cfg(test)]
+mod native_cli_invocation;
+#[cfg(test)]
+mod native_cli_observer;
+#[cfg(test)]
+mod native_cli_output_edges;
+#[cfg(test)]
+mod native_cli_output_route;
+#[cfg(test)]
+mod native_cli_owned_pty;
+#[cfg(test)]
+mod native_cli_platform;
+#[cfg(all(test, windows))]
+mod native_cli_platform_limits;
+#[cfg(test)]
+mod native_cli_profile_api;
+#[cfg(test)]
+mod native_cli_profile_edges;
+#[cfg(test)]
+mod native_cli_profiles;
+#[cfg(test)]
+mod native_cli_registry;
+#[cfg(test)]
+mod native_cli_registry_edges;
+#[cfg(test)]
+mod native_cli_routed_launch;
+#[cfg(test)]
+mod native_cli_run_lifecycle;
+#[cfg(test)]
+mod native_cli_run_supervisor;
+#[cfg(test)]
+mod native_cli_snapshot;
+#[cfg(test)]
+mod native_cli_storage;
+#[cfg(test)]
+mod native_cli_terminal_transport;
+#[cfg(test)]
+mod native_cli_terminal_transport_api;
+#[cfg(test)]
+mod native_cli_wire;
+#[cfg(test)]
+mod native_cli_workspace_schema;
 #[cfg(test)]
 mod platform;
 #[cfg(test)]
@@ -25,3 +93,80 @@ mod store_profiling;
 mod paste_cli_submit;
 #[cfg(test)]
 mod paste_framing;
+
+mod native_cli_launch_service;
+mod native_cli_route_lifetime;
+
+mod native_cli_launch_diagnostics;
+
+#[cfg(windows)]
+mod native_cli_launch_live;
+
+mod native_cli_scope;
+
+mod native_cli_history_diagnostics;
+mod native_cli_program_discovery;
+mod native_cli_projection_service;
+
+#[cfg(windows)]
+mod native_cli_projection_live;
+
+mod native_cli_observer_http;
+
+#[cfg(test)]
+mod native_cli_terminal_input;
+
+mod version_history_catalog;
+mod version_history_commands;
+#[cfg(test)]
+mod version_history_manager_document;
+mod version_history_manager_entry;
+mod version_history_manager_wire;
+mod version_history_source_document;
+
+mod version_history_begin_switch;
+mod version_history_download;
+mod version_history_roundtrip_contract;
+
+#[cfg(windows)]
+mod version_history_classes_alias;
+mod version_history_registration_journal;
+mod version_history_runtime;
+mod version_history_source_failure_journal;
+#[cfg(windows)]
+mod version_history_source_partial_windows;
+mod version_history_transaction;
+
+#[cfg(windows)]
+mod version_history_registration_windows;
+#[cfg(windows)]
+mod version_history_registry_state_windows;
+#[cfg(windows)]
+mod version_history_shortcuts_windows;
+#[cfg(windows)]
+mod version_history_startup_windows;
+
+#[cfg(windows)]
+mod version_history_context_windows;
+#[cfg(windows)]
+mod version_history_journal_windows;
+#[cfg(target_os = "windows")]
+pub(crate) mod version_history_payload;
+#[cfg(windows)]
+mod version_history_scope;
+#[cfg(windows)]
+mod version_history_scope_context_windows;
+#[cfg(windows)]
+mod version_history_webview;
+#[cfg(windows)]
+mod version_history_windows;
+
+mod version_history_private_abort;
+
+#[cfg(windows)]
+mod version_history_role_guard_windows;
+
+#[cfg(windows)]
+mod version_history_source_boundary_windows;
+
+mod version_history_return_checkpoint;

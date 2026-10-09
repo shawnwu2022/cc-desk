@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, imagePasteBytes, bindNativePaste } from '@/utils/pasteText'
+import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, commitPasteWithEvidence, imagePasteBytes, bindNativePaste } from '@/utils/pasteText'
 
-function pasteEvent(text: string): ClipboardEvent {
+function pasteEvent(text: string, types: string[] = ['text/plain']): ClipboardEvent {
   const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
   Object.defineProperty(event, 'clipboardData', {
-    value: { getData: (type: string) => type === 'text/plain' ? text : '' },
+    value: { types, getData: (type: string) => type === 'text/plain' ? text : '' },
   })
   return event
 }
@@ -51,13 +51,24 @@ describe('bindNativePaste', () => {
     unbind()
   })
 
-  it('PasteNative_EmptyText_RoutesImageFallback_002', async () => {
+  it('PasteNative_EmptyText_DoesNotGuessImage_002', async () => {
     const { textarea, write, unbind } = nativePasteFixture('pty-2', false)
 
     textarea.dispatchEvent(pasteEvent(''))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(write).not.toHaveBeenCalled()
+    unbind()
+  })
+
+  it('PasteNative_ExplicitImageMime_RoutesImageFallback_005', async () => {
+    const { textarea, write, unbind } = nativePasteFixture('pty-image', false)
+
+    textarea.dispatchEvent(pasteEvent('', ['image/png']))
 
     await vi.waitFor(() => {
-      expect(write).toHaveBeenCalledExactlyOnceWith('pty-2', '\x1bv')
+      expect(write).toHaveBeenCalledExactlyOnceWith('pty-image', '\x1bv')
     })
     unbind()
   })
@@ -438,6 +449,47 @@ describe('commitPaste', () => {
       commitPaste(async () => { throw boom }, () => current, t => t, write, () => ''),
     ).rejects.toThrow(boom)
     expect(write).not.toHaveBeenCalled()
+  })
+})
+
+describe('commitPasteWithEvidence', () => {
+  it('D18_Paste_EmptyTextWithoutImageEvidenceWritesNothing_010', async () => {
+    const write = vi.fn()
+    await commitPasteWithEvidence(
+      async () => '',
+      async () => { throw new Error('no image') },
+      () => ({ ptyId: 'pty-evidence' }),
+      text => text,
+      write,
+      () => '\\x1bv',
+    )
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('D18_Paste_PermissionFailureIsNotImage_011', async () => {
+    const write = vi.fn()
+    await expect(commitPasteWithEvidence(
+      async () => { throw new Error('text denied') },
+      async () => { throw new Error('image denied') },
+      () => ({ ptyId: 'pty-evidence' }),
+      text => text,
+      write,
+      () => '\\x1bv',
+    )).rejects.toThrow('CLIPBOARD_UNAVAILABLE')
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('D18_Paste_PositiveImageProbeUsesNativeImageKeyOnce_012', async () => {
+    const write = vi.fn(async () => {})
+    await commitPasteWithEvidence(
+      async () => '',
+      async () => ({ width: 1, height: 1 }),
+      () => ({ ptyId: 'pty-evidence' }),
+      text => text,
+      write,
+      () => '\\x1bv',
+    )
+    expect(write).toHaveBeenCalledExactlyOnceWith('pty-evidence', '\\x1bv')
   })
 })
 

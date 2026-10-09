@@ -1,48 +1,46 @@
-# CC Desk 项目愿景
+# CC Desk vision
 
-> 本文件是 CC Desk 独立维护后的产品定位锚，是功能取舍与文档对齐的 source of truth。
+## One-line vision
 
-## 一句话定位
+A native desktop workspace for **Claude Code and Codex CLI** that makes multi-project and multi-session work manageable without replacing the terminal-native experience.
 
-面向 Claude Code 重度用户的多项目、多会话桌面工作台：保留原生 CLI 体验，把跨会话管理、状态总览与工作流辅助集中到一个窗口。
+## Who it is for
 
-## 项目来源与独立性
+Developers who already rely on Claude Code, Codex CLI, or both and need several sessions running in parallel across multiple projects.
 
-CC Desk 最初基于 [orczh-hj/cc-box](https://github.com/orczh-hj/cc-box) fork。随着产品目标、功能边界和实现持续分化，项目现以独立名称、仓库和发布渠道维护，不以重新合并回原项目为目标。
+## What becomes easier
 
-来源、版权与商标说明见根目录 `NOTICE.md` 和 `LICENSE`。
+1. **Parallel sessions** — keep multiple real CLI sessions alive and switch without losing terminal state.
+2. **Project/run identity** — know exactly which project, profile, run and generation a tab owns.
+3. **Safe recovery** — recover uncertain launch state without creating a duplicate process.
+4. **Read-only visibility** — inspect useful native resources through scoped backend projections.
+5. **Host reliability** — preserve ordering, backpressure, process ownership, and safe diagnostics around the real CLI.
 
-## 目标用户
+## Division of responsibility
 
-同时维护多个项目、并行运行多个 Claude Code 会话，并要求保留原生 CLI 完整能力的开发者。
+| System | Responsibility |
+|---|---|
+| Claude Code / Codex CLI | conversation, commands, permissions, authentication, MCP/runtime behavior, extensions, editors |
+| cc-switch or other external config tools | Provider/API-key/configuration switching when the user chooses to use them |
+| CC Desk | desktop projects, tabs, owned PTYs, transport, recovery, scoped read projections, optional observer metadata |
 
-## 核心价值
+CC Desk does not need cc-switch to run and does not read cc-switch internals.
 
-1. **多项目与多会话并行** —— 在一个桌面窗口中启动、恢复、切换和观察多个原生 Claude Code 会话。
-2. **全局状态与信息增强** —— 用项目树、会话状态、Hook 监控和侧边栏面板补足 CLI 的全局视野。
-3. **外围工作流辅助** —— 提供快捷启动、Provider 管理与导入、MCP/Skills/Agents/Plugins 只读呈现等桌面端能力。
-4. **CLI 可逆** —— 会话仍由真实 Claude CLI 驱动，用户随时可以离开 GUI 回到终端。
+## Principles
 
-## 与 cc-switch 的关系
+- **CLI-first** — do not reimplement interaction that the CLI already owns.
+- **Exact identity** — never guess which run/session/write/ACK an event belongs to.
+- **No hidden replay** — ambiguity is surfaced and recovered explicitly.
+- **Read-only by default** — native CLI resources are projections, not a second configuration authority.
+- **Fail closed** — missing authorization, stale revisions, unknown schemas, invalid scopes and unverifiable real-CLI evidence do not silently fall back.
+- **Reversible** — users can always return to the normal CLI.
 
-| 工具 | 主要职责 | 关系 |
-|------|----------|------|
-| **cc-switch** | 独立管理 Provider、API Key 与配置切换 | 可选外部工具 |
-| **CC Desk** | 管理项目、会话、终端与运行状态，并可独立管理或从 cc-switch 导入 Provider | 桌面运行工作台 |
+## Evidence discipline
 
-CC Desk 不依赖 cc-switch 才能运行；已使用 cc-switch 的用户可以把现有 Provider 导入 CC Desk，未使用者也能独立配置。
+Host tests prove host behavior only.
 
-## 设计原则
+Real Claude Code / Codex CLI parity is a separate Layer-C certification problem. D20 remains BLOCKED until an explicitly authorized target environment produces the required evidence.
 
-- **CLI 优先，GUI 增强** —— 不重做 Claude CLI 已经成熟的对话、slash 命令、快捷键和交互式提示。
-- **多会话优先** —— 优先解决跨项目、跨会话和全局状态问题，而不是堆叠单会话功能。
-- **透明与可逆** —— 原生 Claude Code 数据以只读为主；CC Desk 自有数据单独存储。
-- **兼容优先** —— `~/.cc-box/`、`CC_BOX_*` 和既有主题 ID 暂作为兼容 ABI 保留，后续如迁移必须提供自动迁移与回滚路径。
-- **独立发布** —— 不再从原项目更新通道获取应用更新，也不默认向原项目的镜像和 OSS 渠道发布。
+## End state
 
-## 当前主线
-
-- 强化全局项目树与跨项目会话切换。
-- 通过 Hook 事件完善 working / pending / attention 等会话状态。
-- 提升多实例数据一致性与恢复可靠性。
-- 保持 Provider、终端主题和外围面板与多会话主线一致，避免演变为通用 Claude 配置编辑器。
+CC Desk should feel like a dependable multi-session shell around the real CLIs: more visibility and control at the desktop level, without changing what the CLI itself means.
