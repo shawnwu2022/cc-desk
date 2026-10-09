@@ -32,13 +32,44 @@ beforeEach(() => {
   })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); delete (window as any).__CC_DESK_DOCUMENT__; document.body.innerHTML = '' })
-function render() {
+function render(locale = 'en') {
   const w = mount(UpdateSection, { props: { active: true }, attachTo: document.body,
-    global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+    global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })] } })
   wrappers.push(w); return w
 }
 
 describe('historical versions through the real settings and document client', () => {
+  it.each(['en', 'zh'])('HistoryUI_FreshSettingsConfirmation_012: %s', async locale => {
+    const original = io.invoke.getMockImplementation()!
+    io.invoke.mockImplementation((command, payload) => command === 'inspect_switch'
+      ? { ...switchWire.reviews[3], preparationId: wire.ticket.transactionId }
+      : command === 'begin_switch' ? switchWire.ticket : original(command, payload))
+    const messages = locale === 'en' ? en : zh
+    const w = render(locale)
+    expect(w.get('[data-history-install-unavailable] p').text()).toBe(messages.historyInstallUnavailable)
+    await w.get('[data-history-refresh]').trigger('click'); await flushPromises()
+    await w.get('[data-history-select]').trigger('click'); await flushPromises()
+    await w.get('[data-history-prepare]').trigger('click'); await flushPromises()
+    expect(w.get('[data-history-install-ready] p').text()).toBe(messages.historyInstallReady)
+    expect(w.find('[data-history-install-unavailable]').exists()).toBe(false)
+    expect(io.invoke.mock.calls.some(([command]) => command === 'begin_switch')).toBe(false)
+    await w.get('[data-history-install]').trigger('click'); await flushPromises()
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain(messages.historyFreshSettings)
+    expect(dialog.textContent).toContain(messages.historyPreserveReturn)
+    expect(dialog.textContent).toContain(messages.historySharedDataWarning)
+    expect(dialog.textContent).toContain(messages.historySessionsWarning)
+    const begin = dialog.querySelector('[data-history-begin]') as HTMLButtonElement
+    expect(begin.disabled).toBe(false)
+    begin.click(); begin.click(); await flushPromises()
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'begin_switch')).toEqual([
+      ['begin_switch', { preparationId: wire.ticket.transactionId, dataMode: 'fresh-settings' }],
+    ])
+    expect(w.find('[data-history-install-ready]').exists()).toBe(false)
+    expect(w.get('[data-history-status]').text()).toBe(messages.historyHandoffIssued)
+    expect(w.get('[data-update-install]').attributes('disabled')).toBeDefined()
+    expect(io.check).not.toHaveBeenCalled(); expect(io.relaunch).not.toHaveBeenCalled()
+  })
   // 设置页必须通过真实文档桥获取列表，再明确选择和验证；不调用普通更新安装。
   it('HistoryUI_SelectPrepare_001', async () => {
     const w = render()

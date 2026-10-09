@@ -22,7 +22,7 @@ impl CatalogSource for Source {
     }
 }
 
-// 只有测量过的版本、安装包大小和摘要精确匹配；生产切换仍由协调器门禁拒绝。
+// 精确测量身份在 Windows x64 允许进入现有协调器；篡改身份仍拒绝。
 #[test]
 fn HistoryPayload_ExactAdmission_001() {
     use crate::cli::{snapshot::CallerIdentity, types::WireU64};
@@ -56,6 +56,7 @@ fn HistoryPayload_ExactAdmission_001() {
         };
         let page = catalog.list(&caller, None).unwrap();
         let row = &page.rows[0];
+        assert!(row.select_allowed);
         let selected = catalog
             .select(&caller, &row.release_id, row.asset_id.as_deref().unwrap())
             .unwrap();
@@ -66,13 +67,15 @@ fn HistoryPayload_ExactAdmission_001() {
         if variant == 0 {
             let admission = result.unwrap();
             assert_eq!(admission.installed_bytes(), 18_599_575);
-            assert!(matches!(
+            assert_eq!(
                 review_block(&selection),
-                Some(super::super::manager::SwitchReviewBlock::CoordinatorUnavailable)
-            ));
+                (HostPlatform::current() != HostPlatform::WindowsX64)
+                    .then_some(super::super::manager::SwitchReviewBlock::CoordinatorUnavailable)
+            );
             admission.verify_selection(&selection).unwrap();
             held = Some(admission);
         } else {
+            assert!(!roundtrip_enabled(&selection));
             assert_eq!(result.err().unwrap().code, "HISTORY_PAYLOAD_UNVERIFIED");
             assert_eq!(
                 held.as_ref()
@@ -314,7 +317,7 @@ fn HistoryPayload_RejectMalformed_009() {
     }
 }
 
-// 九个版本只接受独立审查的精确包与清单摘要，生产入口仍显示协调器不可用。
+// 九个版本只接受独立审查的精确包与清单摘要，并按实际平台开放现有协调器。
 #[test]
 fn HistoryPayload_ReviewedMatrix_010() {
     use crate::cli::{snapshot::CallerIdentity, types::WireU64};
@@ -340,6 +343,7 @@ fn HistoryPayload_ReviewedMatrix_010() {
         };
         let page = catalog.list(&caller, None).unwrap();
         let row = &page.rows[0];
+        assert!(row.select_allowed, "{version} must remain selectable");
         let selected = catalog
             .select(&caller, &row.release_id, row.asset_id.as_deref().unwrap())
             .unwrap();
@@ -365,16 +369,28 @@ fn HistoryPayload_ReviewedMatrix_010() {
             "{version} inventory digest must match the reviewed canonical bytes"
         );
         assert!(digests.insert(admission.inventory_digest().to_string()));
-        assert!(!roundtrip_enabled(&selection));
-        assert!(matches!(
-            review_block(&selection),
-            Some(super::super::manager::SwitchReviewBlock::CoordinatorUnavailable)
+        assert!(ordinary_roundtrip_capable(
+            HostPlatform::WindowsX64,
+            PayloadAdmission::for_selection(&selection).is_ok()
         ));
+        assert!(!ordinary_roundtrip_capable(
+            HostPlatform::Unsupported,
+            PayloadAdmission::for_selection(&selection).is_ok()
+        ));
+        assert_eq!(
+            roundtrip_enabled(&selection),
+            HostPlatform::current() == HostPlatform::WindowsX64
+        );
+        assert_eq!(
+            review_block(&selection),
+            (HostPlatform::current() != HostPlatform::WindowsX64)
+                .then_some(super::super::manager::SwitchReviewBlock::CoordinatorUnavailable)
+        );
     }
     assert_eq!(digests.len(), expected.len());
 }
 
-// 各版本的大小、摘要及借用相邻版本包身份都必须拒绝，不能只按版本放行。
+// 各版本的大小、摘要、版本标签及借用相邻版本包身份都必须拒绝。
 #[test]
 fn HistoryPayload_MatrixMismatch_011() {
     use crate::cli::{snapshot::CallerIdentity, types::WireU64};
@@ -382,7 +398,7 @@ fn HistoryPayload_MatrixMismatch_011() {
     let fixtures = fixtures["fixtures"].as_array().unwrap();
     for (index, fixture) in fixtures.iter().enumerate() {
         let mut held: Option<PayloadAdmission> = None;
-        for variant in 0..4 {
+        for variant in 0..5 {
             let mut release: ReleaseMetadata =
                 serde_json::from_value(fixture["selection"].clone()).unwrap();
             match variant {
@@ -396,6 +412,24 @@ fn HistoryPayload_MatrixMismatch_011() {
                     release.assets[0].size = other.assets[0].size;
                     release.assets[0].digest = other.assets[0].digest.clone();
                 }
+                4 => {
+                    let other: ReleaseMetadata = serde_json::from_value(
+                        fixtures[(index + 1) % fixtures.len()]["selection"].clone(),
+                    )
+                    .unwrap();
+                    let version = fixture["version"].as_str().unwrap();
+                    let other_version = fixtures[(index + 1) % fixtures.len()]["version"]
+                        .as_str()
+                        .unwrap();
+                    release.tag_name = other.tag_name;
+                    release.name = other.name;
+                    release.html_url = other.html_url;
+                    for asset in &mut release.assets {
+                        asset.name = asset.name.replace(version, other_version);
+                        asset.browser_download_url =
+                            asset.browser_download_url.replace(version, other_version);
+                    }
+                }
                 _ => {}
             }
             let catalog = CatalogService::new(Arc::new(Source(release)), HostPlatform::WindowsX64);
@@ -406,6 +440,7 @@ fn HistoryPayload_MatrixMismatch_011() {
             };
             let page = catalog.list(&caller, None).unwrap();
             let row = &page.rows[0];
+            assert!(row.select_allowed);
             let selected = catalog
                 .select(&caller, &row.release_id, row.asset_id.as_deref().unwrap())
                 .unwrap();
@@ -416,6 +451,11 @@ fn HistoryPayload_MatrixMismatch_011() {
             if variant == 0 {
                 held = Some(result.unwrap());
             } else {
+                assert!(!roundtrip_enabled(&selection));
+                assert!(!ordinary_roundtrip_capable(
+                    HostPlatform::WindowsX64,
+                    PayloadAdmission::for_selection(&selection).is_ok()
+                ));
                 assert_eq!(
                     result.err().unwrap().code,
                     "HISTORY_PAYLOAD_UNVERIFIED",
@@ -570,5 +610,26 @@ fn HistoryPayload_InventoryMatrix_013() {
                 "{version} source preservation alteration {change} must be rejected"
             );
         }
+    }
+}
+
+// 开放已有协调器不扩展历史包信任；未知版本仍不能取得可选择身份。
+#[test]
+fn HistoryPayload_UnreviewedVersion_014() {
+    use crate::version_history::types::HistoryBlockReason;
+    let fixtures: serde_json::Value = serde_json::from_str(FIXTURE_CATALOG).unwrap();
+    for fixture in fixtures["fixtures"].as_array().unwrap() {
+        let mut release: ReleaseMetadata =
+            serde_json::from_value(fixture["selection"].clone()).unwrap();
+        release.tag_name = "v0.13.0".into();
+        release.name = Some("CC Desk v0.13.0".into());
+        release.html_url = "https://github.com/shawnwu2022/cc-desk/releases/tag/v0.13.0".into();
+        let row = release.project(HostPlatform::WindowsX64, "a".repeat(32));
+        assert!(!row.select_allowed);
+        assert!(!row.install_ready);
+        assert_eq!(
+            row.blocked_reason,
+            Some(HistoryBlockReason::PackagingBoundaryUnknown)
+        );
     }
 }

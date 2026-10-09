@@ -33,6 +33,46 @@ beforeEach(() => {
     throw new Error('Unexpected command')
   })
 })
+
+describe('historical installation capability and source refusals', () => {
+  it('HistorySwitch_ReadinessTracksBackendOwner_019', async () => {
+    const w = await preparedPanel()
+    expect(w.find('[data-history-install-ready]').exists()).toBe(true)
+    review = wire.reviews[2]
+    await w.get('[data-history-inspect]').trigger('click'); await flushPromises()
+    expect(w.find('[data-history-install-ready]').exists()).toBe(false)
+    expect(w.get('[data-history-switch-block] p').text()).toBe(en.historyCoordinatorUnavailable)
+    review = wire.reviews[3]
+    await w.get('[data-history-inspect]').trigger('click'); await flushPromises()
+    expect(w.find('[data-history-install-ready]').exists()).toBe(true)
+    await w.setProps({ active: false }); await flushPromises()
+    expect(w.find('[data-history-install-ready]').exists()).toBe(false)
+    expect(io.invoke.mock.calls.some(([command]) => command === 'begin_switch')).toBe(false)
+  })
+
+  it.each([
+    ['en', 'HISTORY_SOURCE_JOB_UNSUPPORTED', 'historyErrorSourceJob'],
+    ['zh', 'HISTORY_SOURCE_JOB_UNSUPPORTED', 'historyErrorSourceJob'],
+    ['en', 'HISTORY_SCOPE_UNREGISTERED', 'historyErrorSourceInstallation'],
+    ['zh', 'HISTORY_SCOPE_UNREGISTERED', 'historyErrorSourceInstallation'],
+  ] as const)('HistorySwitch_SourceRefusal_020: %s %s', async (locale, code, message) => {
+    const messages = locale === 'en' ? en : zh
+    const w = await preparedPanel(locale)
+    await w.get('[data-history-install]').trigger('click'); await flushPromises()
+    io.invoke.mockRejectedValueOnce({ code, details: '/private SECRET' })
+    dialogButton('[data-history-begin]').click(); await flushPromises()
+    expect(w.get('[data-history-error] p').text()).toBe(messages[message])
+    expect(w.get('[data-history-status]').text()).toBe(messages.historyOwnershipUnknown)
+    expect(w.find('[data-history-install-ready]').exists()).toBe(false)
+    expect(w.get('[data-history-install]').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-history-refresh]').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-history-inspect]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-history-cancel]').exists()).toBe(false)
+    expect(w.find('[data-history-prepare-again]').exists()).toBe(false)
+    expect(w.text()).not.toMatch(/SECRET|private/)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'begin_switch')).toHaveLength(1)
+  })
+})
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); delete (window as any).__CC_DESK_DOCUMENT__; document.body.innerHTML = '' })
 function render(locale = 'en') {
   const w = mount(HistoricalVersionsPanel, { props: { active: true }, attachTo: document.body,

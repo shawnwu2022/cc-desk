@@ -92,6 +92,7 @@ function date(value: string) { return new Date(value).toLocaleDateString(locale.
       </div>
     </section>
     <InlineNotice v-if="blockMessage" data-history-switch-block :message="blockMessage" />
+    <InlineNotice v-else-if="active && history.allowed('begin-switch')" data-history-install-ready :message="t('historyInstallReady')" />
     <InlineNotice v-else-if="!history.review && !history.transactionId" data-history-install-unavailable :message="t('historyInstallUnavailable')" />
     <AppButton data-history-install :disabled="!active || !history.allowed('review')" @click="reviewSwitch">{{ t('historyReview') }}</AppButton>
     <AppDialog :open="!!confirmation && active" :title="t('historyReviewTitle', { version: confirmation?.version })"

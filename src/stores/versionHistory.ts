@@ -13,6 +13,8 @@ export function historyErrorMessage(failure: unknown,
   if (['HISTORY_NETWORK_UNAVAILABLE', 'HISTORY_DOWNLOAD_TIMEOUT', 'HISTORY_RELEASE_UNAVAILABLE'].includes(String(code))) return 'historyErrorNetwork'
   if (['HISTORY_PREPARE_BUSY', 'HISTORY_CAPACITY', 'HISTORY_PREPARE_ALREADY_STARTED'].includes(String(code))) return 'historyErrorBusy'
   if (['HISTORY_STORAGE_UNAVAILABLE', 'HISTORY_PREPARATION_UNAVAILABLE'].includes(String(code))) return 'historyErrorStorage'
+  if (code === 'HISTORY_SOURCE_JOB_UNSUPPORTED') return 'historyErrorSourceJob'
+  if (code === 'HISTORY_SCOPE_UNREGISTERED') return 'historyErrorSourceInstallation'
   if (['HISTORY_SIGNATURE_INVALID', 'HISTORY_DIGEST_MISMATCH', 'HISTORY_SIZE_MISMATCH', 'HISTORY_PACKAGE_CHANGED', 'HISTORY_REDIRECT_BLOCKED'].includes(String(code))) return 'historyErrorVerification'
   if (['FORBIDDEN', 'DOCUMENT_BRIDGE_UNAVAILABLE', 'BACKEND_INSTANCE_CHANGED'].includes(String(code))) return 'historyErrorDocument'
   if (['HISTORY_SELECTION_EXPIRED', 'HISTORY_SELECTION_CHANGED', 'HISTORY_SELECTION_UNKNOWN', 'HISTORY_CURSOR_EXPIRED', 'HISTORY_CURSOR_INVALID', 'HISTORY_CATALOG_CHANGED', 'HISTORY_PREPARE_EXPIRED'].includes(String(code))) return 'historyErrorSelection'

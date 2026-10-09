@@ -28,7 +28,7 @@ After public publication, do not delete/recreate or retarget an existing tag. A 
 
 ## Acceptance boundaries
 
-D20 real Claude Code/Codex CLI target certification remains separate and BLOCKED unless actual source-bound evidence exists. Local Node fixtures, isolated native diagnostics and runner registration are not hosted CI or D20 certification. The recovery patch changes publication gating only; it never enables automatic client installation or disabled historical roundtrip admission.
+D20 real Claude Code/Codex CLI target certification remains separate and BLOCKED unless actual source-bound evidence exists. Local Node fixtures, isolated native diagnostics and runner registration are not hosted CI or D20 certification. Publication gating does not enable automatic client installation. Historical installation has a separate Windows x64 capability policy for the nine exact reviewed official packages; its normal coordinator and restricted return path retain all runtime admission and recovery checks. See [historical installation and return](historical-version-preparation.md) for supported scope and remaining native acceptance conditions. A complete-function release cannot describe a permanently disabled historical installation entry as delivered.
 
 Run the blocking release fixtures with:
 

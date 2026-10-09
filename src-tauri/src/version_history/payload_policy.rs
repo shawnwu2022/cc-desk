@@ -236,24 +236,26 @@ const REVIEWED: &[MeasuredPayload] = &[
     },
 ];
 
-// Enabled only with the complete reviewed source/installer/return composition
-// and its disposable native roundtrip acceptance. A measured installer alone
-// cannot enable an unfinished coordinator.
-const SUPPORTED_ROUNDTRIP_ENABLED: bool = false;
+// The implemented coordinator uses the Windows x64 process/installer boundaries.
+// Capability does not grant a handoff: source, package and runtime guards are
+// freshly checked by SourcePreflight and the retained manager owners.
+#[cfg(not(all(feature = "history-roundtrip-acceptance", not(test))))]
+fn ordinary_roundtrip_capable(host: super::policy::HostPlatform, payload_reviewed: bool) -> bool {
+    host == super::policy::HostPlatform::WindowsX64 && payload_reviewed
+}
 
-// Called only after the measured selection matched. Unit tests and every
-// ordinary artifact keep the production denial, even when Cargo enables tests
-// and this opt-in feature together. Review grants no later begin authority.
-fn roundtrip_enabled(_selection: &SelectionMetadata) -> bool {
-    if SUPPORTED_ROUNDTRIP_ENABLED {
-        return true;
-    }
+fn roundtrip_enabled(selection: &SelectionMetadata) -> bool {
+    // A disposable acceptance artifact remains bound to its exact source/target.
+    // It must never fall back to the ordinary production capability.
     #[cfg(all(feature = "history-roundtrip-acceptance", not(test)))]
     {
-        super::acceptance::require_source_target(_selection).is_ok()
+        super::acceptance::require_source_target(selection).is_ok()
     }
     #[cfg(not(all(feature = "history-roundtrip-acceptance", not(test))))]
-    false
+    ordinary_roundtrip_capable(
+        super::policy::HostPlatform::current(),
+        PayloadAdmission::for_selection(selection).is_ok(),
+    )
 }
 
 pub(crate) fn review_block(

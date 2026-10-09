@@ -1,11 +1,22 @@
 import { readFileSync } from 'node:fs'
 import { createHash, createPublicKey, verify } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { execFileSync } from 'node:child_process'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 const directory = fileURLToPath(new URL('../fixtures/version-history-minisign/', import.meta.url))
 const read = name => readFileSync(directory + name)
+
+test('hashed public signature fixtures disable checkout text conversion', () => {
+  const names = [...Object.keys(JSON.parse(read('provenance.json')).sha256), 'provenance.json']
+  const paths = names.map(name => `tests/fixtures/version-history-minisign/${name}`)
+  const attributes = execFileSync('git', ['check-attr', 'text', '--', ...paths], {
+    cwd: fileURLToPath(new URL('../../', import.meta.url)), encoding: 'utf8',
+  }).trim().split(/\r?\n/)
+  assert.equal(attributes.length, paths.length)
+  for (const line of attributes) assert.match(line, /: text: unset$/)
+})
 
 // This gate independently checks the provenance bytes with Node's OpenSSL
 // Ed25519 verifier. It does not execute or substitute for production Rust tests.

@@ -93,12 +93,23 @@ test('compiled binding is deny-only; no runtime switch can select it', () => {
   assert.match(source, /require_job_free_source\(\)/)
 })
 
-test('both ordinary policy gates remain false and acceptance follows measured selection', () => {
+test('ordinary capability requires reviewed payloads while acceptance retains its separate binding', () => {
   const source = read('src-tauri/src/version_history/payload_policy.rs')
-  assert.match(source, /const SUPPORTED_ROUNDTRIP_ENABLED: bool = false;/)
+  assert.doesNotMatch(source, /const SUPPORTED_ROUNDTRIP_ENABLED: bool = (?:false|true);/)
   assert.match(source, /PayloadAdmission::for_selection\(selection\)\.is_err\(\)[\s\S]*else if !roundtrip_enabled\(selection\)/)
   assert.match(source, /let admission = Self::admit\(package\)\?;\s*if !roundtrip_enabled\(package.selection\(\)\)/)
   assert.match(source, /#\[cfg\(all\(feature = "history-roundtrip-acceptance", not\(test\)\)\)\]/)
+  assert.match(source, /super::acceptance::require_source_target\(selection\)\.is_ok\(\)/)
+  assert.match(source, /#\[cfg\(not\(all\(feature = "history-roundtrip-acceptance", not\(test\)\)\)\)\]/)
+  assert.match(source, /HostPlatform::WindowsX64/)
+  assert.match(source, /HostPlatform::current\(\)/)
+  const admission = read('src-tauri/src/version_history/windows/source_begin.rs')
+  const firstJobCheck = admission.indexOf('super::manager_process::require_job_free_source()')
+  const payloadCheck = admission.indexOf('PayloadAdmission::admit_begin(package)?')
+  const sessionCheck = admission.indexOf('process_admissions().freeze(transaction)?')
+  assert.ok(firstJobCheck >= 0 && payloadCheck > firstJobCheck && sessionCheck > payloadCheck,
+    'production confirmation still checks foreign Jobs, exact payload and live session ownership')
+  assert.match(read('src-tauri/src/version_history/download.rs'), /package\.revalidate\(&check\)\?[\s\S]*let permit = admit\(&package, &switch_id\)/)
 })
 
 test('passive evidence cannot propagate errors and injection precedes every installer resume intent', () => {
