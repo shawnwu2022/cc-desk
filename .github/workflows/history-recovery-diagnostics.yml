@@ -63,9 +63,9 @@ jobs:
       - name: Verify durable context readmission
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: |
-          cargo test --locked --lib tests::version_history_context_windows::HistoryContextWindows_DurableReadmission_035 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath durable-readmission.log
+          cargo test --locked --lib -- --exact tests::version_history_context_windows::HistoryContext_DurableByteDrift_035 tests::version_history_context_windows::HistoryContext_DurableReadBlocked_035 --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath durable-readmission.log
           $result = $LASTEXITCODE
-          if (!(Select-String -Path durable-readmission.log -Pattern 'running 1 test' -Quiet)) { throw 'Expected one exact readmission test' }
+          if (!(Select-String -Path durable-readmission.log -Pattern '^running 2 tests$' -Quiet)) { throw 'Expected both exact durable readmission scenarios' }
           exit $result
       - name: Verify separate journal and recovery namespaces
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}

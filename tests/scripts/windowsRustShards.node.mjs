@@ -4,12 +4,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { partitionNames, validatePartition, aggregateHarness, validateShardExecution, validateRustShardRun } from '../../scripts/windows-rust-shards.mjs';
+import { estimatedWeight, partitionNames, validatePartition, aggregateHarness, validateShardExecution, validateRustShardRun } from '../../scripts/windows-rust-shards.mjs';
 import { parseLibtestListing, parseLibtestResult } from '../../scripts/windows-native-validation.mjs';
 
 const full = ['context_slow', 'bundle_slow', 'ordinary_new', 'worker'].map(name => ({ name, type: 'test' }));
 const h = { identity: { name: 'fixture', kind: 'lib' }, full, selected: full.map(t => t.name), ignored: ['worker'], excluded: [] };
 const listing = names => names.map(name => `${name}: test`).join('\n') + `\n${names.length} tests, 0 benchmarks\n`;
+test('WindowsRustShards_MeasuredPlacement_008: real nested bundle and retained-custody names receive heavy placement', () => {
+  const bundle = 'version_history::windows::context::bundle_restore::tests::BundleReturn_RestorePresentImage_002';
+  const context = 'tests::version_history_context_windows::HistoryContext_ReturnMissingImage_036';
+  const custody = 'version_history::windows::context::switching::preinstall_custody_tests::HistoryPreinstallCustody_RetainedContextReturn_002';
+  assert.equal(estimatedWeight(bundle), estimatedWeight(context));
+  assert.ok(estimatedWeight(custody) > estimatedWeight(bundle));
+  const shards = partitionNames([custody, bundle, context], 3);
+  assert.ok(shards.every(names => names.length === 1));
+});
 function slice(index, names, fail = false) {
   const ignored = names.filter(n => n === 'worker').length;
   const result = { exitCode: fail ? 101 : 0, passed: names.length - ignored - Number(fail), failed: Number(fail), ignored, measured: 0, filteredOut: full.length - names.length };

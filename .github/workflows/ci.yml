@@ -77,6 +77,7 @@ jobs:
         with:
           workspaces: src-tauri
           cache-on-failure: true
+          cache-workspace-crates: false
 
       - name: Prepare verified Windows runtime before direct cargo commands
         id: runtime
@@ -132,6 +133,7 @@ jobs:
         working-directory: .
         run: |
           $bundle = 'src-tauri/target/ci-rust-bundle'
+          if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
           New-Item -ItemType Directory -Force "$bundle/logs" | Out-Null
           Push-Location src-tauri
           try {
@@ -149,6 +151,14 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+
+      - name: Keep dependency cache free of source-bound results and executable bundles
+        if: ${{ always() }}
+        working-directory: .
+        run: |
+          foreach ($path in @('src-tauri/target/ci-rust-bundle', 'src-tauri/target/ci-test-artifacts.jsonl', 'src-tauri/target/windows-native-coverage')) {
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+          }
 
   rust-tests:
     name: Rust test shard ${{ matrix.shard }}

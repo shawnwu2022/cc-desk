@@ -141,6 +141,61 @@ The local npm install needed temporary official-registry URLs because this
 execution environment cannot fetch the lockfile's two mirror hosts. Package
 versions and integrity hashes were retained, and the checked-in lockfile was
 restored byte-for-byte; no dependency or registry policy change is part of this PR.
-Windows host execution and the ten-minute target remain unverified until the
-actual Draft PR CI run completes. Signed Release timing requires a separately
-authorized future release; this optimization branch never dispatches one.
+The first Windows host run completed successfully; timings below bind its exact
+source and attempt. Signed Release timing requires a separately authorized future
+release; this optimization branch never dispatches one.
+
+## First hosted measurement and tuning
+
+Draft PR [#35](https://github.com/shawnwu2022/cc-desk/pull/35) first ran head
+`40a2f47df024854aebbfaa03563f692a6894e831` as PR merge source
+`36190369078a18c50cc9947ff080eda66867848d`, run
+[37902592210](https://github.com/shawnwu2022/cc-desk/actions/runs/37902592210),
+attempt 1. All ordinary CI jobs and the strict eight-receipt `Rust checks`
+aggregate succeeded. Compared with baseline run 37894886145:
+
+| Measurement | Prior warm CI | First optimization, cold namespaces |
+| --- | ---: | ---: |
+| Workflow start to final job completion | 50:31 | 24:27 |
+| Sum of all job elapsed time (runner minutes; not rounded billing) | 68.00 | 94.68 |
+| Rust compile/static checks | Included in 50:28 Rust job | 10:10 |
+| Longest Windows test shard | Unsharded library execution 44:54 | 13:51 |
+| Frontend job | 2:35 | 2:23 |
+| Complete roundtrip policy critical path | 14:57 | 13:24, including aggregate |
+
+Wall time fell about 52%, but cold runner consumption rose about 39%. The
+source profile/cache namespace changed, so this is explicitly a warm-before /
+cold-after comparison, not a claim of equal cache conditions. The compiler
+bundle was 125,939,224 ZIP bytes; all eight runners reused that exact same-run
+payload without installing Rust or compiling it again. The final 168,881-byte
+coverage ZIP has SHA-256
+`dbd83c1b40c565c07776d48b2d464df49b487603a9fdc70b8e429058469e7dec`.
+Its authenticated aggregate checked complete discovered inventory and unchanged
+ignore/exclusion policies. Local artifact transfer currently returns HTTP 403;
+the follow-up exposes exact per-harness counts and timings in readable job logs
+as well as retaining the original archive.
+
+Seven of eight additional triggered workflows succeeded. Cold job-span wall
+times: D12 1:23, D13 1:51, D14 1:41, D17 1:50, visual 4:01, real Claude 16:27,
+and Windows package/ConPTY integration 21:51. Recovery diagnostics failed because
+its original exact selector still named the outer DurableReadmission test.
+The corrected command explicitly selects both preserved 035 scenarios through
+libtest and requires exactly two tests. No selector is removed.
+
+The first 831-second tail was shard 3. Original raw libtest warning/finish
+timestamps identify the retained-custody test at about 311 seconds in baseline;
+reconstructing the complete 1,246-name baseline selection and applying the exact
+scenario mapping placed it on shard 3 together with restore scenarios. The
+initial placement heuristic matched top-level module names but undervalued the
+real nested `version_history::windows::context::bundle_restore` and custody
+namespace. The correction weights those actual names and separately weights
+observed heavy intact cases. This changes assignment only; exact inventory
+selection and final fail-closed reconciliation are unchanged. A behavioral
+regression test failed on the old weighting and passes on the correction.
+
+The follow-up also removes generated plans/results/executable bundles before
+Rust cache post-save, clears any restored old bundle before new planning, and
+prints harness start/end, durations, results and slow-case warnings. Raw
+source/run/attempt evidence is recorded in `docs/ci-runtime-evidence.json`.
+Ten minutes remains unmet on this first cold run; the final revised warm run
+must be measured before making a stronger runtime claim.

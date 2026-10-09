@@ -238,6 +238,7 @@ export function runShard(options = {}) {
     for (const receipt of result.harnesses) {
       if (!receipt.executed) continue;
       const h = plan.harnesses.find(h => identity(h) === identity(receipt));
+      if (options.onPhase) options.onPhase({ phase: 'execute-start', index: options.index, identity: h.identity, selected: receipt.names.length });
       const invocation = invoke(relativeFile(c.root, h.executable), ['--exact', ...receipt.names], c.testCwd, c.environment);
       fs.writeFileSync(path.join(output, receipt.logs.execution), invocation.output);
       receipt.durationSeconds = invocation.durationSeconds;
@@ -246,6 +247,8 @@ export function runShard(options = {}) {
         aggregateHarness({ ...h, selected: receipt.names, ignored: h.ignored.filter(n => receipt.names.includes(n)) }, [{ index: options.index, names: receipt.names, listing: readFile(path.join(output, receipt.logs.selected)).toString('utf8'), output: invocation.output, result: receipt.result, durationSeconds: invocation.durationSeconds }], parseLibtestListing, parseLibtestResult);
       } catch (error) { receipt.error = String(error.message); failed = true; }
       if (invocation.error || invocation.exitCode !== 0) { receipt.error ??= invocation.error ?? `exit ${invocation.exitCode}`; failed = true; }
+      if (options.onPhase) options.onPhase({ phase: 'execute-end', index: options.index, identity: h.identity, selected: receipt.names.length, durationSeconds: receipt.durationSeconds, result: receipt.result,
+        slowNames: [...invocation.output.matchAll(/^test (.+) has been running for over 60 seconds$/gm)].map(m => m[1]), error: receipt.error ?? null });
     }
     result.completed = !failed; result.exitCode = failed ? 1 : 0;
   } catch (error) { result.error = String(error.message); }
@@ -346,10 +349,18 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const options = cliOptions(args);
       let value;
       if (action === 'plan') value = createPlan(options);
-      else if (action === 'run') value = runShard(options);
+      else if (action === 'run') value = runShard({ ...options, onPhase: phase => console.log(JSON.stringify(phase)) });
       else if (action === 'aggregate') value = aggregateResults(options);
       else throw new Error('Expected artifact-name, shard-artifact-name, plan, run or aggregate');
-      console.log(JSON.stringify({ action, planHash: value.planHash, artifactName: value.artifactName, completed: value.completed, exitCode: value.exitCode }));
+      const metrics = { action, planHash: value.planHash ?? value.rustShardRun?.planHash, artifactName: value.artifactName ?? value.rustShardRun?.artifactName,
+        sourceSha: value.sourceSha, runId: value.runId, runAttempt: value.runAttempt,
+        completed: value.completed, exitCode: value.exitCode, durationSeconds: value.durationSeconds,
+        bundleBytes: value.files?.reduce((sum, file) => sum + file.bytes, 0),
+        harnesses: value.harnesses?.map(h => ({ identity: h.identity, full: h.full?.length, selected: h.selected?.length ?? h.names?.length, result: h.result, durationSeconds: h.durationSeconds,
+          shards: h.shards?.map(s => ({ index: s.index, selected: s.names.length, durationSeconds: s.durationSeconds, result: s.result })) })),
+        doctests: value.doctests, nativeJobSuite: value.nativeJobSuite };
+      console.log(JSON.stringify(metrics));
+      if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Rust ${action}: exact source ${value.sourceSha}, run ${value.runId}, attempt ${value.runAttempt}.\n\n\`\`\`json\n${JSON.stringify(metrics, null, 2)}\n\`\`\`\n`);
       if (action === 'run' && !value.completed) process.exitCode = 1;
     }
   } catch (error) { console.error(String(error.message)); process.exitCode = 1; }

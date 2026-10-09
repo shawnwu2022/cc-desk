@@ -5,9 +5,14 @@ function unique(names) {
   requireThat(new Set(names).size === names.length, 'duplicate inventory name');
 }
 function equal(a, b) { return a.length === b.length && a.every(n => b.includes(n)); }
-// Initial weights only influence placement, never admission. Actual per-shard times are archived.
+// Weights only influence placement, never admission. Baseline run 37894886145
+// observed retained custody at ~311s; first sharded run put it in the 831s tail.
+// Include the real nested :: namespace as well as top-level test modules.
 export function estimatedWeight(name) {
-  if (/version_history_context_windows|version_history_bundle_restore_windows|version_history_scope_context_windows/.test(name)) return 120;
+  if (name.endsWith('::HistoryPreinstallCustody_RetainedContextReturn_002')) return 300;
+  if (name.endsWith('::HistoryContextWindows_LaterCompletionPublication_040')) return 210;
+  if (name.endsWith('::HistoryContextWindows_ReturnConflicts_038')) return 240;
+  if (/version_history_context_windows|version_history_bundle_restore_windows|version_history_scope_context_windows|version_history::windows::context::(?:bundle_restore|switching::preinstall_custody_tests)/.test(name)) return 120;
   if (/version_history.*(?:windows|registration|restart|journal|preinstall)/.test(name)) return 30;
   if (/Webview|WebView|Channel_Native|Launch_Native/.test(name)) return 60;
   return 1;
