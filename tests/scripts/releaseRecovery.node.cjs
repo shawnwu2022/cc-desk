@@ -1,7 +1,9 @@
 const assert = require('node:assert/strict')
 const { createHash, generateKeyPairSync, sign } = require('node:crypto')
-const { readFileSync } = require('node:fs')
+const { readFileSync, mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } = require('node:fs')
 const { resolve } = require('node:path')
+const { tmpdir } = require('node:os')
+const { spawnSync } = require('node:child_process')
 const test = require('node:test')
 const { buildUpdaterManifest } = require('../../scripts/generate-updater-manifest.js')
 const { verifyUpdaterManifest } = require('../../scripts/verify-updater-manifest.js')
@@ -98,4 +100,51 @@ test('ReleaseRecovery_DownloadedSignatures_011', async () => {
     async () => ({ ok: true, arrayBuffer: async () => Buffer.from('tampered download') })), /signature/)
   const incomplete = structuredClone(manifest); delete incomplete.platforms['linux-x86_64']
   await assert.rejects(verifyUpdaterManifest(incomplete, '1.2.3', pubkey, value.repository, request), /coverage/)
+})
+test('ReleaseRecovery_PreflightAPIRefusal_012', () => {
+  const version = JSON.parse(readFileSync(resolve(__dirname, '../../package.json'), 'utf8')).version
+  const script = `
+    const sha = '${sha}';
+    const run = { id: 7, head_sha: sha, head_branch: 'main', event: 'push', status: 'completed', conclusion: process.env.FIXTURE_CI, path: '.github/workflows/ci.yml' };
+    globalThis.fetch = async url => {
+      let value;
+      if (url.includes('/branches/main')) value = { protected: true, commit: { sha } };
+      else if (url.includes('/actions/workflows/ci.yml/runs')) value = { workflow_runs: [run] };
+      else if (url.includes('/actions/runs/7/jobs')) value = { jobs: ['Frontend checks', 'Rust checks'].map(name => ({ name, status: 'completed', conclusion: 'success' })) };
+      else if (url.includes('/git/ref/tags/')) return { status: 404 };
+      else if (url.endsWith('/releases?per_page=100&page=1')) value = process.env.FIXTURE_DRAFT === 'yes' ? [{ tag_name: 'v${version}', draft: true }] : [];
+      else throw new Error('unexpected fixture API route');
+      return { ok: true, json: async () => value };
+    };
+    await import('./scripts/release-preflight.mjs');
+  `
+  for (const [conclusion, draft, expected] of [['success', 'no', 0], ['failure', 'no', 1], ['success', 'yes', 1]]) {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: resolve(__dirname, '../..'), encoding: 'utf8', timeout: 5000,
+      env: { ...process.env, GITHUB_REPOSITORY: 'shawnwu2022/cc-desk', GITHUB_SHA: sha, GITHUB_REF: 'refs/heads/main',
+        GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_TOKEN: 'synthetic-fixture-token', GITHUB_OUTPUT: '', FIXTURE_CI: conclusion, FIXTURE_DRAFT: draft },
+    })
+    assert.ifError(result.error)
+    assert.equal(result.status, expected, result.stderr)
+    if (expected === 1) assert.match(result.stderr, /release gate blocked/)
+  }
+})
+test('ReleaseRecovery_ActualManifestCLI_013', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'ccdesk-recovery-fixture-'))
+  try {
+    mkdirSync(resolve(root, 'scripts')); mkdirSync(resolve(root, 'src-tauri')); mkdirSync(resolve(root, 'artifacts'))
+    for (const file of ['generate-updater-manifest.js', 'updater-signature.js']) copyFileSync(resolve(__dirname, '../../scripts', file), resolve(root, 'scripts', file))
+    writeFileSync(resolve(root, 'src-tauri/tauri.conf.json'), JSON.stringify({ plugins: { updater: { pubkey } } }))
+    const value = input()
+    for (const asset of value.assets) {
+      writeFileSync(resolve(root, 'artifacts', asset.name), asset.data)
+      writeFileSync(resolve(root, 'artifacts', `${asset.name}.sig`), asset.signature)
+    }
+    const result = spawnSync(process.execPath, [resolve(root, 'scripts/generate-updater-manifest.js'), resolve(root, 'artifacts'), resolve(root, 'latest.json'), 'v1.2.3'], {
+      encoding: 'utf8', timeout: 5000, env: { ...process.env, GITHUB_REPOSITORY: value.repository },
+    })
+    assert.ifError(result.error); assert.equal(result.status, 0, result.stderr)
+    const manifest = JSON.parse(readFileSync(resolve(root, 'latest.json'), 'utf8'))
+    assert.equal(manifest.version, '1.2.3'); assert.equal(Object.keys(manifest.platforms).length, 3)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
