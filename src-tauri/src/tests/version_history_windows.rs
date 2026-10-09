@@ -1079,6 +1079,7 @@ impl Drop for ProbeCleanup<'_> {
 // 检查准备阶段崩溃会由 job 清理真实子进程，解除自动清理后的不确定状态则保留子进程。
 #[test]
 fn HistoryWindows_CrashRecovery_026() {
+    use super::fixture_process::{behavior_deadline, FixtureChild};
     for boundary in [
         "before-identity",
         "after-identity",
@@ -1089,22 +1090,29 @@ fn HistoryWindows_CrashRecovery_026() {
         "resumed",
     ] {
         let (temporary, user, private) = private_fixture();
-        let mut owner = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "tests::version_history_windows::HistoryWindows_CrashWorker_099",
-                "--ignored",
-                "--nocapture",
-            ])
-            .env("CC_DESK_HISTORY_CRASH_ROOT", temporary.path())
-            .env("CC_DESK_HISTORY_CRASH_MODE", boundary)
-            .spawn()
-            .unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let preparation_started = std::time::Instant::now();
+        let mut owner = FixtureChild::new(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::version_history_windows::HistoryWindows_CrashWorker_099",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("CC_DESK_HISTORY_CRASH_ROOT", temporary.path())
+                .env("CC_DESK_HISTORY_CRASH_MODE", boundary)
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        // Preparation includes image verification and parent exact-child custody.
+        // This cap prevents a hung fixture; it is not a production latency requirement.
+        let preparation_deadline = preparation_started + std::time::Duration::from_secs(300);
         while !temporary.path().join("owner-ready").exists() {
-            if owner.try_wait().unwrap().is_some() || std::time::Instant::now() >= deadline {
+            let status = owner.try_wait().unwrap();
+            if status.is_some() || std::time::Instant::now() >= preparation_deadline {
                 let _ = owner.kill();
-                let _ = owner.wait();
+                let _ = owner.wait_bounded(std::time::Duration::from_secs(5));
                 panic!("disposable owner did not publish its exact child");
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1118,14 +1126,23 @@ fn HistoryWindows_CrashRecovery_026() {
         let exact = ExactProcess::capture_observed(ready["pid"].as_u64().unwrap() as u32).unwrap();
         let _cleanup = ProbeCleanup(&exact);
         assert!(exact.terminal(0).unwrap().is_none());
+        let deadline = behavior_deadline(
+            preparation_deadline,
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(15),
+        )
+        .expect("disposable owner preparation exceeded its hang guard");
         std::fs::write(temporary.path().join("owner-observed"), b"held exact child").unwrap();
+        owner.release(b'A').unwrap();
         let status = loop {
             if let Some(status) = owner.try_wait().unwrap() {
                 break status;
             }
             if std::time::Instant::now() >= deadline {
                 owner.kill().unwrap();
-                owner.wait().unwrap();
+                owner
+                    .wait_bounded(std::time::Duration::from_secs(5))
+                    .unwrap();
                 stop_probe(&exact);
                 panic!("disposable crash owner timed out");
             }
@@ -1228,14 +1245,11 @@ fn HistoryWindows_CrashWorker_099() {
     )
     .unwrap();
     std::fs::write(root.join("owner-ready"), b"ready").unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while !root.join("owner-observed").exists() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "observer did not retain child"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    super::fixture_process::await_fixture_release(b'A');
+    assert!(
+        root.join("owner-observed").exists(),
+        "observer did not retain child"
+    );
     if boundary != "before-identity" {
         let receipt = process.persist_identity(&user).unwrap();
         if boundary == "resume-intent" {

@@ -1,4 +1,5 @@
 //! Actual isolated registry/source process probes; never changes installed product state.
+use super::fixture_process::{await_fixture_release, FixtureChild};
 use crate::version_history::windows::{
     process::ExactProcess, scope::RegisteredInstallation, security::CurrentUser,
 };
@@ -111,16 +112,19 @@ fn HistoryRegistration_SourceReadmission_001() {
     std::fs::copy(std::env::current_exe().unwrap(), &image).unwrap();
     let marker = temporary.path().join("source-marker");
     let release = temporary.path().join("release-source");
-    let mut child = std::process::Command::new(&image)
-        .args([
-            "--exact",
-            "tests::version_history_windows::HistoryWindows_ProcessWorker_013",
-            "--ignored",
-        ])
-        .env("CC_DESK_HISTORY_PROBE_MARKER", &marker)
-        .env("CC_DESK_HISTORY_PROBE_RELEASE", &release)
-        .spawn()
-        .unwrap();
+    let mut child = FixtureChild::new(
+        std::process::Command::new(&image)
+            .args([
+                "--exact",
+                "tests::version_history_registration_windows::HistoryRegistration_SourceWorker_004",
+                "--ignored",
+            ])
+            .env("CC_DESK_HISTORY_PROBE_MARKER", &marker)
+            .env("CC_DESK_HISTORY_PROBE_RELEASE", &release)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
     let registry = RegistryFixture::new();
     registry.install(temporary.path());
     let capture = || {
@@ -143,7 +147,11 @@ fn HistoryRegistration_SourceReadmission_001() {
     )
     .is_err());
     std::fs::write(&release, b"release").unwrap();
-    assert!(child.wait().unwrap().success());
+    child.release(b'R').unwrap();
+    assert!(child
+        .wait_bounded(std::time::Duration::from_secs(5))
+        .unwrap()
+        .success());
     let exited = installed.release_after_exit().unwrap();
     exited.verify().unwrap();
     let fence = std::sync::Arc::new(parking_lot::Mutex::new(
@@ -228,4 +236,17 @@ fn HistoryRegistration_ObservedImagePath_003() {
         )
         .unwrap();
     assert!(process.verify_held_image(&image).is_err());
+}
+
+// Source lifetime is authorized only by its exact owning supervisor.
+#[test]
+#[ignore = "explicitly supervised by the copied-source registration fixture"]
+fn HistoryRegistration_SourceWorker_004() {
+    let marker =
+        std::path::PathBuf::from(std::env::var_os("CC_DESK_HISTORY_PROBE_MARKER").unwrap());
+    std::fs::write(&marker, b"executed").unwrap();
+    await_fixture_release(b'R');
+    let release = std::env::var_os("CC_DESK_HISTORY_PROBE_RELEASE").unwrap();
+    assert_eq!(std::fs::read(release).unwrap(), b"release");
+    std::fs::write(marker.with_extension("completed"), b"completed").unwrap();
 }

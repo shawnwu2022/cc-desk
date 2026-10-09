@@ -1,5 +1,8 @@
 #![allow(non_snake_case)]
 
+#[cfg(all(test, windows))]
+pub(crate) mod fixture_process;
+
 #[cfg(test)]
 mod checks;
 #[cfg(test)]

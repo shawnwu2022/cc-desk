@@ -339,6 +339,21 @@ impl Worker {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+    fn await_checkpoint_preparation(&mut self, path: &Path, deadline: Instant) {
+        let result = crate::tests::fixture_process::wait_for_preparation(deadline, || {
+            let ready = path.try_exists()?;
+            if !ready {
+                assert!(
+                    self.child.try_wait()?.is_none(),
+                    "manager worker exited before its preparation checkpoint"
+                );
+            }
+            Ok(ready)
+        });
+        if let Err(error) = result {
+            panic!("manager checkpoint preparation failed: {error}");
+        }
+    }
     fn finish(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -351,6 +366,10 @@ impl Worker {
         }
     }
     fn hard_kill(&mut self) {
+        assert!(
+            self.child.try_wait().unwrap().is_none(),
+            "source exited before the supervised hard kill"
+        );
         self.child.kill().expect("hard-kill exact source worker");
         assert!(!self.child.wait().unwrap().success());
     }
@@ -434,9 +453,12 @@ fn HistoryManager_SourceCrash_004() {
         ("lifetime-persisted", true, true),
     ] {
         let temp = tempfile::tempdir().unwrap();
+        // This waits for real image/identity preparation, not for post-death behavior.
+        // Reuse the existing checked preparation hang guard; native lifetime windows stay below.
+        let preparation = Instant::now() + typed_probe::PREPARATION;
         let mut source = Worker::spawn(temp.path(), "crash", checkpoint);
         let marker = temp.path().join("checkpoint.json");
-        source.await_file(&marker);
+        source.await_checkpoint_preparation(&marker, preparation);
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(marker).unwrap()).unwrap();
         assert_eq!(record["checkpoint"], checkpoint);
