@@ -12,6 +12,7 @@ import { createLaunchAttempt } from '@/api/cliLaunchAttempt'
 import { useHookStore, type ObservationHandler } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
+import { platform } from '@/utils/platform'
 
 const io = vi.hoisted(() => ({ failBinding: false, terms: [] as any[], fits: [] as any[], bindings: [] as any[], channels: [] as any[], observers: [] as any[], scope: vi.fn(), read: vi.fn(), start: vi.fn(), recover: vi.fn(), cancel: vi.fn(), stop: vi.fn(), copy: vi.fn(), resize: vi.fn() }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
@@ -61,6 +62,22 @@ function open(active = true) {
 }
 
 describe('Unified native terminal identity', () => {
+  it('Native_ImageFilePasteKeepsCurrentInputOwner_025', async () => {
+    const { wrapper } = open(); await flushPromises()
+    const image = () => {
+      const event = new Event('paste', { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'clipboardData', { value: { getData: () => '', types: ['Files'], items: [{ kind: 'file', type: 'image/png' }] } })
+      return event
+    }
+    const event = image(); wrapper.get('textarea').element.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(io.bindings[0].sendUserText).toHaveBeenCalledExactlyOnceWith(platform === 'windows' ? '\x1bv' : '\x16')
+    expect(io.bindings[0].reserveUserPaste).not.toHaveBeenCalled()
+    await wrapper.setProps({ active: false })
+    const hidden = image(); wrapper.get('textarea').element.dispatchEvent(hidden)
+    expect(hidden.defaultPrevented).toBe(false)
+    expect(io.bindings[0].sendUserText).toHaveBeenCalledTimes(1)
+  })
   // 隐藏时不测量，后台输出保留并在显示时测量，不重新启动。
   it('Native_VisibilityRetainsOutput_001', async () => {
     const { wrapper, vm } = open(false); await flushPromises()

@@ -29,6 +29,17 @@ Fixture component tests have a dedicated `vitest.visual.config.ts`; the ordinary
 unit suite excludes `tests/visual/` and keeps its real API/module boundaries.
 Playwright discovers only `*.spec.ts` there.
 
+The isolated visual plugin fixes the displayed application version to `0.18.1`,
+the synthetic value in the reviewed Settings baselines. Version text is fixture
+data alongside the clock and project names; release metadata changes should not
+replace otherwise identical UI screenshots. The same production Settings
+components still render the footer normally. Ordinary development and production
+keep the real package version, including when a visual flag is passed to a build.
+Actual Vite resolver tests cover every enablement boundary, and the ordinary
+package identity test checks the compiled display version against package metadata.
+All thirteen baseline PNGs, zero-pixel comparisons, geometry and interaction
+assertions remain unchanged.
+
 Browser setup actions are shared with real-fixture DOM regressions in
 `tests/visual/fixtureActions.ts`. Project expansion keeps stable toggle membership
 while each click changes `aria-expanded`; menu setup focuses the real session row

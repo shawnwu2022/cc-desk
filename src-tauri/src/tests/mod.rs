@@ -170,3 +170,6 @@ mod version_history_role_guard_windows;
 mod version_history_source_boundary_windows;
 
 mod version_history_return_checkpoint;
+
+mod desktop_updater_http;
+mod desktop_updater_policy;

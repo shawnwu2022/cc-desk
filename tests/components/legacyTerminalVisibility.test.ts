@@ -5,6 +5,7 @@ import XTermTerminal from '@/components/XTermTerminal.vue'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
+import { platform } from '@/utils/platform'
 const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], input: vi.fn(), kill: vi.fn(), spawn: vi.fn(), output: null as any, exit: null as any, outputReady: vi.fn(), exitReady: vi.fn(), dragReady: vi.fn(), copy: vi.fn(), clip: vi.fn() }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: any; textarea!: HTMLTextAreaElement; element!: HTMLElement; cols = 80; rows = 24; output = ''; modes = { bracketedPasteMode: false }; unicode = { activeVersion: '6' }; buffer = { active: { length: 0 } }
@@ -31,6 +32,20 @@ beforeEach(() => {
 })
 afterEach(() => { wrapper?.unmount(); wrapper = null; vi.unstubAllGlobals() })
 describe('Legacy unified ownership', () => {
+  it('Legacy_PasteKeyboardUsesDomMimeWithoutExtraPermissions_014', async () => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
+    const chord = new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, cancelable: true })
+    expect(io.terms[0].key(chord)).toBe(true)
+    expect(chord.defaultPrevented).toBe(false)
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: { getData: () => '', types: ['Files'], items: [{ kind: 'file', type: 'image/png' }] } })
+    io.terms[0].textarea.dispatchEvent(event); await flushPromises()
+    expect(io.input).toHaveBeenCalledExactlyOnceWith(sessions.tabs.get(id)!.ptyId, platform === 'windows' ? '\x1bv' : '\x16', 'clipboard-dom')
+    expect(io.clip).not.toHaveBeenCalled()
+    // Ctrl+L stays an ordinary CLI input chord.
+    expect(io.terms[0].key(new KeyboardEvent('keydown', { key: 'l', ctrlKey: true }))).toBe(true)
+  })
   // 隐藏Legacy时，窗口复制和旧命令通道不能截获Native输入。
   it('Legacy_HiddenInputIsIsolated_001', async () => {
     const sessions = useSessionStore(); const id = sessions.createTab('/repo')
@@ -40,13 +55,14 @@ describe('Legacy unified ownership', () => {
     const copy = new Event('copy', { bubbles: true, cancelable: true }); window.dispatchEvent(copy)
     expect(io.input).not.toHaveBeenCalled(); expect(io.copy).not.toHaveBeenCalled(); expect(copy.defaultPrevented).toBe(false)
   })
-  // 隐藏期间的剪贴板异步结果作废，不能写入原先可见的Legacy PTY。
+  // DOM粘贴读取后失去可见性，微任务不得写入原先可见的Legacy PTY。
   it('Legacy_PasteLosesVisibility_002', async () => {
     const sessions = useSessionStore(); const id = sessions.createTab('/repo')
     wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
-    let finish!: (text: string) => void; io.clip.mockReturnValue(new Promise<string>(r => { finish = r }))
-    io.terms[0].key(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true }))
-    await wrapper.setProps({ visible: false }); finish('old paste'); await flushPromises()
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: { getData: () => 'old paste', types: ['text/plain'] } })
+    io.terms[0].textarea.dispatchEvent(event)
+    void wrapper.setProps({ visible: false }); await flushPromises()
     expect(io.input).not.toHaveBeenCalled()
   })
   // 字号变化不测量后台实例；退出后保留内容直到真正关闭会话。

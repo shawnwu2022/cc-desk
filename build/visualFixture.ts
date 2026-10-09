@@ -5,6 +5,11 @@ import { resolve } from 'node:path'
 export function visualFixturePlugin(root: string, enabled: boolean): Plugin {
   return {
     name: 'cc-desk-visual-fixture', enforce: 'pre',
+    config() {
+      // Like project names and time, the display version is fixed synthetic data.
+      // Ordinary development and production retain the real package identity.
+      if (enabled) return { define: { __APP_VERSION__: JSON.stringify('0.18.1') } }
+    },
     resolveId(source) {
       if (enabled && source.startsWith('@tauri-apps/')) return resolve(root, 'src/visual/tauriStub.ts')
     },

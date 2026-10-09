@@ -6,7 +6,7 @@ import { nextTick } from 'vue'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import VisualFixtureApp from '@/visual/VisualFixtureApp.vue'
 import { FIXTURE_TIME, longProjectName, longSessionTitle } from '@/visual/fixtures'
-import { blockedHostCalls, invoke } from '@/visual/tauriStub'
+import { blockedHostCalls, invoke, listen } from '@/visual/tauriStub'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import { expandFixtureProjects, clearFixtureSetupFocus, openFixtureSessionMenu } from './fixtureActions'
@@ -33,6 +33,20 @@ async function render(scenario: string, locale = 'en') {
   await flushPromises(); return wrapper
 }
 describe('Isolated production-component fixture', () => {
+  it('Fixture_SettingsVersionIsStableSyntheticData_019', async () => {
+    const view = await render('terminal-settings')
+    expect(view.text()).toContain('CC Desk v0.18.1')
+    expect(blockedHostCalls.value).toBe(0)
+  })
+  it('Fixture_UpdateSettingsAreSyntheticAndInstallerRemainsBlocked_018', async () => {
+    await expect(invoke('get_updater_settings')).resolves.toEqual({ proxy: null })
+    expect(typeof await listen('desktop-update-progress')).toBe('function')
+    expect(blockedHostCalls.value).toBe(0)
+    for (const command of ['save_updater_settings', 'check_desktop_update', 'install_desktop_update']) {
+      expect(() => invoke(command)).toThrow('VISUAL_HOST_ACCESS_BLOCKED')
+    }
+    expect(blockedHostCalls.value).toBe(3)
+  })
   // 两个恢复入口共用真实对话框：单会话只呈现目标，全局保留检索列表；取消不调用宿主。
   it.each(['en', 'zh'].flatMap(locale => ['resume-session', 'resume-history'].map(scenario => ({ locale, scenario }))))('Fixture_ResumeEntry_015: $scenario $locale', async ({ locale, scenario }) => {
     const view = await render(scenario, locale)

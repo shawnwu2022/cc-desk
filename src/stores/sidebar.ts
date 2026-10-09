@@ -26,7 +26,7 @@ export const useSidebarStore = defineStore('sidebar', () => {
   const updateInfo = ref<UpdateInfo | null>(null)
   const updateAvailable = computed(() => !!updateInfo.value?.hasUpdate && isOrdinaryUpdateEligible(updateInfo.value))
 
-  function setUpdateInfo(info: UpdateInfo) {
+  function setUpdateInfo(info: UpdateInfo | null) {
     updateInfo.value = info
   }
 

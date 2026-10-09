@@ -13,17 +13,71 @@ import { useSessionStore } from '@/stores/session'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
-const io = vi.hoisted(() => ({ write: vi.fn(), open: vi.fn(), check: vi.fn(), relaunch: vi.fn(), summary: vi.fn() }))
+const io = vi.hoisted(() => ({ write: vi.fn(), open: vi.fn(), check: vi.fn(), relaunch: vi.fn(), summary: vi.fn(), settings: vi.fn(), saveProxy: vi.fn(), install: vi.fn() }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.write }))
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: io.open }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({}) }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), checkForUpdates: io.summary, check: io.check, relaunch: io.relaunch }))
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => vi.fn()) }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), checkForUpdates: io.summary, getUpdaterSettings: io.settings, saveUpdaterSettings: io.saveProxy, installDesktopUpdate: io.install, check: io.check, relaunch: io.relaunch }))
 const wrappers: VueWrapper[] = []
-beforeEach(() => { setActivePinia(createPinia()); vi.clearAllMocks(); clearMocks(); mockIPC(command => command === 'get_app_config' ? { language: 'en', terminalTheme: 'cc-box-light' } : undefined); io.write.mockResolvedValue(undefined); io.open.mockResolvedValue(undefined) })
+beforeEach(() => { setActivePinia(createPinia()); vi.clearAllMocks(); clearMocks(); mockIPC(command => command === 'get_app_config' ? { language: 'en', terminalTheme: 'cc-box-light' } : undefined); io.write.mockResolvedValue(undefined); io.open.mockResolvedValue(undefined); io.settings.mockResolvedValue({ proxy: null }); io.saveProxy.mockResolvedValue(undefined); io.install.mockResolvedValue(undefined) })
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = ''; useAppStore().$dispose(); clearMocks(); vi.restoreAllMocks() })
 function render(component: any, props: Record<string, unknown> = {}) { const wrapper = mount(component, { props, attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } }); wrappers.push(wrapper); return wrapper }
 const candidate = (channel: string) => ({ version: '0.99.0', currentVersion: '0.17.7', hasUpdate: true, releaseNotes: 'Notes', downloadUrl: '', platformAsset: null, channel, installEligible: false })
 describe('Remaining settings sections', () => {
+  it('Settings_ProxyHydrationSurvivesInactiveNavigation_016', async () => {
+    let finish!: (value: { proxy: string }) => void
+    io.settings.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const wrapper = render(UpdateSection)
+    expect(wrapper.get('[data-update-check]').attributes('disabled')).toBeDefined()
+    await wrapper.setProps({ active: false }); await wrapper.setProps({ active: true })
+    finish({ proxy: 'http://localhost:1080/' }); await flushPromises()
+    expect((wrapper.get('[data-update-proxy]').element as HTMLInputElement).value).toBe('http://localhost:1080/')
+    expect(wrapper.get('[data-update-check]').attributes('disabled')).toBeUndefined()
+    expect(io.saveProxy).not.toHaveBeenCalled()
+  })
+  it('Settings_UnknownInstallRevokesReceiptAndCannotReplay_017', async () => {
+    const id = '8e111fa0-8baf-4ef2-8d2a-71be6e100321'
+    useUpdateStore().setUpdateInfo({ ...candidate('stable'), channel: 'stable', version: '0.18.2', installEligible: true, admissionId: id,
+      officialRelease: { id: 123, tag: 'v0.18.2', sourceSha: 'a'.repeat(40) } })
+    const wrapper = render(UpdateSection); await flushPromises()
+    useNativeTabsStore().tabs.set('busy', { tabId: 'busy', status: 'unknown' } as any)
+    await wrapper.get('[data-update-install]').trigger('click'); await flushPromises()
+    const confirm = document.querySelector<HTMLButtonElement>('[data-update-confirm-install]')!
+    expect(confirm.disabled).toBe(true); confirm.click(); expect(io.install).not.toHaveBeenCalled()
+    useNativeTabsStore().tabs.clear(); await flushPromises()
+    io.install.mockRejectedValue({ code: 'UPDATER_INSTALL_OUTCOME_UNKNOWN', stage: 'install', secret: 'TOKEN=SECRET' })
+    confirm.click(); await flushPromises(); confirm.click(); await flushPromises()
+    expect(io.install).toHaveBeenCalledTimes(1)
+    expect(useUpdateStore().updateInfo?.admissionId).toBeNull()
+    expect(wrapper.get('[data-update-error]').text()).toContain('UPDATER_INSTALL_OUTCOME_UNKNOWN')
+    expect(wrapper.text()).not.toMatch(/TOKEN|SECRET/)
+    expect(io.relaunch).not.toHaveBeenCalled()
+  })
+  it('Settings_OfficialUpdateOffersConfirmedInstall_014', async () => {
+    const id = '8e111fa0-8baf-4ef2-8d2a-71be6e100321'
+    useUpdateStore().setUpdateInfo({ ...candidate('stable'), channel: 'stable', version: '0.18.2', installEligible: true, admissionId: id,
+      officialRelease: { id: 123, tag: 'v0.18.2', sourceSha: 'a'.repeat(40) } })
+    const wrapper = render(UpdateSection); await flushPromises()
+    expect(useUpdateStore().hasUpdate).toBe(true)
+    expect(wrapper.get('[data-update-install]').attributes('disabled')).toBeUndefined()
+    await wrapper.get('[data-update-install]').trigger('click'); await flushPromises()
+    const confirm = document.querySelector<HTMLButtonElement>('[data-update-confirmation] [data-update-confirm-install]')!
+    expect(confirm).not.toBeNull(); expect(confirm.disabled).toBe(false)
+    confirm.click(); confirm.click(); await flushPromises()
+    expect(io.install).toHaveBeenCalledTimes(1); expect(io.install).toHaveBeenCalledWith(id)
+    expect(io.check).not.toHaveBeenCalled(); expect(io.relaunch).not.toHaveBeenCalled()
+  })
+  it('Settings_UpdaterProxyAndSpecificError_015', async () => {
+    const wrapper = render(UpdateSection); await flushPromises()
+    await wrapper.get('[data-update-proxy]').setValue('http://localhost:1080')
+    await wrapper.get('[data-update-proxy-save]').trigger('click'); await flushPromises()
+    expect(io.saveProxy).toHaveBeenCalledWith('http://localhost:1080')
+    io.summary.mockRejectedValue({ code: 'UPDATER_MANIFEST_INVALID', stage: 'check', secret: '/private TOKEN=value' })
+    await wrapper.get('[data-update-check]').trigger('click'); await flushPromises()
+    expect(wrapper.get('[data-update-error]').text()).toContain('UPDATER_MANIFEST_INVALID')
+    expect(wrapper.text()).not.toMatch(/TOKEN|\/private|signed candidates only/)
+  })
   // 操作和按键可搜索，冲突捕获只在明确Replace后一次保存两个绑定。
   it('Settings_ShortcutCaptureConflict_001', async () => {
     const wrapper = render(ShortcutsSection); await flushPromises()
@@ -80,7 +134,7 @@ describe('Remaining settings sections', () => {
   it('Settings_UpdateSafeStaleCheck_005', async () => {
     let finish!: (value: unknown) => void
     io.summary.mockImplementation(() => new Promise(resolve => { finish = resolve }))
-    const wrapper = render(UpdateSection); await wrapper.get('[data-update-check]').trigger('click'); await flushPromises()
+    const wrapper = render(UpdateSection); await flushPromises(); await wrapper.get('[data-update-check]').trigger('click'); await flushPromises()
     await wrapper.setProps({ active: false }); finish(candidate('test-only')); await flushPromises()
     expect(useUpdateStore().updateInfo).toBeNull()
     await wrapper.setProps({ active: true }); io.summary.mockRejectedValue(new Error('/private TOKEN=secret'))

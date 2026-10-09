@@ -133,6 +133,7 @@ function bindClipboard() {
     const snapshot = classifyClipboardSnapshot({
       text: event.clipboardData?.getData('text/plain') ?? '',
       types: Array.from(event.clipboardData?.types ?? []),
+      items: Array.from(event.clipboardData?.items ?? [], item => ({ kind: item.kind, type: item.type })),
     })
     if (snapshot.kind !== 'text' && snapshot.kind !== 'image') return
 

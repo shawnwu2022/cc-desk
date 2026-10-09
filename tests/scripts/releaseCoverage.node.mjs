@@ -198,15 +198,18 @@ test('ReleaseCoverage_ReviewedDraftPreparationAuthenticatesCoverage_020', () => 
   const draft = { id: 406663556, tag_name: 'v0.18.1', target_commitish: OLD_SOURCE, draft: true,
     prerelease: false, published_at: null, body: 'old notes', name: 'old candidate',
     assets: OLD_ASSETS.map(a => ({ ...a, digest: `sha256:${a.sha256}`, state: 'uploaded' })) }
-  const result = preflight({ extraArgs: ['--prepare-draft-recovery'], mutate: api => { api.releases = [draft] } })
+  // This reviewed recovery record is permanently bound to the 0.18.1 source.
+  // Use its isolated version fixture when the working tree advances to a new release.
+  const result = preflight({ stage: true, extraArgs: ['--prepare-draft-recovery'], mutate: api => { api.releases = [draft] } })
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stdout, /Read-only recovery candidate preflight passed/)
+  assert.match(result.stdout, /v0\.18\.1/)
   for (const mutate of [api => api.releases[0].assets.pop(), api => api.ci.conclusion = 'failure',
     api => api.tagExists = true, api => api.artifacts[0].workflow_run.head_sha = '2'.repeat(40)]) {
-    const result = preflight({ extraArgs: ['--prepare-draft-recovery'], mutate: api => { api.releases = [structuredClone(draft)]; mutate(api) } })
+    const result = preflight({ stage: true, extraArgs: ['--prepare-draft-recovery'], mutate: api => { api.releases = [structuredClone(draft)]; mutate(api) } })
     assert.equal(result.status, 1, result.stdout)
   }
-  const forged = preflight({ extraArgs: ['--prepare-draft-recovery'], mutate: api => { api.releases = [draft] },
+  const forged = preflight({ stage: true, extraArgs: ['--prepare-draft-recovery'], mutate: api => { api.releases = [draft] },
     mutateLocal: directory => { const path = join(directory, REPORT_FILENAME); writeFileSync(path, `${readFileSync(path)}\n`) } })
   assert.equal(forged.status, 1)
   assert.match(forged.stderr, /differs from authenticated archive|path\/size mismatch/)
