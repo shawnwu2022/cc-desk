@@ -175,6 +175,7 @@ fn d12_abort(app: AppHandle, state: State<'_, Arc<Probe>>) {
 }
 #[test]
 fn D12_Webview_FormalCommands_001() {
+    let _webview_lease = crate::tests::NATIVE_WEBVIEW_TEST_LEASE.lock();
     let t = tempfile::tempdir().unwrap();
     let log = fs::File::create(t.path().join("log")).unwrap();
     let mut child = Command::new(std::env::current_exe().unwrap())

@@ -199,6 +199,7 @@ fn d11_channel_abort(app: AppHandle, state: State<'_, Arc<Probe>>) {
 // 检查实际 Channel 有序回传字节，拒绝重复绑定及另一窗口，销毁后拒绝发送。
 #[test]
 fn D11_Channel_Native_011() {
+    let _webview_lease = crate::tests::NATIVE_WEBVIEW_TEST_LEASE.lock();
     let directory = tempfile::tempdir().unwrap();
     let log_path = directory.path().join("worker.log");
     let log = File::create(&log_path).unwrap();

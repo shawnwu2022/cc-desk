@@ -1,5 +1,10 @@
 #![allow(non_snake_case)]
 
+// Native GUI supervisors share the hosted desktop. Acquire only in the parent,
+// before spawning a worker; child workers keep their original deadlines.
+#[cfg(windows)]
+pub(super) static NATIVE_WEBVIEW_TEST_LEASE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 #[cfg(all(test, windows))]
 pub(crate) mod fixture_process;
 

@@ -229,6 +229,7 @@ fn d11_abort(app: AppHandle, state: State<'_, Arc<Probe>>) {
 // 检查真实 WebView 的字节/请求头传输、错窗口及刷新/销毁撤权。
 #[test]
 fn D11_Webview_Live_001() {
+    let _webview_lease = crate::tests::NATIVE_WEBVIEW_TEST_LEASE.lock();
     for mode in ["reload", "destroy"] {
         let directory = tempfile::tempdir().unwrap();
         let log_path = directory.path().join("worker.log");

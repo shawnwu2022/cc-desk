@@ -1,4 +1,4 @@
-name: Isolated D11 launch diagnostic
+name: Native WebView supervisor resource comparison
 on:
   push:
     branches: [feat/unified-workspace-ux]
@@ -48,26 +48,50 @@ jobs:
       - name: Check source formatting
         working-directory: src-tauri
         run: cargo fmt --check
-      - name: Run one supervised launch test
+      - name: Run the exact five supervised GUI tests in one harness
         working-directory: src-tauri
         shell: pwsh
         run: |
-          cargo test --locked --lib tests::native_cli_launch_live::worker::D11_Launch_Native_001 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath d11-launch-isolated.log
+          $parents = @(
+            'tests::native_cli_channel_live::D11_Channel_Native_011',
+            'tests::native_cli_document_live::D11_Webview_Live_001',
+            'tests::native_cli_launch_live::worker::D11_Launch_Native_001',
+            'tests::native_cli_projection_live::D12_Webview_FormalCommands_001',
+            'tests::version_history_webview::HistoryWebView_Exit_001'
+          )
+          $full = @(& cargo test --locked --lib -- --list --format pretty 2>&1 | Tee-Object -FilePath gui-full-inventory.log)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $fullNames = @($full | ForEach-Object { if ("$_" -cmatch '^(.+): test$') { $Matches[1] } })
+          $selected = @(& cargo test --locked --lib -- @parents --exact --list --format pretty 2>&1 | Tee-Object -FilePath gui-selected-inventory.log)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $selectedNames = @($selected | ForEach-Object { if ("$_" -cmatch '^(.+): test$') { $Matches[1] } })
+          if ($selectedNames.Count -ne 5 -or @($selectedNames | Sort-Object -Unique).Count -ne 5 -or
+            @($parents | Where-Object { $selectedNames -cnotcontains $_ -or $fullNames -cnotcontains $_ }).Count -ne 0) {
+            throw 'The exact five original GUI parent tests must be selected'
+          }
+          & cargo test --locked --lib -- @parents --exact --nocapture --test-threads=5 2>&1 | Tee-Object -FilePath gui-supervisor-comparison.log
           $result = $LASTEXITCODE
           if ($result -ne 0) { exit $result }
-          if (!(Select-String -Path d11-launch-isolated.log -Pattern '^running 1 test$' -Quiet)) {
-            throw 'The supervised parent test did not execute'
+          if (!(Select-String -Path gui-supervisor-comparison.log -Pattern '^running 5 tests$' -Quiet)) {
+            throw 'All five supervising parent tests must execute'
           }
-          $pattern = '^(?:test tests::native_cli_launch_live::worker::D11_Launch_Native_001 \.\.\. )?D11_LAUNCH_EVIDENCE (.+)$'
-          $reports = @(Get-Content d11-launch-isolated.log | ForEach-Object {
-            $match = [regex]::Match($_, $pattern)
-            if ($match.Success) { $match.Groups[1].Value | ConvertFrom-Json }
-          })
-          if ($reports.Count -ne 2 -or @($reports | Where-Object { $_.mode -ceq 'ready' }).Count -ne 1 -or @($reports | Where-Object { $_.mode -ceq 'closed' }).Count -ne 1) {
-            throw 'Both supervised fixture modes must produce evidence'
+          $summaries = @(Get-Content gui-supervisor-comparison.log | Where-Object { $_ -cmatch '^test result: (?:ok|FAILED)\.' })
+          if ($summaries.Count -eq 0 -or $summaries[-1] -cnotmatch '^test result: ok\. 5 passed; 0 failed; 0 ignored; 0 measured; (\d+) filtered out;') {
+            throw 'All five original parent assertions must pass without ignores'
           }
+          if ([int]$Matches[1] -ne $fullNames.Count - 5) {
+            throw 'The original library inventory and five-test result must agree'
+          }
+      - name: Preserve actual comparison inventories and execution
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-supervisor-comparison-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/gui-*.log
+          if-no-files-found: error
+          retention-days: 30
       - name: Record scope
         if: always()
         shell: pwsh
         run: |
-          'Exact isolated D11 launch fixture only; original 90-second per-mode supervision remains unchanged. No real CLI, installer, release or updater publication. Success does not erase the aggregate failure or establish its cause.' >> $env:GITHUB_STEP_SUMMARY
+          'Exact five original GUI supervisors in one libtest process, test-threads=5 and a test-only parent resource lease. Original worker modes, deadlines and assertions remain unchanged. This is resource isolation, not a proven cause or real CLI/installer acceptance. Actual failures remain failures; success does not erase an earlier aggregate failure.' >> $env:GITHUB_STEP_SUMMARY

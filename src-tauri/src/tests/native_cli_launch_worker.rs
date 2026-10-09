@@ -3,6 +3,7 @@ use super::*;
 // 正式命令验收同时覆盖启用消费方和默认禁启两种后端状态。
 #[test]
 fn D11_Launch_Native_001() {
+    let _webview_lease = crate::tests::NATIVE_WEBVIEW_TEST_LEASE.lock();
     for mode in ["ready", "closed"] {
         let root = tempfile::tempdir().unwrap();
         let log_path = root.path().join("worker.log");

@@ -47,6 +47,7 @@ fn HistoryWebView_Generation_002() {
 // 检查真实 WebView 使用指定 UDF，关闭控制器后仅在 BrowserProcessExited 到达时允许宿主退出。
 #[test]
 fn HistoryWebView_Exit_001() {
+    let _webview_lease = crate::tests::NATIVE_WEBVIEW_TEST_LEASE.lock();
     let temporary = tempfile::tempdir().unwrap();
     let source = temporary.path().join("source-webview.exe");
     std::fs::copy(std::env::current_exe().unwrap(), &source).unwrap();
