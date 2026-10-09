@@ -218,6 +218,20 @@ fn size() -> PtySize {
     }
 }
 
+// Disposable fixture diagnostics only: never log a URL, document proof, or JS payload.
+#[tauri::command]
+fn d11_launch_page_state(webview: Webview, state: State<'_, Arc<Probe>>, phase: String) {
+    if webview.label() != "main" {
+        return;
+    }
+    state.diagnostics.mark(match phase.as_str() {
+        "loading" => Code::MainPageStateLoading,
+        "interactive" => Code::MainPageStateInteractive,
+        "complete" => Code::MainPageStateComplete,
+        _ => Code::MainPageStateUnknown,
+    });
+}
+
 // 正式取消命令的回执来自实际文档鉴权与登记，且没有创建 PTY 子进程。
 #[tauri::command]
 async fn d11_launch_cancelled(

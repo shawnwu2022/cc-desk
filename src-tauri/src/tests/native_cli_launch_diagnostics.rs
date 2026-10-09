@@ -127,6 +127,17 @@ codes! {
     ScriptNativeBytes => "SCRIPT_FAILED:native-bytes",
     ScriptPeer => "SCRIPT_FAILED:peer",
     ScriptUnknown => "SCRIPT_FAILED:unknown",
+    MainPageLoadStarted => "main_page_load_started",
+    AppReady => "app_ready",
+    MainEventsCleared => "main_events_cleared",
+    MainPageStateEvalSubmitted => "main_page_state_eval_submitted",
+    MainPageStateEvalFailed => "main_page_state_eval_failed",
+    MainPageStateLoading => "main_page_state_loading",
+    MainPageStateInteractive => "main_page_state_interactive",
+    MainPageStateComplete => "main_page_state_complete",
+    MainPageStateUnknown => "main_page_state_unknown",
+    MainPageExpectedUrl => "main_page_expected_url",
+    MainPageOtherUrl => "main_page_other_url",
 }
 
 struct WriterState {

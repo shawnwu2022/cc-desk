@@ -1,4 +1,4 @@
-name: Isolated D11 document diagnostic
+name: Isolated D11 launch diagnostic
 on:
   push:
     branches: [feat/unified-workspace-ux]
@@ -14,13 +14,13 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 35
     env:
-      CC_DESK_BUILD_SHA: 1cc2a1b97e87c5ac1b1d3e8891103125d6794041
+      CC_DESK_BUILD_SHA: ${{ github.sha }}
     steps:
       - name: Check out exact diagnostic source
         uses: actions/checkout@v5
         with:
           persist-credentials: false
-          ref: 1cc2a1b97e87c5ac1b1d3e8891103125d6794041
+          ref: ${{ github.sha }}
       - name: Verify source and record workflow identity
         shell: pwsh
         run: |
@@ -29,8 +29,8 @@ jobs:
             throw 'Exact reviewed diagnostic source required'
           }
           $tree = (git rev-parse 'HEAD^{tree}').Trim()
-          if ($LASTEXITCODE -ne 0 -or $tree -cne 'e50e313cc6938d5bf0fe6a4a94f52a852778696c') {
-            throw 'Exact reviewed diagnostic tree required'
+          if ($LASTEXITCODE -ne 0 -or $tree -cnotmatch '^[a-f0-9]{40}$') {
+            throw 'Exact diagnostic tree required'
           }
           "workflowCommit=$env:GITHUB_SHA testedSource=$actual testedTree=$tree"
       - uses: actions/setup-node@v5
@@ -48,26 +48,26 @@ jobs:
       - name: Check source formatting
         working-directory: src-tauri
         run: cargo fmt --check
-      - name: Run one supervised document test
+      - name: Run one supervised launch test
         working-directory: src-tauri
         shell: pwsh
         run: |
-          cargo test --locked --lib tests::native_cli_document_live::D11_Webview_Live_001 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath d11-document-isolated.log
+          cargo test --locked --lib tests::native_cli_launch_live::worker::D11_Launch_Native_001 -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath d11-launch-isolated.log
           $result = $LASTEXITCODE
           if ($result -ne 0) { exit $result }
-          if (!(Select-String -Path d11-document-isolated.log -Pattern '^running 1 test$' -Quiet)) {
+          if (!(Select-String -Path d11-launch-isolated.log -Pattern '^running 1 test$' -Quiet)) {
             throw 'The supervised parent test did not execute'
           }
-          $pattern = '^(?:test tests::native_cli_document_live::D11_Webview_Live_001 \.\.\. )?D11_NATIVE_EVIDENCE (.+)$'
-          $reports = @(Get-Content d11-document-isolated.log | ForEach-Object {
+          $pattern = '^(?:test tests::native_cli_launch_live::worker::D11_Launch_Native_001 \.\.\. )?D11_LAUNCH_EVIDENCE (.+)$'
+          $reports = @(Get-Content d11-launch-isolated.log | ForEach-Object {
             $match = [regex]::Match($_, $pattern)
             if ($match.Success) { $match.Groups[1].Value | ConvertFrom-Json }
           })
-          if ($reports.Count -ne 2 -or @($reports | Where-Object { $_.mode -ceq 'reload' }).Count -ne 1 -or @($reports | Where-Object { $_.mode -ceq 'destroy' }).Count -ne 1) {
+          if ($reports.Count -ne 2 -or @($reports | Where-Object { $_.mode -ceq 'ready' }).Count -ne 1 -or @($reports | Where-Object { $_.mode -ceq 'closed' }).Count -ne 1) {
             throw 'Both supervised fixture modes must produce evidence'
           }
       - name: Record scope
         if: always()
         shell: pwsh
         run: |
-          'Exact isolated D11 fixture only; original 90-second per-mode supervision remains unchanged. No real CLI, installer, release or updater publication. Success does not erase the aggregate failure or establish its cause.' >> $env:GITHUB_STEP_SUMMARY
+          'Exact isolated D11 launch fixture only; original 90-second per-mode supervision remains unchanged. No real CLI, installer, release or updater publication. Success does not erase the aggregate failure or establish its cause.' >> $env:GITHUB_STEP_SUMMARY

@@ -186,6 +186,7 @@ fn D11_Launch_Worker_099() {
             super::d11_launch_bytes,
             super::d11_launch_closed,
             super::d11_launch_abort,
+            super::d11_launch_page_state,
         ])
         .setup(move |app| {
             setup_diagnostics.mark(Code::AppSetupStarted);
@@ -199,6 +200,16 @@ fn D11_Launch_Worker_099() {
             }
         })
         .on_page_load(move |webview, payload| {
+            if webview.label() == "main" {
+                pages.diagnostics.mark(if payload.url().as_str() == "http://tauri.localhost/probe.html" {
+                    Code::MainPageExpectedUrl
+                } else {
+                    Code::MainPageOtherUrl
+                });
+            }
+            if webview.label() == "main" && matches!(payload.event(), PageLoadEvent::Started) {
+                pages.diagnostics.mark(Code::MainPageLoadStarted);
+            }
             if !matches!(payload.event(), PageLoadEvent::Finished) { return; }
             let script = if webview.label() == "main" && !pages.loaded.swap(true, Ordering::SeqCst) {
                 pages.diagnostics.mark(Code::MainPageLoaded);
@@ -220,7 +231,28 @@ fn D11_Launch_Worker_099() {
         .expect("isolated native launch application");
     diagnostics.mark(Code::AppBuilt);
     diagnostics.mark(Code::RunReturnStarted);
-    let exit = app.run_return(|_, _| {});
+    let loop_diagnostics = diagnostics.clone();
+    let mut events_cleared = false;
+    let exit = app.run_return(move |app, event| {
+        match event {
+            tauri::RunEvent::Ready => {
+                loop_diagnostics.mark(Code::AppReady);
+                let result = app.get_webview_window("main").ok_or(()).and_then(|window| {
+                    window.eval("window.__TAURI_INTERNALS__.invoke('d11_launch_page_state',{phase:document.readyState});").map_err(|_| ())
+                });
+                loop_diagnostics.mark(if result.is_ok() {
+                    Code::MainPageStateEvalSubmitted
+                } else {
+                    Code::MainPageStateEvalFailed
+                });
+            }
+            tauri::RunEvent::MainEventsCleared if !events_cleared => {
+                events_cleared = true;
+                loop_diagnostics.mark(Code::MainEventsCleared);
+            }
+            _ => {}
+        }
+    });
     diagnostics.mark(Code::RunReturned);
     drop(probe.access.lock().take());
     let cleanup = probe.consumer.cleanup(&probe.service, &probe.diagnostics);

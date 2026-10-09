@@ -29,7 +29,7 @@ for (const ending of ['\n', '\r\n']) {
 
   test(`launch stages are persisted before initialization, exit, and reader join (${label})`, () => {
     assert.match(worker, /diagnostics\.mark\(Code::InitializeStarted\);\s*bundled_runtime::initialize\(\)\.unwrap\(\);\s*diagnostics\.mark\(Code::InitializeComplete\);/)
-    for (const stage of ['AppBuildStarted', 'AppSetupStarted', 'MainInitialized', 'MainPageLoaded', 'PeerPageLoaded', 'AppBuilt', 'RunReturnStarted', 'RunReturned', 'ReportWritten']) {
+    for (const stage of ['AppBuildStarted', 'AppSetupStarted', 'MainInitialized', 'MainPageLoadStarted', 'MainPageLoaded', 'PeerPageLoaded', 'AppReady', 'AppBuilt', 'RunReturnStarted', 'RunReturned', 'ReportWritten']) {
       assert.match(worker, new RegExp(`\\.mark\\(Code::${stage}\\)`), stage)
     }
     assert.match(live, /self\.diagnostics\.failure\(code\);[\s\S]*?app\.exit\(1\);/)
