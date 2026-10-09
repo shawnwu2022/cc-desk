@@ -34,6 +34,8 @@ export interface NativeCliTab {
   createdAt: number
   lastActivityAt: number
   attentionState?: 'none' | 'needs-user'
+  activityState?: ObservationState['activity']
+  observationState?: ObservationState['observation']
 }
 
 export interface NativeAttemptIdentity {
@@ -142,7 +144,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   const unstartedAttempts = reactive(new Map<string, NativeAttemptIdentity>())
   const frozenLaunchReceipts = new Map<string, string>()
   // At most one safe latest projection per starting tab, bound to the exact attempt.
-  const pendingAttention = new Map<string, { attempt: NativeAttemptIdentity; attention: 'none' | 'needs-user' }>()
+  const pendingAttention = new Map<string, { attempt: NativeAttemptIdentity; state: ObservationState }>()
   const frozenIdentity = (tab: NativeCliTab) => JSON.stringify([tab.requestId, tab.runId, tab.generation,
     tab.cli, tab.profileId, tab.profileRevision, tab.projectId, tab.projectPath, tab.sourceSessionKey, tab.action])
   /** Positive receipt proof only; a locally assigned status is not admission evidence. */
@@ -180,6 +182,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       attentionState: 'none',
+      activityState: 'unknown',
+      observationState: 'off',
     }
     tabs.set(tabId, value)
     unstartedAttempts.set(tabId, captureNativeAttempt(value))
@@ -211,15 +215,20 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   function applyObservation(tabId: string, attempt: NativeAttemptIdentity, state: ObservationState): void {
     const value = tabs.get(tabId)
     if (!value || !matchesNativeAttempt(value, attempt)) return
-    const projected = state.observation === 'active' && state.activity === 'waiting' ? 'needs-user' : 'none'
+    const projected: ObservationState = { observation: state.observation,
+      activity: state.observation === 'active' ? state.activity : 'unknown' }
     if (value.status === 'starting') {
-      pendingAttention.set(tabId, { attempt: captureNativeAttempt(value), attention: projected })
+      pendingAttention.set(tabId, { attempt: captureNativeAttempt(value), state: projected })
       return
     }
     pendingAttention.delete(tabId)
-    const attention = value.status === 'running' ? projected : 'none'
-    if ((value.attentionState ?? 'none') !== attention) {
+    if (value.status !== 'running') return
+    const attention = projected.activity === 'waiting' ? 'needs-user' : 'none'
+    if ((value.attentionState ?? 'none') !== attention || value.activityState !== projected.activity
+      || value.observationState !== projected.observation) {
       value.attentionState = attention
+      value.activityState = projected.activity
+      value.observationState = projected.observation
       value.lastActivityAt = Date.now()
     }
   }
@@ -242,6 +251,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (value.status !== 'starting' || value.errorCode !== null) value.lastActivityAt = Date.now()
     value.status = 'starting'
     value.attentionState = 'none'
+    value.activityState = 'unknown'
+    value.observationState = 'off'
     value.errorCode = null
   }
 
@@ -253,6 +264,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (value.status !== 'unknown' || value.errorCode !== 'LAUNCH_STATE_UNKNOWN') value.lastActivityAt = Date.now()
     value.status = 'unknown'
     value.attentionState = 'none'
+    value.activityState = 'unknown'
+    value.observationState = 'off'
     value.errorCode = 'LAUNCH_STATE_UNKNOWN'
   }
 
@@ -265,6 +278,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (value.status !== 'failed' || value.errorCode !== next) value.lastActivityAt = Date.now()
     value.status = 'failed'
     value.attentionState = 'none'
+    value.activityState = 'unknown'
+    value.observationState = 'off'
     value.errorCode = next
   }
 
@@ -291,8 +306,15 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       || next.errorCode !== null && value.errorCode !== next.errorCode
     value.status = next.status
     const pending = pendingAttention.get(tabId)
-    if (next.status === 'running' && pending && matchesNativeAttempt(value, pending.attempt)) value.attentionState = pending.attention
-    else if (next.status !== 'running') value.attentionState = 'none'
+    if (next.status === 'running' && pending && matchesNativeAttempt(value, pending.attempt)) {
+      value.activityState = pending.state.activity
+      value.observationState = pending.state.observation
+      value.attentionState = pending.state.activity === 'waiting' ? 'needs-user' : 'none'
+    } else if (next.status !== 'running') {
+      value.attentionState = 'none'
+      value.activityState = 'unknown'
+      value.observationState = 'off'
+    }
     if (next.status !== 'starting') pendingAttention.delete(tabId)
     // A repeated healthy poll cannot erase a transport diagnostic or count as activity.
     if (changed) value.errorCode = next.errorCode
@@ -330,6 +352,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.generation += 1
     value.status = 'stopped'
     value.attentionState = 'none'
+    value.activityState = 'unknown'
+    value.observationState = 'off'
     value.errorCode = null
     value.launchRevision = null
     pendingAttention.delete(tabId)

@@ -60,6 +60,7 @@ if (scenario === 'close-state') {
     id: `visual-close-${runtime}-${state}`, adapterSessionId: `visual-tab-${runtime}-${state}`,
     title: `${runtime === 'native-claude' ? 'Native Claude' : runtime === 'native-codex' ? 'Native Codex' : 'Legacy Claude'} · ${state}`,
     runtime: runtime === 'legacy-claude' ? 'legacy-claude' : 'native-cli', cli: runtime === 'native-codex' ? 'codex' : 'claude',
+    activityState: state === 'running' || state === 'needs-user' ? 'idle' : 'unknown',
     processState: state === 'needs-user' ? 'running' : state, attentionState: state === 'needs-user' ? 'needs-user' : 'none',
     opened: true, resumable: state === 'stopped' || state === 'failed',
   }]

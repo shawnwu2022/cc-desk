@@ -55,7 +55,7 @@ for (const sample of snapshots) {
       // Use the main area's empty lower-right gutter, never a window control.
       await page.mouse.move(sample.width - 4, sample.height - 4)
       if (sample.scenario !== 'tooltip') await expect(page.getByRole('tooltip')).toHaveCount(0)
-      if (sample.scenario === 'hover') await page.locator('[data-session-row]').first().hover()
+      if (sample.scenario === 'hover') await page.locator('[data-session-row="visual-session-0"]').hover()
       await expect(page).toHaveScreenshot(`${sample.name}.png`)
     })
   })
@@ -90,7 +90,7 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
         await expect(primary.getByRole('button')).toHaveCount(1)
         await expect(close).toBeEnabled()
         await expect(close.locator('svg path')).toHaveAttribute('d', 'm6 6 12 12M18 6 6 18')
-        await expect(row.locator('.session-status-icon')).toHaveClass(`session-status-icon session-status-icon--${state === 'unknown' ? 'confirming' : state === 'stopped' ? 'ended' : state}`)
+        await expect(row.locator('.session-status-icon')).toHaveClass(`session-status-icon session-status-icon--${state === 'unknown' ? 'confirming' : state === 'needs-user' ? 'running' : state}`)
         await expect(row.locator('.cli-app-icon')).toHaveAttribute('aria-label', variant === 'native-codex' ? 'Codex CLI' : 'Claude Code')
 
         // Opacity is explicit: Playwright visibility alone would also accept an invisible button.
@@ -107,6 +107,14 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
         await expect(primary).toHaveCSS('opacity', '0')
         await overflow.focus()
         await page.keyboard.press('Shift+Tab')
+        if (state === 'stopped' || state === 'failed') {
+          const archive = row.locator('[data-session-archive] button')
+          await expect(archive).toBeFocused()
+          await expect(archive).toBeInViewport({ ratio: 1 })
+          await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Archive' : '归档')
+          await page.keyboard.press('Escape')
+          await page.keyboard.press('Shift+Tab')
+        }
         await expect(close).toBeFocused()
         await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Close' : '关闭')
         await page.keyboard.press('Escape')
@@ -128,7 +136,8 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
           await expect(menu).toBeInViewport({ ratio: 1 })
           await expect(menu.locator('[data-item-id="close"], [data-item-id="stop"]')).toHaveCount(0)
           await expect(menu.getByRole('menuitem', { name: /^(Close|Stop|Stop and archive|关闭|停止|停止并归档)$/ })).toHaveCount(0)
-          await expect(menu.locator('[data-item-id="archive"]')).toHaveCount(state === 'stopped' || state === 'failed' ? 1 : 0)
+          await expect(menu.locator('[data-item-id="archive"]')).toHaveCount(0)
+          await expect(row.locator('[data-session-archive] button')).toHaveCount(state === 'stopped' || state === 'failed' ? 1 : 0)
           await page.mouse.move(1020, 636)
           await expect(page.getByRole('tooltip')).toHaveCount(0)
           await captureFixtureEvidence(page, testInfo, `${evidenceName}-${entry}-menu-unapproved`)

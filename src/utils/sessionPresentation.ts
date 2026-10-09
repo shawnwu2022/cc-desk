@@ -50,13 +50,19 @@ export function makeSessionRenameOwnerKey(session: UnifiedSession): string {
     origin ? [origin.cli, origin.profileId, origin.profileRevision, origin.projectId, normalizeProjectPath(origin.projectPath)] : null])
 }
 
-export function deriveSessionVisualState(session: UnifiedSession): SessionVisualState {
+export function deriveSessionVisualState(session: UnifiedSession, selected = false): SessionVisualState {
   if (session.processState === 'failed') return 'failed'
-  if (session.attentionState === 'needs-user') return 'needs-user'
   if (session.processState === 'starting') return 'starting'
   if (session.processState === 'unknown') return 'confirming'
-  if (session.processState === 'running') return 'running'
-  return 'ended'
+  if (session.processState === 'stopped') return selected && session.opened === true ? 'stopped' : 'closed'
+  const activity = session.activityState ?? 'unknown'
+  // Preserve the historical working/error/permission/completed/pending priority.
+  if (['working', 'thinking', 'tool_executing', 'subagent_running', 'compacting'].includes(activity)) return 'working'
+  if (session.attentionKind === 'error' || activity === 'error') return 'error'
+  if (session.attentionKind === 'permission' || activity === 'waiting_permission') return selected ? 'running' : 'permission'
+  if (session.attentionKind === 'completed') return selected ? 'running' : 'completed'
+  if (session.attentionState === 'needs-user' || activity === 'waiting' || activity === 'waiting_input') return selected ? 'running' : 'needs-user'
+  return activity === 'idle' ? 'running' : 'unknown'
 }
 
 export function selectSessionPrimaryAction(session: UnifiedSession): SessionPrimaryAction | null {
@@ -96,7 +102,7 @@ export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
   { id: 'restart', labelKey: 'sessionActionRestart', danger: true, visible: (session) => isOpened(session) && isState('running', 'stopped', 'failed')(session) },
   { id: 'close', labelKey: 'sessionActionClose', danger: true, visible: () => false },
   { id: 'discard-creation', labelKey: 'sessionActionDiscardCreation', danger: true, visible: (session) => !session.archived && !session.opened && session.preparationState === 'failed' && session.processState === 'failed' },
-  { id: 'archive', labelKey: 'sessionActionArchive', danger: true, visible: (session) => !session.preparationState && isState('stopped', 'failed')(session) },
+  { id: 'archive', labelKey: 'sessionActionArchive', danger: true, visible: () => false },
   { id: 'restore-archive', labelKey: 'sessionActionRestoreArchive', visible: (session) => session.archived },
   { id: 'copy-session-id', labelKey: 'sessionActionCopyId', visible: () => true },
   { id: 'open-project-directory', labelKey: 'sessionActionOpenProject', visible: () => true },
@@ -106,6 +112,11 @@ export function sessionActionLabelKey(action: SessionMenuAction | SessionPrimary
   if (action === 'save-rename') return 'sessionActionSaveRename'
   if (action === 'archive' && session.processState === 'running') return 'sessionActionStopAndArchive'
   return SESSION_MENU_ACTION_DEFINITIONS.find((definition) => definition.id === action)!.labelKey
+}
+/** Archive is a trailing quick action, with the existing ended-session admission policy. */
+export function selectSessionArchiveAction(session: UnifiedSession, visibility: SessionMenuActionVisibility = {}): SessionMenuActionDefinition | null {
+  if (visibility.archive === false || session.preparationState || !isState('stopped', 'failed')(session)) return null
+  return { id: 'archive', labelKey: 'sessionActionArchive', danger: true, disabled: session.renameState === 'saving' }
 }
 export function selectSessionMenuActions(session: UnifiedSession, visibility: SessionMenuActionVisibility = {}): SessionMenuActionDefinition[] {
   return SESSION_MENU_ACTION_DEFINITIONS

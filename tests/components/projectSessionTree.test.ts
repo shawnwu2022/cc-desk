@@ -226,7 +226,7 @@ describe('Unified project session tree', () => {
     expect(wrapper.emitted('menu-action')).toBeUndefined()
     expect(stop).not.toHaveBeenCalled(); expect(archive).not.toHaveBeenCalled()
     await wrapper.setProps({ project: group([session({ processState: 'stopped' })]) })
-    await wrapper.get('.session-item').trigger('contextmenu'); await selectMenu('archive')
+    await wrapper.get('[data-session-archive] button').trigger('click'); await nextTick()
     expect(wrapper.emitted('menu-action')).toEqual([['claude-1', 'archive']])
   })
 

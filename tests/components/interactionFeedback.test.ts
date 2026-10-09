@@ -22,7 +22,8 @@ vi.mock('@/api/programDiscovery', () => ({ cliDiscoverPrograms: io.discovery }))
 vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, removeProject: io.remove }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.write }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
-vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false }) }))
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false,
+  isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {} }) }))
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
   vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID })
@@ -61,7 +62,8 @@ it('WorkspaceClose_LastSession_001', async () => {
   const wrapper = render(); await flushPromises(); const tab = await running()
   const catalog = useUnifiedSessionsStore()
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'close' }); await flushPromises()
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith(tab.tabId, expect.objectContaining({ requestId: tab.requestId, runId: tab.runId, generation: tab.generation }))
   expect(catalog.activeSessionId).toBeNull()
   expect(wrapper.find('[data-live-terminal]').exists()).toBe(false)
   expect(wrapper.find('[data-session-title]').exists()).toBe(false)
@@ -76,7 +78,8 @@ it('WorkspaceClose_SelectRemaining_002', async () => {
   const existingTerminal = wrapper.get(`[data-live-terminal="${remaining.tabId}"]`).element
   const closing = await running()
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith(closing.tabId, expect.objectContaining({ requestId: closing.requestId, runId: closing.runId, generation: closing.generation }))
   expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + remaining.tabId)
   expect(useNativeTabsStore().activeTabId).toBe(remaining.tabId)
   expect(wrapper.get(`[data-live-terminal="${remaining.tabId}"]`).element).toBe(existingTerminal)
@@ -90,39 +93,41 @@ it('WorkspaceClose_BackgroundSession_003', async () => {
   const wrapper = render(); await flushPromises(); const closing = await running(); const selected = await running()
   const selectedTerminal = wrapper.get(`[data-live-terminal="${selected.tabId}"]`).element
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith(closing.tabId, expect.objectContaining({ requestId: closing.requestId, runId: closing.runId, generation: closing.generation }))
   expect(useNativeTabsStore().tab(closing.tabId)).toBeUndefined()
   expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + selected.tabId)
   expect(wrapper.get(`[data-live-terminal="${selected.tabId}"]`).element).toBe(selectedTerminal)
   expect(wrapper.get(`[data-live-terminal="${selected.tabId}"]`).isVisible()).toBe(true)
 })
 
-// 停止请求失败时关闭没有完成，保留当前会话和终端并显示确认错误。
+// 直接关闭的停止请求失败时，保留当前会话和终端并显示操作错误。
 it('WorkspaceClose_StopFailure_004', async () => {
   const wrapper = render(); await flushPromises(); await running(); const closing = await running()
   const selectedTerminal = wrapper.get(`[data-live-terminal="${closing.tabId}"]`).element
   io.stop.mockRejectedValueOnce(new Error('NATIVE_STOP_UNCONFIRMED'))
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
   expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + closing.tabId)
   expect(useNativeTabsStore().tab(closing.tabId)?.status).toBe('running')
   expect(wrapper.get(`[data-live-terminal="${closing.tabId}"]`).element).toBe(selectedTerminal)
-  expect(useUnifiedSessionsStore().confirmationError).not.toBeNull()
+  expect(useUnifiedSessionsStore().actionFeedback).not.toBeNull()
   expect(wrapper.find('[data-unified-terminal-empty]').exists()).toBe(false)
 })
 
-// 等待关闭时切换选择会撤销原确认；迟到停止不能清空或覆盖新选择。
+// 已发出的直接关闭继续清理原会话；迟到停止不能清空或覆盖新选择。
 it('WorkspaceClose_NewerSelection_005', async () => {
   const wrapper = render(); await flushPromises(); const newer = await running(); const closing = await running()
   let finish!: () => void
   io.stop.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith(closing.tabId, expect.objectContaining({ requestId: closing.requestId, runId: closing.runId, generation: closing.generation }))
   useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: 'native-tab:' + newer.tabId }); await flushPromises()
   finish(); await flushPromises()
   expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + newer.tabId)
   expect(wrapper.get(`[data-live-terminal="${newer.tabId}"]`).isVisible()).toBe(true)
-  expect(useNativeTabsStore().tab(closing.tabId)).toBeDefined()
+  expect(useNativeTabsStore().tab(closing.tabId)).toBeUndefined()
   expect(document.querySelector('[data-session-confirm]')).toBeNull()
 })
 
@@ -132,7 +137,8 @@ it('WorkspaceClose_ReplacedAttempt_006', async () => {
   let finish!: () => void
   io.stop.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith(closing.tabId, expect.objectContaining({ requestId: closing.requestId, runId: closing.runId, generation: closing.generation }))
   useNativeTabsStore().tab(closing.tabId)!.generation++
   finish(); await flushPromises()
   expect(useNativeTabsStore().tab(closing.tabId)?.generation).toBe(2)
@@ -189,7 +195,7 @@ it('WorkspaceClose_SelectLegacy_010', async () => {
   legacy.setActiveTab(null)
   const closing = await running()
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
   expect(useUnifiedSessionsStore().activeSessionId).toBe('legacy-tab:' + id)
   expect(legacy.activeTabId).toBe(id)
   expect(wrapper.get('[data-legacy-terminal]').isVisible()).toBe(true)
@@ -242,12 +248,13 @@ it('WorkspaceRequest_ExplicitRetry_003', async () => {
   expect(useShellStore().pendingRequest).toBeNull()
   expect(document.body.textContent).toContain(en.feedbackCopied)
 })
-// 运行态关闭先确认，确认前不停止，确认后只关闭原尝试。
+// 运行态关闭直接执行，只停止准确的原尝试且不显示二次确认。
 it('Feedback_ConfirmsRunningClose_001', async () => {
   render(); await flushPromises(); const tab = await running()
+  expect(io.stop).not.toHaveBeenCalled()
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'close' }); await flushPromises()
-  expect(document.querySelector('[data-session-confirm]')).not.toBeNull(); expect(io.stop).not.toHaveBeenCalled()
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith(tab.tabId, expect.objectContaining({ requestId: tab.requestId, runId: tab.runId, generation: tab.generation }))
   expect(io.stop).toHaveBeenCalledTimes(1); expect(useNativeTabsStore().tab(tab.tabId)).toBeUndefined()
 })
 // 树的停止并归档意图使用同一确认流，确认后保存索引而不删除历史。
@@ -287,15 +294,16 @@ it('Feedback_SuppressesStaleCopyError_005', async () => {
   reject({ code: 'REVISION_CONFLICT', message: '/private/SECRET' }); await flushPromises()
   expect(document.querySelector('[data-action-feedback]')).toBeNull()
 })
-// 确认过程中原尝试被替换时，旧停止结果不能关闭新尝试或显示旧错误。
+// 直接关闭过程中原尝试被替换时，旧停止结果不能关闭新尝试或显示旧错误。
 it('Feedback_StaleConfirmCannotCloseNew_006', async () => {
   render(); await flushPromises(); const tab = await running()
-  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'close' }); await flushPromises()
   let finish!: () => void; io.stop.mockReturnValue(new Promise<void>(resolve => { finish = resolve }))
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'close' }); await flushPromises()
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith(tab.tabId, expect.objectContaining({ requestId: tab.requestId, runId: tab.runId, generation: tab.generation }))
   useNativeTabsStore().tab(tab.tabId)!.generation++
   finish(); await flushPromises()
   expect(useNativeTabsStore().tab(tab.tabId)?.generation).toBe(2)
+  expect(document.querySelector('[data-action-feedback]')).toBeNull()
   expect(document.querySelector('[data-session-confirm]')).toBeNull()
 })
 
@@ -345,7 +353,8 @@ it('Feedback_TotalSourceFailureShowsPage_011', async () => {
 // 选择另一个项目即失去原确认的上下文，弹窗不能保留旧动作。
 it('Feedback_ProjectSelectionClosesConfirm_012', async () => {
   render(); await flushPromises(); const tab = await running()
-  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'close' }); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'archive' }); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).not.toBeNull()
   useUnifiedSessionsStore().selectProjectContext('/other'); await flushPromises()
   expect(document.querySelector('[data-session-confirm]')).toBeNull(); expect(io.stop).not.toHaveBeenCalled()
 })
@@ -395,7 +404,8 @@ it('Feedback_PreReadyOwnedConfirmation_016', async () => {
 // 同一尝试编号下来源/配置身份改变，也会使原确认失效。
 it.each(['profileRevision', 'sourceSessionKey', 'projectId', 'requestId'] as const)('Feedback_ConfirmationPinsSource_%s', async field => {
   render(); await flushPromises(); const tab = await running()
-  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'close' }); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'archive' }); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).not.toBeNull()
   useNativeTabsStore().tab(tab.tabId)![field] = 'replacement'
   ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
   expect(io.stop).not.toHaveBeenCalled(); expect(useNativeTabsStore().tab(tab.tabId)).toBeDefined(); expect(document.querySelector('[data-session-confirm]')).toBeNull()

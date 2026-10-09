@@ -15,8 +15,9 @@ Run the visual server only with both `--mode visual` and
 `CC_DESK_VISUAL_FIXTURE=1`. `build/visualFixture.ts` serves `/__visual__/` only in this
 explicit **serve** mode. All `@tauri-apps/*` imports resolve to a fail-closed local
 stub in that graph; host calls increment a reactive violation counter and throw a
-fixed error. Only inert window-state/listener reads are provided for the real
-TitleBar. There is no host bridge, PTY, configuration reader, profile mutation or
+fixed error. Only synthetic window-state/listener reads are provided for the real
+TitleBar and unified focus owner. A synthetic `requestUserAttention(null)`
+cancellation is inert; every positive attention request remains blocked. There is no host bridge, PTY, configuration reader, profile mutation or
 payload logger.
 
 Normal development rejects the fixture route and source modules. Production
@@ -298,3 +299,14 @@ A fresh full no-update run of all 226 current cases is required after committing
 this reviewed baseline update. Accepting these version-label pixels does not
 make the original failed run pass, certify Windows WebView2 or real CLI behavior,
 or authorize release/updater promotion.
+
+## 0.18.3 candidate visual changes
+
+The project-name sorting, restored status shapes and external Archive control
+intentionally change workspace pixels. Baselines remain unmodified until actual
+CI captures are inspected and independently reviewed. Original thirteen-image
+inventory, zero-pixel thresholds and all geometry cases stay required. Opened
+state captures now check the external Archive button's real keyboard focus and
+viewport hit target while requiring no Archive entry in any menu. The test fixture
+explicitly supplies known idle activity for its synthetic running examples; it
+cannot be used as evidence that an actual Native source supplies that state.

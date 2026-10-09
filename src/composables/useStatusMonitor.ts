@@ -32,7 +32,7 @@ const ACTIVITY_EVENTS: Set<HookEventType> = new Set([
   'postCompact',
 ])
 
-export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalVisible: Ref<boolean> }) {
+export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalVisible: Ref<boolean>; requestWindowAttention?: boolean }) {
   const hookStore = useHookStore()
   const sessionStore = useSessionStore()
   const attentionStore = useAttentionStore()
@@ -152,7 +152,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
       return
     }
     // 应用失焦时触发任务栏跳动
-    if (!options.isFocused.value) {
+    if (!options.isFocused.value && options.requestWindowAttention !== false) {
       win.requestUserAttention(UserAttentionType.Critical).catch(() => {})
     }
   }

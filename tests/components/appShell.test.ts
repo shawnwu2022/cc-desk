@@ -26,7 +26,7 @@ const host = vi.hoisted(() => ({
   resourceConfig: vi.fn(), getConfig: vi.fn(), updateConfig: vi.fn(), runChecks: vi.fn(),
 }))
 vi.mock('@/utils/platform', () => ({ isMac: false, isWindows: true, ctrl: 'Ctrl', cmd: 'Ctrl', alt: 'Alt' }))
-vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {},
   minimize: host.minimize, toggleMaximize: host.toggleMaximize, close: host.close,
   isMaximized: async () => false, onResized: async () => host.cleanup,
 }) }))

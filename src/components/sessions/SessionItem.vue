@@ -10,7 +10,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import SessionStatusIcon from './SessionStatusIcon.vue'
 import CliAppIcon from './CliAppIcon.vue'
 import SessionOverflowMenu from './SessionOverflowMenu.vue'
-import { deriveSessionVisualState, makeSessionRenameOwnerKey, selectSessionMenuActions, selectSessionPrimaryAction, sessionActionLabelKey } from '@/utils/sessionPresentation'
+import { deriveSessionVisualState, makeSessionRenameOwnerKey, selectSessionMenuActions, selectSessionArchiveAction, selectSessionPrimaryAction, sessionActionLabelKey } from '@/utils/sessionPresentation'
 import { formatRelativeActivity, useRelativeActivityClock } from '@/utils/relativeTime'
 import type { SessionMenuAction, SessionMenuActionVisibility, SessionPrimaryAction, UnifiedSession } from '@/types/unifiedSession'
 
@@ -44,9 +44,10 @@ let firstClick: { session: UnifiedSession; owner: string; owns: (() => boolean) 
 const menuAnchor = ref({ x: 8, y: 8 })
 const isRenaming = computed(() => props.selected && (localRename.value || props.session.renameState === 'editing' || props.session.renameState === 'saving'))
 const isSaving = computed(() => props.session.renameState === 'saving')
-const visualState = computed(() => deriveSessionVisualState(props.session))
+const visualState = computed(() => deriveSessionVisualState(props.session, props.selected))
 const canRename = computed(() => props.selected && !props.session.preparationState && props.menuActionVisibility?.rename !== false)
 const actions = computed(() => selectSessionMenuActions(props.session, { ...props.menuActionVisibility, rename: canRename.value }))
+const archive = computed(() => selectSessionArchiveAction(props.session, props.menuActionVisibility))
 const primary = computed(() => isRenaming.value ? 'save-rename'
   : props.primaryAction === undefined ? selectSessionPrimaryAction({ ...props.session, renameState: 'idle' }) : props.primaryAction)
 const primaryLabel = computed(() => primary.value ? t(sessionActionLabelKey(primary.value, props.session)) : '')
@@ -124,6 +125,9 @@ function runPrimary() {
   if (primary.value === 'save-rename') commitRename()
   else emit('primary-action', props.session.id, primary.value)
 }
+function runArchive() {
+  if (props.surfaceActive && archive.value && !archive.value.disabled && !isRenaming.value) emit('menu-action', props.session.id, 'archive')
+}
 function openOverflow(event: MouseEvent) {
   if (!props.surfaceActive) return
   const trigger = event.currentTarget as HTMLElement
@@ -170,7 +174,7 @@ function onMenuAction(action: SessionMenuAction) {
 </script>
 
 <template>
-  <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, editing: isRenaming }"
+  <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, 'has-archive': !!archive && !isRenaming, editing: isRenaming }"
     role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" tabindex="0"
     @click="onClick" @dblclick="onDoubleClick" @keydown="onKeydown" @contextmenu="openContext">
     <SessionStatusIcon :state="visualState" />
@@ -200,6 +204,13 @@ function onMenuAction(action: SessionMenuAction) {
         </IconButton>
       </div>
     </div>
+    <div v-if="archive && !isRenaming" class="session-archive-action" data-session-archive>
+      <IconButton class="session-row-control" :label="t(archive.labelKey)" :disabled="archive.disabled" @click.stop="runArchive">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="4" rx="1" /><path d="M5 7v13h14V7M9 11h6" />
+        </svg>
+      </IconButton>
+    </div>
     <div class="session-overflow-trigger" :class="{ 'is-open': menuOpen }" @pointerdown="onOverflowPointerdown" @click.stop>
       <IconButton v-if="actions.length && !isRenaming" class="session-row-control" :label="t('sessionActionsLabel')"
         aria-haspopup="menu" :aria-expanded="menuOpen" @click="openOverflow">
@@ -225,6 +236,7 @@ function onMenuAction(action: SessionMenuAction) {
   background: transparent;
   cursor: pointer;
 }
+.session-item.has-archive { grid-template-columns: 16px 18px minmax(0, 1fr) 38px 20px 20px; }
 .session-item:hover { background: var(--hover-bg); }
 .session-item.active { background: var(--selected-bg); }
 .session-item.active::before {
@@ -272,8 +284,10 @@ function onMenuAction(action: SessionMenuAction) {
   opacity: 0;
   pointer-events: none;
 }
+.session-archive-action { width: 20px; height: 28px; opacity: 0; pointer-events: none; }
+.session-item:hover .session-archive-action, .session-item:focus-within .session-archive-action { opacity: 1; pointer-events: auto; }
 .session-overflow-trigger { width: 20px; height: 28px; opacity: 0; pointer-events: none; }
-.session-primary-action :deep(.ui-button), .session-overflow-trigger :deep(.ui-button) { width: 20px; min-width: 20px; height: 28px; padding: 0; }
+.session-primary-action :deep(.ui-button), .session-archive-action :deep(.ui-button), .session-overflow-trigger :deep(.ui-button) { width: 20px; min-width: 20px; height: 28px; padding: 0; }
 .session-item:hover .session-primary-action, .session-item:focus-within .session-primary-action,
 .session-item.editing .session-primary-action { opacity: 1; pointer-events: auto; }
 .session-item:hover .session-overflow-trigger, .session-item:focus-within .session-overflow-trigger,

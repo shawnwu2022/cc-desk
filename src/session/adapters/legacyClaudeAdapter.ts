@@ -7,6 +7,7 @@ import type {
 } from '@/types/unifiedSession'
 import { normalizePath } from '@/utils/path'
 import { saveSessionDisplayName, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
+import type { AttentionItem } from '@/composables/useAttentionQueue'
 
 const ACTIVE_PREFIX = 'legacy-tab:'
 const HISTORY_PREFIX = 'legacy-history:'
@@ -49,6 +50,8 @@ export interface LegacyClaudeAdapterDeps {
   runtime: LegacyClaudeRuntimePort
   projectPaths(): string[]
   metadata?: SessionMetadataPort
+  /** Exact-PTY attention causes stay in the owning legacy store. */
+  attention?: { getItem(ptyId: string): AttentionItem | undefined }
   /** Freeze the caller's project mutation barrier across history checks. */
   captureProjectAdmission?(projectPath: string): () => boolean
 }
@@ -81,7 +84,10 @@ function parseHistoryId(id: string): { projectPath: string; sessionId: string } 
   }
 }
 
-function projectActiveTab(tab: TerminalTab): UnifiedSession {
+function projectActiveTab(tab: TerminalTab, attention?: LegacyClaudeAdapterDeps['attention']): UnifiedSession {
+  const item = tab.status === 'running' && tab.ptyId ? attention?.getItem(tab.ptyId) : undefined
+  const attentionKind = item && item.ptyId === tab.ptyId
+    && (!item.sessionId || !tab.sessionId || item.sessionId === tab.sessionId) ? item.kind : undefined
   return {
     id: activeId(tab.tabId),
     projectKey: normalizeProjectIdentity(tab.projectPath),
@@ -90,7 +96,12 @@ function projectActiveTab(tab: TerminalTab): UnifiedSession {
     runtime: 'legacy-claude',
     title: tab.name,
     processState: tab.status,
-    attentionState: tab.pending ? 'needs-user' : 'none',
+    attentionState: tab.status === 'running' && (tab.pending || attentionKind) ? 'needs-user' : 'none',
+    attentionKind,
+    activityState: tab.status === 'running' && tab.observerEnabled !== false
+      && (tab.observation === undefined || tab.observation === 'active')
+      ? tab.activity ?? (tab.working ? 'working' : 'unknown') : 'unknown',
+    observationState: tab.observerEnabled === false ? 'off' : tab.observation ?? 'off',
     lastActivityAt: tab.lastActiveAt,
     archived: false,
     opened: true,
@@ -113,6 +124,8 @@ function projectHistorySession(projectPath: string, session: HistorySession): Un
     title: session.name,
     processState: 'stopped',
     attentionState: 'none',
+    activityState: 'unknown',
+    observationState: 'off',
     lastActivityAt: session.lastActiveAt,
     archived: false,
     opened: false,
@@ -139,7 +152,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     const row = projectActiveTab(tab)
     return tab.sessionId ? { ...row, id: historyId(tab.projectPath, tab.sessionId), adapterSessionId: tab.sessionId } : row
   }
-  function projectActive(tab: TerminalTab) { return withSessionDisplayName(projectActiveTab(tab), deps.metadata, tabDisplayIdentity(tab)) }
+  function projectActive(tab: TerminalTab) { return withSessionDisplayName(projectActiveTab(tab, deps.attention), deps.metadata, tabDisplayIdentity(tab)) }
   const resumes = new Map<string, { promise: Promise<UnifiedSession>; owners: Set<() => boolean> }>()
 
   function requireTab(id: string): TerminalTab {

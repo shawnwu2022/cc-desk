@@ -376,7 +376,7 @@ npm run tauri:build        # 生产构建
 
 ### 统一确认与安全反馈（Task 16）
 
-- normal App 的运行态关闭、停止并归档和未知状态重启通过类型化 `SessionConfirmDialog`；打开对话框只冻结目标，不执行进程操作。确认固定 Native request/run/generation、CLI/配置修订/项目/来源/启动动作，或 Legacy Tab/PTY/generation/项目/Session 身份，并在异步边界重新检查。导航、项目/会话切换和新意图撤销旧确认，不能把旧错误或完成提示附到新选择。
+- normal App 的停止并归档和未知状态重启通过类型化 `SessionConfirmDialog`；0.18.3 的普通关闭按用户授权直接执行。打开对话框只冻结目标，不执行进程操作。确认或直接关闭均固定 Native request/run/generation、CLI/配置修订/项目/来源/启动动作，或 Legacy Tab/PTY/generation/项目/Session 身份，并在异步边界重新检查。导航、项目/会话切换和新意图撤销旧确认，不能把旧错误或完成提示附到新选择。
 - 未知状态重启只授权既有 exact recover/stop 契约：仍未知或未确认停止时保留原尝试；只有状态已知且旧进程确认结束才分配新 generation。Native 不借道 Legacy PTY。Legacy 运行态关闭先 await 停止；异步重命名也重新检查原 PTY 所有权。
 - `ProjectConfirmDialog` 复用项目移除和启动配置删除展示。项目移除保留 Task14 admission/visibility 屏障、原注册身份和不删除文件边界；取消后不能继续后续写。配置删除由 `cliProfiles.requestDelete` / `confirmDelete` 提供真实 CAS 契约，冻结配置与工作区 revision，并阻止删除期间新 Native admission。Task19 已接入真实编辑器，并仅在准确启动回执证明身份冻结后允许删除运行会话的保存配置；未准入/准备中的会话仍阻止删除。不能用 `patch({ op: 'delete' })` 绕过确认。
 - `userError` 仅以 own-property 白名单映射固定键/代码，原始异常与原型继承键不进入渲染状态。普通重试错误内联显示，单个 CLI 故障用工具级横幅；只有全部来源不可读、无缓存和打开会话时显示工作区错误页，终端宿主不卸载。复制、重命名、归档、项目固定/移除和配置删除只在已确认完成且上下文仍匹配时发短 Toast。
@@ -509,13 +509,14 @@ npm run tauri:build        # 生产构建
 
 - Open Native and Legacy rows expose Close through the single trailing × primary button, including starting, running, unknown, stopped and failed states. The accessible native button remains focusable; rename editing temporarily uses that slot for Save.
 - Overflow, pointer context and keyboard context menus omit Close and Stop. Running sessions cannot offer Stop and archive; non-running history keeps its separate archive action. Restart/rename and exact status recovery retain their existing state restrictions.
-- The existing primary-action dispatch reaches the same exact-owner Close confirmation and cleanup. Copy explains process termination and terminal-display clearing, asks users to copy needed output first, and distinguishes saved CLI history from potentially unrecoverable unsaved content. No output persistence, process state-machine, history or configuration behavior changes.
+- The user-authorized 0.18.3 primary-action dispatch closes directly without a second confirmation. Existing exact-attempt stop/cleanup and ownership rechecks remain mandatory; unknown native attempts still require authoritative stop/cancel recovery and cannot be discarded without proof.
 - The Close-only hover/menu baseline update accepts only the two actual images independently inspected from visual run `37318672270`; eleven existing baseline images remain byte-identical. Keep exact zero-pixel comparison and the thirteen-image inventory. The new confirmation/state/menu captures remain separate unapproved evidence. A full no-update run is required after this reviewed baseline update; see `docs/visual-testing.md`.
 
-### Targeted history resume confirmation
+### Direct targeted history resume
 
-- Activating or explicitly resuming a closed catalog row uses `ResumeDialogRequest.mode: 'session'` with a required session ID. It shows only that frozen target and its CLI/project/saved-configuration context; no history search or alternate-session picker is started. Open rows still activate directly, while the global history entry keeps the searchable picker.
-- Confirmation continues through the original `resumeCatalogSession`/adapter admission and frozen source/profile-revision checks. Cancellation, replacement requests and project navigation revoke pending confirmation; a missing target stays unavailable rather than falling back to another row. No process/history/configuration contract changes.
+- The user-authorized 0.18.3 activation or explicit resume of a closed catalog row directly calls `resumeCatalogSession` for the frozen selected source. No second confirmation is shown. Open rows still activate directly, while the global history entry keeps its searchable picker.
+- Direct resume retains the original adapter admission and frozen source/profile-revision checks. Replacement requests, project/section navigation and disposal revoke pending admission; repeated current requests coalesce. A missing target remains unavailable rather than falling back to another row.
+- Retryable direct-resume failures retain only that request's frozen source for an explicit Retry, even if a failed read removes the catalog row. The retry owns its own request sequence, rechecks the original source/profile/project, and cannot switch to a new row or default configuration. Navigation/replacement cancels both late admission and old feedback.
 - Visual evidence clocks retain the same starting date but allow `Date.now()` to advance. A frozen clock can cause Vue capture/bubble timestamp guards to reject real keyboard events; keep native-event regressions and all Escape/focus assertions rather than hiding tooltips or weakening checks.
 
 ### Selective branch consolidation for 0.18.1
@@ -530,3 +531,10 @@ npm run tauri:build        # 生产构建
 - The five original Windows GUI supervising tests share one test-only parent lease before spawning workers; all other tests retain ordinary parallel execution. Worker processes never acquire that lease. Original modes, per-worker deadlines, assertions, inventory and ignore classifications remain unchanged. The exact five-test Actions comparison preserves full/selected listings and the real outer result; it is resource isolation, not proof of a root cause, installation/return or authenticated CLI acceptance. Production runtime and release qualification are unchanged.
 - Native user-input receipts must match the frozen request identity and exact byte count; mode epochs observe xterm 5.5.0 public modes only after parser batches. Do not claim detection of a mode round trip within one batch. Epoch exhaustion/disposal stays fail-closed. `NATIVE_INPUT_PAUSED` uses only fixed allowlisted diagnostic copy with no replay/recovery action or raw payload.
 - Ordinary Windows registry scope fixtures follow `CARGO_PKG_VERSION`; a valid-PE current-version control and mismatched-version refusal preserve exact production admission. Do not change the separate fixed 0.18.0 roundtrip acceptance bindings when updating ordinary fixtures. Linux source-contract checks are not Windows runtime acceptance.
+
+### Session behavior repair for 0.18.3
+
+- Archive is an external trailing quick button only for ended/failed non-archived rows without preparation ownership. Overflow/context menus omit it. Existing typed running archive requests still require the original exact-owner stop-and-archive confirmation.
+- Preserve complete historical status detail/cause vocabulary and row/project priority; missing/unordered activity remains explicitly unknown. Legacy uses exact-PTY explicit attention receipts; Native uses only existing exact-run ordered activity projections. No completion from Stop, exit, silence or output; observer remains default off and raw/Codex/Shell receive no Claude overlay. See `docs/session-status-semantics.md`.
+- Unified terminal host owns one window focus subscription and attention coordinator. Actual visible/selected/focused ownership acknowledges permission/completion, never sticky errors; initial unproven focus cannot acknowledge, and late subscription registration disposes after unmount. Selection alone never proves acknowledgment.
+- A Native generation change detaches old provenance/ACK before a bounded byte CAN+RIS parser fence, verifies attempt/term/token/publication ownership, resets and installs new bindings only afterward. Partial VT/UTF-8, queued old protocol replies, canceled/unmounted/superseded parser preparation cannot contaminate or launch the new attempt. Recover/activate/hide/theme do not reset.

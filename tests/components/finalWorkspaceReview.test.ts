@@ -20,7 +20,7 @@ vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.
 vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, registerProject: io.register, removeProject: io.remove }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.writeText }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
-vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false }) }))
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false, isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {} }) }))
 let persisted: ProjectsState
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
@@ -115,7 +115,7 @@ describe('Final workspace review regressions', () => {
     expect(tabs.tab(tab.tabId)!.lastActivityAt).toBe(1000)
     now.mockRestore()
   })
-  // 鼠标关闭/归档进入真实确认，取消无副作用，明确确认只影响准确拥有的会话。
+  // 鼠标关闭直接停止准确拥有的会话；运行中归档仍保留明确确认。
   it.each(['close', 'archive'] as const)('Pointer_ConfirmOwner_001 %s', async action => {
     const w = renderApp(); const { tabs, tab, row } = await openNativeRow(w)
     if (action === 'archive') {
@@ -132,9 +132,11 @@ describe('Final workspace review regressions', () => {
       await flushPromises()
     }
     const catalog = useUnifiedSessionsStore()
-    expect(catalog.sessionConfirmation?.kind).toBe(action === 'close' ? 'close-running' : 'stop-and-archive')
-    expect(io.nativeStop).not.toHaveBeenCalled(); expect(io.archive).not.toHaveBeenCalled()
-    await catalog.confirmSessionAction(); await flushPromises()
+    if (action === 'archive') {
+      expect(catalog.sessionConfirmation?.kind).toBe('stop-and-archive')
+      expect(io.nativeStop).not.toHaveBeenCalled(); expect(io.archive).not.toHaveBeenCalled()
+      await catalog.confirmSessionAction(); await flushPromises()
+    } else expect(catalog.sessionConfirmation).toBeNull()
     expect(io.nativeStop).toHaveBeenCalledTimes(1)
     expect(tabs.tab(tab.tabId)).toBeUndefined()
     expect(io.archive).toHaveBeenCalledTimes(action === 'archive' ? 1 : 0)
@@ -189,7 +191,7 @@ describe('Final workspace review regressions', () => {
     await flushPromises()
     expect(document.querySelector('[data-session-diagnostics]')).toBeNull()
   })
-  // 方向键只遍历当前可见结果；历史行必须 Enter 后才显示明确恢复流程。
+  // 方向键只遍历当前可见结果；历史行必须 Enter 后才直接恢复准确目标。
   it('Keyboard_FilteredHistory_005', async () => {
     const w = renderApp(); await openNativeRow(w)
     const search = w.get('.search-input')
@@ -201,7 +203,10 @@ describe('Final workspace review regressions', () => {
     expect(historical.dataset.sessionRow).toMatch(/^native-history:/)
     expect(useUnifiedSessionsStore().resumeDialog).toBeNull()
     historical.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await flushPromises()
-    expect(useUnifiedSessionsStore().resumeDialog?.sessionId).toBe(historical.dataset.sessionRow)
+    expect(useUnifiedSessionsStore().resumeDialog).toBeNull()
+    const restored = [...useNativeTabsStore().tabs.values()].find(tab => tab.action.kind === 'resume-id')
+    expect(restored?.action).toEqual({ kind: 'resume-id', nativeSessionId: 'history-id' })
+    expect(restored?.projectPath).toBe('/repo')
     expect(io.ptySpawn).not.toHaveBeenCalled()
   })
   // 自定义快速切换从其他页面恢复树与焦点；IME 与弹窗仍拥有自己的键盘。
@@ -215,11 +220,11 @@ describe('Final workspace review regressions', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true })); await flushPromises()
     expect(shell.section).toBe('workspace'); expect(shell.sidebarVisible).toBe(true)
     expect(document.activeElement).toBe(w.get('.search-input').element)
-    useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: `native-tab:${tab.tabId}`, action: 'close' }); await flushPromises()
+    useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: `native-tab:${tab.tabId}`, action: 'archive' }); await flushPromises()
     const active = document.activeElement
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true })); await flushPromises()
     expect(document.activeElement).toBe(active)
-    expect(useUnifiedSessionsStore().sessionConfirmation?.kind).toBe('close-running')
+    expect(useUnifiedSessionsStore().sessionConfirmation?.kind).toBe('stop-and-archive')
   })
 
   // Ctrl+P 的项目结果可直接选择项目，不创建或恢复会话。

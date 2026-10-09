@@ -72,6 +72,10 @@ function tabNativeSessionId(tab: NativeCliTab): string | null {
 
 function projectTab(tab: NativeCliTab): UnifiedSession {
   const nativeSessionId = tabNativeSessionId(tab)
+  // The existing optional observer is a Claude-only non-raw side channel.
+  // Missing/inactive observations cannot establish current turn activity.
+  const claudeObservation = tab.cli === 'claude' && tab.action.kind !== 'raw'
+  const activeObservation = claudeObservation && tab.status === 'running' && tab.observationState === 'active'
   return {
     id: activeId(tab.tabId),
     projectKey: normalizePath(tab.projectPath),
@@ -80,7 +84,9 @@ function projectTab(tab: NativeCliTab): UnifiedSession {
     runtime: 'native-cli',
     title: tab.title,
     processState: tab.status === 'stopped' && tab.launchRevision === null ? 'starting' : processState(tab.status),
-    attentionState: tab.attentionState ?? 'none',
+    attentionState: activeObservation ? tab.attentionState ?? 'none' : 'none',
+    activityState: activeObservation ? tab.activityState ?? 'unknown' : 'unknown',
+    observationState: claudeObservation ? tab.observationState ?? 'off' : 'off',
     lastActivityAt: tab.lastActivityAt,
     archived: false,
     opened: true,
@@ -119,6 +125,8 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     title: item.title || item.nativeSessionId,
     processState: 'stopped',
     attentionState: 'none',
+    activityState: 'unknown',
+    observationState: 'off',
     lastActivityAt: Number.isFinite(updated) ? updated : 0,
     archived: false,
     opened: false,

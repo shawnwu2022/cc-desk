@@ -16,14 +16,18 @@ vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profile }))
 vi.mock('@/api/workspace', () => ({ listRegisteredProjects: async () => ({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }) }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
-vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false }) }))
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {}, onResized: async () => () => {}, isMaximized: async () => false }) }))
 const historyKey = JSON.stringify(['local', 'codex', 'root', 'history-id'])
+const NativeHost = defineComponent({ props: ['tabId'], setup(props, { expose }) {
+  expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} })
+  return () => h('div', { 'data-restored-tab': props.tabId })
+} })
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks(); localStorage.clear()
   io.legacy.mockResolvedValue([])
   io.profile.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'Work config', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
-  io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo', updatedAt: '2026-09-30T00:00:00Z' }], hasMore: false })
+  io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo', updatedAt: '2026-09-30T00:00:00Z' }], hasMore: false })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); document.body.innerHTML = '' })
 // 普通 App 的快捷恢复必须打开真实恢复界面，并经确认准入现有宿主。
@@ -40,14 +44,16 @@ it('Resume_QuickMenuReachesHost_001', async () => {
   expect(document.querySelector('[role=dialog]')).toBeNull()
 })
 
-// 点击历史行保留该行的确认对象，不能因初始筛选器设置丢失选择。
+// 点击历史直接恢复冻结的准确来源，不受选择器筛选或二次确认影响。
 it('Resume_TreeKeepsChosenSession_002', async () => {
   const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
-  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: defineComponent({ props: ['tabId'], setup(props, { expose }) { expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} }); return () => h('div', { 'data-restored-tab': props.tabId }) } }), SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const row = useUnifiedSessionsStore().sessions[0]
   useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: row.id }); await flushPromises()
-  expect(document.querySelector('[data-confirm-resume]')).not.toBeNull()
-  expect(useNativeTabsStore().tabs.size).toBe(0)
+  expect(document.querySelector('[data-confirm-resume]')).toBeNull()
+  expect(useUnifiedSessionsStore().resumeDialog).toBeNull()
+  expect(useNativeTabsStore().tabs.size).toBe(1)
+  expect([...useNativeTabsStore().tabs.values()][0]).toMatchObject({ action: { kind: 'resume-id', nativeSessionId: row.nativeSessionId }, projectPath: row.projectPath, profileId: row.nativeOrigin?.profileId, profileRevision: row.nativeOrigin?.profileRevision })
 })
 
 // 较晚的旧搜索响应不能取代新的查询，也不能在隐藏后打开弹窗。
@@ -209,26 +215,23 @@ it('Resume_ReconfirmAfterClose_012', async () => {
 // 树中已选历史在两种语言、激活/恢复入口都只检查当前目标，不再次搜索或展示列表。
 it.each(['en', 'zh'] as const)('Resume_TargetOnlyBothRoutes_013_%s', async locale => {
   const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
-  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })], stubs: { NativeCliTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore(); const row = catalog.sessions[0]
   const readsBefore = io.read.mock.calls.length
   for (const kind of ['activate', 'menu-action'] as const) {
     useShellStore().requestWorkspaceAction(kind === 'activate' ? { kind, sessionId: row.id } : { kind, action: 'resume', sessionId: row.id }); await flushPromises()
-    const dialog = document.querySelector('[role=dialog]')!
-    expect(dialog.querySelector('[data-resume-query]')).toBeNull()
-    expect(dialog.querySelector('[data-resume-result]')).toBeNull()
-    expect(dialog.querySelector('[data-resume-cli]')).toBeNull()
-    expect(dialog.querySelector('[data-resume-scope]')).toBeNull()
-    expect(dialog.querySelector('[data-resume-age]')).toBeNull()
-    expect(dialog.textContent).toContain(row.title)
-    expect(dialog.textContent).toContain('Work config')
-    expect(dialog.textContent).toContain('repo')
-    expect(dialog.textContent).toContain((locale === 'en' ? en : zh).resumeConfirmHint)
-    expect(dialog.querySelector('[data-confirm-resume]')?.textContent).toBe((locale === 'en' ? en : zh).resumeConfirm)
-    expect(io.read.mock.calls.length).toBe(readsBefore)
-    ;(dialog.querySelector('.resume-actions button') as HTMLButtonElement).click(); await flushPromises()
-    expect(useNativeTabsStore().tabs.size).toBe(0)
     expect(document.querySelector('[role=dialog]')).toBeNull()
+    expect(catalog.resumeDialog).toBeNull()
+    expect(document.querySelector('[data-resume-query]')).toBeNull()
+    expect(document.querySelector('[data-confirm-resume]')).toBeNull()
+    expect(useNativeTabsStore().tabs.size).toBe(1)
+    expect([...useNativeTabsStore().tabs.values()][0]).toMatchObject({
+      title: row.title, cli: row.cli, projectPath: row.projectPath,
+      profileId: row.nativeOrigin?.profileId, profileRevision: row.nativeOrigin?.profileRevision,
+      sourceSessionKey: row.adapterSessionId, action: { kind: 'resume-id', nativeSessionId: row.nativeSessionId },
+    })
+    expect(io.read.mock.calls.length).toBe(readsBefore + 1)
+    expect(w.find('[data-restored-tab]').exists()).toBe(true)
   }
 })
 
@@ -237,13 +240,12 @@ it('Resume_TargetConfirmOnlyOnce_014', async () => {
   const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: defineComponent({ props: ['tabId'], setup(props, { expose }) { expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} }); return () => h('div', { 'data-restored-tab': props.tabId }) } }), SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore(); const history = catalog.sessions[0]
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
   const readsBefore = io.read.mock.calls.length
   let finish!: (value: unknown) => void
   io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-  const confirm = document.querySelector('[data-confirm-resume]') as HTMLButtonElement
-  confirm.click(); confirm.click(); await flushPromises()
-  expect(confirm.disabled).toBe(true)
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', action: 'resume', sessionId: history.id }); await flushPromises()
+  expect(document.querySelector('[data-confirm-resume]')).toBeNull()
   expect(io.read.mock.calls.length).toBe(readsBefore + 1)
   expect(useNativeTabsStore().tabs.size).toBe(0)
   finish({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo' }], hasMore: false }); await flushPromises()
@@ -260,20 +262,23 @@ it('Resume_TargetConfirmOnlyOnce_014', async () => {
 })
 
 // 当前目标检查时取消或切换项目，迟到的历史读取不准入，保留新页面。
-it.each(['cancel', 'project'] as const)('Resume_TargetCancelsLateRead_015_%s', async change => {
+it.each(['navigation', 'project'] as const)('Resume_TargetCancelsLateRead_015_%s', async change => {
   const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
-  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore()
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: catalog.sessions[0].id }); await flushPromises()
   let finish!: (value: unknown) => void
   io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-  ;(document.querySelector('[data-confirm-resume]') as HTMLButtonElement).click(); await flushPromises()
-  if (change === 'cancel') (document.querySelector('.resume-actions button') as HTMLButtonElement).click()
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: catalog.sessions[0].id }); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  expect(document.querySelector('[data-confirm-resume]')).toBeNull()
+  if (change === 'navigation') useShellStore().navigate('settings')
   else { catalog.selectProjectContext('/other'); useShellStore().navigate('workspace') }
   await flushPromises()
   finish({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo' }], hasMore: false }); await flushPromises()
   expect(useNativeTabsStore().tabs.size).toBe(0)
   expect(document.querySelector('[role=dialog]')).toBeNull()
+  if (change === 'navigation') expect(useShellStore().section).toBe('settings')
+  else expect(catalog.activeSessionId).toBeNull()
 })
 
 // 当前目标保持原项目和配置身份；检查期间修订或注册替换也不能借用新来源启动。
@@ -281,20 +286,21 @@ it.each(['configuration', 'project'] as const)('Resume_TargetRetainsOrigin_016_%
   const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
   const { useCliProfilesStore } = await import('@/stores/cliProfiles')
   const { useWorkspaceStore } = await import('@/stores/workspace')
-  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore(); const history = catalog.sessions[0]
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
   let finish!: (value: unknown) => void
   io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-  ;(document.querySelector('[data-confirm-resume]') as HTMLButtonElement).click(); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
   if (change === 'configuration') useCliProfilesStore().profiles[0].revision = '8'
   else useWorkspaceStore().projects[0].projectId = 'replacement'
   finish({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo' }], hasMore: false }); await flushPromises()
   expect(useNativeTabsStore().tabs.size).toBe(0)
-  expect(document.querySelector('[role=dialog]')?.textContent).toContain(en.resumeConfigurationChanged)
+  expect(document.querySelector('[role=dialog]')).toBeNull()
+  expect(catalog.actionFeedback?.messageKey).toBe('resumeConfigurationChanged')
+  expect(document.body.textContent).not.toContain('/private/secret')
 })
 
-// 新目标替代旧确认后，旧读取完成不得启动或关闭新目标的确认。
+// 新目标替代旧请求后，旧读取完成不得启动旧目标或覆盖新目标的选择。
 it('Resume_TargetRejectsSuperseded_017', async () => {
   const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
   const secondKey = JSON.stringify(['local', 'codex', 'root', 'second-id'])
@@ -303,20 +309,20 @@ it('Resume_TargetRejectsSuperseded_017', async () => {
     { type: 'session', sessionKey: secondKey, nativeSessionId: 'second-id', title: 'Second target', cwd: '/repo' },
   ]
   io.read.mockResolvedValue({ state: 'ready', items, hasMore: false })
-  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore()
   const first = catalog.sessions.find(row => row.nativeSessionId === 'history-id')!
   const second = catalog.sessions.find(row => row.nativeSessionId === 'second-id')!
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: first.id }); await flushPromises()
   let finish!: (value: unknown) => void
   io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-  ;(document.querySelector('[data-confirm-resume]') as HTMLButtonElement).click(); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: first.id }); await flushPromises()
   useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: second.id }); await flushPromises()
   finish({ state: 'ready', items, hasMore: false }); await flushPromises()
-  expect(useNativeTabsStore().tabs.size).toBe(0)
-  expect(document.querySelector('[data-resume-target]')?.textContent).toContain('Second target')
-  expect(document.querySelector('[data-resume-target]')?.textContent).not.toContain('First target')
-  expect((document.querySelector('[data-confirm-resume]') as HTMLButtonElement).disabled).toBe(false)
+  expect(useNativeTabsStore().tabs.size).toBe(1)
+  const tab = [...useNativeTabsStore().tabs.values()][0]
+  expect(tab).toMatchObject({ title: 'Second target', sourceSessionKey: secondKey, action: { kind: 'resume-id', nativeSessionId: 'second-id' } })
+  expect(catalog.activeSessionId).toBe('native-tab:' + tab.tabId)
+  expect(document.querySelector('[role=dialog]')).toBeNull()
 })
 
 // 当前目标已从目录消失时，只给出无法恢复提示，不回退其他会话或直接恢复表单。
@@ -330,4 +336,53 @@ it('Resume_TargetMissingStaysClosed_018', async () => {
   expect(dialog.querySelector('[data-resume-query]')).toBeNull()
   expect(dialog.querySelector('[data-resume-config]')).toBeNull()
   expect(useNativeTabsStore().tabs.size).toBe(0)
+})
+
+// 直接恢复失败后的 Retry 重新核实原来源，而不是仅刷新目录；仍只准入一次。
+it('Resume_TargetRetryKeepsExactSource_019', async () => {
+  const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), row = catalog.sessions[0]
+  io.read.mockRejectedValueOnce({ code: 'SOURCE_UNAVAILABLE', message: '/private/secret TOKEN' })
+  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: row.id }); await flushPromises()
+  expect(catalog.actionFeedback?.retryable).toBe(true)
+  expect(document.body.textContent).not.toContain('/private/secret')
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  expect(document.querySelector('[role=dialog]')).toBeNull()
+  await catalog.refresh()
+  expect(catalog.sessions.some(session => session.id === row.id)).toBe(false)
+  const retry = [...document.querySelectorAll<HTMLButtonElement>('[data-action-feedback] button')].find(button => button.textContent === en.retry)!
+  expect(retry).toBeDefined()
+  retry.click(); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(1)
+  expect([...useNativeTabsStore().tabs.values()][0]).toMatchObject({
+    projectPath: row.projectPath, profileId: row.nativeOrigin?.profileId, profileRevision: row.nativeOrigin?.profileRevision,
+    sourceSessionKey: row.adapterSessionId, action: { kind: 'resume-id', nativeSessionId: row.nativeSessionId },
+  })
+})
+
+// 消失历史的冻结 Retry 也必须服从当前配置、导航和替代请求，不能迟到准入。
+it.each(['configuration', 'navigation', 'replacement'] as const)('Resume_TargetRetryRechecksAdmission_020_%s', async change => {
+  const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
+  const { useCliProfilesStore } = await import('@/stores/cliProfiles')
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), shell = useShellStore(), row = catalog.sessions[0]
+  io.read.mockRejectedValueOnce({ code: 'SOURCE_UNAVAILABLE' })
+  shell.requestWorkspaceAction({ kind: 'activate', sessionId: row.id }); await flushPromises()
+  await catalog.refresh()
+  expect(catalog.sessions.some(session => session.id === row.id)).toBe(false)
+  let finish!: (value: unknown) => void
+  io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  const retry = [...document.querySelectorAll<HTMLButtonElement>('[data-action-feedback] button')].find(button => button.textContent === en.retry)!
+  retry.click(); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  if (change === 'configuration') useCliProfilesStore().profiles[0].revision = '8'
+  else if (change === 'navigation') shell.navigate('settings')
+  else shell.requestWorkspaceAction({ kind: 'restore-session', project: row, mode: 'history' })
+  await flushPromises()
+  finish({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo' }], hasMore: false }); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  if (change === 'configuration') expect(catalog.actionFeedback?.messageKey).toBe('resumeConfigurationChanged')
+  else expect(catalog.actionFeedback).toBeNull()
+  if (change === 'replacement') expect(catalog.resumeDialog?.mode).toBe('history')
 })
