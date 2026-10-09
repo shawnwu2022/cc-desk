@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { visualFixturePlugin } from '../../build/visualFixture'
 
 // 真实插件路由和模块解析必须在普通开发/生产关闭；不调用Vite内部或真实宿主。
 describe('Visual fixture module boundary', () => {
+  it.each([
+    { command: 'serve' as const, mode: 'visual', flag: '1', fixture: true },
+    { command: 'serve' as const, mode: 'visual', flag: '0', fixture: false },
+    { command: 'serve' as const, mode: 'development', flag: '1', fixture: false },
+    { command: 'build' as const, mode: 'visual', flag: '1', fixture: false },
+    { command: 'build' as const, mode: 'production', flag: '1', fixture: false },
+  ])('VisualGate_VersionIsFrozenOnlyInsideExplicitFixture_005: $command $mode $flag', async ({ command, mode, flag, fixture }) => {
+    // Run the actual Vite resolver in Node, independently of jsdom's typed-array realm.
+    const definitions = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `
+      import { resolveConfig } from 'vite';
+      const config = await resolveConfig({ configFile: 'vite.config.ts', mode: process.argv[2] }, process.argv[1], process.argv[2]);
+      console.log(JSON.stringify(config.define));
+    `, command, mode], { encoding: 'utf8', timeout: 10000, env: { ...process.env, CC_DESK_VISUAL_FIXTURE: flag } }))
+    const actualVersion = JSON.parse(readFileSync('package.json', 'utf8')).version
+    expect(definitions.__APP_VERSION__).toBe(JSON.stringify(fixture ? '0.18.1' : actualVersion))
+  })
   it('VisualGate_RequiresServeModeAndFlag_001', () => {
     const source = readFileSync('vite.config.ts', 'utf8')
     expect(source).toContain("command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'")

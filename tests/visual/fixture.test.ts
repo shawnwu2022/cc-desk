@@ -33,6 +33,11 @@ async function render(scenario: string, locale = 'en') {
   await flushPromises(); return wrapper
 }
 describe('Isolated production-component fixture', () => {
+  it('Fixture_SettingsVersionIsStableSyntheticData_019', async () => {
+    const view = await render('terminal-settings')
+    expect(view.text()).toContain('CC Desk v0.18.1')
+    expect(blockedHostCalls.value).toBe(0)
+  })
   it('Fixture_UpdateSettingsAreSyntheticAndInstallerRemainsBlocked_018', async () => {
     await expect(invoke('get_updater_settings')).resolves.toEqual({ proxy: null })
     expect(typeof await listen('desktop-update-progress')).toBe('function')

@@ -5,6 +5,7 @@ describe('prepared package version', () => {
   // npm、Cargo 与 Tauri 必须标识同一个准备版本，不能混入依赖版本。
   it('PackageVersion_Identity_001', () => {
     const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
+    expect(__APP_VERSION__).toBe(manifest.version)
     const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'))
     const tauri = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'))
     const cargo = readFileSync('src-tauri/Cargo.toml', 'utf8')
