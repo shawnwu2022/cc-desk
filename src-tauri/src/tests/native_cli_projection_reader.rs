@@ -249,7 +249,9 @@ fn HistoryPartial_KeepAggregateCap_004() {
     assert_eq!(result.err(), Some("SOURCE_TOO_LARGE"));
 }
 // 无法枚举的目录不能略过，以免隐藏尚未检查的兄弟链接和有效会话。
-#[cfg(unix)]
+// macOS rejects this raw-byte fixture with EILSEQ before the reader runs.
+// Its decoder remains covered without filesystem creation in scoped_fs tests.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 #[allow(non_snake_case)]
 fn HistoryPartial_RejectBadFilename_006() {

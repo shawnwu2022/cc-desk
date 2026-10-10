@@ -4,6 +4,27 @@ fn budget() -> Budget {
     Budget::new(Limits::default())
 }
 
+// Validate the production decoder without asking a filesystem to create an
+// invalid name: macOS rejects non-UTF-8 filenames before enumeration can begin.
+#[test]
+#[cfg(any(unix, windows))]
+fn invalid_filename_encoding_fails_closed_without_filesystem_creation() {
+    #[cfg(unix)]
+    let name = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(vec![0xff])
+    };
+    #[cfg(windows)]
+    let name = {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[0xd800])
+    };
+    assert_eq!(
+        relative(Path::new(&name), false),
+        Err("SOURCE_INVALID_TEXT")
+    );
+}
+
 #[test]
 fn same_name_is_read_from_each_held_root() {
     let t = tempfile::tempdir().unwrap();
