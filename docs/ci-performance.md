@@ -322,3 +322,77 @@ Ordinary preparation now spends its own one-shot attempt and validates the exact
 The existing host probe additionally observes actual token elevation. The original 18 external-Job tests retain their independent classification. Four ordinary success integrations (`020`, `022`, `024`, `025` in `process::cancel_tests`) are independently disclosed as unverified on an elevated host; they remain unchanged and execute naturally on an unelevated host. This additional scope is explicitly authorized for accurate hosted coverage, is never counted as passing, and remains a future native integration task without requiring user-run validation. Three new mandatory contracts (`027`–`029`) cover denied-admission state ordering, actual host token admission/refusal, and panic cleanup.
 
 The compiler job reuses its exact test executable to run these three contracts first, plus the four success probes on an actual unelevated host, under a two-minute watchdog. It retains original panic/exit diagnostics and the raw log. Failure blocks the original full inventory; passing preflight never substitutes for that inventory or its strict same-source aggregation.
+
+## Post-0.18.5 producer/static split and bounded measurement
+
+This focused batch is based on released main
+`ec857bd2ab54c0723c460774b95ac525ca8b2061`. Its successful baseline ordinary CI
+was run `38042584078`: 11m29 wall time and 91.167 summed runner minutes. These
+are baseline measurements, not measurements of this patch.
+
+The `rust-compile` producer now finishes after the original four-harness test
+compilation, full unfiltered doctests, immutable inventory/plan, original ordinary
+admission/cleanup preflight and same-SHA/run/attempt bundle upload. An independent
+Windows `rust-static` job retains the original executable PowerShell contracts,
+formatting, strict all-target Clippy and real application loader/ConPTY probe.
+The existing required `Rust checks` name requires producer, static and the entire
+sixteen-shard matrix to succeed before any coverage aggregation. Failure, skipped,
+cancelled or absent results are rejected by the executable strict gate. The
+frontend and roundtrip required names and release admission policy are unchanged.
+
+Both jobs use Rust 1.98.1, Node 22, Windows 2022, the existing debug0/test0
+overrides, default features and dependency-only cache. Explicit
+`shared-key: rust-compile` preserves the former producer namespace: the cache
+action uses the shared key instead of the otherwise identical job ID. OS,
+architecture, installed-toolchain, Cargo manifest/lock/config and environment
+identity remain in the action's key. Static restores that compatible cache but
+does not race the producer to save it. Source-bound bundles, preflight results,
+compiler inventory, coverage and metrics are removed before producer cache save.
+No workspace-crate, release-profile or application-code caching policy is added.
+
+Sanitized `ci-build-metrics-<job>-<SHA>-<run>-<attempt>` archives record pinned
+toolchain/runner/profile/config identity, exact cache-match observation, measured
+cache-action surrounding wall interval, Cargo command exit/duration and actual
+compiler-artifact fresh/rebuilt counts. Counts are retained per crate target and
+feature set, including CC Desk, Tauri, Windows and SQLite when emitted. Cargo
+test-compilation duration surrounds the existing Windows Compile entry, including
+its read-only host/token and inventory checks; it is labelled with this scope.
+build-script messages are separately counted; this is not a rebuilt-crate count.
+Raw Cargo paths, rendered diagnostic bodies and build-script environment values
+are excluded from the metrics archive. Non-exact cache output cannot distinguish
+a fallback restore from a miss; byte size, fallback identity and save duration
+must be read from the original cache log/final job step timestamps. Missing data
+is explicitly null. An exact cache match never proves compilation reuse or speedup.
+
+Shard execution starts one shared 25-minute budget in its first runner step,
+before checkout, Node setup, host probe and artifact download. Each later harness
+gets at most the smaller of the original 20-minute cap and the remaining shared
+budget. An exhausted budget cannot begin another test body. This leaves a nominal
+five-minute interval before the existing 30-minute job deadline for termination,
+reporting and upload; runner time before the first step, infrastructure failure,
+slow synchronous setup or a hard job kill can still consume that interval. It is
+not a guaranteed upload deadline or a performance gain. Atomic incomplete receipts
+exist before any body and are refreshed between harnesses; timeout, interruption,
+missing receipts and partial outer output continue to fail strict aggregation.
+Artifact preservation uses `always()` to attempt upload on cancellation too.
+
+`timing-observations.jsonl` retains source/plan-bound harness timing and assigned
+test-name progress/completion observation timestamps without assertion contents.
+Parallel libtest output does not establish a trustworthy per-test start or
+duration. These observations are explicitly labelled accordingly and never used
+to change weights, selection or acceptance. Real per-name calibration through
+the original exact libtest entry is the next bounded experiment, followed by
+deterministic duration-weighted placement with unchanged complete inventory.
+
+Historical three-run estimates put removed static/loader work at 51–80 seconds
+of producer delay. Added static setup/recompilation and metrics upload may increase
+runner consumption and affect this estimate. Hosted final-source warm controls
+are required before claiming savings or p50/p95 progress toward ordinary CI
+at most ten minutes. This patch does not change the Windows package/release
+critical path or establish a complete-PR or signed-release ten-minute result.
+
+The workflow, strict job gate and observational metrics source are included in
+the immutable plan's source hashes. Original test source, scenario mapping,
+four harness identities, default ignored reasons, 18 external-Job and four
+elevated-host disclosures, original exact selectors, production/release profiles
+and all released assets remain unchanged.

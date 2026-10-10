@@ -21,8 +21,9 @@ Behavioral regressions were run RED on the released source and GREEN after the f
 1. Legacy component → adapter → catalog receives a rejected kill response after the exact exit event; one close must remove and dispose the terminal
 2. Native App → tree button → host → component → adapter → catalog receives one failed status read after accepted stop; one close must finish without another stop/start
 3. A closed row's history identity initially appears below older rows; completed close must produce the same order as manual refresh, with subsequent background activity remaining stable
+4. With the real reactive native history store, the exact close-owned source read remains pending after terminal removal; its late, newer activity must enter the completed-close snapshot without another close or runtime replay
 
-Final frontend verification: 167 Vitest files / 2294 tests passed, Vue typecheck passed, Vite build passed. Node policies passed after using the scoped Rust toolchain. Focused independent review found no remaining blockers.
+Combined candidate verification: 167 Vitest files / 2313 tests passed, Vue typecheck passed, Vite build passed. Node policy tests passed (225 passed, 2 PowerShell-only skips), scoped Rust tests passed (64 passed) and strict scoped clippy passed. Focused independent review found no remaining blockers.
 
 The Windows maintenance subprocess additionally checks accepted first termination, duplicate close, retained live ownership after injected reader/control and wait failures, actual waiter settlement, and stale callbacks against a same-ID replacement. These platform checks require Windows CI. Full local Cargo check/test could not run because this Linux environment lacks GLib/GIO/GTK system libraries. Source review and frontend tests are not real Windows, ConPTY, or Claude/Codex CLI acceptance.
 

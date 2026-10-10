@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
+import { flushPromises } from '@vue/test-utils'
 import { useWorkspaceStore } from '@/stores/workspace'
 const project = (id: string) => ({ projectId: id, hostId: 'local', sourcePathKey: id, selectedPath: `/work/${id}`, canonicalPath: null, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } })
 const source = (target: any) => ({ scopeId: `scope-${target.profileId}-${target.projectId}`, instanceId: 'instance', cli: 'codex', sourceRootKey: target.profileId, identityEpoch: '1', profileId: target.profileId, profileRevision: '1', target, basis: 'configured-profile' })
@@ -22,9 +23,15 @@ it('late old-profile enrichment never replaces the next profile or project regis
   bridge(async (c, q) => c === 'native_get_scope' ? source(q) : new Promise(resolve => pending.push({ resolve, q })))
   const w = useWorkspaceStore(); await w.load()
   const old = w.enrich({ profileId: 'old', revision: '1' }); await vi.waitFor(() => expect(pending).toHaveLength(2))
-  const next = w.enrich({ profileId: 'next', revision: '1' }); await vi.waitFor(() => expect(pending).toHaveLength(4))
-  for (const i of [2, 3, 0, 1]) { const { q, resolve } = pending[i]; resolve({ source: q.source, resourceKind: 'history', requestEpoch: q.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: [], hasMore: false }) }
-  await Promise.all([old, next]); expect(w.projects).toHaveLength(2)
+  const next = w.enrich({ profileId: 'next', revision: '1' }); await flushPromises()
+  expect(pending).toHaveLength(2)
+  const finish = (index: number) => { const { q, resolve } = pending[index]; resolve({ source: q.source, resourceKind: 'history', requestEpoch: q.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: [], hasMore: false }) }
+  finish(0); await vi.waitFor(() => expect(pending).toHaveLength(3))
+  finish(2); await vi.waitFor(() => expect(pending).toHaveLength(4))
+  finish(3); await next
+  expect(w.enrichment.a.result?.source.profileId).toBe('next')
+  expect(w.enrichment.b.result?.source.profileId).toBe('next')
+  finish(1); await old; expect(w.projects).toHaveLength(2)
   expect(w.enrichment.a.result?.source.profileId).toBe('next')
   await w.load(); expect(w.enrichment).toEqual({})
 })

@@ -17,6 +17,52 @@ test('RustRunner_PreflightElevation_006', async () => {
   assert.throws(() => ordinaryPreflightNames(undefined), /Actual elevation/, 'unknown elevation cannot silently select an unavailable range');
 });
 
+test('RustRunner_DurableReceipt_008: an executing shard already has an incomplete source-bound receipt and observation log', { skip: process.platform === 'win32' && 'Unix executable fixture; production binaries are Windows PE files' }, async t => {
+  const { root, options, plan, runShard } = await runnerFixture(t);
+  const output = path.join(root, 'durable-shard'), phases = [];
+  const result = await runShard({ ...options, index: 0, output, artifactName: plan.artifactName, onPhase: phase => {
+    phases.push(phase);
+    if (phase.phase === 'execute-start') {
+      assert.ok(fs.existsSync(path.join(output, 'shard-result.json')), 'outer interruption must leave an incomplete receipt');
+      const partial = JSON.parse(fs.readFileSync(path.join(output, 'shard-result.json'), 'utf8'));
+      assert.equal(partial.completed, false); assert.equal(partial.exitCode, 1);
+      assert.equal(partial.planHash, plan.planHash);
+      assert.equal(partial.sourceSha, plan.sourceSha);
+    }
+  } });
+  assert.equal(result.completed, true);
+  const observations = fs.readFileSync(path.join(output, 'timing-observations.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(observations[0].timingSemantics, 'libtest-output-observation-not-per-test-duration');
+  assert.equal(observations[0].planHash, plan.planHash);
+  assert.ok(observations.some(o => o.phase === 'execute-progress' && o.name && Number.isFinite(o.elapsedSeconds)));
+  assert.equal(JSON.stringify(observations).includes('PRIVATE'), false);
+  assert.ok(observations.filter(o => o.name).every(o => plan.harnesses.some(h => h.partitions[0].includes(o.name))));
+});
+
+test('RustRunner_SharedBudget_009: setup time and prior harnesses consume one bounded shard budget', { skip: process.platform === 'win32' && 'Unix executable fixture; production binaries are Windows PE files' }, async t => {
+  const { root, options, plan, runShard } = await runnerFixture(t);
+  const output = path.join(root, 'shared-budget'), phases = [];
+  const started = Date.now();
+  const result = await runShard({ ...options, index: 0, output, artifactName: plan.artifactName,
+    environment: { ...options.environment, RUST_SHARD_FIXTURE_HANG: '1', RUST_SHARD_FIXTURE_HANG_INDEX: '1', RUST_SHARD_FIXTURE_DELAY_MS: '200' },
+    timeoutMs: 5000, shardTimeoutMs: 5000, jobStartMs: started - 1000, onPhase: phase => phases.push(phase) });
+  assert.equal(result.completed, false);
+  assert.notEqual(result.exitCode, 0);
+  assert.ok(Date.now() - started < 6000, 'setup debit must shorten execution below the independent five-second test cap');
+  assert.equal(result.harnesses[0].result.exitCode, 0, 'the first harness completes normally before the next one hangs');
+  const harness = result.harnesses.find(h => h.watchdog?.timedOut);
+  assert.ok(harness, 'the fixture must reach one timed execution');
+  assert.equal(harness.watchdog.timedOut, true);
+  assert.ok(harness.watchdog.timeoutMs <= 4000);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(output, 'shard-result.json'), 'utf8')).completed, false);
+  assert.equal(phases.filter(p => p.phase === 'execute-end').at(-1).watchdog.outputIncomplete, true);
+  // A job arriving after its shared deadline cannot begin a body at all.
+  const late = await runShard({ ...options, index: 1, output: path.join(root, 'expired-budget'), artifactName: plan.artifactName,
+    shardTimeoutMs: 1000, jobStartMs: Date.now() - 2000, onPhase: phase => assert.notEqual(phase.phase, 'execute-start') });
+  assert.equal(late.completed, false);
+  assert.match(late.error, /shared shard deadline/);
+});
+
 // 在子进程退出前输出已分配测试进度，诊断不得泄露原始正文。
 test('RustRunner_LiveProgress_003', async t => {
   const runner = await import(moduleUrl);
@@ -63,7 +109,7 @@ async function runnerFixture(t, failureName = null, elevated = false) {
   const { createPlan, runShard, aggregateResults, verifyBundle, bundleArtifactName } = await import(moduleUrl);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-shard-runner-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const files = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
+  const files = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
   for (const name of files) {
     fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
     fs.copyFileSync(path.join(repository, name), path.join(root, name));
@@ -92,8 +138,9 @@ const full=${JSON.stringify(inventories[index])}, ignored=${JSON.stringify(index
 let selected=full; if(args.includes('--exact')) selected=full.filter(n=>args.includes(n)); else for(let i=0;i<args.length;i++) if(args[i]==='--skip') { const skip=args[++i]; selected=selected.filter(n=>n!==skip); }
 if(args.includes('--ignored')) selected=selected.filter(n=>ignored.includes(n));
 if(args.includes('--list')) { for(const n of selected) console.log(n+': test'); console.log(selected.length+' tests, 0 benchmarks'); }
-else if(process.env.RUST_SHARD_FIXTURE_HANG==='1') { console.log('PRIVATE pending fixture assertion'); if(selected.length) process.stdout.write('test '+selected[0]+' ... '); setInterval(()=>{},1000); }
+else if(process.env.RUST_SHARD_FIXTURE_HANG==='1' && (!process.env.RUST_SHARD_FIXTURE_HANG_INDEX || process.env.RUST_SHARD_FIXTURE_HANG_INDEX===${JSON.stringify(String(index))})) { console.log('PRIVATE pending fixture assertion'); if(selected.length) process.stdout.write('test '+selected[0]+' ... '); setInterval(()=>{},1000); }
 else {
+  if(process.env.RUST_SHARD_FIXTURE_DELAY_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Number(process.env.RUST_SHARD_FIXTURE_DELAY_MS));
   for(const n of selected) console.log('test '+n+' ... '+(ignored.includes(n)?'ignored, supervised only':n===failureName?'FAILED':'ok'));
   const count=selected.filter(n=>ignored.includes(n)).length, failed=selected.includes(failureName)?1:0;
   if(failed) console.log('\\nfailures:\\n\\n---- '+failureName+' stdout ----\\nPRIVATE fixture assertion and Debug value\\n\\nfailures:\\n    '+failureName+'\\n');
@@ -164,6 +211,12 @@ test('RustRunner_ArtifactBinding_001', { skip: process.platform === 'win32' && '
   assert.throws(() => verifyBundle({ ...options, environment: { ...environment, GITHUB_SHA: 'a'.repeat(40) } }), /binding/, 'another source SHA must reject the compiler artifact');
   assert.throws(() => verifyBundle({ ...options, inJob: false }), /Job/, 'the observed runner Job state must agree with compilation');
   assert.throws(() => verifyBundle({ ...options, elevated: true }), /elevation/, 'the actual runner token must agree with compilation');
+  for (const source of ['.github/workflows/ci.yml', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs']) {
+    const filename = path.join(root, source), original = fs.readFileSync(filename);
+    fs.appendFileSync(filename, '\nchanged source binding');
+    assert.throws(() => verifyBundle(options), /hash|size/, 'changed workflow/gate/metrics source must reject the original plan');
+    fs.writeFileSync(filename, original);
+  }
   const executable = plan.files.find(f => f.path.endsWith('harness-0.exe'));
   const filename = path.join(bundle, executable.path), original = fs.readFileSync(filename);
   fs.appendFileSync(filename, '\nchanged bytes');

@@ -14,7 +14,7 @@ import en from '@/i18n/locales/en'
 
 // Keep the real App, tree button, runtime, host, Native component, adapters and
 // facade. Only process/IPC, renderer and window boundaries are synthetic.
-const io = vi.hoisted(() => ({ start: vi.fn(), cancel: vi.fn(), recover: vi.fn(), stop: vi.fn(), resize: vi.fn(), terms: [] as any[], stopped: new Set<string>(), records: {} as Record<string, any> }))
+const io = vi.hoisted(() => ({ start: vi.fn(), cancel: vi.fn(), recover: vi.fn(), stop: vi.fn(), resize: vi.fn(), historyRead: vi.fn(), terms: [] as any[], stopped: new Set<string>(), records: {} as Record<string, any> }))
 const profile = { id: 'cx', revision: '7', cli: 'codex', name: 'Work', launcher: { kind: 'native' }, programPath: { mode: 'inherit' },
   defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
@@ -24,7 +24,7 @@ vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
   getAppConfig: async () => ({ language: 'en', theme: 'light', terminalTheme: 'cc-box-light' }), updateAppConfig: async () => {}, onHookEvent: async () => () => {},
   createNativeProjectionClient: () => ({
     scope: async (target: any) => ({ scopeId: 'scope-cx', instanceId: 'fixture-instance', cli: 'codex', sourceRootKey: 'root-cx', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' }),
-    read: async (request: any) => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: [], hasMore: false }),
+    read: io.historyRead,
   }),
 }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: async () => ({ revision: '7', profiles: [profile] }) }))
@@ -70,15 +70,16 @@ beforeEach(() => {
   io.cancel.mockImplementation(async id => receipt(launched(id), 'running', '1'))
   io.recover.mockImplementation(async id => receipt(launched(id), io.stopped.has(launched(id).runId) ? 'exited' : 'running'))
   io.stop.mockImplementation(async ({ runId }) => { io.stopped.add(runId) }); io.resize.mockResolvedValue(undefined)
+  io.historyRead.mockImplementation(async request => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: [], hasMore: false }))
 })
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers(); vi.unstubAllGlobals(); document.body.innerHTML = '' })
 async function render() {
   const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { TerminalView: true, SettingsView: true } } })
   wrappers.push(wrapper); await flushPromises(); return wrapper
 }
-async function open(wrapper: VueWrapper) {
+async function open(wrapper: VueWrapper, action: import('@/types/cli').LaunchAction = { kind: 'new' }) {
   const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
-  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' }, title: 'Native close target' })
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action, title: 'Native close target' })
   await catalog.refresh()
   await vi.waitFor(() => expect(catalog.sessions.some(row => row.id === `native-tab:${tab.tabId}`)).toBe(true))
   await catalog.activateSession(`native-tab:${tab.tabId}`); await flushPromises()
@@ -121,6 +122,38 @@ it('Native_AppCloseReadRetry_007', async () => {
   expect(io.recover).toHaveBeenCalledTimes(2)
   expect(io.start).toHaveBeenCalledOnce()
   expect(wrapper.findComponent(NativeCliTerminal).exists()).toBe(false)
+  expect(useUnifiedSessionsStore().actionFeedback).toBeNull()
+})
+
+// 整合真实响应式历史后，关闭拥有的迟到来源读取必须进入同一次排序快照。
+it('Native_AppCloseLateHistory_008', async () => {
+  const old = { type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'old']), nativeSessionId: 'old', title: 'Old history', cwd: '/repo', updatedAt: '2026-09-17T00:00:00Z', truncated: false }
+  const closingHistory = { ...old, sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'closed']), nativeSessionId: 'closed', title: 'Closing history', updatedAt: '2026-09-10T00:00:00Z' }
+  const result = (request: any, items: any[]) => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items, hasMore: false })
+  io.historyRead.mockImplementation(async request => result(request, request.resourceKind === 'history' ? [old, closingHistory] : []))
+  const wrapper = await render(), tab = await open(wrapper, { kind: 'resume-id', nativeSessionId: 'closed' }), late = deferred<any>()
+  io.historyRead.mockClear()
+  io.historyRead.mockImplementationOnce(() => late.promise)
+  await closeButton(wrapper, tab.tabId).trigger('click')
+  await vi.waitFor(() => expect(useNativeTabsStore().tab(tab.tabId)).toBeUndefined())
+  expect(wrapper.findComponent(NativeCliTerminal).exists()).toBe(false)
+  expect(io.historyRead).toHaveBeenCalledOnce()
+  const request = io.historyRead.mock.calls[io.historyRead.mock.calls.length - 1][0]
+  expect(request).toMatchObject({ resourceKind: 'history', source: { cli: 'codex', profileId: 'cx', profileRevision: '7',
+    target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectId: 'project' } } })
+  expect(useUnifiedSessionsStore().completedClose).toBeNull()
+  const fresh = { ...closingHistory, updatedAt: '2026-10-10T10:29:00Z' }
+  io.historyRead.mockImplementation(async read => result(read, read.resourceKind === 'history' ? [old, fresh] : []))
+  late.resolve(result(request, [old, fresh]))
+  await vi.waitFor(() => expect(useUnifiedSessionsStore().completedClose).not.toBeNull())
+  expect(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'closed'))
+    .toMatchObject({ opened: false, lastActivityAt: Date.parse(fresh.updatedAt) })
+  const order = () => wrapper.findAll('[data-session-row]').map(row => row.get('.session-name').text())
+  expect(order()).toEqual(['Closing history', 'Old history'])
+  await wrapper.get('button[aria-label="Refresh sessions"]').trigger('click')
+  await flushPromises()
+  expect(order()).toEqual(['Closing history', 'Old history'])
+  expect(io.start).toHaveBeenCalledOnce(); expect(io.stop).toHaveBeenCalledOnce()
   expect(useUnifiedSessionsStore().actionFeedback).toBeNull()
 })
 

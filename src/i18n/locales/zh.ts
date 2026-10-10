@@ -264,6 +264,8 @@ export default {
 
   workspaceRuntimePartial: '部分会话来源暂时无法加载，已打开的会话仍可使用。',
   workspaceHistoryMetadataPartial: '部分历史仅显示摘要，列表可能不完整。',
+  historyReadDiagnostics: '历史读取详情（部分条目已略过）',
+  historyReadFailureHint: '已识别的会话仍可使用，无法读取的条目已略过；可刷新后重新检查。这不影响已打开的终端。',
   sourceWarningDismiss: '收起来源警告',
   sourceWarningDiagnostics: '来源诊断（仍不可用）',
   sourceWarningConfiguration: '启动配置：{name}',

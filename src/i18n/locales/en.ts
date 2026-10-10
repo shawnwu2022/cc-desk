@@ -264,6 +264,8 @@ export default {
 
   workspaceRuntimePartial: 'Some session sources could not be loaded. Open sessions remain available.',
   workspaceHistoryMetadataPartial: 'Some history is shown from limited summaries; the list may be incomplete.',
+  historyReadDiagnostics: 'History read details (some entries skipped)',
+  historyReadFailureHint: 'Recognized sessions remain available. Unreadable entries were skipped; refresh to check again. This does not affect open terminals.',
   sourceWarningDismiss: 'Collapse source warning',
   sourceWarningDiagnostics: 'Source diagnostics (still unavailable)',
   sourceWarningConfiguration: 'Launch configuration: {name}',

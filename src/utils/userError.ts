@@ -104,6 +104,13 @@ const KNOWN_ERRORS: Readonly<Record<string, ErrorTemplate>> = Object.freeze({
     retryable: true,
     detailCode: 'SOURCE_UNAVAILABLE',
   },
+  SOURCE_BUSY: {
+    messageKey: 'errorResourceUnavailable',
+    actionKey: 'retry',
+    severity: 'warning',
+    retryable: true,
+    detailCode: 'SOURCE_BUSY',
+  },
 })
 
 const GENERIC: ErrorTemplate = Object.freeze({

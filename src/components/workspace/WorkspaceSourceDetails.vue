@@ -2,14 +2,15 @@
 import { useI18n } from 'vue-i18n'
 import AppButton from '@/components/ui/AppButton.vue'
 import { workspaceSourceLabels, workspaceWarningKey, type WorkspaceSourceConfiguration, type WorkspaceSourceWarning } from '@/utils/workspaceSourceWarnings'
-withDefaults(defineProps<{ warnings: readonly WorkspaceSourceWarning[]; truncated: boolean; configurations?: readonly WorkspaceSourceConfiguration[]; compact?: boolean }>(), { configurations: () => [], compact: false })
+withDefaults(defineProps<{ warnings: readonly WorkspaceSourceWarning[]; truncated: boolean; configurations?: readonly WorkspaceSourceConfiguration[]; compact?: boolean; partial?: boolean }>(), { configurations: () => [], compact: false, partial: false })
 const emit = defineEmits<{ configure: [profileId: string] }>()
 const { t } = useI18n()
 </script>
 
 <template>
   <details v-if="warnings.length" class="ui-error-details source-warning-details" data-workspace-source-details>
-    <summary>{{ t(compact ? 'sourceWarningDiagnostics' : 'toggleDetails') }}</summary>
+    <summary>{{ t(partial ? 'historyReadDiagnostics' : compact ? 'sourceWarningDiagnostics' : 'toggleDetails') }}</summary>
+    <p v-if="partial">{{ t('historyReadFailureHint') }}</p>
     <ul>
       <li v-for="warning in warnings" :key="`${warning.source}:${warning.stage}:${warning.code}`">
         {{ t(workspaceSourceLabels[warning.source]) }}: <code>{{ warning.code }}<template v-if="warning.stage"> / {{ warning.stage }}</template></code>
