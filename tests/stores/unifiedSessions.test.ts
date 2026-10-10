@@ -120,12 +120,12 @@ beforeEach(() => {
 })
 
 describe('unified sessions store', () => {
-  // 项目按固定和显示名排列；刷新活动时间只能调整项目内会话顺序。
+  // 项目按固定和显示名排列；后台活动既不能移动项目，也不能移动会话。
   it('StableProjectOrder_Catalog_001', async () => {
     const rows = [
       session({ id: 'zulu', projectPath: '/zulu', lastActivityAt: 100 }),
-      session({ id: 'alpha-old', projectPath: '/alpha', lastActivityAt: 1 }),
-      session({ id: 'alpha-new', projectPath: '/alpha', lastActivityAt: 2 }),
+      session({ id: 'alpha-old', projectPath: '/alpha', lastActivityAt: 1, lastOpenedAt: 1 }),
+      session({ id: 'alpha-new', projectPath: '/alpha', lastActivityAt: 2, lastOpenedAt: 2 }),
       session({ id: 'pinned', projectPath: '/omega', lastActivityAt: 0 }),
     ]
     const legacy = fakeAdapter('legacy-claude', rows)
@@ -140,12 +140,12 @@ describe('unified sessions store', () => {
     legacy.setSessions(rows.map(row => ({ ...row, lastActivityAt: row.id === 'alpha-old' ? 1000 : row.lastActivityAt })))
     await store.refresh()
     expect(store.projectGroups.map(group => group.projectKey)).toEqual(['/omega', '/alpha', '/zulu'])
-    expect(store.projectGroups[1].sessions.map(row => row.id)).toEqual(['alpha-old', 'alpha-new'])
+    expect(store.projectGroups[1].sessions.map(row => row.id)).toEqual(['alpha-new', 'alpha-old'])
   })
 
   it('merges legacy/native sessions into one project group and sorts pinned groups first', async () => {
     const legacy = fakeAdapter('legacy-claude', [
-      session({ id: 'legacy', projectPath: '/repo', projectKey: '/repo', lastActivityAt: 100 }),
+      session({ id: 'legacy', projectPath: '/repo', projectKey: '/repo', lastActivityAt: 100, lastOpenedAt: 100 }),
     ])
     const native = fakeAdapter('native-cli', [
       session({
@@ -155,6 +155,7 @@ describe('unified sessions store', () => {
         projectPath: '/repo',
         projectKey: '/repo',
         lastActivityAt: 300,
+        lastOpenedAt: 300,
       }),
       session({
         id: 'other',
@@ -163,6 +164,7 @@ describe('unified sessions store', () => {
         projectPath: '/other',
         projectKey: '/other',
         lastActivityAt: 400,
+        lastOpenedAt: 400,
       }),
     ])
     const projects = useProjectsStateStore()

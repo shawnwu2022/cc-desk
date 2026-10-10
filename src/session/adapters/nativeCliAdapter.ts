@@ -10,7 +10,8 @@ import type {
 } from '@/types/unifiedSession'
 import { makeSessionCatalogKey } from '@/utils/sessionPresentation'
 import { normalizePath } from '@/utils/path'
-import { saveSessionDisplayName, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
+import { saveSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
+import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 
 const ACTIVE_PREFIX = 'native-tab:'
 const HISTORY_PREFIX = 'native-history:'
@@ -104,6 +105,7 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     observationState: claudeObservation ? tab.observationState ?? 'off' : 'off',
     ...(observationNotice ? { observationNotice } : {}),
     lastActivityAt: tab.lastActivityAt,
+    lastOpenedAt: tab.createdAt,
     archived: false,
     opened: true,
     resumable: Boolean(nativeSessionId),
@@ -144,6 +146,7 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     activityState: 'unknown',
     observationState: 'off',
     lastActivityAt: Number.isFinite(updated) ? updated : 0,
+    lastOpenedAt: 0,
     archived: false,
     opened: false,
     resumable: true,
@@ -192,6 +195,24 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     return matches.length === 1 ? projectHistory(matches[0].entry, matches[0].item) : row
   }
   function projectActive(tab: NativeCliTab) { return withSessionDisplayName(projectTab(tab, deps.tabs), deps.metadata, tabDisplayIdentity(tab)) }
+  const acceptedOpens = new Map<string, { at: number; savedIdentities: Set<string> }>()
+  async function transferOpen(tab: NativeCliTab) {
+    const accepted = acceptedOpens.get(tab.tabId)
+    if (!accepted) return
+    const identity = tabDisplayIdentity(tab), attempt = captureNativeAttempt(tab)
+    if (accepted.savedIdentities.has(identity.id)) return
+    // A failed acknowledgement is reconciled by the writer, never automatically
+    // replayed on output/status reads. A later explicit open gets a new owner.
+    accepted.savedIdentities.add(identity.id)
+    // An admitted runtime stays admitted if a display-only write fails. The
+    // canonical metadata store retains its error/reconciliation state.
+    await saveSessionOpenedAt(deps.metadata, identity, accepted.at,
+      () => matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt)).catch(() => {})
+  }
+  async function rememberOpen(tab: NativeCliTab) {
+    acceptedOpens.set(tab.tabId, { at: tab.createdAt, savedIdentities: new Set() })
+    await transferOpen(tab)
+  }
   const admissions = new Map<string, { promise: Promise<UnifiedSession>; owners: Set<() => boolean> }>()
   function coalesce(key: string, operation: (canAdmit: () => boolean) => Promise<UnifiedSession>, canAdmit: () => boolean) {
     const ownResult = (promise: Promise<UnifiedSession>) => promise.then(value => {
@@ -240,6 +261,9 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   async function listSessions(projectKey?: string): Promise<UnifiedSession[]> {
     const wanted = projectKey == null ? null : normalizePath(projectKey)
     const tabs = [...deps.tabs.tabs.values()].filter(tab => wanted == null || normalizePath(tab.projectPath) === wanted)
+    // Transfer the original accepted time when an exact history key becomes
+    // available. Activity does not generate a new time or another saved write.
+    await Promise.all(tabs.map(transferOpen))
     const claimed = new Set(tabs.flatMap(tab => {
       const matches = historyForTab(tab)
       return matches.length === 1
@@ -257,7 +281,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         })
       }
     }
-    return sessions.sort((a, b) => b.lastActivityAt - a.lastActivityAt || a.id.localeCompare(b.id))
+    return sessions.sort(compareSessionOpenOrder)
   }
 
   async function createSession(input: CreateUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
@@ -283,6 +307,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       if (!owns()) throw new Error('RESTORE_CANCELLED')
       const tab = await deps.runtime.createTab({ ...input, action })
       deps.tabs.setActive(tab.tabId)
+      await rememberOpen(tab)
       return projectActive(tab)
     }
     return action.kind === 'new' || action.kind === 'raw' ? create()
@@ -351,6 +376,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         action: { kind: 'resume-id', nativeSessionId: input.nativeSessionId ?? input.adapterSessionId },
       })
       deps.tabs.setActive(created.tabId)
+      await rememberOpen(created)
       return projectActive(created)
     }, canAdmit)
   }
@@ -437,6 +463,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       }
     }
     if (deps.archive.getArchivedSessions(history.projectPath).includes(id)) await deps.archive.restoreSession(history.projectPath, id)
+    if (match) await saveSessionOpenedAt(deps.metadata, projectHistory(match.entry, match.item), Date.now(),
+      () => findHistory(id).length === 1).catch(() => {})
   }
 
   return { runtime: 'native-cli', captureOwnership, listSessions, createSession, resumeSession, activateSession, stopSession, restartSession, closeSession, renameSession, archiveSession, restoreArchivedSession, verifyMissingSession }

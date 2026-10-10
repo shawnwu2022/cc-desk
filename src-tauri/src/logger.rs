@@ -41,10 +41,13 @@ fn open_log_file(name: &str) -> Option<File> {
 /// 格式化日志行
 fn format_line(record: &log::Record) -> String {
     let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-    // Upstream parse/network logs may contain manifest strings or proxy secrets.
+    // Upstream parse/network logs may contain manifest strings, proxy secrets,
+    // or signed release-asset redirect URLs. Never interpolate their payload.
     // The desktop adapter logs fixed code/stage after receiving the same error.
     if record.target() == "tauri_plugin_updater"
         || record.target().starts_with("tauri_plugin_updater::")
+        || record.target() == "reqwest"
+        || record.target().starts_with("reqwest::")
     {
         return format!(
             "[{}][{}] [Updater] upstream detail redacted; see update_diag\n",
@@ -201,29 +204,5 @@ pub fn init() {
 }
 
 #[cfg(test)]
-mod updater_log_tests {
-    #[test]
-    fn upstream_update_strings_never_enter_any_formatted_log() {
-        let record = log::Record::builder()
-            .target("tauri_plugin_updater::updater")
-            .level(log::Level::Error)
-            .args(format_args!(
-                "failed to deserialize PRIVATE_PATH TOKEN=SECRET"
-            ))
-            .build();
-        let line = super::format_line(&record);
-        assert!(line.contains("upstream detail redacted; see update_diag"));
-        assert!(!line.contains("PRIVATE_PATH"));
-        assert!(!line.contains("TOKEN"));
-        assert!(!line.contains("SECRET"));
-        let diagnostic = log::Record::builder()
-            .target("cc_desk::desktop_updater")
-            .level(log::Level::Warn)
-            .args(format_args!(
-                "update_diag code=UPDATER_MANIFEST_INVALID stage=check"
-            ))
-            .build();
-        assert!(super::format_line(&diagnostic)
-            .contains("update_diag code=UPDATER_MANIFEST_INVALID stage=check"));
-    }
-}
+#[path = "tests/updater_logging.rs"]
+mod updater_log_tests;

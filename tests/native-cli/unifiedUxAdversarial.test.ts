@@ -220,7 +220,14 @@ describe('Adversarial unified ownership and persistence', () => {
     await boot()
     const catalog = useUnifiedSessionsStore()
     let row = catalog.sessions.find(row => row.runtime === (kind === 'legacy-live' ? 'legacy-claude' : 'native-cli'))!
+    const sourceRow = row
     if (kind !== 'history') row = await catalog.resumeCatalogSession(row)
+    const openWrites = f.ipc.mock.calls.filter(([command]) => command === 'upsert_session_ui_record')
+    expect(openWrites).toHaveLength(kind === 'history' ? 0 : 1)
+    if (kind !== 'history') expect(openWrites[0][1]).toMatchObject({ recordKey: sourceRow.id, openOnly: true,
+      record: { nativeSessionId: sourceRow.nativeSessionId, lastOpenedAt: expect.any(Number) } })
+    const recordsBeforeRename = clone(f.state.sessionRecords)
+    f.ipc.mockClear()
     const barrier = deferred<any>(), original = f.ipc.getMockImplementation()!
     f.ipc.mockImplementation((command, args) => command === 'pin_project' ? barrier.promise : original(command, args))
     const projects = useProjectsStateStore(), pinning = projects.pinProject('/other')
@@ -237,7 +244,7 @@ describe('Adversarial unified ownership and persistence', () => {
     barrier.resolve(clone(f.state)); await pinning
     expect(await outcome).toMatchObject({ message: 'STALE_SESSION_ATTEMPT' })
     expect(f.ipc.mock.calls.filter(([command]) => command === 'upsert_session_ui_record')).toHaveLength(0)
-    expect(f.state.sessionRecords).toEqual({}); expect(projects.error).toBe(false)
+    expect(f.state.sessionRecords).toEqual(recordsBeforeRename); expect(projects.error).toBe(false)
     expect(f.host.renameLegacy).not.toHaveBeenCalled()
   })
 
@@ -336,6 +343,11 @@ it.each(['queued', 'issued'] as const)('Adversarial_RenameSelection_%s_015', asy
   seedHistory(); await boot()
   const catalog = useUnifiedSessionsStore(), historyRow = catalog.sessions.find(row => row.runtime === 'native-cli')!
   const row = await catalog.resumeCatalogSession(historyRow)
+  const openWrites = f.ipc.mock.calls.filter(([command]) => command === 'upsert_session_ui_record')
+  expect(openWrites).toHaveLength(1)
+  expect(openWrites[0][1]).toMatchObject({ recordKey: historyRow.id, openOnly: true,
+    record: { nativeSessionId: historyRow.nativeSessionId, lastOpenedAt: expect.any(Number) } })
+  f.ipc.mockClear()
   const barrier = deferred<any>(), original = f.ipc.getMockImplementation()!
   f.ipc.mockImplementation((command, args) => command === (phase === 'queued' ? 'pin_project' : 'upsert_session_ui_record') ? barrier.promise : original(command, args))
   const pinning = phase === 'queued' ? useProjectsStateStore().pinProject('/other') : Promise.resolve()

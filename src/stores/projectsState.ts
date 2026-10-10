@@ -8,7 +8,7 @@ import type {
   SessionUiRecord,
 } from '@/types/app'
 import type { UnifiedCliKind } from '@/types/unifiedSession'
-import { normalizePath } from '@/utils/path'
+import { normalizePath, sameProjectPath } from '@/utils/path'
 import { validateDisplayName } from '@/utils/displayName'
 
 function errorCode(value: unknown): string | null {
@@ -33,6 +33,12 @@ function sessionRecord(value: unknown): value is SessionUiRecord {
     && boundedText(row.projectPath, 32768) && boundedText(row.adapterSessionId, 256)
     && (row.nativeSessionId == null || boundedText(row.nativeSessionId, 256)) && boundedText(row.title, 200, true)
     && Number.isInteger(row.lastActivityAt) && row.lastActivityAt >= 0
+    && (row.lastOpenedAt === undefined || Number.isSafeInteger(row.lastOpenedAt) && row.lastOpenedAt >= 0)
+}
+function sameSessionRecord(left: SessionUiRecord | undefined, right: SessionUiRecord): left is SessionUiRecord {
+  return !!left && left.runtime === right.runtime && left.cli === right.cli
+    && sameProjectPath(left.projectPath, right.projectPath) && left.adapterSessionId === right.adapterSessionId
+    && (left.nativeSessionId ?? null) === (right.nativeSessionId ?? null)
 }
 function launchPreference(value: unknown): value is ProjectLaunchPreference {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -183,7 +189,20 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
   }
 
   function upsertSessionRecord(key: string, record: SessionUiRecord, beforeMutation?: () => void): Promise<ProjectsState> {
-    return mutate(() => projectsApi.upsertSessionUiRecord(key, record), true, beforeMutation)
+    return mutate(() => {
+      const saved = sessionRecords.get(key)
+      return projectsApi.upsertSessionUiRecord(key, sameSessionRecord(saved, record) && saved.lastOpenedAt !== undefined
+        ? { ...record, lastOpenedAt: Math.max(saved.lastOpenedAt, record.lastOpenedAt ?? 0) } : record)
+    }, true, beforeMutation)
+  }
+
+  function recordSessionOpened(key: string, record: SessionUiRecord, beforeMutation?: () => void): Promise<ProjectsState> {
+    // Read after prior queued writes, so opening metadata cannot overwrite a rename.
+    return mutate(() => {
+      const saved = sessionRecords.get(key)
+      const next = sameSessionRecord(saved, record) ? { ...saved, lastOpenedAt: Math.max(saved.lastOpenedAt ?? 0, record.lastOpenedAt ?? 0) } : record
+      return projectsApi.upsertSessionUiRecord(key, next, true)
+    }, true, beforeMutation)
   }
 
   function removeSessionRecord(key: string): Promise<ProjectsState> {
@@ -231,6 +250,7 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     archiveSession,
     restoreSession,
     upsertSessionRecord,
+    recordSessionOpened,
     removeSessionRecord,
     setLaunchPreference,
   }

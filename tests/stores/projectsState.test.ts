@@ -66,6 +66,25 @@ beforeEach(async () => {
 })
 
 describe('durable shared projects state', () => {
+  it('opening metadata uses the atomic open-only mode and preserves a queued rename', async () => {
+    const api = await import('@/api/tauri')
+    let records: Record<string, SessionUiRecord> = { native: { ...nativeRecord, title: 'Existing title', lastOpenedAt: 10 } }
+    ;(api.getProjectsState as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ ...emptyState(), sessionRecords: { ...records } }))
+    const upsert = api.upsertSessionUiRecord as ReturnType<typeof vi.fn>
+    upsert.mockImplementation(async (key: string, record: SessionUiRecord) => {
+      records = { ...records, [key]: { ...record } }
+      return { ...emptyState(), sessionRecords: records }
+    })
+    const store = useProjectsStateStore(); await store.load()
+    const rename = store.upsertSessionRecord('native', { ...nativeRecord, title: 'New title' })
+    const opened = store.recordSessionOpened('native', { ...nativeRecord, title: 'Stale title', lastOpenedAt: 20 })
+    await Promise.all([rename, opened])
+    expect(upsert).toHaveBeenLastCalledWith('native', expect.objectContaining({ title: 'New title', lastOpenedAt: 20 }), true)
+    expect(store.sessionRecords.get('native')).toMatchObject({ title: 'New title', lastOpenedAt: 20 })
+    await store.upsertSessionRecord('native', { ...nativeRecord, title: 'Final title' })
+    expect(store.sessionRecords.get('native')).toMatchObject({ title: 'Final title', lastOpenedAt: 20 })
+  })
+
   it('serializes mutations and applies complete returned snapshots', async () => {
     const api = await import('@/api/tauri')
     const first = deferred<ProjectsState>()

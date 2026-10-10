@@ -240,25 +240,29 @@ describe('Final workspace review regressions', () => {
     expect(w.getComponent({ name: 'WorkspaceView' }).props('project')?.projectPath).toBe('/legacy')
     expect(useUnifiedSessionsStore().resumeDialog).toBeNull(); expect(io.ptySpawn).not.toHaveBeenCalled()
   })
-  // 同一项目中 Legacy/Native 排序由实际活动决定；100次确认轮询不得抢到首位。
+  // 同一项目按打开时间保持顺序；100次轮询与输出触碰均不能移动行或抢选中项。
   it('Activity_MixedOrderAndBurst_008', async () => {
     const w = renderApp(); const { tabs, tab } = await openNativeRow(w)
     const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
     const poll = { instanceId: 'backend', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running' as const, failure: null }
     tabs.tab(tab.tabId)!.lastActivityAt = 1000
+    tabs.tab(tab.tabId)!.createdAt = 1000
+    now.mockReturnValue(2000)
     const legacy = useSessionStore(); const legacyId = legacy.createTab('/repo')
     legacy.tabs.get(legacyId)!.lastActiveAt = 2000
     await flushPromises()
     const catalog = useUnifiedSessionsStore()
     const order = () => catalog.projectGroups.find(group => group.projectPath === '/repo')!.sessions.filter(row => row.id.includes('tab:')).map(row => row.id)
     expect(order()).toEqual([`legacy-tab:${legacyId}`, `native-tab:${tab.tabId}`])
+    expect(catalog.activeSessionId).toBe(`native-tab:${tab.tabId}`)
     const refresh = vi.spyOn(catalog, 'refresh')
     now.mockReturnValue(61000)
     for (let n = 0; n < 100; n++) { tabs.applyLaunchStatus(tab.tabId, poll); await flushPromises() }
     expect(order()).toEqual([`legacy-tab:${legacyId}`, `native-tab:${tab.tabId}`])
     expect(refresh).not.toHaveBeenCalled()
     for (let n = 0; n < 100; n++) { now.mockReturnValue(62000 + n); tabs.touch(tab.tabId, captureNativeAttempt(tab)); await flushPromises() }
-    expect(order()).toEqual([`native-tab:${tab.tabId}`, `legacy-tab:${legacyId}`])
+    expect(order()).toEqual([`legacy-tab:${legacyId}`, `native-tab:${tab.tabId}`])
+    expect(catalog.activeSessionId).toBe(`native-tab:${tab.tabId}`)
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 

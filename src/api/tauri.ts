@@ -225,8 +225,9 @@ export const setDisplayName = (path: string, alias: string): Promise<ProjectsSta
 export const upsertSessionUiRecord = (
   recordKey: string,
   record: SessionUiRecord,
+  openOnly = false,
 ): Promise<ProjectsState> =>
-  invoke<ProjectsState>('upsert_session_ui_record', { recordKey, record });
+  invoke<ProjectsState>('upsert_session_ui_record', { recordKey, record, ...(openOnly ? { openOnly: true } : {}) });
 
 export const removeSessionUiRecord = (recordKey: string): Promise<ProjectsState> =>
   invoke<ProjectsState>('remove_session_ui_record', { recordKey });
@@ -284,6 +285,8 @@ export const getUpdaterSettings = (): Promise<{ proxy: string | null }> =>
   invoke('get_updater_settings');
 export const saveUpdaterSettings = (proxy: string | null): Promise<void> =>
   invoke('save_updater_settings', { proxy });
+export const testUpdaterProxy = (proxy: string | null): Promise<{ elapsedMs: number; mode: 'custom' | 'inherited' }> =>
+  invoke('test_updater_proxy', { proxy });
 export const installDesktopUpdate = (admissionId: string): Promise<void> =>
   invoke('install_desktop_update', { admissionId });
 

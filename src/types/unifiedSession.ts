@@ -79,6 +79,8 @@ export interface UnifiedSession {
   /** Authenticated recent/unread event receipts, never a current activity claim. */
   observationNotice?: NativeObservationNoticeState
   lastActivityAt: number
+  /** New/reopened/restored time; selecting an already open terminal preserves it. */
+  lastOpenedAt?: number
   archived: boolean
   /** UI projection only; runtime actions must still check the owning store. */
   opened?: boolean

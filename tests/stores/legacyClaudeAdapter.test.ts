@@ -149,10 +149,10 @@ describe('legacy Claude adapter', () => {
 
     expect(sessions.map(session => session.id)).toEqual([
       'legacy-tab:tab-active',
-      'legacy-history:c:/work/game:history-1',
       'legacy-history:c:/work/game:archived-1',
+      'legacy-history:c:/work/game:history-1',
     ])
-    expect(sessions[2].archived).toBe(true)
+    expect(sessions.find(row => row.id === 'legacy-history:c:/work/game:archived-1')!.archived).toBe(true)
     expect(sessions[0]).toMatchObject({
       projectKey: 'c:/work/game',
       runtime: 'legacy-claude',
@@ -162,7 +162,7 @@ describe('legacy Claude adapter', () => {
       resumable: true,
       nativeSessionId: 'claimed-session',
     })
-    expect(sessions[1]).toMatchObject({
+    expect(sessions.find(row => row.id === 'legacy-history:c:/work/game:history-1')).toMatchObject({
       processState: 'stopped',
       attentionState: 'none',
       resumable: true,

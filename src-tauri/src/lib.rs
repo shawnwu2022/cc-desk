@@ -16,6 +16,7 @@ mod pty_decoder;
 mod run_lifecycle;
 mod run_supervisor;
 mod session_name_index;
+mod session_ui_record;
 mod store;
 mod terminal_input;
 mod terminal_transport;
@@ -236,6 +237,7 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
         .invoke_handler(tauri::generate_handler![
             desktop_updater::get_updater_settings,
             desktop_updater::save_updater_settings,
+            desktop_updater::test_updater_proxy,
             desktop_updater::check_desktop_update,
             desktop_updater::install_desktop_update,
             version_history::commands::list_history,

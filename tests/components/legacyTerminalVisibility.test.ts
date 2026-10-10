@@ -4,6 +4,8 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import XTermTerminal from '@/components/XTermTerminal.vue'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
+import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
+import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
 import { platform } from '@/utils/platform'
 const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], input: vi.fn(), kill: vi.fn(), spawn: vi.fn(), output: null as any, exit: null as any, outputReady: vi.fn(), exitReady: vi.fn(), dragReady: vi.fn(), copy: vi.fn(), clip: vi.fn() }))
@@ -32,6 +34,32 @@ beforeEach(() => {
 })
 afterEach(() => { wrapper?.unmount(); wrapper = null; vi.unstubAllGlobals() })
 describe('Legacy unified ownership', () => {
+  // 真实Legacy停止端口与适配器只需一次关闭；迟到退出/输出不能重建已移除的终端。
+  it('Legacy_SingleCloseAndLateExit_015', async () => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises()
+    await (wrapper.vm as any).startTab(id); await flushPromises()
+    const ptyId = sessions.tabs.get(id)!.ptyId!
+    const catalog = useUnifiedSessionsStore()
+    catalog.configureAdapters([createLegacyClaudeAdapter({ store: sessions, projectPaths: () => ['/repo'], runtime: {
+      startTab: tabId => (wrapper!.vm as any).startTab(tabId),
+      stopTab: tabId => (wrapper!.vm as any).stopTab(tabId),
+      restartTab: tabId => (wrapper!.vm as any).restartTab(tabId),
+      renameTab: (tabId, title) => (wrapper!.vm as any).renameTab(tabId, title),
+    } })])
+    await catalog.refresh(); await catalog.activateSession('legacy-tab:' + id)
+    await catalog.closeSession('legacy-tab:' + id); await flushPromises()
+    expect(io.kill).toHaveBeenCalledExactlyOnceWith(ptyId)
+    expect(sessions.tabs.has(id)).toBe(false)
+    expect(catalog.activeSessionId).toBeNull()
+    expect(io.terms[0].dispose).toHaveBeenCalledTimes(1)
+    io.exit({ id: ptyId }); io.output({ id: ptyId, data: 'late output' }); await flushPromises()
+    await catalog.refresh()
+    expect(sessions.tabs.has(id)).toBe(false)
+    expect(catalog.sessions.some(row => row.id === 'legacy-tab:' + id)).toBe(false)
+    expect(wrapper.find(`[data-tab="${id}"]`).exists()).toBe(false)
+  })
+
   it('Legacy_PasteKeyboardUsesDomMimeWithoutExtraPermissions_014', async () => {
     const sessions = useSessionStore(); const id = sessions.createTab('/repo')
     wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()

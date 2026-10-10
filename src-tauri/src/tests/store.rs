@@ -2363,7 +2363,8 @@ fn ProjectsState_RoundTripsSessionRecords_002() {
               "adapterSessionId":"tab-1",
               "nativeSessionId":"native-1",
               "title":"修复登录",
-              "lastActivityAt":1234
+              "lastActivityAt":1234,
+              "lastOpenedAt":1000
             }
           },
           "launchPreferences":{
@@ -2382,6 +2383,7 @@ fn ProjectsState_RoundTripsSessionRecords_002() {
     assert_eq!(record.title, "修复登录");
     assert_eq!(record.project_path, "d:/work/game");
     assert_eq!(record.native_session_id.as_deref(), Some("native-1"));
+    assert_eq!(record.last_opened_at, Some(1000));
     let preference = state.launch_preferences.get("d:/work/game").unwrap();
     assert_eq!(preference.last_cli, "codex");
     assert_eq!(
@@ -2391,6 +2393,10 @@ fn ProjectsState_RoundTripsSessionRecords_002() {
 
     let reparsed = get_projects_state_at(&data).unwrap();
     assert_eq!(reparsed.session_records.len(), 1);
+    assert_eq!(
+        reparsed.session_records["native-key"].last_opened_at,
+        Some(1000)
+    );
     assert_eq!(reparsed.launch_preferences.len(), 1);
 }
 
