@@ -626,6 +626,73 @@ fn HistoryTools_RejectSymlink_005() {
     );
 }
 
+// 项目自动记忆目录不是会话；其深层目录和 JSONL 不参与历史读取。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryMemory_KeepMainSession_001() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main session", t.path());
+    put(t.path(), "projects/encoded/memory/notes.jsonl", "{broken");
+    put(
+        t.path(),
+        "projects/encoded/memory/topics/nested/note.md",
+        "memory",
+    );
+    for (kind, query, id, expected) in [
+        (ResourceKind::History, None, None, 1),
+        (ResourceKind::Messages, None, Some("same-id"), 2),
+        (ResourceKind::Search, Some("needle"), None, 1),
+    ] {
+        let items = list(t.path(), CliKind::Claude, None, kind, query, id).unwrap();
+        assert_eq!(items.as_array().unwrap().len(), expected);
+        assert_eq!(items[0]["nativeSessionId"], "same-id");
+    }
+}
+
+// 项目 memory 链接必须拒绝，不能因为名称已知而绕过文件身份检查。
+#[cfg(unix)]
+#[test]
+#[allow(non_snake_case)]
+fn HistoryMemory_RejectSymlink_002() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main session", t.path());
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), t.path().join("projects/encoded/memory")).unwrap();
+    assert_eq!(
+        list(
+            t.path(),
+            CliKind::Claude,
+            None,
+            ResourceKind::History,
+            None,
+            None
+        )
+        .err(),
+        Some("SOURCE_NOT_REGULAR")
+    );
+}
+
+// memory 只在项目层排除；会话层的同名未知目录仍使来源不可用。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryMemory_KeepDepthGuard_003() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main session", t.path());
+    fs::create_dir_all(t.path().join("projects/encoded/same-id/memory")).unwrap();
+    assert_eq!(
+        list(
+            t.path(),
+            CliKind::Claude,
+            None,
+            ResourceKind::History,
+            None,
+            None
+        )
+        .err(),
+        Some("SOURCE_UNSUPPORTED")
+    );
+}
+
 #[test]
 #[allow(non_snake_case)]
 fn HistoryMetadata_LargeCodexTranscriptStillListsSession_002() {

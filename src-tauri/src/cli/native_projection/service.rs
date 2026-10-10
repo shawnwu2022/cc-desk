@@ -2,14 +2,14 @@
 use super::diagnostics::{ProjectionFailure, ProjectionStage};
 use super::registry::{Grant, Owner, ScopeRegistry};
 use super::scoped_fs::{ReadResult, Root};
-use super::selection::{locations, Locations};
+use super::selection::{locations, read_scope_known, Locations};
 use super::wire::{ProjectionResult, ReadRequest, ScopeTarget, SourceBasis, SourceRef};
 use crate::cli::environment::{build_environment, EnvMap};
 use crate::cli::launch_service::LaunchService;
-use crate::cli::profiles::{error, Launcher, Override, Profile};
+use crate::cli::profiles::{error, Override, Profile};
 use crate::cli::run_registry::RunKey;
 use crate::cli::snapshot::CallerIdentity;
-use crate::cli::types::{CliKind, LaunchAction, SafeError};
+use crate::cli::types::{LaunchAction, SafeError};
 use crate::cli::workspace::RegisteredProject;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -147,9 +147,11 @@ impl ProjectionService {
                 let snapshot = self.launch.access(caller, &run)?.snapshot()?;
                 // Unknown/native-picker changes are not inferred by inspecting terminal text.
                 if snapshot.raw_args().is_some()
-                    || !matches!(snapshot.launcher(), Launcher::Native)
-                    || !snapshot.default_args().is_empty()
-                    || !snapshot.extra_args().is_empty()
+                    || !read_scope_known(
+                        snapshot.request().cli,
+                        snapshot.launcher(),
+                        snapshot.default_args().iter().chain(snapshot.extra_args()),
+                    )
                     || snapshot
                         .legacy_default_args()
                         .is_some_and(|s| !s.is_empty())
@@ -160,7 +162,7 @@ impl ProjectionService {
                 let selected =
                     locations(snapshot.request().cli, snapshot.environment()).map_err(error)?;
                 *stage = ProjectionStage::ScopeSourceRoot;
-                // Only a new no-extra-args launch authorizes its frozen requested cwd for project resources.
+                // Only a new launch with proven root-neutral args authorizes its frozen requested cwd.
                 // Resume/picker can choose another cwd; they expose root-wide observations only.
                 let (project, project_paths) =
                     if matches!(snapshot.request().action, LaunchAction::New) {
@@ -261,10 +263,11 @@ fn profile_locations_diagnosed(
     stage: &mut ProjectionStage,
 ) -> Result<(EnvMap, Locations), SafeError> {
     *stage = ProjectionStage::ScopeProfileValidation;
-    if profile.cli == CliKind::Shell
-        || !matches!(profile.launcher, Launcher::Native)
-        || matches!(&profile.default_args,Override::Set(args) if !args.is_empty())
-    {
+    let args = match &profile.default_args {
+        Override::Set(args) => args.as_slice(),
+        Override::Inherit | Override::Unset => &[],
+    };
+    if !read_scope_known(profile.cli, &profile.launcher, args) {
         return Err(error("SCOPE_UNKNOWN"));
     }
     let legacy = profile.read_legacy(

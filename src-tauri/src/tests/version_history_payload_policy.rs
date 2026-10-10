@@ -613,7 +613,7 @@ fn HistoryPayload_InventoryMatrix_013() {
     }
 }
 
-// 开放已有协调器不扩展历史包信任；未知版本仍不能取得可选择身份。
+// 可选择身份不授予安装权限；缺少精确版本资产的发布仍拒绝选择。
 #[test]
 fn HistoryPayload_UnreviewedVersion_014() {
     use crate::version_history::types::HistoryBlockReason;
@@ -629,7 +629,53 @@ fn HistoryPayload_UnreviewedVersion_014() {
         assert!(!row.install_ready);
         assert_eq!(
             row.blocked_reason,
-            Some(HistoryBlockReason::PackagingBoundaryUnknown)
+            Some(HistoryBlockReason::PlatformAssetMissing)
         );
+    }
+}
+
+// Metadata admission is independent of the exact installed-output safety policy.
+#[test]
+fn HistoryPayload_DynamicSelectionDoesNotAuthorizeInstall_015() {
+    use crate::cli::{snapshot::CallerIdentity, types::WireU64};
+    for version in ["0.18.1", "0.18.2", "0.18.3"] {
+        let mut release = parse_release(include_bytes!(
+            "../../../tests/fixtures/version-history-payload/v0.17.7-selection.json"
+        ))
+        .unwrap();
+        release.tag_name = format!("v{version}");
+        release.name = Some(format!("CC Desk v{version}"));
+        release.html_url = release.html_url.replace("v0.17.7", &release.tag_name);
+        for asset in &mut release.assets {
+            asset.name = asset.name.replace("0.17.7", version);
+            asset.browser_download_url = asset.browser_download_url.replace("0.17.7", version);
+        }
+        let catalog = CatalogService::new(Arc::new(Source(release)), HostPlatform::WindowsX64);
+        let caller = CallerIdentity {
+            instance_id: "dynamic-payload-test".into(),
+            window_label: "main".into(),
+            webview_epoch: WireU64::parse("1").unwrap(),
+        };
+        let row = catalog.list(&caller, None).unwrap().rows.remove(0);
+        assert!(row.select_allowed);
+        assert!(!row.install_ready);
+        let selected = catalog
+            .select(&caller, &row.release_id, row.asset_id.as_deref().unwrap())
+            .unwrap();
+        let selection = catalog
+            .resolve_selection(&caller, &selected.selection_token)
+            .unwrap();
+        assert_eq!(
+            PayloadAdmission::for_selection(&selection)
+                .err()
+                .unwrap()
+                .code,
+            "HISTORY_PAYLOAD_UNVERIFIED"
+        );
+        assert!(!roundtrip_enabled(&selection));
+        assert!(matches!(
+            review_block(&selection),
+            Some(super::super::manager::SwitchReviewBlock::PayloadUnverified)
+        ));
     }
 }

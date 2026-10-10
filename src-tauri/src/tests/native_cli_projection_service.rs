@@ -86,6 +86,48 @@ fn D12_Production_ProfilesActuallyReadIndependentRoots_001() {
         assert!(matches!(&data.items[0],ResourceItem::Session{title,..} if title==id));
     }
 }
+
+// Cmd npm launcher 的只读 Codex 来源使用精确 CODEX_HOME，不启动 CLI。
+#[test]
+#[allow(non_snake_case)]
+fn ScopeShim_ReadCodexRoot_007() {
+    use crate::cli::profiles::{Dialect, Launcher};
+    let f = Fixture::new();
+    let root = f._temp.path().join("codex");
+    fs::create_dir_all(root.join("sessions/2026/10/10")).unwrap();
+    fs::write(
+        root.join("sessions/2026/10/10/rollout.jsonl"),
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"fixture-codex\"}}\n",
+    )
+    .unwrap();
+    let mut p = Profile::new("codex-shim", CliKind::Codex);
+    p.launcher = Launcher::Shim {
+        runner: "cmd.exe".into(),
+        dialect: Dialect::Cmd,
+    };
+    p.default_args = Override::Set(vec!["--no-alt-screen".into()]);
+    p.env.insert(
+        "CODEX_HOME".into(),
+        Override::Set(EnvValue::Literal {
+            value: root.to_str().unwrap().into(),
+            non_secret: true,
+        }),
+    );
+    let d = f
+        .repo
+        .apply(number(0), Patch::Create { profile: p })
+        .unwrap();
+    let target = ScopeTarget::Profile {
+        profile_id: "codex-shim".into(),
+        expected_profile_revision: d.profiles["codex-shim"].revision,
+        project_id: None,
+    };
+    let source = f.service.scope(&f.caller, &target).unwrap();
+    let data = f.service.read(&f.caller, &req(source)).unwrap();
+    assert!(
+        matches!(&data.items[0], ResourceItem::Session { native_session_id, .. } if native_session_id == "fixture-codex")
+    );
+}
 #[test]
 fn D12_Production_ProfileRevisionRevokesScope_002() {
     let f = Fixture::new();
