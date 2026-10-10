@@ -77,10 +77,10 @@ if ($LASTEXITCODE -ne 0) { throw 'hosted fixture compilation failed' }
 if ($LASTEXITCODE -ne 0) { throw 'collision fixture compilation failed' }
 & rustc --test --cfg selected_failure $hostedRust -o $failedExe
 if ($LASTEXITCODE -ne 0) { throw 'failure fixture compilation failed' }
-$fixtureScope = [pscustomobject]@{ jobFreeTests = @('excluded_exact'); requiredSelectedTests = @('passing') }
+$fixtureScope = [pscustomobject]@{ jobFreeTests = @('excluded_exact'); unelevatedTests = @(); requiredSelectedTests = @('passing'); ordinaryRequiredSelectedTests = @() }
 $full = Read-HostedInventory $hostedExe @() (Join-Path $logs 'full.log')
 $ignored = Read-HostedInventory $hostedExe @('--ignored') (Join-Path $logs 'ignored.log')
-$selection = Get-HostedTestSelection $full.entries $ignored.names $true $true $fixtureScope
+$selection = Get-HostedTestSelection -Full $full.entries -Ignored $ignored.names -Library $true -Contained $true -Elevated $false -Scope $fixtureScope
 $selected = Read-HostedInventory $hostedExe @('--skip', 'excluded_exact') (Join-Path $logs 'selected.log')
 Pass 'hosted selection exactly reconciles F/I/S/E and unknown ordinary name remains selected' {
     Assert-HostedSelection $full.names $ignored.names $selected.names $selection.excluded
@@ -93,7 +93,7 @@ Pass 'actual passing hosted body preserves ignored reason and exact filtered cou
 }
 Reject 'actual substring collision is rejected before test body' {
     $collision = Read-HostedInventory $collisionExe @() (Join-Path $logs 'collision-full.log')
-    Get-HostedTestSelection $collision.entries $ignored.names $true $true $fixtureScope
+    Get-HostedTestSelection -Full $collision.entries -Ignored $ignored.names -Library $true -Contained $true -Elevated $false -Scope $fixtureScope
 } 'collision'
 Reject 'actual libtest prefix filtering cannot conceal an extra omitted test' {
     $collision = Read-HostedInventory $collisionExe @() (Join-Path $logs 'collision-full.log')
@@ -107,12 +107,19 @@ Reject 'broad skip cannot omit an ordinary test' {
 } 'selection'
 Reject 'ignored worker cannot be relabeled unavailable' { Assert-HostedSelection $full.names $ignored.names $selected.names @('worker') } 'ignored'
 Reject 'empty nonignored library cannot become a hosted pass' {
-    Get-HostedTestSelection @([pscustomobject]@{name='worker';type='test'}) @('worker') $true $true ([pscustomobject]@{jobFreeTests=@();requiredSelectedTests=@()})
+    Get-HostedTestSelection -Full @([pscustomobject]@{name='worker';type='test'}) -Ignored @('worker') -Library $true -Contained $true -Elevated $false -Scope ([pscustomobject]@{jobFreeTests=@();unelevatedTests=@();requiredSelectedTests=@();ordinaryRequiredSelectedTests=@()})
 } 'empty'
-Reject 'policy entry changed to ignored is rejected' { Get-HostedTestSelection $full.entries @('excluded_exact') $true $true $fixtureScope } 'policy drift'
+Reject 'policy entry changed to ignored is rejected' { Get-HostedTestSelection -Full $full.entries -Ignored @('excluded_exact') -Library $true -Contained $true -Elevated $false -Scope $fixtureScope } 'policy drift'
 Pass 'Job-free selector includes every full inventory name' {
-    $all = Get-HostedTestSelection $full.entries $ignored.names $true $false $fixtureScope
+    $all = Get-HostedTestSelection -Full $full.entries -Ignored $ignored.names -Library $true -Contained $false -Elevated $false -Scope $fixtureScope
     if ($all.excluded.Count -ne 0 -or !(Test-ExactSet $all.selected $full.names)) { throw 'job-free selector filtered a test' }
+}
+Pass 'actual elevated selection separates ordinary unavailable from mandatory contracts' {
+    $elevationScope = [pscustomobject]@{jobFreeTests=@('excluded_exact');unelevatedTests=@('ordinary_new');requiredSelectedTests=@('passing');ordinaryRequiredSelectedTests=@('passing')}
+    $elevatedSelection = Get-HostedTestSelection -Full $full.entries -Ignored $ignored.names -Library $true -Contained $true -Elevated $true -Scope $elevationScope
+    if (!(Test-ExactSet $elevatedSelection.excluded @('excluded_exact','ordinary_new')) -or $elevatedSelection.selected -cnotcontains 'passing' -or $elevatedSelection.selected -cnotcontains 'worker') { throw 'elevated classification lost mandatory/original ignored distinction' }
+    $naturalSelection = Get-HostedTestSelection -Full $full.entries -Ignored $ignored.names -Library $true -Contained $true -Elevated $false -Scope $elevationScope
+    if ($naturalSelection.selected -cnotcontains 'ordinary_new' -or !(Test-ExactSet $naturalSelection.excluded @('excluded_exact'))) { throw 'unelevated ordinary integration omitted' }
 }
 Pass 'real selected failure keeps exit101 and failed outer count' {
     $failedFull = Read-HostedInventory $failedExe @() (Join-Path $logs 'failure-full.log')
@@ -134,7 +141,7 @@ Pass 'whole hosted helper inventories four real std harnesses and validates arti
     $scopePath = Join-Path $PSScriptRoot '../../scripts/windows-native-scope.json'
     $audited = Get-Content -LiteralPath $scopePath -Raw -Encoding utf8 | ConvertFrom-Json
     $tree = @{ modules = @{}; tests = @() }
-    foreach ($name in @($audited.jobFreeTests) + @($audited.requiredSelectedTests)) {
+    foreach ($name in @($audited.jobFreeTests) + @($audited.requiredSelectedTests) + @($audited.unelevatedTests) + @($audited.ordinaryRequiredSelectedTests)) {
         $parts = $name.Split('::', [StringSplitOptions]::None); $node = $tree
         for ($i = 0; $i -lt $parts.Count - 1; $i++) {
             if (!$node.modules.ContainsKey($parts[$i])) { $node.modules[$parts[$i]] = @{ modules = @{}; tests = @() } }
@@ -160,15 +167,20 @@ Pass 'whole hosted helper inventories four real std harnesses and validates arti
     $oldSha = $env:GITHUB_SHA; $oldRun = $env:GITHUB_RUN_ID; $oldAttempt = $env:GITHUB_RUN_ATTEMPT; $oldOutput = $env:GITHUB_OUTPUT
     try {
         $env:GITHUB_SHA = (& git rev-parse HEAD).Trim(); $env:GITHUB_RUN_ID = '12345'; $env:GITHUB_RUN_ATTEMPT = '2'; $env:GITHUB_OUTPUT = Join-Path $fixture 'github-output'
-        $result = Invoke-HostedSuite $ownedTargets $true $manifest (Resolve-Path (Join-Path $PSScriptRoot '../../scripts')).Path
+        $result = Invoke-HostedSuite -Targets $ownedTargets -Contained $true -Elevated $false -Manifest $manifest -ScriptsDirectory (Resolve-Path (Join-Path $PSScriptRoot '../../scripts')).Path
         if ($result -isnot [bool] -or !$result) { throw 'whole helper did not return exactly Boolean true' }
         $reportPath = Join-Path $fixture 'target/windows-native-coverage/windows-native-coverage.json'
         $report = Get-Content -LiteralPath $reportPath -Raw -Encoding utf8 | ConvertFrom-Json
         if (!$report.completed -or $report.harnesses.Count -ne 4 -or $report.harnesses[0].excluded.Count -ne 18 -or $report.nativeAll.status -ne 'unverified' -or $report.nativeAcceptanceProven) { throw 'whole helper report contract wrong' }
         $emitted = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw -Encoding utf8
         if ($emitted -notmatch 'coverage_name=windows-native-coverage-' -or $emitted -notmatch 'coverage_path=src-tauri/target/windows-native-coverage') { throw 'coverage outputs missing' }
+        $elevatedResult = Invoke-HostedSuite -Targets $ownedTargets -Contained $true -Elevated $true -Manifest $manifest -ScriptsDirectory (Resolve-Path (Join-Path $PSScriptRoot '../../scripts')).Path
+        if ($elevatedResult -isnot [bool] -or !$elevatedResult) { throw 'elevated helper did not return Boolean true' }
+        $elevatedReport = Get-Content -LiteralPath $reportPath -Raw -Encoding utf8 | ConvertFrom-Json
+        if (!$elevatedReport.host.elevationQuerySucceeded -or !$elevatedReport.host.elevated -or $elevatedReport.harnesses[0].excluded.Count -ne 22 -or $elevatedReport.nativeJobSuite.unverifiedNames.Count -ne 18 -or $elevatedReport.nativeUnelevatedSuite.unverifiedNames.Count -ne 4 -or $elevatedReport.nativeUnelevatedSuite.reason -cne 'elevated_host') { throw 'elevated whole helper disclosure contract wrong' }
+        foreach ($name in $audited.ordinaryRequiredSelectedTests) { if ($elevatedReport.harnesses[0].selected -cnotcontains $name) { throw 'mandatory admission/cleanup contract omitted' } }
         $env:GITHUB_SHA = 'b' * 40
-        Reject 'whole helper refuses mismatched source binding before any body' { Invoke-HostedSuite $ownedTargets $true $manifest (Resolve-Path (Join-Path $PSScriptRoot '../../scripts')).Path } 'source binding'
+        Reject 'whole helper refuses mismatched source binding before any body' { Invoke-HostedSuite -Targets $ownedTargets -Contained $true -Elevated $false -Manifest $manifest -ScriptsDirectory (Resolve-Path (Join-Path $PSScriptRoot '../../scripts')).Path } 'source binding'
     } finally {
         $env:GITHUB_SHA=$oldSha; $env:GITHUB_RUN_ID=$oldRun; $env:GITHUB_RUN_ATTEMPT=$oldAttempt; $env:GITHUB_OUTPUT=$oldOutput
         Remove-Item -LiteralPath 'Function:cargo'

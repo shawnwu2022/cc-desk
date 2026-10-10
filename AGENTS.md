@@ -234,7 +234,7 @@ npm run tauri:build        # 生产构建
 
 ### 测试要求
 
-- **CI 性能与来源**：Windows 普通 Rust CI 一次编译四个原始 harness，以同 source SHA/run/attempt 绑定的编译包确定性分为 16 片；`Rust checks` 在全片成功、完整名称与原始忽略集合及原始输出计数核对后才通过。18 条 Job-free 专项仍按原政策披露为未验证，不增排除。roundtrip 的普通 release 与惰性 debug 场景并行，原 required policy 聚合全部成功。发布候选可在同源 CI 等待期间构建，正式发布仍受原完整来源、coverage 与平台签名门控。详见 [docs/ci-performance.md](docs/ci-performance.md)。
+- **CI 性能与来源**：Windows 普通 Rust CI 一次编译四个原始 harness，以同 source SHA/run/attempt 绑定的编译包确定性分为 16 片；`Rust checks` 在全片成功、完整名称与原始忽略集合及原始输出计数核对后才通过。18 条 Job-free 专项仍按原政策披露为未验证，不增排除。roundtrip 的普通 release 与惰性 debug 场景并行，原 required policy 聚合全部成功。发布候选可在同源 CI 等待期间构建，正式发布仍受原完整来源、coverage 与平台签名门控。详见 [docs/ci-performance.md](docs/ci-performance.md)。 分片必须流式保留原始输出和未完成名称诊断；单 harness 20 分钟、job 30 分钟上限超出后失败并保留部分证据，不能把 timeout 或先打印的成功摘要计作完整通过。
 
 - **开发必须搭配测试**：新增功能、修改逻辑、修复 bug 时，同步编写或更新对应测试。遵循 [测试编写原则](docs/测试编写原则.md)
 - **Bug 修复必须先写测试**：修复 bug 时，先编写测试复现问题，确认测试失败，然后修复代码直至测试通过
@@ -557,3 +557,11 @@ npm run tauri:build        # 生产构建
 - Pending exact-source catalog resumes coalesce one operation while preserving each caller's cancellation guard. Pending presentation is projected through both catalog and actual `projectManagement` groups, disabling repeat Resume clicks; navigation and source/profile guards remain authoritative. Preparation Cancel/Close behavior is unchanged.
 - Status backplates are solid 16px local SVGs with contrasting clock, work, shield, check, stop, close, alert and question marks; known idle is a plain solid dot and uncertain ownership uses a confirmation clock. Existing activity details (thinking/tool/subagent/compacting/input) and archive metadata have specific glyphs and localized passive hover/screen-reader labels. Known starting/working breathe slightly, thinking dots brighten sequentially, and permission/input/completion animate once on true state transitions; reduced motion is fully static. Native hook ordering/completion evidence and unread/taskbar ownership rules are unchanged.
 - The four new status-sheet browser captures are unapproved evidence, separate from all thirteen immutable historical baselines. Do not update baselines, claim real CLI/Windows rendering acceptance, change version metadata, merge or release from this frontend draft.
+
+
+### Ordinary signed historical installation
+
+- Ordinary historical install is a separate selection/preparation-bound capability with a shared one-shot latch against reviewed roundtrip. Default FreshSettings; complete source installation/Desk/WebView backup and original global control custody precede normal official installer handoff. Use fixed private sibling backup custody from transaction start; preserve signatures, held image identity, ACL/TOCTOU/durability and Job-free guards. No REVIEWED inventory relaxation for strict switch, no change to upgrade-only updater.
+- Ordinary receipt means installer started, never installation completed. Unknown receipts cannot replay; ordinary manager offers no Return/Launch. Preserve exact backup location and manual restoration evidence; no automatic deletion. Existing global recovery records require explicit runtime diagnosis and preserved evidence. See `docs/historical-version-preparation.md`; hosted tests do not establish Job-free native installation acceptance.
+
+- 普通安装器宿主覆盖：实际提权 token 下，020/022/024/025 四项非提权成功 integration 单独披露未验证，不计 pass；原 18 项 Job-free 分类独立保留。027–029 拒绝/状态次序/精确 fixture panic 清理合同必须执行；自然非提权环境仍执行原四项全部断言。编译后先复用同次 executable 定向检验，再执行原完整库存；禁止移除 `require_unelevated`、修改宿主权限或将 fixture 清理能力用于生产未知进程。

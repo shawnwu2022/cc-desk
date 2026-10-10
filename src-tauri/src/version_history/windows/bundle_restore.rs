@@ -93,6 +93,67 @@ struct SourceInstallationRecord {
 
 /// Authentication comes from the live registered installation at capture and
 /// the exact protected private record at reopen. It is not Deserialize-able.
+/// Read-only original backup observation. This owns exact protected record and
+/// private copy contents, without any current installed-directory, source-exit,
+/// Return, process or launch capability. Ordinary installers may replace the
+/// live directory while these independent source backups remain intact.
+pub(crate) struct ObservedInstallationBackup {
+    data: Arc<PrivateDirectory>,
+    copy: PrivateTreeCopy,
+    record: ManagerRecord,
+    saved: SourceInstallationRecord,
+    binding: JournalBinding,
+}
+impl ObservedInstallationBackup {
+    pub(crate) fn reopen(
+        data: Arc<PrivateDirectory>,
+        expected: &ManagerRecordReference,
+        user: &CurrentUser,
+        binding: &JournalBinding,
+    ) -> io::Result<Self> {
+        let record = ManagerRecord::open(data.clone(), SOURCE_RECORD, expected, user)?;
+        let saved: SourceInstallationRecord = record.decode(user)?;
+        if saved.schema != 1
+            || saved.transaction != binding.transaction_id
+            || saved.data_root != *data.directory().identity()
+            || saved.source.logical_digest()? != binding.source_bundle
+        {
+            return Err(blocked("original backup belongs to another transaction"));
+        }
+        let copy = PrivateTreeCopy::reopen(
+            data.clone(),
+            component(SOURCE_COPY)?,
+            saved.copy.clone(),
+            user,
+            SnapshotLimits::default(),
+        )?;
+        let observation = Self {
+            data,
+            copy,
+            record,
+            saved,
+            binding: binding.clone(),
+        };
+        observation.verify(user)?;
+        Ok(observation)
+    }
+    pub(crate) fn verify(&self, user: &CurrentUser) -> io::Result<()> {
+        self.data.verify(user)?;
+        self.record.verify(user)?;
+        self.copy.verify(user)?;
+        if self.saved.schema != 1
+            || self.saved.transaction != self.binding.transaction_id
+            || self.saved.data_root != *self.data.directory().identity()
+            || self.saved.source.logical_digest()? != self.binding.source_bundle
+            || self.saved.copy != *self.copy.manifest()?
+            || self.saved.copy.source != self.saved.source.tree
+        {
+            return Err(blocked("original backup mapping changed"));
+        }
+        validate_restorable(&self.saved.source.tree, user)
+    }
+}
+
 pub(crate) struct RetainedInstallationBundle {
     data: Arc<PrivateDirectory>,
     directory: Arc<Directory>,

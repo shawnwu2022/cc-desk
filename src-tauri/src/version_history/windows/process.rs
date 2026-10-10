@@ -59,6 +59,7 @@ use windows_core::{BOOL, PCWSTR, PWSTR};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum JobKind {
     Installer,
+    OrdinaryInstaller,
     HistoricalApplication,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,6 +320,23 @@ pub(crate) struct CommandLine {
     environment: Option<Vec<u16>>,
 }
 impl CommandLine {
+    pub(crate) fn ordinary_nsis(
+        application: &OsStr,
+        image: &PinnedFile,
+        installation: &OsStr,
+    ) -> io::Result<Self> {
+        let app = exact_drive_path(application)?;
+        let target = exact_drive_path(installation)?;
+        let command = Self {
+            application: application.to_owned(),
+            text: format!("\"{app}\" /UPDATE /NS /D={target}"),
+            #[cfg(test)]
+            environment: None,
+        };
+        image.verify()?;
+        command.verify_image(image)?;
+        Ok(command)
+    }
     pub(crate) fn nsis(application: &OsStr, installation: &OsStr) -> io::Result<Self> {
         let app = exact_drive_path(application)?;
         let target = exact_drive_path(installation)?;
@@ -457,6 +475,7 @@ struct JobIdentity {
 enum JobPhase {
     ArmedPreparation,
     HistoricalLifetime,
+    OrdinaryInstallerLifetime,
 }
 pub(crate) struct PrivateJob {
     handle: OwnedHandle,
@@ -525,6 +544,7 @@ impl PrivateJob {
         let expected = match (self.identity.kind, phase) {
             (_, JobPhase::ArmedPreparation) => JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.0,
             (JobKind::HistoricalApplication, JobPhase::HistoricalLifetime) => 0,
+            (JobKind::OrdinaryInstaller, JobPhase::OrdinaryInstallerLifetime) => 0,
             _ => return Err(blocked("installer job cannot disarm")),
         };
         if limits.BasicLimitInformation.LimitFlags.0 != expected {
@@ -558,6 +578,29 @@ impl PrivateJob {
             )
             .map_err(win_error)?;
         }
+        Ok(())
+    }
+    fn disarm_ordinary(&mut self) -> io::Result<()> {
+        if self.identity.kind != JobKind::OrdinaryInstaller
+            || self.phase != Some(JobPhase::ArmedPreparation)
+        {
+            return Err(blocked("ordinary installer job is not armed preparation"));
+        }
+        self.verify_limits()?;
+        // Unknown begins before mutation; failure never permits re-arming.
+        self.phase = None;
+        let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        unsafe {
+            SetInformationJobObject(
+                handle(&self.handle),
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+            .map_err(win_error)?;
+        }
+        self.verify_phase(JobPhase::OrdinaryInstallerLifetime)?;
+        self.phase = Some(JobPhase::OrdinaryInstallerLifetime);
         Ok(())
     }
     pub(crate) fn active_processes(&self) -> io::Result<u32> {
@@ -740,6 +783,46 @@ struct IdentityBinding {
     job_phase: JobPhase,
     lease: FileIdentity,
 }
+/// Check only the relationship between past Applied effect observations read
+/// from the protected journal. Callers must authenticate both complete effect
+/// receipts before supplying bytes. This neither reopens a process/job nor
+/// proves current execution, installation success, or recovery authority.
+pub(super) fn verify_ordinary_handoff_observation(
+    created_bytes: &[u8],
+    resumed_observation: &[u8],
+    expected_installer_digest: &str,
+) -> io::Result<()> {
+    let binding: IdentityBinding =
+        serde_json::from_slice(created_bytes).map_err(io::Error::other)?;
+    let resumed: (String, String) =
+        serde_json::from_slice(resumed_observation).map_err(io::Error::other)?;
+    let lower_hex = |value: &str, length: usize| {
+        value.len() == length
+            && value
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    };
+    binding.process.validate()?;
+    if binding.schema != 3
+        || binding.job.kind != JobKind::OrdinaryInstaller
+        || binding.job_phase != JobPhase::ArmedPreparation
+        || !lower_hex(&binding.launch, 32)
+        || !lower_hex(&binding.intent, 64)
+        || !lower_hex(&binding.command_digest, 64)
+        || binding.process.image_digest != expected_installer_digest
+        || binding.job.owner.is_empty()
+        || binding.job.session != binding.process.session
+        || binding.job.name
+            != format!(
+                "Local\\CCDeskRecovery-{}-{}",
+                binding.job.owner, binding.launch
+            )
+        || resumed != (format!("launch-{}.json", binding.launch), binding.intent)
+    {
+        return Err(blocked("ordinary prior handoff observations differ"));
+    }
+    Ok(())
+}
 pub(crate) struct DurableProcessIdentity {
     record: DurableRecord,
     binding: IdentityBinding,
@@ -803,6 +886,10 @@ pub(crate) struct PreparedProcess<'lease> {
     cancel_custody_attempted: AtomicBool,
     resume_intent: Option<DurableRecord>,
     historical_lifetime: Option<DurableRecord>,
+    ordinary_lifetime: Option<DurableRecord>,
+    ordinary_prepare_attempted: bool,
+    ordinary_resume_call_attempted: bool,
+    ordinary_resume_succeeded: bool,
     lease: &'lease mut ExclusiveLease,
     manager_job: Option<&'lease super::manager_process::AdmittedManagerJob>,
 }
@@ -843,6 +930,12 @@ impl<'lease> PreparedProcess<'lease> {
         lease: &'lease mut ExclusiveLease,
         manager_job: Option<&'lease super::manager_process::AdmittedManagerJob>,
     ) -> io::Result<Self> {
+        #[cfg(not(test))]
+        if kind == JobKind::OrdinaryInstaller && manager_job.is_none() {
+            return Err(blocked(
+                "ordinary installer requires an authenticated manager",
+            ));
+        }
         lease.verify()?;
         root.verify(user)?;
         command.verify_image(&image)?;
@@ -948,6 +1041,10 @@ impl<'lease> PreparedProcess<'lease> {
             cancel_custody_attempted: AtomicBool::new(false),
             resume_intent: None,
             historical_lifetime: None,
+            ordinary_lifetime: None,
+            ordinary_prepare_attempted: false,
+            ordinary_resume_call_attempted: false,
+            ordinary_resume_succeeded: false,
             lease,
             manager_job,
         })
@@ -1049,6 +1146,9 @@ impl<'lease> PreparedProcess<'lease> {
         self.job.verify_limits()
     }
     pub(crate) fn resume(&mut self, receipt: &DurableProcessIdentity) -> io::Result<()> {
+        if self.job.identity.kind == JobKind::OrdinaryInstaller {
+            return Err(blocked("ordinary installer requires its explicit handoff"));
+        }
         self.commit_resume_intent(receipt)?;
         self.prepare_historical_lifetime(receipt)?;
         self.job.contains(&self.process)?;
@@ -1060,6 +1160,171 @@ impl<'lease> PreparedProcess<'lease> {
             return Err(blocked("process resume outcome is unknown"));
         }
         Ok(())
+    }
+    /// Commit irreversible handoff intent and verified zero-kill lifetime
+    /// before the coordinator releases global installation custody.
+    pub(crate) fn ordinary_prepare_resume(
+        &mut self,
+        receipt: &DurableProcessIdentity,
+    ) -> io::Result<()> {
+        self.ordinary_prepare_resume_with_validation(receipt, |owner, user| {
+            owner.process.verify_current_user(user)
+        })
+    }
+    // The production adapter always performs the actual process-token/image
+    // check. Child tests may inject rejection only to prove state ordering.
+    fn ordinary_prepare_resume_with_validation(
+        &mut self,
+        receipt: &DurableProcessIdentity,
+        validate: impl FnOnce(&Self, &CurrentUser) -> io::Result<()>,
+    ) -> io::Result<()> {
+        if self.job.identity.kind != JobKind::OrdinaryInstaller
+            || self.ordinary_prepare_attempted
+            || self.ordinary_resume_call_attempted
+        {
+            return Err(blocked("ordinary handoff requires an ordinary installer"));
+        }
+        // Spend preparation before any fallible validation. A known admission
+        // refusal leaves no resume intent and keeps armed cleanup/cancellation.
+        self.ordinary_prepare_attempted = true;
+        let user = CurrentUser::capture()?;
+        validate(self, &user)?;
+        self.commit_resume_intent(receipt)?;
+        self.job.disarm_ordinary()?;
+        let bytes = self.ordinary_lifetime_bytes(receipt)?;
+        self.ordinary_lifetime = Some(DurableRecord::create(
+            self.root.clone(),
+            ComponentName::new(OsStr::new(&format!(
+                "ordinary-lifetime-{}.json",
+                self.launch
+            )))?,
+            &bytes,
+            &user,
+        )?);
+        self.verify_ordinary_handoff(receipt, &user)
+    }
+    fn ordinary_lifetime_bytes(&self, receipt: &DurableProcessIdentity) -> io::Result<Vec<u8>> {
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1, "launch": self.launch, "processReceipt": receipt.record.digest(),
+            "job": self.job.identity, "jobPhase": JobPhase::OrdinaryInstallerLifetime,
+            "operation": "ordinary-installer-job-disarmed"
+        }))
+        .map_err(io::Error::other)
+    }
+    fn verify_ordinary_handoff(
+        &self,
+        receipt: &DurableProcessIdentity,
+        user: &CurrentUser,
+    ) -> io::Result<()> {
+        self.lease.verify()?;
+        self.root.verify(user)?;
+        self.intent.verify()?;
+        receipt.record.verify()?;
+        if self.job.identity.kind != JobKind::OrdinaryInstaller
+            || self.job.phase != Some(JobPhase::OrdinaryInstallerLifetime)
+            || !self.identity_persisted
+            || !self.resume_attempted
+            || self.cancel_attempted
+            || receipt.binding.schema != 3
+            || receipt.binding.launch != self.launch
+            || receipt.binding.process != self.process.identity
+            || receipt.binding.intent != self.intent.digest()
+            || receipt.binding.command_digest != self.command_digest
+            || receipt.binding.job != self.job.identity
+            || receipt.binding.job_phase != JobPhase::ArmedPreparation
+            || &receipt.binding.lease != self.lease.identity()
+            || receipt.record.root_identity() != self.root.directory().identity()
+            || self.intent.root_identity() != self.root.directory().identity()
+            || self.job.identity.owner != user.sid_text()
+        {
+            return Err(blocked("ordinary handoff belongs to another launch"));
+        }
+        let intent: LaunchIntent =
+            serde_json::from_slice(self.intent.bytes()).map_err(io::Error::other)?;
+        if intent.schema != 3
+            || intent.launch != self.launch
+            || intent.image != self.process.identity.image
+            || intent.image_digest != self.process.identity.image_digest
+            || intent.command_digest != self.command_digest
+            || intent.job != self.job.identity
+            || intent.job_phase != JobPhase::ArmedPreparation
+            || &intent.lease != self.lease.identity()
+        {
+            return Err(blocked("ordinary launch intent differs"));
+        }
+        let resume = self
+            .resume_intent
+            .as_ref()
+            .ok_or_else(|| blocked("ordinary resume intent missing"))?;
+        resume.verify()?;
+        let expected = serde_json::to_vec(&serde_json::json!({
+            "schema": 2, "launch": self.launch, "processReceipt": receipt.record.digest(),
+            "operation": "resume", "fromJobPhase": JobPhase::ArmedPreparation
+        }))
+        .map_err(io::Error::other)?;
+        if resume.root_identity() != self.root.directory().identity()
+            || resume.bytes() != expected.as_slice()
+        {
+            return Err(blocked("ordinary resume intent differs"));
+        }
+        let lifetime = self
+            .ordinary_lifetime
+            .as_ref()
+            .ok_or_else(|| blocked("ordinary lifetime receipt missing"))?;
+        lifetime.verify()?;
+        if lifetime.root_identity() != self.root.directory().identity()
+            || lifetime.bytes() != self.ordinary_lifetime_bytes(receipt)?.as_slice()
+        {
+            return Err(blocked("ordinary lifetime receipt differs"));
+        }
+        user.verify_private_job(handle(&self.job.handle))?;
+        self.job.verify_limits()?;
+        if self.ordinary_resume_succeeded && self.process.terminal(0)?.is_some() {
+            // NSIS can finish its extraction parent immediately. The retained
+            // original handle proves its exact terminal identity; querying
+            // image or job membership after exit is neither needed nor valid.
+            self.process.retain_terminal()?.verify()?;
+        } else {
+            self.process.verify_current_user(user)?;
+            self.job.contains(&self.process)?;
+            if let Some(manager) = self.manager_job {
+                manager.verify_child_outside(&self.process)?;
+            }
+        }
+        Ok(())
+    }
+    /// One native resume attempt after the caller releases global custody.
+    /// Failed verification or an ambiguous native result may never be retried.
+    pub(crate) fn ordinary_resume_prepared(
+        &mut self,
+        receipt: &DurableProcessIdentity,
+    ) -> io::Result<()> {
+        if self.ordinary_resume_call_attempted {
+            return Err(blocked("ordinary resume was already attempted"));
+        }
+        self.ordinary_resume_call_attempted = true;
+        let user = CurrentUser::capture()?;
+        self.verify_ordinary_handoff(receipt, &user)?;
+        if self.process.terminal(0)?.is_some() {
+            return Err(blocked("ordinary suspended process already terminated"));
+        }
+        if unsafe { ResumeThread(handle(&self.thread)) } != 1 {
+            return Err(blocked("ordinary process resume outcome is unknown"));
+        }
+        self.ordinary_resume_succeeded = true;
+        self.verify_ordinary_launch(receipt, &user)
+    }
+    /// Authenticate this retained live launch before detaching. No installer
+    /// exit or empty-job proof is required for ordinary NSIS finish behavior.
+    pub(crate) fn verify_ordinary_launch(
+        &self,
+        receipt: &DurableProcessIdentity,
+        user: &CurrentUser,
+    ) -> io::Result<()> {
+        if !self.ordinary_resume_succeeded {
+            return Err(blocked("ordinary installer has no successful resume"));
+        }
+        self.verify_ordinary_handoff(receipt, user)
     }
     pub(crate) fn cancel_before_resume(&mut self) -> io::Result<TerminalReceipt> {
         if self.resume_attempted || self.cancel_attempted {

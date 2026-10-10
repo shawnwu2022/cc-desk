@@ -14,4 +14,9 @@ export interface ManagerStatus {
   readonly phase: ManagerPhase
   readonly blockedReason: ManagerBlockReason | null
   readonly allowedActions: readonly ManagerAction[]
+  readonly ordinaryInstall?: {
+    readonly backupLocation: string | null
+    readonly installerHandedOff: boolean
+    readonly contextPolicy: 'fresh-settings-backup-manual-restore'
+  }
 }

@@ -40,10 +40,36 @@ impl JournalStore {
         self.protect_manifest(&effect.spec.expected_postconditions)
     }
 
-    #[cfg(windows)]
+    #[cfg(any(test, windows))]
     pub(crate) fn applied_effect_observation(
         &self,
         kind: &EffectKind,
+    ) -> Result<(String, Vec<u8>), SafeError> {
+        self.read_applied_observation(kind, false)
+    }
+
+    /// Narrow read-only ordinary backup diagnostics. An unrelated ambiguous
+    /// installer effect cannot erase an independently authenticated past backup
+    /// receipt. These bytes grant no replay, process, restore or launch owner.
+    #[cfg(any(test, windows))]
+    pub(crate) fn ordinary_backup_observation(
+        &self,
+        kind: &EffectKind,
+    ) -> Result<(String, Vec<u8>), SafeError> {
+        if !matches!(
+            kind,
+            EffectKind::VerifySourceBundleCopy
+                | EffectKind::InstallerCreateSuspended
+                | EffectKind::InstallerResume
+        ) {
+            return Err(error("HISTORY_RECEIPT_INVALID"));
+        }
+        self.read_applied_observation(kind, true)
+    }
+    fn read_applied_observation(
+        &self,
+        kind: &EffectKind,
+        diagnostic: bool,
     ) -> Result<(String, Vec<u8>), SafeError> {
         self.check_writer_current()?;
         let state = &self
@@ -51,16 +77,7 @@ impl JournalStore {
             .as_ref()
             .ok_or_else(|| error("HISTORY_TRANSACTION_CHANGED"))?
             .journal;
-        let mut matches = state
-            .effects
-            .values()
-            .filter(|entry| &entry.spec.kind == kind);
-        let effect = matches
-            .next()
-            .ok_or_else(|| error("HISTORY_RECEIPT_INVALID"))?;
-        if matches.next().is_some() || state.requires_reconciliation() {
-            return Err(error("HISTORY_RECEIPT_INVALID"));
-        }
+        let effect = select_applied_observation(state, kind, diagnostic)?;
         let result = effect
             .result
             .as_ref()
@@ -74,16 +91,7 @@ impl JournalStore {
             )?,
         )
         .map_err(|_| error("HISTORY_RECEIPT_INVALID"))?;
-        if result.observation != Observation::Applied
-            || receipt.schema != 1
-            || receipt.transaction_id != state.binding.transaction_id
-            || receipt.effect_id != effect.spec.effect_id
-            || receipt.intent_generation != effect.intent_generation
-            || receipt.expected_postconditions != effect.spec.expected_postconditions
-            || receipt.observation != Observation::Applied
-        {
-            return Err(error("HISTORY_RECEIPT_INVALID"));
-        }
+        validate_applied_receipt(&state.binding, effect, result, &receipt)?;
         Ok((
             effect.spec.effect_id.clone(),
             self.protect_manifest(&receipt.observed_manifest)?,
@@ -392,4 +400,57 @@ impl SwitchJournal {
                         | EffectKind::ReverseSourceFence { .. })
             })
     }
+}
+
+#[cfg(any(test, windows))]
+fn select_applied_observation<'a>(
+    state: &'a SwitchJournal,
+    kind: &EffectKind,
+    diagnostic: bool,
+) -> Result<&'a EffectRecord, SafeError> {
+    if diagnostic
+        && !matches!(
+            kind,
+            EffectKind::VerifySourceBundleCopy
+                | EffectKind::InstallerCreateSuspended
+                | EffectKind::InstallerResume
+        )
+    {
+        return Err(error("HISTORY_RECEIPT_INVALID"));
+    }
+    let mut matches = state
+        .effects
+        .values()
+        .filter(|entry| &entry.spec.kind == kind);
+    let effect = matches
+        .next()
+        .ok_or_else(|| error("HISTORY_RECEIPT_INVALID"))?;
+    if matches.next().is_some()
+        || (!diagnostic && state.requires_reconciliation())
+        || !effect.result.as_ref().is_some_and(|result| {
+            result.observation == Observation::Applied && result.receipt.is_some()
+        })
+    {
+        return Err(error("HISTORY_RECEIPT_INVALID"));
+    }
+    Ok(effect)
+}
+#[cfg(any(test, windows))]
+fn validate_applied_receipt(
+    binding: &JournalBinding,
+    effect: &EffectRecord,
+    result: &ObservedResult,
+    receipt: &EffectReceipt,
+) -> Result<(), SafeError> {
+    if result.observation != Observation::Applied
+        || receipt.schema != 1
+        || receipt.transaction_id != binding.transaction_id
+        || receipt.effect_id != effect.spec.effect_id
+        || receipt.intent_generation != effect.intent_generation
+        || receipt.expected_postconditions != effect.spec.expected_postconditions
+        || receipt.observation != Observation::Applied
+    {
+        return Err(error("HISTORY_RECEIPT_INVALID"));
+    }
+    Ok(())
 }

@@ -1,0 +1,44 @@
+{
+  "preparing": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "1",
+    "sourceVersion": "0.18.4",
+    "targetVersion": "0.18.3",
+    "phase": "preparing",
+    "blockedReason": null,
+    "allowedActions": ["refresh"],
+    "ordinaryInstall": {
+      "backupLocation": null,
+      "installerHandedOff": false,
+      "contextPolicy": "fresh-settings-backup-manual-restore"
+    }
+  },
+  "installerHandedOff": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "2",
+    "sourceVersion": "0.18.4",
+    "targetVersion": "0.18.3",
+    "phase": "installing",
+    "blockedReason": "INSTALLER_OUTCOME_UNKNOWN",
+    "allowedActions": ["refresh"],
+    "ordinaryInstall": {
+      "backupLocation": "C:\\Users\\fixture\\AppData\\Local\\CC Desk Backups\\11111111-1111-4111-8111-111111111111",
+      "installerHandedOff": true,
+      "contextPolicy": "fresh-settings-backup-manual-restore"
+    }
+  },
+  "recoveryRequired": {
+    "transactionId": "11111111-1111-4111-8111-111111111111",
+    "generation": "3",
+    "sourceVersion": "0.18.4",
+    "targetVersion": "0.18.3",
+    "phase": "recovery-required",
+    "blockedReason": "STORAGE_UNAVAILABLE",
+    "allowedActions": ["refresh"],
+    "ordinaryInstall": {
+      "backupLocation": "C:\\Users\\fixture\\AppData\\Local\\CC Desk Backups\\11111111-1111-4111-8111-111111111111",
+      "installerHandedOff": false,
+      "contextPolicy": "fresh-settings-backup-manual-restore"
+    }
+  }
+}

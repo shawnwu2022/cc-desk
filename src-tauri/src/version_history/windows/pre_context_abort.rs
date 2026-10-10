@@ -28,6 +28,7 @@ pub(crate) struct PrivateAbortEvidence<'a> {
     shortcuts: &'a HeldProductShortcuts,
     owner: &'a Arc<SourceHandoff>,
     startup: &'a OrdinaryStartup,
+    installation: &'a Arc<InstallationControl>,
     data: &'a TransactionDataRoot,
 }
 
@@ -76,7 +77,7 @@ pub(crate) fn publish_private_abort<'a>(
     store: &'a mut JournalStore,
     control: &'a ControlLease,
 ) -> Result<VerifiedPrivateAbort<'a>, SafeError> {
-    let root = evidence.startup.control().root().clone();
+    let root = evidence.installation.root().clone();
     control.verify_root(&root).map_err(blocked)?;
     let proof = store.admit_private_abort(evidence.clone())?;
     store.abort_pre_context(&proof)?;
@@ -147,11 +148,12 @@ impl<'a> PrivateAbortEvidence<'a> {
         ownership: (
             &'a Arc<SourceHandoff>,
             &'a OrdinaryStartup,
+            &'a Arc<InstallationControl>,
             &'a TransactionDataRoot,
         ),
     ) -> Result<Self, SafeError> {
         let (source, inventory, registration, shortcuts) = original;
-        let (owner, startup, data) = ownership;
+        let (owner, startup, installation, data) = ownership;
         let evidence = Self {
             binding,
             source,
@@ -160,6 +162,7 @@ impl<'a> PrivateAbortEvidence<'a> {
             shortcuts,
             owner,
             startup,
+            installation,
             data,
         };
         evidence.verify()?;
@@ -174,7 +177,7 @@ impl<'a> PrivateAbortEvidence<'a> {
         generation: u64,
     ) -> Result<(), SafeError> {
         self.verify()?;
-        store.verify_windows_binding(self.startup.control().root(), &self.binding, generation)
+        store.verify_windows_binding(self.installation.root(), &self.binding, generation)
     }
     pub(crate) fn verify(&self) -> Result<(), SafeError> {
         self.owner
@@ -183,7 +186,7 @@ impl<'a> PrivateAbortEvidence<'a> {
             .shared()
             .verify_root(self.startup.control().root())
             .map_err(blocked)?;
-        self.data.verify_installation(self.startup.control())?;
+        self.data.verify_installation(self.installation)?;
         self.source.installation().recheck().map_err(blocked)?;
         self.source.bundle().tree().verify().map_err(blocked)?;
         if self

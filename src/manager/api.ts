@@ -48,7 +48,11 @@ export function createVersionManagerClient(): VersionManagerClient | null {
     const status = parseManagerStatus(result)
     const previous = owned.latest
     if (previous && (status.transactionId !== previous.transactionId || status.sourceVersion !== previous.sourceVersion
-      || status.targetVersion !== previous.targetVersion)) {
+      || status.targetVersion !== previous.targetVersion
+      || !!status.ordinaryInstall !== !!previous.ordinaryInstall
+      || previous.ordinaryInstall?.backupLocation !== null && previous.ordinaryInstall?.backupLocation !== undefined
+        && status.ordinaryInstall?.backupLocation !== previous.ordinaryInstall.backupLocation
+      || previous.ordinaryInstall?.installerHandedOff && !status.ordinaryInstall?.installerHandedOff)) {
       owned.revoked = true
       failure('MANAGER_DOCUMENT_CHANGED')
     }

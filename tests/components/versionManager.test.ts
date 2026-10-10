@@ -3,6 +3,7 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import VersionManagerApp from '@/manager/VersionManagerApp.vue'
 import wire from '../fixtures/version-manager-wire.json'
+import ordinaryWire from '../fixtures/version-manager-ordinary-wire.json'
 
 const invoke = vi.fn()
 const wrappers: VueWrapper[] = []
@@ -25,6 +26,40 @@ function render(locale = 'en') {
 }
 
 describe('isolated historical version recovery manager', () => {
+  // 普通安装准备阶段即说明备份未完成，不展示自动返回或已保存的假保证。
+  it('ManagerUI_OrdinaryPending_018', async () => {
+    invoke.mockResolvedValue(ordinaryWire.preparing)
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.get('[data-manager-ordinary-pending]').text()).toContain('backup has not been verified')
+    expect(wrapper.find('[data-manager-ordinary-backup]').exists()).toBe(false)
+    expect(wrapper.find('[data-manager-return]').exists()).toBe(false)
+    expect(wrapper.find('[data-manager-confirm]').exists()).toBe(false)
+    expect(wrapper.get('[data-manager-boundary]').text()).toContain('manual restoration')
+    expect(wrapper.text()).not.toContain('Returning restores the saved matching context')
+  })
+
+  // 普通安装必须展示真实保留备份、手动恢复说明和仅启动安装程序的状态。
+  it.each(['en', 'zh'])('ManagerUI_OrdinaryBackup_019: %s', async locale => {
+    invoke.mockResolvedValue(ordinaryWire.installerHandedOff)
+    const wrapper = render(locale); await flushPromises()
+    expect(wrapper.get('[data-manager-ordinary-backup]').text()).toContain(ordinaryWire.installerHandedOff.ordinaryInstall.backupLocation)
+    expect(wrapper.get('[data-manager-ordinary-restore]').text()).toContain(locale === 'en' ? 'Close every CC Desk instance' : '关闭所有 CC Desk 实例')
+    expect(wrapper.get('[data-manager-phase]').text()).toBe(locale === 'en' ? 'Official installer started' : '官方安装程序已启动')
+    expect(wrapper.find('[data-manager-return]').exists()).toBe(false)
+    expect(wrapper.find('[data-manager-confirm]').exists()).toBe(false)
+    expect(wrapper.get('[data-manager-refresh]').attributes('disabled')).toBeUndefined()
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual(['inspect_version_switch'])
+  })
+
+  // 备份完成后失败仍保留实际位置，只提供检查而非自动恢复能力。
+  it('ManagerUI_OrdinaryRecovery_020', async () => {
+    invoke.mockResolvedValue(ordinaryWire.recoveryRequired)
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.get('[data-manager-ordinary-backup]').text()).toContain(ordinaryWire.recoveryRequired.ordinaryInstall.backupLocation)
+    expect(wrapper.get('[data-manager-ordinary-restore]').text()).toContain('manual restoration')
+    expect(wrapper.find('[data-manager-return]').exists()).toBe(false)
+    expect(wrapper.find('[data-manager-confirm]').exists()).toBe(false)
+  })
   // 安装未检查不能显示成功，并清楚说明 Desk 与共享 CLI 数据边界。
   it('ManagerUI_UnconfirmedBoundary_001', async () => {
     const wrapper = render(); await flushPromises()

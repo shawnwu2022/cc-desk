@@ -4,6 +4,7 @@
 use super::{
     context::{HeldBundle, HeldContext},
     files::{Directory, PrivateDirectory},
+    install_admission::InstallAdmission,
     manager_process::launch_path,
     security::CurrentUser,
     win_error,
@@ -13,7 +14,6 @@ use crate::{
     version_history::{
         download::PreparedHandoff,
         journal::RootKind,
-        payload_policy::PayloadAdmission,
         snapshot::{EntryType, ManifestEntry},
     },
 };
@@ -62,7 +62,7 @@ impl SpaceAdmission {
         installation: &Directory,
         bundle: &HeldBundle,
         transfer: &PreparedHandoff,
-        payload: &PayloadAdmission,
+        payload: &InstallAdmission,
     ) -> Result<Self, SafeError> {
         bundle
             .tree()

@@ -2,18 +2,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { RUST_SHARD_COUNT, partitionNames, validatePartition, aggregateHarness } from './windows-rust-shards.mjs';
-import { coverageArtifactName, JOB_FREE_TESTS, VALIDATION_POLICY, REPORT_FILENAME, parseLibtestListing, parseLibtestResult, validateNativeCoverage, readNativeCoverageArtifact } from './windows-native-validation.mjs';
+import { coverageArtifactName, JOB_FREE_TESTS, UNELEVATED_TESTS, VALIDATION_POLICY, REPORT_FILENAME, parseLibtestListing, parseLibtestResult, validateNativeCoverage, readNativeCoverageArtifact } from './windows-native-validation.mjs';
 
 const POLICY = 'same-source-compiled-rust-shards-v1';
 const SHARD_COUNT = RUST_SHARD_COUNT;
 const MAX_LOG = 64 * 1024 * 1024;
 const MAX_JSON = 8 * 1024 * 1024;
+export const HARNESS_TIMEOUT_MS = 20 * 60 * 1000;
 const MAX_FAILURE_NAMES = 16;
 const MAX_FAILURE_DIAGNOSTIC_BYTES = 8 * 1024;
-const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
+const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
 const scope = JSON.parse(fs.readFileSync(new URL('./windows-native-scope.json', import.meta.url), 'utf8'));
 const hash = data => createHash('sha256').update(data).digest('hex');
 function requireThat(ok, message) { if (!ok) throw new Error(`Rust runner: ${message}`); }
@@ -43,6 +45,80 @@ function invoke(command, args, root, environment) {
   const child = spawnSync(command, args, { cwd: root, env: environment, encoding: 'utf8', maxBuffer: MAX_LOG, windowsHide: true });
   const output = ((child.stdout ?? '') + (child.stderr ?? '')).replaceAll('\r\n', '\n');
   return { output, exitCode: child.status ?? 1, durationSeconds: Number(process.hrtime.bigint() - start) / 1e9, error: child.error ? String(child.error.message) : child.signal ? `terminated by ${child.signal}` : null };
+}
+// Raw output is archived incrementally. Advisory progress admits only assigned
+// names; captured assertions and worker output never become public diagnostics.
+export async function executeHarness(command, args, options) {
+  const timeoutMs = options.timeoutMs ?? HARNESS_TIMEOUT_MS;
+  requireThat(Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= HARNESS_TIMEOUT_MS, 'execution deadline must not exceed twenty minutes');
+  const started = process.hrtime.bigint(), chunks = [], pending = new Set(options.assignedNames);
+  const logfile = fs.openSync(options.executionLog, 'w');
+  let bytes = 0, timedOut = false, error = null, exited = false, settled = false, stopping = false, deadline, forceClose, heartbeat;
+  const elapsed = () => Number(process.hrtime.bigint() - started) / 1e9;
+  return await new Promise(resolve => {
+    const child = spawn(command, args, { cwd: options.root, env: options.environment, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    function progress(phase) { options.onProgress?.({ ...phase, elapsedSeconds: elapsed() }); }
+    function finish(code, signal) {
+      if (settled) return;
+      settled = true; clearTimeout(deadline); clearTimeout(forceClose); clearInterval(heartbeat);
+      child.stdout.destroy(); child.stderr.destroy(); fs.closeSync(logfile);
+      resolve({ output: Buffer.concat(chunks, bytes).toString('utf8'), exitCode: timedOut ? 124 : error ? 1 : code ?? 1,
+        durationSeconds: elapsed(), error: error ?? (signal ? `terminated by ${signal}` : null), timedOut,
+        outputIncomplete: timedOut || !!error || !!signal, timeoutMs, pendingNames: [...pending] });
+    }
+    function stop(reason) {
+      error ??= reason;
+      if (stopping) return;
+      stopping = true;
+      if (!exited && child.pid) {
+        // Kill this owned harness tree, including workers holding inherited pipes.
+        if (process.platform === 'win32') spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024 });
+        child.kill('SIGKILL');
+      }
+      forceClose ??= setTimeout(() => finish(null, null), 5000);
+    }
+    const assigned = new Set(options.assignedNames), running = new Set();
+    function inspect(line) {
+      const match = /^test (.+) \.\.\. (ok|FAILED|ignored|bench:)/.exec(line);
+      const slow = /^test (.+) has been running for over 60 seconds$/.exec(line);
+      const active = /^test (.+) \.\.\. $/.exec(line);
+      const name = match?.[1] ?? slow?.[1] ?? active?.[1];
+      if (!name || !assigned.has(name) || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(name)) return;
+      if (match) {
+        if (!pending.has(name)) return;
+        pending.delete(name); running.delete(name);
+        progress({ name, status: match[2] === 'bench:' ? 'measured' : match[2] });
+      } else if (slow || !running.has(name)) {
+        running.add(name); progress({ name, status: 'running', slow: !!slow });
+      }
+    }
+    for (const stream of [child.stdout, child.stderr]) {
+      const decoder = new StringDecoder('utf8');
+      let line = '', overflow = false;
+      stream.on('data', chunk => {
+        if (settled) return;
+        try {
+          const remaining = MAX_LOG - bytes, retained = chunk.subarray(0, remaining);
+          if (retained.length) { fs.writeSync(logfile, retained); chunks.push(retained); bytes += retained.length; }
+          if (chunk.length > remaining) { stop('harness output exceeded the 64 MiB capture limit'); return; }
+          for (const character of decoder.write(chunk)) {
+            if (character === '\n') { if (!overflow) inspect(line.replace(/\r$/, '')); line = ''; overflow = false; }
+            else if (line.length < 4096) line += character;
+            else overflow = true;
+          }
+          if (!overflow) inspect(line.replace(/\r$/, ''));
+        } catch (failure) { stop(String(failure.message)); }
+      });
+    }
+    child.on('error', failure => stop(`harness process error: ${failure.message}`));
+    child.on('exit', () => { exited = true; });
+    child.on('close', (code, signal) => finish(code, signal));
+    deadline = setTimeout(() => { timedOut = true; stop(`harness exceeded execution deadline of ${timeoutMs}ms`); }, timeoutMs);
+    heartbeat = setInterval(() => {
+      try { progress({ status: 'heartbeat', pendingNames: [...pending] }); }
+      catch (failure) { stop(String(failure.message)); }
+    }, 60 * 1000);
+  });
 }
 // Advisory only: never expose captured stdout/panic bodies or use these names
 // to qualify a shard. The untouched execution log remains the evidence source.
@@ -102,17 +178,18 @@ export function shardArtifactName(sourceSha, runId, runAttempt, index) {
   return `windows-rust-shard-${index}-${sourceSha}-${runId}-${runAttempt}`;
 }
 function planDigest(plan) { const { planHash, ...body } = plan; return hash(JSON.stringify(body)); }
-function selection(full, ignored, kind, inJob) {
+function selection(full, ignored, kind, inJob, elevated) {
   const names = full.map(t => t.name);
   requireThat(ignored.every(n => names.includes(n)), 'ignored inventory outside full inventory');
   if (kind === 'lib') {
     requireThat(JOB_FREE_TESTS.every(n => names.includes(n) && !ignored.includes(n)), 'reviewed Job-free policy drift');
-  } else requireThat(!names.some(n => JOB_FREE_TESTS.includes(n)), 'Job-free test outside library');
-  const excluded = kind === 'lib' && inJob ? [...JOB_FREE_TESTS] : [];
+    requireThat(UNELEVATED_TESTS.every(n => names.includes(n) && !ignored.includes(n)), 'reviewed unelevated policy drift');
+  } else requireThat(!names.some(n => JOB_FREE_TESTS.includes(n) || UNELEVATED_TESTS.includes(n)), 'host-specific test outside library');
+  const excluded = kind === 'lib' ? [...(inJob ? JOB_FREE_TESTS : []), ...(elevated ? UNELEVATED_TESTS : [])] : [];
   requireThat(excluded.every(n => !names.some(other => other !== n && other.includes(n))), 'full-name skip substring collision');
   const selected = names.filter(n => !excluded.includes(n));
   if (kind === 'lib') {
-    requireThat(scope.requiredSelectedTests.every(n => selected.includes(n) && !ignored.includes(n)), 'required ordinary/Wry test not selected');
+    requireThat([...scope.requiredSelectedTests, ...scope.ordinaryRequiredSelectedTests].every(n => selected.includes(n) && !ignored.includes(n)), 'required ordinary/Wry admission/cleanup test not selected');
     requireThat(full.some(t => t.type === 'test' && selected.includes(t.name) && !ignored.includes(t.name)), 'library selected nonignored inventory empty');
   }
   return { selected, excluded };
@@ -152,6 +229,7 @@ function conptyRuntimePaths(root) { return ['debug', 'debug/deps'].flatMap(direc
 
 export function createPlan(options = {}) {
   requireThat(typeof options.inJob === 'boolean', 'explicit successful Job observation required');
+  requireThat(typeof options.elevated === 'boolean', 'explicit successful elevation observation required');
   const c = context(options), bundle = bundleLocation(options, c.root);
   fs.mkdirSync(path.join(bundle, 'logs'), { recursive: true });
   requireThat(!fs.existsSync(path.join(bundle, 'plan.json')), 'compile plan already exists');
@@ -168,7 +246,7 @@ export function createPlan(options = {}) {
   const plan = {
     schema: 1, policy: POLICY, sourceSha: c.sourceSha, runId: c.runId, runAttempt: c.runAttempt,
     artifactName: bundleArtifactName(c.sourceSha, c.runId, c.runAttempt), checkoutRoot: c.root, shardCount: SHARD_COUNT,
-    host: { jobQuerySucceeded: true, inJob: options.inJob },
+    host: { jobQuerySucceeded: true, inJob: options.inJob, elevationQuerySucceeded: true, elevated: options.elevated },
     compiler: { rustcVerbose: rustc.output.trim(), rustupToolchain: c.environment.RUSTUP_TOOLCHAIN ?? null, profileDevDebug: c.environment.CARGO_PROFILE_DEV_DEBUG ?? null, profileTestDebug: c.environment.CARGO_PROFILE_TEST_DEBUG ?? null, runnerOs: c.environment.RUNNER_OS ?? process.platform, runnerArch: c.environment.RUNNER_ARCH ?? process.arch, imageOs: c.environment.ImageOS ?? null, imageVersion: c.environment.ImageVersion ?? null },
     contentHashes: BOUND_FILES.map(relative => fileRecord(c.root, relative)), cargoJsonHash: hash(readFile(cargoJson)),
     harnesses: [], doctests, files: [],
@@ -177,7 +255,7 @@ export function createPlan(options = {}) {
     const executable = relativeFile(c.root, target.executable), logs = logNames(target.identity.name);
     const full = inventory(executable, [], c, path.join(bundle, logs.full));
     const ignored = inventory(executable, ['--ignored'], c, path.join(bundle, logs.ignored)).map(t => t.name);
-    const policy = selection(full, ignored, target.identity.kind, options.inJob);
+    const policy = selection(full, ignored, target.identity.kind, options.inJob, options.elevated);
     const selected = inventory(executable, policy.excluded.flatMap(n => ['--skip', n]), c, path.join(bundle, logs.selected));
     requireThat(equal(selected.map(t => t.name), policy.selected) && selected.every(t => full.some(f => f.name === t.name && f.type === t.type)), 'compile selection differs from exact policy');
     plan.harnesses.push({ ...target, full, ignored, ...policy, logs, partitions: partitionNames(policy.selected, SHARD_COUNT) });
@@ -212,7 +290,9 @@ export function verifyBundle(options = {}) {
   requireThat(plan.artifactName === bundleArtifactName(c.sourceSha, c.runId, c.runAttempt), 'compiler artifact name binding mismatch');
   if (options.artifactName !== undefined) requireThat(options.artifactName === plan.artifactName, 'downloaded compiler artifact name binding mismatch');
   requireThat(plan.host?.jobQuerySucceeded === true && typeof plan.host.inJob === 'boolean', 'compile Job observation missing');
+  requireThat(plan.host.elevationQuerySucceeded === true && typeof plan.host.elevated === 'boolean', 'compile elevation observation missing');
   if (options.inJob !== undefined) requireThat(typeof options.inJob === 'boolean' && options.inJob === plan.host.inJob, 'observed runner Job state differs from compilation');
+  if (options.elevated !== undefined) requireThat(typeof options.elevated === 'boolean' && options.elevated === plan.host.elevated, 'observed runner elevation state differs from compilation');
   if (options.requireCheckoutPath) requireThat(c.root === plan.checkoutRoot, 'compiled checkout path binding mismatch');
   requireThat(typeof plan.compiler?.rustcVerbose === 'string' && /^rustc \S+/m.test(plan.compiler.rustcVerbose), 'compiler identity missing');
   requireThat(Array.isArray(plan.contentHashes) && new Set(plan.contentHashes.map(f => f.path)).size === BOUND_FILES.length && equal(plan.contentHashes.map(f => f.path), BOUND_FILES), 'source content hash binding incomplete');
@@ -234,7 +314,7 @@ export function verifyBundle(options = {}) {
     const selected = parseLibtestListing(readFile(relativeFile(bundle, h.logs.selected)).toString('utf8'));
     requireThat(JSON.stringify(full) === JSON.stringify(h.full) && equal(ignored.map(t => t.name), h.ignored) && equal(selected.map(t => t.name), h.selected), 'original raw compile inventory changed');
     requireThat([...ignored, ...selected].every(t => full.some(f => f.name === t.name && f.type === t.type)), 'compile inventory type changed');
-    const expected = selection(full, h.ignored, h.identity.kind, plan.host.inJob);
+    const expected = selection(full, h.ignored, h.identity.kind, plan.host.inJob, plan.host.elevated);
     requireThat(equal(expected.selected, h.selected) && equal(expected.excluded, h.excluded), 'compile selection policy changed');
     requireThat(Array.isArray(h.partitions) && h.partitions.length === SHARD_COUNT, 'missing shard partitions');
     validatePartition(h.selected, h.partitions);
@@ -249,15 +329,16 @@ export function verifyBundle(options = {}) {
   return { plan, bundle, context: c };
 }
 
-export function runShard(options = {}) {
+export async function runShard(options = {}) {
   requireThat(Number.isInteger(options.index) && options.index >= 0 && options.index < SHARD_COUNT, 'invalid shard index');
   requireThat(typeof options.inJob === 'boolean', 'explicit successful runner Job observation required');
+  requireThat(typeof options.elevated === 'boolean', 'explicit successful runner elevation observation required');
   requireThat(typeof options.artifactName === 'string', 'downloaded compiler artifact name required');
   const { plan, bundle, context: c } = verifyBundle({ ...options, requireCheckoutPath: true });
   const output = path.resolve(options.output ?? path.join(c.root, `src-tauri/target/ci-rust-shard-${options.index}`));
   fs.mkdirSync(path.join(output, 'logs'), { recursive: true });
   requireThat(!fs.existsSync(path.join(output, 'shard-result.json')), 'shard result already exists');
-  const result = { schema: 1, policy: POLICY, sourceSha: c.sourceSha, runId: c.runId, runAttempt: c.runAttempt, artifactName: plan.artifactName, planHash: plan.planHash, index: options.index, shardCount: SHARD_COUNT, host: { jobQuerySucceeded: true, inJob: options.inJob }, completed: false, exitCode: 1, durationSeconds: 0, harnesses: [], error: null };
+  const result = { schema: 1, policy: POLICY, sourceSha: c.sourceSha, runId: c.runId, runAttempt: c.runAttempt, artifactName: plan.artifactName, planHash: plan.planHash, index: options.index, shardCount: SHARD_COUNT, host: { jobQuerySucceeded: true, inJob: options.inJob, elevationQuerySucceeded: true, elevated: options.elevated }, completed: false, exitCode: 1, durationSeconds: 0, harnesses: [], error: null };
   const started = process.hrtime.bigint();
   try {
     // Restore only hashed runtime payload, at its original source-relative location.
@@ -279,18 +360,23 @@ export function runShard(options = {}) {
     for (const receipt of result.harnesses) {
       if (!receipt.executed) continue;
       const h = plan.harnesses.find(h => identity(h) === identity(receipt));
-      if (options.onPhase) options.onPhase({ phase: 'execute-start', index: options.index, identity: h.identity, selected: receipt.names.length });
-      const invocation = invoke(relativeFile(c.root, h.executable), ['--exact', ...receipt.names], c.testCwd, c.environment);
-      fs.writeFileSync(path.join(output, receipt.logs.execution), invocation.output);
+      if (options.onPhase) options.onPhase({ phase: 'execute-start', index: options.index, identity: h.identity, selected: receipt.names.length, assignedNames: receipt.names, timeoutMs: HARNESS_TIMEOUT_MS });
+      const invocation = await executeHarness(relativeFile(c.root, h.executable), ['--exact', ...receipt.names], {
+        root: c.testCwd, environment: c.environment, executionLog: path.join(output, receipt.logs.execution), assignedNames: receipt.names, timeoutMs: options.timeoutMs,
+        onProgress: progress => options.onPhase?.({ phase: 'execute-progress', index: options.index, identity: h.identity, ...progress }),
+      });
+      const normalizedOutput = invocation.output.replaceAll('\r\n', '\n');
       receipt.durationSeconds = invocation.durationSeconds;
+      receipt.watchdog = { timeoutMs: invocation.timeoutMs, timedOut: invocation.timedOut, outputIncomplete: invocation.outputIncomplete, pendingNames: invocation.pendingNames };
       try {
-        receipt.result = { exitCode: invocation.exitCode, ...parseLibtestResult(invocation.output) };
-        aggregateHarness({ ...h, selected: receipt.names, ignored: h.ignored.filter(n => receipt.names.includes(n)) }, [{ index: options.index, names: receipt.names, listing: readFile(path.join(output, receipt.logs.selected)).toString('utf8'), output: invocation.output, result: receipt.result, durationSeconds: invocation.durationSeconds }], parseLibtestListing, parseLibtestResult);
+        receipt.result = { exitCode: invocation.exitCode, ...parseLibtestResult(normalizedOutput) };
+        aggregateHarness({ ...h, selected: receipt.names, ignored: h.ignored.filter(n => receipt.names.includes(n)) }, [{ index: options.index, names: receipt.names, listing: readFile(path.join(output, receipt.logs.selected)).toString('utf8'), output: normalizedOutput, result: receipt.result, durationSeconds: invocation.durationSeconds }], parseLibtestListing, parseLibtestResult);
       } catch (error) { receipt.error = String(error.message); failed = true; }
       if (invocation.error || invocation.exitCode !== 0) { receipt.error ??= invocation.error ?? `exit ${invocation.exitCode}`; failed = true; }
       if (options.onPhase) options.onPhase({ phase: 'execute-end', index: options.index, identity: h.identity, selected: receipt.names.length, durationSeconds: receipt.durationSeconds, result: receipt.result,
-        slowNames: [...invocation.output.matchAll(/^test (.+) has been running for over 60 seconds$/gm)].map(m => m[1]), error: receipt.error ?? null,
-        failureDiagnostics: shardFailureDiagnostics(invocation.output, receipt.names, receipt.logs.execution, !!invocation.error) });
+        slowNames: [...normalizedOutput.matchAll(/^test (.+) has been running for over 60 seconds$/gm)].map(m => m[1]), error: receipt.error ?? null, watchdog: receipt.watchdog,
+        failureDiagnostics: shardFailureDiagnostics(invocation.output, receipt.names, receipt.logs.execution, invocation.outputIncomplete) });
+      if (invocation.outputIncomplete) break;
     }
     result.completed = !failed; result.exitCode = failed ? 1 : 0;
   } catch (error) { result.error = String(error.message); }
@@ -330,6 +416,7 @@ export function aggregateResults(options = {}) {
     sameBinding(result, c);
     requireThat(result.schema === 1 && result.policy === POLICY && result.shardCount === SHARD_COUNT && result.planHash === plan.planHash && result.artifactName === plan.artifactName, 'shard compiler artifact/plan binding mismatch');
     requireThat(result.host?.jobQuerySucceeded === true && result.host.inJob === plan.host.inJob, 'shard Job observation differs from compilation');
+    requireThat(result.host.elevationQuerySucceeded === true && result.host.elevated === plan.host.elevated, 'shard elevation observation differs from compilation');
     requireThat(result.completed === true && result.exitCode === 0, 'failed or incomplete shard');
     requireThat(Number.isFinite(result.durationSeconds) && result.durationSeconds >= 0, 'invalid shard duration');
     assertHarnessIdentities(result.harnesses);
@@ -338,6 +425,7 @@ export function aggregateResults(options = {}) {
     schema: 1, policy: VALIDATION_POLICY, completed: true, sourceSha: c.sourceSha, runId: c.runId, runAttempt: c.runAttempt,
     host: plan.host, harnesses: [], doctests: plan.doctests,
     nativeJobSuite: { status: plan.host.inJob ? 'unverified' : 'executed', reason: plan.host.inJob ? 'external_job' : null, unverifiedNames: plan.host.inJob ? [...JOB_FREE_TESTS] : [] },
+    nativeUnelevatedSuite: { status: plan.host.elevated ? 'unverified' : 'executed', reason: plan.host.elevated ? 'elevated_host' : null, unverifiedNames: plan.host.elevated ? [...UNELEVATED_TESTS] : [] },
     nativeAll: { status: 'unverified', reason: 'original_all_not_run' }, nativeAcceptanceProven: false,
     rustShardRun: {
       policy: POLICY, sourceSha: c.sourceSha, runId: c.runId, runAttempt: c.runAttempt, planHash: plan.planHash, artifactName: plan.artifactName, shardCount: SHARD_COUNT,
@@ -356,7 +444,7 @@ export function aggregateResults(options = {}) {
       if (!execute) { requireThat(receipt.result === null && receipt.logs === null && receipt.durationSeconds === 0, 'skipped shard contains execution claims'); continue; }
       requireThat(JSON.stringify(receipt.logs) === JSON.stringify({ selected: h.logs.selected, execution: h.logs.execution }), 'shard raw log paths changed');
       const directory = path.dirname(filename);
-      slices.push({ index: result.index, names: receipt.names, listing: readFile(relativeFile(directory, receipt.logs.selected)).toString('utf8'), output: readFile(relativeFile(directory, receipt.logs.execution)).toString('utf8'), result: receipt.result, durationSeconds: receipt.durationSeconds });
+      slices.push({ index: result.index, names: receipt.names, listing: readFile(relativeFile(directory, receipt.logs.selected)).toString('utf8'), output: readFile(relativeFile(directory, receipt.logs.execution)).toString('utf8').replaceAll('\r\n', '\n'), result: receipt.result, durationSeconds: receipt.durationSeconds });
     }
     const { execution, executable, partitions, ...merged } = aggregateHarness(h, slices, parseLibtestListing, parseLibtestResult);
     report.harnesses.push(merged); mergedLogs.push({ filename: h.logs.execution, content: execution });
@@ -372,7 +460,7 @@ export function aggregateResults(options = {}) {
 }
 
 function cliOptions(args) {
-  const accepted = new Set(['root', 'cargo-json', 'bundle', 'in-job', 'doc-exit-code', 'output', 'index', 'artifact-name', 'shards', 'coverage']);
+  const accepted = new Set(['root', 'cargo-json', 'bundle', 'in-job', 'elevated', 'doc-exit-code', 'output', 'index', 'artifact-name', 'shards', 'coverage']);
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
     const key = args[i]?.replace(/^--/, '');
@@ -380,7 +468,8 @@ function cliOptions(args) {
     options[key] = args[i + 1];
   }
   if (options['in-job'] !== undefined) requireThat(['true', 'false'].includes(options['in-job']), '--in-job must be true or false');
-  return Object.fromEntries(Object.entries(options).map(([key, value]) => [key.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), key === 'in-job' ? value === 'true' : ['index', 'doc-exit-code'].includes(key) ? Number(value) : value]));
+  if (options.elevated !== undefined) requireThat(['true', 'false'].includes(options.elevated), '--elevated must be true or false');
+  return Object.fromEntries(Object.entries(options).map(([key, value]) => [key.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), ['in-job', 'elevated'].includes(key) ? value === 'true' : ['index', 'doc-exit-code'].includes(key) ? Number(value) : value]));
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
@@ -391,7 +480,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const options = cliOptions(args);
       let value;
       if (action === 'plan') value = createPlan(options);
-      else if (action === 'run') value = runShard({ ...options, onPhase: phase => console.log(JSON.stringify(phase)) });
+      else if (action === 'run') value = await runShard({ ...options, onPhase: phase => console.log(JSON.stringify(phase)) });
       else if (action === 'aggregate') value = aggregateResults(options);
       else throw new Error('Expected artifact-name, shard-artifact-name, plan, run or aggregate');
       const metrics = { action, planHash: value.planHash ?? value.rustShardRun?.planHash, artifactName: value.artifactName ?? value.rustShardRun?.artifactName,
@@ -400,7 +489,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         bundleBytes: value.files?.reduce((sum, file) => sum + file.bytes, 0),
         harnesses: value.harnesses?.map(h => ({ identity: h.identity, full: h.full?.length, selected: h.selected?.length ?? h.names?.length, result: h.result, durationSeconds: h.durationSeconds,
           shards: h.shards?.map(s => ({ index: s.index, selected: s.names.length, durationSeconds: s.durationSeconds, result: s.result })) })),
-        doctests: value.doctests, nativeJobSuite: value.nativeJobSuite };
+        doctests: value.doctests, nativeJobSuite: value.nativeJobSuite, nativeUnelevatedSuite: value.nativeUnelevatedSuite };
       console.log(JSON.stringify(metrics));
       if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Rust ${action}: exact source ${value.sourceSha}, run ${value.runId}, attempt ${value.runAttempt}.\n\n\`\`\`json\n${JSON.stringify(metrics, null, 2)}\n\`\`\`\n`);
       if (action === 'run' && !value.completed) process.exitCode = 1;

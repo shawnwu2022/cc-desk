@@ -218,6 +218,11 @@ enum Phase {
     Cancelled,
     Failed,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HandoffPurpose {
+    ReviewedSwitch,
+    OrdinaryInstall,
+}
 struct Transaction {
     owner: CallerIdentity,
     token: String,
@@ -229,6 +234,7 @@ struct Transaction {
     // Once issued, even a cancelled/failed preparation cannot imply that its
     // private/native switch work has been safely reversed.
     issued_switch: Option<String>,
+    issued_purpose: Option<HandoffPurpose>,
     verified_abort: bool,
 }
 impl Transaction {
@@ -398,6 +404,91 @@ impl PreparedHandoff {
     }
 }
 impl PrepareService {
+    pub(crate) fn inspect_historical_install(
+        &self,
+        caller: &CallerIdentity,
+        id: &str,
+    ) -> Result<super::manager::OrdinaryInstallReview, SafeError> {
+        use super::manager::{
+            OrdinaryInstallAction as Action, OrdinaryInstallOutcome as Outcome,
+            OrdinaryInstallReview, SwitchReviewBlock as Block, SwitchReviewPhase as ReviewPhase,
+        };
+        (self.owner_check)(caller)?;
+        let mut held = self.held.lock();
+        let item = transaction_mut(&mut held, caller, id)?;
+        if item
+            .issued_purpose
+            .is_some_and(|purpose| purpose != HandoffPurpose::OrdinaryInstall)
+        {
+            return Err(error("HISTORY_HANDOFF_MODE_CHANGED"));
+        }
+        let mut result = OrdinaryInstallReview {
+            preparation_id: id.to_owned(),
+            version: item.selection.version().to_owned(),
+            phase: ReviewPhase::Unavailable,
+            context_policy: "fresh-settings-backup-manual-restore",
+            transaction_id: None,
+            allowed_actions: vec![Action::Refresh],
+            block_reason: None,
+            backup_location: None,
+            installation_outcome: Outcome::NotStarted,
+        };
+        if let Some(issued) = &item.issued_switch {
+            result.transaction_id = Some(issued.clone());
+            if item.verified_abort {
+                result.phase = ReviewPhase::Aborted;
+                result.allowed_actions.push(Action::PrepareAgain);
+            } else {
+                result.phase = ReviewPhase::HandoffIssued;
+                result.block_reason = Some(Block::HandoffIssued);
+                result.installation_outcome = Outcome::HandoffUnknown;
+            }
+        } else if matches!(item.phase, Phase::Cancelled) {
+            result.phase = ReviewPhase::Cancelled;
+        } else if (self.clock)() >= item.expires {
+            result.block_reason = Some(Block::PreparationExpired);
+            result.allowed_actions.push(Action::CancelPreparation);
+        } else {
+            match &item.phase {
+                Phase::Reserved | Phase::Running => {
+                    result.phase = ReviewPhase::Preparing;
+                    result.block_reason = Some(Block::PreparationPending);
+                    result.allowed_actions.push(Action::CancelPreparation);
+                }
+                Phase::Ready(_) => {
+                    result.phase = ReviewPhase::Verified;
+                    if item.in_flight {
+                        result.block_reason = Some(Block::PreparationBusy);
+                    } else {
+                        result.allowed_actions.push(Action::CancelPreparation);
+                        if super::ordinary_install::enabled() {
+                            result.allowed_actions.push(Action::Install);
+                        } else {
+                            result.block_reason = Some(Block::CoordinatorUnavailable);
+                        }
+                    }
+                }
+                Phase::Failed => {
+                    result.block_reason = Some(Block::PreparationFailed);
+                    result.allowed_actions.push(Action::CancelPreparation);
+                }
+                Phase::Handoff { .. } | Phase::ManagerOwned { .. } | Phase::Cancelled => {
+                    unreachable!("terminal preparation cases handled above")
+                }
+            }
+        }
+        (self.owner_check)(caller)?;
+        Ok(result)
+    }
+
+    pub(crate) fn reserve_ordinary_handoff_with_source<T>(
+        self: &Arc<Self>,
+        caller: &CallerIdentity,
+        id: &str,
+        admit: impl FnOnce(&VerifiedPackage, &str) -> Result<T, SafeError>,
+    ) -> Result<(HandoffReservation, Option<T>), SafeError> {
+        self.reserve_handoff_for_purpose(caller, id, HandoffPurpose::OrdinaryInstall, admit)
+    }
     /// Does not start IO, re-download, allocate a switch UUID, cancel, or replay
     /// a handoff. Issued UUIDs remain observable even after preparation expiry.
     pub(crate) fn inspect_switch(
@@ -566,6 +657,7 @@ impl PrepareService {
                 phase: Phase::Reserved,
                 in_flight: false,
                 issued_switch: None,
+                issued_purpose: None,
                 verified_abort: false,
             },
         );
@@ -726,10 +818,22 @@ impl PrepareService {
         id: &str,
         admit: impl FnOnce(&VerifiedPackage, &str) -> Result<T, SafeError>,
     ) -> Result<(HandoffReservation, Option<T>), SafeError> {
+        self.reserve_handoff_for_purpose(caller, id, HandoffPurpose::ReviewedSwitch, admit)
+    }
+    fn reserve_handoff_for_purpose<T>(
+        self: &Arc<Self>,
+        caller: &CallerIdentity,
+        id: &str,
+        purpose: HandoffPurpose,
+        admit: impl FnOnce(&VerifiedPackage, &str) -> Result<T, SafeError>,
+    ) -> Result<(HandoffReservation, Option<T>), SafeError> {
         (self.owner_check)(caller)?;
         let (package, token, selection) = {
             let mut held = self.held.lock();
             let item = transaction_mut(&mut held, caller, id)?;
+            if item.issued_purpose.is_some_and(|issued| issued != purpose) {
+                return Err(error("HISTORY_HANDOFF_MODE_CHANGED"));
+            }
             if let Phase::ManagerOwned { switch_id } = &item.phase {
                 return Ok((
                     HandoffReservation {
@@ -786,6 +890,7 @@ impl PrepareService {
                 return Err(error("HISTORY_PACKAGE_CHANGED"));
             }
             item.issued_switch = Some(switch_id.clone());
+            item.issued_purpose = Some(purpose);
             item.phase = Phase::Handoff {
                 switch_id: switch_id.clone(),
             };

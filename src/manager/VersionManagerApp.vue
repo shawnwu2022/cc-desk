@@ -26,6 +26,15 @@ const { t, locale } = useI18n({ useScope: 'local', messages: {
     documentFailure: 'This manager document is no longer available. Reopen the version manager to inspect recovery. No action has been sent through another window.',
     startupFailure: 'The manager connection is not ready. Check again. If it remains unavailable, reopen the version manager.',
     invalidFailure: 'The manager returned an unrecognized recovery state. Actions are unavailable. Check again or reopen the version manager.',
+    ordinaryTitle: 'Historical version installation', ordinaryPreparing: 'Preparing data backup',
+    ordinaryHandedOff: 'Official installer started',
+    ordinaryPending: 'A complete CC Desk data backup has not been verified yet. The installer will not start before the source application exits and the backup is verified.',
+    ordinaryStarted: 'The official interactive installer was started. Confirm installation in its own window. Installation success and the historical application’s first launch have not been verified.',
+    ordinaryReady: 'The complete CC Desk data backup was verified. The official installer has not been confirmed started. Keep the backup for manual restoration.',
+    ordinaryFresh: 'This ordinary installation uses fresh CC Desk settings and data. Once verified, the complete backup will be retained for manual restoration. There is no automatic return to the current application or its data.',
+    ordinaryRestore: 'Close every CC Desk instance before manual restoration. Keep the entire backup directory and its manifests, and use them to restore the saved Desk folders to their original locations. Preserve any new Desk data before replacing it. Reinstall the desired official application separately if needed; this manager does not perform an automatic return.',
+    ordinaryBackup: 'Verified backup location', ordinaryRecovery: 'Ordinary installation needs attention. Preserve any verified backup for manual restoration; installation success has not been confirmed.',
+    ordinaryHandoff: 'The installation request is with the manager. Keep this window open while it verifies the backup and hands off the installer. Closing it does not confirm installation or restore data.',
     phases: {
       preparing: { title: 'Preparing the version switch', detail: 'The manager is checking and preserving the current installation and Desk context. No installation success is confirmed.' },
       installing: { title: 'Installing historical version', detail: 'The installer is in progress. Installation and first launch are not yet confirmed.' },
@@ -68,6 +77,15 @@ const { t, locale } = useI18n({ useScope: 'local', messages: {
     documentFailure: '此管理器页面已不可用，请重新打开版本管理器检查恢复状态。未通过其他窗口发送操作。',
     startupFailure: '管理器连接尚未就绪，请重新检查。如果仍不可用，请重新打开版本管理器。',
     invalidFailure: '管理器返回了无法识别的恢复状态，操作暂不可用。请重新检查或重新打开版本管理器。',
+    ordinaryTitle: '历史版本安装', ordinaryPreparing: '正在准备数据备份',
+    ordinaryHandedOff: '官方安装程序已启动',
+    ordinaryPending: '尚未验证完整的 CC Desk 数据备份。管理器会等待原应用退出并验证备份，然后才启动安装程序。',
+    ordinaryStarted: '官方交互式安装程序已启动，请在其窗口中确认安装。安装成功和历史应用首次启动尚未验证。',
+    ordinaryReady: '完整的 CC Desk 数据备份已验证，尚未确认安装程序启动。请保留备份供手动恢复。',
+    ordinaryFresh: '此普通安装使用全新的 CC Desk 设置和数据。完整且经过验证的备份会保留供手动恢复，不提供自动返回当前应用或其数据的功能。',
+    ordinaryRestore: '手动恢复前，请先关闭所有 CC Desk 实例。保留完整备份目录及其清单，并据此将保存的 Desk 数据目录恢复到原位置。替换前请另行保留任何新产生的 Desk 数据。如需恢复应用，请另行安装所需的官方版本；此管理器不会自动返回原版本。',
+    ordinaryBackup: '已验证的备份位置', ordinaryRecovery: '普通安装需要处理。请保留备份，并参考下方手动恢复说明；尚未确认安装成功。',
+    ordinaryHandoff: '安装请求已交由管理器处理。请在验证备份并交接安装程序期间保持此窗口打开。关闭它不代表安装已确认，也不会恢复数据。',
     phases: {
       preparing: { title: '正在准备版本切换', detail: '管理器正在检查并保存当前安装及 Desk 数据，尚未确认安装成功。' },
       installing: { title: '正在安装历史版本', detail: '安装程序正在处理，安装结果和首次启动尚未确认。' },
@@ -111,7 +129,14 @@ const offered = computed(() => fresh.value && client?.isCurrent() ? status.value
 const uncertain = computed(() => !!status.value && offered.value.some(action => action !== 'refresh')
   && !offered.value.some(action => action !== 'refresh' && client?.canAct(action, status.value!)))
 const title = computed(() => busy.value === 'action' ? t('pending') : errorKey.value ? t('stale')
-  : status.value ? t(`phases.${status.value.phase}.title`) : t('loading'))
+  : status.value?.ordinaryInstall?.installerHandedOff && status.value.phase === 'installing' ? t('ordinaryHandedOff')
+    : status.value?.ordinaryInstall && status.value.phase === 'preparing' ? t('ordinaryPreparing')
+      : status.value ? t(`phases.${status.value.phase}.title`) : t('loading'))
+const phaseDetail = computed(() => status.value?.ordinaryInstall
+  ? t(status.value.phase === 'recovery-required' ? 'ordinaryRecovery'
+    : status.value.ordinaryInstall.backupLocation === null ? 'ordinaryPending'
+      : status.value.ordinaryInstall.installerHandedOff ? 'ordinaryStarted' : 'ordinaryReady')
+  : status.value ? t(`phases.${status.value.phase}.detail`) : '')
 function allowed(action: ManagerMutation) {
   return !busy.value && fresh.value && !!status.value && !!client?.canAct(action, status.value)
 }
@@ -215,7 +240,7 @@ onBeforeUnmount(() => { alive = false; ++sequence; clearTimer(); systemTheme?.re
 <template>
   <main class="version-manager" :aria-busy="busy === 'action' || undefined">
     <header class="manager-header">
-      <div><p class="manager-eyebrow">{{ t('subtitle') }}</p><h1>{{ t('title') }}</h1></div>
+      <div><p class="manager-eyebrow">{{ t('subtitle') }}</p><h1>{{ t(status?.ordinaryInstall ? 'ordinaryTitle' : 'title') }}</h1></div>
       <div class="manager-preferences">
         <AppSelect v-model="locale" data-manager-language :label="t('language')" :options="[{ value: 'en', label: 'English' }, { value: 'zh', label: '简体中文' }]" size="compact" />
         <AppSelect v-model="theme" data-manager-theme :label="t('theme')" :options="[{ value: 'system', label: t('system') }, { value: 'light', label: t('light') }, { value: 'dark', label: t('dark') }]" size="compact" />
@@ -229,8 +254,8 @@ onBeforeUnmount(() => { alive = false; ++sequence; clearTimer(); systemTheme?.re
       <section class="manager-status" aria-labelledby="manager-status-title" :data-phase="fresh ? status?.phase : 'unknown'">
         <h2 id="manager-status-title" ref="statusHeading" tabindex="-1" data-manager-phase role="status" aria-live="polite" aria-atomic="true">{{ title }}</h2>
         <p v-if="busy === 'action'">{{ t('pendingDetail') }}</p>
-        <p v-if="busy === 'action' && fresh && status">{{ t(`phases.${status.phase}.detail`) }}</p>
-        <p v-else-if="status && fresh">{{ t(`phases.${status.phase}.detail`) }}</p>
+        <p v-if="busy === 'action' && fresh && status">{{ phaseDetail }}</p>
+        <p v-else-if="status && fresh" :data-manager-ordinary-pending="status.ordinaryInstall?.backupLocation === null ? '' : undefined">{{ phaseDetail }}</p>
         <p v-else-if="status">{{ t('lastKnown', { state: t(`phases.${status.phase}.title`) }) }}</p>
         <p v-if="errorKey" class="manager-warning" data-manager-error role="alert">{{ t(errorKey) }}</p>
         <p v-if="fresh && status?.blockedReason" class="manager-warning" data-manager-block>{{ t(`blocks.${status.blockedReason}`) }}</p>
@@ -238,9 +263,13 @@ onBeforeUnmount(() => { alive = false; ++sequence; clearTimer(); systemTheme?.re
       </section>
       <section class="manager-boundary" data-manager-boundary aria-labelledby="manager-boundary-title">
         <h2 id="manager-boundary-title">{{ t('boundaryTitle') }}</h2>
-        <p>{{ t('fresh') }}</p><p>{{ t('shared') }}</p>
+        <p>{{ t(status?.ordinaryInstall ? 'ordinaryFresh' : 'fresh') }}</p><p>{{ t('shared') }}</p>
+        <template v-if="status?.ordinaryInstall?.backupLocation">
+          <p data-manager-ordinary-backup>{{ t('ordinaryBackup') }} {{ status.ordinaryInstall.backupLocation }}</p>
+          <p data-manager-ordinary-restore>{{ t('ordinaryRestore') }}</p>
+        </template>
       </section>
-      <p v-if="status && !['restored', 'pre-context-aborted'].includes(status.phase)" class="manager-handoff">{{ t('handoff') }}</p>
+      <p v-if="status && !['restored', 'pre-context-aborted'].includes(status.phase)" class="manager-handoff">{{ t(status.ordinaryInstall ? 'ordinaryHandoff' : 'handoff') }}</p>
     </div>
     <footer class="manager-actions">
       <AppButton data-manager-refresh :disabled="!!busy || !client?.isCurrent()" :loading="busy === 'inspect'" @click="refresh">{{ t(busy === 'inspect' ? 'refreshing' : 'refresh') }}</AppButton>

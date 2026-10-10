@@ -55,6 +55,18 @@ pub(crate) enum ManagerBlockReason {
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct OrdinaryInstallSummary {
+    pub(crate) backup_location: Option<String>,
+    pub(crate) installer_handed_off: bool,
+    pub(crate) context_policy: OrdinaryContextPolicy,
+}
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum OrdinaryContextPolicy {
+    FreshSettingsBackupManualRestore,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ManagerStatus {
     pub(crate) transaction_id: String,
     pub(crate) generation: WireU64,
@@ -63,8 +75,62 @@ pub(crate) struct ManagerStatus {
     pub(crate) phase: ManagerPhase,
     pub(crate) blocked_reason: Option<ManagerBlockReason>,
     pub(crate) allowed_actions: Vec<ManagerAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ordinary_install: Option<OrdinaryInstallSummary>,
 }
 impl ManagerStatus {
+    /// Only the native coordinator supplies a completed backup's location.
+    /// This display summary supplies no installer, restore or launch authority.
+    pub(crate) fn with_ordinary_install(
+        mut self,
+        backup_location: Option<&str>,
+        mut installer_handed_off: bool,
+    ) -> Result<Self, SafeError> {
+        let mut backup_location = backup_location.map(str::to_owned);
+        if let Some(previous) = &self.ordinary_install {
+            if previous.backup_location.is_some()
+                && backup_location.is_some()
+                && previous.backup_location != backup_location
+            {
+                return Err(error("HISTORY_INVALID_STATUS"));
+            }
+            backup_location = backup_location.or_else(|| previous.backup_location.clone());
+            installer_handed_off |= previous.installer_handed_off;
+        }
+        if backup_location.as_ref().is_some_and(|path| path.is_empty())
+            || !matches!(
+                self.phase,
+                ManagerPhase::Preparing
+                    | ManagerPhase::Installing
+                    | ManagerPhase::RecoveryRequired
+                    | ManagerPhase::PreContextAborted
+            )
+            || (installer_handed_off
+                && (backup_location.is_none()
+                    || matches!(
+                        self.phase,
+                        ManagerPhase::Preparing | ManagerPhase::PreContextAborted
+                    )))
+        {
+            return Err(error("HISTORY_INVALID_STATUS"));
+        }
+        self.allowed_actions = vec![ManagerAction::Refresh];
+        self.ordinary_install = Some(OrdinaryInstallSummary {
+            backup_location,
+            installer_handed_off,
+            context_policy: OrdinaryContextPolicy::FreshSettingsBackupManualRestore,
+        });
+        Ok(self)
+    }
+    /// Preserve ordinary preparation and any proven backup on native failure.
+    /// An absent summary cannot be filled from caller input or an error.
+    pub(crate) fn ordinary_failure(mut self, blocked: ManagerBlockReason) -> Option<Self> {
+        self.ordinary_install.as_ref()?;
+        self.phase = ManagerPhase::RecoveryRequired;
+        self.blocked_reason = Some(blocked);
+        self.allowed_actions = vec![ManagerAction::Refresh];
+        Some(self)
+    }
     /// Projection of the implemented durable state machine. The coordinator
     /// offers an action only after its fresh checks; projection cannot add one.
     pub(crate) fn project(
@@ -102,6 +168,7 @@ impl ManagerStatus {
             phase,
             blocked_reason,
             allowed_actions: offered.to_vec(),
+            ordinary_install: None,
         })
     }
     /// A reopened protected transcript is diagnostic, never a replacement for
@@ -125,6 +192,7 @@ impl ManagerStatus {
             phase,
             blocked_reason: Some(ManagerBlockReason::RecoveryEvidenceUnavailable),
             allowed_actions,
+            ordinary_install: None,
         })
     }
     /// 原生重开路径完成对象重验后才能调用。这里只检查投影与日志阶段吻合，
@@ -208,6 +276,7 @@ impl ManagerStatus {
             phase,
             blocked_reason,
             allowed_actions,
+            ordinary_install: None,
         }
     }
 }

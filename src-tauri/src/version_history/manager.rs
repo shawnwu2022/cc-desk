@@ -72,3 +72,32 @@ pub(crate) struct SwitchReview {
     pub(crate) allowed_actions: Vec<SwitchReviewAction>,
     pub(crate) block_reason: Option<SwitchReviewBlock>,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum OrdinaryInstallAction {
+    Refresh,
+    Install,
+    CancelPreparation,
+    PrepareAgain,
+}
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum OrdinaryInstallOutcome {
+    NotStarted,
+    HandoffUnknown,
+    InstallerStarted,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OrdinaryInstallReview {
+    pub(crate) preparation_id: String,
+    pub(crate) version: String,
+    pub(crate) phase: SwitchReviewPhase,
+    pub(crate) context_policy: &'static str,
+    pub(crate) transaction_id: Option<String>,
+    pub(crate) allowed_actions: Vec<OrdinaryInstallAction>,
+    pub(crate) block_reason: Option<SwitchReviewBlock>,
+    pub(crate) backup_location: Option<String>,
+    pub(crate) installation_outcome: OrdinaryInstallOutcome,
+}

@@ -128,3 +128,35 @@ export function parseSwitchTicket(value: unknown): import('@/types/versionHistor
   const ticket = object(value, ['transactionId'])
   return { transactionId: managerId(ticket.transactionId) }
 }
+
+export function parseOrdinaryInstallReview(value: unknown): import('@/types/versionHistory').OrdinaryInstallReview {
+  const review = object(value, ['preparationId', 'version', 'phase', 'contextPolicy', 'transactionId', 'allowedActions', 'blockReason', 'backupLocation', 'installationOutcome'])
+  const actions = ['refresh', 'install', 'cancel-preparation', 'prepare-again'] as const
+  if (!switchPhases.includes(review.phase as never) || review.contextPolicy !== 'fresh-settings-backup-manual-restore'
+    || !Array.isArray(review.allowedActions) || review.allowedActions.length > actions.length
+    || review.allowedActions.some(action => !actions.includes(action))
+    || new Set(review.allowedActions).size !== review.allowedActions.length
+    || review.blockReason === 'PAYLOAD_UNVERIFIED'
+    || !phaseBlocks[review.phase as SwitchReviewPhase].includes(review.blockReason as never)) invalid()
+  const issued = review.phase === 'handoff-issued' || review.phase === 'aborted'
+  if (issued !== (review.transactionId !== null)
+    || (review.phase === 'handoff-issued' ? !['handoff-unknown', 'installer-started'].includes(review.installationOutcome as string) : review.installationOutcome !== 'not-started')
+    || (review.allowedActions.includes('install') && (review.phase !== 'verified' || review.blockReason !== null))
+    || (review.blockReason === 'PREPARATION_BUSY' && review.allowedActions.includes('cancel-preparation'))
+    || (review.phase === 'handoff-issued' && review.allowedActions.some(action => action !== 'refresh'))
+    || (review.phase === 'aborted' && review.allowedActions.some(action => !['refresh', 'prepare-again'].includes(action)))
+    || (review.allowedActions.includes('prepare-again') && review.phase !== 'aborted')
+    || (review.phase === 'cancelled' && review.allowedActions.some(action => action !== 'refresh'))) invalid()
+  let backupLocation: string | null = null
+  if (review.backupLocation !== null) {
+    if (typeof review.backupLocation !== 'string' || review.backupLocation.length > 32768
+      || !/^[A-Za-z]:\\/.test(review.backupLocation) || /[\x00-\x1f\x7f]/.test(review.backupLocation) || !issued) invalid()
+    backupLocation = review.backupLocation as string
+  }
+  if (review.installationOutcome === 'installer-started' && backupLocation === null) invalid()
+  return { preparationId: token(review.preparationId), version: version(review.version), phase: review.phase as import('@/types/versionHistory').SwitchReviewPhase,
+    contextPolicy: 'fresh-settings-backup-manual-restore', transactionId: issued ? managerId(review.transactionId) : null,
+    allowedActions: [...review.allowedActions] as import('@/types/versionHistory').OrdinaryInstallAction[],
+    blockReason: review.blockReason as import('@/types/versionHistory').OrdinaryInstallReview['blockReason'], backupLocation,
+    installationOutcome: review.installationOutcome as import('@/types/versionHistory').OrdinaryInstallReview['installationOutcome'] }
+}
