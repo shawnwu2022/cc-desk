@@ -97,7 +97,7 @@ const label = computed(() => t(visual.value.labelKey))
   color: var(--text-secondary);
   vertical-align: middle;
 }
-:global([data-theme="dark"]) .session-status-icon {
+[data-theme="dark"] .session-status-icon {
   --session-status-info: #82acdc;
   --session-status-success: #5dad8e;
   --session-status-error: #f28a78;

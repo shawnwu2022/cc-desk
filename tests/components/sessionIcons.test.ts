@@ -390,12 +390,30 @@ describe('SessionIcons', () => {
     else expect(paths[0].getAttribute('fill')).toBe('black')
   })
 
+  // 编译后的 scoped CSS 必须直接覆盖图标自身变量，不能只在主题祖先定义。
+  it('Status_CompiledThemeCascade_034', () => {
+    const component = readFileSync(resolve('src/components/sessions/SessionStatusIcon.vue'), 'utf8')
+    const style = document.createElement('style')
+    style.dataset.testSessionIcons = ''
+    style.textContent = compileStyle({ filename: 'SessionStatusIcon.vue', source: component.match(/<style[^>]*>([\s\S]*?)<\/style>/)![1], id: (SessionStatusIcon as unknown as { __scopeId: string }).__scopeId, scoped: true }).code
+    document.head.append(style)
+    const wrapper = mount(SessionStatusIcon, { attachTo: document.body, props: { state: 'starting' }, global: { plugins: [i18n] } })
+    mounted.push(wrapper)
+    for (const [theme, info, success, error] of [['light', '#2a5082', '#367e63', '#c45c4a'], ['dark', '#82acdc', '#5dad8e', '#f28a78']]) {
+      document.documentElement.setAttribute('data-theme', theme)
+      const actual = getComputedStyle(wrapper.get('.session-status-icon').element)
+      expect(actual.getPropertyValue('--session-status-info').trim()).toBe(info)
+      expect(actual.getPropertyValue('--session-status-success').trim()).toBe(success)
+      expect(actual.getPropertyValue('--session-status-error').trim()).toBe(error)
+    }
+  })
+
   // 实心底与对比符号在双主题及选中叠色上达到 3:1，工作动效不降低透明度。
   it('Status_FilledGlyphContrast_027', () => {
     const globalCss = readFileSync(resolve('src/styles/global.css'), 'utf8')
     const component = readFileSync(resolve('src/components/sessions/SessionStatusIcon.vue'), 'utf8')
     const base = component.match(/\.session-status-icon\s*\{([^}]*)\}/)![1]
-    const dark = component.match(/:global\(\[data-theme="dark"\]\) \.session-status-icon\s*\{([^}]*)\}/)![1]
+    const dark = component.match(/\[data-theme="dark"\] \.session-status-icon\s*\{([^}]*)\}/)![1]
     const luminance = (rgb: number[]) => rgb.map(channel => channel / 255).map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4).reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0)
     const rgb = (hex: string) => [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16))
     const contrast = (left: number[], right: number[]) => (Math.max(luminance(left), luminance(right)) + .05) / (Math.min(luminance(left), luminance(right)) + .05)

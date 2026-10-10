@@ -47,6 +47,10 @@ for (const gui of ['light', 'dark']) for (const locale of ['en', 'zh']) {
   test(`session glyph and explicit launch evidence ${gui} ${locale}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1024, height: 1000 })
     await openFixture(page, { scenario: 'session-status', gui, locale })
+    // Assert the actual browser cascade, not just palette literals in source.
+    await expect(page.locator('[data-session-row="visual-status-12"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(130, 172, 220)' : 'rgb(42, 80, 130)')
+    await expect(page.locator('[data-session-row="visual-status-1"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(93, 173, 142)' : 'rgb(54, 126, 99)')
+    await expect(page.locator('[data-session-row="visual-status-10"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(242, 138, 120)' : 'rgb(196, 92, 74)')
     const history = page.locator('[data-session-row="visual-status-16"]')
     const launch = history.locator('[data-session-launch]')
     await page.mouse.move(1020, 996)
