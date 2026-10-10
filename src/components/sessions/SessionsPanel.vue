@@ -240,6 +240,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
         </IconButton>
       </template>
     </PanelHeader>
+    <slot name="source-status" />
     <div class="search-box">
       <AppInput ref="searchInput" v-model="searchQuery" class="search-input" size="compact" :aria-label="t('searchSessions')" :placeholder="t('searchSessions')" />
       <IconButton v-if="searchQuery" :label="t('clearSearch')" @click="searchQuery = ''">

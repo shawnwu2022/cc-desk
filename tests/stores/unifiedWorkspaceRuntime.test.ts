@@ -90,7 +90,7 @@ describe('Workspace source warning diagnostics', () => {
     i18n.global.locale.value = 'zh'; await flushPromises()
     expect(details.find('summary').text()).toBe('历史读取详情（部分条目已略过）')
   })
-  // 关闭只收起提示，加载中的空错误及相同重试结果不能重置关闭状态。
+  // 真关闭提示；加载中的临时状态与相同重试结果不能重置确认状态。
   it('Warnings_DismissRetry_001', async () => {
     io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_TOO_LARGE', items: [], hasMore: false })
     const { runtime } = render(); await flushPromises()
@@ -200,36 +200,207 @@ describe('Workspace source warning diagnostics', () => {
     expect(runtime.sourceWarnings.value).toEqual(visible)
   })
 
-  // 真实App收起后保留诊断和重试；切换语言不重新弹出，配置入口绑定canonical配置。
-  it('Warnings_AppCollapseLocale_004', async () => {
+  // Dismiss removes terminal notices, retaining an explicit source entry and dialog.
+  it('Warnings_AppDismissLocale_004', async () => {
     io.scope.mockRejectedValue({ code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation', field: '/private/path', name: 'raw-secret' })
     const i18n = createI18n({ legacy: false, locale: 'en', messages: { en, zh } })
     const w = mount(App, { attachTo: document.body, global: { plugins: [i18n], stubs: { NativeCliTerminal: true, SettingsView: true, LaunchConfigurationEditor: true } } })
     wrappers.push(w); await flushPromises()
     expect(w.find('[data-workspace-source-notice]').exists()).toBe(true)
     expect(w.find('[data-workspace-source-details]').text()).toContain('CX')
-    expect(w.find('[data-workspace-source-details]').text()).toContain(en.sourceWarningScopeUnknown)
     ;(w.find('[data-dismiss-source-notice]').element as HTMLElement).focus()
     await w.find('[data-dismiss-source-notice]').trigger('click'); await flushPromises()
     expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
-    expect(w.find('[data-workspace-source-compact]').exists()).toBe(true)
-    const details = w.find('[data-workspace-source-details]')
-    expect(document.activeElement).toBe(details.find('summary').element)
-    ;(details.find('summary').element as HTMLElement).click()
-    expect((details.element as HTMLDetailsElement).open).toBe(true)
-    ;(details.find('summary').element as HTMLElement).click()
-    expect((details.element as HTMLDetailsElement).open).toBe(false)
-    ;(details.find('summary').element as HTMLElement).click()
-    expect((details.element as HTMLDetailsElement).open).toBe(true)
-    expect(details.text()).toContain('SCOPE_UNKNOWN')
-    expect(details.text()).not.toMatch(/raw-secret|private\/path/)
+    expect(w.find('[data-workspace-source-compact]').exists()).toBe(false)
+    expect(w.find('[data-workspace-source-details]').exists()).toBe(false)
+    const entry = w.find('[data-history-source-entry]')
+    expect(entry.exists()).toBe(true)
+    expect(document.activeElement).toBe(entry.element)
+    await entry.trigger('click'); await flushPromises()
+    const dialog = () => document.querySelector('[data-history-source-dialog]')!
+    expect(dialog().textContent).toContain('SCOPE_UNKNOWN')
+    expect(dialog().textContent).not.toMatch(/raw-secret|private\/path/)
     i18n.global.locale.value = 'zh'; await flushPromises()
+    expect(dialog().textContent).toContain(zh.sourceWarningScopeUnknown)
+    ;(dialog().querySelector('[data-source-warning-retry]') as HTMLElement).click(); await flushPromises()
     expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
-    expect(w.find('[data-workspace-source-details]').text()).toContain(zh.sourceWarningScopeUnknown)
-    await w.find('[data-source-warning-retry]').trigger('click'); await flushPromises()
-    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
-    await w.find('[data-source-warning-configuration]').trigger('click'); await flushPromises()
+    ;(dialog().querySelector('[data-source-warning-configuration]') as HTMLElement).click(); await flushPromises()
     expect(w.findComponent(LaunchConfigurationEditor).props('request')).toEqual({ kind: 'edit', profileId: 'cx' })
+    useShellStore().navigate('projects'); await flushPromises()
+    expect(document.querySelector('[data-history-source-dialog]')).toBeNull()
+    useShellStore().navigate('workspace'); await flushPromises()
+    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
+    await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
+    expect(dialog().textContent).toContain('SCOPE_UNKNOWN')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await flushPromises()
+    expect(document.querySelector('[data-history-source-dialog]')).toBeNull()
+  })
+
+  it('HistoryPartial_DismissRetryNavigation_003', async () => {
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_UNSUPPORTED'] })
+    const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } })
+    wrappers.push(w); await flushPromises()
+    expect(w.find('[data-history-metadata-partial]').exists()).toBe(true)
+    await w.find('[data-dismiss-history-notice]').trigger('click'); await flushPromises()
+    expect(w.find('[data-history-metadata-partial]').exists()).toBe(false)
+    expect(w.find('[data-history-read-details]').exists()).toBe(false)
+    expect(useNativeHistoryStore().all()[0].metadataIncomplete).toBe(true)
+    useShellStore().requestWorkspaceAction({ kind: 'refresh' }); await flushPromises()
+    expect(w.find('[data-history-metadata-partial]').exists()).toBe(false)
+    useShellStore().navigate('projects'); useShellStore().navigate('workspace'); await flushPromises()
+    expect(w.find('[data-history-metadata-partial]').exists()).toBe(false)
+    await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
+    expect(document.querySelector('[data-history-source-dialog]')?.textContent).toContain('SOURCE_UNSUPPORTED')
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] })
+    useShellStore().requestWorkspaceAction({ kind: 'refresh' }); await flushPromises()
+    expect(w.find('[data-history-metadata-partial]').exists()).toBe(true)
+  })
+
+  it('HistoryPartial_PendingStaleRecovery_004', async () => {
+    const partial = { state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_UNSUPPORTED'] }
+    io.read.mockResolvedValue(partial)
+    const { runtime } = render(); await flushPromises()
+    runtime.dismissSourceNotice()
+    expect(runtime.historyNoticeDismissed.value).toBe(true)
+    let finish!: (value: unknown) => void
+    io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const old = runtime.refresh(); await flushPromises()
+    // A temporary unloaded entry is not a successful source observation.
+    expect(runtime.historyMetadataPartial.value).toBe(false)
+    runtime.dismissSourceNotice() // An unrelated notice may be dismissed while reads are pending.
+    await runtime.refresh()
+    expect(runtime.historyNoticeDismissed.value).toBe(true)
+    finish({ ...partial, historyReadFailures: ['SOURCE_INVALID'] }); await old; await flushPromises()
+    expect(runtime.historyNoticeDismissed.value).toBe(true)
+    expect(runtime.historyReadWarnings.value[0].code).toBe('SOURCE_UNSUPPORTED')
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+    await runtime.refresh()
+    expect(runtime.sourceIssuesAvailable.value).toBe(false)
+    io.read.mockResolvedValue(partial); await runtime.refresh()
+    expect(runtime.historyNoticeDismissed.value).toBe(false)
+  })
+
+  it('Warnings_AppDismissesBothKinds_012', async () => {
+    const configured = await io.profiles()
+    io.profiles.mockResolvedValue({ ...configured, profiles: [...configured.profiles, { ...configured.profiles[0], id: 'claude-profile', cli: 'claude' }] })
+    io.scope.mockImplementation(async ({ profileId }) => ({ cli: profileId === 'cx' ? 'codex' : 'claude' }))
+    io.read.mockImplementation(async ({ source }) => source.cli === 'codex'
+      ? { state: 'unavailable', reason: 'SOURCE_BUDGET_EXCEEDED', items: [], hasMore: false }
+      : { state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_UNSUPPORTED'] })
+    const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } })
+    wrappers.push(w); await flushPromises()
+    expect(w.find('[data-workspace-source-details]').text()).toContain('five-second time budget')
+    expect(w.find('[data-history-metadata-partial]').exists()).toBe(true)
+    await w.find('[data-dismiss-source-notice]').trigger('click'); await flushPromises()
+    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
+    expect(w.find('[data-history-metadata-partial]').exists()).toBe(false)
+    expect(w.find('[data-history-read-details]').exists()).toBe(false)
+    await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
+    expect(document.querySelector('[data-history-source-dialog]')?.textContent).toContain('SOURCE_BUDGET_EXCEEDED')
+    expect(document.querySelector('[data-history-source-dialog]')?.textContent).toContain('SOURCE_UNSUPPORTED')
+  })
+
+  it('HistoryPartial_LastKnownActivity_006', async () => {
+    const item = { type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'Known task', cwd: '/repo', updatedAt: '2026-10-10T11:00:00Z' }
+    io.read.mockResolvedValue({ state: 'ready', items: [item], hasMore: false })
+    const { runtime } = render(); await flushPromises()
+    const known = Date.parse(item.updatedAt)
+    expect(useUnifiedSessionsStore().sessions[0].lastActivityAt).toBe(known)
+    const { updatedAt: _updated, ...summary } = item
+    io.read.mockResolvedValue({ state: 'ready', items: [{ ...summary, truncated: true }], hasMore: false, historyMetadataIncomplete: true })
+    await runtime.refresh()
+    expect(useNativeHistoryStore().all()[0].sessions[0].updatedAt).toBeUndefined()
+    expect(useNativeHistoryStore().all()[0].absenceEvidence).toBeUndefined()
+    expect(runtime.historyMetadataPartial.value).toBe(true)
+    expect(useUnifiedSessionsStore().sessions[0]).toMatchObject({ lastActivityAt: known, activityState: 'unknown' })
+    io.read.mockResolvedValue({ state: 'ready', items: [{ ...summary, sessionKey: 'different-root-key', truncated: true }], hasMore: false, historyMetadataIncomplete: true })
+    await runtime.refresh()
+    expect(useUnifiedSessionsStore().sessions[0].lastActivityAt).toBe(0)
+  })
+
+  it('Warnings_BackgroundDiagnosticsTruncated_015', async () => {
+    const configured = await io.profiles()
+    io.profiles.mockResolvedValue({ ...configured, profiles: Array.from({ length: 14 }, (_, index) => ({ ...configured.profiles[0], id: `p-${index}`, cli: index < 7 ? 'codex' : 'claude' })) })
+    io.scope.mockImplementation(async ({ profileId }) => ({ cli: Number(profileId.slice(2)) < 7 ? 'codex' : 'claude' }))
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+    const { runtime } = render(); await flushPromises()
+    const codes = ['SOURCE_UNAVAILABLE', 'SOURCE_BUSY', 'SOURCE_UNSUPPORTED', 'SOURCE_TOO_LARGE', 'SOURCE_BUDGET_EXCEEDED', 'SOURCE_CHANGED', 'SOURCE_AMBIGUOUS']
+    for (const entry of useNativeHistoryStore().all()) {
+      entry.error = codes[Number(entry.context.profileId.slice(2)) % codes.length]
+      entry.diagnosticStage = 'read-source-enumeration'
+    }
+    await flushPromises()
+    expect(runtime.sourceWarningsTruncated.value).toBe(false)
+    expect(runtime.sourceDiagnosticsWarnings.value).toHaveLength(12)
+    expect(runtime.sourceDiagnosticsTruncated?.value).toBe(true)
+  })
+
+  it('Warnings_SourceRootIdentity_011', async () => {
+    io.scope.mockResolvedValue({ cli: 'codex', sourceRootKey: 'root-one' })
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_BUDGET_EXCEEDED', items: [], hasMore: false })
+    const { runtime } = render(); await flushPromises()
+    expect(useNativeHistoryStore().all()[0]).toHaveProperty('sourceRootKey', 'root-one')
+    runtime.dismissSourceNotice()
+    io.scope.mockResolvedValue({ cli: 'codex', sourceRootKey: 'root-two' })
+    await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(false)
+  })
+
+  it('HistoryPartial_DrawerPendingIsNotHealthy_005', async () => {
+    const partial = { state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_UNSUPPORTED'] }
+    io.read.mockResolvedValue(partial)
+    const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } })
+    wrappers.push(w); await flushPromises()
+    await w.find('[data-dismiss-history-notice]').trigger('click'); await flushPromises()
+    await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
+    let finish!: (value: unknown) => void
+    io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    ;(document.querySelector('[data-source-warning-retry]') as HTMLElement).click(); await flushPromises()
+    expect(document.querySelector('[data-history-source-dialog]')?.textContent).not.toContain('History sources are up to date.')
+    expect(document.querySelector('[data-history-source-dialog]')?.textContent).toContain(en.loading)
+    finish(partial); await flushPromises()
+    expect(w.find('[data-history-metadata-partial]').exists()).toBe(false)
+    // Close/restore adapters can force this exact context without a runtime refresh.
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_BUDGET_EXCEEDED', items: [], hasMore: false })
+    await useNativeHistoryStore().load({ ...useNativeHistoryStore().all()[0].context, force: true }); await flushPromises()
+    expect(w.find('[data-history-source-entry]').exists()).toBe(true)
+    expect(document.querySelector('[data-history-source-dialog]')?.textContent).toContain('SOURCE_BUDGET_EXCEEDED')
+    expect(document.querySelector('[data-history-source-dialog]')?.textContent).not.toContain('History sources are up to date.')
+  })
+
+  it('Warnings_DismissHiddenSidebarFocus_014', async () => {
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_BUDGET_EXCEEDED', items: [], hasMore: false })
+    const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } })
+    wrappers.push(w); await flushPromises()
+    useShellStore().sidebarVisible = false; await flushPromises()
+    ;(w.find('[data-dismiss-source-notice]').element as HTMLElement).focus()
+    await w.find('[data-dismiss-source-notice]').trigger('click'); await flushPromises()
+    expect(document.activeElement).toBe(w.find('[data-primary-section="workspace"]').element)
+    useShellStore().sidebarVisible = true; await flushPromises()
+    await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
+    expect(document.querySelector('[data-history-source-dialog]')).not.toBeNull()
+    useShellStore().sidebarVisible = false; await flushPromises()
+    expect(document.querySelector('[data-history-source-dialog]')).toBeNull()
+  })
+
+  it('Warnings_ThrownReadRootIdentity_013', async () => {
+    io.scope.mockResolvedValue({ cli: 'codex', sourceRootKey: 'root-one' })
+    io.read.mockRejectedValue({ code: 'SOURCE_READ_FAILED' })
+    const { runtime } = render(); await flushPromises()
+    runtime.dismissSourceNotice()
+    io.scope.mockResolvedValue({ cli: 'codex', sourceRootKey: 'root-two' })
+    await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(false)
+  })
+
+  it('Warnings_ProfileRevision_010', async () => {
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_BUDGET_EXCEEDED', items: [], hasMore: false })
+    const { runtime } = render(); await flushPromises()
+    runtime.dismissSourceNotice()
+    const current = await io.profiles()
+    io.profiles.mockResolvedValue({ ...current, profiles: current.profiles.map((profile: object) => ({ ...profile, revision: '8' })) })
+    await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(false)
   })
 
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {

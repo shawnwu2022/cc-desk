@@ -15,7 +15,10 @@ export interface NativeHistoryContext {
   force?: boolean
 }
 
-export type NativeHistorySession = Extract<ResourceItem, { type: 'session' }>
+export type NativeHistorySession = Extract<ResourceItem, { type: 'session' }> & {
+  /** Display-only prior complete timestamp. Never written into source updatedAt. */
+  lastKnownActivityAt?: number
+}
 
 export interface NativeHistoryEntry {
   key: string
@@ -27,6 +30,8 @@ export interface NativeHistoryEntry {
   diagnosticStage?: ProjectionStage
   metadataIncomplete?: boolean
   readFailures?: HistoryReadFailure[]
+  /** Opaque backend-admitted identity; retained even when enumeration fails. */
+  sourceRootKey?: string
   requestEpoch: string
   /** Only one complete authenticated response can prove absence. Offset pages
    * have no common snapshot token and are positive discovery only. */
@@ -120,7 +125,9 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
         })
         if (owners.get(key) !== owner) return replacement()
         if (source.cli !== context.cli) throw new Error('PROFILE_CLI_MISMATCH')
+        if (typeof source.sourceRootKey === 'string' && source.sourceRootKey) entry.sourceRootKey = source.sourceRootKey
         const sessions = new Map<string, NativeHistorySession>()
+        const previousSessions = new Map(cached?.sourceRootKey === entry.sourceRootKey ? cached?.sessions.map(item => [item.sessionKey, item]) ?? [] : [])
         let offset = 0
         let metadataIncomplete = false
         const readFailures = new Set<HistoryReadFailure>()
@@ -138,7 +145,17 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
           for (const code of result.historyReadFailures ?? []) readFailures.add(code)
           if (readFailures.size) { entry.readFailures = [...readFailures]; metadataIncomplete = true }
           entry.metadataIncomplete = metadataIncomplete
-          for (const item of result.items) if (item.type === 'session') sessions.set(item.sessionKey, item)
+          for (const item of result.items) if (item.type === 'session') {
+            const previous = previousSessions.get(item.sessionKey)
+            const observed = item.updatedAt ? Date.parse(item.updatedAt) : NaN
+            const priorUpdated = previous?.updatedAt ? Date.parse(previous.updatedAt) : NaN
+            const prior = Number.isFinite(priorUpdated) ? priorUpdated : previous?.lastKnownActivityAt ?? NaN
+            // Same canonical context + backend root/session key only. No new row,
+            // source timestamp, completeness or absence evidence is inferred.
+            const known = previous?.nativeSessionId === item.nativeSessionId && Number.isFinite(prior) && prior >= 0 && !Number.isFinite(observed)
+              ? prior : undefined
+            sessions.set(item.sessionKey, known === undefined ? item : { ...item, lastKnownActivityAt: known })
+          }
           if (!result.hasMore) {
             entry.sessions = [...sessions.values()]
             if (offset === 0 && !metadataIncomplete && typeof source.sourceRootKey === 'string' && source.sourceRootKey) {

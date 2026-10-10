@@ -134,6 +134,7 @@ function historyId(entry: Pick<NativeHistoryEntry, 'context'>, sessionKey: strin
 
 function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]): UnifiedSession {
   const updated = item.updatedAt ? Date.parse(item.updatedAt) : 0
+  const lastKnown = item.lastKnownActivityAt ?? 0
   return {
     id: historyId(entry, item.sessionKey, item.nativeSessionId),
     projectKey: normalizePath(entry.context.projectPath),
@@ -145,7 +146,7 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     attentionState: 'none',
     activityState: 'unknown',
     observationState: 'off',
-    lastActivityAt: Number.isFinite(updated) ? updated : 0,
+    lastActivityAt: Math.max(Number.isFinite(updated) ? updated : 0, Number.isFinite(lastKnown) && lastKnown >= 0 ? lastKnown : 0),
     lastOpenedAt: 0,
     archived: false,
     opened: false,

@@ -47,6 +47,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     return profile && profile.revision === owner.profileRevision ? [{ ...owner, name: profile.name }] : []
   }))
   const acknowledgedSourceWarnings = ref(new Set<string>())
+  const acknowledgedHistoryWarnings = ref(new Set<string>())
   // Replaced per owned refresh, deduped per canonical profile and fixed triple.
   // Never accumulate historical profiles or raw errors, including omitted rows.
   const sourceNoticeKeys = ref<string[]>([])
@@ -54,11 +55,12 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     && sourceNoticeKeys.value.every(key => acknowledgedSourceWarnings.value.has(key)))
   function dismissSourceNotice() {
     acknowledgedSourceWarnings.value = new Set(sourceNoticeKeys.value)
+    acknowledgedHistoryWarnings.value = new Set([...acknowledgedHistoryWarnings.value, ...historyNoticeKeys.value])
   }
 
-  const currentHistoryEntries = computed(() => history.all().filter(entry => entry.loaded && !entry.error
-    && profiles.profile(entry.context.profileId)?.revision === entry.context.profileRevision
+  const relevantHistoryEntries = computed(() => history.all().filter(entry => profiles.profile(entry.context.profileId)?.revision === entry.context.profileRevision
     && workspace.projects.some(project => project.projectId === entry.context.projectId && sameProjectPath(project.selectedPath, entry.context.projectPath))))
+  const currentHistoryEntries = computed(() => relevantHistoryEntries.value.filter(entry => entry.loaded && !entry.error))
   const historyMetadataPartial = computed(() => currentHistoryEntries.value.some(entry => entry.metadataIncomplete))
   const historyReadWarnings = computed(() => {
     const warnings = createWorkspaceSourceWarnings()
@@ -67,8 +69,36 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     return warnings.items
   })
+  // Fixed diagnostics + canonical context/root identity, never raw transcript data.
+  // Project navigation does not reset this workspace-owned acknowledgement.
+  const historyNoticeKeys = computed(() => currentHistoryEntries.value.filter(entry => entry.metadataIncomplete).map(entry =>
+    JSON.stringify([entry.key, entry.sourceRootKey ?? null, [...(entry.readFailures ?? [])].sort()])))
+  const historyNoticeDismissed = computed(() => historyNoticeKeys.value.length > 0
+    && historyNoticeKeys.value.every(key => acknowledgedHistoryWarnings.value.has(key)))
+  // Adapter-owned forced reads (close/resume) can finish outside refresh(). Keep
+  // their authenticated fixed diagnostics discoverable, never infer health from
+  // their absence in the positive-session projection.
+  const sourceDiagnostics = computed(() => {
+    const warnings = createWorkspaceSourceWarnings(sourceWarnings.value, sourceWarningsTruncated.value)
+    for (const entry of relevantHistoryEntries.value) if (!entry.loading && entry.error) {
+      warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error, stage: entry.diagnosticStage })
+    }
+    return { warnings: warnings.items, truncated: warnings.truncated }
+  })
+  const sourceDiagnosticsWarnings = computed(() => sourceDiagnostics.value.warnings)
+  const sourceDiagnosticsTruncated = computed(() => sourceDiagnostics.value.truncated)
+  const sourceIssuesAvailable = computed(() => sourceDiagnosticsWarnings.value.length > 0 || historyMetadataPartial.value)
+  function retireHistoryAcknowledgements() {
+    const current = new Set(historyNoticeKeys.value)
+    acknowledgedHistoryWarnings.value = new Set([...acknowledgedHistoryWarnings.value].filter(key => current.has(key)))
+  }
+  // A forced read temporarily removes loaded entries. Do not treat that as health.
+  watch(historyNoticeKeys, () => {
+    if (!loading.value && !history.all().some(entry => entry.loading)) retireHistoryAcknowledgements()
+  }, { flush: 'post' })
   const ready = ref(false)
   const loading = ref(false)
+  const sourceChecksPending = computed(() => loading.value || relevantHistoryEntries.value.some(entry => entry.loading))
   const fatal = computed(() => ready.value && !loading.value && !projects.loaded
     && profiles.status === 'error' && workspace.status === 'error' && app.managedProjectsStatus === 'error'
     && !openSessions.value.length && !catalog.sessions.length && !app.cachedProjects.length
@@ -255,9 +285,13 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     error.value = null
     const warnings = createWorkspaceSourceWarnings()
     const configurationOwners = new Map<string, Omit<WorkspaceSourceConfiguration, 'name'>>()
-    const addHistoryWarning = (context: { cli: UnifiedCliKind; profileId: string; profileRevision: string }, failure: unknown) => {
+    const historyWarningIdentities = new Map<string, Set<string>>()
+    const addHistoryWarning = (context: { cli: UnifiedCliKind; profileId: string; profileRevision: string; sourceRootKey?: string }, failure: unknown) => {
       const warning = warnings.add(context.cli === 'claude' ? 'claude-history' : 'codex-history', failure)
       const warningKey = workspaceWarningKey(warning)
+      const identities = historyWarningIdentities.get(warningKey) ?? new Set<string>()
+      identities.add(JSON.stringify([warningKey, context.profileId, context.profileRevision, context.sourceRootKey ?? null]))
+      historyWarningIdentities.set(warningKey, identities)
       configurationOwners.set(JSON.stringify([warningKey, context.profileId]), {
         warningKey, profileId: context.profileId, profileRevision: context.profileRevision,
       })
@@ -294,8 +328,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           await Promise.all(contexts.slice(i, i + 2).map(async context => {
             try {
               const entry = await history.load(context)
-              if (entry.error) addHistoryWarning(context, { code: entry.error, stage: entry.diagnosticStage })
-            } catch (failure) { addHistoryWarning(context, failure) }
+              if (entry.error) addHistoryWarning({ ...context, sourceRootKey: entry.sourceRootKey }, { code: entry.error, stage: entry.diagnosticStage })
+            } catch (failure) { addHistoryWarning({ ...context, sourceRootKey: history.get(context)?.sourceRootKey }, failure) }
           }))
         }
       }),
@@ -312,14 +346,15 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     sourceWarningsTruncated.value = warnings.truncated
     sourceConfigurationOwners.value = [...configurationOwners.values()].filter(owner => warnings.items.some(warning => workspaceWarningKey(warning) === owner.warningKey))
     sourceNoticeKeys.value = warnings.identityKeys().flatMap(key => {
-      const owners = [...configurationOwners.values()].filter(owner => owner.warningKey === key)
-      return owners.length ? owners.map(owner => JSON.stringify([key, owner.profileId])) : [key]
+      const identities = historyWarningIdentities.get(key)
+      return identities ? [...identities] : [key]
     })
     if (warnings.truncated) sourceNoticeKeys.value.push('truncated')
     // Only a completed owned check retires acknowledgements. Loading's temporary
     // error=null and background catalog publication cannot resurrect a notice.
     const currentKeys = new Set(sourceNoticeKeys.value)
     acknowledgedSourceWarnings.value = new Set([...acknowledgedSourceWarnings.value].filter(key => currentKeys.has(key)))
+    retireHistoryAcknowledgements()
     error.value = warnings.items.length && !fatal.value ? 'workspaceRuntimePartial' : null
   }
 
@@ -519,5 +554,5 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     void refresh()
   })
   onUnmounted(() => { disposed = true; ++refreshOwner })
-  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }
+  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, historyNoticeDismissed, sourceIssuesAvailable, sourceDiagnosticsWarnings, sourceDiagnosticsTruncated, sourceChecksPending, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }
 }

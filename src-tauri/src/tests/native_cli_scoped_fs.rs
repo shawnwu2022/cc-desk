@@ -243,3 +243,61 @@ fn windows_junction_escape_cannot_read_external_bytes() {
     let r = Root::open(&inside).unwrap();
     assert!(r.read(Path::new("escape/secret"), &mut budget()).is_err());
 }
+
+// 过期的五秒协作预算使用独立固定码，不能与文件、总字节或条目上限混淆。
+#[test]
+#[allow(non_snake_case)]
+fn SourceBudget_DeadlineCode_001() {
+    let t = tempfile::tempdir().unwrap();
+    fs::write(t.path().join("x"), b"{}").unwrap();
+    let r = Root::open(t.path()).unwrap();
+    let mut b = budget();
+    b.started = Instant::now() - Duration::from_secs(6);
+    assert_eq!(
+        r.history_prefix(Path::new("x"), &mut b).err(),
+        Some("SOURCE_BUDGET_EXCEEDED")
+    );
+    assert!(!b.omit_history_entry("SOURCE_BUDGET_EXCEEDED"));
+}
+
+// Claude 首行换行位于第九个 64KiB 块时仍继续读取，随后保持前缀未完整与原总量扣减。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryPrefix_LongFirstLine_001() {
+    let t = tempfile::tempdir().unwrap();
+    let mut bytes = vec![b'x'; 8 * 64 * 1024];
+    bytes.extend_from_slice(b"\n{}");
+    bytes.extend(vec![b'y'; 64 * 1024]);
+    fs::write(t.path().join("x"), &bytes).unwrap();
+    let r = Root::open(t.path()).unwrap();
+    let mut b = budget();
+    let (observed, incomplete) = r.history_prefix(Path::new("x"), &mut b).unwrap().unwrap();
+    assert_eq!(observed.len(), 9 * 64 * 1024);
+    assert!(observed == bytes[..observed.len()]);
+    assert!(incomplete);
+    assert!(b.history_metadata_incomplete());
+    assert_eq!(b.bytes_left, Limits::default().total_bytes - observed.len());
+}
+
+// Codex 完整首行位于首个 4KiB 块时只扣减实际读取块，Messages 的完整文件限制保持不变。
+#[test]
+#[allow(non_snake_case)]
+fn CodexHeader_ChargeSample_002() {
+    use std::io::Write;
+    let t = tempfile::tempdir().unwrap();
+    let mut file = fs::File::create(t.path().join("x")).unwrap();
+    file.write_all(b"{}\n").unwrap();
+    file.set_len(3 * 1024 * 1024).unwrap();
+    let r = Root::open(t.path()).unwrap();
+    let mut b = budget();
+    let (observed, incomplete) = r.history_header(Path::new("x"), &mut b).unwrap().unwrap();
+    assert_eq!(observed.len(), 4 * 1024);
+    assert!(observed.starts_with(b"{}\n"));
+    assert!(incomplete);
+    assert!(b.history_metadata_incomplete());
+    assert_eq!(b.bytes_left, Limits::default().total_bytes - observed.len());
+    assert_eq!(
+        r.read(Path::new("x"), &mut budget()).err(),
+        Some("SOURCE_TOO_LARGE")
+    );
+}
