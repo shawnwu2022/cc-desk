@@ -110,6 +110,20 @@ it.each(['running', 'unknown'] as const)('Native_AppPrimaryCloseOnce_%s_001', as
   expect(wrapper.find('[data-session-confirm]').exists()).toBe(false)
 })
 
+// 停止已生效后的状态读取瞬断，首次关闭继续检查精确回执，不要求第二次点击。
+it('Native_AppCloseReadRetry_007', async () => {
+  const wrapper = await render(), tab = await open(wrapper)
+  io.recover.mockRejectedValueOnce(new Error('LAUNCH_STATE_UNKNOWN'))
+  await closeButton(wrapper, tab.tabId).trigger('click')
+  await vi.waitFor(() => expect(useNativeTabsStore().tab(tab.tabId)).toBeUndefined())
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith({ runId: tab.runId, generation: tab.generation })
+  expect(io.cancel).toHaveBeenCalledExactlyOnceWith(tab.requestId)
+  expect(io.recover).toHaveBeenCalledTimes(2)
+  expect(io.start).toHaveBeenCalledOnce()
+  expect(wrapper.findComponent(NativeCliTerminal).exists()).toBe(false)
+  expect(useUnifiedSessionsStore().actionFeedback).toBeNull()
+})
+
 it('Native_AppCloseKeepsUnconfirmedAttempt_002', async () => {
   const wrapper = await render(), tab = await open(wrapper), tabs = useNativeTabsStore()
   io.recover.mockImplementation(async id => receipt(launched(id), 'running'))

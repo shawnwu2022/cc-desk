@@ -540,6 +540,7 @@ async function setupDragDropListener() {
 }
 
 let coreListenersReady: Promise<void> | null = null
+const stopExitWaiters = new Map<string, Set<() => void>>()
 function ensureCoreListeners(): Promise<void> {
   if (disposed) return Promise.reject(new Error('LEGACY_TERMINAL_NOT_READY'))
   if (unlistenPtyOutput && unlistenPtyExit) return Promise.resolve()
@@ -560,6 +561,7 @@ function ensureCoreListeners(): Promise<void> {
     if (unlistenPtyExit) return
     const unlisten = await onPtyExit(({ id }) => {
       if (disposed) return
+      for (const notify of stopExitWaiters.get(id) ?? []) notify()
       const tabId = ptyToTab.get(id)
       sessionStore.handlePtyExit(id)
       hookStore.clearSession(id)
@@ -899,9 +901,34 @@ function focus() {
 // Lifecycle calls capture the exact PTY before awaiting. No completion resolves
 // a new current tab or selects another runtime to finish an old operation.
 async function stopTab(tabId: string) {
-  const ptyId = sessionStore.tabs.get(tabId)?.ptyId
+  const tab = sessionStore.tabs.get(tabId)
+  const ptyId = tab?.ptyId
   if (!ptyId) return
-  await ptyKill(ptyId)
+  const generation = tab.ptyGeneration ?? 0
+  const owns = () => !disposed && sessionStore.tabs.get(tabId) === tab && (tab.ptyGeneration ?? 0) === generation
+  let ended = false
+  let notify!: () => void
+  const exit = new Promise<void>(resolve => { notify = () => { ended = true; resolve() } })
+  const waiters = stopExitWaiters.get(ptyId) ?? new Set<() => void>()
+  waiters.add(notify); stopExitWaiters.set(ptyId, waiters)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    try { await ptyKill(ptyId) } catch {
+      // A rejected control response may arrive after this exact child exited.
+      // Only its matching event (or already-published exact ended state) can
+      // reconcile it; another PTY's exit cannot justify removing this terminal.
+      if (!(owns() && tab.ptyId === null && tab.status === 'stopped') && !ended) {
+        await Promise.race([exit, new Promise<void>(resolve => { timer = setTimeout(resolve, 3000) })])
+      }
+      if (!owns()) throw new Error('STALE_LEGACY_ATTEMPT')
+      if (!ended && !(tab.ptyId === null && tab.status === 'stopped')) throw new Error('LEGACY_STOP_UNCONFIRMED')
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+    waiters.delete(notify)
+    if (!waiters.size && stopExitWaiters.get(ptyId) === waiters) stopExitWaiters.delete(ptyId)
+  }
+  if (!owns()) throw new Error('STALE_LEGACY_ATTEMPT')
   sessionStore.handlePtyExit(ptyId)
   hookStore.clearSession(ptyId)
   ptyToTab.unlink(ptyId)

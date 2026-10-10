@@ -8,6 +8,13 @@ thread_local! {
     static FAIL_IO: Cell<Option<&'static str>> = const { Cell::new(None) };
     static HOLD_WAITER: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
     static FAIL_THREAD: Cell<Option<&'static str>> = const { Cell::new(None) };
+    static FAIL_CONTROL: Cell<bool> = const { Cell::new(false) };
+}
+pub(super) fn check_control() -> anyhow::Result<()> {
+    if FAIL_CONTROL.with(Cell::get) {
+        return Err(anyhow!("injected exact child control failure"));
+    }
+    Ok(())
 }
 pub(super) fn check_io(stage: &str) -> anyhow::Result<()> {
     if FAIL_IO.with(|fault| fault.get() == Some(stage)) {
@@ -152,6 +159,93 @@ fn HistoryRuntime_LegacyWorker_99() {
             .unwrap();
     }
 
+    // A first explicit close must report accepted Windows termination as
+    // success, remove both registrations, and remain idempotent after exit.
+    let id = Uuid::new_v4().to_string();
+    let mut command = CommandBuilder::new("cmd.exe");
+    command.args(["/C", "set /p WAIT="]);
+    command.cwd(&root);
+    manager
+        .spawn_command(
+            gate.begin_start(RuntimeKind::Legacy).unwrap().preparing(),
+            id.clone(),
+            root.to_str().unwrap(),
+            80,
+            24,
+            "shell",
+            command,
+            "single close fixture",
+            None,
+        )
+        .unwrap();
+    // A real live child remains registered when either read cleanup cannot stop
+    // it or a waiter supplies no successful exit result. Neither is exit proof.
+    let control = manager.instances.lock().get(&id).unwrap().killer.clone();
+    FAIL_CONTROL.with(|fault| fault.set(true));
+    manager.fail_reader(&id, &control, "injected reader failure");
+    FAIL_CONTROL.with(|fault| fault.set(false));
+    assert!(manager.instances.lock().contains_key(&id));
+    assert!(manager.writers.lock().contains_key(&id));
+    assert!(gate.freeze(&Uuid::new_v4().to_string()).is_err());
+    manager.finish_natural_exit(
+        &id,
+        &control,
+        Err(io::Error::other("injected wait failure")),
+    );
+    assert!(manager.instances.lock().contains_key(&id));
+    assert!(manager.writers.lock().contains_key(&id));
+    manager
+        .kill(&id)
+        .expect("first kill must accept TerminateProcess success");
+    assert!(!manager.instances.lock().contains_key(&id));
+    assert!(!manager.writers.lock().contains_key(&id));
+    manager
+        .kill(&id)
+        .expect("already-closed exact PTY is idempotent");
+    // A replacement may reuse an ID only after old control completed. Late
+    // callbacks carry the old retained owner and must not stop/remove it.
+    let mut command = CommandBuilder::new("cmd.exe");
+    command.args(["/C", "set /p WAIT="]);
+    command.cwd(&root);
+    manager
+        .spawn_command(
+            gate.begin_start(RuntimeKind::Legacy).unwrap().preparing(),
+            id.clone(),
+            root.to_str().unwrap(),
+            80,
+            24,
+            "shell",
+            command,
+            "reused ID fixture",
+            None,
+        )
+        .unwrap();
+    let replacement = manager.instances.lock().get(&id).unwrap().killer.clone();
+    manager.fail_reader(&id, &control, "old reader failure");
+    manager.finish_natural_exit(&id, &control, Ok(ExitStatus::with_exit_code(1)));
+    assert!(manager
+        .instances
+        .lock()
+        .get(&id)
+        .is_some_and(|instance| Arc::ptr_eq(&instance.killer, &replacement)));
+    assert!(manager.writers.lock().contains_key(&id));
+    assert!(gate.freeze(&Uuid::new_v4().to_string()).is_err());
+    manager
+        .kill(&id)
+        .expect("replacement keeps its own explicit stop");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Ok(frozen) = gate.freeze(&Uuid::new_v4().to_string()) {
+            frozen.release_review().unwrap();
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "first close did not reap its child"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
     // Hold the actual waiter before observing synthetic map removal.
     let barrier = Arc::new(Barrier::new(2));
     HOLD_WAITER.with(|held| *held.borrow_mut() = Some(barrier.clone()));
@@ -175,11 +269,12 @@ fn HistoryRuntime_LegacyWorker_99() {
         .unwrap();
     HOLD_WAITER.with(|held| held.borrow_mut().take());
     assert!(gate.freeze(&Uuid::new_v4().to_string()).is_err());
-    let mut instance = manager.remove_registration(&id).unwrap();
+    let control = manager.instances.lock().get(&id).unwrap().killer.clone();
+    let instance = manager.remove_owned_registration(&id, &control).unwrap();
     assert!(manager.instances.lock().is_empty());
     assert!(gate.freeze(&Uuid::new_v4().to_string()).is_err());
     drop(manager);
-    let _ = instance.killer.kill();
+    let _ = instance.killer.lock().kill();
     drop(instance);
     barrier.wait();
     let deadline = Instant::now() + Duration::from_secs(15);

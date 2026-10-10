@@ -498,14 +498,18 @@ async function stop(attempt: NativeAttemptIdentity = currentAttempt()): Promise<
   try {
     // Cancellation uses the original full frozen request. A missing status is
     // never proof of absence: preparation may still be waiting to reserve it.
-    let result = await withinStopDeadline(deadline, () => entry.cancel(attempt.requestId))
+    let result: LaunchStatus | undefined
+    try { result = await withinStopDeadline(deadline, () => entry.cancel(attempt.requestId)) }
+    catch { result = entry.latest(attempt.requestId) }
     let stopAccepted = false
     for (;;) {
       if (!attemptIsCurrent(attempt)) return
-      if (!applyReceipt(attempt, result)) throw new Error('NATIVE_STOP_UNCONFIRMED')
-      if (['cancelled', 'failed', 'exited'].includes(result.phase)) return
+      if (result) {
+        if (!applyReceipt(attempt, result)) throw new Error('NATIVE_STOP_UNCONFIRMED')
+        if (['cancelled', 'failed', 'exited'].includes(result.phase)) return
+      }
       if (Date.now() >= deadline) throw new Error('NATIVE_STOP_UNCONFIRMED')
-      if (!stopAccepted && ['starting', 'running', 'indeterminate'].includes(result.phase)) {
+      if (!stopAccepted && result && ['starting', 'running', 'indeterminate'].includes(result.phase)) {
         try {
           await withinStopDeadline(deadline, () => cliStop({ runId: attempt.runId, generation: attempt.generation }))
           stopAccepted = true
@@ -517,7 +521,13 @@ async function stop(attempt: NativeAttemptIdentity = currentAttempt()): Promise<
       }
       await withinStopDeadline(deadline, () => new Promise(resolve => setTimeout(resolve, 100)))
       if (!attemptIsCurrent(attempt)) return
-      result = await withinStopDeadline(deadline, () => entry.recover(attempt.requestId))
+      try { result = await withinStopDeadline(deadline, () => entry.recover(attempt.requestId)) }
+      catch {
+        // Read-only reconciliation stays within this same close request. A
+        // transient status failure is neither proof of exit nor a reason to
+        // abandon cleanup after termination was already accepted.
+        result = entry.latest(attempt.requestId)
+      }
     }
   } catch (error) {
     if (!attemptIsCurrent(attempt)) return

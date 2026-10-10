@@ -41,6 +41,30 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
 }
 
 describe('native CLI adapter', () => {
+  // Native 关闭后刷新冻结来源，已结束终端先移除，迟到历史进入同一次关闭完成。
+  it('NativeClose_RefreshesExactHistory_011', async () => {
+    const value = tab({ status: 'exited' })
+    const tabs = new Map([[value.tabId, value]])
+    let entries: NativeHistoryEntry[] = []
+    let complete!: (entry: NativeHistoryEntry) => void
+    const pending = new Promise<NativeHistoryEntry>(resolve => { complete = resolve })
+    const load = vi.fn(async () => { const entry = await pending; entries = [entry]; return entry })
+    const adapter = createNativeCliAdapter({ tabs: { tabs, activeTabId: value.tabId,
+      setActive: vi.fn(), close: id => { tabs.delete(id) }, rename: vi.fn() },
+      history: { all: () => entries, load },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() },
+      archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
+    })
+    let finished = false
+    const closing = adapter.closeSession('native-tab:tab-1').then(() => { finished = true })
+    await Promise.resolve(); await Promise.resolve()
+    expect(tabs.has(value.tabId)).toBe(false)
+    expect(load).toHaveBeenCalledExactlyOnceWith({ cli: 'codex', profileId: 'codex-main', profileRevision: '7', projectId: 'project-1', projectPath: '/repo', force: true })
+    expect(finished).toBe(false)
+    complete(history('codex', '/root', 'session-1')); await closing
+    expect((await adapter.listSessions())[0]).toMatchObject({ opened: false, nativeSessionId: 'session-1' })
+  })
+
   // Claude 的观察侧通道不得通过可选字段叠加到 Codex、Shell 或 raw 启动。
   it.each([
     { cli: 'codex', action: { kind: 'new' } },

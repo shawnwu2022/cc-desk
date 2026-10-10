@@ -41,6 +41,7 @@ const KNOWN_ERRORS: Readonly<Record<string, ErrorTemplate>> = Object.freeze({
   ACTION_CANCELLED: { messageKey: 'errorActionCancelled', actionKey: null, severity: 'info', retryable: false, detailCode: 'ACTION_CANCELLED' },
   NATIVE_INPUT_PAUSED: { messageKey: 'errorNativeInputPaused', actionKey: null, severity: 'warning', retryable: false, detailCode: 'NATIVE_INPUT_PAUSED' },
   NATIVE_STOP_UNCONFIRMED: { messageKey: 'errorStopUnconfirmed', actionKey: 'confirmStatus', severity: 'warning', retryable: false, detailCode: 'NATIVE_STOP_UNCONFIRMED' },
+  LEGACY_STOP_UNCONFIRMED: { messageKey: 'errorStopUnconfirmed', actionKey: 'refresh', severity: 'warning', retryable: false, detailCode: 'LEGACY_STOP_UNCONFIRMED' },
   PROFILE_IN_USE: { messageKey: 'errorConfigurationInUse', actionKey: null, severity: 'warning', retryable: false, detailCode: 'PROFILE_IN_USE' },
   PROFILE_SELECTION_CHANGED: { messageKey: 'resumeConfigurationChanged', actionKey: 'refresh', severity: 'warning', retryable: false, detailCode: 'PROFILE_SELECTION_CHANGED' },
   PROJECT_IDENTITY_CHANGED: { messageKey: 'resumeConfigurationChanged', actionKey: 'refresh', severity: 'warning', retryable: false, detailCode: 'PROJECT_IDENTITY_CHANGED' },

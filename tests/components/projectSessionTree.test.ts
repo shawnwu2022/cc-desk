@@ -63,6 +63,31 @@ function rules(file: string) {
 }
 
 describe('Unified project session tree', () => {
+  // 首次关闭完成后的历史身份替换必须立即按活动快照排序，与手动刷新一致。
+  it('Tree_CloseRefreshesSnapshot_024', async () => {
+    const closing = session({ id: 'legacy-tab:closing', adapterSessionId: 'closing', nativeSessionId: 'same-session', lastActivityAt: 20 })
+    const recent = session({ id: 'recent', opened: false, lastActivityAt: 40 })
+    const old = session({ id: 'old', opened: false, lastActivityAt: 1 })
+    let rows = [closing, recent, old]
+    const catalog = useUnifiedSessionsStore()
+    catalog.configureAdapters([{ runtime: 'legacy-claude', listSessions: async () => rows,
+      captureOwnership: () => () => true, activateSession: async () => {},
+      closeSession: async () => { rows = [recent, old, { ...closing, id: 'legacy-history:same-session', adapterSessionId: 'same-session', opened: false, processState: 'stopped', lastActivityAt: 100 }] },
+    } as unknown as SessionAdapter])
+    await catalog.refresh()
+    const wrapper = panel({ currentProjectPath: '/work/game', loading: false })
+    await wrapper.get('.project-main').trigger('click')
+    const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(order()).toEqual(['recent', 'legacy-tab:closing', 'old'])
+    await catalog.closeSession(closing.id); await nextTick()
+    expect(order()).toEqual(['legacy-history:same-session', 'recent', 'old'])
+    await wrapper.get('button[aria-label="Refresh sessions"]').trigger('click')
+    expect(order()).toEqual(['legacy-history:same-session', 'recent', 'old'])
+    rows = rows.map(row => row.id === 'old' ? { ...row, lastActivityAt: 1000 } : row)
+    await catalog.refresh(); await nextTick()
+    expect(order()).toEqual(['legacy-history:same-session', 'recent', 'old'])
+  })
+
   // 活动只更新时间，不移动已存在行；刷新采用最新快照并保留选择。
   it('Tree_ActivitySnapshot_023', async () => {
     let rows = [session({ id: 'a', lastActivityAt: 20, opened: true }), session({ id: 'b', lastActivityAt: 40, opened: true })]

@@ -2,12 +2,11 @@
 //! 基于 portable-pty 实现 Claude CLI 进程管理
 
 use crate::platform::admitted_child::AdmittedChild;
+use crate::platform::legacy_control::LegacyProcessControl;
 use crate::version_history::maintenance::{AdmissionGate, PreparingStart, RuntimeKind};
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
-use portable_pty::{
-    native_pty_system, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize,
-};
+use portable_pty::{native_pty_system, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize};
 use std::collections::HashMap;
 use std::env;
 use std::io::{self, Read, Write};
@@ -133,7 +132,7 @@ pub struct PtyErrorPayload {
 /// Child 本体由专用 waiter 线程持有并负责 reap。
 struct PtyInstanceData {
     master: Box<dyn MasterPty + Send>,
-    killer: Box<dyn ChildKiller + Send + Sync>,
+    killer: Arc<Mutex<LegacyProcessControl>>,
     _observer: Option<crate::observer_registry::ObserverLease>,
 }
 
@@ -191,9 +190,20 @@ impl PtyManager {
         Ok(())
     }
 
-    fn remove_registration(&self, id: &str) -> Option<PtyInstanceData> {
+    fn remove_owned_registration(
+        &self,
+        id: &str,
+        owner: &Arc<Mutex<LegacyProcessControl>>,
+    ) -> Option<PtyInstanceData> {
+        let mut instances = self.instances.lock();
+        if !instances
+            .get(id)
+            .is_some_and(|instance| Arc::ptr_eq(&instance.killer, owner))
+        {
+            return None;
+        }
         self.writers.lock().remove(id);
-        self.instances.lock().remove(id)
+        instances.remove(id)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -201,18 +211,24 @@ impl PtyManager {
         self: &Arc<Self>,
         id: String,
         master: Box<dyn MasterPty + Send>,
-        child: AdmittedChild,
+        mut child: AdmittedChild,
         writer: Box<dyn Write + Send>,
         reader: Box<dyn Read + Send>,
         reader_label: &'static str,
         observer: Option<crate::observer_registry::ObserverLease>,
     ) -> Result<()> {
-        let killer = child.clone_killer();
+        let killer = match LegacyProcessControl::capture(&child) {
+            Ok(control) => Arc::new(Mutex::new(control)),
+            Err(failure) => {
+                let _ = Self::terminate_unregistered_child(&mut child);
+                return Err(failure).context("Failed to retain exact child control");
+            }
+        };
         self.instances.lock().insert(
             id.clone(),
             PtyInstanceData {
                 master,
-                killer,
+                killer: killer.clone(),
                 _observer: observer,
             },
         );
@@ -224,6 +240,7 @@ impl PtyManager {
         let reader_id = id.clone();
         let reader_app = self.app_handle.clone();
         let reader_manager: Weak<Self> = Arc::downgrade(self);
+        let reader_owner = killer.clone();
         let reader_thread = spawn_pty_thread(
             format!("pty-reader-{}", &reader_id[..8.min(reader_id.len())]),
             move || {
@@ -231,7 +248,7 @@ impl PtyManager {
                 let failure = Self::read_output_loop(reader_id.clone(), reader, reader_app);
                 if let Some(error) = failure {
                     if let Some(manager) = reader_manager.upgrade() {
-                        manager.fail_reader(&reader_id, &error);
+                        manager.fail_reader(&reader_id, &reader_owner, &error);
                     }
                 }
                 let _ = reader_done_tx.send(());
@@ -239,7 +256,7 @@ impl PtyManager {
         );
 
         if let Err(error) = reader_thread {
-            self.remove_registration(&id);
+            self.remove_owned_registration(&id, &killer);
             let mut child = child;
             let _ = Self::terminate_unregistered_child(&mut child);
             return Err(anyhow!(
@@ -253,6 +270,7 @@ impl PtyManager {
         let waiter_child = child_slot.clone();
         let waiter_id = id.clone();
         let waiter_manager: Weak<Self> = Arc::downgrade(self);
+        let waiter_owner = killer.clone();
         let waiter_thread = spawn_pty_thread(
             format!("pty-waiter-{}", &waiter_id[..8.min(waiter_id.len())]),
             move || {
@@ -269,13 +287,13 @@ impl PtyManager {
                 let _ = reader_done_rx.recv_timeout(PTY_OUTPUT_DRAIN_TIMEOUT);
 
                 if let Some(manager) = waiter_manager.upgrade() {
-                    manager.finish_natural_exit(&waiter_id, status);
+                    manager.finish_natural_exit(&waiter_id, &waiter_owner, status);
                 }
             },
         );
 
         if let Err(error) = waiter_thread {
-            self.remove_registration(&id);
+            self.remove_owned_registration(&id, &killer);
             if let Some(mut child) = child_slot.lock().take() {
                 let _ = Self::terminate_unregistered_child(&mut child);
             }
@@ -292,40 +310,59 @@ impl PtyManager {
         child.wait()
     }
 
-    fn finish_natural_exit(&self, id: &str, status: std::io::Result<ExitStatus>) {
-        if self.remove_registration(id).is_none() {
+    fn finish_natural_exit(
+        &self,
+        id: &str,
+        owner: &Arc<Mutex<LegacyProcessControl>>,
+        status: std::io::Result<ExitStatus>,
+    ) {
+        if !self
+            .instances
+            .lock()
+            .get(id)
+            .is_some_and(|instance| Arc::ptr_eq(&instance.killer, owner))
+        {
+            return;
+        }
+        let status = match status {
+            Ok(status) => status,
+            Err(failure) => {
+                // A failed waiter is not process-exit evidence. Keep the exact
+                // control owner available for a later explicit stop, and never
+                // manufacture a stopped row from a wait error.
+                self.emit_error(id, &failure.to_string(), "wait");
+                return;
+            }
+        };
+        if self.remove_owned_registration(id, owner).is_none() {
             // 显式 kill/read failure 已先移除并发送事件；避免重复 pty-exit。
             return;
         }
 
-        let payload = match status {
-            Ok(status) => exit_payload(id, &status),
-            Err(error) => PtyExitPayload {
-                id: id.to_string(),
-                exit_code: -1,
-                signal: Some(format!("wait_error: {error}")),
-            },
-        };
+        let payload = exit_payload(id, &status);
 
         if let Err(error) = self.app_handle.emit("pty-exit", payload) {
             log::warn!("[{}] Failed to emit natural exit: {}", id, error);
         }
     }
 
-    fn fail_reader(&self, id: &str, error: &str) {
-        let Some(mut instance) = self.remove_registration(id) else {
+    fn fail_reader(&self, id: &str, owner: &Arc<Mutex<LegacyProcessControl>>, error: &str) {
+        if !self
+            .instances
+            .lock()
+            .get(id)
+            .is_some_and(|instance| Arc::ptr_eq(&instance.killer, owner))
+        {
             return;
-        };
-
-        let _ = instance.killer.kill();
-        let payload = PtyExitPayload {
-            id: id.to_string(),
-            exit_code: -1,
-            signal: Some(error.to_string()),
-        };
-        if let Err(emit_error) = self.app_handle.emit("pty-exit", payload) {
-            log::warn!("[{}] Failed to emit reader failure: {}", id, emit_error);
         }
+        if let Err(failure) = self.kill_owned(id, owner) {
+            // Read failure does not imply child exit. A failed stop keeps its
+            // registration and retained control; no `pty-exit` may authorize a
+            // frontend close while that exact process remains unconfirmed.
+            self.emit_error(id, &failure.to_string(), "reader-stop");
+            return;
+        }
+        self.emit_error(id, error, "reader");
     }
 
     /// 检测 Git Bash 路径（Windows）
@@ -802,24 +839,32 @@ impl PtyManager {
             .with_context(|| format!("Failed to resize PTY {id} to {cols}x{rows}"))
     }
 
-    /// 杀掉单个 PTY。仅在发送 kill 时短暂持有实例 map 锁，不等待 child。
-    /// 专用 waiter 线程负责真正 reap；实例先移除以抑制其 natural-exit 重复事件。
+    /// 杀掉精确 PTY。控制和 Windows 退出检查不持有全局 map 锁。
+    /// 专用 waiter 负责 reap；自然退出和重复请求均不重复清理。
     pub fn kill(&self, id: &str) -> Result<()> {
-        let removed = {
-            let mut instances = self.instances.lock();
-            let Some(instance) = instances.get_mut(id) else {
-                log::warn!("[{}] PTY not found when trying to kill", id);
-                return Ok(());
-            };
-            instance
-                .killer
-                .kill()
-                .with_context(|| format!("Failed to kill child process {id}"))?;
-            instances.remove(id)
+        let Some(killer) = self
+            .instances
+            .lock()
+            .get(id)
+            .map(|instance| instance.killer.clone())
+        else {
+            return Ok(());
         };
+        self.kill_owned(id, &killer)
+    }
+
+    fn kill_owned(&self, id: &str, killer: &Arc<Mutex<LegacyProcessControl>>) -> Result<()> {
+        #[cfg(all(test, windows))]
+        maintenance_tests::check_control()?;
+        killer
+            .lock()
+            .kill()
+            .with_context(|| format!("Failed to kill child process {id}"))?;
+        // Natural exit may settle while control waits. Callback ownership,
+        // not just the caller-supplied ID, protects a replacement registration.
+        let removed = self.remove_owned_registration(id, killer);
 
         if removed.is_some() {
-            self.writers.lock().remove(id);
             let _ = self.app_handle.emit(
                 "pty-exit",
                 PtyExitPayload {
@@ -837,8 +882,8 @@ impl PtyManager {
         let instances: Vec<(String, PtyInstanceData)> = self.instances.lock().drain().collect();
         self.writers.lock().clear();
 
-        for (id, mut instance) in instances {
-            if let Err(error) = instance.killer.kill() {
+        for (id, instance) in instances {
+            if let Err(error) = instance.killer.lock().kill() {
                 log::warn!("[{}] Failed to kill child: {}", id, error);
             }
         }
