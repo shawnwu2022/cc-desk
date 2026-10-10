@@ -44,7 +44,7 @@ describe('Isolated production-component fixture', () => {
     expect(labels).toContain('Response completed')
     expect(labels).toContain('Activity unknown')
     expect(labels).toContain('Stopped')
-    expect(view.findAll('[data-session-launch] button')).toHaveLength(1)
+    expect(view.findAll('[data-session-launch] button')).toHaveLength(0)
     expect(view.findAll('.xterm')).toHaveLength(0)
     expect(blockedHostCalls.value).toBe(0)
   })

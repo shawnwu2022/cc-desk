@@ -804,7 +804,7 @@ it('Runtime_RowDoubleClickSelection_028', async () => {
   expect(io.ptySpawn).not.toHaveBeenCalled()
 })
 
-// 历史行点击和双击保持关闭，仅独立恢复按钮启动精确来源。
+// 历史行首次点击恢复精确来源，双击的第二次点击不重复，也不弹出重命名。
 it.each(['legacy-claude', 'native-cli'] as const)('Runtime_HistoryMenuAndDoubleClick_029: %s', async runtime => {
   io.sessions.mockResolvedValue([{ sessionId: 'legacy-history', name: 'Legacy history', projectPath: '/legacy', lastActiveAt: 10 }])
   const startLegacy = vi.fn().mockResolvedValue({ ok: true })
@@ -821,9 +821,7 @@ it.each(['legacy-claude', 'native-cli'] as const)('Runtime_HistoryMenuAndDoubleC
   expect(document.querySelector('[data-resume-target]')).toBeNull()
   expect(document.querySelector('.rename-input')).toBeNull()
   expect(w.emitted('workspace-request')?.filter(([request]) => (request as { kind: string }).kind === 'activate') ?? []).toHaveLength(0)
-  expect(useNativeTabsStore().tabs.size).toBe(0)
-  expect(useSessionStore().tabs.size).toBe(0)
-  await row.get('[data-session-launch] button').trigger('click'); await flushPromises()
+  expect(row.find('[data-session-launch]').exists()).toBe(false)
   expect(useNativeTabsStore().tabs.size).toBe(runtime === 'native-cli' ? 1 : 0)
   expect(useSessionStore().tabs.size).toBe(runtime === 'legacy-claude' ? 1 : 0)
   if (runtime === 'legacy-claude') expect(startLegacy).toHaveBeenCalledOnce()
@@ -849,8 +847,8 @@ it.each(['navigation', 'project', 'replacement', 'profile'] as const)('Runtime_D
   if (change === 'replacement') expect(catalog.resumeDialog?.mode).toBe('history')
 })
 
-// 实际 App 的 projectManagement 投影发布待定按钮禁用态，不仅测试独立目录组件。
-it('Runtime_AppResumePendingButton_058', async () => {
+// 实际 App 的 projectManagement 投影发布行待定态，重复点击不再恢复。
+it('Runtime_AppResumePendingRow_058', async () => {
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, XTermTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore()
   const history = catalog.sessions.find(session => session.title === 'History')!
@@ -858,10 +856,10 @@ it('Runtime_AppResumePendingButton_058', async () => {
   let finish!: (value: unknown) => void
   io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
   const row = w.findAll('[data-session-row]').find(item => item.attributes('data-session-row') === history.id)!
-  const button = row.get('[data-session-launch] button')
-  await button.trigger('click'); await flushPromises()
-  expect(button.attributes('disabled')).toBeDefined()
-  await button.trigger('click'); await flushPromises()
+  expect(row.find('[data-session-launch]').exists()).toBe(false)
+  await row.trigger('click'); await flushPromises()
+  expect(row.attributes('aria-busy')).toBe('true')
+  await row.trigger('click'); await flushPromises()
   expect(w.emitted('workspace-request')?.filter(([request]) => (request as { kind: string }).kind === 'primary-action')).toHaveLength(1)
   finish({ state: 'unavailable', reason: 'SOURCE_BUSY', items: [], hasMore: false }); await flushPromises()
   expect(catalog.isResumePending(history)).toBe(false)

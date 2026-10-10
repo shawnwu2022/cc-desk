@@ -92,6 +92,66 @@ async function open(wrapper: VueWrapper, action: import('@/types/cli').LaunchAct
 }
 function closeButton(wrapper: VueWrapper, tabId: string) { return wrapper.get(`[data-session-row="native-tab:${tabId}"] .session-primary-action button`) }
 
+// A closed history row is the restore action; the full close/admission chain
+// still verifies its exact source and creates only one new resume attempt.
+it('Native_AppCloseThenRowResume_009', async () => {
+  const item = { type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'closed']), nativeSessionId: 'closed', title: 'Closing history', cwd: '/repo', updatedAt: '2026-10-10T12:19:00Z', truncated: false }
+  const response = (request: any) => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: request.resourceKind === 'history' ? [item] : [], hasMore: false })
+  io.historyRead.mockImplementation(async request => response(request))
+  const wrapper = await render(), tab = await open(wrapper, { kind: 'resume-id', nativeSessionId: 'closed' }), catalog = useUnifiedSessionsStore()
+  await closeButton(wrapper, tab.tabId).trigger('click')
+  await vi.waitFor(() => expect(catalog.completedClose).not.toBeNull())
+  const history = catalog.sessions.find(row => row.nativeSessionId === 'closed' && !row.opened)!
+  expect(history).toBeDefined()
+  const row = wrapper.findAll('[data-session-row]').find(value => value.attributes('data-session-row') === history.id)!
+  const pending = deferred<any>()
+  io.historyRead.mockClear(); io.historyRead.mockImplementationOnce(() => pending.promise)
+  await row.trigger('click'); await flushPromises()
+  expect(io.historyRead).toHaveBeenCalledOnce()
+  expect(io.historyRead.mock.calls[0][0]).toMatchObject({ resourceKind: 'history', source: { profileId: 'cx', profileRevision: '7', target: { projectId: 'project' } } })
+  expect(io.start).toHaveBeenCalledOnce()
+  expect(catalog.isResumePending(history)).toBe(true)
+  await row.trigger('click')
+  row.element.dispatchEvent(new MouseEvent('click', { detail: 2, bubbles: true }))
+  await row.trigger('dblclick')
+  pending.resolve(response(io.historyRead.mock.calls[0][0]))
+  await vi.waitFor(() => expect(io.start).toHaveBeenCalledTimes(2))
+  expect(io.start.mock.calls[1][0]).toMatchObject({ action: { kind: 'resume-id', nativeSessionId: 'closed' } })
+  expect(useNativeTabsStore().tabs.size).toBe(1)
+  expect(io.stop).toHaveBeenCalledOnce()
+  expect(wrapper.find('button[aria-label="Resume session"]').exists()).toBe(false)
+  const restored = [...useNativeTabsStore().tabs.values()][0]
+  await wrapper.get(`[data-session-row="native-tab:${restored.tabId}"]`).trigger('click'); await flushPromises()
+  expect(io.start).toHaveBeenCalledTimes(2)
+  expect(catalog.actionFeedback).toBeNull()
+})
+
+// A current read failure cannot be replaced with stale cached presence. Leaving
+// the workspace during the read likewise cancels admission without a late start.
+it.each(['budget', 'navigation'] as const)('Native_AppRowResumeNoStaleAdmission_%s_010', async failure => {
+  const item = { type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'saved']), nativeSessionId: 'saved', title: 'Saved history', cwd: '/repo', updatedAt: '2026-10-10T12:19:00Z', truncated: false }
+  const response = (request: any) => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: request.resourceKind === 'history' ? [item] : [], hasMore: false })
+  io.historyRead.mockImplementation(async request => response(request))
+  const wrapper = await render(), catalog = useUnifiedSessionsStore()
+  await wrapper.get('[data-project-key="/repo"] .expand-arrow').trigger('click')
+  const history = catalog.sessions.find(row => row.nativeSessionId === 'saved')!
+  const row = wrapper.findAll('[data-session-row]').find(value => value.attributes('data-session-row') === history.id)!
+  const pending = deferred<any>()
+  io.historyRead.mockClear(); io.historyRead.mockImplementationOnce(() => pending.promise)
+  await row.trigger('click'); await flushPromises()
+  expect(io.historyRead).toHaveBeenCalledOnce()
+  expect(catalog.isResumePending(history)).toBe(true)
+  if (failure === 'navigation') useShellStore().navigate('settings')
+  const request = io.historyRead.mock.calls[0][0]
+  pending.resolve(failure === 'budget' ? { ...response(request), state: 'unavailable', reason: 'SOURCE_BUDGET_EXCEEDED', items: [] } : response(request))
+  await flushPromises()
+  await vi.waitFor(() => expect(catalog.isResumePending(history)).toBe(false))
+  expect(io.start).not.toHaveBeenCalled(); expect(io.stop).not.toHaveBeenCalled()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  if (failure === 'budget') expect(catalog.actionFeedback).not.toBeNull()
+  else expect(catalog.actionFeedback).toBeNull()
+})
+
 it.each(['running', 'unknown'] as const)('Native_AppPrimaryCloseOnce_%s_001', async state => {
   const wrapper = await render(), tab = await open(wrapper), tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
   if (state === 'unknown') { tabs.markUnknown(tab.tabId); await flushPromises() }

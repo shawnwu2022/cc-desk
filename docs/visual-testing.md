@@ -347,10 +347,11 @@ WebView/taskbar acceptance remain unverified/separate.
 ## Unreleased session-list glyph evidence
 
 The `session-status` scenario uses seventeen explicit synthetic display inputs and
-production session rows. Four additional `session glyph and explicit launch evidence`
+production session rows. Four additional `session glyph and row restore evidence`
 Playwright cases capture light/dark English/Chinese glyph sheets separately as
-unapproved PNG attachments. They check the always-visible Resume control, adjacent
-live age, keyboard focus and immediate hover dismissal. No CLI or observer activity
+unapproved PNG attachments. They check the absence of an independent Resume control,
+live age, row keyboard focus and immediate status-hover dismissal. Row admission is
+covered separately by actual-App regressions with synthetic IPC. No CLI or observer activity
 is generated. The thirteen historical baselines and zero-pixel threshold are
 unchanged; an intentional new UI mismatch remains a failed baseline until reviewed
 and explicitly authorized. Do not call fixture or Linux evidence Windows acceptance.

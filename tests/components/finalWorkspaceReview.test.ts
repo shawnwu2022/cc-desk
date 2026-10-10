@@ -199,7 +199,7 @@ describe('Final workspace review regressions', () => {
     await flushPromises()
     expect(document.querySelector('[data-session-diagnostics]')).toBeNull()
   })
-  // 方向键只遍历当前可见结果；历史行 Enter 不恢复，独立按钮才恢复准确目标。
+  // 方向键只遍历当前可见结果；历史行 Enter 恢复准确目标，无独立恢复按钮。
   it('Keyboard_FilteredHistory_005', async () => {
     const w = renderApp(); await openNativeRow(w)
     const search = w.get('.search-input')
@@ -212,9 +212,7 @@ describe('Final workspace review regressions', () => {
     expect(useUnifiedSessionsStore().resumeDialog).toBeNull()
     historical.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await flushPromises()
     expect(useUnifiedSessionsStore().resumeDialog).toBeNull()
-    expect([...useNativeTabsStore().tabs.values()].filter(tab => tab.action.kind === 'resume-id')).toHaveLength(0)
-    const resume = historical.querySelector<HTMLButtonElement>('[data-session-launch] button')!
-    resume.focus(); resume.click(); await flushPromises()
+    expect(historical.querySelector('[data-session-launch]')).toBeNull()
     const restored = [...useNativeTabsStore().tabs.values()].find(tab => tab.action.kind === 'resume-id')
     expect(restored?.action).toEqual({ kind: 'resume-id', nativeSessionId: 'history-id' })
     expect(restored?.projectPath).toBe('/repo')

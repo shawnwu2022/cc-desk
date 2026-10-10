@@ -44,7 +44,7 @@ async function openFixture(page: Page, options: Record<string, string | number>)
 // Unapproved status/explicit-launch pixels stay separate from the immutable
 // historical baselines. Synthetic signals do not certify live CLI semantics.
 for (const gui of ['light', 'dark']) for (const locale of ['en', 'zh']) {
-  test(`session glyph and explicit launch evidence ${gui} ${locale}`, async ({ page }, testInfo) => {
+  test(`session glyph and row restore evidence ${gui} ${locale}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1024, height: 1000 })
     await openFixture(page, { scenario: 'session-status', gui, locale })
     // Assert the actual browser cascade, not just palette literals in source.
@@ -52,24 +52,18 @@ for (const gui of ['light', 'dark']) for (const locale of ['en', 'zh']) {
     await expect(page.locator('[data-session-row="visual-status-1"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(93, 173, 142)' : 'rgb(54, 126, 99)')
     await expect(page.locator('[data-session-row="visual-status-10"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(242, 138, 120)' : 'rgb(196, 92, 74)')
     const history = page.locator('[data-session-row="visual-status-16"]')
-    const launch = history.locator('[data-session-launch]')
+    await expect(history.locator('[data-session-launch]')).toHaveCount(0)
+    await expect(history.getByRole('button', { name: locale === 'en' ? 'Resume session' : '恢复会话' })).toHaveCount(0)
     await page.mouse.move(1020, 996)
-    await expect(launch).toHaveCSS('opacity', '1')
-    await expect(launch).toHaveCSS('pointer-events', 'auto')
     await expect(history.locator('.session-time')).toHaveCSS('opacity', '1')
-    await expect(launch.getByRole('button')).toBeInViewport({ ratio: 1 })
-    const time = await history.locator('.session-time').boundingBox(), action = await launch.boundingBox()
-    expect(time && action && time.x + time.width <= action.x).toBeTruthy()
     await history.hover()
     await expect(history.locator('.session-time')).toHaveCSS('opacity', '1')
-    // End the title hover before testing Escape on the independent launch trigger.
+    // History now restores through the row, without a second launch control.
+    // This inert visual fixture checks focus/layout only, never runtime admission.
     await page.mouse.move(1020, 996)
     await expect(page.getByRole('tooltip')).toHaveCount(0)
-    await launch.getByRole('button').focus()
-    await expect(launch.getByRole('button')).toBeFocused()
-    await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Resume session' : '恢复会话')
-    await page.keyboard.press('Escape')
-    await expect(page.getByRole('tooltip')).toHaveCount(0)
+    await history.focus()
+    await expect(history).toBeFocused()
     await clearFixtureSetupFocus(page)
     await page.mouse.move(1020, 996)
     await captureFixtureEvidence(page, testInfo, `session-glyphs-${gui}-${locale}-unapproved`)
