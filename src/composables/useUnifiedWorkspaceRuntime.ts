@@ -56,9 +56,17 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     acknowledgedSourceWarnings.value = new Set(sourceNoticeKeys.value)
   }
 
-  const historyMetadataPartial = computed(() => history.all().some(entry => entry.loaded && !entry.error && entry.metadataIncomplete
+  const currentHistoryEntries = computed(() => history.all().filter(entry => entry.loaded && !entry.error
     && profiles.profile(entry.context.profileId)?.revision === entry.context.profileRevision
     && workspace.projects.some(project => project.projectId === entry.context.projectId && sameProjectPath(project.selectedPath, entry.context.projectPath))))
+  const historyMetadataPartial = computed(() => currentHistoryEntries.value.some(entry => entry.metadataIncomplete))
+  const historyReadWarnings = computed(() => {
+    const warnings = createWorkspaceSourceWarnings()
+    for (const entry of currentHistoryEntries.value) for (const code of entry.readFailures ?? []) {
+      warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code, stage: 'read-source-enumeration' })
+    }
+    return warnings.items
+  })
   const ready = ref(false)
   const loading = ref(false)
   const fatal = computed(() => ready.value && !loading.value && !projects.loaded
@@ -511,5 +519,5 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     void refresh()
   })
   onUnmounted(() => { disposed = true; ++refreshOwner })
-  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, dismissSourceNotice, historyMetadataPartial, refresh, retryAction }
+  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }
 }

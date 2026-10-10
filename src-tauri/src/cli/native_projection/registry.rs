@@ -247,6 +247,11 @@ impl ScopeRegistry {
             history_metadata_incomplete: (state == ProjectionState::Ready
                 && budget.history_metadata_incomplete())
             .then_some(true),
+            history_read_failures: if state == ProjectionState::Ready {
+                budget.history_read_failures()
+            } else {
+                vec![]
+            },
         };
         // Bound encoded IPC, not just input file bytes; JSON escaping can multiply size.
         let encoded = serde_json::to_vec(&response).map_err(|_| safe("SOURCE_INVALID"))?;
@@ -256,6 +261,7 @@ impl ScopeRegistry {
             response.items.clear();
             response.has_more = false;
             response.history_metadata_incomplete = None;
+            response.history_read_failures.clear();
         }
         (g.check)().map_err(safe)?;
         if response.state == ProjectionState::Ready {

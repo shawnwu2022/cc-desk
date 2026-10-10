@@ -1,4 +1,4 @@
-import type { ProjectionResult, ReadRequest, ResourceItem, ResourceKind, ScopeTarget, SourceRef } from '@/types/nativeProjection'
+import type { HistoryReadFailure, ProjectionResult, ReadRequest, ResourceItem, ResourceKind, ScopeTarget, SourceRef } from '@/types/nativeProjection'
 export interface ProjectionBridge { readonly instanceId: string; invoke(command: string, payload: unknown): Promise<unknown> }
 export interface ProjectionClient { scope(target: ScopeTarget): Promise<SourceRef>; read(request: ReadRequest): Promise<ProjectionResult> }
 const kinds: ResourceKind[] = ['history', 'messages', 'search', 'config', 'mcp', 'skills', 'agents', 'plugins', 'instructions']
@@ -15,10 +15,10 @@ const diagnosticCodes = new Set(['INVALID_PROJECTION', 'RAW_BODY_REQUIRED', 'REQ
   'WORKSPACE_INVALID', 'PROFILE_INVALID', 'ENV_SOURCE_MISSING', 'LEGACY_INVALID', 'LEGACY_READ_FAILED', 'LEGACY_TOO_LARGE',
   'STORAGE_IO', 'STORAGE_BUSY', 'WORKSPACE_TOO_LARGE', 'UNSUPPORTED_SCHEMA', 'UNSAFE_WORKSPACE_PATH', 'INVALID_PATH',
   'RUN_NOT_FOUND', 'RUN_NOT_READY', 'STALE_GENERATION'])
-export function projectionFailure(value: unknown, fallback: ProjectionStage): Error & { code: string; stage: ProjectionStage } {
+export function projectionFailure(value: unknown, fallback: ProjectionStage): Error & { code: string; stage: ProjectionStage; retryable: boolean } {
   const code = projectionErrorCode(value)
   // Construct a fresh bounded error; never retain raw fields, values or parser messages.
-  return Object.assign(new Error(code), { code, stage: projectionErrorStage(value) ?? fallback })
+  return Object.assign(new Error(code), { code, stage: projectionErrorStage(value) ?? fallback, retryable: code === 'SOURCE_BUSY' })
 }
 const reasons = new Set(['SCOPE_UNKNOWN', 'SCOPE_STALE', 'SCOPE_REVOKED', 'SCOPE_CAPACITY', 'SCOPE_EPOCH_EXHAUSTED', 'SCOPE_UNAVAILABLE',
   'SOURCE_UNSUPPORTED', 'SOURCE_INVALID', 'SOURCE_INVALID_TEXT', 'SOURCE_PATH_REJECTED', 'SOURCE_CHANGED', 'SOURCE_NOT_REGULAR',
@@ -120,30 +120,89 @@ function item(v: unknown, request: ReadRequest): ResourceItem {
   }
 }
 function result(v: unknown, request: Required<ReadRequest>): ProjectionResult {
-  const r = object(v, ['source', 'resourceKind', 'requestEpoch', 'observedAt', 'state', 'reason', 'items', 'hasMore'], ['historyMetadataIncomplete'])
+  const r = object(v, ['source', 'resourceKind', 'requestEpoch', 'observedAt', 'state', 'reason', 'items', 'hasMore'], ['historyMetadataIncomplete', 'historyReadFailures'])
   const s = source(r.source)
   if (JSON.stringify(s) !== JSON.stringify(request.source) || kind(r.resourceKind) !== request.resourceKind || u64(r.requestEpoch) !== request.requestEpoch) return invalid()
   if (r.state !== 'ready' && r.state !== 'unavailable') return invalid()
   const metadata = Object.prototype.hasOwnProperty.call(r, 'historyMetadataIncomplete')
     ? { historyMetadataIncomplete: bool(r.historyMetadataIncomplete) } : {}
   if ('historyMetadataIncomplete' in metadata && (request.resourceKind !== 'history' || r.state !== 'ready')) return invalid()
+  let failures: { historyReadFailures?: HistoryReadFailure[] } = {}
+  if (Object.prototype.hasOwnProperty.call(r, 'historyReadFailures')) {
+    const codes = r.historyReadFailures
+    const allowed: HistoryReadFailure[] = ['SOURCE_UNSUPPORTED', 'SOURCE_INVALID', 'SOURCE_INVALID_TEXT', 'SOURCE_TOO_LARGE', 'SOURCE_READ_FAILED']
+    if (request.resourceKind !== 'history' || r.state !== 'ready' || metadata.historyMetadataIncomplete !== true
+      || !Array.isArray(codes) || !codes.length || codes.length > allowed.length || new Set(codes).size !== codes.length
+      || codes.some(code => !allowed.includes(code))) return invalid()
+    failures = { historyReadFailures: [...codes] }
+  }
   if (!Array.isArray(r.items) || r.items.length > request.limit) return invalid()
   const reason = optionalText(r.reason, 128)
   if (r.state === 'ready' ? reason !== null : !reason || !reasons.has(reason) || r.items.length !== 0 || r.hasMore !== false) return invalid()
   if (new TextEncoder().encode(JSON.stringify(r)).length > 2 * 1024 * 1024) return invalid()
   return { source: s, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: u64(r.observedAt),
-    state: r.state, reason, items: r.items.map(v => item(v, request)), hasMore: bool(r.hasMore), ...metadata }
+    state: r.state, reason, items: r.items.map(v => item(v, request)), hasMore: bool(r.hasMore), ...metadata, ...failures }
 }
+const readQueues = new Map<string, ReturnType<typeof createReadQueue>>()
+/** All projection clients for this admitted backend instance share its two
+ * reader slots. Pending work has both a count and a wait limit; never replay. */
+function createReadQueue(onIdle: () => void) {
+  let active = 0
+  const waiting: Array<{ start: () => void; timer: ReturnType<typeof setTimeout> }> = []
+  return (operation: () => Promise<unknown>): Promise<unknown> => new Promise((resolve, reject) => {
+    const complete = () => {
+      --active
+      const next = waiting.shift()
+      if (next) { clearTimeout(next.timer); next.start() }
+      if (!active && !waiting.length) onIdle()
+    }
+    const start = () => {
+      ++active
+      let result: Promise<unknown>
+      try { result = operation() } catch (failure) { reject(failure); complete(); return }
+      result.then(value => { resolve(value); complete() }, failure => { reject(failure); complete() })
+    }
+    if (active < 2) { start(); return }
+    const busy = () => projectionFailure({ code: 'SOURCE_BUSY' }, 'read-invoke')
+    if (waiting.length >= 32) { reject(busy()); return }
+    const pending = { start, timer: setTimeout(() => {
+      const index = waiting.indexOf(pending)
+      if (index !== -1) { waiting.splice(index, 1); reject(busy()) }
+    }, 5000) }
+    waiting.push(pending)
+  })
+}
+function scheduleRead(instance: string, operation: () => Promise<unknown>): Promise<unknown> {
+  let queue = readQueues.get(instance)
+  if (!queue) {
+    queue = createReadQueue(() => { if (readQueues.get(instance) === queue) readQueues.delete(instance) })
+    readQueues.set(instance, queue)
+  }
+  return queue(operation)
+}
+
 /** Pins the admitted document transport. No retry or ambient/default-root invoke is allowed. */
-export function createProjectionClient(bridge: ProjectionBridge): ProjectionClient {
+export function createProjectionClient(bridge: ProjectionBridge, current: () => boolean = () => true): ProjectionClient {
   const instance = id(bridge.instanceId)
+  const assertCurrent = () => {
+    let valid = false
+    try { valid = bridge.instanceId === instance && current() } catch { /* Lost document authority. */ }
+    if (!valid) throw new Error('BACKEND_INSTANCE_CHANGED')
+  }
+  const invoke = async (command: string, payload: unknown) => {
+    assertCurrent()
+    const response = await bridge.invoke(command, payload)
+    assertCurrent()
+    return response
+  }
   return {
     async scope(value) {
       let stage: ProjectionStage = 'scope-request-validation'
       try {
         const query = target(value)
         stage = 'scope-invoke'
-        const response = await bridge.invoke('native_get_scope', query)
+        const response = await invoke('native_get_scope', query)
+        assertCurrent()
         stage = 'scope-response-validation'
         const received = source(response)
         if (received.instanceId !== instance || JSON.stringify(received.target) !== JSON.stringify(query)) return invalid()
@@ -156,7 +215,9 @@ export function createProjectionClient(bridge: ProjectionBridge): ProjectionClie
         const query = readRequest(value)
         if (query.source.instanceId !== instance) return invalid()
         stage = 'read-invoke'
-        const response = await bridge.invoke('native_list_resources', query)
+        assertCurrent()
+        const response = await scheduleRead(instance, () => invoke('native_list_resources', query))
+        assertCurrent()
         stage = 'read-response-validation'
         return result(response, query)
       } catch (failure) { throw projectionFailure(failure, stage) }

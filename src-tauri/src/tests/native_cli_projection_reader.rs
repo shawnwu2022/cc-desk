@@ -116,6 +116,173 @@ fn codex_rollout_is_not_parsed_as_claude_history() {
     assert_eq!(items.as_array().unwrap().len(), 1);
     assert_eq!(items[0]["title"], "needle from Codex");
 }
+// 官方文档中的 orphaned 旁文件不出现在主会话列表。
+// https://code.claude.com/docs/en/claude-directory#cleaned-up-automatically (2026-10-10)
+#[test]
+#[allow(non_snake_case)]
+fn HistoryOrphan_KeepMainSession_001() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main", t.path());
+    put(
+        t.path(),
+        "projects/encoded/same-id.orphaned-20261010-replaced.jsonl",
+        "{\"type\":\"custom-title\",\"customTitle\":\"orphan\"}\n",
+    );
+    let items = list(
+        t.path(),
+        CliKind::Claude,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(items[0]["nativeSessionId"], "same-id");
+}
+// orphaned 标记缺少 timestamp-suffix 结构时不静默排除。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryOrphan_KeepNearMatch_002() {
+    let t = tempfile::tempdir().unwrap();
+    put(
+        t.path(),
+        "projects/encoded/same-id.orphaned-y.jsonl",
+        "{\"type\":\"custom-title\",\"customTitle\":\"valid session\"}\n",
+    );
+    let items = list(
+        t.path(),
+        CliKind::Claude,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(items[0]["title"], "valid session");
+}
+// orphaned 文件只在 Claude 项目子层排除，不能在会话子层套用该规则。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryOrphan_KeepOtherDepth_005() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main", t.path());
+    put(
+        t.path(),
+        "projects/encoded/same-id/other.orphaned-20261010-old.jsonl",
+        "{\"type\":\"custom-title\",\"customTitle\":\"other depth\"}\n",
+    );
+    let items = list(
+        t.path(),
+        CliKind::Claude,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 2);
+}
+// orphaned 名称的符号链接不能因文件名规则被隐藏。
+#[cfg(unix)]
+#[test]
+#[allow(non_snake_case)]
+fn HistoryOrphan_RejectSymlink_003() {
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "main", t.path());
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("history.jsonl"), "{}").unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("history.jsonl"),
+        t.path()
+            .join("projects/encoded/same-id.orphaned-20261010-old.jsonl"),
+    )
+    .unwrap();
+    assert_eq!(
+        list(
+            t.path(),
+            CliKind::Claude,
+            None,
+            ResourceKind::History,
+            None,
+            None
+        )
+        .err(),
+        Some("SOURCE_NOT_REGULAR")
+    );
+}
+// 单文件略过不能绕过整个历史读取的总字节硬上限。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryPartial_KeepAggregateCap_004() {
+    let t = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] {
+        put(
+            t.path(),
+            &format!("projects/p/{name}.jsonl"),
+            &"x".repeat(768),
+        );
+    }
+    let root = Root::open(t.path()).unwrap();
+    let mut budget = Budget::new(Limits {
+        file_bytes: 512,
+        total_bytes: 1024,
+        entries: 4096,
+    });
+    let result = read(
+        &Catalog {
+            cli: CliKind::Claude,
+            root: &root,
+            project: None,
+            project_paths: &[],
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut budget,
+    );
+    assert_eq!(result.err(), Some("SOURCE_TOO_LARGE"));
+}
+// 无法枚举的目录不能略过，以免隐藏尚未检查的兄弟链接和有效会话。
+#[cfg(unix)]
+#[test]
+#[allow(non_snake_case)]
+fn HistoryPartial_RejectBadFilename_006() {
+    use std::os::unix::ffi::OsStringExt;
+    let t = tempfile::tempdir().unwrap();
+    claude(t.path(), "known", t.path());
+    fs::write(
+        t.path()
+            .join("projects/encoded")
+            .join(std::ffi::OsString::from_vec(vec![0xff])),
+        "x",
+    )
+    .unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), t.path().join("projects/encoded/linked")).unwrap();
+    put(
+        t.path(),
+        "projects/other/other.jsonl",
+        "{\"type\":\"custom-title\",\"customTitle\":\"other\"}\n",
+    );
+    assert_eq!(
+        list(
+            t.path(),
+            CliKind::Claude,
+            None,
+            ResourceKind::History,
+            None,
+            None
+        )
+        .err(),
+        Some("SOURCE_INVALID_TEXT")
+    );
+}
 #[test]
 fn message_search_and_details_use_the_same_confined_reader() {
     let t = tempfile::tempdir().unwrap();
@@ -462,7 +629,7 @@ fn resource_documents_are_guarded_after_read_not_just_at_admission() {
     .is_err());
 }
 #[test]
-fn unsupported_directory_depth_never_returns_a_partial_ready_catalog() {
+fn unsupported_depth_keeps_known_history() {
     let t = tempfile::tempdir().unwrap();
     claude(t.path(), "visible", t.path());
     put(
@@ -470,14 +637,25 @@ fn unsupported_directory_depth_never_returns_a_partial_ready_catalog() {
         "projects/a/b/c/hidden.jsonl",
         "{\"type\":\"custom-title\",\"customTitle\":\"hidden\"}\n",
     );
+    let items = list(
+        t.path(),
+        CliKind::Claude,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(items[0]["nativeSessionId"], "same-id");
     assert_eq!(
         list(
             t.path(),
             CliKind::Claude,
             None,
-            ResourceKind::History,
+            ResourceKind::Messages,
             None,
-            None
+            Some("same-id")
         )
         .err(),
         Some("SOURCE_UNSUPPORTED")
@@ -555,7 +733,7 @@ fn HistoryTools_SkipStoredResults_002() {
     assert_eq!(items[0]["title"], "main session");
 }
 
-// 排除 tool-results 后，同层未支持目录仍使整个来源不可用。
+// 同层未知目录不删除正向历史；完整消息读取仍拒绝未知布局。
 #[test]
 #[allow(non_snake_case)]
 fn HistoryTools_RejectUnknownSibling_003() {
@@ -563,35 +741,57 @@ fn HistoryTools_RejectUnknownSibling_003() {
     claude(t.path(), "main session", t.path());
     fs::create_dir_all(t.path().join("projects/encoded/same-id/tool-results")).unwrap();
     fs::create_dir_all(t.path().join("projects/encoded/same-id/unknown-directory")).unwrap();
+    let items = list(
+        t.path(),
+        CliKind::Claude,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(items[0]["nativeSessionId"], "same-id");
     assert_eq!(
         list(
             t.path(),
             CliKind::Claude,
             None,
-            ResourceKind::History,
+            ResourceKind::Messages,
             None,
-            None
+            Some("same-id")
         )
         .err(),
         Some("SOURCE_UNSUPPORTED")
     );
 }
 
-// Codex 的最大深度目录即使同名 tool-results 也不得套用 Claude 排除规则。
+// Codex 未知深层目录明确使历史不完整；消息读取仍拒绝。
 #[test]
 #[allow(non_snake_case)]
 fn HistoryTools_KeepCodexDepthGuard_004() {
     let t = tempfile::tempdir().unwrap();
     codex(t.path(), t.path());
     fs::create_dir_all(t.path().join("sessions/2026/09/23/session/tool-results")).unwrap();
+    let items = list(
+        t.path(),
+        CliKind::Codex,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(items[0]["nativeSessionId"], "same-id");
     assert_eq!(
         list(
             t.path(),
             CliKind::Codex,
             None,
-            ResourceKind::History,
+            ResourceKind::Messages,
             None,
-            None
+            Some("same-id")
         )
         .err(),
         Some("SOURCE_UNSUPPORTED")
@@ -672,21 +872,32 @@ fn HistoryMemory_RejectSymlink_002() {
     );
 }
 
-// memory 只在项目层排除；会话层的同名未知目录仍使来源不可用。
+// memory 只在项目层排除；会话层同名目录仍是未支持的历史子树。
 #[test]
 #[allow(non_snake_case)]
 fn HistoryMemory_KeepDepthGuard_003() {
     let t = tempfile::tempdir().unwrap();
     claude(t.path(), "main session", t.path());
     fs::create_dir_all(t.path().join("projects/encoded/same-id/memory")).unwrap();
+    let items = list(
+        t.path(),
+        CliKind::Claude,
+        None,
+        ResourceKind::History,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(items[0]["nativeSessionId"], "same-id");
     assert_eq!(
         list(
             t.path(),
             CliKind::Claude,
             None,
-            ResourceKind::History,
+            ResourceKind::Messages,
             None,
-            None
+            Some("same-id")
         )
         .err(),
         Some("SOURCE_UNSUPPORTED")
@@ -764,14 +975,26 @@ fn HistoryMetadata_LongHeaderAndCutRecordRemainBounded_003() {
             "sessions/2026/10/04/rollout-long.jsonl",
             &format!("{header}\n{invalid}{}", "x".repeat(200 * 1024)),
         );
+        assert!(list(
+            t.path(),
+            CliKind::Codex,
+            None,
+            ResourceKind::History,
+            None,
+            None
+        )
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
         assert_eq!(
             list(
                 t.path(),
                 CliKind::Codex,
                 None,
-                ResourceKind::History,
+                ResourceKind::Messages,
                 None,
-                None
+                Some("long-header")
             )
             .err(),
             Some("SOURCE_INVALID")

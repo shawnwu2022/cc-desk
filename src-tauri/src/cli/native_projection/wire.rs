@@ -143,6 +143,8 @@ pub(crate) struct ProjectionResult {
     pub(crate) has_more: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) history_metadata_incomplete: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) history_read_failures: Vec<&'static str>,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(

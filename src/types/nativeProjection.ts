@@ -24,4 +24,6 @@ export interface ProjectionResult {
   source: SourceRef; resourceKind: ResourceKind; requestEpoch: string; observedAt: string
   state: 'ready' | 'unavailable'; reason: string | null; items: ResourceItem[]; hasMore: boolean
   historyMetadataIncomplete?: boolean
+  historyReadFailures?: HistoryReadFailure[]
 }
+export type HistoryReadFailure = 'SOURCE_UNSUPPORTED' | 'SOURCE_INVALID' | 'SOURCE_INVALID_TEXT' | 'SOURCE_TOO_LARGE' | 'SOURCE_READ_FAILED'
