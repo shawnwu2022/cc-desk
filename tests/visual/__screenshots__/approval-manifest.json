@@ -12,7 +12,7 @@
   "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/37965393533",
   "artifactId": "11633985429",
   "artifactZipSha256": "0718e755776fca863f27fdbaa5862fcff37d9bfda9903e1c58398ab14fb715d1",
-  "sourceScope": "Mixed provenance: eight entries retain their prior reviewed bytes and source. Five entries named in baselineRevision replace them with inspected PR39 actual PNG bytes. Top-level PR37 source/review fields describe the original approval; per-entry revisionProvenance and baselineRevision identify the five current replacements. This does not establish a successful current CI run.",
+  "sourceScope": "Mixed provenance: eight entries retain their original reviewed bytes/source; four retain first PR39 revision run38024365937; workspace-dark-gui-light-terminal.png uses inspected dark-palette correction run38025570446. Top-level PR37 fields and baselineRevision describe historical approvals; per-entry revisionProvenance identifies current replacements. No prior failed run is retroactively passed.",
   "reviewedSourceTransport": {
     "repository": "shawnwu2022/cc-desk",
     "branch": "evidence/pr37-reviewed-baselines",
@@ -198,28 +198,29 @@
       "name": "workspace-dark-gui-light-terminal.png",
       "width": 1280,
       "height": 720,
-      "sha256": "592108f53def413dc8e7afcd00dc2bedc63c64cad913d9a4195c5149543ed80b",
-      "bytes": 56617,
+      "sha256": "3e5311be66c875e6a8c753ffae077108c955a3329d7b19f578a0c57ccb594a67",
+      "bytes": 56638,
       "reviewVerdict": "approve",
-      "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
+      "provenance": "Exact inspected actual PR39 PNG from run38025570446 after dark scoped palette fix. Only three existing icon colors change; remaining geometry/text untouched.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-dark-gui-light-terminal-snapshot/workspace-dark-gui-light-terminal-actual.png",
       "pixelReview": {
-        "rawRgbChangedPixels": 22557,
+        "playwrightReportedPixels": 69,
+        "rawRgbChangedPixels": 372,
         "rawDifferenceBoundsExclusive": [
-          60,
-          181,
-          323,
-          553
+          70,
+          260,
+          82,
+          552
         ],
-        "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+        "acceptedChange": "Dark info/success/error glyph colors only; corrected scoped theme cascade. No geometry, text or terminal changes."
       },
       "revisionProvenance": {
-        "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
-        "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
-        "workflowRunId": "38024365937",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
-        "artifactId": "11660067279",
-        "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
+        "sourceHead": "3e3a673146f3afc037db90dc500360c5d1bb33dd",
+        "testedCommit": "1a22e6d572c24e4cc0293671aaa161e0fbb6919c",
+        "workflowRunId": "38025570446",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38025570446",
+        "artifactId": "11659569818",
+        "artifactZipSha256": "b5b8e3b6ef1579da96346769ae20e27d8c398c28a2adc96c64925f0faba0040a"
       }
     },
     {
@@ -462,5 +463,22 @@
       "note": "Four glyph evidence setup failures and five reviewed baseline diffs. Baseline update does not retroactively pass that run."
     },
     "acceptance": "Approved five inspected actual PNGs only; next CI must verify exact updated source with zero pixel tolerance. Four new glyph images remain separate evidence."
+  },
+  "darkPaletteRevision": {
+    "sourceHead": "3e3a673146f3afc037db90dc500360c5d1bb33dd",
+    "testedCommit": "1a22e6d572c24e4cc0293671aaa161e0fbb6919c",
+    "workflowRunId": "38025570446",
+    "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38025570446",
+    "artifactId": "11659569818",
+    "artifactZipSha256": "b5b8e3b6ef1579da96346769ae20e27d8c398c28a2adc96c64925f0faba0040a",
+    "reviewDate": "2026-10-10",
+    "names": [
+      "workspace-dark-gui-light-terminal.png"
+    ],
+    "previousRunResult": {
+      "passed": 233,
+      "failed": 1
+    },
+    "acceptance": "Single inspected corrected dark baseline accepted; four new real glyph images inspected separately. Current-source zero-tolerance CI verification remains required."
   }
 }
