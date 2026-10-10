@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 use super::*;
 use crate::cli::{snapshot::CallerIdentity, types::WireU64};
 use crate::version_history::catalog::{

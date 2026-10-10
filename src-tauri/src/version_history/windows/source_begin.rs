@@ -80,7 +80,8 @@ impl SourcePreflight {
         }
         super::manager_process::require_job_free_source()
             .map_err(|_| error("HISTORY_SOURCE_JOB_UNSUPPORTED"))?;
-        let payload = InstallAdmission::Ordinary(OrdinaryInstallAdmission::admit(package)?);
+        let payload =
+            InstallAdmission::Ordinary(Box::new(OrdinaryInstallAdmission::admit(package)?));
         let global = super::startup::InstallationControl::open(false)?;
         let control = global.acquire_control()?;
         global.require_ordinary_global_context()?;

@@ -15,7 +15,7 @@ use crate::{
 
 pub(crate) enum InstallAdmission {
     Reviewed(PayloadAdmission),
-    Ordinary(OrdinaryInstallAdmission),
+    Ordinary(Box<OrdinaryInstallAdmission>),
 }
 impl InstallAdmission {
     pub(crate) fn is_ordinary(&self) -> bool {
@@ -46,9 +46,9 @@ impl InstallAdmission {
     ) -> Result<Self, SafeError> {
         package.verify_retained()?;
         let admission = if ordinary_store {
-            Self::Ordinary(OrdinaryInstallAdmission::from_selection(
+            Self::Ordinary(Box::new(OrdinaryInstallAdmission::from_selection(
                 package.selection(),
-            )?)
+            )?))
         } else {
             Self::Reviewed(PayloadAdmission::admit_retained(package)?)
         };
