@@ -1,5 +1,5 @@
 //! Read-only discovery and one-shot, host-retained official update installation.
-use crate::updater_http::{bytes, http_client};
+use crate::updater_http::{bytes, http_client, probe_proxy, ProxyProbe};
 use crate::updater_policy::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
@@ -175,6 +175,14 @@ pub(crate) fn get_updater_settings(
         .map_err(report)?
         .map(|url| url.to_string());
     Ok(UpdaterSettings { proxy })
+}
+#[tauri::command]
+pub(crate) async fn test_updater_proxy(
+    window: WebviewWindow,
+    proxy: Option<String>,
+) -> Result<ProxyProbe, UpdateFailure> {
+    main_window(&window)?;
+    probe_proxy(proxy.as_deref()).await.map_err(report)
 }
 #[tauri::command]
 pub(crate) async fn save_updater_settings(

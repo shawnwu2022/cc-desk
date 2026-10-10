@@ -19,6 +19,7 @@ import { makeSessionCatalogKey, makeSessionRenameOwnerKey } from '@/utils/sessio
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
 import { normalizePath } from '@/utils/path'
 import { compareProjectGroups } from '@/utils/projectGroupOrder'
+import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 import { LaunchConfigurationRequiredError } from '@/utils/launchPreparation'
 
 function projectName(path: string): string {
@@ -258,6 +259,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   let selectionIntentEpoch = 0
   const actionVersion = new Map<string, number>()
   const actionTails = new Map<string, Promise<void>>()
+  const closingSessions = new Map<string, { owns: () => boolean; promise: Promise<void> }>()
 
   const activeSession = computed(() =>
     sessions.value.find(session => session.id === activeSessionId.value) ?? null,
@@ -305,9 +307,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     }
 
     for (const group of groups.values()) {
-      group.sessions.sort((a, b) =>
-        b.lastActivityAt - a.lastActivityAt || a.id.localeCompare(b.id),
-      )
+      group.sessions.sort(compareSessionOpenOrder)
     }
 
     return [...groups.values()].sort(compareProjectGroups)
@@ -392,9 +392,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       sessions.value = [...byId.values()].map(row => {
         const owner = renameOwners.get(row.id)
         return owner ? { ...row, renameState: owner.state } : row
-      }).sort((a, b) =>
-        b.lastActivityAt - a.lastActivityAt || a.id.localeCompare(b.id),
-      )
+      }).sort(compareSessionOpenOrder)
       if (activeSessionId.value && !byId.has(activeSessionId.value)) {
         activeSessionId.value = null
       }
@@ -446,7 +444,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const owner = {}
     const row: UnifiedSession = { id, projectKey: normalizePath(input.projectPath), projectPath: input.projectPath,
       cli: input.cli, runtime: 'native-cli', title: input.title || (input.cli === 'claude' ? 'Claude Code' : 'Codex CLI'),
-      processState: 'starting', attentionState: 'none', lastActivityAt: Date.now(), archived: false, opened: false, preparationState: 'pending', resumable: false, adapterSessionId: id }
+      processState: 'starting', attentionState: 'none', lastActivityAt: Date.now(), lastOpenedAt: Date.now(), archived: false, opened: false, preparationState: 'pending', resumable: false, adapterSessionId: id }
     const creation = { input: copyInput(input), row, owner, preparing: true, selectionIntentEpoch: intentEpoch }
     creations.set(id, creation)
     sessions.value = [...sessions.value.filter(session => session.id !== id), row]
@@ -576,6 +574,11 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
 
   function closeSession(id: string, canContinue = () => true): Promise<void> {
+    if (!canContinue()) return Promise.reject(new Error('STALE_SESSION_ATTEMPT'))
+    const closing = closingSessions.get(id)
+    // Repeated clicks join only the exact still-owned attempt. Enqueuing another
+    // close would invalidate the first operation's selection publication.
+    if (closing?.owns()) return closing.promise
     const wasSelected = activeSessionId.value === id
     const ownsSelection = captureSelectionOwnership()
     async function selectRemaining(projectKey: string) {
@@ -602,11 +605,20 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     ++selectionEpoch
-    return enqueue(id, () => adapter.closeSession(id, canContinue), async () => {
+    const owns = adapter.captureOwnership?.(id, 'close') ?? (() => sessions.value.some(row => row === session))
+    const promise = enqueue(id, () => adapter.closeSession(id, canContinue), async () => {
       if (activeSessionId.value === id) activeSessionId.value = null
       await refresh(session.projectKey)
       await selectRemaining(session.projectKey)
     }, 'close')
+    const pending = { owns, promise }
+    closingSessions.set(id, pending)
+    void promise.then(() => {
+      if (closingSessions.get(id) === pending) closingSessions.delete(id)
+    }, () => {
+      if (closingSessions.get(id) === pending) closingSessions.delete(id)
+    })
+    return promise
   }
 
   function discardPreparation(id: string): Promise<void> {

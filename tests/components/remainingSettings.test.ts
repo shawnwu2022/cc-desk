@@ -13,18 +13,135 @@ import { useSessionStore } from '@/stores/session'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
-const io = vi.hoisted(() => ({ write: vi.fn(), open: vi.fn(), check: vi.fn(), relaunch: vi.fn(), summary: vi.fn(), settings: vi.fn(), saveProxy: vi.fn(), install: vi.fn() }))
+const io = vi.hoisted(() => ({ write: vi.fn(), open: vi.fn(), check: vi.fn(), relaunch: vi.fn(), summary: vi.fn(), settings: vi.fn(), saveProxy: vi.fn(), testProxy: vi.fn(), install: vi.fn() }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.write }))
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: io.open }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({}) }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => vi.fn()) }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), checkForUpdates: io.summary, getUpdaterSettings: io.settings, saveUpdaterSettings: io.saveProxy, installDesktopUpdate: io.install, check: io.check, relaunch: io.relaunch }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), checkForUpdates: io.summary, getUpdaterSettings: io.settings, saveUpdaterSettings: io.saveProxy, testUpdaterProxy: io.testProxy, installDesktopUpdate: io.install, check: io.check, relaunch: io.relaunch }))
 const wrappers: VueWrapper[] = []
 beforeEach(() => { setActivePinia(createPinia()); vi.clearAllMocks(); clearMocks(); mockIPC(command => command === 'get_app_config' ? { language: 'en', terminalTheme: 'cc-box-light' } : undefined); io.write.mockResolvedValue(undefined); io.open.mockResolvedValue(undefined); io.settings.mockResolvedValue({ proxy: null }); io.saveProxy.mockResolvedValue(undefined); io.install.mockResolvedValue(undefined) })
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = ''; useAppStore().$dispose(); clearMocks(); vi.restoreAllMocks() })
 function render(component: any, props: Record<string, unknown> = {}) { const wrapper = mount(component, { props, attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } }); wrappers.push(wrapper); return wrapper }
 const candidate = (channel: string) => ({ version: '0.99.0', currentVersion: '0.17.7', hasUpdate: true, releaseNotes: 'Notes', downloadUrl: '', platformAsset: null, channel, installEligible: false })
 describe('Remaining settings sections', () => {
+  // 代理地址可读，认证字段独立遮蔽；测试草稿不保存、不检查更新、不生成安装权限。
+  it('Proxy_VisibleAddressMaskedAuth_001', async () => {
+    io.settings.mockResolvedValue({ proxy: 'http://private-user:private-pass@localhost:1080/' })
+    io.testProxy.mockResolvedValue({ elapsedMs: 42, mode: 'custom' })
+    const wrapper = render(UpdateSection); await flushPromises()
+    expect(wrapper.get('[data-update-proxy]').attributes('type')).toBe('text')
+    expect((wrapper.get('[data-update-proxy]').element as HTMLInputElement).value).toBe('http://localhost:1080/')
+    expect(wrapper.get('[data-update-proxy-username]').attributes('type')).toBe('password')
+    expect(wrapper.get('[data-update-proxy-password]').attributes('type')).toBe('password')
+    await wrapper.get('[data-update-proxy-test]').trigger('click'); await flushPromises()
+    expect(io.testProxy).toHaveBeenCalledWith('http://private-user:private-pass@localhost:1080/')
+    expect(wrapper.get('[data-update-proxy-result]').text()).toContain('42 ms')
+    expect(wrapper.text()).not.toMatch(/private-user|private-pass/)
+    expect(io.saveProxy).not.toHaveBeenCalled(); expect(io.summary).not.toHaveBeenCalled(); expect(io.install).not.toHaveBeenCalled()
+    expect(useUpdateStore().updateInfo).toBeNull()
+  })
+  // 连续测试点击只发一次请求，修改配置立即隐藏结果并拒绝旧完成覆盖。
+  it('Proxy_ConfigEditFencesResult_002', async () => {
+    let finish!: (value: unknown) => void
+    io.testProxy.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const wrapper = render(UpdateSection); await flushPromises()
+    await wrapper.get('[data-update-proxy-test]').trigger('click')
+    await wrapper.get('[data-update-proxy-test]').trigger('click')
+    expect(io.testProxy).toHaveBeenCalledTimes(1); expect(io.testProxy).toHaveBeenCalledWith(null)
+    expect(wrapper.get('[data-update-proxy-result]').text()).toContain('Testing')
+    await wrapper.get('[data-update-proxy]').setValue('http://localhost:33210')
+    finish({ elapsedMs: 20, mode: 'inherited' }); await flushPromises()
+    expect(wrapper.find('[data-update-proxy-result]').exists()).toBe(false)
+    expect(wrapper.get('[data-update-proxy-test]').attributes('disabled')).toBeUndefined()
+  })
+  // 失活后的失败不发布，活动页面只渲染固定错误和耗时，不反射原始异常。
+  it('Proxy_TimeoutSafeInactive_003', async () => {
+    let reject!: (value: unknown) => void
+    io.testProxy.mockReturnValue(new Promise((_, fail) => { reject = fail }))
+    const wrapper = render(UpdateSection); await flushPromises()
+    await wrapper.get('[data-update-proxy-test]').trigger('click'); await wrapper.setProps({ active: false })
+    reject({ code: 'UPDATER_TIMEOUT', stage: 'proxy', message: 'http://TOKEN:SECRET@private/' }); await flushPromises()
+    expect(wrapper.find('[data-update-proxy-result]').exists()).toBe(false)
+    await wrapper.setProps({ active: true })
+    io.testProxy.mockRejectedValue({ code: 'UPDATER_TIMEOUT', stage: 'proxy', message: 'http://TOKEN:SECRET@private/' })
+    await wrapper.get('[data-update-proxy-test]').trigger('click'); await flushPromises()
+    expect(wrapper.get('[data-update-proxy-result]').text()).toContain('timed out')
+    expect(wrapper.get('[data-update-proxy-result]').text()).toMatch(/\d+ ms/)
+    expect(wrapper.text()).not.toMatch(/TOKEN|SECRET|private/)
+  })
+  // 粘贴含凭据的地址立即分离，修改密码后的保存仍传入完整代理。
+  it('Proxy_PasteSeparatesCredentials_004', async () => {
+    const wrapper = render(UpdateSection); await flushPromises()
+    await wrapper.get('[data-update-proxy]').setValue('https://user:p%40ss@localhost:443')
+    expect((wrapper.get('[data-update-proxy]').element as HTMLInputElement).value).toBe('https://localhost:443')
+    expect((wrapper.get('[data-update-proxy-password]').element as HTMLInputElement).value).toBe('p@ss')
+    await wrapper.get('[data-update-proxy-password]').setValue('new:secret')
+    await wrapper.get('[data-update-proxy-save]').trigger('click'); await flushPromises()
+    expect(io.saveProxy).toHaveBeenCalledWith('https://user:new%3Asecret@localhost:443')
+  })
+  // 与后端的 trim 契约一致，粘贴前后空格不能让认证值进入明文地址框。
+  it('Proxy_WhitespaceAuthPaste_005', async () => {
+    const wrapper = render(UpdateSection); await flushPromises()
+    await wrapper.get('[data-update-proxy]').setValue('  http://private-user:private-pass@localhost:1080/path  ')
+    expect((wrapper.get('[data-update-proxy]').element as HTMLInputElement).value).toBe('http://localhost:1080/path')
+    expect((wrapper.get('[data-update-proxy-password]').element as HTMLInputElement).value).toBe('private-pass')
+    io.testProxy.mockRejectedValue({ code: 'UPDATER_PROXY_INVALID', stage: 'proxy', raw: 'private-pass' })
+    await wrapper.get('[data-update-proxy-test]').trigger('click'); await flushPromises()
+    expect(wrapper.get('[data-update-proxy-result]').text()).toContain('Invalid update proxy')
+    expect(wrapper.text()).not.toContain('private-pass')
+  })
+  // 已保存认证的百分号字节保持原样；读取设置不能暗中重写真实代理身份。
+  it('Proxy_PreservesEncodedAuth_006', async () => {
+    io.settings.mockResolvedValue({ proxy: 'http://user%FF:pass%FF$&$1@localhost:1080/' })
+    io.testProxy.mockResolvedValue({ elapsedMs: 2, mode: 'custom' })
+    const wrapper = render(UpdateSection); await flushPromises()
+    await wrapper.get('[data-update-proxy-test]').trigger('click'); await flushPromises()
+    expect(io.testProxy).toHaveBeenCalledWith('http://user%FF:pass%FF$&$1@localhost:1080/')
+    expect((wrapper.get('[data-update-proxy]').element as HTMLInputElement).value).toBe('http://localhost:1080/')
+    await wrapper.get('[data-update-proxy]').setValue('http://localhost:33210')
+    await wrapper.get('[data-update-proxy-password]').setValue('new:secret')
+    await wrapper.get('[data-update-proxy-save]').trigger('click'); await flushPromises()
+    expect(io.saveProxy).toHaveBeenCalledWith('http://user%FF:new%3Asecret@localhost:33210')
+  })
+  // 更换同解码值的认证编码仍属于新草稿，旧检测完成不能回到页面。
+  it('Proxy_EncodedEditFencesResult_007', async () => {
+    io.settings.mockResolvedValue({ proxy: 'http://user:pass@localhost:1080/' })
+    let finish!: (value: unknown) => void
+    io.testProxy.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const wrapper = render(UpdateSection); await flushPromises()
+    await wrapper.get('[data-update-proxy-test]').trigger('click')
+    await wrapper.get('[data-update-proxy]').setValue('http://u%73er:pass@localhost:1080/')
+    finish({ elapsedMs: 2, mode: 'custom' }); await flushPromises()
+    expect(wrapper.find('[data-update-proxy-result]').exists()).toBe(false)
+  })
+  // 缺少协议的认证草稿仍遮蔽凭据，并原样交给后端拒绝，不隐式补协议。
+  it('Proxy_SchemelessAuthStaysInvalid_008', async () => {
+    const wrapper = render(UpdateSection); await flushPromises()
+    await wrapper.get('[data-update-proxy]').setValue('user:private-pass@localhost:1080')
+    expect((wrapper.get('[data-update-proxy]').element as HTMLInputElement).value).toBe('localhost:1080')
+    io.testProxy.mockRejectedValue({ code: 'UPDATER_PROXY_INVALID', stage: 'proxy' })
+    await wrapper.get('[data-update-proxy-test]').trigger('click'); await flushPromises()
+    expect(io.testProxy).toHaveBeenCalledWith('user:private-pass@localhost:1080')
+    expect(wrapper.get('[data-update-proxy-result]').text()).toContain('Invalid update proxy')
+    expect(wrapper.text()).not.toContain('private-pass')
+    await wrapper.get('[data-update-proxy]').setValue('user:private-pass@')
+    await wrapper.get('[data-update-proxy-test]').trigger('click'); await flushPromises()
+    expect(io.testProxy).toHaveBeenLastCalledWith('user:private-pass@')
+  })
+  // 畸形协议和路径内 @ 的草稿仍遮蔽前段，检测保留原始无效 URL 而不补正。
+  it('Proxy_MalformedAuthStaysInvalid_009', async () => {
+    const wrapper = render(UpdateSection); await flushPromises()
+    io.testProxy.mockRejectedValue({ code: 'UPDATER_PROXY_INVALID', stage: 'proxy' })
+    for (const draft of ['http:/user:private-pass@localhost:1080', 'http://localhost/private-pass@other']) {
+      await wrapper.get('[data-update-proxy]').setValue(draft)
+      expect((wrapper.get('[data-update-proxy]').element as HTMLInputElement).value).not.toContain('private-pass')
+      await wrapper.get('[data-update-proxy-test]').trigger('click'); await flushPromises()
+      expect(io.testProxy).toHaveBeenLastCalledWith(draft)
+      expect(wrapper.get('[data-update-proxy-result]').text()).toContain('Invalid update proxy')
+      expect(wrapper.text()).not.toContain('private-pass')
+    }
+  })
   it('Settings_ProxyHydrationSurvivesInactiveNavigation_016', async () => {
     let finish!: (value: { proxy: string }) => void
     io.settings.mockReturnValue(new Promise(resolve => { finish = resolve }))

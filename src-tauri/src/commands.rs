@@ -387,6 +387,7 @@ pub async fn set_display_name(path: String, alias: String) -> Result<ProjectsSta
 pub async fn upsert_session_ui_record(
     record_key: String,
     record: SessionUiRecord,
+    open_only: Option<bool>,
 ) -> Result<ProjectsState, String> {
     apply_projects_state_blocking(move |s| {
         crate::store::validate_session_record_key(&record_key)?;
@@ -398,6 +399,11 @@ pub async fn upsert_session_ui_record(
         }
         let mut canonical = record;
         canonical.project_path = crate::store::normalize_path_str(&canonical.project_path);
+        canonical = crate::session_ui_record::merge_record(
+            s.session_records.get(&record_key),
+            canonical,
+            open_only.unwrap_or(false),
+        );
         s.session_records.insert(record_key, canonical);
         Ok::<(), anyhow::Error>(())
     })

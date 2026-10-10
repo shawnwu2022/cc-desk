@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import AppDrawer from '@/components/ui/AppDrawer.vue'
 import SessionList from './SessionList.vue'
 import { normalizePath } from '@/utils/path'
+import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 import type { SessionMenuAction, SessionPrimaryAction, UnifiedProjectIdentity, UnifiedSession } from '@/types/unifiedSession'
 
 const props = withDefaults(defineProps<{
@@ -21,7 +22,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const archived = computed(() => props.sessions.filter(session => session.archived
   && (!props.project || normalizePath(session.projectPath) === normalizePath(props.project.projectPath)))
-  .sort((a, b) => b.lastActivityAt - a.lastActivityAt || a.id.localeCompare(b.id)))
+  .sort(compareSessionOpenOrder))
 function primaryAction(id: string, action: SessionPrimaryAction) {
   if (action === 'restore-archive' && archived.value.some(session => session.id === id)) emit('restore-request', id)
 }

@@ -1,4 +1,4 @@
-use crate::updater_http::{bytes, http_client};
+use crate::updater_http::{bytes, http_client, probe_proxy, validate_probe_manifest};
 use crate::updater_policy::validated_proxy;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -188,5 +188,119 @@ async fn http_limits_and_rejections_return_only_safe_codes() {
         assert_eq!(error.code, code);
         assert_eq!(error.stage, "provenance");
         server.join().unwrap();
+    }
+}
+
+// 检测仅连接固定官方更新源，不使用用户提供的目标 URL。
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn ProxyProbe_OfficialTarget_001() {
+    let (address, server) =
+        proxy_server("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    let error = probe_proxy(Some(&address)).await.unwrap_err();
+    assert_eq!(error.code, "UPDATER_REQUEST_FAILED");
+    let request = server.join().unwrap();
+    assert!(request.starts_with("CONNECT github.com:443 HTTP/1.1\r\n"));
+    assert_eq!(
+        serde_json::to_value(error).unwrap(),
+        serde_json::json!({
+            "code": "UPDATER_REQUEST_FAILED", "stage": "provenance"
+        })
+    );
+}
+
+// 不能把成功 HTTP 状态下的 HTML 或空对象报告为官方清单可达。
+#[test]
+#[allow(non_snake_case)]
+fn ProxyProbe_RequiresManifest_002() {
+    assert!(
+        validate_probe_manifest(br#"{"version":"0.18.3","platforms":{"windows-x86_64":{}}}"#)
+            .is_ok()
+    );
+    for body in [
+        b"<html>login</html>".as_slice(),
+        b"{}",
+        b"null",
+        br#"{"version":"0.18.3"}"#,
+    ] {
+        let error = validate_probe_manifest(body).unwrap_err();
+        assert_eq!(error.code, "UPDATER_MANIFEST_INVALID");
+    }
+}
+
+// 数据体超时保留明确超时代码，而不泄露响应地址或原始传输错误。
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn ProxyProbe_BodyTimeout_003() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut connection = loop {
+            match listener.accept() {
+                Ok((connection, _)) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "body-timeout fixture never received a connection"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("body-timeout fixture accept failed: {error}"),
+            }
+        };
+        read_proxy_request(&mut connection);
+        connection
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n")
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+    });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_millis(50))
+        .build()
+        .unwrap();
+    let error = bytes(&client, &address, 16).await.unwrap_err();
+    assert_eq!(error.code, "UPDATER_TIMEOUT");
+    server.join().unwrap();
+}
+
+// 共享更新客户端拒绝跳转到官方之外的站点，即使源返回可读重定向。
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn ProxyProbe_RejectForeignRedirect_004() {
+    for response in [
+        "HTTP/1.1 302 Found\r\nLocation: https://outside.invalid/private?TOKEN=secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 302 Found\r\nLocation: https://TOKEN:secret@github.com/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 302 Found\r\nLocation: https://github.com:8443/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 302 Found\r\nLocation: http://github.com/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    ] {
+        let (address, server) = proxy_server(response);
+        let proxy = validated_proxy(Some(&address)).unwrap().unwrap();
+        let error = http_client(Some(&proxy)).unwrap()
+            .get("http://update.invalid/manifest").send().await.unwrap_err();
+        // Redirect refusal must happen before another connection, rather than
+        // succeeding in this test merely because the fixture proxy has closed.
+        assert!(error.is_redirect());
+        server.join().unwrap();
+    }
+}
+
+// 无效配置在网络客户端创建前拒绝，返回值不包含认证信息或 URL。
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn ProxyProbe_InvalidDraft_005() {
+    for value in [
+        "socks5://user:secret@localhost:1080",
+        "http://user:secret@localhost/private?TOKEN=secret",
+    ] {
+        let error = probe_proxy(Some(value)).await.unwrap_err();
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "code": "UPDATER_PROXY_INVALID", "stage": "proxy"
+            })
+        );
     }
 }

@@ -1667,17 +1667,7 @@ const MAX_SESSION_TITLE_CHARS: usize = 200;
 const MAX_ID_CHARS: usize = 256;
 const MAX_PROJECT_PATH_CHARS: usize = 32_768;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionUiRecord {
-    pub runtime: String,
-    pub cli: String,
-    pub project_path: String,
-    pub adapter_session_id: String,
-    pub native_session_id: Option<String>,
-    pub title: String,
-    pub last_activity_at: u64,
-}
+pub use crate::session_ui_record::SessionUiRecord;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1759,6 +1749,12 @@ pub(crate) fn validate_project_path_identity(value: &str) -> Result<()> {
 }
 
 pub(crate) fn validate_session_ui_record(value: &SessionUiRecord) -> Result<()> {
+    if value
+        .last_opened_at
+        .is_some_and(|at| at > 9_007_199_254_740_991)
+    {
+        bail!("invalid session opening time");
+    }
     if !matches!(value.runtime.as_str(), "legacy-claude" | "native-cli") {
         bail!("invalid session runtime");
     }

@@ -202,6 +202,63 @@ it('WorkspaceClose_SelectLegacy_010', async () => {
   expect(wrapper.get('[data-session-title]').text()).toBe('Legacy remaining')
 })
 
+// 重复点击同一个关闭按钮共用已发出的停止；不能抢走首次关闭的后续选择发布。
+it('WorkspaceClose_DuplicatePrimaryClick_011', async () => {
+  const wrapper = render(); await flushPromises(); const remaining = await running(); const closing = await running()
+  useShellStore().navigate('workspace'); await flushPromises()
+  let finish!: () => void
+  io.stop.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+  if (!wrapper.find(`[data-session-row="native-tab:${closing.tabId}"]`).exists()) await wrapper.get('.project-row [aria-label="Expand"]').trigger('click')
+  const button = wrapper.get(`[data-session-row="native-tab:${closing.tabId}"] .session-primary-action button`)
+  await button.trigger('click'); await flushPromises()
+  await button.trigger('click'); await flushPromises()
+  expect(io.stop).toHaveBeenCalledTimes(1)
+  finish(); await flushPromises()
+  expect(useNativeTabsStore().tab(closing.tabId)).toBeUndefined()
+  expect(useUnifiedSessionsStore().activeSessionId).toBe('native-tab:' + remaining.tabId)
+  expect(useShellStore().pendingRequest).toBeNull()
+  expect(useUnifiedSessionsStore().actionFeedback).toBeNull()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+})
+
+// 同ID的新attempt不共享旧关闭；新的主动关闭必须经过新的精确停止请求。
+it('WorkspaceClose_DuplicateAfterNewAttempt_012', async () => {
+  const wrapper = render(); await flushPromises(); await running(); const closing = await running()
+  const shell = useShellStore(), catalog = useUnifiedSessionsStore(), tabs = useNativeTabsStore()
+  let finish!: () => void
+  io.stop.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+  shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  tabs.tab(closing.tabId)!.generation++
+  shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  expect(io.stop).toHaveBeenCalledTimes(1)
+  finish(); await flushPromises()
+  expect(io.stop).toHaveBeenCalledTimes(2)
+  expect(io.stop.mock.calls[1][1].generation).toBe(2)
+  expect(tabs.tab(closing.tabId)).toBeUndefined()
+  expect(catalog.actionFeedback).toBeNull()
+  expect(wrapper.find('[data-unified-terminal-empty]').exists()).toBe(false)
+})
+
+// 同一次未确认停止的重复关闭不能自动重试；保留会话直到用户再次明确操作。
+it('WorkspaceClose_DuplicateFailureAllowsExplicitRetry_013', async () => {
+  const wrapper = render(); await flushPromises(); const closing = await running()
+  const shell = useShellStore(), catalog = useUnifiedSessionsStore(), tabs = useNativeTabsStore()
+  let fail!: (error: Error) => void
+  io.stop.mockReturnValueOnce(new Promise<void>((_resolve, reject) => { fail = reject }))
+  shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  fail(new Error('NATIVE_STOP_UNCONFIRMED')); await flushPromises()
+  expect(io.stop).toHaveBeenCalledTimes(1)
+  expect(tabs.tab(closing.tabId)?.status).toBe('running')
+  expect(catalog.activeSessionId).toBe('native-tab:' + closing.tabId)
+  expect(catalog.actionFeedback).not.toBeNull()
+  expect(wrapper.get(`[data-live-terminal="${closing.tabId}"]`).isVisible()).toBe(true)
+  shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
+  expect(io.stop).toHaveBeenCalledTimes(2)
+  expect(tabs.tab(closing.tabId)).toBeUndefined()
+  expect(catalog.actionFeedback).toBeNull()
+})
+
 // 新建准备失败已落地为失败行，不能继续显示等待连接的进行中提示。
 it('WorkspaceRequest_FailedLaunch_001', async () => {
   const wrapper = render(); await flushPromises()

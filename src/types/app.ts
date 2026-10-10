@@ -60,6 +60,8 @@ export interface SessionUiRecord {
   nativeSessionId?: string | null
   title: string
   lastActivityAt: number
+  /** Accepted opening time, independent of output and status activity. */
+  lastOpenedAt?: number
 }
 
 export interface ProjectLaunchPreference {

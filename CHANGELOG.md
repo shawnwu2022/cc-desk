@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.18.4] - 2026-10-10 (unreleased candidate)
+
+- Keep session rows ordered by the last confirmed opening time; switching an already open terminal or receiving background output/status does not move rows or change the selected terminal
+- Persist accepted new/reopened/restored ordering independently of activity, retaining project pin/alphabetical order and archive grouping
+- Join repeated closes of the exact same attempt without a second stop or an automatic retry; preserve remaining-terminal selection, replacement guards and unconfirmed-stop refusal
+- Show the update proxy endpoint and port while masking credentials, and add a bounded official-manifest proxy test with safe results/timing and stale-completion protection
+
+This prepares a repair candidate, not a public release. Real installed Windows interaction and real CLI acceptance remain separate; existing release/source/signature gates stay required.
+
 ## [0.18.3] - 2026-10-09 (unreleased candidate)
 
 - Keep pinned project groups first, then sort by displayed project name; session activity no longer changes project order, while recent sessions keep their ordering inside each project

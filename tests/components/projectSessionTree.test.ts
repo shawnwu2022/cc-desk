@@ -230,6 +230,17 @@ describe('Unified project session tree', () => {
     expect(wrapper.emitted('menu-action')).toEqual([['claude-1', 'archive']])
   })
 
+  it('ArchivedRows_OpeningOrderIgnoresHistoryActivity_001', async () => {
+    const rows = [session({ id: 'older-open', archived: true, lastOpenedAt: 10, lastActivityAt: 1000 }),
+      session({ id: 'recent-open', archived: true, lastOpenedAt: 20, lastActivityAt: 1 })]
+    const wrapper = mount(ArchivedSessionsDrawer, { attachTo: document.body,
+      props: { open: true, sessions: rows }, global: { plugins: [i18n] } })
+    mounted.push(wrapper)
+    expect(wrapper.findAllComponents(SessionItem).map(row => row.props('session').id)).toEqual(['recent-open', 'older-open'])
+    await wrapper.setProps({ sessions: rows.map(row => ({ ...row, lastActivityAt: row.id === 'older-open' ? 9000 : 0 })).reverse() })
+    expect(wrapper.findAllComponents(SessionItem).map(row => row.props('session').id)).toEqual(['recent-open', 'older-open'])
+  })
+
   // Drawer restoration uses the same unified row and retains archived index records until the caller publishes success.
   it('Tree_ArchivedDrawerRestore_005', async () => {
     const archived = session({ id: 'archived-codex', cli: 'codex', runtime: 'native-cli', processState: 'stopped', archived: true })

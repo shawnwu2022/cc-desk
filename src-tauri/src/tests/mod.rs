@@ -85,6 +85,8 @@ mod pty_decoder;
 #[cfg(test)]
 mod session_name_index;
 #[cfg(test)]
+mod session_ui_record;
+#[cfg(test)]
 mod store;
 #[cfg(test)]
 mod store_profiling;
