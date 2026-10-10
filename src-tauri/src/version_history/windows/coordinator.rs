@@ -1147,7 +1147,7 @@ impl SourceExecution {
         progress.publish_ordinary(&mut self.parts.store, Some(&backup_location), false, None)?;
         let image = self.parts.package.installer_image()?;
         let command = CommandLine::ordinary_nsis(
-            &super::manager_process::launch_path(image.raw()).map_err(blocked)?,
+            &super::manager_process::launch_path(super::handle(&image.file)).map_err(blocked)?,
             &image,
             self.parts.scope.original_path().as_os_str(),
         )
