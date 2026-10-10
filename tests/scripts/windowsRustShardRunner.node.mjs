@@ -104,7 +104,7 @@ test('RustRunner_Watchdog_004', async t => {
 const moduleUrl = new URL('../../scripts/windows-rust-shard-runner.mjs', import.meta.url);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-async function runnerFixture(t, failureName = null, elevated = false, calibrationCase = null) {
+async function runnerFixture(t, failureName = null, elevated = false, calibrationCase = null, placementCase = null) {
   assert.equal(fs.existsSync(moduleUrl), true, 'the compiled-artifact runner must exist');
   const { createPlan, runShard, aggregateResults, verifyBundle, bundleArtifactName } = await import(moduleUrl);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-shard-runner-'));
@@ -115,6 +115,12 @@ async function runnerFixture(t, failureName = null, elevated = false, calibratio
     fs.copyFileSync(path.join(repository, name), path.join(root, name));
   }
   fs.writeFileSync(path.join(root, 'src-tauri/Cargo.toml'), '[package]\nname="fixture"\nversion="1.0.0"\n');
+  const timings = { schema: 1, kind: 'original-libtest-duration-weights-v1',
+    calibration: { sourceSha: 'a'.repeat(40), headSha: 'b'.repeat(40), runId: '4321', runAttempt: 1, planHash: 'c'.repeat(64), artifactName: `windows-rust-bundle-${'a'.repeat(40)}-4321-1` },
+    weights: [{ name: 'ordinary::new_test', durationSeconds: 200, group: 0, logHash: 'd'.repeat(64) }] };
+  if (placementCase === 'unknown') timings.weights[0].name = 'invented::original_test';
+  if (placementCase === 'duplicate') timings.weights.push({ ...timings.weights[0] });
+  fs.writeFileSync(path.join(root, 'scripts/windows-rust-timings.json'), JSON.stringify(timings));
   if (calibrationCase) {
     const scoped = JSON.parse(fs.readFileSync(path.join(root, 'scripts/windows-native-scope.json'), 'utf8'));
     const targets = [...scoped.requiredSelectedTests, ...scoped.ordinaryRequiredSelectedTests, ...scoped.unelevatedTests, 'ordinary::new_test', failureName ? 'integration::one_0' : 'integration::one'];
@@ -171,6 +177,21 @@ else {
   const plan = createPlan(options);
   return { root, sourceSha, environment, bundle, runtimeNames, options, plan, runShard, aggregateResults, verifyBundle, bundleArtifactName };
 }
+
+test('RustRunner_MeasuredPlan_012: checked-in timing bytes bind conserved placement and reject inventory drift', { skip: process.platform === 'win32' && 'Unix executable fixture' }, async t => {
+  const { root, options, plan, verifyBundle } = await runnerFixture(t);
+  const timingPath = 'scripts/windows-rust-timings.json';
+  const binding = plan.contentHashes.find(f => f.path === timingPath);
+  assert.ok(binding, 'the duration table must enter the immutable plan source hashes');
+  assert.equal(binding.sha256, createHash('sha256').update(fs.readFileSync(path.join(root, timingPath))).digest('hex'));
+  assert.deepEqual(plan.harnesses[0].partitions[0], ['ordinary::new_test'], 'the measured heavy test receives its own first assignment');
+  assert.deepEqual(new Set(plan.harnesses[0].partitions.flat()), new Set(plan.harnesses[0].selected));
+  assert.equal(plan.harnesses[0].partitions.flat().filter(n => n === 'tests::fixture::ignored_worker').length, 1);
+  fs.appendFileSync(path.join(root, timingPath), '\n ');
+  assert.throws(() => verifyBundle(options), /hash|size/, 'even same-value timing file byte drift rejects the existing plan');
+  await assert.rejects(() => runnerFixture(t, null, false, null, 'unknown'), /timing|measured|inventory/, 'a retired or invented timing cannot silently change original inventory');
+  await assert.rejects(() => runnerFixture(t, null, false, null, 'duplicate'), /timing|measured|duplicate/, 'duplicate exact timing names reject');
+});
 
 test('RustCalibration_RealReceipts_010: exact original processes establish one-pass timings without certifying coverage', { skip: process.platform === 'win32' && 'Unix executable fixture' }, async t => {
   const { runCalibration, calibrationGroups } = await import('../../scripts/windows-rust-calibration.mjs');
