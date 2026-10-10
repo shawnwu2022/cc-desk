@@ -38,8 +38,9 @@ components still render the footer normally. Ordinary development and production
 keep the real package version, including when a visual flag is passed to a build.
 Actual Vite resolver tests cover every enablement boundary, and the ordinary
 package identity test checks the compiled display version against package metadata.
-All thirteen baseline PNGs, zero-pixel comparisons, geometry and interaction
-assertions remain unchanged.
+Baseline changes require inspection of the actual pixels and exact source/hash
+provenance. The thirteen-image inventory, zero-pixel comparisons, geometry and
+interaction assertions remain required.
 
 Browser setup actions are shared with real-fixture DOM regressions in
 `tests/visual/fixtureActions.ts`. Project expansion keeps stable toggle membership
@@ -303,10 +304,42 @@ or authorize release/updater promotion.
 ## 0.18.3 candidate visual changes
 
 The project-name sorting, restored status shapes and external Archive control
-intentionally change workspace pixels. Baselines remain unmodified until actual
+intentionally change workspace pixels. Baselines change only after actual
 CI captures are inspected and independently reviewed. Original thirteen-image
 inventory, zero-pixel thresholds and all geometry cases stay required. Opened
 state captures now check the external Archive button's real keyboard focus and
 viewport hit target while requiring no Archive entry in any menu. The test fixture
 explicitly supplies known idle activity for its synthetic running examples; it
 cannot be used as evidence that an actual Native source supplies that state.
+
+### Reviewed baseline bytes and pending current-source verification
+
+The nine changed actual PNGs from
+[run 37965393533](https://github.com/shawnwu2022/cc-desk/actions/runs/37965393533)
+were inspected on the authorized Windows evidence host and then reopened in the
+cloud workspace at their original dimensions. The accepted differences are
+displayed-name project sorting, restored status icons/counts, and menu/hover
+positions following their moved session rows. Terminal pixels, dialog contents,
+drawer geometry, tooltip anchors and theme combinations have no unexplained
+change. Four existing baseline PNGs remain byte-identical.
+
+The replacement bytes come from source
+`198c3f892de4b12d9f484c736222a4bf188b9ca6`, tested merge
+`79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c`, artifact `11633985429`, ZIP SHA256
+`0718e755776fca863f27fdbaa5862fcff37d9bfda9903e1c58398ab14fb715d1`.
+Explicitly authorized repository sharing preserved those bytes in evidence
+commit `728ae1fedd2b07040c58eb2c1e1484c1d2ad228b`, tree
+`c44e02a1374736bef7e3b5e47a13e61e56669d33`. Its source map SHA256 is
+`ff3bff2bfeacc406db9443f58eeae398970af205f920769d86c8c40d31b81a96`.
+The approval manifest records every ZIP entry, image hash and review scope.
+Only the nine inspected files are copied byte-for-byte; there is no image editing,
+masking, threshold change or screenshot inventory change.
+
+These are **old-source captures**, not screenshots of `f36fd14` or the updated
+PR head. The Native receipt/title flex changes after `198c3f8` still require
+current-source verification; matching old/new failure counts cannot prove pixel
+identity. Both previous failed runs remain failed. The new exact PR source must
+pass the complete 230-case no-update screenshot/geometry/interaction gate with
+`maxDiffPixels: 0`. The four additional Native receipt captures remain separate
+unapproved evidence. Native current working/completed, live CLI and native
+WebView/taskbar acceptance remain unverified/separate.
