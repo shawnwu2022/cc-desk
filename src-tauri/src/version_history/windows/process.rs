@@ -887,6 +887,7 @@ pub(crate) struct PreparedProcess<'lease> {
     resume_intent: Option<DurableRecord>,
     historical_lifetime: Option<DurableRecord>,
     ordinary_lifetime: Option<DurableRecord>,
+    ordinary_prepare_attempted: bool,
     ordinary_resume_call_attempted: bool,
     ordinary_resume_succeeded: bool,
     lease: &'lease mut ExclusiveLease,
@@ -1041,6 +1042,7 @@ impl<'lease> PreparedProcess<'lease> {
             resume_intent: None,
             historical_lifetime: None,
             ordinary_lifetime: None,
+            ordinary_prepare_attempted: false,
             ordinary_resume_call_attempted: false,
             ordinary_resume_succeeded: false,
             lease,
@@ -1165,14 +1167,30 @@ impl<'lease> PreparedProcess<'lease> {
         &mut self,
         receipt: &DurableProcessIdentity,
     ) -> io::Result<()> {
+        self.ordinary_prepare_resume_with_validation(receipt, |owner, user| {
+            owner.process.verify_current_user(user)
+        })
+    }
+    // The production adapter always performs the actual process-token/image
+    // check. Child tests may inject rejection only to prove state ordering.
+    fn ordinary_prepare_resume_with_validation(
+        &mut self,
+        receipt: &DurableProcessIdentity,
+        validate: impl FnOnce(&Self, &CurrentUser) -> io::Result<()>,
+    ) -> io::Result<()> {
         if self.job.identity.kind != JobKind::OrdinaryInstaller
+            || self.ordinary_prepare_attempted
             || self.ordinary_resume_call_attempted
         {
             return Err(blocked("ordinary handoff requires an ordinary installer"));
         }
+        // Spend preparation before any fallible validation. A known admission
+        // refusal leaves no resume intent and keeps armed cleanup/cancellation.
+        self.ordinary_prepare_attempted = true;
+        let user = CurrentUser::capture()?;
+        validate(self, &user)?;
         self.commit_resume_intent(receipt)?;
         self.job.disarm_ordinary()?;
-        let user = CurrentUser::capture()?;
         let bytes = self.ordinary_lifetime_bytes(receipt)?;
         self.ordinary_lifetime = Some(DurableRecord::create(
             self.root.clone(),

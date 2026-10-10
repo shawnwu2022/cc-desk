@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
+
+// 发布说明分别披露 Job 和提升令牌限制，不将普通集成错误标为 Job-free。
+test('RecoveryNotes_ElevationDisclosure_030', async () => {
+  const { validationNotes } = await import('../../scripts/release-draft-recovery.mjs')
+  const summary = { counts: { executed: 7, passed: 7, failed: 0, measured: 0, ignored: 2 }, unverifiedNames: ['job::only', 'ordinary::only'], jobFreeUnverifiedNames: ['job::only'], unelevatedUnverifiedNames: ['ordinary::only'], nativeAllStatus: 'unverified' }
+  const text = validationNotes(summary, { sourceSha: 'a'.repeat(40), runId: '1', runAttempt: 1, artifactId: 2, artifactName: 'source-bound' }, 'b'.repeat(64))
+  assert.match(text, /Unverified tests \(observed external Windows Job\):\n- job::only\n/)
+  assert.match(text, /Unverified ordinary integration tests \(observed elevated Windows token\):\n- ordinary::only\n/)
+  assert.doesNotMatch(text, /2 unavailable Job-free/)
+})
 import { readFileSync } from 'node:fs'
 const reviewedPrepared = JSON.parse(readFileSync(new URL('../fixtures/release-prepared-406663556.json', import.meta.url)))
 

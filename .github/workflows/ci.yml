@@ -140,8 +140,22 @@ jobs:
             cargo test --locked --doc 2>&1 | Tee-Object -FilePath 'target/ci-rust-bundle/logs/doctests.log'
             if ($LASTEXITCODE -ne 0) { throw 'Unfiltered doctests failed' }
           } finally { Pop-Location }
-          node scripts/windows-rust-shard-runner.mjs plan --in-job "${{ steps.compile.outputs.job_free != 'true' }}" --doc-exit-code 0
+          node scripts/windows-rust-shard-runner.mjs plan --in-job "${{ steps.compile.outputs.job_free != 'true' }}" --elevated "${{ steps.compile.outputs.elevated }}" --doc-exit-code 0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check exact ordinary admission and child cleanup before full inventory
+        working-directory: .
+        timeout-minutes: 3
+        run: node scripts/windows-ordinary-preflight.mjs "${{ steps.compile.outputs.job_free != 'true' }}" "${{ steps.compile.outputs.elevated }}"
+
+      - name: Preserve ordinary preflight raw failure evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ordinary-preflight-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/ci-rust-ordinary-preflight/
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Share only verified same-run test executables and inventories
         uses: actions/upload-artifact@v4
@@ -184,7 +198,7 @@ jobs:
           name: windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: src-tauri/target/ci-rust-bundle
       - name: Execute assigned full names and retain original ignores
-        run: node scripts/windows-rust-shard-runner.mjs run --index ${{ matrix.shard }} --in-job "${{ steps.host.outputs.job_free != 'true' }}" --artifact-name windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: node scripts/windows-rust-shard-runner.mjs run --index ${{ matrix.shard }} --in-job "${{ steps.host.outputs.job_free != 'true' }}" --elevated "${{ steps.host.outputs.elevated }}" --artifact-name windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Preserve original selection, execution and timing even on failure
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

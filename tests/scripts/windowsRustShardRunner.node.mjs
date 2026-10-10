@@ -8,6 +8,15 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { shardFailureDiagnostics } from '../../scripts/windows-rust-shard-runner.mjs';
 
+// 预检只在实际提升主机保留四条正向未验证；三条拒绝与清理契约始终选择。
+test('RustRunner_PreflightElevation_006', async () => {
+  const { ordinaryPreflightNames } = await import('../../scripts/windows-ordinary-preflight.mjs');
+  const scope = JSON.parse(fs.readFileSync(new URL('../../scripts/windows-native-scope.json', import.meta.url), 'utf8'));
+  assert.deepEqual(ordinaryPreflightNames(true), scope.ordinaryRequiredSelectedTests);
+  assert.deepEqual(new Set(ordinaryPreflightNames(false)), new Set([...scope.ordinaryRequiredSelectedTests, ...scope.unelevatedTests]));
+  assert.throws(() => ordinaryPreflightNames(undefined), /Actual elevation/, 'unknown elevation cannot silently select an unavailable range');
+});
+
 // 在子进程退出前输出已分配测试进度，诊断不得泄露原始正文。
 test('RustRunner_LiveProgress_003', async t => {
   const runner = await import(moduleUrl);
@@ -49,12 +58,12 @@ test('RustRunner_Watchdog_004', async t => {
 const moduleUrl = new URL('../../scripts/windows-rust-shard-runner.mjs', import.meta.url);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-async function runnerFixture(t, failureName = null) {
+async function runnerFixture(t, failureName = null, elevated = false) {
   assert.equal(fs.existsSync(moduleUrl), true, 'the compiled-artifact runner must exist');
   const { createPlan, runShard, aggregateResults, verifyBundle, bundleArtifactName } = await import(moduleUrl);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-shard-runner-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const files = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
+  const files = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
   for (const name of files) {
     fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
     fs.copyFileSync(path.join(repository, name), path.join(root, name));
@@ -72,7 +81,7 @@ async function runnerFixture(t, failureName = null) {
   const runtimeNames = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri/conpty/manifest.json'), 'utf8')).files.map(f => f.name);
   const worker = 'tests::fixture::ignored_worker';
   const integrationNames = name => failureName ? Array.from({ length: 16 }, (_, index) => `${name}_${index}`) : [name];
-  const inventories = [scope.jobFreeTests.concat(scope.requiredSelectedTests, worker, 'ordinary::new_test'), [], integrationNames('integration::one'), integrationNames('integration::two')];
+  const inventories = [scope.jobFreeTests.concat(scope.unelevatedTests, scope.requiredSelectedTests, scope.ordinaryRequiredSelectedTests, worker, 'ordinary::new_test'), [], integrationNames('integration::one'), integrationNames('integration::two')];
   const records = scope.harnesses.map((identity, index) => {
     const executable = path.join(root, 'src-tauri/target/debug/deps', `harness-${index}.exe`);
     fs.mkdirSync(path.dirname(executable), { recursive: true });
@@ -101,10 +110,25 @@ else {
   const bundle = path.join(root, 'src-tauri/target/ci-rust-bundle');
   fs.mkdirSync(path.join(bundle, 'logs'), { recursive: true });
   fs.writeFileSync(path.join(bundle, 'logs/doctests.log'), 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n');
-  const options = { root, bundle, environment, inJob: true };
+  const options = { root, bundle, environment, inJob: true, elevated };
   const plan = createPlan(options);
   return { root, sourceSha, environment, bundle, runtimeNames, options, plan, runShard, aggregateResults, verifyBundle, bundleArtifactName };
 }
+
+// 编译包和分片对同一实际提升状态作精确绑定，四条正向既不执行也不忽略。
+test('RustRunner_ElevatedArtifact_007', { skip: process.platform === 'win32' && 'Unix executable fixture; production binaries are Windows PE files' }, async t => {
+  const { root, options, plan, runShard } = await runnerFixture(t, null, true);
+  const scope = JSON.parse(fs.readFileSync(new URL('../../scripts/windows-native-scope.json', import.meta.url), 'utf8'));
+  const library = plan.harnesses[0];
+  assert.equal(library.excluded.length, 22);
+  assert.ok(scope.unelevatedTests.every(n => library.full.some(t => t.name === n) && !library.selected.includes(n) && !library.ignored.includes(n)));
+  assert.ok(scope.ordinaryRequiredSelectedTests.every(n => library.selected.includes(n)), 'denial and cleanup contracts remain selected on the elevated host');
+  const result = await runShard({ ...options, index: 0, output: path.join(root, 'elevated-shard'), artifactName: plan.artifactName });
+  assert.equal(result.completed, true);
+  assert.equal(result.host.elevationQuerySucceeded, true);
+  assert.equal(result.host.elevated, true);
+  assert.ok(result.harnesses.every(h => h.names.every(n => !scope.unelevatedTests.includes(n))), 'elevated-host positives cannot appear in any executed shard selection');
+});
 
 // 超时分片保存失败回执与完整部分日志，不能进入成功覆盖聚合。
 test('RustRunner_TimeoutReceipt_005', { skip: process.platform === 'win32' && 'Unix executable fixture; production binaries are Windows PE files' }, async t => {
@@ -139,6 +163,7 @@ test('RustRunner_ArtifactBinding_001', { skip: process.platform === 'win32' && '
   assert.throws(() => verifyBundle({ ...options, environment: { ...environment, GITHUB_RUN_ATTEMPT: '3' } }), /binding/, 'another CI attempt must reject the compiler artifact');
   assert.throws(() => verifyBundle({ ...options, environment: { ...environment, GITHUB_SHA: 'a'.repeat(40) } }), /binding/, 'another source SHA must reject the compiler artifact');
   assert.throws(() => verifyBundle({ ...options, inJob: false }), /Job/, 'the observed runner Job state must agree with compilation');
+  assert.throws(() => verifyBundle({ ...options, elevated: true }), /elevation/, 'the actual runner token must agree with compilation');
   const executable = plan.files.find(f => f.path.endsWith('harness-0.exe'));
   const filename = path.join(bundle, executable.path), original = fs.readFileSync(filename);
   fs.appendFileSync(filename, '\nchanged bytes');

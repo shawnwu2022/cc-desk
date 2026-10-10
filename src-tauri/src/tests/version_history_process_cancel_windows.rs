@@ -45,8 +45,106 @@ fn with_owned_suspended(
         &mut lease,
     )
     .unwrap();
+    // Fixture-only owner retains the exact disposable child through panic,
+    // including disarmed jobs. This never enters production recovery cleanup.
+    let cleanup = FixtureChildCleanup(process.process.process.try_clone().unwrap());
     test(process, &user, &root, &marker);
+    drop(cleanup);
 }
+struct FixtureChildCleanup(OwnedHandle);
+impl Drop for FixtureChildCleanup {
+    fn drop(&mut self) {
+        let pid = unsafe { GetProcessId(handle(&self.0)) };
+        let result = stop_never_resumed(handle(&self.0));
+        if std::thread::panicking() {
+            eprintln!("exact disposable fixture child pid={pid} bounded cleanup={result:?}");
+            if let Err(error) = result {
+                eprintln!("exact fixture child cleanup failed: {error}");
+            }
+        } else {
+            result.expect("exact disposable fixture child must reach bounded terminal state");
+        }
+    }
+}
+
+#[test]
+fn OrdinaryInstaller_AdmissionFailureKeepsArmedCleanupAndSpendsAttempt_027() {
+    with_suspended(JobKind::OrdinaryInstaller, |process, user, _, marker| {
+        let receipt = process.persist_identity(user).unwrap();
+        let denied = process
+            .ordinary_prepare_resume_with_validation(&receipt, |_, _| {
+                Err(blocked("controlled admission rejection"))
+            })
+            .unwrap_err();
+        assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
+        assert!(process.ordinary_prepare_attempted);
+        assert!(!process.resume_attempted);
+        assert!(process.resume_intent.is_none());
+        assert!(process.ordinary_lifetime.is_none());
+        assert_eq!(process.job.phase, Some(JobPhase::ArmedPreparation));
+        process.job.verify_limits().unwrap();
+        assert!(process.ordinary_prepare_resume(&receipt).is_err());
+        assert!(process.can_cancel_before_resume().unwrap());
+        process.cancel_before_resume().unwrap();
+        await_empty(process);
+        assert!(!marker.exists());
+    });
+}
+
+#[test]
+fn OrdinaryInstaller_ElevatedTokenRejectsBeforeDisarm_028() {
+    let user = CurrentUser::capture().unwrap();
+    let unelevated = user.require_unelevated().is_ok();
+    with_suspended(JobKind::OrdinaryInstaller, |process, user, _, marker| {
+        let receipt = process.persist_identity(user).unwrap();
+        if unelevated {
+            process.process.verify_current_user(user).unwrap();
+            assert_eq!(process.job.phase, Some(JobPhase::ArmedPreparation));
+            assert!(!marker.exists());
+            return;
+        }
+        let denied = process.ordinary_prepare_resume(&receipt).unwrap_err();
+        assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            denied.to_string(),
+            "recovery requires an unelevated x64 user"
+        );
+        assert!(process.ordinary_prepare_attempted);
+        assert!(!process.resume_attempted);
+        assert_eq!(process.job.phase, Some(JobPhase::ArmedPreparation));
+        assert!(process.ordinary_lifetime.is_none());
+        assert!(process.can_cancel_before_resume().unwrap());
+        process.cancel_before_resume().unwrap();
+        await_empty(process);
+        assert!(!marker.exists());
+    });
+}
+
+#[test]
+fn OrdinaryInstaller_FixturePanicCleansExactDisarmedChild_029() {
+    let result = std::panic::catch_unwind(|| {
+        with_suspended(JobKind::OrdinaryInstaller, |process, _, _, _| {
+            process.job.disarm_ordinary().unwrap();
+            // Reproduce the former gap: Drop cannot claim safe cleanup once
+            // a resume intent was attempted, but the fixture owns its child.
+            process.resume_attempted = true;
+            let cleanup = FixtureChildCleanup(process.process.process.try_clone().unwrap());
+            let witness = process.process.process.try_clone().unwrap();
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _cleanup = cleanup;
+                panic!("controlled failure after fixture job disarm");
+            }));
+            assert!(panic.is_err());
+            assert_eq!(
+                unsafe { WaitForSingleObject(handle(&witness), 0) },
+                WAIT_OBJECT_0
+            );
+            await_empty(process);
+        });
+    });
+    assert!(result.is_ok());
+}
+
 fn await_empty(process: &PreparedProcess<'_>) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while process.active_processes().unwrap() != 0 {

@@ -11,6 +11,82 @@ import {
 const scope = JSON.parse(fs.readFileSync(new URL('../../scripts/windows-native-scope.json', import.meta.url)));
 const context = { sourceSha: 'a'.repeat(40), runId: '12345', runAttempt: 2 };
 const zero = { exitCode: 0, passed: 0, failed: 0, ignored: 0, measured: 0, filteredOut: 0 };
+const ordinaryUnelevated = [
+  'version_history::windows::process::cancel_tests::OrdinaryInstaller_DurableHandoffAndExactOnceResume_020',
+  'version_history::windows::process::cancel_tests::OrdinaryInstaller_LiveWorkerSurvivesOwnerDrop_022',
+  'version_history::windows::process::cancel_tests::OrdinaryInstaller_MissingLifetimeSpendsResumeWithoutRearming_024',
+  'version_history::windows::process::cancel_tests::OrdinaryInstaller_PriorAppliedObservationBindsExactLaunch_025',
+];
+
+// 仅真实提升令牌主机将四条普通正向集成列为未验证，不能算作执行或忽略。
+test('NativeElevation_ExactFourUnverified_015', () => {
+  const report = validCoverageFixture(), lib = report.harnesses[0];
+  report.host.elevationQuerySucceeded = true; report.host.elevated = true;
+  lib.full.push(...ordinaryUnelevated.map(name => ({ name, type: 'test' })));
+  lib.full.push(...scope.ordinaryRequiredSelectedTests.map(name => ({ name, type: 'test' })));
+  lib.selected.push(...scope.ordinaryRequiredSelectedTests); lib.result.passed += 3;
+  lib.excluded.push(...ordinaryUnelevated); lib.result.filteredOut += 4;
+  report.nativeUnelevatedSuite = { status: 'unverified', reason: 'elevated_host', unverifiedNames: ordinaryUnelevated };
+  const result = validateNativeCoverage(report, context);
+  assert.equal(result.unverified, 22, 'the four elevated-host tests are independent of the original eighteen Job-free tests');
+  assert.equal(result.executed, 11, 'only the three mandatory denial/cleanup tests increase execution; unavailable positives cannot');
+  assert.equal(result.ignored, 3, 'host limitations cannot become ignored tests');
+  assert.deepEqual(report.nativeJobSuite.unverifiedNames, JOB_FREE_TESTS);
+  lib.excluded.push('ordinary_new');
+  assert.throws(() => validateNativeCoverage(report, context), /exclusion/, 'an elevated host grants no arbitrary exclusion');
+});
+
+// 缺失或失败的提升检查不能替代真实主机限制证明。
+test('NativeElevation_UnknownQueryBlocks_016', () => {
+  const report = validCoverageFixture(), lib = report.harnesses[0];
+  lib.full.push(...ordinaryUnelevated.map(name => ({ name, type: 'test' })));
+  lib.full.push(...scope.ordinaryRequiredSelectedTests.map(name => ({ name, type: 'test' })));
+  lib.selected.push(...scope.ordinaryRequiredSelectedTests); lib.result.passed += 3;
+  lib.selected.push(...ordinaryUnelevated); lib.result.passed += 4;
+  report.nativeUnelevatedSuite = { status: 'executed', reason: null, unverifiedNames: [] };
+  assert.throws(() => validateNativeCoverage(report, context), /elevation/, 'current ordinary inventory requires an actual elevation query');
+  report.host.elevated = false; report.host.elevationQuerySucceeded = false;
+  assert.throws(() => validateNativeCoverage(report, context), /elevation/, 'a failed elevation query is never unavailable evidence');
+});
+
+// 自然非提升主机执行所有四条普通测试，Job 外主机也保持独立完整选择。
+test('NativeElevation_UnelevatedKeepsAll_017', () => {
+  const report = validCoverageFixture(false), lib = report.harnesses[0];
+  report.host.elevationQuerySucceeded = true; report.host.elevated = false;
+  lib.full.push(...ordinaryUnelevated.map(name => ({ name, type: 'test' })));
+  lib.full.push(...scope.ordinaryRequiredSelectedTests.map(name => ({ name, type: 'test' })));
+  lib.selected.push(...scope.ordinaryRequiredSelectedTests); lib.result.passed += 3;
+  lib.selected.push(...ordinaryUnelevated); lib.result.passed += 4;
+  report.nativeUnelevatedSuite = { status: 'executed', reason: null, unverifiedNames: [] };
+  assert.equal(validateNativeCoverage(report, context).unverified, 0);
+  lib.excluded.push(ordinaryUnelevated[0]); lib.selected = lib.selected.filter(n => n !== ordinaryUnelevated[0]);
+  lib.result.passed--; lib.result.filteredOut++;
+  assert.throws(() => validateNativeCoverage(report, context), /exclusion/, 'unelevated hosts cannot omit any ordinary positive integration');
+});
+
+// 部分普通库存或新提升字段不能冒充无提升字段的历史报告。
+test('NativeElevation_PartialInventory_018', () => {
+  const report = validCoverageFixture(), lib = report.harnesses[0];
+  report.host.elevationQuerySucceeded = true; report.host.elevated = false;
+  report.nativeUnelevatedSuite = { status: 'executed', reason: null, unverifiedNames: [] };
+  assert.throws(() => validateNativeCoverage(report, context), /inventory drift/, 'new host fields require the complete four-test inventory');
+  lib.full.push(...ordinaryUnelevated.slice(0, 3).map(name => ({ name, type: 'test' })));
+  lib.selected.push(...ordinaryUnelevated.slice(0, 3)); lib.result.passed += 3;
+  assert.throws(() => validateNativeCoverage(report, context), /inventory drift/, 'a partially present ordinary inventory is never legacy');
+});
+
+// 提升主机仍必须执行真实令牌拒绝、失败承诺和精确清理契约。
+test('NativeElevation_RequiredDenials_019', () => {
+  for (const missing of scope.ordinaryRequiredSelectedTests) {
+    const report = validCoverageFixture(), lib = report.harnesses[0];
+    report.host.elevationQuerySucceeded = true; report.host.elevated = true;
+    lib.full.push(...ordinaryUnelevated.concat(scope.ordinaryRequiredSelectedTests).map(name => ({ name, type: 'test' })));
+    lib.excluded.push(...ordinaryUnelevated); lib.result.filteredOut += 4;
+    lib.selected.push(...scope.ordinaryRequiredSelectedTests.filter(n => n !== missing)); lib.result.passed += 2;
+    report.nativeUnelevatedSuite = { status: 'unverified', reason: 'elevated_host', unverifiedNames: ordinaryUnelevated };
+    assert.throws(() => validateNativeCoverage(report, context), /required ordinary/, `mandatory test ${missing} cannot become host-unavailable`);
+  }
+});
 function harness(identity, names, ignored, excluded = []) {
   const selected = names.filter(name => !excluded.includes(name));
   return {
