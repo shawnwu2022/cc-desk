@@ -1,8 +1,18 @@
+import type { NativeObservationNoticeState } from './nativeObservationNotice'
+
 export type UnifiedCliKind = 'claude' | 'codex'
 export type SessionRuntimeKind = 'legacy-claude' | 'native-cli'
 export type SessionProcessState = 'starting' | 'running' | 'unknown' | 'stopped' | 'failed'
 export type SessionAttentionState = 'none' | 'needs-user'
-export type SessionVisualState = 'starting' | 'running' | 'needs-user' | 'confirming' | 'ended' | 'failed'
+/** Turn activity is independent of process ownership and terminal visibility. */
+export type SessionActivityState =
+  | 'idle' | 'working' | 'thinking' | 'tool_executing' | 'waiting' | 'waiting_permission'
+  | 'waiting_input' | 'subagent_running' | 'compacting' | 'error' | 'unknown'
+export type SessionAttentionKind = 'error' | 'permission' | 'completed'
+export type SessionObservationState = 'off' | 'connecting' | 'active' | 'unavailable'
+export type SessionVisualState =
+  | 'starting' | 'running' | 'working' | 'needs-user' | 'permission' | 'completed' | 'error'
+  | 'confirming' | 'unknown' | 'stopped' | 'closed' | 'ended' | 'failed'
 export type SessionPrimaryAction =
   | 'close'
   | 'cancel-start'
@@ -61,6 +71,13 @@ export interface UnifiedSession {
   title: string
   processState: SessionProcessState
   attentionState: SessionAttentionState
+  /** Missing/unordered observation means unknown, never idle or completed. */
+  activityState?: SessionActivityState
+  observationState?: SessionObservationState
+  /** An explicit attention cause; completion must come from a completion event. */
+  attentionKind?: SessionAttentionKind
+  /** Authenticated recent/unread event receipts, never a current activity claim. */
+  observationNotice?: NativeObservationNoticeState
   lastActivityAt: number
   archived: boolean
   /** UI projection only; runtime actions must still check the owning store. */
@@ -87,6 +104,10 @@ export interface UnifiedProjectGroup {
   hidden: boolean
   runningCount: number
   needsUserCount: number
+  workingCount?: number
+  errorCount?: number
+  permissionCount?: number
+  completedCount?: number
   lastActivityAt: number
 }
 

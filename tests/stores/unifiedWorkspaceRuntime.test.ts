@@ -35,7 +35,7 @@ vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: async (profileId: 
 vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, registerProject: io.register, removeProject: io.remove }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.writeText }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
-vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false }) }))
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false, isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {} }) }))
 let persisted: ProjectsState
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
@@ -49,7 +49,7 @@ beforeEach(() => {
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/codex' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.register.mockImplementation(async path => ({ revision: '2', projectId: 'registered-new', projects: [{ projectId: 'registered-new', hostId: 'host', sourcePathKey: 'source-new', selectedPath: path, canonicalPath: path, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }))
-  io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
+  io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 function render() {
@@ -360,14 +360,14 @@ describe('Unified production runtime', () => {
     expect(activate).toHaveBeenCalledTimes(1); expect(shell.pendingRequest).toBeNull(); expect(unified.sessionConfirmation?.kind).toBe('stop-and-archive')
     shell.section = 'settings'; await flushPromises(); expect(activate).toHaveBeenCalledTimes(1)
   })
-  // 新建/恢复/运行中关闭与归档保持待处理，不能假装已完成或自动执行。
+  // 运行中归档仍须确认；关闭是用户直接操作，不再弹第二层确认。
   it('Runtime_OpensOwnedConfirmations_005', async () => {
     const { port } = render(); await flushPromises()
     const tabs = useNativeTabsStore(); const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } }); tabs.tab(tab.tabId)!.status = 'running'
     const unified = useUnifiedSessionsStore(); await unified.refresh(); const shell = useShellStore()
-    for (const action of ['close', 'archive'] as const) {
+    for (const action of ['archive'] as const) {
       shell.requestWorkspaceAction({ kind: 'menu-action', sessionId: `native-tab:${tab.tabId}`, action }); await flushPromises()
-      expect(shell.pendingRequest).toBeNull(); expect(unified.sessionConfirmation?.kind).toBe(action === 'close' ? 'close-running' : 'stop-and-archive'); expect(port.stopNative).not.toHaveBeenCalled(); expect(tabs.tab(tab.tabId)).toBeDefined()
+      expect(shell.pendingRequest).toBeNull(); expect(unified.sessionConfirmation?.kind).toBe('stop-and-archive'); expect(port.stopNative).not.toHaveBeenCalled(); expect(tabs.tab(tab.tabId)).toBeDefined()
     }
     shell.requestWorkspaceAction({ kind: 'new-session', project: { projectKey: '/repo', projectPath: '/repo' } }); await flushPromises()
     expect(shell.pendingRequest).toBeNull(); expect(useNewSessionDraftStore().chooserVisible).toBe(true); expect(useNewSessionDraftStore().visible).toBe(false); expect(tabs.tabs.size).toBe(1)
@@ -378,11 +378,11 @@ describe('Unified production runtime', () => {
     const id = useSessionStore().createTab('/legacy', { name: 'Legacy open' }); await flushPromises()
     expect(useUnifiedSessionsStore().sessions.find(s => s.adapterSessionId === id)?.title).toBe('Legacy open')
     expect(runtime.openSessions.value.map(s => s.id)).toEqual([`legacy-tab:${id}`])
-    useSessionStore().tabs.get(id)!.pending = true; await flushPromises()
+    useSessionStore().tabs.get(id)!.status = 'running'; useSessionStore().tabs.get(id)!.pending = true; await flushPromises()
     expect(useUnifiedSessionsStore().sessions.find(s => s.adapterSessionId === id)?.attentionState).toBe('needs-user')
     expect(useNativeHistoryStore().all()).toHaveLength(1); expect(useWorkspaceStore().projects).toHaveLength(1)
   })
-  // 目录快照尚未发布运行态时，关闭动作必须检查真实store，保持待确认。
+  // 即使目录仍显示停止，直接关闭也必须停止真实store中的当前尝试。
   it('Runtime_CloseChecksLiveState_007', async () => {
     const { port } = render(); await flushPromises()
     const tabs = useNativeTabsStore(); const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
@@ -390,9 +390,10 @@ describe('Unified production runtime', () => {
     tabs.tab(tab.tabId)!.status = 'running'
     useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: `native-tab:${tab.tabId}`, action: 'close' })
     await flushPromises()
-    expect(port.stopNative).not.toHaveBeenCalled()
-    expect(useShellStore().pendingRequest).toBeNull(); expect(unified.sessionConfirmation?.kind).toBe('close-running')
-    expect(tabs.tab(tab.tabId)).toBeDefined()
+    expect(port.stopNative).toHaveBeenCalledOnce()
+    expect(port.stopNative.mock.calls[0][0]).toBe(tab.tabId)
+    expect(useShellStore().pendingRequest).toBeNull(); expect(unified.sessionConfirmation).toBeNull()
+    expect(tabs.tab(tab.tabId)).toBeUndefined()
   })
   // 重启等待停止时出现新代次，旧完成不能覆盖新的代次或启动配置。
   it('Runtime_StaleRestartIsRejected_008', async () => {
@@ -762,34 +763,116 @@ it('Runtime_RowDoubleClickSelection_028', async () => {
   expect(io.ptySpawn).not.toHaveBeenCalled()
 })
 
-// 两种历史来源都隐藏无效动作；双击历史只进入已有显式恢复确认，不新建进程。
+// 已明确选中的历史直接恢复；首次双击不重放点击，不进入重命名或第二层确认。
 it.each(['legacy-claude', 'native-cli'] as const)('Runtime_HistoryMenuAndDoubleClick_029: %s', async runtime => {
   io.sessions.mockResolvedValue([{ sessionId: 'legacy-history', name: 'Legacy history', projectPath: '/legacy', lastActiveAt: 10 }])
-  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const startLegacy = vi.fn().mockResolvedValue({ ok: true })
+  const nativeTerminal = defineComponent({ setup(_props, { expose }) { expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} }); return () => h('div') } })
+  const legacyTerminal = defineComponent({ setup(_props, { expose }) { expose({ startTab: startLegacy, focus() {}, fitVisible() {} }); return () => h('div') } })
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: nativeTerminal, XTermTerminal: legacyTerminal, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore()
   const history = catalog.sessions.find(session => session.runtime === runtime)!
   await w.get('.search-input').setValue(history.projectPath); await flushPromises()
   const row = w.findAll('[data-session-row]').find(item => item.attributes('data-session-row') === history.id)!
-  await row.trigger('contextmenu'); await flushPromises()
-  expect(document.querySelector('[data-item-id="rename"]')).toBeNull()
-  expect(document.querySelector('[data-item-id="restart"]')).toBeNull()
-  expect(document.querySelector('[data-item-id="close"]')).toBeNull()
-  expect(document.querySelector('[data-item-id="resume"]')).not.toBeNull()
-  ;(document.querySelector('[data-item-id="resume"]') as HTMLButtonElement).click(); await flushPromises()
-  expect(catalog.resumeDialog).toMatchObject({ mode: 'session', sessionId: history.id })
-  expect(document.querySelector('[data-resume-target]')?.textContent).toContain(history.title)
-  expect(document.querySelector('[data-resume-query]')).toBeNull()
-  ;(document.querySelector('.resume-actions button') as HTMLButtonElement).click(); await flushPromises()
   row.element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true })); await flushPromises()
   row.element.dispatchEvent(new MouseEvent('click', { detail: 2, bubbles: true })); await flushPromises(); row.element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true })); await flushPromises()
-  expect(catalog.resumeDialog).toMatchObject({ mode: 'session', sessionId: history.id })
-  expect(document.querySelector('[data-resume-target]')?.textContent).toContain(history.title)
-  expect(document.querySelector('[data-resume-query]')).toBeNull()
-  expect(catalog.sessions.find(session => session.id === history.id)?.renameState).toBe('idle')
+  expect(catalog.resumeDialog).toBeNull()
+  expect(document.querySelector('[data-resume-target]')).toBeNull()
+  expect(document.querySelector('.rename-input')).toBeNull()
   expect(w.emitted('workspace-request')?.filter(([request]) => (request as { kind: string }).kind === 'activate')).toHaveLength(1)
+  expect(useNativeTabsStore().tabs.size).toBe(runtime === 'native-cli' ? 1 : 0)
+  expect(useSessionStore().tabs.size).toBe(runtime === 'legacy-claude' ? 1 : 0)
+  if (runtime === 'legacy-claude') expect(startLegacy).toHaveBeenCalledOnce()
+  else expect(useNativeTabsStore().tabs.values().next().value?.action).toEqual({ kind: 'resume-id', nativeSessionId: 'history-id' })
+})
+
+// 快速恢复的异步来源检查不得越过导航、替代请求或配置变更，且不能重放副作用。
+it.each(['navigation', 'project', 'replacement', 'profile'] as const)('Runtime_DirectResumeAdmission_046: %s', async change => {
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), shell = useShellStore()
+  const history = catalog.sessions.find(session => session.title === 'History')!
+  let finish!: (value: unknown) => void
+  io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: history.id, action: 'resume' }); await flushPromises()
+  expect(catalog.resumeDialog).toBeNull()
   expect(useNativeTabsStore().tabs.size).toBe(0)
-  expect(useSessionStore().tabs.size).toBe(0)
-  expect(io.ptySpawn).not.toHaveBeenCalled()
+  if (change === 'navigation') shell.navigate('settings')
+  else if (change === 'project') { catalog.selectProjectContext('/other'); shell.navigate('workspace') }
+  else if (change === 'replacement') shell.requestWorkspaceAction({ kind: 'restore-session', project: history, mode: 'history' })
+  else useCliProfilesStore().profiles[0].revision = '8'
+  finish({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  if (change === 'replacement') expect(catalog.resumeDialog?.mode).toBe('history')
+})
+
+// 同一历史的两次显式请求共享核实；较早请求失效不能取消仍有效的新请求或重复启动。
+it('Runtime_DirectResumeCoalesces_047', async () => {
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), shell = useShellStore()
+  const history = catalog.sessions.find(session => session.title === 'History')!
+  let finish!: (value: unknown) => void
+  io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  shell.requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
+  shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: history.id, action: 'resume' }); await flushPromises()
+  finish({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
+  expect(catalog.resumeDialog).toBeNull()
+  expect(useNativeTabsStore().tabs.size).toBe(1)
+  expect(catalog.activeSessionId).toMatch(/^native-tab:/)
+})
+
+// 等待停止期间被更新的尝试不能被原关闭操作删除。
+it('Runtime_DirectCloseRechecksAttempt_048', async () => {
+  const { port } = render(); await flushPromises()
+  const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore(), shell = useShellStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  tabs.tab(tab.tabId)!.status = 'running'; await catalog.refresh()
+  let finish!: () => void
+  port.stopNative.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+  shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: `native-tab:${tab.tabId}`, action: 'close' }); await flushPromises()
+  expect(port.stopNative).toHaveBeenCalledOnce()
+  tabs.tab(tab.tabId)!.status = 'exited'; tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+  finish(); await flushPromises()
+  expect(tabs.tab(tab.tabId)?.generation).toBe(2)
+  expect(catalog.sessionConfirmation).toBeNull()
+})
+
+// 已打开的结束Legacy恢复在异步来源核实后才选择；失败提示与显式Retry仍属于该请求。
+it('Runtime_EndedLegacyResumeFailureKeepsRetry_049', async () => {
+  const { port, runtime } = render(); await flushPromises()
+  const legacy = useSessionStore(), catalog = useUnifiedSessionsStore(), shell = useShellStore()
+  const tabId = legacy.createTab('/legacy', { sessionId: 'owned-history', name: 'Ended owner' })
+  await catalog.refresh()
+  port.restartLegacy.mockRejectedValueOnce({ code: 'RESOURCE_UNAVAILABLE', message: '/private/secret TOKEN' })
+  shell.requestWorkspaceAction({ kind: 'menu-action', sessionId: `legacy-tab:${tabId}`, action: 'resume' }); await flushPromises()
+  expect(port.restartLegacy).toHaveBeenCalledOnce()
+  expect(catalog.actionFeedback).toMatchObject({ detailCode: 'RESOURCE_UNAVAILABLE', retryable: true })
+  expect(JSON.stringify(catalog.actionFeedback)).not.toContain('/private/secret')
+  expect(catalog.resumeDialog).toBeNull()
+  runtime.retryAction(); await flushPromises()
+  expect(port.restartLegacy).toHaveBeenCalledTimes(2)
+  expect(port.restartLegacy.mock.calls.every(([id]) => id === tabId)).toBe(true)
+  expect(legacy.tabs.size).toBe(1)
+  expect(catalog.activeSessionId).toBe(`legacy-tab:${tabId}`)
+})
+
+// 已结束的 Legacy 终端在异步核实之后才选择；重启错误仍属于本次请求，并支持明确重试。
+it('Runtime_EndedLegacyResumeRetainsFailureAndRetry_049', async () => {
+  const { runtime, port } = render(); await flushPromises()
+  const legacy = useSessionStore(), catalog = useUnifiedSessionsStore(), shell = useShellStore()
+  const id = legacy.createTab('/legacy', { sessionId: 'legacy-ended', name: 'Ended Legacy' })
+  await catalog.refresh(); await flushPromises()
+  port.restartLegacy.mockRejectedValueOnce({ code: 'RESOURCE_UNAVAILABLE', message: '/private/secret TOKEN' })
+  shell.requestWorkspaceAction({ kind: 'menu-action', action: 'resume', sessionId: `legacy-tab:${id}` }); await flushPromises()
+  expect(port.restartLegacy).toHaveBeenCalledOnce()
+  expect(catalog.actionFeedback).toMatchObject({ messageKey: 'errorResourceUnavailable', retryable: true })
+  expect(JSON.stringify(catalog.actionFeedback)).not.toContain('/private/secret')
+  expect(catalog.resumeDialog).toBeNull()
+  port.restartLegacy.mockResolvedValueOnce(undefined)
+  runtime.retryAction(); await flushPromises()
+  expect(port.restartLegacy).toHaveBeenCalledTimes(2)
+  expect(port.restartLegacy.mock.calls.map(call => call[0])).toEqual([id, id])
+  expect(legacy.tabs.size).toBe(1)
+  expect(catalog.activeSessionId).toBe(`legacy-tab:${id}`)
 })
 
 // 默认配置缺少程序路径时保留失败占位的明确取消入口，不把历史或未知尝试当作可丢弃新建。

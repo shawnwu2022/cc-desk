@@ -11,6 +11,8 @@ const POLICY = 'same-source-compiled-rust-shards-v1';
 const SHARD_COUNT = RUST_SHARD_COUNT;
 const MAX_LOG = 64 * 1024 * 1024;
 const MAX_JSON = 8 * 1024 * 1024;
+const MAX_FAILURE_NAMES = 16;
+const MAX_FAILURE_DIAGNOSTIC_BYTES = 8 * 1024;
 const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
 const scope = JSON.parse(fs.readFileSync(new URL('./windows-native-scope.json', import.meta.url), 'utf8'));
 const hash = data => createHash('sha256').update(data).digest('hex');
@@ -41,6 +43,45 @@ function invoke(command, args, root, environment) {
   const child = spawnSync(command, args, { cwd: root, env: environment, encoding: 'utf8', maxBuffer: MAX_LOG, windowsHide: true });
   const output = ((child.stdout ?? '') + (child.stderr ?? '')).replaceAll('\r\n', '\n');
   return { output, exitCode: child.status ?? 1, durationSeconds: Number(process.hrtime.bigint() - start) / 1e9, error: child.error ? String(child.error.message) : child.signal ? `terminated by ${child.signal}` : null };
+}
+// Advisory only: never expose captured stdout/panic bodies or use these names
+// to qualify a shard. The untouched execution log remains the evidence source.
+export function shardFailureDiagnostics(output, assignedNames, executionPath, outputIncomplete = false) {
+  const diagnostic = { names: [], complete: false, truncated: 0, rejected: 0,
+    executionLog: { path: executionPath, sha256: hash(output), bytes: Buffer.byteLength(output, 'utf8') } };
+  const text = output.replaceAll('\r\n', '\n');
+  const summaries = [...text.matchAll(/^test result: (ok|FAILED)\. \d+ passed; (\d+) failed; \d+ ignored; \d+ measured; \d+ filtered out; finished in \d+(?:\.\d+)?s(?:\n|$)/gm)];
+  if (!summaries.length) return diagnostic;
+  const summary = summaries.at(-1), failed = Number(summary[2]);
+  const terminal = !text.slice(summary.index + summary[0].length).trim();
+  const prefix = text.slice(0, summary.index), sections = [...prefix.matchAll(/^failures:$/gm)];
+  if (!failed) {
+    diagnostic.complete = !outputIncomplete && terminal && summaries.length === 1 && summary[1] === 'ok' && sections.length === 0;
+    return diagnostic;
+  }
+  // Only the final list immediately before the terminal outer summary qualifies.
+  if (!terminal || sections.length < 2) return diagnostic;
+  const rows = prefix.slice(sections.at(-1).index + 'failures:'.length).split('\n').filter(line => line.trim());
+  const assigned = new Set(assignedNames), candidates = new Set();
+  for (const row of rows) {
+    const match = /^ {4}(.+)$/.exec(row), name = match?.[1];
+    if (!name || !assigned.has(name) || name.length > 500 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(name) || candidates.has(name)) {
+      ++diagnostic.rejected;
+      continue;
+    }
+    candidates.add(name);
+    if (diagnostic.names.length < MAX_FAILURE_NAMES) diagnostic.names.push(name);
+    else ++diagnostic.truncated;
+  }
+  // Extra summaries/sections include nested worker stdout; never call it complete.
+  diagnostic.complete = !outputIncomplete && summaries.length === 1 && sections.length === 2 && summary[1] === 'FAILED'
+    && candidates.size === failed && diagnostic.rejected === 0 && diagnostic.truncated === 0;
+  while (Buffer.byteLength(JSON.stringify(diagnostic), 'utf8') > MAX_FAILURE_DIAGNOSTIC_BYTES && diagnostic.names.length) {
+    diagnostic.names.pop();
+    ++diagnostic.truncated;
+    diagnostic.complete = false;
+  }
+  return diagnostic;
 }
 function context(options) {
   const root = fs.realpathSync(options.root ?? process.cwd());
@@ -248,7 +289,8 @@ export function runShard(options = {}) {
       } catch (error) { receipt.error = String(error.message); failed = true; }
       if (invocation.error || invocation.exitCode !== 0) { receipt.error ??= invocation.error ?? `exit ${invocation.exitCode}`; failed = true; }
       if (options.onPhase) options.onPhase({ phase: 'execute-end', index: options.index, identity: h.identity, selected: receipt.names.length, durationSeconds: receipt.durationSeconds, result: receipt.result,
-        slowNames: [...invocation.output.matchAll(/^test (.+) has been running for over 60 seconds$/gm)].map(m => m[1]), error: receipt.error ?? null });
+        slowNames: [...invocation.output.matchAll(/^test (.+) has been running for over 60 seconds$/gm)].map(m => m[1]), error: receipt.error ?? null,
+        failureDiagnostics: shardFailureDiagnostics(invocation.output, receipt.names, receipt.logs.execution, !!invocation.error) });
     }
     result.completed = !failed; result.exitCode = failed ? 1 : 0;
   } catch (error) { result.error = String(error.message); }

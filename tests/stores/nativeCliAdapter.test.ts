@@ -41,6 +41,28 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
 }
 
 describe('native CLI adapter', () => {
+  // Claude 的观察侧通道不得通过可选字段叠加到 Codex、Shell 或 raw 启动。
+  it.each([
+    { cli: 'codex', action: { kind: 'new' } },
+    { cli: 'claude', action: { kind: 'raw', argv: ['shell-like-program'] } },
+    { cli: 'shell', action: { kind: 'new' } },
+  ] as const)('NativeObservation_RejectsUnsupportedSource_020 $cli $action.kind', async ({ cli, action }) => {
+    const value = tab({ cli: cli as NativeCliTab['cli'], action: action as NativeCliTab['action'],
+      activityState: 'waiting', observationState: 'active', attentionState: 'needs-user' })
+    const { adapter } = setup([value], [])
+    expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'unknown', observationState: 'off', attentionState: 'none' })
+  })
+  it.each(['working', 'waiting'] as const)('NativeObservation_PreservesClaudeOrderedActivity_021 %s', async activityState => {
+    const { adapter } = setup([tab({ cli: 'claude', action: { kind: 'new' }, activityState, observationState: 'active',
+      attentionState: activityState === 'waiting' ? 'needs-user' : 'none' })], [])
+    expect((await adapter.listSessions())[0]).toMatchObject({ activityState, observationState: 'active',
+      attentionState: activityState === 'waiting' ? 'needs-user' : 'none' })
+  })
+  it.each(['off', 'connecting', 'unavailable'] as const)('NativeObservation_UnreliableActivityStaysUnknown_022 %s', async observationState => {
+    const { adapter } = setup([tab({ cli: 'claude', action: { kind: 'new' }, activityState: 'waiting',
+      observationState, attentionState: 'needs-user' })], [])
+    expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'unknown', attentionState: 'none', observationState })
+  })
   it('mixes Claude and Codex history and preserves duplicate native ids across source roots', async () => {
     const { adapter } = setup([], [history('claude', '/claude-a', 'same'), history('codex', '/codex-a', 'same'), history('codex', '/codex-b', 'same')])
     const sessions = await adapter.listSessions('/repo')

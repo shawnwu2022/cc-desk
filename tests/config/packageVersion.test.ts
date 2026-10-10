@@ -21,12 +21,12 @@ describe('prepared package version', () => {
       cargoLock: cargoLock?.match(/^version = "([^"]+)"$/m)?.[1],
       tauri: tauri.version,
     }).toEqual({
-      npm: '0.18.2',
-      npmLock: '0.18.2',
-      npmRootPackage: '0.18.2',
-      cargo: '0.18.2',
-      cargoLock: '0.18.2',
-      tauri: '0.18.2',
+      npm: '0.18.3',
+      npmLock: '0.18.3',
+      npmRootPackage: '0.18.3',
+      cargo: '0.18.3',
+      cargoLock: '0.18.3',
+      tauri: '0.18.3',
     })
   })
 
@@ -34,7 +34,7 @@ describe('prepared package version', () => {
   it('PackageVersion_Changelog_002', () => {
     const changelog = readFileSync('CHANGELOG.md', 'utf8')
     const headings = [...changelog.matchAll(/^## \[([^\]]+)\] - (.+)$/gm)]
-    expect(headings[0]?.[1]).toBe('0.18.2')
+    expect(headings[0]?.[1]).toBe('0.18.3')
     expect(headings[0]?.[2]).toContain('(unreleased candidate)')
     expect(headings.find(match => match[1] === '0.18.0')?.[2])
       .toBe('2026-10-01 (unreleased test build)')

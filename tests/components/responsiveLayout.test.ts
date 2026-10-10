@@ -14,7 +14,7 @@ import { useCliProfilesStore } from '@/stores/cliProfiles'
 import type { UnifiedSession, UnifiedProjectGroup } from '@/types/unifiedSession'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
-vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isMaximized: async () => false, onResized: async () => () => {} }) }))
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {}, isMaximized: async () => false, onResized: async () => () => {} }) }))
 const wrappers: VueWrapper[] = []
 beforeEach(() => { setActivePinia(createPinia()) })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; document.documentElement.removeAttribute('data-theme'); clearMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -23,7 +23,7 @@ const matrix = [[1024, 640], [1280, 720], [1366, 768], [1440, 900], [1920, 1080]
 it.each(matrix)('Layout_Matrix_001_$label', async ({ width, height, scale, locale, theme }) => {
   const logicalWidth = width
   vi.stubGlobal('innerWidth', logicalWidth); vi.stubGlobal('innerHeight', height); vi.stubGlobal('devicePixelRatio', scale); document.documentElement.dataset.theme = theme
-  const row: UnifiedSession = { id: 'long', runtime: 'native-cli', cli: 'codex', adapterSessionId: 'tab', title: 'T'.repeat(200), projectKey: '/repo', projectPath: 'C:/'+ 'directory/'.repeat(30), processState: 'running', attentionState: 'none', archived: false, resumable: true, lastActivityAt: Date.now() - 60_000 }
+  const row: UnifiedSession = { id: 'long', runtime: 'native-cli', cli: 'codex', adapterSessionId: 'tab', title: 'T'.repeat(200), projectKey: '/repo', projectPath: 'C:/'+ 'directory/'.repeat(30), processState: 'running', activityState: 'idle', attentionState: 'none', archived: false, resumable: true, lastActivityAt: Date.now() - 60_000 }
   const project: UnifiedProjectGroup = { projectKey: '/repo', projectPath: row.projectPath, name: 'P'.repeat(80), sessions: [row], pinned: true, hidden: false, runningCount: 1, needsUserCount: 0, lastActivityAt: row.lastActivityAt }
   const shell = useShellStore(); shell.drawerVisible = true
   const w = mount(AppShell, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })] }, slots: { sidebar: () => h(ProjectNode, { project, expanded: true }), default: '<button data-host-slot>Terminal host slot</button>', context: '<button data-context-content>Resource content</button>' } }); wrappers.push(w); await flushPromises()

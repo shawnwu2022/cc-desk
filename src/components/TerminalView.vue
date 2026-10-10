@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, inject, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { computeTerminalSurfaceVars, getTerminalTheme } from '@/config/terminalThemes'
 import { useWindowAttention } from '@/composables/useWindowAttention'
+import { UNIFIED_WINDOW_FOCUS } from '@/composables/useUnifiedWindowAttention'
 import { useStatusMonitor } from '@/composables/useStatusMonitor'
 import XTermTerminal from './XTermTerminal.vue'
 
@@ -14,8 +15,9 @@ const app = useAppStore()
 const sessions = useSessionStore()
 const terminalRef = ref<InstanceType<typeof XTermTerminal> | null>(null)
 const terminalSurfaceStyle = computed(() => computeTerminalSurfaceVars(getTerminalTheme(app.terminalTheme)))
-const { isFocused } = useWindowAttention()
-useStatusMonitor({ isFocused, isTerminalVisible: computed(() => props.visible) })
+const unifiedFocus = inject(UNIFIED_WINDOW_FOCUS, null)
+const isFocused = unifiedFocus ?? useWindowAttention().isFocused
+useStatusMonitor({ isFocused, isTerminalVisible: computed(() => props.visible), requestWindowAttention: !unifiedFocus })
 
 function handlePtyStarted(tabId: string, ptyId: string) {
   const tab = sessions.tabs.get(tabId)

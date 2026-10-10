@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, provide, ref, toRef, watch } from 'vue'
 import TerminalView from '@/components/TerminalView.vue'
 import NativeCliTerminal from '@/components/NativeCliTerminal.vue'
 import { useShellStore } from '@/stores/shell'
@@ -7,12 +7,15 @@ import { useAppStore } from '@/stores/app'
 import { computeTerminalSurfaceVars, getTerminalTheme } from '@/config/terminalThemes'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { NativeAttemptIdentity } from '@/stores/nativeTabs'
+import { UNIFIED_WINDOW_FOCUS, useUnifiedWindowAttention } from '@/composables/useUnifiedWindowAttention'
 
 const props = withDefaults(defineProps<{
   activeSessionId: string | null
   sessions: OpenTerminalSession[]
   visible?: boolean
 }>(), { visible: true })
+const { isFocused } = useUnifiedWindowAttention({ activeSessionId: toRef(props, 'activeSessionId'), visible: toRef(props, 'visible') })
+provide(UNIFIED_WINDOW_FOCUS, isFocused)
 const shell = useShellStore()
 const app = useAppStore()
 const surface = computed(() => computeTerminalSurfaceVars(getTerminalTheme(app.terminalTheme)))

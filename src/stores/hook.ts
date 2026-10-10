@@ -5,17 +5,20 @@ import type { CliKind } from '@/types/cli'
 import { onHookEvent } from '@/api/tauri'
 import { onNativeObservation } from '@/api/observer'
 import { fromClaudeHook } from '@/integrations/claudeObserver'
+import { fromNativeObservationNotice } from '@/integrations/nativeObservationNotice'
+import type { NativeObservationNotice } from '@/types/nativeObservationNotice'
 import { createObservationRegistry, type ObservationEvent, type ObservationState, type RunRef } from '@/integrations/registry'
 
 export type HookEventType = HookEventDetail['type']
 export type HookEventHandler = (payload: HookEventPayload) => void
 export type ObservationHandler = (event: ObservationEvent, state: ObservationState) => void
+export type ObservationNoticeHandler = (notice: NativeObservationNotice) => void
 export interface ObservationTarget extends RunRef { cli: CliKind; enabled: boolean }
 
 export const useHookStore = defineStore('hook', () => {
   const subscribers = new Map<HookEventType, Set<HookEventHandler>>()
   const observations = createObservationRegistry()
-  const targets = new Map<string, { run: RunRef; handlers: Set<ObservationHandler>; timer: ReturnType<typeof setTimeout> }>()
+  const targets = new Map<string, { run: RunRef; handlers: Set<ObservationHandler>; notices: Set<ObservationNoticeHandler>; seenNotices: Set<string>; timer: ReturnType<typeof setTimeout> }>()
   const key = (run: RunRef) => JSON.stringify([run.runId, run.generation])
   let disposed = false
   let legacyPending: Promise<void> | null = null
@@ -60,6 +63,14 @@ export const useHookStore = defineStore('hook', () => {
     if (!target) return
     clearTimeout(target.timer)
     publish(event)
+    if (targets.get(key(event)) !== target || observations.get(target.run)?.state().observation !== 'active') return
+    const notice = fromNativeObservationNotice(payload)
+    if (!notice || target.seenNotices.has(notice.eventId) || target.seenNotices.size >= 1024) return
+    target.seenNotices.add(notice.eventId)
+    for (const handler of [...target.notices]) {
+      if (!target.notices.has(handler) || targets.get(key(event)) !== target) continue
+      try { handler(Object.freeze({ ...notice })) } catch { /* Receipt consumers are optional; never log CLI text. */ }
+    }
   }
   function ensureNativeListener() {
     if (nativeStop || nativePending || disposed) return
@@ -70,21 +81,24 @@ export const useHookStore = defineStore('hook', () => {
       for (const target of targets.values()) publish({ kind: 'timeout', ...target.run })
     }).finally(() => { nativePending = null })
   }
-  function subscribeObservation(target: ObservationTarget, handler: ObservationHandler): () => void {
+  function subscribeObservation(target: ObservationTarget, handler: ObservationHandler, options: { onNotice?: ObservationNoticeHandler } = {}): () => void {
     if (disposed || target.cli !== 'claude' || !target.enabled) return () => {}
+    const noticeHandler = options.onNotice
     const run = { runId: target.runId, generation: target.generation }
     let entry = targets.get(key(run))
     if (!entry) {
       const reducer = observations.attach(run)
       reducer.accept({ kind: 'connecting', ...run })
-      entry = { run, handlers: new Set(), timer: setTimeout(() => publish({ kind: 'timeout', ...run }), 30_000) }
+      entry = { run, handlers: new Set(), notices: new Set(), seenNotices: new Set(), timer: setTimeout(() => publish({ kind: 'timeout', ...run }), 30_000) }
       targets.set(key(run), entry)
     }
     entry.handlers.add(handler)
+    if (noticeHandler) entry.notices.add(noticeHandler)
     ensureNativeListener()
     const owned = entry
     return () => {
       owned.handlers.delete(handler)
+      if (noticeHandler) owned.notices.delete(noticeHandler)
       if (owned.handlers.size === 0 && targets.get(key(run)) === owned) {
         clearTimeout(owned.timer)
         observations.detach(run)
@@ -97,6 +111,7 @@ export const useHookStore = defineStore('hook', () => {
       if (entry.run.runId !== runId) continue
       clearTimeout(entry.timer)
       entry.handlers.clear()
+      entry.notices.clear(); entry.seenNotices.clear()
       observations.detach(entry.run)
       targets.delete(id)
     }

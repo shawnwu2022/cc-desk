@@ -21,6 +21,8 @@ export const UserAttentionType = { Critical: 1, Informational: 2 }
 export function getCurrentWindow() {
   return {
     isMaximized: async () => false, onResized: async () => () => {},
+    isFocused: async () => true, onFocusChanged: async () => () => {},
+    requestUserAttention: async (kind: number | null) => { if (kind !== null) return blocked() },
     minimize: blocked, toggleMaximize: blocked, close: blocked, setAlwaysOnTop: blocked,
   }
 }

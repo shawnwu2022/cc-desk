@@ -40,7 +40,7 @@ interface SessionMenuPage {
 }
 
 export async function openFixtureSessionMenu(page: SessionMenuPage) {
-  const row = page.locator('[data-session-row]').first()
+  const row = page.locator('[data-session-row="visual-session-0"]').first()
   // Production enables overflow pointer events through the row's focus-within state.
   await row.focus()
   await row.locator('.session-overflow-trigger button').click()

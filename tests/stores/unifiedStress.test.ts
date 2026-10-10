@@ -123,6 +123,9 @@ function workspaceFixture() {
 
 vi.mock('@/utils/platform', () => ({ isWindows: true, isMac: false, platform: 'windows' }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({
+  isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {},
+}) }))
 let f: ReturnType<typeof workspaceFixture>
 beforeEach(() => { f = workspaceFixture() })
 afterEach(() => { f.dispose(); vi.restoreAllMocks() })

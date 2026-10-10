@@ -45,7 +45,7 @@ describe('SessionIcons', () => {
       expect(circle.attributes('fill')).toBe('none')
       expect(circle.attributes('stroke')).toBe('currentColor')
     }
-    expect(shapes).toEqual(['gap-ring', 'active-play', 'reply-dot', 'question-circle', 'stop-circle', 'alert-circle'])
+    expect(shapes).toEqual(['gap-ring', 'idle-dot', 'reply-dot', 'question-circle', 'stop-circle', 'alert-circle'])
     expect(new Set(geometries).size).toBe(6)
   })
 
@@ -261,7 +261,7 @@ describe('SessionIcons', () => {
         expect(notice).toContain('Blossom_Light.svg')
         expect(notice).not.toContain('self-owned project artwork')
       }
-      const names = directory === 'cli' ? ['claude', 'codex'] : ['starting', 'running', 'needs-user', 'confirming', 'ended', 'failed']
+      const names = directory === 'cli' ? ['claude', 'codex'] : ['starting', 'running', 'working', 'permission', 'completed', 'stopped', 'closed', 'unknown', 'needs-user', 'confirming', 'ended', 'failed']
       for (const name of names) {
         const source = readFileSync(resolve(`src/assets/icons/${directory}/${name}.svg`), 'utf8')
         const svg = new DOMParser().parseFromString(source, 'image/svg+xml').documentElement

@@ -120,6 +120,29 @@ beforeEach(() => {
 })
 
 describe('unified sessions store', () => {
+  // 项目按固定和显示名排列；刷新活动时间只能调整项目内会话顺序。
+  it('StableProjectOrder_Catalog_001', async () => {
+    const rows = [
+      session({ id: 'zulu', projectPath: '/zulu', lastActivityAt: 100 }),
+      session({ id: 'alpha-old', projectPath: '/alpha', lastActivityAt: 1 }),
+      session({ id: 'alpha-new', projectPath: '/alpha', lastActivityAt: 2 }),
+      session({ id: 'pinned', projectPath: '/omega', lastActivityAt: 0 }),
+    ]
+    const legacy = fakeAdapter('legacy-claude', rows)
+    const projects = useProjectsStateStore()
+    projects.pinnedProjects = ['/omega']
+    projects.displayNames.set('/zulu', 'Bravo alias')
+    const store = useUnifiedSessionsStore()
+    store.configureAdapters([legacy.adapter])
+    await store.refresh()
+    expect(store.projectGroups.map(group => group.projectKey)).toEqual(['/omega', '/alpha', '/zulu'])
+    expect(store.projectGroups[1].sessions.map(row => row.id)).toEqual(['alpha-new', 'alpha-old'])
+    legacy.setSessions(rows.map(row => ({ ...row, lastActivityAt: row.id === 'alpha-old' ? 1000 : row.lastActivityAt })))
+    await store.refresh()
+    expect(store.projectGroups.map(group => group.projectKey)).toEqual(['/omega', '/alpha', '/zulu'])
+    expect(store.projectGroups[1].sessions.map(row => row.id)).toEqual(['alpha-old', 'alpha-new'])
+  })
+
   it('merges legacy/native sessions into one project group and sorts pinned groups first', async () => {
     const legacy = fakeAdapter('legacy-claude', [
       session({ id: 'legacy', projectPath: '/repo', projectKey: '/repo', lastActivityAt: 100 }),

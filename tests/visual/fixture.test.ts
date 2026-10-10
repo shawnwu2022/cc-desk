@@ -6,7 +6,7 @@ import { nextTick } from 'vue'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import VisualFixtureApp from '@/visual/VisualFixtureApp.vue'
 import { FIXTURE_TIME, longProjectName, longSessionTitle } from '@/visual/fixtures'
-import { blockedHostCalls, invoke, listen } from '@/visual/tauriStub'
+import { blockedHostCalls, invoke, listen, getCurrentWindow } from '@/visual/tauriStub'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import { expandFixtureProjects, clearFixtureSetupFocus, openFixtureSessionMenu } from './fixtureActions'
@@ -33,6 +33,18 @@ async function render(scenario: string, locale = 'en') {
   await flushPromises(); return wrapper
 }
 describe('Isolated production-component fixture', () => {
+  it.each(['en', 'zh'])('Fixture_NativeReceiptStaysIndependent_020 %s', async locale => {
+    const view = await render('native-notice', locale)
+    for (const toggle of view.findAll('.project-node > .project-row .expand-arrow')) await toggle.trigger('click')
+    const marker = view.get('[data-native-observation-notice]')
+    expect(marker.attributes('data-unread')).toBe('true')
+    expect(marker.attributes('aria-label')).toBe(locale === 'en'
+      ? 'Reply-end notice received (unread); current activity unverified'
+      : '收到回复结束通知（未读）；当前活动尚未验证')
+    expect(view.get('.session-status-icon').attributes('aria-label')).toBe(locale === 'en' ? 'Activity unknown' : '活动未知')
+    expect(view.html()).not.toContain('visual-receipt-id')
+    expect(blockedHostCalls.value).toBe(0)
+  })
   it('Fixture_SettingsVersionIsStableSyntheticData_019', async () => {
     const view = await render('terminal-settings')
     expect(view.text()).toContain('CC Desk v0.18.1')
@@ -90,7 +102,7 @@ describe('Isolated production-component fixture', () => {
     expect(view.findAll('[data-session-row]')).toHaveLength(1)
     const row = view.get('[data-session-row]')
     expect(row.attributes('data-session-row')).toBe(`visual-close-${variant}-${state}`)
-    expect(row.get('.session-status-icon').classes()).toContain(`session-status-icon--${state === 'unknown' ? 'confirming' : state === 'stopped' ? 'ended' : state}`)
+    expect(row.get('.session-status-icon').classes()).toContain(`session-status-icon--${state === 'unknown' ? 'confirming' : state === 'needs-user' ? 'running' : state}`)
     const close = row.get('.session-primary-action button')
     expect(row.findAll('.session-primary-action button')).toHaveLength(1)
     expect(close.attributes('aria-label')).toBe(locale === 'en' ? 'Close' : '关闭')
@@ -114,7 +126,8 @@ describe('Isolated production-component fixture', () => {
       const menu = document.querySelector('[role="menu"]')!
       expect(menu, `${entry} must render the actual menu`).not.toBeNull()
       expect(menu.querySelector('[data-item-id="close"], [data-item-id="stop"]')).toBeNull()
-      expect(!!menu.querySelector('[data-item-id="archive"]')).toBe(state === 'stopped' || state === 'failed')
+      expect(menu.querySelector('[data-item-id="archive"]')).toBeNull()
+      expect(row.find('[data-session-archive] button').exists()).toBe(state === 'stopped' || state === 'failed')
       menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
       await flushPromises()
       expect(document.querySelector('[role="menu"]')).toBeNull()
@@ -229,7 +242,7 @@ describe('Isolated production-component fixture', () => {
     expect(document.querySelector('[data-item-id="close"]')).toBeNull()
     expect(document.querySelector('[data-item-id="stop"]')).toBeNull()
     expect(document.querySelector('[data-item-id="archive"]')).toBeNull()
-    expect(document.querySelector('[data-session-row] .session-primary-action button')?.getAttribute('aria-label')).toBe('Close')
+    expect(document.querySelector('[data-session-row="visual-session-0"] .session-primary-action button')?.getAttribute('aria-label')).toBe('Close')
     expect(blockedHostCalls.value).toBe(0)
   })
   // 截图准备完成后移除临时焦点，已有 tabindex 必须原样保留。
@@ -278,4 +291,15 @@ describe('Isolated production-component fixture', () => {
     expect(blockedHostCalls.value).toBe(0)
   })
 
+})
+
+// 视觉宿主仅使用合成焦点/监听/取消；实际提示请求仍失败且无法连接真实窗口。
+it('Fixture_WindowAttentionRemainsIsolated_020', async () => {
+  const window = getCurrentWindow()
+  await expect(window.isFocused()).resolves.toBe(true)
+  expect(typeof await window.onFocusChanged()).toBe('function')
+  await expect(window.requestUserAttention(null)).resolves.toBeUndefined()
+  expect(blockedHostCalls.value).toBe(0)
+  await expect(window.requestUserAttention(1)).rejects.toThrow('VISUAL_HOST_ACCESS_BLOCKED')
+  expect(blockedHostCalls.value).toBe(1)
 })

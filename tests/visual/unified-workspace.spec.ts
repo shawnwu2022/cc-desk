@@ -36,9 +36,40 @@ async function openFixture(page: Page, options: Record<string, string | number>)
   await page.goto(`/__visual__/?${new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]))}`)
   await expect(page.locator('[data-visual-ready]')).toHaveAttribute('data-visual-ready', 'true')
   await page.evaluate(() => document.fonts.ready)
-  if (['mixed', 'hover', 'menu', 'close-state'].includes(String(options.scenario))) {
+  if (['mixed', 'hover', 'menu', 'close-state', 'native-notice'].includes(String(options.scenario))) {
     await expandFixtureProjects(page)
   }
+}
+
+// These synthetic receipt captures are unapproved evidence, separate from the
+// thirteen historical pixel baselines and actual authenticated CLI acceptance.
+for (const locale of ['en', 'zh']) for (const notice of ['unread', 'read']) {
+  test(`native receipt marker ${locale} ${notice}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 640 })
+    await openFixture(page, { scenario: 'native-notice', locale, notice })
+    const row = page.locator('[data-session-row="visual-native-notice"]')
+    const marker = row.locator('[data-native-observation-notice]')
+    const label = notice === 'unread'
+      ? locale === 'en' ? 'Reply-end notice received (unread); current activity unverified' : '收到回复结束通知（未读）；当前活动尚未验证'
+      : locale === 'en' ? 'Recent notice: reply-end event; current activity unverified' : '最近收到：回复结束事件；当前活动尚未验证'
+    await expect(marker).toHaveAttribute('aria-label', label)
+    await expect(marker).toHaveAttribute('data-unread', String(notice === 'unread'))
+    await expect(row.locator('.session-status-icon')).toHaveAttribute('aria-label', locale === 'en' ? 'Activity unknown' : '活动未知')
+    await expect(row.locator('.session-primary-action button')).toHaveAttribute('aria-label', locale === 'en' ? 'Close' : '关闭')
+    await marker.focus()
+    await expect(marker).toBeFocused()
+    await expect(marker).toBeInViewport({ ratio: 1 })
+    await expect(page.getByRole('tooltip')).toHaveText(label)
+    await expect(page.getByRole('tooltip')).toBeInViewport({ ratio: 1 })
+    await captureFixtureEvidence(page, testInfo, `native-receipt-${locale}-${notice}-unapproved`)
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('tooltip')).toHaveCount(0)
+    await expect(marker).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(row.locator('input')).toHaveCount(0)
+    await expect(page.locator('[role="dialog"]')).toHaveCount(0)
+    await expect(row.locator('.session-status-icon')).toHaveAttribute('aria-label', locale === 'en' ? 'Activity unknown' : '活动未知')
+  })
 }
 
 for (const sample of snapshots) {
@@ -55,7 +86,7 @@ for (const sample of snapshots) {
       // Use the main area's empty lower-right gutter, never a window control.
       await page.mouse.move(sample.width - 4, sample.height - 4)
       if (sample.scenario !== 'tooltip') await expect(page.getByRole('tooltip')).toHaveCount(0)
-      if (sample.scenario === 'hover') await page.locator('[data-session-row]').first().hover()
+      if (sample.scenario === 'hover') await page.locator('[data-session-row="visual-session-0"]').hover()
       await expect(page).toHaveScreenshot(`${sample.name}.png`)
     })
   })
@@ -90,7 +121,7 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
         await expect(primary.getByRole('button')).toHaveCount(1)
         await expect(close).toBeEnabled()
         await expect(close.locator('svg path')).toHaveAttribute('d', 'm6 6 12 12M18 6 6 18')
-        await expect(row.locator('.session-status-icon')).toHaveClass(`session-status-icon session-status-icon--${state === 'unknown' ? 'confirming' : state === 'stopped' ? 'ended' : state}`)
+        await expect(row.locator('.session-status-icon')).toHaveClass(`session-status-icon session-status-icon--${state === 'unknown' ? 'confirming' : state === 'needs-user' ? 'running' : state}`)
         await expect(row.locator('.cli-app-icon')).toHaveAttribute('aria-label', variant === 'native-codex' ? 'Codex CLI' : 'Claude Code')
 
         // Opacity is explicit: Playwright visibility alone would also accept an invisible button.
@@ -107,6 +138,14 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
         await expect(primary).toHaveCSS('opacity', '0')
         await overflow.focus()
         await page.keyboard.press('Shift+Tab')
+        if (state === 'stopped' || state === 'failed') {
+          const archive = row.locator('[data-session-archive] button')
+          await expect(archive).toBeFocused()
+          await expect(archive).toBeInViewport({ ratio: 1 })
+          await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Archive' : '归档')
+          await page.keyboard.press('Escape')
+          await page.keyboard.press('Shift+Tab')
+        }
         await expect(close).toBeFocused()
         await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Close' : '关闭')
         await page.keyboard.press('Escape')
@@ -128,7 +167,8 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
           await expect(menu).toBeInViewport({ ratio: 1 })
           await expect(menu.locator('[data-item-id="close"], [data-item-id="stop"]')).toHaveCount(0)
           await expect(menu.getByRole('menuitem', { name: /^(Close|Stop|Stop and archive|关闭|停止|停止并归档)$/ })).toHaveCount(0)
-          await expect(menu.locator('[data-item-id="archive"]')).toHaveCount(state === 'stopped' || state === 'failed' ? 1 : 0)
+          await expect(menu.locator('[data-item-id="archive"]')).toHaveCount(0)
+          await expect(row.locator('[data-session-archive] button')).toHaveCount(state === 'stopped' || state === 'failed' ? 1 : 0)
           await page.mouse.move(1020, 636)
           await expect(page.getByRole('tooltip')).toHaveCount(0)
           await captureFixtureEvidence(page, testInfo, `${evidenceName}-${entry}-menu-unapproved`)

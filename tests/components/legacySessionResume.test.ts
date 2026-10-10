@@ -80,8 +80,8 @@ describe('Legacy session resume in App', () => {
     const history = catalog.sessions.find(row => row.nativeSessionId === 'saved-session')!
     const opened = await catalog.resumeCatalogSession(history.id); await flushPromises()
     shell.requestWorkspaceAction({ kind: 'menu-action', sessionId: opened.id, action: 'close' }); await flushPromises()
-    expect(catalog.sessionConfirmation?.kind).toBe('close-running')
-    await catalog.confirmSessionAction(); await flushPromises()
+    expect(catalog.sessionConfirmation).toBeNull()
+    expect(io.kill).toHaveBeenCalledOnce()
     expect(legacy.tabs.size).toBe(0); expect(io.terms[0].dispose).toHaveBeenCalledOnce()
     const retained = catalog.sessions.find(row => row.nativeSessionId === 'saved-session')!
     expect(retained).toMatchObject({ id: history.id, runtime: 'legacy-claude', resumable: true })

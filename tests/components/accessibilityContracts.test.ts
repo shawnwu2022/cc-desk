@@ -56,7 +56,7 @@ it('A11y_ViewportBoundTooltip_003', async () => {
 // 中英文真实会话行保留图标语义；状态仅在焦点提示出现，菜单键不触发会话动作。
 it.each(['en', 'zh'] as const)('A11y_RowKeyboard_004_%s', async locale => {
   i18n.global.locale.value = locale
-  const w = mount(SessionItem, { attachTo: document.body, global: { plugins: [i18n] }, props: { selected: true, session: { id: 'row', cli: 'codex', runtime: 'native-cli', adapterSessionId: 'tab', projectKey: '/repo', projectPath: '/repo', title: 'A'.repeat(200), processState: 'running', attentionState: 'none', archived: false, resumable: true, lastActivityAt: Date.now() } } }); wrappers.push(w)
+  const w = mount(SessionItem, { attachTo: document.body, global: { plugins: [i18n] }, props: { selected: true, session: { id: 'row', cli: 'codex', runtime: 'native-cli', adapterSessionId: 'tab', projectKey: '/repo', projectPath: '/repo', title: 'A'.repeat(200), processState: 'running', activityState: 'idle', attentionState: 'none', archived: false, resumable: true, lastActivityAt: Date.now() } } }); wrappers.push(w)
   expect(w.text()).not.toContain(locale === 'en' ? en.sessionStatusRunning : zh.sessionStatusRunning)
   const icon = w.get('.session-status-icon'); (icon.element as HTMLElement).focus(); await flushPromises()
   expect(body.get('[role="tooltip"]').text()).toBe(locale === 'en' ? en.sessionStatusRunning : zh.sessionStatusRunning)

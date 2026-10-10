@@ -9,7 +9,7 @@ import zh from '@/i18n/locales/zh'
 import SessionItem from '@/components/sessions/SessionItem.vue'
 import SessionList from '@/components/sessions/SessionList.vue'
 import SessionOverflowMenu from '@/components/sessions/SessionOverflowMenu.vue'
-import { selectSessionMenuActions } from '@/utils/sessionPresentation'
+import { selectSessionMenuActions, selectSessionArchiveAction } from '@/utils/sessionPresentation'
 import type { SessionMenuAction, UnifiedSession } from '@/types/unifiedSession'
 
 const body = new DOMWrapper(document.body)
@@ -127,7 +127,7 @@ describe('Unified SessionItem', () => {
 
   // 默认只显示标题和紧凑年龄，状态与应用只用图标及可访问名称。
   it('Row_CompactTimeAndIcons_002', async () => {
-    const wrapper = row()
+    const wrapper = row({ ...base, activityState: 'idle' })
     expect(wrapper.get('.session-time').text()).toBe('6m')
     expect(wrapper.get('.session-name').text()).toBe(base.title)
     expect(wrapper.get('.session-status-icon').attributes('aria-label')).toBe('Running')
@@ -407,8 +407,8 @@ describe('Unified session menu model', () => {
   // 每个状态提供完整能力并把危险动作排在最后；未知态禁止再次启动。
   it.each([
     { name: 'Menu_Running_018', session: base, actions: [...common, 'restart'] },
-    { name: 'Menu_Stopped_019', session: { ...base, processState: 'stopped' }, actions: [...common, 'resume', 'restart', 'archive'] },
-    { name: 'Menu_Failed_020', session: { ...base, processState: 'failed' }, actions: [...common, 'retry', 'restart', 'archive'] },
+    { name: 'Menu_Stopped_019', session: { ...base, processState: 'stopped' }, actions: [...common, 'resume', 'restart'] },
+    { name: 'Menu_Failed_020', session: { ...base, processState: 'failed' }, actions: [...common, 'retry', 'restart'] },
     { name: 'Menu_Archived_021', session: { ...base, processState: 'stopped', archived: true }, actions: [...common, 'restore-archive'] },
     { name: 'Menu_Unknown_022', session: { ...base, processState: 'unknown' }, actions: [...common, 'confirm-status'] },
     { name: 'Menu_Starting_023', session: { ...base, processState: 'starting' }, actions: [...common, 'cancel-start'] },
@@ -428,12 +428,13 @@ describe('Unified session menu model', () => {
       expect(ids).not.toContain('restart')
       expect(ids).not.toContain('close')
       expect(ids).toContain('resume')
-      expect(ids).toContain('archive')
+      expect(ids).not.toContain('archive')
+      expect(selectSessionArchiveAction(history)?.id).toBe('archive')
       expect(selectSessionMenuActions({ ...history, opened: true }).map(action => action.id)).toEqual(expect.arrayContaining(['restart']))
     }
   })
 
-  // 非运行历史的英中归档文案完整；组件只发出 typed 动作。
+  // 外置归档的英中标签完整；菜单继续只发出 typed 动作。
   it('Menu_LocalizedLabels_024', async () => {
     const wrapper = mount(SessionOverflowMenu, { attachTo: document.body,
       props: { open: true, actions: selectSessionMenuActions({ ...base, opened: false, processState: 'stopped' }), anchor: { x: 10, y: 10 } },
@@ -441,10 +442,12 @@ describe('Unified session menu model', () => {
     })
     mounted.push(wrapper)
     await nextTick()
-    expect(document.querySelector('[data-item-id="archive"]')!.textContent).toBe('Archive')
+    expect(document.querySelector('[data-item-id="archive"]')).toBeNull()
+    const archiveRow = row({ ...base, opened: false, processState: 'stopped' })
+    expect(archiveRow.get('[data-session-archive] button').attributes('aria-label')).toBe('Archive')
     i18n.global.locale.value = 'zh'
     await nextTick()
-    expect(document.querySelector('[data-item-id="archive"]')!.textContent).toBe('归档')
+    expect(archiveRow.get('[data-session-archive] button').attributes('aria-label')).toBe('归档')
     expect(document.querySelector('[role="menu"]')!.textContent).not.toMatch(/sessionAction|Profile|Native|Legacy/)
     document.querySelector<HTMLElement>('[data-item-id="open-project-directory"]')!.click()
     await nextTick()
@@ -481,8 +484,7 @@ describe('SessionList unified boundary', () => {
     expect(wrapper.emitted('rename')).toBeUndefined()
     await rows[1].get('.session-primary-action button').trigger('click')
     expect(wrapper.emitted('primary-action')).toEqual([[history.id, 'resume']])
-    await rows[1].trigger('contextmenu'); await nextTick()
-    document.querySelector<HTMLElement>('[data-item-id="archive"]')!.click()
+    await rows[1].get('[data-session-archive] button').trigger('click')
     await nextTick()
     expect(wrapper.emitted('menu-action')).toEqual([[base.id, 'rename'], [history.id, 'archive']])
     expect(wrapper.emitted('archive')).toBeUndefined()
@@ -533,4 +535,27 @@ it('Menu_DiscardRequiresFailedCreation_037', () => {
   for (const session of [base, { ...failed, opened: true }, { ...failed, preparationState: undefined }, { ...failed, preparationState: 'unknown' as const }]) {
     expect(selectSessionMenuActions(session).map(action => action.id)).not.toContain('discard-creation')
   }
+})
+
+// 外置归档仍只对结束/失败会话可用，遵守能力限制和保存状态，不冒泡激活/恢复。
+it('Row_ArchiveQuickAction_043', async () => {
+  const history = { ...base, opened: false, processState: 'stopped' as const }
+  const wrapper = row(history)
+  const archive = wrapper.get('[data-session-archive] button')
+  ;(archive.element as HTMLButtonElement).focus()
+  expect(document.activeElement).toBe(archive.element)
+  await archive.trigger('click')
+  expect(wrapper.emitted('menu-action')).toEqual([[history.id, 'archive']])
+  expect(wrapper.emitted('activate')).toBeUndefined()
+  expect(wrapper.emitted('primary-action')).toBeUndefined()
+  await wrapper.trigger('contextmenu'); await nextTick()
+  expect(document.querySelector('[data-item-id="archive"]')).toBeNull()
+  await wrapper.setProps({ session: { ...history, renameState: 'saving' } })
+  expect(wrapper.get('[data-session-archive] button').attributes('disabled')).toBeDefined()
+  for (const session of [base, { ...base, processState: 'starting' as const }, { ...base, processState: 'unknown' as const }, { ...history, archived: true }, { ...history, preparationState: 'failed' as const }]) {
+    await wrapper.setProps({ session })
+    expect(wrapper.find('[data-session-archive]').exists()).toBe(false)
+  }
+  await wrapper.setProps({ session: history, menuActionVisibility: { archive: false } })
+  expect(wrapper.find('[data-session-archive]').exists()).toBe(false)
 })

@@ -20,7 +20,7 @@ import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
 import { sameProjectPath } from '@/utils/path'
 import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceSourceConfiguration, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
-import type { UnifiedCliKind } from '@/types/unifiedSession'
+import type { UnifiedCliKind, UnifiedSession } from '@/types/unifiedSession'
 
 /** Normal App composition root. Read-only bootstrap is independent per source;
  * only explicitly admitted operations can enter the existing runtime owners. */
@@ -34,6 +34,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const workspace = useWorkspaceStore()
   const projects = useProjectsStateStore()
   const catalog = useUnifiedSessionsStore()
+  const attention = useAttentionStore()
   const shell = useShellStore()
   const legacyPaths = ref<string[]>([])
   const error = ref<string | null>(null)
@@ -64,7 +65,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     && profiles.status === 'error' && workspace.status === 'error' && app.managedProjectsStatus === 'error'
     && !openSessions.value.length && !catalog.sessions.length && !app.cachedProjects.length
     && !profiles.profiles.length && !workspace.projects.length && !projects.pinnedProjects.length)
-  let retryRequest: { request: WorkspaceRequest; owns: () => boolean } | null = null
+  let retryRequest: { request: WorkspaceRequest; owns: () => boolean; resumeTarget?: UnifiedSession } | null = null
+  let retryResumeTarget: { sequence: number; target: UnifiedSession } | null = null
   const cliProblems = computed(() => (['claude', 'codex'] as const).flatMap(cli => {
     const latest = [...native.tabs.values()].reverse().filter(tab => tab.cli === cli).sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0]
     const failed = latest?.status === 'failed' ? latest : null
@@ -75,7 +77,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   function retryAction() {
     const pending = retryRequest
     retryRequest = null
-    if (pending?.owns()) shell.requestWorkspaceAction(pending.request)
+    if (pending?.owns()) {
+      if (pending.resumeTarget) retryResumeTarget = { sequence: shell.requestSequence + 1, target: pending.resumeTarget }
+      shell.requestWorkspaceAction(pending.request)
+    }
     else shell.requestWorkspaceAction({ kind: 'refresh' })
   }
   let disposed = false
@@ -138,7 +143,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const matches = workspace.projects.filter(project => sameProjectPath(project.selectedPath, input.projectPath)
       && (!source || project.projectId === source.projectId)
       && (!input.registeredProjectId || project.projectId === input.registeredProjectId))
-    if (matches.length !== 1 || (source && !sameProjectPath(source.projectPath, input.projectPath))) throw new Error('PROJECT_NOT_FOUND')
+    if (matches.length !== 1 || (source && !sameProjectPath(source.projectPath, input.projectPath))) {
+      throw new Error(source ? 'PROJECT_IDENTITY_CHANGED' : 'PROJECT_NOT_FOUND')
+    }
     // Paths selected by the frontend do not create registration or bridge authority.
     const tab = native.create({ cli: input.cli, projectId: matches[0].projectId, projectPath: matches[0].selectedPath,
       profileId: profile.id, profileRevision: profile.revision, action: input.action,
@@ -171,7 +178,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   }
   if (enabled) {
     // Subscribe attention before child TerminalView status consumers mount.
-    useAttentionStore().init()
+    attention.init()
     catalog.configureUnknownRestartRecovery(async (id, canContinue) => {
       const row = catalog.sessions.find(row => row.id === id)
       if (row?.runtime !== 'native-cli') throw new Error('LAUNCH_STATE_UNKNOWN')
@@ -217,7 +224,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       return partial
     })
     catalog.configureAdapters([
-      createLegacyClaudeAdapter({ store: legacy, metadata: projects, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
+      createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
         runtime: {
           startTab: id => {
             const tab = legacy.tabs.get(id)
@@ -308,7 +315,21 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     error.value = warnings.items.length && !fatal.value ? 'workspaceRuntimePartial' : null
   }
 
-  async function dispatch(request: WorkspaceRequest): Promise<boolean> {
+  async function resumeDirect(row: UnifiedSession, claimFeedback: (target: UnifiedSession) => void) {
+    if (shell.section !== 'workspace') return
+    const sequence = shell.requestSequence
+    const navigation = shell.navigationSequence
+    const canAdmit = () => !disposed && shell.section === 'workspace'
+      && shell.requestSequence === sequence && shell.navigationSequence === navigation
+    // Freeze the selected source. The adapters still verify its current history,
+    // configuration revision and registered project before admitting a process.
+    const frozen = { ...row, ...(row.nativeOrigin ? { nativeOrigin: { ...row.nativeOrigin } } : {}) }
+    // History and ended Legacy terminals claim selection at different async
+    // boundaries. Capture feedback only after the actual owning selection claim.
+    await catalog.resumeCatalogSession(frozen, canAdmit, () => claimFeedback(frozen))
+  }
+
+  async function dispatch(request: WorkspaceRequest, claimResumeFeedback: (target: UnifiedSession) => void, resumeTarget?: UnifiedSession): Promise<boolean> {
     if (request.kind === 'refresh') { await refresh(); return true }
     if (request.kind === 'rename-cancel') { catalog.cancelRename(request.sessionId); return true }
     if (request.kind === 'new-session') {
@@ -332,7 +353,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     if (request.kind === 'add-project' || request.kind === 'open-project' || request.kind === 'project-action') return false
     if (!('sessionId' in request)) return false
-    const session = catalog.sessions.find(value => value.id === request.sessionId)
+    const session = resumeTarget ?? catalog.sessions.find(value => value.id === request.sessionId)
     if (!session) return false
     if (request.kind === 'menu-action' && request.action === 'view-diagnostics') {
       if (shell.section === 'workspace') diagnosticsOwner.value = { id: session.id, owns: catalog.captureSessionOwnership(session.id) }
@@ -352,7 +373,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const open = openSessions.value.some(value => value.id === session.id)
     if (request.kind === 'activate') {
       if (!open) {
-        if (shell.section === 'workspace') catalog.openResumeDialog({ project: session, cli: session.cli, mode: 'session', sessionId: session.id })
+        await resumeDirect(session, claimResumeFeedback)
         return true
       }
       await catalog.activateSession(session.id)
@@ -395,14 +416,12 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         await catalog.restartSession(session.id); return true
       case 'close':
         if (!open) return false
-        if (live) { if (shell.section === 'workspace') catalog.beginSessionConfirmation('close-running', session.id); return true }
         await catalog.closeSession(session.id); return true
       case 'archive':
         if (live) { if (shell.section === 'workspace') catalog.beginSessionConfirmation('stop-and-archive', session.id); return true }
         await catalog.archiveSession(session.id); return true
       case 'resume':
-        if (open) { await catalog.resumeCatalogSession(session.id); return true }
-        if (shell.section === 'workspace') catalog.openResumeDialog({ project: session, cli: session.cli, mode: 'session', sessionId: session.id })
+        await resumeDirect(session, claimResumeFeedback)
         return true
       case 'restore-archive': await catalog.restoreArchivedSession(session.id); return true
       case 'copy-session-id':
@@ -422,16 +441,27 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (!ready.value && !['new-session', 'create-session'].includes(pending.kind) && !ownsSession) return
     const sequence = shell.requestSequence
     const request = shell.pendingRequest
+    const retryTarget = retryResumeTarget?.sequence === sequence ? retryResumeTarget.target : undefined
+    retryResumeTarget = null
+    let directResumeTarget: UnifiedSession | undefined
     catalog.closeSessionConfirmation()
     closeDiagnostics()
-    const feedback = catalog.captureFeedbackOwner()
-    const ownsFeedbackSession = 'sessionId' in request && typeof request.sessionId === 'string' && catalog.sessions.some(row => row.id === request.sessionId)
+    const navigation = shell.navigationSequence
+    let feedback = catalog.captureFeedbackOwner()
+    let ownsFeedbackSession = 'sessionId' in request && typeof request.sessionId === 'string' && catalog.sessions.some(row => row.id === request.sessionId)
       ? catalog.captureSessionOwnership(request.sessionId) : () => true
-    const current = () => !disposed && shell.requestSequence === sequence && feedback() && ownsFeedbackSession()
+    const current = () => !disposed && shell.requestSequence === sequence && shell.navigationSequence === navigation && feedback() && ownsFeedbackSession()
+    const claimResumeFeedback = (target: UnifiedSession) => {
+      feedback = catalog.captureFeedbackOwner()
+      directResumeTarget = target
+      // A failed exact-source read may remove its history row. Its owned error
+      // still belongs to this explicit request, even when that row is gone.
+      ownsFeedbackSession = () => true
+    }
     retryRequest = null
     claimedSequence = sequence // Claim before async work; never retry on reactive changes.
     try {
-      if (await dispatch(request)) {
+      if (await dispatch(request, claimResumeFeedback, retryTarget)) {
         shell.clearWorkspaceRequest(sequence)
         const key = request.kind === 'rename' ? 'feedbackRenamed'
           : 'action' in request && request.action === 'copy-session-id' ? 'feedbackCopied'
@@ -453,14 +483,14 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       if (current()) {
         error.value = code === 'SESSION_ORIGIN_AMBIGUOUS' ? 'resumeAmbiguous' : null
         catalog.publishActionFailure(current, failure)
-        if (mapSafeUserError(code, 'session').retryable) retryRequest = { request, owns: () => current() && ownsFeedbackSession() }
+        if (mapSafeUserError(code, 'session').retryable) retryRequest = { request, owns: () => current() && ownsFeedbackSession(), resumeTarget: directResumeTarget }
       }
       // No side effect is replayed. Retry is a new, explicit user request.
     }
   }, { immediate: true })
   watch(() => [
     [...legacy.tabs.values()].map(tab => ({ ...tab })), [...native.tabs.values()].map(tab => ({ ...tab })),
-    history.all(), projects.archivedSessions,
+    history.all(), projects.archivedSessions, attention.queue,
   ], async () => {
     if (!enabled || !ready.value || disposed || loading.value) return
     const owner = refreshOwner

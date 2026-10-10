@@ -138,7 +138,8 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
   onWriteParsed() { return { dispose() {} } }
   constructor(options: any) { this.options = options }
   loadAddon() {} open(element: HTMLElement) { this.element = element; this.textarea = document.createElement('textarea'); element.append(this.textarea) }
-  onData() { return { dispose() {} } } attachCustomKeyEventHandler() {} getSelection() { return '' } write() {} focus() {} dispose() {}
+  onData() { return { dispose() {} } } attachCustomKeyEventHandler() {} getSelection() { return '' }
+  write(_data: string | Uint8Array, parsed?: () => void) { parsed?.() } reset() {} focus() {} dispose() {}
 } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
 // Entry and terminal binding are already independently protocol-tested in the

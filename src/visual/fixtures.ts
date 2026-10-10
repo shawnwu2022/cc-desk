@@ -22,6 +22,7 @@ export function fixtureSessions(): UnifiedSession[] {
     projectPath: projectPaths[index < 4 ? 0 : index === 4 ? 1 : 2],
     title: String(title), cli: cli as UnifiedSession['cli'], runtime: index === 4 ? 'legacy-claude' : 'native-cli',
     processState: processState as UnifiedSession['processState'], attentionState: attentionState as UnifiedSession['attentionState'],
+    activityState: processState === 'running' ? 'idle' : 'unknown',
     lastActivityAt: FIXTURE_TIME - Number(age) * 60_000, archived: index >= 6, opened: index < 4, preparationState: index === 5 ? 'failed' as const : undefined, resumable: index >= 4,
   }))
 }

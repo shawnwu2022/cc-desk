@@ -23,7 +23,8 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
   parsed = new Set<() => void>(); parsedRegistrations = 0
   onWriteParsed(callback: () => void) { this.parsedRegistrations++; this.parsed.add(callback); return { dispose: () => this.parsed.delete(callback) } }
   onData() { return { dispose() {} } } attachCustomKeyEventHandler(fn: any) { this.key = fn } getSelection() { return this.selection }
-  write(data: string) { this.output += data; this.parsed.forEach(callback => callback()) }
+  write(data: string | Uint8Array, callback?: () => void) { this.output += typeof data === 'string' ? data : new TextDecoder().decode(data); this.parsed.forEach(listener => listener()); callback?.() }
+  reset() { this.output = ''; this.modes = { applicationCursorKeysMode: false, applicationKeypadMode: false, bracketedPasteMode: false, insertMode: false, mouseTrackingMode: 'none', originMode: false, reverseWraparoundMode: false, sendFocusMode: false, wraparoundMode: true } }
 } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit = vi.fn(); constructor() { io.fits.push(this) } } }))
 vi.mock('@tauri-apps/api/core', () => ({ Channel: class { onmessage: any; constructor() { io.channels.push(this) } }, invoke: vi.fn() }))
@@ -308,7 +309,7 @@ describe('Unified native terminal identity', () => {
 
 })
 
-// 每个 run 仅持有一个模式监听，重启/卸载释放；隐藏、主题与普通输出保持同一 tracker 和滚动内容。
+// 每个 run 仅持有一个模式监听；隐藏/主题保留内容，显式新 generation 才清理 VT 状态。
 it('Native_ModeTrackerLifetime_020', async () => {
   const { tab, wrapper } = open(); await flushPromises()
   const term = io.terms[0]
@@ -322,11 +323,13 @@ it('Native_ModeTrackerLifetime_020', async () => {
   term.write(' ordinary output')
   expect(firstTarget().modeEpoch).toBe('2')
   expect(term.parsed.size).toBe(1)
+  expect(term.output).toBe('retained scrollback ordinary output')
   const tabs = useNativeTabsStore(); tabs.tab(tab.tabId)!.status = 'exited'
   tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' }); await flushPromises()
   expect(io.terms).toHaveLength(1)
   expect(term.parsed.size).toBe(1)
-  expect(term.output).toBe('retained scrollback ordinary output')
+  expect(term.output).toBe('')
+  expect(term.modes.sendFocusMode).toBe(false)
   expect(() => firstTarget()).toThrow('NATIVE_RUN_NOT_WRITABLE')
   const secondTarget = io.bindings[1].options.currentTarget
   expect(secondTarget()).toMatchObject({ generation: 2, modeEpoch: '1' })

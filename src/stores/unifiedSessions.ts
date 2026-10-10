@@ -18,6 +18,7 @@ import type { ToastInput } from '@/stores/notifications'
 import { makeSessionCatalogKey, makeSessionRenameOwnerKey } from '@/utils/sessionPresentation'
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
 import { normalizePath } from '@/utils/path'
+import { compareProjectGroups } from '@/utils/projectGroupOrder'
 import { LaunchConfigurationRequiredError } from '@/utils/launchPreparation'
 
 function projectName(path: string): string {
@@ -154,10 +155,15 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       adapterSessionId: row.adapterSessionId, nativeSessionId: row.nativeSessionId, launchConfigId: row.launchConfigId,
       ...(row.nativeOrigin ? { nativeOrigin: { ...row.nativeOrigin } } : {}), title: row.title }
   }
-  async function resumeCatalogSession(target: string | UnifiedSession, canAdmit = () => true) {
+  async function resumeCatalogSession(target: string | UnifiedSession, canAdmit = () => true, onSelectionClaim = () => {}) {
     const row = typeof target === 'string' ? requireSession(target) : target
     const id = row.id
-    if (id.startsWith('native-tab:')) { await activateSession(id); return row }
+    if (id.startsWith('native-tab:')) {
+      const activation = activateSession(id)
+      onSelectionClaim()
+      await activation
+      return row
+    }
     if (id.startsWith('legacy-tab:')) {
       const owns = captureSessionOwnership(id)
       const ownsSelection = captureSelectionOwnership()
@@ -167,7 +173,9 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       const current = (await adapterForRuntime('legacy-claude').listSessions(row.projectKey)).find(value => value.id === id)
       if (!canAdmit() || !owns() || !ownsSelection() || !current || current.nativeSessionId !== row.nativeSessionId
         || normalizePath(current.projectPath) !== normalizePath(row.projectPath)) throw new Error('STALE_SESSION_ATTEMPT')
-      await activateSession(id)
+      const activation = activateSession(id)
+      onSelectionClaim()
+      await activation
       if (current.processState === 'stopped' && current.resumable) {
         const selected = captureSelectionOwnership()
         return restartSession(id, () => canAdmit() && owns() && selected() && activeSessionId.value === id)
@@ -176,7 +184,9 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     }
     if (row.archived) throw new Error('SESSION_ARCHIVED')
     try {
-      const resumed = await resumeSession(resumeInput(row), canAdmit)
+      const admission = resumeSession(resumeInput(row), canAdmit)
+      onSelectionClaim()
+      const resumed = await admission
       missingRecords.delete(id)
       sessions.value = sessions.value.filter(value => value.id !== id || value.id === resumed.id)
       return resumed
@@ -272,6 +282,10 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
           hidden: false,
           runningCount: 0,
           needsUserCount: 0,
+          workingCount: 0,
+          errorCount: 0,
+          permissionCount: 0,
+          completedCount: 0,
           lastActivityAt: 0,
         }
         groups.set(key, group)
@@ -281,6 +295,12 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         group.runningCount += 1
       }
       if (session.attentionState === 'needs-user') group.needsUserCount += 1
+      if (session.processState === 'running') {
+        if (['working', 'thinking', 'tool_executing', 'subagent_running', 'compacting'].includes(session.activityState ?? 'unknown')) group.workingCount! += 1
+        if (session.attentionKind === 'error' || session.activityState === 'error') group.errorCount! += 1
+        else if (session.attentionKind === 'permission' || session.activityState === 'waiting_permission') group.permissionCount! += 1
+        else if (session.attentionKind === 'completed') group.completedCount! += 1
+      }
       group.lastActivityAt = Math.max(group.lastActivityAt, session.lastActivityAt)
     }
 
@@ -290,11 +310,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       )
     }
 
-    return [...groups.values()].sort((a, b) =>
-      Number(b.pinned) - Number(a.pinned)
-      || b.lastActivityAt - a.lastActivityAt
-      || a.name.localeCompare(b.name),
-    )
+    return [...groups.values()].sort(compareProjectGroups)
   })
 
   function configureAdapters(next: SessionAdapter[]): void {

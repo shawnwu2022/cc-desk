@@ -1,5 +1,6 @@
 import type { LaunchAction } from '@/types/cli'
-import { captureNativeAttempt, matchesNativeAttempt, type NativeCliTab } from '@/stores/nativeTabs'
+import { captureNativeAttempt, matchesNativeAttempt, type NativeAttemptIdentity, type NativeCliTab } from '@/stores/nativeTabs'
+import type { NativeObservationNotice, NativeObservationNoticeState } from '@/types/nativeObservationNotice'
 import { nativeHistoryContextKey, type NativeHistoryContext, type NativeHistoryEntry } from '@/stores/nativeHistory'
 import type {
   CreateUnifiedSessionInput,
@@ -17,6 +18,7 @@ const HISTORY_PREFIX = 'native-history:'
 export interface NativeTabsPort {
   readonly tabs: Map<string, NativeCliTab>
   readonly activeTabId: string | null
+  hasOwnedObservationNotice?(tabId: string, attempt: NativeAttemptIdentity): boolean
   setActive(tabId: string | null): void
   close(tabId: string): void
   rename(tabId: string, title: string): void
@@ -70,8 +72,25 @@ function tabNativeSessionId(tab: NativeCliTab): string | null {
   return tab.action.kind === 'resume-id' ? tab.action.nativeSessionId : null
 }
 
-function projectTab(tab: NativeCliTab): UnifiedSession {
+function projectNotice(tab: NativeCliTab, tabs: NativeTabsPort): NativeObservationNoticeState | undefined {
+  if (tab.cli !== 'claude' || tab.action.kind === 'raw' || tab.status !== 'running'
+    || !tabs.hasOwnedObservationNotice?.(tab.tabId, captureNativeAttempt(tab))) return
+  const copy = (notice: NativeObservationNotice | null | undefined): NativeObservationNotice | null => {
+    if (!notice || notice.runId !== tab.runId || notice.generation !== tab.generation) return null
+    return { kind: notice.kind, eventId: notice.eventId, receivedAt: notice.receivedAt, runId: notice.runId, generation: notice.generation }
+  }
+  const recent = copy(tab.observationNotice?.recent)
+  const unreadReplyEnd = tab.observationNotice?.unreadReplyEnd?.kind === 'reply-ended' ? copy(tab.observationNotice.unreadReplyEnd) : null
+  return recent || unreadReplyEnd ? { recent, unreadReplyEnd } : undefined
+}
+
+function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
   const nativeSessionId = tabNativeSessionId(tab)
+  // The existing optional observer is a Claude-only non-raw side channel.
+  // Missing/inactive observations cannot establish current turn activity.
+  const claudeObservation = tab.cli === 'claude' && tab.action.kind !== 'raw'
+  const activeObservation = claudeObservation && tab.status === 'running' && tab.observationState === 'active'
+  const observationNotice = tabs && projectNotice(tab, tabs)
   return {
     id: activeId(tab.tabId),
     projectKey: normalizePath(tab.projectPath),
@@ -80,7 +99,10 @@ function projectTab(tab: NativeCliTab): UnifiedSession {
     runtime: 'native-cli',
     title: tab.title,
     processState: tab.status === 'stopped' && tab.launchRevision === null ? 'starting' : processState(tab.status),
-    attentionState: tab.attentionState ?? 'none',
+    attentionState: activeObservation ? tab.attentionState ?? 'none' : 'none',
+    activityState: activeObservation ? tab.activityState ?? 'unknown' : 'unknown',
+    observationState: claudeObservation ? tab.observationState ?? 'off' : 'off',
+    ...(observationNotice ? { observationNotice } : {}),
     lastActivityAt: tab.lastActivityAt,
     archived: false,
     opened: true,
@@ -119,6 +141,8 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     title: item.title || item.nativeSessionId,
     processState: 'stopped',
     attentionState: 'none',
+    activityState: 'unknown',
+    observationState: 'off',
     lastActivityAt: Number.isFinite(updated) ? updated : 0,
     archived: false,
     opened: false,
@@ -167,7 +191,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     const matches = historyForTab(tab)
     return matches.length === 1 ? projectHistory(matches[0].entry, matches[0].item) : row
   }
-  function projectActive(tab: NativeCliTab) { return withSessionDisplayName(projectTab(tab), deps.metadata, tabDisplayIdentity(tab)) }
+  function projectActive(tab: NativeCliTab) { return withSessionDisplayName(projectTab(tab, deps.tabs), deps.metadata, tabDisplayIdentity(tab)) }
   const admissions = new Map<string, { promise: Promise<UnifiedSession>; owners: Set<() => boolean> }>()
   function coalesce(key: string, operation: (canAdmit: () => boolean) => Promise<UnifiedSession>, canAdmit: () => boolean) {
     const ownResult = (promise: Promise<UnifiedSession>) => promise.then(value => {

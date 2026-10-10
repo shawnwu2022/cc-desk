@@ -1,7 +1,7 @@
 use crate::updater_http::{bytes, http_client};
 use crate::updater_policy::validated_proxy;
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
 fn proxy_server(response: &'static str) -> (String, std::thread::JoinHandle<String>) {
@@ -23,20 +23,75 @@ fn proxy_server(response: &'static str) -> (String, std::thread::JoinHandle<Stri
                 Err(error) => panic!("fixture accept failed: {error}"),
             }
         };
-        connection
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut request = Vec::new();
-        let mut chunk = [0; 512];
-        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-            let count = connection.read(&mut chunk).unwrap();
-            assert!(count > 0 && request.len() < 16 * 1024);
-            request.extend_from_slice(&chunk[..count]);
-        }
+        let request = read_proxy_request(&mut connection);
         connection.write_all(response.as_bytes()).unwrap();
-        String::from_utf8(request).unwrap()
+        request
     });
     (address, thread)
+}
+
+fn read_proxy_request(connection: &mut TcpStream) -> String {
+    // Winsock accept inherits the listener's nonblocking mode. A read timeout
+    // bounds blocking I/O; it does not restore blocking mode on that stream.
+    connection.set_nonblocking(false).unwrap();
+    connection
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut request = Vec::new();
+    let mut chunk = [0; 512];
+    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+        let count = connection.read(&mut chunk).unwrap();
+        assert!(count > 0 && request.len() < 16 * 1024);
+        request.extend_from_slice(&chunk[..count]);
+    }
+    String::from_utf8(request).unwrap()
+}
+
+#[test]
+fn proxy_fixture_waits_for_delayed_and_fragmented_headers() {
+    const PREFIX: &[u8] =
+        b"GET http://update.invalid/readiness HTTP/1.1\r\nHost: update.invalid\r\n";
+    const RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut connection, _) = listener.accept().unwrap();
+    // Winsock inherits this mode from the listener. Force the same boundary on
+    // every platform, even where accept creates a blocking stream by default.
+    connection.set_nonblocking(true).unwrap();
+    let writer = std::thread::spawn(move || {
+        client.set_nonblocking(true).unwrap();
+        let mut response = [0; 1];
+        for fragment in [PREFIX, b"\r".as_slice(), b"\n".as_slice()] {
+            // Hold each fragment while checking readiness without a blocking
+            // receive timeout, which leaves Winsock connections indeterminate.
+            let held_until = Instant::now() + Duration::from_millis(100);
+            loop {
+                assert!(
+                    matches!(client.peek(&mut response), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                    "fixture closed or responded before complete request headers"
+                );
+                if Instant::now() >= held_until {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            client.set_nonblocking(false).unwrap();
+            client.write_all(fragment).unwrap();
+            client.set_nonblocking(true).unwrap();
+        }
+        client.set_nonblocking(false).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        assert_eq!(response, RESPONSE);
+    });
+    let request = read_proxy_request(&mut connection);
+    connection.write_all(RESPONSE).unwrap();
+    drop(connection);
+    writer.join().unwrap();
+    assert_eq!(request.as_bytes(), [PREFIX, b"\r\n"].concat());
 }
 
 #[tokio::test]

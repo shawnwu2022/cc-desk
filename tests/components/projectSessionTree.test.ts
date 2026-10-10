@@ -63,6 +63,22 @@ function rules(file: string) {
 }
 
 describe('Unified project session tree', () => {
+  // 普通项目与仅归档项目统一按名称排序，活动刷新和来源顺序不会移动项目行。
+  it('StableProjectOrder_PanelAndArchive_001', async () => {
+    const groups = [
+      group([], { projectKey: '/zulu', projectPath: '/zulu', name: 'Zulu', lastActivityAt: 100 }),
+      group([], { projectKey: '/alpha', projectPath: '/alpha', name: 'Alpha', lastActivityAt: 1 }),
+      group([], { projectKey: '/omega', projectPath: '/omega', name: 'Omega', pinned: true, lastActivityAt: 0 }),
+    ]
+    const archived = session({ id: 'archived-beta', projectKey: '/beta', projectPath: '/beta', archived: true, lastActivityAt: 10 })
+    useProjectsStateStore().displayNames.set('/beta', 'Beta saved')
+    const wrapper = panel({ projectGroups: groups, archivedSessions: [archived] })
+    const order = () => wrapper.findAll('.project-row').map(row => row.attributes('data-project-key'))
+    expect(order()).toEqual(['/omega', '/alpha', '/beta', '/zulu'])
+    await wrapper.setProps({ projectGroups: [...groups].reverse().map(value => ({ ...value, lastActivityAt: value.projectKey === '/alpha' ? 1000 : 0 })) })
+    expect(order()).toEqual(['/omega', '/alpha', '/beta', '/zulu'])
+  })
+
   // The normal App's F2 reveal is owned by the catalog, including across actual adapter refreshes.
   it.each(['collapsed', 'filtered'])('Tree_ExternalRenameDraftRefresh_016: %s', async mode => {
     const store = useUnifiedSessionsStore()
@@ -210,7 +226,7 @@ describe('Unified project session tree', () => {
     expect(wrapper.emitted('menu-action')).toBeUndefined()
     expect(stop).not.toHaveBeenCalled(); expect(archive).not.toHaveBeenCalled()
     await wrapper.setProps({ project: group([session({ processState: 'stopped' })]) })
-    await wrapper.get('.session-item').trigger('contextmenu'); await selectMenu('archive')
+    await wrapper.get('[data-session-archive] button').trigger('click'); await nextTick()
     expect(wrapper.emitted('menu-action')).toEqual([['claude-1', 'archive']])
   })
 

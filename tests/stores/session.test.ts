@@ -365,7 +365,7 @@ describe('session store', () => {
 
   // ==================== setActiveTab ack ====================
   describe('setActiveTab ack', () => {
-    // setActiveTab 调 ackPty 清非 error（切到 = 已关注，completed 清除）
+    // 选中不证明窗口聚焦或终端可见；只有宿主实际可见/聚焦确认关注。
     it('SetActiveTab_AckCompleted_001', () => {
       const sessionStore = useSessionStore()
       const attentionStore = useAttentionStore()
@@ -378,7 +378,7 @@ describe('session store', () => {
       expect(attentionStore.getItem('pty-x')?.kind).toBe('completed')
 
       sessionStore.setActiveTab(tabId)
-      expect(attentionStore.getItem('pty-x')).toBeUndefined() // completed 被清
+      expect(attentionStore.getItem('pty-x')?.kind).toBe('completed') // 等待可见聚焦确认
     })
 
     // setActiveTab 不清 error（error 粘性，需新回合/clearPty）

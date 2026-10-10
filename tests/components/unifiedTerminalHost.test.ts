@@ -9,6 +9,7 @@ import { useAppStore } from '@/stores/app'
 import { useShellStore } from '@/stores/shell'
 import en from '@/i18n/locales/en'
 const seen = { mounts: [] as string[], unmounts: [] as string[], fits: [] as string[], focus: [] as string[], stops: [] as any[] }
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {} }) }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
 const Child = defineComponent({ props: { tabId: String, active: { type: Boolean, default: undefined }, visible: Boolean }, setup(props, { expose }) {
   const id = props.tabId ?? 'legacy'

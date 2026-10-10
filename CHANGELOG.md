@@ -1,6 +1,17 @@
 # Changelog
 
-## [0.18.2] - 2026-10-09 (unreleased candidate)
+## [0.18.3] - 2026-10-09 (unreleased candidate)
+
+- Keep pinned project groups first, then sort by displayed project name; session activity no longer changes project order, while recent sessions keep their ordering inside each project
+- Resume the selected closed history directly and close the exact owned terminal without a second confirmation; preserve source/configuration/admission checks and cancellation on replacement or navigation
+- Move Archive to a trailing quick button for ended/failed rows, remove the duplicate menu entry and keep existing running/unknown safeguards
+- Reset Native terminal parser state safely on the first restart so old VT modes, partial control sequences, UTF-8 fragments and queued protocol replies cannot contaminate the new run; activation, recovery, theme changes and hidden terminals retain their content
+- Restore historical working/idle/permission/completed/error/closed status distinctions, detail vocabulary, collapsed project counts and the global error/permission badge; share exact-owned window attention and acknowledge only visible, selected, focused non-error causes
+- Show separate recent Native Claude event notices and unread reply-end receipts from the existing authenticated optional observer; bind and acknowledge the exact attempt, deduplicate bounded IDs, and request window attention without claiming current completion
+
+Live Native completion/current activity still needs source-owned ordering and explicit turn evidence; observer defaults and unordered-event rejection stay unchanged. See `docs/session-status-semantics.md`. This candidate is not a public release; native platform/rendering and real CLI acceptance remain separate.
+
+## [0.18.2] - 2026-10-09
 
 - Add an optional HTTP/HTTPS proxy for update checks and downloads, separate from CLI launch environment settings; blank uses inherited process/system proxy behavior
 - Show fixed update failure codes and stages for network, timeout, manifest, platform, source and signature failures, with upstream updater log details redacted

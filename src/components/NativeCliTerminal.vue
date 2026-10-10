@@ -66,6 +66,8 @@ let disposed = false
 const needsFit = ref(true)
 let startedAttempt: NativeAttemptIdentity | null = null
 let startPromise: Promise<void> | null = null
+let terminalGeneration: number | null = null
+let parserReset: { attempt: NativeAttemptIdentity; cancel: () => void } | null = null
 let stoppingAttempt: NativeAttemptIdentity | null = null
 let receiptPublication: object = {}
 
@@ -105,6 +107,8 @@ function stopStatusSync() {
 function disposeRunBinding() {
   runToken = {}
   receiptPublication = {}
+  parserReset?.cancel()
+  parserReset = null
   statusSyncInFlight = null
   launched = false
   inputEnabled = false
@@ -248,31 +252,80 @@ function start(): Promise<void> {
   return startPromise
 }
 
+function createParserFence(target: Terminal): { promise: Promise<void>; cancel: () => void } {
+  let finish!: (error?: Error) => void
+  const promise = new Promise<void>((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => finish(new Error('NATIVE_TERMINAL_NOT_READY')), 5000)
+    finish = error => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) reject(error)
+      else resolve()
+    }
+    // xterm reset() leaves partial escape/UTF-8 parser state intact. Fixed VT
+    // CAN + RIS bytes cancel it and reset the parser after every old queued
+    // write, with provenance detached. Bytes also flush the UTF-8 decoder;
+    // writing a string would leave an old byte prefix pending.
+    try { target.write(Uint8Array.of(0x18, 0x1b, 0x63), () => finish()) }
+    catch { finish(new Error('NATIVE_TERMINAL_NOT_READY')) }
+  })
+  return { promise, cancel: () => finish(new Error('NATIVE_TERMINAL_DISPOSED')) }
+}
+
 async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   if (!term || !fit) throw new Error('NATIVE_TERMINAL_NOT_READY')
+  const target = term
   const tab = currentTab()
   const token = {}
-  runToken = token
   disposeRunBinding()
   runToken = token
   const publication = receiptPublication
 
-  const runId = tab.runId
-  const generation = tab.generation
+  const runId = attempt.runId
+  const generation = attempt.generation
   tabs.markStarting(props.tabId)
+  try {
+    if (terminalGeneration !== null && terminalGeneration !== generation) {
+      // Keep the previous parser completely disconnected until its queued
+      // output settles. A synchronous reset alone cannot cancel queued writes.
+      const fence = createParserFence(target)
+      const preparation = { attempt, cancel: fence.cancel }
+      parserReset = preparation
+      try {
+        await fence.promise
+        if (runToken !== token || receiptPublication !== publication || term !== target || !attemptIsCurrent(attempt)) return
+        target.reset()
+      } finally {
+        if (parserReset === preparation) parserReset = null
+      }
+    }
+    if (runToken !== token || receiptPublication !== publication || term !== target || !attemptIsCurrent(attempt)) return
+    terminalGeneration = generation
+  } catch (error) {
+    if (runToken === token && receiptPublication === publication && term === target && attemptIsCurrent(attempt)) {
+      // No launch request was submitted; a failed parser fence cannot admit it.
+      tabs.markError(props.tabId, safeLaunchCode(error))
+    }
+    return
+  }
   // A passive exact-run subscription never enables the optional backend observer.
   // Only its ordered projection can claim attention, never a raw hook event kind.
   try {
     stopObservation = useHookStore().subscribeObservation({ cli: tab.cli, runId, generation, enabled: true }, (_event, state) => {
       if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservation(props.tabId, attempt, state)
+    }, { onNotice: notice => {
+      if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservationNotice(props.tabId, attempt, notice)
+    }
     })
   } catch { /* Optional observation must never block the authoritative terminal. */ }
 
   try {
-    const tracker = createXtermModeEpoch(term)
+    const tracker = createXtermModeEpoch(target)
     modeTracker = tracker
     binding = createDeskNativeTerminalBinding({
-      term: term as any,
+      term: target as any,
       runId,
       generation,
       currentTarget: () => {
@@ -325,13 +378,13 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
       launchCwd: tab.projectPath,
       action: tab.action,
       extraArgs: [],
-      cols: term.cols,
-      rows: term.rows,
+      cols: target.cols,
+      rows: target.rows,
     }, channel)
     if (runToken !== token || receiptPublication !== publication || !attemptIsCurrent(attempt)) return
     if (!applyReceipt(attempt, result)) return
     if (launched && !matchesNativeAttempt(stoppingAttempt ?? undefined, attempt)) {
-      await resizeNative(term.cols, term.rows)
+      await resizeNative(target.cols, target.rows)
       if (runToken !== token || !attemptIsCurrent(attempt)) return
       startStatusSync()
     } else {
@@ -427,6 +480,13 @@ async function withinStopDeadline<T>(deadline: number, operation: () => Promise<
 
 async function stop(attempt: NativeAttemptIdentity = currentAttempt()): Promise<void> {
   if (!attemptIsCurrent(attempt)) throw new Error('STALE_NATIVE_ATTEMPT')
+  if (parserReset && matchesNativeAttempt(parserReset.attempt, attempt)) {
+    // The parser transition precedes entry.start(), so cancellation has positive
+    // local proof that this exact attempt never reached the backend.
+    disposeRunBinding()
+    tabs.markError(props.tabId, 'LAUNCH_CANCELLED')
+    return
+  }
   // Earlier start/status callbacks may still update their monotonic attempt
   // receipt, but only this stop or a later explicit recovery may publish it.
   receiptPublication = {}

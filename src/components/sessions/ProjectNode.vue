@@ -51,6 +51,22 @@ function openNewMenu(event: MouseEvent) {
 const anchor = ref({ x: 8, y: 8 })
 const menuPosition = ref({ left: '8px', top: '8px' })
 const sessions = computed(() => props.project.sessions.filter(session => !session.archived))
+const statusBadge = computed(() => {
+  // Some project projections also contain empty registered projects. Preserve
+  // explicit causes from their unified rows when aggregate fields are absent.
+  const running = sessions.value.filter(session => session.processState === 'running')
+  const error = props.project.errorCount ?? running.filter(session => session.attentionKind === 'error' || session.activityState === 'error').length
+  const permission = props.project.permissionCount ?? running.filter(session => session.attentionKind !== 'error'
+    && session.activityState !== 'error' && (session.attentionKind === 'permission' || session.activityState === 'waiting_permission')).length
+  const completed = props.project.completedCount ?? running.filter(session => session.attentionKind === 'completed'
+    && session.activityState !== 'error' && session.activityState !== 'waiting_permission').length
+  if (error > 0) return { kind: 'error', count: error, labelKey: 'projectErrorCount' }
+  if (permission > 0) return { kind: 'permission', count: permission, labelKey: 'projectPermissionCount' }
+  if (completed > 0) return { kind: 'completed', count: completed, labelKey: 'projectCompletedCount' }
+  if (props.project.needsUserCount > 0) return { kind: 'needs-user', count: props.project.needsUserCount, labelKey: 'projectNeedsReplyCount' }
+  if (props.project.runningCount > 0) return { kind: 'running', count: props.project.runningCount, labelKey: 'projectRunningCount' }
+  return null
+})
 const projectIdentity = computed<UnifiedProjectIdentity>(() => ({
   projectKey: props.project.projectKey, projectPath: props.project.projectPath,
 }))
@@ -150,8 +166,9 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
         <span class="project-name">{{ project.name }}</span>
         <span v-if="project.pinned" class="pin-mark" :aria-label="t('pinned')">⌖</span>
       </div>
-      <span v-if="!expanded && project.needsUserCount > 0" class="project-attention" data-project-attention
-        role="img" :aria-label="t('projectNeedsReplyCount', { count: project.needsUserCount })" />
+      <span v-if="!expanded && statusBadge" class="project-attention" :class="`project-attention--${statusBadge.kind}`"
+        data-project-attention :data-status-kind="statusBadge.kind" role="img"
+        :aria-label="t(statusBadge.labelKey, { count: statusBadge.count })">{{ statusBadge.count > 99 ? '99+' : statusBadge.count }}</span>
       <span v-else class="project-attention-slot" aria-hidden="true" />
       <IconButton class="project-new-session" data-project-quick-action="new-session" :label="t('newSessionTitle')"
         aria-haspopup="menu" :aria-expanded="newMenuOpen" @pointerdown="newMenuOpen && $event.stopPropagation()" @click.stop="openNewMenu">
@@ -206,7 +223,10 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
 }
 .project-node.current .project-name { color: var(--accent-color); }
 .pin-mark { flex-shrink: 0; color: var(--text-tertiary); }
-.project-attention { width: 8px; height: 8px; justify-self: center; border-radius: 50%; background: var(--accent-gold); }
+.project-attention { min-width: 16px; height: 16px; justify-self: center; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; color: var(--accent-gold-text); }
+.project-attention--error { color: var(--status-error); }
+.project-attention--completed, .project-attention--running { color: var(--status-success); }
 .project-row :deep(.ui-icon-button) { width: 28px; min-width: 28px; height: 28px; padding: 0; }
 .project-row :deep(.expand-arrow) { width: 20px; min-width: 20px; padding: 0; }
 .expand-arrow :deep(svg) { transition: transform 0.15s ease; }

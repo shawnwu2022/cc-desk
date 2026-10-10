@@ -60,9 +60,19 @@ if (scenario === 'close-state') {
     id: `visual-close-${runtime}-${state}`, adapterSessionId: `visual-tab-${runtime}-${state}`,
     title: `${runtime === 'native-claude' ? 'Native Claude' : runtime === 'native-codex' ? 'Native Codex' : 'Legacy Claude'} · ${state}`,
     runtime: runtime === 'legacy-claude' ? 'legacy-claude' : 'native-cli', cli: runtime === 'native-codex' ? 'codex' : 'claude',
+    activityState: state === 'running' || state === 'needs-user' ? 'idle' : 'unknown',
     processState: state === 'needs-user' ? 'running' : state, attentionState: state === 'needs-user' ? 'needs-user' : 'none',
     opened: true, resumable: state === 'stopped' || state === 'failed',
   }]
+}
+// Synthetic occurrence evidence exercises production rendering only; no source,
+// observer, current activity or live taskbar acceptance is certified here.
+if (scenario === 'native-notice') {
+  const notice = { kind: 'reply-ended' as const, eventId: 'visual-receipt-id',
+    receivedAt: Date.now(), runId: 'visual-receipt-run', generation: 1 }
+  catalog.sessions = [{ ...fixtureSessions()[0], id: 'visual-native-notice',
+    activityState: 'unknown', attentionState: 'none', observationState: 'active',
+    observationNotice: { recent: notice, unreadReplyEnd: parameters.get('notice') === 'read' ? null : notice } }]
 }
 catalog.activeSessionId = catalog.sessions[0]?.id ?? null
 app.cachedProjects = scenario === 'empty' ? [] : projectPaths.map((path, index) => ({ path, name: ['cc-desk', 'Atlas design system', longProjectName, 'Empty project'][index], lastDuration: 0 }))

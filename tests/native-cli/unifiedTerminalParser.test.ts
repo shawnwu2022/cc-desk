@@ -10,6 +10,7 @@ import { useCliProfilesStore } from '@/stores/cliProfiles'
 const io = vi.hoisted(() => ({
   terminals: [] as import('@xterm/xterm').Terminal[], channels: [] as any[],
   user: vi.fn(), protocol: vi.fn(), ack: vi.fn(), stop: vi.fn(), legacyInput: vi.fn(), output: null as any,
+  observation: null as ((payload: import('@/types/hook').HookEventPayload) => void) | null,
 }))
 // Keep the installed xterm 5.5 parser, CoreService, input(), onUserInput and onData.
 // Only DOM open/focus/render geometry and addon lifecycle are omitted; jsdom
@@ -32,6 +33,7 @@ vi.mock('@xterm/xterm', async original => {
   } }
 })
 vi.mock('@tauri-apps/api/core', async original => ({ ...await original<object>(), Channel: class { onmessage: any } }))
+vi.mock('@/api/observer', () => ({ onNativeObservation: async (handler: typeof io.observation) => { io.observation = handler; return () => {} } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { activate() {} dispose() {} fit() {} } }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readText: vi.fn(), readImage: vi.fn(), writeText: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMinimized: async () => false }) }))
@@ -46,6 +48,7 @@ vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
 let wrapper: VueWrapper | null = null
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks(); io.terminals.length = 0; io.channels.length = 0
+  io.observation = null
   // Keep the real component -> launch entry -> attempt chain; stop at authenticated IPC.
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
     instanceId: 'test-backend',
@@ -73,6 +76,36 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = null; Reflect.deleteProperty(window, '__CC_DESK_DOCUMENT__'); vi.unstubAllGlobals(); vi.useRealTimers(); document.body.innerHTML = ''; if (vi.isMockFunction(Date.now)) vi.mocked(Date.now).mockRestore() })
 
 describe('Unified host with pinned real xterm parser', () => {
+  // 真实host→现有Native bus→mapper→store；通知不把无序activity变成completed。
+  it('Native_ReceiptCompositionOwnsExactAttempt_018', async () => {
+    useCliProfilesStore().profiles = [{ ...useCliProfilesStore().profiles[0], id: 'claude-main', cli: 'claude' }]
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'claude-main', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+    const payload = { ptyId: null, sessionId: 'provider', eventName: 'Stop', state: 'unknown', timestamp: 1,
+      runId: tab.runId, generation: tab.generation, eventId: 'receipt-old', observerSource: 'claude-hook',
+      detail: { type: 'stop', data: { lastAssistantMessage: 'SECRET' } } } as import('@/types/hook').HookEventPayload
+    expect(io.observation).not.toBeNull()
+    io.observation!(payload)
+    expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'running', activityState: 'unknown', attentionState: 'none',
+      observationNotice: { recent: { kind: 'reply-ended', eventId: 'receipt-old' }, unreadReplyEnd: { eventId: 'receipt-old' } } })
+    expect(JSON.stringify(tabs.tab(tab.tabId)?.observationNotice)).not.toContain('SECRET')
+    expect(tabs.applyLaunchStatus(tab.tabId, { instanceId: 'test-backend', requestId: tab.requestId,
+      run: { runId: tab.runId, generation: tab.generation }, phase: 'exited', revision: '3', failure: null })).toBe(true)
+    const next = tabs.restart(tab.tabId, { profileId: 'claude-main', profileRevision: '7' }); await flushPromises()
+    // The real parser fence must settle before the new launch/subscription owns events.
+    await vi.waitFor(() => {
+      expect(io.channels).toHaveLength(2)
+      expect(tabs.tab(next.tabId)?.status).toBe('running')
+    })
+    io.observation!(payload)
+    expect(tabs.tab(next.tabId)?.observationNotice?.unreadReplyEnd ?? null).toBeNull()
+    io.observation!({ ...payload, eventId: 'receipt-new', runId: next.runId, generation: next.generation })
+    expect(tabs.tab(next.tabId)?.observationNotice?.unreadReplyEnd?.eventId).toBe('receipt-new')
+    wrapper.unmount(); wrapper = null
+    io.observation!({ ...payload, eventId: 'late-unmounted', runId: next.runId, generation: next.generation })
+    expect(tabs.tab(next.tabId)?.observationNotice?.unreadReplyEnd?.eventId).toBe('receipt-new')
+  })
   // 真实组件、Pinia、启动入口和请求冻结共同运行；同一尝试再次start不得重发。
   it.each(['claude', 'codex'] as const)('Native_RealLaunchComposition_006: %s', async cli => {
     useCliProfilesStore().profiles = [{ ...useCliProfilesStore().profiles[0], id: `${cli}-main`, cli }]
@@ -545,4 +578,143 @@ it('Native_PendingInputGeneration_021', async () => {
   expect(diagnostics).not.toHaveBeenCalled()
   expect(activity).not.toHaveBeenCalled()
   expect(tabs.tab(tab.tabId)).toMatchObject({ generation: 2, status: 'running', errorCode: null })
+})
+
+// A new process must not inherit the previous VT screen, input modes or parser state.
+it.each([
+  { state: 'alternate-and-modes', bytes: [...new TextEncoder().encode('\x1b[?1049h\x1b[?2004h\x1b[?1hOLD-RUN')] },
+  { state: 'unterminated-osc', bytes: [...new TextEncoder().encode('\x1b]0;OLD-TITLE')] },
+  { state: 'unterminated-csi', bytes: [...new TextEncoder().encode('\x1b[31;')] },
+  { state: 'unterminated-dcs', bytes: [...new TextEncoder().encode('\x1bP1;2qOLD-DCS')] },
+  { state: 'incomplete-utf8', bytes: [0xe4, 0xb8] },
+])('Native_RestartClearsParsedState_022 $state', async ({ state, bytes }) => {
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const term = io.terminals[0]
+  const reset = vi.spyOn(term, 'reset')
+  io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: '0', bytes })
+  await vi.waitFor(() => expect(io.ack).toHaveBeenCalledTimes(1))
+  await wrapper.setProps({ active: false }); await wrapper.setProps({ active: true })
+  await (wrapper.vm as any).recover()
+  expect(io.channels).toHaveLength(1)
+  expect(reset).not.toHaveBeenCalled()
+  tabs.tab(tab.tabId)!.status = 'exited'
+  const restarted = tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+  await vi.waitFor(() => expect(io.channels).toHaveLength(2))
+  expect(io.terminals).toHaveLength(1)
+  const banner = 'NEW-STARTUP-BANNER'
+  // The new decoder must ignore an orphan continuation byte rather than finish
+  // the old generation's E4 B8 prefix into a leaked character.
+  const freshBytes = [...(state === 'incomplete-utf8' ? [0xad] : []), ...new TextEncoder().encode(banner)]
+  io.channels[1].channel.onmessage({ runId: restarted.runId, generation: 2, streamEpoch: '1', offset: '0', bytes: freshBytes })
+  await vi.waitFor(() => expect(io.ack).toHaveBeenCalledTimes(2))
+  expect(term.buffer.active.type).toBe('normal')
+  expect(term.modes.bracketedPasteMode).toBe(false)
+  expect(term.modes.applicationCursorKeysMode).toBe(false)
+  expect(term.buffer.active.getLine(0)!.translateToString(true)).toBe(banner)
+  expect(reset).toHaveBeenCalledTimes(1)
+  await (wrapper.vm as any).start()
+  expect(io.channels).toHaveLength(2)
+})
+
+// An actual asynchronous xterm parser handler holds old output across the restart.
+// The old DSR and ACK must settle with no route into the new process.
+it('Native_RestartFencesPendingParser_023', async () => {
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const term = io.terminals[0]
+  let release!: (value: boolean) => void
+  let entered = false
+  const handler = term.parser.registerOscHandler(777, () => { entered = true; return new Promise<boolean>(resolve => { release = resolve }) })
+  const bytes = [...new TextEncoder().encode('\x1b]777;hold\x07\x1b[6n\x1b[?1049h\x1b[?2004hOLD-QUEUED')]
+  io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: '0', bytes })
+  await vi.waitFor(() => expect(entered).toBe(true))
+  tabs.tab(tab.tabId)!.status = 'exited'
+  const restarted = tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+  await flushPromises()
+  const startsDuringDrain = io.channels.length
+  term.input('during drain', true); await flushPromises()
+  release(true)
+  await vi.waitFor(() => expect(io.channels).toHaveLength(2))
+  expect(startsDuringDrain).toBe(1)
+  expect(io.protocol).not.toHaveBeenCalled()
+  expect(io.ack).not.toHaveBeenCalled()
+  expect(io.user).not.toHaveBeenCalled()
+  expect(term.buffer.active.type).toBe('normal')
+  expect(term.modes.bracketedPasteMode).toBe(false)
+  const fresh = [...new TextEncoder().encode('NEW\x1b[6n')]
+  io.channels[1].channel.onmessage({ runId: restarted.runId, generation: 2, streamEpoch: '1', offset: '0', bytes: fresh })
+  await vi.waitFor(() => expect(io.protocol).toHaveBeenCalledTimes(1))
+  await vi.waitFor(() => expect(io.ack).toHaveBeenCalledTimes(1))
+  expect(io.protocol.mock.calls[0][0]).toEqual({ runId: restarted.runId, generation: 2 })
+  expect(io.ack.mock.calls[0][0]).toMatchObject({ runId: restarted.runId, generation: 2 })
+  expect(term.buffer.active.getLine(0)!.translateToString(true)).toBe('NEW')
+  handler.dispose()
+})
+
+it('Native_ParserFenceTimeoutNeverStarts_024', async () => {
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const term = io.terminals[0]
+  const reset = vi.spyOn(term, 'reset')
+  let release!: (value: boolean) => void
+  let entered = false
+  const handler = term.parser.registerOscHandler(777, () => { entered = true; return new Promise<boolean>(resolve => { release = resolve }) })
+  io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: '0', bytes: [...new TextEncoder().encode('\x1b]777;hold\x07\x1b[6n')] })
+  await vi.waitFor(() => expect(entered).toBe(true))
+  vi.useFakeTimers()
+  tabs.tab(tab.tabId)!.status = 'exited'; tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+  await flushPromises()
+  await vi.advanceTimersByTimeAsync(4999)
+  const startsBeforeDeadline = io.channels.length
+  await vi.advanceTimersByTimeAsync(1)
+  const afterDeadline = { status: tabs.tab(tab.tabId)!.status, errorCode: tabs.tab(tab.tabId)!.errorCode, starts: io.channels.length }
+  release(true); await vi.advanceTimersByTimeAsync(0); await flushPromises()
+  expect(startsBeforeDeadline).toBe(1)
+  expect(afterDeadline).toEqual({ status: 'failed', errorCode: 'NATIVE_TERMINAL_NOT_READY', starts: 1 })
+  expect(reset).not.toHaveBeenCalled()
+  expect(io.protocol).not.toHaveBeenCalled()
+  expect(io.ack).not.toHaveBeenCalled()
+  await (wrapper.vm as any).start()
+  expect(io.channels).toHaveLength(1)
+  handler.dispose()
+})
+
+it.each(['cancel', 'unmount', 'supersede'] as const)('Native_ParserFenceRevokesOldOwner_025 %s', async action => {
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+  const term = io.terminals[0]
+  const reset = vi.spyOn(term, 'reset')
+  let release!: (value: boolean) => void
+  let entered = false
+  const handler = term.parser.registerOscHandler(777, () => { entered = true; return new Promise<boolean>(resolve => { release = resolve }) })
+  io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: '0', bytes: [...new TextEncoder().encode('\x1b]777;hold\x07\x1b[6n')] })
+  await vi.waitFor(() => expect(entered).toBe(true))
+  tabs.tab(tab.tabId)!.status = 'exited'; tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+  await flushPromises()
+  let cancellation: unknown
+  if (action === 'unmount') { wrapper.unmount(); wrapper = null }
+  else {
+    try { await (wrapper.vm as any).stop() } catch (error) { cancellation = error }
+    if (action === 'supersede') {
+      expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'failed', errorCode: 'LAUNCH_CANCELLED' })
+      tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' }); await flushPromises()
+    }
+  }
+  release(true)
+  if (action === 'supersede') await vi.waitFor(() => expect(io.channels.some(value => value.input.generation === 3)).toBe(true))
+  else await new Promise<void>(resolve => term.write('', resolve))
+  await flushPromises()
+  expect(cancellation).toBeUndefined()
+  expect(io.channels.map(value => value.input.generation)).toEqual(action === 'supersede' ? [1, 3] : [1])
+  expect(reset).toHaveBeenCalledTimes(action === 'supersede' ? 1 : 0)
+  expect(io.protocol).not.toHaveBeenCalled()
+  expect(io.ack).not.toHaveBeenCalled()
+  expect(io.stop).not.toHaveBeenCalled()
+  if (action === 'cancel') expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'failed', errorCode: 'LAUNCH_CANCELLED' })
+  handler.dispose()
 })
