@@ -355,3 +355,30 @@ covered separately by actual-App regressions with synthetic IPC. No CLI or obser
 is generated. The thirteen historical baselines and zero-pixel threshold are
 unchanged; an intentional new UI mismatch remains a failed baseline until reviewed
 and explicitly authorized. Do not call fixture or Linux evidence Windows acceptance.
+
+## 0.18.7 row-restoration baseline review
+
+[Run 38054103755](https://github.com/shawnwu2022/cc-desk/actions/runs/38054103755)
+tested source `9bad3cc832589dfe792589e79acf189d39d2894b`, merge
+`14094d5793aad269111802f5585bfc9c426bf0b1`: **230 of 234 browser cases passed**,
+with four historical snapshot comparisons failing. Artifact `11670383443`, ZIP
+SHA256 `9a9463e23086323bc0e0cd69382d3bfc9d8a72e95e6473cda685c06f077b3968`,
+was verified before opening every affected actual, expected and diff image.
+Two independent pixel reviews found only the requested closed Settings-row change:
+the separate Resume/play control disappears, the title gains space and the age
+moves right. All 354–358 changed RGB pixels lie within exclusive bounds
+`[180,182,263,192]`; every pixel outside those bounds is identical.
+
+Only `workspace-mixed-1366-zh`, `workspace-hover-action-1366-en`,
+`workspace-menu-1024-en` and `workspace-dark-gui-light-terminal` are copied
+byte-for-byte from those inspected actual PNGs. The other nine baselines retain
+their bytes and provenance, with the same thirteen-image inventory and zero-pixel
+threshold. The approval manifest preserves prior approval records and records the
+new per-image provenance. The original run remains failed; a fresh complete
+234-case no-update run is required on the updated PR head.
+
+Both reviewers also opened the four light/dark English/Chinese status sheets.
+The history row has no separate Resume control, and status/title/age and selected
+row layout remain intact. These sheets remain synthetic evidence, not historical
+baselines or Windows WebView2/live CLI acceptance. Source-drawer behavior has
+actual App interaction coverage but no dedicated browser pixel acceptance.
