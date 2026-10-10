@@ -91,6 +91,35 @@ test('ReleaseRecovery_WorkflowGateWiring_010', () => {
   assert.match(workflow, /pattern: cc-desk-candidate-\$\{\{ github\.sha \}\}-\*/)
   assert.match(workflow, /node --test tests\/scripts\/releaseRecovery\.node\.cjs/)
 })
+function releaseJob(name) {
+  const workflow = readFileSync(resolve(__dirname, '../../.github/workflows/release.yml'), 'utf8')
+  const job = workflow.split(/^  (?=[a-z][a-z0-9-]*:[ \t]*$)/m).find(section => section.startsWith(`${name}:\n`))
+  assert.ok(job, `release workflow must contain ${name}`)
+  return job
+}
+test('ReleaseRecovery_PreflightWaitsForSignedBuilds_014', () => {
+  const preflight = releaseJob('preflight')
+  assert.match(preflight, /^    needs: \[admission, build\]$/m,
+    'CI polling must not occupy a runner while the signed builds are still running')
+  assert.match(preflight, /^    timeout-minutes: 130$/m)
+  assert.match(preflight, /run: node scripts\/release-wait-for-ci\.mjs/)
+})
+test('ReleaseRecovery_BuildsRemainIndependentOfPreflight_015', () => {
+  const build = releaseJob('build')
+  assert.match(build, /^    needs: admission$/m,
+    'all signed builds must remain parallel with ordinary CI, without a preflight dependency cycle')
+  assert.match(build, /^    timeout-minutes: 60$/m)
+  assert.match(build, /fail-fast: false/)
+})
+test('ReleaseRecovery_PublicationRequiresSuccessfulBuildsAndPreflight_016', () => {
+  const release = releaseJob('release')
+  assert.match(release, /^    needs: \[preflight, build\]$/m)
+  assert.match(release, /^    if: github\.ref == 'refs\/heads\/main' && github\.ref_protected$/m)
+  for (const name of ['preflight', 'build', 'release']) {
+    assert.doesNotMatch(releaseJob(name), /^    (?:continue-on-error:|if:.*(?:always\(|cancelled\(|failure\())/m,
+      'failed or cancelled prerequisites must not admit publication')
+  }
+})
 test('ReleaseRecovery_DownloadedSignatures_011', async () => {
   const value = input()
   const manifest = buildUpdaterManifest(value)

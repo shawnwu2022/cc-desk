@@ -36,7 +36,7 @@ jobs:
         run: node scripts/release-build-admission.mjs
 
   preflight:
-    needs: admission
+    needs: [admission, build]
     if: github.ref == 'refs/heads/main' && github.ref_protected
     runs-on: ubuntu-latest
     timeout-minutes: 130
