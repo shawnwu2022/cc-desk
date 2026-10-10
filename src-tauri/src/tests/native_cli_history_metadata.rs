@@ -1,6 +1,80 @@
 use super::*;
 use serde_json::json;
 
+// Large synthetic EOFs must be sparse on NTFS as well as Unix. Mark the same
+// held fixture file before extending, then zero only its newly created gap.
+// https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_set_sparse
+// https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_set_zero_data
+fn extend_sparse_fixture(file: &std::fs::File, length: u64) {
+    #[cfg(windows)]
+    {
+        use std::mem::size_of;
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Storage::FileSystem::{
+            FileStandardInfo, GetFileInformationByHandleEx, FILE_STANDARD_INFO,
+        };
+        use windows::Win32::System::Ioctl::{
+            FILE_ZERO_DATA_INFORMATION, FSCTL_SET_SPARSE, FSCTL_SET_ZERO_DATA,
+        };
+        use windows::Win32::System::IO::DeviceIoControl;
+
+        let previous = file.metadata().unwrap().len();
+        assert!(length > previous);
+        let handle = HANDLE(file.as_raw_handle());
+        let mut returned = 0;
+        unsafe {
+            DeviceIoControl(
+                handle,
+                FSCTL_SET_SPARSE,
+                None,
+                0,
+                None,
+                0,
+                Some(&mut returned),
+                None,
+            )
+            .expect("large history fixture must support explicit sparse marking");
+        }
+        file.set_len(length).unwrap();
+        let gap = FILE_ZERO_DATA_INFORMATION {
+            FileOffset: i64::try_from(previous).unwrap(),
+            BeyondFinalZero: i64::try_from(length).unwrap(),
+        };
+        unsafe {
+            DeviceIoControl(
+                handle,
+                FSCTL_SET_ZERO_DATA,
+                Some((&gap as *const FILE_ZERO_DATA_INFORMATION).cast()),
+                size_of::<FILE_ZERO_DATA_INFORMATION>() as u32,
+                None,
+                0,
+                Some(&mut returned),
+                None,
+            )
+            .expect("new sparse fixture gap must be zeroed without allocating its logical size");
+        }
+        let mut standard = FILE_STANDARD_INFO::default();
+        unsafe {
+            GetFileInformationByHandleEx(
+                handle,
+                FileStandardInfo,
+                (&mut standard as *mut FILE_STANDARD_INFO).cast(),
+                size_of::<FILE_STANDARD_INFO>() as u32,
+            )
+            .expect("query allocation through the same sparse fixture handle");
+        }
+        assert_eq!(standard.EndOfFile, i64::try_from(length).unwrap());
+        assert!(
+            standard.AllocationSize >= 0 && standard.AllocationSize < standard.EndOfFile,
+            "large history fixture must allocate less than its logical EOF"
+        );
+    }
+    #[cfg(not(windows))]
+    file.set_len(length).unwrap();
+    assert_eq!(file.metadata().unwrap().len(), length);
+}
+
 // 完整历史只返回元数据；保持身份、首个用户标题和完整时间，不携带消息正文。
 #[test]
 #[allow(non_snake_case)]
@@ -179,7 +253,7 @@ fn HistorySource_Sparse1677_006() {
         };
         let mut file = std::fs::File::create(path).unwrap();
         file.write_all(input.as_bytes()).unwrap();
-        file.set_len(length).unwrap();
+        extend_sparse_fixture(&file, length);
         file.seek(SeekFrom::End(-1)).unwrap();
         file.write_all(b"\n").unwrap();
     }
@@ -235,7 +309,7 @@ fn HistorySource_DuplicateHeaders_007() {
             json!({"type":"session_meta","payload":{"id":"duplicate","cwd":cwd}})
         )
         .unwrap();
-        file.set_len(3 * 1024 * 1024).unwrap();
+        extend_sparse_fixture(&file, 3 * 1024 * 1024);
     }
     let root = Root::open(temp.path()).unwrap();
     let result = read(
@@ -266,7 +340,7 @@ fn HistorySource_LongNoTitle_008() {
     std::fs::create_dir_all(temp.path().join("sessions")).unwrap();
     let mut file = std::fs::File::create(temp.path().join("sessions/long.jsonl")).unwrap();
     writeln!(file, "{}", json!({"type":"session_meta","payload":{"id":"long-no-title","cwd":temp.path().to_str().unwrap(),"base_instructions":{"text":"i".repeat(230 * 1024)}}})).unwrap();
-    file.set_len(32 * 1024 * 1024).unwrap();
+    extend_sparse_fixture(&file, 32 * 1024 * 1024);
     let root = Root::open(temp.path()).unwrap();
     let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
     let items = read(
@@ -315,7 +389,7 @@ fn HistorySource_KeepHeaderCap_009() {
         let mut file =
             std::fs::File::create(temp.path().join(format!("sessions/{index:04}.jsonl"))).unwrap();
         writeln!(file, "{}", json!({"type":"session_meta","payload":{"id":format!("synthetic-{index:04}"),"base_instructions":"i".repeat(12 * 1024)}})).unwrap();
-        file.set_len(32 * 1024 * 1024).unwrap();
+        extend_sparse_fixture(&file, 32 * 1024 * 1024);
     }
     let root = Root::open(temp.path()).unwrap();
     let result = read(
