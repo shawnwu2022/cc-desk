@@ -1,11 +1,13 @@
 //! Read-only directory capabilities. Ambient paths are accepted only at backend root admission.
 //! Every descendant open is relative to the retained cap-std handle, never path.join + fs::read.
 use cap_std::fs::{Dir, OpenOptions};
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub(crate) type ReadResult<T> = Result<T, &'static str>;
+type HistoryObserver<'a> = dyn FnMut(&[u8]) -> ReadResult<bool> + 'a;
+pub(crate) type TitleTail = (Vec<u8>, Vec<u8>, bool);
 #[derive(Clone, Copy)]
 pub(crate) struct Limits {
     pub file_bytes: usize,
@@ -50,6 +52,15 @@ impl Budget {
     }
     pub(crate) fn history_metadata_incomplete(&self) -> bool {
         self.history_metadata_incomplete
+    }
+    pub(crate) fn unobserved_history_association(&mut self) {
+        self.history_metadata_incomplete = true;
+    }
+    pub(crate) fn optional_title_available(&self, header_bytes: usize) -> bool {
+        self.started.elapsed() < Duration::from_secs(4)
+            && self.entries_left > 0
+            && header_bytes.saturating_add(4096) <= self.bytes_left
+            && header_bytes.saturating_mul(2).saturating_add(4096) <= self.file_bytes
     }
     pub(crate) fn history_read_failures(&self) -> Vec<&'static str> {
         self.history_read_failures.iter().copied().collect()
@@ -143,15 +154,16 @@ impl Root {
     }
     pub(crate) fn read(&self, path: &Path, budget: &mut Budget) -> ReadResult<Option<Vec<u8>>> {
         Ok(self
-            .read_bounded(path, budget, false, 64 * 1024)?
+            .read_bounded(path, budget, false, 64 * 1024, None)?
             .map(|(bytes, _)| bytes))
     }
+    #[cfg(test)]
     pub(crate) fn history_prefix(
         &self,
         path: &Path,
         budget: &mut Budget,
     ) -> ReadResult<Option<(Vec<u8>, bool)>> {
-        self.read_bounded(path, budget, true, 64 * 1024)
+        self.read_bounded(path, budget, true, 64 * 1024, None)
     }
     pub(crate) fn history_header(
         &self,
@@ -160,7 +172,86 @@ impl Root {
     ) -> ReadResult<Option<(Vec<u8>, bool)>> {
         // Codex stores identity/cwd in its first complete session_meta record.
         // Sample a bounded title only when it is in the same observed chunks.
-        self.read_bounded(path, budget, true, 4 * 1024)
+        self.read_bounded(path, budget, true, 4 * 1024, None)
+    }
+    pub(crate) fn history_until(
+        &self,
+        path: &Path,
+        budget: &mut Budget,
+        observe: &mut HistoryObserver<'_>,
+    ) -> ReadResult<Option<(Vec<u8>, bool)>> {
+        // The observer sees charged bytes from one held file. It may ask for
+        // another chunk but cannot expand the original file/aggregate caps.
+        self.read_bounded(path, budget, true, 4 * 1024, Some(observe))
+    }
+    pub(crate) fn history_title_tail(
+        &self,
+        path: &Path,
+        header_bytes: usize,
+        budget: &mut Budget,
+    ) -> ReadResult<Option<TitleTail>> {
+        if !budget.optional_title_available(header_bytes) {
+            return Ok(None);
+        }
+        relative(path, false)?;
+        budget.entry()?;
+        self.current()?;
+        let optional_read_error = |error: io::Error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                "SOURCE_CHANGED"
+            } else {
+                read_error(error)
+            }
+        };
+        let metadata = self
+            .dir
+            .symlink_metadata(path)
+            .map_err(optional_read_error)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("SOURCE_NOT_REGULAR");
+        }
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK);
+        }
+        let file = self
+            .dir
+            .open_with(path, &options)
+            .map_err(optional_read_error)?;
+        let before = file.metadata().map_err(read_error)?;
+        if !before.is_file() {
+            return Err("SOURCE_NOT_REGULAR");
+        }
+        if before.len() < header_bytes as u64 {
+            return Err("SOURCE_CHANGED");
+        }
+        let mut header = Vec::new();
+        let read = (&file).take(header_bytes as u64).read_to_end(&mut header);
+        budget.bytes_left = budget.bytes_left.saturating_sub(header.len());
+        read.map_err(read_error)?;
+        budget.checkpoint()?;
+        let tail_bytes = before.len().min(4096);
+        (&file)
+            .seek(SeekFrom::End(-(tail_bytes as i64)))
+            .map_err(read_error)?;
+        let mut tail = Vec::new();
+        let read = (&file).take(tail_bytes).read_to_end(&mut tail);
+        budget.bytes_left = budget.bytes_left.saturating_sub(tail.len());
+        read.map_err(read_error)?;
+        let after = file.metadata().map_err(read_error)?;
+        if before.len() != after.len()
+            || before.modified().ok() != after.modified().ok()
+            || header.len() != header_bytes
+            || tail.len() as u64 != tail_bytes
+        {
+            return Err("SOURCE_CHANGED");
+        }
+        budget.checkpoint()?;
+        self.current()?;
+        Ok(Some((header, tail, before.len() > tail_bytes)))
     }
     fn read_bounded(
         &self,
@@ -168,6 +259,7 @@ impl Root {
         budget: &mut Budget,
         history_prefix: bool,
         chunk_bytes: usize,
+        mut observe: Option<&mut HistoryObserver<'_>>,
     ) -> ReadResult<Option<(Vec<u8>, bool)>> {
         relative(path, false)?;
         budget.entry()?;
@@ -211,9 +303,13 @@ impl Root {
         // so an omitted history entry cannot reset the aggregate I/O budget.
         budget.bytes_left = budget.bytes_left.saturating_sub(bytes.len());
         read.map_err(read_error)?;
-        // Codex's first session_meta record can include long base instructions.
-        // Extend only until a complete first record, within the original hard caps.
-        let mut complete_record = history_prefix && bytes.contains(&b'\n');
+        // Codex needs a complete first record; Claude may need to pass leading
+        // metadata before observing a complete supported cwd record.
+        let mut complete_record = if let Some(observe) = observe.as_mut() {
+            observe(&bytes)?
+        } else {
+            history_prefix && bytes.contains(&b'\n')
+        };
         while history_prefix && !complete_record && bytes.len() == limit && limit < cap {
             budget.checkpoint()?;
             let next = (cap - limit).min(chunk_bytes);
@@ -223,7 +319,11 @@ impl Root {
             read.map_err(read_error)?;
             // The earlier chunks have already been checked. A long first record
             // must not rescan the entire accumulated prefix on every extension.
-            complete_record = bytes[previous..].contains(&b'\n');
+            complete_record = if let Some(observe) = observe.as_mut() {
+                observe(&bytes)?
+            } else {
+                bytes[previous..].contains(&b'\n')
+            };
             limit += next;
         }
         if bytes.len() > cap {

@@ -1,6 +1,6 @@
 //! On-disk observations only. No CLI execution, activation inference, or ambient child paths.
-use super::scoped_fs::{Budget, Entry, ReadResult, Root};
-use super::wire::{ResourceItem, ResourceKind};
+use super::scoped_fs::{Budget, Entry, ReadResult, Root, TitleTail};
+use super::wire::{ResourceItem, ResourceKind, TitleSource};
 use crate::cli::types::CliKind;
 use std::path::{Path, PathBuf};
 
@@ -56,10 +56,30 @@ impl Catalog<'_> {
         let result = if self.cli == CliKind::Codex {
             self.root.history_header(Path::new(path), budget)?
         } else {
-            // Claude cwd/title can follow an initial snapshot. Retain its
-            // existing observation window rather than dropping positive rows.
-            self.root.history_prefix(Path::new(path), budget)?
+            // Leading metadata and long first prompts can put Claude's cwd
+            // beyond a fixed window. Observe complete records adaptively.
+            self.root.history_until(
+                Path::new(path),
+                budget,
+                &mut history::claude_metadata_probe(),
+            )?
         };
+        self.check()?;
+        Ok(result)
+    }
+    fn history_title_tail(
+        &self,
+        path: &str,
+        header_bytes: usize,
+        budget: &mut Budget,
+    ) -> ReadResult<Option<TitleTail>> {
+        if !budget.optional_title_available(header_bytes) {
+            return Ok(None);
+        }
+        self.check()?;
+        let result = self
+            .root
+            .history_title_tail(Path::new(path), header_bytes, budget)?;
         self.check()?;
         Ok(result)
     }

@@ -711,3 +711,75 @@ it('D13_StatusMonitor_RealUnorderedObserverDoesNotGuessActivityOrRetitleFromProm
   expect(tab.working).toBe(false)
   expect(tab.name).toBe(originalName)
 })
+
+// 真实鉴权子代理身份提供首轮活动提示，切换已选择 tab 不撤销源状态。
+it('Subagent_LegacyProjection_010', () => {
+  setActivePinia(createPinia()); mountedCbs = []; unmountedCbs = []
+  const id = createRunningTab('observed-pty')
+  const tab = useSessionStore().tabs.get(id)!
+  mountMonitor()
+  emit(makePayload('subagentStart', 'observed-pty', {
+    runId: 'observed-pty', generation: 1, eventId: 'start-a', observerSource: 'claude-hook', state: 'unknown',
+    detail: { type: 'subagentStart', data: { agentId: 'agent-a' } },
+  }))
+  expect(tab.activity).toBe('subagent_running')
+  expect(tab.working).toBe(true)
+  useSessionStore().activeTabId = null
+  emit(makePayload('preToolUse', 'observed-pty', {
+    runId: 'observed-pty', generation: 1, eventId: 'tool-a', observerSource: 'claude-hook', state: 'unknown',
+    detail: { type: 'preToolUse', data: {} },
+  }))
+  expect(tab.activity).toBe('subagent_running')
+  emit(makePayload('subagentStop', 'observed-pty', {
+    runId: 'observed-pty', generation: 1, eventId: 'stop-a', observerSource: 'claude-hook', state: 'unknown',
+    detail: { type: 'subagentStop', data: { agentId: 'agent-a' } },
+  }))
+  expect(tab.activity).toBe('unknown')
+  expect(tab.status).toBe('running')
+})
+
+// 权限通知以后到达的子代理不能清除或覆盖权限原因。
+it('Subagent_LegacyPermission_011', () => {
+  setActivePinia(createPinia()); mountedCbs = []; unmountedCbs = []
+  const id = createRunningTab('observed-pty')
+  const tab = useSessionStore().tabs.get(id)!
+  mountMonitor()
+  emit(makePayload('subagentStart', 'observed-pty', {
+    runId: 'observed-pty', generation: 1, eventId: 'start-a', observerSource: 'claude-hook', state: 'unknown',
+    detail: { type: 'subagentStart', data: { agentId: 'agent-a' } },
+  }))
+  expect(tab.activity).toBe('subagent_running')
+  emit(makePayload('notification', 'observed-pty', {
+    runId: 'observed-pty', generation: 1, eventId: 'permission', observerSource: 'claude-hook', state: 'unknown',
+    detail: { type: 'notification', data: { notificationType: 'permission_prompt' } },
+  }))
+  mockAckPty.mockClear()
+  emit(makePayload('subagentStart', 'observed-pty', {
+    runId: 'observed-pty', generation: 1, eventId: 'start-b', observerSource: 'claude-hook', state: 'unknown',
+    detail: { type: 'subagentStart', data: { agentId: 'agent-b' } },
+  }))
+  expect(tab.activity).toBe('unknown')
+  expect(tab.working).toBe(false)
+  expect(mockAckPty).not.toHaveBeenCalled()
+})
+
+// 同一 PTY 关闭观察再开启时，旧 agent_id 的迟到 Start 不当作新证据。
+it('Subagent_LegacyOffClears_014', () => {
+  setActivePinia(createPinia()); mountedCbs = []; unmountedCbs = []
+  const id = createRunningTab('observed-pty')
+  const tab = useSessionStore().tabs.get(id)!
+  mountMonitor()
+  emit(makePayload('subagentStart', 'observed-pty', {
+    runId: 'observed-pty', generation: 1, eventId: 'start-a', observerSource: 'claude-hook', state: 'unknown',
+    detail: { type: 'subagentStart', data: { agentId: 'agent-a' } },
+  }))
+  expect(tab.activity).toBe('subagent_running')
+  tab.observerEnabled = false
+  expect(tab.activity).toBe('unknown')
+  tab.observerEnabled = true
+  emit(makePayload('subagentStart', 'observed-pty', {
+    runId: 'observed-pty', generation: 1, eventId: 'late-start-a', observerSource: 'claude-hook', state: 'unknown',
+    detail: { type: 'subagentStart', data: { agentId: 'agent-a' } },
+  }))
+  expect(tab.activity).toBe('unknown')
+})

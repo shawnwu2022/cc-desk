@@ -30,9 +30,10 @@ terminal is a host action, independent of a CLI turn.
 
 Process lifecycle wins over turn feedback. For a running session, the historical
 row priority remains working, error, permission, completed, generic pending,
-then known idle or unknown. Selected rows suppress permission/completed/pending
-badges as before; errors remain visible. This visual suppression is not an
-acknowledgment and does not change the stored activity or cause.
+then known idle or unknown. Selection never converts a known permission,
+completion or waiting cause to Running. An explicit permission/error cause takes
+priority over the narrower causal subagent lifecycle hint. Actual visible/focused
+acknowledgment still belongs to the attention owner, independently of rendering.
 
 Collapsed projects show counts in the historical priority: error, permission,
 completed, generic attention, then running processes. Archived records do not
@@ -53,7 +54,8 @@ Its localized accessible description remains outside the decorative icon glyph.
   and silence never create completion. Permission uses the existing permission
   notification types; sticky error uses `stopFailure`.
 - Native tabs preserve the existing observer reducer's ordered
-  `working | waiting | unknown` projection and observer availability. A starting
+  `working | waiting | unknown` projection, bounded causal `subagent_running`
+  exception described below, and observer availability. A starting
   tab holds at most one latest projection for its exact request/run/generation;
   only that attempt's running receipt publishes it. Unknown/failure/end/restart/
   close invalidate that pending projection. Unavailable/off observations cannot
@@ -77,9 +79,34 @@ Its localized accessible description remains outside the decorative icon glyph.
 
 ## Current native evidence gap
 
+### Bounded subagent lifecycle exception
+
+Authenticated Claude SubagentStart/SubagentStop now retain only the provider's
+opaque agent ID (nonempty, control-free, at most 128 UTF-8 bytes). An exact
+run/generation reducer tracks first observed invocations independently of global
+turn order. At least one admitted start with no observed stop can supply the
+specific subagent-working hint; a stop retires that ID even when delivered before
+its start. Duplicate receipts, foreign owners and stopped/invalidated attempts
+cannot resurrect it. Permission/waiting evidence blocks the hint, and observer
+off/unavailable/uncertain/end/restart/close boundaries invalidate its activity.
+When a source does supply a sequence, malformed or reordered lifecycle receipts
+must pass the same fail-closed sequence fence as every other ordered event.
+
+This is a best-effort lifecycle observation, not provider-wide ordered turn
+state or completion proof. Claude can reuse the same agent ID on resume or a new
+teammate message, and another SubagentStop hook can veto ending. Without a unique
+invocation epoch, an already retired ID remains unknown until a new exact run
+generation; no arrival timestamp, server counter or transcript path supplies
+that missing identity. A lost stop may leave an observed first-invocation hint
+until invalidation; no timeout, output or Stop creates completion. See the
+[official hook lifecycle contract](https://code.claude.com/docs/en/hooks#subagentstart).
+
+### General turn ordering remains unavailable
+
 The current authenticated Claude hook mapper emits no `sourceSequence`; the
 backend hook processes do not establish a trusted CLI event order. The observer
-reducer therefore keeps their current activity unknown. `Stop` and
+reducer therefore keeps general turn activity unknown apart from the bounded
+subagent exception above. `Stop` and
 `notification.idle_prompt` also map to unknown, and the native observer contract
 has no ordered completed/error/permission-reason projection. Native profiles
 default observation off, and Codex/raw/Shell launches receive no Claude overlay.
@@ -157,6 +184,13 @@ fabricated sequence numbers.
   remain required. These tests use fabricated trusted inputs at host boundaries;
   they do not certify authenticated real CLI behavior, taskbar flash delivery,
   Windows rendering, scaling or screenshot acceptance.
+- Causal observer, hook-store and Legacy status-monitor regressions cover two
+  interleaved agents, stop-before-start, duplicate/malformed IDs, supplied stale
+  sequences, permission barriers, identity reuse, unavailable observation,
+  exact-run recovery/restart/close and foreign-owner refusal. The Rust observer
+  harness imports actual production sources and verifies bounded lifecycle
+  redaction through validated envelopes; this is host proof, not live CLI
+  certification or permission to enable a disabled profile.
 
 ## Unreleased filled-glyph presentation
 
@@ -175,3 +209,21 @@ mark. Icon-scoped palettes strengthen green in the light theme and info/error in
 the dark theme; muted states use secondary text ink. Theme arithmetic covers both
 symbol/backplate and selected/hover surface contrast at 3:1. This unit evidence is
 not a substitute for reviewing rendered pixels or Windows accessibility/scaling.
+
+## Focus switching and archive tail regression
+
+The selected-only Running substitution was introduced by commit `198c3f89`;
+the authenticated unordered-hook projection was introduced separately by
+`585c8265`. They are distinct causes: focus never removed Native subscriptions,
+and reverting the unknown projection wholesale would restore untrusted arrival
+order guesses. The regression now exercises two simultaneously owned Legacy
+sessions through the real adapter, catalog activation and normal App, checking
+stable subagent/permission labels and unchanged PTY ownership on both switches.
+
+Closed history keeps time and Archive in the same fixed tail slot, showing time
+at rest and Archive on row hover or keyboard focus. Coarse/no-hover pointers show
+Archive directly. An open ended/failed terminal prioritizes Close in that slot
+and retains Archive in its menu. Menu/context/keyboard entry points share the
+same typed action and cannot resume or activate the row through bubbling. The
+rendered fixtures cover these transitions separately from unchanged approved
+screenshots; local DOM/CSS success is not installed Windows acceptance.

@@ -460,6 +460,22 @@ fn sanitize_event(event: Value) -> Result<Value, SafeError> {
             safe.insert(name.into(), value.clone());
         }
     }
+    // A provider-generated subagent ID is useful causal identity, never a path
+    // or a global sequence. Retain it only for these lifecycle occurrences.
+    if matches!(
+        object["hook_event_name"].as_str(),
+        Some("SubagentStart" | "SubagentStop")
+    ) {
+        if let Some(value) = object.get("agent_id") {
+            let id = value
+                .as_str()
+                .ok_or_else(|| error("OBSERVER_INVALID_EVENT"))?;
+            if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+                return Err(error("OBSERVER_INVALID_EVENT"));
+            }
+            safe.insert("agent_id".into(), value.clone());
+        }
+    }
     Ok(Value::Object(safe))
 }
 

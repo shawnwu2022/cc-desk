@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { withSessionDisplayName } from '@/session/sessionMetadata'
+import { saveSessionOpenedAt, withSessionDisplayName } from '@/session/sessionMetadata'
 import type { SessionMetadataPort } from '@/session/sessionMetadata'
 import type { UnifiedSession } from '@/types/unifiedSession'
 
@@ -23,4 +23,18 @@ describe('last-known display activity', () => {
     expect(withSessionDisplayName(current, saved)).toEqual(current)
     expect(withSessionDisplayName({ ...current, id: 'another-profile-context' }, metadata(current, 100))).toMatchObject({ lastActivityAt: 0, title: 'Source summary' })
   })
+})
+
+// Open-order checkpoints are not manual renames. Persisting their source title
+// as an override froze later native AI/first-user title observations.
+it('Session_OpenCheckpointDoesNotFreezeAutomaticTitle_009', async () => {
+  const identity = row()
+  const records = new Map()
+  const port: SessionMetadataPort = { sessionRecords: records, upsertSessionRecord: vi.fn(async (key, value) => { records.set(key, value) }) }
+  await saveSessionOpenedAt(port, identity, 100, () => true)
+  expect(records.get(identity.id).title).toBe('')
+  expect(withSessionDisplayName({ ...identity, title: 'Fresh native AI title' }, port).title).toBe('Fresh native AI title')
+  records.set(identity.id, { ...records.get(identity.id), title: 'User named task' })
+  await saveSessionOpenedAt(port, identity, 200, () => true)
+  expect(withSessionDisplayName({ ...identity, title: 'Another native title' }, port).title).toBe('User named task')
 })

@@ -118,6 +118,13 @@ const KNOWN_ERRORS: Readonly<Record<string, ErrorTemplate>> = Object.freeze({
     retryable: true,
     detailCode: 'SOURCE_BUDGET_EXCEEDED',
   },
+  SOURCE_SNAPSHOT_EXPIRED: {
+    messageKey: 'errorResourceUnavailable',
+    actionKey: 'retry',
+    severity: 'warning',
+    retryable: true,
+    detailCode: 'SOURCE_SNAPSHOT_EXPIRED',
+  },
 })
 
 const GENERIC: ErrorTemplate = Object.freeze({

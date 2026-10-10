@@ -232,3 +232,15 @@ describe('D12 authenticated projection API', () => {
     expect((await createProjectionClient({ instanceId: 'instance', invoke: async () => r }).read(q)).state).toBe('unavailable')
   })
 })
+
+it('Projection_TitleObservationFieldsAreFinite_008', async () => {
+  const item = { type: 'session', sessionKey: JSON.stringify(['local', 'claude', 'root', 'id']), nativeSessionId: 'id', title: 'Task', truncated: true, cwd: '/repo', updatedAt: null }
+  for (const fields of [{ titleSource: 'ai' }, { titleUnknown: true }, { metadataIncomplete: true }, { metadataIncomplete: false }]) {
+    const client = createProjectionClient({ instanceId: 'instance', invoke: async () => ({ ...response(), historyMetadataIncomplete: true, items: [{ ...item, ...fields }] }) })
+    expect((await client.read(request())).items[0]).toMatchObject(fields)
+  }
+  for (const fields of [{ metadataIncomplete: 'true' }, { metadataIncomplete: true, truncated: false }, { titleSource: 'from-secret-file' }, { titleUnknown: 'true' }, { titleUnknown: true, titleSource: 'ai' }]) {
+    const client = createProjectionClient({ instanceId: 'instance', invoke: async () => ({ ...response(), items: [{ ...item, ...fields }] }) })
+    await expect(client.read(request())).rejects.toThrow('INVALID_PROJECTION')
+  }
+})

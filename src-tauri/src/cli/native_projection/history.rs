@@ -2,6 +2,21 @@ use super::*;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum TitlePriority {
+    Prompt,
+    Ai,
+    Custom,
+}
+impl TitlePriority {
+    fn source(self) -> TitleSource {
+        match self {
+            Self::Prompt => TitleSource::Prompt,
+            Self::Ai => TitleSource::Ai,
+            Self::Custom => TitleSource::Custom,
+        }
+    }
+}
 struct Transcript {
     id: String,
     cwd: Option<String>,
@@ -9,6 +24,9 @@ struct Transcript {
     updated: Option<String>,
     messages: Vec<(String, String)>,
     metadata_incomplete: bool,
+    title_priority: Option<TitlePriority>,
+    source_path: String,
+    observation_bytes: usize,
 }
 pub(super) fn read(
     c: &Catalog<'_>,
@@ -30,6 +48,7 @@ pub(super) fn read(
     let mut transcripts = Vec::new();
     let mut seen = BTreeSet::new();
     for path in files {
+        let mut observation_bytes = 0;
         let parsed = (|| {
             let observation = if o.kind == ResourceKind::History {
                 c.history_prefix(&path, b)?
@@ -39,19 +58,26 @@ pub(super) fn read(
             let Some((bytes, incomplete)) = observation else {
                 return Err("SOURCE_CHANGED");
             };
+            observation_bytes = bytes.len();
             if incomplete {
                 let end = bytes
                     .iter()
                     .rposition(|b| *b == b'\n')
                     .ok_or("SOURCE_TOO_LARGE")?;
-                parse_metadata(&path, c.cli, text(&bytes[..=end])?)
+                let transcript = parse_metadata(&path, c.cli, text(&bytes[..=end])?)?;
+                if c.cli == CliKind::Claude && transcript.cwd.is_none() {
+                    // Adaptive observation exhausted its byte cap without cwd.
+                    // Do not silently turn an unobserved identity into a foreign project.
+                    return Err("SOURCE_TOO_LARGE");
+                }
+                Ok(transcript)
             } else if o.kind == ResourceKind::History {
                 parse(&path, c.cli, text(&bytes)?)
             } else {
                 parse_complete(&path, c.cli, text(&bytes)?, true)
             }
         })();
-        let transcript = match parsed {
+        let mut transcript = match parsed {
             Ok(transcript) => transcript,
             Err(code) if o.kind == ResourceKind::History && b.omit_history_entry(code) => {
                 c.check()?;
@@ -59,6 +85,7 @@ pub(super) fn read(
             }
             Err(code) => return Err(code),
         };
+        transcript.observation_bytes = observation_bytes;
         if !seen.insert(transcript.id.clone()) {
             return Err("SOURCE_AMBIGUOUS");
         }
@@ -68,9 +95,35 @@ pub(super) fn read(
                 .as_ref()
                 .is_some_and(|cwd| c.project_paths.iter().any(|p| p == Path::new(cwd)))
         {
+            if o.kind == ResourceKind::History && transcript.cwd.is_none() {
+                // Even an EOF-complete metadata file cannot establish project
+                // absence when no association was observed in its records.
+                b.unobserved_history_association();
+            }
             continue;
         }
         transcripts.push(transcript);
+    }
+    // Required headers/tree checks finish before optional display enrichment.
+    // Only a positively associated requested-project row may spend spare bytes.
+    if c.cli == CliKind::Claude && o.kind == ResourceKind::History && c.project.is_some() {
+        for transcript in &mut transcripts {
+            if !transcript.metadata_incomplete {
+                continue;
+            }
+            let enriched = enrich_claude_title(c, transcript, b);
+            match enriched {
+                Ok(Some((title, priority)))
+                    if transcript.title_priority.is_none_or(|old| priority >= old) =>
+                {
+                    transcript.title = title;
+                    transcript.title_priority = Some(priority);
+                }
+                Ok(_) => {}
+                Err(code) if b.omit_history_entry(code) => c.check()?,
+                Err(code) => return Err(code),
+            }
+        }
     }
     transcripts.sort_by(|a, b| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
     let mut result = Vec::new();
@@ -85,6 +138,9 @@ pub(super) fn read(
                 session_key: key,
                 native_session_id: t.id,
                 title,
+                title_unknown: t.title_priority.is_none().then_some(true),
+                title_source: t.title_priority.map(TitlePriority::source),
+                metadata_incomplete: t.metadata_incomplete.then_some(true),
                 truncated: truncated || t.metadata_incomplete,
                 cwd: t.cwd,
                 updated_at: t.updated,
@@ -180,6 +236,147 @@ fn walk(
 fn parse(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
     parse_complete(path, cli, input, false)
 }
+
+fn claude_observed_session_id(value: &Value, session_id: &str) -> ReadResult<()> {
+    if matches!(
+        value["type"].as_str(),
+        Some("user" | "assistant" | "custom-title" | "ai-title")
+    ) && value
+        .get("sessionId")
+        .is_some_and(|id| id.as_str() != Some(session_id))
+    {
+        return Err("SOURCE_AMBIGUOUS");
+    }
+    Ok(())
+}
+
+// Official SDK 0.2.165 gives aiTitle precedence over the first prompt, while
+// customTitle wins. Only the observed ai-title schema with exact sessionId is used.
+// https://github.com/anthropics/claude-agent-sdk-python/blob/b6e9d12fe1cc98dde988ab7b7713c1feeee50c6c/src/claude_agent_sdk/_internal/sessions.py#L441-L458
+fn claude_ai_title(value: &Value, session_id: &str) -> ReadResult<String> {
+    let observed_id = value["sessionId"].as_str().ok_or("SOURCE_INVALID")?;
+    if observed_id != session_id {
+        return Err("SOURCE_AMBIGUOUS");
+    }
+    value["aiTitle"]
+        .as_str()
+        .filter(|title| !title.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or("SOURCE_INVALID")
+}
+
+fn enrich_claude_title(
+    catalog: &Catalog<'_>,
+    transcript: &Transcript,
+    budget: &mut Budget,
+) -> ReadResult<Option<(String, TitlePriority)>> {
+    let Some((header, tail, cut_first)) = catalog.history_title_tail(
+        &transcript.source_path,
+        transcript.observation_bytes,
+        budget,
+    )?
+    else {
+        return Ok(None);
+    };
+    let end = header
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .ok_or("SOURCE_CHANGED")?;
+    let observed = text(&header[..=end])
+        .and_then(|input| parse_metadata(&transcript.source_path, CliKind::Claude, input))
+        .map_err(|code| {
+            if code == "SOURCE_AMBIGUOUS" {
+                code
+            } else {
+                "SOURCE_CHANGED"
+            }
+        })?;
+    if observed.id != transcript.id || observed.cwd != transcript.cwd {
+        return Err("SOURCE_CHANGED");
+    }
+    // The initial tail fragment can begin inside UTF-8 or a JSON record. Only
+    // subsequent complete records, including a validated EOF record, are used.
+    let start = if cut_first {
+        tail.iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(tail.len(), |position| position + 1)
+    } else {
+        0
+    };
+    let mut candidate = None;
+    for line in text(&tail[start..])?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+    {
+        let value: Value = serde_json::from_str(line).map_err(|_| "SOURCE_INVALID")?;
+        validate_value(&value)?;
+        if !value.is_object() {
+            return Err("SOURCE_INVALID");
+        }
+        claude_observed_session_id(&value, &transcript.id)?;
+        if let Some(cwd) = value["cwd"].as_str() {
+            if transcript.cwd.as_deref() != Some(cwd) {
+                return Err("SOURCE_AMBIGUOUS");
+            }
+        }
+        let title = match value["type"].as_str() {
+            Some("ai-title") => Some((claude_ai_title(&value, &transcript.id)?, TitlePriority::Ai)),
+            Some("custom-title") => value["customTitle"]
+                .as_str()
+                .map(|title| (title.to_owned(), TitlePriority::Custom)),
+            _ => None,
+        };
+        if let Some((title, priority)) = title {
+            if candidate.as_ref().is_none_or(|(_, old)| priority >= *old) {
+                candidate = Some((title, priority));
+            }
+        }
+    }
+    Ok(candidate)
+}
+
+// Official SDK 0.2.165 (bundled CLI 2.1.296) demonstrates permission-mode
+// before a user record. It carries no cwd and cannot end our observation.
+// https://github.com/anthropics/claude-agent-sdk-python/blob/b6e9d12fe1cc98dde988ab7b7713c1feeee50c6c/tests/test_sessions.py#L1399-L1426
+pub(super) fn claude_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
+    let mut searched = 0;
+    let mut line_start = 0;
+    let mut cwd_observed = false;
+    move |bytes| {
+        // Search only newly appended bytes. A long record is decoded once,
+        // after its newline, rather than rescanned and parsed on each chunk.
+        for position in searched..bytes.len() {
+            if bytes[position] != b'\n' {
+                continue;
+            }
+            let line = text(&bytes[line_start..position])?;
+            line_start = position + 1;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: Value = serde_json::from_str(line).map_err(|_| "SOURCE_INVALID")?;
+            validate_value(&value)?;
+            if !value.is_object() {
+                return Err("SOURCE_INVALID");
+            }
+            cwd_observed |= matches!(
+                value["type"].as_str(),
+                Some(
+                    "user"
+                        | "assistant"
+                        | "custom-title"
+                        | "summary"
+                        | "file-history-snapshot"
+                        | "queue-operation"
+                        | "progress"
+                        | "system"
+                )
+            ) && value["cwd"].as_str().is_some();
+        }
+        searched = bytes.len();
+        Ok(cwd_observed)
+    }
+}
 fn parse_complete(
     path: &str,
     cli: CliKind,
@@ -198,9 +395,13 @@ fn parse_complete(
         updated: None,
         messages: Vec::new(),
         metadata_incomplete: false,
+        title_priority: None,
+        source_path: path.into(),
+        observation_bytes: 0,
     };
     let mut recognized = false;
     let mut explicit_title = None;
+    let mut ai_title = None;
     let mut codex_id = None;
     let mut event_user = false;
     for line in input.lines().filter(|l| !l.trim().is_empty()) {
@@ -211,10 +412,15 @@ fn parse_complete(
         }
         match cli {
             CliKind::Claude => {
+                claude_observed_session_id(&v, fallback)?;
                 if let Some(cwd) = v.get("cwd").and_then(Value::as_str) {
                     t.cwd = Some(cwd.to_owned());
                 }
                 match v.get("type").and_then(Value::as_str) {
+                    Some("ai-title") => {
+                        ai_title = Some(claude_ai_title(&v, fallback)?);
+                        recognized = true;
+                    }
                     Some("custom-title") => {
                         recognized = true;
                         explicit_title = v
@@ -324,7 +530,17 @@ fn parse_complete(
             }
         }
     }
+    t.title_priority = if explicit_title.is_some() {
+        Some(TitlePriority::Custom)
+    } else if ai_title.is_some() {
+        Some(TitlePriority::Ai)
+    } else if t.messages.iter().any(|(role, _)| role == "user") {
+        Some(TitlePriority::Prompt)
+    } else {
+        None
+    };
     t.title = explicit_title
+        .or(ai_title)
         .or_else(|| {
             t.messages
                 .iter()
@@ -344,6 +560,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
     let mut cwd = None;
     let mut title = None;
     let mut explicit_title = None;
+    let mut ai_title = None;
     let mut recognized = false;
     for line in input.lines().filter(|line| !line.trim().is_empty()) {
         let value: Value = serde_json::from_str(line).map_err(|_| "SOURCE_INVALID")?;
@@ -353,6 +570,23 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
         }
         let observed_cwd = match cli {
             CliKind::Claude => {
+                claude_observed_session_id(
+                    &value,
+                    path.rsplit('/')
+                        .next()
+                        .unwrap_or("")
+                        .trim_end_matches(".jsonl"),
+                )?;
+                if value["type"] == "ai-title" {
+                    ai_title = Some(claude_ai_title(
+                        &value,
+                        path.rsplit('/')
+                            .next()
+                            .unwrap_or("")
+                            .trim_end_matches(".jsonl"),
+                    )?);
+                    recognized = true;
+                }
                 recognized |= matches!(
                     value["type"].as_str(),
                     Some(
@@ -430,15 +664,28 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
     if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
         return Err("SOURCE_INVALID");
     }
+    let title_priority = if explicit_title.is_some() {
+        Some(TitlePriority::Custom)
+    } else if ai_title.is_some() {
+        Some(TitlePriority::Ai)
+    } else if title.is_some() {
+        Some(TitlePriority::Prompt)
+    } else {
+        None
+    };
     Ok(Transcript {
         id,
         cwd,
         title: explicit_title
+            .or(ai_title)
             .or(title)
             .unwrap_or_else(|| "Untitled".into()),
         updated: None,
         messages: Vec::new(),
         metadata_incomplete: true,
+        title_priority,
+        source_path: path.into(),
+        observation_bytes: 0,
     })
 }
 fn content(v: &Value) -> String {

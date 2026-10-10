@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 import { readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import App from '@/App.vue'
@@ -17,16 +18,20 @@ import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import { useShellStore } from '@/stores/shell'
 import { useAppStore } from '@/stores/app'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
+import { useSessionStore } from '@/stores/session'
+import { useAttentionStore } from '@/stores/attention'
+import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import type { UnifiedSession } from '@/types/unifiedSession'
 
 const host = vi.hoisted(() => ({
+  focused: true,
   callbacks: new Map<string, (...args: any[]) => void>(),
   cleanup: vi.fn(), minimize: vi.fn(), toggleMaximize: vi.fn(), close: vi.fn(),
   resourceConfig: vi.fn(), getConfig: vi.fn(), updateConfig: vi.fn(), runChecks: vi.fn(),
 }))
 vi.mock('@/utils/platform', () => ({ isMac: false, isWindows: true, ctrl: 'Ctrl', cmd: 'Ctrl', alt: 'Alt' }))
-vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {},
+vi.mock('@tauri-apps/api/window', () => ({ UserAttentionType: { Critical: 'Critical' }, getCurrentWindow: () => ({ isFocused: async () => host.focused, onFocusChanged: async () => () => {}, requestUserAttention: async () => {},
   minimize: host.minimize, toggleMaximize: host.toggleMaximize, close: host.close,
   isMaximized: async () => false, onResized: async () => host.cleanup,
 }) }))
@@ -50,6 +55,7 @@ const wrappers: VueWrapper[] = []
 let i18n: ReturnType<typeof createI18n>
 beforeEach(() => {
   vi.clearAllMocks(); host.callbacks.clear()
+  host.focused = true
   host.getConfig.mockResolvedValue({ theme: 'dark', terminalTheme: 'cc-box-light', language: 'en', claudeEnvVars: { TEST: 'private' } })
   host.resourceConfig.mockResolvedValue({ basic: [], mcp: [], skills: [], agents: [], hooks: [] })
   host.updateConfig.mockResolvedValue(undefined)
@@ -62,7 +68,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   document.head.querySelectorAll('[data-test-shell]').forEach(style => style.remove())
   document.documentElement.removeAttribute('data-theme')
-  vi.restoreAllMocks(); vi.unstubAllEnvs()
+  vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals()
 })
 function render(component: any, options: Record<string, any> = {}) {
   const wrapper = mount(component, { attachTo: document.body, ...options,
@@ -80,6 +86,46 @@ function css(file: string, selector: string) {
 
 // 删除任何第四个入口门禁、独立列、缩放阈值或请求转发会破坏以下行为。
 describe('Unified application shell', () => {
+  // 两个真实 owning-store 会话经 adapter/catalog/App 切换，选择不得改写其已知活动状态。
+  it('Shell_SwitchPreservesActivity_034', async () => {
+    vi.stubGlobal('crypto', { randomUUID })
+    // 未真正查看时保留未确认权限回执，单纯选中行不能替代实际焦点确认。
+    host.focused = false
+    const legacy = useSessionStore()
+    const agentId = legacy.createTab('/work/game', { name: 'Agent session' })
+    const permissionId = legacy.createTab('/work/game', { name: 'Permission session' })
+    const agent = legacy.tabs.get(agentId)!
+    const permission = legacy.tabs.get(permissionId)!
+    Object.assign(agent, { status: 'running', ptyId: 'agent-pty', working: true, activity: 'subagent_running', observation: 'active' })
+    Object.assign(permission, { status: 'running', ptyId: 'permission-pty', working: false, activity: 'unknown', observation: 'active' })
+    const attention = useAttentionStore()
+    attention.ingestEvent({ ptyId: 'permission-pty', sessionId: null, eventName: 'Notification', state: 'unknown', timestamp: 7,
+      detail: { type: 'notification', data: { notificationType: 'permission_prompt' } } })
+    const catalog = useUnifiedSessionsStore()
+    catalog.configureAdapters([createLegacyClaudeAdapter({ store: legacy,
+      runtime: { startTab: async () => {}, stopTab: async () => {}, restartTab: async () => {}, renameTab: async () => {} },
+      projectPaths: () => ['/work/game'], attention })])
+    await catalog.refresh()
+    await catalog.activateSession(`legacy-tab:${agentId}`)
+    const wrapper = render(App)
+    await flushPromises()
+    await wrapper.get('.project-node .expand-arrow').trigger('click')
+    await flushPromises()
+    const labels = () => [agentId, permissionId].map(id => wrapper.get(`[data-session-row="legacy-tab:${id}"] .session-status-icon`).attributes('aria-label'))
+    expect(labels()).toEqual(['Subagent working', 'Waiting for permission'])
+    await catalog.activateSession(`legacy-tab:${permissionId}`)
+    await flushPromises()
+    expect(legacy.activeTabId).toBe(permissionId)
+    expect(labels()).toEqual(['Subagent working', 'Waiting for permission'])
+    await catalog.activateSession(`legacy-tab:${agentId}`)
+    await flushPromises()
+    expect(labels()).toEqual(['Subagent working', 'Waiting for permission'])
+    expect(agent.activity).toBe('subagent_running')
+    expect(permission.activity).toBe('unknown')
+    expect(attention.getItem('permission-pty')?.kind).toBe('permission')
+    expect([...legacy.tabs.values()].map(tab => [tab.ptyId, tab.status])).toEqual([['agent-pty', 'running'], ['permission-pty', 'running']])
+  })
+
   // 一级导航只有工作区、项目、设置，资源入口不进入全局导航。
   it('Shell_ThreePrimaryDestinations_001', async () => {
     const wrapper = render(AppShell)

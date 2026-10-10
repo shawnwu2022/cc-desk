@@ -1,5 +1,5 @@
 import type { HookEventPayload, NotificationData } from '@/types/hook'
-import type { ObservationEvent } from './registry'
+import { validObservationAgentId, type ObservationEvent } from './registry'
 
 function validAuthenticatedMetadata(
   payload: HookEventPayload,
@@ -39,8 +39,6 @@ export function fromClaudeHook(payload: HookEventPayload): ObservationEvent | nu
     case 'preToolUse':
     case 'postToolUse':
     case 'postToolUseFailure':
-    case 'subagentStart':
-    case 'subagentStop':
     case 'preCompact':
     case 'postCompact':
       kind = 'working'
@@ -54,6 +52,14 @@ export function fromClaudeHook(payload: HookEventPayload): ObservationEvent | nu
     }
     default:
       kind = 'unknown'
+  }
+
+  if (payload.detail.type === 'subagentStart' || payload.detail.type === 'subagentStop') {
+    return {
+      kind: payload.detail.type === 'subagentStart' ? 'subagent-started' : 'subagent-stopped',
+      runId: payload.runId, generation: payload.generation, eventId: payload.eventId,
+      ...(validObservationAgentId(payload.detail.data.agentId) ? { agentId: payload.detail.data.agentId } : {}),
+    }
   }
 
   return {

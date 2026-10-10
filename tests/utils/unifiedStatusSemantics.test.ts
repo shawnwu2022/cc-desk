@@ -40,12 +40,31 @@ describe('Unified historical status semantics', () => {
   it('Attention_HistoricalPriorityAndSelection_003', () => {
     expect(deriveSessionVisualState(row({ activityState: 'working', attentionKind: 'error' }))).toBe('working')
     expect(deriveSessionVisualState(row({ attentionKind: 'error' }), true)).toBe('error')
-    expect(deriveSessionVisualState(row({ attentionKind: 'completed' }), true)).toBe('running')
-    expect(deriveSessionVisualState(row({ attentionKind: 'permission' }), true)).toBe('running')
+    expect(deriveSessionVisualState(row({ attentionKind: 'completed' }), true)).toBe('completed')
+    expect(deriveSessionVisualState(row({ attentionKind: 'permission' }), true)).toBe('permission')
     expect(deriveSessionVisualState(row({ processState: 'stopped', attentionKind: 'completed' }), true)).toBe('stopped')
     expect(deriveSessionVisualState(row({ processState: 'stopped' }))).toBe('closed')
     expect(deriveSessionVisualState(row({ processState: 'stopped', opened: false }), true)).toBe('closed')
     expect(deriveSessionVisualState(row())).toBe('unknown')
+  })
+  // 所有已知运行态活动/关注原因保持同一显示，不从选择推断运行中。
+  it.each([
+    [{ activityState: 'waiting_permission' }, 'permission'],
+    [{ activityState: 'waiting_input' }, 'needs-user'],
+    [{ activityState: 'waiting' }, 'needs-user'],
+    [{ attentionState: 'needs-user' }, 'needs-user'],
+    [{ attentionKind: 'completed' }, 'completed'],
+    [{ activityState: 'subagent_running' }, 'working'],
+    [{ activityState: 'unknown' }, 'unknown'],
+  ])('Activity_FocusInvariant_009 %j', (extra, expected) => {
+    expect(deriveSessionVisualState(row(extra), true)).toBe(expected)
+    expect(deriveSessionVisualState(row(extra), false)).toBe(expected)
+  })
+  // 子代理生命周期提示不能盖过真实权限请求或粘性错误。
+  it.each(['permission', 'error'] as const)('Subagent_AttentionWins_010 %s', attentionKind => {
+    const session = row({ activityState: 'subagent_running', attentionKind, attentionState: 'needs-user' })
+    expect(deriveSessionVisualState(session, true)).toBe(attentionKind)
+    expect(deriveSessionVisualState(session, false)).toBe(attentionKind)
   })
   it('Legacy_ExplicitAttentionAndWorkingProjection_004', async () => {
     const tab: TerminalTab = { tabId: 'tab', projectPath: '/repo', ptyId: 'pty', sessionId: 'saved', name: 'Legacy',

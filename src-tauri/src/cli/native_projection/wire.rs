@@ -146,6 +146,13 @@ pub(crate) struct ProjectionResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) history_read_failures: Vec<&'static str>,
 }
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum TitleSource {
+    Prompt,
+    Ai,
+    Custom,
+}
 #[derive(Debug, Clone, Serialize)]
 #[serde(
     tag = "type",
@@ -157,6 +164,12 @@ pub(crate) enum ResourceItem {
         session_key: String,
         native_session_id: String,
         title: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title_unknown: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title_source: Option<TitleSource>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metadata_incomplete: Option<bool>,
         truncated: bool,
         cwd: Option<String>,
         updated_at: Option<String>,

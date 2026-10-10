@@ -34,7 +34,8 @@ export async function saveSessionOpenedAt(metadata: SessionMetadataPort | undefi
   const record: SessionUiRecord = {
     runtime: identity.runtime, cli: identity.cli, projectPath: identity.projectPath,
     adapterSessionId: identity.adapterSessionId, nativeSessionId: identity.nativeSessionId,
-    title: identity.title, lastActivityAt: identity.lastActivityAt, lastOpenedAt: at,
+    // Opening is not a rename: only explicit saved names are overrides.
+    title: matchesSessionMetadata(saved, identity) ? saved.title : '', lastActivityAt: identity.lastActivityAt, lastOpenedAt: at,
   }
   const requireCurrent = () => { if (!owns()) throw new Error('STALE_SESSION_ATTEMPT') }
   requireCurrent()

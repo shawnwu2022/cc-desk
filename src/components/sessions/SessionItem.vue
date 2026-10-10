@@ -184,7 +184,7 @@ function onMenuAction(action: SessionMenuAction) {
 </script>
 
 <template>
-  <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, 'has-launch': launchPrimary, 'has-archive': !!archive && !isRenaming, editing: isRenaming }"
+  <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, 'has-launch': launchPrimary, 'has-archive': !!archive && !primary && !isRenaming, editing: isRenaming }"
     role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" :aria-busy="session.resumePending || undefined" tabindex="0"
     @click="onClick" @dblclick="onDoubleClick" @keydown="onKeydown" @contextmenu="openContext">
     <SessionStatusIcon :state="visualState" :activity-state="session.activityState" :transition-state="deriveSessionVisualState(session, false)" :archived="session.archived" />
@@ -223,13 +223,13 @@ function onMenuAction(action: SessionMenuAction) {
           </svg>
         </IconButton>
       </div>
-    </div>
-    <div v-if="archive && !isRenaming" class="session-archive-action" data-session-archive>
-      <IconButton class="session-row-control" :label="t(archive.labelKey)" :disabled="archive.disabled" @click.stop="runArchive">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="18" height="4" rx="1" /><path d="M5 7v13h14V7M9 11h6" />
-        </svg>
-      </IconButton>
+      <div v-if="archive && !primary && !isRenaming" class="session-archive-action" data-session-archive>
+        <IconButton class="session-row-control" :label="t(archive.labelKey)" :disabled="archive.disabled" @click.stop="runArchive">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="4" rx="1" /><path d="M5 7v13h14V7M9 11h6" />
+          </svg>
+        </IconButton>
+      </div>
     </div>
     <div class="session-overflow-trigger" :class="{ 'is-open': menuOpen }" @pointerdown="onOverflowPointerdown" @click.stop>
       <IconButton v-if="actions.length && !isRenaming" class="session-row-control" :label="t('sessionActionsLabel')"
@@ -256,9 +256,7 @@ function onMenuAction(action: SessionMenuAction) {
   background: transparent;
   cursor: pointer;
 }
-.session-item.has-archive { grid-template-columns: 16px 18px minmax(0, 1fr) 38px 20px 20px; }
 .session-item.has-launch { grid-template-columns: 16px 18px minmax(0, 1fr) 64px 20px; }
-.session-item.has-launch.has-archive { grid-template-columns: 16px 18px minmax(0, 1fr) 64px 20px 20px; }
 .session-item.has-launch .session-tail { width: 64px; gap: 6px; }
 .session-item.has-launch .session-launch-action { position: static; width: 20px; flex: 0 0 20px; opacity: 1; pointer-events: auto; }
 .session-item.has-launch:hover .session-time, .session-item.has-launch:focus-within .session-time { opacity: 1; pointer-events: auto; }
@@ -314,7 +312,7 @@ function onMenuAction(action: SessionMenuAction) {
   opacity: 0;
   pointer-events: none;
 }
-.session-archive-action { width: 20px; height: 28px; opacity: 0; pointer-events: none; }
+.session-archive-action { position: absolute; inset: 0; display: flex; justify-content: flex-end; align-items: center; opacity: 0; pointer-events: none; }
 .session-item:hover .session-archive-action, .session-item:focus-within .session-archive-action { opacity: 1; pointer-events: auto; }
 .session-overflow-trigger { width: 20px; height: 28px; opacity: 0; pointer-events: none; }
 .session-primary-action :deep(.ui-button), .session-archive-action :deep(.ui-button), .session-overflow-trigger :deep(.ui-button) { width: 20px; min-width: 20px; height: 28px; padding: 0; }
@@ -323,5 +321,10 @@ function onMenuAction(action: SessionMenuAction) {
 .session-item:hover .session-overflow-trigger, .session-item:focus-within .session-overflow-trigger,
 .session-overflow-trigger.is-open { opacity: 1; pointer-events: auto; }
 .session-item.has-primary:not(.has-launch):hover .session-time, .session-item.has-primary:not(.has-launch):focus-within .session-time,
+.session-item.has-archive:hover .session-time, .session-item.has-archive:focus-within .session-time,
 .session-item.editing .session-time { opacity: 0; pointer-events: none; }
+@media (hover: none), (pointer: coarse) {
+  .session-item.has-archive .session-archive-action { opacity: 1; pointer-events: auto; }
+  .session-item.has-archive .session-time { opacity: 0; pointer-events: none; }
+}
 </style>

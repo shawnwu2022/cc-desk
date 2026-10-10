@@ -372,3 +372,339 @@ fn pagination_is_explicit_and_invalid_query_never_enters_reader() {
         "INVALID_REQUEST"
     );
 }
+
+// Consecutive History pages belong to one bounded observation; pagination must
+// not enumerate and parse the same root again for each 200-row IPC page.
+#[test]
+fn history_pages_reuse_one_authenticated_observation() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let checks = Arc::new(AtomicUsize::new(0));
+    let mut g = grant(t.path(), "main", Arc::new(AtomicBool::new(true)));
+    for index in 0..200 {
+        fs::write(
+            t.path().join(format!("projects/p/{index:03}.jsonl")),
+            "{\"type\":\"user\",\"cwd\":\"/repo\",\"message\":{\"content\":\"task\"}}\n",
+        )
+        .unwrap();
+    }
+    let observed = checks.clone();
+    g.check = Arc::new(move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    });
+    let source = registry.register(g).unwrap();
+    let mut page = request(source);
+    checks.store(0, Ordering::SeqCst);
+    let first = registry.read(&owner(), &page).unwrap();
+    assert_eq!(first.state, ProjectionState::Ready);
+    assert!(first.has_more);
+    assert!(checks.load(Ordering::SeqCst) > 200);
+    checks.store(0, Ordering::SeqCst);
+    page.offset = 100;
+    let second = registry.read(&owner(), &page).unwrap();
+    assert_eq!(second.state, ProjectionState::Ready);
+    assert_eq!(second.observed_at, first.observed_at);
+    assert!(
+        checks.load(Ordering::SeqCst) < 20,
+        "a continuation re-scanned the source"
+    );
+    assert_eq!(second.items.len(), 100);
+}
+
+fn paged_source(
+    path: &std::path::Path,
+    registry: &ScopeRegistry,
+    live: Arc<AtomicBool>,
+) -> SourceRef {
+    let g = grant(path, "original", live);
+    fs::write(
+        path.join("projects/p/two.jsonl"),
+        "{\"type\":\"custom-title\",\"customTitle\":\"two\"}\n",
+    )
+    .unwrap();
+    registry.register(g).unwrap()
+}
+#[test]
+fn history_snapshot_fresh_load_never_reuses_prior_items() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let source = paged_source(t.path(), &registry, Arc::new(AtomicBool::new(true)));
+    let mut req = request(source);
+    req.limit = 1;
+    assert!(registry.read(&owner(), &req).unwrap().has_more);
+    fs::write(
+        t.path().join("projects/p/same.jsonl"),
+        "{\"type\":\"custom-title\",\"customTitle\":\"fresh\"}\n",
+    )
+    .unwrap();
+    req.request_epoch = n(10);
+    let fresh = registry.read(&owner(), &req).unwrap();
+    assert!(matches!(&fresh.items[0], ResourceItem::Session { title, .. } if title == "fresh"));
+    req.request_epoch = n(9);
+    req.offset = 1;
+    let stale = registry.read(&owner(), &req).unwrap();
+    assert_eq!(stale.reason.as_deref(), Some("SOURCE_SNAPSHOT_EXPIRED"));
+    assert!(stale.items.is_empty());
+}
+#[test]
+fn history_snapshot_rechecks_revoked_profile_or_project_authority() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let live = Arc::new(AtomicBool::new(true));
+    let source = paged_source(t.path(), &registry, live.clone());
+    let mut req = request(source);
+    req.limit = 1;
+    assert!(registry.read(&owner(), &req).unwrap().has_more);
+    live.store(false, Ordering::SeqCst);
+    req.offset = 1;
+    assert_eq!(
+        registry.read(&owner(), &req).unwrap_err().code,
+        "SCOPE_REVOKED"
+    );
+}
+#[test]
+fn history_snapshot_old_scan_cannot_replace_a_newer_load() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = Arc::new(ScopeRegistry::new(4));
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let old_checks = Arc::new(AtomicUsize::new(0));
+    let mut g = grant(t.path(), "original", Arc::new(AtomicBool::new(true)));
+    fs::write(
+        t.path().join("projects/p/two.jsonl"),
+        "{\"type\":\"custom-title\",\"customTitle\":\"two\"}\n",
+    )
+    .unwrap();
+    let (e, r, c) = (entered.clone(), release.clone(), old_checks.clone());
+    g.check = Arc::new(move || {
+        if std::thread::current().name() == Some("old-history-scan")
+            && c.fetch_add(1, Ordering::SeqCst) == 2
+        {
+            e.wait();
+            r.wait();
+        }
+        Ok(())
+    });
+    let source = registry.register(g).unwrap();
+    let mut req = request(source);
+    req.limit = 1;
+    let (old_registry, old_req) = (registry.clone(), req.clone());
+    let old = std::thread::Builder::new()
+        .name("old-history-scan".into())
+        .spawn(move || old_registry.read(&owner(), &old_req))
+        .unwrap();
+    entered.wait();
+    req.request_epoch = n(10);
+    assert!(registry.read(&owner(), &req).unwrap().has_more);
+    release.wait();
+    let retired = old.join().unwrap().unwrap();
+    assert_eq!(retired.reason.as_deref(), Some("SOURCE_CHANGED"));
+    req.offset = 1;
+    assert_eq!(
+        registry.read(&owner(), &req).unwrap().state,
+        ProjectionState::Ready
+    );
+}
+
+#[test]
+fn history_snapshot_capacity_ttl_and_final_page_retirement_are_bounded() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let mut requests = Vec::new();
+    for index in 0..3 {
+        let source = paged_source(
+            &t.path().join(index.to_string()),
+            &registry,
+            Arc::new(AtomicBool::new(true)),
+        );
+        let mut req = request(source);
+        req.limit = 1;
+        assert!(registry.read(&owner(), &req).unwrap().has_more);
+        requests.push(req);
+    }
+    assert_eq!(registry.history_pages.lock().unwrap().len(), 3);
+    requests[0].offset = 1;
+    assert_eq!(
+        registry.read(&owner(), &requests[0]).unwrap().state,
+        ProjectionState::Ready
+    );
+    {
+        let mut pages = registry.history_pages.lock().unwrap();
+        let page = Arc::get_mut(&mut pages[0]).unwrap();
+        page.created =
+            std::time::Instant::now() - HISTORY_SNAPSHOT_TTL - std::time::Duration::from_millis(1);
+    }
+    requests[1].offset = 1;
+    assert_eq!(
+        registry
+            .read(&owner(), &requests[1])
+            .unwrap()
+            .reason
+            .as_deref(),
+        Some("SOURCE_SNAPSHOT_EXPIRED")
+    );
+    requests[2].offset = 1;
+    let last = registry.read(&owner(), &requests[2]).unwrap();
+    assert_eq!(last.state, ProjectionState::Ready);
+    assert!(!last.has_more);
+    assert!(registry.history_pages.lock().unwrap().is_empty());
+}
+#[test]
+fn history_snapshot_accounts_allocated_capacity_and_retains_partial_flags() {
+    let mut title = String::with_capacity(HISTORY_SNAPSHOT_BYTES);
+    title.push('x');
+    let items = vec![ResourceItem::Session {
+        session_key: "key".into(),
+        native_session_id: "id".into(),
+        title,
+        title_unknown: None,
+        title_source: None,
+        metadata_incomplete: None,
+        cwd: None,
+        updated_at: None,
+        truncated: true,
+    }];
+    assert!(history_snapshot_bytes(&items, items.capacity()) > HISTORY_SNAPSHOT_BYTES);
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let source = paged_source(t.path(), &registry, Arc::new(AtomicBool::new(true)));
+    fs::write(
+        t.path().join("projects/p/bad.jsonl"),
+        "{\"type\":\"unknown\"}\n",
+    )
+    .unwrap();
+    let mut req = request(source);
+    req.limit = 1;
+    let first = registry.read(&owner(), &req).unwrap();
+    req.offset = 1;
+    let second = registry.read(&owner(), &req).unwrap();
+    assert_eq!(second.observed_at, first.observed_at);
+    assert_eq!(second.history_metadata_incomplete, Some(true));
+    assert_eq!(second.history_read_failures, vec!["SOURCE_UNSUPPORTED"]);
+}
+#[test]
+fn history_snapshot_rechecks_root_and_registered_project_handles() {
+    for replace_project in [false, true] {
+        let t = tempfile::tempdir().unwrap();
+        let registry = ScopeRegistry::new(4);
+        let root_path = t.path().join("source");
+        let project_path = t.path().join("registered");
+        fs::create_dir(&project_path).unwrap();
+        let mut g = grant(&root_path, "original", Arc::new(AtomicBool::new(true)));
+        for name in ["same", "two"] {
+            fs::write(root_path.join(format!("projects/p/{name}.jsonl")), format!("{}\n", serde_json::json!({"type":"user", "cwd":project_path.to_str().unwrap(),"message":{"content":name}}))).unwrap();
+        }
+        g.project = Some(Root::open(&project_path).unwrap());
+        g.project_paths = vec![project_path.clone()];
+        let source = registry.register(g).unwrap();
+        let mut req = request(source);
+        req.limit = 1;
+        assert!(registry.read(&owner(), &req).unwrap().has_more);
+        let replaced = if replace_project {
+            &project_path
+        } else {
+            &root_path
+        };
+        match fs::rename(replaced, t.path().join("retired")) {
+            Ok(()) => {
+                fs::create_dir(replaced).unwrap();
+                req.offset = 1;
+                let unavailable = registry.read(&owner(), &req).unwrap();
+                assert_eq!(unavailable.reason.as_deref(), Some("SOURCE_CHANGED"));
+                assert!(unavailable.items.is_empty());
+            }
+            Err(error) => {
+                #[cfg(not(windows))]
+                panic!("unexpected rename denial: {error}");
+                #[cfg(windows)]
+                {
+                    assert!(
+                        matches!(error.raw_os_error(), Some(5 | 32)),
+                        "unexpected rename error: {error:?}"
+                    );
+                    req.offset = 1;
+                    assert_eq!(
+                        registry.read(&owner(), &req).unwrap().state,
+                        ProjectionState::Ready
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn review_probe_old_token_miss_cannot_retire_new_same_epoch_snapshot() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = Arc::new(ScopeRegistry::new(4));
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let checks = Arc::new(AtomicUsize::new(0));
+    let mut g = grant(t.path(), "original", Arc::new(AtomicBool::new(true)));
+    fs::write(
+        t.path().join("projects/p/two.jsonl"),
+        "{\"type\":\"custom-title\",\"customTitle\":\"two\"}\n",
+    )
+    .unwrap();
+    let (e, r, c) = (entered.clone(), release.clone(), checks.clone());
+    g.check = Arc::new(move || {
+        if std::thread::current().name() == Some("old-missing-history-page")
+            && c.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            e.wait();
+            r.wait();
+        }
+        Ok(())
+    });
+    let source = registry.register(g).unwrap();
+    let mut old_req = request(source.clone());
+    old_req.limit = 1;
+    old_req.offset = 1;
+    let old_registry = registry.clone();
+    let old = std::thread::Builder::new()
+        .name("old-missing-history-page".into())
+        .spawn(move || old_registry.read(&owner(), &old_req))
+        .unwrap();
+    entered.wait();
+    let mut new_req = request(source);
+    new_req.limit = 1;
+    assert!(registry.read(&owner(), &new_req).unwrap().has_more);
+    release.wait();
+    assert_eq!(
+        old.join().unwrap().unwrap().reason.as_deref(),
+        Some("SOURCE_CHANGED")
+    );
+    new_req.offset = 1;
+    assert_eq!(
+        registry.read(&owner(), &new_req).unwrap().state,
+        ProjectionState::Ready,
+        "late token miss removed a newer same-epoch snapshot"
+    );
+}
+
+#[test]
+fn old_first_page_retirement_cannot_remove_newer_generation() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let source = paged_source(t.path(), &registry, Arc::new(AtomicBool::new(true)));
+    let mut req = request(source.clone());
+    req.limit = 1;
+    registry.read(&owner(), &req).unwrap();
+    let scope = registry.state.lock().unwrap().scopes[&source.scope_id].clone();
+    let older = scope.history_generation.load(Ordering::SeqCst);
+    req.request_epoch = n(10);
+    registry.read(&owner(), &req).unwrap();
+    assert_eq!(
+        registry
+            .retire_history_pages(&scope, older)
+            .unwrap_err()
+            .code,
+        "SOURCE_CHANGED"
+    );
+    req.offset = 1;
+    assert_eq!(
+        registry.read(&owner(), &req).unwrap().state,
+        ProjectionState::Ready
+    );
+}

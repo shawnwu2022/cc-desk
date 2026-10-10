@@ -299,7 +299,7 @@ describe('Unified project session tree', () => {
     expect(wrapper.emitted('project-action')?.[1]).toEqual([{ action: 'remove-project', projectKey: '/work/game', projectPath: '/work/game' }])
   })
 
-  // 运行会话不提供停止并归档入口，非运行历史仍可独立归档。
+  // 运行会话不提供停止并归档，已打开结束会话保留关闭尾区及菜单归档。
   it('Tree_RunningArchiveConfirmation_004', async () => {
     const store = useUnifiedSessionsStore()
     const stop = vi.spyOn(store, 'stopSession'); const archive = vi.spyOn(store, 'archiveSession')
@@ -310,8 +310,12 @@ describe('Unified project session tree', () => {
     expect(wrapper.emitted('menu-action')).toBeUndefined()
     expect(stop).not.toHaveBeenCalled(); expect(archive).not.toHaveBeenCalled()
     await wrapper.setProps({ project: group([session({ processState: 'stopped' })]) })
-    await wrapper.get('[data-session-archive] button').trigger('click'); await nextTick()
+    expect(wrapper.find('[data-session-archive]').exists()).toBe(false)
+    expect(wrapper.get('.session-primary-action button').attributes('aria-label')).toBe('Close')
+    await wrapper.get('.session-item').trigger('contextmenu')
+    await selectMenu('archive'); await nextTick()
     expect(wrapper.emitted('menu-action')).toEqual([['claude-1', 'archive']])
+    expect(stop).not.toHaveBeenCalled(); expect(archive).not.toHaveBeenCalled()
   })
 
   it('ArchivedRows_OpeningOrderIgnoresHistoryActivity_001', async () => {
