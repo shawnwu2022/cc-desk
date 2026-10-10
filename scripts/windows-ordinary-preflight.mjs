@@ -16,16 +16,20 @@ export const ORDINARY_CONTRACT_NAMES = [
   'OrdinaryInstaller_ElevatedTokenRejectsBeforeDisarm_028',
   'OrdinaryInstaller_FixturePanicCleansExactDisarmedChild_029',
 ].map(name => PREFIX + name);
+export const FIXTURE_CLEANUP_NAMES = [
+  'CancelBeforeResume_RecordFailureCannotRetryOrResume_005',
+  'OrdinaryInstaller_FixtureCleanupRequiresExactTerminalHandle_030',
+].map(name => PREFIX + name);
 export function ordinaryPreflightNames(elevated) {
   if (typeof elevated !== 'boolean') throw new Error('Actual elevation observation required');
-  return [...ORDINARY_CONTRACT_NAMES, ...(elevated ? [] : ORDINARY_NATIVE_NAMES)];
+  return [...ORDINARY_CONTRACT_NAMES, ...FIXTURE_CLEANUP_NAMES, ...(elevated ? [] : ORDINARY_NATIVE_NAMES)];
 }
 export async function preflight(options) {
   const { plan, context: c } = verifyBundle({ ...options, requireCheckoutPath: true });
   if (plan.host.elevationQuerySucceeded !== true || plan.host.elevated !== options.elevated) throw new Error('Compiler/host elevation mismatch');
   const h = plan.harnesses.find(h => h.identity.kind === 'lib');
   const names = ordinaryPreflightNames(options.elevated);
-  if (!h || [...ORDINARY_NATIVE_NAMES, ...ORDINARY_CONTRACT_NAMES].some(name => !h.full.some(row => row.name === name) || h.ignored.includes(name))) throw new Error('Complete ordinary preflight inventory required');
+  if (!h || [...ORDINARY_NATIVE_NAMES, ...ORDINARY_CONTRACT_NAMES, ...FIXTURE_CLEANUP_NAMES].some(name => !h.full.some(row => row.name === name) || h.ignored.includes(name))) throw new Error('Complete ordinary preflight inventory required');
   const output = path.join(c.root, 'src-tauri/target/ci-rust-ordinary-preflight');
   fs.mkdirSync(output, { recursive: true });
   const result = await executeHarness(path.join(c.root, h.executable), ['--exact', ...names], {

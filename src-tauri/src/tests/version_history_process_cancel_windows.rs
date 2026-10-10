@@ -55,7 +55,7 @@ struct FixtureChildCleanup(OwnedHandle);
 impl Drop for FixtureChildCleanup {
     fn drop(&mut self) {
         let pid = unsafe { GetProcessId(handle(&self.0)) };
-        let result = stop_never_resumed(handle(&self.0));
+        let result = stop_fixture_child(handle(&self.0));
         if std::thread::panicking() {
             eprintln!("exact disposable fixture child pid={pid} bounded cleanup={result:?}");
             if let Err(error) = result {
@@ -65,6 +65,62 @@ impl Drop for FixtureChildCleanup {
             result.expect("exact disposable fixture child must reach bounded terminal state");
         }
     }
+}
+
+// Test-only cleanup also owns children whose production owner already began
+// cancellation. An API error is never terminal proof: the exact handle must signal.
+fn stop_fixture_child(process: HANDLE) -> io::Result<()> {
+    stop_fixture_child_with_termination(process, |process| {
+        unsafe { TerminateProcess(process, 0xccde0001) }.map_err(win_error)
+    })
+}
+fn stop_fixture_child_with_termination(
+    process: HANDLE,
+    terminate: impl FnOnce(HANDLE) -> io::Result<()>,
+) -> io::Result<()> {
+    match unsafe { WaitForSingleObject(process, 0) } {
+        WAIT_OBJECT_0 => return Ok(()),
+        WAIT_TIMEOUT => (),
+        _ => return Err(io::Error::last_os_error()),
+    }
+    let termination = terminate(process);
+    match unsafe { WaitForSingleObject(process, 5000) } {
+        WAIT_OBJECT_0 => Ok(()),
+        WAIT_TIMEOUT => Err(termination
+            .err()
+            .unwrap_or_else(|| blocked("exact fixture termination unresolved"))),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
+#[test]
+fn OrdinaryInstaller_FixtureCleanupRequiresExactTerminalHandle_030() {
+    with_suspended(JobKind::Installer, |process, _, _, marker| {
+        let exact = handle(&process.process.process);
+        stop_fixture_child_with_termination(exact, |child| {
+            // Model a concurrent termination returning AccessDenied only after
+            // actual termination has begun on this owned suspended child.
+            unsafe { TerminateProcess(child, 0xccde0001) }.map_err(win_error)?;
+            Err(io::Error::from_raw_os_error(5))
+        })
+        .unwrap();
+        assert_eq!(unsafe { WaitForSingleObject(exact, 0) }, WAIT_OBJECT_0);
+        stop_fixture_child(exact).unwrap(); // repeated cleanup of proven terminal child
+        await_empty(process);
+        assert!(!marker.exists());
+    });
+    with_suspended(JobKind::Installer, |process, _, _, marker| {
+        let exact = handle(&process.process.process);
+        let denied =
+            stop_fixture_child_with_termination(exact, |_| Err(io::Error::from_raw_os_error(5)))
+                .unwrap_err();
+        assert_eq!(denied.raw_os_error(), Some(5));
+        assert_eq!(unsafe { WaitForSingleObject(exact, 0) }, WAIT_TIMEOUT);
+        assert!(!marker.exists());
+        stop_fixture_child(exact).unwrap();
+        assert_eq!(unsafe { WaitForSingleObject(exact, 0) }, WAIT_OBJECT_0);
+        await_empty(process);
+    });
 }
 
 #[test]

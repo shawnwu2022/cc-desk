@@ -10,10 +10,10 @@ import { shardFailureDiagnostics } from '../../scripts/windows-rust-shard-runner
 
 // 预检只在实际提升主机保留四条正向未验证；三条拒绝与清理契约始终选择。
 test('RustRunner_PreflightElevation_006', async () => {
-  const { ordinaryPreflightNames } = await import('../../scripts/windows-ordinary-preflight.mjs');
+  const { ordinaryPreflightNames, FIXTURE_CLEANUP_NAMES } = await import('../../scripts/windows-ordinary-preflight.mjs');
   const scope = JSON.parse(fs.readFileSync(new URL('../../scripts/windows-native-scope.json', import.meta.url), 'utf8'));
-  assert.deepEqual(ordinaryPreflightNames(true), scope.ordinaryRequiredSelectedTests);
-  assert.deepEqual(new Set(ordinaryPreflightNames(false)), new Set([...scope.ordinaryRequiredSelectedTests, ...scope.unelevatedTests]));
+  assert.deepEqual(ordinaryPreflightNames(true), [...scope.ordinaryRequiredSelectedTests, ...FIXTURE_CLEANUP_NAMES]);
+  assert.deepEqual(new Set(ordinaryPreflightNames(false)), new Set([...scope.ordinaryRequiredSelectedTests, ...FIXTURE_CLEANUP_NAMES, ...scope.unelevatedTests]));
   assert.throws(() => ordinaryPreflightNames(undefined), /Actual elevation/, 'unknown elevation cannot silently select an unavailable range');
 });
 
