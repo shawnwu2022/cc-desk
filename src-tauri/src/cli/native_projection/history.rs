@@ -45,8 +45,10 @@ pub(super) fn read(
                     .rposition(|b| *b == b'\n')
                     .ok_or("SOURCE_TOO_LARGE")?;
                 parse_metadata(&path, c.cli, text(&bytes[..=end])?)
-            } else {
+            } else if o.kind == ResourceKind::History {
                 parse(&path, c.cli, text(&bytes)?)
+            } else {
+                parse_complete(&path, c.cli, text(&bytes)?, true)
             }
         })();
         let transcript = match parsed {
@@ -176,6 +178,14 @@ fn walk(
     Ok(())
 }
 fn parse(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
+    parse_complete(path, cli, input, false)
+}
+fn parse_complete(
+    path: &str,
+    cli: CliKind,
+    input: &str,
+    include_messages: bool,
+) -> ReadResult<Transcript> {
     let fallback = path
         .rsplit('/')
         .next()
@@ -218,9 +228,13 @@ fn parse(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
                             continue;
                         }
                         let role = v["type"].as_str().unwrap();
-                        let message = content(&v["message"]["content"]);
-                        if !message.is_empty() {
-                            t.messages.push((role.into(), message));
+                        // History needs only the first user title. Every record is
+                        // still decoded and validated; Messages/Search retain all bodies.
+                        if include_messages || (role == "user" && t.messages.is_empty()) {
+                            let message = content(&v["message"]["content"]);
+                            if !message.is_empty() {
+                                t.messages.push((role.into(), message));
+                            }
                         }
                     }
                     // Known metadata doesn't create a fabricated conversation message.
@@ -255,9 +269,13 @@ fn parse(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
                 }
                 Some("response_item") if v["payload"]["type"] == "message" => {
                     if let Some(role @ ("user" | "assistant")) = v["payload"]["role"].as_str() {
-                        let message = content(&v["payload"]["content"]);
-                        if !message.is_empty() {
-                            t.messages.push((role.into(), message));
+                        // User streams remain available for the complete order and
+                        // multiplicity check below, even for a metadata-only history read.
+                        if include_messages || role == "user" {
+                            let message = content(&v["payload"]["content"]);
+                            if !message.is_empty() {
+                                t.messages.push((role.into(), message));
+                            }
                         }
                     }
                 }
@@ -314,6 +332,9 @@ fn parse(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
                 .map(|(_, text)| text.clone())
         })
         .unwrap_or_else(|| "Untitled".into());
+    if !include_messages {
+        t.messages = Vec::new();
+    }
     Ok(t)
 }
 // A bounded prefix is an observation of identity/title, not a complete message
@@ -439,3 +460,7 @@ fn content(v: &Value) -> String {
         })
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+#[path = "../../tests/native_cli_history_metadata.rs"]
+mod tests;

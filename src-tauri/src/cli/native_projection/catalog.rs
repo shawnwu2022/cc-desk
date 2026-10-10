@@ -53,7 +53,13 @@ impl Catalog<'_> {
         budget: &mut Budget,
     ) -> ReadResult<Option<(Vec<u8>, bool)>> {
         self.check()?;
-        let result = self.root.history_prefix(Path::new(path), budget)?;
+        let result = if self.cli == CliKind::Codex {
+            self.root.history_header(Path::new(path), budget)?
+        } else {
+            // Claude cwd/title can follow an initial snapshot. Retain its
+            // existing observation window rather than dropping positive rows.
+            self.root.history_prefix(Path::new(path), budget)?
+        };
         self.check()?;
         Ok(result)
     }

@@ -85,7 +85,11 @@ describe('Legacy session resume in App', () => {
     expect(legacy.tabs.size).toBe(0); expect(io.terms[0].dispose).toHaveBeenCalledOnce()
     const retained = catalog.sessions.find(row => row.nativeSessionId === 'saved-session')!
     expect(retained).toMatchObject({ id: history.id, runtime: 'legacy-claude', resumable: true })
-    const restored = await catalog.resumeCatalogSession(retained.id); await flushPromises()
+    await wrapper.get('[data-project-key="/legacy"] .expand-arrow').trigger('click')
+    const historyRow = wrapper.findAll('[data-session-row]').find(row => row.attributes('data-session-row') === retained.id)!
+    expect(historyRow.find('button[aria-label="Resume session"]').exists()).toBe(false)
+    await historyRow.trigger('click'); await flushPromises()
+    const restored = catalog.sessions.find(row => row.opened && row.nativeSessionId === 'saved-session')!
     expect(restored.id).not.toBe(opened.id)
     expect(legacy.tabs.get(restored.adapterSessionId)).toMatchObject({ status: 'running', sessionId: 'saved-session', projectPath: '/legacy' })
     expect(io.spawn.mock.calls[1][0]).toMatchObject({ cwd: '/legacy', args: ['--resume', 'saved-session'] })

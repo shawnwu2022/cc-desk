@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.18.7] - 2026-10-10 (repair candidate)
+
+- Restore closed and historical sessions by clicking their row; already-open rows only select, and nested actions and pending attempts retain exact-owner cancellation and duplicate-launch protection
+- Keep source diagnostics dismissible for the acknowledged source state, with bounded details and a specific budget hint
+- Read Codex history identity through bounded header chunks instead of consuming complete large rollouts, retain source admission and resource caps, and preserve confirmed display activity when later metadata is partial
+- Expose a safe explicit Retry after a source budget failure; retry freshly validates the original session/profile context even when the history row disappears or the default profile changes
+
+This prepares the authorized repair release. Exact-source hosted checks and signed release admission remain required. Synthetic regression tests and sparse large-history fixtures do not certify the user’s installed CLI restoration or its precise failure cause.
+
 ## [0.18.6] - 2026-10-10 (repair candidate)
 
 - Reconcile one-click close across exact Windows process control, legacy exit events and native launch receipts; retain live or unconfirmed ownership and preserve newer attempts

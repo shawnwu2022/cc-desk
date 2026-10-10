@@ -14,6 +14,7 @@ const { t } = useI18n()
     <ul>
       <li v-for="warning in warnings" :key="`${warning.source}:${warning.stage}:${warning.code}`">
         {{ t(workspaceSourceLabels[warning.source]) }}: <code>{{ warning.code }}<template v-if="warning.stage"> / {{ warning.stage }}</template></code>
+        <p v-if="warning.code === 'SOURCE_BUDGET_EXCEEDED'" class="source-warning-hint">{{ t('sourceWarningBudget') }}</p>
         <p v-if="warning.code === 'SCOPE_UNKNOWN' && warning.stage === 'scope-profile-validation'" class="source-warning-hint">{{ t('sourceWarningScopeUnknown') }}</p>
         <div v-for="configuration in configurations.filter(row => row.warningKey === workspaceWarningKey(warning))" :key="configuration.profileId" class="source-warning-configuration">
           <span>{{ t('sourceWarningConfiguration', { name: configuration.name }) }}</span>

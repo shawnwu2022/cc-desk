@@ -64,8 +64,8 @@ describe('Unified SessionItem', () => {
     expect(wrapper.get('.session-status-icon').attributes('data-status-entry')).toBe('completed')
   })
 
-  // 历史行的鼠标、双击与行键盘激活均不恢复；只有独立按钮发起恢复。
-  it('Row_HistoryExplicitResume_039', async () => {
+  // 历史行点击发起恢复，双击的第二次点击不重复；不再提供独立恢复按钮。
+  it('Row_HistoryClickResume_039', async () => {
     const wrapper = row({ ...base, opened: false, processState: 'stopped' })
     wrapper.element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true }))
     wrapper.element.dispatchEvent(new MouseEvent('click', { detail: 2, bubbles: true }))
@@ -74,24 +74,21 @@ describe('Unified SessionItem', () => {
     await wrapper.trigger('keydown', { key: 'Enter' })
     await wrapper.trigger('keydown', { key: ' ' })
     expect(wrapper.emitted('activate')).toBeUndefined()
-    expect(wrapper.emitted('primary-action')).toBeUndefined()
-    const resume = wrapper.get('[data-session-launch] button')
-    expect(resume.attributes('aria-label')).toBe('Resume session')
-    await resume.trigger('click')
-    expect(wrapper.emitted('primary-action')).toEqual([[base.id, 'resume']])
+    expect(wrapper.emitted('primary-action')).toEqual([[base.id, 'resume'], [base.id, 'resume'], [base.id, 'resume']])
+    expect(wrapper.find('[data-session-launch]').exists()).toBe(false)
+    expect(wrapper.find('button[aria-label="Resume session"]').exists()).toBe(false)
     await wrapper.trigger('contextmenu')
     expect(menuIds()).not.toContain('resume')
   })
 
-  // 恢复待定时独立按钮禁用，重复点击和失活界面均不再请求副作用。
+  // 恢复待定时行标记忙碌，重复点击和失活界面均不再请求副作用。
   it('Row_ResumePendingAndInactive_040', async () => {
     const wrapper = row({ ...base, opened: false, processState: 'stopped', resumePending: true })
-    const resume = wrapper.get('[data-session-launch] button')
-    expect(resume.attributes('disabled')).toBeDefined()
-    await resume.trigger('click')
+    expect(wrapper.attributes('aria-busy')).toBe('true')
+    await wrapper.trigger('click'); await wrapper.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('primary-action')).toBeUndefined()
     await wrapper.setProps({ session: { ...base, opened: false, processState: 'stopped' }, surfaceActive: false })
-    await wrapper.get('[data-session-launch] button').trigger('click')
+    await wrapper.trigger('click'); await wrapper.trigger('keydown', { key: ' ' })
     expect(wrapper.emitted('primary-action')).toBeUndefined()
   })
 
@@ -523,7 +520,7 @@ describe('SessionList unified boundary', () => {
     await rows[0].get('input').trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('rename-commit')).toEqual([[base.id, 'Renamed session']])
     expect(wrapper.emitted('rename')).toBeUndefined()
-    await rows[1].get('.session-primary-action button').trigger('click')
+    await rows[1].trigger('click')
     expect(wrapper.emitted('primary-action')).toEqual([[history.id, 'resume']])
     await rows[1].get('[data-session-archive] button').trigger('click')
     await nextTick()

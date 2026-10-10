@@ -2471,6 +2471,7 @@
 
 - Target: actual Windows WebView2, 1024×640, 100%/125%/150% scale, light/dark, English/Chinese, and the user's screen reader
 - Preconditions: an authorized installed candidate with open and closed sessions; no new CLI launch is needed for visual inspection
-- Steps: inspect the filled status glyphs and always-visible history Resume button beside activity age; navigate with Tab; inspect status tooltip then leave/press Escape; view justified activity subtype, unknown and completion icons, including with reduced motion enabled
-- Expected: semantic marks remain distinguishable and readable, no empty/hollow status icon or permanent status text, age/action do not overlap, focus is visible, description disappears immediately, reduced motion is static, and only the explicit Resume control can request a launch
+- Steps: inspect the filled status glyphs and history activity age without an independent Resume button; navigate with Tab; inspect status tooltip then leave/press Escape; view justified activity subtype, unknown and completion icons, including with reduced motion enabled
+- Expected: semantic marks remain distinguishable and readable, no empty/hollow status icon or permanent status text, controls and age do not overlap, row focus is visible, description disappears immediately, and reduced motion is static
+- Authorized functional follow-up: click or press Enter/Space on one closed history row, repeat while its exact-source check is pending, and cancel another pending restore by navigation. Expect one exact-session resume, no duplicate launch, and no late launch after cancellation. Clicking an already-open row only selects it; close/archive/menu controls never also resume. A failed current source check must not launch using cached presence
 - Status: not executed on dot's cloud executor; Chromium socket permissions and Tauri Linux GTK prerequisites are unavailable. CI Linux pixels and jsdom regressions remain separate evidence

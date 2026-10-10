@@ -143,7 +143,7 @@ impl Root {
     }
     pub(crate) fn read(&self, path: &Path, budget: &mut Budget) -> ReadResult<Option<Vec<u8>>> {
         Ok(self
-            .read_bounded(path, budget, false)?
+            .read_bounded(path, budget, false, 64 * 1024)?
             .map(|(bytes, _)| bytes))
     }
     pub(crate) fn history_prefix(
@@ -151,13 +151,23 @@ impl Root {
         path: &Path,
         budget: &mut Budget,
     ) -> ReadResult<Option<(Vec<u8>, bool)>> {
-        self.read_bounded(path, budget, true)
+        self.read_bounded(path, budget, true, 64 * 1024)
+    }
+    pub(crate) fn history_header(
+        &self,
+        path: &Path,
+        budget: &mut Budget,
+    ) -> ReadResult<Option<(Vec<u8>, bool)>> {
+        // Codex stores identity/cwd in its first complete session_meta record.
+        // Sample a bounded title only when it is in the same observed chunks.
+        self.read_bounded(path, budget, true, 4 * 1024)
     }
     fn read_bounded(
         &self,
         path: &Path,
         budget: &mut Budget,
         history_prefix: bool,
+        chunk_bytes: usize,
     ) -> ReadResult<Option<(Vec<u8>, bool)>> {
         relative(path, false)?;
         budget.entry()?;
@@ -192,7 +202,7 @@ impl Root {
         }
         let mut bytes = Vec::new();
         let mut limit = if history_prefix {
-            cap.min(64 * 1024)
+            cap.min(chunk_bytes)
         } else {
             cap + 1
         };
@@ -203,13 +213,17 @@ impl Root {
         read.map_err(read_error)?;
         // Codex's first session_meta record can include long base instructions.
         // Extend only until a complete first record, within the original hard caps.
-        while history_prefix && !bytes.contains(&b'\n') && bytes.len() == limit && limit < cap {
+        let mut complete_record = history_prefix && bytes.contains(&b'\n');
+        while history_prefix && !complete_record && bytes.len() == limit && limit < cap {
             budget.checkpoint()?;
-            let next = (cap - limit).min(64 * 1024);
+            let next = (cap - limit).min(chunk_bytes);
             let previous = bytes.len();
             let read = (&file).take(next as u64).read_to_end(&mut bytes);
             budget.bytes_left = budget.bytes_left.saturating_sub(bytes.len() - previous);
             read.map_err(read_error)?;
+            // The earlier chunks have already been checked. A long first record
+            // must not rescan the entire accumulated prefix on every extension.
+            complete_record = bytes[previous..].contains(&b'\n');
             limit += next;
         }
         if bytes.len() > cap {

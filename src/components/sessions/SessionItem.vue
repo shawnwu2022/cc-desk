@@ -49,8 +49,13 @@ const observationNotice = computed(() => selectSessionObservationNotice(props.se
 const canRename = computed(() => props.selected && !props.session.preparationState && props.menuActionVisibility?.rename !== false)
 const actions = computed(() => selectSessionMenuActions(props.session, { ...props.menuActionVisibility, rename: canRename.value }))
 const archive = computed(() => selectSessionArchiveAction(props.session, props.menuActionVisibility))
-const primary = computed(() => isRenaming.value ? 'save-rename'
+const requestedPrimary = computed(() => isRenaming.value ? 'save-rename'
   : props.primaryAction === undefined ? selectSessionPrimaryAction({ ...props.session, renameState: 'idle' }) : props.primaryAction)
+// History is resumed by its row. Opened terminals remain selection-only, even
+// after natural exit; archived/preparation rows keep their explicit controls.
+const rowResumes = computed(() => !props.session.archived && props.session.opened !== true
+  && !props.session.preparationState && props.session.processState === 'stopped' && props.session.resumable)
+const primary = computed(() => rowResumes.value && requestedPrimary.value === 'resume' ? null : requestedPrimary.value)
 const launchPrimary = computed(() => !isRenaming.value && (props.session.archived || !props.session.opened) && ['resume', 'retry', 'restore-archive'].includes(primary.value ?? ''))
 const primaryDisabled = computed(() => isSaving.value || !!props.session.resumePending || (launchPrimary.value && props.session.preparationState === 'pending'))
 const primaryLabel = computed(() => primary.value ? t(sessionActionLabelKey(primary.value, props.session)) : '')
@@ -83,7 +88,9 @@ async function focusRename() {
   input?.select()
 }
 function activate() {
-  if (props.surfaceActive && !props.session.archived && props.session.opened === true && !isRenaming.value && !menuOpen.value) emit('activate', props.session.id)
+  if (!props.surfaceActive || props.session.archived || isRenaming.value || menuOpen.value) return
+  if (props.session.opened === true) emit('activate', props.session.id)
+  else if (rowResumes.value && !props.session.resumePending) emit('primary-action', props.session.id, 'resume')
 }
 function onClick(event: MouseEvent) {
   // A browser double click dispatches click(1), click(2), then dblclick. Capture
@@ -178,7 +185,7 @@ function onMenuAction(action: SessionMenuAction) {
 
 <template>
   <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, 'has-launch': launchPrimary, 'has-archive': !!archive && !isRenaming, editing: isRenaming }"
-    role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" tabindex="0"
+    role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" :aria-busy="session.resumePending || undefined" tabindex="0"
     @click="onClick" @dblclick="onDoubleClick" @keydown="onKeydown" @contextmenu="openContext">
     <SessionStatusIcon :state="visualState" :activity-state="session.activityState" :transition-state="deriveSessionVisualState(session, false)" :archived="session.archived" />
     <CliAppIcon :cli="session.cli" />
