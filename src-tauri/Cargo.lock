@@ -428,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "cc-desk"
-version = "0.18.4"
+version = "0.18.5"
 dependencies = [
  "anyhow",
  "arc-swap",

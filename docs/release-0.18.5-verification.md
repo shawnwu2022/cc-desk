@@ -1,0 +1,7 @@
+# 0.18.5 release verification
+
+Integrated scope: PR39 session status animation, stable activity snapshots and explicit history actions; PR40 narrow official CLI history and signed dynamic release catalog; PR41 ordinary signed installer handoff, complete independent backup/FreshSettings, admission ordering and exact disposable fixture cleanup.
+
+Pre-version source a597081651f42980171003888eb8c442cac5131f passed CI38040331297, Windows package38040331288, historical recovery38040331285 and D1338040331308. Its tested merge 7e227dab2556aea18a832ad6e0fe7a9e16c9dc15 has the identical source tree. Full native inventory1395:1338passed,0failed,35originalignored,18Job-freeunverified and4unelevatedunverified. Full CI wall16min02sec;97.067 summed runner-minutes from actual job start/end timestamps, excluding queue. The longest shard15 took11min26sec; this is not a claim that CI meets ten minutes.
+
+These pre-version results do not substitute for the exact final main-source CI. Publication uses existing release preflight, same-source coverage and all three signed platform builds. The release attaches that final coverage and separately discloses host limits. Actual native installation/return acceptance, installed Windows UI/taskbar behavior, the specific user's Claude history root cause and arbitrary cross-version data compatibility remain unverified. No production durability/ACL/TOCTOU/once/no-replay assertions were removed; no runner purchases, credential expansion or branch-protection changes are part of this release.

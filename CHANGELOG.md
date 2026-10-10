@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.5] - 2026-10-10
+
+- Add local animated status icons with specific activity glyphs, passive accessible labels and static reduced-motion rendering; preserve exact-owner status and attention evidence.
+- Freeze session ordering from an activity snapshot on entry/explicit refresh. Background activity and selection do not reorder existing rows; closed history requires explicit Resume, and pending exact-source resumes coalesce safely.
+- Read narrowly admitted official Claude/Codex CLI history without writing CLI-owned data; expose the dynamic official release directory with exact source and signed package admission.
+- Add ordinary signed historical installation with independent complete backup and FreshSettings. The receipt proves installer handoff only, never installation completion; strict reviewed roundtrip and the upgrade-only updater retain their contracts.
+- Verify actual process/user admission before disarming ordinary installer cleanup, retain unknown-outcome no-replay guards, and bound test execution with exact-source shard aggregation and disposable-child cleanup.
+
+Validation preserves all original assertions and 35 original ignored tests. Hosted coverage separately discloses 18 Job-free and four unelevated integrations as unverified when their observed host requirements are unavailable. Real installed Windows interaction, native historical installation/return acceptance and arbitrary cross-version data compatibility are not certified. The user's specific Claude history cause was not directly established. CI performance research and its proposed cache/scheduling changes are separate from this release.
+
 ## [0.18.4] - 2026-10-10 (unreleased candidate)
 
 - Keep session rows ordered by the last confirmed opening time; switching an already open terminal or receiving background output/status does not move rows or change the selected terminal
