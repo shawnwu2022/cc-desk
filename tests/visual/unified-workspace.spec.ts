@@ -58,8 +58,12 @@ for (const gui of ['light', 'dark']) for (const locale of ['en', 'zh']) {
     expect(time && action && time.x + time.width <= action.x).toBeTruthy()
     await history.hover()
     await expect(history.locator('.session-time')).toHaveCSS('opacity', '1')
+    // End the title hover before testing Escape on the independent launch trigger.
+    await page.mouse.move(1020, 996)
+    await expect(page.getByRole('tooltip')).toHaveCount(0)
     await launch.getByRole('button').focus()
     await expect(launch.getByRole('button')).toBeFocused()
+    await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Resume session' : '恢复会话')
     await page.keyboard.press('Escape')
     await expect(page.getByRole('tooltip')).toHaveCount(0)
     await clearFixtureSetupFocus(page)

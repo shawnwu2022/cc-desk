@@ -12,7 +12,7 @@
   "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/37965393533",
   "artifactId": "11633985429",
   "artifactZipSha256": "0718e755776fca863f27fdbaa5862fcff37d9bfda9903e1c58398ab14fb715d1",
-  "sourceScope": "Nine reviewed actual PNGs from the old Linux Chromium CI run. These are not screenshots of current PR37 head f36fd1401571737cc59128dd02732f948feb6feb and do not establish its CI result.",
+  "sourceScope": "Mixed provenance: eight entries retain their prior reviewed bytes and source. Five entries named in baselineRevision replace them with inspected PR39 actual PNG bytes. Top-level PR37 source/review fields describe the original approval; per-entry revisionProvenance and baselineRevision identify the five current replacements. This does not establish a successful current CI run.",
   "reviewedSourceTransport": {
     "repository": "shawnwu2022/cc-desk",
     "branch": "evidence/pr37-reviewed-baselines",
@@ -44,8 +44,8 @@
     "required": "Every current230 screenshot/geometry/interaction/evidence case on new exact PR source, updateSnapshots none and maxDiffPixels0. Baseline byte acceptance never changes previous failed run conclusions."
   },
   "acceptanceLimits": [
-    "Exact inspected old-source Linux Chromium baseline bytes only",
-    "Four unchanged images retain prior reviewed bytes",
+    "Exact inspected Linux Chromium baseline bytes with per-entry provenance; mixed original and PR39 sources",
+    "Eight other images retain their prior reviewed bytes and provenance",
     "Four added Native receipt captures remain separate unapproved evidence",
     "Native current working/completed remains unverified",
     "Not Windows WebView2 or native scaling/live CLI/taskbar delivery certification",
@@ -56,21 +56,28 @@
       "name": "archived-sessions.png",
       "width": 1366,
       "height": 768,
-      "sha256": "621dd7bcd171033dcb06a7a54d38aeb6ec14091fb657f4a3d8acec336c100a9a",
-      "bytes": 46064,
+      "sha256": "635f6abe9e7ed50bdde6b6e45c923c43480796c4e2a049d55d2a32abe4f4b977",
+      "bytes": 46403,
       "reviewVerdict": "approve",
-      "provenance": "Exact inspected actual PNG bytes from old run37965393533; not a capture of f36 or new current head. Fresh current-source no-update verification required.",
+      "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
       "zipEntry": "test-results/visual-verification/unified-workspace-archived-sessions-snapshot/archived-sessions-actual.png",
       "pixelReview": {
-        "playwrightReportedPixels": 1934,
-        "rawRgbChangedPixels": 4249,
+        "rawRgbChangedPixels": 689,
         "rawDifferenceBoundsExclusive": [
-          80,
-          77,
-          1006,
-          276
+          996,
+          73,
+          1311,
+          127
         ],
-        "acceptedChange": "Project sorting/counts and two status-icon centers; archive drawer geometry and text retained"
+        "acceptedChange": "Archive solid glyphs and always-visible Restore/age tail only"
+      },
+      "revisionProvenance": {
+        "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
+        "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
+        "workflowRunId": "38024365937",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
+        "artifactId": "11660067279",
+        "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
       }
     },
     {
@@ -191,21 +198,28 @@
       "name": "workspace-dark-gui-light-terminal.png",
       "width": 1280,
       "height": 720,
-      "sha256": "c711bb11b4162ee2506cc797d9aae55aea2f45abacff7f3f77475d047b30b1f7",
-      "bytes": 57761,
+      "sha256": "592108f53def413dc8e7afcd00dc2bedc63c64cad913d9a4195c5149543ed80b",
+      "bytes": 56617,
       "reviewVerdict": "approve",
-      "provenance": "Exact inspected actual PNG bytes from old run37965393533; not a capture of f36 or new current head. Fresh current-source no-update verification required.",
+      "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-dark-gui-light-terminal-snapshot/workspace-dark-gui-light-terminal-actual.png",
       "pixelReview": {
-        "playwrightReportedPixels": 7512,
-        "rawRgbChangedPixels": 32324,
+        "rawRgbChangedPixels": 22557,
         "rawDifferenceBoundsExclusive": [
-          56,
-          98,
+          60,
+          181,
           323,
-          554
+          553
         ],
-        "acceptedChange": "Sorted sidebar/status icons only; dark GUI and light terminal retained"
+        "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+      },
+      "revisionProvenance": {
+        "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
+        "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
+        "workflowRunId": "38024365937",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
+        "artifactId": "11660067279",
+        "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
       }
     },
     {
@@ -221,63 +235,84 @@
       "name": "workspace-hover-action-1366-en.png",
       "width": 1366,
       "height": 768,
-      "sha256": "7da3b860ca6e095713ff3731f1cb9212431c6cf0d4eff282298263366d7eaba8",
-      "bytes": 59430,
+      "sha256": "e2c9ab7d1ae2743a455b4fc6430f6ed3638d7fca5cd479f7d0787f71caa9efa3",
+      "bytes": 58170,
       "reviewVerdict": "approve",
-      "provenance": "Exact inspected actual PNG bytes from old run37965393533; not a capture of f36 or new current head. Fresh current-source no-update verification required.",
+      "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-hover-action-1366-en-snapshot/workspace-hover-action-1366-en-actual.png",
       "pixelReview": {
-        "playwrightReportedPixels": 7412,
-        "rawRgbChangedPixels": 41840,
+        "rawRgbChangedPixels": 27794,
         "rawDifferenceBoundsExclusive": [
-          56,
-          98,
+          60,
+          181,
           323,
-          554
+          553
         ],
-        "acceptedChange": "Sorted/status rows; hover tooltip follows row moved78px; Close and overflow anchor retained"
+        "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+      },
+      "revisionProvenance": {
+        "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
+        "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
+        "workflowRunId": "38024365937",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
+        "artifactId": "11660067279",
+        "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
       }
     },
     {
       "name": "workspace-menu-1024-en.png",
       "width": 1024,
       "height": 640,
-      "sha256": "a99d5a486306b22d383baca29b4f08c4e585f9d485cb8509546391e4d0232d67",
-      "bytes": 57712,
+      "sha256": "d003bcae68bfe847722f0ecc67c1480671556f05efca438a20afb76dd34c2e05",
+      "bytes": 57902,
       "reviewVerdict": "approve",
-      "provenance": "Exact inspected actual PNG bytes from old run37965393533; not a capture of f36 or new current head. Fresh current-source no-update verification required.",
+      "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-menu-1024-en-snapshot/workspace-menu-1024-en-actual.png",
       "pixelReview": {
-        "playwrightReportedPixels": 7918,
-        "rawRgbChangedPixels": 64791,
+        "rawRgbChangedPixels": 44328,
         "rawDifferenceBoundsExclusive": [
-          56,
-          98,
+          60,
+          181,
           328,
-          554
+          553
         ],
-        "acceptedChange": "Sorted/status rows and menu following moved row; menu contents/focus/bounds retained"
+        "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+      },
+      "revisionProvenance": {
+        "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
+        "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
+        "workflowRunId": "38024365937",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
+        "artifactId": "11660067279",
+        "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
       }
     },
     {
       "name": "workspace-mixed-1366-zh.png",
       "width": 1366,
       "height": 768,
-      "sha256": "a3ef4a0616b4d91135c425aa2429ea071de4a1ff4f768b261355287e36c59baa",
-      "bytes": 58152,
+      "sha256": "b1bdb62183f1b93e2d404ede3b89630d5ccd9f4134e27e0b9be065454e121698",
+      "bytes": 57015,
       "reviewVerdict": "approve",
-      "provenance": "Exact inspected actual PNG bytes from old run37965393533; not a capture of f36 or new current head. Fresh current-source no-update verification required.",
+      "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-mixed-1366-zh-snapshot/workspace-mixed-1366-zh-actual.png",
       "pixelReview": {
-        "playwrightReportedPixels": 7498,
-        "rawRgbChangedPixels": 32313,
+        "rawRgbChangedPixels": 22633,
         "rawDifferenceBoundsExclusive": [
-          56,
-          98,
+          60,
+          181,
           323,
-          554
+          553
         ],
-        "acceptedChange": "Displayed-name alphabetical project order and restored status shapes; terminal retained"
+        "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+      },
+      "revisionProvenance": {
+        "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
+        "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
+        "workflowRunId": "38024365937",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
+        "artifactId": "11660067279",
+        "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
       }
     },
     {
@@ -404,5 +439,28 @@
         }
       }
     }
+  },
+  "baselineRevision": {
+    "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
+    "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
+    "workflowRunId": "38024365937",
+    "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
+    "artifactId": "11660067279",
+    "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024",
+    "reviewDate": "2026-10-10",
+    "reviewedImages": 5,
+    "names": [
+      "workspace-mixed-1366-zh.png",
+      "workspace-menu-1024-en.png",
+      "workspace-hover-action-1366-en.png",
+      "workspace-dark-gui-light-terminal.png",
+      "archived-sessions.png"
+    ],
+    "previousRunResult": {
+      "passed": 225,
+      "failed": 9,
+      "note": "Four glyph evidence setup failures and five reviewed baseline diffs. Baseline update does not retroactively pass that run."
+    },
+    "acceptance": "Approved five inspected actual PNGs only; next CI must verify exact updated source with zero pixel tolerance. Four new glyph images remain separate evidence."
   }
 }
