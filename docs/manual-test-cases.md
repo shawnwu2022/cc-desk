@@ -2466,3 +2466,11 @@
 - Steps: enable reduced motion and check loading/status/collapse animations; inspect accessible names and visible focus outlines; change GUI/terminal theme independently while keeping a session selected
 - Expected: no nonessential motion, no status conveyed only by color or visible status text added to rows, stable terminal process/output/selection, and usable controls at every scale
 - Status: not executed in Task22. jsdom/source contracts and theme token arithmetic do not constitute rendered or OS acceptance; Task23 browser visuals are separate evidence
+
+## Unreleased session-list rendered acceptance
+
+- Target: actual Windows WebView2, 1024×640, 100%/125%/150% scale, light/dark, English/Chinese, and the user's screen reader
+- Preconditions: an authorized installed candidate with open and closed sessions; no new CLI launch is needed for visual inspection
+- Steps: inspect the filled status glyphs and always-visible history Resume button beside activity age; navigate with Tab; inspect status tooltip then leave/press Escape; view justified activity subtype, unknown and completion icons, including with reduced motion enabled
+- Expected: semantic marks remain distinguishable and readable, no empty/hollow status icon or permanent status text, age/action do not overlap, focus is visible, description disappears immediately, reduced motion is static, and only the explicit Resume control can request a launch
+- Status: not executed on dot's cloud executor; Chromium socket permissions and Tauri Linux GTK prerequisites are unavailable. CI Linux pixels and jsdom regressions remain separate evidence

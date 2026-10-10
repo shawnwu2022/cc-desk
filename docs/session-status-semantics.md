@@ -9,24 +9,24 @@ terminal is a host action, independent of a CLI turn.
 
 | Historical signal | Unified field | Row state | Preserved presentation |
 |---|---|---|---|
-| Explicit working | `activityState: working` | working | Green filled center, dashed ring, pulse |
-| Thinking | `activityState: thinking` | working | Working presentation, detail remains representable |
-| Tool executing | `activityState: tool_executing` | working | Working presentation, detail remains representable |
-| Subagent running | `activityState: subagent_running` | working | Working presentation, detail remains representable |
-| Compacting | `activityState: compacting` | working | Working presentation, detail remains representable |
-| Explicit idle while process runs | `activityState: idle` | running | Static green filled center |
-| Permission request | `attentionKind: permission` or `activityState: waiting_permission` | permission | Gold pause mark, pulse |
-| Waiting for input | `activityState: waiting_input` | needs-user | Gold attention mark |
-| Ordered coarse waiting | `activityState: waiting` | needs-user | Generic gold attention; no invented permission/completion cause |
-| Response completed | `attentionKind: completed` | completed | Hollow green rings |
-| Sticky error | `attentionKind: error` or `activityState: error` | error | Red alert mark, retained on ordinary acknowledgment |
-| Pending without known cause | `attentionState: needs-user` | needs-user | Gold fallback |
-| Stopped retained selected terminal | `processState: stopped`, `opened: true`, selected | stopped | Solid gray center |
-| Closed history/unselected stopped terminal | `processState: stopped` | closed | Hollow gray ring |
-| Missing, unavailable or unordered activity | `activityState: unknown` | unknown | Gray activity-unknown mark |
-| Starting process | `processState: starting` | starting | Existing starting indicator |
-| Uncertain process ownership | `processState: unknown` | confirming | Existing status confirmation indicator |
-| Failed launch | `processState: failed` | failed | Existing launch-failure indicator |
+| Explicit working | `activityState: working` | working | Solid green backplate with work sparkle; slight scale pulse |
+| Thinking | `activityState: thinking` | working | Specific contrasting glyph and localized detail label; sequential dot brightness |
+| Tool executing | `activityState: tool_executing` | working | Specific contrasting glyph and localized detail label; working scale pulse |
+| Subagent running | `activityState: subagent_running` | working | Specific contrasting glyph and localized detail label; working scale pulse |
+| Compacting | `activityState: compacting` | working | Specific contrasting glyph and localized detail label; working scale pulse |
+| Explicit idle while process runs | `activityState: idle` | running | Static solid green dot |
+| Permission request | `attentionKind: permission` or `activityState: waiting_permission` | permission | Static shield on solid gold backplate |
+| Waiting for input | `activityState: waiting_input` | needs-user | Input caret on solid gold backplate |
+| Ordered coarse waiting | `activityState: waiting` | needs-user | Reply bubble on solid gold backplate; no invented permission/completion cause |
+| Response completed | `attentionKind: completed` | completed | Static check on solid green backplate |
+| Sticky error | `attentionKind: error` or `activityState: error` | error | Alert mark on solid red backplate, retained on ordinary acknowledgment |
+| Pending without known cause | `attentionState: needs-user` | needs-user | Reply bubble on solid gold backplate |
+| Stopped retained selected terminal | `processState: stopped`, `opened: true`, selected | stopped | Stop square on solid neutral backplate |
+| Closed history/unselected stopped terminal | `processState: stopped` | closed | Close cross on solid neutral backplate |
+| Missing, unavailable or unordered activity | `activityState: unknown` | unknown | Distinct question mark on solid neutral backplate |
+| Starting process | `processState: starting` | starting | Clock on solid info backplate, gentle breathing |
+| Uncertain process ownership | `processState: unknown` | confirming | Confirmation clock on solid neutral backplate |
+| Failed launch | `processState: failed` | failed | Alert on solid error backplate with launch-failure label |
 
 Process lifecycle wins over turn feedback. For a running session, the historical
 row priority remains working, error, permission, completed, generic pending,
@@ -157,3 +157,21 @@ fabricated sequence numbers.
   remain required. These tests use fabricated trusted inputs at host boundaries;
   they do not certify authenticated real CLI behavior, taskbar flash delivery,
   Windows rendering, scaling or screenshot acceptance.
+
+## Unreleased filled-glyph presentation
+
+The existing status priority and evidence boundaries above are unchanged. Details
+are shown only when their matching coarse state is already justified; a raw native
+receipt cannot become Thinking, Working, Completed or Permission. Archived rows
+use an archive-box label/shape without claiming runtime status. Hover descriptions
+close on pointer leave, keyboard descriptions close on blur/Escape, and all shapes
+keep their accessible localized name. Known starting and justified working breathe
+slightly, while thinking dots brighten sequentially. Tool/branch symbols never rotate.
+Entering permission/input or completed once triggers a brief transition; selection,
+refresh and remount do not replay it. Reduced-motion disables every animation.
+
+Every semantic icon uses a filled 16px circular backplate and a contrasting local
+mark. Icon-scoped palettes strengthen green in the light theme and info/error in
+the dark theme; muted states use secondary text ink. Theme arithmetic covers both
+symbol/backplate and selected/hover surface contrast at 3:1. This unit evidence is
+not a substitute for reviewing rendered pixels or Windows accessibility/scaling.

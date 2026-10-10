@@ -20,7 +20,7 @@ const now = new Date(2026, 8, 30, 9, 0).getTime()
 function session(extra: Partial<UnifiedSession> = {}): UnifiedSession {
   return { id: 'claude-1', projectKey: '/work/game', projectPath: '/work/game', cli: 'claude',
     runtime: 'legacy-claude', title: 'Claude work', processState: 'running', attentionState: 'none',
-    lastActivityAt: now - 60_000, archived: false, resumable: true, adapterSessionId: 'adapter-1', ...extra }
+    lastActivityAt: now - 60_000, archived: false, opened: true, resumable: true, adapterSessionId: 'adapter-1', ...extra }
 }
 function group(sessions = [session()], extra: Partial<UnifiedProjectGroup> = {}): UnifiedProjectGroup {
   return { projectKey: '/work/game', projectPath: '/work/game', name: 'Game', sessions,
@@ -63,6 +63,65 @@ function rules(file: string) {
 }
 
 describe('Unified project session tree', () => {
+  // 活动只更新时间，不移动已存在行；刷新采用最新快照并保留选择。
+  it('Tree_ActivitySnapshot_023', async () => {
+    let rows = [session({ id: 'a', lastActivityAt: 20, opened: true }), session({ id: 'b', lastActivityAt: 40, opened: true })]
+    const wrapper = panel({ projectGroups: [group(rows)], selectedId: 'a', currentProjectPath: '/work/game', loading: false })
+    await wrapper.get('.project-main').trigger('click')
+    const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(order()).toEqual(['b', 'a'])
+    rows = [ { ...rows[0], lastActivityAt: 90, activityState: 'working' }, { ...rows[1], lastActivityAt: 60, attentionKind: 'completed' } ]
+    await wrapper.setProps({ projectGroups: [group(rows)], selectedId: 'b' })
+    expect(order()).toEqual(['b', 'a'])
+    await wrapper.get('button[aria-label="Refresh sessions"]').trigger('click')
+    await wrapper.setProps({ loading: true })
+    await wrapper.setProps({ projectGroups: [group(rows.map(row => row.id === 'b' ? { ...row, lastActivityAt: 100 } : row))], loading: false })
+    expect(order()).toEqual(['b', 'a'])
+    expect(wrapper.get('[data-session-row="b"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.emitted('activate')).toBeUndefined()
+    expect(wrapper.emitted('refresh')).toHaveLength(1)
+  })
+
+  // 背景发现旧历史只追加，不伪装新建置顶；同活动时间由精确 ID 决定快照顺序。
+  it('Tree_DiscoveredHistoryAndTies_025', async () => {
+    const a = session({ id: 'a', lastActivityAt: 20, lastOpenedAt: 1 })
+    const b = session({ id: 'b', lastActivityAt: 20, lastOpenedAt: 2 })
+    const wrapper = panel({ projectGroups: [group([b, a])] })
+    await wrapper.get('.project-main').trigger('click')
+    const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(order()).toEqual(['a', 'b'])
+    const old = session({ id: 'old', opened: false, processState: 'stopped', lastOpenedAt: 99, lastActivityAt: 10 })
+    await wrapper.setProps({ projectGroups: [group([old, b, a])] })
+    expect(order()).toEqual(['a', 'b', 'old'])
+    await wrapper.setProps({ projectGroups: [group([a, b, { ...old, lastOpenedAt: 150, lastActivityAt: 1000 }])] })
+    expect(order()).toEqual(['a', 'b', 'old'])
+    await wrapper.get('button[aria-label="Refresh sessions"]').trigger('click')
+    expect(order()).toEqual(['old', 'a', 'b'])
+  })
+
+  // 新建、重新打开和归档恢复行置顶；状态恢复不重排，项目重新进入按活动重取快照。
+  it('Tree_EntryCreateRestore_024', async () => {
+    const a = session({ id: 'a', lastActivityAt: 20, lastOpenedAt: 10, opened: true })
+    const b = session({ id: 'b', lastActivityAt: 40, lastOpenedAt: 15, opened: true })
+    const restored = session({ id: 'd', opened: false, processState: 'stopped', lastOpenedAt: 70, lastActivityAt: 2 })
+    const wrapper = panel({ projectGroups: [group([a, b])], currentProjectPath: '/work/game', archivedSessions: [{ ...restored, archived: true }] })
+    await wrapper.get('.project-main').trigger('click')
+    const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    const created = session({ id: 'c', lastActivityAt: 1, lastOpenedAt: 50, processState: 'starting' })
+    await wrapper.setProps({ projectGroups: [group([a, b, created])] })
+    expect(order()).toEqual(['c', 'b', 'a'])
+    await wrapper.setProps({ projectGroups: [group([{ ...a, lastOpenedAt: 60 }, b, created])] })
+    expect(order()).toEqual(['a', 'c', 'b'])
+    await wrapper.setProps({ projectGroups: [group([{ ...a, processState: 'running', lastOpenedAt: 60 }, b, created, restored])], archivedSessions: [] })
+    expect(order()).toEqual(['d', 'a', 'c', 'b'])
+    await wrapper.setProps({ active: false })
+    await wrapper.setProps({ active: true })
+    expect(order()).toEqual(['b', 'a', 'd', 'c'])
+    await wrapper.setProps({ currentProjectPath: '/other' })
+    await wrapper.setProps({ projectGroups: [group([{ ...a, lastActivityAt: 80 }, b, created, restored])], currentProjectPath: '/work/game' })
+    expect(order()).toEqual(['a', 'b', 'd', 'c'])
+  })
+
   // 普通项目与仅归档项目统一按名称排序，活动刷新和来源顺序不会移动项目行。
   it('StableProjectOrder_PanelAndArchive_001', async () => {
     const groups = [
@@ -255,7 +314,7 @@ describe('Unified project session tree', () => {
     await rows[0].get('.session-primary-action button').trigger('click')
     expect(wrapper.emitted('restore-request')).toEqual([[archived.id]])
     expect(rows[0].props('session').archived).toBe(true)
-    await rows[0].trigger('contextmenu'); await selectMenu('restore-archive')
+    await rows[0].get('.session-primary-action button').trigger('click')
     expect(wrapper.emitted('restore-request')).toEqual([[archived.id], [archived.id]])
     await wrapper.setProps({ sessions: [] })
     expect(document.querySelector('[role="dialog"]')!.textContent).toContain('No archived sessions')

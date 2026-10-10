@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { compileStyle } from '@vue/compiler-sfc'
@@ -19,6 +19,7 @@ beforeEach(() => {
   i18n = createI18n({ legacy: false, locale: 'en', fallbackLocale: 'en', messages: { en, zh } })
 })
 afterEach(() => {
+  vi.restoreAllMocks()
   mounted.splice(0).forEach((wrapper) => wrapper.unmount())
   document.body.innerHTML = ''
   document.documentElement.removeAttribute('data-theme')
@@ -42,10 +43,10 @@ describe('SessionIcons', () => {
       expect(svg.find('text').exists()).toBe(false)
       const circle = svg.find('circle[cx="8"][cy="8"][r="6"]')
       expect(circle.exists(), `${state} must keep the shared circular outline`).toBe(true)
-      expect(circle.attributes('fill')).toBe('none')
-      expect(circle.attributes('stroke')).toBe('currentColor')
+      expect(circle.attributes('fill')).toBe('currentColor')
+      expect(svg.find('[data-status-mark]').exists()).toBe(true)
     }
-    expect(shapes).toEqual(['gap-ring', 'idle-dot', 'reply-dot', 'question-circle', 'stop-circle', 'alert-circle'])
+    expect(shapes).toEqual(['gap-ring', 'idle-dot', 'reply-dot', 'confirmation-clock', 'stop-circle', 'alert-circle'])
     expect(new Set(geometries).size).toBe(6)
   })
 
@@ -111,6 +112,71 @@ describe('SessionIcons', () => {
     expect(wrapper.get('svg').element).not.toBe(attention)
   })
 
+  // 完成与等待轻提示只在真正状态转换时进入，初次挂载和刷新不重播。
+  it('Status_TransitionsNotRemounts_028', async () => {
+    const wrapper = mount(SessionStatusIcon, { props: { state: 'completed' }, global: { plugins: [i18n] } })
+    mounted.push(wrapper)
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBeUndefined()
+    await wrapper.setProps({ state: 'running' })
+    await wrapper.setProps({ state: 'permission' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBe('permission')
+    await wrapper.get('[role="img"]').trigger('animationend', { animationName: 'session-status-entry' })
+    await wrapper.setProps({ state: 'permission' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBeUndefined()
+    await wrapper.setProps({ state: 'completed' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBe('completed')
+    await wrapper.get('[role="img"]').trigger('animationend', { animationName: 'session-completion-entry' })
+    await wrapper.setProps({ state: 'completed' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBeUndefined()
+    await wrapper.setProps({ activityState: 'idle' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBeUndefined()
+    const remounted = mount(SessionStatusIcon, { props: { state: 'completed' }, global: { plugins: [i18n] } })
+    mounted.push(remounted)
+    expect(remounted.get('[role="img"]').attributes('data-status-entry')).toBeUndefined()
+  })
+
+  // 选择造成的徽标抑制不代表新事件；未知态没有工作动画，空闲不用播放动作符号。
+  it('Status_SelectionDoesNotReplay_029', async () => {
+    const wrapper = mount(SessionStatusIcon, { props: { state: 'running', transitionState: 'permission', activityState: 'waiting_permission' }, global: { plugins: [i18n] } })
+    mounted.push(wrapper)
+    await wrapper.setProps({ state: 'permission' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBeUndefined()
+    await wrapper.setProps({ state: 'working', transitionState: 'working', activityState: 'working' })
+    await wrapper.setProps({ state: 'needs-user', transitionState: 'needs-user', activityState: 'waiting_input' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBe('needs-user')
+    await wrapper.setProps({ state: 'unknown', transitionState: 'unknown', activityState: 'unknown' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBeUndefined()
+    await wrapper.setProps({ state: 'running', transitionState: 'running', activityState: 'idle' })
+    expect(wrapper.get('svg [data-status-mark]').element.children).toHaveLength(0)
+    await wrapper.setProps({ state: 'confirming', transitionState: 'confirming' })
+    expect(wrapper.get('svg').attributes('data-shape')).toBe('confirmation-clock')
+  })
+
+  // 减弱动效的状态转换不保留待播放标记；动画取消也清除一次性过渡。
+  it('Status_ReducedTransitionStatic_030', async () => {
+    const media = vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList)
+    const wrapper = mount(SessionStatusIcon, { props: { state: 'working' }, global: { plugins: [i18n] } })
+    mounted.push(wrapper)
+    await wrapper.setProps({ state: 'completed' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBeUndefined()
+    media.mockReturnValue({ matches: false } as MediaQueryList)
+    await wrapper.setProps({ state: 'permission' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBe('permission')
+    await wrapper.get('[role="img"]').trigger('animationcancel', { animationName: 'session-status-entry' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBeUndefined()
+  })
+
+  // 旧工作子图形的迟到动画取消，不能清除新等待状态的一次轻提示。
+  it('Status_LoopCancelKeepsEntry_031', async () => {
+    const wrapper = mount(SessionStatusIcon, { props: { state: 'working', activityState: 'thinking' }, global: { plugins: [i18n] } })
+    mounted.push(wrapper)
+    await wrapper.setProps({ state: 'permission', activityState: 'waiting_permission' })
+    await wrapper.get('[role="img"]').trigger('animationcancel', { animationName: 'session-thinking-dot' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBe('permission')
+    await wrapper.get('[role="img"]').trigger('animationcancel', { animationName: 'session-status-entry' })
+    expect(wrapper.get('[role="img"]').attributes('data-status-entry')).toBeUndefined()
+  })
+
   // 检查生产样式的状态动效次数与减弱动效分支，不把 jsdom 当作视觉验收。
   it('Status_ReducedMotion_016', () => {
     const source = readFileSync(resolve('src/components/sessions/SessionStatusIcon.vue'), 'utf8')
@@ -119,15 +185,14 @@ describe('SessionIcons', () => {
     style.textContent = source.match(/<style[^>]*>([\s\S]*?)<\/style>/)![1]
     document.head.append(style)
     const rules = Array.from(style.sheet!.cssRules)
-    const starting = rules.find((rule) => rule instanceof CSSStyleRule && rule.selectorText.includes('.session-status-icon--starting') && rule.style.getPropertyValue('animation')) as CSSStyleRule
-    const confirming = rules.find((rule) => rule instanceof CSSStyleRule && rule.selectorText.includes('.session-status-icon--confirming') && rule.style.getPropertyValue('animation')) as CSSStyleRule
-    const attention = rules.find((rule) => rule instanceof CSSStyleRule && rule.selectorText.includes('.session-status-icon--needs-user') && rule.style.getPropertyValue('animation')) as CSSStyleRule
-    expect(starting.style.getPropertyValue('animation')).toMatch(/\d+(?:\.\d+)?s linear infinite$/)
-    expect(confirming.style.getPropertyValue('animation')).toMatch(/\d+(?:\.\d+)?s ease-in-out infinite$/)
-    expect(attention.style.getPropertyValue('animation')).toMatch(/\d+ms ease-out 1$/)
-    expect(rules.filter((rule) => rule instanceof CSSStyleRule && /--(?:running|ended|failed)/.test(rule.selectorText) && rule.style.getPropertyValue('animation'))).toEqual([])
+    const animated = rules.filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule && !!rule.style.getPropertyValue('animation'))
+    const loops = animated.filter(rule => rule.style.getPropertyValue('animation').includes('infinite'))
+    expect(loops).toHaveLength(3)
+    expect(loops.every(rule => /--(?:working|starting)/.test(rule.selectorText))).toBe(true)
+    expect(animated.filter(rule => / 1$/.test(rule.style.getPropertyValue('animation')))).toHaveLength(2)
+    expect(animated.some(rule => /rotate/.test(rule.style.getPropertyValue('animation')))).toBe(false)
     const reduced = rules.find((rule) => rule instanceof CSSMediaRule && rule.conditionText === '(prefers-reduced-motion: reduce)') as CSSMediaRule
-    const reducedShape = Array.from(reduced.cssRules).find((rule) => rule instanceof CSSStyleRule && rule.selectorText === '.session-status-icon .session-status-icon__shape') as CSSStyleRule
+    const reducedShape = Array.from(reduced.cssRules).find((rule) => rule instanceof CSSStyleRule && rule.selectorText.split(',').map(selector => selector.trim()).includes('.session-status-icon .session-status-icon__shape')) as CSSStyleRule
     expect(reducedShape, 'Reduced-motion override must match the state animation specificity').toBeDefined()
     expect(reducedShape.style.getPropertyValue('animation')).toBe('none')
   })
@@ -261,7 +326,7 @@ describe('SessionIcons', () => {
         expect(notice).toContain('Blossom_Light.svg')
         expect(notice).not.toContain('self-owned project artwork')
       }
-      const names = directory === 'cli' ? ['claude', 'codex'] : ['starting', 'running', 'working', 'permission', 'completed', 'stopped', 'closed', 'unknown', 'needs-user', 'confirming', 'ended', 'failed']
+      const names = directory === 'cli' ? ['claude', 'codex'] : ['starting', 'running', 'working', 'permission', 'completed', 'stopped', 'closed', 'unknown', 'needs-user', 'confirming', 'ended', 'failed', 'thinking', 'tool-executing', 'subagent', 'compacting', 'waiting-input', 'archived']
       for (const name of names) {
         const source = readFileSync(resolve(`src/assets/icons/${directory}/${name}.svg`), 'utf8')
         const svg = new DOMParser().parseFromString(source, 'image/svg+xml').documentElement
@@ -325,36 +390,31 @@ describe('SessionIcons', () => {
     else expect(paths[0].getAttribute('fill')).toBe('black')
   })
 
-  // 状态确认的呼吸最低透明度仍在双主题、悬浮及选中行背景上至少达到 3:1。
-  it('Status_BreathContrast_027', () => {
+  // 实心底与对比符号在双主题及选中叠色上达到 3:1，工作动效不降低透明度。
+  it('Status_FilledGlyphContrast_027', () => {
     const globalCss = readFileSync(resolve('src/styles/global.css'), 'utf8')
-    const source = readFileSync(resolve('src/components/sessions/SessionStatusIcon.vue'), 'utf8')
-    const styles = document.createElement('style')
-    styles.dataset.testSessionIcons = ''
-    styles.textContent = source.match(/<style[^>]*>([\s\S]*?)<\/style>/)![1]
-    document.head.append(styles)
-    const rules = Array.from(styles.sheet!.cssRules)
-    const breathing = rules.find((rule) => rule.type === CSSRule.KEYFRAMES_RULE && (rule as CSSKeyframesRule).name === 'session-status-breathe') as CSSKeyframesRule
-    expect(breathing).toBeDefined()
-    const minimumOpacity = Math.min(1, ...Array.from(breathing.cssRules, (rule) => Number((rule as CSSKeyframeRule).style.getPropertyValue('opacity') || 1)))
-    const base = rules.find((rule) => rule instanceof CSSStyleRule && rule.selectorText === '.session-status-icon') as CSSStyleRule
-    const colorToken = base.style.getPropertyValue('color').match(/^var\(--([\w-]+)\)$/)![1]
-    const luminance = (rgb: number[]) => rgb.map((channel) => channel / 255).map((channel) => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4).reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0)
+    const component = readFileSync(resolve('src/components/sessions/SessionStatusIcon.vue'), 'utf8')
+    const base = component.match(/\.session-status-icon\s*\{([^}]*)\}/)![1]
+    const dark = component.match(/:global\(\[data-theme="dark"\]\) \.session-status-icon\s*\{([^}]*)\}/)![1]
+    const luminance = (rgb: number[]) => rgb.map(channel => channel / 255).map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4).reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0)
+    const rgb = (hex: string) => [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16))
+    const contrast = (left: number[], right: number[]) => (Math.max(luminance(left), luminance(right)) + .05) / (Math.min(luminance(left), luminance(right)) + .05)
     for (const theme of ['light', 'dark']) {
-      const tokens = Object.fromEntries(Array.from(globalCss.match(theme === 'dark' ? /\[data-theme="dark"\]\s*\{([^}]*)\}/ : /:root\s*\{([^}]*)\}/)![1].matchAll(/--([\w-]+):\s*([^;]+);/g), (match) => [match[1], match[2].trim()]))
-      const ink = tokens[colorToken]
-      const inkRgb = [1, 3, 5].map((offset) => parseInt(ink.slice(offset, offset + 2), 16))
-      const selected = tokens['selected-bg'].match(/[\d.]+/g)!.map(Number)
-      for (const name of ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-hover']) {
-        const hex = tokens[name]
-        const background = [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16))
-        const selectedBackground = background.map((channel, index) => Math.round(selected[index] * selected[3] + channel * (1 - selected[3])))
-        for (const [surface, rgb] of [[name, background], [`selected over ${name}`, selectedBackground]] as const) {
-          const foreground = inkRgb.map((channel, index) => Math.round(channel * minimumOpacity + rgb[index] * (1 - minimumOpacity)))
-          const fg = luminance(foreground)
-          const bg = luminance(rgb)
-          const ratio = (Math.max(fg, bg) + .05) / (Math.min(fg, bg) + .05)
-          expect(ratio, `${theme} confirming trough on ${surface}: ${ratio.toFixed(4)}:1`).toBeGreaterThanOrEqual(3)
+      const tokens = Object.fromEntries(Array.from(globalCss.match(theme === 'dark' ? /\[data-theme="dark"\]\s*\{([^}]*)\}/ : /:root\s*\{([^}]*)\}/)![1].matchAll(/--([\w-]+):\s*([^;]+);/g), match => [match[1], match[2].trim()]))
+      Object.assign(tokens, Object.fromEntries(Array.from((base + (theme === 'dark' ? dark : '')).matchAll(/--([\w-]+):\s*([^;]+);/g), match => [match[1], match[2].trim()])))
+      const selection = tokens['selected-bg'].match(/[\d.]+/g)!.map(Number)
+      for (const ink of ['text-secondary', 'session-status-info', 'session-status-success', 'session-status-error', 'accent-gold-text']) {
+        expect(contrast(rgb(tokens[ink]), rgb(tokens['bg-primary'])), `${theme} ${ink} symbol/backplate`).toBeGreaterThanOrEqual(3)
+        if (ink === 'session-status-success') {
+          const opacity = Number(component.match(/@keyframes session-thinking-dot[^}]*opacity:\s*([\d.]+)/)![1])
+          const dimDot = rgb(tokens['bg-primary']).map((channel, index) => Math.round(channel * opacity + rgb(tokens[ink])[index] * (1 - opacity)))
+          expect(contrast(dimDot, rgb(tokens[ink])), `${theme} thinking dot at dim trough`).toBeGreaterThanOrEqual(3)
+        }
+        for (const surface of ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-hover']) {
+          const background = rgb(tokens[surface])
+          const selected = background.map((channel, index) => Math.round(selection[index] * selection[3] + channel * (1 - selection[3])))
+          expect(contrast(rgb(tokens[ink]), background), `${theme} ${ink} on ${surface}`).toBeGreaterThanOrEqual(3)
+          expect(contrast(rgb(tokens[ink]), selected), `${theme} ${ink} selected ${surface}`).toBeGreaterThanOrEqual(3)
         }
       }
     }

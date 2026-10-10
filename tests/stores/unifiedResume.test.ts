@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
@@ -264,4 +265,54 @@ it('Resume_RevalidatesAbsenceProof_017', async () => {
     root = 'original'; await catalog.removeMissingRecord(chosen.id)
     expect(catalog.sessions).toEqual([]); expect(tabs.tabs.size).toBe(0)
   } finally { delete (window as any).__CC_DESK_DOCUMENT__ }
+})
+
+// 待定恢复在统一目录发布禁用态；相同精确来源复用一次准入，失败后清除禁用态。
+it('Resume_PendingDeduplicates_023', async () => {
+  const catalog = useUnifiedSessionsStore()
+  const target = { id: 'history-pending', runtime: 'native-cli' as const, cli: 'codex' as const,
+    projectKey: '/repo', projectPath: '/repo', adapterSessionId: 'history', nativeSessionId: 'history',
+    title: 'History', processState: 'stopped' as const, attentionState: 'none' as const,
+    archived: false, opened: false, resumable: true, lastActivityAt: 1 }
+  let fail!: (error: Error) => void
+  let calls = 0
+  catalog.configureAdapters([{ runtime: 'native-cli', listSessions: async () => [target],
+    resumeSession: async () => { calls++; return new Promise<typeof target>((_resolve, reject) => { fail = reject }) },
+  } as unknown as import('@/types/unifiedSession').SessionAdapter])
+  await catalog.refresh()
+  const first = catalog.resumeCatalogSession(target).catch(() => undefined)
+  const second = catalog.resumeCatalogSession(target).catch(() => undefined)
+  expect(catalog.projectGroups[0].sessions[0].resumePending).toBe(true)
+  expect(calls).toBe(1)
+  await catalog.refresh()
+  expect(catalog.projectGroups[0].sessions[0].resumePending).toBe(true)
+  fail(new Error('SESSION_NOT_FOUND'))
+  await Promise.all([first, second])
+  expect(catalog.projectGroups[0].sessions[0].resumePending).toBe(false)
+})
+
+// 归档恢复待定期间复用精确来源的一次 metadata 写入，失败后允许显式重试。
+it('RestoreArchive_PendingCoalesces_024', async () => {
+  const catalog = useUnifiedSessionsStore()
+  const target = { id: 'archive-pending', runtime: 'native-cli' as const, cli: 'codex' as const,
+    projectKey: '/repo', projectPath: '/repo', adapterSessionId: 'archive', nativeSessionId: 'archive',
+    title: 'Archive', processState: 'stopped' as const, attentionState: 'none' as const,
+    archived: true, opened: false, resumable: true, lastActivityAt: 1 }
+  let fail!: (error: Error) => void
+  let calls = 0
+  const admission = new Promise<void>((_resolve, reject) => { fail = reject })
+  catalog.configureAdapters([{ runtime: 'native-cli', listSessions: async () => [target],
+    restoreArchivedSession: async () => { calls++; await admission },
+  } as unknown as import('@/types/unifiedSession').SessionAdapter])
+  await catalog.refresh()
+  const first = catalog.restoreArchivedSession(target.id).catch(() => undefined)
+  const second = catalog.restoreArchivedSession(target.id).catch(() => undefined)
+  expect(catalog.isResumePending(target)).toBe(true)
+  await flushPromises()
+  expect(calls).toBe(1)
+  fail(new Error('COMMIT_STATE_UNKNOWN'))
+  await Promise.all([first, second])
+  expect(calls).toBe(1)
+  expect(catalog.isResumePending(target)).toBe(false)
+  expect(catalog.sessions[0].archived).toBe(true)
 })

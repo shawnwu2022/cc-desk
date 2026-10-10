@@ -73,16 +73,82 @@ watch(() => props.active, active => {
   }
 }, { flush: 'sync' })
 const normalGroups = computed(() => props.projectGroups ?? store.projectGroups)
-const archived = computed(() => (props.archivedSessions ?? store.sessions).filter(session => session.archived))
+const archived = computed(() => (props.archivedSessions ?? store.sessions).filter(session => session.archived)
+  .map(session => store.isResumePending(session) ? { ...session, resumePending: true } : session))
+const knownArchivedIds = new Set<string>()
+// Activity is live metadata, not a continuous row-position command. Keep this
+// view's snapshot independently of adapters' catalog publication order.
+const sessionOrders = ref(new Map<string, { ids: string[]; openedAt: Map<string, number> }>())
+function snapshotOrder(groups = normalGroups.value) {
+  const next = new Map(sessionOrders.value)
+  for (const group of groups) {
+    const rows = group.sessions.filter(row => !row.archived)
+    next.set(group.projectKey, {
+      ids: [...rows].sort((a, b) => activityTime(b) - activityTime(a) || a.id.localeCompare(b.id)).map(row => row.id),
+      openedAt: new Map(rows.map(row => [row.id, row.lastOpenedAt ?? 0])),
+    })
+  }
+  sessionOrders.value = next
+}
+function activityTime(row: UnifiedSession) {
+  return Number.isFinite(row.lastActivityAt) ? row.lastActivityAt : 0
+}
+watch(() => ({ groups: normalGroups.value, archived: archived.value }), ({ groups, archived }) => {
+  for (const row of archived) knownArchivedIds.add(row.id)
+  const next = new Map(sessionOrders.value)
+  const keys = new Set(groups.map(group => group.projectKey))
+  for (const key of next.keys()) if (!keys.has(key)) next.delete(key)
+  for (const group of groups) {
+    const rows = group.sessions.filter(row => !row.archived)
+    const previous = next.get(group.projectKey)
+    if (!previous) {
+      next.set(group.projectKey, { ids: [...rows].sort((a, b) => activityTime(b) - activityTime(a) || a.id.localeCompare(b.id)).map(row => row.id),
+        openedAt: new Map(rows.map(row => [row.id, row.lastOpenedAt ?? 0])) })
+      continue
+    }
+    const live = new Set(rows.map(row => row.id))
+    // New/admitted/restored rows lead, while existing relative order stays fixed.
+    const leading = rows.filter(row => (previous.openedAt.has(row.id) && (row.opened === true || !!row.preparationState) && (row.lastOpenedAt ?? 0) > (previous.openedAt.get(row.id) ?? 0))
+      || (!previous.openedAt.has(row.id) && (row.opened === true || !!row.preparationState || knownArchivedIds.has(row.id))))
+      .sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0) || activityTime(b) - activityTime(a) || a.id.localeCompare(b.id))
+    const leadingIds = new Set(leading.map(row => row.id))
+    const discovered = rows.filter(row => !previous.openedAt.has(row.id) && !leadingIds.has(row.id))
+      .sort((a, b) => activityTime(b) - activityTime(a) || a.id.localeCompare(b.id))
+    next.set(group.projectKey, { ids: [...leadingIds, ...previous.ids.filter(id => live.has(id) && !leadingIds.has(id)), ...discovered.map(row => row.id)],
+      openedAt: new Map(rows.map(row => [row.id, row.lastOpenedAt ?? 0])) })
+    for (const row of rows) knownArchivedIds.delete(row.id)
+  }
+  sessionOrders.value = next
+}, { immediate: true, deep: true, flush: 'sync' })
+watch(() => [props.active, props.currentProjectPath] as const, ([active, path], previous) => {
+  if (!active) manualRefreshPending = false
+  else if (!previous || !previous[0]) snapshotOrder()
+  else if (!sameProjectPath(path ?? '', previous[1] ?? '')) {
+    manualRefreshPending = false
+    snapshotOrder(normalGroups.value.filter(group => sameProjectPath(group.projectPath, path ?? '')))
+  }
+}, { flush: 'sync' })
+let manualRefreshPending = false
+function refreshSessions() {
+  if (!props.active) return
+  manualRefreshPending = true
+  snapshotOrder()
+  emit('refresh')
+}
 const selectedId = computed(() => props.selectedId === undefined ? store.activeSessionId : props.selectedId)
 const loading = computed(() => props.loading ?? store.loading)
+watch(loading, (busy, previous) => {
+  if (!busy && previous && manualRefreshPending) { manualRefreshPending = false; snapshotOrder() }
+}, { flush: 'post' })
 const stateReady = computed(() => props.projectGroups !== undefined || projects.loaded)
 const stateError = computed(() => props.projectGroups === undefined && projects.error)
 const searching = computed(() => !!searchQuery.value.trim())
 const allGroups = computed<UnifiedProjectGroup[]>(() => {
-  const groups = normalGroups.value.filter(group => !group.hidden).map(group => ({
-    ...group, sessions: group.sessions.filter(session => !session.archived),
-  }))
+  const groups = normalGroups.value.filter(group => !group.hidden).map(group => {
+    const ranks = new Map((sessionOrders.value.get(group.projectKey)?.ids ?? []).map((id, rank) => [id, rank]))
+    return { ...group, sessions: group.sessions.filter(session => !session.archived)
+      .sort((a, b) => (ranks.get(a.id) ?? -1) - (ranks.get(b.id) ?? -1) || a.id.localeCompare(b.id)) }
+  })
   const seen = new Set(normalGroups.value.map(group => normalizePath(group.projectPath)))
   const pinned = new Set(projects.pinnedProjects.map(normalizePath))
   // Task 5 intentionally omits all-archived projects. Keep one empty project shell
@@ -166,7 +232,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
         <IconButton data-view-archived :label="t('archivedSessions')" @click="showArchived()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h16v12H4zM3 4h18v4H3zm6 8h6" /></svg>
         </IconButton>
-        <IconButton :label="t('refreshSessions')" :disabled="loading" @click="emit('refresh')">
+        <IconButton :label="t('refreshSessions')" :disabled="loading" @click="refreshSessions">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7v5h-5m5 0a8 8 0 1 0-2 6" /></svg>
         </IconButton>
       </template>
@@ -180,7 +246,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
     <div class="panel-content" role="tree" :aria-label="t('sessions')">
       <div v-if="stateError" class="state-hint">
         <span>{{ t('projectsLoadFailed') }}</span>
-        <AppButton size="compact" @click="emit('refresh')">{{ t('retry') }}</AppButton>
+        <AppButton size="compact" @click="refreshSessions">{{ t('retry') }}</AppButton>
       </div>
       <div v-else-if="!stateReady" class="loading-indicator">{{ t('loading') }}</div>
       <template v-else>
