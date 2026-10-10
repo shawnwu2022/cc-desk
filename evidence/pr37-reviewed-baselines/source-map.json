@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "artifactName": "unified-visual-79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c-1",
+  "artifactZipSha256": "0718e755776fca863f27fdbaa5862fcff37d9bfda9903e1c58398ab14fb715d1",
+  "evidenceScope": "Nine reviewed actual PNGs from the old Linux Chromium CI run. These are not screenshots of current PR37 head f36fd1401571737cc59128dd02732f948feb6feb and do not establish its CI result.",
+  "files": [
+    {
+      "sharedPath": "evidence/pr37-reviewed-baselines/archived-sessions.png",
+      "targetBaseline": "tests/visual/__screenshots__/archived-sessions.png",
+      "zipEntry": "test-results/visual-verification/unified-workspace-archived-sessions-snapshot/archived-sessions-actual.png",
+      "sha256": "621dd7bcd171033dcb06a7a54d38aeb6ec14091fb657f4a3d8acec336c100a9a",
+      "sourceRunId": "37965393533",
+      "sourceRunAttempt": 1,
+      "sourceHead": "198c3f892de4b12d9f484c736222a4bf188b9ca6",
+      "testedCommit": "79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c"
+    },
+    {
+      "sharedPath": "evidence/pr37-reviewed-baselines/confirm-stop-and-archive.png",
+      "targetBaseline": "tests/visual/__screenshots__/confirm-stop-and-archive.png",
+      "zipEntry": "test-results/visual-verification/unified-workspace-confirm-stop-and-archive-snapshot/confirm-stop-and-archive-actual.png",
+      "sha256": "d9a9ca3a335ee5631513c761b59343908c28992ca5af0e7b1645aabfc9d181fd",
+      "sourceRunId": "37965393533",
+      "sourceRunAttempt": 1,
+      "sourceHead": "198c3f892de4b12d9f484c736222a4bf188b9ca6",
+      "testedCommit": "79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c"
+    },
+    {
+      "sharedPath": "evidence/pr37-reviewed-baselines/new-session-dialog.png",
+      "targetBaseline": "tests/visual/__screenshots__/new-session-dialog.png",
+      "zipEntry": "test-results/visual-verification/unified-workspace-new-session-dialog-snapshot/new-session-dialog-actual.png",
+      "sha256": "b63d58a35dee5f7c47f696263d95012286cb03775e07fc3e4550166353470866",
+      "sourceRunId": "37965393533",
+      "sourceRunAttempt": 1,
+      "sourceHead": "198c3f892de4b12d9f484c736222a4bf188b9ca6",
+      "testedCommit": "79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c"
+    },
+    {
+      "sharedPath": "evidence/pr37-reviewed-baselines/tooltip-transformed-1024.png",
+      "targetBaseline": "tests/visual/__screenshots__/tooltip-transformed-1024.png",
+      "zipEntry": "test-results/visual-verification/unified-workspace-tooltip-transformed-1024-snapshot/tooltip-transformed-1024-actual.png",
+      "sha256": "c0129d49983194c8c678829f96cb1f7dfa4f773408dd10d6de58c5b7f2dcd99f",
+      "sourceRunId": "37965393533",
+      "sourceRunAttempt": 1,
+      "sourceHead": "198c3f892de4b12d9f484c736222a4bf188b9ca6",
+      "testedCommit": "79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c"
+    },
+    {
+      "sharedPath": "evidence/pr37-reviewed-baselines/workspace-dark-gui-light-terminal.png",
+      "targetBaseline": "tests/visual/__screenshots__/workspace-dark-gui-light-terminal.png",
+      "zipEntry": "test-results/visual-verification/unified-workspace-workspace-dark-gui-light-terminal-snapshot/workspace-dark-gui-light-terminal-actual.png",
+      "sha256": "c711bb11b4162ee2506cc797d9aae55aea2f45abacff7f3f77475d047b30b1f7",
+      "sourceRunId": "37965393533",
+      "sourceRunAttempt": 1,
+      "sourceHead": "198c3f892de4b12d9f484c736222a4bf188b9ca6",
+      "testedCommit": "79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c"
+    },
+    {
+      "sharedPath": "evidence/pr37-reviewed-baselines/workspace-hover-action-1366-en.png",
+      "targetBaseline": "tests/visual/__screenshots__/workspace-hover-action-1366-en.png",
+      "zipEntry": "test-results/visual-verification/unified-workspace-workspace-hover-action-1366-en-snapshot/workspace-hover-action-1366-en-actual.png",
+      "sha256": "7da3b860ca6e095713ff3731f1cb9212431c6cf0d4eff282298263366d7eaba8",
+      "sourceRunId": "37965393533",
+      "sourceRunAttempt": 1,
+      "sourceHead": "198c3f892de4b12d9f484c736222a4bf188b9ca6",
+      "testedCommit": "79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c"
+    },
+    {
+      "sharedPath": "evidence/pr37-reviewed-baselines/workspace-menu-1024-en.png",
+      "targetBaseline": "tests/visual/__screenshots__/workspace-menu-1024-en.png",
+      "zipEntry": "test-results/visual-verification/unified-workspace-workspace-menu-1024-en-snapshot/workspace-menu-1024-en-actual.png",
+      "sha256": "a99d5a486306b22d383baca29b4f08c4e585f9d485cb8509546391e4d0232d67",
+      "sourceRunId": "37965393533",
+      "sourceRunAttempt": 1,
+      "sourceHead": "198c3f892de4b12d9f484c736222a4bf188b9ca6",
+      "testedCommit": "79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c"
+    },
+    {
+      "sharedPath": "evidence/pr37-reviewed-baselines/workspace-mixed-1366-zh.png",
+      "targetBaseline": "tests/visual/__screenshots__/workspace-mixed-1366-zh.png",
+      "zipEntry": "test-results/visual-verification/unified-workspace-workspace-mixed-1366-zh-snapshot/workspace-mixed-1366-zh-actual.png",
+      "sha256": "a3ef4a0616b4d91135c425aa2429ea071de4a1ff4f768b261355287e36c59baa",
+      "sourceRunId": "37965393533",
+      "sourceRunAttempt": 1,
+      "sourceHead": "198c3f892de4b12d9f484c736222a4bf188b9ca6",
+      "testedCommit": "79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c"
+    },
+    {
+      "sharedPath": "evidence/pr37-reviewed-baselines/workspace-resources-overlay-1024.png",
+      "targetBaseline": "tests/visual/__screenshots__/workspace-resources-overlay-1024.png",
+      "zipEntry": "test-results/visual-verification/unified-workspace-workspace-resources-overlay-1024-snapshot/workspace-resources-overlay-1024-actual.png",
+      "sha256": "20f011235efa0e1a939d5bafa1ee44e4dd5ce24bba91b61449a9ee7f201987d0",
+      "sourceRunId": "37965393533",
+      "sourceRunAttempt": 1,
+      "sourceHead": "198c3f892de4b12d9f484c736222a4bf188b9ca6",
+      "testedCommit": "79fec77d9e7a1eeeb3978f0ed86f6be9fb73d09c"
+    }
+  ]
+}
