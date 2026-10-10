@@ -199,7 +199,7 @@ it('LaunchSettings_ReadFailure_014', async () => {
   readProfiles = () => Promise.reject({ code: 'SOURCE_BUSY', message: 'PRIVATE_FAILURE' })
   await w.get('[data-launch-create]').trigger('click'); await flushPromises()
   expect(document.querySelector('[data-launch-save]')).toBeNull()
-  expect(w.text()).toContain(en.errorGenericUnavailable); expect(w.text()).not.toContain('PRIVATE_FAILURE')
+  expect(w.text()).toContain(en.errorResourceUnavailable); expect(w.text()).toContain(en.retry); expect(w.text()).not.toContain('PRIVATE_FAILURE')
   expect(writes).toEqual([])
 })
 

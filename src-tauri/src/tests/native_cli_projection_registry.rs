@@ -289,7 +289,7 @@ fn identical_grant_reuses_scope_and_capacity_cannot_grow_without_bound() {
     assert!(registry.read(&owner(), &request(a)).is_err());
 }
 #[test]
-fn malformed_files_return_no_partial_success_and_no_raw_error_text() {
+fn malformed_history_keeps_positive_sessions() {
     let t = tempfile::tempdir().unwrap();
     let registry = ScopeRegistry::new(4);
     let source = registry
@@ -301,9 +301,51 @@ fn malformed_files_return_no_partial_success_and_no_raw_error_text() {
     )
     .unwrap();
     let r = registry.read(&owner(), &request(source)).unwrap();
-    assert_eq!(r.state, ProjectionState::Unavailable);
+    assert_eq!(r.state, ProjectionState::Ready);
+    assert_eq!(r.items.len(), 1);
+    let encoded = serde_json::to_value(&r).unwrap();
+    assert_eq!(encoded["historyMetadataIncomplete"], true);
+    assert_eq!(
+        encoded["historyReadFailures"],
+        serde_json::json!(["SOURCE_INVALID"])
+    );
+    assert!(!encoded.to_string().contains("SECRET"));
+}
+// 只有无法识别的条目时仍明确不完整，不能伪装为缺失会话证明。
+#[test]
+fn unsupported_history_is_explicitly_partial() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let source = registry
+        .register(grant(t.path(), "good", Arc::new(AtomicBool::new(true))))
+        .unwrap();
+    fs::write(t.path().join("projects/p/same.jsonl"), "").unwrap();
+    fs::create_dir_all(t.path().join("projects/p/same/unknown/nested")).unwrap();
+    let r = registry.read(&owner(), &request(source)).unwrap();
+    assert_eq!(r.state, ProjectionState::Ready);
     assert!(r.items.is_empty());
-    assert!(!serde_json::to_string(&r).unwrap().contains("SECRET"));
+    assert_eq!(r.history_metadata_incomplete, Some(true));
+    assert_eq!(r.history_read_failures, vec!["SOURCE_UNSUPPORTED"]);
+}
+// 同一来源中的重复原生ID仍拒绝整个结果，不把歧义当作可略过内容错误。
+#[test]
+fn duplicate_ids_remain_unavailable() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let source = registry
+        .register(grant(t.path(), "good", Arc::new(AtomicBool::new(true))))
+        .unwrap();
+    fs::create_dir_all(t.path().join("projects/q")).unwrap();
+    fs::copy(
+        t.path().join("projects/p/same.jsonl"),
+        t.path().join("projects/q/same.jsonl"),
+    )
+    .unwrap();
+    let r = registry.read(&owner(), &request(source)).unwrap();
+    assert_eq!(r.state, ProjectionState::Unavailable);
+    assert_eq!(r.reason.as_deref(), Some("SOURCE_AMBIGUOUS"));
+    assert!(r.items.is_empty());
+    assert!(r.history_read_failures.is_empty());
 }
 #[test]
 fn pagination_is_explicit_and_invalid_query_never_enters_reader() {

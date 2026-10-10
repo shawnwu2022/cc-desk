@@ -32,8 +32,64 @@ beforeEach(() => {
   io.outputReady.mockResolvedValue(() => {}); io.exitReady.mockResolvedValue(() => {}); io.dragReady.mockResolvedValue(() => {})
   io.copy.mockResolvedValue(undefined); io.spawn.mockImplementation(async ({ id }: any) => ({ id })); io.kill.mockResolvedValue(undefined); io.input.mockResolvedValue(undefined)
 })
-afterEach(() => { wrapper?.unmount(); wrapper = null; vi.unstubAllGlobals() })
+afterEach(() => { wrapper?.unmount(); wrapper = null; vi.unstubAllGlobals(); vi.useRealTimers() })
 describe('Legacy unified ownership', () => {
+  // 停止响应失败后等待精确退出事件；另一 PTY 的事件不得释放当前会话。
+  it('Legacy_StopWaitsForExactExit_017', async () => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises()
+    await (wrapper.vm as any).startTab(id); await flushPromises()
+    const ptyId = sessions.tabs.get(id)!.ptyId!
+    io.kill.mockRejectedValueOnce(new Error('lost stop response'))
+    const stopping = (wrapper.vm as any).stopTab(id); await flushPromises()
+    io.exit({ id: 'another-pty' }); await flushPromises()
+    expect(sessions.tabs.get(id)).toMatchObject({ ptyId, status: 'running' })
+    io.exit({ id: ptyId }); await stopping
+    expect(sessions.tabs.get(id)).toMatchObject({ ptyId: null, status: 'stopped' })
+    expect(io.kill).toHaveBeenCalledExactlyOnceWith(ptyId)
+  })
+
+  // 未获得退出证据时保留实际 PTY 所有权并给出固定停止未确认错误。
+  it('Legacy_StopKeepsLivePty_018', async () => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises()
+    await (wrapper.vm as any).startTab(id); await flushPromises()
+    vi.useFakeTimers()
+    const ptyId = sessions.tabs.get(id)!.ptyId!
+    io.kill.mockRejectedValueOnce(new Error('access denied'))
+    const stopped = expect((wrapper.vm as any).stopTab(id)).rejects.toThrow('LEGACY_STOP_UNCONFIRMED')
+    await vi.advanceTimersByTimeAsync(3100); await stopped
+    expect(sessions.tabs.get(id)).toMatchObject({ ptyId, status: 'running' })
+    expect(io.terms[0].dispose).not.toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  // kill 回执丢失但精确 PTY 已发退出事件，首次关闭仍必须完成。
+  it('Legacy_CloseReconcilesExitedPty_016', async () => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises()
+    await (wrapper.vm as any).startTab(id); await flushPromises()
+    const ptyId = sessions.tabs.get(id)!.ptyId!
+    io.kill.mockImplementationOnce(async () => {
+      io.exit({ id: ptyId })
+      throw new Error('Failed to kill child process')
+    })
+    const catalog = useUnifiedSessionsStore()
+    catalog.configureAdapters([createLegacyClaudeAdapter({ store: sessions, projectPaths: () => ['/repo'], runtime: {
+      startTab: tabId => (wrapper!.vm as any).startTab(tabId),
+      stopTab: tabId => (wrapper!.vm as any).stopTab(tabId),
+      restartTab: tabId => (wrapper!.vm as any).restartTab(tabId),
+      renameTab: (tabId, title) => (wrapper!.vm as any).renameTab(tabId, title),
+    } })])
+    await catalog.refresh(); await catalog.activateSession('legacy-tab:' + id)
+    await expect(catalog.closeSession('legacy-tab:' + id)).resolves.toBeUndefined()
+    await flushPromises()
+    expect(sessions.tabs.has(id)).toBe(false)
+    expect(catalog.activeSessionId).toBeNull()
+    expect(io.kill).toHaveBeenCalledExactlyOnceWith(ptyId)
+    expect(io.terms[0].dispose).toHaveBeenCalledOnce()
+  })
+
   // 真实Legacy停止端口与适配器只需一次关闭；迟到退出/输出不能重建已移除的终端。
   it('Legacy_SingleCloseAndLateExit_015', async () => {
     const sessions = useSessionStore(); const id = sessions.createTab('/repo')

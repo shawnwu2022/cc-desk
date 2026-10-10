@@ -59,6 +59,37 @@ function render() {
   return { runtime, port }
 }
 describe('Workspace source warning diagnostics', () => {
+  // 单条历史读取失败保留已识别会话，仅显示可收起的部分历史诊断。
+  it('HistoryPartial_KeepsPositiveRows_001', async () => {
+    io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }], hasMore: false,
+      historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_UNSUPPORTED'] })
+    const { runtime } = render(); await flushPromises()
+    expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'history-id')).toBe(true)
+    expect(runtime.sourceWarnings.value).toEqual([])
+    expect(runtime.error.value).toBeNull()
+    expect(runtime.historyReadWarnings?.value).toEqual([{ source: 'codex-history', code: 'SOURCE_UNSUPPORTED', stage: 'read-source-enumeration' }])
+    expect(useNativeHistoryStore().all()[0].absenceEvidence).toBeUndefined()
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+    await runtime.refresh()
+    expect(runtime.historyReadWarnings?.value).toEqual([])
+    expect(runtime.historyMetadataPartial.value).toBe(false)
+  })
+  // 部分历史诊断默认收起，不展示来源整体失败横幅；原始错误不进入UI。
+  it('HistoryPartial_AppCompactDetails_002', async () => {
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] })
+    const i18n = createI18n({ legacy: false, locale: 'en', messages: { en, zh } })
+    const w = mount(App, { global: { plugins: [i18n], stubs: { NativeCliTerminal: true, SettingsView: true } } })
+    wrappers.push(w); await flushPromises()
+    expect(useNativeHistoryStore().all()[0].readFailures).toEqual(['SOURCE_INVALID'])
+    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
+    const details = w.find('[data-history-read-details]')
+    expect(details.exists()).toBe(true)
+    expect((details.element as HTMLDetailsElement).open).toBe(false)
+    expect(details.text()).toContain('SOURCE_INVALID')
+    expect(details.text()).not.toContain('still unavailable')
+    i18n.global.locale.value = 'zh'; await flushPromises()
+    expect(details.find('summary').text()).toBe('历史读取详情（部分条目已略过）')
+  })
   // 关闭只收起提示，加载中的空错误及相同重试结果不能重置关闭状态。
   it('Warnings_DismissRetry_001', async () => {
     io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_TOO_LARGE', items: [], hasMore: false })
@@ -832,8 +863,11 @@ it('Runtime_AppResumePendingButton_058', async () => {
   expect(button.attributes('disabled')).toBeDefined()
   await button.trigger('click'); await flushPromises()
   expect(w.emitted('workspace-request')?.filter(([request]) => (request as { kind: string }).kind === 'primary-action')).toHaveLength(1)
-  finish({ state: 'unavailable', reason: 'SOURCE_UNKNOWN', items: [], hasMore: false }); await flushPromises()
-  expect(row.get('[data-session-launch] button').attributes('disabled')).toBeUndefined()
+  finish({ state: 'unavailable', reason: 'SOURCE_BUSY', items: [], hasMore: false }); await flushPromises()
+  expect(catalog.isResumePending(history)).toBe(false)
+  expect(w.findAll('[data-session-row]').some(item => item.attributes('data-session-row') === history.id)).toBe(false)
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  expect(catalog.actionFeedback).toMatchObject({ detailCode: 'SOURCE_BUSY', retryable: true })
 })
 
 // 同一历史的两次显式请求共享核实；较早请求失效不能取消仍有效的新请求或重复启动。

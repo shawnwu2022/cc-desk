@@ -93,6 +93,9 @@ function snapshotOrder(groups = normalGroups.value) {
 function activityTime(row: UnifiedSession) {
   return Number.isFinite(row.lastActivityAt) ? row.lastActivityAt : 0
 }
+watch(() => store.completedClose, closed => {
+  if (closed) snapshotOrder(normalGroups.value.filter(group => group.projectKey === closed.projectKey))
+}, { flush: 'sync' })
 watch(() => ({ groups: normalGroups.value, archived: archived.value }), ({ groups, archived }) => {
   for (const row of archived) knownArchivedIds.add(row.id)
   const next = new Map(sessionOrders.value)

@@ -460,7 +460,8 @@ export function createCliLaunchAttempt<E>(
 }
 
 export function createNativeProjectionClient(): import('./nativeProjection').ProjectionClient {
-  return createProjectionClient(nativeDocumentBridge());
+  const bridge = nativeDocumentBridge();
+  return createProjectionClient(bridge, () => nativeDocumentBridge() === bridge);
 }
 export async function nativeGetScope(target: import('@/types/nativeProjection').ScopeTarget): Promise<import('@/types/nativeProjection').SourceRef> {
   return createNativeProjectionClient().scope(target);

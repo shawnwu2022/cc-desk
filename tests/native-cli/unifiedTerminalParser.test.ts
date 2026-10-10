@@ -370,9 +370,13 @@ it('Native_CancelLossRetainsUnknown_015', async () => {
   } })
   const tab = useNativeTabsStore().create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
   wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
-  await expect((wrapper.vm as any).stop()).rejects.toThrow('LAUNCH_STATE_UNKNOWN')
+  vi.useFakeTimers()
+  const stopping = expect((wrapper.vm as any).stop()).rejects.toThrow('NATIVE_STOP_UNCONFIRMED')
+  await vi.advanceTimersByTimeAsync(5100); await stopping
   expect(useNativeTabsStore().tab(tab.tabId)).toMatchObject({ status: 'unknown', launchRevision: null })
-  expect(calls).toEqual(['cli_start', 'cli_cancel_launch'])
+  expect(calls.slice(0, 2)).toEqual(['cli_start', 'cli_cancel_launch'])
+  expect(calls.slice(2).length).toBeGreaterThan(0)
+  expect(calls.slice(2).every(command => command === 'cli_get_launch_status')).toBe(true)
   expect(io.stop).not.toHaveBeenCalled()
 })
 

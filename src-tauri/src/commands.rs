@@ -95,7 +95,11 @@ pub async fn pty_resize(id: String, cols: u16, rows: u16) -> Result<bool, String
 pub async fn pty_kill(id: String) -> Result<bool, String> {
     let manager = get_pty_manager().ok_or_else(|| "PTY manager not initialized".to_string())?;
 
-    manager.kill(&id).map(|_| true).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || manager.kill(&id))
+        .await
+        .map_err(|_| "PTY stop worker unavailable".to_string())?
+        .map(|_| true)
+        .map_err(|e| e.to_string())
 }
 
 /// 杀掉所有 PTY

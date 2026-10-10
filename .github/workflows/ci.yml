@@ -47,13 +47,13 @@ jobs:
         run: npm run test:ci
 
       - name: Run Node policy tests
-        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/windowsNativeValidation.node.mjs tests/scripts/historySignatureFixtures.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs tests/scripts/releaseBuildAdmission.node.mjs tests/scripts/windowsRustShards.node.mjs tests/scripts/windowsRustShardRunner.node.mjs tests/scripts/ownedJobDrain.node.mjs
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/windowsNativeValidation.node.mjs tests/scripts/historySignatureFixtures.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs tests/scripts/releaseBuildAdmission.node.mjs tests/scripts/windowsRustShards.node.mjs tests/scripts/windowsRustShardRunner.node.mjs tests/scripts/ownedJobDrain.node.mjs tests/scripts/ciRustWorkflow.node.mjs tests/scripts/ciBuildMetrics.node.mjs
 
       - name: Build frontend
         run: npm run build
 
   rust-compile:
-    name: Rust compile and static checks
+    name: Rust compiled test bundle
     runs-on: windows-2022
     defaults:
       run:
@@ -72,12 +72,23 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Begin cache restore wall measurement
+        run: Add-Content -LiteralPath $env:GITHUB_ENV -Value "CI_CACHE_STARTED_MS=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+
       - name: Cache Rust dependencies
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: rust-compile
           cache-on-failure: true
           cache-workspace-crates: false
+
+      - name: Record pinned build identity and cache observation
+        working-directory: .
+        env:
+          CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: node scripts/ci-build-metrics.mjs context
 
       - name: Prepare verified Windows runtime before direct cargo commands
         id: runtime
@@ -86,48 +97,17 @@ jobs:
 
       - name: Compile the complete original Windows test inventory
         id: compile
-        run: ../scripts/windows-rust-tests.ps1 -Action Compile
-
-      - name: Test Windows Rust CI entry contracts
-        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-        working-directory: .
-        run: pwsh -NoProfile -File tests/scripts/windowsRustTests.ps1
-
-      - name: Check formatting
-        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-        run: cargo fmt --check
-
-      - name: Lint
-        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-        run: cargo clippy --locked --all-targets -- -D warnings
-
-      - name: Build and check actual Windows application loader
         run: |
-          cargo build --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $report = Join-Path ([IO.Path]::GetTempPath()) ("ccdesk-loader-" + [guid]::NewGuid() + ".json")
-          $start = [Diagnostics.ProcessStartInfo]::new((Resolve-Path 'target/debug/cc-desk.exe').Path)
-          $start.UseShellExecute = $false
-          $start.ArgumentList.Add('--check-conpty')
-          $start.ArgumentList.Add($report)
-          $process = [Diagnostics.Process]::Start($start)
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          ../scripts/windows-rust-tests.ps1 -Action Compile
+          $code = $LASTEXITCODE
+          $seconds = $clock.Elapsed.TotalSeconds.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+          Push-Location ..
           try {
-            if (!$process.WaitForExit(30000)) {
-              $process.Kill()
-              $process.WaitForExit()
-              throw 'Application loader probe timed out'
-            }
-            if ($process.ExitCode -ne 0) { throw "Application loader failed: $($process.ExitCode)" }
-            if ((Get-Item -LiteralPath $report).Length -gt 65536) { throw 'Loader report too large' }
-            $value = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
-            if ($value.ok -ne $true -or $value.ptyLifecycle -ne $true -or $value.backend -ne 'bundled') {
-              throw 'Application loader report did not pass'
-            }
-            Write-Output "D11_APPLICATION_LOADER ok=true backend=bundled ptyLifecycle=true"
-          } finally {
-            $process.Dispose()
-            if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
-          }
+            node scripts/ci-build-metrics.mjs cargo tests src-tauri/target/ci-test-artifacts.jsonl $seconds $code
+            if ($LASTEXITCODE -ne 0 -and $code -eq 0) { $code = $LASTEXITCODE }
+          } finally { Pop-Location }
+          exit $code
 
       - name: Run full unfiltered doctests and prepare exact compiled inventory
         working-directory: .
@@ -166,11 +146,140 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+      - name: Preserve sanitized build metrics without raw Cargo paths
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-build-metrics-${{ github.job }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/ci-build-metrics/*.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Keep dependency cache free of source-bound results and executable bundles
         if: ${{ always() }}
         working-directory: .
         run: |
-          foreach ($path in @('src-tauri/target/ci-rust-bundle', 'src-tauri/target/ci-test-artifacts.jsonl', 'src-tauri/target/windows-native-coverage')) {
+          foreach ($path in @('src-tauri/target/ci-rust-bundle', 'src-tauri/target/ci-test-artifacts.jsonl', 'src-tauri/target/windows-native-coverage', 'src-tauri/target/ci-rust-ordinary-preflight', 'src-tauri/target/ci-build-metrics')) {
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+          }
+
+  rust-static:
+    name: Rust static and actual loader checks
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js for pinned runtime preparation
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Begin cache restore wall measurement
+        run: Add-Content -LiteralPath $env:GITHUB_ENV -Value "CI_CACHE_STARTED_MS=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+
+      - name: Cache Rust dependencies
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: rust-compile
+          cache-on-failure: true
+          cache-workspace-crates: false
+          save-if: false
+
+      - name: Record pinned build identity and cache observation
+        working-directory: .
+        env:
+          CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: node scripts/ci-build-metrics.mjs context
+
+      - name: Prepare verified Windows runtime before direct cargo commands
+        id: runtime
+        working-directory: .
+        run: node scripts/prepare-conpty.mjs
+
+      - name: Test Windows Rust CI entry contracts
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        working-directory: .
+        run: pwsh -NoProfile -File tests/scripts/windowsRustTests.ps1
+
+      - name: Check formatting
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: cargo fmt --check
+
+      - name: Lint
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          cargo clippy --locked --all-targets --message-format=json-render-diagnostics -- -D warnings > target/ci-build-metrics/clippy.jsonl
+          $code = $LASTEXITCODE
+          $seconds = $clock.Elapsed.TotalSeconds.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+          Push-Location ..
+          try {
+            node scripts/ci-build-metrics.mjs cargo clippy src-tauri/target/ci-build-metrics/clippy.jsonl $seconds $code
+            if ($LASTEXITCODE -ne 0 -and $code -eq 0) { $code = $LASTEXITCODE }
+          } finally { Pop-Location }
+          exit $code
+
+      - name: Build and check actual Windows application loader
+        run: |
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          cargo build --locked --message-format=json-render-diagnostics > target/ci-build-metrics/loader.jsonl
+          $code = $LASTEXITCODE
+          $seconds = $clock.Elapsed.TotalSeconds.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+          Push-Location ..
+          try {
+            node scripts/ci-build-metrics.mjs cargo loader src-tauri/target/ci-build-metrics/loader.jsonl $seconds $code
+            if ($LASTEXITCODE -ne 0 -and $code -eq 0) { $code = $LASTEXITCODE }
+          } finally { Pop-Location }
+          if ($code -ne 0) { exit $code }
+          $report = Join-Path ([IO.Path]::GetTempPath()) ("ccdesk-loader-" + [guid]::NewGuid() + ".json")
+          $start = [Diagnostics.ProcessStartInfo]::new((Resolve-Path 'target/debug/cc-desk.exe').Path)
+          $start.UseShellExecute = $false
+          $start.ArgumentList.Add('--check-conpty')
+          $start.ArgumentList.Add($report)
+          $process = [Diagnostics.Process]::Start($start)
+          try {
+            if (!$process.WaitForExit(30000)) {
+              $process.Kill()
+              $process.WaitForExit()
+              throw 'Application loader probe timed out'
+            }
+            if ($process.ExitCode -ne 0) { throw "Application loader failed: $($process.ExitCode)" }
+            if ((Get-Item -LiteralPath $report).Length -gt 65536) { throw 'Loader report too large' }
+            $value = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+            if ($value.ok -ne $true -or $value.ptyLifecycle -ne $true -or $value.backend -ne 'bundled') {
+              throw 'Application loader report did not pass'
+            }
+            Write-Output "D11_APPLICATION_LOADER ok=true backend=bundled ptyLifecycle=true"
+          } finally {
+            $process.Dispose()
+            if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
+          }
+
+      - name: Preserve sanitized build metrics without raw Cargo paths
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-build-metrics-${{ github.job }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/ci-build-metrics/*.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Keep static dependency cache free of observational results
+        if: ${{ always() }}
+        working-directory: .
+        run: |
+          foreach ($path in @('src-tauri/target/ci-build-metrics')) {
             if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
           }
 
@@ -184,6 +293,8 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     steps:
+      - name: Start shared shard budget before checkout and artifact setup
+        run: Add-Content -LiteralPath $env:GITHUB_ENV -Value "CI_RUST_JOB_START_MS=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
@@ -198,9 +309,9 @@ jobs:
           name: windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: src-tauri/target/ci-rust-bundle
       - name: Execute assigned full names and retain original ignores
-        run: node scripts/windows-rust-shard-runner.mjs run --index ${{ matrix.shard }} --in-job "${{ steps.host.outputs.job_free != 'true' }}" --elevated "${{ steps.host.outputs.elevated }}" --artifact-name windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: node scripts/windows-rust-shard-runner.mjs run --index ${{ matrix.shard }} --job-start-ms "${{ env.CI_RUST_JOB_START_MS }}" --in-job "${{ steps.host.outputs.job_free != 'true' }}" --elevated "${{ steps.host.outputs.elevated }}" --artifact-name windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Preserve original selection, execution and timing even on failure
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: windows-rust-shard-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -210,7 +321,7 @@ jobs:
 
   rust:
     name: Rust checks
-    needs: [rust-compile, rust-tests]
+    needs: [rust-compile, rust-static, rust-tests]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -218,13 +329,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: Require successful compilation and every shard
+      - name: Require successful producer, static checks and every shard
         env:
           COMPILE_RESULT: ${{ needs.rust-compile.result }}
+          STATIC_RESULT: ${{ needs.rust-static.result }}
           SHARD_RESULT: ${{ needs.rust-tests.result }}
-        run: |
-          test "$COMPILE_RESULT" = success
-          test "$SHARD_RESULT" = success
+        run: node scripts/ci-rust-job-gate.mjs
       - uses: actions/download-artifact@v4
         with:
           name: windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

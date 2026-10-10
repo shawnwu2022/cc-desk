@@ -13,9 +13,10 @@ const SHARD_COUNT = RUST_SHARD_COUNT;
 const MAX_LOG = 64 * 1024 * 1024;
 const MAX_JSON = 8 * 1024 * 1024;
 export const HARNESS_TIMEOUT_MS = 20 * 60 * 1000;
+export const SHARD_BUDGET_MS = 25 * 60 * 1000;
 const MAX_FAILURE_NAMES = 16;
 const MAX_FAILURE_DIAGNOSTIC_BYTES = 8 * 1024;
-const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
+const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
 const scope = JSON.parse(fs.readFileSync(new URL('./windows-native-scope.json', import.meta.url), 'utf8'));
 const hash = data => createHash('sha256').update(data).digest('hex');
 function requireThat(ok, message) { if (!ok) throw new Error(`Rust runner: ${message}`); }
@@ -330,6 +331,12 @@ export function verifyBundle(options = {}) {
 }
 
 export async function runShard(options = {}) {
+  const budgetStarted = process.hrtime.bigint(), admittedAtMs = Date.now();
+  const jobStartMs = options.jobStartMs ?? admittedAtMs, shardBudgetMs = options.shardTimeoutMs ?? SHARD_BUDGET_MS;
+  requireThat(Number.isSafeInteger(jobStartMs) && jobStartMs > 0 && jobStartMs <= admittedAtMs, 'invalid first-step shard clock');
+  requireThat(Number.isSafeInteger(shardBudgetMs) && shardBudgetMs > 0 && shardBudgetMs <= SHARD_BUDGET_MS, 'shared shard budget must not exceed twenty-five minutes');
+  const remainingMs = () => Math.floor(shardBudgetMs - (admittedAtMs - jobStartMs) - Number(process.hrtime.bigint() - budgetStarted) / 1e6);
+  if (options.timeoutMs !== undefined) requireThat(Number.isSafeInteger(options.timeoutMs) && options.timeoutMs > 0 && options.timeoutMs <= HARNESS_TIMEOUT_MS, 'execution deadline must not exceed twenty minutes');
   requireThat(Number.isInteger(options.index) && options.index >= 0 && options.index < SHARD_COUNT, 'invalid shard index');
   requireThat(typeof options.inJob === 'boolean', 'explicit successful runner Job observation required');
   requireThat(typeof options.elevated === 'boolean', 'explicit successful runner elevation observation required');
@@ -339,7 +346,20 @@ export async function runShard(options = {}) {
   fs.mkdirSync(path.join(output, 'logs'), { recursive: true });
   requireThat(!fs.existsSync(path.join(output, 'shard-result.json')), 'shard result already exists');
   const result = { schema: 1, policy: POLICY, sourceSha: c.sourceSha, runId: c.runId, runAttempt: c.runAttempt, artifactName: plan.artifactName, planHash: plan.planHash, index: options.index, shardCount: SHARD_COUNT, host: { jobQuerySucceeded: true, inJob: options.inJob, elevationQuerySucceeded: true, elevated: options.elevated }, completed: false, exitCode: 1, durationSeconds: 0, harnesses: [], error: null };
-  const started = process.hrtime.bigint();
+  const started = process.hrtime.bigint(); // Preserve the existing receipt timing origin after bundle verification.
+  const resultPath = path.join(output, 'shard-result.json');
+  function persistReceipt() {
+    result.durationSeconds = Number(process.hrtime.bigint() - started) / 1e9;
+    const temporary = resultPath + '.tmp'; writeJson(temporary, result); fs.renameSync(temporary, resultPath);
+  }
+  const timingPath = path.join(output, 'timing-observations.jsonl');
+  fs.writeFileSync(timingPath, JSON.stringify({ schema: 1, timingSemantics: 'libtest-output-observation-not-per-test-duration', sourceSha: c.sourceSha, runId: c.runId, runAttempt: c.runAttempt, planHash: plan.planHash, index: options.index, jobStartMs, shardBudgetMs }) + '\n');
+  function phase(value) {
+    const { phase, identity, selected, name, status, slow, elapsedSeconds, durationSeconds } = value;
+    fs.appendFileSync(timingPath, JSON.stringify({ phase, identity, selected, name, status, slow, elapsedSeconds, durationSeconds }) + '\n');
+    options.onPhase?.(value);
+  }
+  persistReceipt(); // A later outer interruption retains an explicitly incomplete result.
   try {
     // Restore only hashed runtime payload, at its original source-relative location.
     for (const file of plan.files.filter(f => f.path.startsWith('src-tauri/target/debug/'))) {
@@ -357,13 +377,17 @@ export async function runShard(options = {}) {
       requireThat(equal(rows.map(t => t.name), names) && rows.every(t => h.full.some(f => f.name === t.name && f.type === t.type)), 'raw shard listing differs from exact assignment');
     }
     let failed = false;
+    persistReceipt();
     for (const receipt of result.harnesses) {
       if (!receipt.executed) continue;
       const h = plan.harnesses.find(h => identity(h) === identity(receipt));
-      if (options.onPhase) options.onPhase({ phase: 'execute-start', index: options.index, identity: h.identity, selected: receipt.names.length, assignedNames: receipt.names, timeoutMs: HARNESS_TIMEOUT_MS });
+      const timeoutMs = Math.min(options.timeoutMs ?? HARNESS_TIMEOUT_MS, HARNESS_TIMEOUT_MS, remainingMs());
+      requireThat(timeoutMs > 0, 'shared shard deadline exhausted before another harness');
+      persistReceipt();
+      phase({ phase: 'execute-start', index: options.index, identity: h.identity, selected: receipt.names.length, assignedNames: receipt.names, timeoutMs });
       const invocation = await executeHarness(relativeFile(c.root, h.executable), ['--exact', ...receipt.names], {
-        root: c.testCwd, environment: c.environment, executionLog: path.join(output, receipt.logs.execution), assignedNames: receipt.names, timeoutMs: options.timeoutMs,
-        onProgress: progress => options.onPhase?.({ phase: 'execute-progress', index: options.index, identity: h.identity, ...progress }),
+        root: c.testCwd, environment: c.environment, executionLog: path.join(output, receipt.logs.execution), assignedNames: receipt.names, timeoutMs,
+        onProgress: progress => phase({ phase: 'execute-progress', index: options.index, identity: h.identity, ...progress }),
       });
       const normalizedOutput = invocation.output.replaceAll('\r\n', '\n');
       receipt.durationSeconds = invocation.durationSeconds;
@@ -373,15 +397,15 @@ export async function runShard(options = {}) {
         aggregateHarness({ ...h, selected: receipt.names, ignored: h.ignored.filter(n => receipt.names.includes(n)) }, [{ index: options.index, names: receipt.names, listing: readFile(path.join(output, receipt.logs.selected)).toString('utf8'), output: normalizedOutput, result: receipt.result, durationSeconds: invocation.durationSeconds }], parseLibtestListing, parseLibtestResult);
       } catch (error) { receipt.error = String(error.message); failed = true; }
       if (invocation.error || invocation.exitCode !== 0) { receipt.error ??= invocation.error ?? `exit ${invocation.exitCode}`; failed = true; }
-      if (options.onPhase) options.onPhase({ phase: 'execute-end', index: options.index, identity: h.identity, selected: receipt.names.length, durationSeconds: receipt.durationSeconds, result: receipt.result,
+      persistReceipt();
+      phase({ phase: 'execute-end', index: options.index, identity: h.identity, selected: receipt.names.length, durationSeconds: receipt.durationSeconds, result: receipt.result,
         slowNames: [...normalizedOutput.matchAll(/^test (.+) has been running for over 60 seconds$/gm)].map(m => m[1]), error: receipt.error ?? null, watchdog: receipt.watchdog,
         failureDiagnostics: shardFailureDiagnostics(invocation.output, receipt.names, receipt.logs.execution, invocation.outputIncomplete) });
       if (invocation.outputIncomplete) break;
     }
     result.completed = !failed; result.exitCode = failed ? 1 : 0;
   } catch (error) { result.error = String(error.message); }
-  result.durationSeconds = Number(process.hrtime.bigint() - started) / 1e9;
-  writeJson(path.join(output, 'shard-result.json'), result);
+  persistReceipt();
   return result;
 }
 
@@ -460,7 +484,7 @@ export function aggregateResults(options = {}) {
 }
 
 function cliOptions(args) {
-  const accepted = new Set(['root', 'cargo-json', 'bundle', 'in-job', 'elevated', 'doc-exit-code', 'output', 'index', 'artifact-name', 'shards', 'coverage']);
+  const accepted = new Set(['root', 'cargo-json', 'bundle', 'in-job', 'elevated', 'doc-exit-code', 'output', 'index', 'artifact-name', 'shards', 'coverage', 'job-start-ms']);
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
     const key = args[i]?.replace(/^--/, '');
@@ -469,7 +493,7 @@ function cliOptions(args) {
   }
   if (options['in-job'] !== undefined) requireThat(['true', 'false'].includes(options['in-job']), '--in-job must be true or false');
   if (options.elevated !== undefined) requireThat(['true', 'false'].includes(options.elevated), '--elevated must be true or false');
-  return Object.fromEntries(Object.entries(options).map(([key, value]) => [key.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), ['in-job', 'elevated'].includes(key) ? value === 'true' : ['index', 'doc-exit-code'].includes(key) ? Number(value) : value]));
+  return Object.fromEntries(Object.entries(options).map(([key, value]) => [key.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), ['in-job', 'elevated'].includes(key) ? value === 'true' : ['index', 'doc-exit-code', 'job-start-ms'].includes(key) ? Number(value) : value]));
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {

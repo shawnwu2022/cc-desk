@@ -284,6 +284,8 @@ onUnmounted(() => {
           </div>
         </div>
         <InlineNotice v-if="runtime.historyMetadataPartial?.value" data-history-metadata-partial kind="info" :message="t('workspaceHistoryMetadataPartial')" />
+        <WorkspaceSourceDetails v-if="runtime.historyReadWarnings?.value.length" data-history-read-details compact partial
+          :warnings="runtime.historyReadWarnings.value" :truncated="false" />
         <LaunchProgramDiscovery v-if="shell.section === 'workspace' && !configurationEditor && sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED' && sessions.activeSession.preparationIssueCode === 'PROGRAM_TRUST_REQUIRED'"
           :inert="configurationEditorOpening || undefined"
           :key="`${sessions.activeSession.id}:${shell.navigationSequence}:${shell.requestSequence}`" :session="sessions.activeSession" @edit="editPreparationConfiguration" @confirmed="confirmDiscoveredProgram" />

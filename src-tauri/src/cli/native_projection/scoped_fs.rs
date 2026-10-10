@@ -27,6 +27,7 @@ pub(crate) struct Budget {
     entries_left: usize,
     started: Instant,
     history_metadata_incomplete: bool,
+    history_read_failures: std::collections::BTreeSet<&'static str>,
 }
 impl Budget {
     pub(crate) fn new(limits: Limits) -> Self {
@@ -37,6 +38,7 @@ impl Budget {
             entries_left: limits.entries.min(maximum.entries),
             started: Instant::now(),
             history_metadata_incomplete: false,
+            history_read_failures: Default::default(),
         }
     }
     pub(crate) fn checkpoint(&self) -> ReadResult<()> {
@@ -48,6 +50,28 @@ impl Budget {
     }
     pub(crate) fn history_metadata_incomplete(&self) -> bool {
         self.history_metadata_incomplete
+    }
+    pub(crate) fn history_read_failures(&self) -> Vec<&'static str> {
+        self.history_read_failures.iter().copied().collect()
+    }
+    // Only content/read failures of an individual history entry are isolatable.
+    // Scope, identity, permission, links, ambiguity and aggregate limits still fail closed.
+    pub(crate) fn omit_history_entry(&mut self, code: &'static str) -> bool {
+        if (code == "SOURCE_TOO_LARGE" && self.bytes_left == 0)
+            || !matches!(
+                code,
+                "SOURCE_UNSUPPORTED"
+                    | "SOURCE_INVALID"
+                    | "SOURCE_INVALID_TEXT"
+                    | "SOURCE_TOO_LARGE"
+                    | "SOURCE_READ_FAILED"
+            )
+        {
+            return false;
+        }
+        self.history_metadata_incomplete = true;
+        self.history_read_failures.insert(code);
+        true
     }
     fn entry(&mut self) -> ReadResult<()> {
         self.checkpoint()?;
@@ -172,19 +196,20 @@ impl Root {
         } else {
             cap + 1
         };
-        (&file)
-            .take(limit as u64)
-            .read_to_end(&mut bytes)
-            .map_err(read_error)?;
+        let read = (&file).take(limit as u64).read_to_end(&mut bytes);
+        // A failed read can already have consumed bytes. Debit before returning
+        // so an omitted history entry cannot reset the aggregate I/O budget.
+        budget.bytes_left = budget.bytes_left.saturating_sub(bytes.len());
+        read.map_err(read_error)?;
         // Codex's first session_meta record can include long base instructions.
         // Extend only until a complete first record, within the original hard caps.
         while history_prefix && !bytes.contains(&b'\n') && bytes.len() == limit && limit < cap {
             budget.checkpoint()?;
             let next = (cap - limit).min(64 * 1024);
-            (&file)
-                .take(next as u64)
-                .read_to_end(&mut bytes)
-                .map_err(read_error)?;
+            let previous = bytes.len();
+            let read = (&file).take(next as u64).read_to_end(&mut bytes);
+            budget.bytes_left = budget.bytes_left.saturating_sub(bytes.len() - previous);
+            read.map_err(read_error)?;
             limit += next;
         }
         if bytes.len() > cap {
@@ -202,7 +227,6 @@ impl Root {
         {
             return Err("SOURCE_CHANGED");
         }
-        budget.bytes_left -= bytes.len();
         let incomplete = bytes.len() as u64 != after.len();
         budget.history_metadata_incomplete |= history_prefix && incomplete;
         budget.checkpoint()?;

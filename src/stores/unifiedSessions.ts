@@ -70,6 +70,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const initialized = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const completedClose = ref<{ projectKey: string; sequence: number } | null>(null)
 
   const sessionConfirmation = ref<SessionConfirmationRequest | null>(null)
   const confirmationBusy = ref(false)
@@ -649,6 +650,10 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const promise = enqueue(id, () => adapter.closeSession(id, canContinue), async () => {
       if (activeSessionId.value === id) activeSessionId.value = null
       await refresh(session.projectKey)
+      // A close replaces an open identity with its history identity. The tree
+      // takes one fresh activity snapshot only after that reconciliation, while
+      // ordinary output/status publications keep their stable row positions.
+      completedClose.value = { projectKey: session.projectKey, sequence: (completedClose.value?.sequence ?? 0) + 1 }
       await selectRemaining(session.projectKey)
     }, 'close')
     const pending = { owns, promise }
@@ -763,6 +768,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     stopSession,
     restartSession,
     closeSession,
+    completedClose,
     renameSession, beginRename, cancelRename, discardPreparation,
     archiveSession,
     restoreArchivedSession,

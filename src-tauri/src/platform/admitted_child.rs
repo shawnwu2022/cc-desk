@@ -1,6 +1,8 @@
 //! Exact direct-child maintenance evidence shared by Native and Legacy PTYs.
 use crate::version_history::maintenance::{OwnedChildTicket, StartTicket};
-use portable_pty::{Child, ChildKiller, CommandBuilder, ExitStatus, SlavePty};
+#[cfg(not(windows))]
+use portable_pty::ChildKiller;
+use portable_pty::{Child, CommandBuilder, ExitStatus, SlavePty};
 use std::io;
 
 pub(crate) struct AdmittedChild {
@@ -35,6 +37,7 @@ impl AdmittedChild {
         }
     }
 
+    #[cfg(not(windows))]
     pub(crate) fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
         self.child.clone_killer()
     }

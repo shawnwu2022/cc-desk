@@ -412,6 +412,12 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     if (tab.status === 'running' || tab.status === 'starting' || tab.status === 'unknown') await deps.runtime.stopTab(tab)
     if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     deps.tabs.close(tab.tabId)
+    // Close owns one fresh read of the frozen source, just as Legacy close does.
+    // Remove the proven-ended terminal first; history failure must not require
+    // a second close. The catalog's completed-close snapshot follows this read,
+    // including a response that arrives after the runtime identity disappeared.
+    if (deps.history.load) await deps.history.load({ cli: tab.cli, profileId: tab.profileId,
+      profileRevision: tab.profileRevision, projectId: tab.projectId, projectPath: tab.projectPath, force: true }).catch(() => {})
   }
   async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
     const owns = captureOwnership(id)

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.18.6] - 2026-10-10 (repair candidate)
+
+- Reconcile one-click close across exact Windows process control, legacy exit events and native launch receipts; retain live or unconfirmed ownership and preserve newer attempts
+- Refresh the closed project's activity snapshot after exact history reconciliation, including delayed native history publication, while background activity keeps rows stable
+- Isolate unsupported or unreadable history entries, preserve readable sessions and show bounded partial-source diagnostics; coordinate projection reads and publish history state reactively
+- Separate Rust executable production from static checks so test shards can start earlier, preserve all required gates, and record bounded same-source build/timing evidence
+
+This prepares the authorized repair release. Windows process-control, complete exact-source CI and signed release checks remain required before publication. These tests do not certify the user's installed Windows or real Claude/Codex interaction.
+
 ## [0.18.5] - 2026-10-10
 
 - Add local animated status icons with specific activity glyphs, passive accessible labels and static reduced-motion rendering; preserve exact-owner status and attention evidence.

@@ -20,32 +20,42 @@ pub(super) fn read(
     }
     let mut files = Vec::new();
     match c.cli {
-        CliKind::Claude => walk(c, "projects", 2, b, &mut files)?,
+        CliKind::Claude => walk(c, "projects", 2, o.kind, b, &mut files)?,
         CliKind::Codex => {
-            walk(c, "sessions", 4, b, &mut files)?;
-            walk(c, "archived_sessions", 4, b, &mut files)?;
+            walk(c, "sessions", 4, o.kind, b, &mut files)?;
+            walk(c, "archived_sessions", 4, o.kind, b, &mut files)?;
         }
         CliKind::Shell => unreachable!(),
     }
     let mut transcripts = Vec::new();
     let mut seen = BTreeSet::new();
     for path in files {
-        let observation = if o.kind == ResourceKind::History {
-            c.history_prefix(&path, b)?
-        } else {
-            c.bytes(c.root, &path, b)?.map(|bytes| (bytes, false))
-        };
-        let Some((bytes, incomplete)) = observation else {
-            return Err("SOURCE_CHANGED");
-        };
-        let transcript = if incomplete {
-            let end = bytes
-                .iter()
-                .rposition(|b| *b == b'\n')
-                .ok_or("SOURCE_TOO_LARGE")?;
-            parse_metadata(&path, c.cli, text(&bytes[..=end])?)?
-        } else {
-            parse(&path, c.cli, text(&bytes)?)?
+        let parsed = (|| {
+            let observation = if o.kind == ResourceKind::History {
+                c.history_prefix(&path, b)?
+            } else {
+                c.bytes(c.root, &path, b)?.map(|bytes| (bytes, false))
+            };
+            let Some((bytes, incomplete)) = observation else {
+                return Err("SOURCE_CHANGED");
+            };
+            if incomplete {
+                let end = bytes
+                    .iter()
+                    .rposition(|b| *b == b'\n')
+                    .ok_or("SOURCE_TOO_LARGE")?;
+                parse_metadata(&path, c.cli, text(&bytes[..=end])?)
+            } else {
+                parse(&path, c.cli, text(&bytes)?)
+            }
+        })();
+        let transcript = match parsed {
+            Ok(transcript) => transcript,
+            Err(code) if o.kind == ResourceKind::History && b.omit_history_entry(code) => {
+                c.check()?;
+                continue;
+            }
+            Err(code) => return Err(code),
         };
         if !seen.insert(transcript.id.clone()) {
             return Err("SOURCE_AMBIGUOUS");
@@ -106,6 +116,7 @@ fn walk(
     c: &Catalog<'_>,
     path: &str,
     depth: usize,
+    kind: ResourceKind,
     b: &mut Budget,
     files: &mut Vec<String>,
 ) -> ReadResult<()> {
@@ -126,13 +137,35 @@ fn walk(
                 continue;
             }
             if depth == 0 {
+                if kind == ResourceKind::History && b.omit_history_entry("SOURCE_UNSUPPORTED") {
+                    continue;
+                }
                 return Err("SOURCE_UNSUPPORTED");
             }
-            walk(c, &p, depth - 1, b, files)?;
+            // A failed directory enumeration has not checked all siblings for
+            // links/invalid paths. Only individual transcript reads are isolatable.
+            walk(c, &p, depth - 1, kind, b, files)?;
         } else if entry.is_file
             && entry.name.ends_with(".jsonl")
             && !entry.name.starts_with("agent-")
         {
+            // Documented set-aside transcripts are not shown by Claude's picker.
+            // Exclude only regular project-child files, never a link or other depth.
+            if c.cli == CliKind::Claude
+                && depth == 1
+                && entry
+                    .name
+                    .trim_end_matches(".jsonl")
+                    .split_once(".orphaned-")
+                    .is_some_and(|(session, suffix)| {
+                        !session.is_empty()
+                            && suffix.rsplit_once('-').is_some_and(|(timestamp, suffix)| {
+                                !timestamp.is_empty() && !suffix.is_empty()
+                            })
+                    })
+            {
+                continue;
+            }
             files.push(p);
         }
         // Link entries are explicitly rejected, not followed outside a held root.
