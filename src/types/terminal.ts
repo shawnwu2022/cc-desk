@@ -7,7 +7,7 @@ export interface RunKey {
 
 export type ProcessState = 'starting' | 'running' | 'exited' | 'failed'
 export type OutputState = 'open' | 'draining' | 'drained' | 'incomplete' | 'degraded'
-export type ActivityState = 'unknown' | 'working' | 'waiting'
+export type ActivityState = 'unknown' | 'working' | 'waiting' | 'subagent_running'
 export type ObservationState = 'off' | 'connecting' | 'active' | 'unavailable'
 
 export interface OutputFrame extends RunKey {

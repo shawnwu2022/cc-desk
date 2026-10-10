@@ -12,7 +12,7 @@ export interface ReadRequest {
   query?: string | null; sessionId?: string | null; limit?: number; offset?: number
 }
 export type ResourceItem =
-  | { type: 'session'; sessionKey: string; nativeSessionId: string; title: string; truncated: boolean; cwd: string | null; updatedAt: string | null }
+  | { type: 'session'; sessionKey: string; nativeSessionId: string; title: string; titleUnknown?: boolean; titleSource?: 'prompt' | 'ai' | 'custom'; metadataIncomplete?: boolean; truncated: boolean; cwd: string | null; updatedAt: string | null }
   | { type: 'message'; sessionKey: string; nativeSessionId: string; role: string; text: string; truncated: boolean }
   | { type: 'setting'; name: string; value: string; origin: string }
   | { type: 'mcp'; name: string; transport: string; origin: string }

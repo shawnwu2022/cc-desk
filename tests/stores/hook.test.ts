@@ -270,3 +270,62 @@ it('D13_HookStore_DisposeDuringListenerInstallationReleasesListener', async () =
   release!(stop); await Promise.resolve(); await Promise.resolve()
   expect(stop).toHaveBeenCalledOnce()
 })
+
+// 真实 hook store/Native store 保持精确 attempt 的子代理投影，切换不丢失订阅。
+it('Subagent_NativeOwnedProjection_012', async () => {
+  const { captureNativeAttempt, useNativeTabsStore } = await import('@/stores/nativeTabs')
+  setActivePinia(createPinia())
+  const hooks = useHookStore(), tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'claude', projectId: 'p1', projectPath: '/repo',
+    profileId: 'claude-main', profileRevision: '1', action: { kind: 'new' } })
+  const attempt = captureNativeAttempt(tab)
+  tabs.applyLaunchStatus(tab.tabId, { instanceId: 'backend', requestId: tab.requestId,
+    run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+  hooks.subscribeObservation({ ...attempt, cli: 'claude', enabled: true }, (_event, state) => {
+    tabs.applyObservation(tab.tabId, attempt, state)
+  })
+  capturedNative!({ ...nativePayload('start-a'), runId: tab.runId, generation: tab.generation,
+    eventName: 'SubagentStart', detail: { type: 'subagentStart', data: { agentId: 'agent-a' } } })
+  expect(tabs.tab(tab.tabId)?.activityState).toBe('subagent_running')
+  tabs.setActive(null)
+  capturedNative!({ ...nativePayload('tool-a'), runId: tab.runId, generation: tab.generation,
+    eventName: 'PreToolUse', detail: { type: 'preToolUse', data: {} } })
+  expect(tabs.tab(tab.tabId)?.activityState).toBe('subagent_running')
+  capturedNative!({ ...nativePayload('foreign-stop'), runId: 'foreign', generation: tab.generation,
+    eventName: 'SubagentStop', detail: { type: 'subagentStop', data: { agentId: 'agent-a' } } })
+  expect(tabs.tab(tab.tabId)?.activityState).toBe('subagent_running')
+  tabs.close(tab.tabId)
+  capturedNative!({ ...nativePayload('late-start'), runId: tab.runId, generation: tab.generation,
+    eventName: 'SubagentStart', detail: { type: 'subagentStart', data: { agentId: 'agent-a' } } })
+  expect(tabs.tab(tab.tabId)).toBeUndefined()
+  expect(hooks.observationFor(attempt)).toBeUndefined()
+  hooks.$dispose()
+})
+
+// 宿主状态不可确认后，恢复 Running 回执和迟到工具事件不复用旧子代理证据。
+it('Subagent_NativeUnknownClears_013', async () => {
+  const { captureNativeAttempt, useNativeTabsStore } = await import('@/stores/nativeTabs')
+  setActivePinia(createPinia())
+  const hooks = useHookStore(), tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'claude', projectId: 'p1', projectPath: '/repo',
+    profileId: 'claude-main', profileRevision: '1', action: { kind: 'new' } })
+  const attempt = captureNativeAttempt(tab)
+  const receipt = { instanceId: 'backend', requestId: tab.requestId,
+    run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running' as const, failure: null }
+  tabs.applyLaunchStatus(tab.tabId, receipt)
+  hooks.subscribeObservation({ ...attempt, cli: 'claude', enabled: true }, (_event, state) => {
+    tabs.applyObservation(tab.tabId, attempt, state)
+  })
+  capturedNative!({ ...nativePayload('start-a'), runId: tab.runId, generation: tab.generation,
+    eventName: 'SubagentStart', detail: { type: 'subagentStart', data: { agentId: 'agent-a' } } })
+  expect(tabs.tab(tab.tabId)?.activityState).toBe('subagent_running')
+  tabs.markUnknown(tab.tabId)
+  tabs.applyLaunchStatus(tab.tabId, { ...receipt, revision: '2' })
+  capturedNative!({ ...nativePayload('tool-a'), runId: tab.runId, generation: tab.generation,
+    eventName: 'PreToolUse', detail: { type: 'preToolUse', data: {} } })
+  expect(tabs.tab(tab.tabId)?.activityState).toBe('unknown')
+  capturedNative!({ ...nativePayload('late-start-a'), runId: tab.runId, generation: tab.generation,
+    eventName: 'SubagentStart', detail: { type: 'subagentStart', data: { agentId: 'agent-a' } } })
+  expect(tabs.tab(tab.tabId)?.activityState).toBe('unknown')
+  hooks.$dispose()
+})

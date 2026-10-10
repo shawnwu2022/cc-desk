@@ -54,10 +54,12 @@ function styleRules() {
 }
 
 describe('Unified SessionItem', () => {
-  // 已选会话抑制等待徽标时，不把选择/取消选择当成新的状态提醒。
+  // 选择/取消选择保持已知等待状态，不重放状态动画。
   it('Row_SelectionDoesNotAnimate_041', async () => {
     const wrapper = row({ ...base, activityState: 'waiting_permission' })
+    expect(wrapper.get('.session-status-icon').attributes('aria-label')).toBe('Waiting for permission')
     await wrapper.setProps({ selected: true })
+    expect(wrapper.get('.session-status-icon').attributes('aria-label')).toBe('Waiting for permission')
     await wrapper.setProps({ selected: false })
     expect(wrapper.get('.session-status-icon').attributes('data-status-entry')).toBeUndefined()
     await wrapper.setProps({ session: { ...base, activityState: 'idle', attentionKind: 'completed' } })
@@ -445,8 +447,8 @@ describe('Unified session menu model', () => {
   // 每个状态提供完整能力并把危险动作排在最后；未知态禁止再次启动。
   it.each([
     { name: 'Menu_Running_018', session: base, actions: [...common, 'restart'] },
-    { name: 'Menu_Stopped_019', session: { ...base, processState: 'stopped' }, actions: [...common, 'resume', 'restart'] },
-    { name: 'Menu_Failed_020', session: { ...base, processState: 'failed' }, actions: [...common, 'retry', 'restart'] },
+    { name: 'Menu_Stopped_019', session: { ...base, processState: 'stopped' }, actions: [...common, 'resume', 'restart', 'archive'] },
+    { name: 'Menu_Failed_020', session: { ...base, processState: 'failed' }, actions: [...common, 'retry', 'restart', 'archive'] },
     { name: 'Menu_Archived_021', session: { ...base, processState: 'stopped', archived: true }, actions: common },
     { name: 'Menu_Unknown_022', session: { ...base, processState: 'unknown' }, actions: [...common, 'confirm-status'] },
     { name: 'Menu_Starting_023', session: { ...base, processState: 'starting' }, actions: [...common, 'cancel-start'] },
@@ -596,4 +598,43 @@ it('Row_ArchiveQuickAction_043', async () => {
   }
   await wrapper.setProps({ session: history, menuActionVisibility: { archive: false } })
   expect(wrapper.find('[data-session-archive]').exists()).toBe(false)
+})
+
+// 归档与时间共用固定尾区，关闭保留优先级，不新增一列或触发恢复。
+it('Row_ArchiveOverlaysTime_044', async () => {
+  const wrapper = row({ ...base, opened: false, processState: 'stopped' })
+  expect(wrapper.get('.session-tail [data-session-archive] button').attributes('aria-label')).toBe('Archive')
+  expect(wrapper.get('.session-overflow-trigger button').attributes('aria-label')).toBe('Session actions')
+  const rules = styleRules()
+  expect(rules.find(rule => rule.selectorText === '.session-archive-action')?.style.getPropertyValue('position')).toBe('absolute')
+  expect(rules.some(rule => rule.selectorText.includes('.has-archive:hover .session-time') && rule.style.getPropertyValue('opacity') === '0')).toBe(true)
+  expect(rules.some(rule => rule.selectorText.includes('.has-archive:focus-within .session-time') && rule.style.getPropertyValue('pointer-events') === 'none')).toBe(true)
+  expect(rules.some(rule => rule.selectorText === '.session-item.has-archive' && rule.style.getPropertyValue('grid-template-columns'))).toBe(false)
+  await wrapper.get('[data-session-archive] button').trigger('click')
+  expect(wrapper.emitted('menu-action')).toEqual([[base.id, 'archive']])
+  expect(wrapper.emitted('primary-action')).toBeUndefined()
+  await wrapper.setProps({ session: { ...base, processState: 'stopped' } })
+  expect(wrapper.find('[data-session-archive]').exists()).toBe(false)
+  expect(wrapper.get('.session-tail button').attributes('aria-label')).toBe('Close')
+  await wrapper.trigger('contextmenu')
+  expect(menuIds()).toContain('archive')
+  await body.get('[data-item-id="archive"]').trigger('click')
+  expect(wrapper.emitted('menu-action')).toEqual([[base.id, 'archive'], [base.id, 'archive']])
+  expect(wrapper.emitted('activate')).toBeUndefined()
+})
+
+// 无 hover 或粗指针设备直接显示归档按钮，仍占同一固定尾区。
+it('Row_ArchiveCoarsePointer_045', () => {
+  const source = readFileSync(resolve('src/components/sessions/SessionItem.vue'), 'utf8')
+  const style = document.createElement('style')
+  style.dataset.testSessionRow = ''
+  style.textContent = source.match(/<style[^>]*>([\s\S]*?)<\/style>/)![1]
+  document.head.append(style)
+  const media = [...style.sheet!.cssRules].find(rule => rule instanceof CSSMediaRule
+    && rule.conditionText === '(hover: none), (pointer: coarse)') as CSSMediaRule
+  expect(media).toBeDefined()
+  const rules = [...media.cssRules] as CSSStyleRule[]
+  expect(rules.find(rule => rule.selectorText.endsWith('.session-archive-action'))?.style.getPropertyValue('opacity')).toBe('1')
+  expect(rules.find(rule => rule.selectorText.endsWith('.session-archive-action'))?.style.getPropertyValue('pointer-events')).toBe('auto')
+  expect(rules.find(rule => rule.selectorText.endsWith('.session-time'))?.style.getPropertyValue('opacity')).toBe('0')
 })

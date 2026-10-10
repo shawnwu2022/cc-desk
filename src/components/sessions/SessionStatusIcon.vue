@@ -52,8 +52,8 @@ const visual = computed(() => {
   if (props.state === 'needs-user' && props.activityState === 'waiting_input') return { svg: waitingInput, labelKey: 'sessionStatusWaitingInput' }
   return visuals[props.state]
 })
-// Selection can suppress a badge without changing its underlying activity.
-// Watch that independent projection, never remount/refresh or occurrence notices.
+// Watch only the independent activity projection, never selection, remount,
+// refresh or occurrence notices, when deciding whether to animate an entry.
 const entryMotion = ref<'permission' | 'needs-user' | 'completed' | null>(null)
 const transitionState = computed(() => props.transitionState ?? props.state)
 watch(() => JSON.stringify([transitionState.value, props.activityState ?? null, props.archived ?? false]), (next, previous) => {

@@ -514,3 +514,863 @@ fn HistorySource_UnseenTitle_011() {
     assert!(updated_at.is_none());
     assert!(budget.history_metadata_incomplete());
 }
+
+fn read_claude_history_fixture(
+    root: &Root,
+    project_paths: &[PathBuf],
+    budget: &mut Budget,
+) -> ReadResult<Vec<ResourceItem>> {
+    read(
+        &Catalog {
+            cli: CliKind::Claude,
+            root,
+            project: Some(root),
+            project_paths,
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        budget,
+    )
+}
+
+// Anthropic SDK 0.2.165 / bundled CLI 2.1.296 supports a leading permission-mode
+// record without cwd. A following large first user record must remain discoverable.
+// https://github.com/anthropics/claude-agent-sdk-python/blob/b6e9d12fe1cc98dde988ab7b7713c1feeee50c6c/tests/test_sessions.py#L1399-L1426
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_LeadingMetadataLargeUser_012() {
+    for metadata in [
+        json!({"type":"permission-mode","permissionMode":"acceptEdits"}),
+        json!({"type":"file-history-snapshot","snapshot":{}}),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        let input = format!(
+            "{metadata}\n{}\n{}\n",
+            json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":"synthetic task ".repeat(8000)}}),
+            json!({"type":"assistant","timestamp":"2026-10-10T04:00:00Z","message":{"content":"a".repeat(96 * 1024)}}),
+        );
+        let complete = parse("fixture.jsonl", CliKind::Claude, &input).unwrap();
+        assert_eq!(complete.cwd.as_deref(), temp.path().to_str());
+        std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let items =
+            read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+        assert_eq!(
+            items.len(),
+            1,
+            "a complete supported cwd record follows metadata"
+        );
+        let ResourceItem::Session {
+            title,
+            cwd,
+            truncated,
+            updated_at,
+            ..
+        } = &items[0]
+        else {
+            panic!("history must return session metadata")
+        };
+        assert!(title.starts_with("synthetic task "));
+        assert!(title.len() <= 512);
+        assert_eq!(cwd.as_deref(), temp.path().to_str());
+        assert!(*truncated);
+        assert!(updated_at.is_none(), "unread tail time must stay unknown");
+        assert!(budget.history_read_failures().is_empty());
+    }
+}
+
+// The first supported cwd record itself may exceed many chunks; retain the
+// observed title and never parse an incomplete UTF-8 or JSON record as a whole.
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_LongFirstRecord_013() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let input = format!(
+        "{}\n{}\n",
+        json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":"中".repeat(80 * 1024)}}),
+        json!({"type":"assistant","message":{"content":"a".repeat(96 * 1024)}}),
+    );
+    std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert_eq!(items.len(), 1);
+    let ResourceItem::Session {
+        title,
+        truncated,
+        updated_at,
+        ..
+    } = &items[0]
+    else {
+        panic!("history must return session metadata")
+    };
+    assert!(!title.is_empty());
+    assert!(title.len() <= 512);
+    assert!(title.chars().all(|ch| ch == '中'));
+    assert!(*truncated);
+    assert!(updated_at.is_none());
+}
+
+// 1251 complete synthetic Claude transcripts with 96KiB assistant bodies must
+// fit the existing 16MiB aggregate observation cap without reading those bodies.
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_Load1251_014() {
+    let temp = tempfile::tempdir().unwrap();
+    let assistant = json!({"type":"assistant","timestamp":"2026-10-10T05:00:00Z","message":{"content":"a".repeat(96 * 1024)}}).to_string();
+    for index in 0..1251 {
+        let directory = temp.path().join(format!("projects/p{:03}", index % 159));
+        std::fs::create_dir_all(&directory).unwrap();
+        let input = format!(
+            "{}\n{assistant}\n",
+            json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":"synthetic task"}}),
+        );
+        std::fs::write(directory.join(format!("session-{index:04}.jsonl")), input).unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget)
+        .expect("1251 short cwd observations must fit the unchanged byte/entry caps");
+    assert_eq!(items.len(), 1251);
+    assert!(budget.history_metadata_incomplete());
+    assert!(budget.history_read_failures().is_empty());
+    let mut ids = BTreeSet::new();
+    for item in items {
+        let ResourceItem::Session {
+            native_session_id,
+            title,
+            truncated,
+            updated_at,
+            ..
+        } = item
+        else {
+            panic!("history must return session metadata")
+        };
+        assert!(ids.insert(native_session_id));
+        assert_eq!(title, "synthetic task");
+        assert!(truncated);
+        assert!(updated_at.is_none());
+    }
+}
+
+// A sampled metadata record without cwd is insufficient for project identity;
+// exhausting the per-file cap must be diagnosed instead of silently filtering it.
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_UnobservedCwdCap_015() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let input = format!(
+        "{}\n{}\n",
+        json!({"type":"file-history-snapshot","snapshot":{}}),
+        json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":"u".repeat(3 * 1024 * 1024)}}),
+    );
+    std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert!(items.is_empty());
+    assert_eq!(budget.history_read_failures(), vec!["SOURCE_TOO_LARGE"]);
+    assert!(budget.history_metadata_incomplete());
+}
+
+// Validate all complete records in each observed chunk, including records after
+// a positive cwd and records before a later cwd. Arbitrary metadata cannot prove cwd.
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ValidateObservedRecords_016() {
+    for (extra, code) in [
+        ("{broken}", "SOURCE_INVALID"),
+        (
+            r#"{"type":"future","value":"bad\u0000text"}"#,
+            "SOURCE_INVALID_TEXT",
+        ),
+    ] {
+        for after in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+            let user = json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":"task"}});
+            let input = if after {
+                format!("{user}\n{extra}\n")
+            } else {
+                format!("{extra}\n{user}\n")
+            };
+            std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+            let root = Root::open(temp.path()).unwrap();
+            let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+            let items =
+                read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+            assert!(items.is_empty());
+            assert_eq!(budget.history_read_failures(), vec![code]);
+        }
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_UnknownAndMetadataOnlySemantics_017() {
+    for (input, expected_failure) in [
+        ("", Some("SOURCE_UNSUPPORTED")),
+        (
+            "{\"type\":\"permission-mode\",\"permissionMode\":\"acceptEdits\"}\n",
+            Some("SOURCE_UNSUPPORTED"),
+        ),
+        (
+            "{\"type\":\"future\",\"cwd\":\"/synthetic/project\"}\n",
+            Some("SOURCE_UNSUPPORTED"),
+        ),
+        (
+            "{\"type\":\"custom-title\",\"customTitle\":\"known\"}\n",
+            None,
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let items =
+            read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+        assert!(items.is_empty());
+        assert_eq!(
+            budget.history_read_failures(),
+            expected_failure.into_iter().collect::<Vec<_>>()
+        );
+    }
+}
+
+// Adaptive chunks must debit the original shared aggregate cap even when each
+// file reaches a supported cwd before its unread assistant body.
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_KeepAggregateCap_018() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    for index in 0..3 {
+        let input = format!(
+            "{}\n{}\n{}\n",
+            json!({"type":"permission-mode","permissionMode":"acceptEdits"}),
+            json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":"u".repeat(12 * 1024)}}),
+            json!({"type":"assistant","message":{"content":"a".repeat(24 * 1024)}}),
+        );
+        std::fs::write(temp.path().join(format!("projects/p/{index}.jsonl")), input).unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits {
+        file_bytes: 16 * 1024,
+        total_bytes: 32 * 1024,
+        entries: 4096,
+    });
+    assert_eq!(
+        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).err(),
+        Some("SOURCE_TOO_LARGE")
+    );
+}
+
+// Claude filenames remain identities across the whole held source. Project
+// filtering cannot hide duplicates discovered through different cwd records.
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_DuplicateBeforeProjectFilter_019() {
+    let temp = tempfile::tempdir().unwrap();
+    for (directory, cwd) in [
+        ("a", temp.path().to_str().unwrap()),
+        ("b", "/synthetic/foreign"),
+    ] {
+        std::fs::create_dir_all(temp.path().join(format!("projects/{directory}"))).unwrap();
+        let input = format!(
+            "{}\n{}\n{}\n",
+            json!({"type":"permission-mode","permissionMode":"acceptEdits"}),
+            json!({"type":"user","cwd":cwd,"message":{"content":"task"}}),
+            json!({"type":"assistant","message":{"content":"a".repeat(96 * 1024)}}),
+        );
+        std::fs::write(
+            temp.path()
+                .join(format!("projects/{directory}/same-id.jsonl")),
+            input,
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    assert_eq!(
+        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).err(),
+        Some("SOURCE_AMBIGUOUS")
+    );
+}
+
+// Preserve titles and native time from a complete observed file. A partial file
+// can retain observed explicit titles but never promote its observed time to latest.
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ObservedTitleAndTime_020() {
+    for partial in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        let mut input = format!(
+            "{}\n{}\n{}\n{}\n",
+            json!({"type":"user","cwd":temp.path().to_str().unwrap(),"timestamp":"2026-10-10T06:00:00Z","message":{"content":"original task"}}),
+            json!({"type":"custom-title","customTitle":"old title"}),
+            json!({"type":"custom-title","customTitle":"observed latest title"}),
+            json!({"type":"assistant","timestamp":"2026-10-10T07:00:00Z","message":{"content":"answer"}}),
+        );
+        if partial {
+            input.push_str(&format!(
+                "{}\n",
+                json!({"type":"assistant","timestamp":"2026-10-10T08:00:00Z","message":{"content":"a".repeat(96 * 1024)}}),
+            ));
+        }
+        std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let items =
+            read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+        let ResourceItem::Session {
+            title,
+            truncated,
+            updated_at,
+            ..
+        } = &items[0]
+        else {
+            panic!("history must return session metadata")
+        };
+        assert_eq!(title, "observed latest title");
+        assert_eq!(*truncated, partial);
+        assert_eq!(
+            updated_at.as_deref(),
+            if partial {
+                None
+            } else {
+                Some("2026-10-10T07:00:00Z")
+            }
+        );
+    }
+}
+
+// Arbitrary metadata with a cwd cannot terminate sampling before the actual
+// supported record. It does not establish an authorized project directory.
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_UnknownCwdDoesNotEndObservation_021() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let input = format!(
+        "{}\n{}\n{}\n",
+        json!({"type":"future","cwd":"/synthetic/foreign"}),
+        json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":"task ".repeat(20 * 1024)}}),
+        json!({"type":"assistant","message":{"content":"a".repeat(96 * 1024)}}),
+    );
+    std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    assert_eq!(
+        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).err(),
+        Some("SOURCE_AMBIGUOUS"),
+        "observed conflicting cwd records keep their existing fail-closed semantics"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_RejectMainTranscriptLink_022() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let path = outside.path().join("source.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"user\",\"cwd\":\"/synthetic/project\"}\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&path, temp.path().join("projects/p/fixture.jsonl")).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    assert_eq!(
+        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).err(),
+        Some("SOURCE_NOT_REGULAR")
+    );
+}
+
+// A complete recognized metadata file without cwd is globally observable, but
+// cannot prove absence under a particular registered project. No directory-name inference.
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_UnassociatedMetadataIsPartial_023() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    std::fs::write(
+        temp.path().join("projects/p/fixture.jsonl"),
+        "{\"type\":\"custom-title\",\"customTitle\":\"known title\"}\n",
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let scoped =
+        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert!(scoped.is_empty());
+    assert!(
+        budget.history_metadata_incomplete(),
+        "missing association cannot establish complete project absence"
+    );
+    assert!(budget.history_read_failures().is_empty());
+
+    let mut global_budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let global = read(
+        &Catalog {
+            cli: CliKind::Claude,
+            root: &root,
+            project: None,
+            project_paths: &[],
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut global_budget,
+    )
+    .unwrap();
+    assert_eq!(global.len(), 1);
+    let ResourceItem::Session { title, cwd, .. } = &global[0] else {
+        panic!("history must return session metadata")
+    };
+    assert_eq!(title, "known title");
+    assert!(cwd.is_none());
+    assert!(!global_budget.history_metadata_incomplete());
+
+    std::fs::write(
+        temp.path().join("projects/p/fixture.jsonl"),
+        "{\"type\":\"user\",\"cwd\":\"/synthetic/foreign\",\"message\":{\"content\":\"foreign\"}}\n",
+    )
+    .unwrap();
+    let mut foreign_budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    assert!(
+        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut foreign_budget)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!foreign_budget.history_metadata_incomplete());
+    assert!(foreign_budget.history_read_failures().is_empty());
+}
+
+// Official SDK 0.2.165 prefers customTitle, then aiTitle, then a user prompt.
+// https://github.com/anthropics/claude-agent-sdk-python/blob/b6e9d12fe1cc98dde988ab7b7713c1feeee50c6c/src/claude_agent_sdk/_internal/sessions.py#L441-L458
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_AiTitleSchemaAndPrecedence_024() {
+    let user =
+        json!({"type":"user","cwd":"/synthetic/project","message":{"content":"first prompt"}});
+    let ai = json!({"type":"ai-title","aiTitle":"generated title","sessionId":"fixture"});
+    assert_eq!(
+        parse("fixture.jsonl", CliKind::Claude, &format!("{user}\n{ai}\n"))
+            .unwrap()
+            .title,
+        "generated title"
+    );
+    for input in [
+        format!("{user}\n{{\"type\":\"custom-title\",\"customTitle\":\"manual\"}}\n{ai}\n"),
+        format!("{user}\n{ai}\n{{\"type\":\"custom-title\",\"customTitle\":\"manual\"}}\n"),
+    ] {
+        assert_eq!(
+            parse("fixture.jsonl", CliKind::Claude, &input)
+                .unwrap()
+                .title,
+            "manual"
+        );
+        assert_eq!(
+            parse_metadata("fixture.jsonl", CliKind::Claude, &input)
+                .unwrap()
+                .title,
+            "manual"
+        );
+    }
+    for (value, code) in [
+        (
+            json!({"type":"ai-title","aiTitle":"generated","sessionId":"other"}),
+            "SOURCE_AMBIGUOUS",
+        ),
+        (
+            json!({"type":"ai-title","aiTitle":"generated"}),
+            "SOURCE_INVALID",
+        ),
+        (
+            json!({"type":"ai-title","aiTitle":"","sessionId":"fixture"}),
+            "SOURCE_INVALID",
+        ),
+        (
+            json!({"type":"ai-title","aiTitle":42,"sessionId":"fixture"}),
+            "SOURCE_INVALID",
+        ),
+    ] {
+        let input = format!("{user}\n{value}\n");
+        assert_eq!(
+            parse("fixture.jsonl", CliKind::Claude, &input).err(),
+            Some(code)
+        );
+        assert_eq!(
+            parse_metadata("fixture.jsonl", CliKind::Claude, &input).err(),
+            Some(code)
+        );
+    }
+}
+
+fn claude_tail_input(cwd: &Path, tail: &str) -> String {
+    format!(
+        "{}\n{}\n{tail}",
+        json!({"type":"user","cwd":cwd.to_str().unwrap(),"sessionId":"fixture","message":{"content":"first prompt"}}),
+        json!({"type":"assistant","timestamp":"2026-10-10T09:00:00Z","message":{"content":"a".repeat(150 * 1024)}}),
+    )
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_BoundedTailTitle_025() {
+    for (tail, expected) in [
+        ("{\"type\":\"ai-title\",\"aiTitle\":\"generated title\",\"sessionId\":\"fixture\"}\n", "generated title"),
+        ("{\"type\":\"custom-title\",\"customTitle\":\"manual\",\"sessionId\":\"fixture\"}\n{\"type\":\"ai-title\",\"aiTitle\":\"generated title\",\"sessionId\":\"fixture\"}\n", "manual"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        std::fs::write(temp.path().join("projects/p/fixture.jsonl"), claude_tail_input(temp.path(), tail)).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+        let ResourceItem::Session { title, updated_at, truncated, .. } = &items[0] else { panic!("session metadata") };
+        assert_eq!(title, expected);
+        assert!(updated_at.is_none(), "tail display enrichment is not complete activity evidence");
+        assert!(*truncated);
+        assert!(budget.history_metadata_incomplete());
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_TailFailureRetainsProvenRow_026() {
+    for (tail, code) in [
+        ("{broken}\n", "SOURCE_INVALID"),
+        (
+            "{\"type\":\"future\",\"value\":\"bad\\u0000text\"}\n",
+            "SOURCE_INVALID_TEXT",
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        std::fs::write(
+            temp.path().join("projects/p/fixture.jsonl"),
+            claude_tail_input(temp.path(), tail),
+        )
+        .unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let items =
+            read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+        assert_eq!(items.len(), 1);
+        let ResourceItem::Session { title, .. } = &items[0] else {
+            panic!("session metadata")
+        };
+        assert_eq!(title, "first prompt");
+        assert_eq!(budget.history_read_failures(), vec![code]);
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_TailIdMismatchFailsClosed_027() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    std::fs::write(
+        temp.path().join("projects/p/fixture.jsonl"),
+        claude_tail_input(
+            temp.path(),
+            "{\"type\":\"ai-title\",\"aiTitle\":\"wrong session\",\"sessionId\":\"other\"}\n",
+        ),
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    assert_eq!(
+        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).err(),
+        Some("SOURCE_AMBIGUOUS")
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_UnreadMiddleAndLiteralUntitled_028() {
+    for (prompt, expect_unknown) in [("", true), ("Untitled", false)] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        let input = format!(
+            "{}\n{}\n{}\n{}\n",
+            json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":prompt}}),
+            json!({"type":"assistant","message":{"content":"a".repeat(150 * 1024)}}),
+            json!({"type":"ai-title","aiTitle":"unread middle title","sessionId":"fixture"}),
+            json!({"type":"assistant","message":{"content":"b".repeat(150 * 1024)}}),
+        );
+        std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let items =
+            read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+        let row = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(row["title"], "Untitled");
+        assert_eq!(
+            row.get("titleUnknown").and_then(Value::as_bool),
+            expect_unknown.then_some(true)
+        );
+    }
+}
+
+// Required headers finish before optional tails spend any aggregate bytes.
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_OptionalTitlesCannotStarveHeaders_029() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    for index in 0..8 {
+        let input = format!(
+            "{}\n{}\n{}\n",
+            json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":"task"}}),
+            json!({"type":"assistant","message":{"content":"a".repeat(96 * 1024)}}),
+            json!({"type":"ai-title","aiTitle":"optional","sessionId":format!("{index:02}")})
+        );
+        std::fs::write(
+            temp.path().join(format!("projects/p/{index:02}.jsonl")),
+            input,
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits {
+        file_bytes: 2 * 1024 * 1024,
+        total_bytes: 8 * 4096 + 8192,
+        entries: 4096,
+    });
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert_eq!(items.len(), 8);
+    let enriched = items
+        .iter()
+        .filter(|item| matches!(item, ResourceItem::Session { title, .. } if title == "optional"))
+        .count();
+    assert_eq!(
+        enriched, 1,
+        "only one optional header+tail fits after all eight required headers"
+    );
+    assert!(budget.history_read_failures().is_empty());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ObservedSessionIdsAgree_030() {
+    for record in [
+        json!({"type":"user","sessionId":"other","cwd":"/synthetic/project","message":{"content":"task"}}),
+        json!({"type":"assistant","sessionId":"other","cwd":"/synthetic/project"}),
+        json!({"type":"custom-title","sessionId":"other","customTitle":"manual"}),
+    ] {
+        let input = format!("{record}\n");
+        assert_eq!(
+            parse("fixture.jsonl", CliKind::Claude, &input).err(),
+            Some("SOURCE_AMBIGUOUS")
+        );
+        assert_eq!(
+            parse_metadata("fixture.jsonl", CliKind::Claude, &input).err(),
+            Some("SOURCE_AMBIGUOUS")
+        );
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_OptionalHeaderMustRemainProven_031() {
+    for replacement in [
+        None,
+        Some("{broken}\n"),
+        Some("{\"type\":\"user\",\"cwd\":\"/synthetic/changed\"}\n"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        let path = temp.path().join("projects/p/fixture.jsonl");
+        let input = claude_tail_input(
+            temp.path(),
+            "{\"type\":\"ai-title\",\"aiTitle\":\"generated\",\"sessionId\":\"fixture\"}\n",
+        );
+        std::fs::write(&path, &input).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let end = input[..4096].rfind('\n').unwrap();
+        let mut transcript =
+            parse_metadata("projects/p/fixture.jsonl", CliKind::Claude, &input[..=end]).unwrap();
+        transcript.observation_bytes = 4096;
+        match replacement {
+            None => std::fs::remove_file(&path).unwrap(),
+            Some(header) => {
+                std::fs::write(&path, format!("{header}{}", " ".repeat(input.len()))).unwrap()
+            }
+        }
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let catalog = Catalog {
+            cli: CliKind::Claude,
+            root: &root,
+            project: Some(&root),
+            project_paths: &[temp.path().to_owned()],
+            user_config: None,
+            check: &|| Ok(()),
+        };
+        assert_eq!(
+            enrich_claude_title(&catalog, &transcript, &mut budget).err(),
+            Some("SOURCE_CHANGED")
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_OptionalLinkFailsClosed_032() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let input = claude_tail_input(temp.path(), "");
+    let path = temp.path().join("projects/p/fixture.jsonl");
+    std::fs::write(&path, &input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let end = input[..4096].rfind('\n').unwrap();
+    let mut transcript =
+        parse_metadata("projects/p/fixture.jsonl", CliKind::Claude, &input[..=end]).unwrap();
+    transcript.observation_bytes = 4096;
+    std::fs::remove_file(&path).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("outside.jsonl"), &input).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("outside.jsonl"), &path).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let catalog = Catalog {
+        cli: CliKind::Claude,
+        root: &root,
+        project: Some(&root),
+        project_paths: &[temp.path().to_owned()],
+        user_config: None,
+        check: &|| Ok(()),
+    };
+    assert_eq!(
+        enrich_claude_title(&catalog, &transcript, &mut budget).err(),
+        Some("SOURCE_NOT_REGULAR")
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_OptionalTitleBudgetAndPriority_033() {
+    for (custom, file_bytes, expected) in [
+        (true, 2 * 1024 * 1024, "manual"),
+        (false, 8192, "first prompt"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        let mut input = claude_tail_input(
+            temp.path(),
+            "{\"type\":\"ai-title\",\"aiTitle\":\"generated\",\"sessionId\":\"fixture\"}\n",
+        );
+        if custom {
+            input.insert_str(0, "{\"type\":\"custom-title\",\"customTitle\":\"manual\",\"sessionId\":\"fixture\"}\n");
+        }
+        std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits {
+            file_bytes,
+            total_bytes: 16 * 1024 * 1024,
+            entries: 4096,
+        });
+        let items =
+            read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+        let ResourceItem::Session { title, .. } = &items[0] else {
+            panic!("session metadata")
+        };
+        assert_eq!(title, expected);
+        assert!(budget.history_read_failures().is_empty());
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_GlobalHistoryDoesNotSampleTail_034() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    std::fs::write(
+        temp.path().join("projects/p/fixture.jsonl"),
+        claude_tail_input(temp.path(), "{broken}\n"),
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read(
+        &Catalog {
+            cli: CliKind::Claude,
+            root: &root,
+            project: None,
+            project_paths: &[],
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut budget,
+    )
+    .unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(budget.history_metadata_incomplete());
+    assert!(
+        budget.history_read_failures().is_empty(),
+        "optional tail requires positive requested-project association"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_TitleProvenanceWire_035() {
+    for (record, expected) in [
+        (
+            json!({"type":"user","message":{"content":"task"}}),
+            Some("prompt"),
+        ),
+        (
+            json!({"type":"ai-title","aiTitle":"generated","sessionId":"fixture"}),
+            Some("ai"),
+        ),
+        (
+            json!({"type":"custom-title","customTitle":"manual"}),
+            Some("custom"),
+        ),
+        (json!({"type":"file-history-snapshot"}), None),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        let input = format!(
+            "{}\n{record}\n",
+            json!({"type":"system","cwd":temp.path().to_str().unwrap()})
+        );
+        std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let items =
+            read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+        let row = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(row.get("titleSource").and_then(Value::as_str), expected);
+        assert!(row.get("metadataIncomplete").is_none());
+        assert_eq!(
+            row.get("titleUnknown").and_then(Value::as_bool),
+            expected.is_none().then_some(true)
+        );
+    }
+}

@@ -6,6 +6,7 @@ import { parseU64 } from '@/utils/nativeIdentity'
 import type { ObservationState } from '@/integrations/registry'
 import { createNativeId } from '@/utils/nativeId'
 import type { NativeObservationNotice, NativeObservationNoticeState } from '@/types/nativeObservationNotice'
+import { useHookStore } from './hook'
 
 export type NativeTabStatus =
   | 'stopped'
@@ -338,6 +339,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.activityState = 'unknown'
     value.observationState = 'off'
     value.errorCode = 'LAUNCH_STATE_UNKNOWN'
+    useHookStore().invalidateObservation(value)
   }
 
   function markError(tabId: string, code: string): void {
@@ -353,6 +355,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.activityState = 'unknown'
     value.observationState = 'off'
     value.errorCode = next
+    useHookStore().invalidateObservation(value)
   }
 
   function setDiagnostic(tabId: string, code: string): void {
@@ -388,6 +391,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       value.attentionState = 'none'
       value.activityState = 'unknown'
       value.observationState = 'off'
+      if (next.status !== 'starting') useHookStore().invalidateObservation(value)
     }
     if (next.status !== 'starting') pendingAttention.delete(tabId)
     const pendingNotice = pendingNotices.get(tabId)
@@ -424,8 +428,11 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     }
     if (value.generation >= 0xffffffff) throw new Error('GENERATION_EXHAUSTED')
 
-    value.profileId = text(profile.profileId, 'PROFILE_ID_REQUIRED')
-    value.profileRevision = revision(profile.profileRevision)
+    const nextProfileId = text(profile.profileId, 'PROFILE_ID_REQUIRED')
+    const nextProfileRevision = revision(profile.profileRevision)
+    useHookStore().clearSession(value.runId)
+    value.profileId = nextProfileId
+    value.profileRevision = nextProfileRevision
     value.requestId = id('request')
     value.runId = id('run')
     value.generation += 1
@@ -446,6 +453,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   }
 
   function close(tabId: string): void {
+    const value = tabs.get(tabId)
+    if (value) useHookStore().clearSession(value.runId)
     pendingAttention.delete(tabId)
     pendingNotices.delete(tabId)
     noticeLedgers.delete(tabId)
@@ -458,6 +467,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   }
 
   function clear(): void {
+    for (const value of tabs.values()) useHookStore().clearSession(value.runId)
     pendingAttention.clear()
     pendingNotices.clear()
     noticeLedgers.clear()

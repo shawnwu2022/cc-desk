@@ -23,7 +23,7 @@ export function projectionFailure(value: unknown, fallback: ProjectionStage): Er
 const reasons = new Set(['SCOPE_UNKNOWN', 'SCOPE_STALE', 'SCOPE_REVOKED', 'SCOPE_CAPACITY', 'SCOPE_EPOCH_EXHAUSTED', 'SCOPE_UNAVAILABLE',
   'SOURCE_UNSUPPORTED', 'SOURCE_INVALID', 'SOURCE_INVALID_TEXT', 'SOURCE_PATH_REJECTED', 'SOURCE_CHANGED', 'SOURCE_NOT_REGULAR',
   'SOURCE_TOO_LARGE', 'SOURCE_TOO_MANY_ENTRIES', 'SOURCE_BUDGET_EXCEEDED', 'SOURCE_READ_FAILED', 'SOURCE_READ_FORBIDDEN',
-  'SOURCE_RESPONSE_TOO_LARGE', 'SOURCE_AMBIGUOUS', 'SOURCE_BUSY', 'SOURCE_TASK_FAILED', 'PROJECT_NOT_FOUND', 'PROFILE_NOT_FOUND',
+  'SOURCE_RESPONSE_TOO_LARGE', 'SOURCE_SNAPSHOT_EXPIRED', 'SOURCE_AMBIGUOUS', 'SOURCE_BUSY', 'SOURCE_TASK_FAILED', 'PROJECT_NOT_FOUND', 'PROFILE_NOT_FOUND',
   'PROJECT_IDENTITY_CHANGED', 'REVISION_CONFLICT', 'FORBIDDEN', 'INVALID_REQUEST', 'DOCUMENT_BRIDGE_UNAVAILABLE', 'BACKEND_INSTANCE_CHANGED'])
 function invalid(): never { throw new Error('INVALID_PROJECTION') }
 function object(value: unknown, required: string[], optional: string[] = []): Record<string, unknown> {
@@ -87,12 +87,20 @@ function item(v: unknown, request: ReadRequest): ResourceItem {
   if (r.type !== allowed[request.resourceKind]) return invalid()
   if (r.type === 'session' || r.type === 'message') {
     const common = ['type', 'sessionKey', 'nativeSessionId', 'truncated']
-    object(r, [...common, ...(r.type === 'session' ? ['title', 'cwd', 'updatedAt'] : ['role', 'text'])])
+    object(r, [...common, ...(r.type === 'session' ? ['title', 'cwd', 'updatedAt'] : ['role', 'text'])], r.type === 'session' ? ['titleUnknown', 'titleSource', 'metadataIncomplete'] : [])
     const nativeSessionId = text(r.nativeSessionId, 256, false)
     const sessionKey = text(r.sessionKey, 8192, false)
     if (/\p{Cc}/u.test(nativeSessionId) || sessionKey !== JSON.stringify(['local', request.source.cli, request.source.sourceRootKey, nativeSessionId])) return invalid()
     const truncated = bool(r.truncated)
-    if (r.type === 'session') return { type: 'session', sessionKey, nativeSessionId, truncated, title: text(r.title, 512), cwd: optionalText(r.cwd, 32768), updatedAt: optionalText(r.updatedAt, 64) }
+    if (r.type === 'session') {
+      const titleUnknown = Object.prototype.hasOwnProperty.call(r, 'titleUnknown') ? { titleUnknown: bool(r.titleUnknown) } : {}
+      const metadataIncomplete = Object.prototype.hasOwnProperty.call(r, 'metadataIncomplete') ? { metadataIncomplete: bool(r.metadataIncomplete) } : {}
+      if (metadataIncomplete.metadataIncomplete === true && !truncated) return invalid()
+      const titleSource = Object.prototype.hasOwnProperty.call(r, 'titleSource') ? text(r.titleSource, 6, false) : undefined
+      if (titleSource !== undefined && (!['prompt', 'ai', 'custom'].includes(titleSource) || titleUnknown.titleUnknown === true)) return invalid()
+      return { ...titleUnknown, ...metadataIncomplete, ...(titleSource === undefined ? {} : { titleSource: titleSource as 'prompt' | 'ai' | 'custom' }),
+        type: 'session', sessionKey, nativeSessionId, truncated, title: text(r.title, 512), cwd: optionalText(r.cwd, 32768), updatedAt: optionalText(r.updatedAt, 64) }
+    }
     if (r.role !== 'user' && r.role !== 'assistant') return invalid()
     return { type: 'message', sessionKey, nativeSessionId, truncated, role: r.role, text: text(r.text, 16384) }
   }

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.8] - 2026-10-10 (repair candidate)
+
+- Keep permission, completion and waiting-input status independent of which session is selected; preserve exact attention evidence and existing running/closed distinctions
+- Recognize authenticated, exact-run Claude subagent start/stop evidence for bounded first invocations; retain permission priority, stale-owner rejection and conservative unknown states after evidence loss or reused agent IDs
+- Share a fixed trailing slot between history time and Archive on hover or keyboard focus, expose Archive on touch, and keep the full-size Close control plus menu Archive for ended open sessions
+- Observe Claude identity through adaptive bounded headers and read optional AI/custom title metadata from a same-held-file tail; retain exact-source known display titles and avoid saving opening checkpoints as manual renames
+- Reuse one authenticated, bounded history observation across consecutive pages and restart an expired continuation once as a whole observation, preserving authority, revocation and absence safeguards
+
+This prepares the authorized combined repair candidate. Disabled observers still provide no live activity evidence, and this release does not enable them or certify real installed CLI behavior. Same-run subagent ID reuse lacks an invocation epoch and remains unknown. A title outside the bounded header/tail remains unknown, and a live newly created tab without an authenticated history identity still lacks automatic-title binding. Cross-project offset-zero scans still repeat; the user’s precise unsupported history entry was not identified. Exact-source hosted checks, reviewed rendered screenshots and signed protected-main release admission remain required; existing platform and native installation acceptance boundaries remain unchanged.
+
 ## [0.18.7] - 2026-10-10 (repair candidate)
 
 - Restore closed and historical sessions by clicking their row; already-open rows only select, and nested actions and pending attempts retain exact-owner cancellation and duplicate-launch protection

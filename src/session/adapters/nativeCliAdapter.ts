@@ -141,7 +141,7 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     projectPath: entry.context.projectPath,
     cli: entry.context.cli,
     runtime: 'native-cli',
-    title: item.title || item.nativeSessionId,
+    title: item.lastKnownTitle || item.title || item.nativeSessionId,
     processState: 'stopped',
     attentionState: 'none',
     activityState: 'unknown',

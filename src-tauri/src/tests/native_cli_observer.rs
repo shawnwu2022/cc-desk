@@ -365,6 +365,61 @@ fn D13_Observer_PromptAndErrorBodyNeverReachFrontend_011() {
     }
 }
 
+// 仅两个子代理生命周期事件保留有界身份，其他正文元数据继续丢弃。
+#[test]
+fn Subagent_AuthenticatedIdentity_001() {
+    let registry = ObserverRegistry::new();
+    let binding = registry
+        .mint(run("subagent-owner", 1), ObserverSource::ClaudeHook)
+        .unwrap();
+    for (i, name) in ["SubagentStart", "SubagentStop"].iter().enumerate() {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "hook_event_name": name, "session_id": "sid", "agent_id": "agent-abc123",
+            "agent_type": "fixture-private-type", "agent_transcript_path": "/fixture-private-path",
+            "last_assistant_message": "fixture-private-message"
+        }))
+        .unwrap();
+        let ObserverAccept::Accepted(event) = registry
+            .accept_event(&binding, &format!("agent-{i}"), &body)
+            .unwrap()
+        else {
+            panic!("new event");
+        };
+        let payload = serde_json::to_value(HookPayload::from_validated(event)).unwrap();
+        assert_eq!(payload["detail"]["data"]["agentId"], "agent-abc123");
+        assert!(!payload.to_string().contains("fixture-private"));
+    }
+}
+
+// 子代理身份不接受空字符串、129 字节或换行，不扩展其他事件字段。
+#[test]
+fn Subagent_RejectIdentity_002() {
+    let registry = ObserverRegistry::new();
+    let binding = registry
+        .mint(run("subagent-invalid", 1), ObserverSource::ClaudeHook)
+        .unwrap();
+    for (i, id) in [String::new(), "x".repeat(129), "agent\nsecret".into()]
+        .iter()
+        .enumerate()
+    {
+        let body = serde_json::to_vec(
+            &serde_json::json!({ "hook_event_name": "SubagentStart", "agent_id": id }),
+        )
+        .unwrap();
+        assert!(registry
+            .accept_event(&binding, &format!("invalid-{i}"), &body)
+            .is_err());
+    }
+    let body = br#"{"hook_event_name":"UserPromptSubmit","agent_id":"fixture-private-id"}"#;
+    let ObserverAccept::Accepted(event) = registry.accept_event(&binding, "prompt", body).unwrap()
+    else {
+        panic!("new event");
+    };
+    assert!(!serde_json::to_string(&HookPayload::from_validated(event))
+        .unwrap()
+        .contains("fixture-private-id"));
+}
+
 #[test]
 fn D13_Observer_MalformedIdentityIsNotAcceptedAsAnOfficialEvent_012() {
     let registry = ObserverRegistry::new();

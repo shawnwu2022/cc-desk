@@ -57,12 +57,14 @@ export function deriveSessionVisualState(session: UnifiedSession, selected = fal
   if (session.processState === 'unknown') return 'confirming'
   if (session.processState === 'stopped') return selected && session.opened === true ? 'stopped' : 'closed'
   const activity = session.activityState ?? 'unknown'
-  // Preserve the historical working/error/permission/completed/pending priority.
+  // Selection changes viewing ownership, never the observed turn status.
+  // A causal subagent lifecycle is a narrower hint than an explicit blocked/error cause.
+  if (activity === 'subagent_running' && (session.attentionKind === 'permission' || session.attentionKind === 'error')) return session.attentionKind
   if (['working', 'thinking', 'tool_executing', 'subagent_running', 'compacting'].includes(activity)) return 'working'
   if (session.attentionKind === 'error' || activity === 'error') return 'error'
-  if (session.attentionKind === 'permission' || activity === 'waiting_permission') return selected ? 'running' : 'permission'
-  if (session.attentionKind === 'completed') return selected ? 'running' : 'completed'
-  if (session.attentionState === 'needs-user' || activity === 'waiting' || activity === 'waiting_input') return selected ? 'running' : 'needs-user'
+  if (session.attentionKind === 'permission' || activity === 'waiting_permission') return 'permission'
+  if (session.attentionKind === 'completed') return 'completed'
+  if (session.attentionState === 'needs-user' || activity === 'waiting' || activity === 'waiting_input') return 'needs-user'
   return activity === 'idle' ? 'running' : 'unknown'
 }
 
@@ -120,7 +122,8 @@ export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
   { id: 'restart', labelKey: 'sessionActionRestart', danger: true, visible: (session) => isOpened(session) && isState('running', 'stopped', 'failed')(session) },
   { id: 'close', labelKey: 'sessionActionClose', danger: true, visible: () => false },
   { id: 'discard-creation', labelKey: 'sessionActionDiscardCreation', danger: true, visible: (session) => !session.archived && !session.opened && session.preparationState === 'failed' && session.processState === 'failed' },
-  { id: 'archive', labelKey: 'sessionActionArchive', danger: true, visible: () => false },
+  { id: 'archive', labelKey: 'sessionActionArchive', danger: true, visible: session => !!selectSessionArchiveAction(session)
+    && (session.opened === true || selectSessionPrimaryAction(session) === 'retry') },
   { id: 'restore-archive', labelKey: 'sessionActionRestoreArchive', visible: (session) => session.archived },
   { id: 'copy-session-id', labelKey: 'sessionActionCopyId', visible: () => true },
   { id: 'open-project-directory', labelKey: 'sessionActionOpenProject', visible: () => true },

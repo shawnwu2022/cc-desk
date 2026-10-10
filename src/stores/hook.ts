@@ -116,6 +116,14 @@ export const useHookStore = defineStore('hook', () => {
       targets.delete(id)
     }
   }
+  /** A host uncertainty invalidates lifecycle evidence but keeps exact-run
+   * replay/tombstone ledgers. Recovery cannot make an old start fresh again. */
+  function invalidateObservation(run: RunRef) {
+    const entry = targets.get(key(run))
+    if (!entry) return
+    clearTimeout(entry.timer)
+    publish({ kind: 'timeout', ...entry.run })
+  }
   function init(): Promise<void> {
     if (legacyStop || disposed) return Promise.resolve()
     if (legacyPending) return legacyPending
@@ -134,5 +142,5 @@ export const useHookStore = defineStore('hook', () => {
     targets.clear()
     subscribers.clear()
   })
-  return { subscribe, subscribeObservation, clearSession, init, observationFor: (run: RunRef) => observations.get(run)?.state() }
+  return { subscribe, subscribeObservation, clearSession, invalidateObservation, init, observationFor: (run: RunRef) => observations.get(run)?.state() }
 })

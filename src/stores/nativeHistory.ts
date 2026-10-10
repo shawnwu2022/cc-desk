@@ -18,6 +18,9 @@ export interface NativeHistoryContext {
 export type NativeHistorySession = Extract<ResourceItem, { type: 'session' }> & {
   /** Display-only prior complete timestamp. Never written into source updatedAt. */
   lastKnownActivityAt?: number
+  /** Display-only title retained when the current bounded observation is unknown. */
+  lastKnownTitle?: string
+  lastKnownTitleSource?: 'prompt' | 'ai' | 'custom'
 }
 
 export interface NativeHistoryEntry {
@@ -33,8 +36,9 @@ export interface NativeHistoryEntry {
   /** Opaque backend-admitted identity; retained even when enumeration fails. */
   sourceRootKey?: string
   requestEpoch: string
-  /** Only one complete authenticated response can prove absence. Offset pages
-   * have no common snapshot token and are positive discovery only. */
+  /** Only one complete authenticated response can prove absence. Consecutive
+   * pages can share a bounded backend observation, but do not grant additional
+   * absence authority and remain positive discovery only. */
   absenceEvidence?: { cli: NativeCliKind; sourceRootKey: string }
 }
 
@@ -93,7 +97,7 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
     const owner = {}
     if (sequence === BigInt('18446744073709551615')) throw new Error('SCOPE_EPOCH_EXHAUSTED')
     owners.set(key, owner)
-    const epoch = (++sequence).toString()
+    let epoch = (++sequence).toString()
     const entry = reactive<NativeHistoryEntry>({
       key,
       context,
@@ -127,15 +131,31 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
         if (source.cli !== context.cli) throw new Error('PROFILE_CLI_MISMATCH')
         if (typeof source.sourceRootKey === 'string' && source.sourceRootKey) entry.sourceRootKey = source.sourceRootKey
         const sessions = new Map<string, NativeHistorySession>()
-        const previousSessions = new Map(cached?.sourceRootKey === entry.sourceRootKey ? cached?.sessions.map(item => [item.sessionKey, item]) ?? [] : [])
+        const previousSessions = new Map(entry.sourceRootKey && cached?.sourceRootKey === entry.sourceRootKey ? cached?.sessions.map(item => [item.sessionKey, item]) ?? [] : [])
         let offset = 0
         let metadataIncomplete = false
+        let restartedObservation = false
         const readFailures = new Set<HistoryReadFailure>()
         while (true) {
           stage = 'read-invoke'
           const result = await client.read({ source, resourceKind: 'history', requestEpoch: epoch, limit: 200, offset })
           if (owners.get(key) !== owner) return replacement()
           if (result.state !== 'ready') {
+            if (result.reason === 'SOURCE_SNAPSHOT_EXPIRED' && offset > 0 && !restartedObservation) {
+              // Restart one entire owned observation; never append fresh pages
+              // to rows from an expired/evicted receipt. No root-error retry.
+              restartedObservation = true
+              if (sequence === BigInt('18446744073709551615')) throw new Error('SCOPE_EPOCH_EXHAUSTED')
+              epoch = (++sequence).toString()
+              entry.requestEpoch = epoch
+              offset = 0
+              sessions.clear()
+              metadataIncomplete = false
+              readFailures.clear()
+              entry.metadataIncomplete = undefined
+              entry.readFailures = undefined
+              continue
+            }
             entry.error = result.reason ?? 'SOURCE_UNAVAILABLE'
             entry.diagnosticStage = 'read-source-enumeration'
             entry.sessions = []
@@ -154,7 +174,18 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
             // source timestamp, completeness or absence evidence is inferred.
             const known = previous?.nativeSessionId === item.nativeSessionId && Number.isFinite(prior) && prior >= 0 && !Number.isFinite(observed)
               ? prior : undefined
-            sessions.set(item.sessionKey, known === undefined ? item : { ...item, lastKnownActivityAt: known })
+            const priorTitle = previous?.lastKnownTitle ?? previous?.title
+            const priorSource = previous?.lastKnownTitleSource ?? previous?.titleSource
+            const priority = (value: typeof item.titleSource) => value === 'custom' ? 3 : value === 'ai' ? 2 : value === 'prompt' ? 1 : 0
+            // Display retention only: a bounded lower-priority prompt fallback
+            // does not establish that a previously observed AI/custom name vanished.
+            const lowerPriorityPartial = item.metadataIncomplete === true && priority(priorSource) > priority(item.titleSource)
+            const lastKnownTitle = (item.titleUnknown === true || lowerPriorityPartial) && previous?.nativeSessionId === item.nativeSessionId
+              && typeof priorTitle === 'string' && priorTitle ? priorTitle : undefined
+            sessions.set(item.sessionKey, { ...item,
+              ...(known === undefined ? {} : { lastKnownActivityAt: known }),
+              ...(lastKnownTitle === undefined ? {} : { lastKnownTitle, ...(priorSource ? { lastKnownTitleSource: priorSource } : {}) }),
+            })
           }
           if (!result.hasMore) {
             entry.sessions = [...sessions.values()]

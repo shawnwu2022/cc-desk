@@ -12,7 +12,7 @@
   "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/37965393533",
   "artifactId": "11633985429",
   "artifactZipSha256": "0718e755776fca863f27fdbaa5862fcff37d9bfda9903e1c58398ab14fb715d1",
-  "sourceScope": "Mixed provenance: nine entries retain their prior reviewed bytes/source; four use twice-inspected PR44 row-restoration replacements from run38054103755. Top-level PR37 fields and earlier revision objects describe historical approvals; per-entry revisionProvenance identifies current replacements. No prior failed run is retroactively passed.",
+  "sourceScope": "Mixed provenance: nine entries retain their previous reviewed bytes/source; four use twice-inspected PR45 archive/time-tail replacements from run38060913278. Top-level PR37 fields and earlier revision objects remain historical approvals; per-entry revisionProvenance identifies current exact bytes. No failed run is retroactively passed.",
   "reviewedSourceTransport": {
     "repository": "shawnwu2022/cc-desk",
     "branch": "evidence/pr37-reviewed-baselines",
@@ -41,10 +41,10 @@
   },
   "finalNoUpdateVerification": {
     "status": "pending",
-    "required": "All 234 current screenshot/geometry/interaction/evidence cases on the new exact PR source, updateSnapshots none and maxDiffPixels 0. Baseline byte acceptance never changes previous failed run conclusions."
+    "required": "All 236 current screenshot/geometry/interaction/evidence cases on the next exact PR source, updateSnapshots none and maxDiffPixels 0. Exact baseline acceptance does not change the original failed run conclusion."
   },
   "acceptanceLimits": [
-    "Exact inspected Linux Chromium baseline bytes with per-entry provenance; mixed original, PR39 and PR44 sources",
+    "Exact inspected Linux Chromium baseline bytes with per-entry provenance; mixed original, PR39, PR44 and PR45 sources",
     "Nine other images retain their prior reviewed bytes and provenance",
     "Four added Native receipt captures remain separate unapproved evidence",
     "Native current working/completed remains unverified",
@@ -198,55 +198,84 @@
       "name": "workspace-dark-gui-light-terminal.png",
       "width": 1280,
       "height": 720,
-      "sha256": "e77477fc3ff36cceac8da94ccbc4673ee7cdb542ecf150caca3bed733734be36",
-      "bytes": 56829,
+      "sha256": "4c315caf55b805d7808937e1e65f396f26c8429c10d2cc9ec005db8a14eeff52",
+      "bytes": 57128,
       "reviewVerdict": "approve",
-      "provenance": "Exact twice-inspected actual PR44 PNG from run38054103755; only the requested row-restoration action removal and reclaimed text/age space differ. The prior run remains failed.",
+      "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-dark-gui-light-terminal-snapshot/workspace-dark-gui-light-terminal-actual.png",
       "pixelReview": {
-        "rawRgbChangedPixels": 358,
+        "rawRgbChangedPixels": 398,
         "rawDifferenceBoundsExclusive": [
-          180,
+          206,
           182,
-          263,
+          289,
           192
         ],
-        "acceptedChange": "Closed Settings row only: remove independent Resume/play control, expand title space and shift age right; every pixel outside this bound unchanged."
+        "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
+        "playwrightChangedPixels": 159
       },
       "revisionProvenance": {
-        "sourceHead": "9bad3cc832589dfe792589e79acf189d39d2894b",
-        "testedCommit": "14094d5793aad269111802f5585bfc9c426bf0b1",
-        "workflowRunId": "38054103755",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38054103755",
-        "artifactId": "11670383443",
-        "artifactZipSha256": "9a9463e23086323bc0e0cd69382d3bfc9d8a72e95e6473cda685c06f077b3968"
+        "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
+        "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
+        "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+        "workflowRunId": "38060913278",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
+        "artifactId": "11673675051",
+        "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
       },
       "previousApproval": {
         "width": 1280,
         "height": 720,
-        "sha256": "3e5311be66c875e6a8c753ffae077108c955a3329d7b19f578a0c57ccb594a67",
-        "bytes": 56638,
+        "sha256": "e77477fc3ff36cceac8da94ccbc4673ee7cdb542ecf150caca3bed733734be36",
+        "bytes": 56829,
         "reviewVerdict": "approve",
-        "provenance": "Exact inspected actual PR39 PNG from run38025570446 after dark scoped palette fix. Only three existing icon colors change; remaining geometry/text untouched.",
+        "provenance": "Exact twice-inspected actual PR44 PNG from run38054103755; only the requested row-restoration action removal and reclaimed text/age space differ. The prior run remains failed.",
         "zipEntry": "test-results/visual-verification/unified-workspace-workspace-dark-gui-light-terminal-snapshot/workspace-dark-gui-light-terminal-actual.png",
         "pixelReview": {
-          "playwrightReportedPixels": 69,
-          "rawRgbChangedPixels": 372,
+          "rawRgbChangedPixels": 358,
           "rawDifferenceBoundsExclusive": [
-            70,
-            260,
-            82,
-            552
+            180,
+            182,
+            263,
+            192
           ],
-          "acceptedChange": "Dark info/success/error glyph colors only; corrected scoped theme cascade. No geometry, text or terminal changes."
+          "acceptedChange": "Closed Settings row only: remove independent Resume/play control, expand title space and shift age right; every pixel outside this bound unchanged."
         },
         "revisionProvenance": {
-          "sourceHead": "3e3a673146f3afc037db90dc500360c5d1bb33dd",
-          "testedCommit": "1a22e6d572c24e4cc0293671aaa161e0fbb6919c",
-          "workflowRunId": "38025570446",
-          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38025570446",
-          "artifactId": "11659569818",
-          "artifactZipSha256": "b5b8e3b6ef1579da96346769ae20e27d8c398c28a2adc96c64925f0faba0040a"
+          "sourceHead": "9bad3cc832589dfe792589e79acf189d39d2894b",
+          "testedCommit": "14094d5793aad269111802f5585bfc9c426bf0b1",
+          "workflowRunId": "38054103755",
+          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38054103755",
+          "artifactId": "11670383443",
+          "artifactZipSha256": "9a9463e23086323bc0e0cd69382d3bfc9d8a72e95e6473cda685c06f077b3968"
+        },
+        "previousApproval": {
+          "width": 1280,
+          "height": 720,
+          "sha256": "3e5311be66c875e6a8c753ffae077108c955a3329d7b19f578a0c57ccb594a67",
+          "bytes": 56638,
+          "reviewVerdict": "approve",
+          "provenance": "Exact inspected actual PR39 PNG from run38025570446 after dark scoped palette fix. Only three existing icon colors change; remaining geometry/text untouched.",
+          "zipEntry": "test-results/visual-verification/unified-workspace-workspace-dark-gui-light-terminal-snapshot/workspace-dark-gui-light-terminal-actual.png",
+          "pixelReview": {
+            "playwrightReportedPixels": 69,
+            "rawRgbChangedPixels": 372,
+            "rawDifferenceBoundsExclusive": [
+              70,
+              260,
+              82,
+              552
+            ],
+            "acceptedChange": "Dark info/success/error glyph colors only; corrected scoped theme cascade. No geometry, text or terminal changes."
+          },
+          "revisionProvenance": {
+            "sourceHead": "3e3a673146f3afc037db90dc500360c5d1bb33dd",
+            "testedCommit": "1a22e6d572c24e4cc0293671aaa161e0fbb6919c",
+            "workflowRunId": "38025570446",
+            "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38025570446",
+            "artifactId": "11659569818",
+            "artifactZipSha256": "b5b8e3b6ef1579da96346769ae20e27d8c398c28a2adc96c64925f0faba0040a"
+          }
         }
       }
     },
@@ -263,54 +292,83 @@
       "name": "workspace-hover-action-1366-en.png",
       "width": 1366,
       "height": 768,
-      "sha256": "d670fe2c819df47536dffacef1daf32ee453f5f6c7c1d4032360b2d112415823",
-      "bytes": 58339,
+      "sha256": "e344afec709791b13e42d0f81f6f611316dea2035266495cc7e7066a3cd1c3dc",
+      "bytes": 58640,
       "reviewVerdict": "approve",
-      "provenance": "Exact twice-inspected actual PR44 PNG from run38054103755; only the requested row-restoration action removal and reclaimed text/age space differ. The prior run remains failed.",
+      "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-hover-action-1366-en-snapshot/workspace-hover-action-1366-en-actual.png",
       "pixelReview": {
-        "rawRgbChangedPixels": 354,
+        "rawRgbChangedPixels": 394,
         "rawDifferenceBoundsExclusive": [
-          180,
+          206,
           182,
-          263,
+          289,
           192
         ],
-        "acceptedChange": "Closed Settings row only: remove independent Resume/play control, expand title space and shift age right; every pixel outside this bound unchanged."
+        "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
+        "playwrightChangedPixels": 148
       },
       "revisionProvenance": {
-        "sourceHead": "9bad3cc832589dfe792589e79acf189d39d2894b",
-        "testedCommit": "14094d5793aad269111802f5585bfc9c426bf0b1",
-        "workflowRunId": "38054103755",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38054103755",
-        "artifactId": "11670383443",
-        "artifactZipSha256": "9a9463e23086323bc0e0cd69382d3bfc9d8a72e95e6473cda685c06f077b3968"
+        "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
+        "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
+        "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+        "workflowRunId": "38060913278",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
+        "artifactId": "11673675051",
+        "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
       },
       "previousApproval": {
         "width": 1366,
         "height": 768,
-        "sha256": "e2c9ab7d1ae2743a455b4fc6430f6ed3638d7fca5cd479f7d0787f71caa9efa3",
-        "bytes": 58170,
+        "sha256": "d670fe2c819df47536dffacef1daf32ee453f5f6c7c1d4032360b2d112415823",
+        "bytes": 58339,
         "reviewVerdict": "approve",
-        "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
+        "provenance": "Exact twice-inspected actual PR44 PNG from run38054103755; only the requested row-restoration action removal and reclaimed text/age space differ. The prior run remains failed.",
         "zipEntry": "test-results/visual-verification/unified-workspace-workspace-hover-action-1366-en-snapshot/workspace-hover-action-1366-en-actual.png",
         "pixelReview": {
-          "rawRgbChangedPixels": 27794,
+          "rawRgbChangedPixels": 354,
           "rawDifferenceBoundsExclusive": [
-            60,
-            181,
-            323,
-            553
+            180,
+            182,
+            263,
+            192
           ],
-          "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+          "acceptedChange": "Closed Settings row only: remove independent Resume/play control, expand title space and shift age right; every pixel outside this bound unchanged."
         },
         "revisionProvenance": {
-          "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
-          "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
-          "workflowRunId": "38024365937",
-          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
-          "artifactId": "11660067279",
-          "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
+          "sourceHead": "9bad3cc832589dfe792589e79acf189d39d2894b",
+          "testedCommit": "14094d5793aad269111802f5585bfc9c426bf0b1",
+          "workflowRunId": "38054103755",
+          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38054103755",
+          "artifactId": "11670383443",
+          "artifactZipSha256": "9a9463e23086323bc0e0cd69382d3bfc9d8a72e95e6473cda685c06f077b3968"
+        },
+        "previousApproval": {
+          "width": 1366,
+          "height": 768,
+          "sha256": "e2c9ab7d1ae2743a455b4fc6430f6ed3638d7fca5cd479f7d0787f71caa9efa3",
+          "bytes": 58170,
+          "reviewVerdict": "approve",
+          "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
+          "zipEntry": "test-results/visual-verification/unified-workspace-workspace-hover-action-1366-en-snapshot/workspace-hover-action-1366-en-actual.png",
+          "pixelReview": {
+            "rawRgbChangedPixels": 27794,
+            "rawDifferenceBoundsExclusive": [
+              60,
+              181,
+              323,
+              553
+            ],
+            "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+          },
+          "revisionProvenance": {
+            "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
+            "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
+            "workflowRunId": "38024365937",
+            "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
+            "artifactId": "11660067279",
+            "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
+          }
         }
       }
     },
@@ -318,54 +376,83 @@
       "name": "workspace-menu-1024-en.png",
       "width": 1024,
       "height": 640,
-      "sha256": "092bcdd160327b69dd0391bb58068f1bf5bc8242df8dfb5cc3ed723b22db6763",
-      "bytes": 58082,
+      "sha256": "81a2df22a67ed51b9de7b5f4986098e0db83acbbd3d7e90ddf1889303c245efe",
+      "bytes": 58377,
       "reviewVerdict": "approve",
-      "provenance": "Exact twice-inspected actual PR44 PNG from run38054103755; only the requested row-restoration action removal and reclaimed text/age space differ. The prior run remains failed.",
+      "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-menu-1024-en-snapshot/workspace-menu-1024-en-actual.png",
       "pixelReview": {
-        "rawRgbChangedPixels": 354,
+        "rawRgbChangedPixels": 394,
         "rawDifferenceBoundsExclusive": [
-          180,
+          206,
           182,
-          263,
+          289,
           192
         ],
-        "acceptedChange": "Closed Settings row only: remove independent Resume/play control, expand title space and shift age right; every pixel outside this bound unchanged."
+        "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
+        "playwrightChangedPixels": 148
       },
       "revisionProvenance": {
-        "sourceHead": "9bad3cc832589dfe792589e79acf189d39d2894b",
-        "testedCommit": "14094d5793aad269111802f5585bfc9c426bf0b1",
-        "workflowRunId": "38054103755",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38054103755",
-        "artifactId": "11670383443",
-        "artifactZipSha256": "9a9463e23086323bc0e0cd69382d3bfc9d8a72e95e6473cda685c06f077b3968"
+        "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
+        "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
+        "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+        "workflowRunId": "38060913278",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
+        "artifactId": "11673675051",
+        "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
       },
       "previousApproval": {
         "width": 1024,
         "height": 640,
-        "sha256": "d003bcae68bfe847722f0ecc67c1480671556f05efca438a20afb76dd34c2e05",
-        "bytes": 57902,
+        "sha256": "092bcdd160327b69dd0391bb58068f1bf5bc8242df8dfb5cc3ed723b22db6763",
+        "bytes": 58082,
         "reviewVerdict": "approve",
-        "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
+        "provenance": "Exact twice-inspected actual PR44 PNG from run38054103755; only the requested row-restoration action removal and reclaimed text/age space differ. The prior run remains failed.",
         "zipEntry": "test-results/visual-verification/unified-workspace-workspace-menu-1024-en-snapshot/workspace-menu-1024-en-actual.png",
         "pixelReview": {
-          "rawRgbChangedPixels": 44328,
+          "rawRgbChangedPixels": 354,
           "rawDifferenceBoundsExclusive": [
-            60,
-            181,
-            328,
-            553
+            180,
+            182,
+            263,
+            192
           ],
-          "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+          "acceptedChange": "Closed Settings row only: remove independent Resume/play control, expand title space and shift age right; every pixel outside this bound unchanged."
         },
         "revisionProvenance": {
-          "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
-          "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
-          "workflowRunId": "38024365937",
-          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
-          "artifactId": "11660067279",
-          "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
+          "sourceHead": "9bad3cc832589dfe792589e79acf189d39d2894b",
+          "testedCommit": "14094d5793aad269111802f5585bfc9c426bf0b1",
+          "workflowRunId": "38054103755",
+          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38054103755",
+          "artifactId": "11670383443",
+          "artifactZipSha256": "9a9463e23086323bc0e0cd69382d3bfc9d8a72e95e6473cda685c06f077b3968"
+        },
+        "previousApproval": {
+          "width": 1024,
+          "height": 640,
+          "sha256": "d003bcae68bfe847722f0ecc67c1480671556f05efca438a20afb76dd34c2e05",
+          "bytes": 57902,
+          "reviewVerdict": "approve",
+          "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
+          "zipEntry": "test-results/visual-verification/unified-workspace-workspace-menu-1024-en-snapshot/workspace-menu-1024-en-actual.png",
+          "pixelReview": {
+            "rawRgbChangedPixels": 44328,
+            "rawDifferenceBoundsExclusive": [
+              60,
+              181,
+              328,
+              553
+            ],
+            "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+          },
+          "revisionProvenance": {
+            "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
+            "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
+            "workflowRunId": "38024365937",
+            "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
+            "artifactId": "11660067279",
+            "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
+          }
         }
       }
     },
@@ -373,54 +460,121 @@
       "name": "workspace-mixed-1366-zh.png",
       "width": 1366,
       "height": 768,
-      "sha256": "17d194c4227abc44493a3a4d478d1bb9795b86e5ec626ca50258d72a8aef3d17",
-      "bytes": 57178,
+      "sha256": "8c37265919f87cd68236b761cc8f5cfd75181ec31adcc77aadfb2da6089c3a7c",
+      "bytes": 57439,
       "reviewVerdict": "approve",
-      "provenance": "Exact twice-inspected actual PR44 PNG from run38054103755; only the requested row-restoration action removal and reclaimed text/age space differ. The prior run remains failed.",
+      "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-mixed-1366-zh-snapshot/workspace-mixed-1366-zh-actual.png",
       "pixelReview": {
-        "rawRgbChangedPixels": 354,
+        "rawRgbChangedPixels": 396,
         "rawDifferenceBoundsExclusive": [
-          180,
-          182,
-          263,
+          56,
+          98,
+          289,
           192
         ],
-        "acceptedChange": "Closed Settings row only: remove independent Resume/play control, expand title space and shift age right; every pixel outside this bound unchanged."
+        "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
+        "playwrightChangedPixels": 148,
+        "negligibleRasterVariation": {
+          "accepted": true,
+          "pixels": [
+            {
+              "xy": [
+                56,
+                98
+              ],
+              "before": [
+                220,
+                217,
+                207
+              ],
+              "after": [
+                219,
+                215,
+                207
+              ]
+            },
+            {
+              "xy": [
+                57,
+                98
+              ],
+              "before": [
+                247,
+                245,
+                241
+              ],
+              "after": [
+                247,
+                245,
+                242
+              ]
+            }
+          ],
+          "limits": "Two search-corner antialias differences are included in the reviewed exact image; byte equality outside the history row is not claimed, and no tolerance is changed."
+        }
       },
       "revisionProvenance": {
-        "sourceHead": "9bad3cc832589dfe792589e79acf189d39d2894b",
-        "testedCommit": "14094d5793aad269111802f5585bfc9c426bf0b1",
-        "workflowRunId": "38054103755",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38054103755",
-        "artifactId": "11670383443",
-        "artifactZipSha256": "9a9463e23086323bc0e0cd69382d3bfc9d8a72e95e6473cda685c06f077b3968"
+        "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
+        "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
+        "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+        "workflowRunId": "38060913278",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
+        "artifactId": "11673675051",
+        "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
       },
       "previousApproval": {
         "width": 1366,
         "height": 768,
-        "sha256": "b1bdb62183f1b93e2d404ede3b89630d5ccd9f4134e27e0b9be065454e121698",
-        "bytes": 57015,
+        "sha256": "17d194c4227abc44493a3a4d478d1bb9795b86e5ec626ca50258d72a8aef3d17",
+        "bytes": 57178,
         "reviewVerdict": "approve",
-        "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
+        "provenance": "Exact twice-inspected actual PR44 PNG from run38054103755; only the requested row-restoration action removal and reclaimed text/age space differ. The prior run remains failed.",
         "zipEntry": "test-results/visual-verification/unified-workspace-workspace-mixed-1366-zh-snapshot/workspace-mixed-1366-zh-actual.png",
         "pixelReview": {
-          "rawRgbChangedPixels": 22633,
+          "rawRgbChangedPixels": 354,
           "rawDifferenceBoundsExclusive": [
-            60,
-            181,
-            323,
-            553
+            180,
+            182,
+            263,
+            192
           ],
-          "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+          "acceptedChange": "Closed Settings row only: remove independent Resume/play control, expand title space and shift age right; every pixel outside this bound unchanged."
         },
         "revisionProvenance": {
-          "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
-          "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
-          "workflowRunId": "38024365937",
-          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
-          "artifactId": "11660067279",
-          "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
+          "sourceHead": "9bad3cc832589dfe792589e79acf189d39d2894b",
+          "testedCommit": "14094d5793aad269111802f5585bfc9c426bf0b1",
+          "workflowRunId": "38054103755",
+          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38054103755",
+          "artifactId": "11670383443",
+          "artifactZipSha256": "9a9463e23086323bc0e0cd69382d3bfc9d8a72e95e6473cda685c06f077b3968"
+        },
+        "previousApproval": {
+          "width": 1366,
+          "height": 768,
+          "sha256": "b1bdb62183f1b93e2d404ede3b89630d5ccd9f4134e27e0b9be065454e121698",
+          "bytes": 57015,
+          "reviewVerdict": "approve",
+          "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
+          "zipEntry": "test-results/visual-verification/unified-workspace-workspace-mixed-1366-zh-snapshot/workspace-mixed-1366-zh-actual.png",
+          "pixelReview": {
+            "rawRgbChangedPixels": 22633,
+            "rawDifferenceBoundsExclusive": [
+              60,
+              181,
+              323,
+              553
+            ],
+            "acceptedChange": "Activity snapshot initial order, solid glyphs and visible Resume/Retry; narrower titles and row-following hover/menu position. Other surfaces unchanged."
+          },
+          "revisionProvenance": {
+            "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
+            "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
+            "workflowRunId": "38024365937",
+            "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
+            "artifactId": "11660067279",
+            "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
+          }
         }
       }
     },
@@ -612,5 +766,65 @@
     },
     "unchangedBaselineCount": 9,
     "acceptance": "Only four actual PNG byte sequences accepted after independent pixel review. No masks, tolerance, inventory or test assertions change; current-source no-update verification remains required. The four status sheets remain separate synthetic evidence."
+  },
+  "archiveTailRevision": {
+    "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
+    "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
+    "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+    "workflowRunId": "38060913278",
+    "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
+    "artifactId": "11673675051",
+    "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6",
+    "reviewDate": "2026-10-10",
+    "actualPixelsInspected": 4,
+    "independentPixelReviewCount": 2,
+    "rejectedImages": 0,
+    "changes": [
+      {
+        "name": "workspace-mixed-1366-zh.png",
+        "sha256": "8c37265919f87cd68236b761cc8f5cfd75181ec31adcc77aadfb2da6089c3a7c",
+        "bytes": 57439
+      },
+      {
+        "name": "workspace-hover-action-1366-en.png",
+        "sha256": "e344afec709791b13e42d0f81f6f611316dea2035266495cc7e7066a3cd1c3dc",
+        "bytes": 58640
+      },
+      {
+        "name": "workspace-menu-1024-en.png",
+        "sha256": "81a2df22a67ed51b9de7b5f4986098e0db83acbbd3d7e90ddf1889303c245efe",
+        "bytes": 58377
+      },
+      {
+        "name": "workspace-dark-gui-light-terminal.png",
+        "sha256": "4c315caf55b805d7808937e1e65f396f26c8429c10d2cc9ec005db8a14eeff52",
+        "bytes": 57128
+      }
+    ],
+    "environment": {
+      "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
+      "eventCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+      "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+      "node": "v22.23.3",
+      "playwright": "1.63.0",
+      "browser": "Google Chrome for Testing 153.0.8010.12",
+      "platform": "ubuntu-24.04-linux-chromium",
+      "acceptance": "unreviewed; not Windows WebView2 or real CLI certification"
+    },
+    "verificationBeforeAcceptance": {
+      "total": 236,
+      "nonSnapshotCasesPassed": 223,
+      "unchangedSnapshotsPassed": 9,
+      "changedSnapshotFailures": 4,
+      "otherFailures": 0,
+      "fullVerification": "failed-reviewed-snapshot-differences; retained RED"
+    },
+    "acceptanceLimits": [
+      "Four exact inspected Linux Chromium PNGs only; nine other baseline bytes and earlier provenance retained",
+      "Archive hover/focus/no-jump, touch and menu geometry cases passed on original rendered source",
+      "Two negligible mixed-zh search-corner antialias changes accepted without outside-region byte equality; tolerance unchanged",
+      "Fresh full no-update zero-tolerance CI remains required",
+      "Separate synthetic status captures remain separate evidence; not Windows WebView2/real CLI/taskbar/merge/release acceptance"
+    ]
   }
 }

@@ -301,6 +301,8 @@ describe('Workspace source warning diagnostics', () => {
   })
 
   it('HistoryPartial_LastKnownActivity_006', async () => {
+    // Display fallback requires a positively admitted exact root, never absent identity.
+    io.scope.mockResolvedValue({ cli: 'codex', sourceRootKey: 'admitted-root-key' })
     const item = { type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'Known task', cwd: '/repo', updatedAt: '2026-10-10T11:00:00Z' }
     io.read.mockResolvedValue({ state: 'ready', items: [item], hasMore: false })
     const { runtime } = render(); await flushPromises()
@@ -1176,9 +1178,12 @@ it('Runtime_SwitchRevokesRowEditor_033', async () => {
   const catalog = useUnifiedSessionsStore()
   const first = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', title: 'First' })
   const second = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', title: 'Second' }); await flushPromises()
+  // Opening-order persistence is not a manual rename; source display titles remain intact.
+  expect(catalog.sessions.find(row => row.id === first.id)?.title).toBe('First')
+  expect(catalog.sessions.find(row => row.id === second.id)?.title).toBe('Second')
   expect(io.upsertRecord).toHaveBeenCalledTimes(2)
-  expect(io.upsertRecord).toHaveBeenNthCalledWith(1, first.id, expect.objectContaining({ title: 'First', lastOpenedAt: expect.any(Number) }), true)
-  expect(io.upsertRecord).toHaveBeenNthCalledWith(2, second.id, expect.objectContaining({ title: 'Second', lastOpenedAt: expect.any(Number) }), true)
+  expect(io.upsertRecord).toHaveBeenNthCalledWith(1, first.id, expect.objectContaining({ title: '', lastOpenedAt: expect.any(Number) }), true)
+  expect(io.upsertRecord).toHaveBeenNthCalledWith(2, second.id, expect.objectContaining({ title: '', lastOpenedAt: expect.any(Number) }), true)
   io.upsertRecord.mockClear()
   await catalog.activateSession(first.id)
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true })); await flushPromises()
