@@ -161,7 +161,7 @@ function Invoke-HostedSuite($Targets, [bool]$Contained, [bool]$Elevated, [string
             $logs = @{ full = "logs/$name-full.log"; ignored = "logs/$name-ignored.log"; selected = "logs/$name-selected.log"; execution = "logs/$name-execution.log" }
             $full = Read-HostedInventory $target.executable @() (Join-Path $directory $logs.full)
             $ignored = Read-HostedInventory $target.executable @('--ignored') (Join-Path $directory $logs.ignored)
-            $selection = Get-HostedTestSelection $full.entries $ignored.names ($kind -eq 'lib') $Contained $Elevated $scope
+            $selection = Get-HostedTestSelection -Full $full.entries -Ignored $ignored.names -Library ($kind -eq 'lib') -Contained $Contained -Elevated $Elevated -Scope $scope
             $testArgs = @($selection.excluded | ForEach-Object { '--skip'; $_ })
             $selected = Read-HostedInventory $target.executable $testArgs (Join-Path $directory $logs.selected)
             Assert-HostedSelection $full.names $ignored.names $selected.names $selection.excluded
@@ -177,8 +177,8 @@ function Invoke-HostedSuite($Targets, [bool]$Contained, [bool]$Elevated, [string
         $docCode = $LASTEXITCODE
         $report.doctests = @{ command = 'cargo test --locked --doc'; exitCode = $docCode; logs = @('logs/doctests.log'); result = (Read-HostedResult @($docOutput | ForEach-Object { "$_" }) $docCode) }
         if ($docCode -ne 0 -or $report.doctests.result.failed -ne 0) { $ok = $false }
-        $report.nativeJobSuite = @{ status = $(if ($Contained) { 'unverified' } else { 'executed' }); reason = $(if ($Contained) { 'external_job' } else { $null }); unverifiedNames = $(if ($Contained) { @($scope.jobFreeTests) } else { @() }) }
-        $report.nativeUnelevatedSuite = @{ status = $(if ($Elevated) { 'unverified' } else { 'executed' }); reason = $(if ($Elevated) { 'elevated_host' } else { $null }); unverifiedNames = $(if ($Elevated) { @($scope.unelevatedTests) } else { @() }) }
+        $report.nativeJobSuite = @{ status = $(if ($Contained) { 'unverified' } else { 'executed' }); reason = $(if ($Contained) { 'external_job' } else { $null }); unverifiedNames = @(if ($Contained) { @($scope.jobFreeTests) } else { @() }) }
+        $report.nativeUnelevatedSuite = @{ status = $(if ($Elevated) { 'unverified' } else { 'executed' }); reason = $(if ($Elevated) { 'elevated_host' } else { $null }); unverifiedNames = @(if ($Elevated) { @($scope.unelevatedTests) } else { @() }) }
         $report.completed = $true
     } finally {
         $report | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $reportFile -Encoding utf8
@@ -244,7 +244,7 @@ if ($Action -eq 'Compile') {
     if ($env:GITHUB_OUTPUT) { Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'compiled=true' }
     $ok = $true
 } elseif ($Action -eq 'HostedSuite') {
-    $ok = Invoke-HostedSuite $targets $contained $elevated $manifest $PSScriptRoot
+    $ok = Invoke-HostedSuite -Targets $targets -Contained $contained -Elevated $elevated -Manifest $manifest -ScriptsDirectory $PSScriptRoot
 } elseif ($Action -eq 'CompileAndGate') {
     # The following CI step may run the compiled inventory even if the exact gate fails.
     if ($env:GITHUB_OUTPUT) { Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'compiled=true' }
