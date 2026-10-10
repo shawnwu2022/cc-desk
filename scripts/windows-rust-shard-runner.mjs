@@ -16,7 +16,7 @@ export const HARNESS_TIMEOUT_MS = 20 * 60 * 1000;
 export const SHARD_BUDGET_MS = 25 * 60 * 1000;
 const MAX_FAILURE_NAMES = 16;
 const MAX_FAILURE_DIAGNOSTIC_BYTES = 8 * 1024;
-const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
+const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs', 'scripts/windows-rust-calibration.mjs', 'scripts/windows-rust-calibration-targets.json', 'scripts/windows-rust-timings.json', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
 const scope = JSON.parse(fs.readFileSync(new URL('./windows-native-scope.json', import.meta.url), 'utf8'));
 const hash = data => createHash('sha256').update(data).digest('hex');
 function requireThat(ok, message) { if (!ok) throw new Error(`Rust runner: ${message}`); }
@@ -179,6 +179,20 @@ export function shardArtifactName(sourceSha, runId, runAttempt, index) {
   return `windows-rust-shard-${index}-${sourceSha}-${runId}-${runAttempt}`;
 }
 function planDigest(plan) { const { planHash, ...body } = plan; return hash(JSON.stringify(body)); }
+function measuredWeights(root) {
+  const value = readJson(path.join(root, 'scripts/windows-rust-timings.json')), c = value.calibration;
+  requireThat(value.schema === 1 && value.kind === 'original-libtest-duration-weights-v1' && /^[a-f0-9]{40}$/.test(c?.sourceSha ?? '') && /^[a-f0-9]{40}$/.test(c.headSha ?? '') && /^[1-9][0-9]*$/.test(c.runId ?? '') && Number.isSafeInteger(c.runAttempt) && c.runAttempt > 0 && /^[a-f0-9]{64}$/.test(c.planHash ?? '') && c.artifactName === bundleArtifactName(c.sourceSha, c.runId, c.runAttempt), 'invalid measured timing provenance');
+  requireThat(Array.isArray(value.weights) && value.weights.length > 0 && value.weights.length <= 16 && new Set(value.weights.map(w => w.name)).size === value.weights.length && value.weights.every(w => Number.isInteger(w.group) && w.group >= 0 && w.group < 8 && /^[a-f0-9]{64}$/.test(w.logHash ?? '')), 'invalid or duplicate measured timing entries');
+  const weights = Object.fromEntries(value.weights.map(w => [w.name, w.durationSeconds]));
+  partitionNames([], SHARD_COUNT, weights); // Validate every bounded weight, including names absent from this harness.
+  return weights;
+}
+function validateMeasuredInventory(harnesses, weights) {
+  for (const name of Object.keys(weights)) {
+    const owners = harnesses.filter(h => h.full.some(t => t.name === name && t.type === 'test'));
+    requireThat(owners.length === 1 && owners[0].selected.includes(name) && !owners[0].ignored.includes(name), 'measured timing differs from original selected nonignored inventory');
+  }
+}
 function selection(full, ignored, kind, inJob, elevated) {
   const names = full.map(t => t.name);
   requireThat(ignored.every(n => names.includes(n)), 'ignored inventory outside full inventory');
@@ -232,6 +246,7 @@ export function createPlan(options = {}) {
   requireThat(typeof options.inJob === 'boolean', 'explicit successful Job observation required');
   requireThat(typeof options.elevated === 'boolean', 'explicit successful elevation observation required');
   const c = context(options), bundle = bundleLocation(options, c.root);
+  const weights = measuredWeights(c.root);
   fs.mkdirSync(path.join(bundle, 'logs'), { recursive: true });
   requireThat(!fs.existsSync(path.join(bundle, 'plan.json')), 'compile plan already exists');
   const cargoJson = path.resolve(options.cargoJson ?? path.join(c.root, 'src-tauri/target/ci-test-artifacts.jsonl'));
@@ -259,8 +274,9 @@ export function createPlan(options = {}) {
     const policy = selection(full, ignored, target.identity.kind, options.inJob, options.elevated);
     const selected = inventory(executable, policy.excluded.flatMap(n => ['--skip', n]), c, path.join(bundle, logs.selected));
     requireThat(equal(selected.map(t => t.name), policy.selected) && selected.every(t => full.some(f => f.name === t.name && f.type === t.type)), 'compile selection differs from exact policy');
-    plan.harnesses.push({ ...target, full, ignored, ...policy, logs, partitions: partitionNames(policy.selected, SHARD_COUNT) });
+    plan.harnesses.push({ ...target, full, ignored, ...policy, logs, partitions: partitionNames(policy.selected, SHARD_COUNT, weights) });
   }
+  validateMeasuredInventory(plan.harnesses, weights);
   const payload = new Set(plan.harnesses.map(h => h.executable));
   const runtimeNames = conptyRuntimeNames(c.root);
   for (const relative of ['src-tauri/target/debug', 'src-tauri/target/debug/deps']) {
@@ -298,6 +314,7 @@ export function verifyBundle(options = {}) {
   requireThat(typeof plan.compiler?.rustcVerbose === 'string' && /^rustc \S+/m.test(plan.compiler.rustcVerbose), 'compiler identity missing');
   requireThat(Array.isArray(plan.contentHashes) && new Set(plan.contentHashes.map(f => f.path)).size === BOUND_FILES.length && equal(plan.contentHashes.map(f => f.path), BOUND_FILES), 'source content hash binding incomplete');
   plan.contentHashes.forEach(file => verifyFile(c.root, file));
+  const weights = measuredWeights(c.root);
   assertHarnessIdentities(plan.harnesses);
   requireThat(Array.isArray(plan.files) && new Set(plan.files.map(f => f.path)).size === plan.files.length, 'duplicate/missing bundle file inventory');
   requireThat(equal(walkFiles(bundle), ['plan.json', ...plan.files.map(f => f.path)]), 'unlisted file in compiler artifact');
@@ -319,9 +336,10 @@ export function verifyBundle(options = {}) {
     requireThat(equal(expected.selected, h.selected) && equal(expected.excluded, h.excluded), 'compile selection policy changed');
     requireThat(Array.isArray(h.partitions) && h.partitions.length === SHARD_COUNT, 'missing shard partitions');
     validatePartition(h.selected, h.partitions);
-    requireThat(JSON.stringify(h.partitions) === JSON.stringify(partitionNames(h.selected, SHARD_COUNT)), 'deterministic shard partition changed');
+    requireThat(JSON.stringify(h.partitions) === JSON.stringify(partitionNames(h.selected, SHARD_COUNT, weights)), 'deterministic shard partition changed');
     required.push(h.executable, h.logs.full, h.logs.ignored, h.logs.selected);
   }
+  validateMeasuredInventory(plan.harnesses, weights);
   for (const required of runtimePaths) requireThat(plan.files.some(f => f.path.toLowerCase() === required.toLowerCase()), 'ConPTY runtime binding missing');
   requireThat(required.every(p => plan.files.some(f => f.path === p)), 'bundle file hash inventory incomplete');
   requireThat(JSON.stringify(readJson(path.join(bundle, 'doc.result.json'))) === JSON.stringify(plan.doctests), 'compile doctest evidence changed');

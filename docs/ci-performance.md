@@ -396,3 +396,91 @@ the immutable plan's source hashes. Original test source, scenario mapping,
 four harness identities, default ignored reasons, 18 external-Job and four
 elevated-host disclosures, original exact selectors, production/release profiles
 and all released assets remain unchanged.
+
+## P1 bounded exact-name calibration
+
+Released 0.18.6 main `85c857be31eb35f6754eeb9fa52fc5f2ff653dd3`, CI
+`38047662637`, completed in 682 seconds from first job start to last completion,
+using 87.233 summed runner minutes. Producer took 228 seconds, static 175,
+ordinary-release exclusion 542, and shard 5 took 434 seconds including a
+401.284-second library invocation. Release `38047662616` took 741 seconds and
+33.317 runner minutes; Windows candidate build took 583 seconds. This is not
+a controlled comparison with 0.18.5 or a ten-minute result. Test distribution
+and hosted-runner variation remain material.
+
+The optional calibration job reuses only the original compiled bundle from its
+own exact source SHA/run/attempt. It does not rename another run's artifact or
+spoof producer environment identity. Original full test selection, all sixteen
+shards, original ignores/host disclosures, doctests, ordinary preflight, static
+checks and strict required aggregates run unchanged. No placement weights have
+yet been inferred from parallel output timestamps.
+
+Calibration is disabled by default. An explicit `[calibrate-rust]` PR-title marker
+or boolean manual-dispatch `calibrate_rust=true` opt-in enables only sixteen
+checked-in exact names. The mutable title never supplies names, arguments or
+commands, changes scope, or bypasses a normal gate. Eight two-case groups have
+maximum parallelism four. Each group has an eight-minute first-step observation
+budget including checkout/download and a ten-minute outer job bound. A budget
+failure yields incomplete negative evidence, not a relaxed acceptance deadline;
+ordinary suite deadlines remain unchanged.
+
+Each target is validated against the original compiled full/selected/nonignored
+inventory before any body starts. Its original executable runs once with the
+original `--exact <full-name>` entry and original Cargo working directory, with
+no added process/Job wrapper or libtest thread override. An accepted sample must
+have exact one-name listing, actual 1 passed / 0 failed / 0 ignored / 0 measured,
+correct filtered count, native exit zero, complete process/output closure, and no
+watchdog failure. Durable incomplete receipts retain failures and partial output.
+Receipts bind source/run/attempt/plan, target-file hash, compiler, actual consumer
+OS/architecture/profile, observed host, executable, argv and raw-log digest. Their
+kind is explicitly advisory calibration and cannot admit native coverage.
+
+Sixteen invocations add compute. A planning envelope of 20–120 seconds per isolated
+case suggests roughly 9–36 additional runner minutes including setup; these are
+unmeasured assumptions. Eight ten-minute job limits bound the configured outer
+allowance to 80 calibration runner minutes. Account-wide Windows concurrency can
+delay both calibration and normal shards, so this opt-in run is not comparable
+for end-to-end CI performance. The final placement head must remove the title
+marker, leave dispatch input false, verify calibration jobs are skipped, and run
+the complete unchanged checks before measuring any improvement.
+
+### Reviewed P1 placement measurements
+
+The single calibration run `38049514916`, attempt 1, completed all eight groups.
+Its PR head was `189650d30dc9d63ebccab2e05d24b11793164d47`; actual checkout/compiled
+source was the PR merge commit `e77f1e4a87bae43678b2881dcf4efc1f60721c52`.
+The exact same-run bundle plan hash was
+`52122bbaa3a0f766c4db6d9b50c61eecaa24f51aa9da69e2c0df7ef234ffb03c`.
+All eight downloaded ZIP digests and terminal receipts were independently
+reconciled, along with the sixteen raw one-name listings, execution digests and
+actual 1 passed / 0 failed / 0 ignored / 0 measured / 1382 filtered summaries.
+All native exits were zero with complete process closure and no watchdog expiry.
+The producer compiler was Rust 1.98.1; compiler/consumer observations matched
+Windows X64 and debug symbols zero, with external Job and elevated host;
+original `--exact <name>` argv and working
+directory were preserved. The checked-in `scripts/windows-rust-timings.json`
+retains source/run/attempt/plan, compiler/host, immutable receipt/artifact digests
+and the exact invocation durations. Its SHA256 is
+`bbafc92c9435adbe189f3ed8d46ba5f02b82e12043022c718d6b7e2c9498ad52`.
+
+Sixteen single observations ranged from 21.202 to 254.462 seconds. In particular,
+RestorePresentImage took 254.462 seconds and RestoreMissingImage 186.606, while
+ReturnConflicts took 131.963 versus its old 240-second estimate. Calibration
+consumed 27.017 runner minutes across a 645-second first-start-to-last-end span.
+That opt-in run is not an ordinary CI performance comparison.
+
+Only deterministic placement now uses these sixteen measured durations.
+Unmeasured names retain the existing heuristic; new names remain included.
+The duration-table bytes enter the producer's source hashes and plan digest;
+consumers recompute the exact same partition and reject byte drift, invalid
+weights, duplicate timings, or names outside the original selected nonignored
+inventory. The original 1,361 selected library names are conserved exactly once,
+including their original ignored workers; harness identities, selectors, counts,
+host disclosures, full raw logs and mandatory aggregates remain unchanged.
+
+For this inventory, the mixed measured/heuristic LPT model's largest load changes
+from 1378.154 to 1277.200, a 7.3% model reduction. This is not a wall-time forecast:
+libtest parallelism, unmeasured cases and hosted variance can change actual
+results. One sample per name does not establish p50/p95 or the ten-minute goal.
+The final normal head must run with the PR marker removed and calibration
+skipped; only that complete run can measure actual end-to-end progress.

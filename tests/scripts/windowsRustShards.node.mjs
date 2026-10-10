@@ -19,6 +19,28 @@ test('WindowsRustShards_MeasuredPlacement_008: real nested bundle and retained-c
   const shards = partitionNames([custody, bundle, context], 3);
   assert.ok(shards.every(names => names.length === 1));
 });
+
+test('WindowsRustShards_ExactTiming_009: measured invocation weights affect only conserved deterministic placement', () => {
+  const names = ['original::a', 'original::b', 'original::c', 'original::d'];
+  const weights = { 'original::a': 200, 'original::b': 180, 'original::c': 25 };
+  const shards = partitionNames(names, 2, weights);
+  assert.deepEqual(shards, [['original::a', 'original::d'], ['original::b', 'original::c']]);
+  assert.deepEqual(partitionNames([...names].reverse(), 2, weights), shards);
+  assert.deepEqual(shards.flat().sort(), names);
+  assert.equal(estimatedWeight('original::c', weights), 25);
+  assert.equal(estimatedWeight('new::unmeasured', weights), estimatedWeight('new::unmeasured'));
+  assert.equal(estimatedWeight('ignored::worker', weights), estimatedWeight('ignored::worker'));
+});
+
+test('WindowsRustShards_InvalidTiming_010: unusable weights cannot silently alter placement', () => {
+  for (const value of [0, -1, NaN, Infinity, '100', null, 481]) {
+    assert.throws(() => partitionNames(['original::a'], 1, { 'original::a': value }), /weight/);
+  }
+  for (const weights of [[], null, { 'bad\nname': 1 }]) {
+    assert.throws(() => partitionNames(['original::a'], 1, weights), /weight/);
+  }
+  assert.throws(() => partitionNames(['original::a'], 1, { 'invented::unused': 0 }), /weight/, 'unused entries are still validated');
+});
 function slice(index, names, fail = false) {
   const ignored = names.filter(n => n === 'worker').length;
   const result = { exitCode: fail ? 101 : 0, passed: names.length - ignored - Number(fail), failed: Number(fail), ignored, measured: 0, filteredOut: full.length - names.length };

@@ -9,7 +9,8 @@ function equal(a, b) { return a.length === b.length && a.every(n => b.includes(n
 // Weights only influence placement, never admission. Baseline run 37894886145
 // observed retained custody at ~311s; first sharded run put it in the 831s tail.
 // Include the real nested :: namespace as well as top-level test modules.
-export function estimatedWeight(name) {
+export function estimatedWeight(name, measuredWeights = {}) {
+  if (Object.hasOwn(measuredWeights, name)) return measuredWeights[name];
   if (name.endsWith('::HistoryPreinstallCustody_RetainedContextReturn_002')) return 300;
   if (name.endsWith('::HistoryContextWindows_LaterCompletionPublication_040')) return 210;
   if (name.endsWith('::HistoryContextWindows_ReturnConflicts_038')) return 240;
@@ -18,14 +19,18 @@ export function estimatedWeight(name) {
   if (/Webview|WebView|Channel_Native|Launch_Native/.test(name)) return 60;
   return 1;
 }
-export function partitionNames(names, count) {
+export function partitionNames(names, count, measuredWeights = {}) {
   unique(names);
   requireThat(Number.isInteger(count) && count >= 1 && count <= 16, 'invalid shard count');
+  requireThat(measuredWeights && typeof measuredWeights === 'object' && !Array.isArray(measuredWeights), 'invalid measured weight table');
+  const entries = Object.entries(measuredWeights);
+  requireThat(entries.length <= 16 && entries.every(([name, seconds]) => /^[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)+$/.test(name) && name.length <= 500 && Number.isFinite(seconds) && seconds > 0 && seconds <= 480), 'invalid bounded measured weight');
+  const weight = name => estimatedWeight(name, measuredWeights);
   const shards = Array.from({ length: count }, () => []), loads = Array(count).fill(0);
-  const sorted = [...names].sort((a, b) => estimatedWeight(b) - estimatedWeight(a) || (a < b ? -1 : a > b ? 1 : 0));
+  const sorted = [...names].sort((a, b) => weight(b) - weight(a) || (a < b ? -1 : a > b ? 1 : 0));
   for (const name of sorted) {
     const index = loads.indexOf(Math.min(...loads));
-    shards[index].push(name); loads[index] += estimatedWeight(name);
+    shards[index].push(name); loads[index] += weight(name);
   }
   shards.forEach(s => s.sort());
   validatePartition(names, shards);

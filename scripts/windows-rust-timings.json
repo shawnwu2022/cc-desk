@@ -1,0 +1,194 @@
+{
+  "schema": 1,
+  "kind": "original-libtest-duration-weights-v1",
+  "calibration": {
+    "sourceSha": "e77f1e4a87bae43678b2881dcf4efc1f60721c52",
+    "headSha": "189650d30dc9d63ebccab2e05d24b11793164d47",
+    "runId": "38049514916",
+    "runAttempt": 1,
+    "planHash": "52122bbaa3a0f766c4db6d9b50c61eecaa24f51aa9da69e2c0df7ef234ffb03c",
+    "artifactName": "windows-rust-bundle-e77f1e4a87bae43678b2881dcf4efc1f60721c52-38049514916-1",
+    "targetFileHash": "e53ea897c73a733e198b902fabd822aa4d49a6f4356ef7627e0ad3f3ca0e67fe",
+    "durationSemantics": "one exact original libtest process invocation; includes launch and complete output/child shutdown",
+    "compiler": {
+      "rustcVerbose": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.1\nLLVM version: 22.1.8",
+      "rustupToolchain": null,
+      "profileDevDebug": "0",
+      "profileTestDebug": "0",
+      "runnerOs": "Windows",
+      "runnerArch": "X64",
+      "imageOs": "win22",
+      "imageVersion": "20261004.326.1"
+    },
+    "consumer": {
+      "runnerOs": "Windows",
+      "runnerArch": "X64",
+      "profileDevDebug": "0",
+      "profileTestDebug": "0"
+    },
+    "host": {
+      "jobQuerySucceeded": true,
+      "inJob": true,
+      "elevationQuerySucceeded": true,
+      "elevated": true
+    },
+    "nativeAcceptanceProven": false,
+    "sampleCountPerName": 1,
+    "receipts": [
+      {
+        "index": 0,
+        "jobId": 114206181018,
+        "artifactId": 11669515758,
+        "artifactSha256": "371bd2ec2db74ce6401c5a835e78d9d8a67d87124605da8e599191f08e80c8dd",
+        "sha256": "54b2ccd89f036e5125d8d6b7dbc32e83589313ab77726c11db2ee3c8773549eb"
+      },
+      {
+        "index": 1,
+        "jobId": 114206181042,
+        "artifactId": 11669290813,
+        "artifactSha256": "dea649bc59438b8c41554454919c8f911e069d239b77066f08f1aab42ab86671",
+        "sha256": "da36dc2a7ae1495fc68ae94bf6ffe4c5588080327205f073355b6466fad28ad6"
+      },
+      {
+        "index": 2,
+        "jobId": 114206181043,
+        "artifactId": 11669085959,
+        "artifactSha256": "9d2ab6e14bf1f4d690c89c29666b0793dcb6cc59a12d00acc5bd4765dfb54d1e",
+        "sha256": "6057fde9d42f89049fdc21f5a3db9e956c6b7dac9bc6d4e1c414837f855a7d11"
+      },
+      {
+        "index": 3,
+        "jobId": 114206180981,
+        "artifactId": 11669146271,
+        "artifactSha256": "a6f56fc11f5ffe7d7a2e9d93dbd373450e4c8b2ac4b9e4feae3eb1bd093c5f3f",
+        "sha256": "3a22a29e48ce5668cae5775416511077c7fd06c982feef72a6f752097a8cfa64"
+      },
+      {
+        "index": 4,
+        "jobId": 114206180989,
+        "artifactId": 11669436103,
+        "artifactSha256": "eeb40fc92d47c9d1fff097d5de3732a7fbb2b0d821cac22ab237f3fc07965197",
+        "sha256": "054431d6320be980220cb2d76b0762a13f04caa0cec7d48270cb51cbb14f9a74"
+      },
+      {
+        "index": 5,
+        "jobId": 114206181022,
+        "artifactId": 11669665937,
+        "artifactSha256": "f60ffe70297b1ed171d3a437645b360dfb1653ea132b03007b06164774e604cd",
+        "sha256": "d46468b7d105e7ffbf7fc60070c6eef4261050257950e43191335265a717fbd0"
+      },
+      {
+        "index": 6,
+        "jobId": 114206180995,
+        "artifactId": 11669421440,
+        "artifactSha256": "5beae206a433925b4c9448a45a17ada0ee0430a1e706bf9e71124cae0f801ae3",
+        "sha256": "ef43e36f0be9c42f0c082b57511d9a9e9a10f22f21c50e74b6e54fba9b57b562"
+      },
+      {
+        "index": 7,
+        "jobId": 114206180970,
+        "artifactId": 11669341184,
+        "artifactSha256": "9a19418858cc9589ef93c8f69230ff50e856bbada08de9095f5f0cf225a5b238",
+        "sha256": "9d942efc043571644d33b59fb758653ea8aac11e77952114740e65f0176867dd"
+      }
+    ]
+  },
+  "weights": [
+    {
+      "name": "tests::version_history_context_windows::HistoryContextWindows_LaterCompletionPublication_040",
+      "durationSeconds": 113.5131502,
+      "group": 0,
+      "logHash": "506cd8536c490098de46c663e944efd842570a51fd0788cf46faa41824ee52a7"
+    },
+    {
+      "name": "tests::version_history_context_windows::HistoryContextWindows_PreinstallLaunchRefusal_037",
+      "durationSeconds": 57.4795964,
+      "group": 1,
+      "logHash": "a961ba7974e041f3370508e93bd2ec80a11b77346694b8449df5ee7b9917ef14"
+    },
+    {
+      "name": "tests::version_history_context_windows::HistoryContextWindows_RecoveryCopyDrift_027",
+      "durationSeconds": 49.1728259,
+      "group": 2,
+      "logHash": "245dadeaf57e563c96892b3519649fbfaaf1e58dbb6f3df68cedfa953a1ac699"
+    },
+    {
+      "name": "tests::version_history_context_windows::HistoryContextWindows_ReturnConflicts_038",
+      "durationSeconds": 131.9632152,
+      "group": 3,
+      "logHash": "dba89acbb5720fe8a92860b3449b5ff677df875cbed4a7dbe056f474d7402bf7"
+    },
+    {
+      "name": "tests::version_history_context_windows::HistoryContext_FreshAbsentUdf_032",
+      "durationSeconds": 84.353432,
+      "group": 4,
+      "logHash": "687bed04168bae510e5293c358b217b63bd0a24102c6a05a5850c66e9379ea8e"
+    },
+    {
+      "name": "tests::version_history_context_windows::HistoryContext_LaterReceiptLoss_034",
+      "durationSeconds": 86.9976954,
+      "group": 5,
+      "logHash": "399311b484256133ce930b557e17ebc344830859c2bdd13605dbd28730c1873d"
+    },
+    {
+      "name": "tests::version_history_context_windows::HistoryContext_ReturnLaterMoveLoss_036",
+      "durationSeconds": 109.6696473,
+      "group": 6,
+      "logHash": "a542d9936aed1fe96e04bc88e5446be872445202711a26a533e0a994f8d0f42c"
+    },
+    {
+      "name": "tests::version_history_context_windows::HistoryContext_ReturnMissingImage_036",
+      "durationSeconds": 57.2349273,
+      "group": 7,
+      "logHash": "c80752bf5aa42e41b967b7513f98c7ecb5295d5011b0620892c491be44a79a1e"
+    },
+    {
+      "name": "tests::version_history_context_windows::HistoryContext_SourceMoveLoss_033",
+      "durationSeconds": 108.7936967,
+      "group": 0,
+      "logHash": "299ec453b19eb5bb2b76d2f3f7c10920dbf4d8394b11ef45edc4908150bf18dd"
+    },
+    {
+      "name": "tests::version_history_registry_state_windows::HistoryRegistryState_AbsenceAndMissingTarget_006",
+      "durationSeconds": 21.2018715,
+      "group": 1,
+      "logHash": "4887449876f159784daa92415866dd11aa6ec43f3f12ba6ff2c1773b335279a8"
+    },
+    {
+      "name": "tests::version_history_windows::HistoryWindows_CrashRecovery_026",
+      "durationSeconds": 40.877991,
+      "group": 2,
+      "logHash": "c60d5ac34545594b981a5a7f65ab535a1b5c036c1b4af7790970eff8689755d0"
+    },
+    {
+      "name": "version_history::windows::context::bundle_restore::reopen_tests::BundleReturn_PreparedReopenRestores_010",
+      "durationSeconds": 54.7799847,
+      "group": 3,
+      "logHash": "406a13aa48758703b34e2b7f758b7e690e566795a4d467101effbe71c3d7c8a5"
+    },
+    {
+      "name": "version_history::windows::context::bundle_restore::tests::BundleReturn_FreshCopyMissing_003",
+      "durationSeconds": 23.056228,
+      "group": 4,
+      "logHash": "6c9d5b1b2ef3ceea4f2083aa4bdda00238a1a262a0846c492db6960c9db5afe6"
+    },
+    {
+      "name": "version_history::windows::context::bundle_restore::tests::BundleReturn_RestoreMissingImage_002",
+      "durationSeconds": 186.6059357,
+      "group": 5,
+      "logHash": "875a9ea2945ba9f343de3d3163660a5219d991aae7b8e61e214794cc73889d63"
+    },
+    {
+      "name": "version_history::windows::context::bundle_restore::tests::BundleReturn_RestorePresentImage_002",
+      "durationSeconds": 254.4617729,
+      "group": 6,
+      "logHash": "168770d2cbbc481efa21a4c58170357f3c6ef4a1d2de1cdc3dd27333e65d52bb"
+    },
+    {
+      "name": "version_history::windows::context::switching::preinstall_custody_tests::HistoryCustody_ReturnAbsentFresh_002",
+      "durationSeconds": 26.8680525,
+      "group": 7,
+      "logHash": "fea01514f8c7ee5f617fadc677f4fc43d151d2e3af2cc24e0296013cf80aa7cd"
+    }
+  ]
+}
