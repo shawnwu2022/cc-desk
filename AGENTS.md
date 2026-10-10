@@ -236,6 +236,7 @@ npm run tauri:build        # 生产构建
 
 - **CI 性能与来源**：Windows 普通 Rust CI 一次编译四个原始 harness，以同 source SHA/run/attempt 绑定的编译包确定性分为 16 片；`Rust checks` 在全片成功、完整名称与原始忽略集合及原始输出计数核对后才通过。18 条 Job-free 专项仍按原政策披露为未验证，不增排除。roundtrip 的普通 release 与惰性 debug 场景并行，原 required policy 聚合全部成功。发布候选可在同源 CI 等待期间构建，正式发布仍受原完整来源、coverage 与平台签名门控。详见 [docs/ci-performance.md](docs/ci-performance.md)。 分片必须流式保留原始输出和未完成名称诊断；单 harness 20 分钟、job 30 分钟上限超出后失败并保留部分证据，不能把 timeout 或先打印的成功摘要计作完整通过。
   - Producer 与 Windows entry/fmt/Clippy/实际 loader 静态门禁独立并行；原 `Rust checks` 必须同时要求 producer、static 与全 16 片成功。分片从第一个 runner step 起共用 25 分钟预算（含 checkout/download，单 harness 仍最多 20 分钟），原子保存未完成回执并始终尝试上传；基础设施硬停止不能保证上传成功。Cargo cache match 与真实 fresh/rebuilt 分开记录，libtest 名称的输出观察时刻不是单测试耗时，不可作为已校准分片权重。
+  - 单次时长校准默认关闭；仅显式 `[calibrate-rust]` PR 标题或 `calibrate_rust=true` 手动输入启用 16 个源码固定 exact 名称、8 组、最多并行 4 组，每组首 step 起共用 8 分钟观察预算、job 10 分钟。只认同 SHA/run/attempt/plan/OS/profile/host 编译包，单独原 libtest 进程必须实际 1 passed、0 failed/ignored/measured、完整退出才提供可用耗时；其回执不能替代正常全套覆盖。校准 run 的额外 Windows 竞争使整体耗时不可直接比较，最终性能 run 须移除标题标记并核对校准 jobs skipped。
 
 - **开发必须搭配测试**：新增功能、修改逻辑、修复 bug 时，同步编写或更新对应测试。遵循 [测试编写原则](docs/测试编写原则.md)
 - **Bug 修复必须先写测试**：修复 bug 时，先编写测试复现问题，确认测试失败，然后修复代码直至测试通过

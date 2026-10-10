@@ -16,7 +16,7 @@ export const HARNESS_TIMEOUT_MS = 20 * 60 * 1000;
 export const SHARD_BUDGET_MS = 25 * 60 * 1000;
 const MAX_FAILURE_NAMES = 16;
 const MAX_FAILURE_DIAGNOSTIC_BYTES = 8 * 1024;
-const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
+const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs', 'scripts/windows-rust-calibration.mjs', 'scripts/windows-rust-calibration-targets.json', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
 const scope = JSON.parse(fs.readFileSync(new URL('./windows-native-scope.json', import.meta.url), 'utf8'));
 const hash = data => createHash('sha256').update(data).digest('hex');
 function requireThat(ok, message) { if (!ok) throw new Error(`Rust runner: ${message}`); }

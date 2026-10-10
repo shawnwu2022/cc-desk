@@ -396,3 +396,50 @@ the immutable plan's source hashes. Original test source, scenario mapping,
 four harness identities, default ignored reasons, 18 external-Job and four
 elevated-host disclosures, original exact selectors, production/release profiles
 and all released assets remain unchanged.
+
+## P1 bounded exact-name calibration
+
+Released 0.18.6 main `85c857be31eb35f6754eeb9fa52fc5f2ff653dd3`, CI
+`38047662637`, completed in 682 seconds from first job start to last completion,
+using 87.233 summed runner minutes. Producer took 228 seconds, static 175,
+ordinary-release exclusion 542, and shard 5 took 434 seconds including a
+401.284-second library invocation. Release `38047662616` took 741 seconds and
+33.317 runner minutes; Windows candidate build took 583 seconds. This is not
+a controlled comparison with 0.18.5 or a ten-minute result. Test distribution
+and hosted-runner variation remain material.
+
+The optional calibration job reuses only the original compiled bundle from its
+own exact source SHA/run/attempt. It does not rename another run's artifact or
+spoof producer environment identity. Original full test selection, all sixteen
+shards, original ignores/host disclosures, doctests, ordinary preflight, static
+checks and strict required aggregates run unchanged. No placement weights have
+yet been inferred from parallel output timestamps.
+
+Calibration is disabled by default. An explicit `[calibrate-rust]` PR-title marker
+or boolean manual-dispatch `calibrate_rust=true` opt-in enables only sixteen
+checked-in exact names. The mutable title never supplies names, arguments or
+commands, changes scope, or bypasses a normal gate. Eight two-case groups have
+maximum parallelism four. Each group has an eight-minute first-step observation
+budget including checkout/download and a ten-minute outer job bound. A budget
+failure yields incomplete negative evidence, not a relaxed acceptance deadline;
+ordinary suite deadlines remain unchanged.
+
+Each target is validated against the original compiled full/selected/nonignored
+inventory before any body starts. Its original executable runs once with the
+original `--exact <full-name>` entry and original Cargo working directory, with
+no added process/Job wrapper or libtest thread override. An accepted sample must
+have exact one-name listing, actual 1 passed / 0 failed / 0 ignored / 0 measured,
+correct filtered count, native exit zero, complete process/output closure, and no
+watchdog failure. Durable incomplete receipts retain failures and partial output.
+Receipts bind source/run/attempt/plan, target-file hash, compiler, actual consumer
+OS/architecture/profile, observed host, executable, argv and raw-log digest. Their
+kind is explicitly advisory calibration and cannot admit native coverage.
+
+Sixteen invocations add compute. A planning envelope of 20–120 seconds per isolated
+case suggests roughly 9–36 additional runner minutes including setup; these are
+unmeasured assumptions. Eight ten-minute job limits bound the configured outer
+allowance to 80 calibration runner minutes. Account-wide Windows concurrency can
+delay both calibration and normal shards, so this opt-in run is not comparable
+for end-to-end CI performance. The final placement head must remove the title
+marker, leave dispatch input false, verify calibration jobs are skipped, and run
+the complete unchanged checks before measuring any improvement.

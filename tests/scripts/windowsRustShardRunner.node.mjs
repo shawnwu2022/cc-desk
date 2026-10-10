@@ -104,17 +104,25 @@ test('RustRunner_Watchdog_004', async t => {
 const moduleUrl = new URL('../../scripts/windows-rust-shard-runner.mjs', import.meta.url);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-async function runnerFixture(t, failureName = null, elevated = false) {
+async function runnerFixture(t, failureName = null, elevated = false, calibrationCase = null) {
   assert.equal(fs.existsSync(moduleUrl), true, 'the compiled-artifact runner must exist');
   const { createPlan, runShard, aggregateResults, verifyBundle, bundleArtifactName } = await import(moduleUrl);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-shard-runner-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const files = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
+  const files = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs', 'scripts/windows-rust-calibration.mjs', 'scripts/windows-rust-calibration-targets.json', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
   for (const name of files) {
     fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
     fs.copyFileSync(path.join(repository, name), path.join(root, name));
   }
   fs.writeFileSync(path.join(root, 'src-tauri/Cargo.toml'), '[package]\nname="fixture"\nversion="1.0.0"\n');
+  if (calibrationCase) {
+    const scoped = JSON.parse(fs.readFileSync(path.join(root, 'scripts/windows-native-scope.json'), 'utf8'));
+    const targets = [...scoped.requiredSelectedTests, ...scoped.ordinaryRequiredSelectedTests, ...scoped.unelevatedTests, 'ordinary::new_test', failureName ? 'integration::one_0' : 'integration::one'];
+    if (calibrationCase === 'ignored') targets[0] = 'tests::fixture::ignored_worker';
+    if (calibrationCase === 'excluded') targets[0] = scoped.jobFreeTests[0];
+    if (calibrationCase === 'unknown') targets[0] = 'invented::test';
+    fs.writeFileSync(path.join(root, 'scripts/windows-rust-calibration-targets.json'), JSON.stringify({ schema: 1, targets }));
+  }
   execFileSync('git', ['init', '--quiet', root]);
   execFileSync('git', ['-C', root, 'add', '.']);
   execFileSync('git', ['-C', root, '-c', 'user.name=Runner Test', '-c', 'user.email=runner@example.invalid', 'commit', '--quiet', '-m', 'fixture']);
@@ -134,10 +142,12 @@ async function runnerFixture(t, failureName = null, elevated = false) {
     const program = `#!/usr/bin/env node
 if(process.cwd()!==${JSON.stringify(path.join(root, 'src-tauri'))}) { console.error('wrong original Cargo working directory'); process.exit(99); }
 const fs=require('node:fs'), path=require('node:path'); for(const dir of [__dirname,path.dirname(__dirname)]) for(const name of ${JSON.stringify(runtimeNames)}) if(!fs.existsSync(path.join(dir,name))) { console.error('missing runtime beside test executable: '+dir+'/'+name); process.exit(98); }
+if(process.env.RUST_CALIBRATION_INVOCATION_MARKER) fs.writeFileSync(process.env.RUST_CALIBRATION_INVOCATION_MARKER,'original harness was invoked');
 const full=${JSON.stringify(inventories[index])}, ignored=${JSON.stringify(index === 0 ? [worker] : [])}, failureName=${JSON.stringify(failureName)}, args=process.argv.slice(2);
 let selected=full; if(args.includes('--exact')) selected=full.filter(n=>args.includes(n)); else for(let i=0;i<args.length;i++) if(args[i]==='--skip') { const skip=args[++i]; selected=selected.filter(n=>n!==skip); }
 if(args.includes('--ignored')) selected=selected.filter(n=>ignored.includes(n));
 if(args.includes('--list')) { for(const n of selected) console.log(n+': test'); console.log(selected.length+' tests, 0 benchmarks'); }
+else if(process.env.RUST_CALIBRATION_FIXTURE_ZERO==='1') { console.log('test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; '+full.length+' filtered out; finished in 0.01s'); }
 else if(process.env.RUST_SHARD_FIXTURE_HANG==='1' && (!process.env.RUST_SHARD_FIXTURE_HANG_INDEX || process.env.RUST_SHARD_FIXTURE_HANG_INDEX===${JSON.stringify(String(index))})) { console.log('PRIVATE pending fixture assertion'); if(selected.length) process.stdout.write('test '+selected[0]+' ... '); setInterval(()=>{},1000); }
 else {
   if(process.env.RUST_SHARD_FIXTURE_DELAY_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Number(process.env.RUST_SHARD_FIXTURE_DELAY_MS));
@@ -161,6 +171,52 @@ else {
   const plan = createPlan(options);
   return { root, sourceSha, environment, bundle, runtimeNames, options, plan, runShard, aggregateResults, verifyBundle, bundleArtifactName };
 }
+
+test('RustCalibration_RealReceipts_010: exact original processes establish one-pass timings without certifying coverage', { skip: process.platform === 'win32' && 'Unix executable fixture' }, async t => {
+  const { runCalibration, calibrationGroups } = await import('../../scripts/windows-rust-calibration.mjs');
+  const { root, options, plan } = await runnerFixture(t, null, false, 'valid');
+  const groups = calibrationGroups(JSON.parse(fs.readFileSync(path.join(root, 'scripts/windows-rust-calibration-targets.json'), 'utf8')));
+  const index = groups.findIndex(names => names.includes('ordinary::new_test'));
+  const result = await runCalibration({ ...options, index, output: path.join(root, 'calibration-ok'), artifactName: plan.artifactName });
+  assert.equal(result.kind, 'rust-exact-name-calibration-v1');
+  assert.equal(result.completed, true); assert.equal(result.exitCode, 0);
+  assert.equal(result.planHash, plan.planHash); assert.equal(result.nativeAcceptanceProven, false);
+  assert.equal(result.measurements.length, 2);
+  for (const m of result.measurements) {
+    assert.deepEqual(m.argv, ['--exact', m.name]); assert.equal(m.cwd, 'src-tauri');
+    assert.equal(m.completed, true); assert.equal(m.result.passed, 1); assert.equal(m.result.ignored, 0);
+    assert.ok(Number.isFinite(m.durationSeconds) && m.durationSeconds >= 0);
+    assert.ok(/^[a-f0-9]{64}$/.test(m.logHash));
+  }
+  await assert.rejects(() => runCalibration({ ...options, index, environment: { ...options.environment, GITHUB_RUN_ATTEMPT: '3' }, artifactName: plan.artifactName }), /binding/);
+  await assert.rejects(() => runCalibration({ ...options, index, environment: { ...options.environment, RUNNER_OS: 'forged' }, artifactName: plan.artifactName }), /OS\/architecture\/profile/);
+  const zero = await runCalibration({ ...options, index, output: path.join(root, 'calibration-zero'), environment: { ...options.environment, RUST_CALIBRATION_FIXTURE_ZERO: '1' }, artifactName: plan.artifactName });
+  assert.equal(zero.completed, false); assert.equal(zero.exitCode, 1);
+  assert.equal(zero.measurements[0].result.passed, 0);
+  assert.match(zero.error, /one actual passed/);
+  const marker = path.join(root, 'expired-invocation-marker');
+  const late = await runCalibration({ ...options, index, output: path.join(root, 'calibration-expired'),
+    environment: { ...options.environment, RUST_CALIBRATION_INVOCATION_MARKER: marker }, budgetMs: 5000, jobStartMs: Date.now() - 10000, artifactName: plan.artifactName });
+  assert.equal(late.completed, false);
+  assert.equal(fs.existsSync(marker), false, 'an expired setup budget must not start even the exact inventory subprocess');
+});
+
+test('RustCalibration_Admission_011: ignored, excluded, invented, failed and timed-out tests yield no accepted timing set', { skip: process.platform === 'win32' && 'Unix executable fixture' }, async t => {
+  const { runCalibration, calibrationGroups } = await import('../../scripts/windows-rust-calibration.mjs');
+  for (const calibrationCase of ['ignored', 'excluded', 'unknown']) {
+    const { options, plan } = await runnerFixture(t, null, false, calibrationCase);
+    await assert.rejects(() => runCalibration({ ...options, index: 0, artifactName: plan.artifactName }), /selected nonignored original/);
+  }
+  const { root, options, plan } = await runnerFixture(t, 'ordinary::new_test', false, 'valid');
+  const groups = calibrationGroups(JSON.parse(fs.readFileSync(path.join(root, 'scripts/windows-rust-calibration-targets.json'), 'utf8')));
+  const index = groups.findIndex(names => names.includes('ordinary::new_test'));
+  const failed = await runCalibration({ ...options, index, output: path.join(root, 'calibration-failed'), artifactName: plan.artifactName });
+  assert.equal(failed.completed, false); assert.equal(failed.exitCode, 1);
+  assert.ok(failed.measurements.some(m => m.result?.failed === 1));
+  const timed = await runCalibration({ ...options, index, output: path.join(root, 'calibration-timeout'), environment: { ...options.environment, RUST_SHARD_FIXTURE_HANG: '1' }, budgetMs: 5000, jobStartMs: Date.now() - 1000, artifactName: plan.artifactName });
+  assert.equal(timed.completed, false); assert.equal(timed.exitCode, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'calibration-timeout/calibration-result.json'), 'utf8')).completed, false);
+});
 
 // 编译包和分片对同一实际提升状态作精确绑定，四条正向既不执行也不忽略。
 test('RustRunner_ElevatedArtifact_007', { skip: process.platform === 'win32' && 'Unix executable fixture; production binaries are Windows PE files' }, async t => {
