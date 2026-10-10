@@ -306,3 +306,9 @@ fails. There is no worker retry, named-Job reopening, skipped original test or
 production confinement change. Five deterministic drain regressions plus all
 six original diagnostic-policy tests execute through the real Rust helper in
 Frontend checks; the actual Windows original case remains required in shards.
+
+## Bounded shard diagnosis
+
+PR41 run `38034381816` stalled in shards 7/10/11/12 after execution began; active job log download returned BlobNotFound. This is incomplete verification, not passing coverage or performance evidence. Startup lock-contention probes use `LOCKFILE_FAIL_IMMEDIATELY`; the controlled worker has a 60-second release deadline and terminal observations have finite waits. Source inspection alone has not established the stalled test or a production deadlock.
+
+Shard execution now retains streamed stdout/stderr with advisory test-progress diagnostics, including unfinished assigned names, and enforces a 20-minute bound per harness. Exceeding the bound terminates only the disposable test harness process tree and produces an incomplete, nonzero receipt with partial raw logs; a printed success summary cannot override timeout. The shard job has a 30-minute outer bound. These bounds prevent the default six-hour wait and leave evidence for diagnosis; they do not demonstrate the ten-minute performance target, alter individual assertions, add exclusions, or certify native historical installation.

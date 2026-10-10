@@ -2,7 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { RUST_SHARD_COUNT, partitionNames, validatePartition, aggregateHarness } from './windows-rust-shards.mjs';
 import { coverageArtifactName, JOB_FREE_TESTS, VALIDATION_POLICY, REPORT_FILENAME, parseLibtestListing, parseLibtestResult, validateNativeCoverage, readNativeCoverageArtifact } from './windows-native-validation.mjs';
@@ -11,6 +12,7 @@ const POLICY = 'same-source-compiled-rust-shards-v1';
 const SHARD_COUNT = RUST_SHARD_COUNT;
 const MAX_LOG = 64 * 1024 * 1024;
 const MAX_JSON = 8 * 1024 * 1024;
+export const HARNESS_TIMEOUT_MS = 20 * 60 * 1000;
 const MAX_FAILURE_NAMES = 16;
 const MAX_FAILURE_DIAGNOSTIC_BYTES = 8 * 1024;
 const BOUND_FILES = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
@@ -43,6 +45,80 @@ function invoke(command, args, root, environment) {
   const child = spawnSync(command, args, { cwd: root, env: environment, encoding: 'utf8', maxBuffer: MAX_LOG, windowsHide: true });
   const output = ((child.stdout ?? '') + (child.stderr ?? '')).replaceAll('\r\n', '\n');
   return { output, exitCode: child.status ?? 1, durationSeconds: Number(process.hrtime.bigint() - start) / 1e9, error: child.error ? String(child.error.message) : child.signal ? `terminated by ${child.signal}` : null };
+}
+// Raw output is archived incrementally. Advisory progress admits only assigned
+// names; captured assertions and worker output never become public diagnostics.
+export async function executeHarness(command, args, options) {
+  const timeoutMs = options.timeoutMs ?? HARNESS_TIMEOUT_MS;
+  requireThat(Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= HARNESS_TIMEOUT_MS, 'execution deadline must not exceed twenty minutes');
+  const started = process.hrtime.bigint(), chunks = [], pending = new Set(options.assignedNames);
+  const logfile = fs.openSync(options.executionLog, 'w');
+  let bytes = 0, timedOut = false, error = null, exited = false, settled = false, stopping = false, deadline, forceClose, heartbeat;
+  const elapsed = () => Number(process.hrtime.bigint() - started) / 1e9;
+  return await new Promise(resolve => {
+    const child = spawn(command, args, { cwd: options.root, env: options.environment, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    function progress(phase) { options.onProgress?.({ ...phase, elapsedSeconds: elapsed() }); }
+    function finish(code, signal) {
+      if (settled) return;
+      settled = true; clearTimeout(deadline); clearTimeout(forceClose); clearInterval(heartbeat);
+      child.stdout.destroy(); child.stderr.destroy(); fs.closeSync(logfile);
+      resolve({ output: Buffer.concat(chunks, bytes).toString('utf8'), exitCode: timedOut ? 124 : error ? 1 : code ?? 1,
+        durationSeconds: elapsed(), error: error ?? (signal ? `terminated by ${signal}` : null), timedOut,
+        outputIncomplete: timedOut || !!error || !!signal, timeoutMs, pendingNames: [...pending] });
+    }
+    function stop(reason) {
+      error ??= reason;
+      if (stopping) return;
+      stopping = true;
+      if (!exited && child.pid) {
+        // Kill this owned harness tree, including workers holding inherited pipes.
+        if (process.platform === 'win32') spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024 });
+        child.kill('SIGKILL');
+      }
+      forceClose ??= setTimeout(() => finish(null, null), 5000);
+    }
+    const assigned = new Set(options.assignedNames), running = new Set();
+    function inspect(line) {
+      const match = /^test (.+) \.\.\. (ok|FAILED|ignored|bench:)/.exec(line);
+      const slow = /^test (.+) has been running for over 60 seconds$/.exec(line);
+      const active = /^test (.+) \.\.\. $/.exec(line);
+      const name = match?.[1] ?? slow?.[1] ?? active?.[1];
+      if (!name || !assigned.has(name) || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(name)) return;
+      if (match) {
+        if (!pending.has(name)) return;
+        pending.delete(name); running.delete(name);
+        progress({ name, status: match[2] === 'bench:' ? 'measured' : match[2] });
+      } else if (slow || !running.has(name)) {
+        running.add(name); progress({ name, status: 'running', slow: !!slow });
+      }
+    }
+    for (const stream of [child.stdout, child.stderr]) {
+      const decoder = new StringDecoder('utf8');
+      let line = '', overflow = false;
+      stream.on('data', chunk => {
+        if (settled) return;
+        try {
+          const remaining = MAX_LOG - bytes, retained = chunk.subarray(0, remaining);
+          if (retained.length) { fs.writeSync(logfile, retained); chunks.push(retained); bytes += retained.length; }
+          if (chunk.length > remaining) { stop('harness output exceeded the 64 MiB capture limit'); return; }
+          for (const character of decoder.write(chunk)) {
+            if (character === '\n') { if (!overflow) inspect(line.replace(/\r$/, '')); line = ''; overflow = false; }
+            else if (line.length < 4096) line += character;
+            else overflow = true;
+          }
+          if (!overflow) inspect(line.replace(/\r$/, ''));
+        } catch (failure) { stop(String(failure.message)); }
+      });
+    }
+    child.on('error', failure => stop(`harness process error: ${failure.message}`));
+    child.on('exit', () => { exited = true; });
+    child.on('close', (code, signal) => finish(code, signal));
+    deadline = setTimeout(() => { timedOut = true; stop(`harness exceeded execution deadline of ${timeoutMs}ms`); }, timeoutMs);
+    heartbeat = setInterval(() => {
+      try { progress({ status: 'heartbeat', pendingNames: [...pending] }); }
+      catch (failure) { stop(String(failure.message)); }
+    }, 60 * 1000);
+  });
 }
 // Advisory only: never expose captured stdout/panic bodies or use these names
 // to qualify a shard. The untouched execution log remains the evidence source.
@@ -249,7 +325,7 @@ export function verifyBundle(options = {}) {
   return { plan, bundle, context: c };
 }
 
-export function runShard(options = {}) {
+export async function runShard(options = {}) {
   requireThat(Number.isInteger(options.index) && options.index >= 0 && options.index < SHARD_COUNT, 'invalid shard index');
   requireThat(typeof options.inJob === 'boolean', 'explicit successful runner Job observation required');
   requireThat(typeof options.artifactName === 'string', 'downloaded compiler artifact name required');
@@ -279,18 +355,23 @@ export function runShard(options = {}) {
     for (const receipt of result.harnesses) {
       if (!receipt.executed) continue;
       const h = plan.harnesses.find(h => identity(h) === identity(receipt));
-      if (options.onPhase) options.onPhase({ phase: 'execute-start', index: options.index, identity: h.identity, selected: receipt.names.length });
-      const invocation = invoke(relativeFile(c.root, h.executable), ['--exact', ...receipt.names], c.testCwd, c.environment);
-      fs.writeFileSync(path.join(output, receipt.logs.execution), invocation.output);
+      if (options.onPhase) options.onPhase({ phase: 'execute-start', index: options.index, identity: h.identity, selected: receipt.names.length, assignedNames: receipt.names, timeoutMs: HARNESS_TIMEOUT_MS });
+      const invocation = await executeHarness(relativeFile(c.root, h.executable), ['--exact', ...receipt.names], {
+        root: c.testCwd, environment: c.environment, executionLog: path.join(output, receipt.logs.execution), assignedNames: receipt.names, timeoutMs: options.timeoutMs,
+        onProgress: progress => options.onPhase?.({ phase: 'execute-progress', index: options.index, identity: h.identity, ...progress }),
+      });
+      const normalizedOutput = invocation.output.replaceAll('\r\n', '\n');
       receipt.durationSeconds = invocation.durationSeconds;
+      receipt.watchdog = { timeoutMs: invocation.timeoutMs, timedOut: invocation.timedOut, outputIncomplete: invocation.outputIncomplete, pendingNames: invocation.pendingNames };
       try {
-        receipt.result = { exitCode: invocation.exitCode, ...parseLibtestResult(invocation.output) };
-        aggregateHarness({ ...h, selected: receipt.names, ignored: h.ignored.filter(n => receipt.names.includes(n)) }, [{ index: options.index, names: receipt.names, listing: readFile(path.join(output, receipt.logs.selected)).toString('utf8'), output: invocation.output, result: receipt.result, durationSeconds: invocation.durationSeconds }], parseLibtestListing, parseLibtestResult);
+        receipt.result = { exitCode: invocation.exitCode, ...parseLibtestResult(normalizedOutput) };
+        aggregateHarness({ ...h, selected: receipt.names, ignored: h.ignored.filter(n => receipt.names.includes(n)) }, [{ index: options.index, names: receipt.names, listing: readFile(path.join(output, receipt.logs.selected)).toString('utf8'), output: normalizedOutput, result: receipt.result, durationSeconds: invocation.durationSeconds }], parseLibtestListing, parseLibtestResult);
       } catch (error) { receipt.error = String(error.message); failed = true; }
       if (invocation.error || invocation.exitCode !== 0) { receipt.error ??= invocation.error ?? `exit ${invocation.exitCode}`; failed = true; }
       if (options.onPhase) options.onPhase({ phase: 'execute-end', index: options.index, identity: h.identity, selected: receipt.names.length, durationSeconds: receipt.durationSeconds, result: receipt.result,
-        slowNames: [...invocation.output.matchAll(/^test (.+) has been running for over 60 seconds$/gm)].map(m => m[1]), error: receipt.error ?? null,
-        failureDiagnostics: shardFailureDiagnostics(invocation.output, receipt.names, receipt.logs.execution, !!invocation.error) });
+        slowNames: [...normalizedOutput.matchAll(/^test (.+) has been running for over 60 seconds$/gm)].map(m => m[1]), error: receipt.error ?? null, watchdog: receipt.watchdog,
+        failureDiagnostics: shardFailureDiagnostics(invocation.output, receipt.names, receipt.logs.execution, invocation.outputIncomplete) });
+      if (invocation.outputIncomplete) break;
     }
     result.completed = !failed; result.exitCode = failed ? 1 : 0;
   } catch (error) { result.error = String(error.message); }
@@ -356,7 +437,7 @@ export function aggregateResults(options = {}) {
       if (!execute) { requireThat(receipt.result === null && receipt.logs === null && receipt.durationSeconds === 0, 'skipped shard contains execution claims'); continue; }
       requireThat(JSON.stringify(receipt.logs) === JSON.stringify({ selected: h.logs.selected, execution: h.logs.execution }), 'shard raw log paths changed');
       const directory = path.dirname(filename);
-      slices.push({ index: result.index, names: receipt.names, listing: readFile(relativeFile(directory, receipt.logs.selected)).toString('utf8'), output: readFile(relativeFile(directory, receipt.logs.execution)).toString('utf8'), result: receipt.result, durationSeconds: receipt.durationSeconds });
+      slices.push({ index: result.index, names: receipt.names, listing: readFile(relativeFile(directory, receipt.logs.selected)).toString('utf8'), output: readFile(relativeFile(directory, receipt.logs.execution)).toString('utf8').replaceAll('\r\n', '\n'), result: receipt.result, durationSeconds: receipt.durationSeconds });
     }
     const { execution, executable, partitions, ...merged } = aggregateHarness(h, slices, parseLibtestListing, parseLibtestResult);
     report.harnesses.push(merged); mergedLogs.push({ filename: h.logs.execution, content: execution });
@@ -391,7 +472,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const options = cliOptions(args);
       let value;
       if (action === 'plan') value = createPlan(options);
-      else if (action === 'run') value = runShard({ ...options, onPhase: phase => console.log(JSON.stringify(phase)) });
+      else if (action === 'run') value = await runShard({ ...options, onPhase: phase => console.log(JSON.stringify(phase)) });
       else if (action === 'aggregate') value = aggregateResults(options);
       else throw new Error('Expected artifact-name, shard-artifact-name, plan, run or aggregate');
       const metrics = { action, planHash: value.planHash ?? value.rustShardRun?.planHash, artifactName: value.artifactName ?? value.rustShardRun?.artifactName,

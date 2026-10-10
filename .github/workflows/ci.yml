@@ -164,6 +164,7 @@ jobs:
     name: Rust test shard ${{ matrix.shard }}
     needs: rust-compile
     runs-on: windows-2022
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

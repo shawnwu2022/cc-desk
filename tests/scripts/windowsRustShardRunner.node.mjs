@@ -8,6 +8,44 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { shardFailureDiagnostics } from '../../scripts/windows-rust-shard-runner.mjs';
 
+// 在子进程退出前输出已分配测试进度，诊断不得泄露原始正文。
+test('RustRunner_LiveProgress_003', async t => {
+  const runner = await import(moduleUrl);
+  assert.equal(typeof runner.executeHarness, 'function', 'harness bodies need bounded streaming execution');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-live-output-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executionLog = path.join(root, 'execution.log'), phases = [];
+  const program = "process.stdout.write('test owned::one ... '); setTimeout(()=>{console.log('ok'); console.error('PRIVATE captured assertion'); console.log('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s');},100);";
+  const result = await runner.executeHarness(process.execPath, ['-e', program], { root, environment: process.env, executionLog, assignedNames: ['owned::one'], timeoutMs: 5000, onProgress: phase => {
+    phases.push(phase);
+    if (phase.status === 'running') assert.equal(fs.readFileSync(executionLog, 'utf8').includes('test result:'), false, 'running progress must arrive before the outer summary');
+  } });
+  assert.deepEqual(phases.filter(p => p.name).map(p => [p.name, p.status]), [['owned::one', 'running'], ['owned::one', 'ok']]);
+  assert.equal(JSON.stringify(phases).includes('PRIVATE'), false, 'live diagnostics expose assigned names and statuses only');
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.output, fs.readFileSync(executionLog, 'utf8'), 'the raw execution log retains the entire captured output');
+  assert.ok(result.output.includes('PRIVATE captured assertion'));
+});
+
+// 外层汇总先出现也不能将仍未退出且超时的进程认定为成功。
+test('RustRunner_Watchdog_004', async t => {
+  const runner = await import(moduleUrl);
+  assert.equal(typeof runner.executeHarness, 'function', 'harness bodies need a failing execution deadline');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-harness-timeout-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executionLog = path.join(root, 'execution.log');
+  const result = await runner.executeHarness(process.execPath, ['-e', "console.log('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s'); process.stdout.write('test owned::pending ... '); setInterval(()=>{},1000);"], { root, environment: process.env, executionLog, assignedNames: ['owned::pending'], timeoutMs: 500 });
+  assert.equal(result.timedOut, true);
+  assert.notEqual(result.exitCode, 0, 'a terminal summary cannot override watchdog failure');
+  assert.equal(result.outputIncomplete, true);
+  assert.deepEqual(result.pendingNames, ['owned::pending']);
+  assert.match(result.error, /deadline/);
+  assert.ok(result.durationSeconds < 5, 'a stuck fixture must be terminated within the shortened test deadline');
+  assert.equal(result.output, fs.readFileSync(executionLog, 'utf8'));
+  assert.ok(result.output.includes('test result: ok.'), 'the pre-timeout raw summary is retained as evidence');
+});
+
 const moduleUrl = new URL('../../scripts/windows-rust-shard-runner.mjs', import.meta.url);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -44,7 +82,9 @@ const fs=require('node:fs'), path=require('node:path'); for(const dir of [__dirn
 const full=${JSON.stringify(inventories[index])}, ignored=${JSON.stringify(index === 0 ? [worker] : [])}, failureName=${JSON.stringify(failureName)}, args=process.argv.slice(2);
 let selected=full; if(args.includes('--exact')) selected=full.filter(n=>args.includes(n)); else for(let i=0;i<args.length;i++) if(args[i]==='--skip') { const skip=args[++i]; selected=selected.filter(n=>n!==skip); }
 if(args.includes('--ignored')) selected=selected.filter(n=>ignored.includes(n));
-if(args.includes('--list')) { for(const n of selected) console.log(n+': test'); console.log(selected.length+' tests, 0 benchmarks'); } else {
+if(args.includes('--list')) { for(const n of selected) console.log(n+': test'); console.log(selected.length+' tests, 0 benchmarks'); }
+else if(process.env.RUST_SHARD_FIXTURE_HANG==='1') { console.log('PRIVATE pending fixture assertion'); if(selected.length) process.stdout.write('test '+selected[0]+' ... '); setInterval(()=>{},1000); }
+else {
   for(const n of selected) console.log('test '+n+' ... '+(ignored.includes(n)?'ignored, supervised only':n===failureName?'FAILED':'ok'));
   const count=selected.filter(n=>ignored.includes(n)).length, failed=selected.includes(failureName)?1:0;
   if(failed) console.log('\\nfailures:\\n\\n---- '+failureName+' stdout ----\\nPRIVATE fixture assertion and Debug value\\n\\nfailures:\\n    '+failureName+'\\n');
@@ -66,6 +106,27 @@ if(args.includes('--list')) { for(const n of selected) console.log(n+': test'); 
   return { root, sourceSha, environment, bundle, runtimeNames, options, plan, runShard, aggregateResults, verifyBundle, bundleArtifactName };
 }
 
+// 超时分片保存失败回执与完整部分日志，不能进入成功覆盖聚合。
+test('RustRunner_TimeoutReceipt_005', { skip: process.platform === 'win32' && 'Unix executable fixture; production binaries are Windows PE files' }, async t => {
+  const { root, options, plan, runShard, aggregateResults } = await runnerFixture(t);
+  const shards = path.join(root, 'timeout-shards'), output = path.join(shards, '0'), phases = [];
+  const result = await runShard({ ...options, environment: { ...options.environment, RUST_SHARD_FIXTURE_HANG: '1' }, index: 0, output, artifactName: plan.artifactName, timeoutMs: 500, onPhase: phase => phases.push(phase) });
+  assert.equal(result.completed, false);
+  assert.notEqual(result.exitCode, 0);
+  const harness = result.harnesses[0];
+  assert.equal(harness.watchdog.timedOut, true);
+  assert.equal(harness.watchdog.outputIncomplete, true);
+  assert.deepEqual(harness.watchdog.pendingNames, harness.names);
+  const raw = fs.readFileSync(path.join(output, harness.logs.execution), 'utf8');
+  assert.ok(raw.includes('PRIVATE pending fixture assertion'), 'the raw failure evidence remains on disk');
+  assert.equal(JSON.stringify(phases).includes('PRIVATE'), false);
+  assert.deepEqual(phases.find(p => p.phase === 'execute-start').assignedNames, harness.names);
+  assert.equal(phases.find(p => p.phase === 'execute-end').failureDiagnostics.complete, false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(output, 'shard-result.json'), 'utf8')).completed, false);
+  for (let index = 1; index < plan.shardCount; index++) fs.mkdirSync(path.join(shards, String(index)), { recursive: true });
+  assert.throws(() => aggregateResults({ ...options, shards, coverage: path.join(root, 'timeout-coverage') }), /missing|incomplete/, 'a timed-out receipt cannot publish complete coverage');
+});
+
 // 使用真实文件、git checkout 和可执行进程检查十六个分片及旧版覆盖归档。
 test('RustRunner_ArtifactBinding_001', { skip: process.platform === 'win32' && 'Unix executable fixture; production binaries are Windows PE files' }, async t => {
   const { root, sourceSha, environment, bundle, runtimeNames, options, plan, runShard, aggregateResults, verifyBundle, bundleArtifactName } = await runnerFixture(t);
@@ -86,7 +147,7 @@ test('RustRunner_ArtifactBinding_001', { skip: process.platform === 'win32' && '
   fs.rmSync(path.join(root, 'src-tauri/target/debug'), { recursive: true });
   const shards = path.join(root, 'shards');
   for (let index = 0; index < 16; index++) {
-    const result = runShard({ ...options, index, output: path.join(shards, String(index)), artifactName: plan.artifactName });
+    const result = await runShard({ ...options, index, output: path.join(shards, String(index)), artifactName: plan.artifactName });
     assert.equal(result.completed, true);
     assert.equal(result.harnesses[1].executed, index === 0, 'an originally empty harness executes once on shard zero');
     if (index > 0) assert.equal(result.harnesses[2].executed, false, 'empty assignment must not execute a nonempty harness');
@@ -121,7 +182,7 @@ test('RustRunner_FailureDiagnostics_002', { skip: process.platform === 'win32' &
   const { root, options, plan, runShard, aggregateResults } = await runnerFixture(t, failedName);
   const index = plan.harnesses[0].partitions.findIndex(names => names.includes(failedName));
   const phases = [], shards = path.join(root, 'failure-shards');
-  const result = runShard({ ...options, index, output: path.join(shards, String(index)), artifactName: plan.artifactName, onPhase: phase => phases.push(phase) });
+  const result = await runShard({ ...options, index, output: path.join(shards, String(index)), artifactName: plan.artifactName, onPhase: phase => phases.push(phase) });
   const end = phases.find(phase => phase.phase === 'execute-end' && phase.identity.kind === 'lib');
   assert.deepEqual(end.failureDiagnostics?.names, [failedName], 'normal phase output must identify the exact failed assigned test');
   const diagnostic = end.failureDiagnostics;
@@ -149,7 +210,7 @@ test('RustRunner_FailureDiagnostics_002', { skip: process.platform === 'win32' &
   assert.equal(nextHarness.result.passed, 1);
   assert.ok(phases.indexOf(end) < phases.findIndex(phase => phase.phase === 'execute-end' && phase.identity.name === nextHarness.identity.name));
   for (let other = 0; other < 16; ++other) if (other !== index) {
-    assert.equal(runShard({ ...options, index: other, output: path.join(shards, String(other)), artifactName: plan.artifactName }).completed, true);
+    assert.equal((await runShard({ ...options, index: other, output: path.join(shards, String(other)), artifactName: plan.artifactName })).completed, true);
   }
   assert.throws(() => aggregateResults({ ...options, shards, coverage: path.join(root, 'failed-coverage') }), /failed|incomplete/, 'diagnostic completeness cannot make a failed run pass');
 });
