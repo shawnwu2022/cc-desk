@@ -34,6 +34,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import AppDrawer from '@/components/ui/AppDrawer.vue'
 import { useShellStore, type WorkspaceRequest } from '@/stores/shell'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useAppStore } from '@/stores/app'
@@ -93,9 +94,14 @@ const sessionSidebar = ref<InstanceType<typeof SidebarPanel> | null>(null)
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
 const runtime = useUnifiedWorkspaceRuntime(terminalHost)
 const sourceNoticeArea = ref<HTMLElement | null>(null)
+const sourceDiagnosticsOpen = ref(false)
+watch(() => [shell.section, shell.sidebarVisible], () => {
+  if (shell.section !== 'workspace' || !shell.sidebarVisible) sourceDiagnosticsOpen.value = false
+}, { flush: 'sync' })
 function editSourceConfiguration(profileId: string) {
   const owner = runtime.sourceWarningConfigurations.value.find(row => row.profileId === profileId)
   if (shell.section !== 'workspace' || !owner || configurations.profile(profileId)?.revision !== owner.profileRevision) return
+  sourceDiagnosticsOpen.value = false
   const selected = sessions.captureSelectionOwnership()
   void openConfigurationEditor({ kind: 'edit', profileId }, () => selected()
     && runtime.sourceWarningConfigurations.value.some(row => row.profileId === profileId
@@ -105,7 +111,10 @@ async function dismissSourceNotice() {
   const restoreFocus = sourceNoticeArea.value?.contains(document.activeElement) ?? false
   runtime.dismissSourceNotice()
   await nextTick()
-  if (restoreFocus && shell.section === 'workspace') sourceNoticeArea.value?.querySelector<HTMLElement>('summary')?.focus()
+  if (restoreFocus && shell.section === 'workspace') {
+    const target = shell.sidebarVisible ? '[data-history-source-entry]' : '[data-primary-section="workspace"]'
+    document.querySelector<HTMLElement>(target)?.focus()
+  }
 }
 const configFailed = ref(false)
 const settingsLoaded = ref(false)
@@ -255,7 +264,12 @@ onUnmounted(() => {
         @rename-commit="(id, title) => request({ kind: 'rename', sessionId: id, title })"
         @rename-cancel="request({ kind: 'rename-cancel', sessionId: $event })"
         @confirmation-request="request({ kind: 'confirmation', request: $event })"
-        @restore-request="request({ kind: 'restore-archive', sessionId: $event })" />
+        @restore-request="request({ kind: 'restore-archive', sessionId: $event })">
+        <template #source-status>
+          <AppButton v-if="runtime.sourceIssuesAvailable?.value" data-history-source-entry variant="ghost" size="compact"
+            :inert="shell.section !== 'workspace' || !shell.sidebarVisible || undefined" @click="sourceDiagnosticsOpen = true">{{ t('historySourceIssues') }}</AppButton>
+        </template>
+      </SidebarPanel>
     </template>
     <InlineNotice v-if="configFailed" kind="warning" :message="t('workspaceConfigFailed')"
       :action-label="t('retry')" @action="loadPreferences" />
@@ -270,22 +284,21 @@ onUnmounted(() => {
         </InlineNotice>
         <InlineNotice v-if="runtime.error.value && runtime.error.value !== 'workspaceRuntimePartial'" kind="warning" :message="t(runtime.error.value)"
           :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
-        <div v-if="runtime.sourceWarnings?.value.length && !runtime.fatal?.value" ref="sourceNoticeArea" :inert="configurationEditorOpening || undefined">
-          <InlineNotice v-if="!runtime.sourceNoticeDismissed?.value" data-workspace-source-notice class="workspace-source-notice" kind="warning" :message="t('workspaceRuntimePartial')"
+        <div v-if="!runtime.fatal?.value" ref="sourceNoticeArea" :inert="configurationEditorOpening || undefined">
+          <InlineNotice v-if="runtime.sourceWarnings?.value.length && !runtime.sourceNoticeDismissed?.value" data-workspace-source-notice class="workspace-source-notice" kind="warning" :message="t('workspaceRuntimePartial')"
             :action-label="t('retry')" @action="request({ kind: 'refresh' })">
             <IconButton data-dismiss-source-notice :label="t('sourceWarningDismiss')" @click="dismissSourceNotice"><span>×</span></IconButton>
             <WorkspaceSourceDetails :warnings="runtime.sourceWarnings.value" :truncated="runtime.sourceWarningsTruncated.value"
               :configurations="runtime.sourceWarningConfigurations?.value ?? []" @configure="editSourceConfiguration" />
           </InlineNotice>
-          <div v-else data-workspace-source-compact class="workspace-source-compact">
-            <WorkspaceSourceDetails compact :warnings="runtime.sourceWarnings.value" :truncated="runtime.sourceWarningsTruncated.value"
-              :configurations="runtime.sourceWarningConfigurations?.value ?? []" @configure="editSourceConfiguration" />
-            <AppButton data-source-warning-retry variant="ghost" size="compact" :disabled="runtime.loading.value" @click="request({ kind: 'refresh' })">{{ t('retry') }}</AppButton>
-          </div>
+          <template v-if="runtime.historyMetadataPartial?.value && !runtime.historyNoticeDismissed?.value">
+            <InlineNotice data-history-metadata-partial kind="info" :message="t('workspaceHistoryMetadataPartial')">
+              <IconButton data-dismiss-history-notice :label="t('sourceWarningDismiss')" @click="dismissSourceNotice"><span>×</span></IconButton>
+            </InlineNotice>
+            <WorkspaceSourceDetails v-if="runtime.historyReadWarnings?.value.length" data-history-read-details compact partial
+              :warnings="runtime.historyReadWarnings.value" :truncated="false" />
+          </template>
         </div>
-        <InlineNotice v-if="runtime.historyMetadataPartial?.value" data-history-metadata-partial kind="info" :message="t('workspaceHistoryMetadataPartial')" />
-        <WorkspaceSourceDetails v-if="runtime.historyReadWarnings?.value.length" data-history-read-details compact partial
-          :warnings="runtime.historyReadWarnings.value" :truncated="false" />
         <LaunchProgramDiscovery v-if="shell.section === 'workspace' && !configurationEditor && sessions.activeSession?.safeErrorCode === 'LAUNCH_CONFIGURATION_REQUIRED' && sessions.activeSession.preparationIssueCode === 'PROGRAM_TRUST_REQUIRED'"
           :inert="configurationEditorOpening || undefined"
           :key="`${sessions.activeSession.id}:${shell.navigationSequence}:${shell.requestSequence}`" :session="sessions.activeSession" @edit="editPreparationConfiguration" @confirmed="confirmDiscoveredProgram" />
@@ -313,6 +326,17 @@ onUnmounted(() => {
     <InlineNotice v-if="configurationEditorError" :kind="configurationEditorError.severity" :message="t(configurationEditorError.messageKey)" />
     <LaunchConfigurationEditor v-if="configurationEditor" :request="configurationEditor" :active="shell.section === 'workspace'" @close="closeConfigurationEditor" />
     <ProjectConfirmDialog :request="configurations.deleteConfirmation" :active="shell.section === 'settings'" :busy="configurations.deleteBusy" :error-key="configurations.deleteError?.messageKey" @confirm="configurations.confirmDelete" @cancel="configurations.closeDeleteConfirmation" />
+    <AppDrawer v-model:open="sourceDiagnosticsOpen" :title="t('historySourceDiagnostics')">
+      <div data-history-source-dialog>
+        <InlineNotice v-if="runtime.sourceDiagnosticsWarnings?.value.length" kind="warning" :message="t('workspaceRuntimePartial')" />
+        <WorkspaceSourceDetails compact :warnings="runtime.sourceDiagnosticsWarnings.value" :truncated="runtime.sourceDiagnosticsTruncated.value"
+          :configurations="runtime.sourceWarningConfigurations?.value ?? []" @configure="editSourceConfiguration" />
+        <InlineNotice v-if="runtime.historyMetadataPartial?.value" kind="info" :message="t('workspaceHistoryMetadataPartial')" />
+        <WorkspaceSourceDetails compact partial :warnings="runtime.historyReadWarnings.value" :truncated="false" />
+        <p v-if="runtime.sourceChecksPending?.value">{{ t('loading') }}</p>
+        <AppButton data-source-warning-retry variant="ghost" :disabled="runtime.loading.value" @click="request({ kind: 'refresh' })">{{ t('retry') }}</AppButton>
+      </div>
+    </AppDrawer>
     <SessionDiagnosticsDialog :diagnostics="runtime.diagnostics?.value ?? null" @close="runtime.closeDiagnostics()" />
     <SessionConfirmDialog :active="shell.section === 'workspace'" />
     <AppToastHost />
@@ -332,6 +356,5 @@ onUnmounted(() => {
 
 <style scoped>
 .workspace-source-notice { flex-wrap: wrap; }
-.workspace-source-compact { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; }
-.workspace-source-compact :deep(.source-warning-details) { flex: 1; }
+[data-history-source-entry] { margin: 4px 12px 0; align-self: flex-start; }
 </style>
