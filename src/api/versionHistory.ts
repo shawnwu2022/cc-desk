@@ -1,5 +1,5 @@
-import type { HistoryCatalogPage, HistorySelection, PreparationTicket, PreparedPackageSummary, CancelPrepareSummary, SwitchReview, SwitchTicket } from '@/types/versionHistory'
-import { parseHistoryCatalogPage, parseHistorySelection, parsePreparationTicket, parsePreparedPackageSummary, parseCancelPrepareSummary, parseSwitchReview, parseSwitchTicket } from '@/utils/versionHistoryContracts'
+import type { HistoryCatalogPage, HistorySelection, PreparationTicket, PreparedPackageSummary, CancelPrepareSummary, SwitchReview, SwitchTicket, OrdinaryInstallReview } from '@/types/versionHistory'
+import { parseHistoryCatalogPage, parseHistorySelection, parsePreparationTicket, parsePreparedPackageSummary, parseCancelPrepareSummary, parseSwitchReview, parseSwitchTicket, parseOrdinaryInstallReview } from '@/utils/versionHistoryContracts'
 
 export interface HistoryBridge { readonly instanceId: string; invoke(command: string, payload: unknown): Promise<unknown> }
 export interface HistoryClient {
@@ -11,6 +11,8 @@ export interface HistoryClient {
   cancel(transactionId: string): Promise<CancelPrepareSummary>
   inspectSwitch(preparationId: string, version: string): Promise<SwitchReview>
   beginSwitch(preparationId: string): Promise<SwitchTicket>
+  inspectHistoricalInstall(preparationId: string, version: string): Promise<OrdinaryInstallReview>
+  beginHistoricalInstall(preparationId: string): Promise<SwitchTicket>
 }
 function invalid(): never { throw new Error('HISTORY_INVALID_RESPONSE') }
 function token(value: string) { if (!/^[a-f0-9]{32}$/.test(value)) invalid() }
@@ -57,6 +59,16 @@ export function createHistoryClient(bridge: HistoryBridge, current: () => boolea
     async beginSwitch(preparationId) {
       token(preparationId)
       return parseSwitchTicket(await invoke('begin_switch', { preparationId, dataMode: 'fresh-settings' }))
+    },
+    async inspectHistoricalInstall(preparationId, version) {
+      token(preparationId)
+      const value = parseOrdinaryInstallReview(await invoke('inspect_historical_install', { transactionId: preparationId }))
+      if (value.preparationId !== preparationId || value.version !== version) invalid()
+      return value
+    },
+    async beginHistoricalInstall(preparationId) {
+      token(preparationId)
+      return parseSwitchTicket(await invoke('begin_historical_install', { transactionId: preparationId }))
     },
     async cancel(transactionId) {
       token(transactionId)

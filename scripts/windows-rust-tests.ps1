@@ -60,22 +60,24 @@ function Read-HostedInventory([string]$Executable, [string[]]$TestArgs, [string]
     return [pscustomobject]@{ entries = $entries; names = @($entries | ForEach-Object name) }
 }
 
-function Get-HostedTestSelection($Full, [string[]]$Ignored, [bool]$Library, [bool]$Contained, $Scope) {
+function Get-HostedTestSelection($Full, [string[]]$Ignored, [bool]$Library, [bool]$Contained, [bool]$Elevated, $Scope) {
     $names = @($Full | ForEach-Object name)
-    $policy = @($Scope.jobFreeTests)
+    $policy = @($Scope.jobFreeTests) + @($Scope.unelevatedTests)
     if ($Library) {
         foreach ($name in $policy) {
             if (@($names | Where-Object { $_ -ceq $name }).Count -ne 1 -or $Ignored -ccontains $name) { throw 'Job-free policy drift: entry missing, duplicate or ignored' }
         }
     } elseif (@($names | Where-Object { $policy -ccontains $_ }).Count -gt 0) { throw 'Job-free policy entry outside library' }
-    $excluded = if ($Library -and $Contained) { $policy } else { @() }
+    $excluded = @()
+    if ($Library -and $Contained) { $excluded += @($Scope.jobFreeTests) }
+    if ($Library -and $Elevated) { $excluded += @($Scope.unelevatedTests) }
     foreach ($name in $excluded) {
         if (@($names | Where-Object { $_ -cne $name -and $_.Contains($name, [StringComparison]::Ordinal) }).Count -gt 0) { throw 'libtest full-name skip substring collision' }
     }
     $selected = @($names | Where-Object { $excluded -cnotcontains $_ })
     if ($Library) {
         if (@($Full | Where-Object { $_.type -eq 'test' -and $selected -ccontains $_.name -and $Ignored -cnotcontains $_.name }).Count -eq 0) { throw 'library selected nonignored inventory is empty' }
-        foreach ($name in @($Scope.requiredSelectedTests)) {
+        foreach ($name in (@($Scope.requiredSelectedTests) + @($Scope.ordinaryRequiredSelectedTests))) {
             if ($selected -cnotcontains $name -or $Ignored -ccontains $name) { throw 'required ordinary/Wry test not selected' }
         }
     }
@@ -120,10 +122,10 @@ function Invoke-HostedHarness($Plan, [string]$Directory) {
     return ($code -eq 0 -and $r.failed -eq 0)
 }
 
-function Invoke-HostedSuite($Targets, [bool]$Contained, [string]$Manifest, [string]$ScriptsDirectory) {
+function Invoke-HostedSuite($Targets, [bool]$Contained, [bool]$Elevated, [string]$Manifest, [string]$ScriptsDirectory) {
     $validator = Join-Path $ScriptsDirectory 'windows-native-validation.mjs'
     $scope = Get-Content -LiteralPath (Join-Path $ScriptsDirectory 'windows-native-scope.json') -Raw -Encoding utf8 | ConvertFrom-Json
-    if ($scope.schema -ne 1 -or $scope.jobFreeTests.Count -ne 18 -or $scope.harnesses.Count -ne 4) { throw 'invalid checked-in hosted scope' }
+    if ($scope.schema -ne 1 -or $scope.jobFreeTests.Count -ne 18 -or $scope.unelevatedTests.Count -ne 4 -or $scope.ordinaryRequiredSelectedTests.Count -ne 3 -or $scope.harnesses.Count -ne 4) { throw 'invalid checked-in hosted scope' }
     $sourceSha = [string]$env:GITHUB_SHA; $runId = [string]$env:GITHUB_RUN_ID; $attempt = 0
     if (![int]::TryParse([string]$env:GITHUB_RUN_ATTEMPT, [ref]$attempt)) { throw 'missing workflow attempt binding' }
     $coverageName = @(& node $validator artifact-name $sourceSha $runId $attempt)
@@ -139,8 +141,9 @@ function Invoke-HostedSuite($Targets, [bool]$Contained, [string]$Manifest, [stri
     $report = [ordered]@{
         schema = 1; policy = 'required-checks-and-disclosed-host-unverified-v1'; completed = $false
         sourceSha = $sourceSha; runId = $runId; runAttempt = $attempt
-        host = @{ jobQuerySucceeded = $true; inJob = $Contained }; harnesses = @(); doctests = $null
+        host = @{ jobQuerySucceeded = $true; inJob = $Contained; elevationQuerySucceeded = $true; elevated = $Elevated }; harnesses = @(); doctests = $null
         nativeJobSuite = @{ status = 'unverified'; reason = 'not_executed'; unverifiedNames = @($scope.jobFreeTests) }
+        nativeUnelevatedSuite = @{ status = 'unverified'; reason = 'not_executed'; unverifiedNames = @($scope.unelevatedTests) }
         nativeAll = @{ status = 'unverified'; reason = 'original_all_not_run' }; nativeAcceptanceProven = $false
     }
     $report | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $reportFile -Encoding utf8
@@ -158,7 +161,7 @@ function Invoke-HostedSuite($Targets, [bool]$Contained, [string]$Manifest, [stri
             $logs = @{ full = "logs/$name-full.log"; ignored = "logs/$name-ignored.log"; selected = "logs/$name-selected.log"; execution = "logs/$name-execution.log" }
             $full = Read-HostedInventory $target.executable @() (Join-Path $directory $logs.full)
             $ignored = Read-HostedInventory $target.executable @('--ignored') (Join-Path $directory $logs.ignored)
-            $selection = Get-HostedTestSelection $full.entries $ignored.names ($kind -eq 'lib') $Contained $scope
+            $selection = Get-HostedTestSelection -Full $full.entries -Ignored $ignored.names -Library ($kind -eq 'lib') -Contained $Contained -Elevated $Elevated -Scope $scope
             $testArgs = @($selection.excluded | ForEach-Object { '--skip'; $_ })
             $selected = Read-HostedInventory $target.executable $testArgs (Join-Path $directory $logs.selected)
             Assert-HostedSelection $full.names $ignored.names $selected.names $selection.excluded
@@ -174,7 +177,8 @@ function Invoke-HostedSuite($Targets, [bool]$Contained, [string]$Manifest, [stri
         $docCode = $LASTEXITCODE
         $report.doctests = @{ command = 'cargo test --locked --doc'; exitCode = $docCode; logs = @('logs/doctests.log'); result = (Read-HostedResult @($docOutput | ForEach-Object { "$_" }) $docCode) }
         if ($docCode -ne 0 -or $report.doctests.result.failed -ne 0) { $ok = $false }
-        $report.nativeJobSuite = @{ status = $(if ($Contained) { 'unverified' } else { 'executed' }); reason = $(if ($Contained) { 'external_job' } else { $null }); unverifiedNames = $(if ($Contained) { @($scope.jobFreeTests) } else { @() }) }
+        $report.nativeJobSuite = @{ status = $(if ($Contained) { 'unverified' } else { 'executed' }); reason = $(if ($Contained) { 'external_job' } else { $null }); unverifiedNames = @(if ($Contained) { @($scope.jobFreeTests) } else { @() }) }
+        $report.nativeUnelevatedSuite = @{ status = $(if ($Elevated) { 'unverified' } else { 'executed' }); reason = $(if ($Elevated) { 'elevated_host' } else { $null }); unverifiedNames = @(if ($Elevated) { @($scope.unelevatedTests) } else { @() }) }
         $report.completed = $true
     } finally {
         $report | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $reportFile -Encoding utf8
@@ -193,14 +197,37 @@ public static class WindowsRustCiJob {
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsProcessInJob(IntPtr process, IntPtr job, [MarshalAs(UnmanagedType.Bool)] out bool contained);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetTokenInformation(IntPtr token, int infoClass, out int information, uint size, out uint returnedSize);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+    public static bool TryGetElevation(out bool elevated, out int error) {
+        elevated = false; error = 0;
+        IntPtr token;
+        if (!OpenProcessToken(GetCurrentProcess(), 0x0008, out token)) { error = Marshal.GetLastWin32Error(); return false; }
+        try {
+            int value; uint returned;
+            if (!GetTokenInformation(token, 20, out value, 4, out returned)) { error = Marshal.GetLastWin32Error(); return false; }
+            if (returned != 4 || (value != 0 && value != 1)) { error = 87; return false; }
+            elevated = value != 0;
+            return true;
+        } finally { CloseHandle(token); }
+    }
 }
 '@
 $contained = $false
 if (![WindowsRustCiJob]::IsProcessInJob([WindowsRustCiJob]::GetCurrentProcess(), [IntPtr]::Zero, [ref]$contained)) {
     throw "IsProcessInJob failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
 }
-Write-Host "WINDOWS_RUST_CI_PARENT pid=$PID inJob=$contained"
-if ($env:GITHUB_OUTPUT) { Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "job_free=$((!$contained).ToString().ToLowerInvariant())" }
+$elevated = $false; $elevationError = 0
+if (![WindowsRustCiJob]::TryGetElevation([ref]$elevated, [ref]$elevationError)) { throw "TokenElevation query failed: $elevationError" }
+Write-Host "WINDOWS_RUST_CI_PARENT pid=$PID inJob=$contained elevated=$elevated"
+if ($env:GITHUB_OUTPUT) { Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value @("job_free=$((!$contained).ToString().ToLowerInvariant())", "elevated=$($elevated.ToString().ToLowerInvariant())", 'elevation_query_succeeded=true') }
 if ($Action -eq 'Probe') { exit 0 }
 if ($contained -and $Action -in @('CompileAndGate', 'All', 'Channel', 'Launch')) { throw 'Ordinary PowerShell is contained in an external Job; direct native tests are blocked' }
 
@@ -217,7 +244,7 @@ if ($Action -eq 'Compile') {
     if ($env:GITHUB_OUTPUT) { Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'compiled=true' }
     $ok = $true
 } elseif ($Action -eq 'HostedSuite') {
-    $ok = Invoke-HostedSuite $targets $contained $manifest $PSScriptRoot
+    $ok = Invoke-HostedSuite -Targets $targets -Contained $contained -Elevated $elevated -Manifest $manifest -ScriptsDirectory $PSScriptRoot
 } elseif ($Action -eq 'CompileAndGate') {
     # The following CI step may run the compiled inventory even if the exact gate fails.
     if ($env:GITHUB_OUTPUT) { Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'compiled=true' }

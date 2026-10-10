@@ -63,7 +63,7 @@ export const useProjectManagementStore = defineStore('project-management', () =>
       add(row.projectPath)
       const group = rows.get(normalizePath(row.projectPath))!
       group.lastActivityAt = Math.max(group.lastActivityAt, row.lastActivityAt)
-      if (!row.archived) group.sessions.push(row)
+      if (!row.archived) group.sessions.push({ ...row, resumePending: catalog.isResumePending(row) })
       if (row.processState === 'running' || row.processState === 'starting') group.runningCount++
       if (row.attentionState === 'needs-user') group.needsUserCount++
     }

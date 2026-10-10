@@ -420,13 +420,16 @@ export async function stageNewAssets(api, upload, binding, files) {
 
 export function validationNotes(summary, binding, reportHash) {
   const c = summary.counts
+  const jobNames = summary.jobFreeUnverifiedNames ?? summary.unverifiedNames
+  const unelevatedNames = summary.unelevatedUnverifiedNames ?? []
   return `Validation policy: ${VALIDATION_POLICY}\n\nSource: ${binding.sourceSha}\nCI run: ${binding.runId}, attempt: ${binding.runAttempt}\nCoverage artifact: ${binding.artifactId} (${binding.artifactName})\n\n` +
     `Required frontend, Rust normal-suite/build/lint, and roundtrip compile-only policy jobs succeeded.\n` +
-    `Native normal suite: ${c.executed} executed (${c.passed} passed, ${c.failed} failed, ${c.measured} measured); ${c.ignored} original ignored tests; ${summary.unverifiedNames.length} unavailable Job-free manager tests unverified.\n\n` +
+    `Native normal suite: ${c.executed} executed (${c.passed} passed, ${c.failed} failed, ${c.measured} measured); ${c.ignored} original ignored tests; ${jobNames.length} unavailable Job-free manager tests unverified.${unelevatedNames.length ? ` ${unelevatedNames.length} ordinary integration tests unverified because the observed Windows token is elevated.` : ''}\n\n` +
     `Original unfiltered native All: ${summary.nativeAllStatus}. Native installation/return roundtrip acceptance is not proven by this coverage.\n\n` +
     `Real native installation/return roundtrip was not executed by this CI validation; the report discloses the observed host limits.\n` +
     `Current available reviewed official signed Windows historical packages support installation and preserved-current return with FreshSettings. Shared Claude/Codex configuration, history and project-file changes are not rolled back. Future packages require their own reviewed version/digest/size/inventory admission.\n\n` +
-    (summary.unverifiedNames.length ? `Unverified tests (observed external Windows Job):\n${summary.unverifiedNames.map(name => `- ${name}`).join('\n')}\n\n` : '') +
+    (jobNames.length ? `Unverified tests (observed external Windows Job):\n${jobNames.map(name => `- ${name}`).join('\n')}\n\n` : '') +
+    (unelevatedNames.length ? `Unverified ordinary integration tests (observed elevated Windows token):\n${unelevatedNames.map(name => `- ${name}`).join('\n')}\n\n` : '') +
     `Attached ${REPORT_FILENAME} SHA256: ${reportHash}. This is the report validated for this promotion. Client automatic-install policy and runtime historical-installation guards remain unchanged.\n`
 }
 

@@ -37,16 +37,36 @@ describe('Preserved status rendering', () => {
     style.textContent = source.match(/<style[^>]*>([\s\S]*?)<\/style>/)![1]
     document.head.append(style)
     const rules = Array.from(style.sheet!.cssRules)
-    for (const state of ['working', 'permission']) {
+    for (const state of ['working']) {
       const animation = rules.find(rule => rule instanceof CSSStyleRule && rule.selectorText.includes(`--${state}`)
         && rule.style.getPropertyValue('animation')) as CSSStyleRule | undefined
       expect(animation?.style.getPropertyValue('animation')).toMatch(/infinite$/)
     }
     const reduced = rules.find(rule => rule instanceof CSSMediaRule && rule.conditionText === '(prefers-reduced-motion: reduce)') as CSSMediaRule
     expect(Array.from(reduced.cssRules).some(rule => rule instanceof CSSStyleRule
-      && rule.selectorText === '.session-status-icon .session-status-icon__shape'
+      && rule.selectorText.split(',').map(selector => selector.trim()).includes('.session-status-icon .session-status-icon__shape')
       && rule.style.getPropertyValue('animation') === 'none')).toBe(true)
     style.remove()
+  })
+  // 工作细分、输入等待及归档显示不同语义字形，hover 消失即关闭描述。
+  it('Icon_ActivityDetails_006', async () => {
+    const geometries = new Set<string>()
+    for (const [activityState, label] of [['thinking', 'Thinking'], ['tool_executing', 'Using a tool'], ['subagent_running', 'Subagent working'], ['compacting', 'Compacting context']] as const) {
+      const wrapper = mount(SessionStatusIcon, { props: { state: 'working', activityState }, global: { plugins: [i18n()] } })
+      mounted.push(wrapper)
+      expect(wrapper.get('[role="img"]').attributes('aria-label')).toBe(label)
+      geometries.add(wrapper.get('svg').element.innerHTML)
+      await wrapper.get('[role="img"]').trigger('mouseenter')
+      expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(label)
+      await wrapper.get('[role="img"]').trigger('mouseleave')
+      expect(document.querySelector('[role="tooltip"]')).toBeNull()
+    }
+    expect(geometries.size).toBe(4)
+    const waiting = mount(SessionStatusIcon, { props: { state: 'needs-user', activityState: 'waiting_input' }, global: { plugins: [i18n()] } })
+    const archived = mount(SessionStatusIcon, { props: { state: 'closed', archived: true }, global: { plugins: [i18n()] } })
+    mounted.push(waiting, archived)
+    expect(waiting.get('[role="img"]').attributes('aria-label')).toBe('Waiting for input')
+    expect(archived.get('[role="img"]').attributes('aria-label')).toBe('Archived')
   })
   it('Icon_WorkDiffersFromIdleWithoutMotion_004', () => {
     const work = mount(SessionStatusIcon, { props: { state: 'working' }, global: { plugins: [i18n()] } })

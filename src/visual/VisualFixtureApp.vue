@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { UnifiedSession } from '@/types/unifiedSession'
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/shell/AppShell.vue'
@@ -74,7 +75,24 @@ if (scenario === 'native-notice') {
     activityState: 'unknown', attentionState: 'none', observationState: 'active',
     observationNotice: { recent: notice, unreadReplyEnd: parameters.get('notice') === 'read' ? null : notice } }]
 }
-catalog.activeSessionId = catalog.sessions[0]?.id ?? null
+// Synthetic status glyph sheet: explicit display inputs only, never observer
+// evidence, source sequence, a runtime connection or a completion inference.
+if (scenario === 'session-status') {
+  const samples: Partial<UnifiedSession>[] = [
+    { activityState: 'idle' }, { activityState: 'working' }, { activityState: 'thinking' },
+    { activityState: 'tool_executing' }, { activityState: 'subagent_running' }, { activityState: 'compacting' },
+    { attentionState: 'needs-user' }, { activityState: 'waiting_input' }, { activityState: 'waiting_permission' },
+    { attentionKind: 'completed' }, { activityState: 'error' }, { activityState: 'unknown' },
+    { processState: 'starting' }, { processState: 'unknown' }, { processState: 'failed' },
+    { processState: 'stopped', opened: true }, { processState: 'stopped', opened: false, resumable: true },
+  ]
+  catalog.sessions = samples.map((sample, index) => ({ ...fixtureSessions()[0],
+    id: `visual-status-${index}`, adapterSessionId: `visual-status-tab-${index}`,
+    title: `Synthetic ${sample.activityState ?? sample.attentionKind ?? sample.processState ?? 'needs-user'}`,
+    activityState: 'unknown', attentionState: 'none', opened: true,
+    lastActivityAt: Date.now() - index * 60_000, ...sample }))
+}
+catalog.activeSessionId = scenario === 'session-status' ? 'visual-status-15' : catalog.sessions[0]?.id ?? null
 app.cachedProjects = scenario === 'empty' ? [] : projectPaths.map((path, index) => ({ path, name: ['cc-desk', 'Atlas design system', longProjectName, 'Empty project'][index], lastDuration: 0 }))
 metadata.displayNames.set(projectPaths[2].toLowerCase(), longProjectName)
 const management = useProjectManagementStore()

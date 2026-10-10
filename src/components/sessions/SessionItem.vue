@@ -51,6 +51,8 @@ const actions = computed(() => selectSessionMenuActions(props.session, { ...prop
 const archive = computed(() => selectSessionArchiveAction(props.session, props.menuActionVisibility))
 const primary = computed(() => isRenaming.value ? 'save-rename'
   : props.primaryAction === undefined ? selectSessionPrimaryAction({ ...props.session, renameState: 'idle' }) : props.primaryAction)
+const launchPrimary = computed(() => !isRenaming.value && (props.session.archived || !props.session.opened) && ['resume', 'retry', 'restore-archive'].includes(primary.value ?? ''))
+const primaryDisabled = computed(() => isSaving.value || !!props.session.resumePending || (launchPrimary.value && props.session.preparationState === 'pending'))
 const primaryLabel = computed(() => primary.value ? t(sessionActionLabelKey(primary.value, props.session)) : '')
 const age = computed(() => formatRelativeActivity(props.session.lastActivityAt, now.value, locale.value.startsWith('zh') ? 'zh' : 'en'))
 const fullActivity = computed(() => new Date(props.session.lastActivityAt).toLocaleString(locale.value))
@@ -81,7 +83,7 @@ async function focusRename() {
   input?.select()
 }
 function activate() {
-  if (props.surfaceActive && !isRenaming.value && !menuOpen.value) emit('activate', props.session.id)
+  if (props.surfaceActive && !props.session.archived && props.session.opened === true && !isRenaming.value && !menuOpen.value) emit('activate', props.session.id)
 }
 function onClick(event: MouseEvent) {
   // A browser double click dispatches click(1), click(2), then dblclick. Capture
@@ -122,7 +124,7 @@ function cancelRename() {
   void nextTick(() => row.value?.focus())
 }
 function runPrimary() {
-  if (!primary.value || isSaving.value) return
+  if (!props.surfaceActive || !primary.value || primaryDisabled.value) return
   if (primary.value === 'save-rename') commitRename()
   else emit('primary-action', props.session.id, primary.value)
 }
@@ -175,10 +177,10 @@ function onMenuAction(action: SessionMenuAction) {
 </script>
 
 <template>
-  <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, 'has-archive': !!archive && !isRenaming, editing: isRenaming }"
+  <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, 'has-launch': launchPrimary, 'has-archive': !!archive && !isRenaming, editing: isRenaming }"
     role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" tabindex="0"
     @click="onClick" @dblclick="onDoubleClick" @keydown="onKeydown" @contextmenu="openContext">
-    <SessionStatusIcon :state="visualState" />
+    <SessionStatusIcon :state="visualState" :activity-state="session.activityState" :transition-state="deriveSessionVisualState(session, false)" :archived="session.archived" />
     <CliAppIcon :cli="session.cli" />
     <div class="session-name-wrapper">
       <AppInput v-if="isRenaming" ref="renameInput" v-model="renameValue" class="rename-input" size="compact"
@@ -202,8 +204,8 @@ function onMenuAction(action: SessionMenuAction) {
       <AppTooltip :text="fullActivity">
         <span class="session-time" :class="{ 'session-time--date': age.includes('/') }" tabindex="0">{{ age }}</span>
       </AppTooltip>
-      <div v-if="primary" class="session-primary-action">
-        <IconButton class="session-row-control" :label="primaryLabel" :disabled="isSaving" @click.stop="runPrimary">
+      <div v-if="primary" class="session-primary-action" :class="{ 'session-launch-action': launchPrimary }" :data-session-launch="launchPrimary ? '' : undefined">
+        <IconButton class="session-row-control" :label="primaryLabel" :disabled="primaryDisabled" @click.stop="runPrimary">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path v-if="primary === 'save-rename'" d="m5 12 4 4L19 6" />
             <rect v-else-if="primary === 'stop'" x="6" y="6" width="12" height="12" rx="1" />
@@ -248,6 +250,11 @@ function onMenuAction(action: SessionMenuAction) {
   cursor: pointer;
 }
 .session-item.has-archive { grid-template-columns: 16px 18px minmax(0, 1fr) 38px 20px 20px; }
+.session-item.has-launch { grid-template-columns: 16px 18px minmax(0, 1fr) 64px 20px; }
+.session-item.has-launch.has-archive { grid-template-columns: 16px 18px minmax(0, 1fr) 64px 20px 20px; }
+.session-item.has-launch .session-tail { width: 64px; gap: 6px; }
+.session-item.has-launch .session-launch-action { position: static; width: 20px; flex: 0 0 20px; opacity: 1; pointer-events: auto; }
+.session-item.has-launch:hover .session-time, .session-item.has-launch:focus-within .session-time { opacity: 1; pointer-events: auto; }
 .session-item:hover { background: var(--hover-bg); }
 .session-item.active { background: var(--selected-bg); }
 .session-item.active::before {
@@ -308,6 +315,6 @@ function onMenuAction(action: SessionMenuAction) {
 .session-item.editing .session-primary-action { opacity: 1; pointer-events: auto; }
 .session-item:hover .session-overflow-trigger, .session-item:focus-within .session-overflow-trigger,
 .session-overflow-trigger.is-open { opacity: 1; pointer-events: auto; }
-.session-item.has-primary:hover .session-time, .session-item.has-primary:focus-within .session-time,
+.session-item.has-primary:not(.has-launch):hover .session-time, .session-item.has-primary:not(.has-launch):focus-within .session-time,
 .session-item.editing .session-time { opacity: 0; pointer-events: none; }
 </style>

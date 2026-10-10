@@ -151,10 +151,18 @@ describe('Final workspace review regressions', () => {
     const drawer = w.getComponent(ArchivedSessionsDrawer)
     const list = drawer.findComponent({ name: 'SessionList' })
     const row = list.get('[data-session-row]')
-    await row.get('.session-overflow-trigger button').trigger('click'); await flushPromises()
-    const item = row.get('[data-item-id="restore-archive"]')
+    let finish!: () => void
+    io.restore.mockImplementationOnce(async (path, id) => {
+      await new Promise<void>(resolve => { finish = resolve })
+      persisted.archivedSessions[path] = (persisted.archivedSessions[path] ?? []).filter(value => value !== id)
+      return structuredClone(persisted)
+    })
+    const item = row.get('[data-session-launch] button')
+    await item.trigger('click'); await flushPromises()
+    expect(item.attributes('disabled')).toBeDefined()
     await item.trigger('click'); await flushPromises()
     expect(io.restore).toHaveBeenCalledTimes(1)
+    finish(); await flushPromises()
     expect(catalog.resumeDialog).toBeNull()
     expect(drawer.emitted('restore-request')).toEqual([[history.id]])
     expect(list.emitted('activate')).toBeUndefined()
@@ -191,7 +199,7 @@ describe('Final workspace review regressions', () => {
     await flushPromises()
     expect(document.querySelector('[data-session-diagnostics]')).toBeNull()
   })
-  // 方向键只遍历当前可见结果；历史行必须 Enter 后才直接恢复准确目标。
+  // 方向键只遍历当前可见结果；历史行 Enter 不恢复，独立按钮才恢复准确目标。
   it('Keyboard_FilteredHistory_005', async () => {
     const w = renderApp(); await openNativeRow(w)
     const search = w.get('.search-input')
@@ -204,6 +212,9 @@ describe('Final workspace review regressions', () => {
     expect(useUnifiedSessionsStore().resumeDialog).toBeNull()
     historical.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await flushPromises()
     expect(useUnifiedSessionsStore().resumeDialog).toBeNull()
+    expect([...useNativeTabsStore().tabs.values()].filter(tab => tab.action.kind === 'resume-id')).toHaveLength(0)
+    const resume = historical.querySelector<HTMLButtonElement>('[data-session-launch] button')!
+    resume.focus(); resume.click(); await flushPromises()
     const restored = [...useNativeTabsStore().tabs.values()].find(tab => tab.action.kind === 'resume-id')
     expect(restored?.action).toEqual({ kind: 'resume-id', nativeSessionId: 'history-id' })
     expect(restored?.projectPath).toBe('/repo')

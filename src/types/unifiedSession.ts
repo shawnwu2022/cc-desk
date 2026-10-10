@@ -86,6 +86,8 @@ export interface UnifiedSession {
   opened?: boolean
   /** Local creation projection; failed proves admission was never attempted. */
   preparationState?: 'pending' | 'failed' | 'unknown'
+  /** Presentation-only explicit resume/archive restore is pending; not process evidence. */
+  resumePending?: boolean
   resumable: boolean
   adapterSessionId: string
   nativeSessionId?: string | null

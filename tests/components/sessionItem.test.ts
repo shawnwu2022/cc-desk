@@ -54,6 +54,47 @@ function styleRules() {
 }
 
 describe('Unified SessionItem', () => {
+  // 已选会话抑制等待徽标时，不把选择/取消选择当成新的状态提醒。
+  it('Row_SelectionDoesNotAnimate_041', async () => {
+    const wrapper = row({ ...base, activityState: 'waiting_permission' })
+    await wrapper.setProps({ selected: true })
+    await wrapper.setProps({ selected: false })
+    expect(wrapper.get('.session-status-icon').attributes('data-status-entry')).toBeUndefined()
+    await wrapper.setProps({ session: { ...base, activityState: 'idle', attentionKind: 'completed' } })
+    expect(wrapper.get('.session-status-icon').attributes('data-status-entry')).toBe('completed')
+  })
+
+  // 历史行的鼠标、双击与行键盘激活均不恢复；只有独立按钮发起恢复。
+  it('Row_HistoryExplicitResume_039', async () => {
+    const wrapper = row({ ...base, opened: false, processState: 'stopped' })
+    wrapper.element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true }))
+    wrapper.element.dispatchEvent(new MouseEvent('click', { detail: 2, bubbles: true }))
+    wrapper.element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true }))
+    await nextTick()
+    await wrapper.trigger('keydown', { key: 'Enter' })
+    await wrapper.trigger('keydown', { key: ' ' })
+    expect(wrapper.emitted('activate')).toBeUndefined()
+    expect(wrapper.emitted('primary-action')).toBeUndefined()
+    const resume = wrapper.get('[data-session-launch] button')
+    expect(resume.attributes('aria-label')).toBe('Resume session')
+    await resume.trigger('click')
+    expect(wrapper.emitted('primary-action')).toEqual([[base.id, 'resume']])
+    await wrapper.trigger('contextmenu')
+    expect(menuIds()).not.toContain('resume')
+  })
+
+  // 恢复待定时独立按钮禁用，重复点击和失活界面均不再请求副作用。
+  it('Row_ResumePendingAndInactive_040', async () => {
+    const wrapper = row({ ...base, opened: false, processState: 'stopped', resumePending: true })
+    const resume = wrapper.get('[data-session-launch] button')
+    expect(resume.attributes('disabled')).toBeDefined()
+    await resume.trigger('click')
+    expect(wrapper.emitted('primary-action')).toBeUndefined()
+    await wrapper.setProps({ session: { ...base, opened: false, processState: 'stopped' }, surfaceActive: false })
+    await wrapper.get('[data-session-launch] button').trigger('click')
+    expect(wrapper.emitted('primary-action')).toBeUndefined()
+  })
+
   // 真实 IconButton/AppButton 组合切换焦点后，Escape 关闭提示但保留按钮焦点。
   it('Row_CloseTooltipEscape_038', async () => {
     const wrapper = row()
@@ -409,7 +450,7 @@ describe('Unified session menu model', () => {
     { name: 'Menu_Running_018', session: base, actions: [...common, 'restart'] },
     { name: 'Menu_Stopped_019', session: { ...base, processState: 'stopped' }, actions: [...common, 'resume', 'restart'] },
     { name: 'Menu_Failed_020', session: { ...base, processState: 'failed' }, actions: [...common, 'retry', 'restart'] },
-    { name: 'Menu_Archived_021', session: { ...base, processState: 'stopped', archived: true }, actions: [...common, 'restore-archive'] },
+    { name: 'Menu_Archived_021', session: { ...base, processState: 'stopped', archived: true }, actions: common },
     { name: 'Menu_Unknown_022', session: { ...base, processState: 'unknown' }, actions: [...common, 'confirm-status'] },
     { name: 'Menu_Starting_023', session: { ...base, processState: 'starting' }, actions: [...common, 'cancel-start'] },
   ] as const)('$name', ({ session, actions }) => {
@@ -427,7 +468,7 @@ describe('Unified session menu model', () => {
       const ids = selectSessionMenuActions(history, { restart: true, close: true }).map(action => action.id)
       expect(ids).not.toContain('restart')
       expect(ids).not.toContain('close')
-      expect(ids).toContain('resume')
+      expect(ids).not.toContain('resume')
       expect(ids).not.toContain('archive')
       expect(selectSessionArchiveAction(history)?.id).toBe('archive')
       expect(selectSessionMenuActions({ ...history, opened: true }).map(action => action.id)).toEqual(expect.arrayContaining(['restart']))

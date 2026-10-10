@@ -12,6 +12,14 @@ fn with_suspended(
     kind: JobKind,
     test: impl FnOnce(&mut PreparedProcess<'_>, &CurrentUser, &Arc<PrivateDirectory>, &Path),
 ) {
+    with_owned_suspended(kind, |mut process, user, root, marker| {
+        test(&mut process, user, root, marker);
+    });
+}
+fn with_owned_suspended(
+    kind: JobKind,
+    test: impl FnOnce(PreparedProcess<'_>, &CurrentUser, &Arc<PrivateDirectory>, &Path),
+) {
     let temporary = tempfile::tempdir().unwrap();
     let user = CurrentUser::capture().unwrap();
     let parent = Directory::open_absolute(temporary.path()).unwrap();
@@ -28,7 +36,7 @@ fn with_suspended(
         )
         .unwrap();
     let marker = temporary.path().join("must-not-run");
-    let mut process = PreparedProcess::create_suspended(
+    let process = PreparedProcess::create_suspended(
         image,
         CommandLine::probe_controlled(&executable, &marker).unwrap(),
         kind,
@@ -37,14 +45,350 @@ fn with_suspended(
         &mut lease,
     )
     .unwrap();
-    test(&mut process, &user, &root, &marker);
+    // Fixture-only owner retains the exact disposable child through panic,
+    // including disarmed jobs. This never enters production recovery cleanup.
+    let cleanup = FixtureChildCleanup(process.process.process.try_clone().unwrap());
+    test(process, &user, &root, &marker);
+    drop(cleanup);
 }
+struct FixtureChildCleanup(OwnedHandle);
+impl Drop for FixtureChildCleanup {
+    fn drop(&mut self) {
+        let pid = unsafe { GetProcessId(handle(&self.0)) };
+        let result = stop_fixture_child(handle(&self.0));
+        if std::thread::panicking() {
+            eprintln!("exact disposable fixture child pid={pid} bounded cleanup={result:?}");
+            if let Err(error) = result {
+                eprintln!("exact fixture child cleanup failed: {error}");
+            }
+        } else {
+            result.expect("exact disposable fixture child must reach bounded terminal state");
+        }
+    }
+}
+
+// Test-only cleanup also owns children whose production owner already began
+// cancellation. An API error is never terminal proof: the exact handle must signal.
+fn stop_fixture_child(process: HANDLE) -> io::Result<()> {
+    stop_fixture_child_with_termination(process, |process| {
+        unsafe { TerminateProcess(process, 0xccde0001) }.map_err(win_error)
+    })
+}
+fn stop_fixture_child_with_termination(
+    process: HANDLE,
+    terminate: impl FnOnce(HANDLE) -> io::Result<()>,
+) -> io::Result<()> {
+    match unsafe { WaitForSingleObject(process, 0) } {
+        WAIT_OBJECT_0 => return Ok(()),
+        WAIT_TIMEOUT => (),
+        _ => return Err(io::Error::last_os_error()),
+    }
+    let termination = terminate(process);
+    match unsafe { WaitForSingleObject(process, 5000) } {
+        WAIT_OBJECT_0 => Ok(()),
+        WAIT_TIMEOUT => Err(termination
+            .err()
+            .unwrap_or_else(|| blocked("exact fixture termination unresolved"))),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
+#[test]
+fn OrdinaryInstaller_FixtureCleanupRequiresExactTerminalHandle_030() {
+    with_suspended(JobKind::Installer, |process, _, _, marker| {
+        let exact = handle(&process.process.process);
+        stop_fixture_child_with_termination(exact, |child| {
+            // Model a concurrent termination returning AccessDenied only after
+            // actual termination has begun on this owned suspended child.
+            unsafe { TerminateProcess(child, 0xccde0001) }.map_err(win_error)?;
+            Err(io::Error::from_raw_os_error(5))
+        })
+        .unwrap();
+        assert_eq!(unsafe { WaitForSingleObject(exact, 0) }, WAIT_OBJECT_0);
+        stop_fixture_child(exact).unwrap(); // repeated cleanup of proven terminal child
+        await_empty(process);
+        assert!(!marker.exists());
+    });
+    with_suspended(JobKind::Installer, |process, _, _, marker| {
+        let exact = handle(&process.process.process);
+        let denied =
+            stop_fixture_child_with_termination(exact, |_| Err(io::Error::from_raw_os_error(5)))
+                .unwrap_err();
+        assert_eq!(denied.raw_os_error(), Some(5));
+        assert_eq!(unsafe { WaitForSingleObject(exact, 0) }, WAIT_TIMEOUT);
+        assert!(!marker.exists());
+        stop_fixture_child(exact).unwrap();
+        assert_eq!(unsafe { WaitForSingleObject(exact, 0) }, WAIT_OBJECT_0);
+        await_empty(process);
+    });
+}
+
+#[test]
+fn OrdinaryInstaller_AdmissionFailureKeepsArmedCleanupAndSpendsAttempt_027() {
+    with_suspended(JobKind::OrdinaryInstaller, |process, user, _, marker| {
+        let receipt = process.persist_identity(user).unwrap();
+        let denied = process
+            .ordinary_prepare_resume_with_validation(&receipt, |_, _| {
+                Err(blocked("controlled admission rejection"))
+            })
+            .unwrap_err();
+        assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
+        assert!(process.ordinary_prepare_attempted);
+        assert!(!process.resume_attempted);
+        assert!(process.resume_intent.is_none());
+        assert!(process.ordinary_lifetime.is_none());
+        assert_eq!(process.job.phase, Some(JobPhase::ArmedPreparation));
+        process.job.verify_limits().unwrap();
+        assert!(process.ordinary_prepare_resume(&receipt).is_err());
+        assert!(process.can_cancel_before_resume().unwrap());
+        process.cancel_before_resume().unwrap();
+        await_empty(process);
+        assert!(!marker.exists());
+    });
+}
+
+#[test]
+fn OrdinaryInstaller_ElevatedTokenRejectsBeforeDisarm_028() {
+    let user = CurrentUser::capture().unwrap();
+    let unelevated = user.require_unelevated().is_ok();
+    with_suspended(JobKind::OrdinaryInstaller, |process, user, _, marker| {
+        let receipt = process.persist_identity(user).unwrap();
+        if unelevated {
+            process.process.verify_current_user(user).unwrap();
+            assert_eq!(process.job.phase, Some(JobPhase::ArmedPreparation));
+            assert!(!marker.exists());
+            return;
+        }
+        let denied = process.ordinary_prepare_resume(&receipt).unwrap_err();
+        assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            denied.to_string(),
+            "recovery requires an unelevated x64 user"
+        );
+        assert!(process.ordinary_prepare_attempted);
+        assert!(!process.resume_attempted);
+        assert_eq!(process.job.phase, Some(JobPhase::ArmedPreparation));
+        assert!(process.ordinary_lifetime.is_none());
+        assert!(process.can_cancel_before_resume().unwrap());
+        process.cancel_before_resume().unwrap();
+        await_empty(process);
+        assert!(!marker.exists());
+    });
+}
+
+#[test]
+fn OrdinaryInstaller_FixturePanicCleansExactDisarmedChild_029() {
+    let result = std::panic::catch_unwind(|| {
+        with_suspended(JobKind::OrdinaryInstaller, |process, _, _, _| {
+            process.job.disarm_ordinary().unwrap();
+            // Reproduce the former gap: Drop cannot claim safe cleanup once
+            // a resume intent was attempted, but the fixture owns its child.
+            process.resume_attempted = true;
+            let cleanup = FixtureChildCleanup(process.process.process.try_clone().unwrap());
+            let witness = process.process.process.try_clone().unwrap();
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _cleanup = cleanup;
+                panic!("controlled failure after fixture job disarm");
+            }));
+            assert!(panic.is_err());
+            assert_eq!(
+                unsafe { WaitForSingleObject(handle(&witness), 0) },
+                WAIT_OBJECT_0
+            );
+            await_empty(process);
+        });
+    });
+    assert!(result.is_ok());
+}
+
 fn await_empty(process: &PreparedProcess<'_>) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while process.active_processes().unwrap() != 0 {
         assert!(Instant::now() < deadline, "owned job failed to drain");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+// 普通安装器持久化解除清理后只恢复一次，并允许其交互和启动的应用存活。
+#[test]
+fn OrdinaryInstaller_DurableHandoffAndExactOnceResume_020() {
+    with_suspended(JobKind::OrdinaryInstaller, |process, user, _, marker| {
+        let receipt = process.persist_identity(user).unwrap();
+        assert!(process.verify_ordinary_launch(&receipt, user).is_err());
+        process.ordinary_prepare_resume(&receipt).unwrap();
+        assert_eq!(process.job.phase, Some(JobPhase::OrdinaryInstallerLifetime));
+        assert!(process
+            .job
+            .verify_phase(JobPhase::HistoricalLifetime)
+            .is_err());
+        assert!(process.verify_ordinary_launch(&receipt, user).is_err());
+        assert!(process.ordinary_prepare_resume(&receipt).is_err());
+        process.ordinary_resume_prepared(&receipt).unwrap();
+        process.verify_ordinary_launch(&receipt, user).unwrap();
+        assert!(process.ordinary_resume_prepared(&receipt).is_err());
+        assert!(process.cancel_before_resume().is_err());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !marker.exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(process.active_processes().unwrap(), 1);
+        std::fs::write(marker.with_extension("release"), b"release").unwrap();
+        assert_eq!(
+            process.wait_terminal(30_000).unwrap().unwrap().exit_code(),
+            0
+        );
+        process.verify_ordinary_launch(&receipt, user).unwrap();
+    });
+}
+
+// 普通安装器命令保留NSIS目标目录尾部语义并拒绝注入和不同映像。
+#[test]
+fn OrdinaryInstaller_InteractiveCommandAndPinnedImage_021() {
+    let executable = std::env::current_exe().unwrap();
+    let parent = Directory::open_absolute(executable.parent().unwrap()).unwrap();
+    let image = parent
+        .open_file(
+            ComponentName::new(executable.file_name().unwrap()).unwrap(),
+            FileAccess::Read,
+        )
+        .unwrap();
+    let target = OsStr::new("C:\\Program Files\\CC Desk");
+    let command = CommandLine::ordinary_nsis(executable.as_os_str(), &image, target).unwrap();
+    assert_eq!(
+        command.text(),
+        format!(
+            "\"{}\" /UPDATE /NS /D=C:\\Program Files\\CC Desk",
+            executable.display()
+        )
+    );
+    assert!(CommandLine::ordinary_nsis(
+        executable.as_os_str(),
+        &image,
+        OsStr::new("C:\\bad\"path")
+    )
+    .is_err());
+    assert!(CommandLine::ordinary_nsis(OsStr::new("C:\\missing.exe"), &image, target).is_err());
+}
+
+// 解除清理的普通安装器不因创建owner关闭而结束，不授予历史重启能力。
+#[test]
+fn OrdinaryInstaller_LiveWorkerSurvivesOwnerDrop_022() {
+    with_owned_suspended(
+        JobKind::OrdinaryInstaller,
+        |mut process, user, _, marker| {
+            let receipt = process.persist_identity(user).unwrap();
+            process.ordinary_prepare_resume(&receipt).unwrap();
+            process.ordinary_resume_prepared(&receipt).unwrap();
+            let exact = process.probe_exact().unwrap();
+            process.verify_ordinary_launch(&receipt, user).unwrap();
+            drop(process);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !marker.exists() {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(exact.terminal(0).unwrap().is_none());
+            std::fs::write(marker.with_extension("release"), b"release").unwrap();
+            assert_eq!(exact.terminal(30_000).unwrap().unwrap().exit_code(), 0);
+            assert!(marker.with_extension("completed").exists());
+        },
+    );
+}
+
+// 新的交接API不解除严格安装器或历史应用的既有生命周期。
+#[test]
+fn OrdinaryInstaller_HandoffRejectsOtherJobKinds_023() {
+    for kind in [JobKind::Installer, JobKind::HistoricalApplication] {
+        with_suspended(kind, |process, user, _, _| {
+            let receipt = process.persist_identity(user).unwrap();
+            assert!(process.ordinary_prepare_resume(&receipt).is_err());
+            assert_eq!(process.job.phase, Some(JobPhase::ArmedPreparation));
+            process.job.verify_limits().unwrap();
+            assert!(process.can_cancel_before_resume().unwrap());
+        });
+    }
+}
+
+// 丢失交接回执使本次恢复永久失败，不能重试或重新启用kill-on-close。
+#[test]
+fn OrdinaryInstaller_MissingLifetimeSpendsResumeWithoutRearming_024() {
+    with_suspended(JobKind::OrdinaryInstaller, |process, user, _, marker| {
+        let receipt = process.persist_identity(user).unwrap();
+        process.ordinary_prepare_resume(&receipt).unwrap();
+        let lifetime = process.ordinary_lifetime.take().unwrap();
+        assert!(process.ordinary_resume_prepared(&receipt).is_err());
+        process.ordinary_lifetime = Some(lifetime);
+        assert!(process.ordinary_resume_prepared(&receipt).is_err());
+        assert!(process.verify_ordinary_launch(&receipt, user).is_err());
+        assert_eq!(process.job.phase, Some(JobPhase::OrdinaryInstallerLifetime));
+        process.job.verify_limits().unwrap();
+        assert!(!marker.exists());
+        // Fixture-only cleanup: the test retained the original suspended
+        // thread and observed verification fail before every ResumeThread.
+        stop_never_resumed(handle(&process.process.process)).unwrap();
+    });
+}
+
+// 既有受保护日志仅证明同一次普通交接的过去Applied回执，不证明安装成功。
+#[test]
+fn OrdinaryInstaller_PriorAppliedObservationBindsExactLaunch_025() {
+    with_suspended(JobKind::OrdinaryInstaller, |process, user, _, marker| {
+        let receipt = process.persist_identity(user).unwrap();
+        process.ordinary_prepare_resume(&receipt).unwrap();
+        process.ordinary_resume_prepared(&receipt).unwrap();
+        let resumed = serde_json::to_vec(&process.launch_record()).unwrap();
+        let digest = &receipt.binding.process.image_digest;
+        verify_ordinary_handoff_observation(receipt.record.bytes(), &resumed, digest).unwrap();
+        let wrong_digest = "0".repeat(64);
+        assert!(verify_ordinary_handoff_observation(
+            receipt.record.bytes(),
+            &resumed,
+            &wrong_digest
+        )
+        .is_err());
+        let swapped = serde_json::to_vec(&("launch-other.json", &receipt.binding.intent)).unwrap();
+        assert!(
+            verify_ordinary_handoff_observation(receipt.record.bytes(), &swapped, digest).is_err()
+        );
+        let swapped = serde_json::to_vec(&(process.launch_record().0, wrong_digest)).unwrap();
+        assert!(
+            verify_ordinary_handoff_observation(receipt.record.bytes(), &swapped, digest).is_err()
+        );
+        let original: serde_json::Value = serde_json::from_slice(receipt.record.bytes()).unwrap();
+        for (field, replacement) in [
+            ("schema", serde_json::json!(2)),
+            ("launch", serde_json::json!("invalid")),
+            ("intent", serde_json::json!("z".repeat(64))),
+            ("command_digest", serde_json::json!("A".repeat(64))),
+            ("job_phase", serde_json::json!("ordinaryInstallerLifetime")),
+        ] {
+            let mut changed = original.clone();
+            changed[field] = replacement;
+            assert!(
+                verify_ordinary_handoff_observation(
+                    &serde_json::to_vec(&changed).unwrap(),
+                    &resumed,
+                    digest
+                )
+                .is_err(),
+                "accepted changed {field}"
+            );
+        }
+        let mut changed = original;
+        changed["job"]["kind"] = serde_json::json!("HistoricalApplication");
+        assert!(verify_ordinary_handoff_observation(
+            &serde_json::to_vec(&changed).unwrap(),
+            &resumed,
+            digest
+        )
+        .is_err());
+        std::fs::write(marker.with_extension("release"), b"release").unwrap();
+        assert_eq!(
+            process.wait_terminal(30_000).unwrap().unwrap().exit_code(),
+            0
+        );
+    });
 }
 
 // 两种进程均须由原始创建句柄取消后取得真实终态、空 job 和专用回执。

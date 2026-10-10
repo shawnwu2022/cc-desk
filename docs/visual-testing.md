@@ -343,3 +343,14 @@ pass the complete 230-case no-update screenshot/geometry/interaction gate with
 `maxDiffPixels: 0`. The four additional Native receipt captures remain separate
 unapproved evidence. Native current working/completed, live CLI and native
 WebView/taskbar acceptance remain unverified/separate.
+
+## Unreleased session-list glyph evidence
+
+The `session-status` scenario uses seventeen explicit synthetic display inputs and
+production session rows. Four additional `session glyph and explicit launch evidence`
+Playwright cases capture light/dark English/Chinese glyph sheets separately as
+unapproved PNG attachments. They check the always-visible Resume control, adjacent
+live age, keyboard focus and immediate hover dismissal. No CLI or observer activity
+is generated. The thirteen historical baselines and zero-pixel threshold are
+unchanged; an intentional new UI mismatch remains a failed baseline until reviewed
+and explicitly authorized. Do not call fixture or Linux evidence Windows acceptance.

@@ -1,15 +1,63 @@
 //! Resolve only backend-owned launch environment. An empty/invalid explicit root is not a default.
 use super::scoped_fs::ReadResult;
 use crate::cli::environment::{lookup, EnvMap};
+use crate::cli::profiles::{Dialect, Launcher};
 use crate::cli::types::CliKind;
+use std::ffi::OsStr;
 use std::path::PathBuf;
+
+// This admits a read observation of the backend-selected root, not proof of
+// effective CLI state or launcher certification. Explicit Cmd shims (including
+// npm launchers) do not themselves change that observation's authority.
+pub(crate) fn read_scope_known<I, A>(cli: CliKind, launcher: &Launcher, args: I) -> bool
+where
+    I: IntoIterator<Item = A>,
+    A: AsRef<OsStr>,
+{
+    if cli == CliKind::Shell
+        || !matches!(
+            launcher,
+            Launcher::Native
+                | Launcher::Shim {
+                    dialect: Dialect::Cmd,
+                    ..
+                }
+        )
+    {
+        return false;
+    }
+    // Complete, zero-value flags only: no guessing unknown flags, option values,
+    // positional prompts, config overrides, or cwd-changing syntax.
+    let mut permission_flag = None;
+    for arg in args {
+        match (cli, arg.as_ref().to_str()) {
+            (CliKind::Codex, Some("--no-alt-screen")) => {}
+            (
+                CliKind::Codex,
+                Some(flag @ ("--full-auto" | "--dangerously-bypass-approvals-and-sandbox")),
+            ) => {
+                if permission_flag.is_some_and(|old| old != flag) {
+                    return false;
+                }
+                // Store only which known flag was observed, never user argv.
+                permission_flag = Some(if flag == "--full-auto" {
+                    "--full-auto"
+                } else {
+                    "--dangerously-bypass-approvals-and-sandbox"
+                });
+            }
+            (CliKind::Claude, Some("--dangerously-skip-permissions")) => {}
+            _ => return false,
+        }
+    }
+    true
+}
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Locations {
     pub root: PathBuf,
     pub user_config: Option<PathBuf>,
 }
 pub(crate) fn locations(cli: CliKind, env: &EnvMap) -> ReadResult<Locations> {
-    use std::ffi::OsStr;
     let (key, default) = match cli {
         CliKind::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
         CliKind::Codex => ("CODEX_HOME", ".codex"),

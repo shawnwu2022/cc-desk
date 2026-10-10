@@ -349,6 +349,16 @@ describe('Unified production runtime', () => {
     const opened = await unified.createSession({ projectKey: '/repo', projectPath: '/repo', cli: 'codex', action: { kind: 'raw', argv: ['two words', '', '--literal= x'] } })
     expect(useNativeTabsStore().tab(opened.adapterSessionId)!.action).toEqual({ kind: 'raw', argv: ['two words', '', '--literal= x'] })
   })
+  // 非 UI 来源的激活请求也不能把历史行恢复，防止陈旧请求越过按钮边界。
+  it('Runtime_HistoryActivateDoesNotLaunch_057', async () => {
+    render(); await flushPromises()
+    const catalog = useUnifiedSessionsStore(), shell = useShellStore()
+    const history = catalog.sessions.find(session => !session.opened)!
+    shell.requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
+    expect(useNativeTabsStore().tabs.size).toBe(0)
+    expect(useSessionStore().tabs.size).toBe(0)
+    expect(catalog.activeSessionId).toBeNull()
+  })
   // 每个请求序号仅执行一次，较早完成不能清掉较新待确认请求。
   it('Runtime_OwnsRequestSequence_004', async () => {
     render(); await flushPromises(); const shell = useShellStore(); const unified = useUnifiedSessionsStore()
@@ -763,7 +773,7 @@ it('Runtime_RowDoubleClickSelection_028', async () => {
   expect(io.ptySpawn).not.toHaveBeenCalled()
 })
 
-// 已明确选中的历史直接恢复；首次双击不重放点击，不进入重命名或第二层确认。
+// 历史行点击和双击保持关闭，仅独立恢复按钮启动精确来源。
 it.each(['legacy-claude', 'native-cli'] as const)('Runtime_HistoryMenuAndDoubleClick_029: %s', async runtime => {
   io.sessions.mockResolvedValue([{ sessionId: 'legacy-history', name: 'Legacy history', projectPath: '/legacy', lastActiveAt: 10 }])
   const startLegacy = vi.fn().mockResolvedValue({ ok: true })
@@ -779,7 +789,10 @@ it.each(['legacy-claude', 'native-cli'] as const)('Runtime_HistoryMenuAndDoubleC
   expect(catalog.resumeDialog).toBeNull()
   expect(document.querySelector('[data-resume-target]')).toBeNull()
   expect(document.querySelector('.rename-input')).toBeNull()
-  expect(w.emitted('workspace-request')?.filter(([request]) => (request as { kind: string }).kind === 'activate')).toHaveLength(1)
+  expect(w.emitted('workspace-request')?.filter(([request]) => (request as { kind: string }).kind === 'activate') ?? []).toHaveLength(0)
+  expect(useNativeTabsStore().tabs.size).toBe(0)
+  expect(useSessionStore().tabs.size).toBe(0)
+  await row.get('[data-session-launch] button').trigger('click'); await flushPromises()
   expect(useNativeTabsStore().tabs.size).toBe(runtime === 'native-cli' ? 1 : 0)
   expect(useSessionStore().tabs.size).toBe(runtime === 'legacy-claude' ? 1 : 0)
   if (runtime === 'legacy-claude') expect(startLegacy).toHaveBeenCalledOnce()
@@ -805,6 +818,24 @@ it.each(['navigation', 'project', 'replacement', 'profile'] as const)('Runtime_D
   if (change === 'replacement') expect(catalog.resumeDialog?.mode).toBe('history')
 })
 
+// 实际 App 的 projectManagement 投影发布待定按钮禁用态，不仅测试独立目录组件。
+it('Runtime_AppResumePendingButton_058', async () => {
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, XTermTerminal: true, SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  const history = catalog.sessions.find(session => session.title === 'History')!
+  await w.get('.search-input').setValue('/repo'); await flushPromises()
+  let finish!: (value: unknown) => void
+  io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const row = w.findAll('[data-session-row]').find(item => item.attributes('data-session-row') === history.id)!
+  const button = row.get('[data-session-launch] button')
+  await button.trigger('click'); await flushPromises()
+  expect(button.attributes('disabled')).toBeDefined()
+  await button.trigger('click'); await flushPromises()
+  expect(w.emitted('workspace-request')?.filter(([request]) => (request as { kind: string }).kind === 'primary-action')).toHaveLength(1)
+  finish({ state: 'unavailable', reason: 'SOURCE_UNKNOWN', items: [], hasMore: false }); await flushPromises()
+  expect(row.get('[data-session-launch] button').attributes('disabled')).toBeUndefined()
+})
+
 // 同一历史的两次显式请求共享核实；较早请求失效不能取消仍有效的新请求或重复启动。
 it('Runtime_DirectResumeCoalesces_047', async () => {
   render(); await flushPromises()
@@ -812,7 +843,7 @@ it('Runtime_DirectResumeCoalesces_047', async () => {
   const history = catalog.sessions.find(session => session.title === 'History')!
   let finish!: (value: unknown) => void
   io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
-  shell.requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
+  shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: history.id, action: 'resume' }); await flushPromises()
   shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: history.id, action: 'resume' }); await flushPromises()
   finish({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
   expect(catalog.resumeDialog).toBeNull()

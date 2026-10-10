@@ -112,6 +112,11 @@ fn walk(
     for entry in c.entries(c.root, path, b)? {
         let p = child(path, &entry.name);
         if entry.is_dir {
+            // Documented project auto memory is not a session container. Only
+            // this exact real-directory position is excluded; links still fail.
+            if c.cli == CliKind::Claude && depth == 1 && entry.name == "memory" {
+                continue;
+            }
             // Subagent transcripts and spilled tool results live beneath a main
             // session; neither directory is main-session history to traverse.
             if c.cli == CliKind::Claude

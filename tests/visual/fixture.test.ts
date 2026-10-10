@@ -33,6 +33,21 @@ async function render(scenario: string, locale = 'en') {
   await flushPromises(); return wrapper
 }
 describe('Isolated production-component fixture', () => {
+  // 状态证据场景仅使用合成投影，渲染生产实心字形，不连接 CLI 或宿主。
+  it('Fixture_StatusGlyphEvidence_021', async () => {
+    const view = await render('session-status')
+    for (const toggle of view.findAll('.project-node > .project-row .expand-arrow')) await toggle.trigger('click')
+    const labels = view.findAll('.session-status-icon').map(icon => icon.attributes('aria-label'))
+    expect(labels).toContain('Thinking')
+    expect(labels).toContain('Subagent working')
+    expect(labels).toContain('Waiting for input')
+    expect(labels).toContain('Response completed')
+    expect(labels).toContain('Activity unknown')
+    expect(labels).toContain('Stopped')
+    expect(view.findAll('[data-session-launch] button')).toHaveLength(1)
+    expect(view.findAll('.xterm')).toHaveLength(0)
+    expect(blockedHostCalls.value).toBe(0)
+  })
   it.each(['en', 'zh'])('Fixture_NativeReceiptStaysIndependent_020 %s', async locale => {
     const view = await render('native-notice', locale)
     for (const toggle of view.findAll('.project-node > .project-row .expand-arrow')) await toggle.trigger('click')

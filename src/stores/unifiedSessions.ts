@@ -156,7 +156,47 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       adapterSessionId: row.adapterSessionId, nativeSessionId: row.nativeSessionId, launchConfigId: row.launchConfigId,
       ...(row.nativeOrigin ? { nativeOrigin: { ...row.nativeOrigin } } : {}), title: row.title }
   }
-  async function resumeCatalogSession(target: string | UnifiedSession, canAdmit = () => true, onSelectionClaim = () => {}) {
+  type ResumeCaller = { canAdmit: () => boolean; onSelectionClaim: () => void }
+  type PendingCatalogResume = { task: Promise<UnifiedSession>; callers: ResumeCaller[]; selectionClaimed: boolean }
+  const pendingCatalogResumes = new Map<string, PendingCatalogResume>()
+  const pendingResumeKeys = ref(new Set<string>())
+  const pendingArchiveRestores = new Map<string, Promise<void>>()
+  const pendingArchiveKeys = ref(new Set<string>())
+  function isResumePending(row: UnifiedSession) {
+    const key = makeSessionRenameOwnerKey(row)
+    return pendingResumeKeys.value.has(key) || pendingArchiveKeys.value.has(key)
+  }
+  function resumeCatalogSession(target: string | UnifiedSession, canAdmit = () => true, onSelectionClaim = () => {}) {
+    const row = typeof target === 'string' ? requireSession(target) : target
+    const key = makeSessionRenameOwnerKey(row)
+    const caller = { canAdmit, onSelectionClaim }
+    const existing = pendingCatalogResumes.get(key)
+    if (existing) {
+      existing.callers.push(caller)
+      if (existing.selectionClaimed && canAdmit()) onSelectionClaim()
+      return existing.task
+    }
+    pendingResumeKeys.value = new Set([...pendingResumeKeys.value, key])
+    const callers = [caller]
+    let selectionClaimed = false
+    const task = performCatalogResume(row, () => callers.some(value => value.canAdmit()), () => {
+      selectionClaimed = true
+      const pending = pendingCatalogResumes.get(key)
+      if (pending) pending.selectionClaimed = true
+      for (const value of callers) if (value.canAdmit()) value.onSelectionClaim()
+    })
+    pendingCatalogResumes.set(key, { task, callers, selectionClaimed })
+    void task.finally(() => {
+      if (pendingCatalogResumes.get(key)?.task !== task) return
+      pendingCatalogResumes.delete(key)
+      const next = new Set(pendingResumeKeys.value)
+      next.delete(key)
+      pendingResumeKeys.value = next
+    }).catch(() => undefined)
+    return task
+  }
+
+  async function performCatalogResume(target: string | UnifiedSession, canAdmit = () => true, onSelectionClaim = () => {}) {
     const row = typeof target === 'string' ? requireSession(target) : target
     const id = row.id
     if (id.startsWith('native-tab:')) {
@@ -292,7 +332,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         }
         groups.set(key, group)
       }
-      group.sessions.push(session)
+      group.sessions.push({ ...session, resumePending: isResumePending(session) })
       if (session.processState === 'running' || session.processState === 'starting') {
         group.runningCount += 1
       }
@@ -678,12 +718,22 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   function restoreArchivedSession(id: string): Promise<void> {
     const session = requireSession(id)
+    if (!session.archived) return Promise.resolve()
+    const key = makeSessionRenameOwnerKey(session)
+    const existing = pendingArchiveRestores.get(key)
+    if (existing) return existing
     const adapter = adapterForRuntime(session.runtime)
-    return enqueue(
-      id,
-      () => adapter.restoreArchivedSession(id),
-      () => refresh(session.projectKey),
-    )
+    pendingArchiveKeys.value = new Set([...pendingArchiveKeys.value, key])
+    const task = enqueue(id, () => adapter.restoreArchivedSession(id), () => refresh(session.projectKey))
+    pendingArchiveRestores.set(key, task)
+    void task.finally(() => {
+      if (pendingArchiveRestores.get(key) !== task) return
+      pendingArchiveRestores.delete(key)
+      const next = new Set(pendingArchiveKeys.value)
+      next.delete(key)
+      pendingArchiveKeys.value = next
+    }).catch(() => undefined)
+    return task
   }
 
   return {
@@ -699,7 +749,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     configureAdapters,
     captureSessionOwnership,
     resumeDialog, openResumeDialog, closeResumeDialog, configureHistoryLoader, searchSessions,
-    resumeCatalogSession, removeMissingRecord, launchResume,
+    resumeCatalogSession, isResumePending, removeMissingRecord, launchResume,
     configureCreationPreparer,
     isPreparingSession,
     hasUnadmittedConfiguration,

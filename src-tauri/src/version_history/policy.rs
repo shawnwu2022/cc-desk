@@ -1,10 +1,7 @@
-//! Deliberately narrow historical package policy; ordinary updater policy is unrelated.
+//! Historical package metadata policy; ordinary updater policy is unrelated.
 use super::types::HistoryPlatform;
 
 pub(crate) const PRODUCT_IDENTIFIER: &str = "io.github.shawnwu2022.ccdesk";
-pub(crate) const OBSERVED_NSIS_VERSIONS: &[&str] = &[
-    "0.14.0", "0.15.0", "0.16.0", "0.17.0", "0.17.1", "0.17.2", "0.17.5", "0.17.6", "0.17.7",
-];
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HostPlatform {
     WindowsX64,

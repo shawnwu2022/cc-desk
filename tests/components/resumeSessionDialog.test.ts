@@ -44,12 +44,12 @@ it('Resume_QuickMenuReachesHost_001', async () => {
   expect(document.querySelector('[role=dialog]')).toBeNull()
 })
 
-// 点击历史直接恢复冻结的准确来源，不受选择器筛选或二次确认影响。
+// 显式恢复历史按钮直接恢复冻结的准确来源，不受选择器筛选或二次确认影响。
 it('Resume_TreeKeepsChosenSession_002', async () => {
   const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: defineComponent({ props: ['tabId'], setup(props, { expose }) { expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} }); return () => h('div', { 'data-restored-tab': props.tabId }) } }), SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const row = useUnifiedSessionsStore().sessions[0]
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: row.id }); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'primary-action', action: 'resume', sessionId: row.id }); await flushPromises()
   expect(document.querySelector('[data-confirm-resume]')).toBeNull()
   expect(useUnifiedSessionsStore().resumeDialog).toBeNull()
   expect(useNativeTabsStore().tabs.size).toBe(1)
@@ -212,14 +212,14 @@ it('Resume_ReconfirmAfterClose_012', async () => {
   expect(w.find('[data-restored-tab]').exists()).toBe(true)
 })
 
-// 树中已选历史在两种语言、激活/恢复入口都只检查当前目标，不再次搜索或展示列表。
+// 树中已选历史在两种语言、显式按钮/恢复请求入口都只检查当前目标，不再次搜索或展示列表。
 it.each(['en', 'zh'] as const)('Resume_TargetOnlyBothRoutes_013_%s', async locale => {
   const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore(); const row = catalog.sessions[0]
   const readsBefore = io.read.mock.calls.length
-  for (const kind of ['activate', 'menu-action'] as const) {
-    useShellStore().requestWorkspaceAction(kind === 'activate' ? { kind, sessionId: row.id } : { kind, action: 'resume', sessionId: row.id }); await flushPromises()
+  for (const kind of ['primary-action', 'menu-action'] as const) {
+    useShellStore().requestWorkspaceAction({ kind, action: 'resume', sessionId: row.id }); await flushPromises()
     expect(document.querySelector('[role=dialog]')).toBeNull()
     expect(catalog.resumeDialog).toBeNull()
     expect(document.querySelector('[data-resume-query]')).toBeNull()
@@ -243,7 +243,7 @@ it('Resume_TargetConfirmOnlyOnce_014', async () => {
   const readsBefore = io.read.mock.calls.length
   let finish!: (value: unknown) => void
   io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'primary-action', action: 'resume', sessionId: history.id }); await flushPromises()
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', action: 'resume', sessionId: history.id }); await flushPromises()
   expect(document.querySelector('[data-confirm-resume]')).toBeNull()
   expect(io.read.mock.calls.length).toBe(readsBefore + 1)
@@ -268,7 +268,7 @@ it.each(['navigation', 'project'] as const)('Resume_TargetCancelsLateRead_015_%s
   const catalog = useUnifiedSessionsStore()
   let finish!: (value: unknown) => void
   io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: catalog.sessions[0].id }); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'primary-action', action: 'resume', sessionId: catalog.sessions[0].id }); await flushPromises()
   expect(useNativeTabsStore().tabs.size).toBe(0)
   expect(document.querySelector('[data-confirm-resume]')).toBeNull()
   if (change === 'navigation') useShellStore().navigate('settings')
@@ -290,7 +290,7 @@ it.each(['configuration', 'project'] as const)('Resume_TargetRetainsOrigin_016_%
   const catalog = useUnifiedSessionsStore(); const history = catalog.sessions[0]
   let finish!: (value: unknown) => void
   io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: history.id }); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'primary-action', action: 'resume', sessionId: history.id }); await flushPromises()
   if (change === 'configuration') useCliProfilesStore().profiles[0].revision = '8'
   else useWorkspaceStore().projects[0].projectId = 'replacement'
   finish({ state: 'ready', items: [{ type: 'session', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo' }], hasMore: false }); await flushPromises()
@@ -315,8 +315,8 @@ it('Resume_TargetRejectsSuperseded_017', async () => {
   const second = catalog.sessions.find(row => row.nativeSessionId === 'second-id')!
   let finish!: (value: unknown) => void
   io.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: first.id }); await flushPromises()
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: second.id }); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'primary-action', action: 'resume', sessionId: first.id }); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'primary-action', action: 'resume', sessionId: second.id }); await flushPromises()
   finish({ state: 'ready', items, hasMore: false }); await flushPromises()
   expect(useNativeTabsStore().tabs.size).toBe(1)
   const tab = [...useNativeTabsStore().tabs.values()][0]
@@ -344,7 +344,7 @@ it('Resume_TargetRetryKeepsExactSource_019', async () => {
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore(), row = catalog.sessions[0]
   io.read.mockRejectedValueOnce({ code: 'SOURCE_UNAVAILABLE', message: '/private/secret TOKEN' })
-  useShellStore().requestWorkspaceAction({ kind: 'activate', sessionId: row.id }); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'primary-action', action: 'resume', sessionId: row.id }); await flushPromises()
   expect(catalog.actionFeedback?.retryable).toBe(true)
   expect(document.body.textContent).not.toContain('/private/secret')
   expect(useNativeTabsStore().tabs.size).toBe(0)
@@ -368,7 +368,7 @@ it.each(['configuration', 'navigation', 'replacement'] as const)('Resume_TargetR
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore(), shell = useShellStore(), row = catalog.sessions[0]
   io.read.mockRejectedValueOnce({ code: 'SOURCE_UNAVAILABLE' })
-  shell.requestWorkspaceAction({ kind: 'activate', sessionId: row.id }); await flushPromises()
+  shell.requestWorkspaceAction({ kind: 'primary-action', action: 'resume', sessionId: row.id }); await flushPromises()
   await catalog.refresh()
   expect(catalog.sessions.some(session => session.id === row.id)).toBe(false)
   let finish!: (value: unknown) => void

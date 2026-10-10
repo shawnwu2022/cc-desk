@@ -361,7 +361,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     const preparing = catalog.isPreparingSession(session.id)
     if (preparing) {
-      if (request.kind === 'activate') { await catalog.activateSession(session.id); return true }
+      if (request.kind === 'activate') return false
       if ('action' in request) {
         if (request.action === 'discard-creation') { await catalog.discardPreparation(session.id); return true }
         if (request.action === 'retry' && session.processState === 'failed') { await catalog.restartSession(session.id); return true }
@@ -372,10 +372,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     const open = openSessions.value.some(value => value.id === session.id)
     if (request.kind === 'activate') {
-      if (!open) {
-        await resumeDirect(session, claimResumeFeedback)
-        return true
-      }
+      if (!open) return false
       await catalog.activateSession(session.id)
       return true
     }

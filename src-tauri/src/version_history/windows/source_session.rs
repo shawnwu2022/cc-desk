@@ -28,7 +28,7 @@ use crate::{
     version_history::{
         journal::{JournalBinding, JournalPhase, JournalStore, ManifestRole, RootKind},
         maintenance::ActiveContextMarker,
-        payload_policy::{PayloadAdmission, PreservedCompanions},
+        payload_policy::PreservedCompanions,
         policy::PRODUCT_IDENTIFIER,
         snapshot::SnapshotLimits,
         verified_package::sha256,
@@ -100,8 +100,9 @@ struct SourceEvidence {
     bundle: Option<HeldBundle>,
     held_registration: Option<HeldRegistrationState>,
     held_shortcuts: Option<HeldProductShortcuts>,
-    payload: Option<PayloadAdmission>,
+    payload: Option<super::install_admission::InstallAdmission>,
     companions: Option<PreservedCompanions>,
+    global_custody: Option<super::startup::GlobalLeaseCustody>,
     original_bundle: Option<Arc<RetainedInstallationBundle>>,
     shared: Option<SharedLease>,
     control: Option<ControlLease>,
@@ -136,8 +137,9 @@ pub(crate) struct AcquiredSourceParts {
     pub(crate) data: Arc<TransactionDataRoot>,
     pub(crate) binding: JournalBinding,
     pub(crate) package: Arc<RetainedPackage>,
-    pub(crate) payload: PayloadAdmission,
-    pub(crate) companions: PreservedCompanions,
+    pub(crate) payload: super::install_admission::InstallAdmission,
+    pub(crate) companions: Option<PreservedCompanions>,
+    pub(crate) global_custody: Option<super::startup::GlobalLeaseCustody>,
     pub(crate) original_bundle: Arc<RetainedInstallationBundle>,
     pub(crate) terminal: Arc<SourceHandoffTerminal>,
     pub(crate) scope: Arc<FencedInstallation>,
@@ -175,6 +177,7 @@ impl SourceCaptureSession {
             held_shortcuts: None,
             payload: None,
             companions: None,
+            global_custody: None,
             original_bundle: None,
             shared: None,
             control: None,
@@ -253,12 +256,12 @@ impl SourceEvidence {
         self.verify_original_inventory()?;
         self.held_registration = Some(HeldRegistrationState::capture(registered).map_err(blocked)?);
         self.held_shortcuts = Some(HeldProductShortcuts::capture_current_user().map_err(blocked)?);
-        let payload = PayloadAdmission::admit_retained(&self.package)?;
-        if payload.inventory_digest() != self.binding.target_payload {
-            return Err(error("HISTORY_TARGET_CHANGED"));
-        }
-        self.companions =
-            Some(payload.retain_source(self.bundle.as_ref().expect("source bundle"))?);
+        let payload = super::install_admission::InstallAdmission::admit_retained(
+            &self.package,
+            &self.binding.target_payload,
+            self.installation.is_ordinary_backup(),
+        )?;
+        self.companions = payload.retain_source(self.bundle.as_ref().expect("source bundle"))?;
         self.payload = Some(payload);
 
         self.stage = SourceCaptureStage::BindWriter;
@@ -371,6 +374,11 @@ impl SourceEvidence {
             return Err(error("HISTORY_SOURCE_EXIT_UNCONFIRMED"));
         }
         self.terminal = Some(Arc::new(terminal));
+        if self.installation.is_ordinary_backup() {
+            self.global_custody = Some(super::startup::GlobalLeaseCustody::acquire(
+                InstallationControl::open(false)?,
+            )?);
+        }
         self.stage = SourceCaptureStage::CaptureContext;
         let home = dirs::home_dir().ok_or_else(|| error("HISTORY_ROOT_CHANGED"))?;
         let parent = Directory::open_absolute(&home).map_err(blocked)?;
@@ -610,7 +618,8 @@ impl AcquiredSourceSession {
             binding: evidence.binding,
             package: evidence.package,
             payload: evidence.payload.expect("measured payload"),
-            companions: evidence.companions.expect("complete companion inventory"),
+            companions: evidence.companions,
+            global_custody: evidence.global_custody,
             original_bundle: evidence.original_bundle.expect("independent original copy"),
             terminal: evidence.terminal.expect("source exit"),
             scope: evidence.scope.expect("fenced scope"),

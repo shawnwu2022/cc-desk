@@ -203,6 +203,7 @@ fn TerminalGuard_ReleaseImageLease_002() {
             match kind {
                 JobKind::Installer => "armedPreparation",
                 JobKind::HistoricalApplication => "historicalLifetime",
+                JobKind::OrdinaryInstaller => "ordinaryInstallerLifetime",
             }
         );
         let (terminal_name, terminal_digest) = guard.terminal_reference();

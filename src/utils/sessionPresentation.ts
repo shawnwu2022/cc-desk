@@ -138,7 +138,8 @@ export function selectSessionArchiveAction(session: UnifiedSession, visibility: 
 }
 export function selectSessionMenuActions(session: UnifiedSession, visibility: SessionMenuActionVisibility = {}): SessionMenuActionDefinition[] {
   return SESSION_MENU_ACTION_DEFINITIONS
-    .filter((definition) => definition.visible(session) && visibility[definition.id] !== false)
+    .filter((definition) => definition.visible(session) && visibility[definition.id] !== false
+      && !((session.archived || session.opened !== true) && ['resume', 'retry', 'restore-archive'].includes(definition.id) && definition.id === selectSessionPrimaryAction(session)))
     .map(({ id, danger }) => ({ id, labelKey: sessionActionLabelKey(id, session), danger,
       disabled: session.renameState === 'saving' || (id === 'copy-session-id' && !session.nativeSessionId),
     }))

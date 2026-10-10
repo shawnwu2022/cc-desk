@@ -347,8 +347,10 @@ and revision; automatic new-session configuration selection is not reused.
 
 `ResumeSessionDialog` is mounted once in normal App, uses shared modal/input/select/
 button/notice/loading/empty-state primitives, and closes with the owning Workspace
-surface. Quick Restore, history-row activation/Resume, and all three advanced modes
-reach this same dialog through the runtime and `unifiedSessions.resumeDialog`.
+surface. Quick Restore and all three advanced modes reach this same dialog through the
+runtime and `unifiedSessions.resumeDialog`. History rows no longer launch on
+activation: their always-visible explicit Resume control directly restores the
+frozen source through `resumeCatalogSession`, without another confirmation.
 Selecting a history result requests confirmation; confirmation activates the exact
 existing attempt or resumes its exact origin. Dialog dismissal/navigation invalidates
 pending validation admission, and latest-search ownership rejects late success,
@@ -612,3 +614,39 @@ The tree already identifies the requested history session. Its activation and Re
 The dialog copies the selected record and native origin before confirmation. It reuses the same `resumeCatalogSession` and cancellation predicate; no adapter, storage or process state machine is replaced. Project navigation closes the pending dialog even when the shell stays in Workspace. Missing targets remain unavailable. Changes in saved identity/configuration are still rejected by the original admission checks; an already opened exact source is reused.
 
 Isolated bilingual `resume-session` and `resume-history` visual scenarios use a read-only in-memory history adapter. Every mutation fails closed. Their screenshots and cancellation checks demonstrate the rendered distinction, not a real CLI launch or native Windows acceptance.
+
+## Next session-list interaction contract
+
+An open row selects its already-owned terminal. Closed history ignores row click,
+double click, Enter and Space; the separate native Resume button is its only launch
+entry. F2/menu and selected-row double click still request rename independently.
+Resume/failed-creation Retry/archive Restore sit beside the live age and remain
+visible without hover. Their duplicate menu entries are omitted. The existing open
+Close overlay and ended-session Archive control retain their sizing and ownership.
+
+`SessionsPanel` owns the activity snapshot, not the runtime stores. Initial/Workspace
+entry and entry into a different current project snapshot latest activity descending
+with ID ties. Its existing Refresh sessions button snapshots immediately, rereads the
+catalog and snapshots the resulting rows when loading ends. Selection is untouched.
+Existing row order stays fixed through output, status, completion, search and rerender.
+New/admitted openings and manual restore metadata move to the front; background
+closed-history discovery appends without displacing the existing rows. Project
+pin/name ordering and archive opening-order grouping are unchanged.
+
+Exact-source pending restores publish `resumePending` only as presentation metadata.
+Both `unifiedSessions.projectGroups` and `projectManagement` groups project it. One
+pending operation can retain multiple cancellation-aware callers without replaying
+admission. Failed/cancelled completion removes the disable state. This is never a
+process status, native evidence or permission to use another source/configuration.
+
+Background history can carry a nonzero persisted opening timestamp from an older
+Desk visit. It still appends when newly discovered: a timestamp alone is never a
+new foreground action. Known opened/preparing row opening changes and observed archive-to-normal
+transitions are tracked separately. Archive Restore also coalesces one exact-source
+metadata operation, projecting pending into the actual archived drawer and clearing
+it after known failure so an explicit retry remains possible.
+
+Status motion uses fixed 16px SVG/CSS only: known starting/working breathe gently,
+thinking dots brighten sequentially, and permission/input/completion enter once.
+Underlying state transitions exclude selection suppression; refresh and remount do
+not replay entry cues. Reduced-motion is fully static and tool/branch marks never rotate.

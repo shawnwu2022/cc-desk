@@ -19,7 +19,7 @@ mod types;
 mod wire;
 
 mod cli {
-    pub(crate) use crate::{environment, types};
+    pub(crate) use crate::{environment, profiles, types};
     #[cfg(test)]
     pub(crate) mod native_projection {
         pub(crate) use crate::wire;

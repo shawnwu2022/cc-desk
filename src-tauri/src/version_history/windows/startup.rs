@@ -5,7 +5,7 @@ use super::{
     context::HeldBundle,
     durability::MarkerStore,
     files::{ComponentName, Directory, FileIdentity, PrivateDirectory},
-    lease::{ControlLease, LeaseFiles, SharedLease},
+    lease::{ControlLease, ExclusiveLease, LeaseFiles, SharedLease},
     scope::RegisteredInstallation,
     security::CurrentUser,
 };
@@ -20,6 +20,7 @@ use crate::version_history::{
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt, sync::Arc};
 
 const CONTROL_DIRECTORY: &str = "CCDesk-VersionControl";
+const BACKUP_DIRECTORY: &str = "CCDesk-VersionBackups";
 pub(crate) const MANAGER_BASENAME: &str = "cc-desk-version-manager.exe";
 fn unavailable(_: impl std::fmt::Debug) -> SafeError {
     error("HISTORY_STARTUP_UNAVAILABLE")
@@ -33,6 +34,9 @@ pub(crate) struct InstallationControl {
     root: Arc<PrivateDirectory>,
     leases: LeaseFiles,
     user: CurrentUser,
+    // Retain the secured fixed sibling as well as the UUID child's pinned
+    // ancestor chain. Only the backend fixed-locator factory sets this origin.
+    backup_parent: Option<Arc<PrivateDirectory>>,
 }
 impl InstallationControl {
     /// A hard-coded private application directory is the only locator. Merely
@@ -66,12 +70,188 @@ impl InstallationControl {
             root,
             leases,
             user,
+            backup_parent: None,
         }))
+    }
+    /// An ordinary historical install writes its journal and marker only in a
+    /// fresh transaction child of this fixed private sibling. The source still
+    /// owns its original global shared lease; callers establish independent
+    /// shared/exclusive leases on the returned owner.
+    pub(crate) fn ordinary_backup(
+        self: &Arc<Self>,
+        global_control: &ControlLease,
+        transaction_id: &str,
+    ) -> Result<Arc<Self>, SafeError> {
+        if self.is_ordinary_backup() {
+            return Err(error("HISTORY_ROOT_CHANGED"));
+        }
+        global_control.verify_root(self.root()).map_err(recovery)?;
+        self.require_ordinary_global_context()?;
+        let backup = Self::backup_under(self.parent.clone(), transaction_id, true)?;
+        global_control.verify_root(self.root()).map_err(recovery)?;
+        self.require_ordinary_global_context()?;
+        Ok(backup)
+    }
+    pub(crate) fn require_ordinary_global_context(&self) -> Result<(), SafeError> {
+        self.root.verify(&self.user).map_err(recovery)?;
+        if self.is_ordinary_backup() {
+            return Err(error("HISTORY_ROOT_CHANGED"));
+        }
+        for name in self
+            .root
+            .directory()
+            .read_children(100_000)
+            .map_err(recovery)?
+        {
+            let name = name.os_string();
+            if name != OsStr::new("control.lock") && name != OsStr::new("lifetime.lock") {
+                // Even a valid previous terminal marker binds the old source
+                // image, so an ordinary installer cannot safely inherit it.
+                return Err(error("HISTORY_ORDINARY_EXISTING_RECOVERY"));
+            }
+        }
+        self.root.verify(&self.user).map_err(recovery)
+    }
+    pub(crate) fn reopen_ordinary_backup(transaction_id: &str) -> Result<Arc<Self>, SafeError> {
+        let local = dirs::data_local_dir().ok_or_else(|| error("HISTORY_STARTUP_UNAVAILABLE"))?;
+        let parent = Directory::open_absolute(&local).map_err(unavailable)?;
+        Self::backup_under(parent, transaction_id, false)
+    }
+    fn backup_under(
+        parent: Arc<Directory>,
+        transaction_id: &str,
+        create: bool,
+    ) -> Result<Arc<Self>, SafeError> {
+        crate::version_history::journal::validate_id(transaction_id)?;
+        let user = CurrentUser::capture().map_err(unavailable)?;
+        let name = ComponentName::new(OsStr::new(BACKUP_DIRECTORY)).map_err(unavailable)?;
+        let backup_parent =
+            match PrivateDirectory::open_existing(parent.clone(), name.clone(), &user) {
+                Ok(root) => root,
+                Err(missing) if create && missing.kind() == std::io::ErrorKind::NotFound => {
+                    match PrivateDirectory::create_new(parent.clone(), name.clone(), &user) {
+                        Ok(root) => root,
+                        Err(_) => PrivateDirectory::open_existing(parent.clone(), name, &user)
+                            .map_err(recovery)?,
+                    }
+                }
+                Err(failure) => return Err(recovery(failure)),
+            };
+        let backup_parent = Arc::new(backup_parent);
+        backup_parent.verify(&user).map_err(recovery)?;
+        let transaction = ComponentName::new(OsStr::new(transaction_id)).map_err(unavailable)?;
+        let root = Arc::new(
+            if create {
+                // A collision preserves all evidence and fails. Unlike the stable
+                // sibling root, a transaction child must never be silently reused.
+                PrivateDirectory::create_new(backup_parent.directory().clone(), transaction, &user)
+            } else {
+                PrivateDirectory::open_existing(
+                    backup_parent.directory().clone(),
+                    transaction,
+                    &user,
+                )
+            }
+            .map_err(recovery)?,
+        );
+        root.verify(&user).map_err(recovery)?;
+        let leases = LeaseFiles::open(root.clone(), &user).map_err(recovery)?;
+        backup_parent.verify(&user).map_err(recovery)?;
+        Ok(Arc::new(Self {
+            parent,
+            root,
+            leases,
+            user,
+            backup_parent: Some(backup_parent),
+        }))
+    }
+    /// Display the held fixed container containing both journal and complete
+    /// data directories. Callers separately prove full backup completion first.
+    pub(crate) fn ordinary_backup_location(&self) -> Result<String, SafeError> {
+        let parent = self
+            .backup_parent
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_ROOT_CHANGED"))?;
+        parent.verify(&self.user).map_err(recovery)?;
+        self.root.verify(&self.user).map_err(recovery)?;
+        let path =
+            super::manager_process::launch_path(parent.directory().raw()).map_err(recovery)?;
+        parent.verify(&self.user).map_err(recovery)?;
+        path.into_string().map_err(recovery)
+    }
+    pub(crate) fn is_ordinary_backup(&self) -> bool {
+        self.backup_parent.is_some()
+    }
+    /// This transaction UUID is a lookup observation, never a caller path or a
+    /// mode claim. Exactly one fixed root must publish its matching marker.
+    pub(crate) fn open_for_manager(transaction_id: &str) -> Result<Arc<Self>, SafeError> {
+        let local = dirs::data_local_dir().ok_or_else(|| error("HISTORY_STARTUP_UNAVAILABLE"))?;
+        Self::manager_under(
+            Directory::open_absolute(&local).map_err(unavailable)?,
+            transaction_id,
+        )
+    }
+    fn manager_under(parent: Arc<Directory>, transaction_id: &str) -> Result<Arc<Self>, SafeError> {
+        crate::version_history::journal::validate_id(transaction_id)?;
+        let user = CurrentUser::capture().map_err(unavailable)?;
+        // Probe optional roots without creating any directory or lease files.
+        let global = match PrivateDirectory::open_existing(
+            parent.clone(),
+            ComponentName::new(OsStr::new(CONTROL_DIRECTORY)).map_err(unavailable)?,
+            &user,
+        ) {
+            Ok(_) => Some(Self::open_under(parent.clone(), false)?),
+            Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => None,
+            Err(failure) => return Err(recovery(failure)),
+        };
+        let backup = match PrivateDirectory::open_existing(
+            parent.clone(),
+            ComponentName::new(OsStr::new(BACKUP_DIRECTORY)).map_err(unavailable)?,
+            &user,
+        ) {
+            Ok(backup_parent) => {
+                backup_parent.verify(&user).map_err(recovery)?;
+                match PrivateDirectory::open_existing(
+                    backup_parent.directory().clone(),
+                    ComponentName::new(OsStr::new(transaction_id)).map_err(unavailable)?,
+                    &user,
+                ) {
+                    Ok(_) => Some(Self::backup_under(parent, transaction_id, false)?),
+                    Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(failure) => return Err(recovery(failure)),
+                }
+            }
+            Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => None,
+            Err(failure) => return Err(recovery(failure)),
+        };
+        let mut selected = None;
+        for owner in [global, backup].into_iter().flatten() {
+            let control = owner.acquire_control()?;
+            let marker =
+                MarkerStore::open_existing(owner.root().clone(), &control).map_err(recovery)?;
+            let matches = marker
+                .as_ref()
+                .map(|marker| {
+                    let marker = ActiveContextMarker::decode(marker.current().map_err(recovery)?)?;
+                    Ok::<_, SafeError>(marker.binding().transaction_id == transaction_id)
+                })
+                .transpose()?
+                .unwrap_or(false);
+            drop(marker);
+            drop(control);
+            if matches && selected.replace(owner).is_some() {
+                return Err(error("HISTORY_RECOVERY_REQUIRED"));
+            }
+        }
+        selected.ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))
     }
     pub(crate) fn root(&self) -> &Arc<PrivateDirectory> {
         &self.root
     }
     pub(crate) fn acquire_control(&self) -> Result<ControlLease, SafeError> {
+        if let Some(parent) = &self.backup_parent {
+            parent.verify(&self.user).map_err(recovery)?;
+        }
         self.root.verify(&self.user).map_err(unavailable)?;
         self.leases.acquire_control().map_err(unavailable)
     }
@@ -85,6 +265,58 @@ impl InstallationControl {
     #[cfg(test)]
     pub(crate) fn fixture_admit(self: &Arc<Self>) -> Result<OrdinaryStartup, SafeError> {
         admit_under(self.clone())
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_open_for_manager(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Arc<Self>, SafeError> {
+        Self::manager_under(self.parent.clone(), transaction_id)
+    }
+}
+
+/// The copied manager acquires these actual global OS leases only after source
+/// exit. A private journal lease never substitutes for installation custody.
+pub(crate) struct GlobalLeaseCustody {
+    installation: Arc<InstallationControl>,
+    control: ControlLease,
+    exclusive: ExclusiveLease,
+}
+impl GlobalLeaseCustody {
+    pub(crate) fn acquire(installation: Arc<InstallationControl>) -> Result<Self, SafeError> {
+        if installation.is_ordinary_backup() {
+            return Err(error("HISTORY_ROOT_CHANGED"));
+        }
+        let control = installation.acquire_control()?;
+        let exclusive = installation
+            .leases()
+            .acquire_exclusive(&control)
+            .map_err(recovery)?;
+        let custody = Self {
+            installation,
+            control,
+            exclusive,
+        };
+        custody.verify()?;
+        Ok(custody)
+    }
+    pub(crate) fn verify(&self) -> Result<(), SafeError> {
+        self.installation
+            .root
+            .verify(&self.installation.user)
+            .map_err(recovery)?;
+        self.control
+            .verify_root(self.installation.root())
+            .map_err(recovery)?;
+        self.installation.require_ordinary_global_context()?;
+        self.exclusive
+            .verify_root(self.installation.root())
+            .map_err(recovery)
+    }
+    pub(crate) fn release_at_installer_handoff(self) -> Result<(), SafeError> {
+        self.verify()?;
+        drop(self);
+        Ok(())
     }
 }
 
@@ -127,6 +359,13 @@ pub(crate) struct TransactionDataRoot {
     _installation: Arc<InstallationControl>,
 }
 impl TransactionDataRoot {
+    fn parent(installation: &InstallationControl) -> Arc<Directory> {
+        installation
+            .backup_parent
+            .as_ref()
+            .map(|parent| parent.directory().clone())
+            .unwrap_or_else(|| installation.parent.clone())
+    }
     fn name(transaction_id: &str) -> Result<ComponentName, SafeError> {
         crate::version_history::journal::validate_id(transaction_id)?;
         ComponentName::new(OsStr::new(&format!("CCDesk-VersionData-{transaction_id}")))
@@ -140,7 +379,7 @@ impl TransactionDataRoot {
         control.verify_root(installation.root()).map_err(recovery)?;
         let root = Arc::new(
             PrivateDirectory::create_new(
-                installation.parent.clone(),
+                Self::parent(&installation),
                 Self::name(transaction_id)?,
                 &installation.user,
             )
@@ -175,7 +414,7 @@ impl TransactionDataRoot {
         control.verify_root(installation.root()).map_err(recovery)?;
         let root = Arc::new(
             PrivateDirectory::open_existing(
-                installation.parent.clone(),
+                Self::parent(&installation),
                 Self::name(&reference.transaction_id)?,
                 &installation.user,
             )

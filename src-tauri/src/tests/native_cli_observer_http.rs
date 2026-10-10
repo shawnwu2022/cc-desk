@@ -6,6 +6,104 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+// Early authentication rejection may close a socket with unread request bytes,
+// causing a trailing reset on macOS. Require the entire bounded HTTP response;
+// EOF/reset before its declared body is complete is still a test failure.
+fn read_framed_response(reader: &mut impl Read) -> std::io::Result<String> {
+    let invalid = || std::io::Error::from(std::io::ErrorKind::InvalidData);
+    let mut response = Vec::new();
+    while !response.ends_with(b"\r\n\r\n") {
+        if response.len() >= 8192 {
+            return Err(invalid());
+        }
+        let mut byte = [0];
+        reader.read_exact(&mut byte)?;
+        response.push(byte[0]);
+    }
+    let headers = std::str::from_utf8(&response).map_err(|_| invalid())?;
+    let mut lines = headers[..headers.len() - 4].split("\r\n");
+    let status = lines.next().ok_or_else(invalid)?;
+    let mut parts = status.splitn(3, ' ');
+    if parts.next() != Some("HTTP/1.1") {
+        return Err(invalid());
+    }
+    let code = parts.next().ok_or_else(invalid)?;
+    if code.len() != 3
+        || !code.bytes().all(|byte| byte.is_ascii_digit())
+        || !(100..=599).contains(&code.parse::<u16>().map_err(|_| invalid())?)
+    {
+        return Err(invalid());
+    }
+    let mut length = None;
+    for line in lines {
+        let (name, value) = line.split_once(':').ok_or_else(invalid)?;
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err(invalid());
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            let value = value.trim();
+            if length.is_some()
+                || value.is_empty()
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(invalid());
+            }
+            let size = value.parse::<usize>().map_err(|_| invalid())?;
+            if size > 65536 {
+                return Err(invalid());
+            }
+            length = Some(size);
+        }
+    }
+    let length = length.ok_or_else(invalid)?;
+    let header_length = response.len();
+    response.resize(header_length + length, 0);
+    reader.read_exact(&mut response[header_length..])?;
+    String::from_utf8(response).map_err(|_| invalid())
+}
+
+#[test]
+fn D13_Http_ResponseFramingRequiresCompleteResponse_003() {
+    struct ResetAfterBytes(std::io::Cursor<Vec<u8>>);
+    impl Read for ResetAfterBytes {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.position() == self.0.get_ref().len() as u64 {
+                return Err(std::io::ErrorKind::ConnectionReset.into());
+            }
+            self.0.read(buffer)
+        }
+    }
+    let complete = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 12\r\n\r\n{\"ok\":false}";
+    let mut reset = ResetAfterBytes(std::io::Cursor::new(complete.to_vec()));
+    assert_eq!(
+        read_framed_response(&mut reset).unwrap().as_bytes(),
+        complete
+    );
+    for incomplete in [
+        b"".as_slice(),
+        b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 12\r\n",
+        b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 12\r\n\r\n{\"ok\":",
+    ] {
+        assert!(read_framed_response(&mut std::io::Cursor::new(incomplete)).is_err());
+        assert!(
+            read_framed_response(&mut ResetAfterBytes(std::io::Cursor::new(
+                incomplete.to_vec()
+            )))
+            .is_err()
+        );
+    }
+    for malformed in [
+        "HTTP/1.1 401 Unauthorized\r\n\r\n{}",
+        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n{}",
+        "not HTTP\r\nContent-Length: 2\r\n\r\n{}",
+        "HTTP/1.1 401 Unauthorized\r\nContent-Length: -1\r\n\r\n{}",
+        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 65537\r\n\r\n{}",
+    ] {
+        assert!(read_framed_response(&mut std::io::Cursor::new(malformed)).is_err());
+    }
+}
+
 fn post(port: u16, path: &str, headers: &str, body: &[u8]) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
@@ -16,9 +114,7 @@ fn post(port: u16, path: &str, headers: &str, body: &[u8]) -> String {
         .unwrap();
     write!(stream, "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n", body.len()).unwrap();
     stream.write_all(body).unwrap();
-    let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
-    response
+    read_framed_response(&mut stream).unwrap()
 }
 
 #[test]

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useVersionHistoryStore } from '@/stores/versionHistory'
-import type { HistoryBlockReason, HistoryRelease, SwitchReview, SwitchReviewBlock } from '@/types/versionHistory'
+import type { HistoryBlockReason, HistoryRelease, SwitchReview, SwitchReviewBlock, OrdinaryInstallReview } from '@/types/versionHistory'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
@@ -10,8 +10,10 @@ const props = defineProps<{ active: boolean }>()
 const { t, locale } = useI18n(), history = useVersionHistoryStore(), filter = ref('')
 let owner = 0
 const confirmation = shallowRef<SwitchReview | null>(null)
+const ordinaryConfirmation = shallowRef<OrdinaryInstallReview | null>(null), ordinaryAcknowledged = ref(false)
 watch(() => props.active, active => {
   confirmation.value = null
+  ordinaryConfirmation.value = null; ordinaryAcknowledged.value = false
   if (active) { owner = history.activate(); filter.value = '' }
   else history.deactivate(owner)
 }, { immediate: true, flush: 'sync' })
@@ -34,6 +36,22 @@ const switchReasons: Record<SwitchReviewBlock, string> = {
 }
 const blockMessage = computed(() => history.review?.blockReason ? t(switchReasons[history.review.blockReason]) : null)
 watch(() => history.review, value => { if (confirmation.value !== value) confirmation.value = null }, { flush: 'sync' })
+watch(() => history.ordinaryReview, value => {
+  if (ordinaryConfirmation.value !== value) { ordinaryConfirmation.value = null; ordinaryAcknowledged.value = false }
+}, { flush: 'sync' })
+async function reviewOrdinary() {
+  if (!props.active || !history.canReviewOrdinary) return
+  confirmation.value = null; ordinaryConfirmation.value = null; ordinaryAcknowledged.value = false
+  const key = owner
+  await history.inspectOrdinary(key)
+  if (props.active && owner === key && history.ordinaryReview?.phase === 'verified') ordinaryConfirmation.value = history.ordinaryReview
+}
+function confirmOrdinary() {
+  const reviewed = ordinaryConfirmation.value
+  if (!props.active || !reviewed || !ordinaryAcknowledged.value) return
+  ordinaryConfirmation.value = null; ordinaryAcknowledged.value = false
+  void history.beginHistoricalInstall(owner, reviewed)
+}
 function reviewSwitch() { if (props.active && history.allowed('review')) confirmation.value = history.review }
 function confirmSwitch() {
   const reviewed = confirmation.value
@@ -87,14 +105,37 @@ function date(value: string) { return new Date(value).toLocaleDateString(locale.
       <div class="history-actions">
         <AppButton v-if="history.selected && !history.hasPreparation" data-history-prepare :disabled="!active || history.busy" @click="history.prepare(owner)">{{ t('historyPrepare') }}</AppButton>
         <AppButton v-if="history.hasPreparation" data-history-inspect :disabled="!active || !history.canInspect" :loading="history.inspecting" @click="history.inspect(owner)">{{ t('historyInspect') }}</AppButton>
-        <AppButton v-if="history.allowed('cancel-preparation')" data-history-cancel :disabled="!active" @click="history.cancel(owner)">{{ t('historyCancelPreparation') }}</AppButton>
-        <AppButton v-if="history.allowed('prepare-again')" data-history-prepare-again @click="history.prepareAgain(owner)">{{ t('historyPrepareAgain') }}</AppButton>
+        <AppButton v-if="history.allowed('cancel-preparation') || history.allowedOrdinary('cancel-preparation')" data-history-cancel :disabled="!active" @click="history.cancel(owner)">{{ t('historyCancelPreparation') }}</AppButton>
+        <AppButton v-if="history.allowed('prepare-again') || history.allowedOrdinary('prepare-again')" data-history-prepare-again @click="history.prepareAgain(owner)">{{ t('historyPrepareAgain') }}</AppButton>
       </div>
     </section>
+    <p class="history-description">{{ t('historyOrdinaryDescription') }}</p>
+    <AppButton data-history-ordinary-install :disabled="!active || !history.canReviewOrdinary" @click="reviewOrdinary">{{ t('historyOrdinaryInstall') }}</AppButton>
+    <p v-if="history.ordinaryReview?.backupLocation" data-history-ordinary-backup>{{ t('historyOrdinaryBackupLocation', { path: history.ordinaryReview.backupLocation }) }}</p>
+    <p v-if="history.ordinaryReview?.installationOutcome === 'installer-started'" data-history-ordinary-started role="status">{{ t('historyOrdinaryInstallerStarted') }}</p>
+    <InlineNotice v-if="history.ordinaryReview?.blockReason && history.ordinaryReview.phase !== 'handoff-issued'" data-history-ordinary-block :message="t(switchReasons[history.ordinaryReview.blockReason])" />
+    <p class="history-description">{{ t('historyReviewedFlow') }}</p>
     <InlineNotice v-if="blockMessage" data-history-switch-block :message="blockMessage" />
     <InlineNotice v-else-if="active && history.allowed('begin-switch')" data-history-install-ready :message="t('historyInstallReady')" />
     <InlineNotice v-else-if="!history.review && !history.transactionId" data-history-install-unavailable :message="t('historyInstallUnavailable')" />
     <AppButton data-history-install :disabled="!active || !history.allowed('review')" @click="reviewSwitch">{{ t('historyReview') }}</AppButton>
+    <AppDialog :open="!!ordinaryConfirmation && active" data-history-ordinary-dialog :title="t('historyOrdinaryTitle', { version: ordinaryConfirmation?.version })"
+      :show-close="false" @close="ordinaryConfirmation = null; ordinaryAcknowledged = false">
+      <div class="history-confirmation">
+        <InlineNotice kind="warning" :message="t('historyOrdinaryCompatibility')" />
+        <InlineNotice v-if="history.error" kind="warning" :message="t(history.error)" />
+        <p>{{ t('historyOrdinaryBackup') }}</p>
+        <p>{{ t('historyOrdinaryInstaller') }}</p>
+        <p>{{ t('historyOrdinarySharedCli') }}</p>
+        <p>{{ t('historyOrdinarySessions') }}</p>
+        <InlineNotice v-if="history.ordinaryReview?.blockReason" :message="t(switchReasons[history.ordinaryReview.blockReason])" />
+        <label><input v-model="ordinaryAcknowledged" data-history-ordinary-ack type="checkbox" /> {{ t('historyOrdinaryAcknowledge') }}</label>
+      </div>
+      <template #footer>
+        <AppButton data-history-ordinary-back autofocus @click="ordinaryConfirmation = null; ordinaryAcknowledged = false">{{ t('historyBack') }}</AppButton>
+        <AppButton data-history-ordinary-begin variant="danger" :disabled="!active || !ordinaryAcknowledged || !history.allowedOrdinary('install')" @click="confirmOrdinary">{{ t('historyOrdinaryBegin') }}</AppButton>
+      </template>
+    </AppDialog>
     <AppDialog :open="!!confirmation && active" :title="t('historyReviewTitle', { version: confirmation?.version })"
       :description="t('historyFreshSettings')" :show-close="false" @close="confirmation = null">
       <div class="history-confirmation">

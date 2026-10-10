@@ -36,9 +36,49 @@ async function openFixture(page: Page, options: Record<string, string | number>)
   await page.goto(`/__visual__/?${new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]))}`)
   await expect(page.locator('[data-visual-ready]')).toHaveAttribute('data-visual-ready', 'true')
   await page.evaluate(() => document.fonts.ready)
-  if (['mixed', 'hover', 'menu', 'close-state', 'native-notice'].includes(String(options.scenario))) {
+  if (['mixed', 'hover', 'menu', 'close-state', 'native-notice', 'session-status'].includes(String(options.scenario))) {
     await expandFixtureProjects(page)
   }
+}
+
+// Unapproved status/explicit-launch pixels stay separate from the immutable
+// historical baselines. Synthetic signals do not certify live CLI semantics.
+for (const gui of ['light', 'dark']) for (const locale of ['en', 'zh']) {
+  test(`session glyph and explicit launch evidence ${gui} ${locale}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 1000 })
+    await openFixture(page, { scenario: 'session-status', gui, locale })
+    // Assert the actual browser cascade, not just palette literals in source.
+    await expect(page.locator('[data-session-row="visual-status-12"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(130, 172, 220)' : 'rgb(42, 80, 130)')
+    await expect(page.locator('[data-session-row="visual-status-1"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(93, 173, 142)' : 'rgb(54, 126, 99)')
+    await expect(page.locator('[data-session-row="visual-status-10"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(242, 138, 120)' : 'rgb(196, 92, 74)')
+    const history = page.locator('[data-session-row="visual-status-16"]')
+    const launch = history.locator('[data-session-launch]')
+    await page.mouse.move(1020, 996)
+    await expect(launch).toHaveCSS('opacity', '1')
+    await expect(launch).toHaveCSS('pointer-events', 'auto')
+    await expect(history.locator('.session-time')).toHaveCSS('opacity', '1')
+    await expect(launch.getByRole('button')).toBeInViewport({ ratio: 1 })
+    const time = await history.locator('.session-time').boundingBox(), action = await launch.boundingBox()
+    expect(time && action && time.x + time.width <= action.x).toBeTruthy()
+    await history.hover()
+    await expect(history.locator('.session-time')).toHaveCSS('opacity', '1')
+    // End the title hover before testing Escape on the independent launch trigger.
+    await page.mouse.move(1020, 996)
+    await expect(page.getByRole('tooltip')).toHaveCount(0)
+    await launch.getByRole('button').focus()
+    await expect(launch.getByRole('button')).toBeFocused()
+    await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Resume session' : '恢复会话')
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('tooltip')).toHaveCount(0)
+    await clearFixtureSetupFocus(page)
+    await page.mouse.move(1020, 996)
+    await captureFixtureEvidence(page, testInfo, `session-glyphs-${gui}-${locale}-unapproved`)
+    const working = page.locator('[data-session-row="visual-status-2"] .session-status-icon')
+    await working.hover()
+    await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Thinking' : '思考中')
+    await page.mouse.move(1020, 996)
+    await expect(page.getByRole('tooltip')).toHaveCount(0)
+  })
 }
 
 // These synthetic receipt captures are unapproved evidence, separate from the
