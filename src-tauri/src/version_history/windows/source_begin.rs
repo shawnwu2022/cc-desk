@@ -3,6 +3,7 @@
 use super::{
     context::ContextJournal,
     files::{ComponentName, PrivateDirectory},
+    install_admission::InstallAdmission,
     manager_bundle::ManagerBundle,
     manager_handoff::publish_initial_handoff,
     manager_process::PreparedManager,
@@ -24,6 +25,7 @@ use crate::{
         download::PreparedHandoff,
         journal::{CapacityPlan, JournalBinding, JournalStore},
         maintenance::{process_admissions, FrozenAdmissions},
+        ordinary_install::{self, OrdinaryInstallAdmission},
         payload_policy::PayloadAdmission,
         policy::PRODUCT_IDENTIFIER,
         verified_package::{sha256, VerifiedPackage},
@@ -49,14 +51,14 @@ fn root_observation(root: &ObservedPath) -> Result<serde_json::Value, SafeError>
 /// Candidate admission is held before its UUID is issued to the source. It
 /// releases only an uncommitted freeze when the reservation cannot complete.
 pub(crate) struct SourcePreflight {
-    payload: Option<PayloadAdmission>,
+    payload: Option<InstallAdmission>,
     frozen: Option<FrozenAdmissions>,
 }
 impl SourcePreflight {
     pub(crate) fn admit(package: &VerifiedPackage, transaction: &str) -> Result<Self, SafeError> {
         super::manager_process::require_job_free_source()
             .map_err(|_| error("HISTORY_SOURCE_JOB_UNSUPPORTED"))?;
-        let payload = PayloadAdmission::admit_begin(package)?;
+        let payload = InstallAdmission::Reviewed(PayloadAdmission::admit_begin(package)?);
         let frozen = process_admissions().freeze(transaction)?;
         let admission = Self {
             payload: Some(payload),
@@ -69,7 +71,33 @@ impl SourcePreflight {
             .verify_quiescent(transaction)?;
         Ok(admission)
     }
-    fn take(mut self) -> Result<(PayloadAdmission, FrozenAdmissions), SafeError> {
+    pub(crate) fn admit_ordinary(
+        package: &VerifiedPackage,
+        transaction: &str,
+    ) -> Result<Self, SafeError> {
+        if !ordinary_install::enabled() {
+            return Err(error("HISTORY_ORDINARY_INSTALL_UNAVAILABLE"));
+        }
+        super::manager_process::require_job_free_source()
+            .map_err(|_| error("HISTORY_SOURCE_JOB_UNSUPPORTED"))?;
+        let payload = InstallAdmission::Ordinary(OrdinaryInstallAdmission::admit(package)?);
+        let global = super::startup::InstallationControl::open(false)?;
+        let control = global.acquire_control()?;
+        global.require_ordinary_global_context()?;
+        drop(control);
+        let frozen = process_admissions().freeze(transaction)?;
+        let admission = Self {
+            payload: Some(payload),
+            frozen: Some(frozen),
+        };
+        admission
+            .frozen
+            .as_ref()
+            .expect("source preflight owns freeze")
+            .verify_quiescent(transaction)?;
+        Ok(admission)
+    }
+    fn take(mut self) -> Result<(InstallAdmission, FrozenAdmissions), SafeError> {
         Ok((
             self.payload
                 .take()
@@ -97,6 +125,38 @@ pub(crate) fn begin(
     binding: Arc<DocumentBinding<NativeRun>>,
     headers: tauri::http::HeaderMap,
 ) -> Result<(), SafeError> {
+    begin_common(
+        transfer, preflight, startup, window, binding, headers, false,
+    )
+}
+pub(crate) fn begin_ordinary(
+    transfer: PreparedHandoff,
+    preflight: SourcePreflight,
+    startup: Arc<OrdinaryStartup>,
+    window: WebviewWindow,
+    binding: Arc<DocumentBinding<NativeRun>>,
+    headers: tauri::http::HeaderMap,
+) -> Result<(), SafeError> {
+    begin_common(transfer, preflight, startup, window, binding, headers, true)
+}
+fn begin_common(
+    transfer: PreparedHandoff,
+    preflight: SourcePreflight,
+    startup: Arc<OrdinaryStartup>,
+    window: WebviewWindow,
+    binding: Arc<DocumentBinding<NativeRun>>,
+    headers: tauri::http::HeaderMap,
+    ordinary: bool,
+) -> Result<(), SafeError> {
+    if preflight
+        .payload
+        .as_ref()
+        .ok_or_else(|| error("HISTORY_HANDOFF_CHANGED"))?
+        .is_ordinary()
+        != ordinary
+    {
+        return Err(error("HISTORY_HANDOFF_CHANGED"));
+    }
     transfer.check()?;
     preflight
         .payload
@@ -124,7 +184,7 @@ pub(crate) fn begin(
 }
 fn prepare_and_handoff(
     transfer: &PreparedHandoff,
-    payload: &PayloadAdmission,
+    payload: &InstallAdmission,
     startup: &OrdinaryStartup,
     source_ui: &Arc<SourceHandoff>,
 ) -> Result<(), SafeError> {
@@ -147,10 +207,44 @@ fn prepare_and_handoff(
             .require_disjoint(&[&udf, &installed, &control_root, &evidence])
             .map_err(blocked)?;
     }
+    let global_control = startup.control().acquire_control()?;
+    startup
+        .shared()
+        .verify_root(startup.control().root())
+        .map_err(blocked)?;
+    let installation = if payload.is_ordinary() {
+        startup
+            .control()
+            .ordinary_backup(&global_control, transfer.transaction_id())?
+    } else {
+        startup.control().clone()
+    };
+    let backup_control = if payload.is_ordinary() {
+        Some(installation.acquire_control()?)
+    } else {
+        None
+    };
+    let control = backup_control.as_ref().unwrap_or(&global_control);
+    let backup_shared = if payload.is_ordinary() {
+        Some(
+            installation
+                .leases()
+                .acquire_shared(control)
+                .map_err(blocked)?,
+        )
+    } else {
+        None
+    };
+    let shared = backup_shared.as_ref().unwrap_or(startup.shared());
+    let backup_observation =
+        ObservedPath::from_directory(installation.root().directory().clone()).map_err(blocked)?;
+    inventory
+        .require_disjoint(&[&udf, &installed, &backup_observation])
+        .map_err(blocked)?;
     let registration = HeldRegistrationState::capture(source.installation()).map_err(blocked)?;
     let shortcuts = HeldProductShortcuts::capture_current_user().map_err(blocked)?;
     let space = SpaceAdmission::source_handoff(
-        startup.control().root().clone(),
+        installation.root().clone(),
         source.installation().directory(),
         source.bundle(),
         transfer,
@@ -161,18 +255,14 @@ fn prepare_and_handoff(
     inventory.recheck().map_err(blocked)?;
     transfer.check()?;
     source_ui.verify_before_close()?;
-    let control = startup.control().acquire_control()?;
-    startup
-        .shared()
-        .verify_root(startup.control().root())
-        .map_err(blocked)?;
+    shared.verify_root(installation.root()).map_err(blocked)?;
     space.verify()?;
     super::manager_process::require_job_free_source()
         .map_err(|_| error("HISTORY_SOURCE_JOB_UNSUPPORTED"))?;
     source_ui.retain_for_recovery()?;
     let data = Arc::new(TransactionDataRoot::create(
-        startup.control().clone(),
-        &control,
+        installation.clone(),
+        control,
         transfer.transaction_id(),
     )?);
     let recovery =
@@ -219,7 +309,7 @@ fn prepare_and_handoff(
         roots,
     };
     let mut store = JournalStore::create_windows_transaction(
-        startup.control().root().clone(),
+        installation.root().clone(),
         transfer.transaction_id(),
     )?;
     // Bound record/dependency plans are tightened by each actual copy/return
@@ -228,7 +318,7 @@ fn prepare_and_handoff(
         journal_binding.clone(),
         CapacityPlan::for_effects(4_000, 6_000, 512, 2048)?,
     )?;
-    publish_source_transition(startup.control(), &control, &mut store, &journal_binding)?;
+    publish_source_transition(&installation, control, &mut store, &journal_binding)?;
     let private_copy = (|| {
         let package_root = Arc::new(
             PrivateDirectory::create_new(
@@ -241,9 +331,9 @@ fn prepare_and_handoff(
         let package = RetainedPackage::retain(transfer, package_root)?;
         let mut journal = ContextJournal::new_precommit(
             &mut store,
-            startup.control().root().clone(),
-            &control,
-            startup.shared(),
+            installation.root().clone(),
+            control,
+            shared,
             journal_binding.clone(),
             0,
         )
@@ -274,9 +364,9 @@ fn prepare_and_handoff(
             let evidence = PrivateAbortEvidence::capture(
                 journal_binding.clone(),
                 (&source, &inventory, &registration, &shortcuts),
-                (source_ui, startup, &data),
+                (source_ui, startup, &installation, &data),
             )?;
-            let outcome = publish_private_abort(evidence, &mut store, &control)?;
+            let outcome = publish_private_abort(evidence, &mut store, control)?;
             source_ui.finish_private_abort(&outcome)?;
             transfer.record_verified_abort(&outcome)?;
             return Err(failure);
@@ -287,16 +377,17 @@ fn prepare_and_handoff(
         bundle.clone(),
         source.installation(),
         &package,
-        startup.control().root().clone(),
-        &control,
-        startup.shared(),
+        installation.root().clone(),
+        control,
+        shared,
         &user,
     )
     .map_err(blocked)?;
-    let resume = manager.prepare_resume(&control, &user).map_err(blocked)?;
+    let resume = manager.prepare_resume(control, &user).map_err(blocked)?;
+    let control = backup_control.unwrap_or(global_control);
     let published = publish_initial_handoff(
         store,
-        startup.control(),
+        &installation,
         control,
         &data,
         &bundle,
@@ -311,7 +402,7 @@ fn prepare_and_handoff(
         if let Some(ready) = manager.observe_ready(&user).map_err(blocked)? {
             tauri::async_runtime::block_on(source_ui.close_after_manager_ready(ready, &data))?;
             let driver =
-                source_ui.start_exit_driver(startup.control().clone(), data, journal_binding)?;
+                source_ui.start_exit_driver(installation.clone(), data, journal_binding)?;
             return driver.join().map_err(blocked)?;
         }
         std::thread::sleep(std::time::Duration::from_millis(200));

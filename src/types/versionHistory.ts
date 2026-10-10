@@ -60,3 +60,17 @@ export interface SwitchReview {
 }
 /** The manager owns this issued transaction; it is not installation success. */
 export interface SwitchTicket { transactionId: string }
+
+/** Ordinary installer handoff has a retained data backup, without an automatic return guarantee. */
+export type OrdinaryInstallAction = 'refresh' | 'install' | 'cancel-preparation' | 'prepare-again'
+export interface OrdinaryInstallReview {
+  preparationId: string
+  version: string
+  phase: SwitchReviewPhase
+  contextPolicy: 'fresh-settings-backup-manual-restore'
+  transactionId: string | null
+  allowedActions: OrdinaryInstallAction[]
+  blockReason: Exclude<SwitchReviewBlock, 'PAYLOAD_UNVERIFIED'> | null
+  backupLocation: string | null
+  installationOutcome: 'not-started' | 'handoff-unknown' | 'installer-started'
+}

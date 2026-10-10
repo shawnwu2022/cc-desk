@@ -2,7 +2,7 @@ import { computed, ref, shallowRef, shallowReactive } from 'vue'
 import { defineStore } from 'pinia'
 import { createNativeHistoryClient } from '@/api/tauri'
 import type { HistoryClient } from '@/api/versionHistory'
-import type { HistoryRelease, HistorySelection, PreparedPackageSummary, SwitchReview, SwitchReviewAction } from '@/types/versionHistory'
+import type { HistoryRelease, HistorySelection, PreparedPackageSummary, SwitchReview, SwitchReviewAction, OrdinaryInstallReview, OrdinaryInstallAction } from '@/types/versionHistory'
 
 /** Only allowlisted categories reach localized UI. Backend diagnostic text is never shown. */
 export function historyErrorMessage(failure: unknown,
@@ -15,6 +15,7 @@ export function historyErrorMessage(failure: unknown,
   if (['HISTORY_STORAGE_UNAVAILABLE', 'HISTORY_PREPARATION_UNAVAILABLE'].includes(String(code))) return 'historyErrorStorage'
   if (code === 'HISTORY_SOURCE_JOB_UNSUPPORTED') return 'historyErrorSourceJob'
   if (code === 'HISTORY_SCOPE_UNREGISTERED') return 'historyErrorSourceInstallation'
+  if (code === 'HISTORY_ORDINARY_EXISTING_RECOVERY') return 'historyErrorExistingRecovery'
   if (['HISTORY_SIGNATURE_INVALID', 'HISTORY_DIGEST_MISMATCH', 'HISTORY_SIZE_MISMATCH', 'HISTORY_PACKAGE_CHANGED', 'HISTORY_REDIRECT_BLOCKED'].includes(String(code))) return 'historyErrorVerification'
   if (['FORBIDDEN', 'DOCUMENT_BRIDGE_UNAVAILABLE', 'BACKEND_INSTANCE_CHANGED'].includes(String(code))) return 'historyErrorDocument'
   if (['HISTORY_SELECTION_EXPIRED', 'HISTORY_SELECTION_CHANGED', 'HISTORY_SELECTION_UNKNOWN', 'HISTORY_CURSOR_EXPIRED', 'HISTORY_CURSOR_INVALID', 'HISTORY_CATALOG_CHANGED', 'HISTORY_PREPARE_EXPIRED'].includes(String(code))) return 'historyErrorSelection'
@@ -32,6 +33,7 @@ interface Preparation {
   cancelConfirmed: boolean
   failure: string | null
   switchAttempted: boolean
+  operation: 'reviewed-switch' | 'historical-install' | null
   epoch: number
 }
 export const useVersionHistoryStore = defineStore('versionHistory', () => {
@@ -40,6 +42,7 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
   const prepared = ref<PreparedPackageSummary | null>(null), error = ref<string | null>(null)
   const phase = ref<'idle' | 'preparing' | 'verified' | 'cancelling' | 'cancelled' | 'failed' | 'unknown' | 'switching' | 'handoff-issued' | 'unavailable' | 'aborted'>('idle')
   const review = shallowRef<SwitchReview | null>(null), transactionId = ref<string | null>(null)
+  const ordinaryReview = shallowRef<OrdinaryInstallReview | null>(null)
   const inspecting = ref(false), switching = ref(false)
   let inspection = 0
 
@@ -56,13 +59,13 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
   function owns(key: number, transport = client) {
     if (!active || key !== owner || !transport || transport !== client) return false
     if (!transport.isCurrent()) {
-      selected.value = null; prepared.value = null; review.value = null; error.value = 'historyErrorDocument'
+      selected.value = null; prepared.value = null; review.value = null; ordinaryReview.value = null; error.value = 'historyErrorDocument'
       return false
     }
     return true
   }
   function clearView() {
-    ++request; ++inspection; inspecting.value = false; review.value = null; pages = 0; rows.value = []; nextCursor.value = null; truncated.value = false; loaded.value = false
+    ++request; ++inspection; inspecting.value = false; review.value = null; ordinaryReview.value = null; pages = 0; rows.value = []; nextCursor.value = null; truncated.value = false; loaded.value = false
     loading.value = false; selecting.value = false; selected.value = null; prepared.value = null; error.value = null
     if (!work) phase.value = 'idle'
   }
@@ -110,7 +113,7 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
   }
   function finishCancellation(item: Preparation) {
     if (work === item && item.cancelConfirmed && !item.beginPending && !item.preparePending) {
-      work = null; review.value = null; prepared.value = null; selected.value = null; phase.value = item.failure ? 'failed' : 'cancelled'
+      work = null; review.value = null; ordinaryReview.value = null; prepared.value = null; selected.value = null; phase.value = item.failure ? 'failed' : 'cancelled'
     }
   }
   async function cancelWork(item: Preparation) {
@@ -120,14 +123,16 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
     if (item.ticket === null) return
     item.cancelPending = true
     const epoch = ++item.epoch
-    ++inspection; inspecting.value = false; review.value = null
+    ++inspection; inspecting.value = false; review.value = null; ordinaryReview.value = null
     try {
       // Original-client cleanup must freshly prove it still owns preparation.
-      const status = await item.client.inspectSwitch(item.ticket, item.selection.version)
+      const status = item.operation === 'historical-install'
+        ? await item.client.inspectHistoricalInstall(item.ticket, item.selection.version)
+        : await item.client.inspectSwitch(item.ticket, item.selection.version)
       if (work !== item || epoch !== item.epoch) return
       if (status.transactionId) {
         retainIssued(item, status.transactionId)
-        if (active && client === item.client) { review.value = status; phase.value = status.phase; error.value = retainedError(error.value) }
+        if (active && client === item.client) { publishReview(status); phase.value = status.phase; error.value = retainedError(error.value) }
         return
       }
       if (status.phase === 'cancelled') {
@@ -136,7 +141,7 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
       }
       if (!status.allowedActions.includes('cancel-preparation')) {
         phase.value = 'unknown'; error.value = retainedError(error.value)
-        if (active && client === item.client) review.value = status
+        if (active && client === item.client) publishReview(status)
         return
       }
       await item.client.cancel(item.ticket)
@@ -144,7 +149,7 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
       if (work === item) { error.value = item.failure; finishCancellation(item) }
     } catch (failure) { if (work === item) {
       phase.value = transactionId.value ? 'handoff-issued' : 'unknown'
-      item.cancelUncertain = true; ++item.epoch; ++inspection; review.value = null
+      item.cancelUncertain = true; ++item.epoch; ++inspection; review.value = null; ordinaryReview.value = null
       error.value = !item.client.isCurrent() || historyErrorMessage(failure) === 'historyErrorDocument' ? 'historyErrorDocument' : 'historyErrorCancel'
     } }
     finally { item.cancelPending = false }
@@ -152,8 +157,8 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
   async function prepare(key: number) {
     if (!owns(key) || busy.value || work || !selected.value) return
     const item = shallowReactive<Preparation>({ client: client!, selection: selected.value, ticket: null, beginPending: true,
-      preparePending: false, cancelRequested: false, cancelPending: false, cancelConfirmed: false, cancelUncertain: false, failure: null, switchAttempted: false, epoch: 0 })
-    work = item; phase.value = 'preparing'; error.value = null; review.value = null; transactionId.value = null
+      preparePending: false, cancelRequested: false, cancelPending: false, cancelConfirmed: false, cancelUncertain: false, failure: null, switchAttempted: false, operation: null, epoch: 0 })
+    work = item; phase.value = 'preparing'; error.value = null; review.value = null; ordinaryReview.value = null; transactionId.value = null
     try {
       const ticket = await item.client.begin(item.selection.selectionToken)
       item.ticket = ticket.transactionId; item.beginPending = false
@@ -178,21 +183,39 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
   function retainIssued(item: Preparation, id: string) {
     if (transactionId.value && transactionId.value !== id) throw new Error('HISTORY_INVALID_RESPONSE')
     item.switchAttempted = true; item.cancelRequested = false
-    transactionId.value = id; phase.value = 'handoff-issued'; review.value = null
+    transactionId.value = id; phase.value = 'handoff-issued'; review.value = null; ordinaryReview.value = null
+  }
+  function publishReview(value: SwitchReview | OrdinaryInstallReview) {
+    if (value.contextPolicy === 'fresh-settings-backup-manual-restore') ordinaryReview.value = value
+    else review.value = value
   }
   function allowed(action: SwitchReviewAction) {
     if (!active || !work || !client?.isCurrent() || client !== work.client || inspecting.value || switching.value || work.cancelPending) return false
     if (!review.value?.allowedActions.includes(action)) return false
+    if (work.operation === 'historical-install' || (work.switchAttempted && action === 'begin-switch')) return false
     if (transactionId.value && !['refresh', 'prepare-again'].includes(action)) return false
     return action === 'cancel-preparation' || action === 'refresh' || !work.preparePending
   }
+  function allowedOrdinary(action: OrdinaryInstallAction) {
+    if (!active || !work || !client?.isCurrent() || client !== work.client || inspecting.value || switching.value || work.cancelPending) return false
+    if (!ordinaryReview.value?.allowedActions.includes(action)) return false
+    if (work.operation === 'reviewed-switch' || (work.switchAttempted && action === 'install')) return false
+    if (transactionId.value && !['refresh', 'prepare-again'].includes(action)) return false
+    return action === 'cancel-preparation' || action === 'refresh' || !work.preparePending
+  }
+  const canReviewOrdinary = computed(() => !!prepared.value && active && !!work?.ticket && !work.switchAttempted && !work.cancelRequested && !work.cancelUncertain
+    && prepared.value.transactionId === work.ticket && !work.preparePending
+    && client === work.client && !!client?.isCurrent() && !inspecting.value && !switching.value && !work.cancelPending && phase.value === 'verified')
   const canInspect = computed(() => phase.value !== 'idle' && !!work?.ticket && !inspecting.value && !switching.value && !work.cancelPending
-    && error.value !== 'historyErrorDocument' && (review.value === null || review.value.allowedActions.includes('refresh')))
+    && error.value !== 'historyErrorDocument' && (work.operation === 'historical-install'
+      ? ordinaryReview.value === null || ordinaryReview.value.allowedActions.includes('refresh')
+      : review.value === null || review.value.allowedActions.includes('refresh')))
   async function inspect(key: number) {
+    if (work?.operation === 'historical-install') return inspectOrdinary(key)
     const item = work
     if (!item?.ticket || !owns(key, item.client) || switching.value || item.cancelPending) return
     const serial = ++inspection, epoch = item.epoch
-    inspecting.value = true; review.value = null
+    inspecting.value = true; review.value = null; ordinaryReview.value = null
     try {
       const result = await item.client.inspectSwitch(item.ticket, item.selection.version)
       if (work !== item || serial !== inspection || epoch !== item.epoch || !owns(key, item.client)) return
@@ -204,17 +227,50 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
       }
     } catch (failure) {
       if (work === item && serial === inspection && epoch === item.epoch && active && key === owner) {
-        ++item.epoch; review.value = null
+        ++item.epoch; review.value = null; ordinaryReview.value = null
         phase.value = transactionId.value ? 'handoff-issued' : 'unknown'
         error.value = historyErrorMessage(failure, transactionId.value ? 'historyHandoffIssued' : 'historyOwnershipUnknown')
       }
     } finally { if (serial === inspection) inspecting.value = false }
   }
+  async function inspectOrdinary(key: number) {
+    const item = work
+    if (!item?.ticket || !owns(key, item.client) || switching.value || item.cancelPending || item.operation === 'reviewed-switch') return
+    if (item.operation === null && !canReviewOrdinary.value) return
+    const serial = ++inspection, epoch = item.epoch
+    inspecting.value = true; review.value = null; ordinaryReview.value = null
+    try {
+      const result = await item.client.inspectHistoricalInstall(item.ticket, item.selection.version)
+      if (work !== item || serial !== inspection || epoch !== item.epoch || !owns(key, item.client)) return
+      if (transactionId.value && result.transactionId !== transactionId.value) throw new Error('HISTORY_INVALID_RESPONSE')
+      if (result.transactionId) { item.operation = 'historical-install'; retainIssued(item, result.transactionId) }
+      ordinaryReview.value = result; phase.value = result.phase; error.value = retainedError(item.failure)
+      if (result.phase === 'cancelled' && !transactionId.value) { item.cancelConfirmed = true; finishCancellation(item) }
+    } catch (failure) {
+      if (work === item && serial === inspection && epoch === item.epoch && active && key === owner) {
+        ++item.epoch; review.value = null; ordinaryReview.value = null
+        phase.value = transactionId.value ? 'handoff-issued' : 'unknown'
+        error.value = historyErrorMessage(failure, transactionId.value ? 'historyHandoffIssued' : 'historyOwnershipUnknown')
+      }
+    } finally { if (serial === inspection) inspecting.value = false }
+  }
+  async function beginHistoricalInstall(key: number, confirmed: OrdinaryInstallReview) {
+    const item = work
+    if (!item?.ticket || !owns(key, item.client) || confirmed !== ordinaryReview.value || !allowedOrdinary('install')) return
+    item.switchAttempted = true; item.operation = 'historical-install'; ++item.epoch; ++inspection
+    review.value = null; ordinaryReview.value = null; inspecting.value = false; switching.value = true; phase.value = 'switching'; error.value = null
+    try {
+      const issued = await item.client.beginHistoricalInstall(item.ticket)
+      if (work === item) retainIssued(item, issued.transactionId)
+    } catch (failure) {
+      if (work === item) { ++item.epoch; review.value = null; ordinaryReview.value = null; phase.value = 'unknown'; error.value = historyErrorMessage(failure, 'historyOwnershipUnknown') }
+    } finally { if (work === item) switching.value = false }
+  }
   async function beginSwitch(key: number, confirmed: SwitchReview) {
     const item = work
     if (!item?.ticket || !owns(key, item.client) || confirmed !== review.value || !allowed('begin-switch')) return
-    item.switchAttempted = true; ++item.epoch; ++inspection
-    review.value = null; inspecting.value = false; switching.value = true; phase.value = 'switching'; error.value = null
+    item.switchAttempted = true; item.operation = 'reviewed-switch'; ++item.epoch; ++inspection
+    review.value = null; ordinaryReview.value = null; inspecting.value = false; switching.value = true; phase.value = 'switching'; error.value = null
     try {
       const issued = await item.client.beginSwitch(item.ticket)
       if (work === item) retainIssued(item, issued.transactionId)
@@ -224,14 +280,15 @@ export const useVersionHistoryStore = defineStore('versionHistory', () => {
     } finally { if (work === item) switching.value = false }
   }
   function prepareAgain(key: number) {
-    if (!owns(key) || !allowed('prepare-again') || review.value?.phase !== 'aborted') return
-    work = null; review.value = null; transactionId.value = null; selected.value = null; prepared.value = null
+    if (!owns(key) || !(allowed('prepare-again') && review.value?.phase === 'aborted'
+      || allowedOrdinary('prepare-again') && ordinaryReview.value?.phase === 'aborted')) return
+    work = null; review.value = null; ordinaryReview.value = null; transactionId.value = null; selected.value = null; prepared.value = null
     phase.value = 'idle'; error.value = null
   }
   function cancel(key: number) {
-    if (owns(key) && work && allowed('cancel-preparation')) { work.cancelUncertain = false; return cancelWork(work) }
+    if (owns(key) && work && (allowed('cancel-preparation') || allowedOrdinary('cancel-preparation'))) { work.cancelUncertain = false; return cancelWork(work) }
   }
   return { rows, nextCursor, truncated, loaded, loading, selecting, selected, prepared, error, phase, busy, hasPreparation,
-    review, transactionId, inspecting, switching, canInspect, allowed, inspect, beginSwitch, prepareAgain,
+    review, ordinaryReview, transactionId, inspecting, switching, canInspect, canReviewOrdinary, allowed, allowedOrdinary, inspect, inspectOrdinary, beginSwitch, beginHistoricalInstall, prepareAgain,
     activate, deactivate, list, select, prepare, cancel }
 })

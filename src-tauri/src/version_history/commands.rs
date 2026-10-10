@@ -372,6 +372,92 @@ pub(crate) async fn begin_switch(
     Ok(super::manager::SwitchTicket { transaction_id })
 }
 
+#[cfg(windows)]
+#[tauri::command]
+pub(crate) async fn begin_historical_install(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    history: State<'_, Arc<HistoryService>>,
+    startup: State<'_, Arc<super::windows::startup::OrdinaryStartup>>,
+) -> Result<super::manager::SwitchTicket, SafeError> {
+    use tauri::Manager;
+    let (document, query): (_, PrepareTransactionRequest) =
+        admit(&runtime, webview.clone(), &request)?;
+    super::compatibility::admit_data_mode(super::compatibility::ReviewedDataMode::FreshSettings)?;
+    let binding = runtime.binding()?;
+    let window = webview
+        .app_handle()
+        .get_webview_window("main")
+        .ok_or_else(|| error("FORBIDDEN"))?;
+    let mut headers = tauri::http::HeaderMap::new();
+    headers.insert(
+        crate::cli::document::DOCUMENT_HEADER,
+        request.headers()[crate::cli::document::DOCUMENT_HEADER].clone(),
+    );
+    if binding.admit_window(&window, &headers)? != document.caller {
+        return Err(error("FORBIDDEN"));
+    }
+    let service = history.inner().clone();
+    let (reservation, payload) = tauri::async_runtime::spawn_blocking(move || {
+        let preparation = service.preparation(&document)?;
+        let reserved = preparation.service.reserve_ordinary_handoff_with_source(
+            &document.caller,
+            &query.transaction_id,
+            super::windows::source_begin::SourcePreflight::admit_ordinary,
+        )?;
+        document.recheck()?;
+        Ok::<_, SafeError>(reserved)
+    })
+    .await
+    .map_err(|_| error("HISTORY_TASK_FAILED"))??;
+    let transaction_id = reservation.transaction_id;
+    if let Some(transfer) = reservation.transfer {
+        let payload = payload.ok_or_else(|| error("HISTORY_ORDINARY_INSTALL_UNAVAILABLE"))?;
+        let startup = startup.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            super::windows::source_begin::begin_ordinary(
+                transfer, payload, startup, window, binding, headers,
+            )
+        })
+        .await
+        .map_err(|_| error("HISTORY_TASK_FAILED"))??;
+    }
+    Ok(super::manager::SwitchTicket { transaction_id })
+}
+
+#[tauri::command]
+pub(crate) async fn inspect_historical_install(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    history: State<'_, Arc<HistoryService>>,
+) -> Result<super::manager::OrdinaryInstallReview, SafeError> {
+    let (document, query): (_, PrepareTransactionRequest) = admit(&runtime, webview, &request)?;
+    let service = history.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = service
+            .preparation(&document)?
+            .service
+            .inspect_historical_install(&document.caller, &query.transaction_id);
+        document.recheck()?;
+        result
+    })
+    .await
+    .map_err(|_| error("HISTORY_TASK_FAILED"))?
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub(crate) async fn begin_historical_install(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::manager::SwitchTicket, SafeError> {
+    let (_document, _query): (_, PrepareTransactionRequest) = admit(&runtime, webview, &request)?;
+    Err(error("HISTORY_PLATFORM_UNSUPPORTED"))
+}
+
 #[tauri::command]
 pub(crate) async fn inspect_switch(
     webview: Webview,

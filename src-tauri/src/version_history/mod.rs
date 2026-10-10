@@ -35,6 +35,7 @@ pub(crate) mod manager_runtime;
 pub(crate) mod manager_types;
 #[cfg(windows)]
 pub(crate) mod manager_worker;
+pub(crate) mod ordinary_install;
 pub(crate) mod payload_policy;
 pub(crate) mod policy;
 pub(crate) mod snapshot;
