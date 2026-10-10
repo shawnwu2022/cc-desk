@@ -273,6 +273,23 @@ impl ProgressCache {
             .clone()
             .unwrap_or_else(|| Err(error("HISTORY_MANAGER_NOT_READY")))
     }
+    fn fail_preserving_ordinary(&mut self, failure: SafeError, blocked: ManagerBlockReason) {
+        let retained = self
+            .latest
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .cloned()
+            .and_then(|status| {
+                let reason = if status.phase == super::manager_types::ManagerPhase::RecoveryRequired
+                {
+                    status.blocked_reason.unwrap_or(blocked)
+                } else {
+                    blocked
+                };
+                status.ordinary_failure(reason)
+            });
+        self.latest = Some(retained.map(Ok).unwrap_or(Err(failure)));
+    }
 }
 
 /// The coordinator owns this on its dedicated thread. Every visible status is
@@ -287,6 +304,49 @@ pub(crate) struct ProgressPublisher {
 }
 impl ProgressPublisher {
     pub(crate) fn publish(
+        &self,
+        store: &mut JournalStore,
+        blocked: Option<ManagerBlockReason>,
+        actions: &[ManagerAction],
+    ) -> ActionResult {
+        if self.installation.is_ordinary_backup() {
+            if actions != [ManagerAction::Refresh] {
+                return Err(error("HISTORY_INVALID_STATUS"));
+            }
+            return self.publish_ordinary(store, None, false, blocked);
+        }
+        let status = self.inspect_status(store, blocked, actions)?;
+        self.cache.lock().latest = Some(Ok(status.clone()));
+        Ok(status)
+    }
+    /// A location is supplied only after source exit and full native backup.
+    /// Pending preparation carries no path. This cannot authorize effects.
+    pub(crate) fn publish_ordinary(
+        &self,
+        store: &mut JournalStore,
+        backup_location: Option<&str>,
+        installer_handed_off: bool,
+        blocked: Option<ManagerBlockReason>,
+    ) -> ActionResult {
+        if !self.installation.is_ordinary_backup() {
+            return Err(error("HISTORY_INVALID_STATUS"));
+        }
+        let mut status = self.inspect_status(store, blocked, &[ManagerAction::Refresh])?;
+        let mut cache = self.cache.lock();
+        if let Some(Ok(previous)) = &cache.latest {
+            if previous.transaction_id != status.transaction_id {
+                return Err(error("FORBIDDEN"));
+            }
+            if previous.generation.get() > status.generation.get() {
+                return Err(error("HISTORY_GENERATION_CHANGED"));
+            }
+            status.ordinary_install = previous.ordinary_install.clone();
+        }
+        let status = status.with_ordinary_install(backup_location, installer_handed_off)?;
+        cache.latest = Some(Ok(status.clone()));
+        Ok(status)
+    }
+    fn inspect_status(
         &self,
         store: &mut JournalStore,
         blocked: Option<ManagerBlockReason>,
@@ -311,11 +371,17 @@ impl ProgressPublisher {
         )?;
         let status = ManagerStatus::project(journal, self.package.selection(), blocked, actions)?;
         self.package.verify_retained()?;
-        self.cache.lock().latest = Some(Ok(status.clone()));
         Ok(status)
     }
     pub(crate) fn fail(&self, failure: SafeError) {
-        self.cache.lock().latest = Some(Err(failure));
+        if self.installation.is_ordinary_backup() {
+            self.fail_ordinary(failure, ManagerBlockReason::RecoveryEvidenceUnavailable);
+        } else {
+            self.cache.lock().latest = Some(Err(failure));
+        }
+    }
+    pub(crate) fn fail_ordinary(&self, failure: SafeError, blocked: ManagerBlockReason) {
+        self.cache.lock().fail_preserving_ordinary(failure, blocked);
     }
     pub(crate) fn recv_command(&self) -> Result<AuthenticatedManagerCommand, SafeError> {
         self.commands
@@ -684,7 +750,10 @@ fn run_worker(
     let cache = progress.cache.clone();
     let outcome = super::windows::coordinator::run_acquired(acquired.into_parts(), owner, progress);
     if let Err(failure) = &outcome {
-        cache.lock().latest = Some(Err(failure.error().clone()));
+        cache.lock().fail_preserving_ordinary(
+            failure.error().clone(),
+            ManagerBlockReason::RecoveryEvidenceUnavailable,
+        );
     }
     hold_until_shutdown(outcome, &shutdown);
 }

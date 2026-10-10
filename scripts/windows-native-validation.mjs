@@ -8,10 +8,11 @@ export const REPORT_FILENAME = 'windows-native-coverage.json';
 export const MAX_REPORT_BYTES = 4 * 1024 * 1024;
 const MAX_LOG_BYTES = 64 * 1024 * 1024;
 const scope = JSON.parse(fs.readFileSync(new URL('./windows-native-scope.json', import.meta.url), 'utf8'));
-if (scope.schema !== 1 || scope.reason !== 'external_job' || scope.jobFreeTests.length !== 18 || new Set(scope.jobFreeTests).size !== 18) {
+if (scope.schema !== 1 || scope.reason !== 'external_job' || scope.jobFreeTests.length !== 18 || new Set(scope.jobFreeTests).size !== 18 || scope.unelevatedTests?.length !== 4 || new Set(scope.unelevatedTests).size !== 4 || scope.unelevatedTests.some(n => scope.jobFreeTests.includes(n)) || scope.ordinaryRequiredSelectedTests?.length !== 3) {
   throw new Error('Invalid checked-in Windows native scope');
 }
 export const JOB_FREE_TESTS = Object.freeze([...scope.jobFreeTests]);
+export const UNELEVATED_TESTS = Object.freeze([...scope.unelevatedTests]);
 
 function requireThat(condition, message) { if (!condition) throw new Error(`Native coverage: ${message}`); }
 function binding(sourceSha, runId, runAttempt) {
@@ -53,6 +54,13 @@ export function validateNativeCoverage(report, context) {
   requireThat(report.host?.jobQuerySucceeded === true, 'host Job query did not succeed');
   requireThat(typeof report.host.inJob === 'boolean', 'invalid observed host Job state');
   requireThat(Array.isArray(report.harnesses) && report.harnesses.length === scope.harnesses.length, 'default harness coverage missing');
+  const hasOrdinary = report.harnesses.some(h => h.full?.some(t => UNELEVATED_TESTS.includes(t.name)));
+  const hasElevationFields = Object.hasOwn(report.host, 'elevated') || Object.hasOwn(report.host, 'elevationQuerySucceeded') || report.nativeUnelevatedSuite !== undefined || report.rustShardRun?.shards?.some(s => Object.hasOwn(s.host ?? {}, 'elevated') || Object.hasOwn(s.host ?? {}, 'elevationQuerySucceeded'));
+  const legacy = !hasOrdinary && !hasElevationFields;
+  if (!legacy) {
+    requireThat(report.host.elevationQuerySucceeded === true && typeof report.host.elevated === 'boolean', 'host elevation query missing or failed');
+    requireThat(report.harnesses.some(h => h.identity?.kind === 'lib' && UNELEVATED_TESTS.every(n => h.full?.some(t => t.name === n))), 'reviewed unelevated policy inventory drift');
+  }
   const identities = report.harnesses.map(h => `${h.identity?.kind}:${h.identity?.name}`);
   requireThat(new Set(identities).size === identities.length && same(identities, scope.harnesses.map(h => `${h.kind}:${h.name}`)), 'default harness identity mismatch');
   if (report.rustShardRun !== undefined || report.harnesses.some(h => h.shards !== undefined)) validateRustShardRun(report, expected);
@@ -66,15 +74,20 @@ export function validateNativeCoverage(report, context) {
     const excluded = names(h.excluded, 'excluded');
     requireThat(ignored.every(n => full.includes(n)), 'ignored inventory not in full');
     const library = h.identity.kind === 'lib';
-    const requiredExclusion = library && report.host.inJob ? JOB_FREE_TESTS : [];
+    const requiredExclusion = library ? [...(report.host.inJob ? JOB_FREE_TESTS : []), ...(!legacy && report.host.elevated ? UNELEVATED_TESTS : [])] : [];
     requireThat(same(excluded, requiredExclusion), 'unexpected exclusion set');
     if (library) {
       requireThat(JOB_FREE_TESTS.every(n => full.includes(n)), 'reviewed Job-free policy drift');
       requireThat(JOB_FREE_TESTS.every(n => !ignored.includes(n)), 'reviewed Job-free policy entry became ignored');
       requireThat(scope.requiredSelectedTests.every(n => full.includes(n) && selected.includes(n) && !ignored.includes(n)), 'required ordinary/Wry test not selected');
+      if (!legacy) {
+        requireThat(UNELEVATED_TESTS.every(n => full.includes(n) && !ignored.includes(n)), 'reviewed unelevated policy entry missing or ignored');
+        requireThat(scope.ordinaryRequiredSelectedTests.every(n => full.includes(n) && selected.includes(n) && !ignored.includes(n)), 'required ordinary admission/cleanup test not selected');
+      }
       requireThat(selected.some(n => !ignored.includes(n) && h.full.find(t => t.name === n).type === 'test'), 'library selected nonignored inventory is empty');
     } else {
       requireThat(!full.some(n => JOB_FREE_TESTS.includes(n)), 'Job-free policy test moved outside library');
+      requireThat(!full.some(n => UNELEVATED_TESTS.includes(n)), 'unelevated policy test moved outside library');
     }
     requireThat(excluded.every(n => full.includes(n) && !ignored.includes(n)), 'exclusion missing or ignored');
     for (const excludedName of excluded) {
@@ -104,12 +117,17 @@ export function validateNativeCoverage(report, context) {
   const unavailable = report.host.inJob ? JOB_FREE_TESTS : [];
   requireThat(report.nativeJobSuite?.status === (report.host.inJob ? 'unverified' : 'executed') && report.nativeJobSuite.reason === (report.host.inJob ? 'external_job' : null), 'specialist disclosure mismatch');
   requireThat(same(names(report.nativeJobSuite.unverifiedNames, 'disclosure'), unavailable), 'specialist disclosure names mismatch');
+  const unelevatedUnavailable = !legacy && report.host.elevated ? UNELEVATED_TESTS : [];
+  if (!legacy) {
+    requireThat(report.nativeUnelevatedSuite?.status === (report.host.elevated ? 'unverified' : 'executed') && report.nativeUnelevatedSuite.reason === (report.host.elevated ? 'elevated_host' : null), 'unelevated disclosure mismatch');
+    requireThat(same(names(report.nativeUnelevatedSuite.unverifiedNames, 'unelevated disclosure'), unelevatedUnavailable), 'unelevated disclosure names mismatch');
+  }
   requireThat(report.nativeAll?.status === 'unverified' && report.nativeAll.reason === 'original_all_not_run', 'original All claim is unsupported');
   requireThat(report.nativeAcceptanceProven === false, 'actual roundtrip acceptance is not proven');
   return {
     policy: VALIDATION_POLICY, ...expected, counts, harnessCount: report.harnesses.length,
-    unverifiedNames: [...unavailable], nativeAllStatus: 'unverified', nativeAcceptanceProven: false,
-    executed: counts.executed, ignored: counts.ignored, unverified: unavailable.length,
+    unverifiedNames: [...unavailable, ...unelevatedUnavailable], jobFreeUnverifiedNames: [...unavailable], unelevatedUnverifiedNames: [...unelevatedUnavailable], nativeAllStatus: 'unverified', nativeAcceptanceProven: false,
+    executed: counts.executed, ignored: counts.ignored, unverified: unavailable.length + unelevatedUnavailable.length,
   };
 }
 

@@ -136,7 +136,7 @@ impl InitialManager {
     /// Read-only re-admission of the already resumed exact initial child. It
     /// cannot launch/resume an installer or reconstruct an expired process.
     pub(crate) fn open(request: &ManagerRequest) -> Result<Self, SafeError> {
-        let installation = InstallationControl::open(false)?;
+        let installation = InstallationControl::open_for_manager(request.transaction_id())?;
         let control = installation.acquire_control()?;
         let marker = {
             let stored = MarkerStore::open_existing(installation.root().clone(), &control)

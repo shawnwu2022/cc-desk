@@ -1,8 +1,6 @@
 //! Bounded official-repository metadata reads and document-owned selections.
 //! This module cannot download package bytes, install, or authorize shared data.
-use super::policy::{
-    historical, version, HostPlatform, OBSERVED_NSIS_VERSIONS, PRODUCT_IDENTIFIER,
-};
+use super::policy::{historical, version, HostPlatform, PRODUCT_IDENTIFIER};
 use super::types::*;
 use crate::cli::profiles::error;
 use crate::cli::snapshot::CallerIdentity;
@@ -269,9 +267,6 @@ impl ReleaseMetadata {
         }
         if host != HostPlatform::WindowsX64 {
             return Err(HistoryBlockReason::PlatformUnsupported);
-        }
-        if !OBSERVED_NSIS_VERSIONS.contains(&value) {
-            return Err(HistoryBlockReason::PackagingBoundaryUnknown);
         }
         let filename = format!("CC.Desk_{value}_x64-setup.exe");
         let installers: Vec<_> = self

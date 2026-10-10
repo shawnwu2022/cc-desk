@@ -13,9 +13,13 @@ fn fixture() -> (tempfile::TempDir, JournalStore, JournalBinding) {
 fn populate(store: JournalStore) -> (JournalStore, JournalBinding) {
     populate_with_extra(store, false)
 }
-fn populate_with_extra(
+fn populate_with_extra(store: JournalStore, extra_launch: bool) -> (JournalStore, JournalBinding) {
+    populate_until_installer(store, extra_launch, false)
+}
+fn populate_until_installer(
     mut store: JournalStore,
     extra_launch: bool,
+    stop: bool,
 ) -> (JournalStore, JournalBinding) {
     let binding = JournalBinding {
         transaction_id: uuid::Uuid::new_v4().to_string(),
@@ -96,6 +100,9 @@ fn populate_with_extra(
             phase: JournalPhase::Installing,
         },
     );
+    if stop {
+        return (store, binding);
+    }
     for kind in [
         EffectKind::InstallerCreateSuspended,
         EffectKind::InstallerResume,
@@ -669,4 +676,150 @@ fn HistoryReturnCheckpoint_WindowsPersistenceFaults_014() {
             Ok(None) => panic!("original marker must remain retained"),
         }
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn OrdinaryDiagnostic_PreservedBackupSurvivesUnrelatedUnknown_010() {
+    let root = tempfile::tempdir().unwrap();
+    let store = JournalStore::fixture(
+        Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap(),
+    )
+    .unwrap();
+    let (mut store, binding) = populate_until_installer(store, false, true);
+    let digest = store
+        .retain_manifest(b"synthetic ordinary creation")
+        .unwrap();
+    applied(&mut store, EffectKind::InstallerCreateSuspended, &digest);
+    let effect_id = uuid::Uuid::new_v4().to_string();
+    append(
+        &mut store,
+        JournalEvent::Intent {
+            effect: EffectSpec {
+                effect_id: effect_id.clone(),
+                kind: EffectKind::InstallerResume,
+                before: digest.clone(),
+                expected_postconditions: digest,
+            },
+        },
+    );
+    let intent_generation = store.writer.as_ref().unwrap().journal.generation;
+    append(
+        &mut store,
+        JournalEvent::Observed {
+            effect_id,
+            intent_generation,
+            result: ObservedResult {
+                observation: Observation::Unknown,
+                receipt: None,
+            },
+        },
+    );
+    assert!(store
+        .inspect(&binding)
+        .unwrap()
+        .last_valid
+        .unwrap()
+        .requires_reconciliation());
+    assert!(store
+        .applied_effect_observation(&EffectKind::VerifySourceBundleCopy)
+        .is_err());
+    let (_, bytes) = store
+        .ordinary_backup_observation(&EffectKind::VerifySourceBundleCopy)
+        .unwrap();
+    assert_eq!(bytes, b"synthetic observation, not native authority");
+    assert!(store
+        .ordinary_backup_observation(&EffectKind::InstallerCreateSuspended)
+        .is_ok());
+    assert!(store
+        .ordinary_backup_observation(&EffectKind::InstallerResume)
+        .is_err());
+    assert!(store
+        .ordinary_backup_observation(&EffectKind::FenceSourceImage)
+        .is_err());
+}
+
+#[test]
+fn OrdinaryDiagnostic_ExactAppliedReceiptOnly_011() {
+    let binding = JournalBinding {
+        transaction_id: uuid::Uuid::new_v4().to_string(),
+        source_context: uuid::Uuid::new_v4().to_string(),
+        target_context: uuid::Uuid::new_v4().to_string(),
+        user_installation: "1".repeat(64),
+        source_bundle: "2".repeat(64),
+        target_package: "3".repeat(64),
+        target_payload: "4".repeat(64),
+        roots: "5".repeat(64),
+    };
+    let mut state = SwitchJournal::new(
+        binding.clone(),
+        CapacityPlan::for_effects(100, 100, 100, 4096).unwrap(),
+    )
+    .unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    state.effects.insert(
+        id.clone(),
+        EffectRecord {
+            spec: EffectSpec {
+                effect_id: id.clone(),
+                kind: EffectKind::VerifySourceBundleCopy,
+                before: "6".repeat(64),
+                expected_postconditions: "7".repeat(64),
+            },
+            intent_generation: 3,
+            result: Some(ObservedResult {
+                observation: Observation::Applied,
+                receipt: Some("8".repeat(64)),
+            }),
+        },
+    );
+    state.pending = Some("unrelated installer ambiguity".into());
+    assert!(
+        select_applied_observation(&state, &EffectKind::VerifySourceBundleCopy, false).is_err()
+    );
+    let effect =
+        select_applied_observation(&state, &EffectKind::VerifySourceBundleCopy, true).unwrap();
+    let mut receipt = EffectReceipt {
+        schema: 1,
+        transaction_id: binding.transaction_id,
+        effect_id: id.clone(),
+        intent_generation: 3,
+        expected_postconditions: "7".repeat(64),
+        observation: Observation::Applied,
+        observed_manifest: "9".repeat(64),
+    };
+    validate_applied_receipt(
+        &state.binding,
+        effect,
+        effect.result.as_ref().unwrap(),
+        &receipt,
+    )
+    .unwrap();
+    receipt.intent_generation += 1;
+    assert!(validate_applied_receipt(
+        &state.binding,
+        effect,
+        effect.result.as_ref().unwrap(),
+        &receipt
+    )
+    .is_err());
+    receipt.intent_generation -= 1;
+    receipt.transaction_id = uuid::Uuid::new_v4().to_string();
+    assert!(validate_applied_receipt(
+        &state.binding,
+        effect,
+        effect.result.as_ref().unwrap(),
+        &receipt
+    )
+    .is_err());
+    assert!(select_applied_observation(&state, &EffectKind::FenceSourceImage, true).is_err());
+    state
+        .effects
+        .get_mut(&id)
+        .unwrap()
+        .result
+        .as_mut()
+        .unwrap()
+        .observation = Observation::Unknown;
+    assert!(select_applied_observation(&state, &EffectKind::VerifySourceBundleCopy, true).is_err());
 }

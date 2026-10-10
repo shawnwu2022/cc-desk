@@ -23,6 +23,90 @@ use std::sync::{
 };
 use std::time::Instant;
 
+// Ordinary review shares the retained preparation but never claims a backup or install receipt.
+#[test]
+fn HistoryOrdinary_ReviewSeparatesBackupAndHandoff_003() {
+    use crate::version_history::manager::{OrdinaryInstallOutcome, SwitchReviewPhase};
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    let pending = f
+        .service
+        .inspect_historical_install(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    assert_eq!(pending.phase, SwitchReviewPhase::Preparing);
+    assert_eq!(
+        pending.installation_outcome,
+        OrdinaryInstallOutcome::NotStarted
+    );
+    assert!(pending.backup_location.is_none());
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let ready = f
+        .service
+        .inspect_historical_install(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    assert_eq!(ready.phase, SwitchReviewPhase::Verified);
+    assert_eq!(ready.context_policy, "fresh-settings-backup-manual-restore");
+    assert!(ready.transaction_id.is_none());
+    assert!(ready.backup_location.is_none());
+}
+
+// A prepared package cannot acquire a second interpretation after either path reserves it.
+#[test]
+fn HistoryOrdinary_CrossModeReservationCannotReplay_004() {
+    let f = fixture(PAYLOAD.to_vec(), Some(4));
+    let ticket = f.service.begin_prepare(&f.caller, &f.selection).unwrap();
+    f.service
+        .prepare_history(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    let (first, _) = f
+        .service
+        .reserve_ordinary_handoff_with_source(&f.caller, &ticket.transaction_id, |_, _| Ok(()))
+        .unwrap();
+    let duplicate = f.service.reserve_handoff_with_source(
+        &f.caller,
+        &ticket.transaction_id,
+        |_, _| -> Result<(), SafeError> { panic!("must not admit a second mode") },
+    );
+    assert_eq!(
+        duplicate.err().unwrap().code,
+        "HISTORY_HANDOFF_MODE_CHANGED"
+    );
+    let (same, permit) = f
+        .service
+        .reserve_ordinary_handoff_with_source(
+            &f.caller,
+            &ticket.transaction_id,
+            |_, _| -> Result<(), SafeError> { panic!("must not admit twice") },
+        )
+        .unwrap();
+    let issued = f
+        .service
+        .inspect_historical_install(&f.caller, &ticket.transaction_id)
+        .unwrap();
+    assert_eq!(
+        issued.phase,
+        crate::version_history::manager::SwitchReviewPhase::HandoffIssued
+    );
+    assert_eq!(
+        issued.transaction_id.as_deref(),
+        Some(first.transaction_id.as_str())
+    );
+    assert_eq!(
+        issued.installation_outcome,
+        crate::version_history::manager::OrdinaryInstallOutcome::HandoffUnknown
+    );
+    assert!(issued.backup_location.is_none());
+    assert_eq!(
+        issued.allowed_actions,
+        vec![crate::version_history::manager::OrdinaryInstallAction::Refresh]
+    );
+    assert_eq!(same.transaction_id, first.transaction_id);
+    assert!(same.transfer.is_none());
+    assert!(permit.is_none());
+}
+
 const PAYLOAD: &[u8] =
     include_bytes!("../../../tests/fixtures/version-history-minisign/payload.bin");
 const SIGNATURE: &[u8] =

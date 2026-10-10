@@ -102,6 +102,7 @@ export function validateRustShardRun(report, context) {
     requireThat(bound(s), 'shard receipt source/run/attempt/compiler binding mismatch');
     requireThat(s.completed === true && s.exitCode === 0 && Number.isFinite(s.durationSeconds) && s.durationSeconds >= 0, 'failed or incomplete shard receipt');
     requireThat(s.host?.jobQuerySucceeded === true && s.host.inJob === report.host.inJob, 'shard host observation mismatch');
+    if (report.host.elevationQuerySucceeded !== undefined || report.host.elevated !== undefined) requireThat(s.host.elevationQuerySucceeded === true && s.host.elevated === report.host.elevated, 'shard elevation observation mismatch');
     requireThat(Array.isArray(s.harnesses) && s.harnesses.length === identities.length && new Set(s.harnesses.map(h => `${h.identity?.kind}:${h.identity?.name}`)).size === identities.length && equal(s.harnesses.map(h => `${h.identity?.kind}:${h.identity?.name}`), identities), 'shard receipt harness identities mismatch');
     for (const h of report.harnesses) {
       const receipt = s.harnesses.find(r => r.identity.kind === h.identity.kind && r.identity.name === h.identity.name);

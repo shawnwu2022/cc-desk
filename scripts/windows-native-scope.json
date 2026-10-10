@@ -21,6 +21,17 @@
     "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RejectFallback_019",
     "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RejectExit124_020"
   ],
+  "unelevatedTests": [
+    "version_history::windows::process::cancel_tests::OrdinaryInstaller_DurableHandoffAndExactOnceResume_020",
+    "version_history::windows::process::cancel_tests::OrdinaryInstaller_LiveWorkerSurvivesOwnerDrop_022",
+    "version_history::windows::process::cancel_tests::OrdinaryInstaller_MissingLifetimeSpendsResumeWithoutRearming_024",
+    "version_history::windows::process::cancel_tests::OrdinaryInstaller_PriorAppliedObservationBindsExactLaunch_025"
+  ],
+  "ordinaryRequiredSelectedTests": [
+    "version_history::windows::process::cancel_tests::OrdinaryInstaller_AdmissionFailureKeepsArmedCleanupAndSpendsAttempt_027",
+    "version_history::windows::process::cancel_tests::OrdinaryInstaller_ElevatedTokenRejectsBeforeDisarm_028",
+    "version_history::windows::process::cancel_tests::OrdinaryInstaller_FixturePanicCleansExactDisarmedChild_029"
+  ],
   "requiredSelectedTests": [
     "version_history::windows::manager_process::tests::HistoryManagerProcess_CommandGrammar_003",
     "version_history::windows::manager_process::tests::HistoryManager_RejectJobQueryError_014",

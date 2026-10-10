@@ -16,6 +16,8 @@ export function parseManagerStatus(value: unknown): ManagerStatus {
   if (!value || typeof value !== 'object' || Array.isArray(value)) invalid()
   const row = value as Record<string, unknown>
   const fields = ['transactionId', 'generation', 'sourceVersion', 'targetVersion', 'phase', 'blockedReason', 'allowedActions']
+  const hasOrdinary = Object.prototype.hasOwnProperty.call(row, 'ordinaryInstall')
+  if (hasOrdinary) fields.push('ordinaryInstall')
   if (Object.keys(row).length !== fields.length || fields.some(field => !Object.prototype.hasOwnProperty.call(row, field))) invalid()
   if (typeof row.transactionId !== 'string'
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(row.transactionId)
@@ -28,9 +30,27 @@ export function parseManagerStatus(value: unknown): ManagerStatus {
     || row.allowedActions.some(action => !actions.includes(action))
     || row.allowedActions.includes('confirm-historical-version') && row.phase !== 'installed-unconfirmed'
     || row.allowedActions.includes('return-to-previous') && !['installed-unconfirmed', 'historical-active', 'recovery-required'].includes(row.phase as string)) invalid()
+  let ordinaryInstall: ManagerStatus['ordinaryInstall']
+  if (hasOrdinary) {
+    const value = row.ordinaryInstall
+    if (!value || typeof value !== 'object' || Array.isArray(value)) invalid()
+    const ordinary = value as Record<string, unknown>
+    const names = ['backupLocation', 'installerHandedOff', 'contextPolicy']
+    if (Object.keys(ordinary).length !== names.length || names.some(name => !Object.prototype.hasOwnProperty.call(ordinary, name))
+      || ordinary.contextPolicy !== 'fresh-settings-backup-manual-restore' || typeof ordinary.installerHandedOff !== 'boolean'
+      || !['preparing', 'installing', 'recovery-required', 'pre-context-aborted'].includes(row.phase as string)
+      || row.allowedActions.some(action => action !== 'refresh')) invalid()
+    if (ordinary.backupLocation !== null && (typeof ordinary.backupLocation !== 'string'
+      || ordinary.backupLocation.length > 32768 || !/^[A-Za-z]:\\/.test(ordinary.backupLocation)
+      || /[\x00-\x1f\x7f]/.test(ordinary.backupLocation))) invalid()
+    if (ordinary.installerHandedOff && (ordinary.backupLocation === null || !['installing', 'recovery-required'].includes(row.phase as string))) invalid()
+    ordinaryInstall = Object.freeze({ backupLocation: ordinary.backupLocation as string | null,
+      installerHandedOff: ordinary.installerHandedOff, contextPolicy: 'fresh-settings-backup-manual-restore' })
+  }
   return Object.freeze({
     transactionId: row.transactionId, generation: row.generation, sourceVersion: version(row.sourceVersion), targetVersion: version(row.targetVersion),
     phase: row.phase as ManagerPhase, blockedReason: row.blockedReason as ManagerBlockReason | null,
     allowedActions: Object.freeze([...row.allowedActions]) as readonly ManagerAction[],
+    ...(ordinaryInstall ? { ordinaryInstall } : {}),
   })
 }

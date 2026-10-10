@@ -160,7 +160,7 @@ fn HistoryCatalog_ReleaseFiltering_004() {
     }
 }
 
-// macOS和未审查包装版本不能把Windows包当成可安装目标。
+// 非 Windows 平台和缺少精确版本资产的发布均不可选择。
 #[test]
 fn HistoryCatalog_PlatformPolicy_005() {
     let releases = parse_catalog_page(OBSERVED).unwrap();
@@ -181,7 +181,7 @@ fn HistoryCatalog_PlatformPolicy_005() {
         release
             .project(HostPlatform::WindowsX64, "a".repeat(32))
             .blocked_reason,
-        Some(HistoryBlockReason::PackagingBoundaryUnknown)
+        Some(HistoryBlockReason::PlatformAssetMissing)
     );
 }
 
@@ -642,5 +642,58 @@ fn HistoryCatalog_RetainedDiagnostic_015() {
             _ => unreachable!(),
         }
         assert!(inspect_retained_observation(&serde_json::to_vec(&changed).unwrap()).is_err());
+    }
+}
+
+// Synthetic official metadata: no prior per-version review is needed to select/download.
+// Selection remains metadata-only and cannot authorize installation or shared data.
+#[test]
+fn HistoryCatalog_DynamicSignedNsisMetadata_016() {
+    for version in ["0.18.1", "0.18.2", "0.18.3"] {
+        let mut release = parse_catalog_page(OBSERVED).unwrap().remove(0);
+        let old_tag = release.tag_name.clone();
+        let old_version = old_tag.trim_start_matches('v');
+        release.tag_name = format!("v{version}");
+        release.name = Some(format!("CC Desk v{version}"));
+        release.html_url = release.html_url.replace(&old_tag, &release.tag_name);
+        for asset in &mut release.assets {
+            asset.name = asset.name.replace(old_version, version);
+            asset.browser_download_url = asset
+                .browser_download_url
+                .replace(&old_tag, &release.tag_name)
+                .replace(old_version, version);
+        }
+        let source = Arc::new(Source {
+            list: vec![release.clone()],
+            release: Mutex::new(release),
+        });
+        let catalog = CatalogService::new(source, HostPlatform::WindowsX64);
+        let caller = CallerIdentity {
+            instance_id: "dynamic-catalog-test".into(),
+            window_label: "main".into(),
+            webview_epoch: WireU64::parse("1").unwrap(),
+        };
+        let row = catalog.list(&caller, None).unwrap().rows.remove(0);
+        assert!(row.select_allowed, "{version}: {:?}", row.blocked_reason);
+        assert!(!row.install_ready);
+        assert_eq!(
+            row.data_modes.keep_current_data,
+            HistoryDataMode::Unavailable
+        );
+        let selected = catalog
+            .select(&caller, &row.release_id, row.asset_id.as_deref().unwrap())
+            .unwrap();
+        let selection = catalog
+            .resolve_selection(&caller, &selected.selection_token)
+            .unwrap();
+        assert_eq!(selection.version(), version);
+        assert_eq!(
+            selection.installer().name(),
+            format!("CC.Desk_{version}_x64-setup.exe")
+        );
+        assert_eq!(
+            selection.signature().name(),
+            format!("CC.Desk_{version}_x64-setup.exe.sig")
+        );
     }
 }

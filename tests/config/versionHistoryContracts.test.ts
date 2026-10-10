@@ -71,6 +71,8 @@ describe('Rust preparation serialization fixture', () => {
 
 import switchWire from '../fixtures/version-switch-wire.json'
 import { parseSwitchReview, parseSwitchTicket } from '@/utils/versionHistoryContracts'
+import installWire from '../fixtures/version-historical-install-wire.json'
+import { parseOrdinaryInstallReview } from '@/utils/versionHistoryContracts'
 
 describe('Rust ordinary switch serialization fixture', () => {
   // 检查确切的共享契约，准备身份与管理器UUID不可混用。
@@ -119,5 +121,30 @@ describe('ordinary switch cross-field authority', () => {
         expect(parseSwitchReview({ ...review, allowedActions: [action] }).allowedActions).toEqual([action])
       }
     }
+  })
+})
+
+describe('ordinary historical installer wire boundary', () => {
+  // 普通安装单独绑定完整备份与手动恢复，交接和启动不能成为成功回执。
+  it('HistoryWire_OrdinaryReview_007', () => {
+    for (const review of installWire.reviews) expect(parseOrdinaryInstallReview(review)).toEqual(review)
+    const aborted = { ...installWire.reviews[1], phase: 'aborted', blockReason: null,
+      installationOutcome: 'not-started', allowedActions: ['refresh', 'prepare-again'] }
+    expect(parseOrdinaryInstallReview(aborted)).toEqual(aborted)
+  })
+  // 原审核模式、未知路径、成功声明与交接后安装动作不能通过普通契约。
+  it('HistoryWire_RejectOrdinaryAuthority_008', () => {
+    for (const changed of [
+      { contextPolicy: 'fresh-settings-preserve-current-shared-cli' }, { blockReason: 'PAYLOAD_UNVERIFIED' },
+      { installationOutcome: 'installed' }, { installationOutcome: 'installer-started' },
+      { backupLocation: 'https://example.com/backup' }, { backupLocation: 'C:\\private\nSECRET' },
+      { installerPath: 'C:\\private\\setup.exe' }, { allowedActions: ['begin-switch'] },
+      { transactionId: installWire.ticket.transactionId },
+    ]) expect(() => parseOrdinaryInstallReview({ ...installWire.reviews[0], ...changed })).toThrow('HISTORY_INVALID_RESPONSE')
+    for (const changed of [
+      { transactionId: null }, { allowedActions: ['refresh', 'install'] },
+      { allowedActions: ['cancel-preparation'] }, { blockReason: null }, { installationOutcome: 'not-started' },
+    ]) expect(() => parseOrdinaryInstallReview({ ...installWire.reviews[1], ...changed })).toThrow('HISTORY_INVALID_RESPONSE')
+    expect(() => parseOrdinaryInstallReview({ ...installWire.reviews[2], backupLocation: null })).toThrow('HISTORY_INVALID_RESPONSE')
   })
 })

@@ -39,7 +39,10 @@ impl ReenteredManager {
     /// candidate transaction. The actual current image must then be the exact
     /// retained manager object belonging to that transaction's complete bundle.
     pub(crate) fn open(request: Option<&ManagerRequest>) -> Result<Self, SafeError> {
-        let installation = InstallationControl::open(false)?;
+        let installation = match request {
+            Some(request) => InstallationControl::open_for_manager(request.transaction_id())?,
+            None => InstallationControl::open(false)?,
+        };
         Self::open_under(installation, request)
     }
     fn open_under(
@@ -128,8 +131,10 @@ impl ReenteredManager {
     /// released before returning. Missing old process/job proof is never inferred
     /// from PIDs, absent handles, durable booleans, digests or elapsed time.
     pub(crate) fn inspect(&self) -> Result<ManagerStatus, SafeError> {
-        if let Ok(status) = self.inspect_recovered_return() {
-            return Ok(status);
+        if !self.installation.is_ordinary_backup() {
+            if let Ok(status) = self.inspect_recovered_return() {
+                return Ok(status);
+            }
         }
         let control = self.installation.acquire_control()?;
         self.data.verify_installation(&self.installation)?;
@@ -153,7 +158,7 @@ impl ReenteredManager {
         if marker.binding() != &self.binding {
             return Err(error("HISTORY_HANDOFF_CHANGED"));
         }
-        let store = JournalStore::open_windows_transaction(
+        let mut store = JournalStore::open_windows_transaction(
             self.installation.root().clone(),
             self.transaction_id(),
         )?;
@@ -168,7 +173,129 @@ impl ReenteredManager {
             .map_err(unavailable)?;
         // Even a clean terminal checkpoint is a prior observation, not a live
         // proof reacquired by this process. This route offers refresh only.
-        ManagerStatus::project_reentry(journal, self.material.diagnostic())
+        let status = ManagerStatus::project_reentry(journal, self.material.diagnostic())?;
+        if self.installation.is_ordinary_backup() {
+            match self.inspect_ordinary_backup(&control, &mut store) {
+                Ok((location, handed_off)) => {
+                    status.with_ordinary_install(Some(&location), handed_off)
+                }
+                Err(_) => status.with_ordinary_install(None, false),
+            }
+        } else {
+            Ok(status)
+        }
+    }
+    /// Re-admit held backup contents for display only. No expired process, Job,
+    /// snapshot boundary, Return or installer replay owner is reconstructed.
+    fn inspect_ordinary_backup(
+        &self,
+        control: &super::lease::ControlLease,
+        store: &mut JournalStore,
+    ) -> Result<(String, bool), SafeError> {
+        use super::{
+            context::bundle_restore::ObservedInstallationBackup,
+            context::{ContextJournal, PrivateCopyManifest, RetainedContextRoots},
+            files::{ComponentName, PrivateDirectory},
+            manager_bundle::ManagerRecordReference,
+            source_lifecycle::SourceHandoffExitManifest,
+        };
+        use crate::version_history::journal::{EffectKind, JournalPhase};
+        if !self.installation.is_ordinary_backup() {
+            return Err(error("HISTORY_ROOT_CHANGED"));
+        }
+        self.material.verify().map_err(unavailable)?;
+        self.data.verify_installation(&self.installation)?;
+        let user = CurrentUser::capture().map_err(unavailable)?;
+        let exclusive = self
+            .installation
+            .leases()
+            .acquire_exclusive(control)
+            .map_err(unavailable)?;
+        store.bind_existing(&self.binding)?;
+        let state = store
+            .inspect(&self.binding)?
+            .last_valid
+            .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?;
+        if !matches!(
+            state.phase(),
+            JournalPhase::SourceSealed
+                | JournalPhase::FreshReady
+                | JournalPhase::Installing
+                | JournalPhase::RecoveryRequired
+        ) {
+            return Err(error("HISTORY_RECOVERY_REQUIRED"));
+        }
+        let exit: SourceHandoffExitManifest = serde_json::from_slice(
+            &store.read_manifest(
+                state
+                    .manifest(ManifestRole::SourceHandoffExit)
+                    .ok_or_else(|| error("HISTORY_RECOVERY_REQUIRED"))?,
+            )?,
+        )
+        .map_err(unavailable)?;
+        let parents = exit.recovery_context_parents(&self.binding)?;
+        let quarantine = Arc::new(
+            PrivateDirectory::open_existing(
+                self.data.root().directory().clone(),
+                ComponentName::new(std::ffi::OsStr::new("source-context")).map_err(unavailable)?,
+                &user,
+            )
+            .map_err(unavailable)?,
+        );
+        let (_, source_receipt) =
+            store.ordinary_backup_observation(&EffectKind::VerifySourceBundleCopy)?;
+        let (reference, _copy): (ManagerRecordReference, PrivateCopyManifest) =
+            serde_json::from_slice(&source_receipt).map_err(unavailable)?;
+        let mut journal = ContextJournal::new(
+            store,
+            self.installation.root().clone(),
+            &exclusive,
+            self.binding.clone(),
+            state.generation(),
+        )
+        .map_err(unavailable)?;
+        let bundle = ObservedInstallationBackup::reopen(
+            self.data.root().clone(),
+            &reference,
+            &user,
+            &self.binding,
+        )
+        .map_err(unavailable)?;
+        let context = RetainedContextRoots::reopen_observation(
+            parents,
+            self.data.root().clone(),
+            quarantine,
+            &user,
+            &mut journal,
+        )
+        .map_err(unavailable)?;
+        bundle.verify(&user).map_err(unavailable)?;
+        context.verify(&user).map_err(unavailable)?;
+        drop(journal);
+        let handed_off = match (
+            store.ordinary_backup_observation(&EffectKind::InstallerCreateSuspended),
+            store.ordinary_backup_observation(&EffectKind::InstallerResume),
+        ) {
+            (Ok((_, created)), Ok((_, resumed))) => {
+                super::process::verify_ordinary_handoff_observation(
+                    &created,
+                    &resumed,
+                    &self.binding.target_package,
+                )
+                .is_ok()
+            }
+            _ => false,
+        };
+        let location = self.installation.ordinary_backup_location()?;
+        bundle.verify(&user).map_err(unavailable)?;
+        context.verify(&user).map_err(unavailable)?;
+        exclusive
+            .verify_root(self.installation.root())
+            .map_err(unavailable)?;
+        control
+            .verify_root(self.installation.root())
+            .map_err(unavailable)?;
+        Ok((location, handed_off))
     }
 }
 fn require_same_binding(

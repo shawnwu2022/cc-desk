@@ -1858,3 +1858,100 @@ fn BundleReturn_SecurityContract_006() {
     *attributes ^= windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY.0;
     assert!(verify_logical_restore(&original, &restored).is_err());
 }
+
+#[test]
+fn OrdinaryBackup_ReplacedLiveInstallationDoesNotHideCopies_026() {
+    let temp = tempfile::tempdir().unwrap();
+    let user = CurrentUser::capture().unwrap();
+    let parent = Directory::open_absolute(temp.path()).unwrap();
+    let install = Arc::new(
+        PrivateDirectory::create_new(parent.clone(), component("install").unwrap(), &user).unwrap(),
+    );
+    let data = Arc::new(
+        PrivateDirectory::create_new(parent.clone(), component("data").unwrap(), &user).unwrap(),
+    );
+    let records = Arc::new(
+        PrivateDirectory::create_new(parent.clone(), component("records").unwrap(), &user).unwrap(),
+    );
+    for (name, bytes) in [
+        ("cc-desk.exe", "original image"),
+        ("ConPTY.dll", "original DLL"),
+        ("unknown.bin", "original unknown companion"),
+    ] {
+        drop(ManagerRecord::create(install.clone(), name, &bytes, &user).unwrap());
+    }
+    let tree = HeldTree::capture_private(
+        install.directory().clone(),
+        SnapshotLimits::default(),
+        &user,
+    )
+    .unwrap();
+    let manifest = InstalledBundleManifest {
+        schema: 1,
+        original_image_name: "cc-desk.exe".into(),
+        fenced_image_location: "1".repeat(64),
+        tree: tree.manifest.clone(),
+    };
+    let source = HeldBundle { tree, manifest };
+    let binding = JournalBinding {
+        transaction_id: "11111111-1111-4111-8111-111111111111".into(),
+        source_context: "22222222-2222-4222-8222-222222222222".into(),
+        target_context: "33333333-3333-4333-8333-333333333333".into(),
+        user_installation: "1".repeat(64),
+        source_bundle: source.manifest.logical_digest().unwrap(),
+        target_package: "3".repeat(64),
+        target_payload: "4".repeat(64),
+        roots: "5".repeat(64),
+    };
+    let mut store = JournalStore::open_windows(records.clone()).unwrap();
+    store
+        .initialize(
+            binding.clone(),
+            CapacityPlan::for_effects(150, 200, 30, 4096).unwrap(),
+        )
+        .unwrap();
+    let leases = LeaseFiles::open(records.clone(), &user).unwrap();
+    let control = leases.acquire_control().unwrap();
+    let lease = leases.acquire_exclusive(&control).unwrap();
+    let mut journal = ContextJournal::new(&mut store, records, &lease, binding.clone(), 0).unwrap();
+    let retained = RetainedInstallationBundle::preserve_observed(
+        install.directory().clone(),
+        &temp.path().join("install"),
+        &source,
+        data.clone(),
+        &user,
+        &mut journal,
+    )
+    .unwrap();
+    let reference = retained.reference().clone();
+    drop(retained);
+    drop(source);
+    drop(install);
+    std::fs::rename(
+        temp.path().join("install"),
+        temp.path().join("previous-installation"),
+    )
+    .unwrap();
+    std::fs::create_dir(temp.path().join("install")).unwrap();
+    assert!(
+        RetainedInstallationBundle::reopen(data.clone(), &reference, &user, &mut journal).is_err(),
+        "reviewed live scope remains exact"
+    );
+    let observation =
+        ObservedInstallationBackup::reopen(data.clone(), &reference, &user, &binding).unwrap();
+    observation.verify(&user).unwrap();
+    let mut other = binding.clone();
+    other.source_bundle = "f".repeat(64);
+    assert!(ObservedInstallationBackup::reopen(data.clone(), &reference, &user, &other).is_err());
+    drop(observation);
+    std::fs::write(
+        temp.path()
+            .join("data/source-installation-copy/unknown.bin"),
+        b"changed backup",
+    )
+    .unwrap();
+    assert!(
+        ObservedInstallationBackup::reopen(data, &reference, &user, &binding).is_err(),
+        "past record never authorizes changed backup bytes"
+    );
+}

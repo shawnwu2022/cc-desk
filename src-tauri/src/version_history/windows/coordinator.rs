@@ -54,7 +54,7 @@ use crate::{
         maintenance::{ActiveContextMarker, SnapshotBoundary},
         manager_types::{ManagerAction, ManagerBlockReason, ManagerStatus},
         manager_worker::{AcceptedManagerReturn, ProgressPublisher},
-        payload_policy::{PayloadAdmission, PreservedCompanions},
+        payload_policy::PreservedCompanions,
         snapshot::{SnapshotLimits, SnapshotManifest},
     },
 };
@@ -152,8 +152,9 @@ struct TransactionOwners {
     data: Arc<TransactionDataRoot>,
     binding: JournalBinding,
     package: Arc<RetainedPackage>,
-    payload: PayloadAdmission,
-    companions: PreservedCompanions,
+    payload: super::install_admission::InstallAdmission,
+    companions: Option<PreservedCompanions>,
+    global_custody: Option<super::startup::GlobalLeaseCustody>,
     original_bundle: Arc<RetainedInstallationBundle>,
     terminal: Arc<SourceHandoffTerminal>,
     scope: Arc<FencedInstallation>,
@@ -226,6 +227,7 @@ impl SourceExecution {
                 package: parts.package,
                 payload: parts.payload,
                 companions: parts.companions,
+                global_custody: parts.global_custody,
                 original_bundle: parts.original_bundle,
                 terminal: parts.terminal,
                 scope: parts.scope,
@@ -272,6 +274,9 @@ impl SourceExecution {
         }
     }
     fn verify(&mut self) -> Result<(), SafeError> {
+        if let Some(custody) = &self.parts.global_custody {
+            custody.verify()?;
+        }
         self.parts
             .data
             .verify_installation(&self.parts.installation)?;
@@ -630,10 +635,11 @@ impl SourceExecution {
             &self.parts.binding.source_bundle,
         )?;
         self.current_bundle = Some(readmitted_bundle);
-        self.parts
-            .companions
-            .verify_source(self.current_bundle.as_ref().expect("source bundle"))
-            .map_err(blocked)?;
+        if let Some(companions) = &self.parts.companions {
+            companions
+                .verify_source(self.current_bundle.as_ref().expect("source bundle"))
+                .map_err(blocked)?;
+        }
         let admitted = AdmittedSourceSnapshot::capture(
             SourceSnapshotInputs {
                 binding: self.parts.binding.clone(),
@@ -937,6 +943,7 @@ fn request_unstarted_return(
             EffectKind::InstallerResume,
             EffectKind::InstallerTerminalOutcome,
         ),
+        JobKind::OrdinaryInstaller => return Err(error("HISTORY_ORDINARY_INSTALL_UNAVAILABLE")),
         JobKind::HistoricalApplication => (
             EffectKind::HistoricalCreateSuspended,
             EffectKind::HistoricalResume,
@@ -1084,6 +1091,170 @@ fn await_terminal(
 }
 
 impl SourceExecution {
+    /// A distinct one-shot handoff. Complete source backups and fresh roots are
+    /// admitted by the same executors, but no installed-output/Return claim is made.
+    fn handoff_ordinary(
+        &mut self,
+        owner: &InitialManager,
+        progress: &ProgressPublisher,
+    ) -> Result<(), SafeError> {
+        if !self.parts.payload.is_ordinary() || !self.parts.installation.is_ordinary_backup() {
+            return Err(error("HISTORY_HANDOFF_CHANGED"));
+        }
+        self.verify()?;
+        let user = CurrentUser::capture().map_err(blocked)?;
+        self.originals
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_CONTEXT_CHANGED"))?
+            .verify(&user)
+            .map_err(blocked)?;
+        self.parts.original_bundle.verify(&user).map_err(blocked)?;
+        self.reserve
+            .as_ref()
+            .ok_or_else(|| error("HISTORY_CAPACITY"))?
+            .verify_for(
+                &self.parts.data,
+                &self.parts.installation,
+                &self.parts.binding,
+            )?;
+        {
+            let mut journal = ContextJournal::new(
+                &mut self.parts.store,
+                self.parts.installation.root().clone(),
+                &self.parts.exclusive,
+                self.parts.binding.clone(),
+                self.parts.generation,
+            )
+            .map_err(blocked)?;
+            let result = self
+                .fresh
+                .as_ref()
+                .ok_or_else(|| error("HISTORY_CONTEXT_CHANGED"))?
+                .verify_for_launch(
+                    self.originals.as_ref().expect("sealed originals"),
+                    &user,
+                    &mut journal,
+                );
+            self.parts.generation = journal.generation();
+            result.map_err(blocked)?;
+        }
+        let backup_location = self.parts.installation.ordinary_backup_location()?;
+        // Readers are released only after durable full backup admission. The
+        // protected source copies remain present for manual restoration.
+        drop(self.fresh.take());
+        drop(self.current_bundle.take());
+        self.phase(JournalPhase::Installing)?;
+        progress.publish_ordinary(&mut self.parts.store, Some(&backup_location), false, None)?;
+        let image = self.parts.package.installer_image()?;
+        let command = CommandLine::ordinary_nsis(
+            &super::manager_process::launch_path(super::handle(&image.file)).map_err(blocked)?,
+            &image,
+            self.parts.scope.original_path().as_os_str(),
+        )
+        .map_err(blocked)?;
+        self.no_source_launch
+            .as_mut()
+            .ok_or_else(|| error("HISTORY_EARLY_ABORT_BLOCKED"))?
+            .invalidate_before_process_intent();
+        let pending = self.begin(
+            EffectKind::InstallerCreateSuspended,
+            &(
+                self.parts.package.record_digest(),
+                self.parts.scope.directory().identity().clone(),
+            ),
+            &(JobKind::OrdinaryInstaller, command.text()),
+        )?;
+        let mut process = match PreparedProcess::create_suspended_from_manager(
+            image,
+            command,
+            JobKind::OrdinaryInstaller,
+            self.parts.data.root().clone(),
+            &user,
+            &mut self.parts.exclusive,
+            owner.child.manager_job(),
+        ) {
+            Ok(process) => process,
+            Err(failure) => {
+                record_unknown(&mut self.parts.store, &mut self.parts.generation, pending);
+                return Err(blocked(failure));
+            }
+        };
+        // Persisted creation precedes the resume intent. Any uncertainty retains
+        // every owner on this worker; it never turns into replay or target success.
+        let mut receipt = None;
+        let outcome = (|| {
+            receipt = Some(process.persist_identity(&user).map_err(blocked)?);
+            let receipt = receipt.as_ref().expect("ordinary process identity");
+            record_applied(
+                &mut self.parts.store,
+                &mut self.parts.generation,
+                pending,
+                receipt.record_bytes().map_err(blocked)?,
+            )?;
+            let resume = record_intent(
+                &mut self.parts.store,
+                &mut self.parts.generation,
+                EffectKind::InstallerResume,
+                &process.launch_record(),
+                &"one-shot ordinary signed installer handoff",
+            )?;
+            self.parts.package.verify_retained()?;
+            self.parts.original_bundle.verify(&user).map_err(blocked)?;
+            self.originals
+                .as_ref()
+                .expect("sealed originals")
+                .verify(&user)
+                .map_err(blocked)?;
+            if let Err(failure) = process.ordinary_prepare_resume(receipt) {
+                record_unknown(&mut self.parts.store, &mut self.parts.generation, resume);
+                return Err(blocked(failure));
+            }
+            // The independently admitted global installation lease protects the
+            // source through backup and final prepare, then releases immediately
+            // before the exact normal installer resume so its target can start.
+            self.parts
+                .global_custody
+                .take()
+                .ok_or_else(|| error("HISTORY_HANDOFF_CHANGED"))?
+                .release_at_installer_handoff()?;
+            if let Err(failure) = process.ordinary_resume_prepared(receipt) {
+                record_unknown(&mut self.parts.store, &mut self.parts.generation, resume);
+                return Err(blocked(failure));
+            }
+            process
+                .verify_ordinary_launch(receipt, &user)
+                .map_err(blocked)?;
+            record_applied(
+                &mut self.parts.store,
+                &mut self.parts.generation,
+                resume,
+                &serde_json::to_vec(&process.launch_record()).map_err(blocked)?,
+            )?;
+            publish_checkpoint(
+                &self.parts.installation,
+                &self.parts.control,
+                &self.parts.binding,
+                &mut self.parts.store,
+            )?;
+            progress.publish_ordinary(&mut self.parts.store, Some(&backup_location), true, None)?;
+            Ok::<_, SafeError>(())
+        })();
+        if let Err(failure) = outcome {
+            progress.fail_ordinary(failure, ManagerBlockReason::InstallerOutcomeUnknown);
+            let _owners = (process, receipt);
+            loop {
+                match progress.recv_command_timeout(std::time::Duration::from_secs(1)) {
+                    Ok(Some(command)) => command.finish(Err(error("HISTORY_RECOVERY_REQUIRED"))),
+                    Ok(None) => (),
+                    Err(_) => std::thread::park_timeout(std::time::Duration::from_secs(1)),
+                }
+            }
+        }
+        // Zero-kill lifetime was read back and exact resume receipt admitted.
+        // Normal installer interaction owns completion; backups are not deleted.
+        drop(process);
+        Ok(())
+    }
     fn install(
         &mut self,
         owner: &InitialManager,
@@ -2583,6 +2754,9 @@ pub(crate) fn run_acquired(
         source.prepare_source(&progress)?;
         source.seal_and_create_fresh(&progress)?;
         let initial = owner.lock();
+        if source.parts.payload.is_ordinary() {
+            return source.handoff_ordinary(&initial, &progress);
+        }
         if matches!(
             source.install(&initial, &progress)?,
             InstallerStage::ReturnRequested
@@ -2595,9 +2769,11 @@ pub(crate) fn run_acquired(
         command.finish(result);
         outcome
     })();
+    let ordinary = source.parts.payload.is_ordinary();
     let result = match result {
         Err(_)
-            if !source.failure_recovery_started
+            if !ordinary
+                && !source.failure_recovery_started
                 && source.installer.is_some()
                 && source.historical.is_none()
                 && source.return_attempt.is_none()
@@ -2606,7 +2782,8 @@ pub(crate) fn run_acquired(
             source.recover_failed_installer(&progress)
         }
         Err(_)
-            if !source.failure_recovery_started
+            if !ordinary
+                && !source.failure_recovery_started
                 && source.installer.is_none()
                 && source.historical.is_none()
                 && source.return_attempt.is_none()
@@ -2622,7 +2799,14 @@ pub(crate) fn run_acquired(
             if let Some(command) = source.requested_return.take() {
                 command.finish(Err(failure.clone()));
             }
-            progress.fail(failure.clone());
+            if ordinary {
+                progress.fail_ordinary(
+                    failure.clone(),
+                    ManagerBlockReason::RecoveryEvidenceUnavailable,
+                );
+            } else {
+                progress.fail(failure.clone());
+            }
             Err(CoordinatorFailure {
                 error: failure,
                 source,

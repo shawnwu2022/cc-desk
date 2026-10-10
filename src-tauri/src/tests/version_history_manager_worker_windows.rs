@@ -88,6 +88,67 @@ fn reentry_state() -> Arc<Mutex<ReentryCommandState>> {
     Arc::new(Mutex::new(state))
 }
 
+// 后续线程失败不得覆盖普通安装已经证明的完整备份或原有具体阻止原因。
+#[test]
+fn HistoryManagerWorker_OrdinaryFailureRetention_010() {
+    use crate::version_history::manager_types::ManagerPhase;
+    let status =
+        ManagerStatus::fixture(ManagerPhase::Installing, None, vec![ManagerAction::Refresh])
+            .with_ordinary_install(Some("C:\\full-backup"), true)
+            .unwrap();
+    let mut cache = ProgressCache {
+        latest: Some(Ok(status)),
+    };
+    cache.fail_preserving_ordinary(
+        error("HISTORY_STORAGE_UNAVAILABLE"),
+        ManagerBlockReason::StorageUnavailable,
+    );
+    cache.fail_preserving_ordinary(
+        error("HISTORY_RECOVERY_REQUIRED"),
+        ManagerBlockReason::RecoveryEvidenceUnavailable,
+    );
+    let status = cache.read().unwrap();
+    assert_eq!(status.phase, ManagerPhase::RecoveryRequired);
+    assert_eq!(
+        status.blocked_reason,
+        Some(ManagerBlockReason::StorageUnavailable)
+    );
+    assert_eq!(status.allowed_actions, vec![ManagerAction::Refresh]);
+    assert_eq!(
+        status
+            .ordinary_install
+            .as_ref()
+            .unwrap()
+            .backup_location
+            .as_deref(),
+        Some("C:\\full-backup")
+    );
+    let pending =
+        ManagerStatus::fixture(ManagerPhase::Preparing, None, vec![ManagerAction::Refresh])
+            .with_ordinary_install(None, false)
+            .unwrap();
+    let mut cache = ProgressCache {
+        latest: Some(Ok(pending)),
+    };
+    cache.fail_preserving_ordinary(
+        error("HISTORY_SOURCE_EXIT_UNCONFIRMED"),
+        ManagerBlockReason::SourceExitUnconfirmed,
+    );
+    assert!(cache
+        .read()
+        .unwrap()
+        .ordinary_install
+        .unwrap()
+        .backup_location
+        .is_none());
+    let mut cache = ProgressCache::default();
+    cache.fail_preserving_ordinary(
+        error("HISTORY_RECOVERY_REQUIRED"),
+        ManagerBlockReason::RecoveryEvidenceUnavailable,
+    );
+    assert_eq!(cache.read().unwrap_err().code, "HISTORY_RECOVERY_REQUIRED");
+}
+
 // 同一请求并发点击、完成后的旧代次与丢失回执均不能再次派发。
 #[test]
 fn HistoryManagerWorker_ReentrySingleDispatch_006() {

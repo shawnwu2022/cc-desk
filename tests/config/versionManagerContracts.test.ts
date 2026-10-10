@@ -2,12 +2,29 @@ import { readFileSync, existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseManagerStatus } from '@/manager/contracts'
+import ordinaryWire from '../fixtures/version-manager-ordinary-wire.json'
 import { createVersionManagerClient } from '@/manager/api'
 import wire from '../fixtures/version-manager-wire.json'
 
 afterEach(() => { delete window.__CC_DESK_VERSION_MANAGER__ })
 
 describe('version manager authenticated client', () => {
+  it('ManagerClient_OrdinaryFence_008', async () => {
+    for (const next of [
+      { ...wire.recoveryRequired, transactionId: ordinaryWire.installerHandedOff.transactionId, sourceVersion: '0.18.4', targetVersion: '0.18.3', generation: '3' },
+      { ...ordinaryWire.recoveryRequired },
+      { ...ordinaryWire.recoveryRequired, ordinaryInstall: { ...ordinaryWire.recoveryRequired.ordinaryInstall, backupLocation: null } },
+      { ...ordinaryWire.installerHandedOff, generation: '3', ordinaryInstall: { ...ordinaryWire.installerHandedOff.ordinaryInstall, backupLocation: 'C:\\different' } },
+    ]) {
+      const invoke = vi.fn().mockResolvedValueOnce(ordinaryWire.installerHandedOff).mockResolvedValueOnce(next)
+      window.__CC_DESK_VERSION_MANAGER__ = { invoke }
+      const client = createVersionManagerClient()!
+      await client.inspect()
+      await expect(client.inspect()).rejects.toThrow('MANAGER_DOCUMENT_CHANGED')
+      expect(client.isCurrent()).toBe(false)
+    }
+  })
+
   // 大整数 generation 原样发回，事务与路径只能由后端文档确定。
   it('ManagerClient_ExactPayload_001', async () => {
     const status = { ...wire.installedUnconfirmed, generation: '9007199254740993' }
@@ -107,6 +124,32 @@ describe('version manager Rust wire contract', () => {
   it('ManagerWire_RustSnapshots_001', () => {
     for (const value of Object.values(wire)) expect(parseManagerStatus(value)).toEqual(value)
     expect(parseManagerStatus(wire.installedUnconfirmed).phase).not.toBe(parseManagerStatus(wire.historicalActive).phase)
+  })
+
+  it('ManagerWire_OrdinarySnapshots_005', () => {
+    for (const value of Object.values(ordinaryWire)) {
+      const parsed = parseManagerStatus(value)
+      expect(parsed).toEqual(value)
+      expect(Object.isFrozen(parsed.ordinaryInstall)).toBe(true)
+    }
+    expect(parseManagerStatus(wire.installing)).not.toHaveProperty('ordinaryInstall')
+  })
+
+  it('ManagerWire_OrdinaryProofAndActions_006', () => {
+    const base = ordinaryWire.installerHandedOff
+    for (const ordinaryInstall of [null, {}, { ...base.ordinaryInstall, extra: true },
+      { ...base.ordinaryInstall, contextPolicy: 'fresh-settings' },
+      { ...base.ordinaryInstall, backupLocation: null },
+      { ...base.ordinaryInstall, backupLocation: '' },
+      { ...base.ordinaryInstall, backupLocation: '/tmp/backup' },
+      { ...base.ordinaryInstall, backupLocation: 'C:\\backup\nsecret' },
+      { ...base.ordinaryInstall, installerHandedOff: 'true' },
+    ]) expect(() => parseManagerStatus({ ...base, ordinaryInstall })).toThrow('MANAGER_INVALID_RESPONSE')
+    for (const phase of ['installed-unconfirmed', 'historical-active', 'restored', 'returning', 'pre-context-aborted', 'preparing']) {
+      expect(() => parseManagerStatus({ ...base, phase })).toThrow('MANAGER_INVALID_RESPONSE')
+    }
+    expect(() => parseManagerStatus({ ...ordinaryWire.recoveryRequired, allowedActions: ['refresh', 'return-to-previous'] })).toThrow('MANAGER_INVALID_RESPONSE')
+    expect(() => parseManagerStatus({ ...base, phase: 'installed-unconfirmed', allowedActions: ['refresh', 'confirm-historical-version'] })).toThrow('MANAGER_INVALID_RESPONSE')
   })
 
   // 大于 JS 安全整数的 generation 必须保留精确字符串。

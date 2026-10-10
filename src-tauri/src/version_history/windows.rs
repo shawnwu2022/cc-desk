@@ -16,6 +16,8 @@ pub(crate) mod fence;
 #[cfg(windows)]
 pub(crate) mod files;
 #[cfg(windows)]
+pub(crate) mod install_admission;
+#[cfg(windows)]
 pub(crate) mod lease;
 #[cfg(windows)]
 pub(crate) mod manager_bundle;
