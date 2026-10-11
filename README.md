@@ -100,17 +100,35 @@ A green code-side CI run alone is not an authorization to publish, and the gate 
 
 ### Commands
 
+Install dependencies and build the frontend:
+
 ```bash
 npm ci
 npm run typecheck
-npm run test:ci
 npm run build
+```
+
+During iteration, select the checks that cover the changed behavior:
+
+| Scope | Command |
+| --- | --- |
+| Affected tests | `npm test -- <test file or directory>` |
+| Ordinary Node/DOM tests | `npm run test:fast` |
+| Real subprocess/script/HTTP contracts | `npm run test:process` |
+| Full stress workload | `npm run test:stress` |
+
+For complete Vitest and Rust checks, use the following separately from the iteration loop. Before direct Cargo commands on Windows, run `node scripts/prepare-conpty.mjs` from the repository root.
+
+```bash
+npm run test:ci
 
 cd src-tauri
 cargo test --locked
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 ```
+
+`npm test`, `test:all` and `test:ci` cover all four Vitest groups. Independent Node policy, Rust, visual and platform gates remain separate. `test:rust:lib` still contains real process integration tests; it is not a fast suite. See the [test guide](docs/测试编写原则.md) and [CI performance record](docs/ci-performance.md).
 
 Run the desktop app with:
 
@@ -126,6 +144,9 @@ Legacy identifiers such as `~/.cc-box/` and some `CC_BOX_*` names remain where c
 
 ## Documentation
 
+- [Shared agent standard](AGENTS.md) and [tool entry points](docs/agent-guides.md)
+- [Detailed project contracts](docs/project-contracts.md)
+- [Test guide](docs/测试编写原则.md) and [CI performance](docs/ci-performance.md)
 - [Native CLI v3 architecture](docs/native-cli-v3.md)
 - [Native CLI execution ledger](docs/superpowers/execution/)
 - [Real CLI certification command](docs/testing/d20-real-cli-command.md)

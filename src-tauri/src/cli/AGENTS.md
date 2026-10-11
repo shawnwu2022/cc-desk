@@ -1,6 +1,6 @@
 # Native CLI backend module
 
-This directory implements the approved native CLI workspace plan. The older root AGENTS.md describes the existing Claude-only runtime; do not interpret that legacy description as permission to inject Claude settings into Codex.
+This directory implements Native CLI v3. Read the canonical [root AGENTS.md](../../../AGENTS.md), the [Rust directory guide](../../AGENTS.md), and the [Native CLI architecture](../../../docs/native-cli-v3.md). Legacy compatibility is not permission to inject Claude settings into Codex. Commands and code paths below are relative to the repository root unless stated otherwise.
 
 - Keep resolved environment, argv and LaunchSnapshot backend-only. No Serialize on snapshots; Debug must remain redacted. Safe errors contain fixed codes/field identifiers, never original parser errors or user values.
 - Reuse snapshot::configured_program/configured_runner in preflight and launch preparation. A selected program becoming unavailable is an error, never permission to choose another PATH candidate.

@@ -52,6 +52,10 @@ releases/
 # Local agent skills
 .agents/
 
+# 共享 Agent 入口须进入版本管理：即使本机全局 gitignore 忽略 .github，整个目录仍随仓库跟踪
+!/.github/
+!/.github/copilot-instructions.md
+
 # Impeccable design-tool state (local cache, not part of the public project)
 .impeccable/
 

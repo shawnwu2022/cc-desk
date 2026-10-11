@@ -86,17 +86,35 @@ D20 harness 与目标机命令已经实现，但真实 PASS 必须同时具备�
 
 ## 从源码构建
 
+安装依赖并构建前端：
+
 ```bash
 npm ci
 npm run typecheck
-npm run test:ci
 npm run build
+```
+
+日常迭代按修改的行为选择检查：
+
+| 范围 | 命令 |
+| --- | --- |
+| 受影响测试 | `npm test -- <测试文件或目录>` |
+| 普通 Node/DOM 测试 | `npm run test:fast` |
+| 真实子进程/脚本/HTTP 契约 | `npm run test:process` |
+| 完整压力工作量 | `npm run test:stress` |
+
+完整 Vitest 与 Rust 检查独立于迭代环执行。Windows 直接跑 Cargo 前，先从仓库根运行 `node scripts/prepare-conpty.mjs`。
+
+```bash
+npm run test:ci
 
 cd src-tauri
 cargo test --locked
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 ```
+
+`npm test`、`test:all` 与 `test:ci` 均覆盖四个 Vitest 分组。独立 Node policy、Rust、视觉及平台门禁仍单独执行；`test:rust:lib` 仍含真实进程集成测试，不是快速组。详见 [测试指南](docs/测试编写原则.md) 与 [CI 性能记录](docs/ci-performance.md)。
 
 启动桌面开发环境：
 
@@ -112,6 +130,9 @@ CC Desk 最初基于 `orczh-hj/cc-box` fork，现独立维护。MIT 来源与版
 
 ## 文档入口
 
+- [统一 Agent 标准](AGENTS.md) 与 [各工具入口](docs/agent-guides.md)
+- [完整项目约束](docs/project-contracts.md)
+- [测试指南](docs/测试编写原则.md) 与 [CI 性能](docs/ci-performance.md)
 - [Native CLI v3 架构](docs/native-cli-v3.md)
 - [Native CLI 执行账本](docs/superpowers/execution/)
 - [D20 真实 CLI 认证命令](docs/testing/d20-real-cli-command.md)

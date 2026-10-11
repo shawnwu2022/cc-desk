@@ -396,3 +396,161 @@ the immutable plan's source hashes. Original test source, scenario mapping,
 four harness identities, default ignored reasons, 18 external-Job and four
 elevated-host disclosures, original exact selectors, production/release profiles
 and all released assets remain unchanged.
+
+## Local frontend iteration groups (2026-10-11)
+
+`vitest.config.ts` now splits the ordinary inventory into `fast-node`, `fast-dom`,
+`process` and `stress`. Pure Node and real-process files use explicit lists;
+other ordinary tests default to the DOM project. Visual fixtures retain their
+independent config. `npm run test:fast`, `test:process` and `test:stress` select
+the corresponding groups; `npm test`, `test:all` and `test:ci` still run all four.
+Independent Node policy, Rust, browser visual and actual platform evidence are
+not included in the name `test:all`.
+
+This changes the iteration scope and avoids jsdom startup for Node-only files.
+File isolation, original assertions, real subprocess/HTTP execution and the
+5,000-session / 30-owner / 120-change stress workload remain intact. The discovery
+guard uses one actual `vitest list --filesOnly --json` execution to check the
+complete inventory, uniqueness and script selectors, rather than spawning a
+separate list process for every selector.
+
+Local Windows comparisons used the same test names. The 30-file, 219-test Node
+subset took 9.01 seconds under the previous jsdom config and 5.35 seconds under
+Node. The complete 161-file fast subset took 45.22 versus 45.96 seconds, so this
+measurement does not show a total fast-group wall-time gain. The old full suite
+took 58.79 seconds and the grouped suite 55.72 seconds in separate local runs;
+these single samples are not a hosted CI improvement estimate.
+
+The grouped full run retained all 2,426 original test names and statuses, plus
+two new guard cases: 2,428 total, 2,422 passed, four existing observer reporter
+failures and two pending cases. The reporter failures and separate Windows Node
+policy portability failures were not removed or reclassified to obtain a pass.
+No new hosted CI, Rust or real-CLI run was performed for this grouping change.
+The hosted Rust shard and roundtrip build paths described above still need
+measurements before claiming an ordinary CI critical-path reduction.
+
+Agent execution rules and the command index are maintained in the canonical
+[AGENTS.md](../AGENTS.md); tool entry files import or point to it as described in
+[agent-guides.md](agent-guides.md). Detailed iteration and full-evidence guidance
+is in the [test guide](测试编写原则.md). Changes to this grouping must update those
+documents and the READMEs without adding separate tool-specific rule copies.
+
+## Local runtime projection and portable fixtures (2026-10-11)
+
+The next batch changes `useUnifiedWorkspaceRuntime` only at the catalog refresh
+boundary. Each Legacy/Native owner has its own reactive watch. Changes enqueue
+the normalized project path once per Vue tick and call the existing scoped
+`catalog.refresh(projectPath)`. Moving an owner refreshes both paths; replacement,
+removal and unmount stop the former watch. Attention updates and removals use the
+exact Legacy PTY's project. History and archive changes still use a full refresh.
+Existing per-project/full request versions, original adapter projection and all
+launch/stop/admission checks remain responsible for correctness.
+
+Four behavioral regressions cover unrelated row identity/open order, owner
+move/replacement/removal/addition, attention acknowledgement and unmount. The
+unrelated-row test failed against the original global refresh before the change.
+Existing adapters and session operations are not replaced with mock projections.
+
+An isolated Windows run before and after used the same `test:stress` command,
+both original test names, 5,000 sessions, 30 owners, 120 changes and all original
+assertions. Vitest case durations, including each case's initialization, were:
+
+| Original case | Before | After |
+| --- | --- | --- |
+| `Stress_50Projects100Sessions_001` | 2.065 s | 1.673 s |
+| `Stress_30Owners120Changes_002` | 19.780 s | 3.349 s |
+
+These are one local before/after pair, not a per-event timing or hosted CI
+critical-path estimate. JSON case reports were retained as local analysis
+artifacts. No shard weights or required checks are adjusted using these numbers.
+
+Portable fixture repairs retain the real execution checks: workflow text matching
+normalizes CRLF only in the test, Node child scripts use `fileURLToPath`, and the
+real rustc/libtest fixture has `.exe` on Windows. The executable Rust result gate
+now proves an accepted success and then the precise rejection for every original
+invalid result; a missing script no longer masquerades as a rejected job result.
+The reporter fixture converts individual Windows backslashes and runs Bash with
+`--noprofile --norc`, preserving the actual production script, pipe/body bounds,
+strict silent output and no-secret assertions. Six Node policy failures and four
+reporter failures were reproduced before repair; targeted runs are now 17/17 and
+5/5 passed. The production reporter, CI workflow, Rust inventory and source-byte
+hashing are unchanged.
+
+The full follow-up run retained all 2,428 prior cases, including duplicate-name
+occurrences, and added only the four catalog regressions: 176 files, 2,432 cases,
+2,430 passed, zero failed and the original two pending. The original four
+reporter failures are now passed. All 19 Node policy files ran: 212 cases,
+206 passed, zero failed and six unchanged Windows skips for Unix executable
+fixtures. Typecheck, production frontend build and `git diff --check` passed.
+The full Vitest and Node runs overlapped, so their wall times are not an isolated
+performance comparison. No new hosted CI or real-CLI validation is claimed.
+
+## Local Rust calibration boundary (2026-10-11)
+
+The follow-up rebuilt the current library harness with Rust 1.98.1, locked
+dependencies and the CI's `DEV_DEBUG=0` / `TEST_DEBUG=0` profiles, after verifying
+the pinned ConPTY. Cargo was run from `src-tauri` so its repository configuration
+applied. Cargo JSON identified the actual executable; its hash, 266 tracked
+Rust/manifest/lock source hashes and all 1,465 library names were recorded. This
+is a local diagnostic subset, not the ordinary four-harness coverage report.
+
+The ordinary PowerShell probe reported `inJob=true`, `elevated=false`. Four
+non-Job-free exact cases first failed opening their default temporary fixture
+root with `RelativeOpenFailure(3221225506)` / `STATUS_ACCESS_DENIED`, before the
+test logic. Those short failures are not timing samples. Pointing only the
+owned child processes' `TEMP`/`TMP` at a disposable workspace directory allowed
+real execution without ACL/token changes, alternate implementations or removed
+assertions. Raw initialization failures and the second run were both retained.
+
+Each exact case was listed and count-checked first, then run serially from the
+same executable with a local 300-second measurement bound:
+
+| Original case | Outcome | Local wall time |
+| --- | --- | --- |
+| `HistoryContext_FreshAbsentUdf_032` | 1 passed; original assertions | 104.960 s |
+| `HistoryContext_ReturnMissingImage_036` | 1 passed; original assertions | 118.789 s |
+| `BundleReturn_RestorePresentImage_002` | Timeout; no completed summary | 300-second bound |
+| `BundleReturn_FreshCopyMissing_003` | 1 passed; original assertions | 24.873 s |
+
+The three completed runs each reported exactly one pass, zero failures/ignores
+and 1,464 filtered names. The timeout retains partial raw output and is neither
+a pass nor a completed duration sample. The local bound does not alter the
+20-minute CI harness deadline. The generic 120 weight spans materially different
+scenarios; these single local samples and one timeout do not establish hosted
+weights, concurrent shard wall time or resource contention. Shard weights,
+partitioning, required checks and original exclusions remain unchanged. A valid
+update still needs completed same-source runner measurements and a full hosted
+comparison, including scheduling and artifact restore costs.
+
+During compilation another workspace operation advanced HEAD from `a8006a6` to
+`8748317`, changing only the test guide; Rust/vendor inputs were unchanged. The
+calibration metadata records `8748317` plus dirty files and actual source hashes.
+Later fixture-cleanup changes are a separate source/test inventory and are not
+mixed into this measurement record.
+
+## Fixture cleanup and format follow-up (2026-10-11)
+
+Two successful context probes still left their disposable trees. The context
+`Fixture` declared `TempDir` before its held Windows directories, so automatic
+field destruction attempted cleanup while those handles still pinned the tree.
+`HistoryContext_FixtureCleanup_041` reproduced the retained directory before the
+fix. Moving only that field and initializer to the end made the regression and
+two original capture/copy cases pass. No `Drop` implementation is added, preserving
+the existing tests that move individual fields out. Production sharing, ACLs,
+directory identity and cleanup authority are unchanged.
+
+Rust 1.98.1 `cargo fmt --check` also found existing layout differences in `pty.rs`,
+`store.rs`, `tests/native_cli_registry.rs` and `tests/store.rs`. Only its exact
+format hunks were applied. The final locked/offline compile produced all four
+original harness identities. The library inventory retained all 1,465 names and
+added only the cleanup regression (1,466 total). A count-checked exact subset of
+21 cleanup/capture/copy, reader, shell validation, session-ID, registry and project
+metadata tests passed; `cargo fmt --check` and diff checks passed. This subset is
+not a full Rust execution or hosted coverage qualification.
+
+The calibration and RED fixture residue was copied to the local diagnostic
+artifact directory; all 448 file lengths and SHA-256 hashes were checked before
+removing only the owned `src-tauri/target/ci-calibration-temp` root. Logs and byte
+diagnostics remain available. These copies do not preserve native object identity
+or prove recovery/CI coverage. No user installation, application state, Cargo
+cache or unknown process was cleaned.
