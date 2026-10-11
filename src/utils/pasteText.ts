@@ -11,6 +11,7 @@
  */
 import type { Platform } from './platform'
 import { classifyClipboardSnapshot, readClipboardSnapshot } from '@/terminal/inputPolicy'
+import { readImage, readText } from '@tauri-apps/plugin-clipboard-manager'
 
 export function preparePasteText(text: string): string {
   return text.replace(/\r\n?/g, '\n')
@@ -226,7 +227,37 @@ export function bindNativePaste(options: NativePasteOptions): () => void {
   }
 
   options.container.addEventListener('paste', handlePaste, true)
-  return () => options.container.removeEventListener('paste', handlePaste, true)
+  // WebView2 的 Ctrl+V 默认粘贴行为不派发 paste 事件（Runtime 行为，与加速键开关无关），
+  // 改在 keydown 捕获后经插件读取剪贴板，复用同一 commit 链路；preventDefault 防止路径恢复后双写。
+  const handlePasteKeyDown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+    if (event.key.toLowerCase() !== 'v') return
+    const tabId = options.getTabId()
+    if (!tabId) return
+    const instance = options.getInstance(tabId)
+    if (!instance) return
+    const target = event.target as Node | null
+    if (!target || !instance.term.element?.contains(target)) return
+    event.preventDefault()
+    event.stopPropagation()
+    void commitPasteWithEvidence(
+      () => readText(),
+      () => readImage(),
+      () => options.getInstance(tabId),
+      value => buildPastePayload(
+        value,
+        instance.term.modes.bracketedPasteMode,
+        instance.term.options.ignoreBracketedPasteMode ?? false,
+      ),
+      options.write,
+      options.imageFallback,
+    ).catch(() => {})
+  }
+  options.container.addEventListener('keydown', handlePasteKeyDown, true)
+  return () => {
+    options.container.removeEventListener('paste', handlePaste, true)
+    options.container.removeEventListener('keydown', handlePasteKeyDown, true)
+  }
 }
 
 /**
