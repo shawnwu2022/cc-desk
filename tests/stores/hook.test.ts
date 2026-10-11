@@ -39,6 +39,7 @@ describe('useHookStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     capturedOnHookEventCallback = null
+    capturedNative = null
   })
 
   // ---------- subscribe ----------

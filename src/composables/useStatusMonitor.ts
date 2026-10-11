@@ -34,17 +34,60 @@ const ACTIVITY_EVENTS: Set<HookEventType> = new Set([
   'postCompact',
 ])
 
-export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalVisible: Ref<boolean>; requestWindowAttention?: boolean }) {
+/** 子代理提示与 working 的陈旧上限：终止类 hook 的 POST 丢失（curl 超时静默失败）时
+ * 按超时收敛，与 hook store 原生观察路径的 30s 上限保持同一量级。 */
+const SUBAGENT_STALE_MS = 30_000
+
+interface SubagentRun {
+  ptyId: string
+  reducer: ObservationReducer
+  lastSeenAt: number
+  staleTimer: ReturnType<typeof setTimeout> | null
+}
+
+export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalVisible: Ref<boolean>; requestWindowAttention?: boolean; now?: () => number }) {
   const hookStore = useHookStore()
   const sessionStore = useSessionStore()
   const attentionStore = useAttentionStore()
   const win = getCurrentWindow()
+  // 可注入时钟：staleness 判定需要可控时间源（测试用 fake timers 覆盖 Date.now）
+  const now = options.now ?? (() => Date.now())
 
   let unsubscribe: (() => void) | null = null
 
   /** 跟踪每个 tab 的回合是否已结束（Stop 后 recap 等内部操作不应恢复 working） */
   const turnEnded = new Map<string, boolean>()
-  const subagentRuns = new Map<string, { ptyId: string; reducer: ObservationReducer }>()
+  const subagentRuns = new Map<string, SubagentRun>()
+
+  function clearRunTimer(run: SubagentRun) {
+    if (run.staleTimer) {
+      clearTimeout(run.staleTimer)
+      run.staleTimer = null
+    }
+  }
+
+  /** 超过上限没有任何 hook 事件时按正常终止收敛 working 与子代理提示。 */
+  function expireStaleRun(tabId: string) {
+    const run = subagentRuns.get(tabId)
+    if (!run || now() - run.lastSeenAt < SUBAGENT_STALE_MS) return
+    const tab = sessionStore.tabs.get(tabId)
+    if (!tab) {
+      subagentRuns.delete(tabId)
+      return
+    }
+    // 仅提示仍活跃时让 reducer 进入 unavailable，正常结束的 run 不补打 unavailable
+    if (run.reducer.state().activity === 'subagent_running') {
+      run.reducer.accept({ kind: 'timeout', runId: run.ptyId, generation: 1 })
+      tab.activity = 'unknown'
+    }
+    tab.working = false
+  }
+
+  function armStaleTimer(tabId: string, run: SubagentRun) {
+    clearRunTimer(run)
+    run.lastSeenAt = now()
+    run.staleTimer = setTimeout(() => expireStaleRun(tabId), SUBAGENT_STALE_MS)
+  }
 
   // A replaced/ended PTY cannot carry a previous run's causal identities.
   watch(() => [...sessionStore.tabs.values()].map(tab => [tab.tabId, tab.ptyId, tab.status,
@@ -52,11 +95,13 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     for (const [tabId, run] of subagentRuns) {
       const tab = sessionStore.tabs.get(tabId)
       if (!tab || tab.ptyId !== run.ptyId || tab.status !== 'running') {
+        clearRunTimer(run)
         run.reducer.accept({ kind: 'off', runId: run.ptyId, generation: 1 })
         subagentRuns.delete(tabId)
       } else if ((tab.cli ?? 'claude') !== 'claude' || tab.observerEnabled === false
         || tab.observation === 'off' || tab.observation === 'unavailable') {
         // Keep dedupe and invalidated IDs for the same PTY if observation resumes.
+        clearRunTimer(run)
         run.reducer.accept({ kind: 'timeout', runId: run.ptyId, generation: 1 })
         tab.activity = 'unknown'
         tab.working = false
@@ -70,41 +115,35 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     if (!tab || tab.status !== 'running') return
 
     if ((tab.cli ?? 'claude') !== 'claude' || tab.observerEnabled === false) return
-    if (payload.observerSource === 'claude-hook') {
-      // Generic hooks remain unordered. Only a bounded, first-invocation
-      // subagent identity can establish the separate causal work hint.
-      const event = fromClaudeHook(payload)
-      if (!event || event.runId !== ptyId || event.generation !== 1) return
-      let run = subagentRuns.get(tab.tabId)
-      if (!run || run.ptyId !== ptyId) {
-        run = { ptyId, reducer: createObservationReducer({ runId: ptyId, generation: 1 }) }
-        subagentRuns.set(tab.tabId, run)
-      }
-      run.reducer.accept(event)
-      const state = run.reducer.state()
-      tab.observation = state.observation
-      tab.activity = state.activity
-      tab.working = state.activity === 'subagent_running'
-      turnEnded.delete(tab.tabId)
-      if (payload.detail.type === 'sessionStart' && payload.sessionId && !tab.sessionId) {
+    // 后端对所有 hook 事件恒带 claude-hook 鉴权标签（hook_events.rs），无标签 payload 没有生产来源。
+    if (payload.observerSource !== 'claude-hook') return
+    const event = fromClaudeHook(payload)
+    if (!event || event.runId !== ptyId || event.generation !== 1) return
+    let run = subagentRuns.get(tab.tabId)
+    if (!run || run.ptyId !== ptyId) {
+      run = { ptyId, reducer: createObservationReducer({ runId: ptyId, generation: 1 }), lastSeenAt: now(), staleTimer: null }
+      subagentRuns.set(tab.tabId, run)
+    }
+    run.reducer.accept(event)
+    const state = run.reducer.state()
+    tab.observation = state.observation
+    tab.activity = state.activity
+    armStaleTimer(tab.tabId, run)
+
+    // 回合状态机自原通用分支逐事件迁移：通用分支因后端恒打标签在生产不可达。
+    const type = payload.detail.type
+
+    // sessionStart：直接分配 session_id
+    if (type === 'sessionStart') {
+      if (payload.sessionId && !tab.sessionId) {
         const data = payload.detail.data as { model?: string }
         sessionStore.assignSessionIdByPtyId(ptyId, payload.sessionId, data.model)
       }
       return
     }
 
-    // sessionStart：直接分配 session_id
-    if (payload.detail.type === 'sessionStart') {
-      const sessionId = payload.sessionId
-      if (sessionId) {
-        const data = payload.detail.data as { model?: string }
-        sessionStore.assignSessionIdByPtyId(ptyId, sessionId, data.model)
-      }
-      return
-    }
-
     // userPromptSubmit → 进入 working + 设置标题 + 开始新回合
-    if (payload.detail.type === 'userPromptSubmit') {
+    if (type === 'userPromptSubmit') {
       turnEnded.delete(tab.tabId)
       tab.working = true
       // 新回合:清所有 attention（含 error -- 用户开始新工作，旧 error 作废）
@@ -120,7 +159,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     }
 
     // 活跃事件：回合结束后忽略（防止 recap 等内部操作恢复 working）
-    if (ACTIVITY_EVENTS.has(payload.detail.type)) {
+    if (ACTIVITY_EVENTS.has(type)) {
       if (turnEnded.get(tab.tabId)) return
       tab.working = true
       tab.pending = false
@@ -130,7 +169,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     }
 
     // notification：根据 notification_type 区分处理
-    if (payload.detail.type === 'notification') {
+    if (type === 'notification') {
       if (!tab.working) return
 
       const data = payload.detail.data as NotificationData
@@ -159,14 +198,14 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     if (!tab.working) return
 
     // stop/stopFailure 标记回合结束
-    if (payload.detail.type !== 'sessionEnd') {
+    if (type !== 'sessionEnd') {
       turnEnded.set(tab.tabId, true)
     }
 
     tab.working = false
 
     // sessionEnd 不需要 pending/attention 提示
-    if (payload.detail.type === 'sessionEnd') return
+    if (type === 'sessionEnd') return
 
     setPendingWithAttention(tab, ptyId)
   }
@@ -210,6 +249,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     unsubscribe?.()
     unsubscribe = null
     turnEnded.clear()
+    for (const run of subagentRuns.values()) clearRunTimer(run)
     subagentRuns.clear()
   })
 }

@@ -81,7 +81,10 @@ const DEFAULT_DATA: Record<string, unknown> = {
   postCompact: { trigger: 'auto' },
 }
 
-/** 构建测试用的 HookEventPayload */
+/** 生产路径的后端鉴权标签：hook_events.rs 对所有 hook 事件恒打 claude-hook */
+let authEventSeq = 0
+
+/** 构建测试用的 HookEventPayload（默认带 claude-hook 鉴权标签，与生产 payload 一致） */
 function makePayload(
   type: HookEventDetail['type'],
   ptyId: string = 'pty1',
@@ -94,6 +97,10 @@ function makePayload(
     state: 'thinking',
     timestamp: Date.now(),
     detail: { type, data: (DEFAULT_DATA[type] ?? null) as any } as HookEventDetail,
+    runId: ptyId,
+    generation: 1,
+    eventId: `evt-${type}-${++authEventSeq}`,
+    observerSource: 'claude-hook',
     ...extra,
   }
 }
@@ -104,6 +111,34 @@ function makeNotificationPayload(
   ptyId: string = 'pty1',
 ): HookEventPayload {
   return makePayload('notification', ptyId, {
+    detail: {
+      type: 'notification',
+      data: { notificationType, message: 'test' },
+    } as any,
+  })
+}
+
+/** 构建 claude-hook 鉴权标签的 payload（makePayload 已默认带标签，此为语义显式别名） */
+function makeAuthPayload(
+  type: HookEventDetail['type'],
+  ptyId: string = 'pty1',
+  extra?: Partial<HookEventPayload>,
+): HookEventPayload {
+  return makePayload(type, ptyId, {
+    runId: ptyId,
+    generation: 1,
+    eventId: `auth-${type}-${++authEventSeq}`,
+    observerSource: 'claude-hook',
+    ...extra,
+  })
+}
+
+/** 构建 claude-hook 鉴权标签的 notification payload */
+function makeAuthNotificationPayload(
+  notificationType: string,
+  ptyId: string = 'pty1',
+): HookEventPayload {
+  return makeAuthPayload('notification', ptyId, {
     detail: {
       type: 'notification',
       data: { notificationType, message: 'test' },
@@ -695,21 +730,136 @@ describe('useStatusMonitor', () => {
       expect(mockAckPty).toHaveBeenCalledWith('pty1')
     })
   })
+
+  // ==================== claude-hook 鉴权生产路径（audit 20261011） ====================
+  // 生产上后端恒打 claude-hook 标签，以下用例断言该路径的 working/pending 语义。
+  describe('claude-hook 鉴权生产路径', () => {
+    // 鉴权 userPromptSubmit → working = true（迁移前 dead 分支下 working 恒 false）
+    it('StatusMonitor_HookAuth_UserPromptSubmit_Working_020', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makeAuthPayload('userPromptSubmit', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(true)
+    })
+
+    // 鉴权 idle_prompt → working = false, pending = true（迁移前 pending 永不置位）
+    it('StatusMonitor_HookAuth_NotificationIdle_Pending_021', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makeAuthPayload('userPromptSubmit', 'pty1'))
+      emit(makeAuthNotificationPayload('idle_prompt', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // 鉴权 permission_prompt → working = false, pending = true
+    it('StatusMonitor_HookAuth_PermPrompt_Pending_022', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makeAuthPayload('userPromptSubmit', 'pty1'))
+      emit(makeAuthNotificationPayload('permission_prompt', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // 鉴权 stop → working = false, pending = true
+    it('StatusMonitor_HookAuth_Stop_Pending_023', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makeAuthPayload('userPromptSubmit', 'pty1'))
+      emit(makeAuthPayload('stop', 'pty1'))
+
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.working).toBe(false)
+      expect(tab.pending).toBe(true)
+    })
+
+    // 授权恢复 + 终止清理：perm → pending；postToolUse → pending 清 + working 恢复；stop → pending
+    it('StatusMonitor_HookAuth_TerminalCleanup_024', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makeAuthPayload('userPromptSubmit', 'pty1'))
+      emit(makeAuthNotificationPayload('permission_prompt', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(true)
+
+      emit(makeAuthPayload('postToolUse', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(false)
+
+      emit(makeAuthPayload('stop', 'pty1'))
+      expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(false)
+      expect(useSessionStore().getTabByPtyId('pty1')!.pending).toBe(true)
+    })
+
+    // 子代理提示陈旧收敛：30s 无任何 hook 事件后 working/activity 按正常终止清理
+    it('StatusMonitor_HookAuth_SubagentStaleTimeout_Collapse_025', () => {
+      vi.useFakeTimers()
+      try {
+        createRunningTab('pty1')
+        mountMonitor()
+
+        emit(makeAuthPayload('subagentStart', 'pty1'))
+        expect(useSessionStore().getTabByPtyId('pty1')!.activity).toBe('subagent_running')
+        expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
+
+        vi.advanceTimersByTime(30_000)
+
+        const tab = useSessionStore().getTabByPtyId('pty1')!
+        expect(tab.activity).toBe('unknown')
+        expect(tab.working).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    // 正常事件流会刷新陈旧计时：stop 后 working 清理由回合状态机负责，30s 无事件不再误伤 pending
+    it('StatusMonitor_HookAuth_StaleTimer_RefreshedByEvents_026', () => {
+      vi.useFakeTimers()
+      try {
+        createRunningTab('pty1')
+        mountMonitor()
+
+        emit(makeAuthPayload('subagentStart', 'pty1'))
+        // 20s 时仍有事件 → 计时刷新
+        vi.advanceTimersByTime(20_000)
+        emit(makeAuthPayload('postToolUse', 'pty1'))
+        vi.advanceTimersByTime(20_000)
+
+        const tab = useSessionStore().getTabByPtyId('pty1')!
+        expect(tab.activity).toBe('subagent_running')
+        expect(tab.working).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
 })
 
-it('D13_StatusMonitor_RealUnorderedObserverDoesNotGuessActivityOrRetitleFromPrompt', () => {
+// audit 20261011：鉴权 userPromptSubmit 恢复通用分支语义（working + 首条 prompt 作默认标题），
+// 原 D13「不猜活动/不改标题」的保守口径随死分支一并废弃。
+it('StatusMonitor_HookAuth_PromptRestoresWorkingAndRetitle_009', () => {
   setActivePinia(createPinia()); mountedCbs = []; unmountedCbs = []
   const id = createRunningTab('observed-pty')
   const tab = useSessionStore().tabs.get(id)!
-  const originalName = tab.name
   mountMonitor()
   emit(makePayload('userPromptSubmit', 'observed-pty', {
-    runId: 'observed-pty', generation: 1, eventId: 'observed-event', observerSource: 'claude-hook', state: 'unknown',
+    runId: 'observed-pty', generation: 1, eventId: 'observed-event', state: 'unknown',
     detail: { type: 'userPromptSubmit', data: { prompt: 'private prompt' } },
   }))
   expect(tab.status).toBe('running')
-  expect(tab.working).toBe(false)
-  expect(tab.name).toBe(originalName)
+  expect(tab.working).toBe(true)
+  expect(tab.name).toBe('private prompt')
 })
 
 // 真实鉴权子代理身份提供首轮活动提示，切换已选择 tab 不撤销源状态。
@@ -738,7 +888,8 @@ it('Subagent_LegacyProjection_010', () => {
   expect(tab.status).toBe('running')
 })
 
-// 权限通知以后到达的子代理不能清除或覆盖权限原因。
+// 权限后的子代理事件：reducer 提示仍被 waiting 阻断（unknown），但回合状态机按通用分支
+// 迁移语义视为授权后继续（working 恢复、pending 清除、attention 清理）。
 it('Subagent_LegacyPermission_011', () => {
   setActivePinia(createPinia()); mountedCbs = []; unmountedCbs = []
   const id = createRunningTab('observed-pty')
@@ -753,14 +904,17 @@ it('Subagent_LegacyPermission_011', () => {
     runId: 'observed-pty', generation: 1, eventId: 'permission', observerSource: 'claude-hook', state: 'unknown',
     detail: { type: 'notification', data: { notificationType: 'permission_prompt' } },
   }))
+  expect(tab.working).toBe(false)
+  expect(tab.pending).toBe(true)
   mockAckPty.mockClear()
   emit(makePayload('subagentStart', 'observed-pty', {
     runId: 'observed-pty', generation: 1, eventId: 'start-b', observerSource: 'claude-hook', state: 'unknown',
     detail: { type: 'subagentStart', data: { agentId: 'agent-b' } },
   }))
   expect(tab.activity).toBe('unknown')
-  expect(tab.working).toBe(false)
-  expect(mockAckPty).not.toHaveBeenCalled()
+  expect(tab.working).toBe(true)
+  expect(tab.pending).toBe(false)
+  expect(mockAckPty).toHaveBeenCalledWith('observed-pty', { clearError: true })
 })
 
 // 同一 PTY 关闭观察再开启时，旧 agent_id 的迟到 Start 不当作新证据。
