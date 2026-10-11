@@ -28,10 +28,12 @@ Windows 版 CC Desk 在 Claude Code 输入框粘贴较大的 Chrome DevTools JSO
 - 不再改写 ESC，不在 frame 内主动分块或插入 flush，不维护本地 `portable-pty` fork。
 - 普通键盘输入、图片粘贴快捷键和非 Windows PTY 保持原路径。
 - 每个 PTY 继续使用独立 writer 锁；写入错误向上传播，不自动重发可能已写入的前缀。
+- 捕获阶段的 paste 事件监听保留为兜底；当 WebView2 的默认 Ctrl+V 行为不派发该事件时，keydown 捕获经 clipboard-manager 插件读取剪贴板走同一条提交链路。两条路径都先 `preventDefault`，同一次按键不会双写。文本优先；无文本且图片读取成功时发送 CLI 官方图片粘贴键位（Windows 为 Alt+V 字节）。
 
 ## 自动化验证
 
 - 前端测试覆盖 `buildPastePayload`、Ctrl+V 路径和捕获阶段 DOM paste 路径。
+- 组件级回归覆盖 keydown Ctrl+V 经插件读剪贴板的路由、空剪贴板不投递，以及纯图片剪贴板发送官方图片粘贴键位。
 - Rust 测试要求 Windows 完整 frame 只产生一次未经改写的写入。
 - 真实 Claude Code 验收使用隔离配置和 `UserPromptSubmit` hook 捕获完整提交正文，阻止模型处理，不使用用户凭据。
 - 合成样本覆盖合法嵌套 JSON、大整数文本、中文、emoji、转义字符、超过 128 KiB 的正文、4 KiB 临界位置和连续粘贴。
