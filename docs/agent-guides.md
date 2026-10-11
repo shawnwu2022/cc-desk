@@ -22,7 +22,7 @@ CC Desk 以根 [AGENTS.md](../AGENTS.md) 为所有 coding agent 的通用标准�
 | 工具 | 本仓库入口 | 加载与范围 |
 | --- | --- | --- |
 | Codex | 根及目录 `AGENTS.md` | 原生识别；从项目根到当前工作目录合并，每层更具体规则补充根规则。根目录启动后修改 Rust 文件时仍须主动读其目录指南。[官方说明](https://learn.chatgpt.com/docs/agent-configuration/agents-md) |
-| Claude Code | 根及目录 `CLAUDE.md` → `@./AGENTS.md` | 使用原生 import，路径相对导入文件；保留入口可覆盖旧版本及存在 `CLAUDE.md` 时的发现规则。新版也支持直接发现 `AGENTS.md`，但不能据此删除存在的入口后假定所有环境一致。[官方说明](https://code.claude.com/docs/en/memory) |
+| Claude Code | 根及目录 `CLAUDE.md` → `@./AGENTS.md` | 使用原生 import，路径相对导入文件；建议从仓库根启动，再由目标文件访问触发目录加载。深层启动时，祖先入口的导入位于工作目录之外，可能受外部导入信任限制；增加祖先 `@` 引用不会绕过批准。保留入口兼容不能直接发现 `AGENTS.md` 的会话。[官方说明](https://code.claude.com/docs/en/memory) |
 | Gemini CLI | 根及目录 `GEMINI.md` → `@./AGENTS.md` | 使用原生 Markdown import，无需修改用户的 `context.fileName`；仓库与目录规则仍须按实际工作范围读取。[官方说明](https://geminicli.com/docs/cli/gemini-md/) |
 | Cursor | 根及目录 `AGENTS.md` | 原生支持根与嵌套目录指南；不另建重复 `.cursorrules` 或 `.cursor/rules` 规范。[官方说明](https://cursor.com/docs/rules) |
 | Windsurf/Cascade | 根及目录 `AGENTS.md` | 根规则始终应用，子目录规则按路径范围应用；当前官方入口位于 Devin Desktop 文档。[官方说明](https://docs.devin.ai/desktop/cascade/agents-md) |
@@ -57,4 +57,12 @@ Codex 默认 `project_doc_max_bytes` 为 32 KiB，限制自动合并的项目指
 - Gemini CLI：使用 `/memory reload` 与 `/memory show` 核对合并后的根/目录内容。
 - Cursor、Cascade 和 Copilot：在实际项目与工具界面查看启用的指令，并通过上面的提示核对读取来源。客户端未提供来源证据时保留证据缺口，不声称通过跨工具运行认证。
 
-本文的文件与引用检查不会调用已认证 CLI 或外部 agent 服务；真实客户端验收应单独记录工具版本、工作目录和加载来源。
+本文的静态检查无需调用模型服务；客户端加载验收单独记录工具版本、工作目录和加载来源，不能将加载成功当作模型遵循或真实 CLI Layer-C 认证。
+
+### 本机加载检查（2026-10-11）
+
+- Codex CLI `0.160.0`：原生 `codex debug prompt-input` 生成的上下文完整包含根指南；从 `src-tauri/src/cli` 启动时完整包含三层指南。从根启动不预载未触及的目录指南，与主动阅读目录规则的要求一致。未发送模型请求。
+- Claude Code `2.1.293`：以仅回环地址的响应 fixture 检查实际客户端，不转发模型请求。根目录新会话完整加载根指南；一次真实 `Read` 读取 CLI 目录源文件的一行后，下一次上下文完整包含根、Rust 和 CLI 三层指南。检查关闭 hooks/MCP 与会话持久化，仅保留该只读工具；保存指南匹配布尔值和哈希，不保存完整提示或认证头。
+- 同一 Claude 客户端从 CLI 深层目录启动时，当前目录标准完整加载，祖先标准的导入尚未获外部导入信任批准，未进入上下文。这符合[外部导入的信任边界](https://code.claude.com/docs/en/memory#import-additional-files)。推荐从仓库根启动；选择深层启动时，在客户端检查 `/memory` 和 `/context` 并由用户处理其信任提示，不自动修改全局批准状态。
+- Gemini CLI `0.63.0`：直接调用该安装包实际的目录发现、文件导入与按目录补加载函数。默认 `GEMINI.md` 从根加载一层、从 CLI 目录加载三层，根会话访问 CLI 文件时补齐两层；每份标准正文均完整匹配。此处验证的是已安装 loader，不是已认证模型会话。
+- Cursor、Cascade 与 Copilot 的实际界面加载仍未验证，保留上方官方入口与操作步骤。静态链接或另一工具通过不能替代各客户端证据。

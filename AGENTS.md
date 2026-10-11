@@ -2,6 +2,8 @@
 
 本文件是所有 coding agent 的通用规范和执行入口。`CLAUDE.md`、`GEMINI.md` 与 Copilot 指令只引用这里，不维护规则副本。目录内的 `AGENTS.md` 补充该目录的约束；修改文件前，主动读取仓库根到目标目录之间的这些指南，不依赖工具从当前工作目录自动发现全部规则。加载与维护说明见 [docs/agent-guides.md](docs/agent-guides.md)。
 
+建议从仓库根开始会话。Claude Code 深层启动时，祖先标准的导入可能受外部导入信任限制；不要自动修改客户端批准状态或复制规则来规避。根会话读取目标文件后的目录加载与各工具实测边界见上述加载说明。
+
 完整项目约束保留在 [docs/project-contracts.md](docs/project-contracts.md)。**修改相应模块前必须阅读其相关章节及下方对应文档**；不要只依据本文件的概述判断接口或授权语义。Native CLI 架构以 [docs/native-cli-v3.md](docs/native-cli-v3.md) 为权威。
 
 ## 工作方式
