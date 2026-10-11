@@ -61,6 +61,8 @@ Hook 系统只采集**对 GUI 有意义**的信息：
 │  ├─ 订阅 userPromptSubmit → tab.working = true                │
 │  ├─ 订阅 stop/stopFailure/notification → working=false        │
 │  │   └─ 根据窗口聚焦/Tab 激活决定 pending 和任务栏跳动         │
+│  ├─ 30s 无任何 hook 事件 → 清 working（staleness 兜底，事件    │
+│  │   到达即重置计时；防 POST 丢失导致 working 永久卡住）        │
 │  └─ watch 聚焦+Tab 切换 → 清除 active tab 的 pending          │
 │                                                               │
 │  SessionItem.vue ← tab.working → 指示灯样式                   │
