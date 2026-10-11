@@ -595,7 +595,11 @@ onMounted(async () => {
 
 watch(() => props.active, async active => {
   needsFit.value = true
-  if (!active) return
+  if (!active) {
+    // 后台 tab 停掉 1500ms 状态轮询；重新激活时下方立即补偿并重启
+    stopStatusSync()
+    return
+  }
   await nextTick()
   fitVisible()
   focus()

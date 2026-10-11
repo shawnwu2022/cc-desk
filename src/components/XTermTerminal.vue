@@ -13,7 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive, watch, onMounted, onUnmounted, nextTick, toRaw, type ComponentPublicInstance } from 'vue'
+import { computed, ref, reactive, watch, onMounted, onUnmounted, nextTick, markRaw, toRaw, type ComponentPublicInstance } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import type { WebglAddon } from '@xterm/addon-webgl'
@@ -108,7 +108,9 @@ async function waitForElement(tabId: string, timeout = 10000): Promise<HTMLEleme
   return null
 }
 
-// 每个 Tab 独立的 Terminal 实例（key 为 tabId）
+// 每个 Tab 独立的 Terminal 实例（key 为 tabId）。
+// Map 本身保持 reactive（模板 v-for 依赖键集合增删），但实例对象 markRaw：
+// xterm Terminal/FitAddon 是 PTY 输出热路径对象，深度代理会让每次 write 都穿透两层 Proxy。
 const terminalInstances = reactive(new Map<string, {
   term: Terminal
   fitAddon: FitAddon
@@ -182,9 +184,8 @@ const fitCurrentTerminal = debounce(() => {
 }, 50)
 
 // Terminal 渲染生命周期注册表：per-terminal 单飞初始化、dispose 标记、reload timer。
-// key 一律 toRaw 归一——terminalInstances 是深度 reactive Map，setTerminalEl 取出的
-// instance.term 是 Vue proxy，与创建路径的 raw terminal 身份不同；不归一会让 WeakMap
-// 建立两个 key（单飞失效、timer 句柄被覆盖泄漏）。详见 utils/rendererRegistry.ts。
+// key 一律 toRaw 归一：terminal 创建路径与事件回调可能持有不同包装，不归一会生成
+// 两个 key（单飞失效、timer 句柄被覆盖泄漏）。详见 utils/rendererRegistry.ts。
 const rendererRegistry = new TerminalRendererRegistry()
 
 // 在 term.open(el) 之后加载 Unicode 11，并选择渲染后端。
@@ -309,8 +310,8 @@ const imeFixStates = new WeakMap<HTMLTextAreaElement, ImeFixState>()
 function attachImeInputFix(term: Terminal) {
   const ta = term.textarea
   if (!ta) return
-  // 用 textarea（DOM 元素，不被 Vue reactive proxy）作 key，避免 proxy term 与原始 term
-  // 视为不同 key 导致重复绑定（setTerminalEl 的 instance.term 是 proxy，startTab 的 term 是原始）
+  // 用 textarea（DOM 元素）作 key 做幂等绑定：textarea 与 terminal 实例一一对应，
+  // 且不受实例重建/重开影响
   if (imeFixStates.has(ta)) return
   const policy = createImeInputPolicy()
   const state: ImeFixState = { dispose: () => {} }
@@ -351,8 +352,8 @@ function attachImeInputFix(term: Terminal) {
   imeFixStates.set(ta, state)
 }
 
-// 创建新的 Terminal 实例
-function createTerminal(tabId: string): Terminal {
+// 创建新的 Terminal 实例；fitAddon 与 term 一起返回，调用方不得重复 loadAddon
+function createTerminal(tabId: string): { term: Terminal; fitAddon: FitAddon } {
   const term = new Terminal({
     ...terminalAppearanceOptions(appStore.terminalPreferences),
     allowProposedApi: true,
@@ -456,7 +457,7 @@ function createTerminal(tabId: string): Terminal {
     return true
   })
 
-  return term
+  return { term, fitAddon }
 }
 
 onMounted(async () => {
@@ -630,11 +631,9 @@ watch(() => sessionStore.activeTabId, async (newTabId, oldTabId) => {
 async function createTerminalForTab(tabId: string, ptyId: string) {
   if (terminalInstances.has(tabId)) return
 
-  const term = createTerminal(tabId)
-  const fitAddon = new FitAddon()
-  term.loadAddon(fitAddon)
+  const { term, fitAddon } = createTerminal(tabId)
 
-  terminalInstances.set(tabId, { term, fitAddon, ptyId })
+  terminalInstances.set(tabId, markRaw({ term, fitAddon, ptyId }))
   ptyToTab.link(ptyId, tabId)
 
   const el = await waitForElement(tabId)
@@ -681,12 +680,10 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
     const cwd = tab.projectPath
     const ptyId = createPtyId()
     startingPtyId = ptyId
-    const term = createTerminal(tabId)
-    const fitAddon = new FitAddon()
-    term.loadAddon(fitAddon)
+    const { term, fitAddon } = createTerminal(tabId)
 
     // 先注册路由和 store，再启动后端进程。即使 CLI 立即输出或退出，事件也能定位 tab。
-    terminalInstances.set(tabId, { term, fitAddon, ptyId })
+    terminalInstances.set(tabId, markRaw({ term, fitAddon, ptyId }))
     sessionStore.setTabPty(tabId, ptyId)
     startingGeneration = tab.ptyGeneration ?? 0
     ptyToTab.link(ptyId, tabId)

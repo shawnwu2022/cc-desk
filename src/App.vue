@@ -128,9 +128,12 @@ const project = computed<UnifiedProjectIdentity | null>(() => {
   const selected = selectedProject.value ?? management.visibleGroups[0]
   return selected ? { projectKey: selected.projectKey, projectPath: selected.projectPath } : null
 })
-watch(() => management.groups, groups => {
-  if (selectedProject.value && !sessions.activeSession && !groups.some(group => !group.hidden && sameProjectPath(group.projectPath, selectedProject.value!.projectPath))) selectedProject.value = null
-}, { deep: true })
+// 仅需「选中项目是否仍可见」：浅层 [projectKey, hidden] 快照做比较源，
+// 避免 deep 遍历整棵 groups 树（每个会话对象）只为一个可见性判断
+watch(() => management.groups.map(group => [group.projectKey, group.hidden] as const), () => {
+  const selected = selectedProject.value
+  if (selected && !sessions.activeSession && !management.groups.some(group => !group.hidden && sameProjectPath(group.projectPath, selected.projectPath))) selectedProject.value = null
+})
 const visibleArchiveSessions = computed(() => sessions.sessions.filter(row => !app.isHidden(row.projectPath) || management.openCount(row.projectPath) > 0))
 const projectTitle = computed(() => project.value
   ? management.groups.find(group => sameProjectPath(group.projectPath, project.value!.projectPath))?.name

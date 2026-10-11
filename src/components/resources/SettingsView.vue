@@ -7,7 +7,7 @@ const { t } = useI18n()
 </script>
 <template>
   <dl class="resource-list">
-    <div v-for="(item, index) in items" :key="index" class="resource-card">
+    <div v-for="item in items" :key="`${item.origin}:${item.name}`" class="resource-card">
       <dt>{{ t(`resourceSetting_${item.name}`) }}</dt>
       <dd>{{ item.value ?? t('resourceHidden') }}</dd>
       <ResourceMetadata :item="item" />
