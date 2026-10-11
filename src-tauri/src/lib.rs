@@ -328,6 +328,11 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
             native_exit_shutdown.shutdown();
+            // 补齐不经窗口 CloseRequested 的退出路径（如更新安装后的退出）。
+            // kill_all 先 drain 再逐个杀，窗口关闭路径已清理过时此处为空操作。
+            if let Some(manager) = pty::get_pty_manager() {
+                manager.kill_all();
+            }
         }
     });
 }

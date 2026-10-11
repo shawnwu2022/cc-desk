@@ -3,6 +3,7 @@
 
 use crate::platform::admitted_child::AdmittedChild;
 use crate::platform::legacy_control::LegacyProcessControl;
+use crate::platform::{shell_quote_arg, ShellKind};
 use crate::version_history::maintenance::{AdmissionGate, PreparingStart, RuntimeKind};
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
@@ -553,43 +554,48 @@ impl PtyManager {
             return Err(anyhow!(message));
         }
 
-        // 参数边界将在 platform 层统一转义；此处暂保持既有 shell 启动策略。
-        let claude_cmd = if let Ok(config) = crate::store::get_app_config() {
-            if let Some(ref custom_path) = config.claude_path {
-                if let Some(extra_args) = &args {
-                    format!("\"{}\" {}", custom_path, extra_args.join(" "))
-                } else {
-                    format!("\"{}\"", custom_path)
-                }
-            } else if let Some(extra_args) = &args {
-                format!("claude {}", extra_args.join(" "))
-            } else {
-                "claude".to_string()
-            }
-        } else if let Some(extra_args) = &args {
-            format!("claude {}", extra_args.join(" "))
-        } else {
-            "claude".to_string()
-        };
-
-        // Preserve the legacy Claude observer preference, but never enable an
-        // unauthenticated fallback. This lease follows this exact spawned PTY.
-        let prepared = crate::hook_server::prepare_legacy(&self.app_handle, &id);
-        let claude_cmd = if let Some(observer) = &prepared {
-            format!(
-                "{} --plugin-dir \"{}\"",
-                claude_cmd,
-                observer.plugin_dir.display()
-            )
-        } else {
-            claude_cmd
-        };
-
+        // Windows 先探测一次 Git Bash：既决定 shell 引用风格，也复用于
+        // shell 选择与 CLAUDE_CODE_GIT_BASH_PATH 注入，避免重复探测。
         let git_bash = if cfg!(target_os = "windows") {
             Self::detect_git_bash()
         } else {
             None
         };
+        // 无 Git Bash 的 Windows 回退 PowerShell，单引号转义规则不同
+        let shell_kind = if cfg!(target_os = "windows") && git_bash.is_none() {
+            ShellKind::PowerShell
+        } else {
+            ShellKind::Posix
+        };
+
+        // --resume 的 sessionId 来自 ~/.claude/projects 会话文件名并作为独立参数
+        // 交给 shell，先做组件白名单校验；不合法直接拒绝，不进入 spawn。
+        if let Some(extra_args) = args.as_deref() {
+            if let Err(reason) = validate_resume_session_ids(extra_args) {
+                let message = format!("Invalid --resume session id: {reason}");
+                self.emit_error(&id, &message, "validation");
+                return Err(anyhow!(message));
+            }
+        }
+
+        // 可执行路径与每个参数逐一引用为 shell 字面量后交给 shell -c / -Command
+        let custom_path = crate::store::get_app_config()
+            .ok()
+            .and_then(|config| config.claude_path);
+        let mut claude_cmd =
+            build_claude_command(custom_path.as_deref(), args.as_deref(), shell_kind);
+
+        // Preserve the legacy Claude observer preference, but never enable an
+        // unauthenticated fallback. This lease follows this exact spawned PTY.
+        let prepared = crate::hook_server::prepare_legacy(&self.app_handle, &id);
+        if let Some(observer) = &prepared {
+            claude_cmd = format!(
+                "{} --plugin-dir {}",
+                claude_cmd,
+                shell_quote_arg(&observer.plugin_dir.to_string_lossy(), shell_kind)
+            );
+        }
+
         let (program, shell_args) =
             crate::platform::get_claude_shell(&claude_cmd, git_bash.as_deref());
 
@@ -607,7 +613,7 @@ impl PtyManager {
         }
 
         if cfg!(target_os = "windows") {
-            if let Some(git_bash) = Self::detect_git_bash() {
+            if let Some(git_bash) = &git_bash {
                 cmd.env("CLAUDE_CODE_GIT_BASH_PATH", git_bash);
             }
         }
@@ -677,74 +683,16 @@ impl PtyManager {
         mut reader: Box<dyn Read + Send>,
         app_handle: AppHandle,
     ) -> Option<String> {
-        let mut buf = [0u8; 4096];
-        let mut decoder = crate::pty_decoder::PtyDecoder::new();
-        let mut consecutive_errors = 0;
-        const MAX_CONSECUTIVE_ERRORS: i32 = 5;
-
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => {
-                    let output = decoder.flush();
-                    if !output.is_empty() {
-                        let _ = app_handle.emit(
-                            "pty-output",
-                            PtyOutputPayload {
-                                id: pty_id.clone(),
-                                data: output,
-                            },
-                        );
-                    }
-                    log::info!("[{}] PTY EOF reached", pty_id);
-                    return None;
-                }
-                Ok(count) => {
-                    consecutive_errors = 0;
-                    let output = decoder.decode(&buf[..count]);
-                    if !output.is_empty() {
-                        let _ = app_handle.emit(
-                            "pty-output",
-                            PtyOutputPayload {
-                                id: pty_id.clone(),
-                                data: output,
-                            },
-                        );
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) if is_pty_stream_end(&error) => {
-                    let output = decoder.flush();
-                    if !output.is_empty() {
-                        let _ = app_handle.emit(
-                            "pty-output",
-                            PtyOutputPayload {
-                                id: pty_id.clone(),
-                                data: output,
-                            },
-                        );
-                    }
-                    log::debug!("[{}] PTY stream ended: {}", pty_id, error);
-                    return None;
-                }
-                Err(error) => {
-                    consecutive_errors += 1;
-                    log::warn!(
-                        "[{}] Read error ({}/{}): {}",
-                        pty_id,
-                        consecutive_errors,
-                        MAX_CONSECUTIVE_ERRORS,
-                        error
-                    );
-
-                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                        return Some(format!("read_error: {error}"));
-                    }
-                    thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
+        let mut emit = |output: String| {
+            let _ = app_handle.emit(
+                "pty-output",
+                PtyOutputPayload {
+                    id: pty_id.clone(),
+                    data: output,
+                },
+            );
+        };
+        pump_pty_output(&pty_id, reader.as_mut(), &mut emit)
     }
 
     fn emit_error(&self, id: &str, error: &str, stage: &str) {
@@ -905,6 +853,132 @@ pub fn get_pty_manager() -> Option<Arc<PtyManager>> {
     PTY_MANAGER.lock().clone()
 }
 
+/// 读循环核心（与 AppHandle 解耦以便单测错误计数语义）。
+/// 返回 None 表示流正常结束；Some 描述触发 fail_reader 的读取错误。
+fn pump_pty_output(
+    pty_id: &str,
+    reader: &mut dyn Read,
+    emit: &mut dyn FnMut(String),
+) -> Option<String> {
+    let mut buf = [0u8; 4096];
+    let mut decoder = crate::pty_decoder::PtyDecoder::new();
+    let mut consecutive_errors = 0;
+    const MAX_CONSECUTIVE_ERRORS: i32 = 5;
+
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => {
+                let output = decoder.flush();
+                if !output.is_empty() {
+                    emit(output);
+                }
+                log::info!("[{}] PTY EOF reached", pty_id);
+                return None;
+            }
+            Ok(count) => {
+                consecutive_errors = 0;
+                let output = decoder.decode(&buf[..count]);
+                if !output.is_empty() {
+                    emit(output);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                // WouldBlock 是无数据的成功轮询而非读取错误，重置计数，
+                // 保持「连续 5 次真实错误才终止」不被非错误事件稀释。
+                consecutive_errors = 0;
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) if is_pty_stream_end(&error) => {
+                let output = decoder.flush();
+                if !output.is_empty() {
+                    emit(output);
+                }
+                log::debug!("[{}] PTY stream ended: {}", pty_id, error);
+                return None;
+            }
+            Err(error) => {
+                consecutive_errors += 1;
+                log::warn!(
+                    "[{}] Read error ({}/{}): {}",
+                    pty_id,
+                    consecutive_errors,
+                    MAX_CONSECUTIVE_ERRORS,
+                    error
+                );
+
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    return Some(format!("read_error: {error}"));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+/// 校验 --resume 的 sessionId：先做字符白名单（拒绝 shell 元字符），
+/// 再复用 store 的文件名组件校验（防路径逃逸、Windows 保留名、agent- 前缀）。
+fn validate_resume_session_id(session_id: &str) -> Result<(), String> {
+    if session_id.is_empty()
+        || !session_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(format!(
+            "session id contains characters outside [A-Za-z0-9._-]: {session_id}"
+        ));
+    }
+    crate::store::validate_session_id_component(session_id)
+}
+
+/// 校验 extra_args 中全部 --resume 形态（`--resume <id>` 与 `--resume=<id>`）
+fn validate_resume_session_ids(args: &[String]) -> Result<(), String> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--resume" {
+            let session_id = iter
+                .next()
+                .ok_or_else(|| "--resume requires a session id".to_string())?;
+            validate_resume_session_id(session_id)?;
+        } else if let Some(session_id) = arg.strip_prefix("--resume=") {
+            validate_resume_session_id(session_id)?;
+        }
+    }
+    Ok(())
+}
+
+/// 组装交给 shell 执行的 Claude 命令：可执行路径与每个参数逐一引用为
+/// shell 字面量，元字符不会越过引号边界被 shell 重新解释。
+///
+/// PowerShell 的 `-Command` 把整串当脚本解析，裸引号字符串是表达式而非
+/// 命令，必须以调用操作符 `&` 开头才能真正执行；POSIX 无此要求。
+fn build_claude_command(
+    claude_path: Option<&str>,
+    args: Option<&[String]>,
+    shell_kind: ShellKind,
+) -> String {
+    let program = match claude_path {
+        Some(path) => shell_quote_arg(path, shell_kind),
+        None => "claude".to_string(),
+    };
+    let Some(extra_args) = args.filter(|extra| !extra.is_empty()) else {
+        return format!("{}{program}", ps_call_prefix(shell_kind));
+    };
+    let quoted = extra_args
+        .iter()
+        .map(|arg| shell_quote_arg(arg, shell_kind))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{}{program} {quoted}", ps_call_prefix(shell_kind))
+}
+
+/// PowerShell 需要调用操作符前缀；返回值自带尾随空格
+fn ps_call_prefix(shell_kind: ShellKind) -> &'static str {
+    match shell_kind {
+        ShellKind::Posix => "",
+        ShellKind::PowerShell => "& ",
+    }
+}
+
 fn acquire_legacy_writer(master: &dyn MasterPty) -> Result<Box<dyn Write + Send>> {
     #[cfg(all(test, windows))]
     maintenance_tests::check_io("writer")?;
@@ -941,3 +1015,210 @@ fn spawn_pty_thread(
 #[cfg(all(test, windows))]
 #[path = "tests/version_history_legacy.rs"]
 mod maintenance_tests;
+
+#[cfg(test)]
+mod read_loop_tests {
+    #![allow(non_snake_case)]
+
+    use super::pump_pty_output;
+    use std::collections::VecDeque;
+    use std::io;
+
+    /// 按脚本回放的伪 reader；脚本耗尽按 EOF 处理，避免测试挂死
+    struct ScriptedReader {
+        steps: VecDeque<Step>,
+    }
+
+    enum Step {
+        Data(Vec<u8>),
+        Fail(io::Error),
+    }
+
+    fn data(bytes: &[u8]) -> Step {
+        Step::Data(bytes.to_vec())
+    }
+
+    fn fail() -> Step {
+        // 选用不会被 is_pty_stream_end 判定为流结束的错误类型
+        Step::Fail(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "injected read failure",
+        ))
+    }
+
+    fn would_block() -> Step {
+        Step::Fail(io::Error::from(io::ErrorKind::WouldBlock))
+    }
+
+    impl ScriptedReader {
+        fn new(steps: Vec<Step>) -> Self {
+            Self {
+                steps: steps.into(),
+            }
+        }
+    }
+
+    impl io::Read for ScriptedReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.steps.pop_front() {
+                Some(Step::Data(bytes)) => {
+                    let count = bytes.len().min(buf.len());
+                    buf[..count].copy_from_slice(&bytes[..count]);
+                    Ok(count)
+                }
+                Some(Step::Fail(error)) => Err(error),
+                None => Ok(0),
+            }
+        }
+    }
+
+    fn run(steps: Vec<Step>) -> (Option<String>, Vec<String>) {
+        let mut reader = ScriptedReader::new(steps);
+        let mut emitted: Vec<String> = Vec::new();
+        let result = pump_pty_output("test-pty", &mut reader, &mut |output| {
+            emitted.push(output)
+        });
+        (result, emitted)
+    }
+
+    #[test]
+    fn ReadLoop_FiveConsecutiveRealErrors_Terminates() {
+        let steps = (0..5).map(|_| fail()).collect();
+        let (result, _) = run(steps);
+        let reason = result.expect("5 consecutive real errors must terminate the loop");
+        assert!(reason.starts_with("read_error"));
+    }
+
+    #[test]
+    fn ReadLoop_WouldBlockBreaksErrorStreak_KeepsFiveConsecutiveSemantics() {
+        // 4 次真实错误后出现 WouldBlock（非错误事件），连续性被打断；
+        // 之后的 4 次真实错误不应累计到 5，最终按 EOF 正常结束。
+        let mut steps: Vec<Step> = (0..4).map(|_| fail()).collect();
+        steps.push(would_block());
+        steps.extend((0..4).map(|_| fail()));
+        let (result, _) = run(steps);
+        assert!(result.is_none(), "error streak must reset on WouldBlock");
+    }
+
+    #[test]
+    fn ReadLoop_ManyWouldBlocks_DoNotTerminate() {
+        let steps = (0..20).map(|_| would_block()).collect();
+        let (result, _) = run(steps);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn ReadLoop_DataThenEof_EmitsDecodedOutput() {
+        let (result, emitted) = run(vec![data("hello".as_bytes())]);
+        assert!(result.is_none());
+        assert_eq!(emitted, vec!["hello".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod shell_hardening_tests {
+    #![allow(non_snake_case)]
+
+    use super::{build_claude_command, validate_resume_session_id, validate_resume_session_ids};
+    use crate::platform::{shell_quote_arg, ShellKind};
+
+    #[test]
+    fn BuildClaudeCommand_QuotesPathAndArgsAgainstShellMetachars() {
+        let evils = [
+            "; rm -rf /x",
+            "$(calc)",
+            "`calc`",
+            "| pipe",
+            "double \"quote\"",
+            "a b",
+        ];
+        for evil in evils {
+            for kind in [ShellKind::Posix, ShellKind::PowerShell] {
+                let cmd = build_claude_command(
+                    Some("C:\\evil path\\claude.exe"),
+                    Some(&["--resume".to_string(), evil.to_string()]),
+                    kind,
+                );
+                // 每个动态片段都必须是引用后的字面量，不允许裸露在 shell 中
+                let call = if kind == ShellKind::PowerShell { "& " } else { "" };
+                let expected = format!(
+                    "{call}{} {} {}",
+                    shell_quote_arg("C:\\evil path\\claude.exe", kind),
+                    shell_quote_arg("--resume", kind),
+                    shell_quote_arg(evil, kind)
+                );
+                assert_eq!(cmd, expected, "unquoted fragment for {kind:?}: {cmd}");
+            }
+        }
+    }
+
+    #[test]
+    fn BuildClaudeCommand_WithoutArgs_KeepsProgramOnly() {
+        assert_eq!(
+            build_claude_command(Some("C:\\x\\claude.exe"), None, ShellKind::Posix),
+            "'C:\\x\\claude.exe'"
+        );
+        assert_eq!(
+            build_claude_command(None, None, ShellKind::Posix),
+            "claude"
+        );
+        assert_eq!(
+            build_claude_command(None, Some(&[]), ShellKind::Posix),
+            "claude"
+        );
+        // PowerShell 以调用操作符开头，裸引号路径才可执行
+        assert_eq!(
+            build_claude_command(Some("C:\\x\\claude.exe"), None, ShellKind::PowerShell),
+            "& 'C:\\x\\claude.exe'"
+        );
+        assert_eq!(
+            build_claude_command(
+                None,
+                Some(&["--resume".to_string(), "it's".to_string()]),
+                ShellKind::PowerShell
+            ),
+            "& claude '--resume' 'it''s'"
+        );
+    }
+
+    #[test]
+    fn ValidateResumeSessionIds_RejectsShellMetachars() {
+        let evils = [
+            "abc; rm -rf /x",
+            "$(calc)",
+            "a`id`b",
+            "a|b",
+            "a\"b",
+            "a b",
+            "会话",
+            "a:b",
+        ];
+        for evil in evils {
+            assert!(validate_resume_session_id(evil).is_err(), "must reject: {evil}");
+            let pair = ["--resume".to_string(), evil.to_string()];
+            assert!(validate_resume_session_ids(&pair).is_err());
+            let inline = [format!("--resume={evil}")];
+            assert!(validate_resume_session_ids(&inline).is_err());
+        }
+        // --resume 缺值同样拒绝
+        let missing = ["--resume".to_string()];
+        assert!(validate_resume_session_ids(&missing).is_err());
+    }
+
+    #[test]
+    fn ValidateResumeSessionIds_AcceptsWellFormedIds() {
+        assert!(validate_resume_session_id("cb2f0e991234456789ab001122334455").is_ok());
+        assert!(validate_resume_session_id("a-b_c.2026").is_ok());
+        let pair = ["--resume".to_string(), "abc123".to_string()];
+        assert!(validate_resume_session_ids(&pair).is_ok());
+        assert!(validate_resume_session_ids(&[]).is_ok());
+    }
+
+    #[test]
+    fn ValidateResumeSessionIds_RejectsPathEscapeForms() {
+        // store 层文件名组件校验补充点路径逃逸
+        assert!(validate_resume_session_id(".").is_err());
+        assert!(validate_resume_session_id("..").is_err());
+        assert!(validate_resume_session_id("a/b").is_err());
+    }
+}

@@ -182,7 +182,18 @@ pub(crate) fn is_gbk_trail(b: u8) -> bool {
 // ---- 4. 文件管理器 ----
 
 /// 在系统文件管理器中打开指定路径
+///
+/// Windows 的 explorer 会把单个参数按自身规则切分，`/select,` 之类的开关形态
+/// 会被当作命令开关而非路径，因此 Windows 拒绝以 `/` 开头的输入（POSIX 绝对
+/// 路径不受影响）；`-` 开头在所有平台都可能被解析为程序选项，一律拒绝。
 pub(crate) fn open_in_file_manager(path: &str) -> Result<(), String> {
+    if path.starts_with('-') {
+        return Err(format!("path looks like a command switch: {path}"));
+    }
+    #[cfg(target_os = "windows")]
+    if path.starts_with('/') {
+        return Err(format!("path looks like an explorer switch: {path}"));
+    }
     #[cfg(target_os = "windows")]
     {
         let mut cmd = new_command("explorer");
@@ -254,6 +265,30 @@ pub(crate) fn get_default_shell() -> (&'static str, Vec<&'static str>) {
     {
         ("/bin/bash", vec!["-i"])
     }
+}
+
+/// legacy PTY shell 命令行的引用风格
+///
+/// Windows 有 Git Bash 时命令经 `bash -c` 执行，否则回退 PowerShell；
+/// 两者的单引号转义规则不同，必须分开处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShellKind {
+    /// POSIX shell（bash / git-bash）：单引号内的 `'` 以 `'\''` 转义
+    Posix,
+    /// Windows PowerShell：单引号内的 `'` 翻倍为 `''`
+    PowerShell,
+}
+
+/// 将单个参数引用为对应 shell 的安全字面量
+///
+/// 输出必以单引号开始/结束，空格、`;`、`$`、反引号、`|`、双引号等
+/// 元字符不会越过引号边界被 shell 重新解释。
+pub(crate) fn shell_quote_arg(arg: &str, shell_kind: ShellKind) -> String {
+    let escaped = match shell_kind {
+        ShellKind::Posix => arg.replace('\'', "'\\''"),
+        ShellKind::PowerShell => arg.replace('\'', "''"),
+    };
+    format!("'{escaped}'")
 }
 
 // ---- 8. PATH 刷新 ----
@@ -352,5 +387,65 @@ fn refresh_path_unix() {
         Err(e) => {
             log::warn!("[Platform] Failed to run '{}': {}", shell, e);
         }
+    }
+}
+
+#[cfg(test)]
+mod shell_quote_tests {
+    #![allow(non_snake_case)]
+
+    use super::{open_in_file_manager, shell_quote_arg, ShellKind};
+
+    /// 恶意输入引用后必须保持单一字面量：整体包在单引号内，
+    /// 且内部单引号全部处于各 shell 的转义形态，不残留裸引号。
+    #[test]
+    fn ShellQuoteArg_MetacharInputs_StayInsideQuoteBoundary() {
+        let cases = [
+            "; rm -rf /x",
+            "$(calc)",
+            "`calc`",
+            "| pipe",
+            "double \"quote\"",
+            "path with space",
+            "会话 $HOME",
+        ];
+        for input in cases {
+            for kind in [ShellKind::Posix, ShellKind::PowerShell] {
+                let quoted = shell_quote_arg(input, kind);
+                assert!(
+                    quoted.starts_with('\'') && quoted.ends_with('\''),
+                    "quoted output must be single-quote wrapped: {quoted}"
+                );
+                let inner = &quoted[1..quoted.len() - 1];
+                let unescaped = match kind {
+                    // 还原各 shell 的转义形态后再检查是否残留裸引号
+                    ShellKind::Posix => inner.replace("'\\''", ""),
+                    ShellKind::PowerShell => inner.replace("''", ""),
+                };
+                assert!(
+                    !unescaped.contains('\''),
+                    "bare quote escaped its boundary: {quoted}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ShellQuoteArg_ExactEscapedShape_PerShell() {
+        assert_eq!(shell_quote_arg("it's", ShellKind::Posix), "'it'\\''s'");
+        assert_eq!(shell_quote_arg("it's", ShellKind::PowerShell), "'it''s'");
+        assert_eq!(shell_quote_arg("$(calc)", ShellKind::Posix), "'$(calc)'");
+        assert_eq!(shell_quote_arg("", ShellKind::Posix), "''");
+    }
+
+    #[test]
+    fn OpenInFileManager_RejectsDashSwitchInput() {
+        assert!(open_in_file_manager("-Trojan").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn OpenInFileManager_RejectsExplorerSwitchInput() {
+        assert!(open_in_file_manager("/select,C:\\Windows").is_err());
     }
 }

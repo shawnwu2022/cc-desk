@@ -26,7 +26,6 @@
     "core:app:allow-app-hide",
     "shell:default",
     "shell:allow-open",
-    "shell:allow-execute",
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
