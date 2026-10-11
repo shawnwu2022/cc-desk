@@ -752,3 +752,23 @@ The worktree has not been pushed and no hosted run was dispatched in these batch
   Verify remaining agent UI integrations against [agent-guides.md](agent-guides.md)
   when their clients are available. Completion requires actual target evidence;
   these checks cannot be replaced by successful performance or loader tests.
+
+## Production CSP startup gate (2026-10-12)
+
+Required `Frontend checks` retain the complete Vitest inventory, the nineteen
+Node policy files and the ordinary `npm run build`. They now also install the
+locked Playwright Chromium and system dependencies with
+`npx playwright install --with-deps chromium`, then run `npm run test:production`.
+This independent browser gate performs a second normal production Vite build,
+serves the actual `tauri.conf.json` production CSP and verifies both languages,
+Projects and lazy Settings with zero CSP violations. It uses no visual fixture
+entry or relaxed policy; its failing IPC boundary does not grant Native authority
+or establish installed WebView2/real-CLI acceptance.
+
+Chromium/dependency installation and the second build are added CI work, not a
+claimed saving. Startup screenshots and failure traces retain the exact
+source/run/attempt artifact name. The original Rust shards, required aggregate,
+native exclusions and signed protected-main promotion gates remain unchanged.
+`npm run typecheck` first builds Node composite declarations into ignored
+`.cache/typecheck-node`, then checks the application and tests; cold checkouts
+cannot substitute a preexisting local declaration cache for this step.
