@@ -50,7 +50,7 @@ beforeEach(() => {
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/codex' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.register.mockImplementation(async path => ({ revision: '2', projectId: 'registered-new', projects: [{ projectId: 'registered-new', hostId: 'host', sourcePathKey: 'source-new', selectedPath: path, canonicalPath: path, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }))
-  io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
+  io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 function render() {
@@ -62,7 +62,7 @@ function render() {
 describe('Workspace source warning diagnostics', () => {
   // 单条历史读取失败保留已识别会话，仅显示可收起的部分历史诊断。
   it('HistoryPartial_KeepsPositiveRows_001', async () => {
-    io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }], hasMore: false,
+    io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }], hasMore: false,
       historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_UNSUPPORTED'] })
     const { runtime } = render(); await flushPromises()
     expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'history-id')).toBe(true)
@@ -304,7 +304,7 @@ describe('Workspace source warning diagnostics', () => {
   it('HistoryPartial_LastKnownActivity_006', async () => {
     // Display fallback requires a positively admitted exact root, never absent identity.
     io.scope.mockResolvedValue({ cli: 'codex', sourceRootKey: 'admitted-root-key' })
-    const item = { type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'Known task', cwd: '/repo', updatedAt: '2026-10-10T11:00:00Z' }
+    const item = { type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'Known task', cwd: '/repo', updatedAt: '2026-10-10T11:00:00Z' }
     io.read.mockResolvedValue({ state: 'ready', items: [item], hasMore: false })
     const { runtime } = render(); await flushPromises()
     const known = Date.parse(item.updatedAt)
@@ -415,6 +415,17 @@ describe('Workspace source warning diagnostics', () => {
     await runtime.refresh(); await flushPromises()
     // 旧 revision 的幽灵 entry 必须被清理，否则同一会话会同时出现两行。
     expect(history.all().map(entry => entry.context.profileRevision)).toEqual(['8'])
+  })
+
+  it('Runtime_GroupsStartupHistoryByProfile_051', async () => {
+    io.registered.mockResolvedValue({ revision: '1', projects: [
+      { projectId: 'project-1', hostId: 'host', sourcePathKey: 's1', selectedPath: '/repo-a', canonicalPath: '/repo-a', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } },
+      { projectId: 'project-2', hostId: 'host', sourcePathKey: 's2', selectedPath: '/repo-b', canonicalPath: '/repo-b', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } },
+    ] })
+    io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false })
+    render(); await flushPromises()
+    // 同一 profile 的多个项目必须合并为一次后端观察：每个项目各扫一次全库是启动巨慢的根因。
+    expect(io.scope).toHaveBeenCalledExactlyOnceWith({ kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project-1', 'project-2'] })
   })
 
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {
@@ -1027,7 +1038,7 @@ it.each(['navigation', 'project', 'replacement', 'profile'] as const)('Runtime_D
   else if (change === 'project') { catalog.selectProjectContext('/other'); shell.navigate('workspace') }
   else if (change === 'replacement') shell.requestWorkspaceAction({ kind: 'restore-session', project: history, mode: 'history' })
   else useCliProfilesStore().profiles[0].revision = '8'
-  finish({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
+  finish({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
   expect(useNativeTabsStore().tabs.size).toBe(0)
   if (change === 'replacement') expect(catalog.resumeDialog?.mode).toBe('history')
 })
@@ -1062,7 +1073,7 @@ it('Runtime_DirectResumeCoalesces_047', async () => {
   io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
   shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: history.id, action: 'resume' }); await flushPromises()
   shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: history.id, action: 'resume' }); await flushPromises()
-  finish({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
+  finish({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
   expect(catalog.resumeDialog).toBeNull()
   expect(useNativeTabsStore().tabs.size).toBe(1)
   expect(catalog.activeSessionId).toMatch(/^native-tab:/)

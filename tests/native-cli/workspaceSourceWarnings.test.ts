@@ -7,7 +7,7 @@ import { useNativeHistoryStore } from '@/stores/nativeHistory'
 import { createWorkspaceSourceWarnings } from '@/utils/workspaceSourceWarnings'
 
 const template = readFileSync('src-tauri/src/cli/document_bootstrap.js', 'utf8')
-const target = { kind: 'profile', profileId: 'codex', expectedProfileRevision: '1', projectId: 'project' }
+const target = { kind: 'profile', profileId: 'codex', expectedProfileRevision: '1', projectIds: ['project'] }
 const source = { scopeId: 'scope-1', instanceId: 'instance', cli: 'codex', sourceRootKey: 'local:windows:1:2:3', identityEpoch: '1', profileId: 'codex', profileRevision: '1', target, basis: 'configured-profile' }
 const context = { cli: 'codex' as const, profileId: 'codex', profileRevision: '1', projectId: 'project', projectPath: 'C:\\work\\private-project' }
 function bridge(invoke: (command: string, body: Uint8Array, options: { headers: Record<string, string> }) => Promise<unknown>) {

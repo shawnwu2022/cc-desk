@@ -96,7 +96,7 @@ function closeButton(wrapper: VueWrapper, tabId: string) { return wrapper.get(`[
 // A closed history row is the restore action; the full close/admission chain
 // still verifies its exact source and creates only one new resume attempt.
 it('Native_AppCloseThenRowResume_009', async () => {
-  const item = { type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'closed']), nativeSessionId: 'closed', title: 'Closing history', cwd: '/repo', updatedAt: '2026-10-10T12:19:00Z', truncated: false }
+  const item = { type: 'session', projectId: 'project', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'closed']), nativeSessionId: 'closed', title: 'Closing history', cwd: '/repo', updatedAt: '2026-10-10T12:19:00Z', truncated: false }
   const response = (request: any) => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: request.resourceKind === 'history' ? [item] : [], hasMore: false })
   io.historyRead.mockImplementation(async request => response(request))
   const wrapper = await render(), tab = await open(wrapper, { kind: 'resume-id', nativeSessionId: 'closed' }), catalog = useUnifiedSessionsStore()
@@ -109,7 +109,7 @@ it('Native_AppCloseThenRowResume_009', async () => {
   io.historyRead.mockClear(); io.historyRead.mockImplementationOnce(() => pending.promise)
   await row.trigger('click'); await flushPromises()
   expect(io.historyRead).toHaveBeenCalledOnce()
-  expect(io.historyRead.mock.calls[0][0]).toMatchObject({ resourceKind: 'history', source: { profileId: 'cx', profileRevision: '7', target: { projectId: 'project' } } })
+  expect(io.historyRead.mock.calls[0][0]).toMatchObject({ resourceKind: 'history', source: { profileId: 'cx', profileRevision: '7', target: { projectIds: ['project'] } } })
   expect(io.start).toHaveBeenCalledOnce()
   expect(catalog.isResumePending(history)).toBe(true)
   await row.trigger('click')
@@ -130,7 +130,7 @@ it('Native_AppCloseThenRowResume_009', async () => {
 // A current read failure cannot be replaced with stale cached presence. Leaving
 // the workspace during the read likewise cancels admission without a late start.
 it.each(['budget', 'navigation'] as const)('Native_AppRowResumeNoStaleAdmission_%s_010', async failure => {
-  const item = { type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'saved']), nativeSessionId: 'saved', title: 'Saved history', cwd: '/repo', updatedAt: '2026-10-10T12:19:00Z', truncated: false }
+  const item = { type: 'session', projectId: 'project', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'saved']), nativeSessionId: 'saved', title: 'Saved history', cwd: '/repo', updatedAt: '2026-10-10T12:19:00Z', truncated: false }
   const response = (request: any) => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: request.resourceKind === 'history' ? [item] : [], hasMore: false })
   io.historyRead.mockImplementation(async request => response(request))
   const wrapper = await render(), catalog = useUnifiedSessionsStore()
@@ -159,7 +159,7 @@ it.each(['budget', 'navigation'] as const)('Native_AppRowResumeNoStaleAdmission_
     await wrapper.get('[data-action-feedback] button').trigger('click'); await flushPromises()
     await vi.waitFor(() => expect(io.start).toHaveBeenCalledOnce())
     expect(io.historyRead).toHaveBeenCalledTimes(2)
-    expect(io.historyRead.mock.calls[1][0]).toMatchObject({ source: { profileId: 'cx', profileRevision: '7', target: { profileId: 'cx', expectedProfileRevision: '7', projectId: 'project' } } })
+    expect(io.historyRead.mock.calls[1][0]).toMatchObject({ source: { profileId: 'cx', profileRevision: '7', target: { profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] } } })
     expect([...useNativeTabsStore().tabs.values()][0]).toMatchObject({ cli: 'codex', profileId: 'cx', profileRevision: '7', projectId: 'project', projectPath: '/repo', action: { kind: 'resume-id', nativeSessionId: 'saved' } })
     expect(io.stop).not.toHaveBeenCalled()
   } else expect(catalog.actionFeedback).toBeNull()
@@ -168,7 +168,7 @@ it.each(['budget', 'navigation'] as const)('Native_AppRowResumeNoStaleAdmission_
 // A fresh partial source can still prove the chosen exact session is present;
 // omitted neighbors are not absence evidence and do not authorize another row.
 it('Native_AppRowResumePartialPositive_011', async () => {
-  const item = { type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'saved']), nativeSessionId: 'saved', title: 'Saved history', cwd: '/repo', updatedAt: null, truncated: true }
+  const item = { type: 'session', projectId: 'project', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'saved']), nativeSessionId: 'saved', title: 'Saved history', cwd: '/repo', updatedAt: null, truncated: true }
   const response = (request: any) => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: request.resourceKind === 'history' ? [item] : [], hasMore: false,
     historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_READ_FAILED'] })
   io.historyRead.mockImplementation(async request => response(request))
@@ -221,7 +221,7 @@ it('Native_AppCloseReadRetry_007', async () => {
 
 // 整合真实响应式历史后，关闭拥有的迟到来源读取必须进入同一次排序快照。
 it('Native_AppCloseLateHistory_008', async () => {
-  const old = { type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'old']), nativeSessionId: 'old', title: 'Old history', cwd: '/repo', updatedAt: '2026-09-17T00:00:00Z', truncated: false }
+  const old = { type: 'session', projectId: 'project', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'old']), nativeSessionId: 'old', title: 'Old history', cwd: '/repo', updatedAt: '2026-09-17T00:00:00Z', truncated: false }
   const closingHistory = { ...old, sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'closed']), nativeSessionId: 'closed', title: 'Closing history', updatedAt: '2026-09-10T00:00:00Z' }
   const result = (request: any, items: any[]) => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items, hasMore: false })
   io.historyRead.mockImplementation(async request => result(request, request.resourceKind === 'history' ? [old, closingHistory] : []))
@@ -234,7 +234,7 @@ it('Native_AppCloseLateHistory_008', async () => {
   expect(io.historyRead).toHaveBeenCalledOnce()
   const request = io.historyRead.mock.calls[io.historyRead.mock.calls.length - 1][0]
   expect(request).toMatchObject({ resourceKind: 'history', source: { cli: 'codex', profileId: 'cx', profileRevision: '7',
-    target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectId: 'project' } } })
+    target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] } } })
   expect(useUnifiedSessionsStore().completedClose).toBeNull()
   const fresh = { ...closingHistory, updatedAt: '2026-10-10T10:29:00Z' }
   io.historyRead.mockImplementation(async read => result(read, read.resourceKind === 'history' ? [old, fresh] : []))
@@ -255,7 +255,7 @@ it('Native_AppCloseLateHistory_008', async () => {
 // 不能把该会话行从历史列表清空——它的存在性有最强的本地证据，清空后要等下一次
 // 成功的全量扫描才会回来，表现为「关闭的会话直接消失、隔很久才出来」。
 it('Native_AppCloseHistoryReadFailureKeepsRow_012', async () => {
-  const old = { type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'old']), nativeSessionId: 'old', title: 'Old history', cwd: '/repo', updatedAt: '2026-09-17T00:00:00Z', truncated: false }
+  const old = { type: 'session', projectId: 'project', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'old']), nativeSessionId: 'old', title: 'Old history', cwd: '/repo', updatedAt: '2026-09-17T00:00:00Z', truncated: false }
   const closingHistory = { ...old, sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'closed']), nativeSessionId: 'closed', title: 'Closing history', updatedAt: '2026-10-10T00:00:00Z' }
   const result = (request: any, items: any[]) => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items, hasMore: false })
   io.historyRead.mockImplementation(async request => result(request, request.resourceKind === 'history' ? [old, closingHistory] : []))

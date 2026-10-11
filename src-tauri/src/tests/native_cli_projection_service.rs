@@ -60,7 +60,7 @@ impl Fixture {
         ScopeTarget::Profile {
             profile_id: id.into(),
             expected_profile_revision: d.profiles[id].revision,
-            project_id: None,
+            project_ids: vec![],
         }
     }
 }
@@ -120,7 +120,7 @@ fn ScopeShim_ReadCodexRoot_007() {
     let target = ScopeTarget::Profile {
         profile_id: "codex-shim".into(),
         expected_profile_revision: d.profiles["codex-shim"].revision,
-        project_id: None,
+        project_ids: vec![],
     };
     let source = f.service.scope(&f.caller, &target).unwrap();
     let data = f.service.read(&f.caller, &req(source)).unwrap();
@@ -183,8 +183,8 @@ fn D12_Production_ExplicitProjectNotTranscriptCwdControlsResourceAccess_004() {
     fs::create_dir(&work).unwrap();
     fs::write(work.join("CLAUDE.md"), "registered instruction").unwrap();
     let registered = crate::cli::workspace::register_project(&f.repo, &work).unwrap();
-    if let ScopeTarget::Profile { project_id, .. } = &mut t {
-        *project_id = Some(registered.project_id.clone());
+    if let ScopeTarget::Profile { project_ids, .. } = &mut t {
+        *project_ids = vec![registered.project_id.clone()];
     }
     let source = f.service.scope(&f.caller, &t).unwrap();
     let mut r = req(source);
@@ -239,7 +239,7 @@ fn D12_Production_UnknownRunAndUnsafeProfileNeverFallBack_005() {
         .unwrap();
     let ScopeTarget::Profile {
         profile_id,
-        project_id,
+        project_ids,
         ..
     } = t
     else {
@@ -247,7 +247,7 @@ fn D12_Production_UnknownRunAndUnsafeProfileNeverFallBack_005() {
     };
     let t = ScopeTarget::Profile {
         profile_id,
-        project_id,
+        project_ids,
         expected_profile_revision: updated.profiles["p"].revision,
     };
     assert_eq!(

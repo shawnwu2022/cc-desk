@@ -85,7 +85,7 @@ Native frontend calls are admitted through the authenticated document bridge. Fr
 
 Native resource reads:
 
-- bind the selected CLI/profile revision and a registered project;
+- bind the selected CLI/profile revision and the registered projects in the observation; every project in the set is admitted individually, and the set is never a way around a single project's authorization;
 - use backend-held scoped filesystem authority;
 - return kind-specific projection DTOs only;
 - do not return raw env values, headers, credential material, arbitrary argv, or unbounded native errors.

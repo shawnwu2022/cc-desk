@@ -14,7 +14,7 @@ function source(cli: 'claude' | 'codex', profileId: string, revision: string, pr
   return {
     scopeId: 'scope_1', instanceId: 'instance_1', cli, sourceRootKey: root, identityEpoch: '1',
     profileId, profileRevision: revision,
-    target: { kind: 'profile' as const, profileId, expectedProfileRevision: revision, projectId },
+    target: { kind: 'profile' as const, profileId, expectedProfileRevision: revision, projectIds: [projectId] },
     basis: 'configured-profile' as const,
   }
 }
@@ -236,8 +236,8 @@ it('History_ThreeScopesStrictBridgePagination_017', async () => {
   const calls: Array<{ project: string; epoch: string; offset: number }> = []
   let expired = false
   const invoke = vi.fn(async (command: string, payload: any) => {
-    if (command === 'native_get_scope') return { ...source('codex', 'p', '1', payload.projectId), scopeId: `scope_${payload.projectId}` }
-    const project = payload.source.target.projectId
+    if (command === 'native_get_scope') return { ...source('codex', 'p', '1', payload.projectIds[0]), scopeId: `scope_${payload.projectIds[0]}` }
+    const project = payload.source.target.projectIds[0]
     calls.push({ project, epoch: payload.requestEpoch, offset: payload.offset })
     await new Promise(resolve => setTimeout(resolve, 0))
     const response = { source: payload.source, resourceKind: 'history', requestEpoch: payload.requestEpoch, observedAt: payload.requestEpoch, state: 'ready', reason: null, items: [], hasMore: false }

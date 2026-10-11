@@ -27,12 +27,11 @@ fn grant(path: &std::path::Path, title: &str, live: Arc<AtomicBool>) -> Grant {
         target: ScopeTarget::Profile {
             profile_id: "p".into(),
             expected_profile_revision: n(1),
-            project_id: None,
+            project_ids: vec![],
         },
         basis: SourceBasis::ConfiguredProfile,
         root: Root::open(path).unwrap(),
-        project: None,
-        project_paths: vec![],
+        projects: vec![],
         user_config: None,
         check: Arc::new(move || {
             if live.load(Ordering::SeqCst) {
@@ -67,8 +66,11 @@ fn incomplete_history_survives_filtering_and_empty_pages() {
         ),
     )
     .unwrap();
-    g.project = Some(Root::open(t.path()).unwrap());
-    g.project_paths = vec![t.path().to_owned()];
+    g.projects = vec![AdmittedProject {
+        id: "test-project".into(),
+        root: Root::open(t.path()).unwrap(),
+        paths: vec![t.path().to_owned()],
+    }];
     let source = registry.register(g).unwrap();
     let response = registry.read(&owner(), &request(source)).unwrap();
     assert_eq!(response.state, ProjectionState::Ready);
@@ -557,6 +559,7 @@ fn history_snapshot_accounts_allocated_capacity_and_retains_partial_flags() {
     let items = vec![ResourceItem::Session {
         session_key: "key".into(),
         native_session_id: "id".into(),
+        project_id: None,
         title,
         title_unknown: None,
         title_source: None,
@@ -595,8 +598,11 @@ fn history_snapshot_rechecks_root_and_registered_project_handles() {
         for name in ["same", "two"] {
             fs::write(root_path.join(format!("projects/p/{name}.jsonl")), format!("{}\n", serde_json::json!({"type":"user", "cwd":project_path.to_str().unwrap(),"message":{"content":name}}))).unwrap();
         }
-        g.project = Some(Root::open(&project_path).unwrap());
-        g.project_paths = vec![project_path.clone()];
+        g.projects = vec![AdmittedProject {
+            id: "test-project".into(),
+            root: Root::open(&project_path).unwrap(),
+            paths: vec![project_path.clone()],
+        }];
         let source = registry.register(g).unwrap();
         let mut req = request(source);
         req.limit = 1;

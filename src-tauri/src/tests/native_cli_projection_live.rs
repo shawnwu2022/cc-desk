@@ -243,7 +243,7 @@ fn D12_Webview_Worker_099() {
         let d = repo
             .apply(repo.read().unwrap().revision, Patch::Create { profile: p })
             .unwrap();
-        targets.push(json!({"kind":"profile","profileId":id,"expectedProfileRevision":d.profiles[id].revision,"projectId":null}));
+        targets.push(json!({"kind":"profile","profileId":id,"expectedProfileRevision":d.profiles[id].revision,"projectIds":[]}));
     }
     let launch = Arc::new(LaunchService::new(
         repo.clone(),

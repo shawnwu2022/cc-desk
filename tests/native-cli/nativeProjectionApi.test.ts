@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import { createProjectionClient } from '@/api/nativeProjection'
 import type { ReadRequest, SourceRef, ScopeTarget } from '@/types/nativeProjection'
-const target: ScopeTarget = { kind: 'profile', profileId: 'p', expectedProfileRevision: '1', projectId: null }
+const target: ScopeTarget = { kind: 'profile', profileId: 'p', expectedProfileRevision: '1', projectIds: [] }
 const source: SourceRef = { scopeId: 'scope-1', instanceId: 'instance', cli: 'claude', sourceRootKey: 'root', identityEpoch: '1', profileId: 'p', profileRevision: '1', target, basis: 'configured-profile' }
 const request = (): ReadRequest => ({ source: structuredClone(source), resourceKind: 'history', requestEpoch: '1', limit: 100, offset: 0 })
 const response = () => ({ source: structuredClone(source), resourceKind: 'history', requestEpoch: '1', observedAt: '2', state: 'ready', reason: null, items: [], hasMore: false })

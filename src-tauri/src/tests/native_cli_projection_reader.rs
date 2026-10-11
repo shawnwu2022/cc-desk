@@ -25,12 +25,21 @@ fn list(
         .map(Path::to_path_buf)
         .into_iter()
         .collect::<Vec<_>>();
+    let projects = p
+        .as_ref()
+        .map(|root| {
+            vec![ProjectRef {
+                id: "test-project",
+                root,
+                paths: &paths,
+            }]
+        })
+        .unwrap_or_default();
     let items = read(
         &Catalog {
             cli,
             root: &r,
-            project: p.as_ref(),
-            project_paths: &paths,
+            projects: &projects,
             user_config: None,
             check: &|| Ok(()),
         },
@@ -234,8 +243,7 @@ fn HistoryPartial_KeepAggregateCap_004() {
         &Catalog {
             cli: CliKind::Claude,
             root: &root,
-            project: None,
-            project_paths: &[],
+            projects: &[],
             user_config: None,
             check: &|| Ok(()),
         },
@@ -555,8 +563,7 @@ fn revocation_precedes_native_reads() {
         &Catalog {
             cli: CliKind::Claude,
             root: &root,
-            project: None,
-            project_paths: &[],
+            projects: &[],
             user_config: None,
             check: &|| Err("SCOPE_REVOKED"),
         },
@@ -616,8 +623,7 @@ fn resource_documents_are_guarded_after_read_not_just_at_admission() {
         &Catalog {
             cli: CliKind::Claude,
             root: &r,
-            project: None,
-            project_paths: &[],
+            projects: &[],
             user_config: None,
             check: &check
         },
