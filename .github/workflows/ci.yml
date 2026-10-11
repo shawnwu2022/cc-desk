@@ -432,22 +432,34 @@ jobs:
         run: |
           $path = 'tests/fixtures/version-history-roundtrip/target.json'
           $original = [IO.File]::ReadAllBytes((Resolve-Path $path))
+          $frontendReady = $false
+          $reuseConfig = Join-Path (Resolve-Path 'src-tauri/target').Path ('ci-roundtrip-frontend-' + [guid]::NewGuid() + '.json')
           try {
             foreach ($scenario in @('success', 'before-installer-resume')) {
               $target = [Text.Encoding]::UTF8.GetString($original) | ConvertFrom-Json
               if ($target.enabled -ne $false) { throw 'CI only admits the disabled binding' }
               $target.scenario = $scenario
               [IO.File]::WriteAllText((Resolve-Path $path), ($target | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
-              npm run tauri -- build --debug --features history-roundtrip-acceptance --no-bundle
+              if ($frontendReady) {
+                [IO.File]::WriteAllText($reuseConfig, '{"build":{"beforeBuildCommand":null}}', [Text.UTF8Encoding]::new($false))
+                npm run tauri -- build --debug --features history-roundtrip-acceptance --no-bundle --config $reuseConfig
+              } else {
+                npm run tauri -- build --debug --features history-roundtrip-acceptance --no-bundle
+              }
               if ($LASTEXITCODE -ne 0) { throw "Inert acceptance build failed: $scenario" }
               Get-FileHash src-tauri/target/debug/cc-desk.exe -Algorithm SHA256
+              if (!(Test-Path -LiteralPath 'dist/index.html' -PathType Leaf)) { throw 'Fresh debug frontend is missing' }
+              $frontendReady = $true
             }
             Push-Location src-tauri
             try {
               cargo clippy --locked --all-targets --features history-roundtrip-acceptance -- -D warnings
               if ($LASTEXITCODE -ne 0) { throw 'Acceptance compilation lint failed' }
             } finally { Pop-Location }
-          } finally { [IO.File]::WriteAllBytes((Resolve-Path $path), $original) }
+          } finally {
+            [IO.File]::WriteAllBytes((Resolve-Path $path), $original)
+            if (Test-Path -LiteralPath $reuseConfig) { Remove-Item -LiteralPath $reuseConfig }
+          }
       - name: Parse PowerShell and run effect-free driver contracts
         run: |
           foreach ($path in @('scripts/version-history/roundtrip.ps1', 'scripts/version-history/roundtrip-ui.ps1', 'tests/scripts/historyRoundtripDriver.ps1')) {

@@ -616,3 +616,120 @@ source `b0f5c3c`; downloading the build-metrics artifact returned HTTP 401, so i
 actual bytes and source binding were not verified in this batch. No same-source
 hosted run was dispatched for the current worktree. Completed runner evidence
 and a full hosted comparison remain prerequisites for changing shard weights.
+
+## Same-job debug frontend reuse and Node source loading (2026-10-11)
+
+Read-only metadata from successful main run
+[38062961552](https://github.com/shawnwu2022/cc-desk/actions/runs/38062961552)
+declares source `2e74e854b088727388aff75d0351b608d74121b3`.
+Frontend tests took 105 seconds, Node policy tests 25 seconds and the frontend
+build 5 seconds. The ordinary roundtrip release build step took 457 seconds;
+the complete debug job took 373 seconds, including 133 seconds for its two
+scenario builds and strict Clippy. Rust shard jobs 5, 4 and 7 took 443, 367 and
+348 seconds. These are historical job/step intervals, not current-worktree
+measurements or per-name execution weights. The metrics artifact download
+again returned HTTP 401; its actual bytes and source binding remain unverified.
+
+The debug scenario loop previously invoked the same frontend/ConPTY preparation
+hook twice. It now keeps the first ordinary Tauri build. Only after that build
+succeeds and `dist/index.html` exists can the second scenario use a uniquely
+owned temporary JSON config with `build.beforeBuildCommand=null`. Tauri's
+[build config merge](https://v2.tauri.app/reference/cli/#build) applies that
+single override. Both Rust applications are still built and hashed, strict
+all-target Clippy still runs, the fixture must stay disabled, and its exact
+original bytes are restored on success or failure. The override file is removed
+in `finally`. No frontend crosses source, checkout or job boundaries; ordinary
+release, feature denial, required checks and original coverage are unchanged.
+
+An executable regression extracts the actual workflow PowerShell step and runs
+it in an owned temporary workspace with spaces in its path and stale seeded
+frontend files. The original step failed because it built the frontend twice.
+The changed step passes success, first-build failure, missing-frontend,
+second-build failure and Clippy failure cases. Native builders are controlled
+substitutes in this regression; it does not certify an application build.
+Separately, the actual installed Tauri CLI 2.10.1 was run against an owned toy
+project with the locked Tauri 2.10.3 dependency and a deliberately missing
+Cargo runner. Default / null-hook override / default calls observed hook counts
+1 / 1 / 2 and all reached the expected runner refusal. This proves the installed
+CLI's hook/config behavior, not successful Rust compilation or native acceptance.
+
+The full Node policy inventory then exposed sixteen source-loader failures:
+Vite's newly used `import.meta.env.DEV` remained in CommonJS output. The paste
+generator and trace tests now share an AST compiler that applies only the known
+production `DEV=false` constant, as the installed Vite production configuration
+does. It preserves same-spelled string literals, payload bytes, actual clipboard
+policy imports and refusal of unknown environment flags. Trace tests isolate
+the host clipboard API with a throwing boundary; they still execute the real
+paste and policy functions. The dedicated paste workflow path filters now also
+include the shared compiler and clipboard policy source.
+
+Local checks on `ae448e1` plus the dirty worktree with Node 24.18.0 passed all
+nineteen CI Node policy files: 209 passed, zero failed and the six existing
+Windows skips. Hosted CI remains on Node 22 and is independently unrun here.
+The production-constant regression was first retained as a failing run. The
+paste/policy Vitest subset passed all 63 cases. Selected workflow, test and
+production input hashes were stable during the final Node run. Logs and actual
+input hashes are retained with the batch-five artifacts; no tests, assertions,
+workloads, exclusions, Rust profiles or shard weights were reduced.
+Typecheck and Node syntax/diff checks also passed on the final local checks.
+The current canonical agent guides were rechecked with the actual Codex prompt
+assembler, Claude's loopback-only context capture and Gemini's installed loader;
+the existing Claude ancestor-import trust limitation remains documented in
+[agent-guides.md](agent-guides.md).
+
+## Follow-up TODO (2026-10-11)
+
+This is the canonical performance follow-up list. Checked items mean the local
+implementation and scoped evidence recorded above are complete; they do not
+declare the current dirty worktree fully tested or hosted savings proven.
+The worktree has not been pushed and no hosted run was dispatched in these batches.
+
+- [x] Split frontend iteration into fast, process and stress groups without
+  dropping the complete inventory; scope runtime projection refresh by project
+  and make affected fixtures portable. Preserve each batch's source and evidence.
+- [x] Use `AGENTS.md` as the common standard with tool-specific references.
+  Record actual Codex, Claude Code and Gemini loader checks and their scope/trust
+  limitations in [agent-guides.md](agent-guides.md).
+- [x] Reuse the frontend after the first successful same-job debug build and
+  repair production Node source loading. Retain both native builds and original
+  gates; the latest local Node policy, paste/policy and type checks are above.
+- [ ] **P1 / CI-1 — Verify actual metrics artifacts.** Using an authorized
+  authenticated read, download the historical metrics and raw logs, then verify
+  their bytes, source SHA, run/attempt and plan/executable identities. Resolve
+  the API/artifact source discrepancy recorded above before using that run.
+  Completion requires a retained identity ledger and raw files; API step times
+  or HTTP 401 responses cannot close this item or supply per-test weights. If
+  historical bytes remain inaccessible, keep those runs metadata-only and use
+  newly verified source-bound artifacts for subsequent decisions.
+- [ ] **P1 / CI-2 — Measure the hosted control/change comparison.** After the
+  reviewed source is integrated through the authorized Git/CI workflow, execute
+  the original nineteen Node policy files on CI's Node 22 and the complete
+  ordinary required gates, including all four Rust harnesses and sixteen shards.
+  Compare controls with matching application/test inputs, inventory, toolchain
+  and runner class; record each workflow variant's own exact SHA/run/attempt
+  separately. Include cold/warm cache state, actual fresh/rebuilt compilation,
+  scheduling, transfer, runner consumption and the complete critical path.
+  Completion requires source-bound raw coverage and comparable measurements;
+  local hook counts alone do not establish net wall-time savings. Current commit,
+  push and remote dispatch remain outside these completed local batches.
+- [ ] **P2 / CI-3 — Calibrate Rust names on the target runner.** Run the original
+  exact entries serially from the producer-identified executable with unchanged
+  workload/assertions. Retain full inventory, executable/source/toolchain hashes,
+  host conditions, raw completion counts and completed wall times. Initialization
+  failures, timeouts and parallel output timestamps stay excluded from duration
+  samples. Keep the original eighteen Job-free disclosures and timeout policy.
+  This collection can proceed independently of historical artifact recovery.
+  Completion requires completed source-bound runner samples for the proposed
+  placement; the 379.408-second local restore sample is supporting evidence only.
+- [ ] **P2 / CI-4 — Decide on further shard/profile changes.** Only after CI-1
+  through CI-3 close, evaluate deterministic placement or a test-profile override.
+  Include added compilation and artifact costs, and compare the full hosted path
+  with unchanged names, ignores, counts and required checks. Adopt a change only
+  when comparable evidence proves a net gain; otherwise retain current settings
+  and record the no-change decision. The single local profile pair is insufficient.
+- [ ] **P2 / ACCEPTANCE — Close independent target gaps.** Track real Claude
+  Code/Codex CLI D20, Windows rendering/installed-package checks and external
+  Job-free execution in their original ledgers; see [roadmap.md](roadmap.md).
+  Verify remaining agent UI integrations against [agent-guides.md](agent-guides.md)
+  when their clients are available. Completion requires actual target evidence;
+  these checks cannot be replaced by successful performance or loader tests.

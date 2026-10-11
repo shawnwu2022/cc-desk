@@ -1,8 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { transpileProductionSource } = require('./transpile_production_source.cjs');
 
 const root = process.cwd();
-const ts = require(path.join(root, 'node_modules/typescript'));
 fs.mkdirSync(path.join(root, '.ci-claude'), { recursive: true });
 // Standalone Node has no Vite alias resolver. Keep the real clipboard policy
 // alongside pasteText instead of dropping or mocking its production import.
@@ -10,9 +10,8 @@ for (const [source, target] of [
   ['src/terminal/inputPolicy.ts', 'inputPolicy.cjs'],
   ['src/utils/pasteText.ts', 'pasteText.cjs'],
 ]) {
-  const compiled = ts.transpileModule(fs.readFileSync(path.join(root, source), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText.replace('require("@/terminal/inputPolicy")', 'require("./inputPolicy.cjs")');
+  const compiled = transpileProductionSource(fs.readFileSync(path.join(root, source), 'utf8'))
+    .replace('require("@/terminal/inputPolicy")', 'require("./inputPolicy.cjs")');
   fs.writeFileSync(path.join(root, '.ci-claude', target), compiled);
 }
 const compiledPath = path.join(root, '.ci-claude/pasteText.cjs');

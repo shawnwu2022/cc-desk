@@ -591,3 +591,9 @@ npm run tauri:build        # 生产构建
 - Windows 目录句柄必须早于 fixture 的 `TempDir` 释放，不能为了清理而放宽生产目录共享或身份校验。上下文 fixture 的字段顺序由 `HistoryContext_FixtureCleanup_041` 核对；不添加会禁止既有字段移动的 `Drop` 实现。
 - 单例校准记录本次 Cargo 识别的 executable、源码、工具链、实际名称与宿主条件。初始化失败、timeout 和并行输出观察时间不当作完成耗时；本机子集不替代四 harness 全库存或 hosted 证据。诊断临时根只在精确拥有且字节保存验证后清理，不触及用户或生产恢复数据。
 - 严格 all-target Clippy 保持 `-D warnings`；原测试名称仅在对应 `#[cfg(test)]` 模块局部允许 `non_snake_case`，不重命名库存或全局放宽 lint。`BundleReturn_RestorePresentImage_002` 本机完整样本约 379 秒，此前 300 秒 timeout 仍为未完成测量；单次 test profile 优化试验未采用。后续权重或 profile 变更需完成同源 runner 和 hosted 比较，详见 [CI 性能记录](ci-performance.md)。
+
+### CI 前端复用与独立 Node 源码契约
+
+- Roundtrip debug 只在同一 job 首次完整 Tauri 构建成功后复用该前端。第二场景只临时关闭重复 `beforeBuildCommand`，保留两次实际 Rust 构建/可执行文件哈希、disabled binding、严格 Clippy、异常失败与 binding 原始字节恢复；不跨源码或 job 复用产物，不改变 release 与 required policy 聚合。
+- 粘贴 Node 编译器仅在 AST 上把 Vite 生产常量 `import.meta.env.DEV` 设为 `false`；字面量、正文和未知环境开关不重写。执行真实 `pasteText.ts` 与 `inputPolicy.ts`，trace fixture 只隔离宿主 API 且拒绝意外读取真实剪贴板，不能替换黄金样本或原 release gate。
+- 实际 Tauri CLI 的 hook 次数探针与 PowerShell 编排回归分别证明配置合并和失败行为，不构成真实应用构建、hosted 性能或 CLI 往返认证。历史 job 元数据不能当作单例权重；后续工作与来源记录见 [CI 性能](ci-performance.md)。
