@@ -308,7 +308,7 @@ jobs:
             --notes release-validation-notes.md
       - name: Publish ordinary unused-version GitHub Release
         if: steps.promotion.outputs.recovery_draft == ''
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ github.sha }}

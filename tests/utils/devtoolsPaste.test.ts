@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { bindNativePaste, buildPastePayload, commitPaste } from '@/utils/pasteText'
+import { bindNativePaste, buildPastePayload, commitPaste, createLegacyInputQueue } from '@/utils/pasteText'
 
 interface PasteFixture {
   name: string
@@ -52,11 +52,15 @@ describe('DevTools paste framing contract', () => {
       ptyId: 'same-pty',
       term: { element: terminal, modes: { bracketedPasteMode: true }, options: {} },
     }
+    const input = createLegacyInputQueue({
+      owns: () => true,
+      write: async payload => { delivered.push('same-pty', payload) },
+    })
     const unbind = bindNativePaste({
       container,
       getTabId: () => 'tab',
       getInstance: () => instance,
-      write: async (id, payload) => { delivered.push(id, payload) },
+      reserve: (_id, produce) => input.reserve(produce),
       imageFallback: () => '\x1bv',
     })
     try {

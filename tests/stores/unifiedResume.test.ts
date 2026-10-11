@@ -64,7 +64,7 @@ it('Resume_ReadsAllNativePages_005', async () => {
   const { useNativeHistoryStore } = await import('@/stores/nativeHistory')
   const { createNativeProjectionClient } = await import('@/api/tauri')
   // Use the real authenticated client with a protocol-shaped document boundary.
-  const source = { scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectId: 'project' }, basis: 'configured-profile' }
+  const source = { scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] }, basis: 'configured-profile' }
   const offsets: number[] = []
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: { instanceId: 'instance', async invoke(command: string, q: any) {
     if (command === 'native_get_scope') return source
@@ -195,7 +195,7 @@ it('Resume_RejectsChangedSourceAbsence_014', async () => {
   const { useNativeHistoryStore } = await import('@/stores/nativeHistory')
   let root = 'original'
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: { instanceId: 'instance', async invoke(command: string, q: any) {
-    if (command === 'native_get_scope') return { scopeId: 'scope-' + root, instanceId: 'instance', cli: 'codex', sourceRootKey: root, identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectId: 'project' }, basis: 'configured-profile' }
+    if (command === 'native_get_scope') return { scopeId: 'scope-' + root, instanceId: 'instance', cli: 'codex', sourceRootKey: root, identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] }, basis: 'configured-profile' }
     return { source: q.source, resourceKind: 'history', requestEpoch: q.requestEpoch, observedAt: '1', state: 'ready', reason: null,
       items: [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', root, 'saved']), nativeSessionId: 'saved', title: 'Saved', cwd: '/repo', updatedAt: null, truncated: false }], hasMore: false }
   } } })
@@ -215,7 +215,7 @@ it('Resume_RejectsPagedAbsence_015', async () => {
   const { useNativeHistoryStore } = await import('@/stores/nativeHistory')
   let scanning = false
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: { instanceId: 'instance', async invoke(command: string, q: any) {
-    if (command === 'native_get_scope') return { scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectId: 'project' }, basis: 'configured-profile' }
+    if (command === 'native_get_scope') return { scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] }, basis: 'configured-profile' }
     const ids = !scanning ? ['saved'] : q.offset === 0 ? Array.from({ length: 200 }, (_, i) => 'other-' + i) : ['other-199']
     return { source: q.source, resourceKind: 'history', requestEpoch: q.requestEpoch, observedAt: '1', state: 'ready', reason: null,
       items: ids.map(id => ({ type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root', id]), nativeSessionId: id, title: id, cwd: '/repo', updatedAt: null, truncated: false })), hasMore: scanning && q.offset === 0 }
@@ -250,7 +250,7 @@ it('Resume_RevalidatesAbsenceProof_017', async () => {
   const { useNativeHistoryStore } = await import('@/stores/nativeHistory')
   let root = 'original'; let present = true
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: { instanceId: 'instance', async invoke(command: string, q: any) {
-    if (command === 'native_get_scope') return { scopeId: 'scope-' + root, instanceId: 'instance', cli: 'codex', sourceRootKey: root, identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectId: 'project' }, basis: 'configured-profile' }
+    if (command === 'native_get_scope') return { scopeId: 'scope-' + root, instanceId: 'instance', cli: 'codex', sourceRootKey: root, identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] }, basis: 'configured-profile' }
     return { source: q.source, resourceKind: 'history', requestEpoch: q.requestEpoch, observedAt: '1', state: 'ready', reason: null,
       items: present ? [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', root, 'saved']), nativeSessionId: 'saved', title: 'Saved', cwd: '/repo', updatedAt: null, truncated: false }] : [], hasMore: false }
   } } })

@@ -163,8 +163,24 @@ describe('session store', () => {
 
       // 关闭后应触发历史刷新
       expect(mockGetSessions).toHaveBeenCalled()
-      // 刷新后新会话应出现在历史列表（claimed 已释放）
-      expect(store.historySessions.some(s => s.sessionId === 'sess-new')).toBe(true)
+      // 刷新后新会话应出现在该项目历史列表（claimed 已释放）
+      expect(store.getHistoryFor('/project').some(s => s.sessionId === 'sess-new')).toBe(true)
+    })
+
+    // 关闭 tab 不得劫持侧栏历史视图：收尾刷新用无副作用的 loadHistoryFor，
+    // 不改 currentHistoryProject（否则侧栏会跳回被关项目）
+    it('CloseTab_KeepsCurrentHistoryProject_001', async () => {
+      const { getSessions } = await import('@/api/tauri')
+      const mockGetSessions = getSessions as ReturnType<typeof vi.fn>
+      mockGetSessions.mockResolvedValue([])
+
+      const store = useSessionStore()
+      await store.loadHistorySessions('/project-b') // 侧栏当前展示项目 B 的历史
+      const tabId = store.createTab('/project-a')
+
+      await store.closeTab(tabId)
+
+      expect(store.currentHistoryProject).not.toBe('/project-a')
     })
   })
 
@@ -193,7 +209,7 @@ describe('session store', () => {
       await store.closeAllTabs('/project')
 
       expect(mockGetSessions).toHaveBeenCalled()
-      const ids = store.historySessions.map(s => s.sessionId)
+      const ids = store.getHistoryFor('/project').map(s => s.sessionId)
       expect(ids).toContain('sess-1')
       expect(ids).toContain('sess-2')
     })
@@ -224,7 +240,7 @@ describe('session store', () => {
       await store.closeOtherTabs(keep)
 
       expect(mockGetSessions).toHaveBeenCalled()
-      const ids = store.historySessions.map(s => s.sessionId)
+      const ids = store.getHistoryFor('/project').map(s => s.sessionId)
       // 被关闭的 other 应出现在历史；保留的 keep 仍 claimed，不出现
       expect(ids).toContain('sess-other')
       expect(ids).not.toContain('sess-keep')

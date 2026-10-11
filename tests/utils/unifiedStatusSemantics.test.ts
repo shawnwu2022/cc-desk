@@ -123,9 +123,11 @@ describe('Unified historical status semantics', () => {
     tabs.applyObservation(tab.tabId, attempt, reducer.state())
     expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'waiting', attentionState: 'needs-user' })
     expect((await adapter.listSessions())[0].attentionKind).toBeUndefined()
+    // 粗粒度到达顺序证据：无 sourceSequence 的 working 事件按到达宣称 working，
+    // 迟到乱序的误报由 turn-idle-timeout 上界约束（见 _009）。
     reducer.accept({ ...attempt, kind: 'working', eventId: 'unordered' })
     tabs.applyObservation(tab.tabId, attempt, reducer.state())
-    expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'unknown', attentionState: 'none' })
+    expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'working', attentionState: 'none' })
     tabs.applyLaunchStatus(tab.tabId, receipt(tab, 'exited'))
     expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'unknown', attentionState: 'none' })
     expect((await adapter.listSessions())[0].attentionKind).toBeUndefined()
@@ -149,15 +151,48 @@ describe('Unified historical status semantics', () => {
     tabs.applyObservation(tab.tabId, owner, { observation: 'active', activity: 'working' })
     expect(tabs.tab(tab.tabId)).toMatchObject({ activityState: 'unknown', observationState: 'off' })
   })
-  it('Native_CurrentClaudeHooksHaveNoCompletionProof_007', () => {
+  it('Native_CoarseTurnEvidenceWithoutSourceOrder_007', () => {
     const reducer = createObservationReducer({ runId: 'run', generation: 1 })
-    const details: HookEventDetail[] = [{ type: 'stop', data: {} }, { type: 'notification', data: { notificationType: 'idle_prompt' } }]
-    for (const detail of details) {
+    const cases: Array<{ detail: HookEventDetail; activity: string }> = [
+      { detail: { type: 'userPromptSubmit', data: {} }, activity: 'working' },
+      { detail: { type: 'stop', data: {} }, activity: 'idle' },
+      { detail: { type: 'notification', data: { notificationType: 'idle_prompt' } }, activity: 'waiting' },
+    ]
+    for (const { detail, activity } of cases) {
       const event = fromClaudeHook({ ptyId: null, sessionId: null, eventName: 'Hook', timestamp: 1, state: 'idle',
         runId: 'run', generation: 1, eventId: detail.type, observerSource: 'claude-hook', detail })!
       reducer.accept(event)
-      expect(reducer.state().activity).toBe('unknown')
+      expect(reducer.state()).toMatchObject({ observation: 'active', activity })
     }
+  })
+  it('Native_TurnIdleTimeoutFallsBackWithoutTouchingWaiting_009', () => {
+    const reducer = createObservationReducer({ runId: 'run', generation: 1 })
+    reducer.accept({ runId: 'run', generation: 1, kind: 'working', eventId: 'a' })
+    expect(reducer.state().activity).toBe('working')
+    reducer.accept({ runId: 'run', generation: 1, kind: 'turn-idle-timeout' })
+    expect(reducer.state()).toMatchObject({ observation: 'active', activity: 'idle' })
+    reducer.accept({ runId: 'run', generation: 1, kind: 'waiting', eventId: 'b' })
+    reducer.accept({ runId: 'run', generation: 1, kind: 'turn-idle-timeout' })
+    expect(reducer.state().activity).toBe('waiting')
+    reducer.accept({ runId: 'run', generation: 1, kind: 'turn-idle-timeout' })
+    expect(reducer.state().activity).toBe('waiting')
+    reducer.accept({ runId: 'run', generation: 1, kind: 'unknown', eventId: 'c' })
+    expect(reducer.state().activity).toBe('unknown')
+    reducer.accept({ runId: 'run', generation: 1, kind: 'turn-idle-timeout' })
+    expect(reducer.state().activity).toBe('unknown')
+  })
+  it('Native_TurnEndRetiresSubagentHintAndSurvivesLateStops_010', () => {
+    const reducer = createObservationReducer({ runId: 'run', generation: 1 })
+    reducer.accept({ runId: 'run', generation: 1, kind: 'subagent-started', eventId: 's1', agentId: 'agent-1' })
+    expect(reducer.state().activity).toBe('subagent_running')
+    reducer.accept({ runId: 'run', generation: 1, kind: 'turn-end', eventId: 'stop-1' })
+    expect(reducer.state()).toMatchObject({ observation: 'active', activity: 'idle' })
+    // 迟到的 SubagentStop 只退役 agent，不能把已结束的 turn 改回 unknown。
+    reducer.accept({ runId: 'run', generation: 1, kind: 'subagent-stopped', eventId: 's2', agentId: 'agent-1' })
+    expect(reducer.state().activity).toBe('idle')
+    // 新 turn 的 subagent 证据仍然可见。
+    reducer.accept({ runId: 'run', generation: 1, kind: 'subagent-started', eventId: 's3', agentId: 'agent-2' })
+    expect(reducer.state().activity).toBe('subagent_running')
   })
   it('Project_SeparateCauseCountsExcludeArchives_008', () => {
     const catalog = useUnifiedSessionsStore()

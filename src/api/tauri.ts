@@ -83,6 +83,7 @@ interface PtySpawnOptions {
   cols: number
   rows: number
   type: 'claude' | 'shell'
+  resumeSessionId?: string
   args?: string[]
 }
 
@@ -316,7 +317,7 @@ export const selectDirectory = async (options: { register?: boolean } = {}): Pro
     directory: true,
     multiple: false,
     title: 'Select Project Directory'
-  } as any);
+  });
   if (result && typeof result === 'string' && (options.register === false || await registerSelectedDirectory(result))) {
     return { path: result };
   }
@@ -361,9 +362,9 @@ export async function cliAckOutput(
 }
 
 export async function cliStop(
-  run: import('@/types/terminal').RunKey,
+  attempt: import('@/types/terminal').RunKey & { requestId: string },
 ): Promise<void> {
-  await nativeDocumentBridge().invoke('cli_stop', run)
+  await nativeDocumentBridge().invoke('cli_stop', attempt)
 }
 
 export async function cliResize(

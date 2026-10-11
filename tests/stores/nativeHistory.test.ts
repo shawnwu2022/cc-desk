@@ -14,7 +14,7 @@ function source(cli: 'claude' | 'codex', profileId: string, revision: string, pr
   return {
     scopeId: 'scope_1', instanceId: 'instance_1', cli, sourceRootKey: root, identityEpoch: '1',
     profileId, profileRevision: revision,
-    target: { kind: 'profile' as const, profileId, expectedProfileRevision: revision, projectId },
+    target: { kind: 'profile' as const, profileId, expectedProfileRevision: revision, projectIds: [projectId] },
     basis: 'configured-profile' as const,
   }
 }
@@ -236,8 +236,8 @@ it('History_ThreeScopesStrictBridgePagination_017', async () => {
   const calls: Array<{ project: string; epoch: string; offset: number }> = []
   let expired = false
   const invoke = vi.fn(async (command: string, payload: any) => {
-    if (command === 'native_get_scope') return { ...source('codex', 'p', '1', payload.projectId), scopeId: `scope_${payload.projectId}` }
-    const project = payload.source.target.projectId
+    if (command === 'native_get_scope') return { ...source('codex', 'p', '1', payload.projectIds[0]), scopeId: `scope_${payload.projectIds[0]}` }
+    const project = payload.source.target.projectIds[0]
     calls.push({ project, epoch: payload.requestEpoch, offset: payload.offset })
     await new Promise(resolve => setTimeout(resolve, 0))
     const response = { source: payload.source, resourceKind: 'history', requestEpoch: payload.requestEpoch, observedAt: payload.requestEpoch, state: 'ready', reason: null, items: [], hasMore: false }
@@ -281,4 +281,117 @@ it('History_CompleteLongPromptReplacesPriorTitleDespiteOtherPartialRows_019', as
   const row = (await history.load({ ...context, force: true })).sessions[0]
   expect(row.title).toBe('Complete long prompt')
   expect(row.lastKnownTitle).toBeUndefined()
+})
+
+// 目录离线只影响该登记项目，健康项目仍经真实 projection 校验发布历史。
+it('History_IsolateOfflineProject_020', async () => {
+  const invoke = vi.fn(async (command: string, payload: any) => {
+    if (command === 'native_get_scope') {
+      if (payload.projectIds.includes('offline')) throw { code: 'SOURCE_CHANGED', stage: 'scope-project-registration' }
+      return { scopeId: 'scope-healthy', instanceId: 'instance_1', cli: 'codex', sourceRootKey: '/root', identityEpoch: '1',
+        profileId: 'p', profileRevision: '1', target: payload, basis: 'configured-profile' }
+    }
+    return { source: payload.source, resourceKind: 'history', requestEpoch: payload.requestEpoch, observedAt: '1',
+      state: 'ready', reason: null, hasMore: false,
+      items: [{ type: 'session', projectId: 'healthy', sessionKey: '["local","codex","/root","session-healthy"]',
+        nativeSessionId: 'session-healthy', title: 'Healthy', truncated: false, cwd: '/repo/healthy', updatedAt: null }] }
+  })
+  const client = createProjectionClient({ instanceId: 'instance_1', invoke })
+  clients.push(client, client, client)
+  const result = await useNativeHistoryStore().loadGrouped({ cli: 'codex', profileId: 'p', profileRevision: '1',
+    projects: [{ projectId: 'healthy', projectPath: '/repo/healthy' }, { projectId: 'offline', projectPath: '/repo/offline' }] })
+  expect(result.get('healthy')?.sessions.map(row => row.nativeSessionId)).toEqual(['session-healthy'])
+  expect(result.get('healthy')?.error).toBeNull()
+  expect(result.get('offline')?.error).toBe('SOURCE_CHANGED')
+  expect(result.get('offline')?.absenceEvidence).toBeUndefined()
+  expect(invoke.mock.calls.filter(([command]) => command === 'native_list_resources')).toHaveLength(1)
+})
+
+// 65 个登记项目分批准入，不能因为单 scope 的 64 项预算丢失全部历史。
+it('History_Batch65Projects_021', async () => {
+  const invoke = vi.fn(async (command: string, payload: any) => {
+    if (command === 'native_get_scope') return {
+      scopeId: `scope-${payload.projectIds.length}`, instanceId: 'instance_1', cli: 'codex', sourceRootKey: '/root', identityEpoch: '1',
+      profileId: 'p', profileRevision: '1', target: payload, basis: 'configured-profile',
+    }
+    return { source: payload.source, resourceKind: 'history', requestEpoch: payload.requestEpoch, observedAt: '1',
+      state: 'ready', reason: null, hasMore: false,
+      items: payload.source.target.projectIds.map((projectId: string) => ({ type: 'session', projectId,
+        sessionKey: JSON.stringify(['local', 'codex', '/root', `session-${projectId}`]), nativeSessionId: `session-${projectId}`,
+        title: projectId, truncated: false, cwd: `/repo/${projectId}`, updatedAt: null })) }
+  })
+  const client = createProjectionClient({ instanceId: 'instance_1', invoke })
+  clients.push(client, client)
+  const projects = Array.from({ length: 65 }, (_, i) => ({ projectId: `project-${i}`, projectPath: `/repo/project-${i}` }))
+  const result = await useNativeHistoryStore().loadGrouped({ cli: 'codex', profileId: 'p', profileRevision: '1', projects })
+  expect([...result.values()].flatMap(entry => entry.sessions)).toHaveLength(65)
+  expect([...result.values()].every(entry => entry.error === null)).toBe(true)
+  expect(invoke.mock.calls.filter(([command]) => command === 'native_get_scope').map(([, payload]) => payload.projectIds.length)).toEqual([64, 1])
+})
+
+// 最后一批单项目的失败不能把已完成的前 64 个项目变成整组失败。
+it('History_LastBatchFailure_022', async () => {
+  const invoke = vi.fn(async (command: string, payload: any) => {
+    if (command === 'native_get_scope') {
+      if (payload.projectIds.includes('project-64')) throw { code: 'PROJECT_IDENTITY_CHANGED', stage: 'scope-project-registration' }
+      return { scopeId: 'scope-many', instanceId: 'instance_1', cli: 'codex', sourceRootKey: '/root', identityEpoch: '1',
+        profileId: 'p', profileRevision: '1', target: payload, basis: 'configured-profile' }
+    }
+    return { source: payload.source, resourceKind: 'history', requestEpoch: payload.requestEpoch, observedAt: '1',
+      state: 'ready', reason: null, hasMore: false,
+      items: payload.source.target.projectIds.map((projectId: string) => ({ type: 'session', projectId,
+        sessionKey: JSON.stringify(['local', 'codex', '/root', projectId]), nativeSessionId: projectId,
+        title: projectId, truncated: false, cwd: `/repo/${projectId}`, updatedAt: null })) }
+  })
+  const client = createProjectionClient({ instanceId: 'instance_1', invoke })
+  clients.push(client, client)
+  const projects = Array.from({ length: 65 }, (_, i) => ({ projectId: `project-${i}`, projectPath: `/repo/project-${i}` }))
+  const result = await useNativeHistoryStore().loadGrouped({ cli: 'codex', profileId: 'p', profileRevision: '1', projects })
+  expect([...result.values()].flatMap(entry => entry.sessions)).toHaveLength(64)
+  expect(result.get('project-64')).toMatchObject({ error: 'PROJECT_IDENTITY_CHANGED', loaded: true, loading: false })
+  expect(result.get('project-64')?.absenceEvidence).toBeUndefined()
+  expect([...result.values()].slice(0, 64).every(entry => entry.error === null && !entry.loading)).toBe(true)
+})
+
+// root/profile 错误仍失败关闭，不得按项目拆分重试或沿用旧观察来取得授权。
+it('History_RootFailureNoRetry_023', async () => {
+  const invoke = vi.fn(async () => { throw { code: 'SOURCE_CHANGED', stage: 'scope-source-root' } })
+  clients.push(createProjectionClient({ instanceId: 'instance_1', invoke }))
+  const result = await useNativeHistoryStore().loadGrouped({ cli: 'codex', profileId: 'p', profileRevision: '1',
+    projects: [{ projectId: 'a', projectPath: '/repo/a' }, { projectId: 'b', projectPath: '/repo/b' }] })
+  expect(invoke).toHaveBeenCalledOnce()
+  expect([...result.values()].every(entry => entry.error === 'SOURCE_CHANGED' && entry.absenceEvidence === undefined)).toBe(true)
+})
+
+// 拆分失败批次时，被新 owner 接管的项目必须等待新观察，不能发布加载中的中间状态。
+it('History_IsolationOwnerFence_024', async () => {
+  let rejectGroup!: (value: unknown) => void, finishNew!: (value: unknown) => void
+  const invoke = vi.fn(async (command: string, payload: any) => {
+    if (command === 'native_get_scope') {
+      if (payload.projectIds.length === 2) return new Promise((_resolve, reject) => { rejectGroup = reject })
+      if (payload.projectIds.includes('offline')) throw { code: 'SOURCE_CHANGED', stage: 'scope-project-registration' }
+      return { scopeId: 'scope-new', instanceId: 'instance_1', cli: 'codex', sourceRootKey: '/root', identityEpoch: '1',
+        profileId: 'p', profileRevision: '1', target: payload, basis: 'configured-profile' }
+    }
+    return new Promise(resolve => { finishNew = value => resolve({ source: payload.source, resourceKind: 'history',
+      requestEpoch: payload.requestEpoch, observedAt: '1', state: 'ready', reason: null, hasMore: false, items: value }) })
+  })
+  const client = createProjectionClient({ instanceId: 'instance_1', invoke })
+  clients.push(client, client, client)
+  const store = useNativeHistoryStore()
+  const healthy = { cli: 'codex' as const, profileId: 'p', profileRevision: '1', projectId: 'healthy', projectPath: '/repo/healthy' }
+  let oldSettled = false
+  const old = store.loadGrouped({ cli: 'codex', profileId: 'p', profileRevision: '1',
+    projects: [healthy, { projectId: 'offline', projectPath: '/repo/offline' }] }).then(value => { oldSettled = true; return value })
+  await flushPromises()
+  const newer = store.load({ ...healthy, force: true })
+  await flushPromises()
+  rejectGroup({ code: 'SOURCE_CHANGED', stage: 'scope-project-registration' })
+  await flushPromises()
+  expect(oldSettled).toBe(false)
+  finishNew([])
+  const [result, replacement] = await Promise.all([old, newer])
+  expect(result.get('healthy')).toBe(replacement)
+  expect(replacement.loading).toBe(false)
+  expect(result.get('offline')?.error).toBe('SOURCE_CHANGED')
 })

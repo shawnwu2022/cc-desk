@@ -53,6 +53,16 @@ It requires isolated roots, actual binary identities/hashes, raw hook evidence a
 host-payload provenance. Synthetic hooks, model echo, screen scraping, mocked host
 receipts and screenshots cannot substitute for missing cells.
 
+## Test and CI performance follow-up
+
+The ordered [performance TODO](ci-performance.md#follow-up-todo-2026-10-11) is the
+single checklist for the remaining optimization batches. Local iteration groups,
+agent-guide loading and same-job debug frontend reuse have scoped evidence;
+actual metrics artifact verification, a controlled hosted comparison and Rust
+timing calibration remain prerequisites for further shard/profile decisions. Net CI
+savings for the latest worktree remain unverified. The independent acceptance
+sequence and D20 above continue to require their own target evidence.
+
 ## Release track
 
 Signed candidates and test-only installer artifacts do not grant promotion.

@@ -47,6 +47,7 @@ export interface InputQueueSnapshot {
 export interface InputReservation {
   inputSeq: U64String
   settled: Promise<void>
+  cancel(): boolean
 }
 
 export interface InputIntentQueue {
@@ -78,7 +79,8 @@ export interface InputIntentQueueOptions {
   sendProtocol?: (input: ProtocolInput) => Promise<unknown> | unknown
 }
 
-type ItemState = 'pending' | 'ready' | 'failed'
+// cancelled：已被 recover('cancel') 清出队列；producer 迟到的 settle 不得为其入账
+type ItemState = 'pending' | 'ready' | 'failed' | 'cancelled'
 
 interface QueueItem {
   inputSeq: U64String
@@ -326,7 +328,20 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
           },
         )
 
-      return { inputSeq, settled }
+      return {
+        inputSeq,
+        settled,
+        cancel() {
+          // 仅撤销尚未产出字节的单个 intent；ready/dispatch/失败状态保留原冻结边界。
+          if (item.state !== 'pending') return false
+          const index = items.indexOf(item)
+          if (index < 0) return false
+          item.state = 'cancelled'
+          items.splice(index, 1)
+          void flush()
+          return true
+        },
+      }
     },
 
     flush,
@@ -354,6 +369,9 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
       if (index < 0) return false
 
       if (action === 'cancel') {
+        // 标记 cancelled：迟到的 producer settle 据此跳过入账，否则字节会记到
+        // 已不在 items 的条目上且永不释放，累计触发误报 INPUT_QUEUE_BUDGET。
+        for (const item of items) item.state = 'cancelled'
         items.length = 0
         queuedBytes = 0
         pause = undefined

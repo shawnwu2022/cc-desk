@@ -53,16 +53,18 @@ Its localized accessible description remains outside the decorative icon glyph.
   explicit `notification.idle_prompt`. `Stop`, process exit, input/output traffic
   and silence never create completion. Permission uses the existing permission
   notification types; sticky error uses `stopFailure`.
-- Native tabs preserve the existing observer reducer's ordered
-  `working | waiting | unknown` projection, bounded causal `subagent_running`
-  exception described below, and observer availability. A starting
+- Native tabs preserve the observer reducer's coarse arrival-order
+  `working | waiting | idle` projection with the bounded causal
+  `subagent_running` exception described below, and observer availability. A starting
   tab holds at most one latest projection for its exact request/run/generation;
   only that attempt's running receipt publishes it. Unknown/failure/end/restart/
   close invalidate that pending projection. Unavailable/off observations cannot
   publish working or waiting, and stale attempts cannot update a newer one.
 - Existing observer event-ID bounds, canonical monotone `sourceSequence`
   validation, duplicate/reordered rejection and exact-run binding are unchanged.
-  No sequence or turn status is inferred from HTTP arrival order.
+  Only the coarse arrival-order turn projection (no `sourceSequence`) may claim
+  `working`/`waiting`/`idle` from host arrival order; any ordered claim still
+  requires a monotone source sequence.
 - Native occurrence notices use the existing authenticated Claude hook envelope
   independently of the ordered activity reducer. They retain only a fixed kind,
   opaque event ID, host receipt time and run/generation. The hook subscription
@@ -101,23 +103,31 @@ that missing identity. A lost stop may leave an observed first-invocation hint
 until invalidation; no timeout, output or Stop creates completion. See the
 [official hook lifecycle contract](https://code.claude.com/docs/en/hooks#subagentstart).
 
-### General turn ordering remains unavailable
+### Coarse arrival-order turn evidence (implemented compromise)
 
-The current authenticated Claude hook mapper emits no `sourceSequence`; the
-backend hook processes do not establish a trusted CLI event order. The observer
-reducer therefore keeps general turn activity unknown apart from the bounded
-subagent exception above. `Stop` and
-`notification.idle_prompt` also map to unknown, and the native observer contract
-has no ordered completed/error/permission-reason projection. Native profiles
-default observation off, and Codex/raw/Shell launches receive no Claude overlay.
+The authenticated Claude hook mapper still emits no `sourceSequence`; backend
+hook processes do not establish a trusted CLI event order. On top of the
+bounded subagent exception, the reducer now accepts a coarse arrival-order
+turn projection: allowlisted turn events (`userPromptSubmit`, `preToolUse`,
+`postToolUse`, `postToolUseFailure`, `preCompact`, `postCompact`) claim
+`working`; `notification.permission_prompt`, `worker_permission_prompt` and
+`idle_prompt` claim `waiting`; `Stop` claims turn end and falls back to
+`idle`. A host turn-idle timer (90 seconds without an authenticated hook
+event reaching the reducer) drops an
+outstanding `working`/`subagent_running` claim back to `idle`; `waiting` and
+`unknown` never time into another claim. Observations that are off/unavailable
+or never connected still project unknown and can never publish
+working/waiting/idle.
 
-Consequently this patch restores reliable downstream projection and legacy
-attention semantics; it does **not** establish live native working/completed
-acceptance. A future source must provide authenticated exact-run, source-owned
-ordering and explicit turn/reason evidence before adding those claims. An HTTP
-counter, timer, last output, process exit or raw hook kind cannot supply that
-proof. Keep any capability-specific source integration and actual authenticated
-Claude/Codex acceptance separate from this host/UI repair.
+This is a best-effort UI projection, not provider turn state: a reordered or
+late hook receipt can mislabel activity for up to the idle-timeout bound, and
+arrival order is not provider order. It never creates `attentionKind:
+completed`, permission or error reasons, and it does not touch authority,
+ownership or authorization. Restoring authoritative turn state still requires
+a certified producer with authenticated exact-run identity, source-owned
+monotone sequence and explicit turn/reason evidence (see follow-up choices).
+Native profiles still default observation off, and Codex/raw/Shell launches
+receive no Claude overlay.
 
 The Native row now shows a separate localized event marker. An unread `Stop`
 receipt is described as “Reply-end notice received (unread); current activity
@@ -130,9 +140,9 @@ profile fields, CLI launch arguments and permissions are unchanged.
 
 ## Smallest follow-up choices
 
-The current gap is at the producer/DTO boundary, not at the icon renderer:
+The remaining gap is at the producer/DTO boundary, not at the icon renderer:
 `HookEventPayload` has authenticated run/generation/event ID but no source order;
-`claudeObserver` maps `idle_prompt`/`stopFailure` to coarse unknown and drops their
+`claudeObserver` still maps `stopFailure` to coarse unknown and drops the
 reason; `ObservationState` has no turn identifier or attention cause. Codex/raw/
 Shell have no Claude source and must keep their own capability boundary.
 
@@ -155,8 +165,9 @@ Shell have no Claude source and must keep their own capability boundary.
 
 The first option supplies the missing current-state proof. The second supplies
 useful explicit event notices without presenting a receipt as the latest CLI
-state. Neither creates completion from Stop, silence, process lifetime or
-fabricated sequence numbers.
+state. The implemented coarse arrival-order projection supplies visible, bounded
+turn hints in between; none of these creates completion from Stop, silence,
+process lifetime or fabricated sequence numbers.
 
 ## Regression evidence
 

@@ -176,6 +176,17 @@ fn local_document(url: &Url) -> bool {
     }
 }
 
+/// 与 observer_registry 的 capability 比较同款：按字节折叠比较，避免短路
+/// 比较泄漏 proof 前缀匹配长度。
+fn same_proof(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right.iter())
+            .fold(0u8, |different, (a, b)| different | (a ^ b))
+            == 0
+}
+
 impl<R> DocumentAuthority<R> {
     /// Called by the serialized backend window lifecycle, not an IPC command.
     pub(crate) fn new(
@@ -375,7 +386,7 @@ impl<R> DocumentBinding<R> {
         let supplied = values.next().ok_or_else(|| error("FORBIDDEN"))?;
         if values.next().is_some()
             || supplied.as_bytes().len() != 32
-            || supplied.as_bytes() != self.authority.proof.as_bytes()
+            || !same_proof(supplied.as_bytes(), self.authority.proof.as_bytes())
             || self.authority.state.lock().phase != Phase::Ready
         {
             return Err(error("FORBIDDEN"));
@@ -448,4 +459,97 @@ fn decode_start(body: &InvokeBody) -> Result<LaunchRequest, SafeError> {
     let request: LaunchRequest = decode_raw(body, MAX_LAUNCH_WIRE_BYTES)?;
     request.validate()?;
     Ok(request)
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod proof_tests {
+    use super::*;
+    use crate::cli::run_registry::RunRegistry;
+    use tauri::{ResourceTable, Url};
+
+    fn ready_binding() -> (
+        Arc<DocumentAuthority<()>>,
+        DocumentBinding<()>,
+        ResourceTable,
+        Url,
+    ) {
+        let url: Url = "http://tauri.localhost/".parse().unwrap();
+        let authority =
+            DocumentAuthority::<()>::new(Arc::new(RunRegistry::new(8)), url.clone()).unwrap();
+        let mut table = ResourceTable::default();
+        let binding = authority.attach(&mut table).unwrap();
+        authority.started(&url);
+        authority.finished(&url);
+        (authority, binding, table, url)
+    }
+
+    fn header(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(DOCUMENT_HEADER, value.parse().unwrap());
+        headers
+    }
+
+    // 正确 proof 通过、等长错误 proof 拒绝；比较实现为常数时间折叠。
+    #[test]
+    fn Document_Proof_ExactProofAdmitsAndForgedProofRejects_001() {
+        let (authority, binding, table, url) = ready_binding();
+        let context = NativeContext {
+            window_label: "main",
+            webview_label: "main",
+            url: &url,
+        };
+        match binding.admit(&table, &context, &authority.test_headers()) {
+            Ok(_) => {}
+            Err(failure) => panic!("correct proof must admit: {}", failure.code),
+        }
+
+        let forged: String = authority
+            .proof
+            .chars()
+            .enumerate()
+            .map(|(index, character)| {
+                if index == 0 {
+                    if character == '0' {
+                        '1'
+                    } else {
+                        '0'
+                    }
+                } else {
+                    character
+                }
+            })
+            .collect();
+        let forged_failure = match binding.admit(&table, &context, &header(&forged)) {
+            Err(failure) => failure,
+            Ok(_) => panic!("forged proof must be rejected"),
+        };
+        assert_eq!(forged_failure.code, "FORBIDDEN");
+
+        let mut shortened = authority.proof.clone();
+        shortened.pop();
+        let short_failure = match binding.admit(&table, &context, &header(&shortened)) {
+            Err(failure) => failure,
+            Ok(_) => panic!("shortened proof must be rejected"),
+        };
+        assert_eq!(short_failure.code, "FORBIDDEN");
+    }
+
+    // same_proof 等价性：相等为真，任一字节不同或长度不同为假。
+    #[test]
+    fn Document_Proof_FoldedComparisonEquivalence_002() {
+        assert!(same_proof(
+            b"0123456789abcdef0123456789abcdef",
+            b"0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!same_proof(
+            b"0123456789abcdef0123456789abcdef",
+            b"1123456789abcdef0123456789abcdef"
+        ));
+        assert!(!same_proof(
+            b"0123456789abcdef0123456789abcdef",
+            b"0123456789abcdef0123456789abcdeff"
+        ));
+        assert!(!same_proof(b"", b"0"));
+    }
 }

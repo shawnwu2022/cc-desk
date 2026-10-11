@@ -114,6 +114,8 @@ term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 
 `commitPaste` 的核心竞态守卫：`readText()` 是异步的，等待期间 restartTab 可能重建同 tabId 的新 PTY；实现先同步捕获按键瞬间的 ptyId，完成后复核当前实例仍是同一 ptyId（`isPasteStale`），否则丢弃过期粘贴，避免旧 bracketed 模式落到新实例。详见 `src/utils/pasteText.ts`。
 
+Native Ctrl+V 在读取剪贴板前同步向当前 binding 预留输入 intent，并冻结当前 attempt 与 bracketed-paste mode；随后 Enter 等用户输入排在该 intent 之后。异步结果只可完成原预留；空、不可读或 restart 后变旧的结果仅取消尚未提交的原预留，让已排队输入按既有序号继续，不能借用可变 `binding` 写入新 run。producer 已就绪或传输开始后不可取消，真实 producer/传输失败仍保持 partial/unknown 冻结与诊断。文本为空时的图片探测只确认资源存在，始终关闭 Tauri `Image`，不读取或记录像素。
+
 ### JSON 粘贴压缩
 
 `buildPastePayload` 在规范化 LF 之前先经 `compactJsonForPaste`：剪贴板文本是**合法多行 JSON** 时压缩成单行，非 JSON 原样保留。
@@ -126,7 +128,7 @@ term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 
 ### 图片粘贴分流
 
-剪贴板**无文本**时（`readText()` 返回空串或 reject——剪贴板只有截图时插件底层 arboard 返回错误，实际走 reject），`commitPaste` 经 `imageFallback` 向 PTY 转发 CLI 图片粘贴键字节，由 Claude CLI 自行读系统剪贴板、插入 `[Image #N]` 芯片，GUI 全程不接触图片数据：
+剪贴板**无文本**时（`readText()` 返回空串或 reject——剪贴板只有截图时插件底层 arboard 返回错误，实际走 reject），`commitPaste` 经 `imageFallback` 向 PTY 转发 CLI 图片粘贴键字节，由 Claude CLI 自行读系统剪贴板、插入 `[Image #N]` 芯片。GUI 只探测并立即关闭图片资源，不读取图片像素：
 
 | 平台 | 转发字节 | 对应键位（`chat:imagePaste` 官方默认） |
 |---|---|---|

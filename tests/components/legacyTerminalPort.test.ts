@@ -85,17 +85,17 @@ describe('Legacy terminal port', () => {
     await useHookStore().init()
     const wrapper = render(false); await flushPromises()
     host.hook!({ ptyId: 'owned-pty', sessionId: 'session-id', eventName: 'SessionStart', state: 'idle', timestamp: 1,
-      detail: { type: 'sessionStart', data: { model: 'model' } } })
+      detail: { type: 'sessionStart', data: { model: 'model' } }, runId: 'owned-pty', generation: 1, eventId: 'evt-1', observerSource: 'claude-hook' })
     expect(sessions.tabs.get(id)?.sessionId).toBe('session-id')
     host.hook!({ ptyId: 'owned-pty', sessionId: 'session-id', eventName: 'PreToolUse', state: 'tool_executing', timestamp: 2,
-      detail: { type: 'preToolUse', data: {} } })
+      detail: { type: 'preToolUse', data: {} }, runId: 'owned-pty', generation: 1, eventId: 'evt-2', observerSource: 'claude-hook' })
     host.hook!({ ptyId: 'owned-pty', sessionId: 'session-id', eventName: 'Stop', state: 'idle', timestamp: 3,
-      detail: { type: 'stop', data: {} } })
+      detail: { type: 'stop', data: {} }, runId: 'owned-pty', generation: 1, eventId: 'evt-3', observerSource: 'claude-hook' })
     expect(sessions.tabs.get(id)?.pending).toBe(true)
     await wrapper.setProps({ visible: true }); expect(sessions.tabs.get(id)?.pending).toBe(false)
     wrapper.unmount(); wrappers.splice(wrappers.indexOf(wrapper), 1)
     host.hook!({ ptyId: 'owned-pty', sessionId: 'session-id', eventName: 'UserPromptSubmit', state: 'thinking', timestamp: 4,
-      detail: { type: 'userPromptSubmit', data: {} } })
+      detail: { type: 'userPromptSubmit', data: {} }, runId: 'owned-pty', generation: 1, eventId: 'evt-4', observerSource: 'claude-hook' })
     expect(sessions.tabs.get(id)?.working).toBe(false)
   })
 

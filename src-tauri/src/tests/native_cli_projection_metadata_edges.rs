@@ -15,12 +15,21 @@ fn items(root: &Path, project: Option<&Path>, kind: ResourceKind) -> ReadResult<
         .map(Path::to_path_buf)
         .into_iter()
         .collect::<Vec<_>>();
+    let granted_refs = granted
+        .as_ref()
+        .map(|root| {
+            vec![ProjectRef {
+                id: "test-project",
+                root,
+                paths: &paths,
+            }]
+        })
+        .unwrap_or_default();
     let output = read(
         &Catalog {
             cli: CliKind::Claude,
             root: &root,
-            project: granted.as_ref(),
-            project_paths: &paths,
+            projects: &granted_refs,
             user_config: None,
             check: &|| Ok(()),
         },

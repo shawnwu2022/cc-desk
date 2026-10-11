@@ -78,6 +78,10 @@ an older failure from replacing a newer choice. Known failures roll back the cur
 field to its confirmed baseline. An uncertain acknowledgement only rereads inside
 the same lane; failed recovery prevents subsequent writes until a fresh read succeeds.
 
+Legacy environment and default Claude option writes copy each request's values
+before entering that lane. Later edits and caller mutations cannot replace an
+earlier request's payload; each Promise acknowledges only its own queued write.
+
 Compatibility keys `theme`, `terminalTheme`, `fontSize`, `webglRenderer` remain. Missing
 terminal theme may use old GUI state during initial migration only; later GUI changes
 never redefine it. Existing palette IDs retain their values and invalid settings use

@@ -137,7 +137,17 @@ export const useSidebarStore = defineStore('sidebar', () => {
     }
   }
 
+  /** closePanel 的延迟清理 timer；重开面板/打开设置前必须取消，否则会关掉刚打开的面板 */
+  let panelCloseTimer: ReturnType<typeof setTimeout> | null = null
+  function cancelPanelCloseTimer() {
+    if (panelCloseTimer) {
+      clearTimeout(panelCloseTimer)
+      panelCloseTimer = null
+    }
+  }
+
   function togglePanel(panel: SidebarPanelType) {
+    cancelPanelCloseTimer()
     if (showSettings.value) {
       showSettings.value = false
       activePanel.value = panel
@@ -154,6 +164,7 @@ export const useSidebarStore = defineStore('sidebar', () => {
   }
 
   function openSettings(section?: string) {
+    cancelPanelCloseTimer()
     panelVisible.value = false
     activePanel.value = null
     showSettings.value = true
@@ -176,7 +187,9 @@ export const useSidebarStore = defineStore('sidebar', () => {
 
   function closePanel() {
     panelVisible.value = false
-    setTimeout(() => {
+    cancelPanelCloseTimer()
+    panelCloseTimer = setTimeout(() => {
+      panelCloseTimer = null
       activePanel.value = null
     }, 250)
   }

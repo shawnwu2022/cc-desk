@@ -74,7 +74,7 @@ function workspaceFixture() {
     const tab = target.kind === 'run' ? [...useNativeTabsStore().tabs.values()].find(row => row.runId === target.runId && row.generation === target.generation) : undefined
     const config = fixture.profiles.find(row => row.id === (target.kind === 'profile' ? target.profileId : tab?.profileId))
     if (!config || config.cli === 'shell') throw { code: 'SOURCE_UNAVAILABLE' }
-    return { scopeId: `scope-${config.id}-${target.kind === 'profile' ? target.projectId : tab!.runId}`, instanceId: 'fixture-instance',
+    return { scopeId: `scope-${config.id}-${target.kind === 'profile' ? target.projectIds.join('|') : tab!.runId}`, instanceId: 'fixture-instance',
       cli: config.cli, sourceRootKey: fixture.roots.get(config.id) ?? `root-${config.id}`, identityEpoch: '1',
       profileId: config.id, profileRevision: config.revision, target,
       basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' }
@@ -84,8 +84,9 @@ function workspaceFixture() {
     if (command === 'native_list_resources') {
       const request = argument as ReadRequest
       const target = request.source.target
+      const scoped = target.kind === 'profile' ? target.projectIds : []
       const rows = request.resourceKind === 'history'
-        ? fixture.histories.get(`${request.source.profileId}:${target.kind === 'profile' ? target.projectId : ''}`) ?? [] : fixture.resources
+        ? scoped.flatMap(id => (fixture.histories.get(`${request.source.profileId}:${id}`) ?? []).map(row => ({ ...row, projectId: id }))) : fixture.resources
       const offset = request.offset ?? 0, limit = request.limit ?? 200
       return reply(request, rows.slice(offset, offset + limit), rows.length > offset + limit)
     }
@@ -210,7 +211,7 @@ describe('Adversarial unified ownership and persistence', () => {
     await completion; await flushPromises()
     expect(tabs.tab(old.tabId)).toMatchObject({ requestId: current.requestId, runId: current.runId, generation: 2, status: 'running', errorCode: null })
     expect(terminal.start).toHaveBeenCalledTimes(2)
-    if (mode === 'stop') { expect(terminal.stop).toHaveBeenCalledExactlyOnceWith({ runId: old.runId, generation: 1 }); expect(terminal.recover).not.toHaveBeenCalled() }
+    if (mode === 'stop') { expect(terminal.stop).toHaveBeenCalledExactlyOnceWith({ requestId: old.requestId, runId: old.runId, generation: 1 }); expect(terminal.recover).not.toHaveBeenCalled() }
   })
 
   it.each(['history', 'native-live', 'legacy-live'] as const)('Adversarial_QueuedRename_%s_003', async kind => {

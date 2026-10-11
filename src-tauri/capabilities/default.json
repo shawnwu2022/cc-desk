@@ -24,15 +24,16 @@
     "core:webview:default",
     "core:app:default",
     "core:app:allow-app-hide",
+    "core:resources:allow-close",
     "shell:default",
     "shell:allow-open",
-    "shell:allow-execute",
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
     "clipboard-manager:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-image",
     "process:default",
     "process:allow-restart"
   ]

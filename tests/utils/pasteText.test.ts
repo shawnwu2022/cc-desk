@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
-import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, commitPasteWithEvidence, imagePasteBytes, bindNativePaste } from '@/utils/pasteText'
+import { readFileSync } from 'node:fs'
+import { Image } from '@tauri-apps/api/image'
+import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
+import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, commitPasteWithEvidence, imagePasteBytes, bindNativePaste, createLegacyInputQueue } from '@/utils/pasteText'
+
+const clipboard = vi.hoisted(() => ({ readText: vi.fn(), readImage: vi.fn() }))
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  readText: (...args: unknown[]) => clipboard.readText(...args),
+  readImage: (...args: unknown[]) => clipboard.readImage(...args),
+}))
 
 function pasteEvent(text: string, types: string[] = ['text/plain'], items: { kind: string; type: string }[] = []): ClipboardEvent {
   const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
@@ -17,7 +26,12 @@ function nativePasteFixture(ptyId: string, bracketedPasteMode: boolean) {
   container.append(terminal)
   const xtermPaste = vi.fn()
   textarea.addEventListener('paste', xtermPaste)
-  const write = vi.fn(async () => {})
+  const write = vi.fn(async (_id: string, _payload: string, _source?: string) => {})
+  let owns = true
+  const input = createLegacyInputQueue({
+    owns: () => owns,
+    write: (payload, source) => write(ptyId, payload, source),
+  })
   const instance = {
     ptyId,
     term: {
@@ -30,24 +44,27 @@ function nativePasteFixture(ptyId: string, bracketedPasteMode: boolean) {
     container,
     getTabId: () => 'tab-1',
     getInstance: () => instance,
-    write,
+    reserve: (id, produce) => id === ptyId ? input.reserve(produce) : {
+      settled: Promise.resolve(),
+      cancel: () => false,
+    },
     imageFallback: () => '\x1bv',
   })
-  return { textarea, write, xtermPaste, unbind }
+  return { textarea, write, xtermPaste, unbind, input, instance, revoke: () => { owns = false } }
 }
 
 describe('bindNativePaste', () => {
   it('PasteNative_FileItemImageIsSentOnceAndOtherFilesAreNotImages_006', async () => {
     const { textarea, write, xtermPaste, unbind } = nativePasteFixture('pty-files', true)
     textarea.dispatchEvent(pasteEvent('', ['Files'], [{ kind: 'file', type: 'image/png' }]))
-    await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith('pty-files', '\x1bv'))
+    await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith('pty-files', '\x1bv', 'clipboard-dom'))
     expect(xtermPaste).not.toHaveBeenCalled()
     write.mockClear()
     textarea.dispatchEvent(pasteEvent('', ['Files'], [{ kind: 'file', type: 'application/pdf' }]))
     await Promise.resolve(); await Promise.resolve()
     expect(write).not.toHaveBeenCalled()
     textarea.dispatchEvent(pasteEvent('caption', ['Files'], [{ kind: 'file', type: 'image/png' }]))
-    await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith('pty-files', '\x1b[200~caption\x1b[201~'))
+    await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith('pty-files', '\x1b[200~caption\x1b[201~', 'clipboard-dom'))
     unbind()
   })
   it('PasteNative_Text_CaptureAndSendOnce_001', async () => {
@@ -57,7 +74,7 @@ describe('bindNativePaste', () => {
     textarea.dispatchEvent(event)
 
     await vi.waitFor(() => {
-      expect(write).toHaveBeenCalledExactlyOnceWith('pty-1', '\x1b[200~{\n  "a": 1\n}\x1b[201~')
+      expect(write).toHaveBeenCalledExactlyOnceWith('pty-1', '\x1b[200~{\n  "a": 1\n}\x1b[201~', 'clipboard-dom')
     })
     expect(event.defaultPrevented).toBe(true)
     expect(xtermPaste).not.toHaveBeenCalled()
@@ -81,7 +98,7 @@ describe('bindNativePaste', () => {
     textarea.dispatchEvent(pasteEvent('', ['image/png']))
 
     await vi.waitFor(() => {
-      expect(write).toHaveBeenCalledExactlyOnceWith('pty-image', '\x1bv')
+      expect(write).toHaveBeenCalledExactlyOnceWith('pty-image', '\x1bv', 'clipboard-dom')
     })
     unbind()
   })
@@ -103,7 +120,11 @@ describe('bindNativePaste', () => {
     const container = document.createElement('div')
     const textarea = document.createElement('textarea')
     container.append(textarea)
-    const write = vi.fn(async () => {})
+    const write = vi.fn(async (_id: string, _payload: string, _source?: string) => {})
+    const input = createLegacyInputQueue({
+      owns: () => true,
+      write: (payload, source) => write('pty-4', payload, source),
+    })
     const unbind = bindNativePaste({
       container,
       getTabId: () => 'tab-1',
@@ -115,7 +136,7 @@ describe('bindNativePaste', () => {
           options: { ignoreBracketedPasteMode: false },
         },
       }),
-      write,
+      reserve: (_id, produce) => input.reserve(produce),
       imageFallback: () => '\x1bv',
     })
 
@@ -125,6 +146,115 @@ describe('bindNativePaste', () => {
     expect(event.defaultPrevented).toBe(false)
     expect(write).not.toHaveBeenCalled()
     unbind()
+  })
+
+  // Legacy keydown 图片探测只消费资源类型，不得把 Tauri Image 留在资源表中。
+  it('PasteLegacy_ImageProbeCloses_007', async () => {
+    const { textarea, write, unbind } = nativePasteFixture('pty-image-key', false)
+    const close = vi.fn().mockResolvedValue(undefined)
+    clipboard.readText.mockResolvedValue('')
+    clipboard.readImage.mockResolvedValue({ close })
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+
+    await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith('pty-image-key', '\x1bv', 'clipboard-dom'))
+    expect(close).toHaveBeenCalledOnce()
+    unbind()
+  })
+
+  it('PasteLegacy_UnbindReleasesQueue_008 — 解绑取消未提交粘贴并释放协议输入', async () => {
+    const { textarea, write, unbind, input } = nativePasteFixture('pty-unbind', false)
+    let finishRead!: (text: string) => void
+    clipboard.readText.mockReturnValue(new Promise(resolve => { finishRead = resolve }))
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    const protocol = input.enqueue('protocol', 'terminal-ondata')
+    expect(write).not.toHaveBeenCalled()
+
+    unbind()
+    await protocol
+    expect(write).toHaveBeenCalledExactlyOnceWith('pty-unbind', 'protocol', 'terminal-ondata')
+    finishRead('late-paste')
+    await Promise.resolve(); await Promise.resolve()
+    expect(write).toHaveBeenCalledTimes(1)
+  })
+
+  it('PasteLegacy_FreezesMode_009 — 异步读取期间保持按键时 bracketed 模式', async () => {
+    const { textarea, write, unbind, instance } = nativePasteFixture('pty-mode', true)
+    let finishRead!: (text: string) => void
+    clipboard.readText.mockReturnValue(new Promise(resolve => { finishRead = resolve }))
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    instance.term.modes.bracketedPasteMode = false
+
+    finishRead('body')
+    await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith(
+      'pty-mode',
+      '\x1b[200~body\x1b[201~',
+      'clipboard-dom',
+    ))
+    unbind()
+  })
+})
+
+describe('Legacy input queue', () => {
+  it('LegacyQueue_CancelPending_001 — pending 取消后保持后续输入序号', async () => {
+    const writes: string[] = []
+    let finish!: (value: string | null) => void
+    const queue = createLegacyInputQueue({
+      owns: () => true,
+      write: async payload => { writes.push(payload) },
+    })
+    const paste = queue.reserve(() => new Promise(resolve => { finish = resolve }))
+    const enter = queue.enqueue('\r', 'terminal-ondata')
+
+    expect(paste.cancel()).toBe(true)
+    await enter
+    finish('late-paste')
+    await paste.settled
+    expect(writes).toEqual(['\r'])
+  })
+
+  it('LegacyQueue_WriteErrorNoReplay_002 — 已提交写失败不重放并继续下一输入', async () => {
+    const writes: string[] = []
+    let rejectWrite!: (error: Error) => void
+    const queue = createLegacyInputQueue({
+      owns: () => true,
+      write: payload => {
+        writes.push(payload)
+        if (payload === 'first') return new Promise((_resolve, reject) => { rejectWrite = reject })
+        return Promise.resolve()
+      },
+    })
+    const first = queue.reserve(async () => 'first')
+    await vi.waitFor(() => expect(writes).toEqual(['first']))
+    expect(first.cancel()).toBe(false)
+    rejectWrite(new Error('WRITE_UNKNOWN'))
+    await expect(first.settled).rejects.toThrow('WRITE_UNKNOWN')
+
+    await queue.enqueue('second', 'terminal-ondata')
+    expect(writes).toEqual(['first', 'second'])
+  })
+
+  it('LegacyQueue_CancelReady_003 — 未开始传输的 ready 粘贴仍可取消', async () => {
+    const writes: string[] = []
+    let releaseFirst!: () => void
+    const queue = createLegacyInputQueue({
+      owns: () => true,
+      write: payload => {
+        writes.push(payload)
+        return payload === 'first'
+          ? new Promise<void>(resolve => { releaseFirst = resolve })
+          : Promise.resolve()
+      },
+    })
+    const first = queue.enqueue('first', 'terminal-ondata')
+    const paste = queue.reserve(async () => 'paste')
+    await Promise.resolve(); await Promise.resolve()
+
+    expect(paste.cancel()).toBe(true)
+    releaseFirst()
+    await first
+    await paste.settled
+    expect(writes).toEqual(['first'])
   })
 })
 
@@ -466,6 +596,30 @@ describe('commitPaste', () => {
 })
 
 describe('commitPasteWithEvidence', () => {
+  // 真实 Image.close 的命令必须在主窗口获准，否则调用被拒绝后资源仍留在后端表内。
+  it('ClipboardImage_RealResourceClose_017', async () => {
+    const capability = JSON.parse(readFileSync('src-tauri/capabilities/default.json', 'utf8'))
+    const generated = JSON.parse(readFileSync('src-tauri/gen/schemas/capabilities.json', 'utf8'))
+    const acl = JSON.parse(readFileSync('src-tauri/gen/schemas/acl-manifests.json', 'utf8'))
+    const allocated = new Set([42])
+    const close = vi.fn((command: string, argument: any) => {
+      if (command !== 'plugin:resources|close') throw new Error('unexpected resource command')
+      if (!capability.windows.includes('main') || !capability.permissions.includes('core:resources:allow-close')) throw new Error('resource close denied')
+      allocated.delete(argument.rid)
+    })
+    mockIPC(close)
+    try {
+      const write = vi.fn(async () => {})
+      await commitPasteWithEvidence(async () => '', async () => new Image(42), () => ({ ptyId: 'pty-image' }),
+        text => text, write, () => '\x1bv')
+      expect(close).toHaveBeenCalledExactlyOnceWith('plugin:resources|close', { rid: 42 })
+      expect(allocated.size).toBe(0)
+      expect(generated.default.permissions).toContain('core:resources:allow-close')
+      expect(acl['core:resources'].permissions['allow-close'].commands.allow).toContain('close')
+      expect(write).toHaveBeenCalledExactlyOnceWith('pty-image', '\x1bv')
+    } finally { clearMocks() }
+  })
+
   it('D18_Paste_EmptyTextWithoutImageEvidenceWritesNothing_010', async () => {
     const write = vi.fn()
     await commitPasteWithEvidence(

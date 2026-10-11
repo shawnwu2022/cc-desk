@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { readFileSync, existsSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8')
@@ -14,6 +14,87 @@ function releaseRejectionStep() {
   assert.ok(match, 'actual release rejection workflow step must exist')
   return match[1].replace(/^ {10}/gm, '')
 }
+
+// 执行真实 CI 编排，复用前端仍保留两次原生构建、失败传播和原 binding 字节。
+test('Roundtrip_DebugFrontendReuse_007', t => {
+  const available = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' })
+  if (available.error?.code === 'ENOENT') {
+    t.skip('PowerShell unavailable: executable debug build orchestration remains unrun')
+    return
+  }
+  assert.equal(available.status, 0, available.stderr)
+  const workflow = read('.github/workflows/ci.yml').replace(/\r\n/g, '\n')
+  const match = workflow.match(/      - name: Build both inert embedded acceptance scenarios without packages\n        run: \|\n((?:          .*\n)+)/)
+  assert.ok(match, 'execute the actual debug workflow body')
+  const step = match[1].replace(/^ {10}/gm, '')
+  assert.equal((step.match(/npm run tauri -- build --debug --features history-roundtrip-acceptance --no-bundle/g) ?? []).length, 2)
+  for (const failure of ['none', 'first', 'frontend', 'second', 'clippy']) {
+    const temporary = mkdtempSync(join(tmpdir(), 'ccdesk debug builds '))
+    try {
+      mkdirSync(join(temporary, 'tests/fixtures/version-history-roundtrip'), { recursive: true })
+      mkdirSync(join(temporary, 'src-tauri/target/debug'), { recursive: true })
+      mkdirSync(join(temporary, 'dist'))
+      const target = join(temporary, 'tests/fixtures/version-history-roundtrip/target.json')
+      const original = Buffer.from('{ "schema": 1, "enabled": false, "scenario": "success", "fixture": "preserve exact bytes" }\n')
+      writeFileSync(target, original)
+      writeFileSync(join(temporary, 'dist/index.html'), 'stale frontend must not be reused initially')
+      const script = join(temporary, 'run.ps1')
+      writeFileSync(script, `$ErrorActionPreference = 'stop'
+$script:events = [Collections.Generic.List[object]]::new()
+$script:frontends = 0
+function npm {
+  $arguments = @($args)
+  $binding = Get-Content -LiteralPath 'tests/fixtures/version-history-roundtrip/target.json' -Raw | ConvertFrom-Json
+  $index = [Array]::IndexOf($arguments, '--config')
+  $override = if ($index -ge 0) { Get-Content -LiteralPath $arguments[$index + 1] -Raw | ConvertFrom-Json } else { $null }
+  if ($null -eq $override) {
+    $script:frontends++
+    [IO.File]::WriteAllText((Join-Path (Get-Location).Path 'dist/index.html'), 'fresh debug frontend')
+    if ('${failure}' -eq 'frontend') { Remove-Item -LiteralPath 'dist/index.html' }
+  } else {
+    if (@($override.PSObject.Properties.Name).Count -ne 1 -or @($override.build.PSObject.Properties.Name).Count -ne 1 -or @($override.build.PSObject.Properties.Name)[0] -cne 'beforeBuildCommand' -or $null -ne $override.build.beforeBuildCommand) { throw 'Only the duplicate build hook may be disabled' }
+    if ((Get-Content -LiteralPath 'dist/index.html' -Raw) -cne 'fresh debug frontend') { throw 'Not this invocation frontend' }
+  }
+  $script:events.Add(@{ command='tauri'; arguments=$arguments; scenario=$binding.scenario; enabled=$binding.enabled; reused=($null -ne $override) })
+  [IO.File]::WriteAllText((Join-Path (Get-Location).Path 'src-tauri/target/debug/cc-desk.exe'), $binding.scenario)
+  $global:LASTEXITCODE = if (('${failure}' -eq 'first' -and $script:events.Count -eq 1) -or ('${failure}' -eq 'second' -and $script:events.Count -eq 2)) { 101 } else { 0 }
+}
+function cargo {
+  $script:events.Add(@{ command='clippy'; arguments=@($args) })
+  $global:LASTEXITCODE = if ('${failure}' -eq 'clippy') { 101 } else { 0 }
+}
+try {
+${step}
+} finally {
+  @{ events=@($script:events.ToArray()); frontends=$script:frontends; overrides=@(Get-ChildItem -LiteralPath 'src-tauri/target' -Filter 'ci-roundtrip-frontend-*.json' | ForEach-Object Name) } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'receipt.json'
+}
+if ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }
+`)
+      const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', script], { cwd: temporary, encoding: 'utf8', timeout: 30_000 })
+      assert.ifError(result.error)
+      assert.equal(result.status === 0, failure === 'none', result.stdout + result.stderr)
+      const receipt = JSON.parse(readFileSync(join(temporary, 'receipt.json'), 'utf8').replace(/^\uFEFF/, ''))
+      assert.equal(receipt.frontends, 1, `duplicate frontend in ${failure}`)
+      assert.deepEqual(receipt.overrides, [], 'owned override must be cleaned on success and failure')
+      assert.deepEqual(readFileSync(target), original, 'restore the exact original disabled binding')
+      const builds = receipt.events.filter(event => event.command === 'tauri')
+      assert.equal(builds.length, ['first', 'frontend'].includes(failure) ? 1 : 2)
+      for (const [index, build] of builds.entries()) {
+        // PowerShell 函数会消费单独的 --，上方另核对传给原生命令的实际源码。
+        assert.deepEqual(build.arguments.slice(0, 7), ['run', 'tauri', 'build', '--debug', '--features', 'history-roundtrip-acceptance', '--no-bundle'])
+        assert.equal(build.scenario, ['success', 'before-installer-resume'][index])
+        assert.equal(build.enabled, false)
+        assert.equal(build.reused, index === 1)
+      }
+      const clippy = receipt.events.filter(event => event.command === 'clippy')
+      assert.equal(clippy.length, ['none', 'clippy'].includes(failure) ? 1 : 0)
+      if (clippy.length) assert.deepEqual(clippy[0].arguments, ['clippy', '--locked', '--all-targets', '--features', 'history-roundtrip-acceptance', '-D', 'warnings'])
+    } finally {
+      assert.ok(realpathSync(temporary).startsWith(realpathSync(tmpdir()) + sep), 'cleanup stays inside the owned temporary parent')
+      rmSync(temporary, { recursive: true, force: true })
+    }
+  }
+})
 
 test('release rejection exits successfully only after both denial assertions', () => {
   const step = releaseRejectionStep()

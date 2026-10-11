@@ -9,11 +9,18 @@ mod history;
 #[path = "metadata.rs"]
 mod metadata;
 
+/// 一次观察内单个已注册项目的 admission 身份与已校验路径拼法。
+pub(crate) struct ProjectRef<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) root: &'a Root,
+    pub(crate) paths: &'a [PathBuf],
+}
+
 pub(crate) struct Catalog<'a> {
     pub(crate) cli: CliKind,
     pub(crate) root: &'a Root,
-    pub(crate) project: Option<&'a Root>,
-    pub(crate) project_paths: &'a [PathBuf],
+    /// 空集合 = root-wide 观察（不过滤、无归属）；metadata 类读取只允许恰好一个。
+    pub(crate) projects: &'a [ProjectRef<'a>],
     // Default-Claude's sibling config is a separately admitted, fixed-file read.
     pub(crate) user_config: Option<&'a Root>,
     pub(crate) check: &'a dyn Fn() -> ReadResult<()>,
@@ -27,8 +34,8 @@ impl Catalog<'_> {
     fn check(&self) -> ReadResult<()> {
         (self.check)()?;
         self.root.current()?;
-        if let Some(root) = self.project {
-            root.current()?;
+        for project in self.projects {
+            project.root.current()?;
         }
         if let Some(root) = self.user_config {
             root.current()?;
@@ -90,6 +97,14 @@ pub(crate) fn read(
     budget: &mut Budget,
 ) -> ReadResult<Vec<ResourceItem>> {
     catalog.check()?;
+    // 项目文档/技能等资源类别是单项目投影契约；批量观察只服务历史枚举。
+    if !matches!(
+        options.kind,
+        ResourceKind::History | ResourceKind::Messages | ResourceKind::Search
+    ) && catalog.projects.len() > 1
+    {
+        return Err("SOURCE_UNSUPPORTED");
+    }
     let result = match options.kind {
         ResourceKind::History | ResourceKind::Messages | ResourceKind::Search => {
             history::read(catalog, options, budget)

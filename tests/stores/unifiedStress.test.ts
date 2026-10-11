@@ -59,11 +59,12 @@ function workspaceFixture() {
     unavailable: new Set<string>(),
     wrappers: [] as VueWrapper[],
   }
+  let scopeSequence = 0
   function source(target: ScopeTarget): SourceRef {
     const tab = target.kind === 'run' ? [...useNativeTabsStore().tabs.values()].find(row => row.runId === target.runId && row.generation === target.generation) : undefined
     const config = fixture.profiles.find(row => row.id === (target.kind === 'profile' ? target.profileId : tab?.profileId))
     if (!config || config.cli === 'shell') throw { code: 'SOURCE_UNAVAILABLE' }
-    return { scopeId: `scope-${config.id}-${target.kind === 'profile' ? target.projectId : tab!.runId}`, instanceId: 'fixture-instance',
+    return { scopeId: `scope-${++scopeSequence}`, instanceId: 'fixture-instance',
       cli: config.cli, sourceRootKey: fixture.roots.get(config.id) ?? `root-${config.id}`, identityEpoch: '1',
       profileId: config.id, profileRevision: config.revision, target,
       basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' }
@@ -73,8 +74,9 @@ function workspaceFixture() {
     if (command === 'native_list_resources') {
       const request = argument as ReadRequest
       const target = request.source.target
+      const scoped = target.kind === 'profile' ? target.projectIds : []
       const rows = request.resourceKind === 'history'
-        ? fixture.histories.get(`${request.source.profileId}:${target.kind === 'profile' ? target.projectId : ''}`) ?? [] : fixture.resources
+        ? scoped.flatMap(id => (fixture.histories.get(`${request.source.profileId}:${id}`) ?? []).map(row => ({ ...row, projectId: id }))) : fixture.resources
       const offset = request.offset ?? 0, limit = request.limit ?? 200
       return reply(request, rows.slice(offset, offset + limit), rows.length > offset + limit)
     }
@@ -140,7 +142,7 @@ function seed() {
       sessionId: `s-${s}`, name: `${'旧'.repeat(193)}${String(p).padStart(3, '0')}-${String(s).padStart(3, '0')}`,
       projectPath: path, lastActiveAt: s + 1,
     })))
-    f.histories.set(`codex:p-${p}`, Array.from({ length: 50 }, (_, s) => history('codex', 'root-codex', `s-${s}`, path,
+    f.histories.set(`codex:p-${p}`, Array.from({ length: 50 }, (_, s) => history('codex', 'root-codex', `native-${p}-${s}`, path,
       `${'N'.repeat(193)}${String(p).padStart(3, '0')}-${String(s).padStart(3, '0')}`)))
   }
 }
@@ -172,8 +174,8 @@ it('Stress_50Projects100Sessions_001', async () => {
   console.info(`Task24 stress catalog: 50 projects, 5000 sessions, ${Math.round(performance.now() - started)}ms`)
 }, 30000)
 
-// Each cycle settles a real 5,000-row catalog refresh plus Vue rendering. The
-// full workload exceeds 30s on shared CI runners; retain a scoped hang guard.
+// 每轮等待真实 store 的项目投影更新和 Vue 渲染，保留完整目录、owner 与变化次数。
+// 共享 CI 的负载会波动，保留原有挂起保护，不以缩小工作量换取通过。
 it('Stress_30Owners120Changes_002', async () => {
   seed()
   const tabs = useNativeTabsStore(), legacy = useSessionStore()

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
-const ts = require('typescript');
+const { transpileProductionSource } = require('../../.github/scripts/transpile_production_source.cjs');
 const Module = require('node:module');
 const sourceRoot = path.resolve(__dirname, '../../src');
 
@@ -20,9 +20,7 @@ function loadSource(filename, imports = {}, cache = new Map(), source) {
     if (!dependency) throw new Error(`Unexpected import: ${name}`);
     return loadSource(dependency + '.ts', imports, cache);
   };
-  m._compile(ts.transpileModule(source ?? fs.readFileSync(filename, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText, filename);
+  m._compile(transpileProductionSource(source ?? fs.readFileSync(filename, 'utf8')), filename);
   return m.exports;
 }
 
@@ -132,8 +130,14 @@ test('PasteTrace_NoExtraAwaitOrResend_010', async () => {
   assert.equal(await returned, false);
 });
 
-function loadPaste() {
-  return loadSource(path.join(sourceRoot, 'utils/pasteText.ts'));
+function loadPaste(source) {
+  return loadSource(path.join(sourceRoot, 'utils/pasteText.ts'), {
+    // 只隔离真实宿主剪贴板；纯 payload 与显式传入读取器不能触碰用户剪贴板。
+    '@tauri-apps/plugin-clipboard-manager': {
+      readText: () => { throw new Error('Unexpected host clipboard read'); },
+      readImage: () => { throw new Error('Unexpected host clipboard read'); },
+    },
+  }, new Map(), source);
 }
 
 function attach(paste, trace) {
@@ -251,4 +255,26 @@ test('PasteTrace_EvidencePolicyLoaded_017', async () => {
   await paste.commitPasteWithEvidence(async () => '', async () => true, () => ({ ptyId: 'a' }),
     value => value, write, () => '\x1bv');
   assert.deepEqual(sent, [{ id: 'a', data: '\x1bv' }]);
+});
+
+// 生产构建禁用 DEV 分支，但字面量和真实粘贴正文不能被文本替换改写。
+test('PasteTrace_ProductionBuildDev_018', () => {
+  const filename = path.join(sourceRoot, 'utils/pasteText.ts');
+  const source = fs.readFileSync(filename, 'utf8') + `
+export function assertProductionBuild() {
+  if (import.meta.env.DEV) throw new Error('development-only branch executed');
+  return 'import.meta.env.DEV';
+}
+`;
+  const paste = loadPaste(source);
+  assert.equal(paste.assertProductionBuild(), 'import.meta.env.DEV');
+  assert.equal(paste.buildPastePayload('import.meta.env.DEV\r\n__TAIL__', true, false),
+    '\x1b[200~import.meta.env.DEV\n__TAIL__\x1b[201~');
+});
+
+// 未授权的环境开关仍须报错，不能用通用 env mock 悄悄编造成生产配置。
+test('PasteTrace_UnknownBuildEnv_019', () => {
+  assert.throws(() => loadSource(path.join(sourceRoot, 'utils/pasteText.ts'), {}, new Map(),
+    'export const mode = import.meta.env.VITE_UNAPPROVED;'),
+  /import\.meta|exports is not defined/);
 });

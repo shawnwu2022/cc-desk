@@ -56,20 +56,26 @@ import { useAttentionStore } from '@/stores/attention'
 import { useStatusMonitor } from '@/composables/useStatusMonitor'
 import type { HookEventPayload } from '@/types/hook'
 
+// 生产路径：后端 hook_events.rs 对所有 hook 事件恒打 claude-hook 鉴权标签
+let authEventSeq = 0
+function withAuth(payload: HookEventPayload): HookEventPayload {
+  return { ...payload, runId: payload.ptyId ?? undefined, generation: 1, eventId: `evt-${++authEventSeq}`, observerSource: 'claude-hook' }
+}
+
 /** 构造 notification payload */
 function notif(notificationType: string, ptyId = 'pty1'): HookEventPayload {
-  return {
+  return withAuth({
     ptyId, sessionId: 's', eventName: 'Notification', state: 'idle', timestamp: 1,
     detail: { type: 'notification', data: { notificationType } },
-  } as HookEventPayload
+  } as HookEventPayload)
 }
 
 /** 构造 stopFailure payload */
 function stopFail(ptyId = 'pty1'): HookEventPayload {
-  return {
+  return withAuth({
     ptyId, sessionId: 's', eventName: 'StopFailure', state: 'error', timestamp: 1,
     detail: { type: 'stopFailure', data: { error: 'x' } },
-  } as HookEventPayload
+  } as HookEventPayload)
 }
 
 /**

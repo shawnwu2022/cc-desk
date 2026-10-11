@@ -5,6 +5,7 @@ import { createI18n } from 'vue-i18n'
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks'
 import App from '@/App.vue'
 import { useSessionStore } from '@/stores/session'
+import { useAppStore } from '@/stores/app'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useShellStore } from '@/stores/shell'
 import en from '@/i18n/locales/en'
@@ -55,6 +56,7 @@ describe('Legacy session resume in App', () => {
     wrapper = mount(App, { global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { SettingsView: true } } })
     await flushPromises()
     const catalog = useUnifiedSessionsStore(), legacy = useSessionStore(), shell = useShellStore()
+    useAppStore().setClaudeOptions({ skipPermissions: true, customArgs: '--resume "named session" --bare' })
     const history = catalog.sessions.find(row => row.nativeSessionId === 'saved-session')!
     const opened = await catalog.resumeCatalogSession(history.id); await flushPromises()
     const first = legacy.tabs.get(opened.adapterSessionId)!, pty = first.ptyId!
@@ -66,7 +68,11 @@ describe('Legacy session resume in App', () => {
     expect(io.spawn).toHaveBeenCalledOnce()
     shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: opened.id, action: 'resume' }); await flushPromises()
     expect(io.spawn, 'Resume must start a second PTY for the original session').toHaveBeenCalledTimes(2)
-    expect(io.spawn.mock.calls[1][0]).toMatchObject({ cwd: '/legacy', args: ['--resume', 'saved-session'] })
+    expect(io.spawn.mock.calls[1][0]).toMatchObject({
+      cwd: '/legacy',
+      resumeSessionId: 'saved-session',
+      args: ['--dangerously-skip-permissions', '--resume', 'named session', '--bare'],
+    })
     expect(legacy.tabs.get(opened.adapterSessionId)).toMatchObject({ status: 'running', sessionId: 'saved-session', ptyGeneration: 2 })
     expect(catalog.activeSessionId).toBe(opened.id); expect(legacy.tabs.size).toBe(1)
     expect(io.terms[0].dispose).toHaveBeenCalledOnce()
@@ -92,7 +98,7 @@ describe('Legacy session resume in App', () => {
     const restored = catalog.sessions.find(row => row.opened && row.nativeSessionId === 'saved-session')!
     expect(restored.id).not.toBe(opened.id)
     expect(legacy.tabs.get(restored.adapterSessionId)).toMatchObject({ status: 'running', sessionId: 'saved-session', projectPath: '/legacy' })
-    expect(io.spawn.mock.calls[1][0]).toMatchObject({ cwd: '/legacy', args: ['--resume', 'saved-session'] })
+    expect(io.spawn.mock.calls[1][0]).toMatchObject({ cwd: '/legacy', resumeSessionId: 'saved-session', args: [] })
   })
 
   // 恢复的启动回执延迟时，重复恢复不能重复启动，完成不能抢回较新的会话选择。
@@ -129,7 +135,7 @@ describe('Legacy session resume in App', () => {
     const confirm = document.querySelector<HTMLButtonElement>('[data-confirm-resume]')!
     expect(confirm).not.toBeNull(); confirm.click(); await flushPromises()
     expect(io.spawn, 'History chooser Resume must restart the ended open session').toHaveBeenCalledTimes(2)
-    expect(io.spawn.mock.calls[1][0]).toMatchObject({ cwd: '/legacy', args: ['--resume', 'saved-session'] })
+    expect(io.spawn.mock.calls[1][0]).toMatchObject({ cwd: '/legacy', resumeSessionId: 'saved-session', args: [] })
     expect(legacy.tabs.get(opened.adapterSessionId)).toMatchObject({ status: 'running', sessionId: 'saved-session', ptyGeneration: 2 })
     expect(catalog.resumeDialog).toBeNull(); expect(legacy.tabs.size).toBe(1)
   })

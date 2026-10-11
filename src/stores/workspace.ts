@@ -202,7 +202,7 @@ export const useWorkspaceStore = defineStore('cli-workspace', () => {
       if (!current()) return
       try {
         const client = createNativeProjectionClient()
-        const source = await client.scope({ kind: 'profile', profileId: frozen.profileId, expectedProfileRevision: frozen.revision, projectId: project.projectId })
+        const source = await client.scope({ kind: 'profile', profileId: frozen.profileId, expectedProfileRevision: frozen.revision, projectIds: [project.projectId] })
         if (!current()) return
         const result = await client.read({ source, resourceKind: 'history', requestEpoch: epoch, limit: 1, offset: 0 })
         if (current()) enrichment.value[project.projectId] = { state: result.state, result, reason: result.reason }

@@ -61,6 +61,8 @@ Hook 系统只采集**对 GUI 有意义**的信息：
 │  ├─ 订阅 userPromptSubmit → tab.working = true                │
 │  ├─ 订阅 stop/stopFailure/notification → working=false        │
 │  │   └─ 根据窗口聚焦/Tab 激活决定 pending 和任务栏跳动         │
+│  ├─ 30s 无任何 hook 事件 → 清 working（staleness 兜底，事件    │
+│  │   到达即重置计时；防 POST 丢失导致 working 永久卡住）        │
 │  └─ watch 聚焦+Tab 切换 → 清除 active tab 的 pending          │
 │                                                               │
 │  SessionItem.vue ← tab.working → 指示灯样式                   │
@@ -135,7 +137,9 @@ if (payload.detail.type === 'sessionStart') {
 - 收到 SessionStart 时自动 `invalidate_project_path_mapping()`
 - 建立 `session_id ↔ pty_id` 映射（用于反向查询）
 
-### 已注册的 11 个事件
+### 已注册的 13 个事件
+
+其中 `PreCompact` / `PostCompact` 为后补事件，其余 11 个为初始集合。
 
 | 事件 | 提取数据 | 推导状态 |
 |------|----------|----------|
@@ -246,6 +250,17 @@ interface TerminalTab {
 | **PTY** | `--plugin-dir` 路径不存在时 Claude 忽略正常启动 |
 | **前端** | 无 hook 事件时 `working = false`，指示灯降级为默认样式 |
 
+## 已知限制
+
+**Native observer 凭据经 PTY 环境变量分发，可被会话内子进程读取并伪造本会话事件。**
+Observer 的 `CC_DESK_OBSERVER_CAPABILITY` / `CC_DESK_OBSERVER_RUN` / `CC_DESK_OBSERVER_GENERATION`
+通过 PTY 环境变量注入 CLI 进程（`observer_host.rs` 注入、`pty.rs` 落地到子进程环境）。
+会话内 CLI 派生的子进程——例如恶意仓库的构建脚本——继承同一环境，可以读取这组凭据，
+并向本会话的 observer 端点伪造事件（伪造的观察结果只影响元数据展示，不拥有进程控制）。
+跨会话伪造不可行：capability 为 128-bit 随机 UUID（`observer_registry.rs` 的 `mint`），
+比较使用常数时间逐字节 XOR（`same_capability`），事件字段经白名单过滤
+（`sanitize_event` 丢弃 prompt/输出/错误文本/环境变量及未知字段，仅保留白名单元数据字段）。
+
 ## 前端 Hook 事件总线
 
 `stores/hook.ts` 作为纯事件总线，不包含业务逻辑：
@@ -269,14 +284,19 @@ const unsubscribe = hookStore.subscribe(
 
 | 事件 | 操作 |
 |------|------|
-| `userPromptSubmit` | `tab.working = true` |
-| `stop` / `stopFailure` / `notification` | `tab.working = false`（仅在 working=true 时处理） |
+| `userPromptSubmit` | 开启新回合，`tab.working = true` |
+| `stop` / `stopFailure` / `notification` | 已知活跃回合内 `tab.working = false`，活动提示过期后仍处理真实终止/权限事件 |
 | `sessionEnd` | `tab.working = false`（不触发 pending） |
 | PTY 退出 | `tab.working = false` |
 
+Stop、StopFailure 或 idle_prompt 结束的回合按精确 PTY 记录边界。迟到的工具、
+子代理及压缩活动在进入 reducer、更新 activity 或重置陈旧计时之前被拒绝；新
+userPromptSubmit 或新 PTY 可开启独立回合。权限等待不结束回合，授权后的工具活动
+仍可恢复 working。
+
 #### pending 状态（用户注意力管理）
 
-**设置 pending 的时机**：stop/stopFailure/notification 事件到达，且 working=true 时：
+**设置 pending 的时机**：已知活跃回合的 stop/stopFailure 或 idle/permission notification 到达时：
 
 ```
 事件到达（stop/stopFailure/notification）

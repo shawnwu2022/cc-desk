@@ -27,12 +27,11 @@ fn grant(path: &std::path::Path, title: &str, live: Arc<AtomicBool>) -> Grant {
         target: ScopeTarget::Profile {
             profile_id: "p".into(),
             expected_profile_revision: n(1),
-            project_id: None,
+            project_ids: vec![],
         },
         basis: SourceBasis::ConfiguredProfile,
         root: Root::open(path).unwrap(),
-        project: None,
-        project_paths: vec![],
+        projects: vec![],
         user_config: None,
         check: Arc::new(move || {
             if live.load(Ordering::SeqCst) {
@@ -67,8 +66,11 @@ fn incomplete_history_survives_filtering_and_empty_pages() {
         ),
     )
     .unwrap();
-    g.project = Some(Root::open(t.path()).unwrap());
-    g.project_paths = vec![t.path().to_owned()];
+    g.projects = vec![AdmittedProject {
+        id: "test-project".into(),
+        root: Root::open(t.path()).unwrap(),
+        paths: vec![t.path().to_owned()],
+    }];
     let source = registry.register(g).unwrap();
     let response = registry.read(&owner(), &request(source)).unwrap();
     assert_eq!(response.state, ProjectionState::Ready);
@@ -287,6 +289,100 @@ fn identical_grant_reuses_scope_and_capacity_cannot_grow_without_bound() {
         .unwrap();
     assert!(b.identity_epoch.get() > a.identity_epoch.get());
     assert!(registry.read(&owner(), &request(a)).is_err());
+}
+
+fn project_grant(path: &std::path::Path, ids: &[usize]) -> Grant {
+    let mut g = grant(path, "main", Arc::new(AtomicBool::new(true)));
+    g.projects = ids
+        .iter()
+        .map(|id| {
+            let project = path.join(format!("work-{id}"));
+            fs::create_dir_all(&project).unwrap();
+            AdmittedProject {
+                id: format!("project-{id}"),
+                root: Root::open(&project).unwrap(),
+                paths: vec![project],
+            }
+        })
+        .collect();
+    g.target = ScopeTarget::Profile {
+        profile_id: "p".into(),
+        expected_profile_revision: n(1),
+        project_ids: g.projects.iter().map(|p| p.id.clone()).collect(),
+    };
+    g
+}
+
+// 逐步注册项目不保留所有历史子集；65 个项目只需要两个仍有效的 scope。
+#[test]
+#[allow(non_snake_case)]
+fn ScopeRegistry_ProjectGrowthRetiresSupersededSets_001() {
+    let t = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(2);
+    let mut previous = None;
+    for count in 1..=64 {
+        let source = registry
+            .register(project_grant(t.path(), &(0..count).collect::<Vec<_>>()))
+            .unwrap();
+        if let Some(old) = previous {
+            assert_eq!(
+                registry.read(&owner(), &request(old)).unwrap_err().code,
+                "SCOPE_UNKNOWN"
+            );
+        }
+        previous = Some(source);
+    }
+    let first_batch = previous.unwrap();
+    let tail = registry.register(project_grant(t.path(), &[64])).unwrap();
+    assert_eq!(
+        registry
+            .register(project_grant(t.path(), &(0..64).collect::<Vec<_>>()))
+            .unwrap(),
+        first_batch
+    );
+    let extended_tail = registry
+        .register(project_grant(t.path(), &[64, 65]))
+        .unwrap();
+    assert_eq!(
+        registry.read(&owner(), &request(tail)).unwrap_err().code,
+        "SCOPE_UNKNOWN"
+    );
+    assert!(registry.read(&owner(), &request(first_batch)).is_ok());
+    assert!(registry.read(&owner(), &request(extended_tail)).is_ok());
+}
+
+// 不同配置、owner、root-wide 观察和不相交批次不能借扩展规则互相撤销。
+#[test]
+#[allow(non_snake_case)]
+fn ScopeRegistry_ProjectGrowthPreservesOtherAuthorities_002() {
+    let t = tempfile::tempdir().unwrap();
+    for variant in 0..4 {
+        let registry = ScopeRegistry::new(1);
+        let source = registry.register(project_grant(t.path(), &[0])).unwrap();
+        let mut next = project_grant(t.path(), &[0, 1]);
+        match variant {
+            0 => {
+                next.profile_revision = n(2);
+                next.target = ScopeTarget::Profile {
+                    profile_id: "p".into(),
+                    expected_profile_revision: n(2),
+                    project_ids: vec!["project-0".into(), "project-1".into()],
+                };
+            }
+            1 => next.owner.epoch = n(2),
+            2 => {
+                next.projects.clear();
+                next.target = ScopeTarget::Profile {
+                    profile_id: "p".into(),
+                    expected_profile_revision: n(1),
+                    project_ids: vec![],
+                };
+            }
+            _ => next = project_grant(t.path(), &[1, 2]),
+        }
+        assert_eq!(registry.register(next).unwrap_err().code, "SCOPE_CAPACITY");
+        assert!(registry.read(&owner(), &request(source)).is_ok());
+    }
 }
 #[test]
 fn malformed_history_keeps_positive_sessions() {
@@ -557,6 +653,7 @@ fn history_snapshot_accounts_allocated_capacity_and_retains_partial_flags() {
     let items = vec![ResourceItem::Session {
         session_key: "key".into(),
         native_session_id: "id".into(),
+        project_id: None,
         title,
         title_unknown: None,
         title_source: None,
@@ -595,8 +692,11 @@ fn history_snapshot_rechecks_root_and_registered_project_handles() {
         for name in ["same", "two"] {
             fs::write(root_path.join(format!("projects/p/{name}.jsonl")), format!("{}\n", serde_json::json!({"type":"user", "cwd":project_path.to_str().unwrap(),"message":{"content":name}}))).unwrap();
         }
-        g.project = Some(Root::open(&project_path).unwrap());
-        g.project_paths = vec![project_path.clone()];
+        g.projects = vec![AdmittedProject {
+            id: "test-project".into(),
+            root: Root::open(&project_path).unwrap(),
+            paths: vec![project_path.clone()],
+        }];
         let source = registry.register(g).unwrap();
         let mut req = request(source);
         req.limit = 1;

@@ -4,7 +4,9 @@ on:
     branches: [codex/fix-devtools-text-paste]
     paths:
       - .github/workflows/paste-runtime-trace.yml
+      - .github/scripts/transpile_production_source.cjs
       - src/utils/pasteText.ts
+      - src/terminal/inputPolicy.ts
       - src/utils/pasteTrace.ts
       - src/api/tauri.ts
       - src-tauri/src/lib.rs

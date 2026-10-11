@@ -6,6 +6,8 @@ import { readFileSync } from 'node:fs'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import ProjectResourcesDrawer from '@/components/workspace/ProjectResourcesDrawer.vue'
+import PluginList from '@/components/resources/PluginList.vue'
+import { projectResourceItems } from '@/utils/projectResources'
 import { useProjectResourcesStore } from '@/stores/projectResources'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
@@ -34,6 +36,27 @@ async function render(locale = 'en') {
 }
 
 describe('Read-only structured resource content', () => {
+  // 显示字段相同或被隐去的插件仍是独立资源，重排时不能产生重复 key。
+  it('ResourceView_DuplicateDisplayKeys_013', async () => {
+    const plugin = (id: string, name: string, enabled: boolean): ResourceItem => ({
+      type: 'plugin', id, name, version: '1.0', enabled, installed: true, origin: 'global',
+    })
+    const original = [plugin('a', 'Alpha', true), plugin('b', 'TOKEN_hidden', true), plugin('c', 'TOKEN_hidden', false), plugin('d', 'Delta', false)]
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      wrapper = mount(PluginList, { props: { items: projectResourceItems(original).filter(item => item.type === 'plugin') }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+      await wrapper.setProps({ items: projectResourceItems([...original].reverse()).filter(item => item.type === 'plugin') })
+      expect(warns.mock.calls.filter(call => String(call[0]).includes('Duplicate keys'))).toHaveLength(0)
+      expect(wrapper.findAll('li')).toHaveLength(4)
+      expect(wrapper.findAll('li').map(row => row.text())).toEqual([
+        expect.stringContaining('Delta'), expect.stringContaining('Disabled'), expect.stringContaining('Enabled'), expect.stringContaining('Alpha'),
+      ])
+      expect(wrapper.html()).not.toContain('TOKEN_hidden')
+    } finally {
+      warns.mockRestore()
+    }
+  })
+
   // 六类资源作为上下文分类，不重复展示历史或第二套终端标签。
   it('ResourceView_SixCategories_001', async () => {
     const view = await render()

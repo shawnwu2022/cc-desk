@@ -365,21 +365,41 @@ fn D11_Registry_RunAndGenerationNeverAlias_09() {
     );
 }
 
+// 容量满时完整收口的最老记录可淘汰；活跃 run 保留，同 tab 旧代次仍拒绝重放。
 #[test]
-fn D11_Registry_BudgetNeverEvictsReplayTombstones_10() {
+fn D11_Registry_EvictsOldestRetiredTombstoneForNewLaunch_10() {
     let fixture = Fixture::new(1);
     let first = fixture.start(&fixture.request).unwrap();
     fixture.driver.registry().mark_exited(&first.run).unwrap();
     fixture.driver.registry().retire(&first.run).unwrap();
+    fixture
+        .driver
+        .registry()
+        .complete_retirement(&first.run, &first.request_id)
+        .unwrap();
+    // 唯一槽位被已退休墓碑占用：新 launch 成功并逐出该墓碑
+    let second = fixture.start(&fixture.next_request()).unwrap();
+    assert_eq!(fixture.spawns.load(Ordering::SeqCst), 2);
+    // second 活跃占用唯一槽位：新请求仍被容量拒绝（活跃不淘汰）
+    let mut third = fixture.next_request();
+    third.request_id = "request-three".into();
+    third.run_id = "run-three".into();
+    third.generation = 3;
+    assert_eq!(fixture.start(&third).unwrap_err().code, "REGISTRY_CAPACITY");
+    // second 退休后成为唯一记录；first 的墓碑已被逐出，但 tab 代次下限不回退：
+    // 同参重放被 STALE_GENERATION 拒绝（防重放），不会重新 spawn
+    fixture.driver.registry().mark_exited(&second.run).unwrap();
+    fixture.driver.registry().retire(&second.run).unwrap();
+    fixture
+        .driver
+        .registry()
+        .complete_retirement(&second.run, &second.request_id)
+        .unwrap();
     assert_eq!(
-        fixture.start(&fixture.next_request()).unwrap_err().code,
-        "REGISTRY_CAPACITY"
+        fixture.start(&fixture.request).unwrap_err().code,
+        "STALE_GENERATION"
     );
-    assert_eq!(
-        fixture.start(&fixture.request).unwrap().phase,
-        LaunchPhase::Exited
-    );
-    assert_eq!(fixture.spawns.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.spawns.load(Ordering::SeqCst), 2);
 }
 
 #[test]

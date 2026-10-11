@@ -40,9 +40,12 @@ fn history_with_environment(extra: EnvMap) -> Vec<Result<(), crate::cli::types::
         ] {
             let mut target = json!({"kind":"profile", "profileId":id,
                 "expectedProfileRevision":document.profiles[id].revision});
-            if let Some(project) = project {
-                target["projectId"] = project;
-            }
+            // 省略/空/已注册三种目标形状对项目集合而言都是同一观察范围：
+            // 省略与空集合是 root-wide，已注册项目是单元素集合。
+            target["projectIds"] = match project {
+                None | Some(serde_json::Value::Null) => json!([]),
+                Some(value) => json!([value]),
+            };
             let target: ScopeTarget =
                 serde_json::from_slice(&serde_json::to_vec(&target).unwrap()).unwrap();
             let scoped = service.scope_diagnosed(&caller, &target);
@@ -169,7 +172,7 @@ fn HistoryDiagnostics_ProfileProjectAndWireStagesRemainDistinct_004() {
         let target = ScopeTarget::Profile {
             profile_id: profile_id.into(),
             expected_profile_revision: document.profiles["fixture"].revision,
-            project_id: project_id.map(String::from),
+            project_ids: project_id.map(String::from).into_iter().collect(),
         };
         let failure = service.scope_diagnosed(&caller, &target).unwrap_err();
         assert_eq!(

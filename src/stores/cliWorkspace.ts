@@ -230,7 +230,7 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
         kind: 'profile',
         profileId: identity.profileId,
         expectedProfileRevision: identity.revision,
-        ...(projectId === undefined ? {} : { projectId }),
+        projectIds: projectId === undefined ? [] : [projectId],
       },
       kind,
       readOptions,

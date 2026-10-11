@@ -1,6 +1,6 @@
 # Windows ConPTY integration
 
-This file supplements the repository root's architecture/testing rules.
+This file supplements the canonical [root AGENTS.md](../AGENTS.md) architecture/testing rules. Commands and code paths below are relative to the repository root unless stated otherwise.
 
 - Windows desktop startup now verifies and pins the bundled ConPTY before calling `cc_desk::run`. Never remove that guard or add silent system fallback to turn a test green.
 - `conpty/manifest.json` pins the field-verified x64 DLL, OpenConsole host, upstream package and license. Keep the pair, hashes, architecture and license synchronized; do not commit downloaded binaries.

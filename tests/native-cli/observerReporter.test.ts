@@ -10,7 +10,7 @@ function toBashPath(path: string): string {
   if (process.platform !== 'win32') return path
   return path
     .replace(/^([A-Za-z]):[\\\\/]/, (_match, drive: string) => `/${drive.toLowerCase()}/`)
-    .replace(/\\\\/g, '/')
+    .replace(/\\/g, '/')
 }
 
 function bashQuote(value: string): string {
@@ -32,11 +32,12 @@ function capture(auth: boolean, input: Buffer = Buffer.from('{"hook_event_name":
       `export PATH=${bashQuote(toBashPath(dir))}:"$PATH"`,
       `exec ${bashQuote(toBashPath(resolve(script)))}`,
     ].join('; ')
-    const result = spawnSync('bash', ['-lc', command], {
+    // 测试只执行 reporter，不读取个人登录脚本或引入其输出与环境副作用。
+    const result = spawnSync('bash', ['--noprofile', '--norc', '-c', command], {
       env: { ...process.env, CC_BOX_HOOK_PORT: '12345', capability: 'preexisting-export', payload: 'preexisting-export', CC_DESK_OBSERVER_RUN: 'run', CC_DESK_OBSERVER_GENERATION: '1', CC_DESK_OBSERVER_CAPABILITY: auth ? token : '' },
       input, timeout: 6000,
     })
-    expect(result.status).toBe(0)
+    expect(result.status, `report-hook.sh should succeed: ${String(result.stderr)}`).toBe(0)
     expect(result.stdout.length).toBe(0)
     expect(result.stderr.length).toBe(0)
     return existsSync(record) ? JSON.parse(readFileSync(record, 'utf8')) : null
@@ -53,6 +54,7 @@ function body(config: string): string {
 it('D13_Reporter_EmptyCapabilityNeverUsesLegacyFallback_01', () => {
   expect(capture(false)).toBeNull()
 })
+// 真实子进程测试：满载下可超 vitest 默认 5s（单跑约 2.5s），放宽到 15s 消除负载抖动
 it('D13_Reporter_BoundsBodyAndDoesNotExposeTokenInCurlArgvOrEnvironment_02', () => {
   expect(capture(true, Buffer.alloc(65537, 32))).toBeNull()
   const value = capture(true, Buffer.alloc(65536, 32))
@@ -63,7 +65,7 @@ it('D13_Reporter_BoundsBodyAndDoesNotExposeTokenInCurlArgvOrEnvironment_02', () 
   expect(value.bodyExported).toBeUndefined()
   expect(config).toContain(`X-CC-Desk-Capability: ${token}`)
   expect(body(config)).toBe(' '.repeat(65536))
-})
+}, 15_000)
 it('D13_Reporter_ConfigPipePreservesJsonBytesAndCannotInjectOptions_03', () => {
   const input = '\r\n\t' + JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: '中文🙂\\ \\\"\nurl = "file:///must-not-read"\n--next\r\t' }) + '\n\n'
   const value = capture(true, Buffer.from(input))
@@ -75,7 +77,7 @@ it('D13_Reporter_NulInputIsRejectedNotSilentlyRemoved_04', () => {
   expect(capture(true, Buffer.from('{"hook_event_name":"Stop"}\0'))).toBeNull()
 })
 it('D13_Reporter_CheckoutPinsLfOnWindows_05', () => {
-  const result = spawnSync('git', ['check-attr', 'eol', '--', script], { encoding: 'utf8' })
-  expect(result.status).toBe(0)
+  const result = spawnSync('git', ['check-attr', 'eol', '--', script], { encoding: 'utf8', timeout: 30_000 })
+  expect(result.status, `git check-attr should succeed: ${String(result.stderr)}`).toBe(0)
   expect(result.stdout.trim()).toBe(`${script}: eol: lf`)
 })

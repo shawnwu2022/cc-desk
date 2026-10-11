@@ -19,6 +19,8 @@ export type NativeTabStatus =
 export interface NativeCliTab {
   /** Read-only history identity retained by an explicitly resumed catalog item. */
   sourceSessionKey?: string
+  /** 认证 hook 观察回填的运行中 CLI 会话身份；仅用于显示认领，不是授权证据。 */
+  observedSessionId?: string
   tabId: string
   cli: NativeCliKind
   projectId: string
@@ -282,6 +284,19 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (at - value.lastActivityAt >= 1000) value.lastActivityAt = at
   }
 
+  /** 认证观察回填运行中会话的 CLI 身份；同 run 幂等覆盖，随 attempt 精确校验。 */
+  function applyObservationIdentity(tabId: string, attempt: NativeAttemptIdentity, sessionId: string): boolean {
+    const value = tabs.get(tabId)
+    const identity = sessionId.trim()
+    if (!identity || identity.includes('\0')) return false
+    if (!value || !matchesNativeAttempt(value, attempt) || value.cli !== 'claude' || value.action.kind === 'raw') return false
+    if (value.observedSessionId !== identity) {
+      value.observedSessionId = identity
+      value.lastActivityAt = Date.now()
+    }
+    return true
+  }
+
   function applyObservation(tabId: string, attempt: NativeAttemptIdentity, state: ObservationState): void {
     const value = tabs.get(tabId)
     if (!value || !matchesNativeAttempt(value, attempt)) return
@@ -440,6 +455,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.attentionState = 'none'
     value.activityState = 'unknown'
     value.observationState = 'off'
+    delete value.observedSessionId
     value.errorCode = null
     value.launchRevision = null
     pendingAttention.delete(tabId)
@@ -493,6 +509,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     setDiagnostic,
     touch,
     applyObservation,
+    applyObservationIdentity,
     applyObservationNotice,
     ackReplyEndNotice,
     rename,

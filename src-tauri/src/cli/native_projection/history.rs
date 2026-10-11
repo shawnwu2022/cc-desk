@@ -89,25 +89,32 @@ pub(super) fn read(
         if !seen.insert(transcript.id.clone()) {
             return Err("SOURCE_AMBIGUOUS");
         }
-        if c.project.is_some()
-            && !transcript
-                .cwd
-                .as_ref()
-                .is_some_and(|cwd| c.project_paths.iter().any(|p| p == Path::new(cwd)))
-        {
-            if o.kind == ResourceKind::History && transcript.cwd.is_none() {
-                // Even an EOF-complete metadata file cannot establish project
-                // absence when no association was observed in its records.
-                b.unobserved_history_association();
+        // 一次观察服务多个已注册项目：cwd 唯一归属一个项目；无归属行不进入任何项目。
+        let owner = if c.projects.is_empty() {
+            None
+        } else {
+            match transcript.cwd.as_ref().and_then(|cwd| {
+                c.projects
+                    .iter()
+                    .find(|p| p.paths.iter().any(|path| path == Path::new(cwd)))
+            }) {
+                Some(project) => Some(project.id.to_owned()),
+                None => {
+                    if o.kind == ResourceKind::History && transcript.cwd.is_none() {
+                        // Even an EOF-complete metadata file cannot establish project
+                        // absence when no association was observed in its records.
+                        b.unobserved_history_association();
+                    }
+                    continue;
+                }
             }
-            continue;
-        }
-        transcripts.push(transcript);
+        };
+        transcripts.push((transcript, owner));
     }
     // Required headers/tree checks finish before optional display enrichment.
     // Only a positively associated requested-project row may spend spare bytes.
-    if c.cli == CliKind::Claude && o.kind == ResourceKind::History && c.project.is_some() {
-        for transcript in &mut transcripts {
+    if c.cli == CliKind::Claude && o.kind == ResourceKind::History && !c.projects.is_empty() {
+        for (transcript, _) in transcripts.iter_mut() {
             if !transcript.metadata_incomplete {
                 continue;
             }
@@ -125,10 +132,10 @@ pub(super) fn read(
             }
         }
     }
-    transcripts.sort_by(|a, b| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
+    transcripts.sort_by(|(a, _), (b, _)| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
     let mut result = Vec::new();
     let query = o.query.map(str::to_lowercase);
-    for t in transcripts {
+    for (t, owner) in transcripts {
         // Stable within a native source, not a pathname or a permission token.
         let key = serde_json::to_string(&["local", c.cli.as_str(), c.root.key(), &t.id])
             .map_err(|_| "SOURCE_INVALID")?;
@@ -137,6 +144,7 @@ pub(super) fn read(
             result.push(ResourceItem::Session {
                 session_key: key,
                 native_session_id: t.id,
+                project_id: owner,
                 title,
                 title_unknown: t.title_priority.is_none().then_some(true),
                 title_source: t.title_priority.map(TitlePriority::source),

@@ -150,20 +150,29 @@ onUnmounted(() => {
 .win-ctrl-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 
 .win-ctrl-btn:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover-bg);
 }
 
 .win-ctrl-btn:active {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--active-bg);
+}
+
+/*
+ * 关闭钮使用 Windows 标题栏平台红（learn.microsoft.com 标题栏规格），非主题 token：
+ * 浅/暗主题下固定同值，避免暗色下出现 rgba(0,0,0,...) 式不可见 hover。
+ */
+.win-close-btn {
+  --win-close-hover: #c42b1c;
+  --win-close-active: #b42a1a;
 }
 
 .win-close-btn:hover {
-  background: #c42b1c;
+  background: var(--win-close-hover);
   color: white;
 }
 
 .win-close-btn:active {
-  background: #b42a1a;
+  background: var(--win-close-active);
   color: white;
 }
 </style>

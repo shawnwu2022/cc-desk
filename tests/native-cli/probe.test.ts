@@ -44,9 +44,10 @@ describe('native CLI probe contract', () => {
     const result = spawnSync(process.execPath, [probePath], {
       env: fixtureEnv(root),
       encoding: 'utf8',
+      timeout: 30_000,
     })
 
-    expect(result.status).not.toBe(0)
+    expect(result.status, `probe should fail without --report: ${String(result.stderr)}`).not.toBe(0)
     expect(result.stderr).toContain('missing --report')
   })
 
@@ -57,9 +58,10 @@ describe('native CLI probe contract', () => {
     const result = spawnSync(process.execPath, [probePath, '--report', report], {
       env: fixtureEnv(root),
       encoding: 'utf8',
+      timeout: 30_000,
     })
 
-    expect(result.status).not.toBe(0)
+    expect(result.status, `probe should reject report outside root: ${String(result.stderr)}`).not.toBe(0)
     expect(result.stderr).toContain('report path outside test root')
     expect(existsSync(report)).toBe(false)
   })
@@ -75,10 +77,10 @@ describe('native CLI probe contract', () => {
     const result = spawnSync(
       process.execPath,
       [probePath, '--report', report, '--', ...argv],
-      { cwd, env: fixtureEnv(root), encoding: 'utf8' },
+      { cwd, env: fixtureEnv(root), encoding: 'utf8', timeout: 30_000 },
     )
 
-    expect(result.status).toBe(0)
+    expect(result.status, `probe should report fixture env: ${String(result.stderr)}`).toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toBe('')
 
@@ -104,10 +106,10 @@ describe('native CLI probe contract', () => {
         '--capture-input',
         '--capture-bytes', String(input.length),
       ],
-      { env: fixtureEnv(root), input },
+      { env: fixtureEnv(root), input, timeout: 30_000 },
     )
 
-    expect(result.status).toBe(0)
+    expect(result.status, `probe should capture raw input: ${String(result.stderr)}`).toBe(0)
     expect(readReport(report).capturedBase64).toBe(input.toString('base64'))
   })
 
@@ -124,7 +126,7 @@ describe('native CLI probe contract', () => {
         '--output-marker', marker,
         '--exit-code', '7',
       ],
-      { env: fixtureEnv(root) },
+      { env: fixtureEnv(root), timeout: 30_000 },
     )
 
     const expected = Buffer.concat([
@@ -132,7 +134,7 @@ describe('native CLI probe contract', () => {
       Buffer.alloc(257, 0x78),
       Buffer.from(`<<CC_DESK_PROBE_OUTPUT_END:${marker}>>`, 'ascii'),
     ])
-    expect(result.status).toBe(7)
+    expect(result.status, `probe should frame output before exit 7: ${String(result.stderr)}`).toBe(7)
     expect(result.stdout).toEqual(expected)
     expect(existsSync(report)).toBe(true)
     expect(readReport(report).requestedExitCode).toBe(7)
@@ -144,10 +146,10 @@ describe('native CLI probe contract', () => {
     const result = spawnSync(
       process.execPath,
       [probePath, '--report', report, '--output-bytes', '1'],
-      { env: fixtureEnv(root), encoding: 'utf8' },
+      { env: fixtureEnv(root), encoding: 'utf8', timeout: 30_000 },
     )
 
-    expect(result.status).not.toBe(0)
+    expect(result.status, `probe should reject unsafe marker: ${String(result.stderr)}`).not.toBe(0)
     expect(result.stderr).toContain('--output-bytes requires --output-marker')
     expect(existsSync(report)).toBe(false)
   })

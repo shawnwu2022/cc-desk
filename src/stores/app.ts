@@ -15,6 +15,7 @@ import {
 import { normalizeTerminalFont, normalizeTerminalFontSize, normalizeTerminalLineHeight, normalizeTerminalCursor, readTerminalSettings, terminalPreferences as computeTerminalPreferences, type TerminalSettingFields, type TerminalFont, type TerminalCursorStyle } from '@/config/terminalPreferences'
 import { normalizeTerminalThemeId } from '@/config/terminalThemes'
 import { normalizePath } from '@/utils/path'
+import { parseLegacyCustomArgs } from '@/utils/legacyCustomArgs'
 import { useShellStore } from '@/stores/shell'
 import type { AppConfig, GuiThemeMode, GuiDensity, StartupDestination } from '@/types/app'
 import type { UnifiedCliKind } from '@/types/unifiedSession'
@@ -137,7 +138,20 @@ export const useAppStore = defineStore('app', () => {
   let settingsUnconfirmed = false
   let settingsPublicationSequence = 0
   let settingsLoad: Promise<void> | null = null
-  let settingsMutationTail: Promise<void> = Promise.resolve()
+  // config.json 持久化写入按资源域分两条尾队列：同域写串行，防并发读-改-写用陈旧本地
+  // 快照互相覆盖丢字段；跨域写允许并发（两写携带字段不重叠），防覆盖由后端
+  // update_app_config 的跨进程锁内 merge 兜底。不得合并为单一队列：启动迁移挂起时
+  // 会头阻塞用户 hiddenProjects 写入（Projects_StartupCannotUndoHide_014 契约）。
+  function makeWriteQueue() {
+    let tail: Promise<void> = Promise.resolve()
+    return function enqueue<T>(operation: () => Promise<T>): Promise<T> {
+      const result = tail.then(operation, operation)
+      tail = result.then(() => undefined, () => undefined)
+      return result
+    }
+  }
+  const enqueueConfigWrite = makeWriteQueue()
+  const enqueueHiddenWrite = makeWriteQueue()
   function widthValue(value: unknown): number {
     return typeof value === 'number' && Number.isFinite(value) ? Math.round(Math.max(240, Math.min(360, value))) : 288
   }
@@ -202,7 +216,7 @@ export const useAppStore = defineStore('app', () => {
     ++pendingSettings[key]
     settingsErrors.value = { ...settingsErrors.value, [key]: undefined }
     applySimpleSettings({ ...simpleSettings(), [key]: value })
-    const operation = settingsMutationTail.then(async () => {
+    const operation = enqueueConfigWrite(async () => {
       let submitted = false
       try {
         await ensureSettingsWriteReady()
@@ -229,7 +243,6 @@ export const useAppStore = defineStore('app', () => {
         return false
       } finally { --pendingSettings[key] }
     })
-    settingsMutationTail = operation.then(() => undefined)
     return operation
   }
 
@@ -271,12 +284,6 @@ export const useAppStore = defineStore('app', () => {
   const hiddenProjects = ref<Set<string>>(new Set())
   // app config 加载状态：idle/loading/loaded/error（v5 P1：加载失败感知）
   const loadStatus = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
-  // setHidden 操作锁：串行化 读->算 next->persist->改本地，防并发丢更新
-  let hiddenOpLock: Promise<void> = Promise.resolve()
-  // lastOpened 操作锁：串行化 saveLastProject + setCwdLocal，防快速 A->B 各自基于旧内存
-  // 持久化、后 persist 覆盖前导致 lastOpened 乱序（终态为 B 但磁盘先写 A 后写 B 顺序虽对，
-  // 然 setCwdLocal 若与 persist 交错可能短暂错乱；串行化保证读-写原子）。
-  let lastOpenedOpLock: Promise<void> = Promise.resolve()
 
   const managedProjectsStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const removingProjectPaths = ref(new Set<string>())
@@ -304,16 +311,19 @@ export const useAppStore = defineStore('app', () => {
   /** Visibility-only read: does not migrate settings, create profiles or launch a CLI. */
   function loadProjectVisibility(force = false): Promise<void> {
     if (!force && (visibilityLoaded || loadStatus.value === 'loaded' && !visibilityFailed)) return Promise.resolve()
-    if (visibilityLoad) return visibilityLoad
+    // 非 force 复用在途读去重；force 绕过在途 promise 发起新读（readAppConfig(true)
+    // 会等当前读结束后再读一次），保证对账拿到新快照。
+    if (!force && visibilityLoad) return visibilityLoad
     const version = visibilityVersion
-    visibilityLoad = readAppConfig().then(({ config, visibilityVersion: originVersion }) => {
+    const operation = readAppConfig(force).then(({ config, visibilityVersion: originVersion }) => {
       if (originVersion !== visibilityVersion) return
       hiddenProjects.value = new Set(config.hiddenProjects ?? [])
       visibilityLoaded = true
       visibilityFailed = false
       ++visibilityVersion
-    }).catch(failure => { if (version === visibilityVersion) { visibilityFailed = true; visibilityLoaded = false }; throw failure }).finally(() => { visibilityLoad = null })
-    return visibilityLoad
+    }).catch(failure => { if (version === visibilityVersion) { visibilityFailed = true; visibilityLoaded = false }; throw failure }).finally(() => { if (visibilityLoad === operation) visibilityLoad = null })
+    visibilityLoad = operation
+    return operation
   }
   function loadManagedProjects(): Promise<void> {
     if (managedLoad) return managedLoad
@@ -407,12 +417,12 @@ export const useAppStore = defineStore('app', () => {
         : { ...DEFAULT_CLAUDE_ENV_VARS }
 
       // 启动持久化：env + terminalTheme（仅当需修正/迁移时写 terminalTheme）合并为一次调用，
-      // 避免多次读-改-写加剧既有竞态（见 spec「已知限制」）
+      // 经 configWriteTail 与其他持久化写入串行（写入竞态已收敛，无跨队列覆盖）
       const needWriteTheme = inferredTerminalTheme !== config.terminalTheme
       const migrationEnv = { ...claudeEnvVars.value }
       // Startup migration and simple GUI changes share submission ordering.
       // Hydration is already available, so this cannot wait on its own migration.
-      const migration = settingsMutationTail.then(async () => {
+      const migration = enqueueConfigWrite(async () => {
         await ensureSettingsWriteReady()
         // Recheck at actual submission: a late startup read must not rewrite a
         // newer terminal choice, confirmed value, or recovery snapshot.
@@ -429,7 +439,6 @@ export const useAppStore = defineStore('app', () => {
           throw failure
         }
       })
-      settingsMutationTail = migration.then(() => undefined, () => undefined)
       await migration
 
       defaultClaudeOptions.value = {
@@ -539,44 +548,9 @@ export const useAppStore = defineStore('app', () => {
   }
 
   /**
-   * setHidden 操作锁（复用 session.ts withLock 范式）：串行化
-   * 读集合 -> 算 next -> persist -> 改本地 全流程，防同窗口快速隐藏 A+B 各自基于旧内存
-   * 算 next、后 persist 覆盖前导致磁盘丢一项。
-   */
-  function withHiddenLock<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = hiddenOpLock
-    let release!: () => void
-    hiddenOpLock = new Promise<void>(r => { release = r })
-    return (async () => {
-      await prev
-      try {
-        return await fn()
-      } finally {
-        release()
-      }
-    })()
-  }
-
-  /**
-   * lastOpened 操作锁（复用 withLock 范式）：串行化 saveLastProject + setCwdLocal，
-   * 防快速 A->B 切换时并发 persist 乱序覆盖 lastOpened。
-   */
-  function withLastOpenedLock<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = lastOpenedOpLock
-    let release!: () => void
-    lastOpenedOpLock = new Promise<void>(r => { release = r })
-    return (async () => {
-      await prev
-      try {
-        return await fn()
-      } finally {
-        release()
-      }
-    })()
-  }
-
-  /**
-   * 设置/取消隐藏项目（opLock 串行 + persist-first 回滚 + 规范化比较 + cwd 保护）。
+   * 设置/取消隐藏项目（hiddenProjects 专域队列串行 + persist-first 回滚 + 规范化比较 + cwd 保护）。
+   * 不走 configWriteTail：用户 hide 不得被挂起的启动迁移头阻塞（014 契约）；
+   * 与迁移写携带字段不重叠，防覆盖由后端锁内 merge 兜底。
    * - cwd 保护（v6 codex batch1 #10）：拒绝隐藏当前 cwd（隐藏项目不能成 cwd，store/domain 层保证不变量）。
    *   管理页按钮层禁用是 UI 兜底，此为 domain 层硬保护，防 App.vue 打开入口绕过。
    * - 算 next：规范化比较移除旧条目，hidden=true 时加回（用原始 path 保真）。
@@ -589,7 +563,7 @@ export const useAppStore = defineStore('app', () => {
     if (hidden && cwd.value && normalizePath(path) === normalizePath(cwd.value)) {
       return
     }
-    return withHiddenLock(async () => {
+    return enqueueHiddenWrite(async () => {
       if (hidden && cwd.value && normalizePath(path) === normalizePath(cwd.value)) return
       const n = normalizePath(path)
       const next = new Set<string>()
@@ -613,7 +587,7 @@ export const useAppStore = defineStore('app', () => {
   /**
    * 只更新内存 cwd + openedProjectPaths，不持久化。
    * 用途：sessionStart 事务中 spawn 前切 cwd（终端立即用新 cwd 启动），
-   * 持久化由后续 setCurrentProject(persist:true) 或 setCwd 完成。
+   * 持久化由后续 setCurrentProject(persist:true) 完成。
    */
   function setCwdLocal(path: string) {
     cwd.value = path
@@ -621,29 +595,23 @@ export const useAppStore = defineStore('app', () => {
   }
 
   /**
-   * setCurrentProject（persist-first + lastOpenedOpLock 串行）。
+   * setCurrentProject（persist-first + configWriteTail 串行）。
    * - persist=true：先 await saveLastProject 成功，再 setCwdLocal；失败抛错且 cwd 不变。
    *   注：sessionStart 事务中 spawn 前已 setCwdLocal（cwd 已切），此处 persist 失败时 cwd 保持
    *   已切状态（终端已跑），仅 lastOpened 未持久化--错误传播让 UI 提示，终端不中断（spec v6 §4.4）。
    * - persist=false / undefined：只 setCwdLocal（恢复启动用，不重复持久化）。
-   * - lastOpenedOpLock（v6 codex batch1 #3）：串行化 persist 路径，防快速 A->B 切换并发
+   * - configWriteTail（v6 codex batch1 #3）：串行化 persist 写段，防快速 A->B 切换并发
    *   saveLastProject 乱序覆盖 lastOpened（A 后切到 B，但 B 的 persist 先完成、A 后完成则磁盘留 A）。
-   *   persist=false 不涉及磁盘写，无需串行（直接 setCwdLocal，避免无谓排队）。
+   *   persist=false 不涉及磁盘写，无需排队（直接 setCwdLocal）。
    */
   async function setCurrentProject(path: string, opts: { persist?: boolean } = {}): Promise<void> {
     if (opts.persist === true) {
-      return withLastOpenedLock(async () => {
+      return enqueueConfigWrite(async () => {
         await saveLastProject(path) // 失败抛错，setCwdLocal 不执行
         setCwdLocal(path)
       })
     }
     setCwdLocal(path)
-  }
-
-  /** 兼容旧调用方：setCwdLocal + fire-and-forget saveLastProject */
-  function setCwd(path: string) {
-    setCwdLocal(path)
-    saveLastProject(path)
   }
 
   function setTheme(newTheme: string): Promise<boolean> {
@@ -676,15 +644,16 @@ export const useAppStore = defineStore('app', () => {
     return saveSimpleSetting('language', lang === 'zh' ? 'zh' : 'en')
   }
 
-  /** 同步当前 claudeEnvVars 到 CC Desk config */
-  async function doSyncEnv() {
-    await updateAppConfig({ claudeEnvVars: claudeEnvVars.value })
+  /** 入队前冻结本次环境变量，避免后续 UI 修改改写已排队的请求。 */
+  async function persistClaudeEnvVars(vars: Record<string, string>) {
+    const snapshot = { ...vars }
+    await enqueueConfigWrite(() => updateAppConfig({ claudeEnvVars: snapshot }))
   }
 
   /** 更新环境变量并同步 */
   async function setClaudeEnvVars(vars: Record<string, string>) {
-    claudeEnvVars.value = vars
-    await doSyncEnv()
+    claudeEnvVars.value = { ...vars }
+    await persistClaudeEnvVars(claudeEnvVars.value)
   }
 
   /** 将默认变量恢复为代码默认值，保留用户添加的变量 */
@@ -694,7 +663,7 @@ export const useAppStore = defineStore('app', () => {
       updated[key] = value
     }
     claudeEnvVars.value = updated
-    await doSyncEnv()
+    await persistClaudeEnvVars(updated)
   }
 
   function setClaudeOptions(options: Partial<ClaudeOptions>) {
@@ -710,13 +679,15 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function setDefaultClaudeOptions(opts: Partial<DefaultClaudeOptions>) {
-    defaultClaudeOptions.value = { ...defaultClaudeOptions.value, ...opts }
+    const next = { ...defaultClaudeOptions.value, ...opts }
+    const snapshot = { ...next }
+    defaultClaudeOptions.value = next
     claudeOptions.value = {
       resume: claudeOptions.value.resume,
-      skipPermissions: defaultClaudeOptions.value.skipPermissions,
-      customArgs: defaultClaudeOptions.value.customArgs
+      skipPermissions: next.skipPermissions,
+      customArgs: next.customArgs
     }
-    await saveDefaultClaudeOptions(defaultClaudeOptions.value)
+    await enqueueConfigWrite(() => saveDefaultClaudeOptions(snapshot))
   }
 
   async function saveAsDefault(): Promise<boolean> {
@@ -726,7 +697,7 @@ export const useAppStore = defineStore('app', () => {
         customArgs: claudeOptions.value.customArgs
       }
       defaultClaudeOptions.value = opts
-      await saveDefaultClaudeOptions(opts)
+      await enqueueConfigWrite(() => saveDefaultClaudeOptions(opts))
       return true
     } catch (err) {
       console.error('Failed to save default options:', err)
@@ -741,8 +712,7 @@ export const useAppStore = defineStore('app', () => {
     if (opts.resume) args.push('--resume', opts.resume)
     if (opts.skipPermissions) args.push('--dangerously-skip-permissions')
     if (opts.customArgs) {
-      const custom = opts.customArgs.trim().split(/\s+/).filter(Boolean)
-      args.push(...custom)
+      args.push(...parseLegacyCustomArgs(opts.customArgs))
     }
 
     return args
@@ -813,7 +783,6 @@ export const useAppStore = defineStore('app', () => {
     setHidden,
     setCwdLocal,
     setCurrentProject,
-    setCwd,
     setTheme,
     setTerminalTheme,
     setFontSize,

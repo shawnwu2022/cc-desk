@@ -13,11 +13,16 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 pub(crate) const OUTPUT_FRAME_BYTES_MAX: usize = 16 * 1024;
 pub(crate) const OUTPUT_RUN_HIGH_WATER: usize = 256 * 1024;
 pub(crate) const OUTPUT_RUN_LOW_WATER: usize = 64 * 1024;
 pub(crate) const OUTPUT_APP_PAYLOAD_BUDGET: usize = 16 * 1024 * 1024;
+// renderer 停止 ACK 且未 revoke 时的兜底窗口：高水位阻塞超过该窗口且无任何
+// ACK 进展，按既有 degraded 路径释放全局预算并唤醒阻塞者。窗口取值需宽于
+// renderer 合理的解析/节流停顿，代价是跨系统休眠恢复可能误判一次降级。
+pub(crate) const OUTPUT_ACK_STALENESS_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TransportLimits {
@@ -25,6 +30,7 @@ pub(crate) struct TransportLimits {
     run_high_water: usize,
     run_low_water: usize,
     app_payload_budget: usize,
+    ack_staleness: Duration,
 }
 
 impl TransportLimits {
@@ -33,6 +39,22 @@ impl TransportLimits {
         run_high_water: usize,
         run_low_water: usize,
         app_payload_budget: usize,
+    ) -> Result<Self, SafeError> {
+        Self::with_ack_staleness(
+            frame_bytes,
+            run_high_water,
+            run_low_water,
+            app_payload_budget,
+            OUTPUT_ACK_STALENESS_TIMEOUT,
+        )
+    }
+
+    pub(crate) fn with_ack_staleness(
+        frame_bytes: usize,
+        run_high_water: usize,
+        run_low_water: usize,
+        app_payload_budget: usize,
+        ack_staleness: Duration,
     ) -> Result<Self, SafeError> {
         if frame_bytes == 0
             || frame_bytes > run_high_water
@@ -46,6 +68,7 @@ impl TransportLimits {
             run_high_water,
             run_low_water,
             app_payload_budget,
+            ack_staleness,
         })
     }
 }
@@ -332,6 +355,23 @@ impl TerminalTransports {
         stream.apply_ack(ack.through_offset.get())
     }
 
+    /// 仅供后端生命周期收口：解绑精确 stream，不回调 progress。
+    pub(crate) fn detach(&self, stream: &Arc<TerminalStream>) -> Result<(), SafeError> {
+        let core = stream.core()?;
+        if !Arc::ptr_eq(&core, &self.core) {
+            return Err(error("FORBIDDEN"));
+        }
+        stream.detach_without_progress(&core);
+        let mut streams = core.streams.lock();
+        if streams
+            .get(&stream.key)
+            .is_some_and(|current| std::ptr::eq(current.as_ptr(), Arc::as_ptr(stream)))
+        {
+            streams.remove(&stream.key);
+        }
+        Ok(())
+    }
+
     pub(crate) fn budgeted_bytes(&self) -> usize {
         self.core.budget.used()
     }
@@ -389,6 +429,8 @@ impl TerminalStream {
 
     fn wait_local_capacity(&self, core: &TransportCore, amount: usize) -> Result<(), SafeError> {
         let mut state = self.state.lock();
+        let mut last_acked = state.acked;
+        let mut deadline = Instant::now() + core.limits.ack_staleness;
         loop {
             if self.degraded.load(Ordering::SeqCst) {
                 return Err(error("OUTPUT_STREAM_DEGRADED"));
@@ -397,16 +439,12 @@ impl TerminalStream {
             if state.throttled {
                 if outstanding <= core.limits.run_low_water {
                     state.throttled = false;
+                } else if self.wait_for_ack_progress(&mut state, &mut last_acked, &mut deadline) {
+                    // 先释放 state 锁再降级；mark_degraded 内部需要重新加锁。
+                    drop(state);
+                    self.mark_degraded(core);
+                    return Err(error("OUTPUT_STREAM_DEGRADED"));
                 } else {
-                    #[cfg(test)]
-                    {
-                        state.waiting_for_capacity = true;
-                    }
-                    self.changed.wait(&mut state);
-                    #[cfg(test)]
-                    {
-                        state.waiting_for_capacity = false;
-                    }
                     continue;
                 }
             }
@@ -415,19 +453,52 @@ impl TerminalStream {
                 .is_none_or(|value| value > core.limits.run_high_water)
             {
                 state.throttled = true;
-                #[cfg(test)]
-                {
-                    state.waiting_for_capacity = true;
-                }
-                self.changed.wait(&mut state);
-                #[cfg(test)]
-                {
-                    state.waiting_for_capacity = false;
+                if self.wait_for_ack_progress(&mut state, &mut last_acked, &mut deadline) {
+                    drop(state);
+                    self.mark_degraded(core);
+                    return Err(error("OUTPUT_STREAM_DEGRADED"));
                 }
                 continue;
             }
             return Ok(());
         }
+    }
+
+    /// 在节流/高水位等待中观察 ACK 进展：任何解析进展都会重置兜底窗口。
+    /// 返回 true 表示窗口耗尽且无进展，调用方须释放 state 锁后按 revoke
+    /// 同款 degraded 路径收敛，避免 renderer 停止 ACK 永久占用 reader 与预算。
+    fn wait_for_ack_progress(
+        &self,
+        state: &mut parking_lot::MutexGuard<'_, StreamState>,
+        last_acked: &mut u64,
+        deadline: &mut Instant,
+    ) -> bool {
+        #[cfg(test)]
+        {
+            state.waiting_for_capacity = true;
+        }
+        if state.acked != *last_acked {
+            *last_acked = state.acked;
+            *deadline = Instant::now() + self.staleness();
+        }
+        self.changed
+            .wait_for(state, deadline.saturating_duration_since(Instant::now()));
+        #[cfg(test)]
+        {
+            state.waiting_for_capacity = false;
+        }
+        if self.degraded.load(Ordering::SeqCst) {
+            return false;
+        }
+        state.acked == *last_acked && Instant::now() >= *deadline
+    }
+
+    fn staleness(&self) -> Duration {
+        self.core
+            .upgrade()
+            .map_or(OUTPUT_ACK_STALENESS_TIMEOUT, |core| {
+                core.limits.ack_staleness
+            })
     }
 
     fn mark_degraded(&self, core: &TransportCore) {
@@ -444,6 +515,17 @@ impl TerminalStream {
         if let Some(progress) = self.progress() {
             progress.degraded(self.stream_epoch);
         }
+    }
+
+    fn detach_without_progress(&self, core: &TransportCore) {
+        self.degraded.store(true, Ordering::SeqCst);
+        {
+            let mut state = self.state.lock();
+            state.throttled = false;
+            state.frame_ends.clear();
+            self.changed.notify_all();
+        }
+        core.budget.remove_stream(self.id);
     }
 
     fn on_route_revoked(&self) {

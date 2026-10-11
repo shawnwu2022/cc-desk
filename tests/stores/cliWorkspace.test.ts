@@ -128,7 +128,7 @@ describe('D24 native resource/error workspace integration', () => {
                 kind: 'profile',
                 profileId: 'claude-main',
                 expectedProfileRevision: '7',
-                projectId: null,
+                projectIds: [],
               },
               basis: 'configured-profile',
             }
@@ -160,7 +160,7 @@ describe('D24 native resource/error workspace integration', () => {
         kind: 'profile',
         profileId: 'claude-main',
         expectedProfileRevision: '7',
-        projectId: null,
+        projectIds: [],
       },
     ])
     expect(invoked[1][0]).toBe('native_list_resources')
@@ -273,7 +273,7 @@ describe('D24 native resource/error workspace integration', () => {
               kind: 'profile',
               profileId: 'codex-main',
               expectedProfileRevision: '8',
-              projectId: 'project-1',
+              projectIds: ['project-1'],
             })
             return {
               scopeId: 'scope-d24-project',

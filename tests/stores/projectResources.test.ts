@@ -81,7 +81,7 @@ describe('Scoped structured project resources', () => {
   it('Resources_ExactProfile_003', async () => {
     const tab = useNativeTabsStore().tab(tabId)!; tab.status = 'stopped'; tab.launchRevision = null
     const store = useProjectResourcesStore(); store.setActive(true); await flushPromises()
-    expect(host.invoke.mock.calls[0]).toEqual(['native_get_scope', { kind: 'profile', profileId: 'config', expectedProfileRevision: '1', projectId: 'project' }])
+    expect(host.invoke.mock.calls[0]).toEqual(['native_get_scope', { kind: 'profile', profileId: 'config', expectedProfileRevision: '1', projectIds: ['project'] }])
     expect(store.items).toHaveLength(1)
   })
   // 配置修订不一致时不猜测新的配置身份。
@@ -320,7 +320,7 @@ describe('Scoped structured project resources', () => {
     const sessions = useUnifiedSessionsStore(); sessions.sessions[0].id = 'native-history:exact'; sessions.sessions[0].processState = 'stopped'; sessions.activeSessionId = 'native-history:exact'
     useNativeTabsStore().close(tabId)
     const store = useProjectResourcesStore(); store.setActive(true); await flushPromises()
-    expect(host.invoke.mock.calls[0]).toEqual(['native_get_scope', { kind: 'profile', profileId: 'config', expectedProfileRevision: '1', projectId: 'project' }])
+    expect(host.invoke.mock.calls[0]).toEqual(['native_get_scope', { kind: 'profile', profileId: 'config', expectedProfileRevision: '1', projectIds: ['project'] }])
     expect(store.items).toHaveLength(1)
   })
   // Codex 运行 scope 不依赖 Claude 兼容读取或默认配置。

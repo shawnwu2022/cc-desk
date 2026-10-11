@@ -34,13 +34,14 @@ fn binding() -> JournalBinding {
     }
 }
 struct Fixture {
-    temp: tempfile::TempDir,
     user: CurrentUser,
     parent: Arc<Directory>,
     source: Arc<PrivateDirectory>,
     records: Arc<PrivateDirectory>,
     copies: Arc<PrivateDirectory>,
     quarantine: Arc<PrivateDirectory>,
+    // 最后释放临时目录，避免仍持有的 Windows 目录句柄阻断清理。
+    temp: tempfile::TempDir,
 }
 impl Fixture {
     fn new() -> Self {
@@ -58,13 +59,13 @@ impl Fixture {
             PrivateDirectory::create_new(parent.clone(), name("quarantine"), &user).unwrap(),
         );
         Self {
-            temp,
             user,
             parent,
             source,
             records,
             copies,
             quarantine,
+            temp,
         }
     }
     fn context(&self) -> HeldContext {
@@ -117,6 +118,18 @@ impl Fixture {
         std::fs::write(self.temp.path().join("desk/unknown.bin"), [0, 1, 255]).unwrap();
     }
 }
+
+// fixture 释放全部目录句柄后必须清理自己的临时树，不让通过的测试留下私有副本。
+#[test]
+fn HistoryContext_FixtureCleanup_041() {
+    let root = {
+        let fixture = Fixture::new();
+        fixture.fill();
+        fixture.temp.path().to_path_buf()
+    };
+    assert!(!root.exists(), "fixture temporary tree was not removed");
+}
+
 fn set_dacl(path: &Path, sddl: &str) {
     use windows::Win32::{
         Foundation::{LocalFree, HLOCAL},

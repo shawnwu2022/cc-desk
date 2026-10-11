@@ -22,6 +22,7 @@ import type { ProjectsState } from '@/types/app'
 import { useAppStore } from '@/stores/app'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useShellStore } from '@/stores/shell'
+import { useAttentionStore } from '@/stores/attention'
 
 const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
@@ -49,7 +50,7 @@ beforeEach(() => {
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/codex' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.register.mockImplementation(async path => ({ revision: '2', projectId: 'registered-new', projects: [{ projectId: 'registered-new', hostId: 'host', sourcePathKey: 'source-new', selectedPath: path, canonicalPath: path, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }))
-  io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
+  io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 function render() {
@@ -61,7 +62,7 @@ function render() {
 describe('Workspace source warning diagnostics', () => {
   // 单条历史读取失败保留已识别会话，仅显示可收起的部分历史诊断。
   it('HistoryPartial_KeepsPositiveRows_001', async () => {
-    io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }], hasMore: false,
+    io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }], hasMore: false,
       historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_UNSUPPORTED'] })
     const { runtime } = render(); await flushPromises()
     expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'history-id')).toBe(true)
@@ -303,7 +304,7 @@ describe('Workspace source warning diagnostics', () => {
   it('HistoryPartial_LastKnownActivity_006', async () => {
     // Display fallback requires a positively admitted exact root, never absent identity.
     io.scope.mockResolvedValue({ cli: 'codex', sourceRootKey: 'admitted-root-key' })
-    const item = { type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'Known task', cwd: '/repo', updatedAt: '2026-10-10T11:00:00Z' }
+    const item = { type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'Known task', cwd: '/repo', updatedAt: '2026-10-10T11:00:00Z' }
     io.read.mockResolvedValue({ state: 'ready', items: [item], hasMore: false })
     const { runtime } = render(); await flushPromises()
     const known = Date.parse(item.updatedAt)
@@ -403,6 +404,51 @@ describe('Workspace source warning diagnostics', () => {
     io.profiles.mockResolvedValue({ ...current, profiles: current.profiles.map((profile: object) => ({ ...profile, revision: '8' })) })
     await runtime.refresh()
     expect(runtime.sourceNoticeDismissed.value).toBe(false)
+  })
+
+  it('Runtime_RefreshDropsStaleRevisionHistory_050', async () => {
+    const { runtime } = render(); await flushPromises()
+    const history = useNativeHistoryStore()
+    expect(history.all().map(entry => entry.context.profileRevision)).toEqual(['7'])
+    const current = await io.profiles()
+    io.profiles.mockResolvedValue({ ...current, profiles: current.profiles.map((profile: object) => ({ ...profile, revision: '8' })) })
+    await runtime.refresh(); await flushPromises()
+    // 旧 revision 的幽灵 entry 必须被清理，否则同一会话会同时出现两行。
+    expect(history.all().map(entry => entry.context.profileRevision)).toEqual(['8'])
+  })
+
+  it('Runtime_GroupsStartupHistoryByProfile_051', async () => {
+    io.registered.mockResolvedValue({ revision: '1', projects: [
+      { projectId: 'project-1', hostId: 'host', sourcePathKey: 's1', selectedPath: '/repo-a', canonicalPath: '/repo-a', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } },
+      { projectId: 'project-2', hostId: 'host', sourcePathKey: 's2', selectedPath: '/repo-b', canonicalPath: '/repo-b', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } },
+    ] })
+    io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false })
+    render(); await flushPromises()
+    // 同一 profile 的多个项目必须合并为一次后端观察：每个项目各扫一次全库是启动巨慢的根因。
+    expect(io.scope).toHaveBeenCalledExactlyOnceWith({ kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project-1', 'project-2'] })
+  })
+
+  it.each(['profile-revision', 'profile-removal', 'project-removal'] as const)('Runtime_InvalidatesPendingContext_052_%s', async change => {
+    let finishOld!: (value: unknown) => void
+    io.read.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve }))
+    const { runtime } = render(); await flushPromises()
+    const history = useNativeHistoryStore()
+    expect(history.all().map(entry => [entry.context.profileRevision, entry.loading])).toEqual([['7', true]])
+    const current = await io.profiles()
+    if (change === 'profile-revision') {
+      io.profiles.mockResolvedValue({ ...current, profiles: current.profiles.map((profile: object) => ({ ...profile, revision: '8' })) })
+    } else if (change === 'profile-removal') {
+      io.profiles.mockResolvedValue({ ...current, profiles: [] })
+    } else {
+      io.registered.mockResolvedValue({ revision: '2', projects: [] })
+    }
+    await runtime.refresh(); await flushPromises()
+    // 配置撤销立即失效旧 owner，不能等旧 read 结束才删除其 entry。
+    expect(history.all().some(entry => entry.context.profileRevision === '7')).toBe(false)
+    finishOld({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'late-root', nativeSessionId: 'late-history', title: 'Obsolete', cwd: '/repo' }] })
+    await flushPromises()
+    expect(history.all().map(entry => entry.context.profileRevision)).toEqual(change === 'profile-revision' ? ['8'] : [])
+    expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'late-history')).toBe(false)
   })
 
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {
@@ -1015,7 +1061,7 @@ it.each(['navigation', 'project', 'replacement', 'profile'] as const)('Runtime_D
   else if (change === 'project') { catalog.selectProjectContext('/other'); shell.navigate('workspace') }
   else if (change === 'replacement') shell.requestWorkspaceAction({ kind: 'restore-session', project: history, mode: 'history' })
   else useCliProfilesStore().profiles[0].revision = '8'
-  finish({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
+  finish({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
   expect(useNativeTabsStore().tabs.size).toBe(0)
   if (change === 'replacement') expect(catalog.resumeDialog?.mode).toBe('history')
 })
@@ -1050,7 +1096,7 @@ it('Runtime_DirectResumeCoalesces_047', async () => {
   io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
   shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: history.id, action: 'resume' }); await flushPromises()
   shell.requestWorkspaceAction({ kind: 'primary-action', sessionId: history.id, action: 'resume' }); await flushPromises()
-  finish({ state: 'ready', items: [{ type: 'session', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
+  finish({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] }); await flushPromises()
   expect(catalog.resumeDialog).toBeNull()
   expect(useNativeTabsStore().tabs.size).toBe(1)
   expect(catalog.activeSessionId).toMatch(/^native-tab:/)
@@ -1154,6 +1200,89 @@ it('Runtime_DoubleClickOwnsAttempt_031', async () => {
   expect(w.emitted('workspace-request')?.filter(([request]) => (request as { action?: string }).action === 'rename') ?? []).toHaveLength(0)
   expect(row.find('input').exists()).toBe(false)
   expect(tabs.tab(opened.adapterSessionId)?.generation).toBe(2)
+})
+
+// 一个项目的运行状态变化不替换另一项目的行或改变打开顺序。
+it('Catalog_RuntimeProjectScope_001', async () => {
+  const tabs = useNativeTabsStore()
+  const first = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  const other = tabs.create({ cli: 'codex', projectId: 'other', projectPath: '/other', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  Object.assign(first, { status: 'running', launchRevision: '1' })
+  Object.assign(other, { status: 'running', launchRevision: '1' })
+  const { runtime, port } = render(); await flushPromises()
+  expect(runtime.ready.value).toBe(true)
+  const catalog = useUnifiedSessionsStore()
+  const retained = catalog.sessions.find(row => row.adapterSessionId === other.tabId)
+  expect(retained).toBeDefined()
+  const order = catalog.sessions.map(row => row.id)
+  tabs.markUnknown(first.tabId); await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === first.tabId)?.processState).toBe('unknown')
+  expect(catalog.sessions.find(row => row.adapterSessionId === other.tabId)).toBe(retained)
+  expect(catalog.sessions.map(row => row.id)).toEqual(order)
+  expect(port.stopNative).not.toHaveBeenCalled()
+  expect(io.ptySpawn).not.toHaveBeenCalled()
+})
+
+// owner 跨项目、替换、移除与新增均更新目录，已替换对象的迟到变化不能发布。
+it('Catalog_OwnerChanges_002', async () => {
+  const tabs = useNativeTabsStore()
+  const first = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', sourceSessionKey: 'root-key', action: { kind: 'resume-id', nativeSessionId: 'history-id' } })
+  const other = tabs.create({ cli: 'codex', projectId: 'other', projectPath: '/other', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  Object.assign(first, { status: 'running', launchRevision: '1' })
+  const { port } = render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  expect(catalog.sessions.filter(row => row.projectPath === '/repo')).toHaveLength(1)
+  const retained = catalog.sessions.find(row => row.adapterSessionId === other.tabId)
+  const owner = tabs.tab(first.tabId)!
+  Object.assign(owner, { projectPath: '/moved', projectId: 'moved' }); await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === first.tabId)?.projectPath).toBe('/moved')
+  expect(catalog.sessions.filter(row => row.projectPath === '/repo')).toEqual([expect.objectContaining({ nativeSessionId: 'history-id', opened: false, processState: 'stopped' })])
+  tabs.tabs.set(first.tabId, { ...owner, title: 'Replacement' }); await flushPromises()
+  const replacement = catalog.sessions.find(row => row.adapterSessionId === first.tabId)
+  expect(replacement?.title).toBe('Replacement')
+  owner.title = 'Late old owner'; await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === first.tabId)).toBe(replacement)
+  tabs.tabs.delete(first.tabId); await flushPromises()
+  expect(catalog.sessions.some(row => row.adapterSessionId === first.tabId)).toBe(false)
+  expect(catalog.projectGroups.some(group => group.projectPath === '/moved')).toBe(false)
+  const added = tabs.create({ cli: 'codex', projectId: 'added', projectPath: '/added', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } }); await flushPromises()
+  expect(catalog.sessions.some(row => row.adapterSessionId === added.tabId)).toBe(true)
+  expect(catalog.sessions.find(row => row.adapterSessionId === other.tabId)).toBe(retained)
+  expect(port.stopNative).not.toHaveBeenCalled()
+  expect(io.ptySpawn).not.toHaveBeenCalled()
+})
+
+// 关注项进入和确认清除只刷新精确 PTY 的项目，不能让其他项目丢失行身份。
+it('Catalog_AttentionProjectScope_003', async () => {
+  const legacy = useSessionStore()
+  const id = legacy.createTab('/legacy', { name: 'Legacy' })
+  Object.assign(legacy.tabs.get(id)!, { status: 'running', ptyId: 'legacy-pty', ptyGeneration: 1 })
+  const other = useNativeTabsStore().create({ cli: 'codex', projectId: 'other', projectPath: '/other', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), attention = useAttentionStore()
+  const retained = catalog.sessions.find(row => row.adapterSessionId === other.tabId)
+  attention.ingestEvent({ ptyId: 'legacy-pty', sessionId: null, eventName: 'Notification', timestamp: 1, state: 'idle', detail: { type: 'notification', data: { notificationType: 'permission_prompt' } } })
+  await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === id)?.attentionKind).toBe('permission')
+  expect(catalog.sessions.find(row => row.adapterSessionId === id)?.attentionState).toBe('needs-user')
+  attention.ackPty('legacy-pty'); await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === id)?.attentionState).toBe('none')
+  expect(catalog.sessions.find(row => row.adapterSessionId === other.tabId)).toBe(retained)
+})
+
+// 卸载取消排队的目录发布并释放 owner 监听，后台状态变化不再改写目录。
+it('Catalog_UnmountRevokesQueue_004', async () => {
+  const tabs = useNativeTabsStore()
+  const first = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  Object.assign(first, { status: 'running', launchRevision: '1' })
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  const retained = catalog.sessions.find(row => row.adapterSessionId === first.tabId)
+  tabs.markUnknown(first.tabId)
+  wrappers.pop()!.unmount(); await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === first.tabId)).toBe(retained)
+  tabs.tab(first.tabId)!.title = 'After unmount'; await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === first.tabId)).toBe(retained)
 })
 
 // 同一真实尝试的只读目录刷新不能打断当前行双击重命名。

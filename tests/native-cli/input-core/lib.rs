@@ -43,7 +43,7 @@ mod tests {
     use super::terminal_input::{
         write_host_frame, HostWriteResult, InputBeginRequest, InputChunkRequest,
         InputCommitRequest, InputStager, InputWriteState, INPUT_ACTION_BYTES_MAX,
-        INPUT_RUN_STAGING_BYTES_MAX, INPUT_UPLOAD_CHUNK_MAX,
+        INPUT_UPLOAD_CHUNK_MAX,
     };
     use super::types::WireU64;
     use std::io::{self, Write};
@@ -113,7 +113,18 @@ mod tests {
     fn D17_Core_ProductionBudgetsArePinned_001() {
         assert_eq!(INPUT_UPLOAD_CHUNK_MAX, 64 * 1024);
         assert_eq!(INPUT_ACTION_BYTES_MAX, 8 * 1024 * 1024);
-        assert_eq!(INPUT_RUN_STAGING_BYTES_MAX, 16 * 1024 * 1024);
+        // 单 run 仅一个暂存帧；旧 16MiB 分支在 8MiB 帧上限之后不可达，改为验证实际拒绝。
+        let stager = InputStager::new();
+        let a = owner("budget");
+        stager
+            .begin(&a, &begin(1, INPUT_ACTION_BYTES_MAX as u64))
+            .unwrap();
+        for total in [INPUT_ACTION_BYTES_MAX as u64 + 1, 16 * 1024 * 1024] {
+            assert_eq!(
+                stager.begin(&a, &begin(2, total)).unwrap_err().code,
+                "INPUT_TOO_LARGE"
+            );
+        }
     }
 
     #[test]
@@ -172,7 +183,10 @@ mod tests {
             })
             .unwrap();
         assert_eq!(receipt.state, InputWriteState::PartialOrUnknown);
-        assert_eq!(stager.begin(&a, &begin(2, 1)).unwrap_err().code, "INPUT_FROZEN");
+        assert_eq!(
+            stager.begin(&a, &begin(2, 1)).unwrap_err().code,
+            "INPUT_FROZEN"
+        );
     }
 
     #[test]
@@ -183,14 +197,9 @@ mod tests {
             .map(|index| (index % 251) as u8)
             .collect();
 
+        stager.begin(&a, &begin(1, payload.len() as u64)).unwrap();
         stager
-            .begin(&a, &begin(1, payload.len() as u64))
-            .unwrap();
-        stager
-            .chunk(
-                &a,
-                &chunk(1, 0, payload[..INPUT_UPLOAD_CHUNK_MAX].to_vec()),
-            )
+            .chunk(&a, &chunk(1, 0, payload[..INPUT_UPLOAD_CHUNK_MAX].to_vec()))
             .unwrap();
         stager
             .chunk(
@@ -219,7 +228,10 @@ mod tests {
         assert_eq!(receipt.state, InputWriteState::PartialOrUnknown);
         assert_eq!(receipt.confirmed_bytes, fail_after.to_string());
         assert_eq!(writer.bytes, payload[..fail_after]);
-        assert_eq!(stager.begin(&a, &begin(2, 1)).unwrap_err().code, "INPUT_FROZEN");
+        assert_eq!(
+            stager.begin(&a, &begin(2, 1)).unwrap_err().code,
+            "INPUT_FROZEN"
+        );
 
         let replay = stager
             .commit(&a, &commit(1), |_| {
@@ -231,4 +243,70 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
+    // 三平台直接编译的生产源也验证提交期间的覆盖拒绝及回执冻结。
+    #[test]
+    fn D17_Core_CommitFence_006() {
+        let stager = InputStager::new();
+        let a = owner("fence");
+        stager.begin(&a, &begin(1, 2)).unwrap();
+        stager.chunk(&a, &chunk(1, 0, vec![1, 2])).unwrap();
+        let receipt = stager
+            .commit(&a, &commit(1), |bytes| {
+                assert_eq!(bytes, &[1, 2]);
+                assert_eq!(
+                    stager.begin(&a, &begin(2, 2)).unwrap_err().code,
+                    "INPUT_UPLOAD_BUSY"
+                );
+                Ok(HostWriteResult {
+                    state: InputWriteState::PartialOrUnknown,
+                    confirmed_bytes: 1,
+                })
+            })
+            .unwrap();
+        assert_eq!(receipt.state, InputWriteState::PartialOrUnknown);
+        assert_eq!(receipt.confirmed_bytes, "1");
+        assert_eq!(
+            stager.begin(&a, &begin(2, 2)).unwrap_err().code,
+            "INPUT_FROZEN"
+        );
+        assert_eq!(
+            stager
+                .commit(&a, &commit(1), |_| panic!("writer replayed"))
+                .unwrap(),
+            receipt
+        );
+    }
+
+    // 同序号的元数据冲突必须保留已上传的正文，不以空帧替换。
+    #[test]
+    fn D17_Core_ConflictingBegin_007() {
+        let stager = InputStager::new();
+        let a = owner("conflict");
+        let first = begin(1, 2);
+        stager.begin(&a, &first).unwrap();
+        stager.chunk(&a, &chunk(1, 0, vec![1, 2])).unwrap();
+        assert_eq!(
+            stager
+                .begin(
+                    &a,
+                    &InputBeginRequest {
+                        mode_epoch: wire(2),
+                        ..first
+                    }
+                )
+                .unwrap_err()
+                .code,
+            "INPUT_UPLOAD_BUSY"
+        );
+        let receipt = stager
+            .commit(&a, &commit(1), |bytes| {
+                assert_eq!(bytes, &[1, 2]);
+                Ok(HostWriteResult {
+                    state: InputWriteState::HostWritten,
+                    confirmed_bytes: bytes.len() as u64,
+                })
+            })
+            .unwrap();
+        assert_eq!(receipt.state, InputWriteState::HostWritten);
+    }
 }

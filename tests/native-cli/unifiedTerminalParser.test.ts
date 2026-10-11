@@ -87,7 +87,8 @@ describe('Unified host with pinned real xterm parser', () => {
       detail: { type: 'stop', data: { lastAssistantMessage: 'SECRET' } } } as import('@/types/hook').HookEventPayload
     expect(io.observation).not.toBeNull()
     io.observation!(payload)
-    expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'running', activityState: 'unknown', attentionState: 'none',
+    // stop 映射粗粒度 turn-end：通知不把无序回执变成 completed，活动只回落 idle。
+    expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'running', activityState: 'idle', attentionState: 'none',
       observationNotice: { recent: { kind: 'reply-ended', eventId: 'receipt-old' }, unreadReplyEnd: { eventId: 'receipt-old' } } })
     expect(JSON.stringify(tabs.tab(tab.tabId)?.observationNotice)).not.toContain('SECRET')
     expect(tabs.applyLaunchStatus(tab.tabId, { instanceId: 'test-backend', requestId: tab.requestId,
@@ -241,7 +242,7 @@ it('Native_LostReceiptStopsRealRun_008', async () => {
   await vi.advanceTimersByTimeAsync(300)
   await checked
   expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'exited', launchRevision: '3' })
-  expect(io.stop).toHaveBeenCalledExactlyOnceWith({ runId: tab.runId, generation: tab.generation })
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith({ requestId: tab.requestId, runId: tab.runId, generation: tab.generation })
   expect(calls.filter(command => command === 'cli_start')).toHaveLength(1)
   vi.useRealTimers()
 })

@@ -347,3 +347,127 @@ fn D15_Transport_RevokeWakesProducerBlockedOnRunCredit_006() {
         .any(|event| event.starts_with("degraded:")));
     assert_eq!(hub.budgeted_bytes(), 0);
 }
+
+// renderer 停止 ACK 且未撤权时，高水位阻塞必须在兜底窗口后收敛并释放预算。
+#[test]
+fn Transport_Staleness_StalledAckConvergesAndReleasesBudget_007() {
+    let hub = Arc::new(TerminalTransports::with_limits(
+        TransportLimits::with_ack_staleness(4, 8, 4, 16, Duration::from_millis(80)).unwrap(),
+    ));
+    let stream = hub
+        .attach(
+            caller(),
+            run("run-a", 1),
+            collecting_route(Arc::new(Mutex::new(Vec::new()))),
+        )
+        .unwrap();
+    stream.send(&[1, 1, 1, 1]).unwrap();
+    stream.send(&[2, 2, 2, 2]).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    let blocked = stream.clone();
+    let worker = std::thread::spawn(move || {
+        let result = blocked.send(&[3]).map_err(|failure| failure.code);
+        tx.send(result).unwrap();
+    });
+    let outcome = rx.recv_timeout(Duration::from_secs(2));
+    worker.join().unwrap();
+    assert_eq!(
+        outcome.unwrap(),
+        Err("OUTPUT_STREAM_DEGRADED".to_string()),
+        "无 ACK 阻塞必须在有界时间内收敛"
+    );
+    assert_eq!(hub.budgeted_bytes(), 0, "无 ACK 预算必须随降级释放");
+}
+
+// 正常 ACK 进展持续重置窗口，且不会放宽代次与 stream 身份校验。
+#[test]
+fn Transport_Staleness_HealthyAckFlowIsUnaffected_008() {
+    let hub = TerminalTransports::with_limits(TransportLimits::new(4, 8, 4, 16).unwrap());
+    let owner = caller();
+    let stream = hub
+        .attach(
+            owner.clone(),
+            run("run-b", 1),
+            collecting_route(Arc::new(Mutex::new(Vec::new()))),
+        )
+        .unwrap();
+    let epoch = stream.stream_epoch().to_string();
+    for index in 0..50i64 {
+        let offset = index * 4;
+        stream.send(&[index as u8; 4]).unwrap();
+        hub.ack(&owner, &ack("run-b", 1, &epoch, &(offset + 4).to_string()))
+            .unwrap();
+    }
+    assert_eq!(hub.budgeted_bytes(), 0);
+    stream.send(&[9; 4]).unwrap();
+    assert_eq!(
+        hub.ack(&owner, &ack("run-b", 1, "999", "4"))
+            .unwrap_err()
+            .code,
+        "STALE_OUTPUT_STREAM"
+    );
+    assert_eq!(
+        hub.ack(&owner, &ack("run-b", 2, &epoch, "4"))
+            .unwrap_err()
+            .code,
+        "STALE_GENERATION"
+    );
+}
+
+// supervisor 收口只解绑精确旧 stream；旧强引用、迟到 Drop/ACK 不得碰复用 RunKey 的新 stream。
+#[test]
+fn D15_Transport_DetachFencesReuse_009() {
+    let hub = TerminalTransports::with_limits(limits());
+    let owner = caller();
+    let probe = Arc::new(ProgressProbe::default());
+    let old = hub
+        .attach_observed(
+            owner.clone(),
+            run("run-reused", 1),
+            collecting_route(Arc::new(Mutex::new(Vec::new()))),
+            probe.clone(),
+        )
+        .unwrap();
+    old.send(&[1, 2, 3, 4]).unwrap();
+    let old_epoch = old.stream_epoch().to_string();
+
+    hub.detach(&old).unwrap();
+    assert_eq!(hub.budgeted_bytes(), 0);
+    assert_eq!(old.send(&[5]).unwrap_err().code, "OUTPUT_STREAM_DEGRADED");
+    assert_eq!(
+        *probe.events.lock(),
+        vec![format!("sent:{old_epoch}:4")],
+        "backend detach must not reenter lifecycle progress"
+    );
+
+    let current = hub
+        .attach(
+            owner.clone(),
+            run("run-reused", 1),
+            collecting_route(Arc::new(Mutex::new(Vec::new()))),
+        )
+        .unwrap();
+    current.send(&[9, 9, 9, 9]).unwrap();
+    let current_epoch = current.stream_epoch().to_string();
+    assert_eq!(hub.budgeted_bytes(), 4);
+    assert_eq!(
+        hub.ack(&owner, &ack("run-reused", 1, &old_epoch, "4"))
+            .unwrap_err()
+            .code,
+        "STALE_OUTPUT_STREAM"
+    );
+
+    hub.detach(&old).unwrap();
+    drop(old);
+    assert_eq!(
+        hub.budgeted_bytes(),
+        4,
+        "late old detach released new budget"
+    );
+    assert_eq!(
+        hub.ack(&owner, &ack("run-reused", 1, &current_epoch, "4"))
+            .unwrap(),
+        4
+    );
+}

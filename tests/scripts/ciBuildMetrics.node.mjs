@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const metricsUrl = new URL('../../scripts/ci-build-metrics.mjs', import.meta.url);
 const artifact = (name, fresh, features = []) => ({ reason: 'compiler-artifact', target: { name, kind: ['lib'] }, fresh, features, filenames: ['C:/PRIVATE/name.rlib'], manifest_path: 'C:/PRIVATE/Cargo.toml' });
@@ -46,7 +47,7 @@ test('BuildMetrics_FailurePrivacy_004: CLI failure never echoes raw Cargo excerp
   const input = path.join(directory, 'cargo.jsonl'), secret = 'FAKE_PRIVATE_TOKEN_FOR_REGRESSION';
   fs.writeFileSync(input, `{"reason":"${secret}","broken": }`);
   for (const filename of [input, path.join(directory, 'missing-input.jsonl')]) {
-    const child = spawnSync(process.execPath, [metricsUrl.pathname, 'cargo', 'tests', filename, '0.1', '0'], { encoding: 'utf8' });
+    const child = spawnSync(process.execPath, [fileURLToPath(metricsUrl), 'cargo', 'tests', filename, '0.1', '0'], { encoding: 'utf8' });
     assert.notEqual(child.status, 0);
     assert.equal(child.stdout, '');
     assert.equal(child.stderr.includes(secret), false);

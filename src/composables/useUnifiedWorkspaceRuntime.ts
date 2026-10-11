@@ -4,7 +4,7 @@ import { openInFileManager } from '@/api/tauri'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useNativeTabsStore, captureNativeAttempt, matchesNativeAttempt } from '@/stores/nativeTabs'
-import { useNativeHistoryStore } from '@/stores/nativeHistory'
+import { nativeHistoryContextKey, useNativeHistoryStore } from '@/stores/nativeHistory'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -17,7 +17,7 @@ import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapte
 import { createNativeCliAdapter, type NativeRuntimeCreateInput } from '@/session/adapters/nativeCliAdapter'
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
-import { sameProjectPath } from '@/utils/path'
+import { normalizePath, sameProjectPath } from '@/utils/path'
 import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceSourceConfiguration, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { UnifiedCliKind, UnifiedSession } from '@/types/unifiedSession'
@@ -319,17 +319,37 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         if (results[1].status === 'rejected') warnings.add('registrations', results[1].reason)
         if (results.some(result => result.status === 'rejected')) return
         await draft.refreshAvailability()
-        const contexts = profiles.profiles.flatMap(profile => profile.cli === 'shell' ? [] : workspace.projects.map(project => ({
-          cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
-          projectId: project.projectId, projectPath: project.selectedPath, force: true,
-        })))
+        // 同 profile 的全部项目合并为一次后端观察；逐项目加载会让同一棵历史树被完整扫描 N 次。
+        const groups = new Map<string, { cli: UnifiedCliKind; profileId: string; profileRevision: string; projects: { projectId: string; projectPath: string }[] }>()
+        for (const profile of profiles.profiles) {
+          if (profile.cli === 'shell') continue
+          groups.set(`${profile.id}\u0000${profile.revision}`, { cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
+            projects: workspace.projects.map(project => ({ projectId: project.projectId, projectPath: project.selectedPath })) })
+        }
+        const contexts = [...groups.values()]
+        // 清理 profile revision 变更、profile 删除或项目移除后残留的历史 entry：
+        // 否则旧 revision 的幽灵行会与新 observation 的行并存显示（同会话重复）。
+        const validKeys = new Set(contexts.flatMap(group => group.projects.map(project => nativeHistoryContextKey({
+          cli: group.cli, profileId: group.profileId, profileRevision: group.profileRevision, projectId: project.projectId, projectPath: project.projectPath,
+        }))))
+        for (const entry of history.all()) {
+          // invalidate 同时撤销异步 owner，读取中的旧配置也不能在迟到完成时恢复。
+          if (!validKeys.has(nativeHistoryContextKey(entry.context))) history.invalidate(entry.context)
+        }
         // Match the backend's two-reader budget; isolate each source failure.
         for (let i = 0; i < contexts.length && current(); i += 2) {
-          await Promise.all(contexts.slice(i, i + 2).map(async context => {
+          await Promise.all(contexts.slice(i, i + 2).map(async group => {
             try {
-              const entry = await history.load(context)
-              if (entry.error) addHistoryWarning({ ...context, sourceRootKey: entry.sourceRootKey }, { code: entry.error, stage: entry.diagnosticStage })
-            } catch (failure) { addHistoryWarning({ ...context, sourceRootKey: history.get(context)?.sourceRootKey }, failure) }
+              const loaded = await history.loadGrouped(group, { force: true })
+              for (const entry of loaded.values()) {
+                if (entry.error) addHistoryWarning({ ...entry.context, sourceRootKey: entry.sourceRootKey }, { code: entry.error, stage: entry.diagnosticStage })
+              }
+            } catch (failure) {
+              for (const project of group.projects) {
+                addHistoryWarning({ cli: group.cli, profileId: group.profileId, profileRevision: group.profileRevision, ...project,
+                  sourceRootKey: history.get({ cli: group.cli, profileId: group.profileId, profileRevision: group.profileRevision, ...project })?.sourceRootKey }, failure)
+              }
+            }
           }))
         }
       }),
@@ -528,13 +548,13 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       // No side effect is replayed. Retry is a new, explicit user request.
     }
   }, { immediate: true })
-  watch(() => [
-    [...legacy.tabs.values()].map(tab => ({ ...tab })), [...native.tabs.values()].map(tab => ({ ...tab })),
-    history.all(), projects.archivedSessions, attention.queue,
-  ], async () => {
+  async function refreshCatalog(projectPaths?: string[]) {
     if (!enabled || !ready.value || disposed || loading.value) return
     const owner = refreshOwner
-    try { await catalog.refresh() } catch (failure) {
+    try {
+      if (projectPaths) await Promise.all(projectPaths.map(path => catalog.refresh(path)))
+      else await catalog.refresh()
+    } catch (failure) {
       if (disposed || owner !== refreshOwner || loading.value) return
       const warnings = createWorkspaceSourceWarnings(sourceWarnings.value, sourceWarningsTruncated.value)
       const warning = warnings.add('catalog', failure)
@@ -543,7 +563,47 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       sourceWarningsTruncated.value = warnings.truncated
       error.value = 'workspaceRuntimePartial'
     }
+  }
+  const pendingCatalogProjects = new Set<string>()
+  let catalogRefreshScheduled = false
+  function queueCatalogProjects(...paths: string[]) {
+    if (!enabled || !ready.value || disposed || loading.value || !paths.length) return
+    for (const path of paths) pendingCatalogProjects.add(normalizePath(path))
+    if (catalogRefreshScheduled) return
+    catalogRefreshScheduled = true
+    void nextTick().then(async () => {
+      catalogRefreshScheduled = false
+      const changed = [...pendingCatalogProjects]
+      pendingCatalogProjects.clear()
+      await refreshCatalog(changed)
+    })
+  }
+  // 每个运行 owner 独立监听；状态变化不再遍历全部历史。移动或替换时刷新旧、新项目。
+  const catalogOwnerWatches = new Map<object, { projectPath: string; stop: () => void }>()
+  watch(() => [...legacy.tabs.values(), ...native.tabs.values()], tabs => {
+    const current = new Set<object>(tabs)
+    for (const [tab, owner] of catalogOwnerWatches) {
+      if (current.has(tab)) continue
+      owner.stop(); catalogOwnerWatches.delete(tab)
+      queueCatalogProjects(owner.projectPath)
+    }
+    for (const tab of tabs) {
+      if (catalogOwnerWatches.has(tab)) continue
+      const owner = { projectPath: tab.projectPath, stop: () => {} }
+      owner.stop = watch(tab, () => {
+        const previousPath = owner.projectPath
+        owner.projectPath = tab.projectPath
+        queueCatalogProjects(previousPath, owner.projectPath)
+      })
+      catalogOwnerWatches.set(tab, owner)
+      queueCatalogProjects(owner.projectPath)
+    }
+  }, { immediate: true })
+  watch(() => attention.queue, (next, previous) => {
+    const ptyIds = new Set([...next, ...previous].map(item => item.ptyId))
+    queueCatalogProjects(...[...legacy.tabs.values()].filter(tab => tab.ptyId && ptyIds.has(tab.ptyId)).map(tab => tab.projectPath))
   }, { deep: true })
+  watch(() => [history.all(), projects.archivedSessions], () => { void refreshCatalog() }, { deep: true })
   watch(() => catalog.activeSessionId, async () => {
     await nextTick()
     if (!disposed && shell.section === 'workspace') host.value?.focus()
@@ -553,6 +613,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     void useHookStore().init()
     void refresh()
   })
-  onUnmounted(() => { disposed = true; ++refreshOwner })
+  onUnmounted(() => {
+    disposed = true; ++refreshOwner
+    for (const owner of catalogOwnerWatches.values()) owner.stop()
+    catalogOwnerWatches.clear(); pendingCatalogProjects.clear()
+  })
   return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, historyNoticeDismissed, sourceIssuesAvailable, sourceDiagnosticsWarnings, sourceDiagnosticsTruncated, sourceChecksPending, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }
 }

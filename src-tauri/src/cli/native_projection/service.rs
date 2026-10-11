@@ -1,6 +1,6 @@
 //! Binds directory capabilities to D11's live document/run registry and Desk revisions.
 use super::diagnostics::{ProjectionFailure, ProjectionStage};
-use super::registry::{Grant, Owner, ScopeRegistry};
+use super::registry::{AdmittedProject, Grant, Owner, ScopeRegistry};
 use super::scoped_fs::{ReadResult, Root};
 use super::selection::{locations, read_scope_known, Locations};
 use super::wire::{ProjectionResult, ReadRequest, ScopeTarget, SourceBasis, SourceRef};
@@ -56,34 +56,41 @@ impl ProjectionService {
             ScopeTarget::Profile {
                 profile_id,
                 expected_profile_revision,
-                project_id,
+                project_ids,
             } => {
                 *stage = ProjectionStage::ScopeProfileValidation;
-                let profile = self.launch.repository().get_profile(profile_id)?;
+                let document = self.launch.repository().read()?;
+                let profile = document
+                    .profiles
+                    .get(profile_id)
+                    .cloned()
+                    .ok_or_else(|| error("PROFILE_NOT_FOUND"))?;
                 if profile.revision != *expected_profile_revision {
                     return Err(error("REVISION_CONFLICT"));
                 }
                 let (env, selected) = profile_locations_diagnosed(&self.launch, &profile, stage)?;
                 drop(env); // Never retain an ambient environment snapshot in an IPC DTO.
                 *stage = ProjectionStage::ScopeProjectRegistration;
-                let project = project_id
-                    .as_ref()
-                    .map(|id| {
-                        self.launch
-                            .repository()
-                            .read()?
-                            .registered_projects
-                            .get(id)
-                            .cloned()
-                            .ok_or_else(|| error("PROJECT_NOT_FOUND"))
-                    })
-                    .transpose()?;
-                let (project_root, project_paths) =
-                    project.as_ref().map(admit_project).transpose()?.unzip();
+                // 一次观察可覆盖多个已注册项目；每个项目仍逐个 admission，集合不是授权捷径。
+                let mut projects = Vec::with_capacity(project_ids.len());
+                let mut expected_projects = Vec::with_capacity(project_ids.len());
+                for project_id in project_ids {
+                    let registered = document
+                        .registered_projects
+                        .get(project_id)
+                        .cloned()
+                        .ok_or_else(|| error("PROJECT_NOT_FOUND"))?;
+                    let (root, paths) = admit_project(&registered)?;
+                    projects.push(AdmittedProject {
+                        id: project_id.clone(),
+                        root,
+                        paths,
+                    });
+                    expected_projects.push(registered);
+                }
                 let service = Arc::downgrade(&self.launch);
                 let expected_profile = profile.clone();
                 let expected_locations = selected.clone();
-                let expected_project = project;
                 let authority = caller.clone();
                 let check = Arc::new(move || -> ReadResult<()> {
                     let service = service.upgrade().ok_or("SCOPE_REVOKED")?;
@@ -91,21 +98,22 @@ impl ProjectionService {
                         .registry()
                         .check_caller(&authority)
                         .map_err(|_| "FORBIDDEN")?;
-                    let current = service
-                        .repository()
-                        .get_profile(&expected_profile.id)
-                        .map_err(|_| "SCOPE_REVOKED")?;
-                    if current != expected_profile {
+                    // 同次检查只读一份新快照，避免项目数乘以文件操作数的重复解析。
+                    let document = service.repository().read().map_err(|_| "SCOPE_REVOKED")?;
+                    let current = document
+                        .profiles
+                        .get(&expected_profile.id)
+                        .ok_or("SCOPE_REVOKED")?;
+                    if current != &expected_profile {
                         return Err("SCOPE_REVOKED");
                     }
                     let (_, now) =
-                        profile_locations(&service, &current).map_err(|_| "SCOPE_REVOKED")?;
+                        profile_locations(&service, current).map_err(|_| "SCOPE_REVOKED")?;
                     if now != expected_locations {
                         return Err("SCOPE_REVOKED");
                     }
-                    if let Some(expected) = &expected_project {
-                        let current = service.repository().read().map_err(|_| "SCOPE_REVOKED")?;
-                        let current = current
+                    for expected in &expected_projects {
+                        let current = document
                             .registered_projects
                             .get(&expected.project_id)
                             .ok_or("SCOPE_REVOKED")?;
@@ -133,8 +141,7 @@ impl ProjectionService {
                         .map(|p| Root::open(p))
                         .transpose()
                         .map_err(error)?,
-                    project: project_root,
-                    project_paths: project_paths.unwrap_or_default(),
+                    projects,
                     check,
                 }
             }
@@ -201,8 +208,17 @@ impl ProjectionService {
                         .map(|p| Root::open(p))
                         .transpose()
                         .map_err(error)?,
-                    project,
-                    project_paths,
+                    projects: project
+                        .map(|root| {
+                            // Run 观察的项目不是注册项目；冻结的 launch cwd 就是它的身份，
+                            // 只用于前端行归属，不引入新的授权面。
+                            vec![AdmittedProject {
+                                id: snapshot.request().launch_cwd.clone(),
+                                root,
+                                paths: project_paths,
+                            }]
+                        })
+                        .unwrap_or_default(),
                     check,
                 }
             }

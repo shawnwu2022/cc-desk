@@ -13,6 +13,34 @@ beforeEach(() => {
 })
 
 describe('getClaudeArgs', () => {
+  // 旧字符串参数中的引号必须成为参数边界，而不是随空白拆成路径碎片。
+  it('LegacyArgs_QuotedPath_001', () => {
+    const store = useAppStore()
+    store.setClaudeOptions({ customArgs: '--add-dir "C:\\My Repo" --append-system-prompt \'two words\'' })
+    expect(store.getClaudeArgs()).toEqual(['--add-dir', 'C:\\My Repo', '--append-system-prompt', 'two words'])
+  })
+
+  // 未闭合的引用不能形成一组错误 argv 后继续启动 CLI。
+  it('LegacyArgs_UnclosedQuote_002', () => {
+    const store = useAppStore()
+    store.setClaudeOptions({ customArgs: '--add-dir "C:/My Repo' })
+    expect(() => store.getClaudeArgs()).toThrow('LEGACY_ARGS_UNCLOSED_QUOTE')
+  })
+
+  // UNC 前缀不能被当作转义删除；空参数及操作符均保持 argv 的字面语义。
+  it('LegacyArgs_UncAndLiteral_003', () => {
+    const store = useAppStore()
+    store.setClaudeOptions({ customArgs: String.raw`--add-dir "\\server\My Repo" --text "" ; $(whoami)` })
+    expect(store.getClaudeArgs()).toEqual(['--add-dir', String.raw`\\server\My Repo`, '--text', '', ';', '$(whoami)'])
+  })
+
+  // 引号转义和带尾部分隔符的路径仍产生完整参数。
+  it('LegacyArgs_EscapedQuotes_005', () => {
+    const store = useAppStore()
+    store.setClaudeOptions({ customArgs: String.raw`--note "say \"hi\"" --add-dir "C:\\" My\ Folder` })
+    expect(store.getClaudeArgs()).toEqual(['--note', 'say "hi"', '--add-dir', 'C:\\', 'My Folder'])
+  })
+
   // 无选项设置时返回空数组
   it('ClaudeArgs_Empty_001', () => {
     const store = useAppStore()
@@ -97,21 +125,21 @@ describe('currentProject', () => {
   // 设置 cwd="/Users/dev/myproject" 时返回 "myproject"
   it('CurrentProject_ForwardSlash_001', () => {
     const store = useAppStore()
-    store.setCwd('/Users/dev/myproject')
+    store.setCwdLocal('/Users/dev/myproject')
     expect(store.currentProject).toBe('myproject')
   })
 
   // 设置 cwd="C:\\Users\\dev\\myproject" 时返回 "myproject"
   it('CurrentProject_BackSlash_001', () => {
     const store = useAppStore()
-    store.setCwd('C:\\Users\\dev\\myproject')
+    store.setCwdLocal('C:\\Users\\dev\\myproject')
     expect(store.currentProject).toBe('myproject')
   })
 
   // 设置 cwd="" 时返回 null
   it('CurrentProject_Empty_001', () => {
     const store = useAppStore()
-    store.setCwd('')
+    store.setCwdLocal('')
     expect(store.currentProject).toBeNull()
   })
 })
@@ -275,7 +303,7 @@ describe('setTerminalTheme', () => {
   })
 })
 
-describe('app store - 启动状态源 + setCwd 拆分 + setHidden opLock', () => {
+describe('app store - 启动状态源 + setCwdLocal 拆分 + setHidden', () => {
   // loadAppConfig 读 lastOpenedProject + hiddenProjects
   it('LoadAppConfig_ReadLastOpenedAndHidden_001', async () => {
     mockIPC((cmd) => {
@@ -496,5 +524,153 @@ describe('app store - 启动状态源 + setCwd 拆分 + setHidden opLock', () =>
     // 先设法让 cwd 在隐藏集合（绕过 cwd 保护模拟历史脏数据）：直接操作内部不易，改为验证 hidden=false 不抛错
     await store.setHidden('/p-cwd', false) // 取消隐藏 cwd -> 不受限，不抛错
     expect(store.isHidden('/p-cwd')).toBe(false)
+  })
+})
+
+describe('app store - config 写入队列收敛（audit P1）', () => {
+  // 所有持久化写入（hiddenProjects/claudeEnvVars 等）串行过单一 configWriteTail：
+  // 并发成员的写段不得重叠执行（重叠的读-改-写会互相覆盖丢字段）
+  // 同域（config 域）并发写必须串行，防止读-改-写用陈旧快照互相覆盖。
+  it('ConfigWriteTail_SameDomainWritersSerialized_001', async () => {
+    let inFlight = 0
+    let overlapped = false
+    let writes = 0
+    mockIPC((cmd) => {
+      if (cmd === 'update_app_config') {
+        writes++
+        inFlight++
+        if (inFlight > 1) overlapped = true
+        // 延迟 resolve 制造重叠窗口
+        return new Promise(resolve => setTimeout(() => { inFlight--; resolve(null) }, 5))
+      }
+      return null
+    })
+    const store = useAppStore()
+    await Promise.all([
+      store.setClaudeEnvVars({ FOO: '1' }),
+      store.setClaudeEnvVars({ FOO: '2', BAR: '3' }),
+    ])
+    expect(overlapped).toBe(false)   // 同域写段串行，无重叠
+    expect(writes).toBe(2)           // 两个成员都落盘
+  })
+
+  // 入队时冻结每次环境变量快照；后续调用和调用者修改原对象都不能改写已排队的 A。
+  it('ConfigQueue_EnvSnapshot_003', async () => {
+    const writes: Array<Record<string, string>> = []
+    let releaseFirst!: () => void
+    let firstStarted!: () => void
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+    const firstEntered = new Promise<void>(resolve => { firstStarted = resolve })
+    mockIPC((cmd, args) => {
+      if (cmd === 'update_app_config') {
+        const env = (args as { updates: { claudeEnvVars: Record<string, string> } }).updates.claudeEnvVars
+        writes.push({ ...env })
+        if (writes.length === 1) {
+          firstStarted()
+          return firstGate
+        }
+      }
+      return null
+    })
+    const store = useAppStore()
+    const firstInput = { VALUE: 'A' }
+    const first = store.setClaudeEnvVars(firstInput)
+    firstInput.VALUE = 'mutated'
+    const second = store.setClaudeEnvVars({ VALUE: 'B' })
+
+    await firstEntered
+    try {
+      expect(writes).toEqual([{ VALUE: 'A' }])
+    } finally {
+      releaseFirst()
+    }
+    await Promise.all([first, second])
+    expect(writes).toEqual([{ VALUE: 'A' }, { VALUE: 'B' }])
+  })
+
+  // 连续默认参数写保留各自快照与 Promise 回执：A 成功，B 失败只拒绝 B。
+  it('ConfigQueue_DefaultFailure_004', async () => {
+    const writes: string[] = []
+    let releaseFirst!: () => void
+    let firstStarted!: () => void
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+    const firstEntered = new Promise<void>(resolve => { firstStarted = resolve })
+    mockIPC((cmd, args) => {
+      if (cmd === 'save_default_claude_options') {
+        const options = (args as { options: { customArgs: string } }).options
+        writes.push(options.customArgs)
+        if (writes.length === 1) {
+          firstStarted()
+          return firstGate
+        }
+        throw new Error('second failed')
+      }
+      return null
+    })
+    const store = useAppStore()
+    const first = store.setDefaultClaudeOptions({ customArgs: '--a' })
+    const second = store.setDefaultClaudeOptions({ customArgs: '--b' })
+
+    await firstEntered
+    try {
+      expect(writes).toEqual(['--a'])
+    } finally {
+      releaseFirst()
+      await Promise.allSettled([first, second])
+    }
+    await expect(first).resolves.toBeUndefined()
+    await expect(second).rejects.toThrow('second failed')
+    expect(writes).toEqual(['--a', '--b'])
+    expect(store.defaultClaudeOptions.customArgs).toBe('--b')
+  })
+
+  // hiddenProjects 专域队列：用户 hide 写入不得被挂起的启动迁移头阻塞
+  //（Projects_StartupCannotUndoHide_014 契约；跨域字段不重叠由后端锁内 merge 兜底）。
+  it('HiddenWrite_NotBlockedByPendingConfigMigration_002', async () => {
+    let migrationDone!: () => void
+    const fields: string[] = []
+    mockIPC((cmd, args) => {
+      if (cmd === 'get_app_config') return { hiddenProjects: [], language: 'en', terminalTheme: 'cc-box-light' }
+      if (cmd === 'update_app_config') {
+        const updates = (args as { updates: Record<string, unknown> }).updates
+        if ('hiddenProjects' in updates) { fields.push('hiddenProjects'); return null }
+        fields.push('migration')
+        return new Promise<void>(resolve => { migrationDone = resolve })
+      }
+      return null
+    })
+    const store = useAppStore()
+    const startup = store.loadAppConfig()
+    await new Promise(resolve => setTimeout(resolve, 0)) // 排空微任务，让迁移写进入挂起态
+    expect(fields).toContain('migration') // 迁移写已在途且挂起
+    await store.setHidden('/p-a', true)   // 不得被挂起迁移阻塞
+    expect(fields).toContain('hiddenProjects')
+    expect(store.isHidden('/p-a')).toBe(true)
+    migrationDone()
+    await startup
+    expect(store.isHidden('/p-a')).toBe(true) // 迁移完成不回滚已确认的隐藏
+  })
+
+  // loadProjectVisibility(force=true) 在有在途 visibilityLoad 时必须发起新读，
+  // 不得复用旧 promise（否则迟到的 hiddenProjects 永远进不了内存）
+  it('LoadProjectVisibility_ForceStartsNewReadWhileInFlight_001', async () => {
+    let reads = 0
+    let releaseFirst!: () => void
+    const firstHeld = new Promise<void>(resolve => { releaseFirst = resolve })
+    mockIPC((cmd) => {
+      if (cmd === 'get_app_config') {
+        reads++
+        if (reads === 1) return firstHeld.then(() => ({ hiddenProjects: [] }))
+        return { hiddenProjects: ['/p-late'] }
+      }
+      return null
+    })
+    const store = useAppStore()
+    const first = store.loadProjectVisibility(true)
+    const second = store.loadProjectVisibility(true) // 在途时 force：应发起新读而非复用
+    releaseFirst()
+    await Promise.all([first, second])
+    expect(reads).toBeGreaterThanOrEqual(2)       // force 确实发起了新读
+    expect(store.isHidden('/p-late')).toBe(true)  // 新读结果已发布
   })
 })

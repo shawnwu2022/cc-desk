@@ -65,6 +65,24 @@ describe('sidebar store', () => {
       expect(store.activePanel).toBe('sessions')
       expect(store.panelVisible).toBe(true)
     })
+
+    // 快速关-开：closePanel 的 250ms 延迟清理不得关掉刚重开的面板（旧 timer 泄漏回归）
+    it('ClosePanel_FastReopen_NotClosedByStaleTimer_001', () => {
+      vi.useFakeTimers()
+      try {
+        const store = useSidebarStore()
+        store.togglePanel('sessions')
+        store.closePanel()
+        store.togglePanel('sessions') // 立即重开
+
+        vi.advanceTimersByTime(300)
+
+        expect(store.activePanel).toBe('sessions')
+        expect(store.panelVisible).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   describe('settings navigation', () => {

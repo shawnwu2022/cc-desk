@@ -1,6 +1,14 @@
 use super::*;
 use serde_json::json;
 
+fn granted<'a>(root: &'a Root, paths: &'a [PathBuf]) -> Vec<ProjectRef<'a>> {
+    vec![ProjectRef {
+        id: "test-project",
+        root,
+        paths,
+    }]
+}
+
 // Large synthetic EOFs must be sparse on NTFS as well as Unix. Mark the same
 // held fixture file before extending, then zero only its newly created gap.
 // https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_set_sparse
@@ -180,11 +188,11 @@ fn HistorySource_Load256_005() {
         std::fs::write(directory.join(format!("rollout-{index:03}.jsonl")), input).unwrap();
     }
     let root = Root::open(temp.path()).unwrap();
+    let project_paths = vec![temp.path().to_owned()];
     let catalog = Catalog {
         cli: CliKind::Codex,
         root: &root,
-        project: Some(&root),
-        project_paths: &[temp.path().to_owned()],
+        projects: &granted(&root, &project_paths),
         user_config: None,
         check: &|| Ok(()),
     };
@@ -261,7 +269,7 @@ fn HistorySource_Sparse1677_006() {
     let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
     let started = std::time::Instant::now();
     let items = read(
-        &Catalog {cli: CliKind::Codex, root: &root, project: Some(&root), project_paths: &[temp.path().to_owned()], user_config: None, check: &|| Ok(())},
+        &Catalog {cli: CliKind::Codex, root: &root, projects: &granted(&root, &[temp.path().to_owned()]), user_config: None, check: &|| Ok(())},
         &Options {kind: ResourceKind::History, query: None, session_id: None},
         &mut budget,
     ).expect("metadata sampling must fit 1677 sparse histories within the existing aggregate and entry caps");
@@ -316,8 +324,7 @@ fn HistorySource_DuplicateHeaders_007() {
         &Catalog {
             cli: CliKind::Codex,
             root: &root,
-            project: Some(&root),
-            project_paths: &[temp.path().to_owned()],
+            projects: &granted(&root, &[temp.path().to_owned()]),
             user_config: None,
             check: &|| Ok(()),
         },
@@ -347,8 +354,7 @@ fn HistorySource_LongNoTitle_008() {
         &Catalog {
             cli: CliKind::Codex,
             root: &root,
-            project: None,
-            project_paths: &[],
+            projects: &[],
             user_config: None,
             check: &|| Ok(()),
         },
@@ -396,8 +402,7 @@ fn HistorySource_KeepHeaderCap_009() {
         &Catalog {
             cli: CliKind::Codex,
             root: &root,
-            project: None,
-            project_paths: &[],
+            projects: &[],
             user_config: None,
             check: &|| Ok(()),
         },
@@ -432,8 +437,7 @@ fn HistorySource_ClaudeWindow_010() {
         &Catalog {
             cli: CliKind::Claude,
             root: &root,
-            project: Some(&root),
-            project_paths: &[temp.path().to_owned()],
+            projects: &granted(&root, &[temp.path().to_owned()]),
             user_config: None,
             check: &|| Ok(()),
         },
@@ -484,8 +488,7 @@ fn HistorySource_UnseenTitle_011() {
         &Catalog {
             cli: CliKind::Codex,
             root: &root,
-            project: Some(&root),
-            project_paths: &[temp.path().to_owned()],
+            projects: &granted(&root, &[temp.path().to_owned()]),
             user_config: None,
             check: &|| Ok(()),
         },
@@ -517,15 +520,14 @@ fn HistorySource_UnseenTitle_011() {
 
 fn read_claude_history_fixture(
     root: &Root,
-    project_paths: &[PathBuf],
+    paths: &[PathBuf],
     budget: &mut Budget,
 ) -> ReadResult<Vec<ResourceItem>> {
     read(
         &Catalog {
             cli: CliKind::Claude,
             root,
-            project: Some(root),
-            project_paths,
+            projects: &granted(root, paths),
             user_config: None,
             check: &|| Ok(()),
         },
@@ -928,8 +930,7 @@ fn HistoryClaude_UnassociatedMetadataIsPartial_023() {
         &Catalog {
             cli: CliKind::Claude,
             root: &root,
-            project: None,
-            project_paths: &[],
+            projects: &[],
             user_config: None,
             check: &|| Ok(()),
         },
@@ -1218,11 +1219,11 @@ fn HistoryClaude_OptionalHeaderMustRemainProven_031() {
             }
         }
         let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let project_paths = vec![temp.path().to_owned()];
         let catalog = Catalog {
             cli: CliKind::Claude,
             root: &root,
-            project: Some(&root),
-            project_paths: &[temp.path().to_owned()],
+            projects: &granted(&root, &project_paths),
             user_config: None,
             check: &|| Ok(()),
         };
@@ -1252,11 +1253,11 @@ fn HistoryClaude_OptionalLinkFailsClosed_032() {
     std::fs::write(outside.path().join("outside.jsonl"), &input).unwrap();
     std::os::unix::fs::symlink(outside.path().join("outside.jsonl"), &path).unwrap();
     let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let project_paths = vec![temp.path().to_owned()];
     let catalog = Catalog {
         cli: CliKind::Claude,
         root: &root,
-        project: Some(&root),
-        project_paths: &[temp.path().to_owned()],
+        projects: &granted(&root, &project_paths),
         user_config: None,
         check: &|| Ok(()),
     };
@@ -1315,8 +1316,7 @@ fn HistoryClaude_GlobalHistoryDoesNotSampleTail_034() {
         &Catalog {
             cli: CliKind::Claude,
             root: &root,
-            project: None,
-            project_paths: &[],
+            projects: &[],
             user_config: None,
             check: &|| Ok(()),
         },

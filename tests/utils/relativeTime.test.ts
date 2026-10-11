@@ -20,4 +20,10 @@ describe('formatRelativeActivity', () => {
   test('clamps future activity to now', () => {
     expect(formatRelativeActivity(now + 5_000, now, 'zh')).toBe('刚刚')
   })
+
+  test('shows a placeholder for absent activity timestamps', () => {
+    // 不完整历史观察不给 updatedAt；epoch 0 是「无已确认时间」，不能渲染成 70/1/1。
+    expect(formatRelativeActivity(0, now, 'zh')).toBe('—')
+    expect(formatRelativeActivity(0, now, 'en')).toBe('—')
+  })
 })

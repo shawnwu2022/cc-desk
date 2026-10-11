@@ -13,18 +13,32 @@ export type HookEventType = HookEventDetail['type']
 export type HookEventHandler = (payload: HookEventPayload) => void
 export type ObservationHandler = (event: ObservationEvent, state: ObservationState) => void
 export type ObservationNoticeHandler = (notice: NativeObservationNotice) => void
+export type ObservationIdentityHandler = (sessionId: string) => void
 export interface ObservationTarget extends RunRef { cli: CliKind; enabled: boolean }
+
+/** 订阅后允许首个观察事件到达的窗口；超时按 unavailable 处理。 */
+const CONNECT_TIMEOUT_MS = 30_000
+/** 粗粒度 turn 活动的静默上界：working/subagent_running 回落 idle，waiting 不受影响。 */
+const TURN_IDLE_TIMEOUT_MS = 90_000
 
 export const useHookStore = defineStore('hook', () => {
   const subscribers = new Map<HookEventType, Set<HookEventHandler>>()
   const observations = createObservationRegistry()
-  const targets = new Map<string, { run: RunRef; handlers: Set<ObservationHandler>; notices: Set<ObservationNoticeHandler>; seenNotices: Set<string>; timer: ReturnType<typeof setTimeout> }>()
+  const targets = new Map<string, { run: RunRef; handlers: Set<ObservationHandler>; notices: Set<ObservationNoticeHandler>; identities: Set<ObservationIdentityHandler>; seenNotices: Set<string>; timer: ReturnType<typeof setTimeout> }>()
   const key = (run: RunRef) => JSON.stringify([run.runId, run.generation])
   let disposed = false
   let legacyPending: Promise<void> | null = null
   let nativePending: Promise<void> | null = null
   let legacyStop: (() => void) | undefined
   let nativeStop: (() => void) | undefined
+  function armTimer(entry: { run: RunRef; timer: ReturnType<typeof setTimeout> }, delay: number) {
+    clearTimeout(entry.timer)
+    entry.timer = setTimeout(() => {
+      // 连接期超时宣称 unavailable；已收到事件后的静默只回落粗粒度活动。
+      const connecting = observations.get(entry.run)?.state().observation === 'connecting'
+      publish(connecting ? { kind: 'timeout', ...entry.run } : { kind: 'turn-idle-timeout', ...entry.run })
+    }, delay)
+  }
 
   function subscribe(eventTypes: HookEventType[], handler: HookEventHandler): () => void {
     for (const type of eventTypes) {
@@ -63,6 +77,14 @@ export const useHookStore = defineStore('hook', () => {
     if (!target) return
     clearTimeout(target.timer)
     publish(event)
+    // 认证 envelope 的 CLI 会话身份：仅在有订阅者时回填，不参与活动/notice 去重。
+    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (sessionId) for (const handler of [...target.identities]) {
+      if (!target.identities.has(handler) || targets.get(key(event)) !== target) continue
+      try { handler(sessionId) } catch { /* optional observer consumers are isolated */ }
+    }
+    // 每个已接受的事件重设粗粒度静默窗口；空闲会话因此回落而不是停留在过期活动。
+    armTimer(target, TURN_IDLE_TIMEOUT_MS)
     if (targets.get(key(event)) !== target || observations.get(target.run)?.state().observation !== 'active') return
     const notice = fromNativeObservationNotice(payload)
     if (!notice || target.seenNotices.has(notice.eventId) || target.seenNotices.size >= 1024) return
@@ -81,24 +103,28 @@ export const useHookStore = defineStore('hook', () => {
       for (const target of targets.values()) publish({ kind: 'timeout', ...target.run })
     }).finally(() => { nativePending = null })
   }
-  function subscribeObservation(target: ObservationTarget, handler: ObservationHandler, options: { onNotice?: ObservationNoticeHandler } = {}): () => void {
+  function subscribeObservation(target: ObservationTarget, handler: ObservationHandler, options: { onNotice?: ObservationNoticeHandler; onIdentity?: ObservationIdentityHandler } = {}): () => void {
     if (disposed || target.cli !== 'claude' || !target.enabled) return () => {}
     const noticeHandler = options.onNotice
+    const identityHandler = options.onIdentity
     const run = { runId: target.runId, generation: target.generation }
     let entry = targets.get(key(run))
     if (!entry) {
       const reducer = observations.attach(run)
       reducer.accept({ kind: 'connecting', ...run })
-      entry = { run, handlers: new Set(), notices: new Set(), seenNotices: new Set(), timer: setTimeout(() => publish({ kind: 'timeout', ...run }), 30_000) }
+      entry = { run, handlers: new Set(), notices: new Set(), identities: new Set(), seenNotices: new Set(), timer: setTimeout(() => {}, 0) }
+      armTimer(entry, CONNECT_TIMEOUT_MS)
       targets.set(key(run), entry)
     }
     entry.handlers.add(handler)
     if (noticeHandler) entry.notices.add(noticeHandler)
+    if (identityHandler) entry.identities.add(identityHandler)
     ensureNativeListener()
     const owned = entry
     return () => {
       owned.handlers.delete(handler)
       if (noticeHandler) owned.notices.delete(noticeHandler)
+      if (identityHandler) owned.identities.delete(identityHandler)
       if (owned.handlers.size === 0 && targets.get(key(run)) === owned) {
         clearTimeout(owned.timer)
         observations.detach(run)

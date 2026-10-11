@@ -66,6 +66,10 @@ Supported launch actions are:
 
 Raw argv is not shell-split. An uncertain launch result keeps the original request/run identity and is recovered by querying that same request. It is never replaced by an automatic second spawn.
 
+Fully converged launch receipts are evicted within the registry record budget. A reaped run's receipt stays pinned while its supervisor still owns output drain; releasing process handles does not make the receipt evictable. Final convergence marks the exact request/run receipt ready for eviction under the active-supervisor lock before removing that owner. Generation floors for the current authenticated document have a separate limit of twice that budget; reaching it rejects new tab identities with `REGISTRY_CAPACITY`, while known tabs can still advance their generations. Floors cannot be forgotten while that document remains authorized. Activating a new backend-authenticated document revokes the old epoch and clears only its floors, retaining all still-owned runs.
+
+`cli_stop` carries the frozen `requestId`, `runId` and `generation`. Backend admission checks all three against one authenticated registry receipt before the supervisor revalidates the frozen owner and pinned state. A delayed stop from an evicted request cannot acquire authority over a newer request that reuses the same run key.
+
 ## Profiles and workspace storage
 
 The native store is `cli-workspace.v1.json`.
@@ -85,7 +89,10 @@ Native frontend calls are admitted through the authenticated document bridge. Fr
 
 Native resource reads:
 
-- bind the selected CLI/profile revision and a registered project;
+- bind the selected CLI/profile revision and the registered projects in the observation; every project in the set is admitted individually, and the set is never a way around a single project's authorization;
+- use one fresh workspace document snapshot per scope admission or authority check to validate the profile and all registered projects together, keeping workspace parsing independent of the project count;
+- group history observations within the 64-project scope budget; split only a backend-reported project-admission failure so offline projects retain their own error and cannot suppress healthy projects' admitted histories;
+- replace superseded nonempty profile project subsets within the same owner, configuration revision and held roots; root-wide, run, other-source and disjoint batch authorities remain separate. In-flight reads retain only their original grant, and future reads through a replaced reference fail closed;
 - use backend-held scoped filesystem authority;
 - return kind-specific projection DTOs only;
 - do not return raw env values, headers, credential material, arbitrary argv, or unbounded native errors.
@@ -129,6 +136,14 @@ Key properties:
 - ACK must land on a parsed frame boundary;
 - route revocation releases budget and wakes blocked peers;
 - a degraded run does not poison another run.
+
+## Supervisor lifecycle
+
+The supervisor keeps the exact owned child and active run until a real PTY wait/reap succeeds. A wait error records an unknown/failed observation; it does not manufacture process exit or release process control. A later stop or shutdown starts at most one waiter for that same child. If an already accepted stop is followed by a wait or registry-transition error, the supervisor performs one delayed bounded retry; shutdown retries use the same monotonic minimum interval even when failure notifications arrive early. Repeated errors remain active and retryable instead of busy-looping or reporting a clean shutdown.
+
+After real reap, both the registry exit transition and resource retirement must succeed before the supervisor removes the active entry or drops its retained resource. Either registry step can be retried against the same run without spawning a process or replaying input. Only that completed registry convergence permits the supervisor entry to retire with lifecycle `Exited`; output drain and exact ACK remain independent. The registry keeps the retired receipt pinned against capacity eviction until the exact active supervisor state completes its terminal drain and marks retirement complete. Retirement cannot complete while process adoption is still installing the reader and stream. At terminal completion the supervisor first detaches that exact stream without progress callbacks, so retained reader or ACK references cannot occupy the reused run key or its output credit, and only then releases the active state and receipt.
+
+Caller stop carries `requestId` with the run identity. One registry lock admits that exact receipt, then the supervisor pins one active state and matches the receipt against its frozen request, owner, run and retained resource identity. A retired draining state remains bound to that pinned receipt, so delayed control from an old document or an evicted old request cannot be redirected to a newly adopted child that reuses the same run key.
 
 ## Observer boundary
 

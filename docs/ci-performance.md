@@ -396,3 +396,359 @@ the immutable plan's source hashes. Original test source, scenario mapping,
 four harness identities, default ignored reasons, 18 external-Job and four
 elevated-host disclosures, original exact selectors, production/release profiles
 and all released assets remain unchanged.
+
+## Local frontend iteration groups (2026-10-11)
+
+`vitest.config.ts` now splits the ordinary inventory into `fast-node`, `fast-dom`,
+`process` and `stress`. Pure Node and real-process files use explicit lists;
+other ordinary tests default to the DOM project. Visual fixtures retain their
+independent config. `npm run test:fast`, `test:process` and `test:stress` select
+the corresponding groups; `npm test`, `test:all` and `test:ci` still run all four.
+Independent Node policy, Rust, browser visual and actual platform evidence are
+not included in the name `test:all`.
+
+This changes the iteration scope and avoids jsdom startup for Node-only files.
+File isolation, original assertions, real subprocess/HTTP execution and the
+5,000-session / 30-owner / 120-change stress workload remain intact. The discovery
+guard uses one actual `vitest list --filesOnly --json` execution to check the
+complete inventory, uniqueness and script selectors, rather than spawning a
+separate list process for every selector.
+
+Local Windows comparisons used the same test names. The 30-file, 219-test Node
+subset took 9.01 seconds under the previous jsdom config and 5.35 seconds under
+Node. The complete 161-file fast subset took 45.22 versus 45.96 seconds, so this
+measurement does not show a total fast-group wall-time gain. The old full suite
+took 58.79 seconds and the grouped suite 55.72 seconds in separate local runs;
+these single samples are not a hosted CI improvement estimate.
+
+The grouped full run retained all 2,426 original test names and statuses, plus
+two new guard cases: 2,428 total, 2,422 passed, four existing observer reporter
+failures and two pending cases. The reporter failures and separate Windows Node
+policy portability failures were not removed or reclassified to obtain a pass.
+No new hosted CI, Rust or real-CLI run was performed for this grouping change.
+The hosted Rust shard and roundtrip build paths described above still need
+measurements before claiming an ordinary CI critical-path reduction.
+
+Agent execution rules and the command index are maintained in the canonical
+[AGENTS.md](../AGENTS.md); tool entry files import or point to it as described in
+[agent-guides.md](agent-guides.md). Detailed iteration and full-evidence guidance
+is in the [test guide](测试编写原则.md). Changes to this grouping must update those
+documents and the READMEs without adding separate tool-specific rule copies.
+
+## Local runtime projection and portable fixtures (2026-10-11)
+
+The next batch changes `useUnifiedWorkspaceRuntime` only at the catalog refresh
+boundary. Each Legacy/Native owner has its own reactive watch. Changes enqueue
+the normalized project path once per Vue tick and call the existing scoped
+`catalog.refresh(projectPath)`. Moving an owner refreshes both paths; replacement,
+removal and unmount stop the former watch. Attention updates and removals use the
+exact Legacy PTY's project. History and archive changes still use a full refresh.
+Existing per-project/full request versions, original adapter projection and all
+launch/stop/admission checks remain responsible for correctness.
+
+Four behavioral regressions cover unrelated row identity/open order, owner
+move/replacement/removal/addition, attention acknowledgement and unmount. The
+unrelated-row test failed against the original global refresh before the change.
+Existing adapters and session operations are not replaced with mock projections.
+
+An isolated Windows run before and after used the same `test:stress` command,
+both original test names, 5,000 sessions, 30 owners, 120 changes and all original
+assertions. Vitest case durations, including each case's initialization, were:
+
+| Original case | Before | After |
+| --- | --- | --- |
+| `Stress_50Projects100Sessions_001` | 2.065 s | 1.673 s |
+| `Stress_30Owners120Changes_002` | 19.780 s | 3.349 s |
+
+These are one local before/after pair, not a per-event timing or hosted CI
+critical-path estimate. JSON case reports were retained as local analysis
+artifacts. No shard weights or required checks are adjusted using these numbers.
+
+Portable fixture repairs retain the real execution checks: workflow text matching
+normalizes CRLF only in the test, Node child scripts use `fileURLToPath`, and the
+real rustc/libtest fixture has `.exe` on Windows. The executable Rust result gate
+now proves an accepted success and then the precise rejection for every original
+invalid result; a missing script no longer masquerades as a rejected job result.
+The reporter fixture converts individual Windows backslashes and runs Bash with
+`--noprofile --norc`, preserving the actual production script, pipe/body bounds,
+strict silent output and no-secret assertions. Six Node policy failures and four
+reporter failures were reproduced before repair; targeted runs are now 17/17 and
+5/5 passed. The production reporter, CI workflow, Rust inventory and source-byte
+hashing are unchanged.
+
+The full follow-up run retained all 2,428 prior cases, including duplicate-name
+occurrences, and added only the four catalog regressions: 176 files, 2,432 cases,
+2,430 passed, zero failed and the original two pending. The original four
+reporter failures are now passed. All 19 Node policy files ran: 212 cases,
+206 passed, zero failed and six unchanged Windows skips for Unix executable
+fixtures. Typecheck, production frontend build and `git diff --check` passed.
+The full Vitest and Node runs overlapped, so their wall times are not an isolated
+performance comparison. No new hosted CI or real-CLI validation is claimed.
+
+## Local Rust calibration boundary (2026-10-11)
+
+The follow-up rebuilt the current library harness with Rust 1.98.1, locked
+dependencies and the CI's `DEV_DEBUG=0` / `TEST_DEBUG=0` profiles, after verifying
+the pinned ConPTY. Cargo was run from `src-tauri` so its repository configuration
+applied. Cargo JSON identified the actual executable; its hash, 266 tracked
+Rust/manifest/lock source hashes and all 1,465 library names were recorded. This
+is a local diagnostic subset, not the ordinary four-harness coverage report.
+
+The ordinary PowerShell probe reported `inJob=true`, `elevated=false`. Four
+non-Job-free exact cases first failed opening their default temporary fixture
+root with `RelativeOpenFailure(3221225506)` / `STATUS_ACCESS_DENIED`, before the
+test logic. Those short failures are not timing samples. Pointing only the
+owned child processes' `TEMP`/`TMP` at a disposable workspace directory allowed
+real execution without ACL/token changes, alternate implementations or removed
+assertions. Raw initialization failures and the second run were both retained.
+
+Each exact case was listed and count-checked first, then run serially from the
+same executable with a local 300-second measurement bound:
+
+| Original case | Outcome | Local wall time |
+| --- | --- | --- |
+| `HistoryContext_FreshAbsentUdf_032` | 1 passed; original assertions | 104.960 s |
+| `HistoryContext_ReturnMissingImage_036` | 1 passed; original assertions | 118.789 s |
+| `BundleReturn_RestorePresentImage_002` | Timeout; no completed summary | 300-second bound |
+| `BundleReturn_FreshCopyMissing_003` | 1 passed; original assertions | 24.873 s |
+
+The three completed runs each reported exactly one pass, zero failures/ignores
+and 1,464 filtered names. The timeout retains partial raw output and is neither
+a pass nor a completed duration sample. The local bound does not alter the
+20-minute CI harness deadline. The generic 120 weight spans materially different
+scenarios; these single local samples and one timeout do not establish hosted
+weights, concurrent shard wall time or resource contention. Shard weights,
+partitioning, required checks and original exclusions remain unchanged. A valid
+update still needs completed same-source runner measurements and a full hosted
+comparison, including scheduling and artifact restore costs.
+
+During compilation another workspace operation advanced HEAD from `a8006a6` to
+`8748317`, changing only the test guide; Rust/vendor inputs were unchanged. The
+calibration metadata records `8748317` plus dirty files and actual source hashes.
+Later fixture-cleanup changes are a separate source/test inventory and are not
+mixed into this measurement record.
+
+## Fixture cleanup and format follow-up (2026-10-11)
+
+Two successful context probes still left their disposable trees. The context
+`Fixture` declared `TempDir` before its held Windows directories, so automatic
+field destruction attempted cleanup while those handles still pinned the tree.
+`HistoryContext_FixtureCleanup_041` reproduced the retained directory before the
+fix. Moving only that field and initializer to the end made the regression and
+two original capture/copy cases pass. No `Drop` implementation is added, preserving
+the existing tests that move individual fields out. Production sharing, ACLs,
+directory identity and cleanup authority are unchanged.
+
+Rust 1.98.1 `cargo fmt --check` also found existing layout differences in `pty.rs`,
+`store.rs`, `tests/native_cli_registry.rs` and `tests/store.rs`. Only its exact
+format hunks were applied. The final locked/offline compile produced all four
+original harness identities. The library inventory retained all 1,465 names and
+added only the cleanup regression (1,466 total). A count-checked exact subset of
+21 cleanup/capture/copy, reader, shell validation, session-ID, registry and project
+metadata tests passed; `cargo fmt --check` and diff checks passed. This subset is
+not a full Rust execution or hosted coverage qualification.
+
+The calibration and RED fixture residue was copied to the local diagnostic
+artifact directory; all 448 file lengths and SHA-256 hashes were checked before
+removing only the owned `src-tauri/target/ci-calibration-temp` root. Logs and byte
+diagnostics remain available. These copies do not preserve native object identity
+or prove recovery/CI coverage. No user installation, application state, Cargo
+cache or unknown process was cleaned.
+
+## Audit regression gate closure (2026-10-12)
+
+The D17 production-source crate reproduced `E0432` after the input stager's
+unreachable 16 MiB aggregate constant was removed. Its original 64 KiB chunk and
+8 MiB upload assertions remain. Behavioral checks now reject both 8 MiB + 1 and
+16 MiB uploads, and two added commit-fence regressions preserve partial receipts
+and forbid conflicting sequence replacement. All nine standalone tests and
+strict Clippy passed locally.
+
+The D14 production-source crate reproduced `E0432`/`E0433` because two inline
+staleness tests required Tauri callback types absent from the portable crate.
+Those two tests now live in the existing native transport test file and retain
+real `OutputRoutes`/`Channel` delivery; all eight native transport tests passed.
+The portable crate keeps its original eleven tests and adds the same
+stalled-ACK/healthy-flow behaviors against the actual transport source, including
+exact generation/stream refusal. Its thirteen tests and strict Clippy passed
+locally. These results do not substitute for the three-OS hosted matrices, the
+full native inventory or real CLI/WebView acceptance.
+
+## Completed restore probe and strict Rust checks (2026-10-11)
+
+The next local batch completed the original
+`BundleReturn_RestorePresentImage_002` with the CI's 20-minute harness bound:
+379.408 seconds, exactly one pass, zero failures/ignores and 1,465 filtered
+names. The earlier 300-second timeout remains an incomplete failed measurement.
+Fixture journal generations and process CPU continued advancing during the
+long run; this proves progress, not a particular function's CPU cost. The
+existing installation workload, assertions, ACL/identity checks and Job policy
+were retained. Only child `TEMP`/`TMP` pointed at owned workspace fixtures.
+
+A same-source experiment used Cargo's package-specific test profile override,
+without persisting a repository setting:
+
+```text
+cargo +1.98.1 test --locked --offline --no-run --config 'profile.test.package.cc-desk.opt-level=1' --message-format=json
+```
+
+Cargo JSON retained `debug_assertions=true`, `overflow_checks=true` and
+`debuginfo=0` for all four test harnesses. The same exact restore case passed in
+353.762 seconds, about 6.8% below the single default-profile sample. Rebuilding
+the application package took 159.423 seconds with cached dependencies; the
+1.53-second cached default compile is not a fresh-build comparator. This pair
+does not establish a net CI gain, and the override was not adopted. Ordinary
+profiles, shard weights, required checks and exclusions remain unchanged.
+See Cargo's [profile overrides](https://doc.rust-lang.org/cargo/reference/profiles.html#overrides).
+
+The strict all-target Clippy gate then reproduced 22 errors: sixteen test-name
+warnings, four literal `format!` uses, one unused test import and one production
+item block after a test module. Six test modules now have narrowly scoped
+`non_snake_case` allowances to retain the required original test names. The
+other changes remove the unused import, use `String::from` for literals and move
+two unchanged validation helpers before the test module. `-D warnings` remains
+enabled; runtime logic and assertions are unchanged.
+
+On the final source, locked/offline compilation produced all four original
+harnesses with the ordinary profile. The library's complete raw inventory was
+byte-identical across default, experimental and final builds: 1,466 names.
+Thirty-six exact document/environment/registry/input/transport/supervisor cases
+passed, with executable and source hashes stable during execution. Strict
+Clippy, formatting, typecheck and diff checks passed. The actual non-test
+`cc-desk.exe` from that final Cargo invocation also passed `--check-conpty`
+(`ok=true`, `backend=bundled`, `ptyLifecycle=true`). These are local checks,
+not full four-harness execution, hosted qualification or real CLI certification.
+Metadata records `b6e4001` plus the dirty Rust files and actual input hashes;
+the timing pair precedes the lint cleanup and is kept separate from its tests.
+After execution, all three uniquely owned diagnostic roots contained zero files
+and were removed after path/ownership checks. Raw logs and metadata were retained;
+Cargo caches, user state and installation recovery data were not cleaned.
+
+Read-only metadata from historical successful run
+[38062158367](https://github.com/shawnwu2022/cc-desk/actions/runs/38062158367)
+reported a 223-second producer, a 189-second static job, sixteen shard jobs
+spanning 100–379 seconds, and two roundtrip jobs taking 378/444 seconds. The
+producer-start to Rust-aggregate-completion span was 10:24, including scheduling
+and artifact transfer gaps. These are job intervals, not calibrated per-name
+weights. The API reports head SHA `abcfd4d`, while artifact names declare tested
+source `b0f5c3c`; downloading the build-metrics artifact returned HTTP 401, so its
+actual bytes and source binding were not verified in this batch. No same-source
+hosted run was dispatched for the current worktree. Completed runner evidence
+and a full hosted comparison remain prerequisites for changing shard weights.
+
+## Same-job debug frontend reuse and Node source loading (2026-10-11)
+
+Read-only metadata from successful main run
+[38062961552](https://github.com/shawnwu2022/cc-desk/actions/runs/38062961552)
+declares source `2e74e854b088727388aff75d0351b608d74121b3`.
+Frontend tests took 105 seconds, Node policy tests 25 seconds and the frontend
+build 5 seconds. The ordinary roundtrip release build step took 457 seconds;
+the complete debug job took 373 seconds, including 133 seconds for its two
+scenario builds and strict Clippy. Rust shard jobs 5, 4 and 7 took 443, 367 and
+348 seconds. These are historical job/step intervals, not current-worktree
+measurements or per-name execution weights. The metrics artifact download
+again returned HTTP 401; its actual bytes and source binding remain unverified.
+
+The debug scenario loop previously invoked the same frontend/ConPTY preparation
+hook twice. It now keeps the first ordinary Tauri build. Only after that build
+succeeds and `dist/index.html` exists can the second scenario use a uniquely
+owned temporary JSON config with `build.beforeBuildCommand=null`. Tauri's
+[build config merge](https://v2.tauri.app/reference/cli/#build) applies that
+single override. Both Rust applications are still built and hashed, strict
+all-target Clippy still runs, the fixture must stay disabled, and its exact
+original bytes are restored on success or failure. The override file is removed
+in `finally`. No frontend crosses source, checkout or job boundaries; ordinary
+release, feature denial, required checks and original coverage are unchanged.
+
+An executable regression extracts the actual workflow PowerShell step and runs
+it in an owned temporary workspace with spaces in its path and stale seeded
+frontend files. The original step failed because it built the frontend twice.
+The changed step passes success, first-build failure, missing-frontend,
+second-build failure and Clippy failure cases. Native builders are controlled
+substitutes in this regression; it does not certify an application build.
+Separately, the actual installed Tauri CLI 2.10.1 was run against an owned toy
+project with the locked Tauri 2.10.3 dependency and a deliberately missing
+Cargo runner. Default / null-hook override / default calls observed hook counts
+1 / 1 / 2 and all reached the expected runner refusal. This proves the installed
+CLI's hook/config behavior, not successful Rust compilation or native acceptance.
+
+The full Node policy inventory then exposed sixteen source-loader failures:
+Vite's newly used `import.meta.env.DEV` remained in CommonJS output. The paste
+generator and trace tests now share an AST compiler that applies only the known
+production `DEV=false` constant, as the installed Vite production configuration
+does. It preserves same-spelled string literals, payload bytes, actual clipboard
+policy imports and refusal of unknown environment flags. Trace tests isolate
+the host clipboard API with a throwing boundary; they still execute the real
+paste and policy functions. The dedicated paste workflow path filters now also
+include the shared compiler and clipboard policy source.
+
+Local checks on `ae448e1` plus the dirty worktree with Node 24.18.0 passed all
+nineteen CI Node policy files: 209 passed, zero failed and the six existing
+Windows skips. Hosted CI remains on Node 22 and is independently unrun here.
+The production-constant regression was first retained as a failing run. The
+paste/policy Vitest subset passed all 63 cases. Selected workflow, test and
+production input hashes were stable during the final Node run. Logs and actual
+input hashes are retained with the batch-five artifacts; no tests, assertions,
+workloads, exclusions, Rust profiles or shard weights were reduced.
+Typecheck and Node syntax/diff checks also passed on the final local checks.
+The current canonical agent guides were rechecked with the actual Codex prompt
+assembler, Claude's loopback-only context capture and Gemini's installed loader;
+the existing Claude ancestor-import trust limitation remains documented in
+[agent-guides.md](agent-guides.md).
+
+## Follow-up TODO (2026-10-11)
+
+This is the canonical performance follow-up list. Checked items mean the local
+implementation and scoped evidence recorded above are complete; they do not
+declare the current dirty worktree fully tested or hosted savings proven.
+The worktree has not been pushed and no hosted run was dispatched in these batches.
+
+- [x] Split frontend iteration into fast, process and stress groups without
+  dropping the complete inventory; scope runtime projection refresh by project
+  and make affected fixtures portable. Preserve each batch's source and evidence.
+- [x] Use `AGENTS.md` as the common standard with tool-specific references.
+  Record actual Codex, Claude Code and Gemini loader checks and their scope/trust
+  limitations in [agent-guides.md](agent-guides.md).
+- [x] Reuse the frontend after the first successful same-job debug build and
+  repair production Node source loading. Retain both native builds and original
+  gates; the latest local Node policy, paste/policy and type checks are above.
+- [ ] **P1 / CI-1 — Verify actual metrics artifacts.** Using an authorized
+  authenticated read, download the historical metrics and raw logs, then verify
+  their bytes, source SHA, run/attempt and plan/executable identities. Resolve
+  the API/artifact source discrepancy recorded above before using that run.
+  Completion requires a retained identity ledger and raw files; API step times
+  or HTTP 401 responses cannot close this item or supply per-test weights. If
+  historical bytes remain inaccessible, keep those runs metadata-only and use
+  newly verified source-bound artifacts for subsequent decisions.
+- [ ] **P1 / CI-2 — Measure the hosted control/change comparison.** After the
+  reviewed source is integrated through the authorized Git/CI workflow, execute
+  the original nineteen Node policy files on CI's Node 22 and the complete
+  ordinary required gates, including all four Rust harnesses and sixteen shards.
+  Compare controls with matching application/test inputs, inventory, toolchain
+  and runner class; record each workflow variant's own exact SHA/run/attempt
+  separately. Include cold/warm cache state, actual fresh/rebuilt compilation,
+  scheduling, transfer, runner consumption and the complete critical path.
+  Completion requires source-bound raw coverage and comparable measurements;
+  local hook counts alone do not establish net wall-time savings. Current commit,
+  push and remote dispatch remain outside these completed local batches.
+- [ ] **P2 / CI-3 — Calibrate Rust names on the target runner.** Run the original
+  exact entries serially from the producer-identified executable with unchanged
+  workload/assertions. Retain full inventory, executable/source/toolchain hashes,
+  host conditions, raw completion counts and completed wall times. Initialization
+  failures, timeouts and parallel output timestamps stay excluded from duration
+  samples. Keep the original eighteen Job-free disclosures and timeout policy.
+  This collection can proceed independently of historical artifact recovery.
+  Completion requires completed source-bound runner samples for the proposed
+  placement; the 379.408-second local restore sample is supporting evidence only.
+- [ ] **P2 / CI-4 — Decide on further shard/profile changes.** Only after CI-1
+  through CI-3 close, evaluate deterministic placement or a test-profile override.
+  Include added compilation and artifact costs, and compare the full hosted path
+  with unchanged names, ignores, counts and required checks. Adopt a change only
+  when comparable evidence proves a net gain; otherwise retain current settings
+  and record the no-change decision. The single local profile pair is insufficient.
+- [ ] **P2 / ACCEPTANCE — Close independent target gaps.** Track real Claude
+  Code/Codex CLI D20, Windows rendering/installed-package checks and external
+  Job-free execution in their original ledgers; see [roadmap.md](roadmap.md).
+  Verify remaining agent UI integrations against [agent-guides.md](agent-guides.md)
+  when their clients are available. Completion requires actual target evidence;
+  these checks cannot be replaced by successful performance or loader tests.

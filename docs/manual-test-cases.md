@@ -1696,7 +1696,7 @@
 
 **预期结果**：
 - 步骤 1-2：不进入隐藏项目 A 的终端，弹出错误卡提示「先显示项目」（showFirst）；config.json 的 lastOpenedProject 未改向 A
-- 步骤 3：不切换到隐藏项目 A（不 setCwd）；点会话节点对应 handler 检查 isHidden 拒绝
+- 步骤 3：不切换到隐藏项目 A（不切换工作目录）；点会话节点对应 handler 检查 isHidden 拒绝
 - 步骤 4：B 的「隐藏」禁用（管理页按钮层）+ 即便绕过调用 setHidden(B,true) 也被 domain 层拒绝（B 仍为 cwd，hiddenProjects 不含 B）
 
 ### MgmtPage_MenuKeyboard_011 - ⋯ 菜单键盘协议完整
@@ -2475,3 +2475,24 @@
 - Expected: semantic marks remain distinguishable and readable, no empty/hollow status icon or permanent status text, controls and age do not overlap, row focus is visible, description disappears immediately, and reduced motion is static
 - Authorized functional follow-up: click or press Enter/Space on one closed history row, repeat while its exact-source check is pending, and cancel another pending restore by navigation. Expect one exact-session resume, no duplicate launch, and no late launch after cancellation. Clicking an already-open row only selects it; close/archive/menu controls never also resume. A failed current source check must not launch using cached presence
 - Status: not executed on dot's cloud executor; Chromium socket permissions and Tauri Linux GTK prerequisites are unavailable. CI Linux pixels and jsdom regressions remain separate evidence
+
+## Audit follow-up: app exit PTY cleanup (pending)
+
+- Target: verify legacy PTY child processes are reaped on app exit paths that bypass window CloseRequested (e.g. taskbar quit, updater-driven exit)
+- Preconditions: one running legacy Claude session in `~/.claude` visible in Task Manager (claude.exe / OpenConsole.exe)
+- Steps: start a legacy session, quit the app from the taskbar jump list / tray (not the window X button), then inspect the process tree
+- Expected: no orphaned claude.exe or OpenConsole.exe remains after the app exits; a second consecutive launch-and-quit does not accumulate processes
+
+## Audit follow-up: strict CSP resource smoke (pending)
+
+- Target: confirm the production CSP (tauri.conf.json `default-src 'self'` baseline) does not block any legitimate runtime resource after this audit's hardening
+- Preconditions: signed candidate build installed (dev server uses devCsp and is not representative)
+- Steps: launch the installed app; open a native Claude and a legacy session, send one prompt each; open Sessions panel, resources lists (MCP/Agents/Skills/Plugins), Settings, About; toggle light/dark
+- Expected: terminal renders and streams output, styles and icons load, no blank panes; WebView console (if opened) shows no CSP violation reports
+
+## Audit follow-up: TitleBar hover in dark theme (pending)
+
+- Target: verify window control buttons (minimize/maximize) have visible hover/active feedback in dark theme after switching from hardcoded rgba to theme tokens
+- Preconditions: app running with GUI theme set to dark
+- Steps: hover and press the minimize/maximize buttons; repeat in light theme for regression
+- Expected: visible subtle background change on hover and press in both themes; close button keeps its platform red

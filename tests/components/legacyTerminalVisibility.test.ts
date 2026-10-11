@@ -8,7 +8,7 @@ import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
 import { sendTerminalCommand } from '@/composables/useTerminalCommand'
 import { platform } from '@/utils/platform'
-const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], input: vi.fn(), kill: vi.fn(), spawn: vi.fn(), output: null as any, exit: null as any, outputReady: vi.fn(), exitReady: vi.fn(), dragReady: vi.fn(), copy: vi.fn(), clip: vi.fn() }))
+const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], input: vi.fn(), kill: vi.fn(), spawn: vi.fn(), output: null as any, exit: null as any, outputReady: vi.fn(), exitReady: vi.fn(), dragReady: vi.fn(), copy: vi.fn(), clip: vi.fn(), image: vi.fn() }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: any; textarea!: HTMLTextAreaElement; element!: HTMLElement; cols = 80; rows = 24; output = ''; modes = { bracketedPasteMode: false }; unicode = { activeVersion: '6' }; buffer = { active: { length: 0 } }
   userSignal: (() => void) | null = null
@@ -21,7 +21,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
 } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit = vi.fn(); constructor() { io.fits.push(this) } } }))
 vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: class {} }))
-vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readText: io.clip, readImage: vi.fn(), writeText: io.copy }))
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readText: io.clip, readImage: io.image, writeText: io.copy }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMinimized: async () => false }) }))
 vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ onDragDropEvent: io.dragReady }) }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), ptySpawn: io.spawn, ptyInput: io.input, ptyKill: io.kill, ptyResize: vi.fn().mockResolvedValue(undefined), logMessage: vi.fn(), getSessions: vi.fn().mockResolvedValue([]), onPtyOutput: async (fn: any) => { io.output = fn; return io.outputReady() }, onPtyExit: async (fn: any) => { io.exit = fn; return io.exitReady() } }))
@@ -30,7 +30,8 @@ beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks(); io.terms.length = 0; io.fits.length = 0
   let id = 0; vi.stubGlobal('crypto', { randomUUID: () => `pty-${++id}` }); vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }); vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { fn(0); return 1 })
   io.outputReady.mockResolvedValue(() => {}); io.exitReady.mockResolvedValue(() => {}); io.dragReady.mockResolvedValue(() => {})
-  io.copy.mockResolvedValue(undefined); io.spawn.mockImplementation(async ({ id }: any) => ({ id })); io.kill.mockResolvedValue(undefined); io.input.mockResolvedValue(undefined)
+  io.copy.mockResolvedValue(undefined); io.clip.mockResolvedValue(''); io.image.mockRejectedValue(new Error('NO_IMAGE'))
+  io.spawn.mockImplementation(async ({ id }: any) => ({ id })); io.kill.mockResolvedValue(undefined); io.input.mockResolvedValue(undefined)
 })
 afterEach(() => { wrapper?.unmount(); wrapper = null; vi.unstubAllGlobals(); vi.useRealTimers() })
 describe('Legacy unified ownership', () => {
@@ -130,6 +131,101 @@ describe('Legacy unified ownership', () => {
     // Ctrl+L stays an ordinary CLI input chord.
     expect(io.terms[0].key(new KeyboardEvent('keydown', { key: 'l', ctrlKey: true }))).toBe(true)
   })
+  // WebView2 Ctrl+V 在异步剪贴板读取完成前必须阻塞同一 PTY 的键盘与协议回复。
+  it('Legacy_PasteOrdersInput_010 — deferred Ctrl+V 保持粘贴、Enter、协议回复 FIFO', async () => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
+    const ptyId = sessions.tabs.get(id)!.ptyId!
+    let finishRead!: (text: string) => void
+    io.clip.mockReturnValue(new Promise(resolve => { finishRead = resolve }))
+
+    io.terms[0].textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    io.terms[0].userData('\r')
+    io.terms[0].data('parser-response')
+    expect(io.input).not.toHaveBeenCalled()
+
+    finishRead('paste-body')
+    await flushPromises()
+    expect(io.input.mock.calls).toEqual([
+      [ptyId, 'paste-body', 'clipboard-dom'],
+      [ptyId, '\r', 'terminal-ondata'],
+      [ptyId, 'parser-response', 'terminal-ondata'],
+    ])
+  })
+
+  // 空或不可读剪贴板只取消未提交的粘贴预留，已排队 Enter 继续发送。
+  it.each(['empty', 'unreadable'] as const)('Legacy_NoopReleasesEnter_011_%s — no-op 剪贴板释放后续 Enter', async result => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
+    const ptyId = sessions.tabs.get(id)!.ptyId!
+    let finishRead!: (text: string) => void
+    let failRead!: (error: Error) => void
+    io.clip.mockReturnValue(new Promise((resolve, reject) => { finishRead = resolve; failRead = reject }))
+
+    io.terms[0].textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    io.terms[0].userData('\r')
+    expect(io.input).not.toHaveBeenCalled()
+
+    if (result === 'empty') finishRead('')
+    else failRead(new Error('CLIPBOARD_DENIED'))
+    await flushPromises()
+    expect(io.input).toHaveBeenCalledExactlyOnceWith(ptyId, '\r', 'terminal-ondata')
+  })
+
+  // restart 取消旧 PTY 的 pending 粘贴与其后输入，新 PTY 输入不等待旧剪贴板。
+  it('Legacy_RestartDropsOldQueue_012 — restart 隔离旧预留并放行新 PTY 输入', async () => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
+    const oldPtyId = sessions.tabs.get(id)!.ptyId!
+    let finishRead!: (text: string) => void
+    io.clip.mockReturnValue(new Promise(resolve => { finishRead = resolve }))
+    io.terms[0].textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    io.terms[0].userData('old-enter')
+
+    await (wrapper.vm as any).restartTab(id); await flushPromises()
+    const newPtyId = sessions.tabs.get(id)!.ptyId!
+    expect(newPtyId).not.toBe(oldPtyId)
+    io.terms[1].userData('new-input')
+    finishRead('stale-paste')
+    await flushPromises()
+
+    expect(io.input.mock.calls).toEqual([[newPtyId, 'new-input', 'terminal-ondata']])
+  })
+  // 隐藏会撤销可见期未完成的粘贴，但 parser reply 仍按队列在取消后发送。
+  it('Legacy_HiddenProtocolAfterPaste_013 — 隐藏后取消粘贴并保留协议回复', async () => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
+    const ptyId = sessions.tabs.get(id)!.ptyId!
+    let finishRead!: (text: string) => void
+    io.clip.mockReturnValue(new Promise(resolve => { finishRead = resolve }))
+    io.terms[0].textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+
+    await wrapper.setProps({ visible: false })
+    io.terms[0].data('parser-response')
+    expect(io.input).not.toHaveBeenCalled()
+    finishRead('stale-hidden-paste')
+    await flushPromises()
+
+    expect(io.input).toHaveBeenCalledExactlyOnceWith(ptyId, 'parser-response', 'terminal-ondata')
+  })
+  // 移除 tab 时销毁旧队列；迟到剪贴板和旧键盘均不能污染随后创建的 PTY。
+  it('Legacy_RemoveDropsOldQueue_019 — 移除旧 owner 后仅新 PTY 接收输入', async () => {
+    const sessions = useSessionStore(); const oldId = sessions.createTab('/old')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(oldId); await flushPromises()
+    let finishRead!: (text: string) => void
+    io.clip.mockReturnValue(new Promise(resolve => { finishRead = resolve }))
+    io.terms[0].textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    io.terms[0].userData('old-input')
+
+    sessions.removeTab(oldId); await flushPromises()
+    const newId = sessions.createTab('/new'); await (wrapper.vm as any).startTab(newId); await flushPromises()
+    const newPtyId = sessions.tabs.get(newId)!.ptyId!
+    io.terms[1].userData('new-input')
+    finishRead('late-old-paste')
+    await flushPromises()
+
+    expect(io.input.mock.calls).toEqual([[newPtyId, 'new-input', 'terminal-ondata']])
+  })
   // 隐藏Legacy时，窗口复制和旧命令通道不能截获Native输入。
   it('Legacy_HiddenInputIsIsolated_001', async () => {
     const sessions = useSessionStore(); const id = sessions.createTab('/repo')
@@ -226,6 +322,21 @@ describe('Legacy unified ownership', () => {
     io.spawn.mockImplementation(async ({ id }: any) => { io.output({ id, data: 'first byte' }); return { id } })
     expect(await starting).toEqual({ ok: true })
     expect(io.terms[0].output).toBe('first byte')
+  })
+  // 启动调用冻结 Desk 历史 locator；监听注册等待期间的 tab 变化不能改写本次 PTY 请求。
+  it('Legacy_ResumeLocatorFrozen_020', async () => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo', { sessionId: 'owned-a' })
+    let outputReady!: (unlisten: () => void) => void
+    io.outputReady.mockReturnValue(new Promise(r => { outputReady = r }))
+    wrapper = mount(XTermTerminal, { props: { visible: true } })
+    const starting = (wrapper.vm as any).startTab(id); await flushPromises()
+    sessions.tabs.get(id)!.sessionId = 'changed-after-start'
+    outputReady(() => {})
+    expect(await starting).toEqual({ ok: true })
+    expect(io.spawn).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: 'owned-a',
+      args: [],
+    }))
   })
   // 等待监听注册期间关闭目标后，旧启动不得生成孤儿进程。
   it('Legacy_ReadinessRechecksOwner_009', async () => {

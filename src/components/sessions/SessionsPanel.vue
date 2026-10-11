@@ -96,6 +96,9 @@ function activityTime(row: UnifiedSession) {
 watch(() => store.completedClose, closed => {
   if (closed) snapshotOrder(normalGroups.value.filter(group => group.projectKey === closed.projectKey))
 }, { flush: 'sync' })
+// normalGroups/archived 是 computed，每次重算产出全新引用（Map 重建 + 对象 spread），
+// 因此无需 deep 监听：引用变化即数据变化。去掉 flush: 'sync' 让高频会话状态更新
+// 合并到每个 tick 一次，而不是任意属性变化都同步触发全量重排。
 watch(() => ({ groups: normalGroups.value, archived: archived.value }), ({ groups, archived }) => {
   for (const row of archived) knownArchivedIds.add(row.id)
   const next = new Map(sessionOrders.value)
@@ -122,7 +125,7 @@ watch(() => ({ groups: normalGroups.value, archived: archived.value }), ({ group
     for (const row of rows) knownArchivedIds.delete(row.id)
   }
   sessionOrders.value = next
-}, { immediate: true, deep: true, flush: 'sync' })
+}, { immediate: true })
 watch(() => [props.active, props.currentProjectPath] as const, ([active, path], previous) => {
   if (!active) manualRefreshPending = false
   else if (!previous || !previous[0]) snapshotOrder()

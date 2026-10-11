@@ -128,19 +128,16 @@ describe.each(lineEndings)('Final Windows package workflow triggers ($name)', ({
     const pullRequest = source.split('  pull_request:\n')[1].split('  workflow_dispatch:')[0]
     for (const path of ['src/**', 'src-tauri/src/commands.rs', 'src-tauri/src/lib.rs',
       'src-tauri/src/store.rs', 'src-tauri/src/tests/store.rs', 'src-tauri/tauri.conf.json',
-      'package.json', 'package-lock.json', 'build/**', 'vite.config.ts', 'tsconfig*.json',
+      'package.json', 'package-lock.json', 'build/**', 'vite.config.ts', 'vitest.config.ts', 'tsconfig*.json',
       'tests/components/**', 'tests/stores/**', 'tests/native-cli/**', 'tests/config/**']) {
       expect(pullRequest, `final package must cover ${path}`).toContain(`      - ${path}\n`)
     }
   })
-  it('does not expand the existing development push trigger or publication authority', () => {
-    const push = source.split('  push:\n')[1].split('  pull_request:\n')[0]
-    expect(push).toContain('branches: [codex/fix-devtools-text-paste]')
-    expect([...push.matchAll(/^      - (.+)$/gm)].map(match => match[1])).toEqual([
-      'src-tauri/src/main.rs', 'src-tauri/src/conpty_runtime.rs', 'src-tauri/src/tests/conpty_runtime.rs',
-      'src-tauri/build.rs', 'src-tauri/conpty/**', 'src-tauri/tauri.windows.conf.json',
-      'scripts/*conpty*', 'tests/scripts/conptyBundle.node.cjs', '.github/workflows/conpty-integration.yml',
-    ])
+  it('keeps no development push trigger after legacy branch cleanup and no publication authority', () => {
+    // 遗留开发分支触发器已按审查清理（分支均已合并），触发面收敛为 pull_request + workflow_dispatch
+    expect(source).not.toMatch(/  push:\n/)
+    expect(source).toContain('  pull_request:\n')
+    expect(source).not.toContain('codex/fix-devtools-text-paste')
     expect(source).toContain('  workflow_dispatch:\n')
     expect(source).toContain('contents: read')
     expect(source).not.toMatch(/contents: write|action-gh-release|make_latest: true/)

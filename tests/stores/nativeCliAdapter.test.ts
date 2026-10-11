@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { describe, expect, it, vi } from 'vitest'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
-import type { NativeCliTab } from '@/stores/nativeTabs'
+import { captureNativeAttempt, useNativeTabsStore, type NativeCliTab } from '@/stores/nativeTabs'
 import type { NativeHistoryEntry } from '@/stores/nativeHistory'
 
 function tab(overrides: Partial<NativeCliTab> = {}): NativeCliTab {
@@ -41,6 +41,51 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
 }
 
 describe('native CLI adapter', () => {
+  // restart 必须撤销旧 run 的 observer 身份，避免新 attempt 认领旧历史行。
+  it('Restart_DropsObservedClaim_032 — restart 后旧 observer 身份不再认领历史', async () => {
+    setActivePinia(createPinia())
+    const tabs = useNativeTabsStore()
+    const active = tabs.create({ cli: 'claude', projectId: 'project-1', projectPath: '/repo', profileId: 'claude-main', profileRevision: '7', action: { kind: 'new' } })
+    tabs.applyLaunchStatus(active.tabId, {
+      instanceId: 'backend', requestId: active.requestId, run: { runId: active.runId, generation: active.generation },
+      phase: 'running', revision: '1', failure: null,
+    })
+    tabs.applyObservationIdentity(active.tabId, captureNativeAttempt(active), 'session-1')
+    tabs.applyLaunchStatus(active.tabId, {
+      instanceId: 'backend', requestId: active.requestId, run: { runId: active.runId, generation: active.generation },
+      phase: 'exited', revision: '2', failure: null,
+    })
+    tabs.restart(active.tabId, { profileId: 'claude-main', profileRevision: '7' })
+    const adapter = createNativeCliAdapter({
+      tabs,
+      history: { all: () => [history('claude', '/root', 'session-1')] },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() },
+      archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
+    })
+
+    const rows = (await adapter.listSessions()).filter(row => row.nativeSessionId === 'session-1')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ opened: false })
+  })
+
+  // 认证 hook 回填身份后，运行中 new 会话认领自己的历史行，消除活动/历史双行。
+  it('NativeObservedIdentity_ClaimsHistoryRow_030', async () => {
+    const active = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, observedSessionId: 'session-1' })
+    const { adapter } = setup([active], [history('claude', '/root', 'session-1')])
+    const matched = (await adapter.listSessions()).filter(row => row.nativeSessionId === 'session-1')
+    expect(matched).toHaveLength(1)
+    expect(matched[0]).toMatchObject({ opened: true })
+  })
+
+  // 无观察身份时维持不猜测立场：历史行照常投出，与活动行并存。
+  it('NativeObservedIdentity_WithoutIdentityKeepsRow_031', async () => {
+    const active = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' } })
+    const { adapter } = setup([active], [history('claude', '/root', 'session-1')])
+    const matched = (await adapter.listSessions()).filter(row => row.nativeSessionId === 'session-1')
+    expect(matched).toHaveLength(1)
+    expect(matched[0]).toMatchObject({ opened: false })
+  })
+
   // Native 关闭后刷新冻结来源，已结束终端先移除，迟到历史进入同一次关闭完成。
   it('NativeClose_RefreshesExactHistory_011', async () => {
     const value = tab({ status: 'exited' })
@@ -59,7 +104,7 @@ describe('native CLI adapter', () => {
     const closing = adapter.closeSession('native-tab:tab-1').then(() => { finished = true })
     await Promise.resolve(); await Promise.resolve()
     expect(tabs.has(value.tabId)).toBe(false)
-    expect(load).toHaveBeenCalledExactlyOnceWith({ cli: 'codex', profileId: 'codex-main', profileRevision: '7', projectId: 'project-1', projectPath: '/repo', force: true })
+    expect(load).toHaveBeenCalledExactlyOnceWith({ cli: 'codex', profileId: 'codex-main', profileRevision: '7', projectId: 'project-1', projectPath: '/repo', force: true, retainOnFailure: true })
     expect(finished).toBe(false)
     complete(history('codex', '/root', 'session-1')); await closing
     expect((await adapter.listSessions())[0]).toMatchObject({ opened: false, nativeSessionId: 'session-1' })
@@ -185,6 +230,33 @@ describe('native CLI adapter', () => {
     await adapter.resumeSession({ projectKey: '/repo', projectPath: '/repo', cli: 'codex', adapterSessionId: entry.sessions[0].sessionKey, nativeSessionId: 'session-1', launchConfigId: 'codex-main' })
     expect(runtime.createTab).toHaveBeenCalledTimes(1)
     expect(setActive).not.toHaveBeenCalledWith('tab-1')
+  })
+
+  // 关闭成功后必须清理 acceptedOpens：条目持有整个 tab 引用（长会话缓慢累积），
+  // 且 tabId 复用时旧 entry 会让新 tab 用陈旧 accepted 时间重复写 openedAt。
+  it('NativeClose_CleansAcceptedOpenEntry_012', async () => {
+    const created = tab()
+    const tabs = new Map([[created.tabId, created]])
+    const sessionRecords = new Map()
+    const upsertSessionRecord = vi.fn(async (key: string, record: unknown) => { sessionRecords.set(key, record) })
+    const adapter = createNativeCliAdapter({
+      tabs: { tabs, activeTabId: null, setActive: vi.fn(), close: id => { tabs.delete(id) }, rename: vi.fn() },
+      history: { all: () => [] },
+      runtime: { createTab: vi.fn(async () => created), restartTab: vi.fn(), stopTab: vi.fn() },
+      archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
+      metadata: { sessionRecords, upsertSessionRecord },
+    })
+
+    await adapter.createSession({ projectKey: '/repo', projectPath: '/repo', cli: 'codex', title: 'Codex active', action: { kind: 'new' } })
+    expect(upsertSessionRecord).toHaveBeenCalledTimes(1)
+
+    await adapter.closeSession('native-tab:tab-1')
+
+    // tabId 复用探测：新 tab 对象指向另一条历史来源；entry 已清理则不得再写 openedAt
+    const reused = tab({ action: { kind: 'resume-id', nativeSessionId: 'session-2' }, sourceSessionKey: JSON.stringify(['local', 'codex', '/root-2', 'session-2']) })
+    tabs.set(reused.tabId, reused)
+    await adapter.listSessions()
+    expect(upsertSessionRecord).toHaveBeenCalledTimes(1)
   })
 
 })

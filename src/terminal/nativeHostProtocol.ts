@@ -1,6 +1,7 @@
 import { classifyExplicitUserText, classifyXtermBinary } from './hostAdapter'
 import {
   createInputIntentQueue,
+  type InputReservation,
   type InputQueueSnapshot,
   type InputTarget,
 } from './inputQueue'
@@ -23,7 +24,7 @@ export interface NativeTerminalHostProtocol {
   handleData(data: string): Promise<void>
   handleBinary(data: string): Promise<void>
   sendUserText(data: string): Promise<void>
-  reserveUserPaste(produce: () => Promise<Uint8Array>): { inputSeq: string; settled: Promise<void> }
+  reserveUserPaste(produce: () => Promise<Uint8Array>): InputReservation
   snapshot(): InputQueueSnapshot
 }
 
@@ -170,6 +171,7 @@ export function createTerminalHostProtocol(
       return {
         inputSeq: reservation.inputSeq,
         settled: reservation.settled.then(() => queue.flush()),
+        cancel: reservation.cancel,
       }
     },
 

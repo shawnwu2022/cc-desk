@@ -154,9 +154,10 @@ describe('D20 target-machine certification command', () => {
     const result = spawnSync(process.execPath, [commandPath, '--config', configPath], {
       encoding: 'utf8',
       env: { ...process.env },
+      timeout: 30_000,
     })
 
-    expect(result.status).toBe(2)
+    expect(result.status, `certification command should exit 2 blocked: ${result.stderr}`).toBe(2)
     expect(result.stderr).toBe('')
     const report = JSON.parse(result.stdout)
     expect(report.status).toBe('BLOCKED')

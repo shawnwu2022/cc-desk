@@ -57,7 +57,7 @@ export const useProjectResourcesStore = defineStore('project-resources', () => {
     const registered = projects.projects.find(row => row.projectId === origin.projectId)
     if (!profile || profile.cli !== session.cli || profile.revision !== origin.profileRevision || !registered
       || ![registered.selectedPath, registered.canonicalPath].some(path => path && sameProjectPath(path, session.projectPath))) return null
-    return { ...base, target: { kind: 'profile', profileId: profile.id, expectedProfileRevision: profile.revision, projectId: registered.projectId } }
+    return { ...base, target: { kind: 'profile', profileId: profile.id, expectedProfileRevision: profile.revision, projectIds: [registered.projectId] } }
   })
   const legacyProjectOnly = computed(() => context.value?.runtime === 'legacy-claude')
   const identity = computed(() => JSON.stringify([sessions.activeSessionId, context.value, kind.value]))

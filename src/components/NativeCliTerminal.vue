@@ -13,14 +13,14 @@ import { Channel } from '@tauri-apps/api/core'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { writeText } from '@tauri-apps/plugin-clipboard-manager'
+import { readImage, readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { createNativeLaunchEntry, NativeLaunchNotSubmittedError } from '@/terminal/nativeLaunchEntry'
 import type { LaunchStatus } from '@/api/cliLaunchAttempt'
 import { createDeskNativeTerminalBinding } from '@/terminal/deskNativeTerminal'
 import type { NativeTerminalBinding } from '@/terminal/nativeTerminalBinding'
 import { createXtermModeEpoch, type XtermModeEpoch } from '@/terminal/modeEpoch'
 import { buildPastePayload, imagePasteBytes } from '@/utils/pasteText'
-import { classifyClipboardSnapshot, createImeInputPolicy } from '@/terminal/inputPolicy'
+import { classifyClipboardSnapshot, createImeInputPolicy, readClipboardSnapshot } from '@/terminal/inputPolicy'
 import { platform } from '@/utils/platform'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop } from '@/api/tauri'
@@ -54,6 +54,7 @@ let preferenceFitPending = false
 let binding: NativeTerminalBinding | null = null
 let resizeObserver: ResizeObserver | null = null
 let pasteListener: ((event: ClipboardEvent) => void) | null = null
+let pasteKeyDownListener: ((event: KeyboardEvent) => void) | null = null
 let imeCleanup: (() => void) | null = null
 let runToken: object = {}
 let modeTracker: XtermModeEpoch | null = null
@@ -163,6 +164,48 @@ function bindClipboard() {
     void reserved.settled.catch(() => markInputFailure(attempt))
   }
   host.addEventListener('paste', pasteListener, true)
+  // WebView2 的 Ctrl+V 默认粘贴行为不派发 paste 事件（Runtime 行为，与加速键开关无关），
+  // 改在 keydown 捕获后手动读剪贴板路由；preventDefault 同时避免 paste 路径恢复后的双写。
+  pasteKeyDownListener = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+    if (event.key.toLowerCase() !== 'v') return
+    if (!props.active || !inputEnabled || !term || !binding) return
+    const target = event.target as Node | null
+    if (!target || !term.element?.contains(target)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const attempt = currentAttempt()
+    const activeTerm = term
+    const activeBinding = binding
+    const bracketedPasteMode = activeTerm.modes.bracketedPasteMode
+    const ignoreBracketedPasteMode = activeTerm.options.ignoreBracketedPasteMode ?? false
+    let cancelReservation: (() => boolean) | null = null
+    const cancelNoop = (): Uint8Array => {
+      if (!cancelReservation?.()) throw new Error('NATIVE_PASTE_CANCEL_FAILED')
+      return new Uint8Array()
+    }
+    // 先在当前 attempt/mode 同步预留 intent；异步剪贴板结果只能完成这个固定预留。
+    const reserved = activeBinding.reserveUserPaste(async () => {
+      const clipboard = await readClipboardSnapshot(() => readText(), () => readImage())
+      if (!attemptIsCurrent(attempt) || binding !== activeBinding || term !== activeTerm) {
+        return cancelNoop()
+      }
+      if (clipboard.kind === 'text') {
+        const payload = buildPastePayload(
+          clipboard.text,
+          bracketedPasteMode,
+          ignoreBracketedPasteMode,
+        )
+        if (!payload) return cancelNoop()
+        return new TextEncoder().encode(payload)
+      }
+      if (clipboard.kind === 'image') return new TextEncoder().encode(imagePasteBytes(platform))
+      return cancelNoop()
+    })
+    cancelReservation = reserved.cancel
+    void reserved.settled.catch(() => markInputFailure(attempt))
+  }
+  host.addEventListener('keydown', pasteKeyDownListener, true)
 }
 
 function bindImeFallback() {
@@ -317,6 +360,9 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
       if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservation(props.tabId, attempt, state)
     }, { onNotice: notice => {
       if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservationNotice(props.tabId, attempt, notice)
+    }, onIdentity: sessionId => {
+      // 认证 hook 的会话身份让运行中 tab 可认领自己的历史行，消除活动/历史双行。
+      if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservationIdentity(props.tabId, attempt, sessionId)
     }
     })
   } catch { /* Optional observation must never block the authoritative terminal. */ }
@@ -511,7 +557,7 @@ async function stop(attempt: NativeAttemptIdentity = currentAttempt()): Promise<
       if (Date.now() >= deadline) throw new Error('NATIVE_STOP_UNCONFIRMED')
       if (!stopAccepted && result && ['starting', 'running', 'indeterminate'].includes(result.phase)) {
         try {
-          await withinStopDeadline(deadline, () => cliStop({ runId: attempt.runId, generation: attempt.generation }))
+          await withinStopDeadline(deadline, () => cliStop({ requestId: attempt.requestId, runId: attempt.runId, generation: attempt.generation }))
           stopAccepted = true
         } catch {
           // Starting can precede supervisor adoption; even RUN_NOT_FOUND or a
@@ -595,7 +641,10 @@ onMounted(async () => {
 
 watch(() => props.active, async active => {
   needsFit.value = true
-  if (!active) return
+  if (!active) {
+    // 输出 Channel 与 observer 都不拥有进程 phase；后台仍保留 owner 状态同步。
+    return
+  }
   await nextTick()
   fitVisible()
   focus()
@@ -657,6 +706,10 @@ onUnmounted(() => {
     container.value.removeEventListener('paste', pasteListener, true)
   }
   pasteListener = null
+  if (pasteKeyDownListener && container.value) {
+    container.value.removeEventListener('keydown', pasteKeyDownListener, true)
+  }
+  pasteKeyDownListener = null
   resizeObserver?.disconnect()
   resizeObserver = null
   try { webglAddon?.dispose() } catch { /* Optional renderer. */ }

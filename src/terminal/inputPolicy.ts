@@ -135,8 +135,15 @@ export async function readClipboardSnapshot(
 
   if (readImage) {
     try {
-      await readImage()
-      return { kind: 'image' }
+      const image = await readImage()
+      try {
+        return { kind: 'image' }
+      } finally {
+        const close = (image as { close?: () => Promise<unknown> } | null)?.close
+        if (typeof close === 'function') {
+          await close.call(image).catch(() => {})
+        }
+      }
     } catch {
       // Absence/failure of image probing is not itself image evidence.
     }

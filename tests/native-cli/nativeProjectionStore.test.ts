@@ -3,7 +3,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import { useNativeProjectionStore } from '@/stores/nativeProjection'
 import { useConfigStore } from '@/stores/config'
 import { nativeGetScope } from '@/api/tauri'
-const target = (p: string) => ({ kind: 'profile' as const, profileId: p, expectedProfileRevision: '1', projectId: null })
+const target = (p: string) => ({ kind: 'profile' as const, profileId: p, expectedProfileRevision: '1', projectIds: [] })
 const scope = (p: string) => ({ scopeId: `scope-${p}`, instanceId: 'instance', cli: 'claude', sourceRootKey: p, identityEpoch: '1', profileId: p, profileRevision: '1', target: target(p), basis: 'configured-profile' })
 function bridge(invoke: (cmd: string, arg: any) => Promise<unknown>) {
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: { instanceId: 'instance', invoke } })

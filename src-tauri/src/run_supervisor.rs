@@ -3,24 +3,84 @@
 
 use crate::cli::launch_service::{NativeRun, RunSupervisor};
 use crate::cli::profiles::error;
-use crate::cli::run_registry::{RunKey, RunRegistry};
+use crate::cli::run_registry::{LaunchStatus, RunKey, RunRegistry};
+use crate::cli::snapshot::CallerIdentity;
 use crate::cli::types::{SafeError, WireU64};
+#[cfg(test)]
+use crate::run_lifecycle::ProcessLifecycle;
 use crate::run_lifecycle::{LifecycleRecord, OutputLifecycle};
 use crate::terminal_transport::{OutputProgress, TerminalStream, TerminalTransports};
 use parking_lot::{Condvar, Mutex};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 type RunIdentity = (String, u32);
 
+// 诊断快照保留上限：超过后按完成顺序淘汰最老记录，避免 completed 无界增长。
+const SUPERVISOR_COMPLETED_MAX: usize = 256;
+const SUPERVISOR_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+#[derive(Default)]
+struct CompletedRuns {
+    order: VecDeque<RunIdentity>,
+    records: HashMap<RunIdentity, LifecycleRecord>,
+}
+
+fn record_completed(completed: &mut CompletedRuns, key: RunIdentity, snapshot: LifecycleRecord) {
+    completed.records.insert(key.clone(), snapshot);
+    if !completed.order.contains(&key) {
+        completed.order.push_back(key.clone());
+    }
+    while completed.order.len() > SUPERVISOR_COMPLETED_MAX {
+        let Some(oldest) = completed.order.pop_front() else {
+            break;
+        };
+        completed.records.remove(&oldest);
+    }
+}
+
 struct SupervisorCore {
     transports: Arc<TerminalTransports>,
     active: Mutex<HashMap<RunIdentity, Arc<SupervisedRun>>>,
-    completed: Mutex<HashMap<RunIdentity, LifecycleRecord>>,
+    completed: Mutex<CompletedRuns>,
     shutting_down: AtomicBool,
     settled: Condvar,
+    #[cfg(test)]
+    fail_next_wait: AtomicBool,
+    #[cfg(test)]
+    fail_wait_count: AtomicUsize,
+    #[cfg(test)]
+    fail_wait_after_stop: AtomicBool,
+    #[cfg(test)]
+    fail_next_mark_exited: AtomicBool,
+    #[cfg(test)]
+    fail_next_retire: AtomicBool,
+    #[cfg(test)]
+    registry_step_calls: AtomicUsize,
+    #[cfg(test)]
+    automatic_retry_calls: AtomicUsize,
+    #[cfg(test)]
+    automatic_retry_paused: Mutex<bool>,
+    #[cfg(test)]
+    automatic_retry_changed: Condvar,
+    #[cfg(test)]
+    registry_steps_paused: Mutex<bool>,
+    #[cfg(test)]
+    registry_steps_changed: Condvar,
+    #[cfg(test)]
+    retirement_publish_paused: Mutex<bool>,
+    #[cfg(test)]
+    retirement_publish_changed: Condvar,
+    #[cfg(test)]
+    adoption_setup_paused: Mutex<bool>,
+    #[cfg(test)]
+    adoption_setup_waiting: AtomicBool,
+    #[cfg(test)]
+    adoption_setup_changed: Condvar,
 }
 
 pub(crate) struct NativeRunSupervisor {
@@ -33,11 +93,153 @@ impl NativeRunSupervisor {
             core: Arc::new(SupervisorCore {
                 transports,
                 active: Mutex::new(HashMap::new()),
-                completed: Mutex::new(HashMap::new()),
+                completed: Mutex::new(CompletedRuns::default()),
                 shutting_down: AtomicBool::new(false),
                 settled: Condvar::new(),
+                #[cfg(test)]
+                fail_next_wait: AtomicBool::new(false),
+                #[cfg(test)]
+                fail_wait_count: AtomicUsize::new(0),
+                #[cfg(test)]
+                fail_wait_after_stop: AtomicBool::new(false),
+                #[cfg(test)]
+                fail_next_mark_exited: AtomicBool::new(false),
+                #[cfg(test)]
+                fail_next_retire: AtomicBool::new(false),
+                #[cfg(test)]
+                registry_step_calls: AtomicUsize::new(0),
+                #[cfg(test)]
+                automatic_retry_calls: AtomicUsize::new(0),
+                #[cfg(test)]
+                automatic_retry_paused: Mutex::new(false),
+                #[cfg(test)]
+                automatic_retry_changed: Condvar::new(),
+                #[cfg(test)]
+                registry_steps_paused: Mutex::new(false),
+                #[cfg(test)]
+                registry_steps_changed: Condvar::new(),
+                #[cfg(test)]
+                retirement_publish_paused: Mutex::new(false),
+                #[cfg(test)]
+                retirement_publish_changed: Condvar::new(),
+                #[cfg(test)]
+                adoption_setup_paused: Mutex::new(false),
+                #[cfg(test)]
+                adoption_setup_waiting: AtomicBool::new(false),
+                #[cfg(test)]
+                adoption_setup_changed: Condvar::new(),
             }),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_wait_for_test(&self) {
+        self.core.fail_next_wait.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_wait_count_for_test(&self, count: usize) {
+        self.core.fail_wait_count.store(count, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_wait_after_stop_for_test(&self) {
+        self.core.fail_wait_after_stop.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_registry_steps_for_test(&self) {
+        self.core
+            .fail_next_mark_exited
+            .store(true, Ordering::SeqCst);
+        self.core.fail_next_retire.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_mark_exited_for_test(&self) {
+        self.core
+            .fail_next_mark_exited
+            .store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn registry_step_calls_for_test(&self) -> usize {
+        self.core.registry_step_calls.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn automatic_retry_calls_for_test(&self) -> usize {
+        self.core.automatic_retry_calls.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_automatic_retry_for_test(&self) {
+        *self.core.automatic_retry_paused.lock() = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release_automatic_retry_for_test(&self) {
+        *self.core.automatic_retry_paused.lock() = false;
+        self.core.automatic_retry_changed.notify_all();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_registry_steps_for_test(&self) {
+        *self.core.registry_steps_paused.lock() = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release_registry_steps_for_test(&self) {
+        *self.core.registry_steps_paused.lock() = false;
+        self.core.registry_steps_changed.notify_all();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_retirement_publish_for_test(&self) {
+        *self.core.retirement_publish_paused.lock() = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release_retirement_publish_for_test(&self) {
+        *self.core.retirement_publish_paused.lock() = false;
+        self.core.retirement_publish_changed.notify_all();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_adoption_setup_for_test(&self) {
+        *self.core.adoption_setup_paused.lock() = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn adoption_setup_waiting_for_test(&self) -> bool {
+        self.core.adoption_setup_waiting.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release_adoption_setup_for_test(&self) {
+        *self.core.adoption_setup_paused.lock() = false;
+        self.core.adoption_setup_changed.notify_all();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retry_ready_for_test(&self, run: &RunKey) -> bool {
+        self.core
+            .active
+            .lock()
+            .get(&identity(run))
+            .is_some_and(|state| !state.waiter_running.load(Ordering::SeqCst))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_for_test(&self, run: &RunKey) -> bool {
+        self.core.active.lock().contains_key(&identity(run))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stream_for_test(&self, run: &RunKey) -> Option<Arc<TerminalStream>> {
+        let state = self.core.active.lock().get(&identity(run)).cloned()?;
+        let stream = state.stream.lock().clone();
+        stream
     }
 
     #[allow(dead_code)] // D15 test/diagnostic observation; not a wire command.
@@ -46,53 +248,67 @@ impl NativeRunSupervisor {
         if let Some(state) = self.core.active.lock().get(&key).cloned() {
             return Some(state.lifecycle.lock().clone());
         }
-        self.core.completed.lock().get(&key).cloned()
+        self.core.completed.lock().records.get(&key).cloned()
     }
 
-    pub(crate) fn stop(&self, run: &RunKey) -> Result<(), SafeError> {
+    pub(crate) fn stop(
+        &self,
+        caller: &CallerIdentity,
+        receipt: &LaunchStatus,
+    ) -> Result<(), SafeError> {
         let state = self
             .core
             .active
             .lock()
-            .get(&identity(run))
+            .get(&identity(&receipt.run))
             .cloned()
             .ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        state.authorize_stop(caller, receipt)?;
         state.request_stop()
     }
 
     pub(crate) fn shutdown(&self) {
         const SHUTDOWN_REAP_TIMEOUT: Duration = Duration::from_secs(5);
 
-        let first = !self.core.shutting_down.swap(true, Ordering::SeqCst);
-        if first {
-            let active: Vec<_> = self.core.active.lock().values().cloned().collect();
-            for state in active {
-                if let Err(failure) = state.request_stop() {
-                    log::warn!(
-                        "native run shutdown control failed for {}:{}: {}",
-                        state.run.run_id,
-                        state.run.generation,
-                        failure.code
-                    );
-                }
-            }
-        }
-
-        // begin_shutdown() on LaunchService prevents future handoffs before this
-        // production path calls us. Waiting here makes app exit observe waiter
-        // reaping instead of treating an accepted terminate signal as completion.
+        self.core.shutting_down.store(true, Ordering::SeqCst);
         let started = Instant::now();
-        let mut active = self.core.active.lock();
-        while !active.is_empty() {
+        let mut next_control_at = started;
+        loop {
+            if Instant::now() >= next_control_at {
+                let states: Vec<_> = self.core.active.lock().values().cloned().collect();
+                if states.is_empty() {
+                    return;
+                }
+                for state in states {
+                    if let Err(failure) = state.request_stop() {
+                        log::warn!(
+                            "native run shutdown control failed for {}:{}: {}",
+                            state.run.run_id,
+                            state.run.generation,
+                            failure.code
+                        );
+                    }
+                }
+                next_control_at = Instant::now() + SUPERVISOR_RETRY_DELAY;
+            }
+
             let remaining = SHUTDOWN_REAP_TIMEOUT.saturating_sub(started.elapsed());
             if remaining.is_zero() {
                 log::warn!(
                     "native run shutdown timed out with {} supervised run(s) still active",
-                    active.len()
+                    self.core.active.lock().len()
                 );
-                break;
+                return;
             }
-            self.core.settled.wait_for(&mut active, remaining);
+            let mut active = self.core.active.lock();
+            if active.is_empty() {
+                return;
+            }
+            // 早到的故障通知只用于重查 active；下一次控制仍受单调时钟节流。
+            let until_control = next_control_at.saturating_duration_since(Instant::now());
+            self.core
+                .settled
+                .wait_for(&mut active, remaining.min(until_control));
         }
     }
 }
@@ -104,7 +320,12 @@ impl RunSupervisor for NativeRunSupervisor {
         run: &RunKey,
         resource: Arc<NativeRun>,
     ) -> Result<(), SafeError> {
-        let state = SupervisedRun::new(Arc::downgrade(&self.core), run.clone(), resource.clone())?;
+        let state = SupervisedRun::new(
+            Arc::downgrade(&self.core),
+            registry,
+            run.clone(),
+            resource.clone(),
+        )?;
         {
             let mut active = self.core.active.lock();
             if active.contains_key(&identity(run)) {
@@ -112,79 +333,39 @@ impl RunSupervisor for NativeRunSupervisor {
             }
             active.insert(identity(run), state.clone());
         }
+        let mut adoption = AdoptionGuard::new(state.clone());
 
         // Install the reap owner before any transport setup that can fail. Once
         // spawn has published a NativeRun, an attach/setup failure must still
         // terminate and reap that exact creation-owned child.
-        let waiter_state = state.clone();
-        let waiter_run = run.clone();
-        let waiter_resource = resource.clone();
-        if std::thread::Builder::new()
-            .name("native-run-waiter".into())
-            .spawn(move || match waiter_resource.process.pty.wait() {
-                Ok(_) => {
-                    if let Err(failure) = registry.mark_exited(&waiter_run) {
-                        log::error!(
-                            "native run registry exit transition failed: {}",
-                            failure.code
-                        );
-                        waiter_state.process_failed();
-                        return;
-                    }
-                    waiter_state.process_exited();
-                    if let Err(failure) = registry.retire(&waiter_run) {
-                        log::error!("native run resource retirement failed: {}", failure.code);
-                        waiter_state.reader_failed();
-                        return;
-                    }
-                    // Registry retirement removes caller control immediately after
-                    // wait/reap. SupervisedRun retains its own Arc until PTY EOF (or
-                    // an incomplete/degraded terminal state), so any client that
-                    // remains attached after root exit can finish its tail output.
-                    // This retention does not make an OS-terminated descendant live.
-                    drop(waiter_resource);
-                    waiter_state.await_real_output_end();
-                }
-                Err(_) => {
-                    log::error!("native run waiter failed");
-                    waiter_state.process_failed();
-                }
-            })
-            .is_err()
-        {
-            state.reader_failed();
-            let _ = state.request_stop();
+        if state.start_waiter().is_err() {
             return Err(error("RUN_SUPERVISOR_FAILED"));
         }
 
-        let mut reader = match resource.process.pty.take_reader() {
-            Ok(reader) => reader,
-            Err(failure) => {
-                state.reader_failed();
-                let _ = state.request_stop();
-                return Err(failure);
+        #[cfg(test)]
+        {
+            let mut paused = self.core.adoption_setup_paused.lock();
+            self.core
+                .adoption_setup_waiting
+                .store(true, Ordering::SeqCst);
+            while *paused {
+                self.core.adoption_setup_changed.wait(&mut paused);
             }
-        };
+            self.core
+                .adoption_setup_waiting
+                .store(false, Ordering::SeqCst);
+        }
+
+        let mut reader = resource.process.pty.take_reader()?;
 
         let progress: Arc<dyn OutputProgress> = state.clone();
-        let stream = match self.core.transports.attach_observed(
+        let stream = self.core.transports.attach_observed(
             resource.process.snapshot.owner().clone(),
             run.clone(),
             resource.route(),
             progress,
-        ) {
-            Ok(stream) => stream,
-            Err(failure) => {
-                state.reader_failed();
-                let _ = state.request_stop();
-                return Err(failure);
-            }
-        };
-        if let Err(failure) = state.set_stream(stream.clone()) {
-            state.reader_failed();
-            let _ = state.request_stop();
-            return Err(failure);
-        }
+        )?;
+        state.set_stream(stream.clone())?;
 
         let reader_state = state.clone();
         if std::thread::Builder::new()
@@ -204,8 +385,6 @@ impl RunSupervisor for NativeRunSupervisor {
             })
             .is_err()
         {
-            state.reader_failed();
-            let _ = state.request_stop();
             return Err(error("RUN_SUPERVISOR_FAILED"));
         }
 
@@ -216,37 +395,245 @@ impl RunSupervisor for NativeRunSupervisor {
             state.request_stop()?;
         }
 
+        adoption.complete();
         Ok(())
+    }
+}
+
+struct AdoptionGuard {
+    state: Arc<SupervisedRun>,
+    complete: bool,
+}
+
+impl AdoptionGuard {
+    fn new(state: Arc<SupervisedRun>) -> Self {
+        Self {
+            state,
+            complete: false,
+        }
+    }
+
+    fn complete(&mut self) {
+        self.state.complete_adoption();
+        self.complete = true;
+    }
+}
+
+impl Drop for AdoptionGuard {
+    fn drop(&mut self) {
+        if self.complete {
+            return;
+        }
+        self.state.reader_failed();
+        let _ = self.state.request_stop();
+        self.state.complete_adoption();
     }
 }
 
 struct SupervisedRun {
     core: Weak<SupervisorCore>,
+    registry: Arc<RunRegistry<NativeRun>>,
     run: RunKey,
+    owner: CallerIdentity,
+    request_id: String,
     lifecycle: Mutex<LifecycleRecord>,
     stream: Mutex<Option<Arc<TerminalStream>>>,
     resource: Mutex<Option<Arc<NativeRun>>>,
+    stop_control: Mutex<()>,
     stop_requested: AtomicBool,
+    waiter_running: AtomicBool,
+    reaped: AtomicBool,
+    registry_retired: AtomicBool,
+    adoption_complete: AtomicBool,
+    automatic_retry_used: AtomicBool,
     changed: Condvar,
 }
 
 impl SupervisedRun {
     fn new(
         core: Weak<SupervisorCore>,
+        registry: Arc<RunRegistry<NativeRun>>,
         run: RunKey,
         resource: Arc<NativeRun>,
     ) -> Result<Arc<Self>, SafeError> {
         let mut lifecycle = LifecycleRecord::new(run.clone());
         lifecycle.process_running()?;
+        let owner = resource.process.snapshot.owner().clone();
+        let request_id = resource.process.snapshot.request().request_id.clone();
         Ok(Arc::new(Self {
             core,
+            registry,
             run,
+            owner,
+            request_id,
             lifecycle: Mutex::new(lifecycle),
             stream: Mutex::new(None),
             resource: Mutex::new(Some(resource)),
+            stop_control: Mutex::new(()),
             stop_requested: AtomicBool::new(false),
+            waiter_running: AtomicBool::new(false),
+            reaped: AtomicBool::new(false),
+            registry_retired: AtomicBool::new(false),
+            adoption_complete: AtomicBool::new(false),
+            automatic_retry_used: AtomicBool::new(false),
             changed: Condvar::new(),
         }))
+    }
+
+    fn start_waiter(self: &Arc<Self>) -> Result<(), SafeError> {
+        if self.registry_retired.load(Ordering::SeqCst) {
+            self.release_resource_if_transport_terminal();
+            self.finish_if_terminal();
+            return Ok(());
+        }
+        if self
+            .waiter_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Ok(());
+        }
+        let resource = if self.reaped.load(Ordering::SeqCst) {
+            None
+        } else {
+            match self.resource.lock().clone() {
+                Some(resource) => Some(resource),
+                None => {
+                    self.waiter_running.store(false, Ordering::SeqCst);
+                    return Err(error("RUN_NOT_READY"));
+                }
+            }
+        };
+        let state = self.clone();
+        if std::thread::Builder::new()
+            .name("native-run-waiter".into())
+            .spawn(move || state.wait_and_converge(resource))
+            .is_err()
+        {
+            self.waiter_running.store(false, Ordering::SeqCst);
+            self.notify_retryable();
+            return Err(error("RUN_SUPERVISOR_FAILED"));
+        }
+        Ok(())
+    }
+
+    fn wait_and_converge(self: Arc<Self>, resource: Option<Arc<NativeRun>>) {
+        if !self.reaped.load(Ordering::SeqCst) {
+            let Some(resource) = resource else {
+                self.waiter_running.store(false, Ordering::SeqCst);
+                self.notify_retryable();
+                return;
+            };
+            #[cfg(test)]
+            let waited = {
+                let core = self.core.upgrade();
+                if core
+                    .as_ref()
+                    .is_some_and(|core| core.fail_wait_after_stop.load(Ordering::SeqCst))
+                {
+                    let mut lifecycle = self.lifecycle.lock();
+                    while !self.stop_requested.load(Ordering::SeqCst) {
+                        self.changed.wait(&mut lifecycle);
+                    }
+                    drop(lifecycle);
+                    core.expect("test supervisor core must remain alive")
+                        .fail_wait_after_stop
+                        .store(false, Ordering::SeqCst);
+                    Err(error("PROCESS_WAIT_FAILED"))
+                } else if core.is_some_and(|core| {
+                    core.fail_next_wait.swap(false, Ordering::SeqCst)
+                        || core
+                            .fail_wait_count
+                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                                remaining.checked_sub(1)
+                            })
+                            .is_ok()
+                }) {
+                    Err(error("PROCESS_WAIT_FAILED"))
+                } else {
+                    resource.process.pty.wait()
+                }
+            };
+            #[cfg(not(test))]
+            let waited = resource.process.pty.wait();
+            if waited.is_err() {
+                log::error!("native run waiter failed");
+                self.process_failed();
+                self.retry_after_failure();
+                return;
+            }
+            self.reaped.store(true, Ordering::SeqCst);
+        }
+
+        if let Err(failure) = self.lifecycle.lock().process_exited() {
+            log::error!("native lifecycle exit conflict: {}", failure.code);
+            self.retry_after_failure();
+            return;
+        }
+        if let Err(failure) = self.mark_registry_exited() {
+            log::error!(
+                "native run registry exit transition failed: {}",
+                failure.code
+            );
+            self.retry_after_failure();
+            return;
+        }
+        if let Err(failure) = self.retire_registry_resource() {
+            log::error!("native run resource retirement failed: {}", failure.code);
+            self.retry_after_failure();
+            return;
+        }
+        #[cfg(test)]
+        if let Some(core) = self.core.upgrade() {
+            let mut paused = core.retirement_publish_paused.lock();
+            while *paused {
+                core.retirement_publish_changed.wait(&mut paused);
+            }
+        }
+        self.registry_retired.store(true, Ordering::SeqCst);
+        self.changed.notify_all();
+        self.release_resource_if_transport_terminal();
+        self.finish_if_terminal();
+        self.await_real_output_end();
+        self.waiter_running.store(false, Ordering::SeqCst);
+        self.notify_retryable();
+    }
+
+    fn mark_registry_exited(&self) -> Result<(), SafeError> {
+        #[cfg(test)]
+        if let Some(core) = self.core.upgrade() {
+            let mut paused = core.registry_steps_paused.lock();
+            while *paused {
+                core.registry_steps_changed.wait(&mut paused);
+            }
+            drop(paused);
+            core.registry_step_calls.fetch_add(1, Ordering::SeqCst);
+        }
+        #[cfg(test)]
+        if self
+            .core
+            .upgrade()
+            .is_some_and(|core| core.fail_next_mark_exited.swap(false, Ordering::SeqCst))
+        {
+            return Err(error("RUN_STATE_CONFLICT"));
+        }
+        self.registry.mark_exited(&self.run)
+    }
+
+    fn retire_registry_resource(&self) -> Result<(), SafeError> {
+        #[cfg(test)]
+        if let Some(core) = self.core.upgrade() {
+            core.registry_step_calls.fetch_add(1, Ordering::SeqCst);
+        }
+        #[cfg(test)]
+        if self
+            .core
+            .upgrade()
+            .is_some_and(|core| core.fail_next_retire.swap(false, Ordering::SeqCst))
+        {
+            return Err(error("RUN_NOT_READY"));
+        }
+        self.registry.retire(&self.run)
     }
 
     fn set_stream(&self, stream: Arc<TerminalStream>) -> Result<(), SafeError> {
@@ -257,14 +644,37 @@ impl SupervisedRun {
         Ok(())
     }
 
-    fn process_exited(&self) {
-        let result = self.lifecycle.lock().process_exited();
-        if let Err(failure) = result {
-            log::error!("native lifecycle exit conflict: {}", failure.code);
+    fn authorize_stop(
+        &self,
+        caller: &CallerIdentity,
+        receipt: &LaunchStatus,
+    ) -> Result<(), SafeError> {
+        if self.owner != *caller || receipt.run != self.run || receipt.request_id != self.request_id
+        {
+            return Err(error("FORBIDDEN"));
         }
-        self.changed.notify_all();
-        self.release_resource_if_transport_terminal();
-        self.finish_if_terminal();
+        self.registry.check_run(caller, &self.run)?;
+        match self.registry.resource(caller, &self.run) {
+            Ok(current) => {
+                let owned = self
+                    .resource
+                    .lock()
+                    .clone()
+                    .ok_or_else(|| error("RUN_NOT_READY"))?;
+                if !Arc::ptr_eq(&current, &owned) {
+                    return Err(error("FORBIDDEN"));
+                }
+                Ok(())
+            }
+            Err(failure)
+                if failure.code == "RUN_NOT_READY" && self.reaped.load(Ordering::SeqCst) =>
+            {
+                // Registry 退役可早于输出排空；固定 state Arc、冻结 owner 与精确 run
+                // 继续构成此阶段的授权绑定。
+                Ok(())
+            }
+            Err(failure) => Err(failure),
+        }
     }
 
     fn process_failed(&self) {
@@ -322,28 +732,32 @@ impl SupervisedRun {
         self.finish_if_terminal();
     }
 
-    fn request_stop(&self) -> Result<(), SafeError> {
-        if self.stop_requested.swap(true, Ordering::SeqCst) {
-            return Ok(());
-        }
-        let exited = {
+    fn request_stop(self: &Arc<Self>) -> Result<(), SafeError> {
+        // 每次显式控制允许一次延迟自动重试；连续底层错误仍保持未知并等待下一次控制。
+        self.automatic_retry_used.store(false, Ordering::SeqCst);
+        {
             let mut lifecycle = self.lifecycle.lock();
-            let exited = lifecycle.process() == crate::run_lifecycle::ProcessLifecycle::Exited;
             lifecycle.mark_incomplete()?;
-            exited
-        };
-        self.changed.notify_all();
-        if exited {
-            self.release_resource_if_transport_terminal();
-            self.finish_if_terminal();
-            return Ok(());
         }
-        let resource = self
-            .resource
-            .lock()
-            .clone()
-            .ok_or_else(|| error("RUN_NOT_READY"))?;
-        resource.process.pty.terminate_root()
+        self.changed.notify_all();
+        {
+            let _control = self.stop_control.lock();
+            if !self.stop_requested.load(Ordering::SeqCst) {
+                if !self.reaped.load(Ordering::SeqCst) {
+                    let resource = self
+                        .resource
+                        .lock()
+                        .clone()
+                        .ok_or_else(|| error("RUN_NOT_READY"))?;
+                    // 只在系统接受 terminate 后发布 stop_requested，避免并发 stop 误报成功。
+                    resource.process.pty.terminate_root()?;
+                }
+                // 真实 reap 已知时无需 terminate；两种成功控制路径都登记后续有界重试。
+                self.stop_requested.store(true, Ordering::SeqCst);
+                self.changed.notify_all();
+            }
+        }
+        self.start_waiter()
     }
 
     fn await_real_output_end(&self) {
@@ -395,7 +809,20 @@ impl SupervisedRun {
         }
     }
 
+    fn complete_adoption(&self) {
+        self.adoption_complete.store(true, Ordering::SeqCst);
+        self.changed.notify_all();
+        self.release_resource_if_transport_terminal();
+        self.finish_if_terminal();
+    }
+
     fn finish_if_terminal(&self) {
+        if !self.adoption_complete.load(Ordering::SeqCst) {
+            return;
+        }
+        if !self.registry_retired.load(Ordering::SeqCst) {
+            return;
+        }
         let snapshot = {
             let lifecycle = self.lifecycle.lock();
             if !lifecycle.can_retire() {
@@ -407,13 +834,87 @@ impl SupervisedRun {
             return;
         };
         let key = identity(&self.run);
-        core.completed.lock().insert(key.clone(), snapshot);
-        core.active.lock().remove(&key);
+        let mut active = core.active.lock();
+        if !active
+            .get(&key)
+            .is_some_and(|current| std::ptr::eq(current.as_ref(), self))
+        {
+            return;
+        }
+        if let Some(stream) = self.stream.lock().clone() {
+            if let Err(failure) = core.transports.detach(&stream) {
+                log::error!("native output stream detach failed: {}", failure.code);
+                return;
+            }
+        }
+        if let Err(failure) = self
+            .registry
+            .complete_retirement(&self.run, &self.request_id)
+        {
+            log::error!(
+                "native run registry retirement completion failed: {}",
+                failure.code
+            );
+            return;
+        }
+        record_completed(&mut core.completed.lock(), key.clone(), snapshot);
+        active.remove(&key);
+        drop(active);
         core.settled.notify_all();
         // TerminalTransports stores only a Weak. Keep this strong reference
         // through EOF and the final parsed ACK, then release exact credit/route.
         self.stream.lock().take();
         self.resource.lock().take();
+    }
+
+    fn notify_retryable(&self) {
+        self.changed.notify_all();
+        if let Some(core) = self.core.upgrade() {
+            core.settled.notify_all();
+        }
+    }
+
+    fn retry_after_failure(self: &Arc<Self>) {
+        self.waiter_running.store(false, Ordering::SeqCst);
+        self.notify_retryable();
+        if !self.stop_requested.load(Ordering::SeqCst)
+            || self.automatic_retry_used.swap(true, Ordering::SeqCst)
+            || self
+                .core
+                .upgrade()
+                .is_some_and(|core| core.shutting_down.load(Ordering::SeqCst))
+        {
+            return;
+        }
+        let state = self.clone();
+        if std::thread::Builder::new()
+            .name("native-run-wait-retry".into())
+            .spawn(move || {
+                std::thread::sleep(SUPERVISOR_RETRY_DELAY);
+                if state
+                    .core
+                    .upgrade()
+                    .is_some_and(|core| core.shutting_down.load(Ordering::SeqCst))
+                {
+                    return;
+                }
+                #[cfg(test)]
+                if let Some(core) = state.core.upgrade() {
+                    let mut paused = core.automatic_retry_paused.lock();
+                    while *paused {
+                        core.automatic_retry_changed.wait(&mut paused);
+                    }
+                    drop(paused);
+                    core.automatic_retry_calls.fetch_add(1, Ordering::SeqCst);
+                }
+                if let Err(failure) = state.start_waiter() {
+                    log::warn!("native run waiter retry failed: {}", failure.code);
+                }
+            })
+            .is_err()
+        {
+            log::warn!("native run waiter retry thread failed");
+        }
     }
 }
 
@@ -437,4 +938,94 @@ impl OutputProgress for SupervisedRun {
 
 fn identity(run: &RunKey) -> RunIdentity {
     (run.run_id.clone(), run.generation)
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod convergence_tests {
+    use super::*;
+
+    fn lifecycle() -> LifecycleRecord {
+        LifecycleRecord::new(RunKey {
+            run_id: "run-a".into(),
+            generation: 1,
+        })
+    }
+
+    // wait 失败只表示进程状态未知，不能据此释放监督权。
+    #[test]
+    fn Supervisor_ProcessFailure_FailedIncompleteStaysActive_001() {
+        let mut record = lifecycle();
+        record.process_running().unwrap();
+        record.process_failed();
+        assert_eq!(record.process(), ProcessLifecycle::Failed);
+        assert_eq!(record.output(), OutputLifecycle::Incomplete);
+        assert!(!record.can_retire());
+    }
+
+    // 已降级输出也不能把 wait 错误伪装成 OS 退出。
+    #[test]
+    fn Supervisor_ProcessFailure_DegradedFailureStaysActive_002() {
+        let mut record = lifecycle();
+        record.process_running().unwrap();
+        record.output_started("1").unwrap();
+        record.mark_degraded().unwrap();
+        record.process_failed();
+        assert_eq!(record.output(), OutputLifecycle::Degraded);
+        assert!(!record.can_retire());
+    }
+
+    // 后续真实 wait/reap 证据可以将 Failed 恢复为 Exited。
+    #[test]
+    fn Supervisor_ProcessFailure_RealReapRecoversExited_003() {
+        let mut record = lifecycle();
+        record.process_running().unwrap();
+        record.output_started("1").unwrap();
+        record.process_failed();
+        record.process_exited().unwrap();
+        assert_eq!(record.process(), ProcessLifecycle::Exited);
+        assert!(record.can_retire());
+    }
+
+    // completed 诊断表有界：超出上限按完成顺序淘汰最老记录。
+    #[test]
+    fn Supervisor_CompletedRetention_BoundedAndEvictsOldest_004() {
+        let mut completed = CompletedRuns::default();
+        for index in 0..(SUPERVISOR_COMPLETED_MAX + 5) {
+            let run_id = format!("run-{index}");
+            let mut record = LifecycleRecord::new(RunKey {
+                run_id: run_id.clone(),
+                generation: 1,
+            });
+            record.process_running().unwrap();
+            record.output_started("1").unwrap();
+            record.process_exited().unwrap();
+            record.output_end("0").unwrap();
+            record.parsed_through("0").unwrap();
+            record_completed(&mut completed, (run_id, 1), record);
+        }
+        assert_eq!(completed.records.len(), SUPERVISOR_COMPLETED_MAX);
+        assert!(!completed.records.contains_key(&(String::from("run-0"), 1)));
+        assert!(!completed.records.contains_key(&(String::from("run-4"), 1)));
+        assert!(completed.records.contains_key(&(String::from("run-5"), 1)));
+        assert!(completed
+            .records
+            .contains_key(&(format!("run-{}", SUPERVISOR_COMPLETED_MAX + 4), 1)));
+        assert_eq!(
+            completed.order.front().map(|(run_id, _)| run_id.clone()),
+            Some(String::from("run-5"))
+        );
+    }
+
+    // 同一 run 的重复完成（迟到 reader 终结）只保留最新快照且不重复排队。
+    #[test]
+    fn Supervisor_CompletedRetention_RepublishKeepsSingleOrderEntry_005() {
+        let mut completed = CompletedRuns::default();
+        let key = (String::from("run-a"), 1);
+        record_completed(&mut completed, key.clone(), lifecycle());
+        record_completed(&mut completed, key.clone(), lifecycle());
+        assert_eq!(completed.records.len(), 1);
+        assert_eq!(completed.order.len(), 1);
+        assert_eq!(completed.order.front(), Some(&key));
+    }
 }

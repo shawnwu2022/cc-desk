@@ -8,14 +8,19 @@ use tauri::AppHandle;
 use crate::checks::CheckResult;
 use crate::pty::get_pty_manager;
 use crate::store::{
-    AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project, ProjectConfig,
-    ProjectLaunchPreference, ProjectsState, SessionDetails, SessionInfo, SessionSearchResult,
-    SessionUiRecord, SkillInfo,
+    apply_archive_session, apply_pin_project, apply_restore_session, apply_set_display_name,
+    apply_unpin_project, AgentInfo, AppConfig, HomeData, McpServerInfo, PluginInfo, Project,
+    ProjectConfig, ProjectLaunchPreference, ProjectsState, SessionDetails, SessionInfo,
+    SessionSearchResult, SessionUiRecord, SkillInfo,
 };
+// 别名校验已下沉 store（apply_set_display_name 内部使用）；测试仍从原路径导入，故 test 构建下保留
+#[cfg(test)]
+pub(crate) use crate::store::validate_display_name_inner;
 
 // ==================== PTY Commands ====================
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PtySpawnOptions {
     id: String,
     cwd: String,
@@ -23,6 +28,7 @@ pub struct PtySpawnOptions {
     pty_type: String, // "claude" | "shell"
     cols: Option<u16>,
     rows: Option<u16>,
+    resume_session_id: Option<String>,
     args: Option<Vec<String>>,
 }
 
@@ -46,6 +52,7 @@ pub async fn pty_spawn(
         pty_type,
         cols,
         rows,
+        resume_session_id,
         args,
     } = options;
     let cols = cols.unwrap_or(80);
@@ -55,7 +62,7 @@ pub async fn pty_spawn(
     let result = if pty_type == "shell" {
         manager.spawn_shell(id, &cwd, cols, rows)
     } else {
-        manager.spawn_claude(id, &cwd, cols, rows, args)
+        manager.spawn_claude(id, &cwd, cols, rows, resume_session_id, args)
     };
 
     result
@@ -288,18 +295,6 @@ pub async fn get_projects_state() -> Result<ProjectsState, String> {
     spawn_blocking_locked(crate::store::read_projects_state_locked).await
 }
 
-/// 别名校验（与前端 validateDisplayName/input maxlength 同规则）：原始输入 ≤ 32 UTF-16 code unit、无控制字符。
-pub(crate) fn validate_display_name_inner(alias: &str) -> Result<()> {
-    let len = alias.encode_utf16().count();
-    if len > 32 {
-        bail!("alias too long ({} > 32)", len);
-    }
-    if alias.chars().any(|c| c.is_control()) {
-        bail!("alias contains control characters");
-    }
-    Ok(())
-}
-
 async fn apply_projects_state_blocking<F>(apply: F) -> Result<ProjectsState, String>
 where
     F: FnOnce(&mut ProjectsState) -> anyhow::Result<()> + Send + 'static,
@@ -310,25 +305,13 @@ where
 /// 置顶项目（锁内幂等：已含 normalized 等价则不重复）
 #[tauri::command]
 pub async fn pin_project(path: String) -> Result<ProjectsState, String> {
-    apply_projects_state_blocking(move |s| {
-        let n = crate::store::normalize_path_str(&path);
-        if !s.pinned_projects.contains(&n) {
-            s.pinned_projects.push(n);
-        }
-        Ok::<(), anyhow::Error>(())
-    })
-    .await
+    apply_projects_state_blocking(move |s| apply_pin_project(s, &path)).await
 }
 
 /// 取消置顶（锁内 normalized 过滤移除）
 #[tauri::command]
 pub async fn unpin_project(path: String) -> Result<ProjectsState, String> {
-    apply_projects_state_blocking(move |s| {
-        let n = crate::store::normalize_path_str(&path);
-        s.pinned_projects.retain(|p| *p != n);
-        Ok::<(), anyhow::Error>(())
-    })
-    .await
+    apply_projects_state_blocking(move |s| apply_unpin_project(s, &path)).await
 }
 
 /// 存档会话（锁内归并到 canonical key 数组，sessionId 去重）
@@ -337,16 +320,8 @@ pub async fn archive_session(
     project_path: String,
     session_id: String,
 ) -> Result<ProjectsState, String> {
-    apply_projects_state_blocking(move |s| {
-        // canonicalize 已保证 key 为 normalized，直接用 normalized key
-        let n = crate::store::normalize_path_str(&project_path);
-        let arr = s.archived_sessions.entry(n).or_default();
-        if !arr.contains(&session_id) {
-            arr.push(session_id);
-        }
-        Ok::<(), anyhow::Error>(())
-    })
-    .await
+    apply_projects_state_blocking(move |s| apply_archive_session(s, &project_path, &session_id))
+        .await
 }
 
 /// 恢复会话（锁内从数组移除，空数组清理 key；未存档幂等）
@@ -355,35 +330,14 @@ pub async fn restore_session(
     project_path: String,
     session_id: String,
 ) -> Result<ProjectsState, String> {
-    apply_projects_state_blocking(move |s| {
-        let n = crate::store::normalize_path_str(&project_path);
-        if let Some(arr) = s.archived_sessions.get_mut(&n) {
-            arr.retain(|id| *id != session_id);
-            if arr.is_empty() {
-                s.archived_sessions.remove(&n);
-            }
-        }
-        Ok::<(), anyhow::Error>(())
-    })
-    .await
+    apply_projects_state_blocking(move |s| apply_restore_session(s, &project_path, &session_id))
+        .await
 }
 
 /// 设别名（锁内校验 + 删 canonical 等价 key + 非空 set / 空 clear）
 #[tauri::command]
 pub async fn set_display_name(path: String, alias: String) -> Result<ProjectsState, String> {
-    apply_projects_state_blocking(move |s| {
-        validate_display_name_inner(&alias)?; // 校验失败返 Err（前后端同规则）
-        let n = crate::store::normalize_path_str(&path);
-        // canonicalize 已合并等价 key，此处 key 已是 normalized，直接覆盖/删除
-        let trimmed = alias.trim();
-        if trimmed.is_empty() {
-            s.display_names.remove(&n);
-        } else {
-            s.display_names.insert(n, trimmed.to_string());
-        }
-        Ok::<(), anyhow::Error>(())
-    })
-    .await
+    apply_projects_state_blocking(move |s| apply_set_display_name(s, &path, &alias)).await
 }
 
 /// Upsert one bounded user-interface session record without replacing unrelated state.

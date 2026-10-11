@@ -26,6 +26,13 @@ waiting. A local Legacy PTY generation prevents a late start/stop/restart/archiv
 from modifying a replacement instance. These are host/unit-tested boundaries,
 not real CLI or platform certification.
 
+Legacy history resume freezes an optional `resumeSessionId` beside the launch argv.
+The backend validates only this Desk-owned file locator and prepends its generated
+`--resume <id>` pair. User argv retains native Claude semantics, including bare
+`--resume`/`-r` pickers, session names and transcript paths; it is never scanned as
+a Desk locator. Every argument remains a separately quoted shell literal. See the
+[official CLI reference](https://code.claude.com/docs/en/cli-reference#cli-flags).
+
 ## Native CLI v3 — forward path
 
 ```text
@@ -89,6 +96,10 @@ Properties:
 
 Clipboard arbitration preserves bracketed-paste framing and requires explicit handling for unsafe ambiguous multiline/escape payloads. Image-only handling uses a proven native CLI/system capability rather than synthesizing text.
 
+Native Ctrl+V synchronously reserves an intent against the current request/run/generation and xterm mode before `readText` / `readImage` begins. Text and image results complete that fixed reservation. Empty or unavailable clipboard results, and results made stale by a replaced attempt or binding, explicitly cancel only that still-pending, unsubmitted reservation so later queued input can continue with its already allocated sequence. Cancellation fails once the producer is ready or host dispatch has begun; producer and transport failures keep the input queue's failed-intent freeze and no-replay behavior. Image probing consumes only type evidence and closes the returned Tauri `Image` resource in `finally` without reading pixel data; the Legacy keydown probe uses the same cleanup rule.
+
+Legacy WebView2 Ctrl+V likewise reserves an item synchronously against the exact PTY and the keydown-time bracketed-paste mode. Paste, ordinary xterm/IME input and parser protocol replies share that PTY's FIFO writer, so a later Enter or DSR/DA reply cannot overtake clipboard reads. Empty, unavailable, stale, removed or unbound reservations cancel only bytes that have not started transport and release later owned input; replacing a PTY disposes its old queue instead of retargeting it. Once `pty_input` begins, cancellation cannot replay or redirect the write. Each completed payload remains one unchanged logical `pty_input` call.
+
 ## Output transport
 
 Output is emitted as bounded binary frames with exact offsets.
@@ -115,6 +126,8 @@ Native resize and stop go through authenticated native commands.
 
 Natural exits are adopted by the exact run/generation. Restart is explicit and increments generation with new request/run IDs.
 
+Native owner status synchronization continues while a terminal is hidden because the output channel and optional observer do not own process phase. Visibility gates user input, focus and layout work; it does not suspend lifecycle adoption.
+
 Observer or UI diagnostic degradation is not process failure.
 
 ## Terminal protocol replies
@@ -138,6 +151,13 @@ Public native failures are mapped to fixed safe codes. Raw serde errors, native 
 The existing `XTermTerminal.vue -> pty.rs -> Claude Code` path remains for compatibility and legacy project/session workflows.
 
 It continues to use the older Claude-specific environment/check/hook integration. Do not extend this path for new Codex/native features.
+
+**Known limitation: no output backpressure.** The `pty.rs` reader emits a `pty-output`
+IPC event for every 4 KB read, and the frontend (`XTermTerminal.vue`) writes each event
+straight into xterm on arrival — there is no pause/resume signal and no ACK. A
+high-throughput CLI burst therefore becomes a burst of IPC events that the frontend
+must absorb one `term.write` at a time. The Native bounded transport (frame offsets,
+exact ACK, per-run watermarks, global payload budget) does not apply to this legacy path.
 
 ## Windows ConPTY
 
@@ -323,5 +343,7 @@ screenshots remain BLOCKED_VISUAL, and D20 remains BLOCKED_EXTERNAL_TARGET.
 Native launch receipts update `lastActivityAt` only when launch/state/error meaning changes; identical healthy polls neither refresh activity nor clear a transport diagnostic. Accepted output and successfully admitted user keyboard/explicit-text/paste operations report activity through the existing terminal binding. Parser replies and ACKs do not count as user activity. The terminal checks its exact request/run/generation and binding lifetime before publishing, while `nativeTabs.touch` coalesces reactive input/output timestamps to at most one publication per second per attempt. No delayed timer keeps idle rows recent.
 
 Optional attention consumes the existing exact-run observer's projected state. Only an active ordered `waiting` projection means `needs-user`; unordered/raw events remain unknown. Repeated projected attention does not refresh timestamps, and unknown/failed/starting/stopped/replacement state clears previous attention. Subscriptions are passive and released with the run binding; they do not enable the backend observer or control a CLI. These are host/source contracts, not D20 real-CLI or throughput certification.
+
+An authenticated observer session identity is display-only claim evidence for its exact attempt. Restart replaces request/run/generation and clears that identity before the adapter projects history, so a new attempt cannot claim the previous run's history row.
 
 During a pending launch receipt, a starting tab retains one latest safe attention projection bound to its exact request/run/generation. It displays needs-user only after that same attempt is confirmed running. A newer unknown projection replaces waiting; unknown/failed/ended process state, restart, close and clear discard the pending projection. This bounded temporary state contains no raw observer event and cannot establish process state or input authority.

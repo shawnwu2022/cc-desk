@@ -35,20 +35,35 @@ pub(crate) fn capture_windows_environment(
     entries: Vec<(OsString, OsString)>,
     mut effective_value: impl FnMut(&OsStr) -> Option<OsString>,
 ) -> Result<EnvMap, SafeError> {
+    // 先一次性聚合等价类：精确同名走哈希索引，其余候选只与各组代表做一次
+    // same_name 判定；再按组单次解析取值，避免每条目重复两两扫描构造 Command。
+    let mut index: std::collections::HashMap<OsString, usize> = std::collections::HashMap::new();
+    let mut groups: Vec<Vec<(OsString, OsString)>> = Vec::new();
+    for (name, value) in entries {
+        let group = match index.get(&name) {
+            Some(group) => *group,
+            None => {
+                let group = groups
+                    .iter()
+                    .position(|group| same_name(&group[0].0, &name))
+                    .unwrap_or_else(|| {
+                        groups.push(Vec::new());
+                        groups.len() - 1
+                    });
+                index.insert(name.clone(), group);
+                group
+            }
+        };
+        groups[group].push((name, value));
+    }
+
     let mut result = EnvMap::new();
-    for (name, first) in &entries {
-        if lookup(&result, name).is_some() {
-            continue;
-        }
-        let aliases: Vec<_> = entries
-            .iter()
-            .filter(|(other, _)| same_name(name, other))
-            .map(|(_, value)| value)
-            .collect();
-        let value = if aliases.iter().any(|value| *value != first) {
+    for group in &groups {
+        let (name, first) = &group[0];
+        let value = if group[1..].iter().any(|(_, value)| value != first) {
             let current =
                 effective_value(name).ok_or_else(|| SafeError::invalid("environment.changed"))?;
-            if !aliases.contains(&&current) {
+            if !group.iter().any(|(_, value)| value == &current) {
                 return Err(SafeError::invalid("environment.changed"));
             }
             current
@@ -276,4 +291,64 @@ pub(crate) fn overlay_observer(
     let mut next = frozen.clone();
     merge(&mut next, &layer);
     Ok(next)
+}
+
+#[cfg(test)]
+#[cfg(windows)]
+#[allow(non_snake_case)]
+mod capture_tests {
+    use super::*;
+
+    fn entries(list: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        list.iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            .collect()
+    }
+
+    // 大小写别名聚合为一类：值一致时取首个，不再对后续别名重复解析。
+    #[test]
+    fn Environment_Capture_AliasGroupResolvesOnce_001() {
+        let raw = entries(&[
+            ("Path", "first"),
+            ("HOME", "h"),
+            ("PATH", "first"),
+            ("path", "first"),
+            ("Home", "h"),
+        ]);
+        let captured =
+            capture_windows_environment(raw, |_| panic!("一致别名不应查询 OS 有效值")).unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(
+            lookup(&captured, OsStr::new("PATH")),
+            Some(&OsString::from("first"))
+        );
+        assert_eq!(
+            lookup(&captured, OsStr::new("home")),
+            Some(&OsString::from("h"))
+        );
+    }
+
+    // 冲突别名回退 OS 有效值；有效值不属于该组时拒绝。
+    #[test]
+    fn Environment_Capture_ConflictingAliasesUseEffectiveValue_002() {
+        let raw = entries(&[("Path", "a"), ("PATH", "b")]);
+        let captured = capture_windows_environment(raw, |name| {
+            assert_eq!(name, OsStr::new("Path"));
+            Some(OsString::from("b"))
+        })
+        .unwrap();
+        assert_eq!(
+            lookup(&captured, OsStr::new("path")),
+            Some(&OsString::from("b"))
+        );
+
+        let error = capture_windows_environment(entries(&[("Path", "a"), ("PATH", "b")]), |_| {
+            Some(OsString::from("c"))
+        })
+        .unwrap_err();
+        assert_eq!(error.field.as_deref(), Some("environment.changed"));
+        let error = capture_windows_environment(entries(&[("Path", "a"), ("PATH", "b")]), |_| None)
+            .unwrap_err();
+        assert_eq!(error.field.as_deref(), Some("environment.changed"));
+    }
 }

@@ -31,6 +31,7 @@ grep -i "focus" src-tauri/gen/schemas/windows-schema.json
 | `getCurrentWindow().setSize()` | `core:window:allow-set-size` | 否 |
 | `getCurrentWindow().setTitle()` | `core:window:allow-set-title` | 否 |
 | `getCurrentWindow().currentMonitor()` | `core:window:allow-current-monitor` | 是 |
+| `Image.close()` / `Resource.close()` | `core:resources:allow-close` | 主窗口显式授权，不能由其他 core 子集推断 |
 
 ## 确认与添加权限
 

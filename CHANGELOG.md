@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.18.9] - 2026-10-12
+
+- Preserve staged input and partial/unknown receipts while a commit is in progress; reclaim only abandoned, uncommitted uploads with a strictly newer sequence
+- Reserve clipboard input before asynchronous reads, bind it to the original run and terminal mode, cancel unsent empty/stale intents without blocking later input, and release probed native image resources
+- Clear the observed session identity on restart and keep background process-exit synchronization active
+- Batch authenticated history observations within the 64-project scope budget, validate each authority check against one workspace snapshot, isolate offline project admission failures, and await replacement owners before publishing grouped results
+- Retire superseded profile project scopes and bound document generation floors without forgetting live-document replay guards
+- Keep completion and permission attention eligible after activity hints expire, and render distinct read-only resources even when their display fields coincide
+- Order Legacy clipboard, keyboard, IME and terminal protocol input through an exact-PTY FIFO with synchronous paste reservation
+- Retain exact owned-process control after waiter failures, bind stops to the original request, and finish process, registry and output-stream ownership together before reclaiming a run
+- Preserve quoted paths, UNC prefixes and empty arguments in both Legacy launch entry points while passing shell operators and variables literally
+- Keep native resume-picker, name and transcript-path semantics for user argv while validating only the separately frozen Desk history locator
+- Open normalized Windows UNC and long paths without admitting Explorer switches
+- Reject ended-turn activity before status reduction, retain exact PTY boundaries across restart, and freeze each queued Legacy environment/default-option write independently
+- Revoke obsolete pending history contexts immediately after profile or project changes so late reads cannot restore removed rows
+- Admit the bundled data images under production CSP and retain the complete 5,000-session, 30-owner and 120-change stress workload
+- Project native Claude session turn activity onto the tree with coarse arrival-order evidence: allowlisted turn hooks claim working, permission/idle notifications claim waiting for input, Stop falls back to idle, and a 90-second host turn-idle timer bounds stale working claims back to idle. Sessions no longer show the unknown question mark while they are actively working; a failed or disconnected observer still shows unknown. This is a best-effort UI projection, never completion/permission/error causes, and it does not touch authority or ownership
+- Keep the bounded subagent hint priority over generic working claims and keep waiting for the user ahead of subagent-started receipts; retired subagent IDs still never revive, and late subagent stop receipts cannot turn an ended turn back to unknown
+
+Protected-main CI, exact-source coverage and the complete signed platform set remain required before publication. Hosted checks and synthetic regressions do not certify real installed CLI, Windows WebView2 or native historical installation acceptance; existing unavailable-host disclosures remain unchanged.
+
 ## [0.18.8] - 2026-10-10 (repair candidate)
 
 - Keep permission, completion and waiting-input status independent of which session is selected; preserve exact attention evidence and existing running/closed distinctions

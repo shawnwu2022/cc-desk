@@ -95,6 +95,10 @@ unsupported operations are never translated to Legacy commands. Refresh reloads
 sources without retrying a failed lifecycle request. Historical and live rename
 both use `projectsState` display metadata, never terminal `/rename` input.
 
+Windows directory opening restores normalized `//server/share` and `//?/` paths
+to backslash prefixes before passing one literal argument to Explorer. Explorer
+switches with a single leading `/` and program options with a leading `-` remain rejected.
+
 The optional adapter `captureOwnership` hook freezes exact Native request/run/generation
 or Legacy tab/local PTY generation at facade admission, before an action waits in a
 queue. Lifecycle completions recheck ownership before touching a newer context.
@@ -113,6 +117,7 @@ Responsibilities:
 - bind the exact run through `createDeskNativeTerminalBinding`;
 - ordered native input;
 - output parse/ACK;
+- hidden-tab owner lifecycle synchronization;
 - authenticated resize/stop;
 - safe diagnostic projection.
 
@@ -123,6 +128,10 @@ No arbitrary HTML rendering or payload logging is allowed.
 `nativeWorkbench.ts` was used only by the retired page and is removed. The unified
 runtime independently loads profiles, registered projects, history and Legacy
 compatibility data; it does not launch a process during bootstrap.
+
+Refresh invalidates history contexts removed by profile revision, profile deletion
+or project removal even while their reads are pending. Invalidation revokes the
+entry owner immediately, so late responses cannot restore obsolete catalog rows.
 
 ### nativeTabs.ts
 
@@ -141,6 +150,8 @@ status/errorCode/launchRevision
 ```
 
 Only exact request/run/generation launch status may be adopted.
+
+Observer-provided session identity is bound to that same attempt and used only for display deduplication. `restart` clears it when allocating the next request/run/generation, before adapter history projection.
 
 ### cliProfiles.ts / cliWorkspace.ts
 
@@ -650,3 +661,5 @@ Status motion uses fixed 16px SVG/CSS only: known starting/working breathe gentl
 thinking dots brighten sequentially, and permission/input/completion enter once.
 Underlying state transitions exclude selection suppression; refresh and remount do
 not replay entry cues. Reduced-motion is fully static and tool/branch marks never rotate.
+
+Legacy authenticated Claude activity hints expire after 30 seconds into unknown activity and clear `working`. This does not end the observed turn: a later authenticated Stop or permission notification still updates completion/attention. A real terminal event consumes that turn once; duplicate Stop events cannot recreate unread attention. Explicitly disabled, off or unavailable observation revokes that eligibility until fresh activity is observed; re-enabling alone cannot revive an old turn.

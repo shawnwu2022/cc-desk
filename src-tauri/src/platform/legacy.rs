@@ -182,28 +182,48 @@ pub(crate) fn is_gbk_trail(b: u8) -> bool {
 // ---- 4. 文件管理器 ----
 
 /// 在系统文件管理器中打开指定路径
+///
+/// Windows 的 explorer 会把单个参数按自身规则切分，`/select,` 之类的开关形态
+/// 会被当作命令开关而非路径，因此 Windows 将规范化 UNC/长路径恢复为反斜杠，
+/// 并拒绝单个 `/` 开头的开关；`-` 开头在所有平台都拒绝，POSIX 绝对路径不受影响。
 pub(crate) fn open_in_file_manager(path: &str) -> Result<(), String> {
+    let path = file_manager_argument(path)?;
     #[cfg(target_os = "windows")]
     {
         let mut cmd = new_command("explorer");
-        cmd.arg(path);
+        cmd.arg(path.as_ref());
         cmd.spawn().map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
-            .arg(path)
+            .arg(path.as_ref())
             .spawn()
             .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "linux")]
     {
         Command::new("xdg-open")
-            .arg(path)
+            .arg(path.as_ref())
             .spawn()
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn file_manager_argument(path: &str) -> Result<std::borrow::Cow<'_, str>, String> {
+    if path.starts_with('-') {
+        return Err(format!("path looks like a command switch: {path}"));
+    }
+    #[cfg(target_os = "windows")]
+    if path.starts_with("//") {
+        return Ok(std::borrow::Cow::Owned(path.replace('/', "\\")));
+    }
+    #[cfg(target_os = "windows")]
+    if path.starts_with('/') {
+        return Err(format!("path looks like an explorer switch: {path}"));
+    }
+    Ok(std::borrow::Cow::Borrowed(path))
 }
 
 // ---- 7. Shell 选择 ----
@@ -254,6 +274,30 @@ pub(crate) fn get_default_shell() -> (&'static str, Vec<&'static str>) {
     {
         ("/bin/bash", vec!["-i"])
     }
+}
+
+/// legacy PTY shell 命令行的引用风格
+///
+/// Windows 有 Git Bash 时命令经 `bash -c` 执行，否则回退 PowerShell；
+/// 两者的单引号转义规则不同，必须分开处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShellKind {
+    /// POSIX shell（bash / git-bash）：单引号内的 `'` 以 `'\''` 转义
+    Posix,
+    /// Windows PowerShell：单引号内的 `'` 翻倍为 `''`
+    PowerShell,
+}
+
+/// 将单个参数引用为对应 shell 的安全字面量
+///
+/// 输出必以单引号开始/结束，空格、`;`、`$`、反引号、`|`、双引号等
+/// 元字符不会越过引号边界被 shell 重新解释。
+pub(crate) fn shell_quote_arg(arg: &str, shell_kind: ShellKind) -> String {
+    let escaped = match shell_kind {
+        ShellKind::Posix => arg.replace('\'', "'\\''"),
+        ShellKind::PowerShell => arg.replace('\'', "''"),
+    };
+    format!("'{escaped}'")
 }
 
 // ---- 8. PATH 刷新 ----
@@ -354,3 +398,7 @@ fn refresh_path_unix() {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/legacy_platform_safety.rs"]
+mod shell_quote_tests;
