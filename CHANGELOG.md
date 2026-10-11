@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- Project native Claude session turn activity onto the tree with coarse arrival-order evidence: allowlisted turn hooks claim working, permission/idle notifications claim waiting for input, Stop falls back to idle, and a 90-second host turn-idle timer bounds stale working claims back to idle. Sessions no longer show the unknown question mark while they are actively working; a failed or disconnected observer still shows unknown. This is a best-effort UI projection, never completion/permission/error causes, and it does not touch authority or ownership
+- Keep the bounded subagent hint priority over generic working claims and keep waiting for the user ahead of subagent-started receipts; retired subagent IDs still never revive, and late subagent stop receipts cannot turn an ended turn back to unknown
+
 ## [0.18.8] - 2026-10-10 (repair candidate)
 
 - Keep permission, completion and waiting-input status independent of which session is selected; preserve exact attention evidence and existing running/closed distinctions

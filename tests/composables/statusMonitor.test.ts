@@ -888,8 +888,8 @@ it('Subagent_LegacyProjection_010', () => {
   expect(tab.status).toBe('running')
 })
 
-// 权限后的子代理事件：reducer 提示仍被 waiting 阻断（unknown），但回合状态机按通用分支
-// 迁移语义视为授权后继续（working 恢复、pending 清除、attention 清理）。
+// 权限后的子代理事件：粗粒度语义下 reducer 保持 waiting（started 不覆盖等待），
+// 回合状态机按通用分支迁移语义视为授权后继续（working 恢复、pending 清除、attention 清理）。
 it('Subagent_LegacyPermission_011', () => {
   setActivePinia(createPinia()); mountedCbs = []; unmountedCbs = []
   const id = createRunningTab('observed-pty')
@@ -911,7 +911,7 @@ it('Subagent_LegacyPermission_011', () => {
     runId: 'observed-pty', generation: 1, eventId: 'start-b', observerSource: 'claude-hook', state: 'unknown',
     detail: { type: 'subagentStart', data: { agentId: 'agent-b' } },
   }))
-  expect(tab.activity).toBe('unknown')
+  expect(tab.activity).toBe('waiting')
   expect(tab.working).toBe(true)
   expect(tab.pending).toBe(false)
   expect(mockAckPty).toHaveBeenCalledWith('observed-pty', { clearError: true })

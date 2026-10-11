@@ -39,7 +39,8 @@ describe('D13 observer isolation', () => {
       generation: 2,
       eventId: 'parallel-b',
     })
-    expect(reducer.state()).toEqual({ observation: 'active', activity: 'unknown' })
+    // 粗粒度到达顺序语义：waiting 是最后到达的显式宣称，事件仍不带 sourceSequence。
+    expect(reducer.state()).toEqual({ observation: 'active', activity: 'waiting' })
   })
 
   it('D13_Observer_OrderedActivityRejectsDuplicateAndStaleSequence_03', () => {
@@ -144,7 +145,8 @@ describe('D13 observer isolation', () => {
     ]
     const reducer = createObservationReducer(current)
     for (const event of events) reducer.accept(event)
-    expect(reducer.state()).toEqual({ observation: 'active', activity: 'unknown' })
+    // unknown 事件只退役子代理提示；waiting 是显式宣称，粗粒度语义下保持可见。
+    expect(reducer.state()).toEqual({ observation: 'active', activity: 'waiting' })
   })
 
   it('D13_Observer_ApplyObservationIsRunScoped_07', () => {
@@ -282,15 +284,18 @@ it('Subagent_RestartIdentity_005', () => {
   expect(reducer.state().activity).toBe('subagent_running')
 })
 
-// 无序权限通知不能被随后到达的子代理或工具事件覆盖为工作中。
+// 粗粒度语义：等待用户不被子代理提示覆盖；工具证据按到达顺序覆盖等待，但
+// 活跃子代理的具体提示仍优先于泛化 working。
 it('Subagent_PermissionBarrier_006', () => {
   const reducer = createObservationReducer(current)
   reducer.accept({ kind: 'subagent-started', ...current, eventId: 'start-a', agentId: 'agent-a' } as ObservationEvent)
   expect(reducer.state().activity).toBe('subagent_running')
   reducer.accept({ kind: 'waiting', ...current, eventId: 'permission' })
+  expect(reducer.state().activity).toBe('waiting')
   reducer.accept({ kind: 'subagent-started', ...current, eventId: 'start-b', agentId: 'agent-b' } as ObservationEvent)
+  expect(reducer.state().activity).toBe('waiting')
   reducer.accept({ kind: 'working', ...current, eventId: 'unordered-tool' })
-  expect(reducer.state().activity).toBe('unknown')
+  expect(reducer.state().activity).toBe('subagent_running')
 })
 
 // 已验证的有序 waiting 状态在子代理生命周期事件期间保留。

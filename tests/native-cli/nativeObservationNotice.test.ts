@@ -40,7 +40,8 @@ describe('Authenticated Native event receipt, separate from current activity', (
     const input = payload({ type: 'stop', data: { stopHookActive: true, lastAssistantMessage: 'SECRET' } })
     const reducer = createObservationReducer({ runId: 'owned-run', generation: 2 })
     reducer.accept(fromClaudeHook(input)!)
-    expect(reducer.state()).toEqual({ observation: 'active', activity: 'unknown' })
+    // stop 映射粗粒度 turn-end：回执不产生 completed，活动回落 idle。
+    expect(reducer.state()).toEqual({ observation: 'active', activity: 'idle' })
     expect(fromNativeObservationNotice(input, 1234)?.kind).toBe('reply-ended')
     expect(JSON.stringify(fromNativeObservationNotice(input, 1234))).not.toContain('SECRET')
   })

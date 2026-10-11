@@ -43,9 +43,13 @@ export function fromClaudeHook(payload: HookEventPayload): ObservationEvent | nu
     case 'postCompact':
       kind = 'working'
       break
+    // Stop 是宿主可认证的 turn 结束证据；迟到的工具回执由静默超时约束。
+    case 'stop':
+      kind = 'turn-end'
+      break
     case 'notification': {
       const type = (payload.detail.data as NotificationData).notificationType
-      if (type === 'permission_prompt' || type === 'worker_permission_prompt') {
+      if (type === 'permission_prompt' || type === 'worker_permission_prompt' || type === 'idle_prompt') {
         kind = 'waiting'
       }
       break

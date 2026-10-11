@@ -184,7 +184,7 @@ describe('useHookStore', () => {
       runId: 'run-claude',
       generation: 3,
       eventId: 'event-1',
-    }, { observation: 'active', activity: 'unknown' })
+    }, { observation: 'active', activity: 'working' })
     expect(legacyHandler).not.toHaveBeenCalled()
   })
 
@@ -215,6 +215,47 @@ describe('useHookStore', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
+  // turn 静默 90 秒后粗粒度 working 回落 idle，waiting 不受超时影响。
+  it('D13_HookStore_TurnIdleTimeoutFallsBackAndKeepsWaiting_004', () => {
+    vi.useFakeTimers()
+    try {
+      const store = useHookStore()
+      store.init()
+      const handler = vi.fn()
+      store.subscribeObservation(observationTarget, handler)
+
+      capturedNative!(nativePayload())
+      expect(handler).toHaveBeenLastCalledWith(expect.anything(), { observation: 'active', activity: 'working' })
+      vi.advanceTimersByTime(90_000)
+      expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'turn-idle-timeout' }),
+        { observation: 'active', activity: 'idle' })
+      handler.mockClear()
+
+      capturedNative!({ ...nativePayload('event-w'), eventName: 'Notification',
+        detail: { type: 'notification', data: { notificationType: 'permission_prompt' } } })
+      expect(handler).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ activity: 'waiting' }))
+      vi.advanceTimersByTime(90_000)
+      // 静默超时仍会通知，但 waiting 的观察状态不受影响。
+      expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'turn-idle-timeout' }),
+        expect.objectContaining({ activity: 'waiting' }))
+    } finally { vi.useRealTimers() }
+  })
+
+  // 从未收到事件时保留原有 connecting 30 秒超时（unavailable），与 turn 静默回落不同。
+  it('D13_HookStore_ConnectingTimeoutWithoutEvents_005', () => {
+    vi.useFakeTimers()
+    try {
+      const store = useHookStore()
+      store.init()
+      const handler = vi.fn()
+      store.subscribeObservation(observationTarget, handler)
+
+      vi.advanceTimersByTime(30_000)
+      expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'timeout' }),
+        { observation: 'unavailable', activity: 'unknown' })
+    } finally { vi.useRealTimers() }
+  })
+
 })
 
 it('D13_HookStore_OneThrowingSubscriberCannotAbortOtherObservers_003', () => {
@@ -243,7 +284,7 @@ it('D13_HookStore_RunCliAndGenerationAreExactNotActiveTab', () => {
   ]
   capturedNative!(nativePayload())
   expect(current).toHaveBeenCalledOnce()
-  expect(store.observationFor(observationTarget)).toEqual({ observation: 'active', activity: 'unknown' })
+  expect(store.observationFor(observationTarget)).toEqual({ observation: 'active', activity: 'working' })
   expect(foreign).not.toHaveBeenCalled(); expect(codex).not.toHaveBeenCalled(); expect(disabled).not.toHaveBeenCalled()
   stops.forEach(stop => stop()); store.$dispose()
 })
@@ -324,9 +365,10 @@ it('Subagent_NativeUnknownClears_013', async () => {
   tabs.applyLaunchStatus(tab.tabId, { ...receipt, revision: '2' })
   capturedNative!({ ...nativePayload('tool-a'), runId: tab.runId, generation: tab.generation,
     eventName: 'PreToolUse', detail: { type: 'preToolUse', data: {} } })
-  expect(tabs.tab(tab.tabId)?.activityState).toBe('unknown')
+  // 无效化后新到达的粗粒度工具证据可以宣称 working，但旧子代理提示不得复活。
+  expect(tabs.tab(tab.tabId)?.activityState).toBe('working')
   capturedNative!({ ...nativePayload('late-start-a'), runId: tab.runId, generation: tab.generation,
     eventName: 'SubagentStart', detail: { type: 'subagentStart', data: { agentId: 'agent-a' } } })
-  expect(tabs.tab(tab.tabId)?.activityState).toBe('unknown')
+  expect(tabs.tab(tab.tabId)?.activityState).toBe('working')
   hooks.$dispose()
 })

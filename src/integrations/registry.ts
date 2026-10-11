@@ -4,7 +4,7 @@ export interface RunRef {
 }
 
 export type ObservationStatus = 'off' | 'connecting' | 'active' | 'unavailable'
-export type ActivityStatus = 'unknown' | 'working' | 'waiting' | 'subagent_running'
+export type ActivityStatus = 'unknown' | 'working' | 'waiting' | 'subagent_running' | 'idle'
 
 export interface ObservationState {
   observation: ObservationStatus
@@ -24,6 +24,8 @@ export type ObservationEvent =
   | (ObservationEventBase & { kind: 'waiting' })
   | (ObservationEventBase & { kind: 'unknown' })
   | (ObservationEventBase & { kind: 'subagent-started' | 'subagent-stopped'; agentId?: string })
+  | (ObservationEventBase & { kind: 'turn-end' })
+  | (ObservationEventBase & { kind: 'turn-idle-timeout' })
 
 export interface ObservationReducer {
   accept(event: ObservationEvent): void
@@ -62,7 +64,6 @@ class RunObservationReducer implements ObservationReducer {
   // without a provider invocation epoch; never infer completion from this set.
   private readonly activeAgents = new Set<string>()
   private readonly retiredAgents = new Set<string>()
-  private subagentBlocked = false
 
   private invalidateAgents(): void {
     for (const id of this.activeAgents) this.retiredAgents.add(id)
@@ -92,6 +93,13 @@ class RunObservationReducer implements ObservationReducer {
     if (event.kind === 'timeout') {
       this.invalidateAgents()
       this.current = { observation: 'unavailable', activity: 'unknown' }
+      return
+    }
+    if (event.kind === 'turn-idle-timeout') {
+      // 粗粒度到达顺序证据的静默上界：只有宣称中的活动回落，waiting/unknown 不受影响。
+      if (this.current.activity === 'working' || this.current.activity === 'subagent_running') {
+        this.current.activity = 'idle'
+      }
       return
     }
 
@@ -129,28 +137,47 @@ class RunObservationReducer implements ObservationReducer {
       if (event.kind === 'subagent-stopped') {
         this.activeAgents.delete(event.agentId)
         this.retiredAgents.add(event.agentId)
+        // turn 已结束（idle）时迟到的停止回执只退役 agent，不把行改回 unknown。
+        if (this.current.activity === 'subagent_running') {
+          this.current.activity = this.activeAgents.size > 0 ? 'subagent_running' : 'unknown'
+        }
       } else if (!this.retiredAgents.has(event.agentId)) {
         this.activeAgents.add(event.agentId)
-      }
-      // Both sets together are bounded by the non-evicting 1,024 event ledger.
-      // A lifecycle occurrence cannot resolve a permission/waiting signal.
-      if (this.current.activity !== 'waiting') {
-        this.current.activity = !this.subagentBlocked && this.activeAgents.size > 0 ? 'subagent_running' : 'unknown'
+        // 等待用户是比子代理提示更高价值的信号，started 不覆盖它。
+        if (this.current.activity !== 'waiting') this.current.activity = 'subagent_running'
       }
       return
     }
 
     if (sequence === undefined) {
-      if (event.kind === 'waiting') this.subagentBlocked = true
+      // 无可信顺序时的粗粒度证据：按到达顺序宣称 working/waiting/turn 结束，
+      // 迟到乱序的误报由宿主静默超时（turn-idle-timeout）约束上界。
+      if (event.kind === 'turn-end') {
+        this.invalidateAgents()
+        this.current.activity = 'idle'
+        return
+      }
       if (event.kind === 'unknown') this.invalidateAgents()
-      this.current.activity = !this.subagentBlocked && this.activeAgents.size > 0 ? 'subagent_running' : 'unknown'
+      if (event.kind === 'working') {
+        this.current.activity = this.activeAgents.size > 0 ? 'subagent_running' : 'working'
+      } else if (event.kind === 'waiting') {
+        this.current.activity = 'waiting'
+      } else {
+        this.current.activity = this.activeAgents.size > 0 ? 'subagent_running' : 'unknown'
+      }
       return
     }
-    if (event.kind === 'waiting') this.subagentBlocked = true
-    else if (event.kind === 'working') this.subagentBlocked = false
-    else this.invalidateAgents()
-    this.current.activity =
-      event.kind === 'working' ? 'working' : event.kind === 'waiting' ? 'waiting' : 'unknown'
+    if (event.kind === 'turn-end') {
+      this.invalidateAgents()
+      this.current.activity = 'idle'
+      return
+    }
+    if (event.kind === 'working' || event.kind === 'waiting') {
+      this.current.activity = event.kind === 'working' && this.activeAgents.size > 0 ? 'subagent_running' : event.kind
+    } else {
+      this.invalidateAgents()
+      this.current.activity = this.activeAgents.size > 0 ? 'subagent_running' : 'unknown'
+    }
   }
 
   state(): ObservationState {
