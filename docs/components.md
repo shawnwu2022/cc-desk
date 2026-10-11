@@ -653,3 +653,5 @@ Status motion uses fixed 16px SVG/CSS only: known starting/working breathe gentl
 thinking dots brighten sequentially, and permission/input/completion enter once.
 Underlying state transitions exclude selection suppression; refresh and remount do
 not replay entry cues. Reduced-motion is fully static and tool/branch marks never rotate.
+
+Legacy authenticated Claude activity hints expire after 30 seconds into unknown activity and clear `working`. This does not end the observed turn: a later authenticated Stop or permission notification still updates completion/attention. A real terminal event consumes that turn once; duplicate Stop events cannot recreate unread attention. Explicitly disabled, off or unavailable observation revokes that eligibility until fresh activity is observed; re-enabling alone cannot revive an old turn.

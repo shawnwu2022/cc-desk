@@ -10,6 +10,7 @@
  * 避免终端层擅自改写用户输入。
  */
 import type { Platform } from './platform'
+import type { PtyInputSource } from '@/api/tauri'
 import { classifyClipboardSnapshot, readClipboardSnapshot } from '@/terminal/inputPolicy'
 import { readImage, readText } from '@tauri-apps/plugin-clipboard-manager'
 
@@ -80,6 +81,149 @@ export function isPasteStale(capturedPtyId: string | undefined, currentPtyId: st
 }
 
 type PasteInstance = { ptyId: string }
+
+export interface LegacyInputReservation {
+  settled: Promise<void>
+  cancel(): boolean
+}
+
+export interface LegacyInputQueue {
+  enqueue(payload: string, source?: PtyInputSource): Promise<void>
+  reserve(produce: () => Promise<string | null>): LegacyInputReservation
+  dispose(): void
+}
+
+type LegacyQueueItem = {
+  state: 'pending' | 'ready' | 'writing' | 'cancelled'
+  payload?: string
+  source?: PtyInputSource
+  resolve: () => void
+  reject: (error: unknown) => void
+}
+
+/**
+ * Legacy PTY 的单写入 FIFO。pending 粘贴在读取剪贴板时占住队首，普通键盘和
+ * xterm 协议回复排在其后；所有权失效只丢弃尚未提交的项，已开始的写入绝不重放。
+ */
+export function createLegacyInputQueue(options: {
+  owns: () => boolean
+  write: (payload: string, source?: PtyInputSource) => Promise<unknown>
+}): LegacyInputQueue {
+  const items: LegacyQueueItem[] = []
+  let draining = false
+  let disposed = false
+
+  const remove = (item: LegacyQueueItem) => {
+    const index = items.indexOf(item)
+    if (index >= 0) items.splice(index, 1)
+  }
+
+  const canWrite = () => !disposed && options.owns()
+
+  const drain = async () => {
+    if (draining) return
+    draining = true
+    try {
+      while (items.length > 0) {
+        const item = items[0]
+        if (item.state === 'pending') return
+        if (item.state === 'cancelled') {
+          items.shift()
+          continue
+        }
+        if (item.state !== 'ready') return
+        if (!canWrite()) {
+          item.state = 'cancelled'
+          items.shift()
+          item.resolve()
+          continue
+        }
+        const payload = item.payload
+        if (!payload) {
+          item.state = 'cancelled'
+          items.shift()
+          item.resolve()
+          continue
+        }
+
+        item.state = 'writing'
+        try {
+          await options.write(payload, item.source)
+          item.resolve()
+        } catch (error) {
+          item.reject(error)
+        } finally {
+          if (items[0] === item) items.shift()
+        }
+      }
+    } finally {
+      draining = false
+      if (items[0]?.state === 'ready') void drain()
+    }
+  }
+
+  const cancelUnsubmitted = (item: LegacyQueueItem): boolean => {
+    if (item.state !== 'pending' && item.state !== 'ready') return false
+    item.state = 'cancelled'
+    remove(item)
+    item.resolve()
+    void drain()
+    return true
+  }
+
+  return {
+    enqueue(payload, source) {
+      if (!payload || !canWrite()) return Promise.resolve()
+      let resolve!: () => void
+      let reject!: (error: unknown) => void
+      const settled = new Promise<void>((res, rej) => { resolve = res; reject = rej })
+      items.push({ state: 'ready', payload, source, resolve, reject })
+      void drain()
+      return settled
+    },
+
+    reserve(produce) {
+      if (!canWrite()) return { settled: Promise.resolve(), cancel: () => false }
+      let resolve!: () => void
+      let reject!: (error: unknown) => void
+      const settled = new Promise<void>((res, rej) => { resolve = res; reject = rej })
+      const item: LegacyQueueItem = { state: 'pending', resolve, reject }
+      items.push(item)
+      void Promise.resolve().then(produce).then(
+        payload => {
+          if (item.state !== 'pending') return
+          if (!payload || !canWrite()) {
+            cancelUnsubmitted(item)
+            return
+          }
+          item.payload = payload
+          item.source = 'clipboard-dom'
+          item.state = 'ready'
+          void drain()
+        },
+        error => {
+          if (item.state !== 'pending') return
+          item.state = 'cancelled'
+          remove(item)
+          item.reject(error)
+          void drain()
+        },
+      )
+      return { settled, cancel: () => cancelUnsubmitted(item) }
+    },
+
+    dispose() {
+      if (disposed) return
+      disposed = true
+      for (const item of [...items]) {
+        if (item.state === 'writing') continue
+        item.state = 'cancelled'
+        remove(item)
+        item.resolve()
+      }
+    },
+  }
+}
 
 type PasteObservation = (id: string, expected: string, send: () => Promise<unknown>) => Promise<unknown>
 let pasteObserver: ((id: string | undefined) => PasteObservation | undefined) | undefined
@@ -187,7 +331,10 @@ type NativePasteOptions = {
   container: HTMLElement
   getTabId: () => string | null
   getInstance: (tabId: string) => NativePasteInstance | undefined
-  write: (ptyId: string, payload: string) => Promise<unknown>
+  reserve: (
+    ptyId: string,
+    produce: () => Promise<string | null>,
+  ) => LegacyInputReservation
   imageFallback: () => string
 }
 
@@ -197,6 +344,36 @@ type NativePasteOptions = {
  * 避免同一份剪贴板内容被 xterm 再发送一次。
  */
 export function bindNativePaste(options: NativePasteOptions): () => void {
+  const reservations = new Set<LegacyInputReservation>()
+  const reservePaste = (
+    tabId: string,
+    instance: NativePasteInstance,
+    classify: () => ReturnType<typeof readClipboardSnapshot>,
+  ) => {
+    const capturedPtyId = instance.ptyId
+    const bracketedPasteMode = instance.term.modes.bracketedPasteMode
+    const ignoreBracketedPasteMode = instance.term.options.ignoreBracketedPasteMode ?? false
+    const reservation = options.reserve(capturedPtyId, async () => {
+      const classification = await classify()
+      const current = options.getInstance(tabId)
+      if (!current?.ptyId || isPasteStale(capturedPtyId, current.ptyId)) return null
+      if (classification.kind === 'text') {
+        return buildPastePayload(
+          classification.text,
+          bracketedPasteMode,
+          ignoreBracketedPasteMode,
+        ) || null
+      }
+      if (classification.kind === 'image') return options.imageFallback() || null
+      return null
+    })
+    reservations.add(reservation)
+    void reservation.settled.then(
+      () => reservations.delete(reservation),
+      () => reservations.delete(reservation),
+    )
+  }
+
   const handlePaste = (event: ClipboardEvent) => {
     const tabId = options.getTabId()
     if (!tabId) return
@@ -212,18 +389,7 @@ export function bindNativePaste(options: NativePasteOptions): () => void {
     const types = Array.from(event.clipboardData?.types ?? [])
     const items = Array.from(event.clipboardData?.items ?? [], item => ({ kind: item.kind, type: item.type }))
     const snapshot = classifyClipboardSnapshot({ text, types, items })
-    commitPasteWithEvidence(
-      async () => snapshot.kind === 'text' ? snapshot.text : '',
-      snapshot.kind === 'image' ? async () => true : undefined,
-      () => options.getInstance(tabId),
-      value => buildPastePayload(
-        value,
-        instance.term.modes.bracketedPasteMode,
-        instance.term.options.ignoreBracketedPasteMode ?? false,
-      ),
-      options.write,
-      options.imageFallback,
-    ).catch(() => {})
+    reservePaste(tabId, instance, async () => snapshot)
   }
 
   options.container.addEventListener('paste', handlePaste, true)
@@ -240,23 +406,14 @@ export function bindNativePaste(options: NativePasteOptions): () => void {
     if (!target || !instance.term.element?.contains(target)) return
     event.preventDefault()
     event.stopPropagation()
-    void commitPasteWithEvidence(
-      () => readText(),
-      () => readImage(),
-      () => options.getInstance(tabId),
-      value => buildPastePayload(
-        value,
-        instance.term.modes.bracketedPasteMode,
-        instance.term.options.ignoreBracketedPasteMode ?? false,
-      ),
-      options.write,
-      options.imageFallback,
-    ).catch(() => {})
+    reservePaste(tabId, instance, () => readClipboardSnapshot(() => readText(), () => readImage()))
   }
   options.container.addEventListener('keydown', handlePasteKeyDown, true)
   return () => {
     options.container.removeEventListener('paste', handlePaste, true)
     options.container.removeEventListener('keydown', handlePasteKeyDown, true)
+    for (const reservation of reservations) reservation.cancel()
+    reservations.clear()
   }
 }
 

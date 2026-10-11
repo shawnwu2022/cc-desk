@@ -22,6 +22,34 @@ use tauri::ipc::{InvokeBody, Request};
 use tauri::utils::config::{Config, FrontendDist, WindowConfig};
 use tauri::{Manager, Runtime, Url, Webview, WebviewUrl, WebviewWindow};
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StopQuery {
+    request_id: String,
+    run_id: String,
+    generation: u32,
+}
+
+pub(crate) fn decode_stop_query(body: &InvokeBody) -> Result<(String, RunKey), SafeError> {
+    let InvokeBody::Raw(bytes) = body else {
+        return Err(error("RAW_BODY_REQUIRED"));
+    };
+    if bytes.len() > 1024 {
+        return Err(error("REQUEST_TOO_LARGE"));
+    }
+    let query: StopQuery = serde_json::from_slice(bytes).map_err(|_| error("INVALID_REQUEST"))?;
+    if query.generation == 0 {
+        return Err(SafeError::invalid("generation"));
+    }
+    Ok((
+        query.request_id,
+        RunKey {
+            run_id: query.run_id,
+            generation: query.generation,
+        },
+    ))
+}
+
 pub(crate) struct NativeRuntime {
     service: Arc<LaunchService>,
     projections: Arc<super::native_projection::service::ProjectionService>,
@@ -257,6 +285,22 @@ impl NativeRuntime {
         Ok((caller, run))
     }
 
+    fn admit_stop<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<(CallerIdentity, LaunchStatus), SafeError> {
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, headers)?;
+        let (request_id, run) = decode_stop_query(body)?;
+        let receipt = self
+            .service
+            .registry()
+            .admit_run(&caller, &run, &request_id)?;
+        Ok((caller, receipt))
+    }
+
     /// Shared native admission for later input/resize/snapshot adapters.
     /// An acquired access rechecks caller/run ownership again at each operation.
     #[allow(dead_code)] // D17 operation adapters use this authenticated port.
@@ -369,11 +413,11 @@ impl NativeRuntime {
         webview: &Webview<T>,
         request: &Request<'_>,
     ) -> Result<(), SafeError> {
-        let (_caller, run) = self.admit_run_key(webview, request.headers(), request.body())?;
+        let (caller, receipt) = self.admit_stop(webview, request.headers(), request.body())?;
         self.supervisor
             .as_ref()
             .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
-            .stop(&run)
+            .stop(&caller, &receipt)
     }
 
     pub(crate) fn shutdown(&self) {

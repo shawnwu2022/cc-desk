@@ -7,7 +7,7 @@ const { t } = useI18n()
 </script>
 <template>
   <ul class="resource-list">
-    <li v-for="item in items" :key="`${item.origin}:${item.name ?? 'withheld'}:${item.transport}`" class="resource-card">
+    <li v-for="(item, index) in items" :key="index" class="resource-card">
       <h3>{{ item.name ?? t('resourceHidden') }}</h3>
       <p class="resource-detail">{{ t('resourceTransport') }}: {{ t(`resourceTransport_${item.transport}`) }}</p>
       <ResourceMetadata :item="item" />

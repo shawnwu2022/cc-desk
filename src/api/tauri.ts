@@ -361,9 +361,9 @@ export async function cliAckOutput(
 }
 
 export async function cliStop(
-  run: import('@/types/terminal').RunKey,
+  attempt: import('@/types/terminal').RunKey & { requestId: string },
 ): Promise<void> {
-  await nativeDocumentBridge().invoke('cli_stop', run)
+  await nativeDocumentBridge().invoke('cli_stop', attempt)
 }
 
 export async function cliResize(

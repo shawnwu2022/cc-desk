@@ -43,6 +43,7 @@ interface SubagentRun {
   reducer: ObservationReducer
   lastSeenAt: number
   staleTimer: ReturnType<typeof setTimeout> | null
+  turnActive: boolean
 }
 
 export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalVisible: Ref<boolean>; requestWindowAttention?: boolean; now?: () => number }) {
@@ -66,7 +67,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     }
   }
 
-  /** 超过上限没有任何 hook 事件时按正常终止收敛 working 与子代理提示。 */
+  /** 提示过期只撤销活动证据，保留真实终止/权限事件的处理资格。 */
   function expireStaleRun(tabId: string) {
     const run = subagentRuns.get(tabId)
     if (!run || now() - run.lastSeenAt < SUBAGENT_STALE_MS) return
@@ -76,9 +77,9 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
       return
     }
     // 仅提示仍活跃时让 reducer 进入 unavailable，正常结束的 run 不补打 unavailable
-    if (run.reducer.state().activity === 'subagent_running') {
+    if (['working', 'subagent_running'].includes(run.reducer.state().activity)) {
       run.reducer.accept({ kind: 'timeout', runId: run.ptyId, generation: 1 })
-      tab.activity = 'unknown'
+      tab.activity = run.reducer.state().activity
     }
     tab.working = false
   }
@@ -102,6 +103,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
         || tab.observation === 'off' || tab.observation === 'unavailable') {
         // Keep dedupe and invalidated IDs for the same PTY if observation resumes.
         clearRunTimer(run)
+        run.turnActive = false
         run.reducer.accept({ kind: 'timeout', runId: run.ptyId, generation: 1 })
         tab.activity = 'unknown'
         tab.working = false
@@ -121,7 +123,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     if (!event || event.runId !== ptyId || event.generation !== 1) return
     let run = subagentRuns.get(tab.tabId)
     if (!run || run.ptyId !== ptyId) {
-      run = { ptyId, reducer: createObservationReducer({ runId: ptyId, generation: 1 }), lastSeenAt: now(), staleTimer: null }
+      run = { ptyId, reducer: createObservationReducer({ runId: ptyId, generation: 1 }), lastSeenAt: now(), staleTimer: null, turnActive: false }
       subagentRuns.set(tab.tabId, run)
     }
     run.reducer.accept(event)
@@ -145,6 +147,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     // userPromptSubmit → 进入 working + 设置标题 + 开始新回合
     if (type === 'userPromptSubmit') {
       turnEnded.delete(tab.tabId)
+      run.turnActive = true
       tab.working = true
       // 新回合:清所有 attention（含 error -- 用户开始新工作，旧 error 作废）
       attentionStore.ackPty(ptyId, { clearError: true })
@@ -161,6 +164,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     // 活跃事件：回合结束后忽略（防止 recap 等内部操作恢复 working）
     if (ACTIVITY_EVENTS.has(type)) {
       if (turnEnded.get(tab.tabId)) return
+      run.turnActive = true
       tab.working = true
       tab.pending = false
       // 新回合:清所有 attention（含 error）
@@ -170,7 +174,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
 
     // notification：根据 notification_type 区分处理
     if (type === 'notification') {
-      if (!tab.working) return
+      if (!tab.working && !run.turnActive) return
 
       const data = payload.detail.data as NotificationData
       const ntype = data.notificationType
@@ -178,6 +182,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
       if (ntype === 'idle_prompt') {
         // 回合结束，等待用户下一条消息
         turnEnded.set(tab.tabId, true)
+        run.turnActive = false
         tab.working = false
         setPendingWithAttention(tab, ptyId)
         return
@@ -194,8 +199,9 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
       return
     }
 
-    // stop/stopFailure/sessionEnd：仅在 working 时才处理
-    if (!tab.working) return
+    // 已知回合可在提示过期或等待权限后收到真实终止；空闲/重复事件仍不发布提醒。
+    if (!tab.working && !run.turnActive) return
+    run.turnActive = false
 
     // stop/stopFailure 标记回合结束
     if (type !== 'sessionEnd') {

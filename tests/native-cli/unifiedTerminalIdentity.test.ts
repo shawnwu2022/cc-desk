@@ -109,7 +109,7 @@ describe('Unified native terminal identity', () => {
     const tabs = useNativeTabsStore(); tabs.tab(tab.tabId)!.status = 'exited'
     const newer = tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' }); await flushPromises()
     finish(); await stopping
-    expect(io.stop).toHaveBeenCalledWith({ runId: tab.runId, generation: 1 })
+    expect(io.stop).toHaveBeenCalledWith({ requestId: tab.requestId, runId: tab.runId, generation: 1 })
     expect(io.recover).not.toHaveBeenCalled()
     expect(tabs.tab(tab.tabId)).toMatchObject({ requestId: newer.requestId, status: 'running', generation: 2 })
   })

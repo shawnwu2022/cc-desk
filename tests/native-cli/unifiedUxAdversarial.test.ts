@@ -211,7 +211,7 @@ describe('Adversarial unified ownership and persistence', () => {
     await completion; await flushPromises()
     expect(tabs.tab(old.tabId)).toMatchObject({ requestId: current.requestId, runId: current.runId, generation: 2, status: 'running', errorCode: null })
     expect(terminal.start).toHaveBeenCalledTimes(2)
-    if (mode === 'stop') { expect(terminal.stop).toHaveBeenCalledExactlyOnceWith({ runId: old.runId, generation: 1 }); expect(terminal.recover).not.toHaveBeenCalled() }
+    if (mode === 'stop') { expect(terminal.stop).toHaveBeenCalledExactlyOnceWith({ requestId: old.requestId, runId: old.runId, generation: 1 }); expect(terminal.recover).not.toHaveBeenCalled() }
   })
 
   it.each(['history', 'native-live', 'legacy-live'] as const)('Adversarial_QueuedRename_%s_003', async kind => {

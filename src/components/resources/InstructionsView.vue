@@ -7,7 +7,7 @@ const { t } = useI18n()
 </script>
 <template>
   <div class="resource-list">
-    <article v-for="item in items" :key="`${item.origin}:${item.name ?? 'withheld'}:${item.truncated ? 'truncated' : 'full'}`" class="resource-card">
+    <article v-for="(item, index) in items" :key="index" class="resource-card">
       <h3>{{ item.name ?? t('resourceHidden') }}</h3>
       <ResourceMetadata :item="item" />
       <p v-if="item.text" class="resource-document">{{ item.text }}</p>

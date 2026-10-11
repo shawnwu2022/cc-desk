@@ -242,7 +242,7 @@ it('Native_LostReceiptStopsRealRun_008', async () => {
   await vi.advanceTimersByTimeAsync(300)
   await checked
   expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'exited', launchRevision: '3' })
-  expect(io.stop).toHaveBeenCalledExactlyOnceWith({ runId: tab.runId, generation: tab.generation })
+  expect(io.stop).toHaveBeenCalledExactlyOnceWith({ requestId: tab.requestId, runId: tab.runId, generation: tab.generation })
   expect(calls.filter(command => command === 'cli_start')).toHaveLength(1)
   vi.useRealTimers()
 })

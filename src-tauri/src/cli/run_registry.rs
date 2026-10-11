@@ -59,6 +59,7 @@ struct Record<R> {
     resource: Option<Arc<R>>,
     in_flight: bool,
     retired: bool,
+    eviction_ready: bool,
 }
 
 impl<R> Record<R> {
@@ -116,7 +117,7 @@ pub(super) enum Reservation<'a, R> {
 pub(super) struct Ticket<'a, R> {
     registry: &'a RunRegistry<R>,
     key: RequestKey,
-    finished: bool,
+    finished: Option<LaunchStatus>,
 }
 
 impl<R> RunRegistry<R> {
@@ -147,6 +148,8 @@ impl<R> RunRegistry<R> {
             .ok_or_else(|| error("WINDOW_EPOCH_EXHAUSTED"))?;
         state.epoch = epoch;
         state.active = true;
+        // 旧 document 已永久失去准入资格；仅其代次下限可释放，运行资源仍由后台保有。
+        state.tab_generations.clear();
         Ok(CallerIdentity {
             instance_id: self.instance_id.clone(),
             window_label: label.into(),
@@ -219,15 +222,32 @@ impl<R> RunRegistry<R> {
     ) -> Result<Reservation<'_, R>, SafeError> {
         self.authorize(&self.state.lock(), caller)?;
         let fingerprint = self.fingerprints.fingerprint(request)?;
-        let key = (caller.webview_epoch.get(), request.request_id.clone());
-        let tab = (caller.webview_epoch.get(), request.tab_id.clone());
         let mut state = self.state.lock();
         self.authorize(&state, caller)?;
-        if let Some(status) = self.existing_locked(&state, &key, fingerprint)? {
+        self.reserve_locked(&mut state, caller, request, fingerprint)
+    }
+
+    fn reserve_locked(
+        &self,
+        state: &mut RegistryState<R>,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        fingerprint: Fingerprint,
+    ) -> Result<Reservation<'_, R>, SafeError> {
+        let key = (caller.webview_epoch.get(), request.request_id.clone());
+        let tab = (caller.webview_epoch.get(), request.tab_id.clone());
+        if let Some(status) = self.existing_locked(state, &key, fingerprint)? {
             return Ok(Reservation::Existing(status));
         }
+        // 活 document 的下限不能淘汰，否则会允许旧 generation 重放。独立有限预算
+        // 容纳记录淘汰后的历史 tab；满额只拒绝新 tab，不阻止已知 tab 的下一代。
+        if !state.tab_generations.contains_key(&tab)
+            && state.tab_generations.len() >= self.capacity.saturating_mul(2)
+        {
+            return Err(error("REGISTRY_CAPACITY"));
+        }
         if state.records.len() >= self.capacity {
-            self.evict_retired_locked(&mut state);
+            self.evict_retired_locked(state);
             if state.records.len() >= self.capacity {
                 return Err(error("REGISTRY_CAPACITY"));
             }
@@ -269,6 +289,7 @@ impl<R> RunRegistry<R> {
                 resource: None,
                 in_flight: true,
                 retired: false,
+                eviction_ready: false,
             },
         );
         state.runs.insert(request.run_id.clone(), key.clone());
@@ -276,12 +297,12 @@ impl<R> RunRegistry<R> {
         Ok(Reservation::New(Ticket {
             registry: self,
             key,
-            finished: false,
+            finished: None,
         }))
     }
 
-    /// 容量压力下按插入序淘汰最老的已退休记录，绝不淘汰活跃（in_flight 或
-    /// 未退休）记录；runs/tabs 索引同步移除，代次下限保留在 tab_generations。
+    /// 只有完整 supervisor 收口或从未持有 child 的墓碑才可淘汰；已 reap 但仍
+    /// draining 的 receipt 保留，避免同 RunKey 新 child 撞上旧 active owner。
     fn evict_retired_locked(&self, state: &mut RegistryState<R>) {
         let mut index = 0;
         while state.records.len() >= self.capacity && index < state.order.len() {
@@ -289,7 +310,7 @@ impl<R> RunRegistry<R> {
             let evictable = state
                 .records
                 .get(&key)
-                .is_some_and(|record| !record.in_flight && record.retired);
+                .is_some_and(|record| !record.in_flight && record.retired && record.eviction_ready);
             if !evictable {
                 index += 1;
                 continue;
@@ -333,16 +354,16 @@ impl<R> RunRegistry<R> {
         request: &LaunchRequest,
     ) -> Result<LaunchStatus, SafeError> {
         request.validate()?;
-        // reserve checks the full fingerprint, owner, run and generation. Keep a
-        // new ticket alive until after publishing cancellation under the same
-        // lock used by begin. Neither path calls external code under this lock.
-        let ticket = match self.reserve(caller, request)? {
+        self.authorize(&self.state.lock(), caller)?;
+        let fingerprint = self.fingerprints.fingerprint(request)?;
+        let mut state = self.state.lock();
+        self.authorize(&state, caller)?;
+        // 同锁准入与取消，既保留原 owner 的 Ticket，也防止终态回执在二次查找前被淘汰。
+        let mut ticket = match self.reserve_locked(&mut state, caller, request, fingerprint)? {
             Reservation::New(ticket) => Some(ticket),
             Reservation::Existing(_) => None,
         };
         let result = {
-            let mut state = self.state.lock();
-            self.authorize(&state, caller)?;
             let key = (caller.webview_epoch.get(), request.request_id.clone());
             let record = state
                 .records
@@ -350,11 +371,17 @@ impl<R> RunRegistry<R> {
                 .expect("reservation is retained");
             if record.status.phase == LaunchPhase::Reserved {
                 record.transition(LaunchPhase::Cancelled, None);
-                record.in_flight = false;
                 record.retired = true;
+                record.eviction_ready = true;
+                // 同锁结束 ticket，不能让容量回收先于随后 Drop 读取其记录。
+                if let Some(ticket) = ticket.as_mut() {
+                    record.in_flight = false;
+                    ticket.finished = Some(record.status.clone());
+                }
             }
             record.status.clone()
         };
+        drop(state);
         drop(ticket);
         Ok(result)
     }
@@ -364,7 +391,17 @@ impl<R> RunRegistry<R> {
     /// a still-active document can explicitly abort an output drain.
     pub(crate) fn check_run(&self, caller: &CallerIdentity, run: &RunKey) -> Result<(), SafeError> {
         let state = self.state.lock();
-        self.authorize(&state, caller)?;
+        self.checked_run_record(&state, caller, run)?;
+        Ok(())
+    }
+
+    fn checked_run_record<'a>(
+        &self,
+        state: &'a RegistryState<R>,
+        caller: &CallerIdentity,
+        run: &RunKey,
+    ) -> Result<&'a Record<R>, SafeError> {
+        self.authorize(state, caller)?;
         let key = state
             .runs
             .get(&run.run_id)
@@ -376,7 +413,23 @@ impl<R> RunRegistry<R> {
         if record.status.run != *run {
             return Err(error("STALE_GENERATION"));
         }
-        Ok(())
+        Ok(record)
+    }
+
+    /// 停止准入在同一锁内冻结精确 request/run receipt，不把迟到旧请求改绑到新运行。
+    pub(crate) fn admit_run(
+        &self,
+        caller: &CallerIdentity,
+        run: &RunKey,
+        request_id: &str,
+    ) -> Result<LaunchStatus, SafeError> {
+        let state = self.state.lock();
+        let record = self.checked_run_record(&state, caller, run)?;
+        validate_routing_id("requestId", request_id)?;
+        if record.status.request_id != request_id {
+            return Err(error("REQUEST_CONFLICT"));
+        }
+        Ok(record.status.clone())
     }
 
     /// Backend-only handle acquisition. A returned Arc is not a wire capability;
@@ -475,11 +528,41 @@ impl<R> RunRegistry<R> {
         drop(resource);
         Ok(())
     }
+
+    /// 持有 exact active supervisor 锁且生命周期完全收口后调用；只修改元数据。
+    pub(crate) fn complete_retirement(
+        &self,
+        run: &RunKey,
+        request_id: &str,
+    ) -> Result<(), SafeError> {
+        let mut state = self.state.lock();
+        let key = state
+            .runs
+            .get(&run.run_id)
+            .cloned()
+            .ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        let record = state.records.get_mut(&key).expect("run index is retained");
+        if record.status.run != *run || record.status.request_id != request_id {
+            return Err(error("REQUEST_CONFLICT"));
+        }
+        if record.in_flight
+            || !record.retired
+            || record.resource.is_some()
+            || record.status.phase != LaunchPhase::Exited
+        {
+            return Err(error("RUN_NOT_READY"));
+        }
+        record.eviction_ready = true;
+        Ok(())
+    }
 }
 
 impl<R> Ticket<'_, R> {
     pub(super) fn status(&self) -> LaunchStatus {
-        self.registry.state.lock().records[&self.key].status.clone()
+        // 终态可立即容量回收，最后一次读取使用 ticket 自己冻结的安全回执。
+        self.finished
+            .clone()
+            .unwrap_or_else(|| self.registry.state.lock().records[&self.key].status.clone())
     }
 
     /// Linearization point: a valid owner commits to a single spawn attempt.
@@ -492,14 +575,16 @@ impl<R> Ticket<'_, R> {
             .get_mut(&self.key)
             .expect("ticket owns retained record");
         if record.status.phase == LaunchPhase::Cancelled {
-            self.finished = true;
+            record.in_flight = false;
+            self.finished = Some(record.status.clone());
             return false;
         }
         if !authorized {
             record.transition(LaunchPhase::Cancelled, None);
             record.in_flight = false;
             record.retired = true;
-            self.finished = true;
+            record.eviction_ready = true;
+            self.finished = Some(record.status.clone());
             return false;
         }
         record.transition(LaunchPhase::Starting, None);
@@ -518,9 +603,10 @@ impl<R> Ticket<'_, R> {
         ) {
             record.transition(LaunchPhase::Failed, Some(failure));
             record.retired = true;
+            record.eviction_ready = true;
         }
         record.in_flight = false;
-        self.finished = true;
+        self.finished = Some(record.status.clone());
         record.status.clone()
     }
 
@@ -536,14 +622,14 @@ impl<R> Ticket<'_, R> {
         if record.status.phase == LaunchPhase::Starting {
             record.transition(LaunchPhase::Running, None);
         }
-        self.finished = true;
+        self.finished = Some(record.status.clone());
         record.status.clone()
     }
 }
 
 impl<R> Drop for Ticket<'_, R> {
     fn drop(&mut self) {
-        if self.finished {
+        if self.finished.is_some() {
             return;
         }
         let mut state = self.registry.state.lock();
@@ -556,6 +642,7 @@ impl<R> Drop for Ticket<'_, R> {
             LaunchPhase::Reserved => {
                 record.transition(LaunchPhase::Failed, Some(LaunchFailure::Aborted));
                 record.retired = true;
+                record.eviction_ready = true;
             }
             LaunchPhase::Starting => {
                 record.transition(
@@ -570,154 +657,5 @@ impl<R> Drop for Ticket<'_, R> {
 
 #[cfg(test)]
 #[allow(non_snake_case)]
-mod capacity_tests {
-    use super::*;
-    use crate::cli::types::{CliKind, LaunchAction};
-
-    fn caller(registry: &RunRegistry<usize>) -> CallerIdentity {
-        registry.activate_window("main").unwrap()
-    }
-
-    fn request(id: &str, tab: &str, run: &str, generation: u32) -> LaunchRequest {
-        LaunchRequest {
-            request_id: id.into(),
-            tab_id: tab.into(),
-            run_id: run.into(),
-            generation,
-            profile_id: "profile-test".into(),
-            expected_profile_revision: WireU64::parse("1").unwrap(),
-            cli: CliKind::Codex,
-            launch_cwd: "cwd".into(),
-            action: LaunchAction::Raw {
-                argv: vec!["private-argv".into()],
-            },
-            extra_args: vec![],
-            cols: 80,
-            rows: 24,
-        }
-    }
-
-    fn running(
-        registry: &RunRegistry<usize>,
-        caller: &CallerIdentity,
-        request: &LaunchRequest,
-    ) -> LaunchStatus {
-        match registry.reserve(caller, request).unwrap() {
-            Reservation::New(mut ticket) => {
-                assert!(ticket.begin());
-                ticket.complete(1usize)
-            }
-            Reservation::Existing(status) => status,
-        }
-    }
-
-    fn retired(
-        registry: &RunRegistry<usize>,
-        caller: &CallerIdentity,
-        request: &LaunchRequest,
-    ) -> LaunchStatus {
-        let status = running(registry, caller, request);
-        registry.mark_exited(&status.run).unwrap();
-        registry.retire(&status.run).unwrap();
-        status
-    }
-
-    // 容量满时按最老优先淘汰非活跃记录，新 launch 注册成功。
-    #[test]
-    fn RegistryCapacity_EvictsOldestRetiredForNewLaunch_001() {
-        let registry = RunRegistry::new(2);
-        let caller = caller(&registry);
-        retired(
-            &registry,
-            &caller,
-            &request("request-1", "tab-1", "run-1", 1),
-        );
-        running(
-            &registry,
-            &caller,
-            &request("request-2", "tab-2", "run-2", 1),
-        );
-
-        let third = running(
-            &registry,
-            &caller,
-            &request("request-3", "tab-1", "run-3", 2),
-        );
-        assert_eq!(third.run.run_id, "run-3");
-        assert_eq!(
-            registry.status(&caller, "request-1").unwrap_err().code,
-            "LAUNCH_NOT_FOUND"
-        );
-        assert!(registry.status(&caller, "request-2").is_ok());
-        assert!(registry.status(&caller, "request-3").is_ok());
-    }
-
-    // 活跃记录即使最老也绝不淘汰；满员且无可淘汰记录时仍然拒绝。
-    #[test]
-    fn RegistryCapacity_NeverEvictsActiveRun_002() {
-        let registry = RunRegistry::new(2);
-        let caller = caller(&registry);
-        running(
-            &registry,
-            &caller,
-            &request("request-1", "tab-1", "run-1", 1),
-        );
-        retired(
-            &registry,
-            &caller,
-            &request("request-2", "tab-2", "run-2", 1),
-        );
-
-        running(
-            &registry,
-            &caller,
-            &request("request-3", "tab-3", "run-3", 1),
-        );
-        assert!(registry.status(&caller, "request-1").is_ok());
-        assert_eq!(
-            registry.status(&caller, "request-2").unwrap_err().code,
-            "LAUNCH_NOT_FOUND"
-        );
-        let full = match registry.reserve(&caller, &request("request-4", "tab-4", "run-4", 1)) {
-            Err(failure) => failure,
-            Ok(_) => panic!("full registry must reject without an evictable record"),
-        };
-        assert_eq!(full.code, "REGISTRY_CAPACITY");
-    }
-
-    // 失败/取消墓碑同样可淘汰；淘汰后同 tab 的代次下限保持单调。
-    #[test]
-    fn RegistryCapacity_EvictedTombstoneKeepsGenerationFloor_003() {
-        let registry = RunRegistry::new(3);
-        let caller = caller(&registry);
-        retired(
-            &registry,
-            &caller,
-            &request("request-1", "tab-1", "run-1", 5),
-        );
-        retired(
-            &registry,
-            &caller,
-            &request("request-2", "tab-2", "run-2", 1),
-        );
-        running(
-            &registry,
-            &caller,
-            &request("request-3", "tab-3", "run-3", 1),
-        );
-
-        let stale = match registry.reserve(&caller, &request("request-4", "tab-1", "run-4", 5)) {
-            Err(failure) => failure,
-            Ok(_) => panic!("evicted tombstone generation floor must reject stale reuse"),
-        };
-        assert_eq!(stale.code, "STALE_GENERATION");
-        // 只淘汰了一个名额，request-2 不应被顺带清除。
-        assert!(registry.status(&caller, "request-2").is_ok());
-        let fresh = running(
-            &registry,
-            &caller,
-            &request("request-4", "tab-1", "run-4", 6),
-        );
-        assert_eq!(fresh.run.generation, 6);
-    }
-}
+#[path = "../tests/native_cli_registry_capacity.rs"]
+mod capacity_tests;

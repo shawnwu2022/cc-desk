@@ -414,3 +414,60 @@ fn Transport_Staleness_HealthyAckFlowIsUnaffected_008() {
         "STALE_GENERATION"
     );
 }
+
+// supervisor 收口只解绑精确旧 stream；旧强引用、迟到 Drop/ACK 不得碰复用 RunKey 的新 stream。
+#[test]
+fn D15_Transport_DetachFencesReuse_009() {
+    let hub = TerminalTransports::with_limits(limits());
+    let owner = caller();
+    let probe = Arc::new(ProgressProbe::default());
+    let old = hub
+        .attach_observed(
+            owner.clone(),
+            run("run-reused", 1),
+            collecting_route(Arc::new(Mutex::new(Vec::new()))),
+            probe.clone(),
+        )
+        .unwrap();
+    old.send(&[1, 2, 3, 4]).unwrap();
+    let old_epoch = old.stream_epoch().to_string();
+
+    hub.detach(&old).unwrap();
+    assert_eq!(hub.budgeted_bytes(), 0);
+    assert_eq!(old.send(&[5]).unwrap_err().code, "OUTPUT_STREAM_DEGRADED");
+    assert_eq!(
+        *probe.events.lock(),
+        vec![format!("sent:{old_epoch}:4")],
+        "backend detach must not reenter lifecycle progress"
+    );
+
+    let current = hub
+        .attach(
+            owner.clone(),
+            run("run-reused", 1),
+            collecting_route(Arc::new(Mutex::new(Vec::new()))),
+        )
+        .unwrap();
+    current.send(&[9, 9, 9, 9]).unwrap();
+    let current_epoch = current.stream_epoch().to_string();
+    assert_eq!(hub.budgeted_bytes(), 4);
+    assert_eq!(
+        hub.ack(&owner, &ack("run-reused", 1, &old_epoch, "4"))
+            .unwrap_err()
+            .code,
+        "STALE_OUTPUT_STREAM"
+    );
+
+    hub.detach(&old).unwrap();
+    drop(old);
+    assert_eq!(
+        hub.budgeted_bytes(),
+        4,
+        "late old detach released new budget"
+    );
+    assert_eq!(
+        hub.ack(&owner, &ack("run-reused", 1, &current_epoch, "4"))
+            .unwrap(),
+        4
+    );
+}

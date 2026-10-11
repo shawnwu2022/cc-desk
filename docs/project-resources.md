@@ -20,6 +20,8 @@ The normal App context slot renders six read-only categories: project instructio
 
 `ProjectResourceItem` contains kind-specific display fields only. Settings names are restricted to model, language, outputStyle, model_reasoning_effort, approval_policy and sandbox_mode. Origin becomes a fixed localized category. Plugin IDs, source handles, paths, URLs, commands, argv, environment maps, headers, credentials, raw config and transport errors never enter the display DTO.
 
+The six read-only lists use unique local row positions for Vue keys. Display names, origins and other filtered fields can coincide or be withheld; they are not resource identities and must not collapse or mispatch distinct rows during refresh.
+
 Free-text fields receive a conservative additional privacy screen: secret/credential/header/environment/token-looking strings, credential prefixes, environment assignments, path-like slash/backslash text, control/format characters, raw JSON-looking objects and unusually long opaque strings are withheld as whole fields. This can hide benign prose containing paths or these words. It is defense in depth for display, not a universal secret detector or an export sanitizer. `.claude/CLAUDE.md` is the one fixed, known relative instruction filename allowed verbatim. Text uses Vue interpolation only; no HTML, Markdown execution, external links or JSON dump.
 
 ## Bounded and unavailable observations

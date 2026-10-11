@@ -823,6 +823,68 @@ describe('useStatusMonitor', () => {
       }
     })
 
+    // 普通回合超时只能撤销活动提示，之后的真实 Stop 仍须发布一次后台完成提醒。
+    it('StatusMonitor_HookAuth_LateStop_027', () => {
+      vi.useFakeTimers()
+      try {
+        createRunningTab('pty1')
+        mountMonitor()
+        emit(makeAuthPayload('userPromptSubmit', 'pty1'))
+        const tab = useSessionStore().getTabByPtyId('pty1')!
+        expect(tab.activity).toBe('working')
+        vi.advanceTimersByTime(30_000)
+        expect(tab.working).toBe(false)
+        expect(tab.activity).toBe('unknown')
+        expect(tab.pending).toBe(false)
+        emit(makeAuthPayload('stop', 'pty1'))
+        expect(tab.activity).toBe('idle')
+        expect(tab.pending).toBe(true)
+        tab.pending = false
+        emit(makeAuthPayload('stop', 'pty1'))
+        expect(tab.pending).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    // 长时间工具调用的活动提示过期后，真实权限通知仍保留用户关注。
+    it('StatusMonitor_HookAuth_LatePermission_028', () => {
+      vi.useFakeTimers()
+      try {
+        createRunningTab('pty1')
+        mountMonitor()
+        emit(makeAuthPayload('preToolUse', 'pty1'))
+        vi.advanceTimersByTime(30_000)
+        expect(useSessionStore().getTabByPtyId('pty1')!.activity).toBe('unknown')
+        emit(makeAuthNotificationPayload('permission_prompt', 'pty1'))
+        const tab = useSessionStore().getTabByPtyId('pty1')!
+        expect(tab.activity).toBe('waiting')
+        expect(tab.pending).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    // 显式撤销观察后重新启用不恢复旧回合资格；只有新的活动证据能恢复关注处理。
+    it.each(['disabled', 'off', 'unavailable'] as const)('StatusMonitor_HookAuth_RevokedTurn_029_%s', reason => {
+      createRunningTab('pty1')
+      mountMonitor()
+      emit(makeAuthPayload('userPromptSubmit', 'pty1'))
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      if (reason === 'disabled') tab.observerEnabled = false
+      else tab.observation = reason
+      expect(tab.activity).toBe('unknown')
+      tab.observerEnabled = true
+      tab.observation = 'active'
+      emit(makeAuthPayload('stop', 'pty1'))
+      expect(tab.pending).toBe(false)
+      emit(makeAuthNotificationPayload('permission_prompt', 'pty1'))
+      expect(tab.pending).toBe(false)
+      emit(makeAuthPayload('userPromptSubmit', 'pty1'))
+      emit(makeAuthPayload('stop', 'pty1'))
+      expect(tab.pending).toBe(true)
+    })
+
     // 正常事件流会刷新陈旧计时：stop 后 working 清理由回合状态机负责，30s 无事件不再误伤 pending
     it('StatusMonitor_HookAuth_StaleTimer_RefreshedByEvents_026', () => {
       vi.useFakeTimers()

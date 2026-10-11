@@ -78,7 +78,10 @@ impl LifecycleRecord {
 
     pub(crate) fn process_exited(&mut self) -> Result<(), SafeError> {
         match self.process {
-            ProcessLifecycle::Starting | ProcessLifecycle::Running | ProcessLifecycle::Exited => {
+            ProcessLifecycle::Starting
+            | ProcessLifecycle::Running
+            | ProcessLifecycle::Exited
+            | ProcessLifecycle::Failed => {
                 self.process = ProcessLifecycle::Exited;
                 if self.output == OutputLifecycle::Open {
                     self.output = OutputLifecycle::Draining;
@@ -86,7 +89,6 @@ impl LifecycleRecord {
                 self.refresh_drained();
                 Ok(())
             }
-            ProcessLifecycle::Failed => Err(error("RUN_STATE_CONFLICT")),
         }
     }
 

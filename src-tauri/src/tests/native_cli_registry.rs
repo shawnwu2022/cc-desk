@@ -365,14 +365,18 @@ fn D11_Registry_RunAndGenerationNeverAlias_09() {
     );
 }
 
-// 容量满时最老的已退休记录被淘汰（预算不再永久阻塞新 launch）：
-// 活跃 run 绝不淘汰；墓碑被逐出后同参重放不再命中缓存，而是重新 reserve/spawn。
+// 容量满时完整收口的最老记录可淘汰；活跃 run 保留，同 tab 旧代次仍拒绝重放。
 #[test]
 fn D11_Registry_EvictsOldestRetiredTombstoneForNewLaunch_10() {
     let fixture = Fixture::new(1);
     let first = fixture.start(&fixture.request).unwrap();
     fixture.driver.registry().mark_exited(&first.run).unwrap();
     fixture.driver.registry().retire(&first.run).unwrap();
+    fixture
+        .driver
+        .registry()
+        .complete_retirement(&first.run, &first.request_id)
+        .unwrap();
     // 唯一槽位被已退休墓碑占用：新 launch 成功并逐出该墓碑
     let second = fixture.start(&fixture.next_request()).unwrap();
     assert_eq!(fixture.spawns.load(Ordering::SeqCst), 2);
@@ -386,6 +390,11 @@ fn D11_Registry_EvictsOldestRetiredTombstoneForNewLaunch_10() {
     // 同参重放被 STALE_GENERATION 拒绝（防重放），不会重新 spawn
     fixture.driver.registry().mark_exited(&second.run).unwrap();
     fixture.driver.registry().retire(&second.run).unwrap();
+    fixture
+        .driver
+        .registry()
+        .complete_retirement(&second.run, &second.request_id)
+        .unwrap();
     assert_eq!(
         fixture.start(&fixture.request).unwrap_err().code,
         "STALE_GENERATION"

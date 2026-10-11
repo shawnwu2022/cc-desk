@@ -77,13 +77,8 @@ impl Grant {
         Ok(())
     }
     fn same(&self, other: &Self) -> bool {
-        self.owner == other.owner
-            && self.cli == other.cli
+        self.same_basis(other)
             && self.target == other.target
-            && self.profile_id == other.profile_id
-            && self.profile_revision == other.profile_revision
-            && self.basis == other.basis
-            && self.root.key() == other.root.key()
             && self.projects.len() == other.projects.len()
             && self
                 .projects
@@ -94,7 +89,48 @@ impl Grant {
                         && mine.root.key() == theirs.root.key()
                         && mine.paths == theirs.paths
                 })
+    }
+    fn same_basis(&self, other: &Self) -> bool {
+        self.owner == other.owner
+            && self.cli == other.cli
+            && self.profile_id == other.profile_id
+            && self.profile_revision == other.profile_revision
+            && self.basis == other.basis
+            && self.root.key() == other.root.key()
             && self.user_config.as_ref().map(Root::key) == other.user_config.as_ref().map(Root::key)
+    }
+    // 同一授权来源的完整项目扩展替换旧子集；在途读取仍持有原 scope，不扩大其权限。
+    fn supersedes(&self, other: &Self) -> bool {
+        let (
+            ScopeTarget::Profile {
+                profile_id: mine_profile,
+                expected_profile_revision: mine_revision,
+                project_ids: mine,
+            },
+            ScopeTarget::Profile {
+                profile_id: previous_profile,
+                expected_profile_revision: previous_revision,
+                project_ids: theirs,
+            },
+        ) = (&self.target, &other.target)
+        else {
+            return false;
+        };
+        self.same_basis(other)
+            && mine_profile == previous_profile
+            && mine_revision == previous_revision
+            && !theirs.is_empty()
+            && !mine.is_empty()
+            && self.projects.len() == mine.len()
+            && other.projects.len() == theirs.len()
+            && theirs.iter().all(|id| mine.contains(id))
+            && other.projects.iter().all(|previous| {
+                self.projects.iter().any(|current| {
+                    current.id == previous.id
+                        && current.root.key() == previous.root.key()
+                        && current.paths == previous.paths
+                })
+            })
     }
 }
 impl ScopeRegistry {
@@ -123,7 +159,9 @@ impl ScopeRegistry {
             .collect();
         let invalid: Vec<_> = candidates
             .iter()
-            .filter(|s| s.grant.current().is_err())
+            .filter(|s| {
+                s.grant.current().is_err() || (!s.grant.same(&grant) && grant.supersedes(&s.grant))
+            })
             .cloned()
             .collect();
         let (selected, retired) = {

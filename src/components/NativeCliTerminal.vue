@@ -557,7 +557,7 @@ async function stop(attempt: NativeAttemptIdentity = currentAttempt()): Promise<
       if (Date.now() >= deadline) throw new Error('NATIVE_STOP_UNCONFIRMED')
       if (!stopAccepted && result && ['starting', 'running', 'indeterminate'].includes(result.phase)) {
         try {
-          await withinStopDeadline(deadline, () => cliStop({ runId: attempt.runId, generation: attempt.generation }))
+          await withinStopDeadline(deadline, () => cliStop({ requestId: attempt.requestId, runId: attempt.runId, generation: attempt.generation }))
           stopAccepted = true
         } catch {
           // Starting can precede supervisor adoption; even RUN_NOT_FOUND or a

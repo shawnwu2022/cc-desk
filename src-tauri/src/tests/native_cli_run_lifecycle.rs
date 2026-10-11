@@ -128,3 +128,17 @@ fn D15_Lifecycle_FinalFailureReasonIsOrderStable_006() {
     incomplete_first.mark_degraded().unwrap();
     assert_eq!(incomplete_first.output(), OutputLifecycle::Incomplete);
 }
+
+// wait 观测失败不等于进程退出；后续真实 reap 可以把同一 run 收口为 Exited。
+#[test]
+fn D15_WaitFail_RealExitRecovers_007() {
+    let mut state = LifecycleRecord::new(run("run-a", 1));
+    state.process_running().unwrap();
+    state.output_started("1").unwrap();
+    state.process_failed();
+
+    state.process_exited().unwrap();
+    assert_eq!(state.process(), ProcessLifecycle::Exited);
+    assert_eq!(state.output(), OutputLifecycle::Incomplete);
+    assert!(state.can_retire());
+}

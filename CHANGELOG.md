@@ -8,6 +8,10 @@
 - Reserve clipboard input before asynchronous reads, bind it to the original run and terminal mode, cancel unsent empty/stale intents without blocking later input, and release probed native image resources
 - Clear the observed session identity on restart and keep background process-exit synchronization active
 - Batch authenticated history observations within the 64-project scope budget, isolate offline project admission failures, and await replacement owners before publishing grouped results
+- Retire superseded profile project scopes and bound document generation floors without forgetting live-document replay guards
+- Keep completion and permission attention eligible after activity hints expire, and render distinct read-only resources even when their display fields coincide
+- Order Legacy clipboard, keyboard, IME and terminal protocol input through an exact-PTY FIFO with synchronous paste reservation
+- Retain exact owned-process control after waiter failures, bind stops to the original request, and finish process, registry and output-stream ownership together before reclaiming a run
 - Preserve quoted paths, UNC prefixes and empty arguments in both Legacy launch entry points while passing shell operators and variables literally
 - Admit the bundled data images under production CSP and retain the complete 5,000-session, 30-owner and 120-change stress workload
 - Project native Claude session turn activity onto the tree with coarse arrival-order evidence: allowlisted turn hooks claim working, permission/idle notifications claim waiting for input, Stop falls back to idle, and a 90-second host turn-idle timer bounds stale working claims back to idle. Sessions no longer show the unknown question mark while they are actively working; a failed or disconnected observer still shows unknown. This is a best-effort UI projection, never completion/permission/error causes, and it does not touch authority or ownership

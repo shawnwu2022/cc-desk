@@ -91,6 +91,8 @@ Clipboard arbitration preserves bracketed-paste framing and requires explicit ha
 
 Native Ctrl+V synchronously reserves an intent against the current request/run/generation and xterm mode before `readText` / `readImage` begins. Text and image results complete that fixed reservation. Empty or unavailable clipboard results, and results made stale by a replaced attempt or binding, explicitly cancel only that still-pending, unsubmitted reservation so later queued input can continue with its already allocated sequence. Cancellation fails once the producer is ready or host dispatch has begun; producer and transport failures keep the input queue's failed-intent freeze and no-replay behavior. Image probing consumes only type evidence and closes the returned Tauri `Image` resource in `finally` without reading pixel data; the Legacy keydown probe uses the same cleanup rule.
 
+Legacy WebView2 Ctrl+V likewise reserves an item synchronously against the exact PTY and the keydown-time bracketed-paste mode. Paste, ordinary xterm/IME input and parser protocol replies share that PTY's FIFO writer, so a later Enter or DSR/DA reply cannot overtake clipboard reads. Empty, unavailable, stale, removed or unbound reservations cancel only bytes that have not started transport and release later owned input; replacing a PTY disposes its old queue instead of retargeting it. Once `pty_input` begins, cancellation cannot replay or redirect the write. Each completed payload remains one unchanged logical `pty_input` call.
+
 ## Output transport
 
 Output is emitted as bounded binary frames with exact offsets.

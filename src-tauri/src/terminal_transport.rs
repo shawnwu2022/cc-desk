@@ -355,6 +355,23 @@ impl TerminalTransports {
         stream.apply_ack(ack.through_offset.get())
     }
 
+    /// 仅供后端生命周期收口：解绑精确 stream，不回调 progress。
+    pub(crate) fn detach(&self, stream: &Arc<TerminalStream>) -> Result<(), SafeError> {
+        let core = stream.core()?;
+        if !Arc::ptr_eq(&core, &self.core) {
+            return Err(error("FORBIDDEN"));
+        }
+        stream.detach_without_progress(&core);
+        let mut streams = core.streams.lock();
+        if streams
+            .get(&stream.key)
+            .is_some_and(|current| std::ptr::eq(current.as_ptr(), Arc::as_ptr(stream)))
+        {
+            streams.remove(&stream.key);
+        }
+        Ok(())
+    }
+
     pub(crate) fn budgeted_bytes(&self) -> usize {
         self.core.budget.used()
     }
@@ -498,6 +515,17 @@ impl TerminalStream {
         if let Some(progress) = self.progress() {
             progress.degraded(self.stream_epoch);
         }
+    }
+
+    fn detach_without_progress(&self, core: &TransportCore) {
+        self.degraded.store(true, Ordering::SeqCst);
+        {
+            let mut state = self.state.lock();
+            state.throttled = false;
+            state.frame_ends.clear();
+            self.changed.notify_all();
+        }
+        core.budget.remove_stream(self.id);
     }
 
     fn on_route_revoked(&self) {

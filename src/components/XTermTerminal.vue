@@ -41,7 +41,13 @@ import { relativizePath } from '@/utils/path'
 import { parseLegacyCustomArgs } from '@/utils/legacyCustomArgs'
 import { PtyIndex } from '@/utils/ptyIndex'
 import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
-import { bindNativePaste, imagePasteBytes } from '@/utils/pasteText'
+import {
+  bindNativePaste,
+  createLegacyInputQueue,
+  imagePasteBytes,
+  type LegacyInputQueue,
+  type LegacyInputReservation,
+} from '@/utils/pasteText'
 import type { XtermProvenanceSource } from '@/terminal/xtermProvenance'
 import { createImeInputPolicy, isPasteShortcut } from '@/terminal/inputPolicy'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
@@ -117,6 +123,42 @@ const terminalInstances = reactive(new Map<string, {
   fitAddon: FitAddon
   ptyId: string
 }>())
+const legacyInputQueues = new WeakMap<Terminal, LegacyInputQueue>()
+
+function bindLegacyInputQueue(tabId: string, ptyId: string, term: Terminal) {
+  const instance = terminalInstances.get(tabId)
+  if (!instance || instance.term !== term || instance.ptyId !== ptyId) {
+    throw new Error('LEGACY_INPUT_OWNER_MISSING')
+  }
+  const queue = createLegacyInputQueue({
+    owns: () => !disposed
+      && terminalInstances.get(tabId) === instance
+      && instance.ptyId === ptyId
+      && sessionStore.tabs.get(tabId)?.ptyId === ptyId,
+    write: (payload, source) => source
+      ? ptyInput(ptyId, payload, source)
+      : ptyInput(ptyId, payload),
+  })
+  legacyInputQueues.set(term, queue)
+}
+
+function enqueueLegacyInput(
+  instance: { term: Terminal; ptyId: string },
+  payload: string,
+  source?: Parameters<LegacyInputQueue['enqueue']>[1],
+): Promise<void> {
+  return legacyInputQueues.get(instance.term)?.enqueue(payload, source) ?? Promise.resolve()
+}
+
+function reserveLegacyPaste(
+  ptyId: string,
+  produce: () => Promise<string | null>,
+): LegacyInputReservation {
+  const tabId = ptyToTab.get(ptyId)
+  const instance = tabId ? terminalInstances.get(tabId) : undefined
+  const queue = instance?.ptyId === ptyId ? legacyInputQueues.get(instance.term) : undefined
+  return queue?.reserve(produce) ?? { settled: Promise.resolve(), cancel: () => false }
+}
 
 // Terminal DOM 元素引用
 const terminalEls = reactive(new Map<string, HTMLElement | null>())
@@ -283,6 +325,8 @@ async function loadRendererAddonsOnce(term: Terminal) {
 
 // 统一清理 terminal：先停 timer，再 dispose
 async function disposeTerminal(term: Terminal, context: string) {
+  legacyInputQueues.get(term)?.dispose()
+  legacyInputQueues.delete(term)
   rendererRegistry.markDisposed(term)
   rendererRegistry.clearTimer(term)
   const imeTa = term.textarea
@@ -333,7 +377,7 @@ function attachImeInputFix(term: Terminal) {
     // it back through term.input(), which would re-emerge as ambiguous onData.
     for (const instance of terminalInstances.values()) {
       if (isVisibleTab(currentDisplayTabId.value ?? '') && instance.term.textarea === ta && instance.ptyId && instance === terminalInstances.get(currentDisplayTabId.value!)) {
-        void ptyInput(instance.ptyId, text, 'ime-fallback')
+        void enqueueLegacyInput(instance, text, 'ime-fallback').catch(() => {})
         return
       }
     }
@@ -383,7 +427,11 @@ function createTerminal(tabId: string): { term: Terminal; fitAddon: FitAddon } {
       // ptyId 空（fit 在 spawn 前发生）时跳过发送；Escape 仍清 working 状态
       if (instance.ptyId) {
       const pasteLike = data.includes('\x1b[200~') || data.includes('\x1b[201~')
-      ptyInput(instance.ptyId, data, pasteLike ? 'xterm-ondata-paste' : 'terminal-ondata')
+      void enqueueLegacyInput(
+        instance,
+        data,
+        pasteLike ? 'xterm-ondata-paste' : 'terminal-ondata',
+      ).catch(() => {})
     }
 
       // A local Escape invalidates an activity hint; it does not prove CLI idle/exit.
@@ -450,7 +498,7 @@ function createTerminal(tabId: string): { term: Terminal; fitAddon: FitAddon } {
       event.preventDefault()
       const instance = terminalInstances.get(tabId)
       if (instance) {
-        ptyInput(instance.ptyId, '\\\r')
+        void enqueueLegacyInput(instance, '\\\r').catch(() => {})
       }
       return false
     }
@@ -469,7 +517,7 @@ onMounted(async () => {
       container: containerRef.value,
       getTabId: () => visible.value ? currentDisplayTabId.value : null,
       getInstance: tabId => isVisibleTab(tabId) ? terminalInstances.get(tabId) : undefined,
-      write: (id, payload) => ptyInput(id, payload, 'clipboard-dom'),
+      reserve: reserveLegacyPaste,
       imageFallback: () => imagePasteBytes(platform),
     })
   }
@@ -570,7 +618,10 @@ function ensureCoreListeners(): Promise<void> {
       if (!tabId) return
       const instance = terminalInstances.get(tabId)
       // An ended open terminal still owns its scrollback until close/restart.
-      if (instance?.ptyId === id) instance.ptyId = ''
+      if (instance?.ptyId === id) {
+        legacyInputQueues.get(instance.term)?.dispose()
+        instance.ptyId = ''
+      }
       ptyToTab.unlink(id)
       emit('ptyExited', tabId, id)
     })
@@ -635,6 +686,7 @@ async function createTerminalForTab(tabId: string, ptyId: string) {
   const { term, fitAddon } = createTerminal(tabId)
 
   terminalInstances.set(tabId, markRaw({ term, fitAddon, ptyId }))
+  bindLegacyInputQueue(tabId, ptyId, term)
   ptyToTab.link(ptyId, tabId)
 
   const el = await waitForElement(tabId)
@@ -685,6 +737,7 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
 
     // 先注册路由和 store，再启动后端进程。即使 CLI 立即输出或退出，事件也能定位 tab。
     terminalInstances.set(tabId, markRaw({ term, fitAddon, ptyId }))
+    bindLegacyInputQueue(tabId, ptyId, term)
     sessionStore.setTabPty(tabId, ptyId)
     startingGeneration = tab.ptyGeneration ?? 0
     ptyToTab.link(ptyId, tabId)
@@ -879,7 +932,7 @@ function sendText(text: string) {
   if (!tabId) return false
   const instance = terminalInstances.get(tabId)
   if (instance?.ptyId) {
-    void ptyInput(instance.ptyId, text)
+    void enqueueLegacyInput(instance, text).catch(() => {})
     instance.term.focus()
     return true
   }
@@ -930,7 +983,10 @@ async function stopTab(tabId: string) {
   hookStore.clearSession(ptyId)
   ptyToTab.unlink(ptyId)
   const instance = terminalInstances.get(tabId)
-  if (instance?.ptyId === ptyId) instance.ptyId = ''
+  if (instance?.ptyId === ptyId) {
+    legacyInputQueues.get(instance.term)?.dispose()
+    instance.ptyId = ''
+  }
 }
 async function recover() { throw new Error('LEGACY_RECOVERY_UNSUPPORTED') }
 async function renameTab(tabId: string, title: string) {
@@ -938,7 +994,10 @@ async function renameTab(tabId: string, title: string) {
   const tab = sessionStore.tabs.get(tabId)
   if (!tab) throw new Error('LEGACY_SESSION_NOT_FOUND')
   const ptyId = tab.ptyId
-  if (tab.status === 'running' && ptyId) await ptyInput(ptyId, `/rename ${title}\r`)
+  const instance = terminalInstances.get(tabId)
+  if (tab.status === 'running' && ptyId && instance?.ptyId === ptyId) {
+    await enqueueLegacyInput(instance, `/rename ${title}\r`)
+  }
 }
 watch(() => props.visible, async () => {
   for (const id of terminalInstances.keys()) needsFit.add(id)
