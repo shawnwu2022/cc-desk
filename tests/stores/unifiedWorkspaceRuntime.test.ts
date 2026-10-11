@@ -406,6 +406,17 @@ describe('Workspace source warning diagnostics', () => {
     expect(runtime.sourceNoticeDismissed.value).toBe(false)
   })
 
+  it('Runtime_RefreshDropsStaleRevisionHistory_050', async () => {
+    const { runtime } = render(); await flushPromises()
+    const history = useNativeHistoryStore()
+    expect(history.all().map(entry => entry.context.profileRevision)).toEqual(['7'])
+    const current = await io.profiles()
+    io.profiles.mockResolvedValue({ ...current, profiles: current.profiles.map((profile: object) => ({ ...profile, revision: '8' })) })
+    await runtime.refresh(); await flushPromises()
+    // 旧 revision 的幽灵 entry 必须被清理，否则同一会话会同时出现两行。
+    expect(history.all().map(entry => entry.context.profileRevision)).toEqual(['8'])
+  })
+
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {
     io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false, historyMetadataIncomplete: true })
     const { runtime } = render(); await flushPromises()

@@ -36,6 +36,8 @@ export function formatRelativeActivity(
   locale: RelativeTimeLocale = 'zh',
 ): string {
   const activity = finiteTimestamp(timestamp)
+  // 0/负值是「无已确认活动时间」（如不完整历史观察），不是 1970 年的活动。
+  if (activity <= 0) return '—'
   const reference = finiteTimestamp(now)
   const diff = Math.max(0, reference - activity)
 

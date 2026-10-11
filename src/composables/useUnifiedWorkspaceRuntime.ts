@@ -4,7 +4,7 @@ import { openInFileManager } from '@/api/tauri'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useNativeTabsStore, captureNativeAttempt, matchesNativeAttempt } from '@/stores/nativeTabs'
-import { useNativeHistoryStore } from '@/stores/nativeHistory'
+import { nativeHistoryContextKey, useNativeHistoryStore } from '@/stores/nativeHistory'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -323,6 +323,12 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
           projectId: project.projectId, projectPath: project.selectedPath, force: true,
         })))
+        // 清理 profile revision 变更、profile 删除或项目移除后残留的历史 entry：
+        // 否则旧 revision 的幽灵行会与新 observation 的行并存显示（同会话重复）。
+        const validKeys = new Set(contexts.map(({ force: _force, ...context }) => nativeHistoryContextKey(context)))
+        for (const entry of history.all()) {
+          if (!entry.loading && !validKeys.has(nativeHistoryContextKey(entry.context))) history.invalidate(entry.context)
+        }
         // Match the backend's two-reader budget; isolate each source failure.
         for (let i = 0; i < contexts.length && current(); i += 2) {
           await Promise.all(contexts.slice(i, i + 2).map(async context => {
