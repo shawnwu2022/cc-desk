@@ -351,6 +351,7 @@ npm run tauri:build        # 生产构建
 
 ### Unified application shell boundary
 
+- 严格生产 CSP 下，两个前端入口的 Vue I18n 9 翻译字符串必须经 JIT/AST 解释执行，不能在首次渲染时依赖 `new Function`。`npm run test:production` 编译正常生产入口并施加真实生产 CSP，核对中英文主界面、Projects 与异步 Settings 可见和零 CSP 违规；该 IPC 边界合成测试不能替代真实安装包 WebView2/CLI 验收。
 - `useShellStore` owns exactly `workspace | projects | settings`, logical responsive mode and global column state. `AppShell` is the only normal global layout: 44px navigation, 288px session tree (240–360), flexible main, optional344px resources (300–420). Do not recreate global shells in content views or add another tab strip.
 - Context overlays below1180 CSS pixels through shared `AppDrawer`; sessions can collapse below900 while preserving the separate desktop choice. Read `window.innerWidth`, not physical scale. Native default/minimum is1024×640; min-width zero/overflow-hidden containers avoid global horizontal scroll under scaling.
 - Every build of `App.vue` mounts only `AppShell` and loads app/GUI preferences independently of CLI availability. `useUnifiedWorkspaceRuntime` configures the real adapters and performs read-only bootstrap; no old automatic Legacy startup or alternate DEV product route remains. The retired compatibility flag has no effect.

@@ -2,6 +2,21 @@
 
 CC Desk has one application startup path and two runtime adapters. Startup loads preferences and independently reads Legacy history, Native configurations/projects/history and project metadata. It never implicitly launches a CLI.
 
+## Production document startup
+
+The strict production CSP permits local scripts but forbids dynamic JavaScript
+evaluation. Vue I18n 9 must use its JIT/AST message compiler, with the compiler
+retained for the bundled locale strings. The shared Vite definitions apply to both
+the ordinary application and the version-manager entry point.
+
+`npm run test:production` builds the ordinary production modules and serves the
+exact `app.security.csp` response header to Chromium. It verifies visible
+English/Chinese startup, Projects navigation and lazy Settings loading, and rejects
+CSP violations or blocked-evaluation errors. Its IPC boundary is synthetic and
+fail-closed; it does not grant Native document authority or certify actual
+installed WebView2, CLI or historical-installation behavior. Frontend CI runs this
+gate and retains its browser evidence in addition to the original tests/build.
+
 ## Native CLI v3
 
 Native CLI startup does **not** depend on the legacy Claude environment-check overlay.

@@ -8,9 +8,11 @@
     "strict": true
   },
   "include": [
+    "build/**/*.ts",
     "vite.config.ts",
     "vitest.config.ts",
     "playwright.config.ts",
+    "playwright.production.config.ts",
     "vitest.visual.config.ts"
   ]
 }

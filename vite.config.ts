@@ -21,7 +21,10 @@ export default defineConfig(({ command, mode }) => ({
   },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
-    __APP_BUILD_COMMIT__: JSON.stringify(buildCommit)
+    __APP_BUILD_COMMIT__: JSON.stringify(buildCommit),
+    // 原始翻译字符串使用 AST 解释执行，避免首次渲染依赖 CSP 禁止的 new Function。
+    __INTLIFY_JIT_COMPILATION__: true,
+    __INTLIFY_DROP_MESSAGE_COMPILER__: false,
   },
   test: {
     globals: true,
