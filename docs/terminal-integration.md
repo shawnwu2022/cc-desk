@@ -139,6 +139,13 @@ The existing `XTermTerminal.vue -> pty.rs -> Claude Code` path remains for compa
 
 It continues to use the older Claude-specific environment/check/hook integration. Do not extend this path for new Codex/native features.
 
+**Known limitation: no output backpressure.** The `pty.rs` reader emits a `pty-output`
+IPC event for every 4 KB read, and the frontend (`XTermTerminal.vue`) writes each event
+straight into xterm on arrival — there is no pause/resume signal and no ACK. A
+high-throughput CLI burst therefore becomes a burst of IPC events that the frontend
+must absorb one `term.write` at a time. The Native bounded transport (frame offsets,
+exact ACK, per-run watermarks, global payload budget) does not apply to this legacy path.
+
 ## Windows ConPTY
 
 Windows packages a verified private ConPTY runtime and fails closed when that runtime is missing/corrupt rather than silently falling back to the known-bad path.

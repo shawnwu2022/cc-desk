@@ -135,7 +135,9 @@ if (payload.detail.type === 'sessionStart') {
 - 收到 SessionStart 时自动 `invalidate_project_path_mapping()`
 - 建立 `session_id ↔ pty_id` 映射（用于反向查询）
 
-### 已注册的 11 个事件
+### 已注册的 13 个事件
+
+其中 `PreCompact` / `PostCompact` 为后补事件，其余 11 个为初始集合。
 
 | 事件 | 提取数据 | 推导状态 |
 |------|----------|----------|
@@ -245,6 +247,17 @@ interface TerminalTab {
 | **HTTP 服务器** | 启动失败仅日志告警；handler 内 catch 所有错误；独立 tokio task |
 | **PTY** | `--plugin-dir` 路径不存在时 Claude 忽略正常启动 |
 | **前端** | 无 hook 事件时 `working = false`，指示灯降级为默认样式 |
+
+## 已知限制
+
+**Native observer 凭据经 PTY 环境变量分发，可被会话内子进程读取并伪造本会话事件。**
+Observer 的 `CC_DESK_OBSERVER_CAPABILITY` / `CC_DESK_OBSERVER_RUN` / `CC_DESK_OBSERVER_GENERATION`
+通过 PTY 环境变量注入 CLI 进程（`observer_host.rs` 注入、`pty.rs` 落地到子进程环境）。
+会话内 CLI 派生的子进程——例如恶意仓库的构建脚本——继承同一环境，可以读取这组凭据，
+并向本会话的 observer 端点伪造事件（伪造的观察结果只影响元数据展示，不拥有进程控制）。
+跨会话伪造不可行：capability 为 128-bit 随机 UUID（`observer_registry.rs` 的 `mint`），
+比较使用常数时间逐字节 XOR（`same_capability`），事件字段经白名单过滤
+（`sanitize_event` 丢弃 prompt/输出/错误文本/环境变量及未知字段，仅保留白名单元数据字段）。
 
 ## 前端 Hook 事件总线
 

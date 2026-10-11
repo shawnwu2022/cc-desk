@@ -76,15 +76,13 @@ D20 harness 与目标机命令已经实现，但真实 PASS 必须同时具备�
 
 ## 发布状态
 
-当前仓库只构建 **signed candidate packages**。
+发布只从 **protected main** 出发，经显式 promotion gate 提升一组签名平台产物：
 
-发布被明确关闭：
+- `scripts/release-policy.mjs` 门禁要求 required CI 全部成功、package.json / Cargo.toml / tauri.conf.json 三方版本一致、coverage artifact 与源 SHA/CI run 绑定校验通过；任何异常 fail-closed 即拒绝；
+- `.github/workflows/release.yml` 构建签名候选，复核精确 main 源、CI 与 coverage 后，才发布 GitHub Release 与 `latest.json` updater manifest；既有冲突 draft 走已审查的 draft 恢复事务；
+- 普通开发 PR 只跑验证：不做版本 bump/tag/release。
 
-- `scripts/release-policy.mjs` 永远返回 false；
-- `.github/workflows/release.yml` 只构建并上传候选产物；
-- 不创建 GitHub Release，也不发布 updater manifest。
-
-代码 CI 全绿不等于获得发布授权。
+代码 CI 全绿本身不是发布授权，也不得借道 Gitee/OSS 或其他渠道绕过门禁。
 
 ## 从源码构建
 

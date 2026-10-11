@@ -105,7 +105,7 @@ Legacy 路径继续维护兼容性，但不是新的双 CLI 架构扩展点。
 Claude CLI hook 触发 → report-hook.sh → curl POST → hook_server.rs (axum) → emit('hook-event') → stores/hook.ts (事件总线) → useStatusMonitor (状态监控)
 ```
 
-- Plugin 通过 `--plugin-dir` 按 session 加载，注入 11 个 hook 事件
+- Plugin 通过 `--plugin-dir` 按 session 加载，注入 13 个 hook 事件
 - 每个 PTY 注入 `CC_BOX_HOOK_PORT`（服务器端口）和 `CC_BOX_SESSION_ID`（终端标识）
 - `stores/hook.ts`：纯事件总线，模块通过 `subscribe(eventTypes[], handler)` 注册消费
 - `useStatusMonitor`：hook 事件 → Tab 的 `working`/`pending` 状态 + 任务栏跳动
@@ -165,16 +165,15 @@ npm run tauri:build        # 生产构建
 - **GitHub**：`https://github.com/shawnwu2022/cc-desk`
 - 项目源自 `orczh-hj/cc-box`，现按独立产品方向维护；来源与版权说明见 `NOTICE.md`
 - `~/.cc-box/`、`CC_BOX_*` 与 `cc-box-light` / `cc-box-dark` 暂作为兼容标识保留，避免旧用户配置和插件协议失效
-- 当前只产出 CC Desk signed candidate artifacts；公开 GitHub Release/updater promotion 仍禁用，不得借 Gitee/OSS 绕过
+- 发布只能经 protected main + promotion gate 进行，不得借 Gitee/OSS 绕过（见下方「版本/发布边界」）
 - signed candidate 使用 CC Desk 自有 Tauri signing secret；私钥只存 GitHub Secrets，禁止提交到仓库、日志或支持包
-### 版本/发布边界（当前：signed candidates only）
+### 版本/发布边界（protected main + promotion gate）
 
 - 普通开发 PR 只跑验证，不做版本 bump/tag/release。
-- `.github/workflows/release.yml` 当前只构建并上传 signed candidate artifacts。
-- `scripts/release-policy.mjs` 必须保持 fail-closed（`mayPublish() === false`）。
-- 不得因为 CI 全绿就恢复 GitHub Release/updater 发布路径。
-- 真实 Claude Code / Codex CLI Layer-C 证据属于 D20，和普通代码 CI 分层记录。
-- 公开发布必须另行设计显式 promotion：绑定不可变候选产物、真实 CLI 证据、审批与回滚。
+- 发布只能来自 protected main：`release.yml` 的 promotion 前先过条件门禁——`scripts/release-policy.mjs` 的 `mayPublish()` 要求 REQUIRED_CI_JOBS 各恰好一次且全部成功、package.json / Cargo.toml / tauri.conf.json 三方版本一致且未被既有 tag/release 占用、coverage artifact 与源 SHA/CI run/attempt 绑定校验通过；任何异常 fail-closed 即拒绝，不存在 skip-CI 或豁免。
+- 门禁通过后由 release job 显式 promotion：发布 GitHub Release（draft:false）+ `latest.json` updater manifest，发布前校验三个平台产物签名、发布后复验字节与签名；既有冲突 draft 走 `release-draft-transaction.mjs` 恢复事务（backup → prepare/reprepare → stage → publish），备份或 mutation 失败保持 draft 未发布。
+- 不得绕过门禁借道 Gitee/OSS 或其他发布路径。
+- 真实 Claude Code / Codex CLI Layer-C 证据属于 D20，和普通代码 CI 分层记录；required CI 成功不等于真实安装/回环验收。
 
 详细流程 → [docs/release-process.md](docs/release-process.md)
 

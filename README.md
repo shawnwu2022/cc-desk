@@ -80,15 +80,13 @@ Synthetic fixtures, model echo, screen scraping, or host writer receipts cannot 
 
 ## Release status
 
-The repository currently builds **signed candidate packages only**.
+Releases promote one signed platform set from **protected main** through an explicit promotion gate:
 
-Publishing is deliberately disabled:
+- `scripts/release-policy.mjs` gates publication on required CI success, a three-way consistent stable version, and a coverage artifact bound to that exact source/CI run; any anomaly fails closed;
+- `.github/workflows/release.yml` builds signed candidates, rechecks the exact main source, CI and coverage, then publishes the GitHub Release and the `latest.json` updater manifest only after the gate passes; an existing conflicting draft goes through the reviewed draft recovery transaction;
+- ordinary development PRs run verification only: no version bump, tag or release.
 
-- `scripts/release-policy.mjs` returns false;
-- `.github/workflows/release.yml` builds and uploads candidate artifacts;
-- it does not publish a GitHub Release or updater manifest.
-
-A green code-side CI run is not an authorization to publish.
+A green code-side CI run alone is not an authorization to publish, and the gate must not be bypassed via Gitee/OSS or other channels.
 
 ## Building from source
 
