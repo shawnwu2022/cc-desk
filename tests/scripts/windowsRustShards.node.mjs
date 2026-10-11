@@ -69,7 +69,7 @@ test('WindowsRustShards_StableHarness_006: exact multi-name arguments exercise r
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdesk-shard-libtest-'));
   try {
     fs.writeFileSync(path.join(temp, 'fixture.rs'), '#[test] fn one(){} #[test] fn one_suffix(){panic!("substring must not run")} #[test] fn two(){} #[test] #[ignore="supervised only"] fn worker(){}');
-    const executable = path.join(temp, 'fixture');
+    const executable = path.join(temp, process.platform === 'win32' ? 'fixture.exe' : 'fixture');
     const compiled = spawnSync('rustc', ['--test', path.join(temp, 'fixture.rs'), '-o', executable], { encoding: 'utf8' });
     assert.equal(compiled.status, 0, compiled.stderr);
     const args = ['one', 'two', 'worker', '--exact'];

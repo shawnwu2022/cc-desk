@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-const workflow = fs.readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
+const workflow = fs.readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const job = id => workflow.match(new RegExp(`^  ${id}:\\n([\\s\\S]*?)(?=^  [a-z][a-z-]*:|$(?![\\s\\S]))`, 'm'))?.[1];
 const gateUrl = new URL('../../scripts/ci-rust-job-gate.mjs', import.meta.url);
 
@@ -56,11 +57,18 @@ test('RustDag_FailClosed_004: failures, cancellation, skips and missing results 
   assert.ok(fs.existsSync(gateUrl), 'the aggregator must execute a tested strict result gate');
   const { requireRustJobSuccess } = await import(gateUrl);
   assert.doesNotThrow(() => requireRustJobSuccess({ compile: 'success', static: 'success', shards: 'success' }));
+  // 先证明真实入口能接受完整成功，不能把模块未找到误当作门禁拒绝。
+  const accepted = spawnSync(process.execPath, [fileURLToPath(gateUrl)], { encoding: 'utf8', env: { ...process.env, COMPILE_RESULT: 'success', STATIC_RESULT: 'success', SHARD_RESULT: 'success' } });
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(accepted.stdout, '');
+  assert.equal(accepted.stderr, '');
   for (const key of ['compile', 'static', 'shards']) for (const result of ['failure', 'cancelled', 'skipped', '', undefined, 'Success']) {
     const values = { compile: 'success', static: 'success', shards: 'success', [key]: result };
     assert.throws(() => requireRustJobSuccess(values), new RegExp(key));
-    const child = spawnSync(process.execPath, [gateUrl.pathname], { encoding: 'utf8', env: { ...process.env, COMPILE_RESULT: values.compile ?? '', STATIC_RESULT: values.static ?? '', SHARD_RESULT: values.shards ?? '' } });
-    assert.notEqual(child.status, 0);
+    const child = spawnSync(process.execPath, [fileURLToPath(gateUrl)], { encoding: 'utf8', env: { ...process.env, COMPILE_RESULT: values.compile ?? '', STATIC_RESULT: values.static ?? '', SHARD_RESULT: values.shards ?? '' } });
+    assert.equal(child.status, 1);
+    assert.equal(child.stdout, '');
+    assert.equal(child.stderr, `Rust checks: ${key} job result must be success\n`);
   }
 });
 

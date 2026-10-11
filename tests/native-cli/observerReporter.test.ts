@@ -10,7 +10,7 @@ function toBashPath(path: string): string {
   if (process.platform !== 'win32') return path
   return path
     .replace(/^([A-Za-z]):[\\\\/]/, (_match, drive: string) => `/${drive.toLowerCase()}/`)
-    .replace(/\\\\/g, '/')
+    .replace(/\\/g, '/')
 }
 
 function bashQuote(value: string): string {
@@ -32,7 +32,8 @@ function capture(auth: boolean, input: Buffer = Buffer.from('{"hook_event_name":
       `export PATH=${bashQuote(toBashPath(dir))}:"$PATH"`,
       `exec ${bashQuote(toBashPath(resolve(script)))}`,
     ].join('; ')
-    const result = spawnSync('bash', ['-lc', command], {
+    // 测试只执行 reporter，不读取个人登录脚本或引入其输出与环境副作用。
+    const result = spawnSync('bash', ['--noprofile', '--norc', '-c', command], {
       env: { ...process.env, CC_BOX_HOOK_PORT: '12345', capability: 'preexisting-export', payload: 'preexisting-export', CC_DESK_OBSERVER_RUN: 'run', CC_DESK_OBSERVER_GENERATION: '1', CC_DESK_OBSERVER_CAPABILITY: auth ? token : '' },
       input, timeout: 6000,
     })

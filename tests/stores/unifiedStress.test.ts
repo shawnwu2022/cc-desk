@@ -172,8 +172,8 @@ it('Stress_50Projects100Sessions_001', async () => {
   console.info(`Task24 stress catalog: 50 projects, 5000 sessions, ${Math.round(performance.now() - started)}ms`)
 }, 30000)
 
-// Each cycle settles a real 5,000-row catalog refresh plus Vue rendering. The
-// full workload exceeds 30s on shared CI runners; retain a scoped hang guard.
+// 每轮等待真实 store 的项目投影更新和 Vue 渲染，保留完整目录、owner 与变化次数。
+// 共享 CI 的负载会波动，保留原有挂起保护，不以缩小工作量换取通过。
 it('Stress_30Owners120Changes_002', async () => {
   seed()
   const tabs = useNativeTabsStore(), legacy = useSessionStore()
