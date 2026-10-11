@@ -22,6 +22,7 @@ import type { ProjectsState } from '@/types/app'
 import { useAppStore } from '@/stores/app'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useShellStore } from '@/stores/shell'
+import { useAttentionStore } from '@/stores/attention'
 
 const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
@@ -1154,6 +1155,89 @@ it('Runtime_DoubleClickOwnsAttempt_031', async () => {
   expect(w.emitted('workspace-request')?.filter(([request]) => (request as { action?: string }).action === 'rename') ?? []).toHaveLength(0)
   expect(row.find('input').exists()).toBe(false)
   expect(tabs.tab(opened.adapterSessionId)?.generation).toBe(2)
+})
+
+// 一个项目的运行状态变化不替换另一项目的行或改变打开顺序。
+it('Catalog_RuntimeProjectScope_001', async () => {
+  const tabs = useNativeTabsStore()
+  const first = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  const other = tabs.create({ cli: 'codex', projectId: 'other', projectPath: '/other', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  Object.assign(first, { status: 'running', launchRevision: '1' })
+  Object.assign(other, { status: 'running', launchRevision: '1' })
+  const { runtime, port } = render(); await flushPromises()
+  expect(runtime.ready.value).toBe(true)
+  const catalog = useUnifiedSessionsStore()
+  const retained = catalog.sessions.find(row => row.adapterSessionId === other.tabId)
+  expect(retained).toBeDefined()
+  const order = catalog.sessions.map(row => row.id)
+  tabs.markUnknown(first.tabId); await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === first.tabId)?.processState).toBe('unknown')
+  expect(catalog.sessions.find(row => row.adapterSessionId === other.tabId)).toBe(retained)
+  expect(catalog.sessions.map(row => row.id)).toEqual(order)
+  expect(port.stopNative).not.toHaveBeenCalled()
+  expect(io.ptySpawn).not.toHaveBeenCalled()
+})
+
+// owner 跨项目、替换、移除与新增均更新目录，已替换对象的迟到变化不能发布。
+it('Catalog_OwnerChanges_002', async () => {
+  const tabs = useNativeTabsStore()
+  const first = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', sourceSessionKey: 'root-key', action: { kind: 'resume-id', nativeSessionId: 'history-id' } })
+  const other = tabs.create({ cli: 'codex', projectId: 'other', projectPath: '/other', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  Object.assign(first, { status: 'running', launchRevision: '1' })
+  const { port } = render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  expect(catalog.sessions.filter(row => row.projectPath === '/repo')).toHaveLength(1)
+  const retained = catalog.sessions.find(row => row.adapterSessionId === other.tabId)
+  const owner = tabs.tab(first.tabId)!
+  Object.assign(owner, { projectPath: '/moved', projectId: 'moved' }); await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === first.tabId)?.projectPath).toBe('/moved')
+  expect(catalog.sessions.filter(row => row.projectPath === '/repo')).toEqual([expect.objectContaining({ nativeSessionId: 'history-id', opened: false, processState: 'stopped' })])
+  tabs.tabs.set(first.tabId, { ...owner, title: 'Replacement' }); await flushPromises()
+  const replacement = catalog.sessions.find(row => row.adapterSessionId === first.tabId)
+  expect(replacement?.title).toBe('Replacement')
+  owner.title = 'Late old owner'; await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === first.tabId)).toBe(replacement)
+  tabs.tabs.delete(first.tabId); await flushPromises()
+  expect(catalog.sessions.some(row => row.adapterSessionId === first.tabId)).toBe(false)
+  expect(catalog.projectGroups.some(group => group.projectPath === '/moved')).toBe(false)
+  const added = tabs.create({ cli: 'codex', projectId: 'added', projectPath: '/added', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } }); await flushPromises()
+  expect(catalog.sessions.some(row => row.adapterSessionId === added.tabId)).toBe(true)
+  expect(catalog.sessions.find(row => row.adapterSessionId === other.tabId)).toBe(retained)
+  expect(port.stopNative).not.toHaveBeenCalled()
+  expect(io.ptySpawn).not.toHaveBeenCalled()
+})
+
+// 关注项进入和确认清除只刷新精确 PTY 的项目，不能让其他项目丢失行身份。
+it('Catalog_AttentionProjectScope_003', async () => {
+  const legacy = useSessionStore()
+  const id = legacy.createTab('/legacy', { name: 'Legacy' })
+  Object.assign(legacy.tabs.get(id)!, { status: 'running', ptyId: 'legacy-pty', ptyGeneration: 1 })
+  const other = useNativeTabsStore().create({ cli: 'codex', projectId: 'other', projectPath: '/other', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), attention = useAttentionStore()
+  const retained = catalog.sessions.find(row => row.adapterSessionId === other.tabId)
+  attention.ingestEvent({ ptyId: 'legacy-pty', sessionId: null, eventName: 'Notification', timestamp: 1, state: 'idle', detail: { type: 'notification', data: { notificationType: 'permission_prompt' } } })
+  await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === id)?.attentionKind).toBe('permission')
+  expect(catalog.sessions.find(row => row.adapterSessionId === id)?.attentionState).toBe('needs-user')
+  attention.ackPty('legacy-pty'); await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === id)?.attentionState).toBe('none')
+  expect(catalog.sessions.find(row => row.adapterSessionId === other.tabId)).toBe(retained)
+})
+
+// 卸载取消排队的目录发布并释放 owner 监听，后台状态变化不再改写目录。
+it('Catalog_UnmountRevokesQueue_004', async () => {
+  const tabs = useNativeTabsStore()
+  const first = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  Object.assign(first, { status: 'running', launchRevision: '1' })
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  const retained = catalog.sessions.find(row => row.adapterSessionId === first.tabId)
+  tabs.markUnknown(first.tabId)
+  wrappers.pop()!.unmount(); await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === first.tabId)).toBe(retained)
+  tabs.tab(first.tabId)!.title = 'After unmount'; await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === first.tabId)).toBe(retained)
 })
 
 // 同一真实尝试的只读目录刷新不能打断当前行双击重命名。
