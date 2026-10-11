@@ -381,10 +381,7 @@ fn D11_Registry_EvictsOldestRetiredTombstoneForNewLaunch_10() {
     third.request_id = "request-three".into();
     third.run_id = "run-three".into();
     third.generation = 3;
-    assert_eq!(
-        fixture.start(&third).unwrap_err().code,
-        "REGISTRY_CAPACITY"
-    );
+    assert_eq!(fixture.start(&third).unwrap_err().code, "REGISTRY_CAPACITY");
     // second 退休后成为唯一记录；first 的墓碑已被逐出，但 tab 代次下限不回退：
     // 同参重放被 STALE_GENERATION 拒绝（防重放），不会重新 spawn
     fixture.driver.registry().mark_exited(&second.run).unwrap();

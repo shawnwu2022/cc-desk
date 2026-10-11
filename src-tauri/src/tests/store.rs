@@ -17,9 +17,9 @@ use crate::store::{
     normalize_path_inner, normalize_path_str, parse_agents_list_output, parse_mcp_server_entry,
     parse_skill_description, parse_timestamp, read_projects_state_locked, replace_file_atomic,
     resolve_marketplace_plugin_path_at, scan_home_projects_at, search_session_messages_in_dirs,
-    validate_session_id_component, with_project_path_mapping,
-    with_projects_state_locked, write_json_atomic, AgentInfo, AppConfig, Project,
-    ProjectPathMapping, ProjectsState, SessionInfo,
+    validate_session_id_component, with_project_path_mapping, with_projects_state_locked,
+    write_json_atomic, AgentInfo, AppConfig, Project, ProjectPathMapping, ProjectsState,
+    SessionInfo,
 };
 
 use std::collections::HashMap;
@@ -3210,9 +3210,8 @@ fn SetDisplayNameCommand_OverwriteThenClear_002() {
         Some(&"Second".to_string()),
         "重复 set 同一 canonical key 应覆盖"
     );
-    let s3 =
-        with_projects_state_locked(&data, &lock, |s| apply_set_display_name(s, "e:/a", "   "))
-            .unwrap();
+    let s3 = with_projects_state_locked(&data, &lock, |s| apply_set_display_name(s, "e:/a", "   "))
+        .unwrap();
     assert!(s3.display_names.is_empty(), "空白 alias 应清除条目");
     let on_disk = read_projects_state_locked(&data, &lock).unwrap();
     assert!(on_disk.display_names.is_empty(), "清除结果应落盘");
@@ -3247,7 +3246,10 @@ fn ArchiveRestoreCommand_MissingSessionTolerant_001() {
         apply_restore_session(s, "e:/a", "missing-id")
     })
     .unwrap();
-    assert!(s3.archived_sessions.is_empty(), "restore 后空数组应清理 key");
+    assert!(
+        s3.archived_sessions.is_empty(),
+        "restore 后空数组应清理 key"
+    );
 }
 
 // ==================== 跨进程并发（re-exec self 子任务）====================

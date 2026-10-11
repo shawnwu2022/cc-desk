@@ -882,7 +882,10 @@ pub(crate) fn validate_session_id_component(id: &str) -> Result<(), String> {
     if id.is_empty() {
         return Err("session id is empty".to_string());
     }
-    if id.contains('/') || id.contains('\\') || id.contains(':') || id.contains(';')
+    if id.contains('/')
+        || id.contains('\\')
+        || id.contains(':')
+        || id.contains(';')
         || id.contains('\0')
     {
         return Err(format!(

@@ -1075,9 +1075,7 @@ mod read_loop_tests {
     fn run(steps: Vec<Step>) -> (Option<String>, Vec<String>) {
         let mut reader = ScriptedReader::new(steps);
         let mut emitted: Vec<String> = Vec::new();
-        let result = pump_pty_output("test-pty", &mut reader, &mut |output| {
-            emitted.push(output)
-        });
+        let result = pump_pty_output("test-pty", &mut reader, &mut |output| emitted.push(output));
         (result, emitted)
     }
 
@@ -1140,7 +1138,11 @@ mod shell_hardening_tests {
                     kind,
                 );
                 // 每个动态片段都必须是引用后的字面量，不允许裸露在 shell 中
-                let call = if kind == ShellKind::PowerShell { "& " } else { "" };
+                let call = if kind == ShellKind::PowerShell {
+                    "& "
+                } else {
+                    ""
+                };
                 let expected = format!(
                     "{call}{} {} {}",
                     shell_quote_arg("C:\\evil path\\claude.exe", kind),
@@ -1158,10 +1160,7 @@ mod shell_hardening_tests {
             build_claude_command(Some("C:\\x\\claude.exe"), None, ShellKind::Posix),
             "'C:\\x\\claude.exe'"
         );
-        assert_eq!(
-            build_claude_command(None, None, ShellKind::Posix),
-            "claude"
-        );
+        assert_eq!(build_claude_command(None, None, ShellKind::Posix), "claude");
         assert_eq!(
             build_claude_command(None, Some(&[]), ShellKind::Posix),
             "claude"
@@ -1194,7 +1193,10 @@ mod shell_hardening_tests {
             "a:b",
         ];
         for evil in evils {
-            assert!(validate_resume_session_id(evil).is_err(), "must reject: {evil}");
+            assert!(
+                validate_resume_session_id(evil).is_err(),
+                "must reject: {evil}"
+            );
             let pair = ["--resume".to_string(), evil.to_string()];
             assert!(validate_resume_session_ids(&pair).is_err());
             let inline = [format!("--resume={evil}")];
