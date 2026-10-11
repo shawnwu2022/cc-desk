@@ -215,8 +215,9 @@ npm run tauri:build        # 生产构建
 - **自动测试优先**：能用自动测试覆盖的场景，必须写成自动测试，不要写入手动测试文档
 - **手动测试条目**：仅记录自动化测试无法覆盖的场景（如真实 PTY 进程环境、跨组件端到端交互、视觉表现），记录到 `docs/manual-test-cases.md`，每个条目包含：测试目标、前置条件、操作步骤、预期结果
 - **测试文件独立存放**：
-  - 前端：项目根目录 `tests/` 文件夹，运行 `npm test`
-  - 后端：`src-tauri/src/tests/` 文件夹，运行 `cd src-tauri && cargo test`
+  - 前端：项目根目录 `tests/` 文件夹，运行 `npm test`（全量 ~40s）；日常迭代用 `npx vitest run <文件>` 或 `npm run test:watch`，只跑相关文件
+  - 后端：`src-tauri/src/tests/` 文件夹，日常用 `npm run test:rust:lib`（等价 `cargo test --lib`）**按域过滤**：`cargo test --lib -- <Filter 词>`（如 launch、registry、store）；全量 `cargo test` 含大量真实进程集成测试（本地 30 分钟级），完整证据由 CI 分片（windows-rust-shard-runner）执行，不要作为日常环
+  - **慢测试是设计使然，不要为提速删真实进程测试**：前端 `tests/native-cli/` 下 probe/oracle/baseline/realCliCommand/realCliCollector/observerReporter 6 个文件 spawn 真实子进程（单文件 5-30s）；Rust 侧 owned_pty、run_supervisor、version_history、*_live 等同理
 - **测试基础设施**：
   - 前端：Vitest + jsdom + `@tauri-apps/api/mocks`（mockIPC）
   - 后端：Rust `#[cfg(test)]` 模块，被测函数 `pub(crate)` 可见性
