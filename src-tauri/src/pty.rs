@@ -529,6 +529,7 @@ impl PtyManager {
         cwd: &str,
         cols: u16,
         rows: u16,
+        resume_session_id: Option<String>,
         args: Option<Vec<String>>,
     ) -> Result<PtyInfo> {
         let admission = self
@@ -568,22 +569,22 @@ impl PtyManager {
             ShellKind::Posix
         };
 
-        // --resume 的 sessionId 来自 ~/.claude/projects 会话文件名并作为独立参数
-        // 交给 shell，先做组件白名单校验；不合法直接拒绝，不进入 spawn。
-        if let Some(extra_args) = args.as_deref() {
-            if let Err(reason) = validate_resume_session_ids(extra_args) {
-                let message = format!("Invalid --resume session id: {reason}");
-                self.emit_error(&id, &message, "validation");
-                return Err(anyhow!(message));
-            }
-        }
+        let prepared_args =
+            match prepare_legacy_claude_args(resume_session_id.as_deref(), args.as_deref()) {
+                Ok(args) => args,
+                Err(reason) => {
+                    let message = format!("Invalid owned --resume session id: {reason}");
+                    self.emit_error(&id, &message, "validation");
+                    return Err(anyhow!(message));
+                }
+            };
 
         // 可执行路径与每个参数逐一引用为 shell 字面量后交给 shell -c / -Command
         let custom_path = crate::store::get_app_config()
             .ok()
             .and_then(|config| config.claude_path);
         let mut claude_cmd =
-            build_claude_command(custom_path.as_deref(), args.as_deref(), shell_kind);
+            build_claude_command(custom_path.as_deref(), prepared_args.as_deref(), shell_kind);
 
         // Preserve the legacy Claude observer preference, but never enable an
         // unauthenticated fallback. This lease follows this exact spawned PTY.
@@ -918,6 +919,9 @@ fn pump_pty_output(
 /// 校验 --resume 的 sessionId：先做字符白名单（拒绝 shell 元字符），
 /// 再复用 store 的文件名组件校验（防路径逃逸、Windows 保留名、agent- 前缀）。
 fn validate_resume_session_id(session_id: &str) -> Result<(), String> {
+    if session_id.starts_with('-') {
+        return Err("session id cannot start with '-'".to_string());
+    }
     if session_id.is_empty()
         || !session_id
             .chars()
@@ -930,7 +934,7 @@ fn validate_resume_session_id(session_id: &str) -> Result<(), String> {
     crate::store::validate_session_id_component(session_id)
 }
 
-/// 校验 extra_args 中全部 --resume 形态（`--resume <id>` 与 `--resume=<id>`）
+/// 只校验 Desk 自己构建的 owned `--resume` 参数对；不得用它解释用户原始 CLI 参数语义。
 fn validate_resume_session_ids(args: &[String]) -> Result<(), String> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -944,6 +948,24 @@ fn validate_resume_session_ids(args: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// 将 Desk 历史 locator 作为受校验的参数对前置，再原样附加用户 argv。
+/// 用户 argv 由 Claude CLI 自己解释，不能扫描、补值或改写其中的 `--resume` / `-r`。
+fn prepare_legacy_claude_args(
+    resume_session_id: Option<&str>,
+    user_args: Option<&[String]>,
+) -> Result<Option<Vec<String>>, String> {
+    let mut prepared = Vec::new();
+    if let Some(session_id) = resume_session_id {
+        let owned = ["--resume".to_string(), session_id.to_string()];
+        validate_resume_session_ids(&owned)?;
+        prepared.extend(owned);
+    }
+    if let Some(args) = user_args {
+        prepared.extend_from_slice(args);
+    }
+    Ok((!prepared.is_empty()).then_some(prepared))
 }
 
 /// 组装交给 shell 执行的 Claude 命令：可执行路径与每个参数逐一引用为
@@ -1114,113 +1136,5 @@ mod read_loop_tests {
 }
 
 #[cfg(test)]
-mod shell_hardening_tests {
-    #![allow(non_snake_case)]
-
-    use super::{build_claude_command, validate_resume_session_id, validate_resume_session_ids};
-    use crate::platform::{shell_quote_arg, ShellKind};
-
-    #[test]
-    fn BuildClaudeCommand_QuotesPathAndArgsAgainstShellMetachars() {
-        let evils = [
-            "; rm -rf /x",
-            "$(calc)",
-            "`calc`",
-            "| pipe",
-            "double \"quote\"",
-            "a b",
-        ];
-        for evil in evils {
-            for kind in [ShellKind::Posix, ShellKind::PowerShell] {
-                let cmd = build_claude_command(
-                    Some("C:\\evil path\\claude.exe"),
-                    Some(&["--resume".to_string(), evil.to_string()]),
-                    kind,
-                );
-                // 每个动态片段都必须是引用后的字面量，不允许裸露在 shell 中
-                let call = if kind == ShellKind::PowerShell {
-                    "& "
-                } else {
-                    ""
-                };
-                let expected = format!(
-                    "{call}{} {} {}",
-                    shell_quote_arg("C:\\evil path\\claude.exe", kind),
-                    shell_quote_arg("--resume", kind),
-                    shell_quote_arg(evil, kind)
-                );
-                assert_eq!(cmd, expected, "unquoted fragment for {kind:?}: {cmd}");
-            }
-        }
-    }
-
-    #[test]
-    fn BuildClaudeCommand_WithoutArgs_KeepsProgramOnly() {
-        assert_eq!(
-            build_claude_command(Some("C:\\x\\claude.exe"), None, ShellKind::Posix),
-            "'C:\\x\\claude.exe'"
-        );
-        assert_eq!(build_claude_command(None, None, ShellKind::Posix), "claude");
-        assert_eq!(
-            build_claude_command(None, Some(&[]), ShellKind::Posix),
-            "claude"
-        );
-        // PowerShell 以调用操作符开头，裸引号路径才可执行
-        assert_eq!(
-            build_claude_command(Some("C:\\x\\claude.exe"), None, ShellKind::PowerShell),
-            "& 'C:\\x\\claude.exe'"
-        );
-        assert_eq!(
-            build_claude_command(
-                None,
-                Some(&["--resume".to_string(), "it's".to_string()]),
-                ShellKind::PowerShell
-            ),
-            "& claude '--resume' 'it''s'"
-        );
-    }
-
-    #[test]
-    fn ValidateResumeSessionIds_RejectsShellMetachars() {
-        let evils = [
-            "abc; rm -rf /x",
-            "$(calc)",
-            "a`id`b",
-            "a|b",
-            "a\"b",
-            "a b",
-            "会话",
-            "a:b",
-        ];
-        for evil in evils {
-            assert!(
-                validate_resume_session_id(evil).is_err(),
-                "must reject: {evil}"
-            );
-            let pair = ["--resume".to_string(), evil.to_string()];
-            assert!(validate_resume_session_ids(&pair).is_err());
-            let inline = [format!("--resume={evil}")];
-            assert!(validate_resume_session_ids(&inline).is_err());
-        }
-        // --resume 缺值同样拒绝
-        let missing = ["--resume".to_string()];
-        assert!(validate_resume_session_ids(&missing).is_err());
-    }
-
-    #[test]
-    fn ValidateResumeSessionIds_AcceptsWellFormedIds() {
-        assert!(validate_resume_session_id("cb2f0e991234456789ab001122334455").is_ok());
-        assert!(validate_resume_session_id("a-b_c.2026").is_ok());
-        let pair = ["--resume".to_string(), "abc123".to_string()];
-        assert!(validate_resume_session_ids(&pair).is_ok());
-        assert!(validate_resume_session_ids(&[]).is_ok());
-    }
-
-    #[test]
-    fn ValidateResumeSessionIds_RejectsPathEscapeForms() {
-        // store 层文件名组件校验补充点路径逃逸
-        assert!(validate_resume_session_id(".").is_err());
-        assert!(validate_resume_session_id("..").is_err());
-        assert!(validate_resume_session_id("a/b").is_err());
-    }
-}
+#[path = "tests/legacy_claude_launch.rs"]
+mod shell_hardening_tests;

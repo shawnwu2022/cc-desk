@@ -98,7 +98,7 @@ fn HistoryRuntime_LegacyWorker_99() {
     );
     assert_eq!(
         manager
-            .spawn_claude(id, root.to_str().unwrap(), 80, 24, None)
+            .spawn_claude(id, root.to_str().unwrap(), 80, 24, None, None)
             .unwrap_err()
             .to_string(),
         "HISTORY_MAINTENANCE_ACTIVE"

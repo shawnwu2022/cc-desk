@@ -727,10 +727,11 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
   let startingGeneration = tab.ptyGeneration ?? 0
 
   try {
+    const args = buildClaudeArgs()
+    const resumeSessionId = tab.sessionId || undefined
+    const cwd = tab.projectPath
     await ensureCoreListeners()
     if (disposed || sessionStore.tabs.get(tabId) !== tab || (tab.ptyGeneration ?? 0) !== startingGeneration) throw new Error('STALE_LEGACY_ATTEMPT')
-    const args = buildClaudeArgs(tab)
-    const cwd = tab.projectPath
     const ptyId = createPtyId()
     startingPtyId = ptyId
     const { term, fitAddon } = createTerminal(tabId)
@@ -762,6 +763,7 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
       cols,
       rows,
       type: 'claude',
+      ...(resumeSessionId ? { resumeSessionId } : {}),
       args,
     })
 
@@ -861,16 +863,11 @@ async function restartTab(tabId: string) {
 }
 
 /**
- * 根据 Tab 状态构建 Claude CLI 参数
+ * 构建用户配置的 Claude CLI 参数；Desk 历史 locator 通过独立 IPC 字段传递。
  */
-function buildClaudeArgs(tab: { sessionId: string | null }): string[] {
+function buildClaudeArgs(): string[] {
   const args: string[] = []
   const opts = appStore.claudeOptions
-
-  // 有 sessionId → --resume；无 → 新建会话（不带 --resume）
-  if (tab.sessionId) {
-    args.push('--resume', tab.sessionId)
-  }
 
   if (opts.skipPermissions) args.push('--dangerously-skip-permissions')
   if (opts.customArgs) {

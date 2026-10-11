@@ -323,6 +323,21 @@ describe('Legacy unified ownership', () => {
     expect(await starting).toEqual({ ok: true })
     expect(io.terms[0].output).toBe('first byte')
   })
+  // 启动调用冻结 Desk 历史 locator；监听注册等待期间的 tab 变化不能改写本次 PTY 请求。
+  it('Legacy_ResumeLocatorFrozen_020', async () => {
+    const sessions = useSessionStore(); const id = sessions.createTab('/repo', { sessionId: 'owned-a' })
+    let outputReady!: (unlisten: () => void) => void
+    io.outputReady.mockReturnValue(new Promise(r => { outputReady = r }))
+    wrapper = mount(XTermTerminal, { props: { visible: true } })
+    const starting = (wrapper.vm as any).startTab(id); await flushPromises()
+    sessions.tabs.get(id)!.sessionId = 'changed-after-start'
+    outputReady(() => {})
+    expect(await starting).toEqual({ ok: true })
+    expect(io.spawn).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: 'owned-a',
+      args: [],
+    }))
+  })
   // 等待监听注册期间关闭目标后，旧启动不得生成孤儿进程。
   it('Legacy_ReadinessRechecksOwner_009', async () => {
     const sessions = useSessionStore(); const id = sessions.createTab('/repo')

@@ -26,6 +26,13 @@ waiting. A local Legacy PTY generation prevents a late start/stop/restart/archiv
 from modifying a replacement instance. These are host/unit-tested boundaries,
 not real CLI or platform certification.
 
+Legacy history resume freezes an optional `resumeSessionId` beside the launch argv.
+The backend validates only this Desk-owned file locator and prepends its generated
+`--resume <id>` pair. User argv retains native Claude semantics, including bare
+`--resume`/`-r` pickers, session names and transcript paths; it is never scanned as
+a Desk locator. Every argument remains a separately quoted shell literal. See the
+[official CLI reference](https://code.claude.com/docs/en/cli-reference#cli-flags).
+
 ## Native CLI v3 — forward path
 
 ```text

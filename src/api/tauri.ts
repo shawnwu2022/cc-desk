@@ -83,6 +83,7 @@ interface PtySpawnOptions {
   cols: number
   rows: number
   type: 'claude' | 'shell'
+  resumeSessionId?: string
   args?: string[]
 }
 

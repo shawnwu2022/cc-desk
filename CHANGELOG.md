@@ -13,6 +13,7 @@
 - Order Legacy clipboard, keyboard, IME and terminal protocol input through an exact-PTY FIFO with synchronous paste reservation
 - Retain exact owned-process control after waiter failures, bind stops to the original request, and finish process, registry and output-stream ownership together before reclaiming a run
 - Preserve quoted paths, UNC prefixes and empty arguments in both Legacy launch entry points while passing shell operators and variables literally
+- Keep native resume-picker, name and transcript-path semantics for user argv while validating only the separately frozen Desk history locator
 - Open normalized Windows UNC and long paths without admitting Explorer switches
 - Reject ended-turn activity before status reduction, retain exact PTY boundaries across restart, and freeze each queued Legacy environment/default-option write independently
 - Revoke obsolete pending history contexts immediately after profile or project changes so late reads cannot restore removed rows

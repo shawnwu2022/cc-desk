@@ -20,6 +20,7 @@ pub(crate) use crate::store::validate_display_name_inner;
 // ==================== PTY Commands ====================
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PtySpawnOptions {
     id: String,
     cwd: String,
@@ -27,6 +28,7 @@ pub struct PtySpawnOptions {
     pty_type: String, // "claude" | "shell"
     cols: Option<u16>,
     rows: Option<u16>,
+    resume_session_id: Option<String>,
     args: Option<Vec<String>>,
 }
 
@@ -50,6 +52,7 @@ pub async fn pty_spawn(
         pty_type,
         cols,
         rows,
+        resume_session_id,
         args,
     } = options;
     let cols = cols.unwrap_or(80);
@@ -59,7 +62,7 @@ pub async fn pty_spawn(
     let result = if pty_type == "shell" {
         manager.spawn_shell(id, &cwd, cols, rows)
     } else {
-        manager.spawn_claude(id, &cwd, cols, rows, args)
+        manager.spawn_claude(id, &cwd, cols, rows, resume_session_id, args)
     };
 
     result
