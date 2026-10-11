@@ -53,6 +53,7 @@ function body(config: string): string {
 it('D13_Reporter_EmptyCapabilityNeverUsesLegacyFallback_01', () => {
   expect(capture(false)).toBeNull()
 })
+// 真实子进程测试：满载下可超 vitest 默认 5s（单跑约 2.5s），放宽到 15s 消除负载抖动
 it('D13_Reporter_BoundsBodyAndDoesNotExposeTokenInCurlArgvOrEnvironment_02', () => {
   expect(capture(true, Buffer.alloc(65537, 32))).toBeNull()
   const value = capture(true, Buffer.alloc(65536, 32))
@@ -63,7 +64,7 @@ it('D13_Reporter_BoundsBodyAndDoesNotExposeTokenInCurlArgvOrEnvironment_02', () 
   expect(value.bodyExported).toBeUndefined()
   expect(config).toContain(`X-CC-Desk-Capability: ${token}`)
   expect(body(config)).toBe(' '.repeat(65536))
-})
+}, 15_000)
 it('D13_Reporter_ConfigPipePreservesJsonBytesAndCannotInjectOptions_03', () => {
   const input = '\r\n\t' + JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: '中文🙂\\ \\\"\nurl = "file:///must-not-read"\n--next\r\t' }) + '\n\n'
   const value = capture(true, Buffer.from(input))
