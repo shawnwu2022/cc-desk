@@ -13,6 +13,12 @@ pub(crate) struct Owner {
     pub window: String,
     pub epoch: WireU64,
 }
+/// 一次观察覆盖的已注册项目。项目集合仍逐个 admission；空集合 = root-wide 观察。
+pub(crate) struct AdmittedProject {
+    pub(crate) id: String,
+    pub(crate) root: Root,
+    pub(crate) paths: Vec<PathBuf>,
+}
 pub(crate) struct Grant {
     pub owner: Owner,
     pub cli: CliKind,
@@ -21,8 +27,7 @@ pub(crate) struct Grant {
     pub target: ScopeTarget,
     pub basis: SourceBasis,
     pub root: Root,
-    pub project: Option<Root>,
-    pub project_paths: Vec<PathBuf>,
+    pub projects: Vec<AdmittedProject>,
     pub user_config: Option<Root>,
     pub check: Arc<dyn Fn() -> ReadResult<()> + Send + Sync>,
 }
@@ -63,8 +68,8 @@ impl Grant {
     fn current(&self) -> ReadResult<()> {
         (self.check)()?;
         self.root.current()?;
-        if let Some(root) = &self.project {
-            root.current()?;
+        for project in &self.projects {
+            project.root.current()?;
         }
         if let Some(root) = &self.user_config {
             root.current()?;
@@ -79,9 +84,13 @@ impl Grant {
             && self.profile_revision == other.profile_revision
             && self.basis == other.basis
             && self.root.key() == other.root.key()
-            && self.project.as_ref().map(Root::key) == other.project.as_ref().map(Root::key)
+            && self.projects.len() == other.projects.len()
+            && self.projects.iter().zip(other.projects.iter()).all(|(mine, theirs)| {
+                mine.id == theirs.id
+                    && mine.root.key() == theirs.root.key()
+                    && mine.paths == theirs.paths
+            })
             && self.user_config.as_ref().map(Root::key) == other.user_config.as_ref().map(Root::key)
-            && self.project_paths == other.project_paths
     }
 }
 impl ScopeRegistry {
@@ -267,11 +276,19 @@ impl ScopeRegistry {
                 // of the same epoch. Retire any older receipt for this scope.
                 self.retire_history_pages(&scope, history_generation.unwrap())?;
             }
+            let project_refs: Vec<super::catalog::ProjectRef<'_>> = g
+                .projects
+                .iter()
+                .map(|project| super::catalog::ProjectRef {
+                    id: &project.id,
+                    root: &project.root,
+                    paths: &project.paths,
+                })
+                .collect();
             let catalog = super::catalog::Catalog {
                 cli: g.cli,
                 root: &g.root,
-                project: g.project.as_ref(),
-                project_paths: &g.project_paths,
+                projects: &project_refs,
                 user_config: g.user_config.as_ref(),
                 check: g.check.as_ref(),
             };
@@ -422,11 +439,11 @@ fn source_heap_bytes(source: &SourceRef) -> usize {
     match &source.target {
         ScopeTarget::Profile {
             profile_id,
-            project_id,
+            project_ids,
             ..
         } => base
             .saturating_add(profile_id.capacity())
-            .saturating_add(project_id.as_ref().map_or(0, String::capacity)),
+            .saturating_add(project_ids.iter().map(String::capacity).sum()),
         ScopeTarget::Run { run_id, .. } => base.saturating_add(run_id.capacity()),
     }
 }
@@ -483,6 +500,7 @@ fn history_snapshot_bytes(items: &[ResourceItem], capacity: usize) -> usize {
             let ResourceItem::Session {
                 session_key,
                 native_session_id,
+                project_id,
                 title,
                 cwd,
                 updated_at,
@@ -494,6 +512,7 @@ fn history_snapshot_bytes(items: &[ResourceItem], capacity: usize) -> usize {
             [
                 session_key.capacity(),
                 native_session_id.capacity(),
+                project_id.as_ref().map_or(0, String::capacity),
                 title.capacity(),
                 cwd.as_ref().map_or(0, String::capacity),
                 updated_at.as_ref().map_or(0, String::capacity),

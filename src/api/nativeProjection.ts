@@ -52,8 +52,9 @@ function optionalBool(v: unknown): boolean | null { return v === null ? null : b
 function target(v: unknown): ScopeTarget {
   const r = v as Record<string, unknown> | null
   if (r?.kind === 'profile') {
-    object(r, ['kind', 'profileId', 'expectedProfileRevision'], ['projectId'])
-    return { kind: 'profile', profileId: id(r.profileId), expectedProfileRevision: u64(r.expectedProfileRevision), projectId: r.projectId == null ? null : id(r.projectId) }
+    object(r, ['kind', 'profileId', 'expectedProfileRevision', 'projectIds'])
+    if (!Array.isArray(r.projectIds) || r.projectIds.length > 64) return invalid()
+    return { kind: 'profile', profileId: id(r.profileId), expectedProfileRevision: u64(r.expectedProfileRevision), projectIds: r.projectIds.map(id) }
   }
   const q = object(v, ['kind', 'runId', 'generation']); if (q.kind !== 'run') return invalid()
   return { kind: 'run', runId: id(q.runId), generation: integer(q.generation, 1, 4294967295) }
@@ -87,18 +88,31 @@ function item(v: unknown, request: ReadRequest): ResourceItem {
   if (r.type !== allowed[request.resourceKind]) return invalid()
   if (r.type === 'session' || r.type === 'message') {
     const common = ['type', 'sessionKey', 'nativeSessionId', 'truncated']
-    object(r, [...common, ...(r.type === 'session' ? ['title', 'cwd', 'updatedAt'] : ['role', 'text'])], r.type === 'session' ? ['titleUnknown', 'titleSource', 'metadataIncomplete'] : [])
+    object(r, [...common, ...(r.type === 'session' ? ['title', 'cwd', 'updatedAt'] : ['role', 'text'])], r.type === 'session' ? ['titleUnknown', 'titleSource', 'metadataIncomplete', 'projectId'] : [])
     const nativeSessionId = text(r.nativeSessionId, 256, false)
     const sessionKey = text(r.sessionKey, 8192, false)
     if (/\p{Cc}/u.test(nativeSessionId) || sessionKey !== JSON.stringify(['local', request.source.cli, request.source.sourceRootKey, nativeSessionId])) return invalid()
     const truncated = bool(r.truncated)
     if (r.type === 'session') {
+      // 行归属必须落在 scope 的已 admission 项目集合内；root-wide 观察不得带归属。
+      // 单项目 scope 右侧归属唯一，允许省略以便不带归属的旧响应继续可用。
+      const scopeProjects = request.source.target.kind === 'profile' ? request.source.target.projectIds : null
+      const declared = Object.prototype.hasOwnProperty.call(r, 'projectId') ? id(r.projectId) : undefined
+      let projectId = declared
+      if (scopeProjects !== null) {
+        if (!scopeProjects.length) {
+          if (declared !== undefined) return invalid()
+        } else if (declared === undefined) {
+          if (scopeProjects.length !== 1) return invalid()
+          projectId = scopeProjects[0]
+        } else if (!scopeProjects.includes(declared)) return invalid()
+      }
       const titleUnknown = Object.prototype.hasOwnProperty.call(r, 'titleUnknown') ? { titleUnknown: bool(r.titleUnknown) } : {}
       const metadataIncomplete = Object.prototype.hasOwnProperty.call(r, 'metadataIncomplete') ? { metadataIncomplete: bool(r.metadataIncomplete) } : {}
       if (metadataIncomplete.metadataIncomplete === true && !truncated) return invalid()
       const titleSource = Object.prototype.hasOwnProperty.call(r, 'titleSource') ? text(r.titleSource, 6, false) : undefined
       if (titleSource !== undefined && (!['prompt', 'ai', 'custom'].includes(titleSource) || titleUnknown.titleUnknown === true)) return invalid()
-      return { ...titleUnknown, ...metadataIncomplete, ...(titleSource === undefined ? {} : { titleSource: titleSource as 'prompt' | 'ai' | 'custom' }),
+      return { ...titleUnknown, ...metadataIncomplete, ...(projectId === undefined ? {} : { projectId }), ...(titleSource === undefined ? {} : { titleSource: titleSource as 'prompt' | 'ai' | 'custom' }),
         type: 'session', sessionKey, nativeSessionId, truncated, title: text(r.title, 512), cwd: optionalText(r.cwd, 32768), updatedAt: optionalText(r.updatedAt, 64) }
     }
     if (r.role !== 'user' && r.role !== 'assistant') return invalid()

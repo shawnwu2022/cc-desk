@@ -1,6 +1,6 @@
 import type { NativeCliKind } from './cli'
 export type ScopeTarget =
-  | { kind: 'profile'; profileId: string; expectedProfileRevision: string; projectId?: string | null }
+  | { kind: 'profile'; profileId: string; expectedProfileRevision: string; projectIds: string[] }
   | { kind: 'run'; runId: string; generation: number }
 export type ResourceKind = 'history' | 'messages' | 'search' | 'config' | 'mcp' | 'skills' | 'agents' | 'plugins' | 'instructions'
 export interface SourceRef {
@@ -12,7 +12,7 @@ export interface ReadRequest {
   query?: string | null; sessionId?: string | null; limit?: number; offset?: number
 }
 export type ResourceItem =
-  | { type: 'session'; sessionKey: string; nativeSessionId: string; title: string; titleUnknown?: boolean; titleSource?: 'prompt' | 'ai' | 'custom'; metadataIncomplete?: boolean; truncated: boolean; cwd: string | null; updatedAt: string | null }
+  | { type: 'session'; sessionKey: string; nativeSessionId: string; projectId?: string; title: string; titleUnknown?: boolean; titleSource?: 'prompt' | 'ai' | 'custom'; metadataIncomplete?: boolean; truncated: boolean; cwd: string | null; updatedAt: string | null }
   | { type: 'message'; sessionKey: string; nativeSessionId: string; role: string; text: string; truncated: boolean }
   | { type: 'setting'; name: string; value: string; origin: string }
   | { type: 'mcp'; name: string; transport: string; origin: string }

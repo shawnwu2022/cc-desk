@@ -21,7 +21,7 @@ pub(super) fn read(
                 "AGENTS.md"
             };
             document(c, c.root, name, "global", b, &mut out)?;
-            if let Some(project) = c.project {
+            if let Some(project) = c.projects.first().map(|project| project.root) {
                 document(c, project, name, "project", b, &mut out)?;
                 if c.cli == CliKind::Claude {
                     document(c, project, ".claude/CLAUDE.md", "project", b, &mut out)?;
@@ -43,7 +43,7 @@ pub(super) fn read(
                     &mut out,
                 )?;
             }
-            if let Some(project) = c.project {
+            if let Some(project) = c.projects.first().map(|project| project.root) {
                 let dir = if c.cli == CliKind::Claude {
                     ".claude/skills"
                 } else {
@@ -69,7 +69,7 @@ pub(super) fn read(
         }
         ResourceKind::Agents if c.cli == CliKind::Claude => {
             markdown(c, c.root, "agents", "global", true, 6, b, &mut out)?;
-            if let Some(project) = c.project {
+            if let Some(project) = c.projects.first().map(|project| project.root) {
                 markdown(
                     c,
                     project,
@@ -133,7 +133,7 @@ pub(super) fn read(
                         claude_user_mcp(c, &config, "user-config", &mut out)?;
                     }
                 }
-                if let Some(project) = c.project {
+                if let Some(project) = c.projects.first().map(|project| project.root) {
                     for (path, origin) in [
                         (".claude/settings.json", "project"),
                         (".claude/settings.local.json", "project-local"),
@@ -159,7 +159,7 @@ pub(super) fn read(
                     "global",
                     &mut out,
                 )?;
-                if let Some(project) = c.project {
+                if let Some(project) = c.projects.first().map(|project| project.root) {
                     codex_settings(
                         &toml(c, project, ".codex/config.toml", b)?,
                         kind,
@@ -182,7 +182,7 @@ fn claude_user_mcp(
 ) -> ReadResult<()> {
     settings(config, ResourceKind::Mcp, origin, out)?;
     if let Some(projects) = object_field(config, "projects")? {
-        for path in c.project_paths {
+        for path in c.projects.first().map(|project| project.paths).unwrap_or_default() {
             if let Some(project) = path.to_str().and_then(|key| projects.get(key)) {
                 settings(project, ResourceKind::Mcp, "project-local", out)?;
             }
@@ -467,10 +467,11 @@ fn installed(c: &Catalog<'_>, b: &mut Budget) -> ReadResult<Vec<(String, Value)>
                 _ => return Err("SOURCE_UNSUPPORTED"),
             }
             if let Some("project" | "local") = record["scope"].as_str() {
-                if !record["projectPath"]
-                    .as_str()
-                    .is_some_and(|p| c.project_paths.iter().any(|known| known == Path::new(p)))
-                {
+                if !record["projectPath"].as_str().is_some_and(|p| {
+                    c.projects
+                        .first()
+                        .is_some_and(|project| project.paths.iter().any(|known| known == Path::new(p)))
+                }) {
                     continue;
                 }
             }

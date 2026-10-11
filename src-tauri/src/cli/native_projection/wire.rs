@@ -13,7 +13,9 @@ pub(crate) enum ScopeTarget {
     Profile {
         profile_id: String,
         expected_profile_revision: WireU64,
-        project_id: Option<String>,
+        /// 一次观察覆盖的全部已注册项目；空集合 = root-wide 观察（Run 简历路径）。
+        /// 项目集合仍逐个经 D11 注册 admission，集合不是绕过单项目授权的方式。
+        project_ids: Vec<String>,
     },
     Run {
         run_id: String,
@@ -25,11 +27,14 @@ impl ScopeTarget {
         match self {
             Self::Profile {
                 profile_id,
-                project_id,
+                project_ids,
                 ..
             } => {
                 id(profile_id, "profileId")?;
-                if let Some(project) = project_id {
+                if project_ids.len() > 64 {
+                    return Err(SafeError::invalid("projectIds"));
+                }
+                for project in project_ids {
                     id(project, "projectId")?;
                 }
             }
@@ -163,6 +168,9 @@ pub(crate) enum ResourceItem {
     Session {
         session_key: String,
         native_session_id: String,
+        /// 批量观察中该行归属的已注册项目；root-wide 观察的无归属行为 None。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
         title: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         title_unknown: Option<bool>,
@@ -235,7 +243,8 @@ mod tests {
     #[test]
     fn invalid_target_cannot_become_a_root_reference() {
         for value in [
-            serde_json::json!({"kind":"profile","profileId":"","expectedProfileRevision":"0","projectId":null}),
+            serde_json::json!({"kind":"profile","profileId":"","expectedProfileRevision":"0","projectIds":[]}),
+            serde_json::json!({"kind":"profile","profileId":"p","expectedProfileRevision":"0","projectIds":[""]}),
             serde_json::json!({"kind":"run","runId":"r","generation":0}),
         ] {
             let target: ScopeTarget = serde_json::from_value(value).unwrap();
@@ -245,8 +254,8 @@ mod tests {
     #[test]
     fn frontend_cannot_inject_paths_owners_or_numbers_for_u64() {
         for value in [
-            serde_json::json!({"kind":"profile","profileId":"p","expectedProfileRevision":"0","projectId":null,"root":"/tmp"}),
-            serde_json::json!({"kind":"profile","profileId":"p","expectedProfileRevision":0,"projectId":null}),
+            serde_json::json!({"kind":"profile","profileId":"p","expectedProfileRevision":"0","projectIds":[],"root":"/tmp"}),
+            serde_json::json!({"kind":"profile","profileId":"p","expectedProfileRevision":0,"projectIds":[]}),
             serde_json::json!({"kind":"run","runId":"r","generation":1,"owner":"main"}),
         ] {
             assert!(serde_json::from_value::<ScopeTarget>(value).is_err());
