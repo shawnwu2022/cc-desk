@@ -188,6 +188,28 @@ describe('useHookStore', () => {
     expect(legacyHandler).not.toHaveBeenCalled()
   })
 
+  it('D13_HookStore_IdentityCallbackReceivesAuthenticatedSessionId_003', () => {
+    const store = useHookStore()
+    store.init()
+
+    const handler = vi.fn()
+    const identity = vi.fn()
+    store.subscribeObservation(observationTarget, handler, { onIdentity: identity })
+    capturedNative!({
+      ptyId: null, sessionId: 'native-session', eventName: 'UserPromptSubmit', state: 'thinking',
+      timestamp: 1, runId: 'run-claude', generation: 3, eventId: 'event-1', observerSource: 'claude-hook',
+      detail: { type: 'userPromptSubmit', data: {} },
+    })
+    expect(identity).toHaveBeenCalledExactlyOnceWith('native-session')
+    // 无 sessionId 的认证事件不触发身份回调
+    capturedNative!({
+      ptyId: null, sessionId: null, eventName: 'Stop', state: 'idle',
+      timestamp: 2, runId: 'run-claude', generation: 3, eventId: 'event-2', observerSource: 'claude-hook',
+      detail: { type: 'stop', data: {} },
+    })
+    expect(identity).toHaveBeenCalledOnce()
+  })
+
   it('D13_HookStore_ObservationUnsubscribeStopsOnlyObservationStream_002', () => {
     const store = useHookStore()
     store.init()

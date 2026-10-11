@@ -41,6 +41,24 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
 }
 
 describe('native CLI adapter', () => {
+  // 认证 hook 回填身份后，运行中 new 会话认领自己的历史行，消除活动/历史双行。
+  it('NativeObservedIdentity_ClaimsHistoryRow_030', async () => {
+    const active = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, observedSessionId: 'session-1' })
+    const { adapter } = setup([active], [history('claude', '/root', 'session-1')])
+    const matched = (await adapter.listSessions()).filter(row => row.nativeSessionId === 'session-1')
+    expect(matched).toHaveLength(1)
+    expect(matched[0]).toMatchObject({ opened: true })
+  })
+
+  // 无观察身份时维持不猜测立场：历史行照常投出，与活动行并存。
+  it('NativeObservedIdentity_WithoutIdentityKeepsRow_031', async () => {
+    const active = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' } })
+    const { adapter } = setup([active], [history('claude', '/root', 'session-1')])
+    const matched = (await adapter.listSessions()).filter(row => row.nativeSessionId === 'session-1')
+    expect(matched).toHaveLength(1)
+    expect(matched[0]).toMatchObject({ opened: false })
+  })
+
   // Native 关闭后刷新冻结来源，已结束终端先移除，迟到历史进入同一次关闭完成。
   it('NativeClose_RefreshesExactHistory_011', async () => {
     const value = tab({ status: 'exited' })
@@ -59,7 +77,7 @@ describe('native CLI adapter', () => {
     const closing = adapter.closeSession('native-tab:tab-1').then(() => { finished = true })
     await Promise.resolve(); await Promise.resolve()
     expect(tabs.has(value.tabId)).toBe(false)
-    expect(load).toHaveBeenCalledExactlyOnceWith({ cli: 'codex', profileId: 'codex-main', profileRevision: '7', projectId: 'project-1', projectPath: '/repo', force: true })
+    expect(load).toHaveBeenCalledExactlyOnceWith({ cli: 'codex', profileId: 'codex-main', profileRevision: '7', projectId: 'project-1', projectPath: '/repo', force: true, retainOnFailure: true })
     expect(finished).toBe(false)
     complete(history('codex', '/root', 'session-1')); await closing
     expect((await adapter.listSessions())[0]).toMatchObject({ opened: false, nativeSessionId: 'session-1' })

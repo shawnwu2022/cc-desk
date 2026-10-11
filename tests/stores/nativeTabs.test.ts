@@ -215,4 +215,26 @@ describe('D22 native dual-CLI tab store', () => {
     expect(store.tab(tab.tabId)!.attentionState).toBe('none')
   })
 
+  // 认证 hook 回填的运行中会话身份：claude 非 raw 专属、随 attempt 精确校验、同 run 幂等。
+  it('D22_Tabs_ObservedIdentityBinding_021', () => {
+    const store = useNativeTabsStore()
+    const claude = store.create({ cli: 'claude', projectId: 'p1', projectPath: '/repo', profileId: 'cc', profileRevision: '7', action: { kind: 'new' } })
+    store.applyLaunchStatus(claude.tabId, status(claude))
+    expect(store.applyObservationIdentity(claude.tabId, captureNativeAttempt(claude), ' session-9 ')).toBe(true)
+    expect(store.tab(claude.tabId)?.observedSessionId).toBe('session-9')
+    // 幂等覆盖不刷新活动时间
+    const at = store.tab(claude.tabId)!.lastActivityAt
+    expect(store.applyObservationIdentity(claude.tabId, captureNativeAttempt(claude), 'session-9')).toBe(true)
+    expect(store.tab(claude.tabId)!.lastActivityAt).toBe(at)
+    // 旧 attempt 迟到事件不得覆盖当前身份
+    expect(store.applyObservationIdentity(claude.tabId, { ...captureNativeAttempt(claude), generation: 99 }, 'stale')).toBe(false)
+    expect(store.tab(claude.tabId)?.observedSessionId).toBe('session-9')
+    // codex 与 raw 动作没有认证观察源，拒绝绑定
+    const codex = store.create({ cli: 'codex', projectId: 'p1', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    expect(store.applyObservationIdentity(codex.tabId, captureNativeAttempt(codex), 'session-x')).toBe(false)
+    const raw = store.create({ cli: 'claude', projectId: 'p1', projectPath: '/repo', profileId: 'cc', profileRevision: '7', action: { kind: 'raw', argv: ['sh'] } })
+    expect(store.applyObservationIdentity(raw.tabId, captureNativeAttempt(raw), 'session-r')).toBe(false)
+    expect(store.applyObservationIdentity(claude.tabId, captureNativeAttempt(claude), '  ')).toBe(false)
+  })
+
 })
