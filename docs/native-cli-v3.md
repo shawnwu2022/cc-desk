@@ -90,6 +90,7 @@ Native frontend calls are admitted through the authenticated document bridge. Fr
 Native resource reads:
 
 - bind the selected CLI/profile revision and the registered projects in the observation; every project in the set is admitted individually, and the set is never a way around a single project's authorization;
+- use one fresh workspace document snapshot per scope admission or authority check to validate the profile and all registered projects together, keeping workspace parsing independent of the project count;
 - group history observations within the 64-project scope budget; split only a backend-reported project-admission failure so offline projects retain their own error and cannot suppress healthy projects' admitted histories;
 - replace superseded nonempty profile project subsets within the same owner, configuration revision and held roots; root-wide, run, other-source and disjoint batch authorities remain separate. In-flight reads retain only their original grant, and future reads through a replaced reference fail closed;
 - use backend-held scoped filesystem authority;

@@ -15,11 +15,12 @@ fn number(n: u64) -> WireU64 {
     WireU64::parse(&n.to_string()).unwrap()
 }
 struct Fixture {
-    _temp: tempfile::TempDir,
     repo: WorkspaceRepository,
     launch: Arc<LaunchService>,
     service: ProjectionService,
     caller: CallerIdentity,
+    // Windows 目录句柄先随 service 释放，最后再清理临时树。
+    _temp: tempfile::TempDir,
 }
 impl Fixture {
     fn new() -> Self {
@@ -85,6 +86,65 @@ fn D12_Production_ProfilesActuallyReadIndependentRoots_001() {
         assert_eq!(data.state, ProjectionState::Ready);
         assert!(matches!(&data.items[0],ResourceItem::Session{title,..} if title==id));
     }
+}
+
+// 64 项批量历史观察不会按项目数重复读取工作区，且末项移除仍撤销整组授权。
+#[test]
+#[allow(non_snake_case)]
+fn ProjectionBatch_WorkspaceReadsRemainBounded_008() {
+    let f = Fixture::new();
+    let mut target = f.profile("batch", &f._temp.path().join("root"));
+    let mut projects = Vec::new();
+    for index in 0..64 {
+        let path = f._temp.path().join(format!("project-{index}"));
+        fs::create_dir(&path).unwrap();
+        projects.push(crate::cli::workspace::register_project(&f.repo, &path).unwrap());
+    }
+    let ScopeTarget::Profile { project_ids, .. } = &mut target else {
+        unreachable!()
+    };
+    project_ids.push(projects[0].project_id.clone());
+    let before = f.repo.read_count_for_test();
+    let single = f.service.scope(&f.caller, &target).unwrap();
+    let single_scope_reads = f.repo.read_count_for_test() - before;
+    let before = f.repo.read_count_for_test();
+    let single_data = f.service.read(&f.caller, &req(single)).unwrap();
+    let single_read_count = f.repo.read_count_for_test() - before;
+    assert_eq!(single_data.state, ProjectionState::Ready);
+    assert!(single_read_count > 0);
+
+    let ScopeTarget::Profile { project_ids, .. } = &mut target else {
+        unreachable!()
+    };
+    *project_ids = projects.iter().map(|p| p.project_id.clone()).collect();
+    let before = f.repo.read_count_for_test();
+    let batch = f.service.scope(&f.caller, &target).unwrap();
+    let batch_scope_reads = f.repo.read_count_for_test() - before;
+    assert!(
+        batch_scope_reads <= single_scope_reads + 1,
+        "scope workspace reads grew from {single_scope_reads} to {batch_scope_reads}"
+    );
+    let request = req(batch);
+    let before = f.repo.read_count_for_test();
+    let batch_data = f.service.read(&f.caller, &request).unwrap();
+    let batch_read_count = f.repo.read_count_for_test() - before;
+    assert_eq!(batch_data.state, ProjectionState::Ready);
+    assert_eq!(batch_data.items.len(), single_data.items.len());
+    assert_eq!(
+        batch_read_count, single_read_count,
+        "history workspace reads must not grow with the project count"
+    );
+
+    crate::cli::workspace::remove_project(
+        &f.repo,
+        f.repo.read().unwrap().revision,
+        &projects[63].project_id,
+    )
+    .unwrap();
+    assert_eq!(
+        f.service.read(&f.caller, &request).unwrap_err().code,
+        "SCOPE_REVOKED"
+    );
 }
 
 // Cmd npm launcher 的只读 Codex 来源使用精确 CODEX_HOME，不启动 CLI。

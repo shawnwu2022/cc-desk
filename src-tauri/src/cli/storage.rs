@@ -59,6 +59,8 @@ pub(crate) enum Patch {
 pub(crate) struct WorkspaceRepository {
     path: PathBuf,
     admission: AdmissionGate,
+    #[cfg(test)]
+    read_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +83,12 @@ impl WorkspaceRepository {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err(SafeError::invalid("workspacePath"));
         }
-        Ok(Self { path, admission })
+        Ok(Self {
+            path,
+            admission,
+            #[cfg(test)]
+            read_count: Default::default(),
+        })
     }
 
     pub(crate) fn admission(&self) -> &AdmissionGate {
@@ -142,7 +149,15 @@ impl WorkspaceRepository {
             .ok_or_else(|| error("PROFILE_NOT_FOUND"))
     }
 
+    #[cfg(test)]
+    pub(crate) fn read_count_for_test(&self) -> usize {
+        self.read_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     fn read_locked(&self) -> Result<WorkspaceDocument, SafeError> {
+        #[cfg(test)]
+        self.read_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         check_regular_or_missing(&self.path)?;
         let file = match File::open(&self.path) {
             Ok(file) => file,

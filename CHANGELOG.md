@@ -7,7 +7,7 @@
 - Preserve staged input and partial/unknown receipts while a commit is in progress; reclaim only abandoned, uncommitted uploads with a strictly newer sequence
 - Reserve clipboard input before asynchronous reads, bind it to the original run and terminal mode, cancel unsent empty/stale intents without blocking later input, and release probed native image resources
 - Clear the observed session identity on restart and keep background process-exit synchronization active
-- Batch authenticated history observations within the 64-project scope budget, isolate offline project admission failures, and await replacement owners before publishing grouped results
+- Batch authenticated history observations within the 64-project scope budget, validate each authority check against one workspace snapshot, isolate offline project admission failures, and await replacement owners before publishing grouped results
 - Retire superseded profile project scopes and bound document generation floors without forgetting live-document replay guards
 - Keep completion and permission attention eligible after activity hints expire, and render distinct read-only resources even when their display fields coincide
 - Order Legacy clipboard, keyboard, IME and terminal protocol input through an exact-PTY FIFO with synchronous paste reservation

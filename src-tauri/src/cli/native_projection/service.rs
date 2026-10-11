@@ -59,7 +59,12 @@ impl ProjectionService {
                 project_ids,
             } => {
                 *stage = ProjectionStage::ScopeProfileValidation;
-                let profile = self.launch.repository().get_profile(profile_id)?;
+                let document = self.launch.repository().read()?;
+                let profile = document
+                    .profiles
+                    .get(profile_id)
+                    .cloned()
+                    .ok_or_else(|| error("PROFILE_NOT_FOUND"))?;
                 if profile.revision != *expected_profile_revision {
                     return Err(error("REVISION_CONFLICT"));
                 }
@@ -68,11 +73,9 @@ impl ProjectionService {
                 *stage = ProjectionStage::ScopeProjectRegistration;
                 // 一次观察可覆盖多个已注册项目；每个项目仍逐个 admission，集合不是授权捷径。
                 let mut projects = Vec::with_capacity(project_ids.len());
+                let mut expected_projects = Vec::with_capacity(project_ids.len());
                 for project_id in project_ids {
-                    let registered = self
-                        .launch
-                        .repository()
-                        .read()?
+                    let registered = document
                         .registered_projects
                         .get(project_id)
                         .cloned()
@@ -83,18 +86,11 @@ impl ProjectionService {
                         root,
                         paths,
                     });
+                    expected_projects.push(registered);
                 }
                 let service = Arc::downgrade(&self.launch);
                 let expected_profile = profile.clone();
                 let expected_locations = selected.clone();
-                let expected_projects: Vec<RegisteredProject> = {
-                    let repository = self.launch.repository().read()?;
-                    project_ids
-                        .iter()
-                        .map(|project_id| repository.registered_projects.get(project_id).cloned())
-                        .collect::<Option<Vec<_>>>()
-                        .ok_or_else(|| error("PROJECT_NOT_FOUND"))?
-                };
                 let authority = caller.clone();
                 let check = Arc::new(move || -> ReadResult<()> {
                     let service = service.upgrade().ok_or("SCOPE_REVOKED")?;
@@ -102,21 +98,22 @@ impl ProjectionService {
                         .registry()
                         .check_caller(&authority)
                         .map_err(|_| "FORBIDDEN")?;
-                    let current = service
-                        .repository()
-                        .get_profile(&expected_profile.id)
-                        .map_err(|_| "SCOPE_REVOKED")?;
-                    if current != expected_profile {
+                    // 同次检查只读一份新快照，避免项目数乘以文件操作数的重复解析。
+                    let document = service.repository().read().map_err(|_| "SCOPE_REVOKED")?;
+                    let current = document
+                        .profiles
+                        .get(&expected_profile.id)
+                        .ok_or("SCOPE_REVOKED")?;
+                    if current != &expected_profile {
                         return Err("SCOPE_REVOKED");
                     }
                     let (_, now) =
-                        profile_locations(&service, &current).map_err(|_| "SCOPE_REVOKED")?;
+                        profile_locations(&service, current).map_err(|_| "SCOPE_REVOKED")?;
                     if now != expected_locations {
                         return Err("SCOPE_REVOKED");
                     }
                     for expected in &expected_projects {
-                        let current = service.repository().read().map_err(|_| "SCOPE_REVOKED")?;
-                        let current = current
+                        let current = document
                             .registered_projects
                             .get(&expected.project_id)
                             .ok_or("SCOPE_REVOKED")?;
