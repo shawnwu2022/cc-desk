@@ -14,8 +14,8 @@ async function loadModule() {
 }
 
 function runGit(cwd: string, args: string[]) {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
-  expect(result.status, `git ${args.join(' ')} failed: ${result.stderr}`).toBe(0)
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 30_000 })
+  expect(result.status, `git ${args.join(' ')} failed: ${result.stderr || String(result.error)}`).toBe(0)
 }
 
 describe('native CLI baseline report contract', () => {

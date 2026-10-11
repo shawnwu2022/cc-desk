@@ -36,7 +36,7 @@ function capture(auth: boolean, input: Buffer = Buffer.from('{"hook_event_name":
       env: { ...process.env, CC_BOX_HOOK_PORT: '12345', capability: 'preexisting-export', payload: 'preexisting-export', CC_DESK_OBSERVER_RUN: 'run', CC_DESK_OBSERVER_GENERATION: '1', CC_DESK_OBSERVER_CAPABILITY: auth ? token : '' },
       input, timeout: 6000,
     })
-    expect(result.status).toBe(0)
+    expect(result.status, `report-hook.sh should succeed: ${String(result.stderr)}`).toBe(0)
     expect(result.stdout.length).toBe(0)
     expect(result.stderr.length).toBe(0)
     return existsSync(record) ? JSON.parse(readFileSync(record, 'utf8')) : null
@@ -75,7 +75,7 @@ it('D13_Reporter_NulInputIsRejectedNotSilentlyRemoved_04', () => {
   expect(capture(true, Buffer.from('{"hook_event_name":"Stop"}\0'))).toBeNull()
 })
 it('D13_Reporter_CheckoutPinsLfOnWindows_05', () => {
-  const result = spawnSync('git', ['check-attr', 'eol', '--', script], { encoding: 'utf8' })
-  expect(result.status).toBe(0)
+  const result = spawnSync('git', ['check-attr', 'eol', '--', script], { encoding: 'utf8', timeout: 30_000 })
+  expect(result.status, `git check-attr should succeed: ${String(result.stderr)}`).toBe(0)
   expect(result.stdout.trim()).toBe(`${script}: eol: lf`)
 })

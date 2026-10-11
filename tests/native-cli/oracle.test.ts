@@ -153,10 +153,11 @@ describe('native CLI prompt oracle contract', () => {
         env: syntheticEnv(root),
         input: JSON.stringify(event),
         encoding: 'utf8',
+        timeout: 30_000,
       },
     )
 
-    expect(result.status).toBe(0)
+    expect(result.status, `collector should persist envelope: ${result.stderr}`).toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toBe('')
     const report = JSON.parse(readFileSync(reportPath, 'utf8'))
@@ -186,10 +187,11 @@ describe('native CLI prompt oracle contract', () => {
         env: syntheticEnv(root),
         input: JSON.stringify(codexEvent({ session_id: 'wrong' })),
         encoding: 'utf8',
+        timeout: 30_000,
       },
     )
 
-    expect(result.status).toBe(0)
+    expect(result.status, `collector should record invalid event: ${result.stderr}`).toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toBe('')
     expect(JSON.parse(readFileSync(reportPath, 'utf8')).validation).toEqual({
@@ -216,10 +218,11 @@ describe('native CLI prompt oracle contract', () => {
         env: { ...process.env, CC_DESK_TEST_ROOT: root },
         input: JSON.stringify(codexEvent()),
         encoding: 'utf8',
+        timeout: 30_000,
       },
     )
 
-    expect(result.status).not.toBe(0)
+    expect(result.status, `collector should require synthetic mode: ${result.stderr}`).not.toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toContain('synthetic test mode required')
     expect(existsSync(reportPath)).toBe(false)

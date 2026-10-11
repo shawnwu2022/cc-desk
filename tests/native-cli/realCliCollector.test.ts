@@ -95,6 +95,7 @@ function runCollector(
       env: environment,
       input: JSON.stringify(event),
       encoding: 'utf8',
+      timeout: 30_000,
     },
   )
 }
@@ -127,7 +128,7 @@ describe('D20 real UserPromptSubmit collector', () => {
       },
     )
 
-    expect(result.status).not.toBe(0)
+    expect(result.status, `collector should require real test mode: ${result.stderr}`).not.toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toContain('real CLI test mode required')
     expect(existsSync(reportPath)).toBe(false)
@@ -141,7 +142,7 @@ describe('D20 real UserPromptSubmit collector', () => {
     const reportPath = join(outside, 'report.json')
     const result = runCollector(root, 'codex', fixturePath, reportPath, eventFor(value))
 
-    expect(result.status).not.toBe(0)
+    expect(result.status, `collector should restrict report path: ${result.stderr}`).not.toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toContain('report path outside test root')
     expect(existsSync(reportPath)).toBe(false)
@@ -155,7 +156,7 @@ describe('D20 real UserPromptSubmit collector', () => {
     const event = eventFor(value, { model: 'fixture-model' })
     const result = runCollector(root, 'codex', fixturePath, reportPath, event)
 
-    expect(result.status).toBe(0)
+    expect(result.status, `collector should capture codex envelope: ${result.stderr}`).toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toBe('')
 
@@ -186,7 +187,7 @@ describe('D20 real UserPromptSubmit collector', () => {
     delete event.turn_id
     const result = runCollector(root, 'codex', fixturePath, reportPath, event)
 
-    expect(result.status).toBe(0)
+    expect(result.status, `collector should record missing turn id: ${result.stderr}`).toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toBe('')
     expect(JSON.parse(readFileSync(reportPath, 'utf8')).validation).toEqual({
@@ -218,7 +219,7 @@ describe('D20 real UserPromptSubmit collector', () => {
     const event = eventFor(value, { prompt: wrapped })
     const result = runCollector(root, 'claude', fixturePath, reportPath, event)
 
-    expect(result.status).toBe(0)
+    expect(result.status, `collector should preserve paste wrapper: ${result.stderr}`).toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toBe('')
     const report = JSON.parse(readFileSync(reportPath, 'utf8'))
@@ -240,7 +241,7 @@ describe('D20 real UserPromptSubmit collector', () => {
       eventFor(value, { prompt: 'changed' }),
     )
 
-    expect(result.status).toBe(0)
+    expect(result.status, `collector should record content mismatch: ${result.stderr}`).toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toBe('')
     expect(JSON.parse(readFileSync(reportPath, 'utf8')).validation).toEqual({
@@ -262,7 +263,7 @@ describe('D20 real UserPromptSubmit collector', () => {
       eventFor(value),
     )
 
-    expect(result.status).not.toBe(0)
+    expect(result.status, `collector should reject cli mismatch: ${result.stderr}`).not.toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toContain('fixture CLI mismatch')
     expect(existsSync(reportPath)).toBe(false)
@@ -278,8 +279,8 @@ describe('D20 real UserPromptSubmit collector', () => {
     const first = runCollector(root, 'codex', fixturePath, reportPath, event)
     const second = runCollector(root, 'codex', fixturePath, reportPath, event)
 
-    expect(first.status).toBe(0)
-    expect(second.status).not.toBe(0)
+    expect(first.status, `first collector run should succeed: ${first.stderr}`).toBe(0)
+    expect(second.status, `replay collector run should fail: ${second.stderr}`).not.toBe(0)
     expect(second.stdout).toBe('')
     expect(second.stderr).toContain('report already exists')
     expect(JSON.parse(readFileSync(reportPath, 'utf8')).runId).toBe(value.runId)
