@@ -182,7 +182,12 @@ fn claude_user_mcp(
 ) -> ReadResult<()> {
     settings(config, ResourceKind::Mcp, origin, out)?;
     if let Some(projects) = object_field(config, "projects")? {
-        for path in c.projects.first().map(|project| project.paths).unwrap_or_default() {
+        for path in c
+            .projects
+            .first()
+            .map(|project| project.paths)
+            .unwrap_or_default()
+        {
             if let Some(project) = path.to_str().and_then(|key| projects.get(key)) {
                 settings(project, ResourceKind::Mcp, "project-local", out)?;
             }
@@ -468,9 +473,9 @@ fn installed(c: &Catalog<'_>, b: &mut Budget) -> ReadResult<Vec<(String, Value)>
             }
             if let Some("project" | "local") = record["scope"].as_str() {
                 if !record["projectPath"].as_str().is_some_and(|p| {
-                    c.projects
-                        .first()
-                        .is_some_and(|project| project.paths.iter().any(|known| known == Path::new(p)))
+                    c.projects.first().is_some_and(|project| {
+                        project.paths.iter().any(|known| known == Path::new(p))
+                    })
                 }) {
                     continue;
                 }

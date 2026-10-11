@@ -13,17 +13,46 @@ import { platform } from '@/utils/platform'
  * buildPastePayload 的字节到达 binding.reserveUserPaste。
  * 守卫链任何一环静默丢弃都会表现为用户侧「Ctrl+V 失效」。
  */
-const io = vi.hoisted(() => ({ binding: null as any, starts: [] as any[], readText: vi.fn(), readImage: vi.fn() }))
+const io = vi.hoisted(() => ({
+  binding: null as any,
+  bindings: [] as any[],
+  terminals: [] as any[],
+  starts: [] as any[],
+  readText: vi.fn(),
+  readImage: vi.fn(),
+  failReservation: false,
+}))
 vi.mock('@/terminal/deskNativeTerminal', () => ({
-  createDeskNativeTerminalBinding: vi.fn(() => {
-    io.binding = {
+  createDeskNativeTerminalBinding: vi.fn((options: any) => {
+    const next = {
       acceptOutput: vi.fn(() => true),
       sendUserText: vi.fn().mockResolvedValue(undefined),
-      reserveUserPaste: vi.fn((produce: () => Promise<Uint8Array>) => ({ inputSeq: '1', settled: produce().then(() => {}) })),
+      reserveUserPaste: vi.fn((produce: () => Promise<Uint8Array>) => {
+        let pending = true
+        let cancelled = false
+        const cancel = vi.fn(() => {
+          if (!pending) return false
+          pending = false
+          cancelled = true
+          return true
+        })
+        const produced = Promise.resolve().then(produce)
+        const settled = produced.then(() => {
+          pending = false
+          if (io.failReservation && !cancelled) throw new Error('WRITE_FAILED')
+        }, error => {
+          pending = false
+          throw error
+        })
+        return { inputSeq: '1', produced, settled, cancel }
+      }),
       drainInput: vi.fn().mockResolvedValue(undefined),
-      dispose: vi.fn(),
+      dispose: vi.fn(() => input.dispose()),
     }
-    return io.binding
+    const input = options.term.onData((data: string) => { void next.sendUserText(data) })
+    io.binding = next
+    io.bindings.push(next)
+    return next
   }),
 }))
 vi.mock('@xterm/xterm', async original => {
@@ -31,6 +60,10 @@ vi.mock('@xterm/xterm', async original => {
   const actual = await original<typeof import('@xterm/xterm')>()
   canvas.mockRestore()
   return { ...actual, Terminal: class extends actual.Terminal {
+    constructor(options: import('@xterm/xterm').ITerminalOptions) {
+      super(options)
+      io.terminals.push(this)
+    }
     open(element: HTMLElement) {
       const core = (this as any)._core
       core.element = element
@@ -61,7 +94,7 @@ vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
 let wrapper: VueWrapper | null = null
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks()
-  io.binding = null; io.starts = []
+  io.binding = null; io.bindings = []; io.terminals = []; io.starts = []; io.failReservation = false
   io.readText.mockResolvedValue('')
   io.readImage.mockRejectedValue(new Error('NO_IMAGE'))
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
@@ -138,7 +171,7 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(new TextDecoder().decode(await produce())).toBe('from-clipboard')
   })
 
-  it('Running_KeyDownIgnoresEmptyClipboard_003 — 空剪贴板不投递空 payload', async () => {
+  it('Paste_EmptyCancels_003 — 空剪贴板取消预留且后续键盘仍可提交', async () => {
     const tabs = useNativeTabsStore()
     const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
     wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
@@ -148,8 +181,15 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     const textarea = wrapper.find('textarea').element
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
     await vi.advanceTimersByTimeAsync(0)
-    expect(io.binding.reserveUserPaste).not.toHaveBeenCalled()
-    expect(io.binding.sendUserText).not.toHaveBeenCalled()
+    expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
+    const reservation = io.binding.reserveUserPaste.mock.results[0].value as { settled: Promise<void>; cancel: ReturnType<typeof vi.fn> }
+    await expect(reservation.settled).resolves.toBeUndefined()
+    expect(reservation.cancel).toHaveBeenCalledOnce()
+    expect(tabs.tab(tab.tabId)?.errorCode).toBeNull()
+
+    io.terminals[0].input('\r', true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(io.binding.sendUserText).toHaveBeenCalledWith('\r')
   })
 
   it('Running_KeyDownImageClipboardSendsShortcut_004 — 无文本且剪贴板有图时发送 CLI 官方图片粘贴键位', async () => {
@@ -158,12 +198,99 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
     await vi.advanceTimersByTimeAsync(0)
     io.readText.mockResolvedValue('')
-    io.readImage.mockResolvedValue({ width: 1, height: 1, rgba: new Uint8Array(4) })
+    const close = vi.fn().mockResolvedValue(undefined)
+    io.readImage.mockResolvedValue({ close })
 
     const textarea = wrapper.find('textarea').element
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
     await vi.advanceTimersByTimeAsync(0)
+    expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
+    const reservation = io.binding.reserveUserPaste.mock.results[0].value as { produced: Promise<Uint8Array> }
+    expect(new TextDecoder().decode(await reservation.produced)).toBe(imagePasteBytes(platform))
+    expect(io.binding.sendUserText).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledOnce()
+  })
+
+  // 异步读剪贴板前必须同步预留输入序号，后续键盘输入才能排在粘贴之后。
+  it('Paste_ReservesBeforeRead_005 — Ctrl+V 在 readText 完成前预留当前 intent', async () => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    let finishRead!: (text: string) => void
+    io.readText.mockReturnValue(new Promise(resolve => { finishRead = resolve }))
+
+    wrapper.find('textarea').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+
+    expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
+    finishRead('ordered')
+    await vi.advanceTimersByTimeAsync(0)
+    const reservation = io.binding.reserveUserPaste.mock.results[0].value as { produced: Promise<Uint8Array> }
+    expect(new TextDecoder().decode(await reservation.produced)).toBe('ordered')
+  })
+
+  // restart 后旧 Ctrl+V 完成不得通过 mutable binding 把旧 attempt 内容写进新 run。
+  it('Paste_StaleCancels_006 — restart 后旧剪贴板结果取消旧预留', async () => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    const oldBinding = io.binding
+    let finishRead!: (text: string) => void
+    io.readText.mockReturnValue(new Promise(resolve => { finishRead = resolve }))
+    wrapper.find('textarea').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    expect(oldBinding.reserveUserPaste).toHaveBeenCalledOnce()
+
+    tabs.applyLaunchStatus(tab.tabId, {
+      instanceId: 'test-backend', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation },
+      phase: 'exited', revision: '2', failure: null,
+    })
+    tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(io.binding).not.toBe(oldBinding)
+
+    finishRead('stale')
+    await vi.advanceTimersByTimeAsync(0)
+    const reservation = oldBinding.reserveUserPaste.mock.results[0].value as { settled: Promise<void>; cancel: ReturnType<typeof vi.fn> }
+    await expect(reservation.settled).resolves.toBeUndefined()
+    expect(reservation.cancel).toHaveBeenCalledOnce()
     expect(io.binding.reserveUserPaste).not.toHaveBeenCalled()
-    expect(io.binding.sendUserText).toHaveBeenCalledExactlyOnceWith(imagePasteBytes(platform))
+    expect(tabs.tab(tab.tabId)?.errorCode).toBeNull()
+  })
+
+  it('Paste_UnreadableCancels_007 — 剪贴板不可读时取消预留且后续键盘仍可提交', async () => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    io.readText.mockRejectedValue(new Error('TEXT_DENIED'))
+    io.readImage.mockRejectedValue(new Error('IMAGE_DENIED'))
+
+    wrapper.find('textarea').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    const reservation = io.binding.reserveUserPaste.mock.results[0].value as { settled: Promise<void>; cancel: ReturnType<typeof vi.fn> }
+    await expect(reservation.settled).resolves.toBeUndefined()
+    expect(reservation.cancel).toHaveBeenCalledOnce()
+    expect(tabs.tab(tab.tabId)?.errorCode).toBeNull()
+
+    io.terminals[0].input('next', true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(io.binding.sendUserText).toHaveBeenCalledWith('next')
+  })
+
+  it('Paste_WriteFailureReports_008 — 已产生 payload 的传输失败仍显示输入暂停诊断', async () => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    io.readText.mockResolvedValue('payload')
+    io.failReservation = true
+
+    wrapper.find('textarea').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(tabs.tab(tab.tabId)?.errorCode).toBe('NATIVE_INPUT_PAUSED')
+    const reservation = io.binding.reserveUserPaste.mock.results[0].value as { cancel: ReturnType<typeof vi.fn> }
+    expect(reservation.cancel).not.toHaveBeenCalled()
   })
 })

@@ -170,7 +170,9 @@ mod tests {
     fn D14_Core_OrderedBytesAndCumulativeAck_002() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let hub = TerminalTransports::with_limits(TransportLimits::new(4, 8, 4, 16).unwrap());
-        let stream = hub.attach(owner(), run("a"), route(events.clone())).unwrap();
+        let stream = hub
+            .attach(owner(), run("a"), route(events.clone()))
+            .unwrap();
         stream.send(&[0, 255, 1, 2]).unwrap();
         stream.send(&[3, 4]).unwrap();
         let epoch = stream.stream_epoch().to_string();
@@ -213,7 +215,9 @@ mod tests {
             .attach(owner(), run("a"), route(Arc::new(Mutex::new(Vec::new()))))
             .unwrap();
         let b_events = Arc::new(Mutex::new(Vec::new()));
-        let b = hub.attach(owner(), run("b"), route(b_events.clone())).unwrap();
+        let b = hub
+            .attach(owner(), run("b"), route(b_events.clone()))
+            .unwrap();
         a.send(&[1, 1, 1, 1]).unwrap();
         a.send(&[2, 2, 2, 2]).unwrap();
         b.send(&[9, 9, 9, 9]).unwrap();
@@ -400,9 +404,13 @@ mod tests {
             .attach(owner(), run("a"), route(Arc::new(Mutex::new(Vec::new()))))
             .unwrap();
         let b_events = Arc::new(Mutex::new(Vec::new()));
-        let b = hub.attach(owner(), run("b"), route(b_events.clone())).unwrap();
+        let b = hub
+            .attach(owner(), run("b"), route(b_events.clone()))
+            .unwrap();
         let c_events = Arc::new(Mutex::new(Vec::new()));
-        let c_stream = hub.attach(owner(), run("c"), route(c_events.clone())).unwrap();
+        let c_stream = hub
+            .attach(owner(), run("c"), route(c_events.clone()))
+            .unwrap();
 
         a.send(&[1, 1, 1, 1]).unwrap();
         a.send(&[2, 2, 2, 2]).unwrap();
@@ -497,13 +505,13 @@ mod tests {
 
     #[test]
     fn D27_Core_ManyRunsStayWithinLowBudgetAndConvergeToZero_007() {
-        let hub = TerminalTransports::with_limits(
-            TransportLimits::new(4, 8, 4, 16).unwrap(),
-        );
+        let hub = TerminalTransports::with_limits(TransportLimits::new(4, 8, 4, 16).unwrap());
         for index in 0..64 {
             let id = format!("run-{index}");
             let events = Arc::new(Mutex::new(Vec::new()));
-            let stream = hub.attach(owner(), run(&id), route(events.clone())).unwrap();
+            let stream = hub
+                .attach(owner(), run(&id), route(events.clone()))
+                .unwrap();
             stream.send(&[index as u8, 1, 2, 3]).unwrap();
             assert!(hub.budgeted_bytes() <= 16);
             let epoch = stream.stream_epoch().to_string();
@@ -517,7 +525,11 @@ mod tests {
     fn D27_Core_WrongOwnerAckCannotReleaseAnotherRunsCredit_008() {
         let hub = TerminalTransports::with_limits(TransportLimits::new(4, 8, 4, 8).unwrap());
         let stream = hub
-            .attach(owner(), run("owned"), route(Arc::new(Mutex::new(Vec::new()))))
+            .attach(
+                owner(),
+                run("owned"),
+                route(Arc::new(Mutex::new(Vec::new()))),
+            )
             .unwrap();
         stream.send(&[1, 2, 3, 4]).unwrap();
         let epoch = stream.stream_epoch().to_string();
@@ -545,7 +557,9 @@ mod tests {
             .attach(owner(), run("a"), route(Arc::new(Mutex::new(Vec::new()))))
             .unwrap();
         let b_events = Arc::new(Mutex::new(Vec::new()));
-        let b = hub.attach(owner(), run("b"), route(b_events.clone())).unwrap();
+        let b = hub
+            .attach(owner(), run("b"), route(b_events.clone()))
+            .unwrap();
         a.send(&[1, 1, 1, 1]).unwrap();
 
         let worker = {
@@ -570,6 +584,76 @@ mod tests {
         }
         assert_eq!(b_events.lock().len(), 1);
         assert!(worker.join().unwrap().is_ok());
+    }
+
+    // 三平台直接运行生产 transport，确保无 ACK 的阻塞会收敛且释放预算。
+    #[test]
+    fn D14_Core_StalledAckReleasesBudget_012() {
+        let hub = Arc::new(TerminalTransports::with_limits(
+            TransportLimits::with_ack_staleness(4, 8, 4, 16, Duration::from_millis(80)).unwrap(),
+        ));
+        let stream = hub
+            .attach(
+                owner(),
+                run("stalled"),
+                route(Arc::new(Mutex::new(Vec::new()))),
+            )
+            .unwrap();
+        stream.send(&[1; 4]).unwrap();
+        stream.send(&[2; 4]).unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let blocked = stream.clone();
+        let worker = std::thread::spawn(move || {
+            done_tx.send(blocked.send(&[3])).unwrap();
+        });
+        let outcome = done_rx.recv_timeout(Duration::from_secs(2));
+        worker.join().unwrap();
+        assert_eq!(outcome.unwrap().unwrap_err().code, "OUTPUT_STREAM_DEGRADED");
+        assert_eq!(hub.budgeted_bytes(), 0, "过期 stream 必须释放预算");
+    }
+
+    // 健康 ACK 流可持续发送，但错误 stream 与 generation 不能释放预算。
+    #[test]
+    fn D14_Core_HealthyAckKeepsIdentity_013() {
+        let hub = TerminalTransports::with_limits(TransportLimits::new(4, 8, 4, 16).unwrap());
+        let stream = hub
+            .attach(
+                owner(),
+                run("healthy"),
+                route(Arc::new(Mutex::new(Vec::new()))),
+            )
+            .unwrap();
+        let epoch = stream.stream_epoch().to_string();
+        for index in 0..50u64 {
+            stream.send(&[index as u8; 4]).unwrap();
+            hub.ack(
+                &owner(),
+                &ack("healthy", &epoch, &((index + 1) * 4).to_string()),
+            )
+            .unwrap();
+        }
+        assert_eq!(hub.budgeted_bytes(), 0);
+        stream.send(&[9; 4]).unwrap();
+        assert_eq!(
+            hub.ack(&owner(), &ack("healthy", "999", "204"))
+                .unwrap_err()
+                .code,
+            "STALE_OUTPUT_STREAM"
+        );
+        let wrong_generation = serde_json::from_value(json!({
+            "runId": "healthy",
+            "generation": 2,
+            "streamEpoch": epoch,
+            "throughOffset": "204",
+        }))
+        .unwrap();
+        assert_eq!(
+            hub.ack(&owner(), &wrong_generation).unwrap_err().code,
+            "STALE_GENERATION"
+        );
+        assert_eq!(hub.budgeted_bytes(), 4, "错误身份的 ACK 不能释放预算");
+        hub.ack(&owner(), &ack("healthy", &epoch, "204")).unwrap();
+        assert_eq!(hub.budgeted_bytes(), 0);
     }
 
     #[test]

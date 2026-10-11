@@ -38,6 +38,7 @@ import {
 import { registerTerminalCommand } from '@/composables/useTerminalCommand'
 import { safeDispose } from '@/utils/dispose'
 import { relativizePath } from '@/utils/path'
+import { parseLegacyCustomArgs } from '@/utils/legacyCustomArgs'
 import { PtyIndex } from '@/utils/ptyIndex'
 import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
 import { bindNativePaste, imagePasteBytes } from '@/utils/pasteText'
@@ -820,8 +821,7 @@ function buildClaudeArgs(tab: { sessionId: string | null }): string[] {
 
   if (opts.skipPermissions) args.push('--dangerously-skip-permissions')
   if (opts.customArgs) {
-    const custom = opts.customArgs.trim().split(/\s+/).filter(Boolean)
-    args.push(...custom)
+    args.push(...parseLegacyCustomArgs(opts.customArgs))
   }
 
   return args

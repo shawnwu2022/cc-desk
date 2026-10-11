@@ -4,6 +4,7 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import XTermTerminal from '@/components/XTermTerminal.vue'
 import { useSessionStore } from '@/stores/session'
+import { useAppStore } from '@/stores/app'
 
 /**
  * XTermTerminal 响应式开销回归：
@@ -17,6 +18,7 @@ const io = vi.hoisted(() => ({
   terminals: [] as import('@xterm/xterm').Terminal[],
   fits: [] as unknown[],
   output: null as ((payload: { id: string; data: string }) => void) | null,
+  spawns: [] as { id: string; args: string[] }[],
 }))
 vi.mock('@xterm/xterm', async original => {
   // 真实 xterm 类在模块加载时会探测 canvas；jsdom 未实现 getContext，按
@@ -44,7 +46,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized:
 vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
   ptyInput: vi.fn().mockResolvedValue(undefined), ptyKill: vi.fn().mockResolvedValue(undefined), ptyResize: vi.fn().mockResolvedValue(undefined),
-  ptySpawn: async ({ id }: any) => ({ id }), logMessage: vi.fn().mockResolvedValue(undefined),
+  ptySpawn: async (request: any) => { io.spawns.push(request); return { id: request.id } }, logMessage: vi.fn().mockResolvedValue(undefined),
   onPtyOutput: async (callback: any) => { io.output = callback; return () => {} }, onPtyExit: async () => () => {},
 }))
 
@@ -52,6 +54,7 @@ let wrapper: VueWrapper | null = null
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks()
   io.terminals.length = 0; io.fits.length = 0; io.output = null
+  io.spawns.length = 0
   vi.stubGlobal('crypto', { randomUUID: () => 'owned-tab' })
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { fn(0); return 1 })
@@ -69,6 +72,17 @@ function mountWithRunningTab() {
 }
 
 describe('XTermTerminal_ReactivityOverhead', () => {
+  // 实际终端启动入口必须将带空格的路径传为一个参数，不能仅修正未被调用的 store 方法。
+  it('LegacyArgs_TerminalLaunch_004', async () => {
+    const sessions = useSessionStore()
+    const id = sessions.createTab('/repo')
+    useAppStore().setClaudeOptions({ customArgs: '--add-dir "C:/My Repo"' })
+    wrapper = mount(XTermTerminal, { props: { visible: true } })
+    await flushPromises()
+    await (wrapper.vm as any).startTab(id)
+    expect(io.spawns).toHaveLength(1)
+    expect(io.spawns[0].args).toEqual(['--add-dir', 'C:/My Repo'])
+  })
   it('FitAddon_SingleInstancePerTab_001 — 每 tab 只创建一个 FitAddon（createTerminal 复用，不再双重注册）', async () => {
     mountWithRunningTab(); await flushPromises()
     expect(io.terminals).toHaveLength(1)

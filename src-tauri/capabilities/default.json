@@ -24,6 +24,7 @@
     "core:webview:default",
     "core:app:default",
     "core:app:allow-app-hide",
+    "core:resources:allow-close",
     "shell:default",
     "shell:allow-open",
     "dialog:default",

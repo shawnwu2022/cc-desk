@@ -33,6 +33,16 @@ function fakeXterm() {
   return { term, data, binary, user, writeCallbacks }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 function frame(bytes: number[], offset = '0'): OutputFrame {
   return {
     runId: 'run-a',
@@ -228,6 +238,51 @@ describe('D19 native terminal binding', () => {
 
     expect(reserved.inputSeq).toBe('1')
     expect(users).toEqual(['1:paste-body', '2:\r'])
+    binding.dispose()
+  })
+
+  // 组件确认剪贴板是 no-op 后只取消仍 pending 的预留，后续 Enter 保留原序号与发送能力。
+  it('Paste_CancelNoopKeepsEnter_021 — 取消空粘贴后真实 binding 继续发送 Enter', async () => {
+    const xterm = fakeXterm()
+    const users: string[] = []
+    const diagnostics: string[] = []
+    const clipboard = deferred<Uint8Array>()
+    const binding = createNativeTerminalBinding({
+      term: xterm.term,
+      runId: 'run-a',
+      generation: 2,
+      currentTarget: () => ({ runId: 'run-a', generation: 2, modeEpoch: '4' }),
+      writeUser: async input => {
+        users.push(input.inputSeq + ':' + new TextDecoder().decode(input.bytes))
+        return {
+          runId: input.runId,
+          generation: input.generation,
+          inputSeq: input.inputSeq,
+          modeEpoch: input.modeEpoch,
+          state: 'host-written',
+          confirmedBytes: String(input.bytes.length),
+        }
+      },
+      writeProtocol: async (_run, bytes) => ({
+        state: 'host-written',
+        confirmedBytes: String(bytes.length),
+      }),
+      ackOutput: async () => {},
+      onDegraded: reason => diagnostics.push(reason),
+    })
+
+    const reserved = binding.reserveUserPaste(() => clipboard.promise)
+    const enter = binding.sendUserText('\r')
+    await Promise.resolve()
+    expect(users).toEqual([])
+
+    expect(reserved.cancel()).toBe(true)
+    clipboard.resolve(new Uint8Array())
+    await reserved.settled
+    await enter
+
+    expect(users).toEqual(['2:\r'])
+    expect(diagnostics).toEqual([])
     binding.dispose()
   })
 

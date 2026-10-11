@@ -78,7 +78,11 @@ impl ProjectionService {
                         .cloned()
                         .ok_or_else(|| error("PROJECT_NOT_FOUND"))?;
                     let (root, paths) = admit_project(&registered)?;
-                    projects.push(AdmittedProject { id: project_id.clone(), root, paths });
+                    projects.push(AdmittedProject {
+                        id: project_id.clone(),
+                        root,
+                        paths,
+                    });
                 }
                 let service = Arc::downgrade(&self.launch);
                 let expected_profile = profile.clone();

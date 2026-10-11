@@ -13,6 +13,34 @@ beforeEach(() => {
 })
 
 describe('getClaudeArgs', () => {
+  // 旧字符串参数中的引号必须成为参数边界，而不是随空白拆成路径碎片。
+  it('LegacyArgs_QuotedPath_001', () => {
+    const store = useAppStore()
+    store.setClaudeOptions({ customArgs: '--add-dir "C:\\My Repo" --append-system-prompt \'two words\'' })
+    expect(store.getClaudeArgs()).toEqual(['--add-dir', 'C:\\My Repo', '--append-system-prompt', 'two words'])
+  })
+
+  // 未闭合的引用不能形成一组错误 argv 后继续启动 CLI。
+  it('LegacyArgs_UnclosedQuote_002', () => {
+    const store = useAppStore()
+    store.setClaudeOptions({ customArgs: '--add-dir "C:/My Repo' })
+    expect(() => store.getClaudeArgs()).toThrow('LEGACY_ARGS_UNCLOSED_QUOTE')
+  })
+
+  // UNC 前缀不能被当作转义删除；空参数及操作符均保持 argv 的字面语义。
+  it('LegacyArgs_UncAndLiteral_003', () => {
+    const store = useAppStore()
+    store.setClaudeOptions({ customArgs: String.raw`--add-dir "\\server\My Repo" --text "" ; $(whoami)` })
+    expect(store.getClaudeArgs()).toEqual(['--add-dir', String.raw`\\server\My Repo`, '--text', '', ';', '$(whoami)'])
+  })
+
+  // 引号转义和带尾部分隔符的路径仍产生完整参数。
+  it('LegacyArgs_EscapedQuotes_005', () => {
+    const store = useAppStore()
+    store.setClaudeOptions({ customArgs: String.raw`--note "say \"hi\"" --add-dir "C:\\" My\ Folder` })
+    expect(store.getClaudeArgs()).toEqual(['--note', 'say "hi"', '--add-dir', 'C:\\', 'My Folder'])
+  })
+
   // 无选项设置时返回空数组
   it('ClaudeArgs_Empty_001', () => {
     const store = useAppStore()

@@ -15,6 +15,7 @@ import {
 import { normalizeTerminalFont, normalizeTerminalFontSize, normalizeTerminalLineHeight, normalizeTerminalCursor, readTerminalSettings, terminalPreferences as computeTerminalPreferences, type TerminalSettingFields, type TerminalFont, type TerminalCursorStyle } from '@/config/terminalPreferences'
 import { normalizeTerminalThemeId } from '@/config/terminalThemes'
 import { normalizePath } from '@/utils/path'
+import { parseLegacyCustomArgs } from '@/utils/legacyCustomArgs'
 import { useShellStore } from '@/stores/shell'
 import type { AppConfig, GuiThemeMode, GuiDensity, StartupDestination } from '@/types/app'
 import type { UnifiedCliKind } from '@/types/unifiedSession'
@@ -708,8 +709,7 @@ export const useAppStore = defineStore('app', () => {
     if (opts.resume) args.push('--resume', opts.resume)
     if (opts.skipPermissions) args.push('--dangerously-skip-permissions')
     if (opts.customArgs) {
-      const custom = opts.customArgs.trim().split(/\s+/).filter(Boolean)
-      args.push(...custom)
+      args.push(...parseLegacyCustomArgs(opts.customArgs))
     }
 
     return args

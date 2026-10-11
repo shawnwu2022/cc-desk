@@ -230,9 +230,9 @@ impl InputStager {
             {
                 return Ok(());
             }
-            // 上传中断后没有任何清理路径会运行；更高 seq 只能来自放弃旧上传
-            // 后的新一帧，丢弃遗留暂存回收字节，否则该 run 永久 INPUT_UPLOAD_BUSY。
-            if seq < stage.input_seq {
+            // 仅更高 seq 可回收尚未提交的遗留上传；提交期间必须保留暂存和 receipt，
+            // 否则 partial/unknown 写入会丢失冻结证据。同 seq 的冲突也不能覆盖正文。
+            if stage.committing || seq <= stage.input_seq {
                 return Err(error("INPUT_UPLOAD_BUSY"));
             }
         }

@@ -340,6 +340,69 @@ describe('D16 ordered input intent queue', () => {
       queued: 2,
     })
   })
+
+  // 尚未完成 producer 的已知 no-op 可以只取消自身，后续输入仍按已分配序号发送。
+  it('Input_CancelPendingKeepsLater_014 — 取消未提交粘贴后继续发送后续 Enter', async () => {
+    const sent: Array<{ seq: string; text: string }> = []
+    const clipboard = deferred<Uint8Array>()
+    const queue = createInputIntentQueue({
+      runId: 'run-a',
+      generation: 1,
+      currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch: '1' }),
+      send: async intent => sent.push({
+        seq: intent.inputSeq,
+        text: new TextDecoder().decode(intent.bytes),
+      }),
+    })
+
+    const paste = queue.reserveAsync({
+      source: 'user-paste',
+      modeEpoch: '1',
+      produce: () => clipboard.promise,
+    })
+    queue.enqueue({ source: 'user-text', modeEpoch: '1', bytes: utf8('\r') })
+
+    expect(paste.cancel()).toBe(true)
+    clipboard.reject(new Error('clipboard unavailable'))
+    await paste.settled
+    await queue.flush()
+
+    expect(sent).toEqual([{ seq: '2', text: '\r' }])
+    expect(queue.snapshot()).toMatchObject({ state: 'open', queued: 0, queuedBytes: 0 })
+  })
+
+  // ready 或 dispatch 已开始后不能伪装成 no-op；真实传输仍必须完成或进入失败冻结。
+  it('Input_CancelAfterDispatchFails_015 — 已开始传输的预留不可取消', async () => {
+    const started = deferred<void>()
+    const release = deferred<void>()
+    const sent: string[] = []
+    const queue = createInputIntentQueue({
+      runId: 'run-a',
+      generation: 1,
+      currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch: '1' }),
+      send: async intent => {
+        sent.push(`${intent.inputSeq}:${new TextDecoder().decode(intent.bytes)}`)
+        started.resolve()
+        await release.promise
+      },
+    })
+
+    const paste = queue.reserveAsync({
+      source: 'user-paste',
+      modeEpoch: '1',
+      produce: async () => utf8('payload'),
+    })
+    await paste.settled
+    const flushing = queue.flush()
+    await started.promise
+
+    expect(paste.cancel()).toBe(false)
+    release.resolve()
+    await flushing
+
+    expect(sent).toEqual(['1:payload'])
+    expect(queue.snapshot()).toMatchObject({ state: 'open', queued: 0 })
+  })
 })
 
 describe('D16 terminal host source classification', () => {

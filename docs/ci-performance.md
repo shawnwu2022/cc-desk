@@ -555,6 +555,25 @@ diagnostics remain available. These copies do not preserve native object identit
 or prove recovery/CI coverage. No user installation, application state, Cargo
 cache or unknown process was cleaned.
 
+## Audit regression gate closure (2026-10-12)
+
+The D17 production-source crate reproduced `E0432` after the input stager's
+unreachable 16 MiB aggregate constant was removed. Its original 64 KiB chunk and
+8 MiB upload assertions remain. Behavioral checks now reject both 8 MiB + 1 and
+16 MiB uploads, and two added commit-fence regressions preserve partial receipts
+and forbid conflicting sequence replacement. All nine standalone tests and
+strict Clippy passed locally.
+
+The D14 production-source crate reproduced `E0432`/`E0433` because two inline
+staleness tests required Tauri callback types absent from the portable crate.
+Those two tests now live in the existing native transport test file and retain
+real `OutputRoutes`/`Channel` delivery; all eight native transport tests passed.
+The portable crate keeps its original eleven tests and adds the same
+stalled-ACK/healthy-flow behaviors against the actual transport source, including
+exact generation/stream refusal. Its thirteen tests and strict Clippy passed
+locally. These results do not substitute for the three-OS hosted matrices, the
+full native inventory or real CLI/WebView acceptance.
+
 ## Completed restore probe and strict Rust checks (2026-10-11)
 
 The next local batch completed the original

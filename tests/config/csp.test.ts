@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { build } from 'vite'
 
 /**
  * CSP 严格化回归测试
@@ -29,6 +30,18 @@ function directives(policy: unknown): Record<string, string[]> {
 }
 
 describe('Config_CspStrictness', () => {
+  // 生产打包实际生成的内联图片必须被生产策略允许，开发策略不能代替验收。
+  it('Csp_BundledImages_008', async () => {
+    const bundled = await build({ configFile: resolve(__dirname, '../../vite.config.ts'), logLevel: 'silent',
+      build: { write: false, minify: false } })
+    const outputs = Array.isArray(bundled) ? bundled : [bundled]
+    const code = outputs.flatMap(output => 'output' in output ? output.output : [])
+      .filter(output => output.type === 'chunk').map(output => output.code).join('\n')
+    if (code.includes('data:image/')) {
+      expect(directives(security.csp)['img-src'] ?? directives(security.csp)['default-src']).toContain('data:')
+    }
+  }, 30000)
+
   it('ProductionCsp_NotNull_001 — 生产 csp 必须为非空字符串策略', () => {
     expect(typeof security.csp).toBe('string')
     expect((security.csp as string).length).toBeGreaterThan(0)

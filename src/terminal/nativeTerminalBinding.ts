@@ -4,7 +4,7 @@ import {
   bindXtermInputProvenance,
   type XtermProvenanceSource,
 } from './xtermProvenance'
-import type { InputTarget } from './inputQueue'
+import type { InputReservation, InputTarget } from './inputQueue'
 import type {
   InputWriteReceipt,
   NativeInputFrame,
@@ -32,7 +32,7 @@ export interface NativeTerminalBindingOptions extends RunKey {
 export interface NativeTerminalBinding {
   acceptOutput(frame: OutputFrame): boolean
   sendUserText(data: string): Promise<void>
-  reserveUserPaste(produce: () => Promise<Uint8Array>): { inputSeq: string; settled: Promise<void> }
+  reserveUserPaste(produce: () => Promise<Uint8Array>): InputReservation
   drainInput(): Promise<void>
   dispose(): void
 }
@@ -122,13 +122,18 @@ export function createNativeTerminalBinding(
         return {
           inputSeq: '0',
           settled: Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED')),
+          cancel: () => false,
         }
       }
       let hasBytes = false
       const reserved = host.reserveUserPaste(async () => {
         const bytes = await produce(); hasBytes = bytes.length > 0; return bytes
       })
-      return { inputSeq: reserved.inputSeq, settled: reserved.settled.then(() => completeUserOperation(hasBytes)) }
+      return {
+        inputSeq: reserved.inputSeq,
+        settled: reserved.settled.then(() => completeUserOperation(hasBytes)),
+        cancel: reserved.cancel,
+      }
     },
 
     drainInput() {

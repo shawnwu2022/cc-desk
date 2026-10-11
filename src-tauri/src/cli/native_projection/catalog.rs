@@ -98,8 +98,10 @@ pub(crate) fn read(
 ) -> ReadResult<Vec<ResourceItem>> {
     catalog.check()?;
     // 项目文档/技能等资源类别是单项目投影契约；批量观察只服务历史枚举。
-    if !matches!(options.kind, ResourceKind::History | ResourceKind::Messages | ResourceKind::Search)
-        && catalog.projects.len() > 1
+    if !matches!(
+        options.kind,
+        ResourceKind::History | ResourceKind::Messages | ResourceKind::Search
+    ) && catalog.projects.len() > 1
     {
         return Err("SOURCE_UNSUPPORTED");
     }

@@ -2,7 +2,11 @@ use super::*;
 use serde_json::json;
 
 fn granted<'a>(root: &'a Root, paths: &'a [PathBuf]) -> Vec<ProjectRef<'a>> {
-    vec![ProjectRef { id: "test-project", root, paths }]
+    vec![ProjectRef {
+        id: "test-project",
+        root,
+        paths,
+    }]
 }
 
 // Large synthetic EOFs must be sparse on NTFS as well as Unix. Mark the same

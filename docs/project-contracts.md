@@ -104,6 +104,8 @@ XTermTerminal ←→ legacy Tauri IPC ←→ pty.rs ←→ Claude Code
 
 Legacy 路径继续维护兼容性，但不是新的双 CLI 架构扩展点。
 
+Legacy `customArgs` 在两个启动入口统一解析成 argv：单/双引号包围的空格、空参数及引号转义保持参数边界，Windows 路径分隔符保留；未闭合引号拒绝启动。变量和 shell 操作符按字面值传递，不执行 shell 表达式。Native profile 的结构化参数与迁移约束不变。
+
 ### Hook 监控数据流
 
 ```

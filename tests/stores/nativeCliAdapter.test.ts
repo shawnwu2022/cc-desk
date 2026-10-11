@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { describe, expect, it, vi } from 'vitest'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
-import type { NativeCliTab } from '@/stores/nativeTabs'
+import { captureNativeAttempt, useNativeTabsStore, type NativeCliTab } from '@/stores/nativeTabs'
 import type { NativeHistoryEntry } from '@/stores/nativeHistory'
 
 function tab(overrides: Partial<NativeCliTab> = {}): NativeCliTab {
@@ -41,6 +41,33 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
 }
 
 describe('native CLI adapter', () => {
+  // restart 必须撤销旧 run 的 observer 身份，避免新 attempt 认领旧历史行。
+  it('Restart_DropsObservedClaim_032 — restart 后旧 observer 身份不再认领历史', async () => {
+    setActivePinia(createPinia())
+    const tabs = useNativeTabsStore()
+    const active = tabs.create({ cli: 'claude', projectId: 'project-1', projectPath: '/repo', profileId: 'claude-main', profileRevision: '7', action: { kind: 'new' } })
+    tabs.applyLaunchStatus(active.tabId, {
+      instanceId: 'backend', requestId: active.requestId, run: { runId: active.runId, generation: active.generation },
+      phase: 'running', revision: '1', failure: null,
+    })
+    tabs.applyObservationIdentity(active.tabId, captureNativeAttempt(active), 'session-1')
+    tabs.applyLaunchStatus(active.tabId, {
+      instanceId: 'backend', requestId: active.requestId, run: { runId: active.runId, generation: active.generation },
+      phase: 'exited', revision: '2', failure: null,
+    })
+    tabs.restart(active.tabId, { profileId: 'claude-main', profileRevision: '7' })
+    const adapter = createNativeCliAdapter({
+      tabs,
+      history: { all: () => [history('claude', '/root', 'session-1')] },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() },
+      archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
+    })
+
+    const rows = (await adapter.listSessions()).filter(row => row.nativeSessionId === 'session-1')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ opened: false })
+  })
+
   // 认证 hook 回填身份后，运行中 new 会话认领自己的历史行，消除活动/历史双行。
   it('NativeObservedIdentity_ClaimsHistoryRow_030', async () => {
     const active = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, observedSessionId: 'session-1' })

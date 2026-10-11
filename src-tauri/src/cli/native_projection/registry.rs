@@ -85,11 +85,15 @@ impl Grant {
             && self.basis == other.basis
             && self.root.key() == other.root.key()
             && self.projects.len() == other.projects.len()
-            && self.projects.iter().zip(other.projects.iter()).all(|(mine, theirs)| {
-                mine.id == theirs.id
-                    && mine.root.key() == theirs.root.key()
-                    && mine.paths == theirs.paths
-            })
+            && self
+                .projects
+                .iter()
+                .zip(other.projects.iter())
+                .all(|(mine, theirs)| {
+                    mine.id == theirs.id
+                        && mine.root.key() == theirs.root.key()
+                        && mine.paths == theirs.paths
+                })
             && self.user_config.as_ref().map(Root::key) == other.user_config.as_ref().map(Root::key)
     }
 }

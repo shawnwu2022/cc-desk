@@ -455,6 +455,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.attentionState = 'none'
     value.activityState = 'unknown'
     value.observationState = 'off'
+    delete value.observedSessionId
     value.errorCode = null
     value.launchRevision = null
     pendingAttention.delete(tabId)

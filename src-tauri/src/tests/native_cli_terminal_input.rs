@@ -371,3 +371,130 @@ fn D17_Staging_WriterPanicFreezesWithoutReplay_011() {
         receipt
     );
 }
+
+// 正在提交的帧不能被下一次 begin 覆盖，部分写入必须保存回执并冻结后续输入。
+#[test]
+fn Input_CommitFence_014() {
+    let stager = InputStager::new();
+    let owner = CallerIdentity {
+        instance_id: "doc-a".into(),
+        window_label: "main".into(),
+        webview_epoch: WireU64::parse("1").unwrap(),
+    };
+    let first = InputBeginRequest {
+        run_id: "run-a".into(),
+        generation: 1,
+        input_seq: WireU64::parse("1").unwrap(),
+        mode_epoch: WireU64::parse("7").unwrap(),
+        total_bytes: WireU64::parse("2").unwrap(),
+    };
+    let next = InputBeginRequest {
+        input_seq: WireU64::parse("2").unwrap(),
+        ..first.clone()
+    };
+    stager.begin(&owner, &first).unwrap();
+    stager
+        .chunk(
+            &owner,
+            &InputChunkRequest {
+                run_id: "run-a".into(),
+                generation: 1,
+                input_seq: WireU64::parse("1").unwrap(),
+                offset: WireU64::parse("0").unwrap(),
+                bytes: vec![1, 2],
+            },
+        )
+        .unwrap();
+    let request = InputCommitRequest {
+        run_id: "run-a".into(),
+        generation: 1,
+        input_seq: WireU64::parse("1").unwrap(),
+    };
+    let mut interleaved = None;
+    let receipt = stager
+        .commit(&owner, &request, |_| {
+            interleaved = Some(stager.begin(&owner, &next));
+            Ok(HostWriteResult {
+                state: InputWriteState::PartialOrUnknown,
+                confirmed_bytes: 1,
+            })
+        })
+        .expect("partial write must retain its receipt");
+    assert_eq!(interleaved.unwrap().unwrap_err().code, "INPUT_UPLOAD_BUSY");
+    assert_eq!(receipt.state, InputWriteState::PartialOrUnknown);
+    assert_eq!(receipt.confirmed_bytes, "1");
+    assert_eq!(
+        stager.begin(&owner, &next).unwrap_err().code,
+        "INPUT_FROZEN"
+    );
+    assert_eq!(
+        stager
+            .commit(&owner, &request, |_| panic!(
+                "receipt must not replay PTY input"
+            ))
+            .unwrap(),
+        receipt
+    );
+}
+
+// 同序号但参数不同的 begin 不能丢弃已经收到的字节。
+#[test]
+fn Input_ConflictingBegin_015() {
+    let stager = InputStager::new();
+    let owner = CallerIdentity {
+        instance_id: "doc-a".into(),
+        window_label: "main".into(),
+        webview_epoch: WireU64::parse("1").unwrap(),
+    };
+    let first = InputBeginRequest {
+        run_id: "run-a".into(),
+        generation: 1,
+        input_seq: WireU64::parse("1").unwrap(),
+        mode_epoch: WireU64::parse("7").unwrap(),
+        total_bytes: WireU64::parse("2").unwrap(),
+    };
+    stager.begin(&owner, &first).unwrap();
+    stager
+        .chunk(
+            &owner,
+            &InputChunkRequest {
+                run_id: "run-a".into(),
+                generation: 1,
+                input_seq: WireU64::parse("1").unwrap(),
+                offset: WireU64::parse("0").unwrap(),
+                bytes: vec![1, 2],
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        stager
+            .begin(
+                &owner,
+                &InputBeginRequest {
+                    mode_epoch: WireU64::parse("8").unwrap(),
+                    ..first
+                }
+            )
+            .unwrap_err()
+            .code,
+        "INPUT_UPLOAD_BUSY"
+    );
+    let receipt = stager
+        .commit(
+            &owner,
+            &InputCommitRequest {
+                run_id: "run-a".into(),
+                generation: 1,
+                input_seq: WireU64::parse("1").unwrap(),
+            },
+            |bytes| {
+                assert_eq!(bytes, &[1, 2]);
+                Ok(HostWriteResult {
+                    state: InputWriteState::HostWritten,
+                    confirmed_bytes: bytes.len() as u64,
+                })
+            },
+        )
+        .unwrap();
+    assert_eq!(receipt.state, InputWriteState::HostWritten);
+}

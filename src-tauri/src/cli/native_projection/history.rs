@@ -93,11 +93,11 @@ pub(super) fn read(
         let owner = if c.projects.is_empty() {
             None
         } else {
-            match transcript
-                .cwd
-                .as_ref()
-                .and_then(|cwd| c.projects.iter().find(|p| p.paths.iter().any(|path| path == Path::new(cwd))))
-            {
+            match transcript.cwd.as_ref().and_then(|cwd| {
+                c.projects
+                    .iter()
+                    .find(|p| p.paths.iter().any(|path| path == Path::new(cwd)))
+            }) {
                 Some(project) => Some(project.id.to_owned()),
                 None => {
                     if o.kind == ResourceKind::History && transcript.cwd.is_none() {
@@ -158,7 +158,8 @@ pub(super) fn read(
         if o.kind == ResourceKind::Messages && o.session_id != Some(t.id.as_str()) {
             continue;
         }
-        for (role, message) in t.messages {            if o.kind == ResourceKind::Search
+        for (role, message) in t.messages {
+            if o.kind == ResourceKind::Search
                 && !query
                     .as_ref()
                     .is_some_and(|q| message.to_lowercase().contains(q))

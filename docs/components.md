@@ -113,6 +113,7 @@ Responsibilities:
 - bind the exact run through `createDeskNativeTerminalBinding`;
 - ordered native input;
 - output parse/ACK;
+- hidden-tab owner lifecycle synchronization;
 - authenticated resize/stop;
 - safe diagnostic projection.
 
@@ -141,6 +142,8 @@ status/errorCode/launchRevision
 ```
 
 Only exact request/run/generation launch status may be adopted.
+
+Observer-provided session identity is bound to that same attempt and used only for display deduplication. `restart` clears it when allocating the next request/run/generation, before adapter history projection.
 
 ### cliProfiles.ts / cliWorkspace.ts
 

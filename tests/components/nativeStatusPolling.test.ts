@@ -6,13 +6,12 @@ import { useNativeTabsStore } from '@/stores/nativeTabs'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 
 /**
- * NativeCliTerminal 后台轮询回归：
- * 每个 launched tab 曾持有独立 1500ms statusTimer，切到后台（active=false）后
- * 依旧持续调用 cli_get_launch_status。修复后：非活跃 tab 停掉 timer，
- * 重新激活时立即 syncStatus 并重启轮询。
+ * NativeCliTerminal 后台生命周期回归：Channel 只承载输出，observer 也不拥有 phase。
+ * launched tab 切到后台后仍须保留低频状态同步，否则退出进程会永久显示 running。
  */
 const io = vi.hoisted(() => ({
   statusReads: 0,
+  phase: 'running' as 'running' | 'exited',
   starts: [] as any[],
   observation: null as ((payload: import('@/types/hook').HookEventPayload) => void) | null,
   stop: vi.fn(),
@@ -48,7 +47,7 @@ vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
 let wrapper: VueWrapper | null = null
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks()
-  io.statusReads = 0; io.observation = null
+  io.statusReads = 0; io.phase = 'running'; io.observation = null
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
     instanceId: 'test-backend',
     async invoke(command: string, input: any) {
@@ -61,7 +60,7 @@ beforeEach(() => {
         // status 查询只携带 requestId；回显 cli_start 冻结请求里的原始 run 身份
         const original = io.starts.find(value => value.requestId === input.requestId)
         if (!original) throw new Error('UNKNOWN_REQUEST_ID')
-        return { instanceId: 'test-backend', requestId: input.requestId, run: { runId: original.runId, generation: original.generation }, phase: 'running', revision: '2', failure: null }
+        return { instanceId: 'test-backend', requestId: input.requestId, run: { runId: original.runId, generation: original.generation }, phase: io.phase, revision: '2', failure: null }
       }
       throw new Error('UNEXPECTED_BRIDGE_COMMAND: ' + command)
     },
@@ -79,32 +78,21 @@ afterEach(() => {
   vi.unstubAllGlobals(); vi.useRealTimers(); document.body.innerHTML = ''
 })
 
-describe('NativeStatusPolling_BackgroundPause', () => {
-  it('InactiveTab_StopsPolling_001 — active=false 停止轮询，重新激活立即同步并重启', async () => {
+describe('NativeStatusPolling_BackgroundLife', () => {
+  // active=false 时进程退出仍须通过 owner status 同步投影到 store。
+  it('InactiveTab_TracksExit_001 — 后台 tab 保留生命周期同步并发布 exited', async () => {
     const tabs = useNativeTabsStore()
     const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
     wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
     await vi.advanceTimersByTimeAsync(0)
     expect(tabs.tab(tab.tabId)?.status).toBe('running')
 
-    // 活跃 tab 保持 1500ms 轮询
-    await vi.advanceTimersByTimeAsync(1500)
-    const readsWhileActive = io.statusReads
-    expect(readsWhileActive).toBeGreaterThan(0)
-
-    // 切后台：轮询必须停摆
     await wrapper.setProps({ active: false })
     await vi.advanceTimersByTimeAsync(0)
-    const readsAtPause = io.statusReads
-    await vi.advanceTimersByTimeAsync(4500)
-    expect(io.statusReads).toBe(readsAtPause)
-
-    // 重新激活：立即补偿同步，且轮询恢复
-    await wrapper.setProps({ active: true })
-    await vi.advanceTimersByTimeAsync(0)
-    expect(io.statusReads).toBeGreaterThan(readsAtPause)
-    const readsAfterResume = io.statusReads
+    const readsBeforeExit = io.statusReads
+    io.phase = 'exited'
     await vi.advanceTimersByTimeAsync(1500)
-    expect(io.statusReads).toBeGreaterThan(readsAfterResume)
+    expect(io.statusReads).toBeGreaterThan(readsBeforeExit)
+    expect(tabs.tab(tab.tabId)?.status).toBe('exited')
   })
 })

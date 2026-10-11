@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { Image } from '@tauri-apps/api/image'
+import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import { preparePasteText, bracketPasteText, buildPastePayload, compactJsonForPaste, isPasteStale, commitPaste, commitPasteWithEvidence, imagePasteBytes, bindNativePaste } from '@/utils/pasteText'
+
+const clipboard = vi.hoisted(() => ({ readText: vi.fn(), readImage: vi.fn() }))
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  readText: (...args: unknown[]) => clipboard.readText(...args),
+  readImage: (...args: unknown[]) => clipboard.readImage(...args),
+}))
 
 function pasteEvent(text: string, types: string[] = ['text/plain'], items: { kind: string; type: string }[] = []): ClipboardEvent {
   const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
@@ -124,6 +133,20 @@ describe('bindNativePaste', () => {
 
     expect(event.defaultPrevented).toBe(false)
     expect(write).not.toHaveBeenCalled()
+    unbind()
+  })
+
+  // Legacy keydown 图片探测只消费资源类型，不得把 Tauri Image 留在资源表中。
+  it('PasteLegacy_ImageProbeCloses_007', async () => {
+    const { textarea, write, unbind } = nativePasteFixture('pty-image-key', false)
+    const close = vi.fn().mockResolvedValue(undefined)
+    clipboard.readText.mockResolvedValue('')
+    clipboard.readImage.mockResolvedValue({ close })
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+
+    await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith('pty-image-key', '\x1bv'))
+    expect(close).toHaveBeenCalledOnce()
     unbind()
   })
 })
@@ -466,6 +489,30 @@ describe('commitPaste', () => {
 })
 
 describe('commitPasteWithEvidence', () => {
+  // 真实 Image.close 的命令必须在主窗口获准，否则调用被拒绝后资源仍留在后端表内。
+  it('ClipboardImage_RealResourceClose_017', async () => {
+    const capability = JSON.parse(readFileSync('src-tauri/capabilities/default.json', 'utf8'))
+    const generated = JSON.parse(readFileSync('src-tauri/gen/schemas/capabilities.json', 'utf8'))
+    const acl = JSON.parse(readFileSync('src-tauri/gen/schemas/acl-manifests.json', 'utf8'))
+    const allocated = new Set([42])
+    const close = vi.fn((command: string, argument: any) => {
+      if (command !== 'plugin:resources|close') throw new Error('unexpected resource command')
+      if (!capability.windows.includes('main') || !capability.permissions.includes('core:resources:allow-close')) throw new Error('resource close denied')
+      allocated.delete(argument.rid)
+    })
+    mockIPC(close)
+    try {
+      const write = vi.fn(async () => {})
+      await commitPasteWithEvidence(async () => '', async () => new Image(42), () => ({ ptyId: 'pty-image' }),
+        text => text, write, () => '\x1bv')
+      expect(close).toHaveBeenCalledExactlyOnceWith('plugin:resources|close', { rid: 42 })
+      expect(allocated.size).toBe(0)
+      expect(generated.default.permissions).toContain('core:resources:allow-close')
+      expect(acl['core:resources'].permissions['allow-close'].commands.allow).toContain('close')
+      expect(write).toHaveBeenCalledExactlyOnceWith('pty-image', '\x1bv')
+    } finally { clearMocks() }
+  })
+
   it('D18_Paste_EmptyTextWithoutImageEvidenceWritesNothing_010', async () => {
     const write = vi.fn()
     await commitPasteWithEvidence(

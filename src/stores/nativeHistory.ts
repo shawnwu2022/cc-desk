@@ -83,8 +83,8 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
   }
 
   /**
-   * 一次后端观察服务同 profile 的整组项目：行经后端 cwd 归属分发到各项目 entry。
-   * 启动巨慢的根因是每个项目各做一次全库扫描；合并后扫描次数从项目数降为 1。
+   * 同 profile 按 scope 的 64 项预算合并观察，行经后端归属分发到各项目 entry。
+   * 项目准入失败时拆分该批次，健康项目仍使用独立的后端授权观察。
    * 逐 entry 的 owner/inFlight 语义与单项目路径完全一致，并发单项目 load 可整组接管。
    */
   async function loadGrouped(
@@ -117,7 +117,7 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
 
     const owner = {}
     if (sequence === BigInt('18446744073709551615')) throw new Error('SCOPE_EPOCH_EXHAUSTED')
-    let epoch = (++sequence).toString()
+    const epoch = (++sequence).toString()
     const replacement = (key: string): Promise<NativeHistoryEntry> => {
       const newer = inFlight.get(key)
       if (newer && newer.owner !== owner) return newer.promise
@@ -127,7 +127,6 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
     }
 
     const work = (async () => {
-      let stage: ProjectionStage = 'frontend-bridge'
       const state = claimed.map(({ context, key, cached }) => {
         owners.set(key, owner)
         const entry = reactive<NativeHistoryEntry>({
@@ -138,118 +137,137 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
           sessions: new Map<string, NativeHistorySession>(),
           previousSessions: new Map<string, NativeHistorySession>() }
       })
-      const live = () => state.filter(item => owners.get(item.key) === owner)
-      try {
-        const client = createNativeProjectionClient()
-        stage = 'scope-invoke'
-        const source = await client.scope({
-          kind: 'profile', profileId: profile.profileId, expectedProfileRevision: profile.profileRevision,
-          projectIds: state.map(item => item.context.projectId),
-        })
+      const observe = async (batch: typeof state): Promise<void> => {
+        let stage: ProjectionStage = 'frontend-bridge'
+        let observationEpoch = epoch
+        const live = () => batch.filter(item => owners.get(item.key) === owner)
         if (!live().length) return
-        if (source.cli !== profile.cli) throw new Error('PROFILE_CLI_MISMATCH')
-        const sourceRootKey = typeof source.sourceRootKey === 'string' && source.sourceRootKey ? source.sourceRootKey : undefined
-        if (sourceRootKey) for (const { entry } of state) entry.sourceRootKey = sourceRootKey
-        // 既有显示值的保留只对同一 backend root key 成立，跨 root 重新观察。
-        for (const item of state) {
-          item.previousSessions = new Map(item.entry.sourceRootKey && item.cached?.sourceRootKey === item.entry.sourceRootKey
-            ? item.cached?.sessions.map(row => [row.sessionKey, row]) ?? [] : [])
-        }
-        let offset = 0
-        let metadataIncomplete = false
-        let restartedObservation = false
-        const readFailures = new Set<HistoryReadFailure>()
-        const absorb = (item: Extract<ResourceItem, { type: 'session' }>, target: (typeof state)[number]) => {
-          const previous = target.previousSessions.get(item.sessionKey)
-          const observed = item.updatedAt ? Date.parse(item.updatedAt) : NaN
-          const priorUpdated = previous?.updatedAt ? Date.parse(previous.updatedAt) : NaN
-          const prior = Number.isFinite(priorUpdated) ? priorUpdated : previous?.lastKnownActivityAt ?? NaN
-          // Same canonical context + backend root/session key only. No new row,
-          // source timestamp, completeness or absence evidence is inferred.
-          const known = previous?.nativeSessionId === item.nativeSessionId && Number.isFinite(prior) && prior >= 0 && !Number.isFinite(observed)
-            ? prior : undefined
-          const priorTitle = previous?.lastKnownTitle ?? previous?.title
-          const priorSource = previous?.lastKnownTitleSource ?? previous?.titleSource
-          const priority = (value: typeof item.titleSource) => value === 'custom' ? 3 : value === 'ai' ? 2 : value === 'prompt' ? 1 : 0
-          // Display retention only: a bounded lower-priority prompt fallback
-          // does not establish that a previously observed AI/custom name vanished.
-          const lowerPriorityPartial = item.metadataIncomplete === true && priority(priorSource) > priority(item.titleSource)
-          const lastKnownTitle = (item.titleUnknown === true || lowerPriorityPartial) && previous?.nativeSessionId === item.nativeSessionId
-            && typeof priorTitle === 'string' && priorTitle ? priorTitle : undefined
-          target.sessions.set(item.sessionKey, { ...item,
-            ...(known === undefined ? {} : { lastKnownActivityAt: known }),
-            ...(lastKnownTitle === undefined ? {} : { lastKnownTitle, ...(priorSource ? { lastKnownTitleSource: priorSource } : {}) }),
+        try {
+          const client = createNativeProjectionClient()
+          stage = 'scope-invoke'
+          const source = await client.scope({
+            kind: 'profile', profileId: profile.profileId, expectedProfileRevision: profile.profileRevision,
+            projectIds: batch.map(item => item.context.projectId),
           })
-        }
-        while (true) {
-          stage = 'read-invoke'
-          const result = await client.read({ source, resourceKind: 'history', requestEpoch: epoch, limit: 200, offset })
           if (!live().length) return
-          if (result.state !== 'ready') {
-            if (result.reason === 'SOURCE_SNAPSHOT_EXPIRED' && offset > 0 && !restartedObservation) {
-              // Restart one entire owned observation; never append fresh pages
-              // to rows from an expired/evicted receipt. No root-error retry.
-              restartedObservation = true
-              if (sequence === BigInt('18446744073709551615')) throw new Error('SCOPE_EPOCH_EXHAUSTED')
-              epoch = (++sequence).toString()
-              offset = 0
-              metadataIncomplete = false
-              readFailures.clear()
-              for (const item of live()) {
-                item.entry.requestEpoch = epoch
-                item.sessions.clear()
-                item.entry.metadataIncomplete = undefined
-                item.entry.readFailures = undefined
+          if (source.cli !== profile.cli) throw new Error('PROFILE_CLI_MISMATCH')
+          const sourceRootKey = typeof source.sourceRootKey === 'string' && source.sourceRootKey ? source.sourceRootKey : undefined
+          if (sourceRootKey) for (const { entry } of live()) entry.sourceRootKey = sourceRootKey
+          // 既有显示值的保留只对同一 backend root key 成立，跨 root 重新观察。
+          for (const item of live()) {
+            item.previousSessions = new Map(item.entry.sourceRootKey && item.cached?.sourceRootKey === item.entry.sourceRootKey
+              ? item.cached?.sessions.map(row => [row.sessionKey, row]) ?? [] : [])
+          }
+          let offset = 0
+          let metadataIncomplete = false
+          let restartedObservation = false
+          const readFailures = new Set<HistoryReadFailure>()
+          const absorb = (item: Extract<ResourceItem, { type: 'session' }>, target: (typeof state)[number]) => {
+            const previous = target.previousSessions.get(item.sessionKey)
+            const observed = item.updatedAt ? Date.parse(item.updatedAt) : NaN
+            const priorUpdated = previous?.updatedAt ? Date.parse(previous.updatedAt) : NaN
+            const prior = Number.isFinite(priorUpdated) ? priorUpdated : previous?.lastKnownActivityAt ?? NaN
+            // Same canonical context + backend root/session key only. No new row,
+            // source timestamp, completeness or absence evidence is inferred.
+            const known = previous?.nativeSessionId === item.nativeSessionId && Number.isFinite(prior) && prior >= 0 && !Number.isFinite(observed)
+              ? prior : undefined
+            const priorTitle = previous?.lastKnownTitle ?? previous?.title
+            const priorSource = previous?.lastKnownTitleSource ?? previous?.titleSource
+            const priority = (value: typeof item.titleSource) => value === 'custom' ? 3 : value === 'ai' ? 2 : value === 'prompt' ? 1 : 0
+            // Display retention only: a bounded lower-priority prompt fallback
+            // does not establish that a previously observed AI/custom name vanished.
+            const lowerPriorityPartial = item.metadataIncomplete === true && priority(priorSource) > priority(item.titleSource)
+            const lastKnownTitle = (item.titleUnknown === true || lowerPriorityPartial) && previous?.nativeSessionId === item.nativeSessionId
+              && typeof priorTitle === 'string' && priorTitle ? priorTitle : undefined
+            target.sessions.set(item.sessionKey, { ...item,
+              ...(known === undefined ? {} : { lastKnownActivityAt: known }),
+              ...(lastKnownTitle === undefined ? {} : { lastKnownTitle, ...(priorSource ? { lastKnownTitleSource: priorSource } : {}) }),
+            })
+          }
+          while (true) {
+            stage = 'read-invoke'
+            const result = await client.read({ source, resourceKind: 'history', requestEpoch: observationEpoch, limit: 200, offset })
+            if (!live().length) return
+            if (result.state !== 'ready') {
+              if (result.reason === 'SOURCE_SNAPSHOT_EXPIRED' && offset > 0 && !restartedObservation) {
+                // Restart one entire owned observation; never append fresh pages
+                // to rows from an expired/evicted receipt. No root-error retry.
+                restartedObservation = true
+                if (sequence === BigInt('18446744073709551615')) throw new Error('SCOPE_EPOCH_EXHAUSTED')
+                observationEpoch = (++sequence).toString()
+                offset = 0
+                metadataIncomplete = false
+                readFailures.clear()
+                for (const item of live()) {
+                  item.entry.requestEpoch = observationEpoch
+                  item.sessions.clear()
+                  item.entry.metadataIncomplete = undefined
+                  item.entry.readFailures = undefined
+                }
+                continue
               }
-              continue
+              for (const { entry } of live()) {
+                entry.error = result.reason ?? 'SOURCE_UNAVAILABLE'
+                entry.diagnosticStage = 'read-source-enumeration'
+                if (!options.retainOnFailure) entry.sessions = []
+              }
+              break
             }
+            metadataIncomplete ||= result.historyMetadataIncomplete === true
+            for (const code of result.historyReadFailures ?? []) readFailures.add(code)
+            if (readFailures.size) metadataIncomplete = true
             for (const { entry } of live()) {
-              entry.error = result.reason ?? 'SOURCE_UNAVAILABLE'
-              entry.diagnosticStage = 'read-source-enumeration'
-              if (!options.retainOnFailure) entry.sessions = []
+              if (readFailures.size) entry.readFailures = [...readFailures]
+              entry.metadataIncomplete = metadataIncomplete
             }
-            break
-          }
-          metadataIncomplete ||= result.historyMetadataIncomplete === true
-          for (const code of result.historyReadFailures ?? []) readFailures.add(code)
-          if (readFailures.size) metadataIncomplete = true
-          for (const { entry } of live()) {
-            if (readFailures.size) entry.readFailures = [...readFailures]
-            entry.metadataIncomplete = metadataIncomplete
-          }
-          for (const item of result.items) {
-            if (item.type !== 'session') continue
-            // 单项目观察的归属唯一，后端省略 projectId 时归给唯一 entry；
-            // 多项目观察必须有归属，否则该行不属于任何已 admission 项目。
-            const target = item.projectId
-              ? state.find(entry => entry.context.projectId === item.projectId)
-              : state.length === 1 ? state[0] : undefined
-            if (target && owners.get(target.key) === owner) absorb(item, target)
-          }
-          if (!result.hasMore) {
-            for (const item of live()) {
-              item.entry.sessions = [...item.sessions.values()]
-              if (offset === 0 && !metadataIncomplete && sourceRootKey) {
-                item.entry.absenceEvidence = { cli: source.cli, sourceRootKey }
+            for (const item of result.items) {
+              if (item.type !== 'session') continue
+              // 单项目观察的归属唯一，后端省略 projectId 时归给唯一 entry；
+              // 多项目观察必须有归属，否则该行不属于任何已 admission 项目。
+              const target = item.projectId
+                ? batch.find(entry => entry.context.projectId === item.projectId)
+                : batch.length === 1 ? batch[0] : undefined
+              if (target && owners.get(target.key) === owner) absorb(item, target)
+            }
+            if (!result.hasMore) {
+              for (const item of live()) {
+                item.entry.sessions = [...item.sessions.values()]
+                if (offset === 0 && !metadataIncomplete && sourceRootKey) {
+                  item.entry.absenceEvidence = { cli: source.cli, sourceRootKey }
+                }
               }
+              break
             }
-            break
+            if (!result.items.length || offset + result.items.length > 1_000_000) throw new Error('SOURCE_UNAVAILABLE')
+            offset += result.items.length
           }
-          if (!result.items.length || offset + result.items.length > 1_000_000) throw new Error('SOURCE_UNAVAILABLE')
-          offset += result.items.length
+          for (const { entry } of live()) entry.loaded = entry.error !== 'SOURCE_BUSY'
+        } catch (failure) {
+          const alive = live()
+          if (!alive.length) return
+          const diagnostic = projectionFailure(failure, stage)
+          if (stage === 'scope-invoke' && diagnostic.stage === 'scope-project-registration' && batch.length > 1) {
+            // 仅隔离后端明确报告的项目准入失败，不能重试 profile/root/读取错误或绕过授权。
+            const middle = Math.ceil(alive.length / 2)
+            for (const subset of [alive.slice(0, middle), alive.slice(middle)]) {
+              if (subset.length) await observe(subset).catch(() => {})
+            }
+            return
+          }
+          for (const { entry } of alive) {
+            entry.error = diagnostic.code
+            entry.diagnosticStage = diagnostic.stage
+            if (!options.retainOnFailure) entry.sessions = []
+            entry.loaded = diagnostic.code !== 'SOURCE_BUSY'
+          }
+          throw diagnostic
         }
-        for (const { entry } of live()) entry.loaded = entry.error !== 'SOURCE_BUSY'
-      } catch (failure) {
-        const alive = live()
-        if (!alive.length) return
-        const diagnostic = projectionFailure(failure, stage)
-        for (const { entry } of alive) {
-          entry.error = diagnostic.code
-          entry.diagnosticStage = diagnostic.stage
-          if (!options.retainOnFailure) entry.sessions = []
-          entry.loaded = diagnostic.code !== 'SOURCE_BUSY'
+      }
+      try {
+        for (let offset = 0; offset < state.length; offset += 64) {
+          try { await observe(state.slice(offset, offset + 64)) }
+          catch (failure) { if (claimed.length === 1) throw failure }
         }
-        throw diagnostic
       } finally {
         for (const { entry } of state) if (owners.get(entry.key) === owner) entry.loading = false
       }
@@ -269,7 +287,10 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
     void work.then(release, release)
     // 单项目调用仍以 rejection 暴露失败，且不产生未经消费的整组 rejection。
     await (claimed.length === 1 ? work : work.then(() => undefined, () => undefined))
-    for (const { context, key } of claimed) result.set(context.projectId, entries.get(key)!)
+    for (const { context, key } of claimed) {
+      const entry = owners.get(key) === owner ? entries.get(key)! : await replacement(key)
+      result.set(context.projectId, entry)
+    }
     return result
   }
 

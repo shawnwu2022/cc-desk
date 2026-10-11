@@ -21,21 +21,21 @@ describe('prepared package version', () => {
       cargoLock: cargoLock?.match(/^version = "([^"]+)"$/m)?.[1],
       tauri: tauri.version,
     }).toEqual({
-      npm: '0.18.8',
-      npmLock: '0.18.8',
-      npmRootPackage: '0.18.8',
-      cargo: '0.18.8',
-      cargoLock: '0.18.8',
-      tauri: '0.18.8',
+      npm: '0.18.9',
+      npmLock: '0.18.9',
+      npmRootPackage: '0.18.9',
+      cargo: '0.18.9',
+      cargoLock: '0.18.9',
+      tauri: '0.18.9',
     })
   })
 
-  // 最新版本说明保留未发布身份，旧 0.18.0 仍明确是测试构建。
+  // 最新说明与准备版本及日期一致，旧 0.18.0 仍明确是测试构建。
   it('PackageVersion_Changelog_002', () => {
     const changelog = readFileSync('CHANGELOG.md', 'utf8')
     const headings = [...changelog.matchAll(/^## \[([^\]]+)\] - (.+)$/gm)]
-    expect(headings[0]?.[1]).toBe('0.18.8')
-    expect(headings[0]?.[2]).toBe('2026-10-10 (repair candidate)')
+    expect(headings[0]?.[1]).toBe('0.18.9')
+    expect(headings[0]?.[2]).toBe('2026-10-12')
     expect(headings.find(match => match[1] === '0.18.0')?.[2])
       .toBe('2026-10-01 (unreleased test build)')
   })

@@ -47,6 +47,7 @@ export interface InputQueueSnapshot {
 export interface InputReservation {
   inputSeq: U64String
   settled: Promise<void>
+  cancel(): boolean
 }
 
 export interface InputIntentQueue {
@@ -327,7 +328,20 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
           },
         )
 
-      return { inputSeq, settled }
+      return {
+        inputSeq,
+        settled,
+        cancel() {
+          // 仅撤销尚未产出字节的单个 intent；ready/dispatch/失败状态保留原冻结边界。
+          if (item.state !== 'pending') return false
+          const index = items.indexOf(item)
+          if (index < 0) return false
+          item.state = 'cancelled'
+          items.splice(index, 1)
+          void flush()
+          return true
+        },
+      }
     },
 
     flush,

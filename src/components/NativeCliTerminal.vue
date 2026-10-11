@@ -20,7 +20,7 @@ import { createDeskNativeTerminalBinding } from '@/terminal/deskNativeTerminal'
 import type { NativeTerminalBinding } from '@/terminal/nativeTerminalBinding'
 import { createXtermModeEpoch, type XtermModeEpoch } from '@/terminal/modeEpoch'
 import { buildPastePayload, imagePasteBytes } from '@/utils/pasteText'
-import { classifyClipboardSnapshot, createImeInputPolicy } from '@/terminal/inputPolicy'
+import { classifyClipboardSnapshot, createImeInputPolicy, readClipboardSnapshot } from '@/terminal/inputPolicy'
 import { platform } from '@/utils/platform'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop } from '@/api/tauri'
@@ -176,24 +176,34 @@ function bindClipboard() {
     event.stopPropagation()
     const attempt = currentAttempt()
     const activeTerm = term
-    // 纯图片剪贴板下 readText 会 reject（无文本格式），归一为空文本后继续探测图片。
-    void readText().catch(() => '').then(async text => {
-      if (text) {
-        const payload = buildPastePayload(
-          text,
-          activeTerm.modes.bracketedPasteMode,
-          activeTerm.options.ignoreBracketedPasteMode ?? false,
-        )
-        if (!payload) return
-        const bytes = new TextEncoder().encode(payload)
-        const reserved = binding!.reserveUserPaste(async () => bytes)
-        void reserved.settled.catch(() => markInputFailure(attempt))
-        return
+    const activeBinding = binding
+    const bracketedPasteMode = activeTerm.modes.bracketedPasteMode
+    const ignoreBracketedPasteMode = activeTerm.options.ignoreBracketedPasteMode ?? false
+    let cancelReservation: (() => boolean) | null = null
+    const cancelNoop = (): Uint8Array => {
+      if (!cancelReservation?.()) throw new Error('NATIVE_PASTE_CANCEL_FAILED')
+      return new Uint8Array()
+    }
+    // 先在当前 attempt/mode 同步预留 intent；异步剪贴板结果只能完成这个固定预留。
+    const reserved = activeBinding.reserveUserPaste(async () => {
+      const clipboard = await readClipboardSnapshot(() => readText(), () => readImage())
+      if (!attemptIsCurrent(attempt) || binding !== activeBinding || term !== activeTerm) {
+        return cancelNoop()
       }
-      // 无文本：探测图片剪贴板，有图交给 CLI 官方粘贴键位（与 paste 事件图片路由同语义）。
-      try { await readImage() } catch { return }
-      void binding!.sendUserText(imagePasteBytes(platform)).catch(() => markInputFailure(attempt))
-    }).catch(() => {})
+      if (clipboard.kind === 'text') {
+        const payload = buildPastePayload(
+          clipboard.text,
+          bracketedPasteMode,
+          ignoreBracketedPasteMode,
+        )
+        if (!payload) return cancelNoop()
+        return new TextEncoder().encode(payload)
+      }
+      if (clipboard.kind === 'image') return new TextEncoder().encode(imagePasteBytes(platform))
+      return cancelNoop()
+    })
+    cancelReservation = reserved.cancel
+    void reserved.settled.catch(() => markInputFailure(attempt))
   }
   host.addEventListener('keydown', pasteKeyDownListener, true)
 }
@@ -632,8 +642,7 @@ onMounted(async () => {
 watch(() => props.active, async active => {
   needsFit.value = true
   if (!active) {
-    // 后台 tab 停掉 1500ms 状态轮询；重新激活时下方立即补偿并重启
-    stopStatusSync()
+    // 输出 Channel 与 observer 都不拥有进程 phase；后台仍保留 owner 状态同步。
     return
   }
   await nextTick()

@@ -59,11 +59,12 @@ function workspaceFixture() {
     unavailable: new Set<string>(),
     wrappers: [] as VueWrapper[],
   }
+  let scopeSequence = 0
   function source(target: ScopeTarget): SourceRef {
     const tab = target.kind === 'run' ? [...useNativeTabsStore().tabs.values()].find(row => row.runId === target.runId && row.generation === target.generation) : undefined
     const config = fixture.profiles.find(row => row.id === (target.kind === 'profile' ? target.profileId : tab?.profileId))
     if (!config || config.cli === 'shell') throw { code: 'SOURCE_UNAVAILABLE' }
-    return { scopeId: `scope-${config.id}-${target.kind === 'profile' ? target.projectIds.join('|') : tab!.runId}`, instanceId: 'fixture-instance',
+    return { scopeId: `scope-${++scopeSequence}`, instanceId: 'fixture-instance',
       cli: config.cli, sourceRootKey: fixture.roots.get(config.id) ?? `root-${config.id}`, identityEpoch: '1',
       profileId: config.id, profileRevision: config.revision, target,
       basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' }
@@ -141,7 +142,7 @@ function seed() {
       sessionId: `s-${s}`, name: `${'旧'.repeat(193)}${String(p).padStart(3, '0')}-${String(s).padStart(3, '0')}`,
       projectPath: path, lastActiveAt: s + 1,
     })))
-    f.histories.set(`codex:p-${p}`, Array.from({ length: 50 }, (_, s) => history('codex', 'root-codex', `s-${s}`, path,
+    f.histories.set(`codex:p-${p}`, Array.from({ length: 50 }, (_, s) => history('codex', 'root-codex', `native-${p}-${s}`, path,
       `${'N'.repeat(193)}${String(p).padStart(3, '0')}-${String(s).padStart(3, '0')}`)))
   }
 }
