@@ -1,6 +1,10 @@
 {
   "compilerOptions": {
     "composite": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": ".cache/typecheck-node",
+    "tsBuildInfoFile": ".cache/typecheck-node/tsconfig.node.tsbuildinfo",
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -8,6 +12,7 @@
     "strict": true
   },
   "include": [
+    "package.json",
     "build/**/*.ts",
     "vite.config.ts",
     "vitest.config.ts",
