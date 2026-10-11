@@ -514,6 +514,58 @@ describe('useStatusMonitor', () => {
       emit(makePayload('preToolUse', 'pty1'))
       expect(useSessionStore().getTabByPtyId('pty1')!.working).toBe(true)
     })
+
+    // 回合结束后的迟到活动既不能恢复 working，也不能先污染 activity 投影；新 prompt 仍开启新回合。
+    it('StatusMonitor_LateActivity_027', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('stop', 'pty1'))
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      expect(tab.activity).toBe('idle')
+
+      emit(makePayload('preToolUse', 'pty1'))
+      emit(makePayload('postToolUse', 'pty1'))
+      expect(tab.working).toBe(false)
+      expect(tab.activity).toBe('idle')
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      expect(tab.working).toBe(true)
+      expect(tab.activity).toBe('working')
+    })
+
+    // 同一 tab 绑定的新 PTY 拥有独立 reducer，首个活动事件不继承旧 PTY 的回合结束标记。
+    it('StatusMonitor_NewPtyAfterEnd_028', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('stop', 'pty1'))
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      tab.ptyId = 'pty2'
+
+      emit(makePayload('preToolUse', 'pty2'))
+      expect(tab.working).toBe(true)
+      expect(tab.activity).toBe('working')
+    })
+
+    // 真实重启会先停止旧 PTY；即使旧 reducer 已删除，新 PTY 也不能继承旧回合结束边界。
+    it('StatusMonitor_RestartedPty_029', () => {
+      createRunningTab('pty1')
+      mountMonitor()
+
+      emit(makePayload('userPromptSubmit', 'pty1'))
+      emit(makePayload('stop', 'pty1'))
+      const tab = useSessionStore().getTabByPtyId('pty1')!
+      tab.status = 'stopped'
+      tab.ptyId = 'pty2'
+      tab.status = 'running'
+
+      emit(makePayload('preToolUse', 'pty2'))
+      expect(tab.working).toBe(true)
+      expect(tab.activity).toBe('working')
+    })
   })
 
   // ==================== 完整流程 ====================

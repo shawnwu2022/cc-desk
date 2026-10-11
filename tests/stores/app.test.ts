@@ -554,6 +554,76 @@ describe('app store - config 写入队列收敛（audit P1）', () => {
     expect(writes).toBe(2)           // 两个成员都落盘
   })
 
+  // 入队时冻结每次环境变量快照；后续调用和调用者修改原对象都不能改写已排队的 A。
+  it('ConfigQueue_EnvSnapshot_003', async () => {
+    const writes: Array<Record<string, string>> = []
+    let releaseFirst!: () => void
+    let firstStarted!: () => void
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+    const firstEntered = new Promise<void>(resolve => { firstStarted = resolve })
+    mockIPC((cmd, args) => {
+      if (cmd === 'update_app_config') {
+        const env = (args as { updates: { claudeEnvVars: Record<string, string> } }).updates.claudeEnvVars
+        writes.push({ ...env })
+        if (writes.length === 1) {
+          firstStarted()
+          return firstGate
+        }
+      }
+      return null
+    })
+    const store = useAppStore()
+    const firstInput = { VALUE: 'A' }
+    const first = store.setClaudeEnvVars(firstInput)
+    firstInput.VALUE = 'mutated'
+    const second = store.setClaudeEnvVars({ VALUE: 'B' })
+
+    await firstEntered
+    try {
+      expect(writes).toEqual([{ VALUE: 'A' }])
+    } finally {
+      releaseFirst()
+    }
+    await Promise.all([first, second])
+    expect(writes).toEqual([{ VALUE: 'A' }, { VALUE: 'B' }])
+  })
+
+  // 连续默认参数写保留各自快照与 Promise 回执：A 成功，B 失败只拒绝 B。
+  it('ConfigQueue_DefaultFailure_004', async () => {
+    const writes: string[] = []
+    let releaseFirst!: () => void
+    let firstStarted!: () => void
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+    const firstEntered = new Promise<void>(resolve => { firstStarted = resolve })
+    mockIPC((cmd, args) => {
+      if (cmd === 'save_default_claude_options') {
+        const options = (args as { options: { customArgs: string } }).options
+        writes.push(options.customArgs)
+        if (writes.length === 1) {
+          firstStarted()
+          return firstGate
+        }
+        throw new Error('second failed')
+      }
+      return null
+    })
+    const store = useAppStore()
+    const first = store.setDefaultClaudeOptions({ customArgs: '--a' })
+    const second = store.setDefaultClaudeOptions({ customArgs: '--b' })
+
+    await firstEntered
+    try {
+      expect(writes).toEqual(['--a'])
+    } finally {
+      releaseFirst()
+      await Promise.allSettled([first, second])
+    }
+    await expect(first).resolves.toBeUndefined()
+    await expect(second).rejects.toThrow('second failed')
+    expect(writes).toEqual(['--a', '--b'])
+    expect(store.defaultClaudeOptions.customArgs).toBe('--b')
+  })
+
   // hiddenProjects 专域队列：用户 hide 写入不得被挂起的启动迁移头阻塞
   //（Projects_StartupCannotUndoHide_014 契约；跨域字段不重叠由后端锁内 merge 兜底）。
   it('HiddenWrite_NotBlockedByPendingConfigMigration_002', async () => {

@@ -284,14 +284,19 @@ const unsubscribe = hookStore.subscribe(
 
 | 事件 | 操作 |
 |------|------|
-| `userPromptSubmit` | `tab.working = true` |
-| `stop` / `stopFailure` / `notification` | `tab.working = false`（仅在 working=true 时处理） |
+| `userPromptSubmit` | 开启新回合，`tab.working = true` |
+| `stop` / `stopFailure` / `notification` | 已知活跃回合内 `tab.working = false`，活动提示过期后仍处理真实终止/权限事件 |
 | `sessionEnd` | `tab.working = false`（不触发 pending） |
 | PTY 退出 | `tab.working = false` |
 
+Stop、StopFailure 或 idle_prompt 结束的回合按精确 PTY 记录边界。迟到的工具、
+子代理及压缩活动在进入 reducer、更新 activity 或重置陈旧计时之前被拒绝；新
+userPromptSubmit 或新 PTY 可开启独立回合。权限等待不结束回合，授权后的工具活动
+仍可恢复 working。
+
 #### pending 状态（用户注意力管理）
 
-**设置 pending 的时机**：stop/stopFailure/notification 事件到达，且 working=true 时：
+**设置 pending 的时机**：已知活跃回合的 stop/stopFailure 或 idle/permission notification 到达时：
 
 ```
 事件到达（stop/stopFailure/notification）

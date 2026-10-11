@@ -428,6 +428,29 @@ describe('Workspace source warning diagnostics', () => {
     expect(io.scope).toHaveBeenCalledExactlyOnceWith({ kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project-1', 'project-2'] })
   })
 
+  it.each(['profile-revision', 'profile-removal', 'project-removal'] as const)('Runtime_InvalidatesPendingContext_052_%s', async change => {
+    let finishOld!: (value: unknown) => void
+    io.read.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve }))
+    const { runtime } = render(); await flushPromises()
+    const history = useNativeHistoryStore()
+    expect(history.all().map(entry => [entry.context.profileRevision, entry.loading])).toEqual([['7', true]])
+    const current = await io.profiles()
+    if (change === 'profile-revision') {
+      io.profiles.mockResolvedValue({ ...current, profiles: current.profiles.map((profile: object) => ({ ...profile, revision: '8' })) })
+    } else if (change === 'profile-removal') {
+      io.profiles.mockResolvedValue({ ...current, profiles: [] })
+    } else {
+      io.registered.mockResolvedValue({ revision: '2', projects: [] })
+    }
+    await runtime.refresh(); await flushPromises()
+    // 配置撤销立即失效旧 owner，不能等旧 read 结束才删除其 entry。
+    expect(history.all().some(entry => entry.context.profileRevision === '7')).toBe(false)
+    finishOld({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'late-root', nativeSessionId: 'late-history', title: 'Obsolete', cwd: '/repo' }] })
+    await flushPromises()
+    expect(history.all().map(entry => entry.context.profileRevision)).toEqual(change === 'profile-revision' ? ['8'] : [])
+    expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'late-history')).toBe(false)
+  })
+
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {
     io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false, historyMetadataIncomplete: true })
     const { runtime } = render(); await flushPromises()

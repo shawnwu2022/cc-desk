@@ -56,8 +56,8 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
 
   let unsubscribe: (() => void) | null = null
 
-  /** 跟踪每个 tab 的回合是否已结束（Stop 后 recap 等内部操作不应恢复 working） */
-  const turnEnded = new Map<string, boolean>()
+  /** 记录每个 tab 已结束回合的精确 PTY，避免旧 recap 污染状态或阻塞重启后的新 PTY。 */
+  const turnEnded = new Map<string, string>()
   const subagentRuns = new Map<string, SubagentRun>()
 
   function clearRunTimer(run: SubagentRun) {
@@ -121,6 +121,9 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     if (payload.observerSource !== 'claude-hook') return
     const event = fromClaudeHook(payload)
     if (!event || event.runId !== ptyId || event.generation !== 1) return
+    const type = payload.detail.type
+    // 已结束回合的迟到活动不能先污染 reducer、投影或陈旧计时；新 prompt 和新 PTY 会解除该边界。
+    if (ACTIVITY_EVENTS.has(type) && turnEnded.get(tab.tabId) === ptyId) return
     let run = subagentRuns.get(tab.tabId)
     if (!run || run.ptyId !== ptyId) {
       run = { ptyId, reducer: createObservationReducer({ runId: ptyId, generation: 1 }), lastSeenAt: now(), staleTimer: null, turnActive: false }
@@ -133,8 +136,6 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     armStaleTimer(tab.tabId, run)
 
     // 回合状态机自原通用分支逐事件迁移：通用分支因后端恒打标签在生产不可达。
-    const type = payload.detail.type
-
     // sessionStart：直接分配 session_id
     if (type === 'sessionStart') {
       if (payload.sessionId && !tab.sessionId) {
@@ -163,7 +164,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
 
     // 活跃事件：回合结束后忽略（防止 recap 等内部操作恢复 working）
     if (ACTIVITY_EVENTS.has(type)) {
-      if (turnEnded.get(tab.tabId)) return
+      if (turnEnded.get(tab.tabId) === ptyId) return
       run.turnActive = true
       tab.working = true
       tab.pending = false
@@ -181,7 +182,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
 
       if (ntype === 'idle_prompt') {
         // 回合结束，等待用户下一条消息
-        turnEnded.set(tab.tabId, true)
+        turnEnded.set(tab.tabId, ptyId)
         run.turnActive = false
         tab.working = false
         setPendingWithAttention(tab, ptyId)
@@ -205,7 +206,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
 
     // stop/stopFailure 标记回合结束
     if (type !== 'sessionEnd') {
-      turnEnded.set(tab.tabId, true)
+      turnEnded.set(tab.tabId, ptyId)
     }
 
     tab.working = false

@@ -644,15 +644,16 @@ export const useAppStore = defineStore('app', () => {
     return saveSimpleSetting('language', lang === 'zh' ? 'zh' : 'en')
   }
 
-  /** 同步当前 claudeEnvVars 到 CC Desk config（写段经 configWriteTail 串行） */
-  async function doSyncEnv() {
-    await enqueueConfigWrite(() => updateAppConfig({ claudeEnvVars: claudeEnvVars.value }))
+  /** 入队前冻结本次环境变量，避免后续 UI 修改改写已排队的请求。 */
+  async function persistClaudeEnvVars(vars: Record<string, string>) {
+    const snapshot = { ...vars }
+    await enqueueConfigWrite(() => updateAppConfig({ claudeEnvVars: snapshot }))
   }
 
   /** 更新环境变量并同步 */
   async function setClaudeEnvVars(vars: Record<string, string>) {
-    claudeEnvVars.value = vars
-    await doSyncEnv()
+    claudeEnvVars.value = { ...vars }
+    await persistClaudeEnvVars(claudeEnvVars.value)
   }
 
   /** 将默认变量恢复为代码默认值，保留用户添加的变量 */
@@ -662,7 +663,7 @@ export const useAppStore = defineStore('app', () => {
       updated[key] = value
     }
     claudeEnvVars.value = updated
-    await doSyncEnv()
+    await persistClaudeEnvVars(updated)
   }
 
   function setClaudeOptions(options: Partial<ClaudeOptions>) {
@@ -678,13 +679,15 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function setDefaultClaudeOptions(opts: Partial<DefaultClaudeOptions>) {
-    defaultClaudeOptions.value = { ...defaultClaudeOptions.value, ...opts }
+    const next = { ...defaultClaudeOptions.value, ...opts }
+    const snapshot = { ...next }
+    defaultClaudeOptions.value = next
     claudeOptions.value = {
       resume: claudeOptions.value.resume,
-      skipPermissions: defaultClaudeOptions.value.skipPermissions,
-      customArgs: defaultClaudeOptions.value.customArgs
+      skipPermissions: next.skipPermissions,
+      customArgs: next.customArgs
     }
-    await enqueueConfigWrite(() => saveDefaultClaudeOptions(defaultClaudeOptions.value))
+    await enqueueConfigWrite(() => saveDefaultClaudeOptions(snapshot))
   }
 
   async function saveAsDefault(): Promise<boolean> {

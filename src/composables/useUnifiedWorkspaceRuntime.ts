@@ -333,7 +333,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           cli: group.cli, profileId: group.profileId, profileRevision: group.profileRevision, projectId: project.projectId, projectPath: project.projectPath,
         }))))
         for (const entry of history.all()) {
-          if (!entry.loading && !validKeys.has(nativeHistoryContextKey(entry.context))) history.invalidate(entry.context)
+          // invalidate 同时撤销异步 owner，读取中的旧配置也不能在迟到完成时恢复。
+          if (!validKeys.has(nativeHistoryContextKey(entry.context))) history.invalidate(entry.context)
         }
         // Match the backend's two-reader budget; isolate each source failure.
         for (let i = 0; i < contexts.length && current(); i += 2) {
