@@ -316,7 +316,7 @@ export const selectDirectory = async (options: { register?: boolean } = {}): Pro
     directory: true,
     multiple: false,
     title: 'Select Project Directory'
-  } as any);
+  });
   if (result && typeof result === 'string' && (options.register === false || await registerSelectedDirectory(result))) {
     return { path: result };
   }

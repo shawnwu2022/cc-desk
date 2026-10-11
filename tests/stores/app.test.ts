@@ -97,21 +97,21 @@ describe('currentProject', () => {
   // 设置 cwd="/Users/dev/myproject" 时返回 "myproject"
   it('CurrentProject_ForwardSlash_001', () => {
     const store = useAppStore()
-    store.setCwd('/Users/dev/myproject')
+    store.setCwdLocal('/Users/dev/myproject')
     expect(store.currentProject).toBe('myproject')
   })
 
   // 设置 cwd="C:\\Users\\dev\\myproject" 时返回 "myproject"
   it('CurrentProject_BackSlash_001', () => {
     const store = useAppStore()
-    store.setCwd('C:\\Users\\dev\\myproject')
+    store.setCwdLocal('C:\\Users\\dev\\myproject')
     expect(store.currentProject).toBe('myproject')
   })
 
   // 设置 cwd="" 时返回 null
   it('CurrentProject_Empty_001', () => {
     const store = useAppStore()
-    store.setCwd('')
+    store.setCwdLocal('')
     expect(store.currentProject).toBeNull()
   })
 })
@@ -275,7 +275,7 @@ describe('setTerminalTheme', () => {
   })
 })
 
-describe('app store - 启动状态源 + setCwd 拆分 + setHidden opLock', () => {
+describe('app store - 启动状态源 + setCwdLocal 拆分 + setHidden', () => {
   // loadAppConfig 读 lastOpenedProject + hiddenProjects
   it('LoadAppConfig_ReadLastOpenedAndHidden_001', async () => {
     mockIPC((cmd) => {
@@ -496,5 +496,59 @@ describe('app store - 启动状态源 + setCwd 拆分 + setHidden opLock', () =>
     // 先设法让 cwd 在隐藏集合（绕过 cwd 保护模拟历史脏数据）：直接操作内部不易，改为验证 hidden=false 不抛错
     await store.setHidden('/p-cwd', false) // 取消隐藏 cwd -> 不受限，不抛错
     expect(store.isHidden('/p-cwd')).toBe(false)
+  })
+})
+
+describe('app store - config 写入队列收敛（audit P1）', () => {
+  // 所有持久化写入（hiddenProjects/claudeEnvVars 等）串行过单一 configWriteTail：
+  // 并发成员的写段不得重叠执行（重叠的读-改-写会互相覆盖丢字段）
+  it('ConfigWriteTail_ConcurrentWriters_Serialized_001', async () => {
+    let inFlight = 0
+    let overlapped = false
+    const fields: string[] = []
+    mockIPC((cmd, args) => {
+      if (cmd === 'update_app_config') {
+        const updates = (args as { updates: Record<string, unknown> }).updates
+        if ('hiddenProjects' in updates) fields.push('hiddenProjects')
+        if ('claudeEnvVars' in updates) fields.push('claudeEnvVars')
+        inFlight++
+        if (inFlight > 1) overlapped = true
+        // 延迟 resolve 制造重叠窗口
+        return new Promise(resolve => setTimeout(() => { inFlight--; resolve(null) }, 5))
+      }
+      return null
+    })
+    const store = useAppStore()
+    await Promise.all([
+      store.setHidden('/p-a', true),
+      store.setClaudeEnvVars({ FOO: '1' }),
+    ])
+    expect(overlapped).toBe(false)             // 写段串行，无重叠
+    expect(fields).toContain('hiddenProjects') // 两个成员都落盘，不丢字段
+    expect(fields).toContain('claudeEnvVars')
+    expect(store.isHidden('/p-a')).toBe(true)
+  })
+
+  // loadProjectVisibility(force=true) 在有在途 visibilityLoad 时必须发起新读，
+  // 不得复用旧 promise（否则迟到的 hiddenProjects 永远进不了内存）
+  it('LoadProjectVisibility_ForceStartsNewReadWhileInFlight_001', async () => {
+    let reads = 0
+    let releaseFirst!: () => void
+    const firstHeld = new Promise<void>(resolve => { releaseFirst = resolve })
+    mockIPC((cmd) => {
+      if (cmd === 'get_app_config') {
+        reads++
+        if (reads === 1) return firstHeld.then(() => ({ hiddenProjects: [] }))
+        return { hiddenProjects: ['/p-late'] }
+      }
+      return null
+    })
+    const store = useAppStore()
+    const first = store.loadProjectVisibility(true)
+    const second = store.loadProjectVisibility(true) // 在途时 force：应发起新读而非复用
+    releaseFirst()
+    await Promise.all([first, second])
+    expect(reads).toBeGreaterThanOrEqual(2)       // force 确实发起了新读
+    expect(store.isHidden('/p-late')).toBe(true)  // 新读结果已发布
   })
 })

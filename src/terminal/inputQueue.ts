@@ -78,7 +78,8 @@ export interface InputIntentQueueOptions {
   sendProtocol?: (input: ProtocolInput) => Promise<unknown> | unknown
 }
 
-type ItemState = 'pending' | 'ready' | 'failed'
+// cancelled：已被 recover('cancel') 清出队列；producer 迟到的 settle 不得为其入账
+type ItemState = 'pending' | 'ready' | 'failed' | 'cancelled'
 
 interface QueueItem {
   inputSeq: U64String
@@ -354,6 +355,9 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
       if (index < 0) return false
 
       if (action === 'cancel') {
+        // 标记 cancelled：迟到的 producer settle 据此跳过入账，否则字节会记到
+        // 已不在 items 的条目上且永不释放，累计触发误报 INPUT_QUEUE_BUDGET。
+        for (const item of items) item.state = 'cancelled'
         items.length = 0
         queuedBytes = 0
         pause = undefined

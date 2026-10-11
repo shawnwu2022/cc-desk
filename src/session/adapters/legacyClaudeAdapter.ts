@@ -335,6 +335,8 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     if (tab.status === 'running' || tab.status === 'starting') await runtime.stopTab(tab.tabId)
     if (!owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     await store.closeTab(tab.tabId)
+    // 关闭成功后释放 acceptedOpens：条目持有整个 tab 引用，不清会长会话缓慢累积。
+    acceptedOpens.delete(tab.tabId)
   }
 
   async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
@@ -372,6 +374,8 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
       await store.archiveSession(tab.projectPath, tab.sessionId, requireCurrent)
       if (!owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
       await store.closeTab(tab.tabId)
+      // 同 closeSession：存档路径的关闭也释放 acceptedOpens。
+      acceptedOpens.delete(tab.tabId)
       return
     }
     const history = parseHistoryId(id)

@@ -413,6 +413,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     if (tab.status === 'running' || tab.status === 'starting' || tab.status === 'unknown') await deps.runtime.stopTab(tab)
     if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     deps.tabs.close(tab.tabId)
+    // 关闭成功后释放 acceptedOpens：条目持有整个 tab 引用，不清会长会话缓慢累积。
+    acceptedOpens.delete(tab.tabId)
     // Close owns one fresh read of the frozen source, just as Legacy close does.
     // Remove the proven-ended terminal first; history failure must not require
     // a second close. The catalog's completed-close snapshot follows this read,
@@ -454,6 +456,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       await deps.archive.archiveSession(tab.projectPath, historyId(entry, item.sessionKey, item.nativeSessionId), requireCurrent)
       if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
       deps.tabs.close(tab.tabId)
+      // 同 closeSession：存档路径的关闭也释放 acceptedOpens。
+      acceptedOpens.delete(tab.tabId)
       return
     }
     const history = parseHistoryId(id)

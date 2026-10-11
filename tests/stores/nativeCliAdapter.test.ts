@@ -187,4 +187,31 @@ describe('native CLI adapter', () => {
     expect(setActive).not.toHaveBeenCalledWith('tab-1')
   })
 
+  // 关闭成功后必须清理 acceptedOpens：条目持有整个 tab 引用（长会话缓慢累积），
+  // 且 tabId 复用时旧 entry 会让新 tab 用陈旧 accepted 时间重复写 openedAt。
+  it('NativeClose_CleansAcceptedOpenEntry_012', async () => {
+    const created = tab()
+    const tabs = new Map([[created.tabId, created]])
+    const sessionRecords = new Map()
+    const upsertSessionRecord = vi.fn(async (key: string, record: unknown) => { sessionRecords.set(key, record) })
+    const adapter = createNativeCliAdapter({
+      tabs: { tabs, activeTabId: null, setActive: vi.fn(), close: id => { tabs.delete(id) }, rename: vi.fn() },
+      history: { all: () => [] },
+      runtime: { createTab: vi.fn(async () => created), restartTab: vi.fn(), stopTab: vi.fn() },
+      archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
+      metadata: { sessionRecords, upsertSessionRecord },
+    })
+
+    await adapter.createSession({ projectKey: '/repo', projectPath: '/repo', cli: 'codex', title: 'Codex active', action: { kind: 'new' } })
+    expect(upsertSessionRecord).toHaveBeenCalledTimes(1)
+
+    await adapter.closeSession('native-tab:tab-1')
+
+    // tabId 复用探测：新 tab 对象指向另一条历史来源；entry 已清理则不得再写 openedAt
+    const reused = tab({ action: { kind: 'resume-id', nativeSessionId: 'session-2' }, sourceSessionKey: JSON.stringify(['local', 'codex', '/root-2', 'session-2']) })
+    tabs.set(reused.tabId, reused)
+    await adapter.listSessions()
+    expect(upsertSessionRecord).toHaveBeenCalledTimes(1)
+  })
+
 })

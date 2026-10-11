@@ -321,8 +321,9 @@ export const useSessionStore = defineStore('session', () => {
     }
 
     // 关闭后刷新历史会话：新会话的 JSONL 在运行期间已创建，force 拉取让被关闭的
-    // 会话立即出现在历史列表，无需手动刷新（新建时刷新因时序过早未必能读到）
-    await loadHistorySessions(projectPath, true)
+    // 会话立即出现在历史列表，无需手动刷新（新建时刷新因时序过早未必能读到）。
+    // 用无副作用的 loadHistoryFor：不改 currentHistoryProject，避免侧栏历史视图跳回被关项目
+    await loadHistoryFor(projectPath, true)
   }
 
   /**
@@ -349,8 +350,8 @@ export const useSessionStore = defineStore('session', () => {
       ptyKill(ptyId).catch(() => {})
     }
 
-    // 关闭后刷新历史会话（同 closeTab）
-    await loadHistorySessions(projectPath, true)
+    // 关闭后刷新历史会话（同 closeTab：loadHistoryFor 不改 currentHistoryProject）
+    await loadHistoryFor(projectPath, true)
   }
 
   /**
@@ -380,8 +381,8 @@ export const useSessionStore = defineStore('session', () => {
       ptyKill(ptyId).catch(() => {})
     }
 
-    // 关闭后刷新历史会话（同 closeTab）
-    await loadHistorySessions(projectPath, true)
+    // 关闭后刷新历史会话（同 closeTab：loadHistoryFor 不改 currentHistoryProject）
+    await loadHistoryFor(projectPath, true)
   }
 
   /**

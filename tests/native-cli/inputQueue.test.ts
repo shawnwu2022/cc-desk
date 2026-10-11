@@ -265,6 +265,55 @@ describe('D16 ordered input intent queue', () => {
     })
   })
 
+  // 取消清队后慢粘贴才 settle：其字节不得再入账（预算泄漏回归）。
+  // 复现：recover('cancel') 清空 items 并把 queuedBytes 归零，但未改 pending 项状态，
+  // producer settle 回调 account() 把字节计到已不在 items 的条目上，字节永不释放，
+  // 累计触顶后误报 INPUT_QUEUE_BUDGET。
+  it('D16_Input_CancelThenSlowPasteSettleDoesNotLeakBudget_013', async () => {
+    let failSend = true
+    const sent: number[] = []
+    const queue = createInputIntentQueue({
+      runId: 'run-a',
+      generation: 1,
+      currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch: '1' }),
+      limits: { actionBytes: 16, queuedBytes: 16 },
+      send: async intent => {
+        if (failSend) throw new Error('send down')
+        sent.push(intent.bytes.length)
+      },
+    })
+
+    // 第一条就绪项：发送失败形成 pause（blockedSeq='1'），其 4 字节占用预算
+    queue.enqueue({ source: 'user-text', modeEpoch: '1', bytes: bytes(1, 2, 3, 4) })
+    // 慢粘贴排在后面，cancel 时仍 pending
+    const clipboard = deferred<Uint8Array>()
+    const paste = queue.reserveAsync({
+      source: 'user-paste',
+      modeEpoch: '1',
+      produce: () => clipboard.promise,
+    })
+    expect(paste.inputSeq).toBe('2')
+
+    await queue.flush()
+    expect(queue.snapshot()).toMatchObject({ state: 'paused', blockedSeq: '1' })
+
+    // 取消：清空 items 并归零 queuedBytes
+    expect(queue.recover('1', 'cancel')).toBe(true)
+    expect(queue.snapshot()).toMatchObject({ state: 'open', queuedBytes: 0 })
+
+    // 慢粘贴此刻才 settle：12 字节不得再计入预算
+    clipboard.resolve(new Uint8Array(12))
+    await paste.settled
+    expect(queue.snapshot().queuedBytes).toBe(0)
+
+    // 预算未被幽灵字节占满：新输入仍可入队并发送
+    failSend = false
+    queue.enqueue({ source: 'user-text', modeEpoch: '1', bytes: bytes(9, 9, 9, 9, 9) })
+    await queue.flush()
+    expect(sent).toEqual([5])
+    expect(queue.snapshot().queuedBytes).toBe(0)
+  })
+
   it('D16_Input_EmptyPastePausesLaterEnter_012', async () => {
     const sent: string[] = []
     const queue = createInputIntentQueue({
