@@ -128,7 +128,7 @@ describe.each(lineEndings)('Final Windows package workflow triggers ($name)', ({
     const pullRequest = source.split('  pull_request:\n')[1].split('  workflow_dispatch:')[0]
     for (const path of ['src/**', 'src-tauri/src/commands.rs', 'src-tauri/src/lib.rs',
       'src-tauri/src/store.rs', 'src-tauri/src/tests/store.rs', 'src-tauri/tauri.conf.json',
-      'package.json', 'package-lock.json', 'build/**', 'vite.config.ts', 'tsconfig*.json',
+      'package.json', 'package-lock.json', 'build/**', 'vite.config.ts', 'vitest.config.ts', 'tsconfig*.json',
       'tests/components/**', 'tests/stores/**', 'tests/native-cli/**', 'tests/config/**']) {
       expect(pullRequest, `final package must cover ${path}`).toContain(`      - ${path}\n`)
     }
