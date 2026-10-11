@@ -319,23 +319,36 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         if (results[1].status === 'rejected') warnings.add('registrations', results[1].reason)
         if (results.some(result => result.status === 'rejected')) return
         await draft.refreshAvailability()
-        const contexts = profiles.profiles.flatMap(profile => profile.cli === 'shell' ? [] : workspace.projects.map(project => ({
-          cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
-          projectId: project.projectId, projectPath: project.selectedPath, force: true,
-        })))
+        // 同 profile 的全部项目合并为一次后端观察；逐项目加载会让同一棵历史树被完整扫描 N 次。
+        const groups = new Map<string, { cli: UnifiedCliKind; profileId: string; profileRevision: string; projects: { projectId: string; projectPath: string }[] }>()
+        for (const profile of profiles.profiles) {
+          if (profile.cli === 'shell') continue
+          groups.set(`${profile.id}\u0000${profile.revision}`, { cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
+            projects: workspace.projects.map(project => ({ projectId: project.projectId, projectPath: project.selectedPath })) })
+        }
+        const contexts = [...groups.values()]
         // 清理 profile revision 变更、profile 删除或项目移除后残留的历史 entry：
         // 否则旧 revision 的幽灵行会与新 observation 的行并存显示（同会话重复）。
-        const validKeys = new Set(contexts.map(({ force: _force, ...context }) => nativeHistoryContextKey(context)))
+        const validKeys = new Set(contexts.flatMap(group => group.projects.map(project => nativeHistoryContextKey({
+          cli: group.cli, profileId: group.profileId, profileRevision: group.profileRevision, projectId: project.projectId, projectPath: project.projectPath,
+        }))))
         for (const entry of history.all()) {
           if (!entry.loading && !validKeys.has(nativeHistoryContextKey(entry.context))) history.invalidate(entry.context)
         }
         // Match the backend's two-reader budget; isolate each source failure.
         for (let i = 0; i < contexts.length && current(); i += 2) {
-          await Promise.all(contexts.slice(i, i + 2).map(async context => {
+          await Promise.all(contexts.slice(i, i + 2).map(async group => {
             try {
-              const entry = await history.load(context)
-              if (entry.error) addHistoryWarning({ ...context, sourceRootKey: entry.sourceRootKey }, { code: entry.error, stage: entry.diagnosticStage })
-            } catch (failure) { addHistoryWarning({ ...context, sourceRootKey: history.get(context)?.sourceRootKey }, failure) }
+              const loaded = await history.loadGrouped(group, { force: true })
+              for (const entry of loaded.values()) {
+                if (entry.error) addHistoryWarning({ ...entry.context, sourceRootKey: entry.sourceRootKey }, { code: entry.error, stage: entry.diagnosticStage })
+              }
+            } catch (failure) {
+              for (const project of group.projects) {
+                addHistoryWarning({ cli: group.cli, profileId: group.profileId, profileRevision: group.profileRevision, ...project,
+                  sourceRootKey: history.get({ cli: group.cli, profileId: group.profileId, profileRevision: group.profileRevision, ...project })?.sourceRootKey }, failure)
+              }
+            }
           }))
         }
       }),
