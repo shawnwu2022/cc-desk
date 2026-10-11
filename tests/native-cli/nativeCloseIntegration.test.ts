@@ -251,6 +251,25 @@ it('Native_AppCloseLateHistory_008', async () => {
   expect(useUnifiedSessionsStore().actionFeedback).toBeNull()
 })
 
+// 关闭自己刚持有的会话时，历史读失败（SOURCE_BUSY：读槽被启动扫描占满的真实形态）
+// 不能把该会话行从历史列表清空——它的存在性有最强的本地证据，清空后要等下一次
+// 成功的全量扫描才会回来，表现为「关闭的会话直接消失、隔很久才出来」。
+it('Native_AppCloseHistoryReadFailureKeepsRow_012', async () => {
+  const old = { type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'old']), nativeSessionId: 'old', title: 'Old history', cwd: '/repo', updatedAt: '2026-09-17T00:00:00Z', truncated: false }
+  const closingHistory = { ...old, sessionKey: JSON.stringify(['local', 'codex', 'root-cx', 'closed']), nativeSessionId: 'closed', title: 'Closing history', updatedAt: '2026-10-10T00:00:00Z' }
+  const result = (request: any, items: any[]) => ({ source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items, hasMore: false })
+  io.historyRead.mockImplementation(async request => result(request, request.resourceKind === 'history' ? [old, closingHistory] : []))
+  const wrapper = await render(), tab = await open(wrapper, { kind: 'resume-id', nativeSessionId: 'closed' }), catalog = useUnifiedSessionsStore()
+  io.historyRead.mockClear()
+  io.historyRead.mockImplementation(async request => ({ ...result(request, []), state: 'busy', reason: 'SOURCE_BUSY' }))
+  await closeButton(wrapper, tab.tabId).trigger('click')
+  await vi.waitFor(() => expect(catalog.completedClose).not.toBeNull())
+  expect(useNativeTabsStore().tab(tab.tabId)).toBeUndefined()
+  const closed = catalog.sessions.find(row => row.nativeSessionId === 'closed')
+  expect(closed).toBeDefined()
+  expect(closed!.opened).toBe(false)
+})
+
 it('Native_AppCloseKeepsUnconfirmedAttempt_002', async () => {
   const wrapper = await render(), tab = await open(wrapper), tabs = useNativeTabsStore()
   io.recover.mockImplementation(async id => receipt(launched(id), 'running'))
