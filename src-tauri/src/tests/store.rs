@@ -6,19 +6,20 @@ use crate::session_name_index::{
     SessionNameIndex, SessionNameIndexDelta, SessionNameIndexPaths, SessionNameIndexStore,
 };
 use crate::store::{
-    acquire_lock, assemble_home_data, build_project_path_mapping_at,
+    acquire_lock, apply_archive_session, apply_pin_project, apply_restore_session,
+    apply_set_display_name, assemble_home_data, build_project_path_mapping_at,
     build_project_path_mapping_strict_at, canonicalize_state, compute_project_startup_state,
     delete_sessions_inner, expand_env_vars, extract_md_description,
     extract_project_path_from_jsonl, extract_session_name, find_valid_plugin_path,
     get_all_recent_sessions_indexed_at, get_home_data, get_home_data_indexed_at,
-    get_projects_state_at, get_sessions_from_dirs, get_sessions_indexed_at, infer_server_type,
-    invalidate_project_path_mapping, lookup_project_dirs, merge_json_values, normalize_path_inner,
-    normalize_path_str, parse_agents_list_output, parse_mcp_server_entry, parse_skill_description,
-    parse_timestamp, read_projects_state_locked, replace_file_atomic,
+    get_projects_state_at, get_session_details_at, get_sessions_from_dirs, get_sessions_indexed_at,
+    infer_server_type, invalidate_project_path_mapping, lookup_project_dirs, merge_json_values,
+    normalize_path_inner, normalize_path_str, parse_agents_list_output, parse_mcp_server_entry,
+    parse_skill_description, parse_timestamp, read_projects_state_locked, replace_file_atomic,
     resolve_marketplace_plugin_path_at, scan_home_projects_at, search_session_messages_in_dirs,
-    validate_session_id_component, with_project_path_mapping, with_projects_state_locked,
-    write_json_atomic, AgentInfo, AppConfig, Project, ProjectPathMapping, ProjectsState,
-    SessionInfo,
+    validate_session_id_component, with_project_path_mapping,
+    with_projects_state_locked, write_json_atomic, AgentInfo, AppConfig, Project,
+    ProjectPathMapping, ProjectsState, SessionInfo,
 };
 
 use std::collections::HashMap;
@@ -3159,24 +3160,17 @@ fn WithLocked_CanonicalizesBeforeApply_001() {
     );
 }
 
-// ==================== command 行为单测（模拟 command apply 逻辑）====================
+// ==================== command 行为单测（直调 store 具名 apply 函数）====================
 
-// 模拟 pin_project command 的 apply 逻辑：pin 幂等（已含 normalized 等价则不重复）
+// pin_project command 的真实锁内 apply：pin 幂等（已含 normalized 等价则不重复）
 #[test]
 fn PinProjectCommand_Idempotent_001() {
     let tmp = tempfile::tempdir().unwrap();
     let data = tmp.path().join("projects.json");
     let lock = tmp.path().join("projects.json.lock");
-    let apply = |s: &mut ProjectsState| {
-        let n = normalize_path_str("E:/A");
-        if !s.pinned_projects.contains(&n) {
-            s.pinned_projects.push(n);
-        }
-        Ok::<(), anyhow::Error>(())
-    };
-    with_projects_state_locked(&data, &lock, apply).unwrap();
+    with_projects_state_locked(&data, &lock, |s| apply_pin_project(s, "E:/A")).unwrap();
     // 再 pin 等价路径（不同大小写/斜杠），normalized 后同一 key，不应增加
-    let s2 = with_projects_state_locked(&data, &lock, apply).unwrap();
+    let s2 = with_projects_state_locked(&data, &lock, |s| apply_pin_project(s, "e:/a")).unwrap();
     assert_eq!(
         s2.pinned_projects,
         vec!["e:/a".to_string()],
@@ -3184,7 +3178,7 @@ fn PinProjectCommand_Idempotent_001() {
     );
 }
 
-// 模拟 set_display_name command 的 apply 逻辑：超长 alias -> Err，状态不变（校验失败不写入）
+// set_display_name command 的真实锁内 apply：超长 alias -> Err，状态不变（校验失败不写入）
 #[test]
 fn SetDisplayNameCommand_RejectsTooLong_001() {
     let tmp = tempfile::tempdir().unwrap();
@@ -3192,16 +3186,68 @@ fn SetDisplayNameCommand_RejectsTooLong_001() {
     let lock = tmp.path().join("projects.json.lock");
     let long_alias = "x".repeat(40);
     let res = with_projects_state_locked(&data, &lock, |s| {
-        let trimmed = long_alias.trim();
-        if trimmed.chars().count() > 32 {
-            return Err(anyhow::anyhow!("alias too long"));
-        }
-        s.display_names.insert("e:/a".into(), trimmed.into());
-        Ok::<(), anyhow::Error>(())
+        apply_set_display_name(s, "e:/a", &long_alias)
     });
     assert!(res.is_err(), "超长 alias 应被拒绝");
     let state = read_projects_state_locked(&data, &lock).unwrap();
     assert!(state.display_names.is_empty(), "校验失败不应写入");
+}
+
+// 副本未覆盖的边界：重复 set_display_name 覆盖旧值，空白 alias 清除（持久化一致）
+#[test]
+fn SetDisplayNameCommand_OverwriteThenClear_002() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    with_projects_state_locked(&data, &lock, |s| apply_set_display_name(s, "E:/A", "First"))
+        .unwrap();
+    let s2 = with_projects_state_locked(&data, &lock, |s| {
+        apply_set_display_name(s, "e:/a", "Second")
+    })
+    .unwrap();
+    assert_eq!(
+        s2.display_names.get("e:/a"),
+        Some(&"Second".to_string()),
+        "重复 set 同一 canonical key 应覆盖"
+    );
+    let s3 =
+        with_projects_state_locked(&data, &lock, |s| apply_set_display_name(s, "e:/a", "   "))
+            .unwrap();
+    assert!(s3.display_names.is_empty(), "空白 alias 应清除条目");
+    let on_disk = read_projects_state_locked(&data, &lock).unwrap();
+    assert!(on_disk.display_names.is_empty(), "清除结果应落盘");
+}
+
+// 副本未覆盖的边界：archive 不存在的 session 仍记录标记（容错语义）、重复 archive 去重、
+// restore 未存档幂等且空数组清理 key
+#[test]
+fn ArchiveRestoreCommand_MissingSessionTolerant_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("projects.json");
+    let lock = tmp.path().join("projects.json.lock");
+    let s = with_projects_state_locked(&data, &lock, |s| {
+        apply_archive_session(s, "E:/A", "missing-id")
+    })
+    .unwrap();
+    assert_eq!(
+        s.archived_sessions.get("e:/a").map(|v| v.as_slice()),
+        Some(&["missing-id".to_string()][..]),
+        "存档标记不校验文件存在，照常记录"
+    );
+    let s2 = with_projects_state_locked(&data, &lock, |s| {
+        apply_archive_session(s, "e:/a", "missing-id")
+    })
+    .unwrap();
+    assert_eq!(
+        s2.archived_sessions.get("e:/a").map(|v| v.len()),
+        Some(1),
+        "重复 archive 同一 id 不重复"
+    );
+    let s3 = with_projects_state_locked(&data, &lock, |s| {
+        apply_restore_session(s, "e:/a", "missing-id")
+    })
+    .unwrap();
+    assert!(s3.archived_sessions.is_empty(), "restore 后空数组应清理 key");
 }
 
 // ==================== 跨进程并发（re-exec self 子任务）====================
@@ -3219,6 +3265,9 @@ fn conc_dirs() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let lock = tmp.path().join("projects.json.lock");
     (tmp, data, lock)
 }
+
+// config 并发子进程每次循环递增写自己的 key，轮数决定竞争窗口总量
+const CONFIG_CONC_ITERS: usize = 25;
 
 fn wait_for_file(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
@@ -3296,6 +3345,18 @@ fn run_conc_child_if_set() -> bool {
                 &std::path::Path::new(&dir).join("release_lock"),
                 Duration::from_secs(30),
             );
+        }
+        "cfg_a" => {
+            let config = std::path::Path::new(&dir).join("config.json");
+            for i in 1..=CONFIG_CONC_ITERS {
+                crate::store::update_app_config_at(&config, json!({ "keyA": i })).unwrap();
+            }
+        }
+        "cfg_b" => {
+            let config = std::path::Path::new(&dir).join("config.json");
+            for i in 1..=CONFIG_CONC_ITERS {
+                crate::store::update_app_config_at(&config, json!({ "keyB": i })).unwrap();
+            }
         }
         _ => {}
     }
@@ -3473,6 +3534,93 @@ fn AcquireLock_Timeout_001() {
     );
 }
 
+// ==================== config.json 并发写（独立锁 + 原子替换）====================
+
+// 两个子进程并发增量更新 config.json：双方字段都不丢、文件完整可解析、
+// 独立锁文件存在、无 .tmp 残留。
+#[test]
+fn Concurrent_ConfigUpdates_NoLostFields_001() {
+    if run_conc_child_if_set() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let config_path = dir.join("config.json");
+    let exe = env::current_exe().unwrap();
+    let mut ha = Command::new(&exe)
+        .arg("Concurrent_ConfigUpdates_NoLostFields_001")
+        .env("CC_BOX_CONC_TEST", "cfg_a")
+        .env("CC_BOX_CONC_DIR", &dir)
+        .env("CC_BOX_CONC_BARRIER", "1")
+        .spawn()
+        .unwrap();
+    let mut hb = Command::new(&exe)
+        .arg("Concurrent_ConfigUpdates_NoLostFields_001")
+        .env("CC_BOX_CONC_TEST", "cfg_b")
+        .env("CC_BOX_CONC_DIR", &dir)
+        .env("CC_BOX_CONC_BARRIER", "1")
+        .spawn()
+        .unwrap();
+    std::fs::write(dir.join("start"), "1").unwrap();
+    wait_for_child(&mut ha, Duration::from_secs(60));
+    wait_for_child(&mut hb, Duration::from_secs(60));
+
+    assert!(
+        dir.join("config.json.lock").exists(),
+        "config 写入应创建独立锁文件（跨进程互斥的同步对象）"
+    );
+    let raw = std::fs::read(&config_path).unwrap();
+    let result: serde_json::Value =
+        serde_json::from_slice(&raw).expect("config.json 必须是完整 JSON（无截断损坏）");
+    assert_eq!(result["keyA"], CONFIG_CONC_ITERS, "A 的最终值不能被丢失");
+    assert_eq!(result["keyB"], CONFIG_CONC_ITERS, "B 的最终值不能被丢失");
+    assert!(
+        !config_path.with_extension("json.tmp").exists(),
+        "原子替换后不应残留 .tmp"
+    );
+}
+
+// 双线程 barrier 同步发起最终写：merge 语义会自愈历史丢失，只能逐轮断言，
+// 任一轮任一字段被对方覆盖即失败（无锁读改写时最终写碰撞高概率丢字段）。
+#[test]
+fn Concurrent_ConfigRacingFinalWrites_BothKept_002() {
+    use std::sync::Barrier;
+    const ROUNDS: usize = 8;
+    let tmp = tempfile::tempdir().unwrap();
+    let config_path = tmp.path().join("config.json");
+    std::fs::write(&config_path, r#"{"keyA":-1,"keyB":-1}"#).unwrap();
+
+    let start = Arc::new(Barrier::new(3));
+    let done = Arc::new(Barrier::new(3));
+    let workers: Vec<_> = ["keyA", "keyB"]
+        .into_iter()
+        .map(|key| {
+            let path = config_path.clone();
+            let start = start.clone();
+            let done = done.clone();
+            std::thread::spawn(move || {
+                for round in 0..ROUNDS {
+                    start.wait();
+                    crate::store::update_app_config_at(&path, json!({ (key): round })).unwrap();
+                    done.wait();
+                }
+            })
+        })
+        .collect();
+    for round in 0..ROUNDS {
+        start.wait();
+        done.wait();
+        let raw = std::fs::read(&config_path).unwrap();
+        let result: serde_json::Value =
+            serde_json::from_slice(&raw).expect("config.json 必须是完整 JSON");
+        assert_eq!(result["keyA"], round, "第 {round} 轮：A 的写入被丢失");
+        assert_eq!(result["keyB"], round, "第 {round} 轮：B 的写入被丢失");
+    }
+    for w in workers {
+        w.join().unwrap();
+    }
+}
+
 // ==================== validate_session_id_component ====================
 
 // 检查空 sessionId 被拒
@@ -3487,6 +3635,7 @@ fn SessionId_RejectsSep_002() {
     assert!(validate_session_id_component("a/b").is_err());
     assert!(validate_session_id_component("a\\b").is_err());
     assert!(validate_session_id_component("a:b").is_err()); // Windows 冒号/ADS
+    assert!(validate_session_id_component("a;b").is_err()); // shell 元字符，id 会流入 resume 参数
     assert!(validate_session_id_component("a\0b").is_err());
 }
 
@@ -3524,6 +3673,44 @@ fn SessionId_AcceptsNormal_005() {
 fn SessionId_RejectsAgent_006() {
     assert!(validate_session_id_component("agent-a1b2").is_err());
     assert!(validate_session_id_component("agent-").is_err());
+}
+
+// ==================== get_session_details_at 路径逃逸 ====================
+
+// 恶意 session_id（.. 组件/分隔符/Windows 绝对路径/分号）必须 Err，不得读项目目录外文件
+#[test]
+fn GetSessionDetails_RejectsPathEscapeIds_001() {
+    let tmp = tempfile::tempdir().unwrap();
+    let proj = tmp.path().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    // 逃逸目标：proj 之外的 tmp/secret.jsonl；未拦截时 "../secret" 恰好命中它
+    std::fs::write(tmp.path().join("secret.jsonl"), "{\"type\":\"user\"}").unwrap();
+
+    let dirs = vec![proj];
+    for id in ["../secret", "a/b", "C:\\Users\\x\\secret", "a;b"] {
+        let result = get_session_details_at(&dirs, id);
+        assert!(result.is_err(), "恶意 session id 应被拒绝: {id}");
+    }
+}
+
+// 合法 UUID 形态 id 正常读取内容，正路不回归
+#[test]
+fn GetSessionDetails_LegalUuidStillReads_002() {
+    let tmp = tempfile::tempdir().unwrap();
+    let proj = tmp.path().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    let id = "3f2b8c64-1a2b-4c3d-9e8f-0a1b2c3d4e5f";
+    std::fs::write(
+        proj.join(format!("{id}.jsonl")),
+        "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"usage\":{\"input_tokens\":3,\"output_tokens\":5},\"costUSD\":0.5}",
+    )
+    .unwrap();
+
+    let details = get_session_details_at(&[proj], id).unwrap().unwrap();
+    assert_eq!(details.session_id, id);
+    assert_eq!(details.message_count, 2);
+    assert_eq!(details.total_tokens, Some(8));
+    assert_eq!(details.total_cost, Some(0.5));
 }
 
 // ==================== build_project_path_mapping_at / lookup_project_dirs ====================

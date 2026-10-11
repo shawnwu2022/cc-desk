@@ -876,13 +876,15 @@ pub(crate) fn normalize_path_str(p: &str) -> String {
     normalize_path_inner(p, cfg!(target_os = "linux"))
 }
 
-/// 校验会话 ID 可作为单个文件名组件(防路径逃逸)。拒绝空、路径分隔符、冒号、
+/// 校验会话 ID 可作为单个文件名组件(防路径逃逸)。拒绝空、路径分隔符、冒号、分号、
 /// NUL、`.`/`..`、Windows 保留设备名。合法返回 Ok(())，否则 Err(reason)。
 pub(crate) fn validate_session_id_component(id: &str) -> Result<(), String> {
     if id.is_empty() {
         return Err("session id is empty".to_string());
     }
-    if id.contains('/') || id.contains('\\') || id.contains(':') || id.contains('\0') {
+    if id.contains('/') || id.contains('\\') || id.contains(':') || id.contains(';')
+        || id.contains('\0')
+    {
         return Err(format!(
             "session id has path separators or special chars: {id}"
         ));
@@ -1312,7 +1314,16 @@ pub fn get_session_count(project_path: &str) -> Result<usize> {
 /// 获取会话详情
 pub fn get_session_details(project_path: &str, session_id: &str) -> Result<Option<SessionDetails>> {
     let project_dirs = get_project_dirs(project_path);
+    get_session_details_at(&project_dirs, session_id)
+}
 
+/// 会话详情核心（目录列表显式传入，便于测试）。
+pub(crate) fn get_session_details_at(
+    project_dirs: &[PathBuf],
+    session_id: &str,
+) -> Result<Option<SessionDetails>> {
+    // session_id 来自前端且直接参与 dir.join；`..` 组件或绝对路径会逃出项目目录读任意文件
+    validate_session_id_component(session_id).map_err(anyhow::Error::msg)?;
     let session_file = project_dirs
         .iter()
         .flat_map(|dir| {
@@ -1594,7 +1605,8 @@ pub(crate) fn update_app_config_at(config_path: &Path, updates: serde_json::Valu
         config_path,
         updates,
         &crate::version_history::maintenance::process_admissions(),
-        |path, bytes| fs::write(path, bytes),
+        // 临时文件完整落盘后原子替换，消除「截断旧文件再写新内容」的崩溃窗口
+        write_bytes_atomic,
     )
 }
 
@@ -1614,27 +1626,47 @@ pub(crate) fn update_app_config_admitted(
     if !config_dir.exists() {
         fs::create_dir_all(config_dir)?;
     }
-    let existing_json = if config_path.exists() {
-        let content = fs::read_to_string(config_path)?;
-        let existing: serde_json::Value =
-            serde_json::from_str(&content).context("Failed to parse config.json")?;
-        if !existing.is_object() {
-            bail!("App config must be an object");
-        }
-        existing
-    } else {
-        serde_json::json!({
-            "defaultContinue": true, "defaultSkipPermissions": false,
-            "defaultCustomArgs": "", "theme": "light", "fontSize": 12,
-            "hiddenProjects": []
-        })
-    };
-    let merged = merge_json_values(existing_json, updates);
-    let content = serde_json::to_string_pretty(&merged)?;
-    let ticket = admission.begin_write();
-    write(config_path, content.as_bytes())?;
-    ticket.completed_authoritative_write();
-    Ok(())
+    // 与 projects.json 同款：绑定永不 rename 的独立 lock 文件，跨进程排他后再读改写，
+    // 避免两实例「读旧→merge→写」交错丢字段
+    let lock_path = config_path.with_extension("json.lock");
+    ensure_parent(&lock_path)?;
+    let lock_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    acquire_lock_with_label(
+        &lock_file,
+        /*exclusive*/ true,
+        Duration::from_secs(5),
+        "config.json",
+    )?;
+    let result: Result<()> = (|| {
+        let existing_json = if config_path.exists() {
+            let content = fs::read_to_string(config_path)?;
+            let existing: serde_json::Value =
+                serde_json::from_str(&content).context("Failed to parse config.json")?;
+            if !existing.is_object() {
+                bail!("App config must be an object");
+            }
+            existing
+        } else {
+            serde_json::json!({
+                "defaultContinue": true, "defaultSkipPermissions": false,
+                "defaultCustomArgs": "", "theme": "light", "fontSize": 12,
+                "hiddenProjects": []
+            })
+        };
+        let merged = merge_json_values(existing_json, updates);
+        let content = serde_json::to_string_pretty(&merged)?;
+        let ticket = admission.begin_write();
+        write(config_path, content.as_bytes())?;
+        ticket.completed_authoritative_write();
+        Ok(())
+    })();
+    let _ = lock_file.unlock();
+    result
 }
 
 /// 合并 JSON 值
@@ -3440,20 +3472,24 @@ fn parse_plugin_agents(install_path: &str, plugin_name: &str) -> Option<Vec<Plug
 /// 原子写 JSON：先完整写入并 flush `.tmp`，再原子替换目标（pub(crate) 供测试导入）。
 /// Windows 使用 `ReplaceFileW`，POSIX 使用覆盖语义的 `rename`；替换失败时保留原目标。
 pub(crate) fn write_json_atomic(path: &Path, value: &serde_json::Value) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
     let content = serde_json::to_string_pretty(value)?;
+    write_bytes_atomic(path, content.as_bytes())?;
+    Ok(())
+}
+
+/// 原子写字节：完整写入并 flush `.tmp` 后原子替换目标；替换失败时保留原目标。
+pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
-        .open(&tmp)
-        .with_context(|| "Failed to open .tmp file")?;
-    file.write_all(content.as_bytes())
-        .with_context(|| "Failed to write .tmp file")?;
-    file.sync_all()
-        .with_context(|| "Failed to flush .tmp file")?;
+        .open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
     drop(file);
     replace_file_atomic(&tmp, path)
+        .map_err(|e| io::Error::other(format!("atomic replace failed: {e:#}")))
 }
 
 pub(crate) fn replace_file_atomic(tmp: &Path, path: &Path) -> Result<()> {
@@ -3782,6 +3818,84 @@ pub(crate) fn delete_sessions_inner(
         }
         Ok(())
     })
+}
+
+// ---------- projects.json command 的锁内 apply（具名化：commands 薄壳与测试直调同一实现）----------
+
+/// 别名校验（与前端 validateDisplayName/input maxlength 同规则）：原始输入 ≤ 32 UTF-16 code unit、无控制字符。
+pub(crate) fn validate_display_name_inner(alias: &str) -> Result<()> {
+    let len = alias.encode_utf16().count();
+    if len > 32 {
+        bail!("alias too long ({} > 32)", len);
+    }
+    if alias.chars().any(|c| c.is_control()) {
+        bail!("alias contains control characters");
+    }
+    Ok(())
+}
+
+/// pin_project 的锁内 apply：normalized 幂等置顶
+pub(crate) fn apply_pin_project(state: &mut ProjectsState, path: &str) -> Result<()> {
+    let n = normalize_path_str(path);
+    if !state.pinned_projects.contains(&n) {
+        state.pinned_projects.push(n);
+    }
+    Ok(())
+}
+
+/// unpin_project 的锁内 apply：normalized 过滤移除
+pub(crate) fn apply_unpin_project(state: &mut ProjectsState, path: &str) -> Result<()> {
+    let n = normalize_path_str(path);
+    state.pinned_projects.retain(|p| *p != n);
+    Ok(())
+}
+
+/// archive_session 的锁内 apply：归并到 canonical key 数组，sessionId 去重
+pub(crate) fn apply_archive_session(
+    state: &mut ProjectsState,
+    project_path: &str,
+    session_id: &str,
+) -> Result<()> {
+    let n = normalize_path_str(project_path);
+    let arr = state.archived_sessions.entry(n).or_default();
+    if !arr.iter().any(|id| id == session_id) {
+        arr.push(session_id.to_string());
+    }
+    Ok(())
+}
+
+/// restore_session 的锁内 apply：移除；空数组清理 key；未存档幂等
+pub(crate) fn apply_restore_session(
+    state: &mut ProjectsState,
+    project_path: &str,
+    session_id: &str,
+) -> Result<()> {
+    let n = normalize_path_str(project_path);
+    if let Some(arr) = state.archived_sessions.get_mut(&n) {
+        arr.retain(|id| id != session_id);
+        if arr.is_empty() {
+            state.archived_sessions.remove(&n);
+        }
+    }
+    Ok(())
+}
+
+/// set_display_name 的锁内 apply：校验失败返 Err（前后端同规则）、删 canonical 等价 key、非空 set / 空 clear
+pub(crate) fn apply_set_display_name(
+    state: &mut ProjectsState,
+    path: &str,
+    alias: &str,
+) -> Result<()> {
+    validate_display_name_inner(alias)?;
+    // canonicalize 已合并等价 key，此处 key 已是 normalized，直接覆盖/删除
+    let n = normalize_path_str(path);
+    let trimmed = alias.trim();
+    if trimmed.is_empty() {
+        state.display_names.remove(&n);
+    } else {
+        state.display_names.insert(n, trimmed.to_string());
+    }
+    Ok(())
 }
 
 /// 共享锁内读取完整状态。写者持排他锁时本调用阻塞（有界）直到写完，
