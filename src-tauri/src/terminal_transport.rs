@@ -677,13 +677,14 @@ impl Drop for TerminalStream {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod staleness_tests {
     use super::*;
     use crate::cli::output_route::OutputRoutes;
     use crate::cli::types::WireU64;
     use std::sync::mpsc;
     use std::time::Duration;
-    use tauri::ipc::{Channel, InvokeResponseBody};
+    use tauri::ipc::Channel;
 
     fn caller() -> CallerIdentity {
         CallerIdentity {

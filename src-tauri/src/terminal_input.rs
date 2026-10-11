@@ -465,7 +465,26 @@ impl InputStager {
     }
 }
 
+fn validate_run(run_id: &str, generation: u32) -> Result<(), SafeError> {
+    if run_id.is_empty() || run_id.contains('\0') {
+        return Err(SafeError::invalid("runId"));
+    }
+    if generation == 0 {
+        return Err(SafeError::invalid("generation"));
+    }
+    Ok(())
+}
+
+fn validate_positive(value: WireU64, field: &str) -> Result<u64, SafeError> {
+    let value = value.get();
+    if value == 0 {
+        return Err(SafeError::invalid(field));
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod abandonment_tests {
     use super::*;
     use crate::cli::types::WireU64;
@@ -565,22 +584,4 @@ mod abandonment_tests {
             .unwrap();
         assert_eq!(receipt.confirmed_bytes, "2");
     }
-}
-
-fn validate_run(run_id: &str, generation: u32) -> Result<(), SafeError> {
-    if run_id.is_empty() || run_id.contains('\0') {
-        return Err(SafeError::invalid("runId"));
-    }
-    if generation == 0 {
-        return Err(SafeError::invalid("generation"));
-    }
-    Ok(())
-}
-
-fn validate_positive(value: WireU64, field: &str) -> Result<u64, SafeError> {
-    let value = value.get();
-    if value == 0 {
-        return Err(SafeError::invalid(field));
-    }
-    Ok(value)
 }

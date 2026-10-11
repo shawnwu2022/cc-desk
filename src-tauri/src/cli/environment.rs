@@ -295,6 +295,7 @@ pub(crate) fn overlay_observer(
 
 #[cfg(test)]
 #[cfg(windows)]
+#[allow(non_snake_case)]
 mod capture_tests {
     use super::*;
 

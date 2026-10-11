@@ -462,6 +462,7 @@ fn decode_start(body: &InvokeBody) -> Result<LaunchRequest, SafeError> {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod proof_tests {
     use super::*;
     use crate::cli::run_registry::RunRegistry;

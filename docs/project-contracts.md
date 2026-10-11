@@ -590,3 +590,4 @@ npm run tauri:build        # 生产构建
 
 - Windows 目录句柄必须早于 fixture 的 `TempDir` 释放，不能为了清理而放宽生产目录共享或身份校验。上下文 fixture 的字段顺序由 `HistoryContext_FixtureCleanup_041` 核对；不添加会禁止既有字段移动的 `Drop` 实现。
 - 单例校准记录本次 Cargo 识别的 executable、源码、工具链、实际名称与宿主条件。初始化失败、timeout 和并行输出观察时间不当作完成耗时；本机子集不替代四 harness 全库存或 hosted 证据。诊断临时根只在精确拥有且字节保存验证后清理，不触及用户或生产恢复数据。
+- 严格 all-target Clippy 保持 `-D warnings`；原测试名称仅在对应 `#[cfg(test)]` 模块局部允许 `non_snake_case`，不重命名库存或全局放宽 lint。`BundleReturn_RestorePresentImage_002` 本机完整样本约 379 秒，此前 300 秒 timeout 仍为未完成测量；单次 test profile 优化试验未采用。后续权重或 profile 变更需完成同源 runner 和 hosted 比较，详见 [CI 性能记录](ci-performance.md)。

@@ -477,6 +477,7 @@ fn identity(run: &RunKey) -> RunIdentity {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod convergence_tests {
     use super::*;
 
@@ -550,15 +551,15 @@ mod convergence_tests {
             record_completed(&mut completed, (run_id, 1), record);
         }
         assert_eq!(completed.records.len(), SUPERVISOR_COMPLETED_MAX);
-        assert!(!completed.records.contains_key(&(format!("run-0"), 1)));
-        assert!(!completed.records.contains_key(&(format!("run-4"), 1)));
-        assert!(completed.records.contains_key(&(format!("run-5"), 1)));
+        assert!(!completed.records.contains_key(&(String::from("run-0"), 1)));
+        assert!(!completed.records.contains_key(&(String::from("run-4"), 1)));
+        assert!(completed.records.contains_key(&(String::from("run-5"), 1)));
         assert!(completed
             .records
             .contains_key(&(format!("run-{}", SUPERVISOR_COMPLETED_MAX + 4), 1)));
         assert_eq!(
             completed.order.front().map(|(run_id, _)| run_id.clone()),
-            Some(format!("run-5"))
+            Some(String::from("run-5"))
         );
     }
 

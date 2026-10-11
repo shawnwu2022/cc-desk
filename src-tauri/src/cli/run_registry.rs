@@ -569,6 +569,7 @@ impl<R> Drop for Ticket<'_, R> {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod capacity_tests {
     use super::*;
     use crate::cli::types::{CliKind, LaunchAction};

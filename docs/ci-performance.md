@@ -554,3 +554,65 @@ removing only the owned `src-tauri/target/ci-calibration-temp` root. Logs and by
 diagnostics remain available. These copies do not preserve native object identity
 or prove recovery/CI coverage. No user installation, application state, Cargo
 cache or unknown process was cleaned.
+
+## Completed restore probe and strict Rust checks (2026-10-11)
+
+The next local batch completed the original
+`BundleReturn_RestorePresentImage_002` with the CI's 20-minute harness bound:
+379.408 seconds, exactly one pass, zero failures/ignores and 1,465 filtered
+names. The earlier 300-second timeout remains an incomplete failed measurement.
+Fixture journal generations and process CPU continued advancing during the
+long run; this proves progress, not a particular function's CPU cost. The
+existing installation workload, assertions, ACL/identity checks and Job policy
+were retained. Only child `TEMP`/`TMP` pointed at owned workspace fixtures.
+
+A same-source experiment used Cargo's package-specific test profile override,
+without persisting a repository setting:
+
+```text
+cargo +1.98.1 test --locked --offline --no-run --config 'profile.test.package.cc-desk.opt-level=1' --message-format=json
+```
+
+Cargo JSON retained `debug_assertions=true`, `overflow_checks=true` and
+`debuginfo=0` for all four test harnesses. The same exact restore case passed in
+353.762 seconds, about 6.8% below the single default-profile sample. Rebuilding
+the application package took 159.423 seconds with cached dependencies; the
+1.53-second cached default compile is not a fresh-build comparator. This pair
+does not establish a net CI gain, and the override was not adopted. Ordinary
+profiles, shard weights, required checks and exclusions remain unchanged.
+See Cargo's [profile overrides](https://doc.rust-lang.org/cargo/reference/profiles.html#overrides).
+
+The strict all-target Clippy gate then reproduced 22 errors: sixteen test-name
+warnings, four literal `format!` uses, one unused test import and one production
+item block after a test module. Six test modules now have narrowly scoped
+`non_snake_case` allowances to retain the required original test names. The
+other changes remove the unused import, use `String::from` for literals and move
+two unchanged validation helpers before the test module. `-D warnings` remains
+enabled; runtime logic and assertions are unchanged.
+
+On the final source, locked/offline compilation produced all four original
+harnesses with the ordinary profile. The library's complete raw inventory was
+byte-identical across default, experimental and final builds: 1,466 names.
+Thirty-six exact document/environment/registry/input/transport/supervisor cases
+passed, with executable and source hashes stable during execution. Strict
+Clippy, formatting, typecheck and diff checks passed. The actual non-test
+`cc-desk.exe` from that final Cargo invocation also passed `--check-conpty`
+(`ok=true`, `backend=bundled`, `ptyLifecycle=true`). These are local checks,
+not full four-harness execution, hosted qualification or real CLI certification.
+Metadata records `b6e4001` plus the dirty Rust files and actual input hashes;
+the timing pair precedes the lint cleanup and is kept separate from its tests.
+After execution, all three uniquely owned diagnostic roots contained zero files
+and were removed after path/ownership checks. Raw logs and metadata were retained;
+Cargo caches, user state and installation recovery data were not cleaned.
+
+Read-only metadata from historical successful run
+[38062158367](https://github.com/shawnwu2022/cc-desk/actions/runs/38062158367)
+reported a 223-second producer, a 189-second static job, sixteen shard jobs
+spanning 100–379 seconds, and two roundtrip jobs taking 378/444 seconds. The
+producer-start to Rust-aggregate-completion span was 10:24, including scheduling
+and artifact transfer gaps. These are job intervals, not calibrated per-name
+weights. The API reports head SHA `abcfd4d`, while artifact names declare tested
+source `b0f5c3c`; downloading the build-metrics artifact returned HTTP 401, so its
+actual bytes and source binding were not verified in this batch. No same-source
+hosted run was dispatched for the current worktree. Completed runner evidence
+and a full hosted comparison remain prerequisites for changing shard weights.
