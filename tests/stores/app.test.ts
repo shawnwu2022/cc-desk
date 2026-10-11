@@ -502,15 +502,14 @@ describe('app store - 启动状态源 + setCwdLocal 拆分 + setHidden', () => {
 describe('app store - config 写入队列收敛（audit P1）', () => {
   // 所有持久化写入（hiddenProjects/claudeEnvVars 等）串行过单一 configWriteTail：
   // 并发成员的写段不得重叠执行（重叠的读-改-写会互相覆盖丢字段）
-  it('ConfigWriteTail_ConcurrentWriters_Serialized_001', async () => {
+  // 同域（config 域）并发写必须串行，防止读-改-写用陈旧快照互相覆盖。
+  it('ConfigWriteTail_SameDomainWritersSerialized_001', async () => {
     let inFlight = 0
     let overlapped = false
-    const fields: string[] = []
-    mockIPC((cmd, args) => {
+    let writes = 0
+    mockIPC((cmd) => {
       if (cmd === 'update_app_config') {
-        const updates = (args as { updates: Record<string, unknown> }).updates
-        if ('hiddenProjects' in updates) fields.push('hiddenProjects')
-        if ('claudeEnvVars' in updates) fields.push('claudeEnvVars')
+        writes++
         inFlight++
         if (inFlight > 1) overlapped = true
         // 延迟 resolve 制造重叠窗口
@@ -520,13 +519,38 @@ describe('app store - config 写入队列收敛（audit P1）', () => {
     })
     const store = useAppStore()
     await Promise.all([
-      store.setHidden('/p-a', true),
       store.setClaudeEnvVars({ FOO: '1' }),
+      store.setClaudeEnvVars({ FOO: '2', BAR: '3' }),
     ])
-    expect(overlapped).toBe(false)             // 写段串行，无重叠
-    expect(fields).toContain('hiddenProjects') // 两个成员都落盘，不丢字段
-    expect(fields).toContain('claudeEnvVars')
+    expect(overlapped).toBe(false)   // 同域写段串行，无重叠
+    expect(writes).toBe(2)           // 两个成员都落盘
+  })
+
+  // hiddenProjects 专域队列：用户 hide 写入不得被挂起的启动迁移头阻塞
+  //（Projects_StartupCannotUndoHide_014 契约；跨域字段不重叠由后端锁内 merge 兜底）。
+  it('HiddenWrite_NotBlockedByPendingConfigMigration_002', async () => {
+    let migrationDone!: () => void
+    const fields: string[] = []
+    mockIPC((cmd, args) => {
+      if (cmd === 'get_app_config') return { hiddenProjects: [], language: 'en', terminalTheme: 'cc-box-light' }
+      if (cmd === 'update_app_config') {
+        const updates = (args as { updates: Record<string, unknown> }).updates
+        if ('hiddenProjects' in updates) { fields.push('hiddenProjects'); return null }
+        fields.push('migration')
+        return new Promise<void>(resolve => { migrationDone = resolve })
+      }
+      return null
+    })
+    const store = useAppStore()
+    const startup = store.loadAppConfig()
+    await new Promise(resolve => setTimeout(resolve, 0)) // 排空微任务，让迁移写进入挂起态
+    expect(fields).toContain('migration') // 迁移写已在途且挂起
+    await store.setHidden('/p-a', true)   // 不得被挂起迁移阻塞
+    expect(fields).toContain('hiddenProjects')
     expect(store.isHidden('/p-a')).toBe(true)
+    migrationDone()
+    await startup
+    expect(store.isHidden('/p-a')).toBe(true) // 迁移完成不回滚已确认的隐藏
   })
 
   // loadProjectVisibility(force=true) 在有在途 visibilityLoad 时必须发起新读，

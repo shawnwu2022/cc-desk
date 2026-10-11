@@ -137,14 +137,20 @@ export const useAppStore = defineStore('app', () => {
   let settingsUnconfirmed = false
   let settingsPublicationSequence = 0
   let settingsLoad: Promise<void> | null = null
-  // 单一 config 持久化写入尾队列：settings 简单项、启动迁移、hiddenProjects、claudeEnvVars、
-  // 默认启动参数、lastOpened 的写段全部串行过此队列，避免并发读-改-写互相覆盖丢字段（audit P1）。
-  let configWriteTail: Promise<void> = Promise.resolve()
-  function enqueueConfigWrite<T>(operation: () => Promise<T>): Promise<T> {
-    const result = configWriteTail.then(operation, operation)
-    configWriteTail = result.then(() => undefined, () => undefined)
-    return result
+  // config.json 持久化写入按资源域分两条尾队列：同域写串行，防并发读-改-写用陈旧本地
+  // 快照互相覆盖丢字段；跨域写允许并发（两写携带字段不重叠），防覆盖由后端
+  // update_app_config 的跨进程锁内 merge 兜底。不得合并为单一队列：启动迁移挂起时
+  // 会头阻塞用户 hiddenProjects 写入（Projects_StartupCannotUndoHide_014 契约）。
+  function makeWriteQueue() {
+    let tail: Promise<void> = Promise.resolve()
+    return function enqueue<T>(operation: () => Promise<T>): Promise<T> {
+      const result = tail.then(operation, operation)
+      tail = result.then(() => undefined, () => undefined)
+      return result
+    }
   }
+  const enqueueConfigWrite = makeWriteQueue()
+  const enqueueHiddenWrite = makeWriteQueue()
   function widthValue(value: unknown): number {
     return typeof value === 'number' && Number.isFinite(value) ? Math.round(Math.max(240, Math.min(360, value))) : 288
   }
@@ -541,7 +547,9 @@ export const useAppStore = defineStore('app', () => {
   }
 
   /**
-   * 设置/取消隐藏项目（configWriteTail 串行 + persist-first 回滚 + 规范化比较 + cwd 保护）。
+   * 设置/取消隐藏项目（hiddenProjects 专域队列串行 + persist-first 回滚 + 规范化比较 + cwd 保护）。
+   * 不走 configWriteTail：用户 hide 不得被挂起的启动迁移头阻塞（014 契约）；
+   * 与迁移写携带字段不重叠，防覆盖由后端锁内 merge 兜底。
    * - cwd 保护（v6 codex batch1 #10）：拒绝隐藏当前 cwd（隐藏项目不能成 cwd，store/domain 层保证不变量）。
    *   管理页按钮层禁用是 UI 兜底，此为 domain 层硬保护，防 App.vue 打开入口绕过。
    * - 算 next：规范化比较移除旧条目，hidden=true 时加回（用原始 path 保真）。
@@ -554,7 +562,7 @@ export const useAppStore = defineStore('app', () => {
     if (hidden && cwd.value && normalizePath(path) === normalizePath(cwd.value)) {
       return
     }
-    return enqueueConfigWrite(async () => {
+    return enqueueHiddenWrite(async () => {
       if (hidden && cwd.value && normalizePath(path) === normalizePath(cwd.value)) return
       const n = normalizePath(path)
       const next = new Set<string>()
