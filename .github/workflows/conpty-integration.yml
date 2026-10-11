@@ -1,17 +1,5 @@
 name: Windows test package and bundled ConPTY integration
 on:
-  push:
-    branches: [codex/fix-devtools-text-paste]
-    paths:
-      - src-tauri/src/main.rs
-      - src-tauri/src/conpty_runtime.rs
-      - src-tauri/src/tests/conpty_runtime.rs
-      - src-tauri/build.rs
-      - src-tauri/conpty/**
-      - src-tauri/tauri.windows.conf.json
-      - scripts/*conpty*
-      - tests/scripts/conptyBundle.node.cjs
-      - .github/workflows/conpty-integration.yml
   pull_request:
     paths:
       # Unified UX changes need the final installed Windows package gate too.
