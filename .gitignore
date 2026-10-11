@@ -3,9 +3,7 @@ node_modules/
 
 # Build output
 dist/
-src-tauri/target/
-src-tauri/target-test/
-src-tauri/target-test2/
+src-tauri/target*/
 
 # IDE
 .idea/
