@@ -13,11 +13,16 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 pub(crate) const OUTPUT_FRAME_BYTES_MAX: usize = 16 * 1024;
 pub(crate) const OUTPUT_RUN_HIGH_WATER: usize = 256 * 1024;
 pub(crate) const OUTPUT_RUN_LOW_WATER: usize = 64 * 1024;
 pub(crate) const OUTPUT_APP_PAYLOAD_BUDGET: usize = 16 * 1024 * 1024;
+// renderer 停止 ACK 且未 revoke 时的兜底窗口：高水位阻塞超过该窗口且无任何
+// ACK 进展，按既有 degraded 路径释放全局预算并唤醒阻塞者。窗口取值需宽于
+// renderer 合理的解析/节流停顿，代价是跨系统休眠恢复可能误判一次降级。
+pub(crate) const OUTPUT_ACK_STALENESS_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TransportLimits {
@@ -25,6 +30,7 @@ pub(crate) struct TransportLimits {
     run_high_water: usize,
     run_low_water: usize,
     app_payload_budget: usize,
+    ack_staleness: Duration,
 }
 
 impl TransportLimits {
@@ -33,6 +39,22 @@ impl TransportLimits {
         run_high_water: usize,
         run_low_water: usize,
         app_payload_budget: usize,
+    ) -> Result<Self, SafeError> {
+        Self::with_ack_staleness(
+            frame_bytes,
+            run_high_water,
+            run_low_water,
+            app_payload_budget,
+            OUTPUT_ACK_STALENESS_TIMEOUT,
+        )
+    }
+
+    pub(crate) fn with_ack_staleness(
+        frame_bytes: usize,
+        run_high_water: usize,
+        run_low_water: usize,
+        app_payload_budget: usize,
+        ack_staleness: Duration,
     ) -> Result<Self, SafeError> {
         if frame_bytes == 0
             || frame_bytes > run_high_water
@@ -46,6 +68,7 @@ impl TransportLimits {
             run_high_water,
             run_low_water,
             app_payload_budget,
+            ack_staleness,
         })
     }
 }
@@ -389,6 +412,8 @@ impl TerminalStream {
 
     fn wait_local_capacity(&self, core: &TransportCore, amount: usize) -> Result<(), SafeError> {
         let mut state = self.state.lock();
+        let mut last_acked = state.acked;
+        let mut deadline = Instant::now() + core.limits.ack_staleness;
         loop {
             if self.degraded.load(Ordering::SeqCst) {
                 return Err(error("OUTPUT_STREAM_DEGRADED"));
@@ -397,16 +422,12 @@ impl TerminalStream {
             if state.throttled {
                 if outstanding <= core.limits.run_low_water {
                     state.throttled = false;
+                } else if self.wait_for_ack_progress(&mut state, &mut last_acked, &mut deadline) {
+                    // 先释放 state 锁再降级；mark_degraded 内部需要重新加锁。
+                    drop(state);
+                    self.mark_degraded(core);
+                    return Err(error("OUTPUT_STREAM_DEGRADED"));
                 } else {
-                    #[cfg(test)]
-                    {
-                        state.waiting_for_capacity = true;
-                    }
-                    self.changed.wait(&mut state);
-                    #[cfg(test)]
-                    {
-                        state.waiting_for_capacity = false;
-                    }
                     continue;
                 }
             }
@@ -415,19 +436,52 @@ impl TerminalStream {
                 .is_none_or(|value| value > core.limits.run_high_water)
             {
                 state.throttled = true;
-                #[cfg(test)]
-                {
-                    state.waiting_for_capacity = true;
-                }
-                self.changed.wait(&mut state);
-                #[cfg(test)]
-                {
-                    state.waiting_for_capacity = false;
+                if self.wait_for_ack_progress(&mut state, &mut last_acked, &mut deadline) {
+                    drop(state);
+                    self.mark_degraded(core);
+                    return Err(error("OUTPUT_STREAM_DEGRADED"));
                 }
                 continue;
             }
             return Ok(());
         }
+    }
+
+    /// 在节流/高水位等待中观察 ACK 进展：任何解析进展都会重置兜底窗口。
+    /// 返回 true 表示窗口耗尽且无进展，调用方须释放 state 锁后按 revoke
+    /// 同款 degraded 路径收敛，避免 renderer 停止 ACK 永久占用 reader 与预算。
+    fn wait_for_ack_progress(
+        &self,
+        state: &mut parking_lot::MutexGuard<'_, StreamState>,
+        last_acked: &mut u64,
+        deadline: &mut Instant,
+    ) -> bool {
+        #[cfg(test)]
+        {
+            state.waiting_for_capacity = true;
+        }
+        if state.acked != *last_acked {
+            *last_acked = state.acked;
+            *deadline = Instant::now() + self.staleness();
+        }
+        self.changed
+            .wait_for(state, deadline.saturating_duration_since(Instant::now()));
+        #[cfg(test)]
+        {
+            state.waiting_for_capacity = false;
+        }
+        if self.degraded.load(Ordering::SeqCst) {
+            return false;
+        }
+        state.acked == *last_acked && Instant::now() >= *deadline
+    }
+
+    fn staleness(&self) -> Duration {
+        self.core
+            .upgrade()
+            .map_or(OUTPUT_ACK_STALENESS_TIMEOUT, |core| {
+                core.limits.ack_staleness
+            })
     }
 
     fn mark_degraded(&self, core: &TransportCore) {
@@ -619,5 +673,110 @@ impl Drop for TerminalStream {
         {
             streams.remove(&self.key);
         }
+    }
+}
+
+#[cfg(test)]
+mod staleness_tests {
+    use super::*;
+    use crate::cli::output_route::OutputRoutes;
+    use crate::cli::types::WireU64;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tauri::ipc::{Channel, InvokeResponseBody};
+
+    fn caller() -> CallerIdentity {
+        CallerIdentity {
+            instance_id: "backend-test".into(),
+            window_label: "main".into(),
+            webview_epoch: WireU64::parse("7").unwrap(),
+        }
+    }
+
+    fn run(id: &str, generation: u32) -> RunKey {
+        RunKey {
+            run_id: id.into(),
+            generation,
+        }
+    }
+
+    fn ack(run_id: &str, generation: u32, stream_epoch: &str, through: &str) -> OutputAck {
+        serde_json::from_value(serde_json::json!({
+            "runId": run_id,
+            "generation": generation,
+            "streamEpoch": stream_epoch,
+            "throughOffset": through
+        }))
+        .unwrap()
+    }
+
+    fn silent_route() -> Arc<OutputRoute<OutputFrame>> {
+        Arc::new(
+            OutputRoutes::new(1)
+                .bind(1, Box::new(|| Ok(())), || Ok(Channel::new(move |_| Ok(()))))
+                .unwrap(),
+        )
+    }
+
+    // renderer 停止 ACK 且未 revoke：高水位阻塞必须在兜底窗口后按 degraded
+    // 收敛并释放全局预算，不得永久占用 reader 与预算。
+    #[test]
+    fn Transport_Staleness_StalledAckConvergesAndReleasesBudget_007() {
+        let hub = Arc::new(TerminalTransports::with_limits(
+            TransportLimits::with_ack_staleness(4, 8, 4, 16, Duration::from_millis(80)).unwrap(),
+        ));
+        let stream = hub
+            .attach(caller(), run("run-a", 1), silent_route())
+            .unwrap();
+        stream.send(&[1, 1, 1, 1]).unwrap();
+        stream.send(&[2, 2, 2, 2]).unwrap(); // 达到 8 字节高水位
+
+        let (tx, rx) = mpsc::channel();
+        let blocked = stream.clone();
+        let worker = std::thread::spawn(move || {
+            let result = blocked.send(&[3]).map_err(|failure| failure.code);
+            tx.send(result).unwrap();
+        });
+        let outcome = rx.recv_timeout(Duration::from_secs(2));
+        worker.join().unwrap();
+        // 修复后为 OUTPUT_STREAM_DEGRADED；修复前永久阻塞导致超时失败。
+        assert_eq!(
+            outcome.unwrap(),
+            Err("OUTPUT_STREAM_DEGRADED".to_string()),
+            "无 ACK 阻塞必须在有界时间内收敛"
+        );
+        assert_eq!(hub.budgeted_bytes(), 0, "无 ACK 预算必须随降级释放");
+    }
+
+    // 正常 ACK 流不受兜底影响：ACK 进展持续重置窗口，预算随 ACK 归零。
+    #[test]
+    fn Transport_Staleness_HealthyAckFlowIsUnaffected_008() {
+        let hub = TerminalTransports::with_limits(TransportLimits::new(4, 8, 4, 16).unwrap());
+        let owner = caller();
+        let stream = hub
+            .attach(owner.clone(), run("run-b", 1), silent_route())
+            .unwrap();
+        let epoch = stream.stream_epoch().to_string();
+        for index in 0..50i64 {
+            let offset = index * 4;
+            stream.send(&[index as u8; 4]).unwrap();
+            hub.ack(&owner, &ack("run-b", 1, &epoch, &(offset + 4).to_string()))
+                .unwrap();
+        }
+        assert_eq!(hub.budgeted_bytes(), 0);
+        // 流仍健康：继续可发送且错误代次的 ACK 被拒绝。
+        stream.send(&[9; 4]).unwrap();
+        assert_eq!(
+            hub.ack(&owner, &ack("run-b", 1, "999", "4"))
+                .unwrap_err()
+                .code,
+            "STALE_OUTPUT_STREAM"
+        );
+        assert_eq!(
+            hub.ack(&owner, &ack("run-b", 2, &epoch, "4"))
+                .unwrap_err()
+                .code,
+            "STALE_GENERATION"
+        );
     }
 }

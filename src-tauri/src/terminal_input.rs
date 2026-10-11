@@ -15,7 +15,6 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 pub(crate) const INPUT_UPLOAD_CHUNK_MAX: usize = 64 * 1024;
 pub(crate) const INPUT_ACTION_BYTES_MAX: usize = 8 * 1024 * 1024;
-pub(crate) const INPUT_RUN_STAGING_BYTES_MAX: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -215,9 +214,6 @@ impl InputStager {
         if total_bytes > INPUT_ACTION_BYTES_MAX {
             return Err(error("INPUT_TOO_LARGE"));
         }
-        if total_bytes > INPUT_RUN_STAGING_BYTES_MAX {
-            return Err(error("INPUT_STAGING_BUDGET"));
-        }
 
         let mut runs = self.runs.lock();
         let state = runs.entry(key).or_default();
@@ -234,7 +230,11 @@ impl InputStager {
             {
                 return Ok(());
             }
-            return Err(error("INPUT_UPLOAD_BUSY"));
+            // 上传中断后没有任何清理路径会运行；更高 seq 只能来自放弃旧上传
+            // 后的新一帧，丢弃遗留暂存回收字节，否则该 run 永久 INPUT_UPLOAD_BUSY。
+            if seq < stage.input_seq {
+                return Err(error("INPUT_UPLOAD_BUSY"));
+            }
         }
 
         state.stage = Some(InputStage {
@@ -453,6 +453,117 @@ impl InputStager {
             return Err(error("INPUT_CHUNK_TOO_LARGE"));
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn staged_bytes(&self) -> usize {
+        self.runs
+            .lock()
+            .values()
+            .map(|state| state.stage.as_ref().map_or(0, |stage| stage.bytes.len()))
+            .sum()
+    }
+}
+
+#[cfg(test)]
+mod abandonment_tests {
+    use super::*;
+    use crate::cli::types::WireU64;
+
+    fn wire(value: u64) -> WireU64 {
+        WireU64::parse(&value.to_string()).unwrap()
+    }
+
+    fn caller() -> CallerIdentity {
+        CallerIdentity {
+            instance_id: "doc-a".into(),
+            window_label: "main".into(),
+            webview_epoch: wire(1),
+        }
+    }
+
+    fn begin(seq: u64, total: u64) -> InputBeginRequest {
+        InputBeginRequest {
+            run_id: "run-a".into(),
+            generation: 1,
+            input_seq: wire(seq),
+            mode_epoch: wire(7),
+            total_bytes: wire(total),
+        }
+    }
+
+    fn chunk(seq: u64, offset: u64, bytes: Vec<u8>) -> InputChunkRequest {
+        InputChunkRequest {
+            run_id: "run-a".into(),
+            generation: 1,
+            input_seq: wire(seq),
+            offset: wire(offset),
+            bytes,
+        }
+    }
+
+    fn commit(seq: u64) -> InputCommitRequest {
+        InputCommitRequest {
+            run_id: "run-a".into(),
+            generation: 1,
+            input_seq: wire(seq),
+        }
+    }
+
+    // 上传中断（未 commit/abort）后，同 run 更高 seq 的 begin 必须回收遗留
+    // 暂存并正常完成新一帧，不得永久 INPUT_UPLOAD_BUSY。
+    #[test]
+    fn Input_Staging_AbandonedUploadIsReclaimedByLaterSequence_012() {
+        let stager = InputStager::new();
+        let owner = caller();
+        stager.begin(&owner, &begin(1, 4)).unwrap();
+        stager
+            .chunk(&owner, &chunk(1, 0, vec![1, 2, 3, 4]))
+            .unwrap();
+        assert_eq!(stager.staged_bytes(), 4);
+
+        // 中断：不 commit 也不 abort，直接开始下一帧。
+        stager.begin(&owner, &begin(2, 2)).unwrap();
+        assert_eq!(
+            stager.staged_bytes(),
+            0,
+            "遗留暂存字节必须随 displacement 释放"
+        );
+        stager.chunk(&owner, &chunk(2, 0, vec![9, 9])).unwrap();
+        let receipt = stager
+            .commit(&owner, &commit(2), |bytes| {
+                assert_eq!(bytes, &[9, 9]);
+                Ok(HostWriteResult {
+                    state: InputWriteState::HostWritten,
+                    confirmed_bytes: bytes.len() as u64,
+                })
+            })
+            .unwrap();
+        assert_eq!(receipt.state, InputWriteState::HostWritten);
+    }
+
+    // 打开中的暂存不得被更早的 seq 挤掉，保持有序单调。
+    #[test]
+    fn Input_Staging_OlderSequenceCannotDisplaceOpenStage_013() {
+        let stager = InputStager::new();
+        let owner = caller();
+        stager.begin(&owner, &begin(3, 2)).unwrap();
+        stager.chunk(&owner, &chunk(3, 0, vec![7, 7])).unwrap();
+
+        let failure = stager.begin(&owner, &begin(2, 2)).unwrap_err();
+        assert_eq!(failure.code, "INPUT_UPLOAD_BUSY");
+        // 同 seq 幂等续传不受影响。
+        stager.begin(&owner, &begin(3, 2)).unwrap();
+        let receipt = stager
+            .commit(&owner, &commit(3), |bytes| {
+                assert_eq!(bytes, &[7, 7]);
+                Ok(HostWriteResult {
+                    state: InputWriteState::HostWritten,
+                    confirmed_bytes: bytes.len() as u64,
+                })
+            })
+            .unwrap();
+        assert_eq!(receipt.confirmed_bytes, "2");
     }
 }
 

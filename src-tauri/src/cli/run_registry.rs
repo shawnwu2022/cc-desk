@@ -8,7 +8,7 @@ use super::snapshot::CallerIdentity;
 use super::types::{LaunchRequest, SafeError, WireU64};
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -87,6 +87,10 @@ struct RegistryState<R> {
     records: HashMap<RequestKey, Record<R>>,
     runs: HashMap<String, RequestKey>,
     tabs: HashMap<(u64, String), RequestKey>,
+    // 每个 tab 已插入记录的最大代次；墓碑被容量淘汰后仍保持 generation 单调。
+    tab_generations: HashMap<(u64, String), u32>,
+    // 记录插入序，供容量压力下最老优先淘汰。
+    order: VecDeque<RequestKey>,
 }
 
 pub(crate) struct RunRegistry<R> {
@@ -127,6 +131,8 @@ impl<R> RunRegistry<R> {
                 records: HashMap::new(),
                 runs: HashMap::new(),
                 tabs: HashMap::new(),
+                tab_generations: HashMap::new(),
+                order: VecDeque::new(),
             }),
         }
     }
@@ -221,7 +227,10 @@ impl<R> RunRegistry<R> {
             return Ok(Reservation::Existing(status));
         }
         if state.records.len() >= self.capacity {
-            return Err(error("REGISTRY_CAPACITY"));
+            self.evict_retired_locked(&mut state);
+            if state.records.len() >= self.capacity {
+                return Err(error("REGISTRY_CAPACITY"));
+            }
         }
         if state.runs.contains_key(&request.run_id) {
             return Err(error("RUN_ID_CONFLICT"));
@@ -230,7 +239,10 @@ impl<R> RunRegistry<R> {
             if !previous.retired {
                 return Err(error("TAB_BUSY"));
             }
-            if request.generation <= previous.status.run.generation {
+        }
+        // 容量压力可能已淘汰墓碑；代次下限保证同 tab 的 generation 单调不回退。
+        if let Some(floor) = state.tab_generations.get(&tab) {
+            if request.generation <= *floor {
                 return Err(error("STALE_GENERATION"));
             }
         }
@@ -245,6 +257,9 @@ impl<R> RunRegistry<R> {
             phase: LaunchPhase::Reserved,
             failure: None,
         };
+        state.order.push_back(key.clone());
+        let floor = state.tab_generations.entry(tab.clone()).or_insert(0);
+        *floor = (*floor).max(request.generation);
         state.records.insert(
             key.clone(),
             Record {
@@ -263,6 +278,34 @@ impl<R> RunRegistry<R> {
             key,
             finished: false,
         }))
+    }
+
+    /// 容量压力下按插入序淘汰最老的已退休记录，绝不淘汰活跃（in_flight 或
+    /// 未退休）记录；runs/tabs 索引同步移除，代次下限保留在 tab_generations。
+    fn evict_retired_locked(&self, state: &mut RegistryState<R>) {
+        let mut index = 0;
+        while state.records.len() >= self.capacity && index < state.order.len() {
+            let key = state.order[index].clone();
+            let evictable = state
+                .records
+                .get(&key)
+                .is_some_and(|record| !record.in_flight && record.retired);
+            if !evictable {
+                index += 1;
+                continue;
+            }
+            state.order.remove(index);
+            let run_id = state
+                .records
+                .remove(&key)
+                .map(|record| record.status.run.run_id);
+            if let Some(run_id) = run_id {
+                if state.runs.get(&run_id).is_some_and(|mapped| *mapped == key) {
+                    state.runs.remove(&run_id);
+                }
+            }
+            state.tabs.retain(|_, mapped| *mapped != key);
+        }
     }
 
     pub(crate) fn status(
@@ -522,5 +565,158 @@ impl<R> Drop for Ticket<'_, R> {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+    use crate::cli::types::{CliKind, LaunchAction};
+
+    fn caller(registry: &RunRegistry<usize>) -> CallerIdentity {
+        registry.activate_window("main").unwrap()
+    }
+
+    fn request(id: &str, tab: &str, run: &str, generation: u32) -> LaunchRequest {
+        LaunchRequest {
+            request_id: id.into(),
+            tab_id: tab.into(),
+            run_id: run.into(),
+            generation,
+            profile_id: "profile-test".into(),
+            expected_profile_revision: WireU64::parse("1").unwrap(),
+            cli: CliKind::Codex,
+            launch_cwd: "cwd".into(),
+            action: LaunchAction::Raw {
+                argv: vec!["private-argv".into()],
+            },
+            extra_args: vec![],
+            cols: 80,
+            rows: 24,
+        }
+    }
+
+    fn running(
+        registry: &RunRegistry<usize>,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+    ) -> LaunchStatus {
+        match registry.reserve(caller, request).unwrap() {
+            Reservation::New(mut ticket) => {
+                assert!(ticket.begin());
+                ticket.complete(1usize)
+            }
+            Reservation::Existing(status) => status,
+        }
+    }
+
+    fn retired(
+        registry: &RunRegistry<usize>,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+    ) -> LaunchStatus {
+        let status = running(registry, caller, request);
+        registry.mark_exited(&status.run).unwrap();
+        registry.retire(&status.run).unwrap();
+        status
+    }
+
+    // 容量满时按最老优先淘汰非活跃记录，新 launch 注册成功。
+    #[test]
+    fn RegistryCapacity_EvictsOldestRetiredForNewLaunch_001() {
+        let registry = RunRegistry::new(2);
+        let caller = caller(&registry);
+        retired(
+            &registry,
+            &caller,
+            &request("request-1", "tab-1", "run-1", 1),
+        );
+        running(
+            &registry,
+            &caller,
+            &request("request-2", "tab-2", "run-2", 1),
+        );
+
+        let third = running(
+            &registry,
+            &caller,
+            &request("request-3", "tab-1", "run-3", 2),
+        );
+        assert_eq!(third.run.run_id, "run-3");
+        assert_eq!(
+            registry.status(&caller, "request-1").unwrap_err().code,
+            "LAUNCH_NOT_FOUND"
+        );
+        assert!(registry.status(&caller, "request-2").is_ok());
+        assert!(registry.status(&caller, "request-3").is_ok());
+    }
+
+    // 活跃记录即使最老也绝不淘汰；满员且无可淘汰记录时仍然拒绝。
+    #[test]
+    fn RegistryCapacity_NeverEvictsActiveRun_002() {
+        let registry = RunRegistry::new(2);
+        let caller = caller(&registry);
+        running(
+            &registry,
+            &caller,
+            &request("request-1", "tab-1", "run-1", 1),
+        );
+        retired(
+            &registry,
+            &caller,
+            &request("request-2", "tab-2", "run-2", 1),
+        );
+
+        running(
+            &registry,
+            &caller,
+            &request("request-3", "tab-3", "run-3", 1),
+        );
+        assert!(registry.status(&caller, "request-1").is_ok());
+        assert_eq!(
+            registry.status(&caller, "request-2").unwrap_err().code,
+            "LAUNCH_NOT_FOUND"
+        );
+        let full = match registry.reserve(&caller, &request("request-4", "tab-4", "run-4", 1)) {
+            Err(failure) => failure,
+            Ok(_) => panic!("full registry must reject without an evictable record"),
+        };
+        assert_eq!(full.code, "REGISTRY_CAPACITY");
+    }
+
+    // 失败/取消墓碑同样可淘汰；淘汰后同 tab 的代次下限保持单调。
+    #[test]
+    fn RegistryCapacity_EvictedTombstoneKeepsGenerationFloor_003() {
+        let registry = RunRegistry::new(3);
+        let caller = caller(&registry);
+        retired(
+            &registry,
+            &caller,
+            &request("request-1", "tab-1", "run-1", 5),
+        );
+        retired(
+            &registry,
+            &caller,
+            &request("request-2", "tab-2", "run-2", 1),
+        );
+        running(
+            &registry,
+            &caller,
+            &request("request-3", "tab-3", "run-3", 1),
+        );
+
+        let stale = match registry.reserve(&caller, &request("request-4", "tab-1", "run-4", 5)) {
+            Err(failure) => failure,
+            Ok(_) => panic!("evicted tombstone generation floor must reject stale reuse"),
+        };
+        assert_eq!(stale.code, "STALE_GENERATION");
+        // 只淘汰了一个名额，request-2 不应被顺带清除。
+        assert!(registry.status(&caller, "request-2").is_ok());
+        let fresh = running(
+            &registry,
+            &caller,
+            &request("request-4", "tab-1", "run-4", 6),
+        );
+        assert_eq!(fresh.run.generation, 6);
     }
 }

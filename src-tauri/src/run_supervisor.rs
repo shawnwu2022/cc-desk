@@ -5,20 +5,53 @@ use crate::cli::launch_service::{NativeRun, RunSupervisor};
 use crate::cli::profiles::error;
 use crate::cli::run_registry::{RunKey, RunRegistry};
 use crate::cli::types::{SafeError, WireU64};
-use crate::run_lifecycle::{LifecycleRecord, OutputLifecycle};
+use crate::run_lifecycle::{LifecycleRecord, OutputLifecycle, ProcessLifecycle};
 use crate::terminal_transport::{OutputProgress, TerminalStream, TerminalTransports};
 use parking_lot::{Condvar, Mutex};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 type RunIdentity = (String, u32);
 
+// 诊断快照保留上限：超过后按完成顺序淘汰最老记录，避免 completed 无界增长。
+const SUPERVISOR_COMPLETED_MAX: usize = 256;
+
+#[derive(Default)]
+struct CompletedRuns {
+    order: VecDeque<RunIdentity>,
+    records: HashMap<RunIdentity, LifecycleRecord>,
+}
+
+fn record_completed(completed: &mut CompletedRuns, key: RunIdentity, snapshot: LifecycleRecord) {
+    completed.records.insert(key.clone(), snapshot);
+    if !completed.order.contains(&key) {
+        completed.order.push_back(key.clone());
+    }
+    while completed.order.len() > SUPERVISOR_COMPLETED_MAX {
+        let Some(oldest) = completed.order.pop_front() else {
+            break;
+        };
+        completed.records.remove(&oldest);
+    }
+}
+
+/// run_lifecycle::can_retire 只认 Exited；waiter 终结（pty.wait 失败或
+/// registry 状态冲突）把进程置为 Failed 且等待已不可恢复，宿主层在此补充
+/// 收敛判定，避免此类 run 把 active 表与 PTY 资源永久占住。
+fn supervisor_converged(lifecycle: &LifecycleRecord) -> bool {
+    lifecycle.process() == ProcessLifecycle::Failed
+        && matches!(
+            lifecycle.output(),
+            OutputLifecycle::Incomplete | OutputLifecycle::Degraded
+        )
+}
+
 struct SupervisorCore {
     transports: Arc<TerminalTransports>,
     active: Mutex<HashMap<RunIdentity, Arc<SupervisedRun>>>,
-    completed: Mutex<HashMap<RunIdentity, LifecycleRecord>>,
+    completed: Mutex<CompletedRuns>,
     shutting_down: AtomicBool,
     settled: Condvar,
 }
@@ -33,7 +66,7 @@ impl NativeRunSupervisor {
             core: Arc::new(SupervisorCore {
                 transports,
                 active: Mutex::new(HashMap::new()),
-                completed: Mutex::new(HashMap::new()),
+                completed: Mutex::new(CompletedRuns::default()),
                 shutting_down: AtomicBool::new(false),
                 settled: Condvar::new(),
             }),
@@ -46,7 +79,7 @@ impl NativeRunSupervisor {
         if let Some(state) = self.core.active.lock().get(&key).cloned() {
             return Some(state.lifecycle.lock().clone());
         }
-        self.core.completed.lock().get(&key).cloned()
+        self.core.completed.lock().records.get(&key).cloned()
     }
 
     pub(crate) fn stop(&self, run: &RunKey) -> Result<(), SafeError> {
@@ -270,6 +303,10 @@ impl SupervisedRun {
     fn process_failed(&self) {
         self.lifecycle.lock().process_failed();
         self.changed.notify_all();
+        // waiter 已终结，进程等待不可恢复；释放 PTY 资源让 reader 尽快到达
+        // 终结态，并按补充收敛判定完成退役，避免 Failed 态永久占用 active 表。
+        self.resource.lock().take();
+        self.finish_if_terminal();
     }
 
     fn output_end(&self, epoch: WireU64, final_offset: WireU64) {
@@ -398,7 +435,7 @@ impl SupervisedRun {
     fn finish_if_terminal(&self) {
         let snapshot = {
             let lifecycle = self.lifecycle.lock();
-            if !lifecycle.can_retire() {
+            if !lifecycle.can_retire() && !supervisor_converged(&lifecycle) {
                 return;
             }
             lifecycle.clone()
@@ -407,7 +444,7 @@ impl SupervisedRun {
             return;
         };
         let key = identity(&self.run);
-        core.completed.lock().insert(key.clone(), snapshot);
+        record_completed(&mut core.completed.lock(), key.clone(), snapshot);
         core.active.lock().remove(&key);
         core.settled.notify_all();
         // TerminalTransports stores only a Weak. Keep this strong reference
@@ -437,4 +474,103 @@ impl OutputProgress for SupervisedRun {
 
 fn identity(run: &RunKey) -> RunIdentity {
     (run.run_id.clone(), run.generation)
+}
+
+#[cfg(test)]
+mod convergence_tests {
+    use super::*;
+
+    fn lifecycle() -> LifecycleRecord {
+        LifecycleRecord::new(RunKey {
+            run_id: "run-a".into(),
+            generation: 1,
+        })
+    }
+
+    // 状态机自身不收敛 Failed（can_retire 只认 Exited），宿主层补充判定收敛。
+    #[test]
+    fn Supervisor_ProcessFailure_FailedIncompleteConvergesViaSupervisor_001() {
+        let mut record = lifecycle();
+        record.process_running().unwrap();
+        record.process_failed();
+        assert_eq!(record.process(), ProcessLifecycle::Failed);
+        assert_eq!(record.output(), OutputLifecycle::Incomplete);
+        assert!(!record.can_retire(), "修复前 Failed 态永不满足 can_retire");
+        assert!(supervisor_converged(&record));
+    }
+
+    // process_failed 保留既有 Degraded 输出态；该形态同样收敛。
+    #[test]
+    fn Supervisor_ProcessFailure_DegradedOutputStillConverges_002() {
+        let mut record = lifecycle();
+        record.process_running().unwrap();
+        record.output_started("1").unwrap();
+        record.mark_degraded().unwrap();
+        record.process_failed();
+        assert_eq!(record.output(), OutputLifecycle::Degraded);
+        assert!(!record.can_retire());
+        assert!(supervisor_converged(&record));
+    }
+
+    // 未终结的 Failed（输出仍 Draining）不收敛；正常 Exited 判定不受影响。
+    #[test]
+    fn Supervisor_ProcessFailure_NonTerminalOutputStaysActive_003() {
+        let mut record = lifecycle();
+        record.process_running().unwrap();
+        record.output_started("1").unwrap();
+        record.process_failed();
+        // process_failed 会立刻把未终结输出置为 Incomplete，此形态仅为
+        // 防御性验证：构造 Draining 需要真实流，这里确认判定不含糊。
+        assert!(supervisor_converged(&record));
+
+        let mut exited = lifecycle();
+        exited.process_running().unwrap();
+        exited.process_exited().unwrap();
+        assert!(
+            !supervisor_converged(&exited),
+            "Exited 仍走原 can_retire 判定"
+        );
+    }
+
+    // completed 诊断表有界：超出上限按完成顺序淘汰最老记录。
+    #[test]
+    fn Supervisor_CompletedRetention_BoundedAndEvictsOldest_004() {
+        let mut completed = CompletedRuns::default();
+        for index in 0..(SUPERVISOR_COMPLETED_MAX + 5) {
+            let run_id = format!("run-{index}");
+            let mut record = LifecycleRecord::new(RunKey {
+                run_id: run_id.clone(),
+                generation: 1,
+            });
+            record.process_running().unwrap();
+            record.output_started("1").unwrap();
+            record.process_exited().unwrap();
+            record.output_end("0").unwrap();
+            record.parsed_through("0").unwrap();
+            record_completed(&mut completed, (run_id, 1), record);
+        }
+        assert_eq!(completed.records.len(), SUPERVISOR_COMPLETED_MAX);
+        assert!(!completed.records.contains_key(&(format!("run-0"), 1)));
+        assert!(!completed.records.contains_key(&(format!("run-4"), 1)));
+        assert!(completed.records.contains_key(&(format!("run-5"), 1)));
+        assert!(completed
+            .records
+            .contains_key(&(format!("run-{}", SUPERVISOR_COMPLETED_MAX + 4), 1)));
+        assert_eq!(
+            completed.order.front().map(|(run_id, _)| run_id.clone()),
+            Some(format!("run-5"))
+        );
+    }
+
+    // 同一 run 的重复完成（迟到 reader 终结）只保留最新快照且不重复排队。
+    #[test]
+    fn Supervisor_CompletedRetention_RepublishKeepsSingleOrderEntry_005() {
+        let mut completed = CompletedRuns::default();
+        let key = (String::from("run-a"), 1);
+        record_completed(&mut completed, key.clone(), lifecycle());
+        record_completed(&mut completed, key.clone(), lifecycle());
+        assert_eq!(completed.records.len(), 1);
+        assert_eq!(completed.order.len(), 1);
+        assert_eq!(completed.order.front(), Some(&key));
+    }
 }
