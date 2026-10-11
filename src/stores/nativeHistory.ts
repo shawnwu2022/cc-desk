@@ -13,6 +13,8 @@ export interface NativeHistoryContext {
   projectId: string
   projectPath: string
   force?: boolean
+  /** 仅 close 路径使用：读失败时保留已有显示行（本地证据最强），错误标注仍阻止 absence 误判。 */
+  retainOnFailure?: boolean
 }
 
 export type NativeHistorySession = Extract<ResourceItem, { type: 'session' }> & {
@@ -158,7 +160,7 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
             }
             entry.error = result.reason ?? 'SOURCE_UNAVAILABLE'
             entry.diagnosticStage = 'read-source-enumeration'
-            entry.sessions = []
+            if (!input.retainOnFailure) entry.sessions = []
             break
           }
           metadataIncomplete ||= result.historyMetadataIncomplete === true
@@ -204,7 +206,7 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
         const diagnostic = projectionFailure(failure, stage)
         entry.error = diagnostic.code
         entry.diagnosticStage = diagnostic.stage
-        entry.sessions = []
+        if (!input.retainOnFailure) entry.sessions = []
         entry.loaded = diagnostic.code !== 'SOURCE_BUSY'
         throw diagnostic
       } finally {

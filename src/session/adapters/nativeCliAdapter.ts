@@ -70,7 +70,9 @@ function activeTabId(id: string): string {
 }
 
 function tabNativeSessionId(tab: NativeCliTab): string | null {
-  return tab.action.kind === 'resume-id' ? tab.action.nativeSessionId : null
+  if (tab.action.kind === 'resume-id') return tab.action.nativeSessionId
+  // 认证 hook 观察回填的运行中身份，只用于显示认领（活动/历史行去重），不是授权证据。
+  return tab.observedSessionId ?? null
 }
 
 function projectNotice(tab: NativeCliTab, tabs: NativeTabsPort): NativeObservationNoticeState | undefined {
@@ -420,7 +422,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // a second close. The catalog's completed-close snapshot follows this read,
     // including a response that arrives after the runtime identity disappeared.
     if (deps.history.load) await deps.history.load({ cli: tab.cli, profileId: tab.profileId,
-      profileRevision: tab.profileRevision, projectId: tab.projectId, projectPath: tab.projectPath, force: true }).catch(() => {})
+      profileRevision: tab.profileRevision, projectId: tab.projectId, projectPath: tab.projectPath, force: true,
+      retainOnFailure: true }).catch(() => {})
   }
   async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
     const owns = captureOwnership(id)
