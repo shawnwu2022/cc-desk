@@ -384,7 +384,9 @@ fn HistorySource_LongNoTitle_008() {
     assert!(updated_at.is_none());
 }
 
-// 1677 个 12KiB 身份头仍受原 16MiB 总量限制，元数据采样不能扩大或吞掉全局上限。
+// 1677 个 12KiB 身份头（每条记录跨四个 4KiB 块，约 26MiB 计费字节）在 16MiB 显式
+// 总量下仍然失败关闭：元数据采样不能扩大或吞掉全局上限。默认上限的量级由
+// LimitsDefaultValues 单独钉住，避免该用例为了踩满 64MiB 而在慢机器上先撞 5 秒协作截止。
 #[test]
 #[allow(non_snake_case)]
 fn HistorySource_KeepHeaderCap_009() {
@@ -411,9 +413,24 @@ fn HistorySource_KeepHeaderCap_009() {
             query: None,
             session_id: None,
         },
-        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+        &mut Budget::new(super::super::super::scoped_fs::Limits {
+            file_bytes: 2 * 1024 * 1024,
+            total_bytes: 16 * 1024 * 1024,
+            entries: 4096,
+        }),
     );
     assert_eq!(result.err(), Some("SOURCE_TOO_LARGE"));
+}
+
+// 默认聚合上限的量级单独钉住：真实 Codex 根（约 2100 个 rollout）的一次性
+// 元数据采样实测消耗约 45 MiB / 4400 entries，64MiB / 16384 entries 留出约三成字节余量。
+#[test]
+#[allow(non_snake_case)]
+fn HistorySource_DefaultLimitsCoverRealCodexRoots_036() {
+    let limits = super::super::super::scoped_fs::Limits::default();
+    assert_eq!(limits.file_bytes, 2 * 1024 * 1024);
+    assert_eq!(limits.total_bytes, 64 * 1024 * 1024);
+    assert_eq!(limits.entries, 16384);
 }
 
 // Claude 首个快照无 cwd 时仍扫描旧 64KiB 窗口，保留随后用户记录的项目、标题与完整原生时间。
@@ -622,7 +639,7 @@ fn HistoryClaude_LongFirstRecord_013() {
 }
 
 // 1251 complete synthetic Claude transcripts with 96KiB assistant bodies must
-// fit the existing 16MiB aggregate observation cap without reading those bodies.
+// fit the 64MiB default aggregate observation cap without reading those bodies.
 #[test]
 #[allow(non_snake_case)]
 fn HistoryClaude_Load1251_014() {
@@ -1372,5 +1389,44 @@ fn HistoryClaude_TitleProvenanceWire_035() {
             row.get("titleUnknown").and_then(Value::as_bool),
             expected.is_none().then_some(true)
         );
+    }
+}
+
+// 尾段记录携带的 cwd 与首段观察不同（会话进入子目录、或仅大小写/分隔符差异）不是
+// 身份歧义：行归属由首段 cwd 决定，尾段只提取标题，其身份由 sessionId 一致性约束。
+// 真机复现：46 个 Claude 转录中 7 个因此被误判 SOURCE_AMBIGUOUS，整源不可用。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_TailCwdVariationKeepsRow_037() {
+    let temp = tempfile::tempdir().unwrap();
+    let nested = temp.path().join("web").to_str().unwrap().to_string();
+    for tail in [
+        format!(
+            "{}\n{}\n",
+            json!({"type":"user","cwd":nested,"sessionId":"fixture","message":{"content":"later turn"}}),
+            json!({"type":"ai-title","aiTitle":"generated title","sessionId":"fixture"}),
+        ),
+        format!(
+            "{}\n",
+            json!({"type":"ai-title","aiTitle":"generated title","sessionId":"fixture","cwd":"/synthetic/unrelated"}),
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        std::fs::write(
+            temp.path().join("projects/p/fixture.jsonl"),
+            claude_tail_input(temp.path(), &tail),
+        )
+        .unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let items =
+            read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+        assert_eq!(items.len(), 1, "cwd variation in the tail is not ambiguity");
+        let ResourceItem::Session { title, cwd, .. } = &items[0] else {
+            panic!("history must return session metadata")
+        };
+        assert_eq!(title, "generated title");
+        assert_eq!(cwd.as_deref(), Some(temp.path().to_str().unwrap()));
     }
 }

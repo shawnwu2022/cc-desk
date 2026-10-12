@@ -322,11 +322,9 @@ fn enrich_claude_title(
             return Err("SOURCE_INVALID");
         }
         claude_observed_session_id(&value, &transcript.id)?;
-        if let Some(cwd) = value["cwd"].as_str() {
-            if transcript.cwd.as_deref() != Some(cwd) {
-                return Err("SOURCE_AMBIGUOUS");
-            }
-        }
+        // 同一转录内的 cwd 会随会话进入子目录而变化（例如 root/web、root/mobile/android），
+        // 首段观察到的只是其中一个取值。这里不再比对 cwd：行归属已由首段观察决定，
+        // 尾段只用于提取标题，其身份约束由上面的 sessionId 校验承担。
         let title = match value["type"].as_str() {
             Some("ai-title") => Some((claude_ai_title(&value, &transcript.id)?, TitlePriority::Ai)),
             Some("custom-title") => value["customTitle"]
