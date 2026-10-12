@@ -18,8 +18,11 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             file_bytes: 2 * 1024 * 1024,
-            total_bytes: 16 * 1024 * 1024,
-            entries: 4096,
+            // 真实 Codex 根（约 2100 个 rollout、按年/月/日分层）的一次性元数据采样
+            // 实测消耗约 45 MiB / 4400 entries（首记录超过 4KiB 时会扩展读取）；
+            // 64 MiB / 16384 entries 留出约三成字节余量，5 秒协作截止仍是硬护栏。
+            total_bytes: 64 * 1024 * 1024,
+            entries: 16384,
         }
     }
 }
