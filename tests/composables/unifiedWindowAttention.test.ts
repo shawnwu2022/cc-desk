@@ -183,6 +183,19 @@ describe('Native unread reply receipt attention', () => {
     expect(tab.activityState).toBe('unknown')
     expect(flashes()).toHaveLength(0)
   })
+  // 结束后的保留回执仍需窗口焦点和实际可见终端，单独选择行不确认。
+  it('NativeNotice_EndedActualView_018', async () => {
+    io.focused = true
+    const tab = nativeNoticeOwner(), notice = unreadReply(tab), other = nativeNoticeOwner()
+    const { visible } = render('native-tab:' + tab.tabId); visible.value = false
+    tab.status = 'exited'
+    await flushPromises()
+    visible.value = true; await flushPromises()
+    expect(tab.observationNotice?.unreadReplyEnd).toEqual(notice)
+    expect(useNativeTabsStore().activeTabId).toBe(other.tabId)
+    useNativeTabsStore().setActive(tab.tabId); await flushPromises()
+    expect(tab.observationNotice?.unreadReplyEnd).toBeNull()
+  })
   it('NativeNotice_UnprovenInitialFocusCannotAcknowledge_010', async () => {
     const tab = nativeNoticeOwner(), notice = unreadReply(tab)
     let finish!: (focused: boolean) => void

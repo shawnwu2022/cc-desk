@@ -63,7 +63,7 @@ describe('Unified SessionItem', () => {
     await wrapper.setProps({ selected: false })
     expect(wrapper.get('.session-status-icon').attributes('data-status-entry')).toBeUndefined()
     await wrapper.setProps({ session: { ...base, activityState: 'idle', attentionKind: 'completed' } })
-    expect(wrapper.get('.session-status-icon').attributes('data-status-entry')).toBe('completed')
+    expect(wrapper.get('.session-app-icon').attributes('data-completion-entry')).toBe('true')
   })
 
   // 历史行点击发起恢复，双击的第二次点击不重复；不再提供独立恢复按钮。
@@ -138,7 +138,7 @@ describe('Unified SessionItem', () => {
     const rules = styleRules()
     const grid = rules.find((rule) => rule.selectorText === '.session-item')!
     expect(grid.style.getPropertyValue('display')).toBe('grid')
-    expect(grid.style.getPropertyValue('grid-template-columns')).toBe('16px 18px minmax(0, 1fr) 38px 20px')
+    expect(grid.style.getPropertyValue('grid-template-columns')).toBe('20px minmax(0, 1fr) 38px 20px')
     expect(grid.style.getPropertyValue('column-gap')).toBe('6px')
     expect(Number.parseInt(grid.style.getPropertyValue('height'))).toBeGreaterThanOrEqual(36)
     expect(Number.parseInt(grid.style.getPropertyValue('height'))).toBeLessThanOrEqual(38)
@@ -170,8 +170,9 @@ describe('Unified SessionItem', () => {
     const wrapper = row({ ...base, activityState: 'idle' })
     expect(wrapper.get('.session-time').text()).toBe('6m')
     expect(wrapper.get('.session-name').text()).toBe(base.title)
-    expect(wrapper.get('.session-status-icon').attributes('aria-label')).toBe('Running')
-    expect(wrapper.get('.cli-app-icon').attributes('aria-label')).toBe('Codex CLI')
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('Codex CLI; Running')
+    expect(wrapper.find('.session-status-icon').exists()).toBe(false)
+    expect(wrapper.get('.cli-app-icon').attributes('aria-hidden')).toBe('true')
     expect(wrapper.text()).toBe(`${base.title}6m`)
     await wrapper.get('.session-time').trigger('focus')
     const fullDate = new Date(base.lastActivityAt).toLocaleString('en')

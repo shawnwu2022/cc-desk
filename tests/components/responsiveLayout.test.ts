@@ -33,7 +33,7 @@ it.each(matrix)('Layout_Matrix_001_$label', async ({ width, height, scale, local
   expect(columns.style.getPropertyValue('--context-column-width')).toBe(mode === 'wide' ? '344px' : '0px')
   expect(columns.style.getPropertyValue('--session-column-width')).toBe(mode === 'compact' ? '0px' : '288px')
   const item = w.get('[data-session-row]')
-  expect(item.get('.session-status-icon').attributes('aria-label')).toBe(locale === 'zh' ? zh.sessionStatusRunning : en.sessionStatusRunning)
+  expect(item.get('.session-app-icon').attributes('aria-label')).toBe('Codex CLI; ' + (locale === 'zh' ? zh.sessionStatusRunning : en.sessionStatusRunning))
   expect(item.find('.cli-app-icon').exists()).toBe(true); expect(item.get('.session-name').text()).toHaveLength(200)
   expect(item.get('.session-time').text()).toBe('1m'); expect(item.find('.session-overflow-trigger button').exists()).toBe(true)
   expect(w.get('.project-name').text()).toHaveLength(80)
@@ -71,7 +71,7 @@ it('Layout_SettingsModalOwnership_003', async () => {
 // 静态布局约束只验证 CSS 策略，不声称 jsdom 测出了溢出或字体宽度。
 it('Layout_PreservesColumnsAndWrap_004', () => {
   const session = readFileSync('src/components/sessions/SessionItem.vue', 'utf8')
-  expect(session).toMatch(/grid-template-columns:\s*16px 18px minmax\(0, 1fr\) 38px 20px/)
+  expect(session).toMatch(/grid-template-columns:\s*20px minmax\(0, 1fr\) 38px 20px/)
   expect(session).toMatch(/\.session-name\s*\{[^}]*overflow:\s*hidden[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/s)
   const shell = readFileSync('src/components/shell/AppShell.vue', 'utf8'); expect(shell).toContain('minmax(0, 1fr)'); expect(shell).toContain('overflow: hidden')
   const settings = readFileSync('src/components/settings/SettingsView.vue', 'utf8'); expect(settings).toContain('minmax(0, 1fr)'); expect(settings).toContain('overflow-x: hidden')

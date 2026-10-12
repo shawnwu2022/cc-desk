@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import type { NativeObservationNotice } from '@/types/nativeObservationNotice'
 import type {
   ProjectActionRequest, SessionMenuAction, SessionPrimaryAction,
   SessionTreeConfirmationRequest, NewSessionRequest, CreateUnifiedSessionInput, ResumeDialogRequest,
@@ -16,7 +17,8 @@ export type WorkspaceRequest =
   | ({ kind: 'restore-session' } & ResumeDialogRequest)
   | { kind: 'activate' | 'restore-archive' | 'rename-cancel'; sessionId: string }
   | { kind: 'primary-action'; sessionId: string; action: SessionPrimaryAction }
-  | { kind: 'menu-action'; sessionId: string; action: SessionMenuAction }
+  | { kind: 'menu-action'; sessionId: string; action: Exclude<SessionMenuAction, 'clear-unread'> }
+  | { kind: 'menu-action'; sessionId: string; action: 'clear-unread'; expectedNotice: NativeObservationNotice }
   | { kind: 'rename'; sessionId: string; title: string }
   | { kind: 'project-action'; request: ProjectActionRequest }
   | { kind: 'confirmation'; request: SessionTreeConfirmationRequest }

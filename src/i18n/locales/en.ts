@@ -540,6 +540,7 @@ export default {
   sessionActionRetry: 'Retry',
   sessionActionRestart: 'Restart',
   sessionActionClose: 'Close',
+  sessionActionClearUnread: 'Clear unread marker',
   sessionActionDiscardCreation: 'Cancel creation',
   sessionActionArchive: 'Archive',
   sessionActionStopAndArchive: 'Stop and archive',

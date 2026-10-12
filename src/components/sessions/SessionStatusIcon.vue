@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppTooltip from '@/components/ui/AppTooltip.vue'
 import type { SessionVisualState, SessionActivityState } from '@/types/unifiedSession'
+import { sessionVisualLabelKey } from '@/utils/sessionPresentation'
 import starting from '@/assets/icons/session-status/starting.svg?raw'
 import running from '@/assets/icons/session-status/running.svg?raw'
 import needsUser from '@/assets/icons/session-status/needs-user.svg?raw'
@@ -23,7 +24,7 @@ import compacting from '@/assets/icons/session-status/compacting.svg?raw'
 import waitingInput from '@/assets/icons/session-status/waiting-input.svg?raw'
 import archived from '@/assets/icons/session-status/archived.svg?raw'
 
-const props = defineProps<{ state: SessionVisualState; activityState?: SessionActivityState; archived?: boolean; transitionState?: SessionVisualState }>()
+const props = defineProps<{ state: SessionVisualState; activityState?: SessionActivityState; archived?: boolean; transitionState?: SessionVisualState; decorative?: boolean }>()
 const { t } = useI18n()
 const visuals: Record<SessionVisualState, { svg: string; labelKey: string }> = {
   starting: { svg: starting, labelKey: 'sessionStatusStarting' },
@@ -58,7 +59,7 @@ const entryMotion = ref<'permission' | 'needs-user' | 'completed' | null>(null)
 const transitionState = computed(() => props.transitionState ?? props.state)
 watch(() => JSON.stringify([transitionState.value, props.activityState ?? null, props.archived ?? false]), (next, previous) => {
   entryMotion.value = null
-  if (next === previous || JSON.parse(previous)[0] === transitionState.value || props.archived || props.state !== transitionState.value
+  if (props.decorative || next === previous || JSON.parse(previous)[0] === transitionState.value || props.archived || props.state !== transitionState.value
     || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
   const state = transitionState.value
   if (state === 'permission' || state === 'needs-user' || state === 'completed') entryMotion.value = state
@@ -69,20 +70,21 @@ function finishEntryMotion(event: AnimationEvent) {
   if (!(trigger instanceof HTMLElement) || !(event.target instanceof Node) || !trigger.contains(event.target)) return
   entryMotion.value = null
 }
-const label = computed(() => t(visual.value.labelKey))
+const label = computed(() => t(sessionVisualLabelKey(props.state, props.activityState, props.archived)))
 </script>
 
 <template>
-  <AppTooltip :text="label">
+  <component :is="decorative ? 'span' : AppTooltip" :class="decorative ? 'session-status-icon__container' : undefined" :text="decorative ? undefined : label">
     <span class="session-status-icon" :class="[`session-status-icon--${state}`, { 'session-status-icon--thinking': state === 'working' && activityState === 'thinking' }, entryMotion && `session-status-icon--entry-${entryMotion}`]"
-      :data-status-entry="entryMotion ?? undefined" @animationend="finishEntryMotion" @animationcancel="finishEntryMotion" role="img" :aria-label="label" tabindex="0">
+      :data-status-entry="entryMotion ?? undefined" @animationend="finishEntryMotion" @animationcancel="finishEntryMotion" :role="decorative ? undefined : 'img'" :aria-hidden="decorative || undefined" :aria-label="label" :tabindex="decorative ? undefined : 0">
       <!-- Only these allowlisted, bundled self-owned SVGs enter this sink; no caller markup. -->
       <span :key="visual.labelKey" class="session-status-icon__shape" aria-hidden="true" v-html="visual.svg" />
     </span>
-  </AppTooltip>
+  </component>
 </template>
 
 <style scoped>
+.session-status-icon__container { display: inline-flex; line-height: 0; }
 .session-status-icon {
   --session-status-info: #2a5082;
   --session-status-success: #367e63;
