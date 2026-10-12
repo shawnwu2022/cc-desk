@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.18.11] - 2026-10-12
+
+- Keep bounded Claude title-tail cwd changes from making an otherwise valid history source unavailable while retaining exact session identity and header ownership checks
+- Raise aggregate native history read budgets to 64 MiB and 16,384 entries while retaining per-file caps, deadlines and fail-closed admission
+- Keep open terminals ahead of closed history in session lists and preserve relative ordering within each group
+
 ## [0.18.10] - 2026-10-12
 
 - Fix the installed application's startup black screen by compiling locale strings through Vue I18n's CSP-compatible AST runtime

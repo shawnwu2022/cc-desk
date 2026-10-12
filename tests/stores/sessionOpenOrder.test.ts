@@ -135,7 +135,7 @@ describe('session order follows accepted opens instead of background activity', 
     expect(writes).toHaveLength(2)
   })
 
-  it('restoring an archived history row moves it forward without opening or selecting its terminal', async () => {
+  it('restores an archived history row behind open terminals without opening or selecting it', async () => {
     const { catalog, projects } = native()
     await catalog.initialize()
     await catalog.resumeCatalogSession(catalog.sessions.find(row => row.nativeSessionId === 'b')!)
@@ -143,7 +143,8 @@ describe('session order follows accepted opens instead of background activity', 
     disk.archivedSessions['/repo'] = [a.id]; await projects.reload(); await catalog.refresh()
     const selected = catalog.activeSessionId
     time = 4000; await catalog.restoreArchivedSession(a.id)
-    expect(ids(catalog)).toEqual(['a', 'b'])
+    // 恢复的仍是关闭会话，开启的终端始终排在它之前。
+    expect(ids(catalog)).toEqual(['b', 'a'])
     expect(catalog.activeSessionId).toBe(selected)
     expect(catalog.sessions.find(row => row.id === a.id)).toMatchObject({ opened: false, lastOpenedAt: 4000 })
   })

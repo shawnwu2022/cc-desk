@@ -82,9 +82,9 @@ const sessionOrders = ref(new Map<string, { ids: string[]; openedAt: Map<string,
 function snapshotOrder(groups = normalGroups.value) {
   const next = new Map(sessionOrders.value)
   for (const group of groups) {
-    const rows = group.sessions.filter(row => !row.archived)
+    const rows = group.sessions.filter(row => !row.archived).sort(listActivityOrder)
     next.set(group.projectKey, {
-      ids: [...rows].sort((a, b) => activityTime(b) - activityTime(a) || a.id.localeCompare(b.id)).map(row => row.id),
+      ids: rows.map(row => row.id),
       openedAt: new Map(rows.map(row => [row.id, row.lastOpenedAt ?? 0])),
     })
   }
@@ -92,6 +92,12 @@ function snapshotOrder(groups = normalGroups.value) {
 }
 function activityTime(row: UnifiedSession) {
   return Number.isFinite(row.lastActivityAt) ? row.lastActivityAt : 0
+}
+// Open terminals always precede closed history; activity orders within a run of
+// equal ownership, with exact identity breaking ties.
+function listActivityOrder(a: UnifiedSession, b: UnifiedSession) {
+  return Number(b.opened === true) - Number(a.opened === true)
+    || activityTime(b) - activityTime(a) || a.id.localeCompare(b.id)
 }
 watch(() => store.completedClose, closed => {
   if (closed) snapshotOrder(normalGroups.value.filter(group => group.projectKey === closed.projectKey))
@@ -106,9 +112,14 @@ watch(() => ({ groups: normalGroups.value, archived: archived.value }), ({ group
   for (const key of next.keys()) if (!keys.has(key)) next.delete(key)
   for (const group of groups) {
     const rows = group.sessions.filter(row => !row.archived)
+    const openedById = new Map(rows.map(row => [row.id, row.opened === true]))
     const previous = next.get(group.projectKey)
+    function partition(list: string[]): string[] {
+      // 关闭的行不能排在打开行之前；分区内部保持既定相对顺序。
+      return [...list.filter(id => openedById.get(id) === true), ...list.filter(id => openedById.get(id) !== true)]
+    }
     if (!previous) {
-      next.set(group.projectKey, { ids: [...rows].sort((a, b) => activityTime(b) - activityTime(a) || a.id.localeCompare(b.id)).map(row => row.id),
+      next.set(group.projectKey, { ids: partition([...rows].sort(listActivityOrder).map(row => row.id)),
         openedAt: new Map(rows.map(row => [row.id, row.lastOpenedAt ?? 0])) })
       continue
     }
@@ -120,7 +131,8 @@ watch(() => ({ groups: normalGroups.value, archived: archived.value }), ({ group
     const leadingIds = new Set(leading.map(row => row.id))
     const discovered = rows.filter(row => !previous.openedAt.has(row.id) && !leadingIds.has(row.id))
       .sort((a, b) => activityTime(b) - activityTime(a) || a.id.localeCompare(b.id))
-    next.set(group.projectKey, { ids: [...leadingIds, ...previous.ids.filter(id => live.has(id) && !leadingIds.has(id)), ...discovered.map(row => row.id)],
+    const retained = previous.ids.filter(id => live.has(id) && !leadingIds.has(id))
+    next.set(group.projectKey, { ids: partition([...leadingIds, ...retained, ...discovered.map(row => row.id)]),
       openedAt: new Map(rows.map(row => [row.id, row.lastOpenedAt ?? 0])) })
     for (const row of rows) knownArchivedIds.delete(row.id)
   }
