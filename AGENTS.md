@@ -46,6 +46,7 @@
 | 完整 Vitest | `npm test` / `npm run test:all` / `npm run test:ci` | 四组全量；不包含独立 Node policy、Rust、视觉和平台验收 |
 | 类型/构建 | `npm run typecheck` / `npm run build` | 按变更影响执行，不能替代运行验收 |
 | 视觉逻辑/浏览器 | `npm run test:visual:unit` / `npm run test:visual` | 两套独立入口；浏览器成功不等于 Windows WebView 验收 |
+| 生产启动/CSP | `npm run test:production` | 重新构建正常生产入口，在真实生产 CSP 下检查中英文首屏与异步 Settings；合成 IPC 不替代安装包 WebView2 验收 |
 | Rust 迭代 | `cargo test --locked --lib <行为过滤名>` | 在 `src-tauri` 按域过滤，记录实际执行库存 |
 | Rust library 全量 | `npm run test:rust:lib` | 等价 `cargo test --locked --lib`，包含真实进程集成，**不是快速组** |
 

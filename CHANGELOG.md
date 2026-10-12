@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.18.10] - 2026-10-12
+
+- Fix the installed application's startup black screen by compiling locale strings through Vue I18n's CSP-compatible AST runtime
+- Verify the actual production bundle with the production CSP in a browser, including English/Chinese startup, Projects navigation and lazy Settings loading; make this a required frontend CI step
+- Retain strict CSP, authenticated document/IPC boundaries, existing native test inventory and protected-main signed publication gates
+
 ## [0.18.9] - 2026-10-12
 
 - Preserve staged input and partial/unknown receipts while a commit is in progress; reclaim only abandoned, uncommitted uploads with a strictly newer sequence

@@ -116,6 +116,7 @@ During iteration, select the checks that cover the changed behavior:
 | Ordinary Node/DOM tests | `npm run test:fast` |
 | Real subprocess/script/HTTP contracts | `npm run test:process` |
 | Full stress workload | `npm run test:stress` |
+| Production startup under the actual CSP | `npm run test:production` |
 
 For complete Vitest and Rust checks, use the following separately from the iteration loop. Before direct Cargo commands on Windows, run `node scripts/prepare-conpty.mjs` from the repository root.
 
@@ -128,7 +129,9 @@ cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 ```
 
-`npm test`, `test:all` and `test:ci` cover all four Vitest groups. Independent Node policy, Rust, visual and platform gates remain separate. `test:rust:lib` still contains real process integration tests; it is not a fast suite. See the [test guide](docs/测试编写原则.md) and [CI performance record](docs/ci-performance.md).
+`npm test`, `test:all` and `test:ci` cover all four Vitest groups. Independent Node policy, Rust, production startup, visual and platform gates remain separate. `test:rust:lib` still contains real process integration tests; it is not a fast suite. See the [test guide](docs/测试编写原则.md) and [CI performance record](docs/ci-performance.md).
+
+Install the production-startup browser with `npx playwright install --with-deps chromium` before `npm run test:production`. This required Frontend check builds the normal production entry and applies the production CSP to English/Chinese startup and navigation; its IPC fixture does not certify an installed WebView2 or real CLI. `npm run typecheck` generates shared configuration declarations into the ignored cache before checking the application and tests.
 
 Run the desktop app with:
 

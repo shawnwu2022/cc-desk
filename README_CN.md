@@ -102,6 +102,7 @@ npm run build
 | 普通 Node/DOM 测试 | `npm run test:fast` |
 | 真实子进程/脚本/HTTP 契约 | `npm run test:process` |
 | 完整压力工作量 | `npm run test:stress` |
+| 真实 CSP 下的生产启动 | `npm run test:production` |
 
 完整 Vitest 与 Rust 检查独立于迭代环执行。Windows 直接跑 Cargo 前，先从仓库根运行 `node scripts/prepare-conpty.mjs`。
 
@@ -114,7 +115,9 @@ cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 ```
 
-`npm test`、`test:all` 与 `test:ci` 均覆盖四个 Vitest 分组。独立 Node policy、Rust、视觉及平台门禁仍单独执行；`test:rust:lib` 仍含真实进程集成测试，不是快速组。详见 [测试指南](docs/测试编写原则.md) 与 [CI 性能记录](docs/ci-performance.md)。
+`npm test`、`test:all` 与 `test:ci` 均覆盖四个 Vitest 分组。独立 Node policy、Rust、生产启动、视觉及平台门禁仍单独执行；`test:rust:lib` 仍含真实进程集成测试，不是快速组。详见 [测试指南](docs/测试编写原则.md) 与 [CI 性能记录](docs/ci-performance.md)。
+
+生产启动门禁运行 `npm run test:production`，首次先用 `npx playwright install --with-deps chromium` 安装浏览器。该 required Frontend check 构建正常生产入口，并在真实生产 CSP 下检查中英文首屏与导航；IPC fixture 不能替代安装包 WebView2 或真实 CLI 验收。`npm run typecheck` 先生成共享配置声明至忽略的缓存目录，再检查应用与测试。
 
 启动桌面开发环境：
 

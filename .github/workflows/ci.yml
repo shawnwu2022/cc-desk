@@ -52,6 +52,20 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Install production startup browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify production startup under actual CSP
+        run: npm run test:production
+
+      - name: Retain production startup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-startup-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/production-startup
+          if-no-files-found: warn
+
   rust-compile:
     name: Rust compiled test bundle
     runs-on: windows-2022
