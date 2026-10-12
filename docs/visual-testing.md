@@ -42,6 +42,15 @@ Baseline changes require inspection of the actual pixels and exact source/hash
 provenance. The thirteen-image inventory, zero-pixel comparisons, geometry and
 interaction assertions remain required.
 
+The 0.18.12 session icon merge replaces five Linux Chromium screenshots with
+independently inspected actual PNGs from PR49 visual run 38222119387 attempt 2.
+The two pre-acceptance attempts produced identical bytes for all five images.
+Three dark-terminal captions also show the same grayscale antialias change in
+their first line; the text, geometry and all other main-content pixels remain
+unchanged. `approval-manifest.json` records exact hashes and accepted regions.
+The failed pre-acceptance runs stay failed; the updated images require a fresh
+zero-tolerance, no-update PR run before merge.
+
 Browser setup actions are shared with real-fixture DOM regressions in
 `tests/visual/fixtureActions.ts`. Project expansion keeps stable toggle membership
 while each click changes `aria-expanded`; menu setup focuses the real session row
