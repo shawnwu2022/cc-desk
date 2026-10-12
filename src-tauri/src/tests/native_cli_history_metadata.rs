@@ -269,7 +269,7 @@ fn HistorySource_Sparse1677_006() {
     let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
     let started = std::time::Instant::now();
     let items = read(
-        &Catalog {cli: CliKind::Codex, root: &root, projects: &granted(&root, &[temp.path().to_owned()]), user_config: None, check: &|| Ok(())},
+        &Catalog {cli: CliKind::Codex, root: &root, projects: &granted(&root, &[temp.path().to_owned()]), user_config: None, check: &|| Ok(()),},
         &Options {kind: ResourceKind::History, query: None, session_id: None},
         &mut budget,
     ).expect("metadata sampling must fit 1677 sparse histories within the existing aggregate and entry caps");

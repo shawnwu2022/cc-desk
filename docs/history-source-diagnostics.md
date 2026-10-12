@@ -6,11 +6,11 @@ Acknowledgements are in-memory and keyed to fixed source/error/stage plus canoni
 
 ## Guard meanings
 
-- `SOURCE_BUDGET_EXCEEDED`: the cooperative five-second deadline, checked between operations; it cannot interrupt an OS filesystem call
+- `SOURCE_BUDGET_EXCEEDED`: the cooperative thirty-five-second deadline, checked between operations; it cannot interrupt an OS filesystem call
 - `SOURCE_TOO_LARGE`: individual file/read or aggregate byte budget
 - `SOURCE_TOO_MANY_ENTRIES`: the entry budget
 
-The existing per-file/read maximum remains 2 MiB, with a 64 MiB aggregate, 16,384 entries and five seconds. The aggregate byte and entry limits were raised from 16 MiB/4,096 entries after measuring a real Codex history root: roughly 2,100 rollout files under a year/month/day tree consume about 4,400 entries and about 45 MiB for one bounded first-record sample per file (first records longer than 4 KiB extend within the per-file cap). The same explicit values are pinnable through `Limits`, and aggregate exhaustion still fails closed and retryable. No error code establishes the configured root's volume or identifies an offending file.
+The existing per-file/read maximum remains 2 MiB, with a 64 MiB aggregate, 16,384 entries and thirty-five seconds. The aggregate byte and entry limits were raised from 16 MiB/4,096 entries after measuring a real Codex history root: roughly 2,100 rollout files under a year/month/day tree consume about 4,400 entries and about 45 MiB for one bounded first-record sample per file (first records longer than 4 KiB extend within the per-file cap). The cooperative deadline was raised from five to thirty-five seconds in steps: past five seconds when the same real root grew past what five seconds could sample, and past twenty seconds once per-file open costs under active file-filter scanning were measured on the machine (full enumeration costs ~2,300 entries in milliseconds; per-file samples dominate the rest). The same explicit values are pinnable through `Limits`, and aggregate exhaustion still fails closed and retryable. No error code establishes the configured root's volume or identifies an offending file.
 
 ## Codex metadata sampling
 

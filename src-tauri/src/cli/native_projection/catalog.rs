@@ -31,6 +31,11 @@ pub(crate) struct Options<'a> {
     pub(crate) session_id: Option<&'a str>,
 }
 impl Catalog<'_> {
+    // 授权复核语义：read() 入口一次；每个文件观察完成后复核一次（「读后出账
+    // 前」防线，撤销后不得让已读内容继续入账）；观察出口由 registry 调用
+    // Grant::current 全量复核并丢弃整个观察。目录枚举不产出文件内容，身份由
+    // list() 内部的持有句柄 key 校验保证，不再逐目录做 O(项目) 次全量复核——
+    // 本机真实规模（~250 个会话目录、8 个注册项目）下那占整个读取的一半以上。
     fn check(&self) -> ReadResult<()> {
         (self.check)()?;
         self.root.current()?;
@@ -43,23 +48,18 @@ impl Catalog<'_> {
         Ok(())
     }
     fn bytes(&self, root: &Root, path: &str, budget: &mut Budget) -> ReadResult<Option<Vec<u8>>> {
-        self.check()?;
         let bytes = root.read(Path::new(path), budget)?;
         self.check()?;
         Ok(bytes)
     }
     fn entries(&self, root: &Root, path: &str, budget: &mut Budget) -> ReadResult<Vec<Entry>> {
-        self.check()?;
-        let entries = root.list(Path::new(path), budget)?;
-        self.check()?;
-        Ok(entries)
+        root.list(Path::new(path), budget)
     }
     fn history_prefix(
         &self,
         path: &str,
         budget: &mut Budget,
     ) -> ReadResult<Option<(Vec<u8>, bool)>> {
-        self.check()?;
         let result = if self.cli == CliKind::Codex {
             self.root.history_header(Path::new(path), budget)?
         } else {
@@ -83,7 +83,6 @@ impl Catalog<'_> {
         if !budget.optional_title_available(header_bytes) {
             return Ok(None);
         }
-        self.check()?;
         let result = self
             .root
             .history_title_tail(Path::new(path), header_bytes, budget)?;

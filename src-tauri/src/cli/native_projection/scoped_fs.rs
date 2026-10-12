@@ -20,7 +20,8 @@ impl Default for Limits {
             file_bytes: 2 * 1024 * 1024,
             // 真实 Codex 根（约 2100 个 rollout、按年/月/日分层）的一次性元数据采样
             // 实测消耗约 45 MiB / 4400 entries（首记录超过 4KiB 时会扩展读取）；
-            // 64 MiB / 16384 entries 留出约三成字节余量，5 秒协作截止仍是硬护栏。
+            // 64 MiB / 16384 entries 留出约三成字节余量，35 秒协作截止与字节
+            // 条目预算共同构成硬护栏。
             total_bytes: 64 * 1024 * 1024,
             entries: 16384,
         }
@@ -48,7 +49,11 @@ impl Budget {
     }
     pub(crate) fn checkpoint(&self) -> ReadResult<()> {
         // Cooperative deadline between operations; not a promise to interrupt OS filesystem I/O.
-        if self.started.elapsed() > Duration::from_secs(5) {
+        // 真实规模（~2130 个 rollout）下枚举毫秒级完成，逐文件首记录采样在
+        // 文件过滤驱动（实时扫描）逐句柄惩罚下每次打开多耗数毫秒，45 MiB 采样
+        // 需要约 30 秒。35 秒仍受 64 MiB / 16384 entries 预算硬护栏约束；成功
+        // 后的快照由连续页复用，不随每次翻页重扫。
+        if self.started.elapsed() > Duration::from_secs(35) {
             return Err("SOURCE_BUDGET_EXCEEDED");
         }
         Ok(())
@@ -148,10 +153,32 @@ impl Root {
     }
 
     pub(crate) fn current(&self) -> ReadResult<()> {
-        let now = Dir::open_ambient_dir(&self.selected, cap_std::ambient_authority())
-            .map_err(|_| "SOURCE_CHANGED")?;
-        if directory_key(&now)? != self.identity {
-            return Err("SOURCE_CHANGED");
+        #[cfg(windows)]
+        {
+            // Windows 目录能力以 deny delete-sharing 打开（held_root_cannot_
+            // silently_follow_replacement 的 Windows 分支）：持有句柄期间目录
+            // 无法删除或替换，重开路径只能解析到同一目录。直接对持有句柄取
+            // 身份 key 即可；check() 按目录×项目调用本函数，重开路径在实时
+            // 扫描下是 O(目录数×项目数) 次 CreateFile 的主导成本。
+            if directory_key(&self.dir)? != self.identity {
+                return Err("SOURCE_CHANGED");
+            }
+        }
+        #[cfg(unix)]
+        {
+            let now = Dir::open_ambient_dir(&self.selected, cap_std::ambient_authority())
+                .map_err(|_| "SOURCE_CHANGED")?;
+            if directory_key(&now)? != self.identity {
+                return Err("SOURCE_CHANGED");
+            }
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let now = Dir::open_ambient_dir(&self.selected, cap_std::ambient_authority())
+                .map_err(|_| "SOURCE_CHANGED")?;
+            if directory_key(&now)? != self.identity {
+                return Err("SOURCE_CHANGED");
+            }
         }
         Ok(())
     }

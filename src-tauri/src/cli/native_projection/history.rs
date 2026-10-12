@@ -83,7 +83,6 @@ pub(super) fn read(
         let mut transcript = match parsed {
             Ok(transcript) => transcript,
             Err(code) if o.kind == ResourceKind::History && b.omit_history_entry(code) => {
-                c.check()?;
                 continue;
             }
             Err(code) => return Err(code),
@@ -146,7 +145,7 @@ pub(super) fn read(
                     transcript.title_priority = Some(priority);
                 }
                 Ok(_) => {}
-                Err(code) if b.omit_history_entry(code) => c.check()?,
+                Err(code) if b.omit_history_entry(code) => {}
                 Err(code) => return Err(code),
             }
         }

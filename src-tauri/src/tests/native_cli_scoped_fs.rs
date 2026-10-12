@@ -252,7 +252,7 @@ fn SourceBudget_DeadlineCode_001() {
     fs::write(t.path().join("x"), b"{}").unwrap();
     let r = Root::open(t.path()).unwrap();
     let mut b = budget();
-    b.started = Instant::now() - Duration::from_secs(6);
+    b.started = Instant::now() - Duration::from_secs(36);
     assert_eq!(
         r.history_prefix(Path::new("x"), &mut b).err(),
         Some("SOURCE_BUDGET_EXCEEDED")
