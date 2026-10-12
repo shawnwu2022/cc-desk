@@ -78,7 +78,7 @@ describe('Unified project session tree', () => {
     const wrapper = panel({ currentProjectPath: '/work/game', loading: false })
     await wrapper.get('.project-main').trigger('click')
     const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
-    expect(order()).toEqual(['recent', 'legacy-tab:closing', 'old'])
+    expect(order()).toEqual(['legacy-tab:closing', 'recent', 'old'])
     await catalog.closeSession(closing.id); await nextTick()
     expect(order()).toEqual(['legacy-history:same-session', 'recent', 'old'])
     await wrapper.get('button[aria-label="Refresh sessions"]').trigger('click')
@@ -121,7 +121,8 @@ describe('Unified project session tree', () => {
     await wrapper.setProps({ projectGroups: [group([a, b, { ...old, lastOpenedAt: 150, lastActivityAt: 1000 }])] })
     expect(order()).toEqual(['a', 'b', 'old'])
     await wrapper.get('button[aria-label="Refresh sessions"]').trigger('click')
-    expect(order()).toEqual(['old', 'a', 'b'])
+    // 关闭的历史行始终排在打开行之后；分区内仍按最新活动排序。
+    expect(order()).toEqual(['a', 'b', 'old'])
   })
 
   // 新建、重新打开和归档恢复行置顶；状态恢复不重排，项目重新进入按活动重取快照。
@@ -138,13 +139,15 @@ describe('Unified project session tree', () => {
     await wrapper.setProps({ projectGroups: [group([{ ...a, lastOpenedAt: 60 }, b, created])] })
     expect(order()).toEqual(['a', 'c', 'b'])
     await wrapper.setProps({ projectGroups: [group([{ ...a, processState: 'running', lastOpenedAt: 60 }, b, created, restored])], archivedSessions: [] })
-    expect(order()).toEqual(['d', 'a', 'c', 'b'])
+    // 归档恢复的 d 仍是关闭行；新加入的置顶行 c 由分区重新落到打开行尾。
+    expect(order()).toEqual(['a', 'c', 'b', 'd'])
     await wrapper.setProps({ active: false })
     await wrapper.setProps({ active: true })
-    expect(order()).toEqual(['b', 'a', 'd', 'c'])
+    // 关闭的归档行 d 仍在打开行之后；活动序只在同一归属分组内生效。
+    expect(order()).toEqual(['b', 'a', 'c', 'd'])
     await wrapper.setProps({ currentProjectPath: '/other' })
     await wrapper.setProps({ projectGroups: [group([{ ...a, lastActivityAt: 80 }, b, created, restored])], currentProjectPath: '/work/game' })
-    expect(order()).toEqual(['a', 'b', 'd', 'c'])
+    expect(order()).toEqual(['a', 'b', 'c', 'd'])
   })
 
   // 普通项目与仅归档项目统一按名称排序，活动刷新和来源顺序不会移动项目行。
