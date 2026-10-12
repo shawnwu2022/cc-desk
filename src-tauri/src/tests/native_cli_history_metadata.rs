@@ -298,7 +298,8 @@ fn HistorySource_Sparse1677_006() {
     }
 }
 
-// 项目筛选移除另一条记录前，采样头中重复的 Codex 身份仍拒绝整个来源。
+// codex 同 thread 的不同 rollout 即使 cwd 不同也不再拒绝整个来源；无归属
+// （外国 cwd）的记录不进入代表竞争，已归属的代表保留并可列出。
 #[test]
 #[allow(non_snake_case)]
 fn HistorySource_DuplicateHeaders_007() {
@@ -320,7 +321,7 @@ fn HistorySource_DuplicateHeaders_007() {
         extend_sparse_fixture(&file, 3 * 1024 * 1024);
     }
     let root = Root::open(temp.path()).unwrap();
-    let result = read(
+    let items = read(
         &Catalog {
             cli: CliKind::Codex,
             root: &root,
@@ -334,8 +335,200 @@ fn HistorySource_DuplicateHeaders_007() {
             session_id: None,
         },
         &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .expect("同 thread 的无归属 rollout 不得让历史读取失败");
+    assert_eq!(items.len(), 1);
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["cwd"], temp.path().to_str().unwrap());
+}
+
+// codex 0.147+ 的 fork/compact 会为同一 thread 追加 rollout 文件，session id
+// 继承父 thread（文件名形如 <父id>_<新id>.jsonl）。同 id 多文件是合法 thread
+// 模型，最新文件代表 thread 当前状态，与 codex resume 语义一致；不得让整个
+// 来源失败，否则任一 fork 都会让全部 codex 历史无法加载。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_SameThreadRolloutsKeepLatest_040() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("sessions/2026/10/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    for (name, message, timestamp) in [
+        (
+            "rollout-2026-10-03T20-14-17-thread.jsonl",
+            "before fork",
+            "2026-10-03T20:14:17Z",
+        ),
+        (
+            "rollout-2026-10-03T23-35-11-thread_fork.jsonl",
+            "after fork",
+            "2026-10-03T23:35:11Z",
+        ),
+    ] {
+        std::fs::write(
+            directory.join(name),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":"thread","cwd":cwd}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":message},"timestamp":timestamp})
+            ),
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .expect("同 thread 的多个 rollout 不得让历史读取失败");
+    assert_eq!(items.len(), 1, "同 thread 只保留最新代表");
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["title"], "after fork");
+    assert_eq!(value[0]["updatedAt"], "2026-10-03T23:35:11Z");
+}
+
+// 同 thread 的最新 rollout 归属其自身 cwd 对应的项目：fork 后 thread 在另一
+// 项目继续时，条目随最新代表移动，不残留旧项目。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_SameThreadCrossProjectTakesLatest_042() {
+    let temp = tempfile::tempdir().unwrap();
+    let project_x = temp.path().join("x");
+    let project_y = temp.path().join("y");
+    std::fs::create_dir_all(&project_x).unwrap();
+    std::fs::create_dir_all(&project_y).unwrap();
+    let directory = temp.path().join("sessions/2026/10/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    for (name, cwd, message, timestamp) in [
+        (
+            "rollout-2026-10-03T20-14-17-thread.jsonl",
+            project_x.to_str().unwrap().to_owned(),
+            "in project x",
+            "2026-10-03T20:14:17Z",
+        ),
+        (
+            "rollout-2026-10-03T23-35-11-thread_fork.jsonl",
+            project_y.to_str().unwrap().to_owned(),
+            "in project y",
+            "2026-10-03T23:35:11Z",
+        ),
+    ] {
+        std::fs::write(
+            directory.join(name),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":"thread","cwd":cwd}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":message},"timestamp":timestamp})
+            ),
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let projects = [
+        ProjectRef {
+            id: "project-x",
+            root: &root,
+            paths: &[project_x.clone()],
+        },
+        ProjectRef {
+            id: "project-y",
+            root: &root,
+            paths: &[project_y.clone()],
+        },
+    ];
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &projects,
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .unwrap();
+    assert_eq!(items.len(), 1);
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["projectId"], "project-y");
+    assert_eq!(value[0]["title"], "in project y");
+}
+
+// 消息读取同样按代表制：同 thread 只读最新 rollout，不同文件的消息不得交错。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_SameThreadMessagesReadRepresentative_041() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("sessions/2026/10/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    for (name, message, timestamp) in [
+        (
+            "rollout-2026-10-03T20-14-17-thread.jsonl",
+            "before fork",
+            "2026-10-03T20:14:17Z",
+        ),
+        (
+            "rollout-2026-10-03T23-35-11-thread_fork.jsonl",
+            "after fork",
+            "2026-10-03T23:35:11Z",
+        ),
+    ] {
+        std::fs::write(
+            directory.join(name),
+            format!(
+                "{}\n{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":"thread","cwd":cwd}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":message},"timestamp":timestamp}),
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":format!("{message} answer")}]}})
+            ),
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::Messages,
+            query: None,
+            session_id: Some("thread"),
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .expect("同 thread 的多个 rollout 不得让消息读取失败");
+    let value = serde_json::to_value(&items).unwrap();
+    let bodies: Vec<&str> = value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        bodies,
+        vec!["after fork", "after fork answer"],
+        "只读代表 rollout，不含 fork 前消息"
     );
-    assert_eq!(result.err(), Some("SOURCE_AMBIGUOUS"));
 }
 
 // 230KiB 的完整有效身份头无需标题即可列出；未知正文不产生虚构标题、时间或完整性。

@@ -45,8 +45,11 @@ pub(super) fn read(
         }
         CliKind::Shell => unreachable!(),
     }
-    let mut transcripts = Vec::new();
+    let mut transcripts: Vec<(Transcript, Option<String>)> = Vec::new();
     let mut seen = BTreeSet::new();
+    // codex fork/compact 为同一 thread 追加 rollout，同 id 是合法 thread 模型；
+    // Claude 文件名即身份，跨目录同 id 仍是来源级异常。
+    let mut codex_representatives = std::collections::HashMap::<String, usize>::new();
     for path in files {
         let mut observation_bytes = 0;
         let parsed = (|| {
@@ -86,7 +89,7 @@ pub(super) fn read(
             Err(code) => return Err(code),
         };
         transcript.observation_bytes = observation_bytes;
-        if !seen.insert(transcript.id.clone()) {
+        if c.cli == CliKind::Claude && !seen.insert(transcript.id.clone()) {
             return Err("SOURCE_AMBIGUOUS");
         }
         // 一次观察服务多个已注册项目：cwd 唯一归属一个项目；无归属行不进入任何项目。
@@ -109,6 +112,22 @@ pub(super) fn read(
                 }
             }
         };
+        if c.cli == CliKind::Codex {
+            if let Some(&index) = codex_representatives.get(&transcript.id) {
+                // 最新文件代表 thread 当前状态，与 codex resume 语义一致；
+                // updated 相同（含都缺失）时保留先到的代表。
+                let replaces = match (&transcript.updated, &transcripts[index].0.updated) {
+                    (Some(new), Some(old)) => new > old,
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                };
+                if replaces {
+                    transcripts[index] = (transcript, owner);
+                }
+                continue;
+            }
+            codex_representatives.insert(transcript.id.clone(), transcripts.len());
+        }
         transcripts.push((transcript, owner));
     }
     // Required headers/tree checks finish before optional display enrichment.
