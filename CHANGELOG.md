@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.18.12] - 2026-10-12
+
+- Combine each session's application and lifecycle indicators in one fixed icon slot while keeping the Claude and Codex marks recognizable and all existing states visible
+- Keep authenticated native Claude reply-end unread until its exact notice is acknowledged, including after background selection and close/history retention within the app's bounded in-memory cache; show permission, input, error and unknown badges with accessible status text
+- Respect reduced motion and keyboard, pointer and touch access; verify the focused session behavior and production CSP without changing native CLI ownership
+
 ## [0.18.11] - 2026-10-12
 
 - Keep bounded Claude title-tail cwd changes from making an otherwise valid history source unavailable while retaining exact session identity and header ownership checks

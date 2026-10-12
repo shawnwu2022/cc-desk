@@ -76,7 +76,7 @@ function tabNativeSessionId(tab: NativeCliTab): string | null {
 }
 
 function projectNotice(tab: NativeCliTab, tabs: NativeTabsPort): NativeObservationNoticeState | undefined {
-  if (tab.cli !== 'claude' || tab.action.kind === 'raw' || tab.status !== 'running'
+  if (tab.cli !== 'claude' || tab.action.kind === 'raw' || !['running', 'exited', 'stopped'].includes(tab.status)
     || !tabs.hasOwnedObservationNotice?.(tab.tabId, captureNativeAttempt(tab))) return
   const copy = (notice: NativeObservationNotice | null | undefined): NativeObservationNotice | null => {
     if (!notice || notice.runId !== tab.runId || notice.generation !== tab.generation) return null
@@ -186,6 +186,57 @@ function parseHistoryId(id: string): { adapterSessionId: string; nativeSessionId
 }
 
 export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapter {
+  // 仅内存展示快照：不跨应用重启、不赋予资源/进程授权；满额不淘汰既有未读。
+  const closedNotices = new Map<string, NativeObservationNoticeState>()
+  const closingNoticeOwners = new Map<string, { latest: symbol; order: number; pending: number }>()
+  let closingNoticeOrder = 0, unresolvedNoticeCloses = 0
+  function releaseNoticeFences() {
+    if (unresolvedNoticeCloses) return
+    for (const [key, fence] of closingNoticeOwners) if (fence.pending === 0) closingNoticeOwners.delete(key)
+  }
+  function beginClosedNotice(tab: NativeCliTab) {
+    const initialKey = tabDisplayIdentity(tab).id, owner = Symbol(), order = ++closingNoticeOrder
+    const unresolved = !initialKey.startsWith(HISTORY_PREFIX)
+    if (unresolved) unresolvedNoticeCloses++
+    else {
+      const fence = closingNoticeOwners.get(initialKey) ?? { latest: owner, order, pending: 0 }
+      fence.latest = owner; fence.order = order; fence.pending++; closingNoticeOwners.set(initialKey, fence)
+    }
+    return {
+      publish: (notice: NativeObservationNoticeState | undefined) => {
+        if (!notice?.unreadReplyEnd) return
+        const matches = unresolved ? historyForTab(tab) : []
+        const key = unresolved && matches.length === 1
+          ? historyId(matches[0].entry, matches[0].item.sessionKey, matches[0].item.nativeSessionId) : initialKey
+        if (!key.startsWith(HISTORY_PREFIX)) return
+        const fence = closingNoticeOwners.get(key)
+        if (fence && (fence.order > order || fence.order === order && fence.latest !== owner)) return
+        if (unresolved) closingNoticeOwners.set(key, { latest: owner, order, pending: fence?.pending ?? 0 })
+        rememberClosed(key, notice)
+      },
+      release: () => {
+        if (unresolved) unresolvedNoticeCloses--
+        else {
+          const fence = closingNoticeOwners.get(initialKey)
+          if (fence) fence.pending--
+        }
+        releaseNoticeFences()
+      },
+    }
+  }
+  function rememberClosed(key: string, notice: NativeObservationNoticeState | undefined) {
+    if (!notice?.unreadReplyEnd) return
+    if (!closedNotices.has(key) && closedNotices.size >= 1024) return
+    closedNotices.set(key, { recent: { ...notice.unreadReplyEnd }, unreadReplyEnd: { ...notice.unreadReplyEnd } })
+  }
+  function clearUnread(id: string, expected: UnifiedSession) {
+    if (!id.startsWith(HISTORY_PREFIX) || findHistory(id).length !== 1) throw new Error('NATIVE_HISTORY_SESSION_REQUIRED')
+    const current = closedNotices.get(id)?.unreadReplyEnd
+    const notice = expected.observationNotice?.unreadReplyEnd
+    if (!current || !notice || current.eventId !== notice.eventId || current.runId !== notice.runId
+      || current.generation !== notice.generation || current.receivedAt !== notice.receivedAt) throw new Error('STALE_SESSION_ATTEMPT')
+    closedNotices.delete(id)
+  }
   function findHistory(id: string) {
     return deps.history.all().flatMap(entry => entry.sessions.filter(item => historyId(entry, item.sessionKey, item.nativeSessionId) === id).map(item => ({ entry, item })))
   }
@@ -281,6 +332,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         if (!claimed.has(claim)) sessions.push({
           ...withSessionDisplayName(projectHistory(entry, item), deps.metadata),
           ...archiveState(entry, item),
+          ...(closedNotices.has(claim) ? { observationNotice: { recent: { ...closedNotices.get(claim)!.recent! }, unreadReplyEnd: { ...closedNotices.get(claim)!.unreadReplyEnd! } } } : {}),
         })
       }
     }
@@ -414,6 +466,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     const attempt = captureNativeAttempt(tab)
     if (tab.status === 'running' || tab.status === 'starting' || tab.status === 'unknown') await deps.runtime.stopTab(tab)
     if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+    const closedNotice = projectNotice(deps.tabs.tabs.get(tab.tabId)!, deps.tabs)
+    const noticeOwner = beginClosedNotice(tab)
     deps.tabs.close(tab.tabId)
     // 关闭成功后释放 acceptedOpens：条目持有整个 tab 引用，不清会长会话缓慢累积。
     acceptedOpens.delete(tab.tabId)
@@ -421,9 +475,12 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // Remove the proven-ended terminal first; history failure must not require
     // a second close. The catalog's completed-close snapshot follows this read,
     // including a response that arrives after the runtime identity disappeared.
-    if (deps.history.load) await deps.history.load({ cli: tab.cli, profileId: tab.profileId,
-      profileRevision: tab.profileRevision, projectId: tab.projectId, projectPath: tab.projectPath, force: true,
-      retainOnFailure: true }).catch(() => {})
+    try {
+      if (deps.history.load) await deps.history.load({ cli: tab.cli, profileId: tab.profileId,
+        profileRevision: tab.profileRevision, projectId: tab.projectId, projectPath: tab.projectPath, force: true,
+        retainOnFailure: true }).catch(() => {})
+      noticeOwner.publish(closedNotice)
+    } finally { noticeOwner.release() }
   }
   async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
     const owns = captureOwnership(id)
@@ -458,6 +515,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
       await deps.archive.archiveSession(tab.projectPath, historyId(entry, item.sessionKey, item.nativeSessionId), requireCurrent)
       if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+      const noticeOwner = beginClosedNotice(tab)
+      try { noticeOwner.publish(projectNotice(deps.tabs.tabs.get(tab.tabId)!, deps.tabs)) } finally { noticeOwner.release() }
       deps.tabs.close(tab.tabId)
       // 同 closeSession：存档路径的关闭也释放 acceptedOpens。
       acceptedOpens.delete(tab.tabId)
@@ -481,5 +540,5 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       () => findHistory(id).length === 1).catch(() => {})
   }
 
-  return { runtime: 'native-cli', captureOwnership, listSessions, createSession, resumeSession, activateSession, stopSession, restartSession, closeSession, renameSession, archiveSession, restoreArchivedSession, verifyMissingSession }
+  return { runtime: 'native-cli', captureOwnership, listSessions, createSession, resumeSession, activateSession, stopSession, restartSession, closeSession, renameSession, archiveSession, restoreArchivedSession, verifyMissingSession, clearUnread }
 }

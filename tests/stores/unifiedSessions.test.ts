@@ -120,6 +120,20 @@ beforeEach(() => {
 })
 
 describe('unified sessions store', () => {
+  it('Notice_ClearRejectsChangedReceipt_001', async () => {
+    const first = { kind: 'reply-ended' as const, eventId: 'first', receivedAt: 1, runId: 'run-1', generation: 1 }
+    const second = { ...first, eventId: 'second', receivedAt: 2, runId: 'run-2', generation: 2 }
+    const native = fakeAdapter('native-cli', [session({ id: 'history', runtime: 'native-cli', opened: false,
+      observationNotice: { recent: first, unreadReplyEnd: first } })])
+    native.adapter.clearUnread = vi.fn()
+    const store = useUnifiedSessionsStore(); store.configureAdapters([native.adapter]); await store.refresh()
+    native.setSessions([session({ id: 'history', runtime: 'native-cli', opened: false,
+      observationNotice: { recent: second, unreadReplyEnd: second } })]); await store.refresh()
+    await expect(store.clearUnread('history', first)).rejects.toThrow('STALE_SESSION_ATTEMPT')
+    expect(native.adapter.clearUnread).not.toHaveBeenCalled()
+    await store.clearUnread('history', second)
+    expect(native.adapter.clearUnread).toHaveBeenCalledWith('history', expect.objectContaining({ observationNotice: { recent: second, unreadReplyEnd: second } }))
+  })
   // 项目按固定和显示名排列；后台活动既不能移动项目，也不能移动会话。
   it('StableProjectOrder_Catalog_001', async () => {
     const rows = [

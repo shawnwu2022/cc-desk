@@ -1,6 +1,6 @@
 {
   "name": "cc-desk",
-  "version": "0.18.11",
+  "version": "0.18.12",
   "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code and Codex CLI",
   "license": "MIT",
   "author": {
@@ -47,7 +47,7 @@
     "test:watch": "vitest",
     "test:rust:lib": "cd src-tauri && cargo test --locked --lib",
     "typecheck": "tsc --build tsconfig.node.json && vue-tsc --noEmit",
-    "test:visual": "playwright test tests/visual/unified-workspace.spec.ts tests/visual/version-manager.spec.ts",
+    "test:visual": "playwright test tests/visual/unified-workspace.spec.ts tests/visual/version-manager.spec.ts tests/visual/session-app-icon.spec.ts",
     "test:visual:unit": "vitest run --config vitest.visual.config.ts",
     "test:production": "playwright test --config playwright.production.config.ts"
   },

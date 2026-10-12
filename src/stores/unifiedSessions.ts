@@ -614,6 +614,18 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     })
   }
 
+  async function clearUnread(id: string, expected: NonNullable<NonNullable<UnifiedSession['observationNotice']>['unreadReplyEnd']>): Promise<void> {
+    const session = requireSession(id)
+    const adapter = adapterForRuntime(session.runtime)
+    if (session.opened || !adapter.clearUnread) throw new Error('STALE_SESSION_ATTEMPT')
+    const current = session.observationNotice?.unreadReplyEnd
+    if (!current || !expected || current.kind !== expected.kind || current.eventId !== expected.eventId
+      || current.runId !== expected.runId || current.generation !== expected.generation
+      || current.receivedAt !== expected.receivedAt) throw new Error('STALE_SESSION_ATTEMPT')
+    await adapter.clearUnread(id, session)
+    await refresh(session.projectKey)
+  }
+
   function closeSession(id: string, canContinue = () => true): Promise<void> {
     if (!canContinue()) return Promise.reject(new Error('STALE_SESSION_ATTEMPT'))
     const closing = closingSessions.get(id)
@@ -768,6 +780,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     stopSession,
     restartSession,
     closeSession,
+    clearUnread,
     completedClose,
     renameSession, beginRename, cancelRename, discardPreparation,
     archiveSession,

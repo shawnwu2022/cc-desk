@@ -44,7 +44,7 @@ import { projectBasename } from '@/utils/displayName'
 import { mapSafeUserError } from '@/utils/userError'
 import { sameProjectPath } from '@/utils/path'
 import { onMenuSettings, onMenuShortcuts, onConfigFontSize, onOpenDirectory, onTerminalRestart } from '@/api/tauri'
-import type { NewSessionRequest, UnifiedProjectIdentity } from '@/types/unifiedSession'
+import type { NewSessionRequest, SessionMenuAction, UnifiedProjectIdentity } from '@/types/unifiedSession'
 
 const SettingsView = defineAsyncComponent(() => import('@/components/settings/SettingsView.vue'))
 const emit = defineEmits<{ 'workspace-request': [request: WorkspaceRequest] }>()
@@ -172,6 +172,14 @@ function request(action: WorkspaceRequest) {
     })()
   }
 }
+function requestMenuAction(id: string, action: SessionMenuAction) {
+  if (action === 'clear-unread') {
+    const notice = sessions.sessions.find(row => row.id === id)?.observationNotice?.unreadReplyEnd
+    if (notice) request({ kind: 'menu-action', sessionId: id, action, expectedNotice: { ...notice } })
+    return
+  }
+  request({ kind: 'menu-action', sessionId: id, action })
+}
 function chooseNewSession(intent: NonNullable<NewSessionRequest['intent']>) {
   if (shell.section === 'workspace' && newSessionDraft.project) request({ kind: 'new-session', project: { ...newSessionDraft.project, intent } })
 }
@@ -263,7 +271,7 @@ onUnmounted(() => {
         @project-action="request({ kind: 'project-action', request: $event })"
         @activate="request({ kind: 'activate', sessionId: $event })"
         @primary-action="(id, action) => request({ kind: 'primary-action', sessionId: id, action })"
-        @menu-action="(id, action) => request({ kind: 'menu-action', sessionId: id, action })"
+        @menu-action="requestMenuAction"
         @rename-commit="(id, title) => request({ kind: 'rename', sessionId: id, title })"
         @rename-cancel="request({ kind: 'rename-cancel', sessionId: $event })"
         @confirmation-request="request({ kind: 'confirmation', request: $event })"

@@ -180,7 +180,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   /** Receipt proof binds the private request identity omitted from the safe DTO. */
   function hasOwnedObservationNotice(tabId: string, attempt: NativeAttemptIdentity): boolean {
     const value = tabs.get(tabId), ledger = noticeLedgers.get(tabId)
-    if (!value || value.status !== 'running' || value.cli !== 'claude' || value.action.kind === 'raw'
+    if (!value || !['running', 'exited', 'stopped'].includes(value.status) || value.cli !== 'claude' || value.action.kind === 'raw'
       || !matchesNativeAttempt(value, attempt) || !ledger || !matchesNativeAttempt(value, ledger.attempt)) return false
     const notices = [value.observationNotice?.recent, value.observationNotice?.unreadReplyEnd].filter(Boolean) as NativeObservationNotice[]
     return notices.length > 0 && notices.every(notice => {
@@ -410,9 +410,9 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     }
     if (next.status !== 'starting') pendingAttention.delete(tabId)
     const pendingNotice = pendingNotices.get(tabId)
-    if (next.status === 'running' && pendingNotice && matchesNativeAttempt(value, pendingNotice.attempt)) {
+    if (['running', 'exited', 'stopped'].includes(next.status) && pendingNotice && matchesNativeAttempt(value, pendingNotice.attempt)) {
       value.observationNotice = copyNotices(pendingNotice.state)
-    } else if (next.status !== 'running' && next.status !== 'starting') clearNoticeProjection(tabId)
+    } else if (!['running', 'starting', 'exited', 'stopped'].includes(next.status)) clearNoticeProjection(tabId)
     if (next.status !== 'starting') pendingNotices.delete(tabId)
     // A repeated healthy poll cannot erase a transport diagnostic or count as activity.
     if (changed) value.errorCode = next.errorCode

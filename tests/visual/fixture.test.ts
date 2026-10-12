@@ -54,9 +54,9 @@ describe('Isolated production-component fixture', () => {
     const marker = view.get('[data-native-observation-notice]')
     expect(marker.attributes('data-unread')).toBe('true')
     expect(marker.attributes('aria-label')).toBe(locale === 'en'
-      ? 'Reply-end notice received (unread); current activity unverified'
-      : '收到回复结束通知（未读）；当前活动尚未验证')
-    expect(view.get('.session-status-icon').attributes('aria-label')).toBe(locale === 'en' ? 'Activity unknown' : '活动未知')
+      ? 'Claude Code; Activity unknown; Reply-end notice received (unread); current activity unverified'
+      : 'Claude Code; 活动未知; 收到回复结束通知（未读）；当前活动尚未验证')
+    expect(view.get('[data-session-badge]').attributes('data-session-badge')).toBe('completed')
     expect(view.html()).not.toContain('visual-receipt-id')
     expect(blockedHostCalls.value).toBe(0)
   })
@@ -117,7 +117,8 @@ describe('Isolated production-component fixture', () => {
     expect(view.findAll('[data-session-row]')).toHaveLength(1)
     const row = view.get('[data-session-row]')
     expect(row.attributes('data-session-row')).toBe(`visual-close-${variant}-${state}`)
-    expect(row.get('.session-status-icon').classes()).toContain(`session-status-icon--${state === 'unknown' ? 'confirming' : state}`)
+    if (state === 'running') expect(row.find('[data-session-badge]').exists()).toBe(false)
+    else expect(row.get('[data-session-badge]').attributes('data-session-badge')).toBe(state === 'unknown' ? 'confirming' : state)
     const close = row.get('.session-primary-action button')
     expect(row.findAll('.session-primary-action button')).toHaveLength(1)
     expect(close.attributes('aria-label')).toBe(locale === 'en' ? 'Close' : '关闭')

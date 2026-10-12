@@ -12,7 +12,7 @@
   "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/37965393533",
   "artifactId": "11633985429",
   "artifactZipSha256": "0718e755776fca863f27fdbaa5862fcff37d9bfda9903e1c58398ab14fb715d1",
-  "sourceScope": "Mixed provenance: nine entries retain their previous reviewed bytes/source; four use twice-inspected PR45 archive/time-tail replacements from run38060913278. Top-level PR37 fields and earlier revision objects remain historical approvals; per-entry revisionProvenance identifies current exact bytes. No failed run is retroactively passed.",
+  "sourceScope": "Mixed provenance: five exact inspected PR49 application/status icon PNGs from run38222119387 attempt 2; eight other baseline PNGs retain prior reviewed bytes/source. Top-level PR37 and earlier revision objects remain historical approvals; per-entry revisionProvenance identifies current bytes. Both failed PR49 attempts remain RED until fresh zero-tolerance verification.",
   "reviewedSourceTransport": {
     "repository": "shawnwu2022/cc-desk",
     "branch": "evidence/pr37-reviewed-baselines",
@@ -41,14 +41,14 @@
   },
   "finalNoUpdateVerification": {
     "status": "pending",
-    "required": "All 236 current screenshot/geometry/interaction/evidence cases on the next exact PR source, updateSnapshots none and maxDiffPixels 0. Exact baseline acceptance does not change the original failed run conclusion."
+    "required": "All 236 screenshot/geometry/interaction/evidence cases on the next exact PR source, updateSnapshots none and maxDiffPixels 0. No failed pre-acceptance attempt is retroactively passed."
   },
   "acceptanceLimits": [
-    "Exact inspected Linux Chromium baseline bytes with per-entry provenance; mixed original, PR39, PR44 and PR45 sources",
-    "Nine other images retain their prior reviewed bytes and provenance",
-    "Four added Native receipt captures remain separate unapproved evidence",
-    "Native current working/completed remains unverified",
-    "Not Windows WebView2 or native scaling/live CLI/taskbar delivery certification",
+    "Exact inspected Linux Chromium PNG bytes with per-entry source/run/attempt and SHA-256 provenance",
+    "Eight other baseline images retain prior reviewed bytes and provenance",
+    "Separate synthetic status captures remain unapproved evidence",
+    "Browser fixture cannot certify live Native CLI activity/permission/completion semantics",
+    "Not Windows WebView2, native scaling, screen reader, live CLI or taskbar delivery certification",
     "Not merge, release or updater promotion approval"
   ],
   "entries": [
@@ -56,28 +56,53 @@
       "name": "archived-sessions.png",
       "width": 1366,
       "height": 768,
-      "sha256": "635f6abe9e7ed50bdde6b6e45c923c43480796c4e2a049d55d2a32abe4f4b977",
-      "bytes": 46403,
+      "sha256": "94ee1708e1da4035dfad75782b3ad192bca1a4e773ca56f4627a52f2143af1e1",
+      "bytes": 46095,
       "reviewVerdict": "approve",
-      "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
+      "provenance": "Exact independently inspected PR49 actual PNG, identical in visual workflow run38222119387 attempts 1 and 2; attempt 2 archive bytes verified. Both pre-acceptance attempts remain failed.",
       "zipEntry": "test-results/visual-verification/unified-workspace-archived-sessions-snapshot/archived-sessions-actual.png",
       "pixelReview": {
-        "rawRgbChangedPixels": 689,
+        "playwrightReportedPixels": 1331,
+        "rawRgbChangedPixels": 3112,
         "rawDifferenceBoundsExclusive": [
-          996,
-          73,
-          1311,
-          127
+          997,
+          72,
+          1217,
+          131
         ],
-        "acceptedChange": "Archive solid glyphs and always-visible Restore/age tail only"
+        "acceptedChange": "Archive drawer rows only: one application/status icon slot, recognizable Claude/Codex logos, neutral closed appearance and aligned titles; every pixel outside the drawer rows is unchanged."
       },
       "revisionProvenance": {
-        "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
-        "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
-        "workflowRunId": "38024365937",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
-        "artifactId": "11660067279",
-        "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
+        "sourceHead": "c95fff016b2f66fc3cf65a21d89e209899fe9e13",
+        "testedCommit": "74af6f77d54994130b5556a4bf014b8f096dc648",
+        "workflowRunId": "38222119387",
+        "workflowRunAttempt": 2,
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38222119387",
+        "artifactId": "11734918295",
+        "artifactZipSha256": "38576d17be495bd2ba3753a4966226e1694d3da369479f029d69df6d4f4f0d68"
+      },
+      "priorCurrentRevision": {
+        "sha256": "635f6abe9e7ed50bdde6b6e45c923c43480796c4e2a049d55d2a32abe4f4b977",
+        "bytes": 46403,
+        "provenance": "Exact inspected PR39 actual PNG from run38024365937; replaces the previous baseline. Not a successful verification result.",
+        "pixelReview": {
+          "rawRgbChangedPixels": 689,
+          "rawDifferenceBoundsExclusive": [
+            996,
+            73,
+            1311,
+            127
+          ],
+          "acceptedChange": "Archive solid glyphs and always-visible Restore/age tail only"
+        },
+        "revisionProvenance": {
+          "sourceHead": "b5ab5031918457a664a86f97bbc771200c8919a9",
+          "testedCommit": "226b7d44f6bcca896b1858f6020164ad6b10ccdb",
+          "workflowRunId": "38024365937",
+          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38024365937",
+          "artifactId": "11660067279",
+          "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
+        }
       }
     },
     {
@@ -198,30 +223,30 @@
       "name": "workspace-dark-gui-light-terminal.png",
       "width": 1280,
       "height": 720,
-      "sha256": "4c315caf55b805d7808937e1e65f396f26c8429c10d2cc9ec005db8a14eeff52",
-      "bytes": 57128,
+      "sha256": "5f13131256a49dc4947ebced849f46e8b01153de0b21dd96e7a067acb18fa5ab",
+      "bytes": 57457,
       "reviewVerdict": "approve",
-      "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
+      "provenance": "Exact independently inspected PR49 actual PNG, identical in visual workflow run38222119387 attempts 1 and 2; attempt 2 archive bytes verified. Both pre-acceptance attempts remain failed.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-dark-gui-light-terminal-snapshot/workspace-dark-gui-light-terminal-actual.png",
       "pixelReview": {
-        "rawRgbChangedPixels": 398,
+        "playwrightReportedPixels": 4032,
+        "rawRgbChangedPixels": 8383,
         "rawDifferenceBoundsExclusive": [
-          206,
-          182,
-          289,
-          192
+          70,
+          180,
+          245,
+          557
         ],
-        "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
-        "playwrightChangedPixels": 159
+        "acceptedChange": "Sidebar session rows only: merged application/status icons, status corner badges and reclaimed title width; all main-content pixels are unchanged."
       },
       "revisionProvenance": {
-        "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
-        "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
-        "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
-        "workflowRunId": "38060913278",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
-        "artifactId": "11673675051",
-        "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
+        "sourceHead": "c95fff016b2f66fc3cf65a21d89e209899fe9e13",
+        "testedCommit": "74af6f77d54994130b5556a4bf014b8f096dc648",
+        "workflowRunId": "38222119387",
+        "workflowRunAttempt": 2,
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38222119387",
+        "artifactId": "11734918295",
+        "artifactZipSha256": "38576d17be495bd2ba3753a4966226e1694d3da369479f029d69df6d4f4f0d68"
       },
       "previousApproval": {
         "width": 1280,
@@ -277,6 +302,31 @@
             "artifactZipSha256": "b5b8e3b6ef1579da96346769ae20e27d8c398c28a2adc96c64925f0faba0040a"
           }
         }
+      },
+      "priorCurrentRevision": {
+        "sha256": "4c315caf55b805d7808937e1e65f396f26c8429c10d2cc9ec005db8a14eeff52",
+        "bytes": 57128,
+        "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
+        "pixelReview": {
+          "rawRgbChangedPixels": 398,
+          "rawDifferenceBoundsExclusive": [
+            206,
+            182,
+            289,
+            192
+          ],
+          "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
+          "playwrightChangedPixels": 159
+        },
+        "revisionProvenance": {
+          "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
+          "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
+          "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+          "workflowRunId": "38060913278",
+          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
+          "artifactId": "11673675051",
+          "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
+        }
       }
     },
     {
@@ -292,30 +342,37 @@
       "name": "workspace-hover-action-1366-en.png",
       "width": 1366,
       "height": 768,
-      "sha256": "e344afec709791b13e42d0f81f6f611316dea2035266495cc7e7066a3cd1c3dc",
-      "bytes": 58640,
+      "sha256": "d8f97c9d6fd14d093df66bbb517a99cc1adbe2213e859ea16e08c1d8a89924ee",
+      "bytes": 58699,
       "reviewVerdict": "approve",
-      "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
+      "provenance": "Exact independently inspected PR49 actual PNG, identical in visual workflow run38222119387 attempts 1 and 2; attempt 2 archive bytes verified. Both pre-acceptance attempts remain failed.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-hover-action-1366-en-snapshot/workspace-hover-action-1366-en-actual.png",
       "pixelReview": {
-        "rawRgbChangedPixels": 394,
+        "playwrightReportedPixels": 4027,
+        "rawRgbChangedPixels": 10693,
         "rawDifferenceBoundsExclusive": [
-          206,
-          182,
-          289,
-          192
+          70,
+          108,
+          569,
+          557
         ],
-        "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
-        "playwrightChangedPixels": 148
+        "captionGrayscalePixels": 1170,
+        "captionBoundsExclusive": [
+          361,
+          108,
+          569,
+          120
+        ],
+        "acceptedChange": "Session icon/title rows and a stable grayscale antialias shift in the terminal preview caption only; caption text and geometry, all other main content and menu/controls are unchanged."
       },
       "revisionProvenance": {
-        "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
-        "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
-        "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
-        "workflowRunId": "38060913278",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
-        "artifactId": "11673675051",
-        "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
+        "sourceHead": "c95fff016b2f66fc3cf65a21d89e209899fe9e13",
+        "testedCommit": "74af6f77d54994130b5556a4bf014b8f096dc648",
+        "workflowRunId": "38222119387",
+        "workflowRunAttempt": 2,
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38222119387",
+        "artifactId": "11734918295",
+        "artifactZipSha256": "38576d17be495bd2ba3753a4966226e1694d3da369479f029d69df6d4f4f0d68"
       },
       "previousApproval": {
         "width": 1366,
@@ -370,36 +427,68 @@
             "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
           }
         }
+      },
+      "priorCurrentRevision": {
+        "sha256": "e344afec709791b13e42d0f81f6f611316dea2035266495cc7e7066a3cd1c3dc",
+        "bytes": 58640,
+        "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
+        "pixelReview": {
+          "rawRgbChangedPixels": 394,
+          "rawDifferenceBoundsExclusive": [
+            206,
+            182,
+            289,
+            192
+          ],
+          "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
+          "playwrightChangedPixels": 148
+        },
+        "revisionProvenance": {
+          "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
+          "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
+          "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+          "workflowRunId": "38060913278",
+          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
+          "artifactId": "11673675051",
+          "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
+        }
       }
     },
     {
       "name": "workspace-menu-1024-en.png",
       "width": 1024,
       "height": 640,
-      "sha256": "81a2df22a67ed51b9de7b5f4986098e0db83acbbd3d7e90ddf1889303c245efe",
-      "bytes": 58377,
+      "sha256": "50c84b7afa8e2d6b12765f185ccb916b3068eecb06965d6445aebc9ff65b6375",
+      "bytes": 58608,
       "reviewVerdict": "approve",
-      "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
+      "provenance": "Exact independently inspected PR49 actual PNG, identical in visual workflow run38222119387 attempts 1 and 2; attempt 2 archive bytes verified. Both pre-acceptance attempts remain failed.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-menu-1024-en-snapshot/workspace-menu-1024-en-actual.png",
       "pixelReview": {
-        "rawRgbChangedPixels": 394,
+        "playwrightReportedPixels": 3182,
+        "rawRgbChangedPixels": 7663,
         "rawDifferenceBoundsExclusive": [
-          206,
-          182,
-          289,
-          192
+          70,
+          108,
+          569,
+          557
         ],
-        "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
-        "playwrightChangedPixels": 148
+        "captionGrayscalePixels": 1170,
+        "captionBoundsExclusive": [
+          361,
+          108,
+          569,
+          120
+        ],
+        "acceptedChange": "Session icon/title rows and the same stable terminal preview caption antialias shift; menu placement/content and all other main content are unchanged."
       },
       "revisionProvenance": {
-        "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
-        "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
-        "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
-        "workflowRunId": "38060913278",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
-        "artifactId": "11673675051",
-        "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
+        "sourceHead": "c95fff016b2f66fc3cf65a21d89e209899fe9e13",
+        "testedCommit": "74af6f77d54994130b5556a4bf014b8f096dc648",
+        "workflowRunId": "38222119387",
+        "workflowRunAttempt": 2,
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38222119387",
+        "artifactId": "11734918295",
+        "artifactZipSha256": "38576d17be495bd2ba3753a4966226e1694d3da369479f029d69df6d4f4f0d68"
       },
       "previousApproval": {
         "width": 1024,
@@ -454,74 +543,68 @@
             "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
           }
         }
+      },
+      "priorCurrentRevision": {
+        "sha256": "81a2df22a67ed51b9de7b5f4986098e0db83acbbd3d7e90ddf1889303c245efe",
+        "bytes": 58377,
+        "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
+        "pixelReview": {
+          "rawRgbChangedPixels": 394,
+          "rawDifferenceBoundsExclusive": [
+            206,
+            182,
+            289,
+            192
+          ],
+          "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
+          "playwrightChangedPixels": 148
+        },
+        "revisionProvenance": {
+          "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
+          "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
+          "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+          "workflowRunId": "38060913278",
+          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
+          "artifactId": "11673675051",
+          "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
+        }
       }
     },
     {
       "name": "workspace-mixed-1366-zh.png",
       "width": 1366,
       "height": 768,
-      "sha256": "8c37265919f87cd68236b761cc8f5cfd75181ec31adcc77aadfb2da6089c3a7c",
-      "bytes": 57439,
+      "sha256": "777c7fee6cc3cda07949fee983fa58efc32c337467918fde823534d412c7cc5c",
+      "bytes": 57351,
       "reviewVerdict": "approve",
-      "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
+      "provenance": "Exact independently inspected PR49 actual PNG, identical in visual workflow run38222119387 attempts 1 and 2; attempt 2 archive bytes verified. Both pre-acceptance attempts remain failed.",
       "zipEntry": "test-results/visual-verification/unified-workspace-workspace-mixed-1366-zh-snapshot/workspace-mixed-1366-zh-actual.png",
       "pixelReview": {
-        "rawRgbChangedPixels": 396,
+        "playwrightReportedPixels": 4037,
+        "rawRgbChangedPixels": 9458,
         "rawDifferenceBoundsExclusive": [
           56,
           98,
-          289,
-          192
+          509,
+          557
         ],
-        "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
-        "playwrightChangedPixels": 148,
-        "negligibleRasterVariation": {
-          "accepted": true,
-          "pixels": [
-            {
-              "xy": [
-                56,
-                98
-              ],
-              "before": [
-                220,
-                217,
-                207
-              ],
-              "after": [
-                219,
-                215,
-                207
-              ]
-            },
-            {
-              "xy": [
-                57,
-                98
-              ],
-              "before": [
-                247,
-                245,
-                241
-              ],
-              "after": [
-                247,
-                245,
-                242
-              ]
-            }
-          ],
-          "limits": "Two search-corner antialias differences are included in the reviewed exact image; byte equality outside the history row is not claimed, and no tolerance is changed."
-        }
+        "captionGrayscalePixels": 1144,
+        "captionBoundsExclusive": [
+          361,
+          107,
+          509,
+          119
+        ],
+        "acceptedChange": "Session icon/title rows, two previously noted search-corner raster pixels and a stable grayscale antialias shift in the terminal preview caption; caption text/geometry and all other main content are unchanged."
       },
       "revisionProvenance": {
-        "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
-        "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
-        "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
-        "workflowRunId": "38060913278",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
-        "artifactId": "11673675051",
-        "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
+        "sourceHead": "c95fff016b2f66fc3cf65a21d89e209899fe9e13",
+        "testedCommit": "74af6f77d54994130b5556a4bf014b8f096dc648",
+        "workflowRunId": "38222119387",
+        "workflowRunAttempt": 2,
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38222119387",
+        "artifactId": "11734918295",
+        "artifactZipSha256": "38576d17be495bd2ba3753a4966226e1694d3da369479f029d69df6d4f4f0d68"
       },
       "previousApproval": {
         "width": 1366,
@@ -575,6 +658,69 @@
             "artifactId": "11660067279",
             "artifactZipSha256": "459bebbcc02fde376f67468ee1f45a4177e5c2f16adc6cc460b840373004a024"
           }
+        }
+      },
+      "priorCurrentRevision": {
+        "sha256": "8c37265919f87cd68236b761cc8f5cfd75181ec31adcc77aadfb2da6089c3a7c",
+        "bytes": 57439,
+        "provenance": "Exact twice-inspected actual PR45 PNG from run38060913278; requested shared archive/time tail reclaims closed-history text width. Original failed run remains RED.",
+        "pixelReview": {
+          "rawRgbChangedPixels": 396,
+          "rawDifferenceBoundsExclusive": [
+            56,
+            98,
+            289,
+            192
+          ],
+          "acceptedChange": "Closed Atlas Settings history row: remove separate archive column, expand title space and move age into the fixed shared time/archive tail. Surrounding status/action/menu/terminal layout is visually unchanged.",
+          "playwrightChangedPixels": 148,
+          "negligibleRasterVariation": {
+            "accepted": true,
+            "pixels": [
+              {
+                "xy": [
+                  56,
+                  98
+                ],
+                "before": [
+                  220,
+                  217,
+                  207
+                ],
+                "after": [
+                  219,
+                  215,
+                  207
+                ]
+              },
+              {
+                "xy": [
+                  57,
+                  98
+                ],
+                "before": [
+                  247,
+                  245,
+                  241
+                ],
+                "after": [
+                  247,
+                  245,
+                  242
+                ]
+              }
+            ],
+            "limits": "Two search-corner antialias differences are included in the reviewed exact image; byte equality outside the history row is not claimed, and no tolerance is changed."
+          }
+        },
+        "revisionProvenance": {
+          "sourceHead": "1ae85581b90e386f6d46c8079dad32b91a767d3d",
+          "sourceTree": "31a20f0d0f6e26cbfdc01274b70112d904c1e3b9",
+          "testedCommit": "c24c91fb1a6e599aa3780d357c6f476b8403284f",
+          "workflowRunId": "38060913278",
+          "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38060913278",
+          "artifactId": "11673675051",
+          "artifactZipSha256": "f3ac30307220b2d42e5fa41724899c3a8657ef70df3a7b8c7724ff833db744d6"
         }
       }
     },
@@ -825,6 +971,76 @@
       "Two negligible mixed-zh search-corner antialias changes accepted without outside-region byte equality; tolerance unchanged",
       "Fresh full no-update zero-tolerance CI remains required",
       "Separate synthetic status captures remain separate evidence; not Windows WebView2/real CLI/taskbar/merge/release acceptance"
+    ]
+  },
+  "iconMergeRevision": {
+    "sourceHead": "c95fff016b2f66fc3cf65a21d89e209899fe9e13",
+    "testedCommit": "74af6f77d54994130b5556a4bf014b8f096dc648",
+    "workflowRunId": "38222119387",
+    "workflowRunAttempt": 2,
+    "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38222119387",
+    "artifactId": "11734918295",
+    "artifactZipSha256": "38576d17be495bd2ba3753a4966226e1694d3da369479f029d69df6d4f4f0d68",
+    "reviewDate": "2026-10-12",
+    "actualPixelsInspected": 5,
+    "independentPixelReviewCount": 2,
+    "rejectedImages": 0,
+    "environment": {
+      "sourceHead": "c95fff016b2f66fc3cf65a21d89e209899fe9e13",
+      "eventCommit": "74af6f77d54994130b5556a4bf014b8f096dc648",
+      "testedCommit": "74af6f77d54994130b5556a4bf014b8f096dc648",
+      "node": "v22.23.3",
+      "playwright": "1.63.0",
+      "browser": "Google Chrome for Testing 153.0.8010.12",
+      "platform": "ubuntu-24.04-linux-chromium",
+      "acceptance": "unreviewed; not Windows WebView2 or real CLI certification"
+    },
+    "repeatEvidence": "Attempt 1 and attempt 2 produced byte-identical actual PNGs for all five changed screenshots; attempt 1 artifact was superseded by rerun.",
+    "verificationBeforeAcceptance": {
+      "total": 236,
+      "nonSnapshotCasesPassed": 223,
+      "unchangedSnapshotsPassed": 8,
+      "changedSnapshotFailures": 5,
+      "otherFailures": 0,
+      "fullVerification": "failed-reviewed-snapshot-differences; retained RED"
+    },
+    "changes": [
+      {
+        "name": "archived-sessions.png",
+        "previousSha256": "635f6abe9e7ed50bdde6b6e45c923c43480796c4e2a049d55d2a32abe4f4b977",
+        "sha256": "94ee1708e1da4035dfad75782b3ad192bca1a4e773ca56f4627a52f2143af1e1",
+        "bytes": 46095
+      },
+      {
+        "name": "workspace-dark-gui-light-terminal.png",
+        "previousSha256": "4c315caf55b805d7808937e1e65f396f26c8429c10d2cc9ec005db8a14eeff52",
+        "sha256": "5f13131256a49dc4947ebced849f46e8b01153de0b21dd96e7a067acb18fa5ab",
+        "bytes": 57457
+      },
+      {
+        "name": "workspace-hover-action-1366-en.png",
+        "previousSha256": "e344afec709791b13e42d0f81f6f611316dea2035266495cc7e7066a3cd1c3dc",
+        "sha256": "d8f97c9d6fd14d093df66bbb517a99cc1adbe2213e859ea16e08c1d8a89924ee",
+        "bytes": 58699
+      },
+      {
+        "name": "workspace-menu-1024-en.png",
+        "previousSha256": "81a2df22a67ed51b9de7b5f4986098e0db83acbbd3d7e90ddf1889303c245efe",
+        "sha256": "50c84b7afa8e2d6b12765f185ccb916b3068eecb06965d6445aebc9ff65b6375",
+        "bytes": 58608
+      },
+      {
+        "name": "workspace-mixed-1366-zh.png",
+        "previousSha256": "8c37265919f87cd68236b761cc8f5cfd75181ec31adcc77aadfb2da6089c3a7c",
+        "sha256": "777c7fee6cc3cda07949fee983fa58efc32c337467918fde823534d412c7cc5c",
+        "bytes": 57351
+      }
+    ],
+    "acceptanceLimits": [
+      "Five actual PNGs and old/diff pairs inspected independently; icon/title changes match the accepted single-slot design",
+      "Three terminal preview captions have stable grayscale-only antialias changes; their text/geometry and remaining main content are unchanged",
+      "Five source screenshots were failed pre-acceptance comparisons; fresh no-update CI is required with zero pixel tolerance",
+      "No Windows WebView2, screen reader, installed package or real CLI certification"
     ]
   }
 }

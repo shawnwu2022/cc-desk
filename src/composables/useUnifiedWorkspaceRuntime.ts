@@ -484,6 +484,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         await resumeDirect(session, claimResumeFeedback)
         return true
       case 'restore-archive': await catalog.restoreArchivedSession(session.id); return true
+      case 'clear-unread':
+        if (request.kind !== 'menu-action') return false
+        await catalog.clearUnread(session.id, request.expectedNotice); return true
       case 'copy-session-id':
         if (!session.nativeSessionId) return false
         await writeText(session.nativeSessionId); return true
