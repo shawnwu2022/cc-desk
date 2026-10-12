@@ -46,6 +46,63 @@ function mergeDuplicateSession(existing: UnifiedSession | undefined, candidate: 
   }
 }
 
+// 跨运行时会话身份：Claude 转录会被 legacy 目录扫描与 native 历史投影同时发现，
+// 两行必须折叠。身份取 nativeSessionId；legacy 历史行没有该字段时回退其
+// adapterSessionId（即转录 sessionId）。身份缺失（如尚未建立会话身份的
+// 新 tab）不参与折叠，避免误合并。
+function crossRuntimeSessionIdentity(row: UnifiedSession): string | null {
+  if (row.cli !== 'claude') return null
+  const identity = row.nativeSessionId ?? (row.runtime === 'legacy-claude' ? row.adapterSessionId : null)
+  return identity ? identity : null
+}
+
+function collapseCrossRuntimeDuplicates(
+  byId: Map<string, UnifiedSession>,
+  renameOwners: Map<string, unknown>,
+): void {
+  const groups = new Map<string, UnifiedSession[]>()
+  for (const row of byId.values()) {
+    const identity = crossRuntimeSessionIdentity(row)
+    if (!identity) continue
+    const key = `${normalizePath(row.projectPath)}\u0000${identity}`
+    const group = groups.get(key)
+    if (group) group.push(row)
+    else groups.set(key, [row])
+  }
+  const dropped = new Set<string>()
+  const replaced = new Map<string, UnifiedSession>()
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    // 两侧同时处于打开态说明是两个真实运行投影，不属于重复历史，不折叠。
+    const live = group.filter(row => row.processState === 'running' || row.processState === 'starting')
+    if (live.length > 1) continue
+    // 唯一活动行优先；否则保留 native 行（历史投影元数据更完整）。
+    const winner = live.length === 1
+      ? live[0]
+      : (group.find(row => row.runtime === 'native-cli') ?? group[0])
+    const merged: UnifiedSession = {
+      ...winner,
+      archived: group.some(row => row.archived),
+      lastActivityAt: Math.max(...group.map(row => row.lastActivityAt)),
+      lastOpenedAt: group.reduce<number | undefined>(
+        (latest, row) => (row.lastOpenedAt === undefined ? latest : Math.max(latest ?? 0, row.lastOpenedAt)),
+        undefined,
+      ),
+    }
+    for (const row of group) {
+      if (row === winner) replaced.set(row.id, merged)
+      else dropped.add(row.id)
+    }
+  }
+  if (!dropped.size && !replaced.size) return
+  // 正在重命名的行不能被替换或移除，否则在途编辑会丢失归属。
+  for (const id of dropped) if (renameOwners.has(id)) dropped.delete(id)
+  for (const [id] of replaced) if (renameOwners.has(id)) { replaced.delete(id); dropped.delete(id) }
+  if (!dropped.size && !replaced.size) return
+  for (const [id, merged] of replaced) byId.set(id, merged)
+  for (const id of dropped) byId.delete(id)
+}
+
 export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const projects = useProjectsStateStore()
   const sessions = ref<UnifiedSession[]>([])
@@ -421,6 +478,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         byId.set(session.id, mergeDuplicateSession(byId.get(session.id), session))
       }
       for (const [id, row] of missingRecords) byId.set(id, row)
+      collapseCrossRuntimeDuplicates(byId, renameOwners)
       // Adapter reads project runtime state; an unsaved draft belongs to the
       // current UI owner until cancellation or exact source/attempt invalidation.
       for (const [id, owner] of renameOwners) {

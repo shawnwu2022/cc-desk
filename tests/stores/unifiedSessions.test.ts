@@ -509,3 +509,92 @@ it('Unified_ResumeIntentRevokesEdit_022', async () => {
   admission.resolve(session({ runtime: 'native-cli', id: 'resumed', adapterSessionId: 'resumed' })); await launching
   expect(stateWhileWaiting).toBe('idle')
 })
+
+// legacy 与 native 的历史扫描会把同一 Claude 转录各列一行；统一树必须按
+// 项目+会话身份折叠成一行。两者都已关闭时保留 native 行（投影元数据更完整），
+// 并合并归档标记与最近活动时间。
+it('Unified_CrossRuntimeClaudeDuplicateCollapses_023', async () => {
+  const legacyRow = session({
+    id: 'legacy-history:/repo:sess-1',
+    runtime: 'legacy-claude',
+    processState: 'stopped',
+    adapterSessionId: 'sess-1',
+    nativeSessionId: 'sess-1',
+    lastActivityAt: 100,
+  })
+  const nativeRow = session({
+    id: 'native-history:/repo:sess-1',
+    runtime: 'native-cli',
+    processState: 'stopped',
+    adapterSessionId: 'native-history-key',
+    nativeSessionId: 'sess-1',
+    lastActivityAt: 200,
+  })
+  const legacy = fakeAdapter('legacy-claude', [legacyRow])
+  const native = fakeAdapter('native-cli', [nativeRow])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter])
+  await store.refresh()
+  const rows = store.sessions.filter(row => row.projectKey === '/repo')
+  expect(rows).toHaveLength(1)
+  expect(rows[0].runtime).toBe('native-cli')
+  expect(rows[0].lastActivityAt).toBe(200)
+})
+
+// 同一会话在 legacy 中打开（活动行）时，折叠结果必须保留活动行本身，
+// 不能让 native 历史行顶替打开中的终端投影。
+it('Unified_CrossRuntimeDuplicateKeepsLiveRow_024', async () => {
+  const liveLegacyTab = session({
+    id: 'legacy-tab:t1',
+    runtime: 'legacy-claude',
+    processState: 'running',
+    adapterSessionId: 't1',
+    nativeSessionId: 'sess-1',
+    lastActivityAt: 300,
+  })
+  const nativeRow = session({
+    id: 'native-history:/repo:sess-1',
+    runtime: 'native-cli',
+    processState: 'stopped',
+    adapterSessionId: 'native-history-key',
+    nativeSessionId: 'sess-1',
+    lastActivityAt: 200,
+  })
+  const legacy = fakeAdapter('legacy-claude', [liveLegacyTab])
+  const native = fakeAdapter('native-cli', [nativeRow])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter])
+  await store.refresh()
+  const rows = store.sessions.filter(row => row.projectKey === '/repo')
+  expect(rows).toHaveLength(1)
+  expect(rows[0].id).toBe('legacy-tab:t1')
+})
+
+// 两侧都关闭但归档状态不同：折叠行必须继承任一来源的归档标记，
+// 否则已归档会话会以普通历史身份重新出现在项目列表。
+it('Unified_CrossRuntimeDuplicateMergesArchived_025', async () => {
+  const legacyRow = session({
+    id: 'legacy-history:/repo:sess-1',
+    runtime: 'legacy-claude',
+    processState: 'stopped',
+    adapterSessionId: 'sess-1',
+    nativeSessionId: 'sess-1',
+    archived: true,
+  })
+  const nativeRow = session({
+    id: 'native-history:/repo:sess-1',
+    runtime: 'native-cli',
+    processState: 'stopped',
+    adapterSessionId: 'native-history-key',
+    nativeSessionId: 'sess-1',
+    archived: false,
+  })
+  const legacy = fakeAdapter('legacy-claude', [legacyRow])
+  const native = fakeAdapter('native-cli', [nativeRow])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter])
+  await store.refresh()
+  const rows = store.sessions.filter(row => row.projectKey === '/repo')
+  expect(rows).toHaveLength(1)
+  expect(rows[0].archived).toBe(true)
+})

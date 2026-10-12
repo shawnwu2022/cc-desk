@@ -126,6 +126,7 @@ UnifiedSession catalog（Legacy/Native adapters）→ UnifiedProjectGroup[] → 
 ```
 
 - 统一树直接混排 Claude Code / Codex CLI；`ProjectNode` 和 `SessionList` 不再接收旧 tabs/history，也不依赖旧 PTY attention store。`SessionsPanel` 接收显式统一投影或默认读取 `unifiedSessions` store；adapter 初始化和生命周期 dispatch 由 `useUnifiedWorkspaceRuntime` 负责；`UnifiedTerminalHost` 保持一个 Legacy 聚合器及每个 Native 会话的独立终端常驻。
+- Legacy 与 Native 的历史扫描会发现同一 Claude 转录；`unifiedSessions.refresh` 在合并后按「规范化项目路径 + 会话身份（nativeSessionId，legacy 历史行回退其 adapterSessionId）」折叠为一行：唯一活动行获胜，否则保留 Native 历史行，并合并归档标记与最近活动/打开时间。身份缺失的行（如尚未建立会话身份的新 tab）与两侧同时打开的运行投影不折叠；正在重命名的行不参与折叠以免在途编辑丢失归属。Codex 历史仅由 Native 投影提供，不受此折叠影响。
 - 项目行只有一个新建快捷动作；固定/取消固定、重命名、查看归档、打开目录、移除走同一 `AppMenu`，鼠标右键和 overflow 共用动作。`new-session-request` 携带 projectKey/projectPath，不能交给旧容器的 `new-session` Legacy 启动 handler。
 - normal `projectGroups` 保持排除已归档记录。UI 为仅剩归档的项目保留一个空项目壳以访问其归档菜单；面板全局归档入口在搜索无结果时仍可用。恢复仅发 `restore-request`，不直接恢复或启动，成功后由调用方发布 catalog 更新。
 - 项目分组固定优先，分区内按显示名称自然字母排序，再按精确 projectKey 决定同名顺序；活动时间不能移动项目。普通、空和仅归档项目使用同一排序，项目内会话按持久化的最近打开时间排序；切换已打开会话或后台活动不能调序。
