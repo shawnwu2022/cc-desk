@@ -674,7 +674,7 @@ fn HistorySource_KeepHeaderCap_009() {
 fn HistorySource_DefaultLimitsCoverRealCodexRoots_036() {
     let limits = super::super::super::scoped_fs::Limits::default();
     assert_eq!(limits.file_bytes, 2 * 1024 * 1024);
-    assert_eq!(limits.total_bytes, 256 * 1024 * 1024);
+    assert_eq!(limits.total_bytes, 512 * 1024 * 1024);
     assert_eq!(limits.entries, 16384);
 }
 

@@ -45,6 +45,9 @@ pub(crate) struct CachedMetadata {
     pub metadata_incomplete: bool,
 }
 
+/// 当前缓存格式版本。字段语义变化（如标题来源规则）时递增，旧文件按未命中处理。
+const SCHEMA: u32 = 3;
+
 #[derive(Default, Serialize, Deserialize)]
 struct CacheFile {
     #[serde(default)]
@@ -86,7 +89,7 @@ impl MetadataCache {
             return;
         }
         if let Ok(file) = serde_json::from_slice::<CacheFile>(&bytes) {
-            if file.schema == 1 {
+            if file.schema == SCHEMA {
                 self.entries = file.entries;
             }
         }
@@ -127,7 +130,7 @@ impl MetadataCache {
             return Ok(());
         };
         let file = CacheFile {
-            schema: 1,
+            schema: SCHEMA,
             entries: self.entries.clone(),
         };
         let bytes = serde_json::to_vec(&file)?;

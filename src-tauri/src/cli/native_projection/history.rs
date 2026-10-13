@@ -304,7 +304,14 @@ pub(super) fn codex_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
             match value["type"].as_str() {
                 Some("session_meta") => seen_meta = true,
                 Some("event_msg") if value["payload"]["type"] == "user_message" => seen_user = true,
-                Some("response_item") if value["payload"]["role"] == "user" => seen_user = true,
+                Some("response_item") if value["payload"]["role"] == "user" => {
+                    // 注入的上下文（AGENTS.md/环境块）不算标题来源，不能据此提前
+                    // 停止读取，否则真正的用户消息（通常在其后）永远读不到。
+                    let candidate = content(&value["payload"]["content"]);
+                    if !candidate.is_empty() && !is_injected_user_context(&candidate) {
+                        seen_user = true;
+                    }
+                }
                 _ => {}
             }
         }
@@ -313,9 +320,15 @@ pub(super) fn codex_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
     }
 }
 
-/// 从头窗口提取身份/归属/标题，从尾部提取最近原生时间戳。头窗口覆盖任意记录
-/// （工具输出等可能含 NUL 等不受支持内容），因此逐行解析失败只跳过该行，只有
-/// 身份冲突（两个不同 session_meta id）才是来源级错误。
+/// codex 会把 AGENTS.md、环境上下文等以 role=user 注入到 rollout 中。这些记录
+/// 只作展示标题时是噪声，按已知包装前缀排除；真实用户输入不会是这些形式。
+fn is_injected_user_context(text: &str) -> bool {
+    let head = text.trim_start();
+    head.starts_with('<')
+        || head.starts_with("# AGENTS.md instructions")
+        || head.starts_with("# Environment")
+}
+
 /// 从头窗口提取身份/归属/标题，从尾部提取最近原生时间戳。头窗口覆盖任意记录，
 /// 而真实 codex rollout 的字符串值可能含裸换行（把一条记录拆成无法解析的片段），
 /// 因此逐行解析失败只跳过该行；只有身份冲突（两条 session_meta id 不同）才是
@@ -354,7 +367,10 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
             }
             Some("response_item") if title.is_none() && value["payload"]["role"] == "user" => {
                 let candidate = content(&value["payload"]["content"]);
-                if !candidate.is_empty() && !candidate.contains('\0') {
+                if !candidate.is_empty()
+                    && !candidate.contains('\0')
+                    && !is_injected_user_context(&candidate)
+                {
                     title = Some(candidate);
                 }
             }
