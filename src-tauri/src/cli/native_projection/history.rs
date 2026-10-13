@@ -26,6 +26,8 @@ struct Transcript {
     messages: Vec<(String, String)>,
     metadata_incomplete: bool,
     title_priority: Option<TitlePriority>,
+    /// codex 来源标记表明该 rollout 由 subagent 或自动流程创建（非用户主动创建）。
+    auto_session: bool,
     source_path: String,
     observation_bytes: usize,
 }
@@ -53,14 +55,12 @@ pub(super) fn read(
     let mut codex_representatives = std::collections::HashMap::<String, usize>::new();
     for path in files {
         let mut observation_bytes = 0;
-        let parsed = (|| {
+        // Ok(None) 表示这一行不是用户主动创建的会话，直接跳过而不计入任何失败。
+        let parsed: ReadResult<Option<Transcript>> = (|| {
             // Codex 历史走缓存 + 一次打开的头窗口观察：身份取自 session_meta，
             // 标题取自首条用户消息，时间取自尾部。命中缓存则不读文件。
             if o.kind == ResourceKind::History && c.cli == CliKind::Codex {
-                let Some(transcript) = codex_history(c, &path, b, &mut observation_bytes)? else {
-                    return Err("SOURCE_CHANGED");
-                };
-                return Ok(transcript);
+                return codex_history(c, &path, b, &mut observation_bytes);
             }
             let observation = if o.kind == ResourceKind::History {
                 c.history_prefix(&path, b)?
@@ -82,15 +82,16 @@ pub(super) fn read(
                     // Do not silently turn an unobserved identity into a foreign project.
                     return Err("SOURCE_TOO_LARGE");
                 }
-                Ok(transcript)
+                Ok(Some(transcript))
             } else if o.kind == ResourceKind::History {
-                parse(&path, c.cli, text(&bytes)?)
+                parse(&path, c.cli, text(&bytes)?).map(Some)
             } else {
-                parse_complete(&path, c.cli, text(&bytes)?, true)
+                parse_complete(&path, c.cli, text(&bytes)?, true).map(Some)
             }
         })();
         let mut transcript = match parsed {
-            Ok(transcript) => transcript,
+            Ok(Some(transcript)) => transcript,
+            Ok(None) => continue,
             Err(code) if o.kind == ResourceKind::History && b.omit_history_entry(code) => {
                 continue;
             }
@@ -225,23 +226,30 @@ fn codex_history(
         return Ok(None);
     };
     let Some(stamps) = cache::Stamps::from_system(len, modified) else {
-        return Ok(None);
+        return Err("SOURCE_CHANGED");
     };
     let key = cache::key(c.root.key(), c.cli.as_str(), relative);
+    // 缓存只保存用户主动创建的会话，因此命中本身就代表该行应被列出，
+    // 不需要在读文件之前再判断一次来源标记。
     if let Some(metadata) = cache::with(|cache| cache.lookup(&key, &stamps).cloned()) {
         let mut transcript = cached_transcript(metadata);
         // 归档状态由代表 rollout 的容器位置决定，必须保留真实相对路径。
         transcript.source_path = path.to_owned();
         return Ok(Some(transcript));
     }
-    let mut probe = codex_metadata_probe();
-    let Some((head, tail, incomplete)) =
-        c.root.history_codex_metadata(relative, b, &mut probe)?
+    // 观察者在确认「非用户创建的会话」时立即停止，省下该文件其余头窗口的读取。
+    let auto = std::cell::Cell::new(false);
+    let mut probe = codex_metadata_probe(&auto);
+    let Some((head, tail, incomplete)) = c.root.history_codex_metadata(relative, b, &mut probe)?
     else {
         cache::with(|cache| cache.forget(&key));
-        return Ok(None);
+        return Err("SOURCE_CHANGED");
     };
     let mut transcript = parse_codex_metadata(text(&head)?, text(&tail).ok())?;
+    if transcript.auto_session {
+        cache::with(|cache| cache.forget(&key));
+        return Ok(None);
+    }
     transcript.metadata_incomplete = incomplete;
     transcript.source_path = path.to_owned();
     *observation_bytes = head.len();
@@ -277,14 +285,17 @@ fn cached_transcript(metadata: cache::CachedMetadata) -> Transcript {
         messages: Vec::new(),
         metadata_incomplete: metadata.metadata_incomplete,
         title_priority,
+        auto_session: false,
         source_path: String::new(),
         observation_bytes: 0,
     }
 }
 
 /// Codex 头窗口观察者：确认已见 session_meta（身份）与首条用户消息（标题来源）
-/// 后即可停止读取。逐行解析失败只跳过该行，不使整次观察失败。
-pub(super) fn codex_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
+/// 后即可停止读取。逐行解析失败只跳过该行，不使整次观察失败。若首个
+/// session_meta 已表明该 rollout 由 subagent 或自动流程创建，则不再继续读取，
+/// 并把该结论写入 `auto`（这类会话不进历史列表，其头窗口无需展开）。
+pub(super) fn codex_metadata_probe(auto: &std::cell::Cell<bool>) -> impl FnMut(&[u8]) -> ReadResult<bool> + '_ {
     let mut line_start = 0usize;
     let mut scanned = 0usize;
     let mut seen_meta = false;
@@ -303,7 +314,13 @@ pub(super) fn codex_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
                 continue;
             };
             match value["type"].as_str() {
-                Some("session_meta") => seen_meta = true,
+                Some("session_meta") => {
+                    seen_meta = true;
+                    if is_auto_session(&value["payload"]) {
+                        auto.set(true);
+                        return Ok(true);
+                    }
+                }
                 Some("event_msg") if value["payload"]["type"] == "user_message" => seen_user = true,
                 Some("response_item") if value["payload"]["role"] == "user" => {
                     // 注入的上下文（AGENTS.md/环境块）不算标题来源，不能据此提前
@@ -321,27 +338,29 @@ pub(super) fn codex_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
     }
 }
 
-/// codex 会把 AGENTS.md、环境上下文以及自动评审/安全扫描的脚手架以 role=user
-/// 注入到 rollout 中。这些记录只作展示标题时是噪声，按已知包装前缀排除；真实
-/// 用户输入不会是这些形式。前缀来自本机真实根的实测分布：自动评审包装出现于
-/// 690 个会话，其余包装合计约 290 个；未列入的未知包装最多让该行退回 Untitled，
-/// 不会挡住其后的真实首条消息（标题仍继续向后扫描）。
+/// 该 rollout 是否由 subagent 或自动流程（守护评审、安全扫描、代码评审）创建。
+/// 判据取自 codex 自己在 session_meta 上写的来源标记：`thread_source` 是权威
+/// 取值；早期版本没有该字段，但 subagent 线程仍带结构化 `source.subagent`。
+/// 未知取值一律按用户创建处理——隐藏真实用户会话的代价远大于多列一行噪声。
+fn is_auto_session(payload: &Value) -> bool {
+    if matches!(
+        payload["thread_source"].as_str(),
+        Some("subagent" | "guardian_review" | "security_scan" | "code_review")
+    ) {
+        return true;
+    }
+    payload["source"].get("subagent").is_some()
+}
+
+/// codex 会把 AGENTS.md、环境上下文等以 role=user 注入到 rollout 中。这些记录
+/// 只作展示标题时是噪声，按已知包装前缀排除；真实用户输入不会是这些形式。
+/// 自动评审/安全扫描等整段会话由 `is_auto_session` 在来源层排除，不在这里按
+/// 文本猜测——实测用户会话中不存在这些包装。
 fn is_injected_user_context(text: &str) -> bool {
-    const WRAPPERS: [&str; 11] = [
-        "<",
-        "# AGENTS.md instructions",
-        "# Environment",
-        "The following is the Codex agent history",
-        "Review the code changes against the base branch",
-        "## Code review guidelines:",
-        "IMPORTANT: Do NOT read",
-        "# Files mentioned by the user:",
-        "Run one Standard security scan",
-        "You are the single serial semantic reducer for one Codex Security Deep",
-        "You are one independent discovery worker inside a Codex Security Deep",
-    ];
     let head = text.trim_start();
-    WRAPPERS.iter().any(|prefix| head.starts_with(prefix))
+    head.starts_with('<')
+        || head.starts_with("# AGENTS.md instructions")
+        || head.starts_with("# Environment")
 }
 
 /// 展示标题：取首个非空行、折叠空白并限长。首条用户消息常是整段 prompt，
@@ -371,6 +390,7 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
     let mut id = None;
     let mut cwd = None;
     let mut title = None;
+    let mut auto_session = false;
     for line in head.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -384,6 +404,7 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
                     continue;
                 };
                 id = Some(observed.to_owned());
+                auto_session = is_auto_session(&value["payload"]);
                 cwd = value["payload"]["cwd"]
                     .as_str()
                     .filter(|path| !path.contains('\0'))
@@ -428,6 +449,7 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
         messages: Vec::new(),
         metadata_incomplete: false,
         title_priority,
+        auto_session,
         source_path: String::new(),
         observation_bytes: 0,
     })
@@ -667,6 +689,7 @@ fn parse_complete(
         messages: Vec::new(),
         metadata_incomplete: false,
         title_priority: None,
+        auto_session: false,
         source_path: path.into(),
         observation_bytes: 0,
     };
@@ -955,6 +978,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
         messages: Vec::new(),
         metadata_incomplete: true,
         title_priority,
+        auto_session: false,
         source_path: path.into(),
         observation_bytes: 0,
     })

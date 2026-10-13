@@ -439,12 +439,12 @@ fn HistoryCodex_SameThreadCrossProjectTakesLatest_042() {
         ProjectRef {
             id: "project-x",
             root: &root,
-            paths: &[project_x.clone()],
+            paths: std::slice::from_ref(&project_x),
         },
         ProjectRef {
             id: "project-y",
             root: &root,
-            paths: &[project_y.clone()],
+            paths: std::slice::from_ref(&project_y),
         },
     ];
     let items = read(
@@ -516,8 +516,8 @@ fn HistoryCodex_ArchivedFlagFromSourceDir_043() {
         .iter()
         .map(|item| (item["nativeSessionId"].as_str().unwrap(), item["archived"].as_bool().unwrap()))
         .collect();
-    assert_eq!(by_id["archived-id"], true);
-    assert_eq!(by_id["live-id"], false);
+    assert!(by_id["archived-id"]);
+    assert!(!by_id["live-id"]);
 }
 
 // 阶段一按 8KiB 块读取首条记录后不得截断缓冲：游标已越过块边界，若把缓冲
@@ -830,57 +830,86 @@ fn HistorySource_TitleFromUserMessageWindow_011() {
     assert!(!budget.history_metadata_incomplete());
 }
 
-// codex 的自动评审/安全扫描脚手架同样以 role=user 注入，且必须继续向后扫描真实
-// 首条消息；没有任何真实用户输入时会话退回 Untitled，而不是把包装文字当标题。
+// codex 在 session_meta 上标记线程来源：subagent 线程与守护评审/安全扫描/代码评审
+// 都不是用户主动创建的会话，不进入历史列表。未知/缺失标记按用户创建处理——隐藏
+// 真实用户会话的代价大于多列一行噪声。消息读取仍按显式会话 id 工作。
 #[test]
 #[allow(non_snake_case)]
-fn HistorySource_InjectedScaffoldingIsNotATitle_045() {
+fn HistoryCodex_AutoSessionsAreNotListed_046() {
     let temp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(temp.path().join("sessions")).unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
     let cwd = temp.path().to_str().unwrap().to_owned();
-    let header = json!({"type":"session_meta","payload":{"id":"auto-review","cwd":cwd}});
-    let wrappers = [
-        "The following is the Codex agent history whose request action you are assessing.",
-        "Review the code changes against the base branch 'main'.",
-        "## Code review guidelines:\n# Review Guidelines",
-        "IMPORTANT: Do NOT read or execute any files under ~/.codex/",
-        "# Files mentioned by the user:",
-        "Run one Standard security scan using this exact configuration:",
-    ];
-
-    // 只有包装：不得把包装文字当标题。
-    let body: String = wrappers
-        .iter()
-        .map(|text| {
-            format!(
-                "{}\n",
-                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})
-            )
-        })
-        .collect();
-    std::fs::write(
-        temp.path().join("sessions/auto.jsonl"),
-        format!("{header}\n{body}"),
-    )
-    .unwrap();
-    let items = read_codex_history_fixture(temp.path()).unwrap();
-    let value = serde_json::to_value(&items).unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(value[0]["title"], "Untitled");
-    assert_eq!(value[0]["titleUnknown"], true);
-
-    // 包装之后出现真实用户消息时，标题取该真实消息。
-    std::fs::write(
-        temp.path().join("sessions/auto.jsonl"),
-        format!(
-            "{header}\n{body}{}\n",
-            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"修复 cc-box 的历史列表"}]}})
+    let user_message = json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"real work"}]}});
+    for (id, source) in [
+        ("subagent", json!({"thread_source":"subagent"})),
+        ("guardian", json!({"thread_source":"guardian_review"})),
+        ("scan", json!({"thread_source":"security_scan"})),
+        ("review", json!({"thread_source":"code_review"})),
+        (
+            "legacy-subagent",
+            json!({"source":{"subagent":{"other":"guardian"}}}),
         ),
-    )
-    .unwrap();
+        ("user", json!({"thread_source":"user"})),
+        ("voice", json!({"thread_source":"realtime_voice"})),
+        ("unmarked", json!({})),
+    ] {
+        let mut payload = json!({"id":id,"cwd":cwd});
+        for (key, value) in source.as_object().unwrap() {
+            payload[key] = value.clone();
+        }
+        std::fs::write(
+            temp.path().join(format!("sessions/2026/10/04/{id}.jsonl")),
+            format!(
+                "{}\n{user_message}\n",
+                json!({"type":"session_meta","payload":payload})
+            ),
+        )
+        .unwrap();
+    }
     let items = read_codex_history_fixture(temp.path()).unwrap();
     let value = serde_json::to_value(&items).unwrap();
-    assert_eq!(value[0]["title"], "修复 cc-box 的历史列表");
+    let listed: BTreeSet<&str> = value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["nativeSessionId"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        listed,
+        BTreeSet::from(["user", "voice", "unmarked"]),
+        "只有非自动创建的会话进入历史列表"
+    );
+    assert!(
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["title"] == "real work"),
+        "被排除的会话不得改变其余行的标题"
+    );
+
+    // 显式按会话 id 读取消息不受列表过滤影响：行不列出，但内容仍可读。
+    let root = Root::open(temp.path()).unwrap();
+    let messages = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::Messages,
+            query: None,
+            session_id: Some("subagent"),
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .unwrap();
+    assert!(
+        !messages.is_empty(),
+        "自动创建会话的消息读取仍按显式 id 工作"
+    );
 }
 
 fn read_codex_history_fixture(root_path: &Path) -> ReadResult<Vec<ResourceItem>> {

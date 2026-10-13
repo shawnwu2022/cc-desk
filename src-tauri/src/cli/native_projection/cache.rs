@@ -45,8 +45,9 @@ pub(crate) struct CachedMetadata {
     pub metadata_incomplete: bool,
 }
 
-/// 当前缓存格式版本。字段语义变化（如标题来源规则）时递增，旧文件按未命中处理。
-const SCHEMA: u32 = 5;
+/// 当前缓存格式版本。缓存只保存用户主动创建的会话；标题来源规则或收录范围
+/// 变化时递增，旧文件按未命中处理，以免旧条目把已排除的会话重新列出来。
+const SCHEMA: u32 = 6;
 
 #[derive(Default, Serialize, Deserialize)]
 struct CacheFile {
