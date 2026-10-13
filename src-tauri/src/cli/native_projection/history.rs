@@ -321,12 +321,24 @@ pub(super) fn codex_metadata_probe(auto: &std::cell::Cell<bool>) -> impl FnMut(&
                         return Ok(true);
                     }
                 }
-                Some("event_msg") if value["payload"]["type"] == "user_message" => seen_user = true,
+                Some("event_msg") if value["payload"]["type"] == "user_message" => {
+                    let message = value["payload"]["message"].as_str().unwrap_or_default();
+                    if !message.is_empty()
+                        && !is_injected_user_context(message)
+                        && !is_automation_wrapper(message)
+                    {
+                        seen_user = true;
+                    }
+                }
                 Some("response_item") if value["payload"]["role"] == "user" => {
-                    // 注入的上下文（AGENTS.md/环境块）不算标题来源，不能据此提前
-                    // 停止读取，否则真正的用户消息（通常在其后）永远读不到。
+                    // 注入的上下文（AGENTS.md/环境块）与自动评审/安全扫描的脚手架
+                    // 都不算标题来源，不能据此提前停止读取，否则真正的用户消息
+                    // （通常在其后）永远读不到。
                     let candidate = content(&value["payload"]["content"]);
-                    if !candidate.is_empty() && !is_injected_user_context(&candidate) {
+                    if !candidate.is_empty()
+                        && !is_injected_user_context(&candidate)
+                        && !is_automation_wrapper(&candidate)
+                    {
                         seen_user = true;
                     }
                 }
@@ -354,13 +366,31 @@ fn is_auto_session(payload: &Value) -> bool {
 
 /// codex 会把 AGENTS.md、环境上下文等以 role=user 注入到 rollout 中。这些记录
 /// 只作展示标题时是噪声，按已知包装前缀排除；真实用户输入不会是这些形式。
-/// 自动评审/安全扫描等整段会话由 `is_auto_session` 在来源层排除，不在这里按
-/// 文本猜测——实测用户会话中不存在这些包装。
 fn is_injected_user_context(text: &str) -> bool {
     let head = text.trim_start();
     head.starts_with('<')
         || head.starts_with("# AGENTS.md instructions")
         || head.starts_with("# Environment")
+}
+
+/// codex 的自动评审、代码评审与安全扫描插件把整段任务以 role=user 写进 rollout。
+/// 这些会话的 thread_source 通常已标为自动来源，但由 `codex exec`/SDK 驱动时仍会
+/// 记为 user，因此这里再按实测前缀识别：开头是这些包装、且窗口内没有任何真实用户
+/// 消息的会话视为非用户创建。已知前缀来自本机真实根（132 个这类会话中 76 个仅含
+/// 包装）；未知包装最坏只会作为会话名显示，不会被误判为自动会话。
+fn is_automation_wrapper(text: &str) -> bool {
+    const WRAPPERS: [&str; 8] = [
+        "The following is the Codex agent history",
+        "Review the code changes against the base branch",
+        "## Code review guidelines:",
+        "IMPORTANT: Do NOT read",
+        "# Files mentioned by the user:",
+        "Run one Standard security scan",
+        "You are the single serial semantic reducer",
+        "You are one independent discovery worker",
+    ];
+    let head = text.trim_start();
+    WRAPPERS.iter().any(|prefix| head.starts_with(prefix))
 }
 
 /// 展示标题：取首个非空行、折叠空白并限长。首条用户消息常是整段 prompt，
@@ -391,6 +421,7 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
     let mut cwd = None;
     let mut title = None;
     let mut auto_session = false;
+    let mut wrapper_only = false;
     for line in head.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -416,17 +447,14 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
                     .as_str()
                     .filter(|text| !text.contains('\0'))
                     .and_then(|text| {
-                        let display = display_title(text);
+                        let display = user_title(text, &mut wrapper_only);
                         (!display.is_empty()).then_some(display)
                     });
             }
             Some("response_item") if title.is_none() && value["payload"]["role"] == "user" => {
                 let candidate = content(&value["payload"]["content"]);
-                if !candidate.is_empty()
-                    && !candidate.contains('\0')
-                    && !is_injected_user_context(&candidate)
-                {
-                    let display = display_title(&candidate);
+                if !candidate.is_empty() && !candidate.contains('\0') {
+                    let display = user_title(&candidate, &mut wrapper_only);
                     if !display.is_empty() {
                         title = Some(display);
                     }
@@ -449,10 +477,25 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
         messages: Vec::new(),
         metadata_incomplete: false,
         title_priority,
-        auto_session,
+        // 只含自动评审/安全扫描脚手架、且窗口内没有任何真实用户消息的会话，
+        // 与 thread_source 已标记的自动会话同等处理：不属于用户主动创建。
+        auto_session: auto_session || (wrapper_only && title_priority.is_none()),
         source_path: String::new(),
         observation_bytes: 0,
     })
+}
+
+/// 展示标题候选：注入上下文与自动脚手架都不是标题来源，`wrapper_only` 记录本次
+/// 观察中是否只见到这两类记录（用于判定会话是否由用户主动创建）。
+fn user_title(text: &str, wrapper_only: &mut bool) -> String {
+    if is_injected_user_context(text) {
+        return String::new();
+    }
+    if is_automation_wrapper(text) {
+        *wrapper_only = true;
+        return String::new();
+    }
+    display_title(text)
 }
 
 /// 尾部最近时间戳。尾部读取已保证从完整行开始（不完整的首行在字节层丢弃），

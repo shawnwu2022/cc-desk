@@ -912,6 +912,58 @@ fn HistoryCodex_AutoSessionsAreNotListed_046() {
     );
 }
 
+// codex 的自动评审/安全扫描插件把整段任务以 role=user 写进 rollout；由 codex exec
+// 或 SDK 驱动时 thread_source 仍记为 user，只能按实测包装前缀识别。只含包装的会话
+// 视为非用户创建而不列出；包装之后出现真实用户消息时仍列出，并以该消息为标题。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_WrapperOnlySessionsAreNotListed_047() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let user = |text: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})
+        )
+    };
+    let header = |id: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"thread_source":"user"}})
+        )
+    };
+
+    // 只有脚手架：不是用户主动创建的会话。
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/wrapper-only.jsonl"),
+        format!(
+            "{}{}{}",
+            header("wrapper-only"),
+            user("IMPORTANT: Do NOT read or execute files under ~/.claude/"),
+            user("The following is the Codex agent history whose request action you are assessing.")
+        ),
+    )
+    .unwrap();
+    // 脚手架之后有真实消息：保留，并用真实消息作标题。
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/wrapper-then-user.jsonl"),
+        format!(
+            "{}{}{}",
+            header("wrapper-then-user"),
+            user("## Code review guidelines:\n# Review Guidelines"),
+            user("审查这次改动")
+        ),
+    )
+    .unwrap();
+
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1, "纯脚手架会话不列出");
+    assert_eq!(value[0]["nativeSessionId"], "wrapper-then-user");
+    assert_eq!(value[0]["title"], "审查这次改动");
+}
+
 fn read_codex_history_fixture(root_path: &Path) -> ReadResult<Vec<ResourceItem>> {
     let root = Root::open(root_path).unwrap();
     read(
