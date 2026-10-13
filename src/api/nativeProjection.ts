@@ -1,6 +1,6 @@
-import type { HistoryReadFailure, ProjectionResult, ReadRequest, ResourceItem, ResourceKind, ScopeTarget, SourceRef } from '@/types/nativeProjection'
+import type { HistoryReadFailure, ProjectionResult, ReadRequest, ResourceItem, ResourceKind, ScopeTarget, SourceRef, UnarchiveRequest } from '@/types/nativeProjection'
 export interface ProjectionBridge { readonly instanceId: string; invoke(command: string, payload: unknown): Promise<unknown> }
-export interface ProjectionClient { scope(target: ScopeTarget): Promise<SourceRef>; read(request: ReadRequest): Promise<ProjectionResult> }
+export interface ProjectionClient { scope(target: ScopeTarget): Promise<SourceRef>; read(request: ReadRequest): Promise<ProjectionResult>; unarchive(request: UnarchiveRequest): Promise<void> }
 const kinds: ResourceKind[] = ['history', 'messages', 'search', 'config', 'mcp', 'skills', 'agents', 'plugins', 'instructions']
 const diagnosticStages = ['frontend-bridge', 'frontend-serialization',
   'scope-invoke', 'scope-document-admission', 'scope-request-decode', 'scope-request-validation', 'scope-profile-validation',
@@ -165,6 +165,27 @@ function result(v: unknown, request: Required<ReadRequest>): ProjectionResult {
   return { source: s, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: u64(r.observedAt),
     state: r.state, reason, items: r.items.map(v => item(v, request)), hasMore: bool(r.hasMore), ...metadata, ...failures }
 }
+// 一次性命令在本前端只可能产生下列有限错误码；其余一律折叠为不可用，
+// 绝不回显原生载荷或任意异常文本。
+const unarchiveCodes = new Set(['COMMAND_FAILED', 'COMMAND_TIMEOUT', 'UNSUPPORTED_ACTION', 'FORBIDDEN',
+  'PROFILE_NOT_FOUND', 'PROFILE_MISMATCH', 'PROFILE_CLI_MISMATCH', 'REVISION_CONFLICT', 'WORKSPACE_INVALID',
+  'WORKING_DIRECTORY_UNAVAILABLE', 'PROGRAM_UNAVAILABLE', 'RUNNER_UNAVAILABLE', 'PROCESS_START_FAILED',
+  'HOST_PTY_UNAVAILABLE', 'LEGACY_INVALID', 'LEGACY_READ_FAILED', 'HISTORY_MAINTENANCE_ACTIVE',
+  'RUN_SUPERVISOR_STOPPING', 'LAUNCH_STATE_UNKNOWN', 'INVALID_REQUEST', 'REQUEST_TOO_LARGE', 'RAW_BODY_REQUIRED',
+  'DOCUMENT_BRIDGE_UNAVAILABLE', 'BACKEND_INSTANCE_CHANGED'])
+export function unarchiveErrorCode(value: unknown): string {
+  const code = value && typeof value === 'object' && 'code' in value ? (value as { code: unknown }).code
+    : value instanceof Error ? value.message : null
+  return typeof code === 'string' && unarchiveCodes.has(code) ? code : 'SOURCE_UNAVAILABLE'
+}
+function unarchiveRequest(v: unknown): Required<UnarchiveRequest> {
+  const r = object(v, ['requestId', 'cli', 'profileId', 'expectedProfileRevision', 'projectPath', 'nativeSessionId'])
+  if (r.cli !== 'codex') return invalid()
+  const nativeSessionId = text(r.nativeSessionId, 256, false)
+  if (/\p{Cc}/u.test(nativeSessionId)) return invalid()
+  return { requestId: id(r.requestId), cli: 'codex', profileId: id(r.profileId),
+    expectedProfileRevision: u64(r.expectedProfileRevision), projectPath: text(r.projectPath, 32768, false), nativeSessionId }
+}
 const readQueues = new Map<string, ReturnType<typeof createReadQueue>>()
 /** All projection clients for this admitted backend instance share its two
  * reader slots. Pending work has both a count and a wait limit; never replay. */
@@ -243,6 +264,20 @@ export function createProjectionClient(bridge: ProjectionBridge, current: () => 
         stage = 'read-response-validation'
         return result(response, query)
       } catch (failure) { throw projectionFailure(failure, stage) }
+    },
+    /** 恢复 CLI 自身归档的会话：归档归 CLI 所有，这里只请求 CLI 执行该变更。 */
+    async unarchive(value) {
+      const query = unarchiveRequest(value)
+      assertCurrent()
+      try {
+        const response = await invoke('native_unarchive_session', query)
+        assertCurrent()
+        // 成功只返回 null；任何其他形状都视为不可信响应。
+        if (response !== null && response !== undefined) throw new Error('SOURCE_UNAVAILABLE')
+      } catch (failure) {
+        assertCurrent()
+        throw Object.assign(new Error(unarchiveErrorCode(failure)), { code: unarchiveErrorCode(failure), retryable: false })
+      }
     },
   }
 }

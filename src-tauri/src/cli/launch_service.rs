@@ -17,9 +17,10 @@ use crate::version_history::maintenance::{PreparingStart, RuntimeKind};
 use parking_lot::RwLock;
 use portable_pty::PtySize;
 use std::cell::{Cell, RefCell};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub(crate) struct FrozenPty {
     pub(crate) pty: OwnedPty,
@@ -241,6 +242,73 @@ impl LaunchService {
 
     pub(crate) fn begin_shutdown(&self) {
         *self.shutting_down.write() = true;
+    }
+
+    /// 一次性 CLI 子命令：复用启动完全相同的 profile/环境冻结与 argv 构造，但
+    /// 不注册 run、不建立 document/输出路由、不返回 tab。用于 `codex unarchive`
+    /// 这类必须由 CLI 自己执行的会话状态变更——Desk 不得搬动 CLI 的归档文件。
+    /// 子进程仍走 PTY 与既有 admission 门禁，因此窗口/维护冻结语义保持一致；
+    /// 输出丢弃，仅以退出状态判定成功。
+    pub(crate) fn run_command(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+    ) -> Result<(), SafeError> {
+        if *self.shutting_down.read() {
+            return Err(error("RUN_SUPERVISOR_STOPPING"));
+        }
+        let profile = self.repository.get_profile(&request.profile_id)?;
+        let legacy = profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+        let inherited = self.inherited_environment()?;
+        let snapshot = freeze_launch(
+            request,
+            &profile,
+            caller,
+            &FreezeContext {
+                inherited: &inherited,
+                terminal: &EnvMap::new(),
+                legacy: legacy.as_ref(),
+                // 一次性命令不安装 observer：它没有 run 身份可供授权回调核验。
+                observer: None,
+            },
+        )?;
+        let invocation = build_invocation(request, &snapshot)?;
+        let spec = resolve_process(&invocation)?;
+        let mut admission = self.admit_start()?;
+        let pty = OwnedPty::spawn_admitted(
+            &spec,
+            PtySize {
+                cols: request.cols,
+                rows: request.rows,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+            admission.begin_creation(),
+        )?;
+        // 子进程的输出必须被读走，否则 PTY 缓冲写满会阻塞它；内容本身无意义。
+        if let Ok(mut reader) = pty.take_reader() {
+            std::thread::spawn(move || {
+                let mut discard = [0u8; 4096];
+                while matches!(reader.read(&mut discard), Ok(read) if read > 0) {}
+            });
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = pty.try_wait()? {
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(error("COMMAND_FAILED"))
+                };
+            }
+            if Instant::now() >= deadline {
+                // 先终止再回收：留下未知状态的一次性子进程会阻塞后续维护冻结。
+                let _ = pty.terminate_root();
+                let _ = pty.wait();
+                return Err(error("COMMAND_TIMEOUT"));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 
     pub(crate) fn access(

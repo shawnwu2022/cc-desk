@@ -1,6 +1,7 @@
 import { computed, shallowRef, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { openInFileManager } from '@/api/tauri'
+import { openInFileManager, nativeUnarchiveSession } from '@/api/tauri'
+import { createNativeId } from '@/utils/nativeId'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useNativeTabsStore, captureNativeAttempt, matchesNativeAttempt } from '@/stores/nativeTabs'
@@ -272,6 +273,13 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title) => requireHost().renameLegacy(id, title),
         } }),
       createNativeCliAdapter({ tabs: native, history, metadata: projects, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
+        cliUnarchive: { unarchive: (context, nativeSessionId) => {
+          if (app.isProjectAdmissionBlocked(context.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
+          // 只有 codex 有 CLI 侧归档；claude 行不进入此路径。
+          if (context.cli !== 'codex') throw new Error('CLI_UNARCHIVE_UNAVAILABLE')
+          return nativeUnarchiveSession({ requestId: createNativeId('request'), cli: 'codex', profileId: context.profileId,
+            expectedProfileRevision: context.profileRevision, projectPath: context.projectPath, nativeSessionId })
+        } },
         runtime: { createTab: createNativeTab, restartTab: restartNative,
           stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)) } }),
     ])

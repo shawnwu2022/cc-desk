@@ -470,6 +470,10 @@ export async function nativeGetScope(target: import('@/types/nativeProjection').
 export async function nativeListResources(request: import('@/types/nativeProjection').ReadRequest): Promise<import('@/types/nativeProjection').ProjectionResult> {
   return createNativeProjectionClient().read(request);
 }
+/** 恢复 CLI 自身归档的会话（当前仅 codex 的 archived_sessions）。 */
+export async function nativeUnarchiveSession(request: import('@/types/nativeProjection').UnarchiveRequest): Promise<void> {
+  return createNativeProjectionClient().unarchive(request);
+}
 
 export function createNativeHistoryClient(): import('./versionHistory').HistoryClient {
   const bridge = nativeDocumentBridge()

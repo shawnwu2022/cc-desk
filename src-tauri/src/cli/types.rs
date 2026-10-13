@@ -153,6 +153,13 @@ pub(crate) enum LaunchAction {
         #[serde(rename = "nativeSessionId")]
         native_session_id: String,
     },
+    /// CLI 自身的归档容器不是 Desk 的注册表，恢复必须由 CLI 执行：codex 拒绝
+    /// resume 已归档会话，要求先 `codex unarchive <id>`。这是一次性命令，
+    /// 不建立 PTY 会话、不进入 run registry。
+    Unarchive {
+        #[serde(rename = "nativeSessionId")]
+        native_session_id: String,
+    },
     Raw {
         argv: Vec<String>,
     },
@@ -193,7 +200,8 @@ impl LaunchRequest {
 
         match &self.action {
             LaunchAction::New | LaunchAction::ResumePicker { .. } => {}
-            LaunchAction::ResumeId { native_session_id } => {
+            LaunchAction::ResumeId { native_session_id }
+            | LaunchAction::Unarchive { native_session_id } => {
                 validate_required("action.nativeSessionId", native_session_id)?;
             }
             LaunchAction::Raw { argv } => {
@@ -208,13 +216,59 @@ impl LaunchRequest {
     }
 }
 
+/// 恢复 CLI 自身归档会话的最小请求。归档位置由 CLI 管理，Desk 只转达这条意图，
+/// 因此除身份与项目上下文外不需要 tab/run/尺寸等启动字段。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct UnarchiveRequest {
+    pub(crate) request_id: String,
+    pub(crate) cli: CliKind,
+    pub(crate) profile_id: String,
+    pub(crate) expected_profile_revision: WireU64,
+    pub(crate) project_path: String,
+    pub(crate) native_session_id: String,
+}
+
+impl UnarchiveRequest {
+    pub(crate) fn validate(&self) -> Result<(), SafeError> {
+        validate_required("requestId", &self.request_id)?;
+        validate_required("profileId", &self.profile_id)?;
+        validate_required("projectPath", &self.project_path)?;
+        validate_required("nativeSessionId", &self.native_session_id)?;
+        if self.cli != CliKind::Codex {
+            return Err(SafeError::invalid("cli"));
+        }
+        Ok(())
+    }
+
+    /// 冻结与启动共用同一 LaunchRequest 形状：一次性命令没有 tab/run 归属，
+    /// 这两个标识只用于满足校验，不参与任何所有权判定。
+    pub(crate) fn to_launch_request(&self) -> LaunchRequest {
+        LaunchRequest {
+            request_id: self.request_id.clone(),
+            tab_id: format!("once-{}", self.request_id),
+            run_id: format!("once-{}", self.request_id),
+            generation: 1,
+            profile_id: self.profile_id.clone(),
+            expected_profile_revision: self.expected_profile_revision,
+            cli: self.cli,
+            launch_cwd: self.project_path.clone(),
+            action: LaunchAction::Unarchive {
+                native_session_id: self.native_session_id.clone(),
+            },
+            extra_args: Vec::new(),
+            cols: 80,
+            rows: 24,
+        }
+    }
+}
+
 fn validate_required(field: &str, value: &str) -> Result<(), SafeError> {
     if value.is_empty() || value.contains('\0') {
         return Err(SafeError::invalid(field));
     }
     Ok(())
 }
-
 fn validate_arguments(field: &str, values: &[String]) -> Result<(), SafeError> {
     for (index, value) in values.iter().enumerate() {
         if value.contains('\0') {

@@ -47,11 +47,18 @@ export interface NativeArchivePort {
   restoreSession(projectPath: string, sessionId: string): Promise<unknown>
 }
 
+/// CLI 自身归档容器（codex archived_sessions）的恢复端口。Desk 不搬动 CLI 文件，
+/// 只请求 CLI 执行它自己的 unarchive。
+export interface NativeCliUnarchivePort {
+  unarchive(session: NativeHistoryContext, nativeSessionId: string): Promise<void>
+}
+
 export interface NativeCliAdapterDeps {
   tabs: NativeTabsPort
   history: NativeHistoryPort
   runtime: NativeRuntimePort
   archive: NativeArchivePort
+  cliUnarchive?: NativeCliUnarchivePort
   metadata?: SessionMetadataPort
 }
 
@@ -480,19 +487,13 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     }
     if (deps.archive.getArchivedSessions(history.projectPath).includes(id)) await deps.archive.restoreSession(history.projectPath, id)
     if (match) {
-      // CLI 自身归档容器（item.archived）不在 Desk 注册表内，没有「写回原位」
-      // 的恢复动作；其语义就是从归档中打开会话——codex resume 按 id 查找，
-      // 归档位置不影响恢复。
+      // CLI 自身归档（codex archived_sessions）不在 Desk 注册表内：它的恢复就是
+      // 让 CLI 取消归档。codex 明确拒绝 resume 已归档会话（要求先 unarchive），
+      // 所以这里不能走 resume；Desk 也不搬动 CLI 的归档文件。
       if (match.item.archived === true) {
-        await resumeSession({
-          projectKey: history.projectPath,
-          projectPath: history.projectPath,
-          cli: match.entry.context.cli,
-          adapterSessionId: match.item.sessionKey,
-          nativeSessionId: match.item.nativeSessionId,
-          nativeOrigin: match.entry.context,
-          launchConfigId: match.entry.context.profileId,
-        })
+        const unarchive = deps.cliUnarchive
+        if (!unarchive) throw new Error('CLI_UNARCHIVE_UNAVAILABLE')
+        await unarchive.unarchive(match.entry.context, match.item.nativeSessionId)
         return
       }
       await saveSessionOpenedAt(deps.metadata, projectHistory(match.entry, match.item), Date.now(),

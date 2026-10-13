@@ -36,8 +36,9 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
   }
   const archived = new Map<string, string[]>()
   const archive = { getArchivedSessions: (path: string) => archived.get(path) ?? [], archiveSession: vi.fn(async (path: string, id: string) => { archived.set(path, [...(archived.get(path) ?? []), id]) }), restoreSession: vi.fn(async (path: string, id: string) => { archived.set(path, (archived.get(path) ?? []).filter(value => value !== id)) }) }
-  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries }, runtime, archive })
-  return { adapter, map, runtime, archive, setActive, archived }
+  const cliUnarchive = { unarchive: vi.fn().mockResolvedValue(undefined) }
+  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries }, runtime, archive, cliUnarchive })
+  return { adapter, map, runtime, archive, cliUnarchive, setActive, archived }
 }
 
 describe('native CLI adapter', () => {
@@ -261,19 +262,39 @@ describe('native CLI adapter', () => {
 
   // codex 自身归档容器（item.archived）的行必须标记归档；其「恢复」语义是
   // 从归档中打开会话（resume），而不是写 Desk 的归档注册表。
-  it('CodexArchive_SourceDirRowArchivesAndRestoreOpens_033', async () => {
+  // codex 拒绝 resume 自己归档的会话（要求先 `codex unarchive`），所以 CLI 归档行
+  // 的恢复必须请求 CLI 取消归档，而不是开一个注定失败的 resume 标签；Desk 也不
+  // 搬动 CLI 的归档文件。
+  it('CodexArchive_SourceDirRowRestoresThroughCliUnarchive_033', async () => {
     setActivePinia(createPinia())
     const entry = history('codex', '/root', 'session-9')
     entry.sessions[0].archived = true
-    const { adapter, runtime, archive, setActive } = setup([], [entry])
+    const { adapter, runtime, archive, cliUnarchive, setActive } = setup([], [entry])
     const rows = await adapter.listSessions()
     expect(rows).toHaveLength(1)
     expect(rows[0].archived).toBe(true)
     await adapter.restoreArchivedSession(rows[0].id)
+    expect(cliUnarchive.unarchive).toHaveBeenCalledTimes(1)
+    expect(cliUnarchive.unarchive.mock.calls[0][1]).toBe('session-9')
     expect(archive.restoreSession).not.toHaveBeenCalled()
-    expect(runtime.createTab).toHaveBeenCalledTimes(1)
-    expect(runtime.createTab.mock.calls[0][0].action).toMatchObject({ kind: 'resume-id', nativeSessionId: 'session-9' })
-    expect(setActive).toHaveBeenCalled()
+    expect(runtime.createTab).not.toHaveBeenCalled()
+    expect(setActive).not.toHaveBeenCalled()
+  })
+
+  // 没有 CLI 取消归档能力时不得静默退化成 resume：那会开出一个必然被 CLI 拒绝的
+  // 标签，用户以为恢复成功。失败必须显式暴露。
+  it('CodexArchive_MissingCliUnarchiveFailsClosed_034', async () => {
+    setActivePinia(createPinia())
+    const entry = history('codex', '/root', 'session-9')
+    entry.sessions[0].archived = true
+    const adapter = createNativeCliAdapter({
+      tabs: { tabs: new Map(), activeTabId: null, setActive: vi.fn(), close: vi.fn(), rename: vi.fn() },
+      history: { all: () => [entry] },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() },
+      archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
+    })
+    const rows = await adapter.listSessions()
+    await expect(adapter.restoreArchivedSession(rows[0].id)).rejects.toThrow('CLI_UNARCHIVE_UNAVAILABLE')
   })
 
 })
