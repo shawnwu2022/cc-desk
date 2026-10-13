@@ -975,11 +975,12 @@ fn HistoryMetadata_LongHeaderAndCutRecordRemainBounded_003() {
     assert_eq!(items[0]["title"], "long header task");
     assert_eq!(items[0]["truncated"], true);
     // 真实 codex rollout 的字符串值可能含裸换行，把一条记录拆成无法解析的片段。
-    // 因此头窗口内无法解析的行只跳过；只要身份头有效，行仍按该身份列出。与之相对，
-    // 出现第二条 id 不同的 session_meta 属来源级身份冲突，必须拒绝整个文件。
-    for (invalid, listed) in [
-        ("{broken}\n", true),
-        ("{\"type\":\"session_meta\",\"payload\":{\"id\":\"different\"}}\n", false),
+    // 因此头窗口内无法解析的行只跳过；只要身份头有效，行仍按该身份列出。实测
+    // compact/fork 续写的 rollout 会内嵌其他 thread 的 session_meta 且 codex 自身
+    // 仍按首条 meta（文件名 id）resume，因此后续 meta 跳过而非拒绝整个文件。
+    for invalid in [
+        "{broken}\n",
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"different\"}}\n",
     ] {
         put(
             t.path(),
@@ -995,12 +996,8 @@ fn HistoryMetadata_LongHeaderAndCutRecordRemainBounded_003() {
             None,
         )
         .unwrap();
-        if listed {
-            assert_eq!(history[0]["nativeSessionId"], "long-header");
-            assert_eq!(history[0]["title"], "Untitled");
-        } else {
-            assert!(history.as_array().unwrap().is_empty());
-        }
+        assert_eq!(history[0]["nativeSessionId"], "long-header");
+        assert_eq!(history[0]["title"], "Untitled");
         assert_eq!(
             list(
                 t.path(),

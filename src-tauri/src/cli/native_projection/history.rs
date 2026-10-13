@@ -240,7 +240,8 @@ fn codex_history(
     else {
         cache::with(|cache| cache.forget(&key));
         return Ok(None);
-    };    let mut transcript = parse_codex_metadata(text(&head)?, text(&tail).ok())?;
+    };
+    let mut transcript = parse_codex_metadata(text(&head)?, text(&tail).ok())?;
     transcript.metadata_incomplete = incomplete;
     transcript.source_path = path.to_owned();
     *observation_bytes = head.len();
@@ -329,10 +330,29 @@ fn is_injected_user_context(text: &str) -> bool {
         || head.starts_with("# Environment")
 }
 
+/// 展示标题：取首个非空行、折叠空白并限长。首条用户消息常是整段 prompt，
+/// 直接展示会是整屏文本；完整原文仍可经消息读取获得。
+fn display_title(raw: &str) -> String {
+    const MAX_CHARS: usize = 96;
+    let line = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let collapsed = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = collapsed.chars();
+    let mut out: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    out
+}
+
 /// 从头窗口提取身份/归属/标题，从尾部提取最近原生时间戳。头窗口覆盖任意记录，
 /// 而真实 codex rollout 的字符串值可能含裸换行（把一条记录拆成无法解析的片段），
-/// 因此逐行解析失败只跳过该行；只有身份冲突（两条 session_meta id 不同）才是
-/// 来源级错误。身份缺失同样不产出行。
+/// 因此逐行解析失败只跳过该行。身份只取首条 session_meta（与文件名、
+/// `codex resume <id>` 一致）；compact/fork 续写的 rollout 可能内嵌其他 thread 的
+/// meta，后续出现一律跳过，不视为来源级错误。
 fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript> {
     let mut id = None;
     let mut cwd = None;
@@ -345,13 +365,10 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
             continue;
         }
         match value["type"].as_str() {
-            Some("session_meta") => {
+            Some("session_meta") if id.is_none() => {
                 let Some(observed) = value["payload"]["id"].as_str() else {
                     continue;
                 };
-                if id.as_ref().is_some_and(|old| old != observed) {
-                    return Err("SOURCE_INVALID");
-                }
                 id = Some(observed.to_owned());
                 cwd = value["payload"]["cwd"]
                     .as_str()
@@ -362,8 +379,11 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
             Some("event_msg") if title.is_none() && value["payload"]["type"] == "user_message" => {
                 title = value["payload"]["message"]
                     .as_str()
-                    .filter(|text| !text.trim().is_empty() && !text.contains('\0'))
-                    .map(str::to_owned);
+                    .filter(|text| !text.contains('\0'))
+                    .and_then(|text| {
+                        let display = display_title(text);
+                        (!display.is_empty()).then_some(display)
+                    });
             }
             Some("response_item") if title.is_none() && value["payload"]["role"] == "user" => {
                 let candidate = content(&value["payload"]["content"]);
@@ -371,7 +391,10 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
                     && !candidate.contains('\0')
                     && !is_injected_user_context(&candidate)
                 {
-                    title = Some(candidate);
+                    let display = display_title(&candidate);
+                    if !display.is_empty() {
+                        title = Some(display);
+                    }
                 }
             }
             _ => {}
@@ -396,11 +419,10 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
     })
 }
 
-/// 尾部最近时间戳：跳过可能被截断的首条记录，只比较完整行。
+/// 尾部最近时间戳。尾部读取已保证从完整行开始（不完整的首行在字节层丢弃），
+/// 这里逐行解析并取最大时间戳。
 fn latest_timestamp(tail: &str) -> Option<String> {
-    let start = tail.find('\n').map(|position| position + 1)?;
-    tail[start..]
-        .lines()
+    tail.lines()
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter_map(|value| value["timestamp"].as_str().map(str::to_owned))

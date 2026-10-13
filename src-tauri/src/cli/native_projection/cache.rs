@@ -46,7 +46,7 @@ pub(crate) struct CachedMetadata {
 }
 
 /// 当前缓存格式版本。字段语义变化（如标题来源规则）时递增，旧文件按未命中处理。
-const SCHEMA: u32 = 3;
+const SCHEMA: u32 = 4;
 
 #[derive(Default, Serialize, Deserialize)]
 struct CacheFile {

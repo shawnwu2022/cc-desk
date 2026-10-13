@@ -268,10 +268,12 @@ impl Root {
                 break;
             }
         }
-        let Some(end) = head.iter().rposition(|byte| *byte == b'\n') else {
+        // 首条记录已完整（缓冲含换行）。阶段一可能多读至块边界，这些字节必须
+        // 保留：游标已越过它们，若在此截断缓冲，阶段二会从游标处继续追加，
+        // 中间的记录被永久跳过（实测曾因此丢失 200 个 rollout 并切断多字节字符）。
+        if !head.contains(&b'\n') {
             return Err("SOURCE_TOO_LARGE");
-        };
-        head.truncate(end + 1);
+        }
 
         // 阶段二：继续读到首条用户消息（标题来源）或头窗口上限；观察者确认后即停，
         // 把本机真实根的头窗口 IO 从约 366MiB 降到约 102MiB。
@@ -307,6 +309,12 @@ impl Root {
             let read = (&file).take(tail_bytes).read_to_end(&mut tail);
             budget.bytes_left = budget.bytes_left.saturating_sub(tail.len());
             read.map_err(read_error)?;
+            // 尾部按字节截取可能起始于多字节字符中间；丢弃首个不完整行，保证
+            // tail 是完整行序列，否则 CJK 内容会让整个 tail 无法通过 UTF-8 校验，
+            // 最近时间戳整体丢失。
+            if let Some(position) = tail.iter().position(|byte| *byte == b'\n') {
+                tail.drain(..=position);
+            }
         }
         let after = file.metadata().map_err(read_error)?;
         if before.len() != after.len() || before.modified().ok() != after.modified().ok() {

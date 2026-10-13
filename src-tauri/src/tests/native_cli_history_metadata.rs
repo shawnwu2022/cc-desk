@@ -520,6 +520,52 @@ fn HistoryCodex_ArchivedFlagFromSourceDir_043() {
     assert_eq!(by_id["live-id"], false);
 }
 
+// 阶段一按 8KiB 块读取首条记录后不得截断缓冲：游标已越过块边界，若把缓冲
+// 截回首条记录末端，阶段二会从游标处继续，跨块记录的开头被永久丢弃——轻则
+// 标题落到后见记录，重则把多字节字符拦腰切断使整个头窗口变成无效 UTF-8，
+// 生产实测曾因此丢弃 200 个 rollout。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_FirstRecordChunkBoundaryKeepsFollowingRecords_044() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("sessions/2026/10/04");
+    std::fs::create_dir_all(&directory).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    // 首条记录约 10KiB（跨过一个 8KiB 块边界）；随后的首条用户记录被该边界
+    // 拦腰切断（多字节文本使断缝几乎必然落在字符中间）。
+    let input = format!(
+        "{}\n{}\n{}\n{}\n",
+        json!({"type":"session_meta","payload":{"id":"thread-a","cwd":cwd,"base_instructions":"i".repeat(10 * 1024)}}),
+        json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"好".repeat(8 * 1024)}]}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"后见标题"}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"tail message"},"timestamp":"2026-10-04T02:00:00Z"}),
+    );
+    std::fs::write(directory.join("rollout-2026-10-04T01-13-08-gap.jsonl"), input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .expect("跨块记录不得使整个来源失败");
+    assert_eq!(items.len(), 1, "行不得因读取缝隙被丢弃");
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["title"], format!("{}…", "好".repeat(96)));
+    // 身份只取首条 session_meta；compact/fork 续写内嵌的其他 thread meta 跳过。
+    assert_eq!(value[0]["nativeSessionId"], "thread-a");
+    assert_eq!(value[0]["updatedAt"], "2026-10-04T02:00:00Z");
+}
+
 // 消息读取同样按代表制：同 thread 只读最新 rollout，不同文件的消息不得交错。
 #[test]
 #[allow(non_snake_case)]
