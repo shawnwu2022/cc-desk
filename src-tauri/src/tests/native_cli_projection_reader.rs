@@ -974,27 +974,33 @@ fn HistoryMetadata_LongHeaderAndCutRecordRemainBounded_003() {
     assert_eq!(items[0]["nativeSessionId"], "long-header");
     assert_eq!(items[0]["title"], "long header task");
     assert_eq!(items[0]["truncated"], true);
-    for invalid in [
-        "{broken}\n",
-        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"different\"}}\n",
+    // 真实 codex rollout 的字符串值可能含裸换行，把一条记录拆成无法解析的片段。
+    // 因此头窗口内无法解析的行只跳过；只要身份头有效，行仍按该身份列出。与之相对，
+    // 出现第二条 id 不同的 session_meta 属来源级身份冲突，必须拒绝整个文件。
+    for (invalid, listed) in [
+        ("{broken}\n", true),
+        ("{\"type\":\"session_meta\",\"payload\":{\"id\":\"different\"}}\n", false),
     ] {
         put(
             t.path(),
             "sessions/2026/10/04/rollout-long.jsonl",
             &format!("{header}\n{invalid}{}", "x".repeat(200 * 1024)),
         );
-        assert!(list(
+        let history = list(
             t.path(),
             CliKind::Codex,
             None,
             ResourceKind::History,
             None,
-            None
+            None,
         )
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .is_empty());
+        .unwrap();
+        if listed {
+            assert_eq!(history[0]["nativeSessionId"], "long-header");
+            assert_eq!(history[0]["title"], "Untitled");
+        } else {
+            assert!(history.as_array().unwrap().is_empty());
+        }
         assert_eq!(
             list(
                 t.path(),

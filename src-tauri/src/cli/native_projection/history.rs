@@ -1,6 +1,7 @@
 use super::*;
 use serde_json::Value;
 use std::collections::BTreeSet;
+use super::super::cache;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum TitlePriority {
@@ -53,6 +54,14 @@ pub(super) fn read(
     for path in files {
         let mut observation_bytes = 0;
         let parsed = (|| {
+            // Codex 历史走缓存 + 一次打开的头窗口观察：身份取自 session_meta，
+            // 标题取自首条用户消息，时间取自尾部。命中缓存则不读文件。
+            if o.kind == ResourceKind::History && c.cli == CliKind::Codex {
+                let Some(transcript) = codex_history(c, &path, b, &mut observation_bytes)? else {
+                    return Err("SOURCE_CHANGED");
+                };
+                return Ok(transcript);
+            }
             let observation = if o.kind == ResourceKind::History {
                 c.history_prefix(&path, b)?
             } else {
@@ -198,7 +207,189 @@ pub(super) fn read(
             });
         }
     }
+    // 显示元数据缓存只影响后续扫描的读取成本，不改变本次观察结果。
+    let _ = cache::with(|cache| cache.flush());
     Ok(result)
+}
+
+/// Codex 历史行：先查显示元数据缓存（命中则零读取），未命中则做一次打开
+/// 内的头窗口 + 尾部观察并回填缓存。缓存只服务展示，不充当身份或存在证据。
+fn codex_history(
+    c: &Catalog<'_>,
+    path: &str,
+    b: &mut Budget,
+    observation_bytes: &mut usize,
+) -> ReadResult<Option<Transcript>> {
+    let relative = Path::new(path);
+    let Some((len, modified)) = c.root.stat(relative)? else {
+        return Ok(None);
+    };
+    let Some(stamps) = cache::Stamps::from_system(len, modified) else {
+        return Ok(None);
+    };
+    let key = cache::key(c.root.key(), c.cli.as_str(), relative);
+    if let Some(metadata) = cache::with(|cache| cache.lookup(&key, &stamps).cloned()) {
+        let mut transcript = cached_transcript(metadata);
+        // 归档状态由代表 rollout 的容器位置决定，必须保留真实相对路径。
+        transcript.source_path = path.to_owned();
+        return Ok(Some(transcript));
+    }
+    let mut probe = codex_metadata_probe();
+    let Some((head, tail, incomplete)) =
+        c.root.history_codex_metadata(relative, b, &mut probe)?
+    else {
+        cache::with(|cache| cache.forget(&key));
+        return Ok(None);
+    };    let mut transcript = parse_codex_metadata(text(&head)?, text(&tail).ok())?;
+    transcript.metadata_incomplete = incomplete;
+    transcript.source_path = path.to_owned();
+    *observation_bytes = head.len();
+    cache::with(|cache| {
+        cache.record(
+            key,
+            stamps,
+            cache::CachedMetadata {
+                native_id: transcript.id.clone(),
+                cwd: transcript.cwd.clone(),
+                title: transcript.title.clone(),
+                title_priority: transcript.title_priority.map(|p| p as u8),
+                updated: transcript.updated.clone(),
+                metadata_incomplete: incomplete,
+            },
+        )
+    });
+    Ok(Some(transcript))
+}
+
+fn cached_transcript(metadata: cache::CachedMetadata) -> Transcript {
+    let title_priority = match metadata.title_priority {
+        Some(0) => Some(TitlePriority::Prompt),
+        Some(1) => Some(TitlePriority::Ai),
+        Some(2) => Some(TitlePriority::Custom),
+        _ => None,
+    };
+    Transcript {
+        id: metadata.native_id,
+        cwd: metadata.cwd,
+        title: metadata.title,
+        updated: metadata.updated,
+        messages: Vec::new(),
+        metadata_incomplete: metadata.metadata_incomplete,
+        title_priority,
+        source_path: String::new(),
+        observation_bytes: 0,
+    }
+}
+
+/// Codex 头窗口观察者：确认已见 session_meta（身份）与首条用户消息（标题来源）
+/// 后即可停止读取。逐行解析失败只跳过该行，不使整次观察失败。
+pub(super) fn codex_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
+    let mut line_start = 0usize;
+    let mut scanned = 0usize;
+    let mut seen_meta = false;
+    let mut seen_user = false;
+    move |bytes: &[u8]| {
+        for position in scanned..bytes.len() {
+            if bytes[position] != b'\n' {
+                continue;
+            }
+            let Ok(line) = std::str::from_utf8(&bytes[line_start..position]) else {
+                line_start = position + 1;
+                continue;
+            };
+            line_start = position + 1;
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            match value["type"].as_str() {
+                Some("session_meta") => seen_meta = true,
+                Some("event_msg") if value["payload"]["type"] == "user_message" => seen_user = true,
+                Some("response_item") if value["payload"]["role"] == "user" => seen_user = true,
+                _ => {}
+            }
+        }
+        scanned = bytes.len();
+        Ok(seen_meta && seen_user)
+    }
+}
+
+/// 从头窗口提取身份/归属/标题，从尾部提取最近原生时间戳。头窗口覆盖任意记录
+/// （工具输出等可能含 NUL 等不受支持内容），因此逐行解析失败只跳过该行，只有
+/// 身份冲突（两个不同 session_meta id）才是来源级错误。
+/// 从头窗口提取身份/归属/标题，从尾部提取最近原生时间戳。头窗口覆盖任意记录，
+/// 而真实 codex rollout 的字符串值可能含裸换行（把一条记录拆成无法解析的片段），
+/// 因此逐行解析失败只跳过该行；只有身份冲突（两条 session_meta id 不同）才是
+/// 来源级错误。身份缺失同样不产出行。
+fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript> {
+    let mut id = None;
+    let mut cwd = None;
+    let mut title = None;
+    for line in head.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if !value.is_object() {
+            continue;
+        }
+        match value["type"].as_str() {
+            Some("session_meta") => {
+                let Some(observed) = value["payload"]["id"].as_str() else {
+                    continue;
+                };
+                if id.as_ref().is_some_and(|old| old != observed) {
+                    return Err("SOURCE_INVALID");
+                }
+                id = Some(observed.to_owned());
+                cwd = value["payload"]["cwd"]
+                    .as_str()
+                    .filter(|path| !path.contains('\0'))
+                    .map(str::to_owned)
+                    .or(cwd);
+            }
+            Some("event_msg") if title.is_none() && value["payload"]["type"] == "user_message" => {
+                title = value["payload"]["message"]
+                    .as_str()
+                    .filter(|text| !text.trim().is_empty() && !text.contains('\0'))
+                    .map(str::to_owned);
+            }
+            Some("response_item") if title.is_none() && value["payload"]["role"] == "user" => {
+                let candidate = content(&value["payload"]["content"]);
+                if !candidate.is_empty() && !candidate.contains('\0') {
+                    title = Some(candidate);
+                }
+            }
+            _ => {}
+        }
+    }
+    let id = id.ok_or("SOURCE_UNSUPPORTED")?;
+    if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+        return Err("SOURCE_INVALID");
+    }
+    let updated = tail.and_then(latest_timestamp);
+    let title_priority = title.as_ref().map(|_| TitlePriority::Prompt);
+    Ok(Transcript {
+        id,
+        cwd,
+        title: title.unwrap_or_else(|| "Untitled".into()),
+        updated,
+        messages: Vec::new(),
+        metadata_incomplete: false,
+        title_priority,
+        source_path: String::new(),
+        observation_bytes: 0,
+    })
+}
+
+/// 尾部最近时间戳：跳过可能被截断的首条记录，只比较完整行。
+fn latest_timestamp(tail: &str) -> Option<String> {
+    let start = tail.find('\n').map(|position| position + 1)?;
+    tail[start..]
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|value| value["timestamp"].as_str().map(str::to_owned))
+        .filter(|stamp| stamp.len() <= 64)
+        .max()
 }
 fn walk(
     c: &Catalog<'_>,

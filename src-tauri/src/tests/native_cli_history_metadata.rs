@@ -666,14 +666,15 @@ fn HistorySource_KeepHeaderCap_009() {
     assert_eq!(result.err(), Some("SOURCE_TOO_LARGE"));
 }
 
-// 默认聚合上限的量级单独钉住：真实 Codex 根（约 2100 个 rollout）的一次性
-// 元数据采样实测消耗约 45 MiB / 4400 entries，64MiB / 16384 entries 留出约三成字节余量。
+// 默认聚合上限的量级单独钉住：真实 Codex 根（约 2130 个 rollout，含
+// archived_sessions）4KiB 身份采样实测约 47MiB；扩展到 192KiB 头窗口取首条
+// 用户消息后实测约 157MiB，256MiB 留出余量。稳定根经元数据缓存命中后不再重读。
 #[test]
 #[allow(non_snake_case)]
 fn HistorySource_DefaultLimitsCoverRealCodexRoots_036() {
     let limits = super::super::super::scoped_fs::Limits::default();
     assert_eq!(limits.file_bytes, 2 * 1024 * 1024);
-    assert_eq!(limits.total_bytes, 64 * 1024 * 1024);
+    assert_eq!(limits.total_bytes, 256 * 1024 * 1024);
     assert_eq!(limits.entries, 16384);
 }
 
@@ -730,16 +731,19 @@ fn HistorySource_ClaudeWindow_010() {
     assert!(!budget.history_metadata_incomplete());
 }
 
-// 首个用户标题记录在采样块之外时保持未知；未读取的原生末尾时间不能替换成文件时间。
+// 头窗口覆盖到首条用户消息时，标题与尾部时间都被观察：codex 列表因此不再只有
+// “Untitled”，也不再缺少原生最近时间。窗口未覆盖时仍以未知标题列出（见下方
+// 超长身份头用例）。
 #[test]
 #[allow(non_snake_case)]
-fn HistorySource_UnseenTitle_011() {
+fn HistorySource_TitleFromUserMessageWindow_011() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join("sessions")).unwrap();
+    let title = "seen-title";
     let input = format!(
         "{}\n{}\n{}\n",
         json!({"type":"session_meta","payload":{"id":"unseen-title","cwd":temp.path().to_str().unwrap(),"base_instructions":"i".repeat(1024)}}),
-        json!({"type":"event_msg","payload":{"type":"user_message","message":"u".repeat(6 * 1024)}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":title}}),
         json!({"type":"response_item","timestamp":"2026-10-10T03:00:00Z","payload":{"type":"message","role":"assistant","content":"answer"}}),
     );
     std::fs::write(temp.path().join("sessions/title.jsonl"), input).unwrap();
@@ -764,7 +768,7 @@ fn HistorySource_UnseenTitle_011() {
     assert_eq!(items.len(), 1);
     let ResourceItem::Session {
         native_session_id,
-        title,
+        title: observed_title,
         truncated,
         updated_at,
         ..
@@ -773,10 +777,11 @@ fn HistorySource_UnseenTitle_011() {
         panic!("history must return only session metadata")
     };
     assert_eq!(native_session_id, "unseen-title");
-    assert_eq!(title, "Untitled");
-    assert!(*truncated);
-    assert!(updated_at.is_none());
-    assert!(budget.history_metadata_incomplete());
+    assert_eq!(observed_title, title);
+    // 完整读取（文件很小）时标记为完整，且时间来自尾部真实时间戳。
+    assert!(!truncated);
+    assert_eq!(updated_at.as_deref(), Some("2026-10-10T03:00:00Z"));
+    assert!(!budget.history_metadata_incomplete());
 }
 
 fn read_claude_history_fixture(
