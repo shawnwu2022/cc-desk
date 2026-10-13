@@ -830,6 +830,78 @@ fn HistorySource_TitleFromUserMessageWindow_011() {
     assert!(!budget.history_metadata_incomplete());
 }
 
+// codex 的自动评审/安全扫描脚手架同样以 role=user 注入，且必须继续向后扫描真实
+// 首条消息；没有任何真实用户输入时会话退回 Untitled，而不是把包装文字当标题。
+#[test]
+#[allow(non_snake_case)]
+fn HistorySource_InjectedScaffoldingIsNotATitle_045() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let header = json!({"type":"session_meta","payload":{"id":"auto-review","cwd":cwd}});
+    let wrappers = [
+        "The following is the Codex agent history whose request action you are assessing.",
+        "Review the code changes against the base branch 'main'.",
+        "## Code review guidelines:\n# Review Guidelines",
+        "IMPORTANT: Do NOT read or execute any files under ~/.codex/",
+        "# Files mentioned by the user:",
+        "Run one Standard security scan using this exact configuration:",
+    ];
+
+    // 只有包装：不得把包装文字当标题。
+    let body: String = wrappers
+        .iter()
+        .map(|text| {
+            format!(
+                "{}\n",
+                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})
+            )
+        })
+        .collect();
+    std::fs::write(
+        temp.path().join("sessions/auto.jsonl"),
+        format!("{header}\n{body}"),
+    )
+    .unwrap();
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(value[0]["title"], "Untitled");
+    assert_eq!(value[0]["titleUnknown"], true);
+
+    // 包装之后出现真实用户消息时，标题取该真实消息。
+    std::fs::write(
+        temp.path().join("sessions/auto.jsonl"),
+        format!(
+            "{header}\n{body}{}\n",
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"修复 cc-box 的历史列表"}]}})
+        ),
+    )
+    .unwrap();
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["title"], "修复 cc-box 的历史列表");
+}
+
+fn read_codex_history_fixture(root_path: &Path) -> ReadResult<Vec<ResourceItem>> {
+    let root = Root::open(root_path).unwrap();
+    read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[root_path.to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+}
+
 fn read_claude_history_fixture(
     root: &Root,
     paths: &[PathBuf],

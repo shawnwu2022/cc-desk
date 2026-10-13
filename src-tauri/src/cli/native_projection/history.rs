@@ -321,13 +321,27 @@ pub(super) fn codex_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
     }
 }
 
-/// codex 会把 AGENTS.md、环境上下文等以 role=user 注入到 rollout 中。这些记录
-/// 只作展示标题时是噪声，按已知包装前缀排除；真实用户输入不会是这些形式。
+/// codex 会把 AGENTS.md、环境上下文以及自动评审/安全扫描的脚手架以 role=user
+/// 注入到 rollout 中。这些记录只作展示标题时是噪声，按已知包装前缀排除；真实
+/// 用户输入不会是这些形式。前缀来自本机真实根的实测分布：自动评审包装出现于
+/// 690 个会话，其余包装合计约 290 个；未列入的未知包装最多让该行退回 Untitled，
+/// 不会挡住其后的真实首条消息（标题仍继续向后扫描）。
 fn is_injected_user_context(text: &str) -> bool {
+    const WRAPPERS: [&str; 11] = [
+        "<",
+        "# AGENTS.md instructions",
+        "# Environment",
+        "The following is the Codex agent history",
+        "Review the code changes against the base branch",
+        "## Code review guidelines:",
+        "IMPORTANT: Do NOT read",
+        "# Files mentioned by the user:",
+        "Run one Standard security scan",
+        "You are the single serial semantic reducer for one Codex Security Deep",
+        "You are one independent discovery worker inside a Codex Security Deep",
+    ];
     let head = text.trim_start();
-    head.starts_with('<')
-        || head.starts_with("# AGENTS.md instructions")
-        || head.starts_with("# Environment")
+    WRAPPERS.iter().any(|prefix| head.starts_with(prefix))
 }
 
 /// 展示标题：取首个非空行、折叠空白并限长。首条用户消息常是整段 prompt，
