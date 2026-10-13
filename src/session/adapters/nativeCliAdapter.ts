@@ -240,7 +240,9 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     const keys = deps.archive.getArchivedSessions(entry.context.projectPath)
     const old = oldHistoryId(entry, item.sessionKey, item.nativeSessionId)
     const legacy = keys.includes(old)
-    return { archived: keys.includes(historyId(entry, item.sessionKey, item.nativeSessionId)) || legacy,
+    // archived=true 也来自 CLI 自身的归档容器（codex 会把会话移进
+    // archived_sessions/，与 sessions/ 零重叠），不只来自 Desk 的归档注册表。
+    return { archived: item.archived === true || keys.includes(historyId(entry, item.sessionKey, item.nativeSessionId)) || legacy,
       safeErrorCode: legacy && oldKeyMatches(old).length !== 1 ? 'SESSION_ORIGIN_AMBIGUOUS' : null }
   }
 
@@ -477,8 +479,25 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       }
     }
     if (deps.archive.getArchivedSessions(history.projectPath).includes(id)) await deps.archive.restoreSession(history.projectPath, id)
-    if (match) await saveSessionOpenedAt(deps.metadata, projectHistory(match.entry, match.item), Date.now(),
-      () => findHistory(id).length === 1).catch(() => {})
+    if (match) {
+      // CLI 自身归档容器（item.archived）不在 Desk 注册表内，没有「写回原位」
+      // 的恢复动作；其语义就是从归档中打开会话——codex resume 按 id 查找，
+      // 归档位置不影响恢复。
+      if (match.item.archived === true) {
+        await resumeSession({
+          projectKey: history.projectPath,
+          projectPath: history.projectPath,
+          cli: match.entry.context.cli,
+          adapterSessionId: match.item.sessionKey,
+          nativeSessionId: match.item.nativeSessionId,
+          nativeOrigin: match.entry.context,
+          launchConfigId: match.entry.context.profileId,
+        })
+        return
+      }
+      await saveSessionOpenedAt(deps.metadata, projectHistory(match.entry, match.item), Date.now(),
+        () => findHistory(id).length === 1).catch(() => {})
+    }
   }
 
   return { runtime: 'native-cli', captureOwnership, listSessions, createSession, resumeSession, activateSession, stopSession, restartSession, closeSession, renameSession, archiveSession, restoreArchivedSession, verifyMissingSession }

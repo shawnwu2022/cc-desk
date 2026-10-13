@@ -159,6 +159,9 @@ pub(super) fn read(
             .map_err(|_| "SOURCE_INVALID")?;
         if o.kind == ResourceKind::History {
             let (title, truncated) = bounded(&t.title, 512);
+            // Codex 自身把归档会话移进 archived_sessions/（与 sessions/ 零重叠的
+            // move 语义）；代表 rollout 的容器位置就是该 thread 的归档状态。
+            let archived = t.source_path.starts_with("archived_sessions/");
             result.push(ResourceItem::Session {
                 session_key: key,
                 native_session_id: t.id,
@@ -168,6 +171,7 @@ pub(super) fn read(
                 title_source: t.title_priority.map(TitlePriority::source),
                 metadata_incomplete: t.metadata_incomplete.then_some(true),
                 truncated: truncated || t.metadata_incomplete,
+                archived,
                 cwd: t.cwd,
                 updated_at: t.updated,
             });

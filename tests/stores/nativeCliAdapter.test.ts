@@ -19,7 +19,7 @@ function history(cli: 'claude' | 'codex', root: string, nativeSessionId: string,
   return {
     key: `${cli}:${root}`,
     context: { cli, profileId, profileRevision: '7', projectId: 'project-1', projectPath },
-    sessions: [{ type: 'session', sessionKey: JSON.stringify(['local', cli, root, nativeSessionId]), nativeSessionId, title: `${cli}-${root}`, truncated: false, cwd: projectPath, updatedAt: '2026-09-29T00:00:00Z' }],
+    sessions: [{ type: 'session', sessionKey: JSON.stringify(['local', cli, root, nativeSessionId]), nativeSessionId, title: `${cli}-${root}`, truncated: false, archived: false, cwd: projectPath, updatedAt: '2026-09-29T00:00:00Z' }],
     loading: false, loaded: true, error: null, requestEpoch: '1',
   }
 }
@@ -257,6 +257,23 @@ describe('native CLI adapter', () => {
     tabs.set(reused.tabId, reused)
     await adapter.listSessions()
     expect(upsertSessionRecord).toHaveBeenCalledTimes(1)
+  })
+
+  // codex 自身归档容器（item.archived）的行必须标记归档；其「恢复」语义是
+  // 从归档中打开会话（resume），而不是写 Desk 的归档注册表。
+  it('CodexArchive_SourceDirRowArchivesAndRestoreOpens_033', async () => {
+    setActivePinia(createPinia())
+    const entry = history('codex', '/root', 'session-9')
+    entry.sessions[0].archived = true
+    const { adapter, runtime, archive, setActive } = setup([], [entry])
+    const rows = await adapter.listSessions()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].archived).toBe(true)
+    await adapter.restoreArchivedSession(rows[0].id)
+    expect(archive.restoreSession).not.toHaveBeenCalled()
+    expect(runtime.createTab).toHaveBeenCalledTimes(1)
+    expect(runtime.createTab.mock.calls[0][0].action).toMatchObject({ kind: 'resume-id', nativeSessionId: 'session-9' })
+    expect(setActive).toHaveBeenCalled()
   })
 
 })

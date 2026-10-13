@@ -381,6 +381,7 @@ npm run tauri:build        # 生产构建
 - 按 Session ID 和 CLI 自带恢复列表要求显式已有启动配置和已注册项目，冻结所选配置修订/注册身份，直接进入现有 Native adapter/runtime；不得调用新建准备逻辑、自动注册或创建配置。来源已变更/缺失时提示刷新并重新选择。
 - 缺失记录移除先重新验证来源/不存在证据，再经 `projectsState` 移除精确可选 UI 元数据并清理当前目录，不调用 `deleteSessions`，不删除 CLI 文件、不创建永久忽略标记。以后成功发现的真实记录可以重新出现。
 - 原 Native archive key 唯一匹配时继续兼容，显式恢复可移除该旧键；多来源歧义时保留元数据并提示，不猜测。新归档使用完整来源键。Legacy 普通历史按项目过滤占用/归档；`getCatalogHistoryFor` 始终保留归档供统一目录处理。
+- Codex 自身的归档机制是 CLI 把会话 rollout 移进 `~/.codex/archived_sessions/`（与 `sessions/` 零重叠的 move 语义）。后端按代表 rollout 的容器位置在 `ResourceItem.Session.archived` 输出该状态；Native adapter 将其并入行的归档投影（OR Desk 注册表），归档行照常从普通树隐藏并进入归档抽屉。该来源的「恢复」不写 Desk 注册表（没有可写回的原位），语义是从归档中打开会话——`codex resume <id>` 按 id 查找，归档位置不影响恢复。Desk 自己的归档动作仍走注册表，不移动 CLI 文件。
 - 门禁：`npm test -- tests/components/resumeSessionDialog.test.ts tests/stores/unifiedResume.test.ts tests/native-cli/nativeProjectionStore.test.ts && npm run typecheck`。真实 CLI/平台缩放验收仍未执行，见手动测试清单。
 
 - Task13 review repair：Native 不存在证据必须来自同一原始 `sourceRootKey` 的单次完整鉴权响应，并与保存的 `sessionKey` 匹配。offset 多页没有共同快照契约，只可提供正向发现，不能证明缺失/允许移除；大历史中无法证明缺失的记录需保留并提示不确定。合并恢复请求分别保留每个调用方的取消所有权，新显式确认可接管尚未完成的检查；旧已取消调用方仍拒绝，全部取消时不准入。

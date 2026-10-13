@@ -661,6 +661,7 @@ fn history_snapshot_accounts_allocated_capacity_and_retains_partial_flags() {
         cwd: None,
         updated_at: None,
         truncated: true,
+        archived: false,
     }];
     assert!(history_snapshot_bytes(&items, items.capacity()) > HISTORY_SNAPSHOT_BYTES);
     let t = tempfile::tempdir().unwrap();

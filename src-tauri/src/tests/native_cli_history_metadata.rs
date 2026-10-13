@@ -469,6 +469,57 @@ fn HistoryCodex_SameThreadCrossProjectTakesLatest_042() {
     assert_eq!(value[0]["title"], "in project y");
 }
 
+// codex 自身的归档机制把会话移进 archived_sessions/（与 sessions/ 零重叠）；
+// 代表 rollout 的容器位置必须作为 archived 状态输出，供前端隐藏普通树中的行。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_ArchivedFlagFromSourceDir_043() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    for (path, id) in [
+        ("archived_sessions/rollout-2026-05-05T19-04-12-archived.jsonl", "archived-id"),
+        ("sessions/2026/10/03/rollout-2026-10-03T20-14-17-live.jsonl", "live-id"),
+    ] {
+        let full = temp.path().join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(
+            &full,
+            format!(
+                "{}\n",
+                json!({"type":"session_meta","payload":{"id":id,"cwd":cwd}})
+            ),
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .unwrap();
+    assert_eq!(items.len(), 2);
+    let value = serde_json::to_value(&items).unwrap();
+    let by_id: std::collections::BTreeMap<&str, bool> = value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| (item["nativeSessionId"].as_str().unwrap(), item["archived"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(by_id["archived-id"], true);
+    assert_eq!(by_id["live-id"], false);
+}
+
 // 消息读取同样按代表制：同 thread 只读最新 rollout，不同文件的消息不得交错。
 #[test]
 #[allow(non_snake_case)]
