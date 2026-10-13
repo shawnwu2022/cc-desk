@@ -221,22 +221,44 @@ There is no Provider/API-key management or alternate settings overlay.
 
 ## Unified session icon primitives
 
-`src/components/sessions/SessionStatusIcon.vue` accepts `state: SessionVisualState`
-and renders a 16px icon, without an inline status-label node. The bundled SVG
-shape identifiers are `gap-ring`, `active-play`, `reply-dot`, `question-circle`,
-`stop-circle`, and `alert-circle`. Only allowlisted static project SVG imports
-are rendered; caller data never becomes SVG/HTML markup. The accessible name and
-shared tooltip use the same English/Chinese locale key. Its single actual trigger
-is keyboard-focusable and has the shared 2px ink-blue focus ring.
+`SessionAppIcon.vue` takes CLI, visual/activity state, archive context and an
+independent occurrence-notice description. It reserves one 20px slot and combines
+the real 16px application mark with a solid lower-right badge (10px SVG box,
+approximately 8px colored backplate). Known idle has no badge and keeps native
+artwork static; closed/stopped marks use a recognizable neutral-gray treatment.
+Working uses a 2.6-second opacity cycle and a static working/thinking/tool/subagent/
+compacting shape. Permission is an amber lock, input a blue bubble, error a red
+exclamation, unknown a neutral question; starting/confirmation/stopped/archive
+retain their dedicated shapes. A new completion state or unread receipt brightens
+once for 650ms. Selection, stable refresh and remount never replay it.
+Reduced-motion removes all motion while preserving the static badge.
 
-Starting rotates slowly; confirming breathes weakly with a .75 minimum opacity
-to preserve ≥3:1 shape contrast; needs-user gives one brief cue on each entry
-into that state. Stable state/localization updates do not
-recreate the shape or replay that cue. Running, ended, and failed are static.
-The later reduced-motion rule matches the animation selectors' specificity and
-disables every animation.
+`SessionStatusIcon.vue` remains the allowlisted bundled shape primitive;
+caller data never becomes SVG/HTML markup. `decorative` mode disables its own
+focus/Tooltip and entry motion. Its flex container avoids inheriting the row text
+baseline into the small badge. `SessionAppIcon` owns one shared Tooltip trigger
+with the complete CLI, current-state and receipt name, keyboard focus ring and
+Escape dismissal. There is no permanent status-text node.
+The CLI icon area retains normal row activation; an attached receipt remains
+passive on click/touch so inspecting its description cannot resume history.
 
-`src/components/sessions/CliAppIcon.vue` accepts `cli: 'claude' | 'codex'`. Its
+Native unread reply-end receipts show a green check only when no known newer
+work/permission/error/start cause has priority. The accessible description still
+states that receipt occurrence does not verify current activity. Ended retained
+terminals acknowledge only with proven window focus, actual active tab and visible
+content. Mere selected-row changes and history reopening do not clear a closed
+snapshot. Close/archive caches privately proven unread facts under the complete
+historical source identity in adapter memory, capped at 1024 sources without
+evicting prior unread entries. A new source at capacity is not retained; clearing
+frees the slot. Unknown historical identity is not guessed. These snapshots do
+not survive application restart. The shared closed-row menu's Clear unread marker
+freezes event, run, generation and receipt time at the click, then compares them
+against the current cache; a delayed request cannot clear a newer run. A first
+close can bind its frozen Native attempt to a unique complete historical source
+found by the close refresh. Ambiguous or missing sources retain no badge.
+
+`src/components/sessions/CliAppIcon.vue` accepts `cli: 'claude' | 'codex'` and an
+optional `decorative` mode for the combined row trigger. Its
 16px SVG image uses the corresponding application mark and never derives
 color from session state. Claude retains its official orange starburst; Codex
 uses a black/white treatment for the current GUI theme. The
@@ -251,7 +273,9 @@ its application marks are not claimed as CC Desk-created MIT artwork. The
 circular session status symbols remain CC Desk-owned artwork under MIT.
 The Task 7 component gate is `tests/components/sessionIcons.test.ts` plus
 `npm run typecheck`; actual Windows scaling and visual accessibility remain
-separate final gates. Existing session rows are migrated by subsequent tasks.
+separate final gates. The merged row adds `sessionAppIcon.test.ts` and
+`tests/visual/session-app-icon.spec.ts`; browser fixture evidence does not certify
+installed Windows WebView2 or live CLI activity semantics.
 
 
 ## Unified project/session tree

@@ -7,8 +7,7 @@ import { useI18n } from 'vue-i18n'
 import AppInput from '@/components/ui/AppInput.vue'
 import AppTooltip from '@/components/ui/AppTooltip.vue'
 import IconButton from '@/components/ui/IconButton.vue'
-import SessionStatusIcon from './SessionStatusIcon.vue'
-import CliAppIcon from './CliAppIcon.vue'
+import SessionAppIcon from './SessionAppIcon.vue'
 import SessionOverflowMenu from './SessionOverflowMenu.vue'
 import { deriveSessionVisualState, makeSessionRenameOwnerKey, selectSessionMenuActions, selectSessionArchiveAction, selectSessionPrimaryAction, selectSessionObservationNotice, sessionActionLabelKey } from '@/utils/sessionPresentation'
 import { formatRelativeActivity, useRelativeActivityClock } from '@/utils/relativeTime'
@@ -44,8 +43,12 @@ let firstClick: { session: UnifiedSession; owner: string; owns: (() => boolean) 
 const menuAnchor = ref({ x: 8, y: 8 })
 const isRenaming = computed(() => props.selected && (localRename.value || props.session.renameState === 'editing' || props.session.renameState === 'saving'))
 const isSaving = computed(() => props.session.renameState === 'saving')
-const visualState = computed(() => deriveSessionVisualState(props.session, props.selected))
+const visualState = computed(() => deriveSessionVisualState(props.session, props.session.opened === true))
 const observationNotice = computed(() => selectSessionObservationNotice(props.session))
+const receiptId = computed(() => {
+  const notice = props.session.observationNotice?.unreadReplyEnd
+  return notice ? JSON.stringify([notice.runId, notice.generation, notice.eventId]) : undefined
+})
 const canRename = computed(() => props.selected && !props.session.preparationState && props.menuActionVisibility?.rename !== false)
 const actions = computed(() => selectSessionMenuActions(props.session, { ...props.menuActionVisibility, rename: canRename.value }))
 const archive = computed(() => selectSessionArchiveAction(props.session, props.menuActionVisibility))
@@ -187,24 +190,13 @@ function onMenuAction(action: SessionMenuAction) {
   <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, 'has-launch': launchPrimary, 'has-archive': !!archive && !primary && !isRenaming, editing: isRenaming }"
     role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" :aria-busy="session.resumePending || undefined" tabindex="0"
     @click="onClick" @dblclick="onDoubleClick" @keydown="onKeydown" @contextmenu="openContext">
-    <SessionStatusIcon :state="visualState" :activity-state="session.activityState" :transition-state="deriveSessionVisualState(session, false)" :archived="session.archived" />
-    <CliAppIcon :cli="session.cli" />
+    <SessionAppIcon :cli="session.cli" :state="visualState" :activity-state="session.activityState" :archived="session.archived" :notice="observationNotice" :receipt-id="receiptId" />
     <div class="session-name-wrapper">
       <AppInput v-if="isRenaming" ref="renameInput" v-model="renameValue" class="rename-input" size="compact"
         :aria-label="t('sessionRenameLabel')" :invalid="renameInvalid" :disabled="isSaving"
         @click.stop @keydown.enter.stop.prevent="commitRename" @keydown.esc.stop.prevent="cancelRename" />
       <AppTooltip v-else class="session-title-tooltip" :text="session.title">
         <span class="session-name" tabindex="0">{{ session.title }}</span>
-      </AppTooltip>
-      <AppTooltip v-if="observationNotice && !isRenaming" class="session-notice-tooltip" :text="t(observationNotice.labelKey)">
-        <span class="session-observation-notice" role="img" tabindex="0" data-native-observation-notice
-          :data-unread="observationNotice.unread" :aria-label="t(observationNotice.labelKey)" @click.stop @dblclick.stop>
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M3 3.5h10v7H7l-3 2v-2H3z" stroke="currentColor" stroke-linejoin="round" />
-            <circle v-if="observationNotice.unread" cx="8" cy="7" r="1.5" fill="currentColor" />
-            <path v-else d="M5.5 6.5h5m-5 2h3" stroke="currentColor" />
-          </svg>
-        </span>
       </AppTooltip>
     </div>
     <div class="session-tail">
@@ -244,7 +236,7 @@ function onMenuAction(action: SessionMenuAction) {
 <style scoped>
 .session-item {
   display: grid;
-  grid-template-columns: 16px 18px minmax(0, 1fr) 38px 20px;
+  grid-template-columns: 20px minmax(0, 1fr) 38px 20px;
   column-gap: 6px;
   align-items: center;
   height: 38px;
@@ -256,7 +248,7 @@ function onMenuAction(action: SessionMenuAction) {
   background: transparent;
   cursor: pointer;
 }
-.session-item.has-launch { grid-template-columns: 16px 18px minmax(0, 1fr) 64px 20px; }
+.session-item.has-launch { grid-template-columns: 20px minmax(0, 1fr) 64px 20px; }
 .session-item.has-launch .session-tail { width: 64px; gap: 6px; }
 .session-item.has-launch .session-launch-action { position: static; width: 20px; flex: 0 0 20px; opacity: 1; pointer-events: auto; }
 .session-item.has-launch:hover .session-time, .session-item.has-launch:focus-within .session-time { opacity: 1; pointer-events: auto; }
@@ -276,10 +268,6 @@ function onMenuAction(action: SessionMenuAction) {
 .session-name-wrapper { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .session-name-wrapper :deep(.ui-tooltip-anchor) { display: block; min-width: 0; }
 .session-title-tooltip { flex: 1; }
-.session-notice-tooltip { flex: 0 0 12px; }
-.session-observation-notice { display: flex; width: 12px; height: 12px; color: var(--text-secondary); cursor: help; }
-.session-observation-notice[data-unread="true"] { color: var(--accent-gold); }
-.session-observation-notice:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--radius-sm); }
 .session-name {
   display: block;
   min-width: 0;

@@ -68,6 +68,17 @@ export function deriveSessionVisualState(session: UnifiedSession, selected = fal
   return activity === 'idle' ? 'running' : 'unknown'
 }
 
+export function sessionVisualLabelKey(state: SessionVisualState, activity?: UnifiedSession['activityState'], archived = false): string {
+  if (archived) return 'sessionStatusArchived'
+  if (state === 'working') {
+    const details = { thinking: 'sessionStatusThinking', tool_executing: 'sessionStatusToolExecuting', subagent_running: 'sessionStatusSubagent', compacting: 'sessionStatusCompacting' }
+    if (activity && activity in details) return details[activity as keyof typeof details]
+  }
+  if (state === 'needs-user' && activity === 'waiting_input') return 'sessionStatusWaitingInput'
+  const keys: Record<SessionVisualState, string> = { starting: 'sessionStatusStarting', running: 'sessionStatusRunning', working: 'sessionStatusWorking', 'needs-user': 'sessionStatusNeedsUser', permission: 'sessionStatusPermission', completed: 'sessionStatusCompleted', error: 'sessionStatusError', confirming: 'sessionStatusConfirming', unknown: 'sessionStatusUnknown', stopped: 'sessionStatusStopped', closed: 'sessionStatusClosed', ended: 'sessionStatusEnded', failed: 'sessionStatusFailed' }
+  return keys[state]
+}
+
 const noticeLabelKeys: Record<NativeObservationNoticeKind, string> = {
   'prompt-submitted': 'nativeNoticePromptSubmitted', 'tool-started': 'nativeNoticeToolStarted',
   'tool-ended': 'nativeNoticeToolEnded', 'tool-failed': 'nativeNoticeToolFailed',
@@ -78,7 +89,7 @@ const noticeLabelKeys: Record<NativeObservationNoticeKind, string> = {
 }
 /** Occurrence metadata stays separate from the current activity/status icon. */
 export function selectSessionObservationNotice(session: UnifiedSession): { labelKey: string; unread: boolean } | null {
-  if (session.runtime !== 'native-cli' || session.cli !== 'claude' || session.processState !== 'running' || session.archived) return null
+  if (session.runtime !== 'native-cli' || session.cli !== 'claude' || !['running', 'stopped'].includes(session.processState)) return null
   const notice = session.observationNotice
   if (notice?.unreadReplyEnd?.kind === 'reply-ended') return { labelKey: 'nativeNoticeReplyEndUnread', unread: true }
   const labelKey = notice?.recent && noticeLabelKeys[notice.recent.kind]
@@ -113,6 +124,7 @@ const isState = (...states: UnifiedSession['processState'][]) =>
 
 /** Both menu entry points consume this one allowlisted action model. */
 export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
+  { id: 'clear-unread', labelKey: 'sessionActionClearUnread', visible: session => !session.opened && !!session.observationNotice?.unreadReplyEnd },
   { id: 'rename', labelKey: 'sessionActionRename', visible: (session) => !session.preparationState },
   { id: 'cancel-start', labelKey: 'sessionActionCancelStart', danger: true, visible: isState('starting') },
   { id: 'stop', labelKey: 'sessionActionStop', danger: true, visible: () => false },

@@ -87,6 +87,7 @@ if (scenario === 'session-status') {
     { processState: 'stopped', opened: true }, { processState: 'stopped', opened: false, resumable: true },
   ]
   catalog.sessions = samples.map((sample, index) => ({ ...fixtureSessions()[0],
+    cli: parameters.get('cli') === 'codex' ? 'codex' : 'claude',
     id: `visual-status-${index}`, adapterSessionId: `visual-status-tab-${index}`,
     title: `Synthetic ${sample.activityState ?? sample.attentionKind ?? sample.processState ?? 'needs-user'}`,
     activityState: 'unknown', attentionState: 'none', opened: true,

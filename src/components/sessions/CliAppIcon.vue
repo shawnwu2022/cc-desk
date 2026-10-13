@@ -5,7 +5,7 @@ import type { UnifiedCliKind } from '@/types/unifiedSession'
 import claude from '@/assets/icons/cli/claude.svg'
 import codex from '@/assets/icons/cli/codex.svg'
 
-const props = defineProps<{ cli: UnifiedCliKind }>()
+const props = defineProps<{ cli: UnifiedCliKind; decorative?: boolean }>()
 const apps: Record<UnifiedCliKind, { src: string; name: string; fallback: string }> = {
   claude: { src: claude, name: 'Claude Code', fallback: 'CC' },
   codex: { src: codex, name: 'Codex CLI', fallback: 'CX' },
@@ -21,12 +21,12 @@ function onImageError(event: Event) {
 </script>
 
 <template>
-  <AppTooltip :text="app.name">
-    <span class="cli-app-icon" :class="`cli-app-icon--${cli}`" role="img" :aria-label="app.name" tabindex="0">
+  <component :is="decorative ? 'span' : AppTooltip" :text="decorative ? undefined : app.name">
+    <span class="cli-app-icon" :class="`cli-app-icon--${cli}`" :role="decorative ? undefined : 'img'" :aria-hidden="decorative || undefined" :aria-label="decorative ? undefined : app.name" :tabindex="decorative ? undefined : 0">
       <img v-if="!imageFailed" :key="cli" ref="image" class="cli-app-icon__image" :src="app.src" alt="" aria-hidden="true" draggable="false" @error="onImageError" />
       <span v-else class="cli-app-icon__fallback" aria-hidden="true">{{ app.fallback }}</span>
     </span>
-  </AppTooltip>
+  </component>
 </template>
 
 <style scoped>

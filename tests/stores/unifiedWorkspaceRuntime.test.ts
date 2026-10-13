@@ -609,6 +609,19 @@ describe('Unified production runtime', () => {
     expect(useSessionStore().tabs.size).toBe(0)
     expect(catalog.activeSessionId).toBeNull()
   })
+  it('Runtime_ClearRequestKeepsClickedReceipt_058', async () => {
+    render(); await flushPromises()
+    const catalog = useUnifiedSessionsStore(), shell = useShellStore()
+    const row = catalog.sessions.find(session => !session.opened)!
+    const first = { kind: 'reply-ended' as const, eventId: 'first', receivedAt: 1, runId: 'run-1', generation: 1 }
+    const second = { ...first, eventId: 'second', runId: 'run-2', generation: 2 }
+    row.observationNotice = { recent: first, unreadReplyEnd: first }
+    const clear = vi.spyOn(catalog, 'clearUnread').mockResolvedValue()
+    shell.requestWorkspaceAction({ kind: 'menu-action', sessionId: row.id, action: 'clear-unread', expectedNotice: { ...first } })
+    row.observationNotice = { recent: second, unreadReplyEnd: second }
+    await flushPromises()
+    expect(clear).toHaveBeenCalledWith(row.id, first)
+  })
   // 每个请求序号仅执行一次，较早完成不能清掉较新待确认请求。
   it('Runtime_OwnsRequestSequence_004', async () => {
     render(); await flushPromises(); const shell = useShellStore(); const unified = useUnifiedSessionsStore()

@@ -33,14 +33,15 @@ describe('Honest Native event notice presentation', () => {
   ])('Notice_UnreadIsSeparateFromActivity_001 %s', async (locale, expected) => {
     const wrapper = render(row(), locale)
     const marker = wrapper.get('[data-native-observation-notice]')
-    expect(marker.attributes('aria-label')).toBe(expected)
+    expect(marker.attributes('aria-label')).toBe('Claude Code; ' + (locale === 'en' ? 'Activity unknown' : '活动未知') + '; ' + expected)
     expect(marker.attributes('data-unread')).toBe('true')
-    expect(wrapper.get('.session-status-icon').attributes('aria-label')).toBe(locale === 'en' ? 'Activity unknown' : '活动未知')
+    expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('completed')
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toContain(locale === 'en' ? 'Activity unknown' : '活动未知')
     expect(wrapper.html()).not.toContain('opaque-event')
     expect(wrapper.html()).not.toContain('opaque-run')
     expect(wrapper.text()).not.toMatch(/completed|已完成/i)
     await marker.trigger('focus'); await nextTick()
-    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(expected)
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(marker.attributes('aria-label'))
     await marker.trigger('click')
     expect(wrapper.emitted('activate')).toBeUndefined()
   })
@@ -51,15 +52,14 @@ describe('Honest Native event notice presentation', () => {
     expect(wrapper.get('[data-native-observation-notice]').attributes('aria-label')).toContain('Reply-end notice received (unread)')
     await wrapper.setProps({ session: { ...session, observationNotice: { ...session.observationNotice!, unreadReplyEnd: null } } })
     expect(wrapper.get('[data-native-observation-notice]').attributes('data-unread')).toBe('false')
-    expect(wrapper.get('[data-native-observation-notice]').attributes('aria-label')).toBe('Recent notice: prompt submitted; current activity unverified')
+    expect(wrapper.get('[data-native-observation-notice]').attributes('aria-label')).toBe('Claude Code; Activity unknown; Recent notice: prompt submitted; current activity unverified')
     expect(wrapper.get('.session-status-icon').attributes('aria-label')).toBe('Activity unknown')
   })
-  it.each(['legacy-claude', 'codex', 'stopped', 'archived', 'empty'] as const)('Notice_HiddenOutsideNativeReceiptScope_003 %s', invalidation => {
+  it.each(['legacy-claude', 'codex', 'failed', 'empty'] as const)('Notice_HiddenOutsideNativeReceiptScope_003 %s', invalidation => {
     const session = row()
     if (invalidation === 'legacy-claude') session.runtime = invalidation
     else if (invalidation === 'codex') session.cli = invalidation
-    else if (invalidation === 'stopped') session.processState = invalidation
-    else if (invalidation === 'archived') session.archived = true
+    else if (invalidation === 'failed') session.processState = invalidation
     else session.observationNotice = { recent: null, unreadReplyEnd: null }
     expect(render(session).find('[data-native-observation-notice]').exists()).toBe(false)
   })

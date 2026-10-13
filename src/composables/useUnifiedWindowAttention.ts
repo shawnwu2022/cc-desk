@@ -46,7 +46,7 @@ export function useUnifiedWindowAttention(options: { activeSessionId: Ref<string
     for (const tab of native.tabs.values()) {
       const noticeOwner = JSON.stringify(['native-reply-notice', tab.tabId, tab.requestId, tab.runId, tab.generation])
       liveNoticeOwners.add(noticeOwner)
-      if (tab.status !== 'running' || tab.cli !== 'claude' || tab.action.kind === 'raw') continue
+      if (!['running', 'exited', 'stopped'].includes(tab.status) || tab.cli !== 'claude' || tab.action.kind === 'raw') continue
       const owner = JSON.stringify(['native', tab.tabId, tab.requestId, tab.runId, tab.generation])
       liveOwners.add(owner)
       const state = tab.observationState === 'active' ? tab.activityState ?? 'unknown' : 'unknown'
@@ -54,7 +54,7 @@ export function useUnifiedWindowAttention(options: { activeSessionId: Ref<string
       seen.set(owner, state)
       // A waiting transition can request generic attention; it cannot supply
       // permission/completion/error causes absent from the source projection.
-      if (!isFocused.value && fresh && state === 'waiting') notify = true
+      if (tab.status === 'running' && !isFocused.value && fresh && state === 'waiting') notify = true
 
       const notice = tab.observationNotice?.unreadReplyEnd
       const attempt = captureNativeAttempt(tab)
@@ -64,7 +64,7 @@ export function useUnifiedWindowAttention(options: { activeSessionId: Ref<string
         && native.activeTabId === tab.tabId) {
         // Reading a historical receipt does not require current observer activity.
         native.ackReplyEndNotice(tab.tabId, attempt, notice.eventId)
-      } else if (!isFocused.value && tab.observationState === 'active') {
+      } else if (tab.status === 'running' && !isFocused.value && tab.observationState === 'active') {
         const sent = sentReplyNotices.get(noticeOwner) ?? new Set<string>()
         // Retain the bound even if a corrupted/replayed DTO escapes producer
         // dedup. Exhaustion never evicts an old ID and re-flashes it.

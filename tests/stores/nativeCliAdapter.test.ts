@@ -42,6 +42,105 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
 }
 
 describe('native CLI adapter', () => {
+  // 容量满时不淘汰旧未读；同一完整来源的新回执仍可替换，并拒绝旧快照清除。
+  it('Notice_CacheBoundAndExactClear_033', async () => {
+    const map = new Map<string, NativeCliTab>(), entries: NativeHistoryEntry[] = []
+    const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive() {}, rename() {}, close: id => { map.delete(id) }, hasOwnedObservationNotice: () => true },
+      history: { all: () => entries }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {} },
+      archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
+    for (let n = 0; n < 1025; n++) {
+      const entry = history('claude', 'root', 'session-' + n); entries.push(entry)
+      const value = tab({ tabId: 'tab-' + n, cli: 'claude', profileId: 'claude-main', sourceSessionKey: entry.sessions[0].sessionKey, action: { kind: 'resume-id', nativeSessionId: 'session-' + n } })
+      const receipt = { kind: 'reply-ended' as const, eventId: 'reply-' + n, receivedAt: n, runId: value.runId, generation: value.generation }
+      value.observationNotice = { recent: receipt, unreadReplyEnd: receipt }
+      map.set(value.tabId, value)
+      await adapter.closeSession('native-tab:' + value.tabId)
+    }
+    const rows = await adapter.listSessions()
+    expect(rows.filter(row => row.observationNotice?.unreadReplyEnd)).toHaveLength(1024)
+    expect(rows.find(row => row.nativeSessionId === 'session-0')!.observationNotice?.unreadReplyEnd?.eventId).toBe('reply-0')
+    expect(rows.find(row => row.nativeSessionId === 'session-1024')!.observationNotice).toBeUndefined()
+    const old = rows.find(row => row.nativeSessionId === 'session-0')!
+    const value = tab({ cli: 'claude', profileId: 'claude-main', sourceSessionKey: entries[0].sessions[0].sessionKey, action: { kind: 'resume-id', nativeSessionId: 'session-0' }, runId: 'run-2', generation: 2 })
+    const receipt = { kind: 'reply-ended' as const, eventId: 'replacement', receivedAt: 2000, runId: value.runId, generation: 2 }
+    value.observationNotice = { recent: receipt, unreadReplyEnd: receipt }; map.set(value.tabId, value)
+    await adapter.closeSession('native-tab:' + value.tabId)
+    expect(() => adapter.clearUnread!(old.id, old)).toThrow('STALE_SESSION_ATTEMPT')
+    const latest = (await adapter.listSessions()).find(row => row.id === old.id)!
+    expect(latest.observationNotice?.unreadReplyEnd?.eventId).toBe('replacement')
+    await adapter.clearUnread!(latest.id, latest)
+    expect((await adapter.listSessions()).filter(row => row.observationNotice?.unreadReplyEnd)).toHaveLength(1023)
+  })
+  // 旧关闭的历史读取晚到不能覆盖更新代次关闭的未读快照。
+  it('Notice_LateCloseKeepsNewReceipt_034', async () => {
+    const entry = history('claude', 'root', 'session-1')
+    let finish!: () => void, reads = 0
+    const map = new Map<string, NativeCliTab>()
+    const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive() {}, rename() {}, close: id => { map.delete(id) }, hasOwnedObservationNotice: () => true },
+      history: { all: () => [entry], load: async () => { if (++reads === 1) await new Promise<void>(resolve => { finish = resolve }); return entry } },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {} },
+      archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
+    const first = tab({ cli: 'claude', profileId: 'claude-main', sourceSessionKey: entry.sessions[0].sessionKey })
+    const one = { kind: 'reply-ended' as const, eventId: 'one', receivedAt: 1, runId: first.runId, generation: 1 }
+    first.observationNotice = { recent: one, unreadReplyEnd: one }; map.set(first.tabId, first)
+    const closing = adapter.closeSession('native-tab:' + first.tabId)
+    await Promise.resolve(); await Promise.resolve()
+    const second = { ...first, tabId: 'second', runId: 'run-2', generation: 2 }
+    const two = { ...one, eventId: 'two', runId: 'run-2', generation: 2, receivedAt: 2 }
+    second.observationNotice = { recent: two, unreadReplyEnd: two }; map.set(second.tabId, second)
+    await adapter.closeSession('native-tab:' + second.tabId)
+    finish(); await closing
+    expect((await adapter.listSessions())[0].observationNotice?.unreadReplyEnd?.eventId).toBe('two')
+  })
+  it('Notice_FirstCloseFindsExactHistoryAfterRefresh_035', async () => {
+    const entry = history('claude', 'root', 'session-1')
+    const entries: NativeHistoryEntry[] = []
+    const value = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, observedSessionId: 'session-1' })
+    const receipt = { kind: 'reply-ended' as const, eventId: 'first', receivedAt: 1, runId: value.runId, generation: value.generation }
+    value.observationNotice = { recent: receipt, unreadReplyEnd: receipt }
+    const map = new Map([[value.tabId, value]])
+    const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive() {}, rename() {}, close: id => { map.delete(id) }, hasOwnedObservationNotice: () => true },
+      history: { all: () => entries, load: async () => { entries.push(entry); return entry } },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {} },
+      archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
+    await adapter.closeSession('native-tab:' + value.tabId)
+    expect((await adapter.listSessions())[0].observationNotice?.unreadReplyEnd?.eventId).toBe('first')
+  })
+  it('Notice_UnresolvedOlderCloseCannotReplaceNewReceipt_036', async () => {
+    const entry = history('claude', 'root', 'session-1'), entries: NativeHistoryEntry[] = []
+    let release!: () => void, reads = 0
+    const map = new Map<string, NativeCliTab>()
+    const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive() {}, rename() {}, close: id => { map.delete(id) }, hasOwnedObservationNotice: () => true },
+      history: { all: () => entries, load: async () => { if (++reads === 1) await new Promise<void>(resolve => { release = resolve }); return entry } },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {} },
+      archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
+    const first = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, observedSessionId: 'session-1' })
+    const one = { kind: 'reply-ended' as const, eventId: 'one', receivedAt: 1, runId: first.runId, generation: 1 }
+    first.observationNotice = { recent: one, unreadReplyEnd: one }; map.set(first.tabId, first)
+    const pending = adapter.closeSession('native-tab:' + first.tabId)
+    await Promise.resolve(); await Promise.resolve()
+    entries.push(entry)
+    const second = tab({ tabId: 'second', cli: 'claude', profileId: 'claude-main', sourceSessionKey: entry.sessions[0].sessionKey,
+      action: { kind: 'resume-id', nativeSessionId: 'session-1' }, runId: 'run-2', generation: 2 })
+    const two = { ...one, eventId: 'two', runId: 'run-2', generation: 2, receivedAt: 2 }
+    second.observationNotice = { recent: two, unreadReplyEnd: two }; map.set(second.tabId, second)
+    await adapter.closeSession('native-tab:' + second.tabId)
+    release(); await pending
+    expect((await adapter.listSessions())[0].observationNotice?.unreadReplyEnd?.eventId).toBe('two')
+  })
+  it('Notice_AmbiguousFirstCloseDoesNotClaimAnotherSource_037', async () => {
+    const entries: NativeHistoryEntry[] = []
+    const value = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, observedSessionId: 'session-1' })
+    const receipt = { kind: 'reply-ended' as const, eventId: 'ambiguous', receivedAt: 1, runId: value.runId, generation: 1 }
+    value.observationNotice = { recent: receipt, unreadReplyEnd: receipt }
+    const map = new Map([[value.tabId, value]])
+    const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive() {}, rename() {}, close: id => { map.delete(id) }, hasOwnedObservationNotice: () => true },
+      history: { all: () => entries, load: async () => { entries.push(history('claude', 'root-one', 'session-1'), history('claude', 'root-two', 'session-1')); return entries[0] } },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {} },
+      archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
+    await adapter.closeSession('native-tab:' + value.tabId)
+    expect((await adapter.listSessions()).every(row => row.observationNotice === undefined)).toBe(true)
+  })
   // restart 必须撤销旧 run 的 observer 身份，避免新 attempt 认领旧历史行。
   it('Restart_DropsObservedClaim_032 — restart 后旧 observer 身份不再认领历史', async () => {
     setActivePinia(createPinia())

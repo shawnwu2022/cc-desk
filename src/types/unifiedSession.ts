@@ -26,7 +26,7 @@ export type SessionRenameState = 'idle' | 'editing' | 'saving'
 export type SessionMenuAction =
   | Exclude<SessionPrimaryAction, 'save-rename'>
   | 'rename' | 'restart' | 'close' | 'archive' | 'discard-creation'
-  | 'copy-session-id' | 'open-project-directory' | 'view-diagnostics'
+  | 'copy-session-id' | 'open-project-directory' | 'view-diagnostics' | 'clear-unread'
 /** Omitted entries use state defaults; false hides an unsupported capability. */
 export type SessionMenuActionVisibility = Partial<Record<SessionMenuAction, boolean>>
 export interface SessionMenuActionDefinition {
@@ -161,6 +161,8 @@ export interface SessionAdapter {
   renameSession(id: string, title: string, canContinue?: () => boolean, onIssued?: () => void): Promise<void>
   archiveSession(id: string, canContinue?: () => boolean): Promise<void>
   restoreArchivedSession(id: string): Promise<void>
+  /** 仅显式清除与调用方快照匹配的关闭未读；不得清除活动运行的通知。 */
+  clearUnread?(id: string, expected: UnifiedSession): Promise<void> | void
   /** Recheck absence without deleting CLI history files. */
   verifyMissingSession?(input: ResumeUnifiedSessionInput): Promise<void>
 }

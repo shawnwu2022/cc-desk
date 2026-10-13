@@ -48,9 +48,9 @@ for (const gui of ['light', 'dark']) for (const locale of ['en', 'zh']) {
     await page.setViewportSize({ width: 1024, height: 1000 })
     await openFixture(page, { scenario: 'session-status', gui, locale })
     // Assert the actual browser cascade, not just palette literals in source.
-    await expect(page.locator('[data-session-row="visual-status-12"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(130, 172, 220)' : 'rgb(42, 80, 130)')
-    await expect(page.locator('[data-session-row="visual-status-1"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(93, 173, 142)' : 'rgb(54, 126, 99)')
-    await expect(page.locator('[data-session-row="visual-status-10"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(242, 138, 120)' : 'rgb(196, 92, 74)')
+    await expect(page.locator('[data-session-row="visual-status-12"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(106, 154, 205)' : 'rgb(42, 80, 130)')
+    await expect(page.locator('[data-session-row="visual-status-1"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(93, 173, 142)' : 'rgb(61, 140, 110)')
+    await expect(page.locator('[data-session-row="visual-status-10"] .session-status-icon')).toHaveCSS('color', gui === 'dark' ? 'rgb(232, 112, 90)' : 'rgb(196, 92, 74)')
     const history = page.locator('[data-session-row="visual-status-16"]')
     await expect(history.locator('[data-session-launch]')).toHaveCount(0)
     await expect(history.getByRole('button', { name: locale === 'en' ? 'Resume session' : '恢复会话' })).toHaveCount(0)
@@ -68,9 +68,9 @@ for (const gui of ['light', 'dark']) for (const locale of ['en', 'zh']) {
     await clearFixtureSetupFocus(page)
     await page.mouse.move(1020, 996)
     await captureFixtureEvidence(page, testInfo, `session-glyphs-${gui}-${locale}-unapproved`)
-    const working = page.locator('[data-session-row="visual-status-2"] .session-status-icon')
+    const working = page.locator('[data-session-row="visual-status-2"] .session-app-icon')
     await working.hover()
-    await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Thinking' : '思考中')
+    await expect(page.getByRole('tooltip')).toHaveText(locale === 'en' ? 'Claude Code; Thinking' : 'Claude Code; 思考中')
     await page.mouse.move(1020, 996)
     await expect(page.getByRole('tooltip')).toHaveCount(0)
   })
@@ -87,14 +87,15 @@ for (const locale of ['en', 'zh']) for (const notice of ['unread', 'read']) {
     const label = notice === 'unread'
       ? locale === 'en' ? 'Reply-end notice received (unread); current activity unverified' : '收到回复结束通知（未读）；当前活动尚未验证'
       : locale === 'en' ? 'Recent notice: reply-end event; current activity unverified' : '最近收到：回复结束事件；当前活动尚未验证'
-    await expect(marker).toHaveAttribute('aria-label', label)
+    const fullLabel = (locale === 'en' ? 'Claude Code; Activity unknown; ' : 'Claude Code; 活动未知; ') + label
+    await expect(marker).toHaveAttribute('aria-label', fullLabel)
     await expect(marker).toHaveAttribute('data-unread', String(notice === 'unread'))
-    await expect(row.locator('.session-status-icon')).toHaveAttribute('aria-label', locale === 'en' ? 'Activity unknown' : '活动未知')
+    await expect(row.locator('.session-app-icon')).toHaveAttribute('aria-label', fullLabel)
     await expect(row.locator('.session-primary-action button')).toHaveAttribute('aria-label', locale === 'en' ? 'Close' : '关闭')
     await marker.focus()
     await expect(marker).toBeFocused()
     await expect(marker).toBeInViewport({ ratio: 1 })
-    await expect(page.getByRole('tooltip')).toHaveText(label)
+    await expect(page.getByRole('tooltip')).toHaveText(fullLabel)
     await expect(page.getByRole('tooltip')).toBeInViewport({ ratio: 1 })
     await captureFixtureEvidence(page, testInfo, `native-receipt-${locale}-${notice}-unapproved`)
     await page.keyboard.press('Escape')
@@ -103,7 +104,7 @@ for (const locale of ['en', 'zh']) for (const notice of ['unread', 'read']) {
     await page.keyboard.press('Enter')
     await expect(row.locator('input')).toHaveCount(0)
     await expect(page.locator('[role="dialog"]')).toHaveCount(0)
-    await expect(row.locator('.session-status-icon')).toHaveAttribute('aria-label', locale === 'en' ? 'Activity unknown' : '活动未知')
+    await expect(row.locator('.session-app-icon')).toHaveAttribute('aria-label', fullLabel)
   })
 }
 
@@ -156,8 +157,9 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
         await expect(primary.getByRole('button')).toHaveCount(1)
         await expect(close).toBeEnabled()
         await expect(close.locator('svg path')).toHaveAttribute('d', 'm6 6 12 12M18 6 6 18')
-        await expect(row.locator('.session-status-icon')).toHaveClass(`session-status-icon session-status-icon--${state === 'unknown' ? 'confirming' : state}`)
-        await expect(row.locator('.cli-app-icon')).toHaveAttribute('aria-label', variant === 'native-codex' ? 'Codex CLI' : 'Claude Code')
+        if (state === 'running') await expect(row.locator('[data-session-badge]')).toHaveCount(0)
+        else await expect(row.locator('[data-session-badge]')).toHaveAttribute('data-session-badge', state === 'unknown' ? 'confirming' : state)
+        await expect(row.locator('.session-app-icon')).toHaveAttribute('aria-label', new RegExp('^' + (variant === 'native-codex' ? 'Codex CLI' : 'Claude Code') + '; '))
 
         // Opacity is explicit: Playwright visibility alone would also accept an invisible button.
         await page.mouse.move(1020, 636)
@@ -318,7 +320,7 @@ for (const viewport of viewports) for (const dpr of [1, 1.25, 1.5]) for (const l
       const geometry = await page.locator('[data-session-row]').evaluateAll(rows => rows.map(row => {
         const box = row.getBoundingClientRect()
         const name = row.querySelector<HTMLElement>('.session-name')!
-        const cells = [...row.children].slice(0, 5).map(cell => { const rect = cell.getBoundingClientRect(); return { left: rect.left, right: rect.right, width: rect.width } })
+        const cells = [...row.children].slice(0, 4).map(cell => { const rect = cell.getBoundingClientRect(); return { left: rect.left, right: rect.right, width: rect.width } })
         return { height: box.height, right: box.right, cells, titleLength: row.getAttribute('aria-label')!.length,
           truncated: name.scrollWidth > name.clientWidth, textOverflow: getComputedStyle(name).textOverflow,
           actionCount: row.querySelectorAll('.session-primary-action button').length,
@@ -326,11 +328,11 @@ for (const viewport of viewports) for (const dpr of [1, 1.25, 1.5]) for (const l
       }))
       for (const row of geometry) {
         expect(row.height).toBe(density === 'compact' ? 34 : 38)
-        expect(row.cells).toHaveLength(5)
-        expect(row.cells[0].width).toBeGreaterThanOrEqual(16)
-        expect(row.cells[1].width).toBeGreaterThanOrEqual(18)
-        expect(row.cells[3].width).toBeGreaterThanOrEqual(38)
-        expect(row.cells[4].width).toBeGreaterThanOrEqual(20)
+        expect(row.cells).toHaveLength(4)
+        expect(row.cells[0].width).toBe(20)
+        expect(row.cells[1].width).toBeGreaterThan(0)
+        expect(row.cells[2].width).toBeGreaterThanOrEqual(38)
+        expect(row.cells[3].width).toBeGreaterThanOrEqual(20)
         expect(row.actionCount).toBeLessThanOrEqual(1)
         for (let index = 1; index < row.cells.length; index++) expect(row.cells[index].left).toBeGreaterThanOrEqual(row.cells[index - 1].right)
         for (const control of row.controls) { expect(control.width).toBeGreaterThanOrEqual(20); expect(control.height).toBeGreaterThanOrEqual(28) }
