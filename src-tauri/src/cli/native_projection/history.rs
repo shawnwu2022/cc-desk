@@ -39,6 +39,12 @@ pub(super) fn read(
     if c.cli == CliKind::Shell {
         return Err("SOURCE_UNSUPPORTED");
     }
+    // 用户自己设定的会话名优先于现抽标题；只在历史列表展示中生效。
+    let named = if c.cli == CliKind::Codex && o.kind == ResourceKind::History {
+        codex_session_names(c, b)
+    } else {
+        std::collections::HashMap::new()
+    };
     let mut files = Vec::new();
     match c.cli {
         CliKind::Claude => walk(c, "projects", 2, o.kind, b, &mut files)?,
@@ -98,6 +104,12 @@ pub(super) fn read(
             Err(code) => return Err(code),
         };
         transcript.observation_bytes = observation_bytes;
+        if let Some(name) = named.get(&transcript.id) {
+            // 用户自己起的名字就是这条会话的身份：优先于任何现抽标题，且不受
+            // 头窗口是否覆盖用户消息影响。
+            transcript.title = name.clone();
+            transcript.title_priority = Some(TitlePriority::Custom);
+        }
         if c.cli == CliKind::Claude && !seen.insert(transcript.id.clone()) {
             return Err("SOURCE_AMBIGUOUS");
         }
@@ -211,6 +223,63 @@ pub(super) fn read(
     // 显示元数据缓存只影响后续扫描的读取成本，不改变本次观察结果。
     let _ = cache::with(|cache| cache.flush());
     Ok(result)
+}
+
+/// Codex 在 `session_index.jsonl` 里记录用户设定的会话名（每行
+/// `{id, thread_name, updated_at}`）。这是**用户意图**，优先级高于从 rollout 现抽
+/// 的标题；同一 id 出现多行时（实测 317 行里 10 个 id 有 2 行）取 `updated_at`
+/// 最大者，与"最后改名生效"一致。它是展示增强，不是完整性判据：文件只覆盖
+/// Desktop/CLI 记录过名字的会话（本机 418 个 rollout 里仅 34 个），缺失一律回落
+/// 到现抽标题；损坏行逐行跳过，整个文件不可用则等同于没有该文件。
+fn codex_session_names(
+    c: &Catalog<'_>,
+    b: &mut Budget,
+) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+    // 身份文件本身不可读（CLI 版本没有该文件）不是历史读取失败。
+    let Ok(Some(bytes)) = c.bytes(c.root, "session_index.jsonl", b) else {
+        return HashMap::new();
+    };
+    let Ok(text) = text(&bytes) else {
+        return HashMap::new();
+    };
+    // id -> (updated_at, name)：只保留 updated_at 最大的一行。
+    let mut best: HashMap<String, (String, String)> = HashMap::new();
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(id) = value["id"].as_str().filter(|id| {
+            !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control)
+        }) else {
+            continue;
+        };
+        let Some(name) = value["thread_name"]
+            .as_str()
+            .filter(|name| !name.contains('\0'))
+        else {
+            continue;
+        };
+        let display = display_title(name);
+        // display_title 已折叠空白；残留的控制字符（ESC 等）不是会话名，
+        // 与 id 校验同样拒绝，回落到现抽标题。
+        if display.is_empty() || display.chars().any(char::is_control) {
+            continue;
+        }
+        let stamp = value["updated_at"].as_str().unwrap_or_default().to_owned();
+        match best.get_mut(id) {
+            // 同一 id 多行：只有更新的行才能覆盖，否则保留先到的标题。
+            Some(entry) => {
+                if stamp > entry.0 {
+                    *entry = (stamp, display);
+                }
+            }
+            None => {
+                best.insert(id.to_owned(), (stamp, display));
+            }
+        }
+    }
+    best.into_iter().map(|(id, (_, name))| (id, name)).collect()
 }
 
 /// Codex 历史行：先查显示元数据缓存（命中则零读取），未命中则做一次打开

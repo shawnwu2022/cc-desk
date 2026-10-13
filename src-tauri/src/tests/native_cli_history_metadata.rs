@@ -964,6 +964,67 @@ fn HistoryCodex_WrapperOnlySessionsAreNotListed_047() {
     assert_eq!(value[0]["title"], "审查这次改动");
 }
 
+// codex 把用户设定的会话名写在 CODEX_HOME/session_index.jsonl（每行
+// {id, thread_name, updated_at}），这是用户意图，优先级高于从 rollout 现抽的标题。
+// 同一 id 有多行时取 updated_at 最大者；索引缺失或未覆盖该 id 时回落现抽标题，
+// 且不得使历史读取失败。真机实测 160 个可见 codex 行里 83 行（51%）在索引中有名字。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_UserNamedSessionsFromIndex_048() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/rollout-2026-10-04T01-00-00-named.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":"named-thread","cwd":cwd,"thread_source":"user"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划"}}),
+        ),
+    )
+    .unwrap();
+
+    // 索引未覆盖该 id：行照常列出，标题回落到现抽标题。
+    std::fs::write(
+        temp.path().join("session_index.jsonl"),
+        format!(
+            "{}\n",
+            json!({"id":"some-other-thread","thread_name":"别人的名字","updated_at":"2026-10-04T00:00:00Z"})
+        ),
+    )
+    .unwrap();
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(value[0]["title"], "[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划");
+    assert_eq!(value[0]["titleSource"], "prompt");
+
+    // 索引里有用户设定的名字：优先于现抽标题，来源标注为 custom。
+    // 同一 id 两行时取 updated_at 更新的一条，与「最后改名生效」一致。
+    std::fs::write(
+        temp.path().join("session_index.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({"id":"named-thread","thread_name":"旧名字","updated_at":"2026-10-04T00:00:00Z"}),
+            json!({"id":"named-thread","thread_name":"用户改名后的会话","updated_at":"2026-10-05T00:00:00Z"}),
+        ),
+    )
+    .unwrap();
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(value[0]["title"], "用户改名后的会话");
+    assert_eq!(value[0]["titleSource"], "custom");
+
+    // 索引整体损坏（不可解析）：等同没有该文件，不得让历史读取失败。
+    std::fs::write(temp.path().join("session_index.jsonl"), "{broken}\n").unwrap();
+    let items = read_codex_history_fixture(temp.path())
+        .expect("损坏的 session_index 不得使历史读取失败");
+    assert_eq!(items.len(), 1);
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["title"], "[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划");
+}
+
 fn read_codex_history_fixture(root_path: &Path) -> ReadResult<Vec<ResourceItem>> {
     let root = Root::open(root_path).unwrap();
     read(
