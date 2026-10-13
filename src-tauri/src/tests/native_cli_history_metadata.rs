@@ -1025,6 +1025,163 @@ fn HistoryCodex_UserNamedSessionsFromIndex_048() {
     assert_eq!(value[0]["title"], "[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划");
 }
 
+// 尾部观察的字节计入同一聚合预算：剩余预算不足以同时容纳头窗口与尾部时，
+// 该行必须按单文件读取失败隔离（不返回），并继续把来源标记为不完整，而不是用
+// 饱和扣减把超额读取伪装成预算恰好耗尽（实测 115 字节预算下 233 字节文件
+// 仍被完整读出并作为正常历史行返回）。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_TailReadStaysWithinByteBudget_049() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/rollout-budget.jsonl"),
+        format!(
+            "{}\n{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":"tb","cwd":cwd,"thread_source":"user"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"real work"}}),
+            json!({"type":"response_item","timestamp":"2026-10-10T03:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"tail"}]}}),
+        ),
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits {
+        file_bytes: 2 * 1024 * 1024,
+        total_bytes: 115,
+        entries: 16,
+    });
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut budget,
+    )
+    .unwrap();
+    assert!(
+        items.is_empty(),
+        "剩余预算不足以容纳头窗口与尾部时，该行不得作为正常历史行返回"
+    );
+    assert!(
+        budget.history_metadata_incomplete(),
+        "被隔离的行仍须把来源标记为不完整"
+    );
+}
+
+// 缓存命中同样必须保留来源级「观察不完整」事实：行内恢复的 metadata_incomplete
+// 若不写回 Budget，同一文件会冷读标记不完整、暖读漏记，部分观察被升级成缺失证明。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_CacheHitRetainsSourceIncompleteFlag_050() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/rollout-cached.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":"cached-incomplete","cwd":cwd,"thread_source":"user"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"real work"}}),
+        ),
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let relative = Path::new("sessions/2026/10/04/rollout-cached.jsonl");
+    let (len, modified) = root.stat(relative).unwrap().unwrap();
+    let stamps = cache::Stamps::from_system(len, modified).unwrap();
+    cache::with(|cache| {
+        cache.record(
+            cache::key(root.key(), "codex", relative),
+            stamps,
+            cache::CachedMetadata {
+                native_id: "cached-incomplete".into(),
+                cwd: Some(cwd),
+                title: "real work".into(),
+                title_priority: Some(0),
+                updated: Some("2026-10-10T03:00:00Z".into()),
+                metadata_incomplete: true,
+            },
+        )
+    });
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut budget,
+    )
+    .unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(
+        budget.history_metadata_incomplete(),
+        "缓存命中的部分观察事实必须回到来源级标记"
+    );
+}
+
+// wrapper-only 排除只在观察到完整文件时成立：头窗口只是前缀，真实的人工后续
+// 消息可能位于窗口之外，有界前缀不能证明全会话只含自动包装。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_WrapperOnlyExclusionNeedsCompleteObservation_051() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let user = |text: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})
+        )
+    };
+    let header = |id: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"thread_source":"user"}})
+        )
+    };
+    // 头窗口内只有评审包装；真实人工消息排在超长记录之后、窗口之外。
+    let filler = format!(
+        "{}\n",
+        json!({"type":"response_item","timestamp":"2026-10-10T03:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x".repeat(220 * 1024)}]}})
+    );
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/wrapper-late-user.jsonl"),
+        format!(
+            "{}{}{}{}",
+            header("wrapper-late-user"),
+            user("The following is the Codex agent history whose request action you are assessing."),
+            filler,
+            user("轮到我人工跟进这次评审"),
+        ),
+    )
+    .unwrap();
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "窗口之外的真实用户消息不能被前缀观察排除"
+    );
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["nativeSessionId"], "wrapper-late-user");
+}
+
 fn read_codex_history_fixture(root_path: &Path) -> ReadResult<Vec<ResourceItem>> {
     let root = Root::open(root_path).unwrap();
     read(

@@ -69,6 +69,10 @@ impl Budget {
     pub(crate) fn unobserved_history_association(&mut self) {
         self.history_metadata_incomplete = true;
     }
+    /// 缓存命中不打开文件；行内恢复的「观察不完整」事实由此回到来源级标记。
+    pub(crate) fn retain_history_metadata_incomplete(&mut self) {
+        self.history_metadata_incomplete = true;
+    }
     pub(crate) fn optional_title_available(&self, header_bytes: usize) -> bool {
         self.started.elapsed() < Duration::from_secs(4)
             && self.entries_left > 0
@@ -236,6 +240,10 @@ impl Root {
         if cap == 0 {
             return Err("SOURCE_TOO_LARGE");
         }
+        // 尾部观察最多再读 4KiB，必须先从本次上限预留，头窗口与尾部的合计才不
+        // 会突破剩余聚合预算；否则 saturating 扣减会把超额读取伪装成预算恰好
+        // 耗尽（实测 115 字节预算下 233 字节文件仍被完整读出）。
+        let readable = cap.saturating_sub((metadata.len() as usize).min(4096));
         let mut options = OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
@@ -256,7 +264,7 @@ impl Root {
         let chunk = 8 * 1024;
         while head.iter().all(|byte| *byte != b'\n') {
             budget.checkpoint()?;
-            let next = chunk.min(cap - head.len());
+            let next = chunk.min(readable.saturating_sub(head.len()));
             if next == 0 {
                 break;
             }
@@ -277,7 +285,7 @@ impl Root {
 
         // 阶段二：继续读到首条用户消息（标题来源）或头窗口上限；观察者确认后即停，
         // 把本机真实根的头窗口 IO 从约 366MiB 降到约 102MiB。
-        let head_cap = cap.min(CODEX_HEAD_WINDOW);
+        let head_cap = readable.min(CODEX_HEAD_WINDOW);
         while head.len() < head_cap {
             budget.checkpoint()?;
             let next = chunk.min(head_cap - head.len());

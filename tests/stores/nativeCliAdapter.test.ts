@@ -37,8 +37,9 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
   const archived = new Map<string, string[]>()
   const archive = { getArchivedSessions: (path: string) => archived.get(path) ?? [], archiveSession: vi.fn(async (path: string, id: string) => { archived.set(path, [...(archived.get(path) ?? []), id]) }), restoreSession: vi.fn(async (path: string, id: string) => { archived.set(path, (archived.get(path) ?? []).filter(value => value !== id)) }) }
   const cliUnarchive = { unarchive: vi.fn().mockResolvedValue(undefined) }
-  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries }, runtime, archive, cliUnarchive })
-  return { adapter, map, runtime, archive, cliUnarchive, setActive, archived }
+  const historyLoad = vi.fn(async () => entries[0])
+  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries, load: historyLoad }, runtime, archive, cliUnarchive })
+  return { adapter, map, runtime, archive, cliUnarchive, setActive, archived, historyLoad }
 }
 
 describe('native CLI adapter', () => {
@@ -396,4 +397,20 @@ describe('native CLI adapter', () => {
     await expect(adapter.restoreArchivedSession(rows[0].id)).rejects.toThrow('CLI_UNARCHIVE_UNAVAILABLE')
   })
 
+})
+
+// CLI 取消归档成功后，归档状态要靠下一次历史读取按容器位置重投影；
+// all() 的缓存仍是归档行，必须强制重读原上下文，调用方的目录刷新才能
+// 看到已恢复的行，否则会话滞留归档抽屉直到手动刷新。
+it('CodexArchive_UnarchiveForcesHistoryReload_035', async () => {
+  setActivePinia(createPinia())
+  const entry = history('codex', '/root', 'session-1')
+  entry.sessions[0].archived = true
+  const { adapter, cliUnarchive, historyLoad } = setup([], [entry])
+  const rows = await adapter.listSessions()
+  const record = rows.find(value => value.archived)
+  expect(record).toBeDefined()
+  await adapter.restoreArchivedSession(record!.id)
+  expect(cliUnarchive.unarchive).toHaveBeenCalledWith(entry.context, 'session-1')
+  expect(historyLoad).toHaveBeenCalledWith(expect.objectContaining({ ...entry.context, force: true }))
 })

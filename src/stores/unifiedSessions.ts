@@ -47,7 +47,7 @@ function mergeDuplicateSession(existing: UnifiedSession | undefined, candidate: 
 }
 
 // 跨运行时会话身份：Claude 转录会被 legacy 目录扫描与 native 历史投影同时发现，
-// 两行必须折叠。身份取 nativeSessionId；legacy 历史行没有该字段时回退其
+// 可唯一配对且不丢失独立 owner 的两行参与折叠。身份取 nativeSessionId；legacy 历史行没有该字段时回退其
 // adapterSessionId（即转录 sessionId）。身份缺失（如尚未建立会话身份的
 // 新 tab）不参与折叠，避免误合并。
 function crossRuntimeSessionIdentity(row: UnifiedSession): string | null {
@@ -72,14 +72,21 @@ function collapseCrossRuntimeDuplicates(
   const dropped = new Set<string>()
   const replaced = new Map<string, UnifiedSession>()
   for (const group of groups.values()) {
-    if (group.length < 2) continue
-    // 两侧同时处于打开态说明是两个真实运行投影，不属于重复历史，不折叠。
-    const live = group.filter(row => row.processState === 'running' || row.processState === 'starting')
-    if (live.length > 1) continue
-    // 唯一活动行优先；否则保留 native 行（历史投影元数据更完整）。
+    // 仅有一个 Legacy 与一个 Native 时可唯一配对；多条来源保留各自准确恢复身份。
+    if (group.length !== 2) continue
+    if (!group.some(row => row.runtime === 'legacy-claude') || !group.some(row => row.runtime === 'native-cli')) continue
+    // 打开中的终端 owner（含自然退出后仍打开的 tab）不能被历史投影折叠掉。
+    const live = group.filter(row => row.opened === true || row.processState === 'running' || row.processState === 'starting')
+    const archivedRows = group.filter(row => row.archived)
+    // 多个终端或归档 owner 各自保留入口，终端行与归档记录也不互相折叠。
+    if (live.length > 1 || archivedRows.length > 1 || (live.length > 0 && archivedRows.length > 0)) continue
+    // 唯一打开行优先；否则唯一归档行作为 winner——恢复动作必须派发给持有
+    // 原归档键的 adapter；否则保留 native 行（历史投影元数据更完整）。
     const winner = live.length === 1
       ? live[0]
-      : (group.find(row => row.runtime === 'native-cli') ?? group[0])
+      : archivedRows.length === 1
+        ? archivedRows[0]
+        : (group.find(row => row.runtime === 'native-cli') ?? group[0])
     const merged: UnifiedSession = {
       ...winner,
       archived: group.some(row => row.archived),

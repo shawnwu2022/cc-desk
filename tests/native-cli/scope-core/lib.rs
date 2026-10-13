@@ -1,6 +1,8 @@
 //! Compile the actual capability and parser modules on all three OS families.
 //! No substitute implementations, Tauri shims, or private user roots.
 #![allow(dead_code)]
+#[path = "../../../src-tauri/src/cli/native_projection/cache.rs"]
+mod cache;
 #[path = "../../../src-tauri/src/cli/native_projection/catalog.rs"]
 mod catalog;
 #[path = "../../../src-tauri/src/cli/environment.rs"]

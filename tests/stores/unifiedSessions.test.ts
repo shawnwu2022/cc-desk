@@ -612,3 +612,171 @@ it('Unified_CrossRuntimeDuplicateMergesArchived_025', async () => {
   expect(rows).toHaveLength(1)
   expect(rows[0].archived).toBe(true)
 })
+
+// 自然退出后仍打开的 legacy 终端（opened=true、processState=stopped）是真实
+// 终端 owner：底层 tab 仍在，不能被 native 历史行当作重复项折叠掉，
+// 否则用户无法再选中或关闭它，活动选中也会被 refresh 清空。
+it('Unified_CrossRuntimeDuplicateKeepsOpenedTerminal_026', async () => {
+  const legacyRow = session({
+    id: 'legacy-tab:t1',
+    runtime: 'legacy-claude',
+    processState: 'stopped',
+    opened: true,
+    adapterSessionId: 't1',
+    nativeSessionId: 'sess-1',
+    lastActivityAt: 300,
+  })
+  const nativeRow = session({
+    id: 'native-history:/repo:sess-1',
+    runtime: 'native-cli',
+    processState: 'stopped',
+    opened: false,
+    adapterSessionId: 'native-history-key',
+    nativeSessionId: 'sess-1',
+    lastActivityAt: 200,
+  })
+  const legacy = fakeAdapter('legacy-claude', [legacyRow])
+  const native = fakeAdapter('native-cli', [nativeRow])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter])
+  await store.refresh()
+  store.activeSessionId = 'legacy-tab:t1'
+  await store.refresh()
+  expect(store.sessions.map(value => value.id)).toEqual(['legacy-tab:t1'])
+  expect(store.activeSessionId).toBe('legacy-tab:t1')
+})
+
+// 折叠只针对已证明的跨运行时重复：同运行时不同 profile/来源身份的多行
+// 是各自准确的恢复来源，不得按身份互相吞并只剩第一条。
+it('Unified_CrossRuntimeCollapseRequiresBothRuntimes_027', async () => {
+  const first = session({
+    id: 'nh-1',
+    runtime: 'native-cli',
+    processState: 'stopped',
+    opened: false,
+    adapterSessionId: 'k1',
+    nativeSessionId: 'sess-1',
+  })
+  const second = session({
+    id: 'nh-2',
+    runtime: 'native-cli',
+    processState: 'stopped',
+    opened: false,
+    adapterSessionId: 'k2',
+    nativeSessionId: 'sess-1',
+  })
+  const native = fakeAdapter('native-cli', [first, second])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([native.adapter])
+  await store.refresh()
+  expect(store.sessions.map(value => value.id).sort()).toEqual(['nh-1', 'nh-2'])
+})
+
+// 归档标记属于写它的运行时：唯一归档行必须作为折叠 winner 保留其 id/runtime，
+// 恢复动作才能派发给持有原归档键的 adapter，否则 legacy 注册表键无法清除。
+it('Unified_CrossRuntimeArchivedWinnerKeepsRestoreOwner_028', async () => {
+  const legacyRow = session({
+    id: 'legacy-history:/repo:sess-1',
+    runtime: 'legacy-claude',
+    processState: 'stopped',
+    adapterSessionId: 'sess-1',
+    nativeSessionId: 'sess-1',
+    archived: true,
+  })
+  const nativeRow = session({
+    id: 'native-history:/repo:sess-1',
+    runtime: 'native-cli',
+    processState: 'stopped',
+    adapterSessionId: 'native-history-key',
+    nativeSessionId: 'sess-1',
+    archived: false,
+  })
+  const legacy = fakeAdapter('legacy-claude', [legacyRow])
+  const native = fakeAdapter('native-cli', [nativeRow])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter])
+  await store.refresh()
+  const rows = store.sessions.filter(row => row.projectKey === '/repo')
+  expect(rows).toHaveLength(1)
+  expect(rows[0].archived).toBe(true)
+  await store.restoreArchivedSession(rows[0].id)
+  expect(legacy.adapter.restoreArchivedSession).toHaveBeenCalledWith('legacy-history:/repo:sess-1')
+  expect(native.adapter.restoreArchivedSession).not.toHaveBeenCalled()
+})
+
+// 同项目同 session ID 的 1 条 Legacy 与 2 条 Native 历史必须保留各自来源及恢复入口。
+it('Unified_MixedOriginsStayDistinct_029', async () => {
+  const legacyRow: UnifiedSession = {
+    id: 'legacy-history:/repo:sess-1', projectKey: '/repo', projectPath: '/repo',
+    cli: 'claude', runtime: 'legacy-claude', title: 'Legacy history',
+    processState: 'stopped', attentionState: 'none', lastActivityAt: 100,
+    archived: false, opened: false, resumable: true, adapterSessionId: 'sess-1',
+    nativeSessionId: 'sess-1', launchConfigId: null,
+  }
+  const first: UnifiedSession = {
+    id: 'native-history:profile-a', projectKey: '/repo', projectPath: '/repo',
+    cli: 'claude', runtime: 'native-cli', title: 'Profile A history',
+    processState: 'stopped', attentionState: 'none', lastActivityAt: 200,
+    archived: false, opened: false, resumable: true,
+    adapterSessionId: '["local","claude","root-a","sess-1"]', nativeSessionId: 'sess-1',
+    launchConfigId: 'profile-a',
+    nativeOrigin: { cli: 'claude', profileId: 'profile-a', profileRevision: '7', projectId: 'project-1', projectPath: '/repo' },
+  }
+  const second: UnifiedSession = {
+    id: 'native-history:profile-b', projectKey: '/repo', projectPath: '/repo',
+    cli: 'claude', runtime: 'native-cli', title: 'Profile B history',
+    processState: 'stopped', attentionState: 'none', lastActivityAt: 300,
+    archived: false, opened: false, resumable: true,
+    adapterSessionId: '["local","claude","root-b","sess-1"]', nativeSessionId: 'sess-1',
+    launchConfigId: 'profile-b',
+    nativeOrigin: { cli: 'claude', profileId: 'profile-b', profileRevision: '9', projectId: 'project-1', projectPath: '/repo' },
+  }
+  const legacy = fakeAdapter('legacy-claude', [legacyRow])
+  const native = fakeAdapter('native-cli', [first, second])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter])
+  await store.refresh()
+  expect(store.sessions.map(row => row.id).sort()).toEqual([
+    'legacy-history:/repo:sess-1', 'native-history:profile-a', 'native-history:profile-b',
+  ])
+  expect(store.projectGroups[0].sessions.filter(row => row.runtime === 'native-cli').map(row => [
+    row.launchConfigId, row.nativeOrigin?.profileRevision, row.adapterSessionId,
+  ]).sort()).toEqual([
+    ['profile-a', '7', '["local","claude","root-a","sess-1"]'],
+    ['profile-b', '9', '["local","claude","root-b","sess-1"]'],
+  ])
+})
+
+// Legacy 与 Native 同时归档时保留两个恢复入口，各自恢复只解除原 owner 的归档。
+it('Unified_BothArchivesKeepOwners_030', async () => {
+  const legacyRow: UnifiedSession = {
+    id: 'legacy-history:/repo:sess-1', projectKey: '/repo', projectPath: '/repo',
+    cli: 'claude', runtime: 'legacy-claude', title: 'Legacy archive',
+    processState: 'stopped', attentionState: 'none', lastActivityAt: 100,
+    archived: true, opened: false, resumable: true, adapterSessionId: 'sess-1',
+    nativeSessionId: 'sess-1', launchConfigId: null,
+  }
+  const nativeRow: UnifiedSession = {
+    id: 'native-history:profile-a', projectKey: '/repo', projectPath: '/repo',
+    cli: 'claude', runtime: 'native-cli', title: 'Native archive',
+    processState: 'stopped', attentionState: 'none', lastActivityAt: 200,
+    archived: true, opened: false, resumable: true,
+    adapterSessionId: '["local","claude","root-a","sess-1"]', nativeSessionId: 'sess-1',
+    launchConfigId: 'profile-a',
+    nativeOrigin: { cli: 'claude', profileId: 'profile-a', profileRevision: '7', projectId: 'project-1', projectPath: '/repo' },
+  }
+  const legacy = fakeAdapter('legacy-claude', [legacyRow])
+  const native = fakeAdapter('native-cli', [nativeRow])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter])
+  await store.refresh()
+  expect(store.sessions.filter(row => row.archived).map(row => row.id).sort()).toEqual([
+    'legacy-history:/repo:sess-1', 'native-history:profile-a',
+  ])
+  expect(store.projectGroups).toEqual([])
+  await store.restoreArchivedSession('legacy-history:/repo:sess-1')
+  expect(store.sessions.filter(row => row.archived).map(row => row.id)).toEqual(['native-history:profile-a'])
+  await store.restoreArchivedSession('native-history:profile-a')
+  expect(store.sessions.some(row => row.archived)).toBe(false)
+  expect(store.projectGroups[0].sessions.map(row => row.id)).toEqual(['native-history:profile-a'])
+})

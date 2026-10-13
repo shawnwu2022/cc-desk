@@ -304,6 +304,11 @@ fn codex_history(
         let mut transcript = cached_transcript(metadata);
         // 归档状态由代表 rollout 的容器位置决定，必须保留真实相对路径。
         transcript.source_path = path.to_owned();
+        // 缓存命中的行若上次只观察到文件前缀，这个事实必须回到来源级标记：
+        // 否则同一文件冷读标记不完整、暖读漏记，部分观察被升级成缺失证明。
+        if transcript.metadata_incomplete {
+            b.retain_history_metadata_incomplete();
+        }
         return Ok(Some(transcript));
     }
     // 观察者在确认「非用户创建的会话」时立即停止，省下该文件其余头窗口的读取。
@@ -314,7 +319,7 @@ fn codex_history(
         cache::with(|cache| cache.forget(&key));
         return Err("SOURCE_CHANGED");
     };
-    let mut transcript = parse_codex_metadata(text(&head)?, text(&tail).ok())?;
+    let mut transcript = parse_codex_metadata(text(&head)?, text(&tail).ok(), !incomplete)?;
     if transcript.auto_session {
         cache::with(|cache| cache.forget(&key));
         return Ok(None);
@@ -485,7 +490,7 @@ fn display_title(raw: &str) -> String {
 /// 因此逐行解析失败只跳过该行。身份只取首条 session_meta（与文件名、
 /// `codex resume <id>` 一致）；compact/fork 续写的 rollout 可能内嵌其他 thread 的
 /// meta，后续出现一律跳过，不视为来源级错误。
-fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript> {
+fn parse_codex_metadata(head: &str, tail: Option<&str>, observed_completely: bool) -> ReadResult<Transcript> {
     let mut id = None;
     let mut cwd = None;
     let mut title = None;
@@ -546,9 +551,11 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>) -> ReadResult<Transcript
         messages: Vec::new(),
         metadata_incomplete: false,
         title_priority,
-        // 只含自动评审/安全扫描脚手架、且窗口内没有任何真实用户消息的会话，
-        // 与 thread_source 已标记的自动会话同等处理：不属于用户主动创建。
-        auto_session: auto_session || (wrapper_only && title_priority.is_none()),
+        // 只含自动评审/安全扫描脚手架、且观察到完整文件的会话，与 thread_source
+        // 已标记的自动会话同等处理。头窗口只是前缀：真实的人工后续消息可能位于
+        // 窗口之外，部分观察不能证明全会话只含包装，行照常列出（标题未知）。
+        auto_session: auto_session
+            || (wrapper_only && title_priority.is_none() && observed_completely),
         source_path: String::new(),
         observation_bytes: 0,
     })
