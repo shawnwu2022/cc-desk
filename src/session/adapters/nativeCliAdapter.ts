@@ -10,7 +10,7 @@ import type {
 } from '@/types/unifiedSession'
 import { makeSessionCatalogKey } from '@/utils/sessionPresentation'
 import { normalizePath } from '@/utils/path'
-import { saveSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
+import { saveSessionDisplayName, clearSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 
 const ACTIVE_PREFIX = 'native-tab:'
@@ -39,6 +39,7 @@ export interface NativeRuntimePort {
   createTab(input: NativeRuntimeCreateInput): Promise<NativeCliTab> | NativeCliTab
   restartTab(tabId: string): Promise<NativeCliTab> | NativeCliTab
   stopTab(tab: NativeCliTab): Promise<void>
+  renameTab(tabId: string, title: string): Promise<void>
 }
 
 export interface NativeArchivePort {
@@ -492,19 +493,29 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     } finally { noticeOwner.release() }
   }
   async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
+    const value = title.trim()
+    if (!value || /[\x00-\x1f\x7f]/.test(value) || value.includes('\0')) throw new Error('SESSION_TITLE_REQUIRED')
     const owns = captureOwnership(id)
     const current = () => canContinue() && owns()
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
     if (id.startsWith(ACTIVE_PREFIX)) {
       const tab = requireTab(id)
-      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), title, current, onIssued)
-      if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
-      if (!deps.metadata) onIssued?.()
-      deps.tabs.rename(tab.tabId, title)
+      if (tab.cli === 'claude' && tab.status === 'running') {
+        // claude 的 /rename 是 CLI 自身改名机制：注入后名字随 catalog.refresh 回流，GUI 覆盖名清除。
+        await deps.runtime.renameTab(tab.tabId, value)
+        if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+        if (deps.metadata) await clearSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), current, onIssued)
+        else onIssued?.()
+      } else {
+        // codex 的 /rename 参数形式未证实；GUI 显示名继续兜底，待实测后切到 CLI 注入。
+        if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current, onIssued)
+        else onIssued?.()
+      }
+      deps.tabs.rename(tab.tabId, value)
     } else {
       const matches = findHistory(id)
       if (matches.length !== 1 || !deps.metadata) throw new Error('SESSION_NOT_FOUND')
-      await saveSessionDisplayName(deps.metadata, projectHistory(matches[0].entry, matches[0].item), title, current, onIssued)
+      await saveSessionDisplayName(deps.metadata, projectHistory(matches[0].entry, matches[0].item), value, current, onIssued)
     }
   }
   async function archiveSession(id: string, canContinue = () => true): Promise<void> {

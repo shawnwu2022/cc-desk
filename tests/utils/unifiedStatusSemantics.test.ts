@@ -115,7 +115,7 @@ describe('Unified historical status semantics', () => {
     tabs.applyObservation(tab.tabId, attempt, reducer.state())
     tabs.applyLaunchStatus(tab.tabId, receipt(tab))
     const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] },
-      runtime: { createTab: () => tab, restartTab: () => tab, stopTab: async () => {} },
+      runtime: { createTab: () => tab, restartTab: () => tab, stopTab: async () => {}, renameTab: async () => {} },
       archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
     expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'working', observationState: 'active' })
     expect(deriveSessionVisualState((await adapter.listSessions())[0])).toBe('working')

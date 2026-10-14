@@ -23,7 +23,7 @@ describe('Unified resume', () => {
     const tabs = useNativeTabsStore(); const catalog = useUnifiedSessionsStore()
     const otherProject = entry(); otherProject.context.projectId = 'second-registration'
     const adapter = createNativeCliAdapter({ tabs, history: { all: () => [entry('cx', '7'), entry('cx', '8'), entry('other', '7'), otherProject] },
-      archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() } })
+      archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })
     catalog.configureAdapters([adapter]); await catalog.refresh()
     expect(catalog.sessions).toHaveLength(4)
     expect(new Set(catalog.sessions.map(row => row.id)).size).toBe(4)
@@ -33,7 +33,7 @@ describe('Unified resume', () => {
     const tabs = useNativeTabsStore(); const source = entry(); let release!: () => void
     const barrier = new Promise<void>(resolve => { release = resolve })
     const adapter = createNativeCliAdapter({ tabs, history: { all: () => [source] }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
-      runtime: { async createTab(input) { await barrier; return tabs.create({ cli: input.cli, projectId: 'project', projectPath: input.projectPath, profileId: 'cx', profileRevision: '7', action: input.action, sourceSessionKey: input.sourceSessionKey }) }, restartTab: vi.fn(), stopTab: vi.fn() } })
+      runtime: { async createTab(input) { await barrier; return tabs.create({ cli: input.cli, projectId: 'project', projectPath: input.projectPath, profileId: 'cx', profileRevision: '7', action: input.action, sourceSessionKey: input.sourceSessionKey }) }, restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })
     const input = { runtime: 'native-cli' as const, projectKey: '/repo', projectPath: '/repo', cli: 'codex' as const, adapterSessionId: sourceKey, nativeSessionId: 'same-id' }
     const a = adapter.resumeSession(input); const b = adapter.resumeSession(input); release()
     const results = await Promise.all([a, b]); expect(results[0].id).toBe(results[1].id); expect(tabs.tabs.size).toBe(1)
@@ -44,7 +44,7 @@ describe('Unified resume', () => {
   it('Resume_RejectsMissingOrigin_003', async () => {
     const tabs = useNativeTabsStore()
     const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
-      runtime: { createTab(input) { return tabs.create({ cli: input.cli, projectId: 'project', projectPath: input.projectPath, profileId: 'cx', profileRevision: '7', action: input.action }) }, restartTab: vi.fn(), stopTab: vi.fn() } })
+      runtime: { createTab(input) { return tabs.create({ cli: input.cli, projectId: 'project', projectPath: input.projectPath, profileId: 'cx', profileRevision: '7', action: input.action }) }, restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })
     await expect(adapter.resumeSession({ projectKey: '/repo', projectPath: '/repo', cli: 'codex', adapterSessionId: 'missing', nativeSessionId: 'missing' })).rejects.toThrow('SESSION_NOT_FOUND')
     expect(tabs.tabs.size).toBe(0)
   })
@@ -86,7 +86,7 @@ it('Resume_RemovesOnlyMissingRecord_006', async () => {
   const source = entry(); const other = entry('other'); const tabs = useNativeTabsStore(); const projects = useProjectsStateStore()
   let absent = false; const reads: string[] = []; const commands: string[] = []
   const adapter = createNativeCliAdapter({ tabs, history: { all: () => [source, other], async load(context) { reads.push(context.profileId); return { ...source, sessions: absent ? [] : source.sessions } } },
-    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() } })
+    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })
   const catalog = useUnifiedSessionsStore(); catalog.configureAdapters([adapter]); await catalog.refresh()
   const target = catalog.sessions.find(row => row.launchConfigId === 'cx')!; const sibling = catalog.sessions.find(row => row.launchConfigId === 'other')!
   const records = { [target.id]: { runtime: target.runtime, cli: target.cli, projectPath: target.projectPath, adapterSessionId: target.adapterSessionId, nativeSessionId: target.nativeSessionId, title: target.title, lastActivityAt: 1 }, [sibling.id]: { runtime: sibling.runtime, cli: sibling.cli, projectPath: sibling.projectPath, adapterSessionId: sibling.adapterSessionId, nativeSessionId: sibling.nativeSessionId, title: sibling.title, lastActivityAt: 1 } }
@@ -104,7 +104,7 @@ it('Resume_RechecksMissingEvidence_007', async () => {
   const source = entry(); const tabs = useNativeTabsStore(); let present = false
   const catalog = useUnifiedSessionsStore(); catalog.configureAdapters([createNativeCliAdapter({ tabs,
     history: { all: () => [source], async load() { return { ...source, sessions: present ? source.sessions : [] } } },
-    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() } })])
+    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })])
   await catalog.refresh(); const target = catalog.sessions[0]
   await expect(catalog.resumeCatalogSession(target)).rejects.toThrow('SESSION_NOT_FOUND')
   present = true
@@ -119,7 +119,7 @@ it('Resume_PreservesOldArchiveKeys_008', async () => {
   const old = 'native-history:' + makeSessionCatalogKey({ runtime: 'native-cli', cli: 'codex', projectPath: '/repo', adapterSessionId: sourceKey, nativeSessionId: 'same-id' })
   let keys = [old]; const changed: string[] = []
   const adapter = createNativeCliAdapter({ tabs: useNativeTabsStore(), history: { all: () => entries },
-    archive: { getArchivedSessions: () => keys, archiveSession: vi.fn(), async restoreSession(_path, id) { changed.push(id); keys = keys.filter(key => key !== id) } }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() } })
+    archive: { getArchivedSessions: () => keys, archiveSession: vi.fn(), async restoreSession(_path, id) { changed.push(id); keys = keys.filter(key => key !== id) } }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })
   const [unique] = await adapter.listSessions(); expect(unique.archived).toBe(true)
   await adapter.restoreArchivedSession(unique.id); expect(keys).toEqual([]); expect(changed).toEqual([old])
   entries = [source, entry('other')]; keys = [old]; changed.length = 0
@@ -132,7 +132,7 @@ it('Resume_PreservesOldArchiveKeys_008', async () => {
 // 搜索标题和 Session ID，默认项目范围与全部项目范围保留 CLI 和时间过滤。
 it('Resume_SearchesScopedHistory_009', async () => {
   const first = entry(); const second = entry('other'); second.context.projectPath = '/other'; second.sessions[0].title = 'Elsewhere'; second.sessions[0].nativeSessionId = 'older-id'; second.sessions[0].updatedAt = '2025-01-01T00:00:00Z'
-  const catalog = useUnifiedSessionsStore(); catalog.configureAdapters([createNativeCliAdapter({ tabs: useNativeTabsStore(), history: { all: () => [first, second] }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() } })])
+  const catalog = useUnifiedSessionsStore(); catalog.configureAdapters([createNativeCliAdapter({ tabs: useNativeTabsStore(), history: { all: () => [first, second] }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })])
   expect((await catalog.searchSessions({ projectPath: '/repo', scope: 'current-project' })).sessions.map(row => row.title)).toEqual(['History'])
   expect((await catalog.searchSessions({ projectPath: '/repo', scope: 'all', query: 'older-ID' })).sessions.map(row => row.title)).toEqual(['Elsewhere'])
   expect((await catalog.searchSessions({ projectPath: '/repo', scope: 'all', query: 'history', cli: 'codex', since: Date.parse('2026-01-01') })).sessions).toHaveLength(1)
@@ -143,7 +143,7 @@ it('Resume_SearchesScopedHistory_009', async () => {
 it('Resume_LoadsMetadataBeforeRemove_010', async () => {
   const source = entry(); const tabs = useNativeTabsStore(); let absent = false
   const catalog = useUnifiedSessionsStore(); catalog.configureAdapters([createNativeCliAdapter({ tabs, history: { all: () => [source], async load() { return { ...source, sessions: absent ? [] : source.sessions } } },
-    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() } })])
+    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })])
   await catalog.refresh(); const target = catalog.sessions[0]; absent = true
   await expect(catalog.resumeCatalogSession(target)).rejects.toThrow('SESSION_NOT_FOUND')
   const projects = useProjectsStateStore(); projects.loaded = false
@@ -158,7 +158,7 @@ it('Resume_RechecksOpenAfterRead_011', async () => {
   const source = entry(); const tabs = useNativeTabsStore(); let release!: () => void
   const barrier = new Promise<void>(resolve => { release = resolve })
   const adapter = createNativeCliAdapter({ tabs, history: { all: () => [source], async load() { await barrier; return source } },
-    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab(input) { return tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: input.action, sourceSessionKey: sourceKey }) }, restartTab: vi.fn(), stopTab: vi.fn() } })
+    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab(input) { return tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: input.action, sourceSessionKey: sourceKey }) }, restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })
   const pending = adapter.resumeSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', adapterSessionId: sourceKey, nativeSessionId: 'same-id', nativeOrigin: source.context })
   const opened = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'resume-id', nativeSessionId: 'same-id' }, sourceSessionKey: sourceKey }); tabs.markUnknown(opened.tabId)
   release(); const resumed = await pending
@@ -169,7 +169,7 @@ it('Resume_RechecksOpenAfterRead_011', async () => {
 it('Resume_ClearsRecoveredMissingRow_012', async () => {
   const source = entry(); const tabs = useNativeTabsStore(); let present = false
   const catalog = useUnifiedSessionsStore(); catalog.configureAdapters([createNativeCliAdapter({ tabs, history: { all: () => [source], async load() { return { ...source, sessions: present ? source.sessions : [] } } },
-    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab(input) { return tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', sourceSessionKey: input.sourceSessionKey, action: input.action }) }, restartTab: vi.fn(), stopTab: vi.fn() } })])
+    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab(input) { return tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', sourceSessionKey: input.sourceSessionKey, action: input.action }) }, restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })])
   await catalog.refresh(); const target = catalog.sessions[0]
   await expect(catalog.resumeCatalogSession(target)).rejects.toThrow('SESSION_NOT_FOUND')
   present = true; const opened = await catalog.resumeCatalogSession(target)
@@ -201,7 +201,7 @@ it('Resume_RejectsChangedSourceAbsence_014', async () => {
   } } })
   try {
     const history = useNativeHistoryStore(); const tabs = useNativeTabsStore(); const catalog = useUnifiedSessionsStore()
-    catalog.configureAdapters([createNativeCliAdapter({ history, tabs, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() } })])
+    catalog.configureAdapters([createNativeCliAdapter({ history, tabs, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })])
     await history.load(entry().context); await catalog.refresh(); const chosen = catalog.sessions[0]
     root = 'replacement'
     await expect(catalog.resumeCatalogSession(chosen)).rejects.toThrow('SOURCE_CHANGED')
@@ -222,7 +222,7 @@ it('Resume_RejectsPagedAbsence_015', async () => {
   } } })
   try {
     const history = useNativeHistoryStore(); const tabs = useNativeTabsStore(); const catalog = useUnifiedSessionsStore()
-    catalog.configureAdapters([createNativeCliAdapter({ history, tabs, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() } })])
+    catalog.configureAdapters([createNativeCliAdapter({ history, tabs, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })])
     await history.load(entry().context); await catalog.refresh(); const chosen = catalog.sessions[0]; scanning = true
     await expect(catalog.resumeCatalogSession(chosen)).rejects.toThrow('HISTORY_ABSENCE_UNVERIFIED')
     await expect(catalog.removeMissingRecord(chosen.id)).rejects.toThrow('SESSION_MISSING_NOT_VERIFIED')
@@ -256,7 +256,7 @@ it('Resume_RevalidatesAbsenceProof_017', async () => {
   } } })
   try {
     const history = useNativeHistoryStore(); const tabs = useNativeTabsStore(); const catalog = useUnifiedSessionsStore()
-    catalog.configureAdapters([createNativeCliAdapter({ history, tabs, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() } })])
+    catalog.configureAdapters([createNativeCliAdapter({ history, tabs, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })])
     await history.load(entry().context); await catalog.refresh(); const chosen = catalog.sessions[0]; present = false
     await expect(catalog.resumeCatalogSession(chosen)).rejects.toThrow('SESSION_NOT_FOUND')
     root = 'replacement'

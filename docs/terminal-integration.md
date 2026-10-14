@@ -331,6 +331,12 @@ history identity and Native/Legacy attempts; late completions cannot name a repl
 New/raw Native tabs without authenticated history association retain tab-local names;
 no title/raw-ID/default inference associates later discovered history.
 
+2026-10-14 update: renaming a running session now injects `/rename <title>` through the
+owning terminal writer (Legacy PTY queue or native user-input channel) and clears the
+stored override on success, so the title flows back from CLI history. Display metadata
+remains only as the fallback for states without a writable CLI; the paragraph above
+describes the metadata-only behavior it was written under.
+
 Task 24 host tests cover 50 projects × 100 mixed sessions, 30 open descriptors and 120
 state/selection/layout cycles. They do not spawn 30 real CLIs or measure browser
 throughput. The current Task 25 frontend build/typecheck/full-suite result belongs to

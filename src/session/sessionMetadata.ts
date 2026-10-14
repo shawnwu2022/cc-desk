@@ -64,3 +64,20 @@ export async function saveSessionDisplayName(metadata: SessionMetadataPort, iden
   })
   requireCurrent()
 }
+
+/** 原生改名成功后清除 GUI 覆盖名，显示回落 CLI 记录的真实标题；打开时间保留。 */
+export async function clearSessionDisplayName(metadata: SessionMetadataPort, identity: UnifiedSession, owns: () => boolean, onIssued?: () => void): Promise<void> {
+  const requireCurrent = () => { if (!owns()) throw new Error('STALE_SESSION_ATTEMPT') }
+  requireCurrent()
+  const saved = metadata.sessionRecords.get(identity.id)
+  if (!matchesSessionMetadata(saved, identity) || !saved.title) { onIssued?.(); return }
+  await metadata.upsertSessionRecord(identity.id, {
+    runtime: identity.runtime, cli: identity.cli, projectPath: identity.projectPath,
+    adapterSessionId: identity.adapterSessionId, nativeSessionId: identity.nativeSessionId,
+    title: '', lastActivityAt: identity.lastActivityAt, lastOpenedAt: saved.lastOpenedAt,
+  }, () => {
+    requireCurrent()
+    onIssued?.()
+  })
+  requireCurrent()
+}

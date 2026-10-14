@@ -90,6 +90,7 @@ const port: UnifiedTerminalHostPort = {
   async renameLegacy(id, title) { await requireLegacy().renameTab(id, title) },
   async stopNative(id: string, attempt: NativeAttemptIdentity) { await requireNative(id).stop(attempt) },
   async recoverNative(id: string, attempt: NativeAttemptIdentity) { await requireNative(id).recover(attempt) },
+  async renameNative(id: string, title: string) { await requireNative(id).renameTab(title) },
   focus,
 }
 defineExpose({ ...port, fitVisible })

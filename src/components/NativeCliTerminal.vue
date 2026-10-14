@@ -266,6 +266,13 @@ function dropPaths(paths: string[]): boolean {
   return true
 }
 
+// claude /rename 是 CLI 自身的会话改名机制；注入后名字随 catalog.refresh 从 CLI 回流。
+async function renameTab(title: string): Promise<void> {
+  if (!props.active || !inputEnabled || !binding) throw new Error('NATIVE_RENAME_UNAVAILABLE')
+  const attempt = currentAttempt()
+  await binding.sendUserText(`/rename ${title}\r`).catch(error => { markInputFailure(attempt); throw error })
+}
+
 // Do not use xterm disableStdin for visibility: it also suppresses parser replies.
 // User-event/provenance admission owns the hidden-input boundary.
 function configureCopy() {
@@ -735,7 +742,7 @@ onUnmounted(() => {
   fit = null
 })
 
-defineExpose({ start, recover, stop, focus, fitVisible, needsFit, dropPaths })
+defineExpose({ start, recover, stop, focus, fitVisible, needsFit, dropPaths, renameTab })
 </script>
 
 <style scoped>

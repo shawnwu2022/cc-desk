@@ -37,7 +37,7 @@ describe('Exact Native tab occurrence receipts', () => {
     const other = { ...entry, key: 'other', sessions: [{ ...entry.sessions[0], sessionKey: JSON.stringify(['local', 'claude', 'root-two', 'session']) }] }
     const port = createNativeCliAdapter({ tabs: store, history: { all: () => [entry, other] }, runtime: {
       stopTab: async value => { store.applyLaunchStatus(value.tabId, status(value, 'exited')) },
-      restartTab: () => { throw new Error('unexpected restart') },
+      restartTab: () => { throw new Error("unexpected restart") }, renameTab: async () => {},
       createTab: input => { const created = store.create({ cli: 'claude', projectId: 'p', projectPath: '/repo', profileId: 'claude', profileRevision: '1', sourceSessionKey: input.sourceSessionKey, action: input.action }); store.markStarting(created.tabId); return created },
     }, archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
     store.applyObservationNotice(tab.tabId, attempt, notice())
