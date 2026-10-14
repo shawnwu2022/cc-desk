@@ -62,9 +62,12 @@ Supported launch actions are:
 - new session;
 - native resume picker;
 - explicit native session ID;
+- native unarchive (one-shot, see below);
 - exact raw argv as JSON `string[]`.
 
 Raw argv is not shell-split. An uncertain launch result keeps the original request/run identity and is recovered by querying that same request. It is never replaced by an automatic second spawn.
+
+The unarchive action is a one-shot CLI command, not a session. It freezes the same profile/environment snapshot and builds argv through the same action mapping, but registers no run, opens no document, returns no tab and publishes no output: the CLI owns its own archive state and CC Desk only asks it to change that state (`codex unarchive <id>`). The child still runs in a PTY through the same admission gate, output is discarded, and only the exit status counts; the authenticated document is rechecked at the spawn commit point, and a backend owner observes shutdown and retains the exact PTY after a wait error or deadline. The caller receives one bounded safe failure while that owner retries termination and nonblocking reap with an interval; ownership and maintenance admission remain held until actual exit is proved. Unknown outcomes are not replayed. Restoring a Codex-archived session must go through this action because the CLI refuses to resume an archived session ("session <id> is archived. Run `codex unarchive <id>` …"); Claude has no such subcommand and rejects the action instead of silently degrading into a resume.
 
 Fully converged launch receipts are evicted within the registry record budget. A reaped run's receipt stays pinned while its supervisor still owns output drain; releasing process handles does not make the receipt evictable. Final convergence marks the exact request/run receipt ready for eviction under the active-supervisor lock before removing that owner. Generation floors for the current authenticated document have a separate limit of twice that budget; reaching it rejects new tab identities with `REGISTRY_CAPACITY`, while known tabs can still advance their generations. Floors cannot be forgotten while that document remains authorized. Activating a new backend-authenticated document revokes the old epoch and clears only its floors, retaining all still-owned runs.
 

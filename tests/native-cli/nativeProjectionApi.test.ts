@@ -233,8 +233,50 @@ describe('D12 authenticated projection API', () => {
   })
 })
 
+const unarchive = () => ({ requestId: 'request-1', cli: 'codex' as const, profileId: 'p', expectedProfileRevision: '1', projectPath: 'C:\\repo', nativeSessionId: 'session-9' })
+// CLI 侧归档的恢复只转达意图：请求必须严格、成功只接受空响应，原生错误码
+// 折叠为有限集合，绝不回显任意文本。
+it('Projection_CliUnarchiveStrictRequestAndBoundedErrors_009', async () => {
+  const invoke = vi.fn(async (_command: string, _payload: unknown) => null)
+  expect(await createProjectionClient({ instanceId: 'instance', invoke }).unarchive(unarchive())).toBeUndefined()
+  expect(invoke.mock.calls[0][0]).toBe('native_unarchive_session')
+  expect(invoke.mock.calls[0][1]).toMatchObject({ cli: 'codex', nativeSessionId: 'session-9' })
+
+  for (const broken of [
+    { ...unarchive(), cli: 'claude' },
+    { ...unarchive(), requestId: '' },
+    { ...unarchive(), requestId: 'has space' },
+    { ...unarchive(), expectedProfileRevision: '01' },
+    { ...unarchive(), projectPath: '' },
+    { ...unarchive(), nativeSessionId: '' },
+    { ...unarchive(), nativeSessionId: 'bad\u0000id' },
+    { ...unarchive(), extra: 'field' },
+    { ...unarchive(), requestId: undefined },
+  ]) {
+    const client = createProjectionClient({ instanceId: 'instance', invoke: async () => null })
+    await expect(client.unarchive(broken as never)).rejects.toThrow('INVALID_PROJECTION')
+  }
+
+  for (const [failure, expected] of [
+    [{ code: 'COMMAND_FAILED' }, 'COMMAND_FAILED'],
+    [{ code: 'COMMAND_TIMEOUT' }, 'COMMAND_TIMEOUT'],
+    [{ code: 'FORBIDDEN' }, 'FORBIDDEN'],
+    [new Error('COMMAND_FAILED'), 'COMMAND_FAILED'],
+    [{ code: 'C:\\secret\\path leaked' }, 'SOURCE_UNAVAILABLE'],
+    ['COMMAND_FAILED', 'SOURCE_UNAVAILABLE'],
+  ] as const) {
+    const client = createProjectionClient({ instanceId: 'instance', invoke: async () => { throw failure } })
+    const error = await client.unarchive(unarchive()).then(() => null, reason => reason as Error & { code: string })
+    expect(error?.code).toBe(expected)
+  }
+
+  // 成功响应必须是空；其他形状一律视为不可信。
+  const shaped = createProjectionClient({ instanceId: 'instance', invoke: async () => ({ ok: true }) })
+  await expect(shaped.unarchive(unarchive())).rejects.toThrow('SOURCE_UNAVAILABLE')
+})
+
 it('Projection_TitleObservationFieldsAreFinite_008', async () => {
-  const item = { type: 'session', sessionKey: JSON.stringify(['local', 'claude', 'root', 'id']), nativeSessionId: 'id', title: 'Task', truncated: true, cwd: '/repo', updatedAt: null }
+  const item = { type: 'session', sessionKey: JSON.stringify(['local', 'claude', 'root', 'id']), nativeSessionId: 'id', title: 'Task', truncated: true, archived: false, cwd: '/repo', updatedAt: null }
   for (const fields of [{ titleSource: 'ai' }, { titleUnknown: true }, { metadataIncomplete: true }, { metadataIncomplete: false }]) {
     const client = createProjectionClient({ instanceId: 'instance', invoke: async () => ({ ...response(), historyMetadataIncomplete: true, items: [{ ...item, ...fields }] }) })
     expect((await client.read(request())).items[0]).toMatchObject(fields)

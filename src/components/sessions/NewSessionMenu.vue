@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { useCliSupportStore } from '@/stores/cliSupport'
 import AppMenu from '@/components/ui/AppMenu.vue'
 import claudeIcon from '@/assets/icons/cli/claude.svg'
 import codexIcon from '@/assets/icons/cli/codex.svg'
@@ -10,12 +11,13 @@ const props = withDefaults(defineProps<{ open: boolean; active?: boolean; anchor
 const emit = defineEmits<{ 'update:open': [open: boolean]; select: [intent: NonNullable<NewSessionRequest['intent']>] }>()
 const { t } = useI18n()
 const app = useAppStore()
+const support = useCliSupportStore()
 const menu = ref<InstanceType<typeof AppMenu> | null>(null)
 const position = ref({ left: '8px', top: '8px' })
 const items = computed(() => [
-  { id: 'claude', label: props.availability.claude === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'Claude Code' }) : 'Claude Code', disabled: props.availability.claude === 'unavailable' },
-  { id: 'codex', label: props.availability.codex === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'Codex CLI' }) : 'Codex CLI', disabled: props.availability.codex === 'unavailable' },
-].sort((left, right) => Number(right.id === app.defaultNewCli) - Number(left.id === app.defaultNewCli)).concat([
+  support.isEnabled('claude') ? { id: 'claude', label: props.availability.claude === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'Claude Code' }) : 'Claude Code', disabled: props.availability.claude === 'unavailable' } : null,
+  support.isEnabled('codex') ? { id: 'codex', label: props.availability.codex === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'Codex CLI' }) : 'Codex CLI', disabled: props.availability.codex === 'unavailable' } : null,
+].filter(item => item !== null).sort((left, right) => Number(right.id === app.defaultNewCli) - Number(left.id === app.defaultNewCli)).concat([
   { id: 'restore', label: t('newSessionRestore'), disabled: false }, { id: 'options', label: t('newSessionMoreOptions'), disabled: false },
 ]))
 async function place() {

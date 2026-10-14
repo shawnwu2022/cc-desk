@@ -14,7 +14,7 @@ beforeEach(() => { vi.stubGlobal('crypto', { getRandomValues: window.crypto.getR
 const sourceKey = JSON.stringify(['local', 'codex', 'root', 'same-id'])
 const entry = (profileId = 'cx', revision = '7'): NativeHistoryEntry => ({ key: profileId + revision,
   context: { cli: 'codex', profileId, profileRevision: revision, projectId: 'project', projectPath: '/repo' },
-  sessions: [{ type: 'session', sessionKey: sourceKey, nativeSessionId: 'same-id', title: 'History', cwd: '/repo', updatedAt: '2026-09-30T00:00:00Z', truncated: false }],
+  sessions: [{ type: 'session', sessionKey: sourceKey, nativeSessionId: 'same-id', title: 'History', cwd: '/repo', updatedAt: '2026-09-30T00:00:00Z', truncated: false, archived: false }],
   loaded: true, loading: false, error: null, requestEpoch: '1', absenceEvidence: { cli: 'codex', sourceRootKey: 'root' } })
 
 describe('Unified resume', () => {
@@ -71,7 +71,7 @@ it('Resume_ReadsAllNativePages_005', async () => {
     offsets.push(q.offset)
     const id = q.offset === 0 ? 'first' : 'last'
     return { source: q.source, resourceKind: q.resourceKind, requestEpoch: q.requestEpoch, observedAt: '1', state: 'ready', reason: null,
-      items: [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root', id]), nativeSessionId: id, title: id, truncated: false, cwd: '/repo', updatedAt: null }], hasMore: q.offset === 0 }
+      items: [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root', id]), nativeSessionId: id, title: id, truncated: false, cwd: '/repo', updatedAt: null , archived: false }], hasMore: q.offset === 0 }
   } } })
   try {
     expect(createNativeProjectionClient).toBeDefined()
@@ -197,7 +197,7 @@ it('Resume_RejectsChangedSourceAbsence_014', async () => {
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: { instanceId: 'instance', async invoke(command: string, q: any) {
     if (command === 'native_get_scope') return { scopeId: 'scope-' + root, instanceId: 'instance', cli: 'codex', sourceRootKey: root, identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] }, basis: 'configured-profile' }
     return { source: q.source, resourceKind: 'history', requestEpoch: q.requestEpoch, observedAt: '1', state: 'ready', reason: null,
-      items: [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', root, 'saved']), nativeSessionId: 'saved', title: 'Saved', cwd: '/repo', updatedAt: null, truncated: false }], hasMore: false }
+      items: [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', root, 'saved']), nativeSessionId: 'saved', title: 'Saved', cwd: '/repo', updatedAt: null, truncated: false , archived: false }], hasMore: false }
   } } })
   try {
     const history = useNativeHistoryStore(); const tabs = useNativeTabsStore(); const catalog = useUnifiedSessionsStore()
@@ -218,7 +218,7 @@ it('Resume_RejectsPagedAbsence_015', async () => {
     if (command === 'native_get_scope') return { scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] }, basis: 'configured-profile' }
     const ids = !scanning ? ['saved'] : q.offset === 0 ? Array.from({ length: 200 }, (_, i) => 'other-' + i) : ['other-199']
     return { source: q.source, resourceKind: 'history', requestEpoch: q.requestEpoch, observedAt: '1', state: 'ready', reason: null,
-      items: ids.map(id => ({ type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root', id]), nativeSessionId: id, title: id, cwd: '/repo', updatedAt: null, truncated: false })), hasMore: scanning && q.offset === 0 }
+      items: ids.map(id => ({ type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root', id]), nativeSessionId: id, title: id, cwd: '/repo', updatedAt: null, truncated: false , archived: false })), hasMore: scanning && q.offset === 0 }
   } } })
   try {
     const history = useNativeHistoryStore(); const tabs = useNativeTabsStore(); const catalog = useUnifiedSessionsStore()
@@ -252,7 +252,7 @@ it('Resume_RevalidatesAbsenceProof_017', async () => {
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: { instanceId: 'instance', async invoke(command: string, q: any) {
     if (command === 'native_get_scope') return { scopeId: 'scope-' + root, instanceId: 'instance', cli: 'codex', sourceRootKey: root, identityEpoch: '1', profileId: 'cx', profileRevision: '7', target: { kind: 'profile', profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] }, basis: 'configured-profile' }
     return { source: q.source, resourceKind: 'history', requestEpoch: q.requestEpoch, observedAt: '1', state: 'ready', reason: null,
-      items: present ? [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', root, 'saved']), nativeSessionId: 'saved', title: 'Saved', cwd: '/repo', updatedAt: null, truncated: false }] : [], hasMore: false }
+      items: present ? [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', root, 'saved']), nativeSessionId: 'saved', title: 'Saved', cwd: '/repo', updatedAt: null, truncated: false , archived: false }] : [], hasMore: false }
   } } })
   try {
     const history = useNativeHistoryStore(); const tabs = useNativeTabsStore(); const catalog = useUnifiedSessionsStore()

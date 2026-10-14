@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { useAppStore } from './app'
 import { useProjectsStateStore } from './projectsState'
 import { useCliProfilesStore } from './cliProfiles'
+import { useCliSupportStore } from './cliSupport'
 import { useNativeTabsStore, type NativeCliTab } from './nativeTabs'
 import { cliGetAvailability } from '@/api/cliAvailability'
 import { parseNativeRawArgv } from '@/utils/nativeRawArgv'
@@ -111,13 +112,18 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
     return [tool, latest?.status === 'running' ? 'available' : failureStillCurrent ? 'unavailable' : checked?.state ?? 'unknown']
   })) as Record<UnifiedCliKind, 'unknown' | 'available' | 'unavailable'> }
   const cliAvailability = computed(() => availabilityFor(project.value ?? undefined))
+  // 默认 CLI 被支持开关关闭时回落到仍启用的 CLI，避免入口隐藏后草稿仍开出被屏蔽的工具。
+  function initialTool(): UnifiedCliKind {
+    const app = useAppStore()
+    return useCliSupportStore().fallbackDefault(app.defaultNewCli)
+  }
   function resetDraft(identity: UnifiedProjectIdentity, tool: UnifiedCliKind, advanced: boolean) {
     project.value = { projectKey: identity.projectKey, projectPath: identity.projectPath }
     cli.value = tool; title.value = ''; launchConfigId.value = ''; startMode.value = 'new'
     rawEnabled.value = false; argvFormat.value = 'lines'; argvText.value = ''; visible.value = advanced; chooserVisible.value = !advanced
   }
-  function open(identity: UnifiedProjectIdentity, tool: UnifiedCliKind = useAppStore().defaultNewCli) { resetDraft(identity, tool, true) }
-  function openChooser(identity: UnifiedProjectIdentity) { resetDraft(identity, useAppStore().defaultNewCli, false) }
+  function open(identity: UnifiedProjectIdentity, tool: UnifiedCliKind = initialTool()) { resetDraft(identity, tool, true) }
+  function openChooser(identity: UnifiedProjectIdentity) { resetDraft(identity, initialTool(), false) }
   function argv(): string[] { return argvFormat.value === 'json' ? parseNativeRawArgv(argvText.value) : argvFromLines(argvText.value) }
   function setArgvFormat(format: 'lines' | 'json') {
     if (format === argvFormat.value) return

@@ -269,7 +269,7 @@ fn HistorySource_Sparse1677_006() {
     let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
     let started = std::time::Instant::now();
     let items = read(
-        &Catalog {cli: CliKind::Codex, root: &root, projects: &granted(&root, &[temp.path().to_owned()]), user_config: None, check: &|| Ok(())},
+        &Catalog {cli: CliKind::Codex, root: &root, projects: &granted(&root, &[temp.path().to_owned()]), user_config: None, check: &|| Ok(()),},
         &Options {kind: ResourceKind::History, query: None, session_id: None},
         &mut budget,
     ).expect("metadata sampling must fit 1677 sparse histories within the existing aggregate and entry caps");
@@ -298,7 +298,8 @@ fn HistorySource_Sparse1677_006() {
     }
 }
 
-// 项目筛选移除另一条记录前，采样头中重复的 Codex 身份仍拒绝整个来源。
+// codex 同 thread 的不同 rollout 即使 cwd 不同也不再拒绝整个来源；无归属
+// （外国 cwd）的记录不进入代表竞争，已归属的代表保留并可列出。
 #[test]
 #[allow(non_snake_case)]
 fn HistorySource_DuplicateHeaders_007() {
@@ -320,7 +321,7 @@ fn HistorySource_DuplicateHeaders_007() {
         extend_sparse_fixture(&file, 3 * 1024 * 1024);
     }
     let root = Root::open(temp.path()).unwrap();
-    let result = read(
+    let items = read(
         &Catalog {
             cli: CliKind::Codex,
             root: &root,
@@ -334,8 +335,312 @@ fn HistorySource_DuplicateHeaders_007() {
             session_id: None,
         },
         &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .expect("同 thread 的无归属 rollout 不得让历史读取失败");
+    assert_eq!(items.len(), 1);
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["cwd"], temp.path().to_str().unwrap());
+}
+
+// codex 0.147+ 的 fork/compact 会为同一 thread 追加 rollout 文件，session id
+// 继承父 thread（文件名形如 <父id>_<新id>.jsonl）。同 id 多文件是合法 thread
+// 模型，最新文件代表 thread 当前状态，与 codex resume 语义一致；不得让整个
+// 来源失败，否则任一 fork 都会让全部 codex 历史无法加载。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_SameThreadRolloutsKeepLatest_040() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("sessions/2026/10/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    for (name, message, timestamp) in [
+        (
+            "rollout-2026-10-03T20-14-17-thread.jsonl",
+            "before fork",
+            "2026-10-03T20:14:17Z",
+        ),
+        (
+            "rollout-2026-10-03T23-35-11-thread_fork.jsonl",
+            "after fork",
+            "2026-10-03T23:35:11Z",
+        ),
+    ] {
+        std::fs::write(
+            directory.join(name),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":"thread","cwd":cwd}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":message},"timestamp":timestamp})
+            ),
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .expect("同 thread 的多个 rollout 不得让历史读取失败");
+    assert_eq!(items.len(), 1, "同 thread 只保留最新代表");
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["title"], "after fork");
+    assert_eq!(value[0]["updatedAt"], "2026-10-03T23:35:11Z");
+}
+
+// 同 thread 的最新 rollout 归属其自身 cwd 对应的项目：fork 后 thread 在另一
+// 项目继续时，条目随最新代表移动，不残留旧项目。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_SameThreadCrossProjectTakesLatest_042() {
+    let temp = tempfile::tempdir().unwrap();
+    let project_x = temp.path().join("x");
+    let project_y = temp.path().join("y");
+    std::fs::create_dir_all(&project_x).unwrap();
+    std::fs::create_dir_all(&project_y).unwrap();
+    let directory = temp.path().join("sessions/2026/10/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    for (name, cwd, message, timestamp) in [
+        (
+            "rollout-2026-10-03T20-14-17-thread.jsonl",
+            project_x.to_str().unwrap().to_owned(),
+            "in project x",
+            "2026-10-03T20:14:17Z",
+        ),
+        (
+            "rollout-2026-10-03T23-35-11-thread_fork.jsonl",
+            project_y.to_str().unwrap().to_owned(),
+            "in project y",
+            "2026-10-03T23:35:11Z",
+        ),
+    ] {
+        std::fs::write(
+            directory.join(name),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":"thread","cwd":cwd}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":message},"timestamp":timestamp})
+            ),
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let projects = [
+        ProjectRef {
+            id: "project-x",
+            root: &root,
+            paths: std::slice::from_ref(&project_x),
+        },
+        ProjectRef {
+            id: "project-y",
+            root: &root,
+            paths: std::slice::from_ref(&project_y),
+        },
+    ];
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &projects,
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .unwrap();
+    assert_eq!(items.len(), 1);
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["projectId"], "project-y");
+    assert_eq!(value[0]["title"], "in project y");
+}
+
+// codex 自身的归档机制把会话移进 archived_sessions/（与 sessions/ 零重叠）；
+// 代表 rollout 的容器位置必须作为 archived 状态输出，供前端隐藏普通树中的行。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_ArchivedFlagFromSourceDir_043() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    for (path, id) in [
+        (
+            "archived_sessions/rollout-2026-05-05T19-04-12-archived.jsonl",
+            "archived-id",
+        ),
+        (
+            "sessions/2026/10/03/rollout-2026-10-03T20-14-17-live.jsonl",
+            "live-id",
+        ),
+    ] {
+        let full = temp.path().join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(
+            &full,
+            format!(
+                "{}\n",
+                json!({"type":"session_meta","payload":{"id":id,"cwd":cwd}})
+            ),
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .unwrap();
+    assert_eq!(items.len(), 2);
+    let value = serde_json::to_value(&items).unwrap();
+    let by_id: std::collections::BTreeMap<&str, bool> = value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            (
+                item["nativeSessionId"].as_str().unwrap(),
+                item["archived"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert!(by_id["archived-id"]);
+    assert!(!by_id["live-id"]);
+}
+
+// 阶段一按 8KiB 块读取首条记录后不得截断缓冲：游标已越过块边界，若把缓冲
+// 截回首条记录末端，阶段二会从游标处继续，跨块记录的开头被永久丢弃——轻则
+// 标题落到后见记录，重则把多字节字符拦腰切断使整个头窗口变成无效 UTF-8，
+// 生产实测曾因此丢弃 200 个 rollout。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_FirstRecordChunkBoundaryKeepsFollowingRecords_044() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("sessions/2026/10/04");
+    std::fs::create_dir_all(&directory).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    // 首条记录约 10KiB（跨过一个 8KiB 块边界）；随后的首条用户记录被该边界
+    // 拦腰切断（多字节文本使断缝几乎必然落在字符中间）。
+    let input = format!(
+        "{}\n{}\n{}\n{}\n",
+        json!({"type":"session_meta","payload":{"id":"thread-a","cwd":cwd,"base_instructions":"i".repeat(10 * 1024)}}),
+        json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"好".repeat(8 * 1024)}]}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"后见标题"}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"tail message"},"timestamp":"2026-10-04T02:00:00Z"}),
     );
-    assert_eq!(result.err(), Some("SOURCE_AMBIGUOUS"));
+    std::fs::write(
+        directory.join("rollout-2026-10-04T01-13-08-gap.jsonl"),
+        input,
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .expect("跨块记录不得使整个来源失败");
+    assert_eq!(items.len(), 1, "行不得因读取缝隙被丢弃");
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["title"], format!("{}…", "好".repeat(96)));
+    // 身份只取首条 session_meta；compact/fork 续写内嵌的其他 thread meta 跳过。
+    assert_eq!(value[0]["nativeSessionId"], "thread-a");
+    assert_eq!(value[0]["updatedAt"], "2026-10-04T02:00:00Z");
+}
+
+// 消息读取同样按代表制：同 thread 只读最新 rollout，不同文件的消息不得交错。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_SameThreadMessagesReadRepresentative_041() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("sessions/2026/10/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    for (name, message, timestamp) in [
+        (
+            "rollout-2026-10-03T20-14-17-thread.jsonl",
+            "before fork",
+            "2026-10-03T20:14:17Z",
+        ),
+        (
+            "rollout-2026-10-03T23-35-11-thread_fork.jsonl",
+            "after fork",
+            "2026-10-03T23:35:11Z",
+        ),
+    ] {
+        std::fs::write(
+            directory.join(name),
+            format!(
+                "{}\n{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":"thread","cwd":cwd}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":message},"timestamp":timestamp}),
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":format!("{message} answer")}]}})
+            ),
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::Messages,
+            query: None,
+            session_id: Some("thread"),
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .expect("同 thread 的多个 rollout 不得让消息读取失败");
+    let value = serde_json::to_value(&items).unwrap();
+    let bodies: Vec<&str> = value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        bodies,
+        vec!["after fork", "after fork answer"],
+        "只读代表 rollout，不含 fork 前消息"
+    );
 }
 
 // 230KiB 的完整有效身份头无需标题即可列出；未知正文不产生虚构标题、时间或完整性。
@@ -422,14 +727,15 @@ fn HistorySource_KeepHeaderCap_009() {
     assert_eq!(result.err(), Some("SOURCE_TOO_LARGE"));
 }
 
-// 默认聚合上限的量级单独钉住：真实 Codex 根（约 2100 个 rollout）的一次性
-// 元数据采样实测消耗约 45 MiB / 4400 entries，64MiB / 16384 entries 留出约三成字节余量。
+// 默认聚合上限的量级单独钉住：真实 Codex 根（约 2130 个 rollout，含
+// archived_sessions）4KiB 身份采样实测约 47MiB；扩展到 192KiB 头窗口取首条
+// 用户消息后实测约 157MiB，256MiB 留出余量。稳定根经元数据缓存命中后不再重读。
 #[test]
 #[allow(non_snake_case)]
 fn HistorySource_DefaultLimitsCoverRealCodexRoots_036() {
     let limits = super::super::super::scoped_fs::Limits::default();
     assert_eq!(limits.file_bytes, 2 * 1024 * 1024);
-    assert_eq!(limits.total_bytes, 64 * 1024 * 1024);
+    assert_eq!(limits.total_bytes, 512 * 1024 * 1024);
     assert_eq!(limits.entries, 16384);
 }
 
@@ -486,16 +792,19 @@ fn HistorySource_ClaudeWindow_010() {
     assert!(!budget.history_metadata_incomplete());
 }
 
-// 首个用户标题记录在采样块之外时保持未知；未读取的原生末尾时间不能替换成文件时间。
+// 头窗口覆盖到首条用户消息时，标题与尾部时间都被观察：codex 列表因此不再只有
+// “Untitled”，也不再缺少原生最近时间。窗口未覆盖时仍以未知标题列出（见下方
+// 超长身份头用例）。
 #[test]
 #[allow(non_snake_case)]
-fn HistorySource_UnseenTitle_011() {
+fn HistorySource_TitleFromUserMessageWindow_011() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join("sessions")).unwrap();
+    let title = "seen-title";
     let input = format!(
         "{}\n{}\n{}\n",
         json!({"type":"session_meta","payload":{"id":"unseen-title","cwd":temp.path().to_str().unwrap(),"base_instructions":"i".repeat(1024)}}),
-        json!({"type":"event_msg","payload":{"type":"user_message","message":"u".repeat(6 * 1024)}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":title}}),
         json!({"type":"response_item","timestamp":"2026-10-10T03:00:00Z","payload":{"type":"message","role":"assistant","content":"answer"}}),
     );
     std::fs::write(temp.path().join("sessions/title.jsonl"), input).unwrap();
@@ -520,7 +829,7 @@ fn HistorySource_UnseenTitle_011() {
     assert_eq!(items.len(), 1);
     let ResourceItem::Session {
         native_session_id,
-        title,
+        title: observed_title,
         truncated,
         updated_at,
         ..
@@ -529,10 +838,471 @@ fn HistorySource_UnseenTitle_011() {
         panic!("history must return only session metadata")
     };
     assert_eq!(native_session_id, "unseen-title");
-    assert_eq!(title, "Untitled");
-    assert!(*truncated);
-    assert!(updated_at.is_none());
-    assert!(budget.history_metadata_incomplete());
+    assert_eq!(observed_title, title);
+    // 完整读取（文件很小）时标记为完整，且时间来自尾部真实时间戳。
+    assert!(!truncated);
+    assert_eq!(updated_at.as_deref(), Some("2026-10-10T03:00:00Z"));
+    assert!(!budget.history_metadata_incomplete());
+}
+
+// codex 在 session_meta 上标记线程来源：subagent 线程与守护评审/安全扫描/代码评审
+// 都不是用户主动创建的会话，不进入历史列表。未知/缺失标记按用户创建处理——隐藏
+// 真实用户会话的代价大于多列一行噪声。消息读取仍按显式会话 id 工作。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_AutoSessionsAreNotListed_046() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let user_message = json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"real work"}]}});
+    for (id, source) in [
+        ("subagent", json!({"thread_source":"subagent"})),
+        ("guardian", json!({"thread_source":"guardian_review"})),
+        ("scan", json!({"thread_source":"security_scan"})),
+        ("review", json!({"thread_source":"code_review"})),
+        (
+            "legacy-subagent",
+            json!({"source":{"subagent":{"other":"guardian"}}}),
+        ),
+        ("user", json!({"thread_source":"user"})),
+        ("voice", json!({"thread_source":"realtime_voice"})),
+        ("unmarked", json!({})),
+    ] {
+        let mut payload = json!({"id":id,"cwd":cwd});
+        for (key, value) in source.as_object().unwrap() {
+            payload[key] = value.clone();
+        }
+        std::fs::write(
+            temp.path().join(format!("sessions/2026/10/04/{id}.jsonl")),
+            format!(
+                "{}\n{user_message}\n",
+                json!({"type":"session_meta","payload":payload})
+            ),
+        )
+        .unwrap();
+    }
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let value = serde_json::to_value(&items).unwrap();
+    let listed: BTreeSet<&str> = value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["nativeSessionId"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        listed,
+        BTreeSet::from(["user", "voice", "unmarked"]),
+        "只有非自动创建的会话进入历史列表"
+    );
+    assert!(
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["title"] == "real work"),
+        "被排除的会话不得改变其余行的标题"
+    );
+
+    // 显式按会话 id 读取消息不受列表过滤影响：行不列出，但内容仍可读。
+    let root = Root::open(temp.path()).unwrap();
+    let messages = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::Messages,
+            query: None,
+            session_id: Some("subagent"),
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .unwrap();
+    assert!(
+        !messages.is_empty(),
+        "自动创建会话的消息读取仍按显式 id 工作"
+    );
+}
+
+// codex 的自动评审/安全扫描插件把整段任务以 role=user 写进 rollout；由 codex exec
+// 或 SDK 驱动时 thread_source 仍记为 user，只能按实测包装前缀识别。只含包装的会话
+// 视为非用户创建而不列出；包装之后出现真实用户消息时仍列出，并以该消息为标题。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_WrapperOnlySessionsAreNotListed_047() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let user = |text: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})
+        )
+    };
+    let header = |id: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"thread_source":"user"}})
+        )
+    };
+
+    // 只有脚手架：不是用户主动创建的会话。
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/wrapper-only.jsonl"),
+        format!(
+            "{}{}{}",
+            header("wrapper-only"),
+            user("Run one Standard security scan for the current source."),
+            user(
+                "The following is the Codex agent history whose request action you are assessing."
+            )
+        ),
+    )
+    .unwrap();
+    // 脚手架之后有真实消息：保留，并用真实消息作标题。
+    std::fs::write(
+        temp.path()
+            .join("sessions/2026/10/04/wrapper-then-user.jsonl"),
+        format!(
+            "{}{}{}",
+            header("wrapper-then-user"),
+            user("## Code review guidelines:\n# Review Guidelines"),
+            user("审查这次改动")
+        ),
+    )
+    .unwrap();
+
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1, "纯脚手架会话不列出");
+    assert_eq!(value[0]["nativeSessionId"], "wrapper-then-user");
+    assert_eq!(value[0]["title"], "审查这次改动");
+}
+
+// codex 把用户设定的会话名写在 CODEX_HOME/session_index.jsonl（每行
+// {id, thread_name, updated_at}），这是用户意图，优先级高于从 rollout 现抽的标题。
+// 同一 id 有多行时取 updated_at 最大者；索引缺失或未覆盖该 id 时回落现抽标题，
+// 且不得使历史读取失败。真机实测 160 个可见 codex 行里 83 行（51%）在索引中有名字。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_UserNamedSessionsFromIndex_048() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/rollout-2026-10-04T01-00-00-named.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":"named-thread","cwd":cwd,"thread_source":"user"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划"}}),
+        ),
+    )
+    .unwrap();
+
+    // 索引未覆盖该 id：行照常列出，标题回落到现抽标题。
+    std::fs::write(
+        temp.path().join("session_index.jsonl"),
+        format!(
+            "{}\n",
+            json!({"id":"some-other-thread","thread_name":"别人的名字","updated_at":"2026-10-04T00:00:00Z"})
+        ),
+    )
+    .unwrap();
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        value[0]["title"],
+        "[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划"
+    );
+    assert_eq!(value[0]["titleSource"], "prompt");
+
+    // 索引里有用户设定的名字：优先于现抽标题，来源标注为 custom。
+    // 同一 id 两行时取 updated_at 更新的一条，与「最后改名生效」一致。
+    std::fs::write(
+        temp.path().join("session_index.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({"id":"named-thread","thread_name":"旧名字","updated_at":"2026-10-04T00:00:00Z"}),
+            json!({"id":"named-thread","thread_name":"用户改名后的会话","updated_at":"2026-10-05T00:00:00Z"}),
+        ),
+    )
+    .unwrap();
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(value[0]["title"], "用户改名后的会话");
+    assert_eq!(value[0]["titleSource"], "custom");
+
+    // 索引整体损坏（不可解析）：等同没有该文件，不得让历史读取失败。
+    std::fs::write(temp.path().join("session_index.jsonl"), "{broken}\n").unwrap();
+    let items =
+        read_codex_history_fixture(temp.path()).expect("损坏的 session_index 不得使历史读取失败");
+    assert_eq!(items.len(), 1);
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(
+        value[0]["title"],
+        "[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划"
+    );
+}
+
+// 尾部观察的字节计入同一聚合预算：剩余预算不足以同时容纳头窗口与尾部时，
+// 该行必须按单文件读取失败隔离（不返回），并继续把来源标记为不完整，而不是用
+// 饱和扣减把超额读取伪装成预算恰好耗尽（实测 115 字节预算下 233 字节文件
+// 仍被完整读出并作为正常历史行返回）。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_TailReadStaysWithinByteBudget_049() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/rollout-budget.jsonl"),
+        format!(
+            "{}\n{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":"tb","cwd":cwd,"thread_source":"user"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"real work"}}),
+            json!({"type":"response_item","timestamp":"2026-10-10T03:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"tail"}]}}),
+        ),
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits {
+        file_bytes: 2 * 1024 * 1024,
+        total_bytes: 115,
+        entries: 16,
+    });
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut budget,
+    )
+    .unwrap();
+    assert!(
+        items.is_empty(),
+        "剩余预算不足以容纳头窗口与尾部时，该行不得作为正常历史行返回"
+    );
+    assert!(
+        budget.history_metadata_incomplete(),
+        "被隔离的行仍须把来源标记为不完整"
+    );
+}
+
+// 缓存命中同样必须保留来源级「观察不完整」事实：行内恢复的 metadata_incomplete
+// 若不写回 Budget，同一文件会冷读标记不完整、暖读漏记，部分观察被升级成缺失证明。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_CacheHitRetainsSourceIncompleteFlag_050() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/rollout-cached.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":"cached-incomplete","cwd":cwd,"thread_source":"user"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"real work"}}),
+        ),
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let relative = Path::new("sessions/2026/10/04/rollout-cached.jsonl");
+    let (len, modified) = root.stat(relative).unwrap().unwrap();
+    let stamps = cache::Stamps::from_system(len, modified).unwrap();
+    cache::with(|cache| {
+        cache.record(
+            cache::key(root.key(), "codex", relative),
+            stamps,
+            cache::CachedMetadata {
+                native_id: "cached-incomplete".into(),
+                cwd: Some(cwd),
+                title: "real work".into(),
+                title_priority: Some(0),
+                updated: Some("2026-10-10T03:00:00Z".into()),
+                metadata_incomplete: true,
+            },
+        )
+    });
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut budget,
+    )
+    .unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(
+        budget.history_metadata_incomplete(),
+        "缓存命中的部分观察事实必须回到来源级标记"
+    );
+}
+
+// wrapper-only 且观察不完整的会话不列出：几乎全为 exec/SDK 自动会话，Untitled 行
+// 只是噪声；但前缀不能证明全会话只含包装，省略必须显式披露（来源不完整 + 读失败
+// 计数），不能伪装成无此会话，Messages 仍可按显式 id 读取。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_PartialWrapperOnlyIsOmittedDisclosed_051() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let user = |text: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})
+        )
+    };
+    let header = |id: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"thread_source":"user"}})
+        )
+    };
+    // 头窗口内只有评审包装；真实人工消息排在超长记录之后、窗口之外。
+    let filler = format!(
+        "{}\n",
+        json!({"type":"response_item","timestamp":"2026-10-10T03:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x".repeat(220 * 1024)}]}})
+    );
+    std::fs::write(
+        temp.path()
+            .join("sessions/2026/10/04/wrapper-late-user.jsonl"),
+        format!(
+            "{}{}{}{}",
+            header("wrapper-late-user"),
+            user(
+                "The following is the Codex agent history whose request action you are assessing."
+            ),
+            filler,
+            user("轮到我人工跟进这次评审"),
+        ),
+    )
+    .unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut budget,
+    )
+    .unwrap();
+    assert!(
+        items.is_empty(),
+        "wrapper-only 且部分观察的会话不占用列表行"
+    );
+    assert!(
+        budget.history_metadata_incomplete(),
+        "省略必须把来源标记为不完整"
+    );
+    assert!(
+        budget
+            .history_read_failures()
+            .contains(&"SOURCE_UNSUPPORTED"),
+        "省略必须计入读失败披露，而不是伪装成无此会话"
+    );
+    // 省略不改变按显式 id 的消息读取。
+    let messages = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::Messages,
+            query: None,
+            session_id: Some("wrapper-late-user"),
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .unwrap();
+    assert!(!messages.is_empty(), "被省略会话的消息读取仍按显式 id 工作");
+}
+
+// 非 wrapper 的部分观察即使标题未知也照常列出：开头没有评审包装时，用户消息
+// 可能就在窗口之外，隐藏这类行会丢失真实用户会话。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_PartialObservationWithoutWrapperStillListed_052() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let header = |id: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"thread_source":"user"}})
+        )
+    };
+    let filler = format!(
+        "{}\n",
+        json!({"type":"response_item","timestamp":"2026-10-10T03:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x".repeat(220 * 1024)}]}})
+    );
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/no-wrapper-late-user.jsonl"),
+        format!(
+            "{}{}{}\n",
+            header("no-wrapper-late-user"),
+            filler,
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"窗口外的真实任务"}]}})
+        ),
+    )
+    .unwrap();
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    assert_eq!(items.len(), 1, "窗口之外的真实用户消息不能让该行消失");
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["nativeSessionId"], "no-wrapper-late-user");
+}
+
+fn read_codex_history_fixture(root_path: &Path) -> ReadResult<Vec<ResourceItem>> {
+    let root = Root::open(root_path).unwrap();
+    read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[root_path.to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
 }
 
 fn read_claude_history_fixture(
@@ -1429,4 +2199,127 @@ fn HistoryClaude_TailCwdVariationKeepsRow_037() {
         assert_eq!(title, "generated title");
         assert_eq!(cwd.as_deref(), Some(temp.path().to_str().unwrap()));
     }
+}
+
+// 文件引用头和人工评审/限制说明不能仅因正文前缀就使用户会话消失。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_OrdinaryUserPrefixesStayVisible_053() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/14")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    for (id, message) in [
+        (
+            "files-user",
+            "# Files mentioned by the user:\n- src/main.rs\nPlease fix the startup bug.",
+        ),
+        (
+            "review-user",
+            "Review the code changes against the base branch main and explain the risks.",
+        ),
+        (
+            "restriction-user",
+            "IMPORTANT: Do NOT read credentials. Please fix this bug.",
+        ),
+    ] {
+        std::fs::write(
+            temp.path().join(format!("sessions/2026/10/14/{id}.jsonl")),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"thread_source":"user"}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":message}})
+            ),
+        )
+        .unwrap();
+    }
+    std::fs::write(temp.path().join("session_index.jsonl"),
+        format!("{}\n", json!({"id":"files-user","thread_name":"Named file request","updated_at":"2026-10-14T00:00:00Z"}))).unwrap();
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let values = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 3, "人工文件引用、评审和限制说明必须全部保留");
+    assert!(values.as_array().unwrap().iter().any(
+        |item| item["nativeSessionId"] == "files-user" && item["title"] == "Named file request"
+    ));
+}
+
+// 相同大小和修改时间的显示缓存不能把陈旧会话身份变成当前来源或缺失证明。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_CacheChecksCurrentIdentity_054() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/14")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let relative = Path::new("sessions/2026/10/14/rollout-cache-proof.jsonl");
+    std::fs::write(temp.path().join(relative), format!("{}\n{}\n",
+        json!({"type":"session_meta","payload":{"id":"fresh-bb","cwd":cwd,"thread_source":"user"}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"real work"}}))).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let (len, modified) = root.stat(relative).unwrap().unwrap();
+    let stamps = cache::Stamps::from_system(len, modified).unwrap();
+    cache::with(|cache| {
+        cache.record(
+            cache::key(root.key(), "codex", relative),
+            stamps,
+            cache::CachedMetadata {
+                native_id: "stale-aa".into(),
+                cwd: Some(cwd),
+                title: "Cached old title".into(),
+                title_priority: Some(0),
+                updated: None,
+                metadata_incomplete: false,
+            },
+        )
+    });
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let values = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        values[0]["nativeSessionId"], "fresh-bb",
+        "当前文件身份必须优先于同 stamp 的陈旧缓存"
+    );
+}
+
+// 暖缓存的身份读取只能解析完整记录；4KiB 后续正文字符切半不能丢失合法会话。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_CacheHeaderKeepsUtf8Seam_055() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/14")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let relative = Path::new("sessions/2026/10/14/rollout-cache-utf8.jsonl");
+    let header = format!(
+        "{}\n",
+        json!({"type":"session_meta","payload":{"id":"cached-utf8","cwd":cwd,"thread_source":"user"}})
+    );
+    let prefix = r#"{"type":"event_msg","payload":{"type":"user_message","message":""#;
+    let padding = 4095 - header.len() - prefix.len();
+    let body = format!(
+        "{}{}{}中{}\"}}}}\n",
+        header,
+        prefix,
+        "x".repeat(padding),
+        "x".repeat(8192)
+    );
+    assert!(!std::str::from_utf8(&body.as_bytes()[..4096]).is_ok());
+    std::fs::write(temp.path().join(relative), body).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let (len, modified) = root.stat(relative).unwrap().unwrap();
+    cache::with(|cache| {
+        cache.record(
+            cache::key(root.key(), "codex", relative),
+            cache::Stamps::from_system(len, modified).unwrap(),
+            cache::CachedMetadata {
+                native_id: "cached-utf8".into(),
+                cwd: Some(cwd),
+                title: "Kept cached title".into(),
+                title_priority: Some(0),
+                updated: None,
+                metadata_incomplete: true,
+            },
+        )
+    });
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let values = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1, "后续正文切半的字符不能使暖缓存历史消失");
+    assert_eq!(values[0]["nativeSessionId"], "cached-utf8");
 }

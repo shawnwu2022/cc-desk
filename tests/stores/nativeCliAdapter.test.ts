@@ -19,7 +19,7 @@ function history(cli: 'claude' | 'codex', root: string, nativeSessionId: string,
   return {
     key: `${cli}:${root}`,
     context: { cli, profileId, profileRevision: '7', projectId: 'project-1', projectPath },
-    sessions: [{ type: 'session', sessionKey: JSON.stringify(['local', cli, root, nativeSessionId]), nativeSessionId, title: `${cli}-${root}`, truncated: false, cwd: projectPath, updatedAt: '2026-09-29T00:00:00Z' }],
+    sessions: [{ type: 'session', sessionKey: JSON.stringify(['local', cli, root, nativeSessionId]), nativeSessionId, title: `${cli}-${root}`, truncated: false, archived: false, cwd: projectPath, updatedAt: '2026-09-29T00:00:00Z' }],
     loading: false, loaded: true, error: null, requestEpoch: '1',
   }
 }
@@ -36,8 +36,11 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
   }
   const archived = new Map<string, string[]>()
   const archive = { getArchivedSessions: (path: string) => archived.get(path) ?? [], archiveSession: vi.fn(async (path: string, id: string) => { archived.set(path, [...(archived.get(path) ?? []), id]) }), restoreSession: vi.fn(async (path: string, id: string) => { archived.set(path, (archived.get(path) ?? []).filter(value => value !== id)) }) }
-  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries }, runtime, archive })
-  return { adapter, map, runtime, archive, setActive, archived }
+  const cliUnarchive = { unarchive: vi.fn().mockResolvedValue(undefined) }
+  const historyLoad = vi.fn(async () => entries[0])
+  const metadata = { sessionRecords: new Map(), recordSessionOpened: vi.fn(async () => undefined), upsertSessionRecord: vi.fn(async () => undefined) }
+  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries, load: historyLoad }, runtime, archive, cliUnarchive, metadata })
+  return { adapter, map, runtime, archive, cliUnarchive, setActive, archived, historyLoad, metadata }
 }
 
 describe('native CLI adapter', () => {
@@ -358,4 +361,59 @@ describe('native CLI adapter', () => {
     expect(upsertSessionRecord).toHaveBeenCalledTimes(1)
   })
 
+  // codex 自身归档容器（item.archived）的行必须标记归档；其「恢复」语义是
+  // 从归档中打开会话（resume），而不是写 Desk 的归档注册表。
+  // codex 拒绝 resume 自己归档的会话（要求先 `codex unarchive`），所以 CLI 归档行
+  // 的恢复必须请求 CLI 取消归档，而不是开一个注定失败的 resume 标签；Desk 也不
+  // 搬动 CLI 的归档文件。
+  it('CodexArchive_SourceDirRowRestoresThroughCliUnarchive_033', async () => {
+    setActivePinia(createPinia())
+    const entry = history('codex', '/root', 'session-9')
+    entry.sessions[0].archived = true
+    const { adapter, runtime, archive, cliUnarchive, setActive } = setup([], [entry])
+    const rows = await adapter.listSessions()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].archived).toBe(true)
+    await adapter.restoreArchivedSession(rows[0].id)
+    expect(cliUnarchive.unarchive).toHaveBeenCalledTimes(1)
+    expect(cliUnarchive.unarchive.mock.calls[0][1]).toBe('session-9')
+    expect(archive.restoreSession).not.toHaveBeenCalled()
+    expect(runtime.createTab).not.toHaveBeenCalled()
+    expect(setActive).not.toHaveBeenCalled()
+  })
+
+  // 没有 CLI 取消归档能力时不得静默退化成 resume：那会开出一个必然被 CLI 拒绝的
+  // 标签，用户以为恢复成功。失败必须显式暴露。
+  it('CodexArchive_MissingCliUnarchiveFailsClosed_034', async () => {
+    setActivePinia(createPinia())
+    const entry = history('codex', '/root', 'session-9')
+    entry.sessions[0].archived = true
+    const adapter = createNativeCliAdapter({
+      tabs: { tabs: new Map(), activeTabId: null, setActive: vi.fn(), close: vi.fn(), rename: vi.fn() },
+      history: { all: () => [entry] },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() },
+      archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
+    })
+    const rows = await adapter.listSessions()
+    await expect(adapter.restoreArchivedSession(rows[0].id)).rejects.toThrow('CLI_UNARCHIVE_UNAVAILABLE')
+  })
+
+})
+
+// CLI 取消归档成功后，归档状态要靠下一次历史读取按容器位置重投影；
+// all() 的缓存仍是归档行，必须强制重读原上下文，调用方的目录刷新才能
+// 看到已恢复的行，否则会话滞留归档抽屉直到手动刷新。
+it('CodexArchive_UnarchiveForcesHistoryReload_035', async () => {
+  setActivePinia(createPinia())
+  const entry = history('codex', '/root', 'session-1')
+  entry.sessions[0].archived = true
+  const { adapter, cliUnarchive, historyLoad, metadata } = setup([], [entry])
+  const rows = await adapter.listSessions()
+  const record = rows.find(value => value.archived)
+  expect(record).toBeDefined()
+  await adapter.restoreArchivedSession(record!.id)
+  expect(cliUnarchive.unarchive).toHaveBeenCalledWith(entry.context, 'session-1')
+  expect(historyLoad).toHaveBeenCalledWith(expect.objectContaining({ ...entry.context, force: true }))
+  // 恢复后的行照常写入最近打开时间，不能因 CLI 归档分支提前返回而跳过排序更新。
+  expect(metadata.recordSessionOpened).toHaveBeenCalledTimes(1)
 })

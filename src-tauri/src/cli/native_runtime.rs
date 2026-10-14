@@ -192,6 +192,27 @@ impl NativeRuntime {
         Ok(())
     }
 
+    /// 恢复 CLI 自身归档的会话。归档状态属于 CLI，Desk 只把 `codex unarchive`
+    /// 这条意图交给同一套 profile/环境授权去执行；不建立 tab、不注册 run。
+    pub(crate) async fn unarchive<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<(), SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query: super::types::UnarchiveRequest = decode_projection(request.body(), 4096)?;
+        query.validate()?;
+        let service = self.service.clone();
+        let admitted = caller.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            service.run_command(&admitted, &query.to_launch_request())
+        })
+        .await
+        .map_err(|_| error("LAUNCH_STATE_UNKNOWN"))??;
+        self.service.registry().check_caller(&caller)?;
+        Ok(())
+    }
+
     pub(crate) async fn projection_scope<T: Runtime>(
         &self,
         webview: &Webview<T>,
@@ -431,6 +452,7 @@ impl NativeRuntime {
         if let Some(supervisor) = &self.supervisor {
             supervisor.shutdown();
         }
+        self.service.wait_for_commands();
     }
 }
 

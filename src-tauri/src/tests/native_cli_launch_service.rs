@@ -461,3 +461,119 @@ fn HistoryRuntime_NativeBlockingLaunchSurvivesLostReceiver_03() {
         .release_review()
         .unwrap();
 }
+
+// 已撤销的 document 不能借一次性命令绕过 launch 的 epoch 授权。
+#[test]
+fn NativeCommand_RevokedDocumentCreatesNoChild_001() {
+    let mut f = Fixture::new(false);
+    if let LaunchAction::Raw { argv } = &mut f.request.action {
+        argv[1] = "exit".into();
+    }
+    f.service.registry().revoke_window(&f.caller).unwrap();
+    let failure = f.service.run_command(&f.caller, &f.request).unwrap_err();
+    assert_eq!(failure.code, "FORBIDDEN");
+    assert_eq!(f.children(), 0, "revoked command created a real child");
+    f.repository
+        .admission()
+        .freeze(&uuid::Uuid::new_v4().to_string())
+        .unwrap()
+        .release_review()
+        .unwrap();
+}
+// 正在运行的一次性 child 也必须响应 shutdown，回执不能等待整个命令截止。
+#[test]
+fn NativeCommand_ShutdownReapsExactChild_002() {
+    let f = Fixture::new(false);
+    let service = f.service.clone();
+    let caller = f.caller.clone();
+    let request = f.request.clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _ = sender.send(service.run_command(&caller, &request));
+    });
+    f.ready();
+    assert!(f
+        .repository
+        .admission()
+        .freeze(&uuid::Uuid::new_v4().to_string())
+        .is_err());
+    f.service.begin_shutdown();
+    let response = receiver.recv_timeout(Duration::from_secs(3));
+    // RED 时旧实现会在 30 秒才返回；仍先回收测试线程，避免把失败留成后台 child。
+    worker.join().unwrap();
+    let failure = response
+        .expect("shutdown command reply must be bounded")
+        .unwrap_err();
+    assert_eq!(failure.code, "RUN_SUPERVISOR_STOPPING");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(frozen) = f
+            .repository
+            .admission()
+            .freeze(&uuid::Uuid::new_v4().to_string())
+        {
+            frozen.release_review().unwrap();
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "command retained an unreaped child ticket"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(f.children(), 1, "cleanup created a replacement child");
+}
+
+// 使用真实 hold child 验证命令截止返回与真实 reap，而非把错误回执当作退出证明。
+#[test]
+fn NativeCommand_TimeoutReapsExactChild_003() {
+    let f = Fixture::new(false);
+    let started = Instant::now();
+    let failure = f.service.run_command(&f.caller, &f.request).unwrap_err();
+    assert_eq!(failure.code, "COMMAND_TIMEOUT");
+    assert!(started.elapsed() < Duration::from_secs(40));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(frozen) = f
+            .repository
+            .admission()
+            .freeze(&uuid::Uuid::new_v4().to_string())
+        {
+            frozen.release_review().unwrap();
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timeout lost the exact child reaper"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(f.children(), 1, "timeout retried process creation");
+}
+
+// 实际 NativeRuntime 退出入口必须等待一次性 command 的真实 reap，不能仅发 flag。
+#[test]
+fn NativeCommand_RuntimeShutdownWaitsForReap_004() {
+    let f = Fixture::new(false);
+    let runtime = crate::cli::native_runtime::NativeRuntime::new(f.service.clone());
+    let service = f.service.clone();
+    let caller = f.caller.clone();
+    let request = f.request.clone();
+    let worker = std::thread::spawn(move || service.run_command(&caller, &request));
+    f.ready();
+    let started = Instant::now();
+    runtime.shutdown();
+    let settled = f
+        .repository
+        .admission()
+        .freeze(&uuid::Uuid::new_v4().to_string());
+    // RED 时仍等待后台线程自行收口，以免测试失败遗留活进程。
+    let failure = worker.join().unwrap().unwrap_err();
+    assert_eq!(failure.code, "RUN_SUPERVISOR_STOPPING");
+    assert!(started.elapsed() < Duration::from_secs(6));
+    settled
+        .expect("runtime shutdown returned before command reap")
+        .release_review()
+        .unwrap();
+    assert_eq!(f.children(), 1);
+}

@@ -18,7 +18,7 @@ const writes: any[] = []
 const source = (id: string): NativeHistoryEntry => ({ key: id,
   context: { cli: 'codex', profileId: 'cx', profileRevision: '7', projectId: 'project', projectPath: '/repo' },
   sessions: [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', 'root', id]), nativeSessionId: id,
-    title: id, cwd: '/repo', updatedAt: '2026-10-10T00:00:00Z', truncated: false }],
+    title: id, cwd: '/repo', updatedAt: '2026-10-10T00:00:00Z', truncated: false, archived: false }],
   loaded: true, loading: false, error: null, requestEpoch: '1' })
 
 beforeEach(() => {

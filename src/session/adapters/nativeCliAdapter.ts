@@ -47,11 +47,18 @@ export interface NativeArchivePort {
   restoreSession(projectPath: string, sessionId: string): Promise<unknown>
 }
 
+/// CLI 自身归档容器（codex archived_sessions）的恢复端口。Desk 不搬动 CLI 文件，
+/// 只请求 CLI 执行它自己的 unarchive。
+export interface NativeCliUnarchivePort {
+  unarchive(session: NativeHistoryContext, nativeSessionId: string): Promise<void>
+}
+
 export interface NativeCliAdapterDeps {
   tabs: NativeTabsPort
   history: NativeHistoryPort
   runtime: NativeRuntimePort
   archive: NativeArchivePort
+  cliUnarchive?: NativeCliUnarchivePort
   metadata?: SessionMetadataPort
 }
 
@@ -291,7 +298,9 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     const keys = deps.archive.getArchivedSessions(entry.context.projectPath)
     const old = oldHistoryId(entry, item.sessionKey, item.nativeSessionId)
     const legacy = keys.includes(old)
-    return { archived: keys.includes(historyId(entry, item.sessionKey, item.nativeSessionId)) || legacy,
+    // archived=true 也来自 CLI 自身的归档容器（codex 会把会话移进
+    // archived_sessions/，与 sessions/ 零重叠），不只来自 Desk 的归档注册表。
+    return { archived: item.archived === true || keys.includes(historyId(entry, item.sessionKey, item.nativeSessionId)) || legacy,
       safeErrorCode: legacy && oldKeyMatches(old).length !== 1 ? 'SESSION_ORIGIN_AMBIGUOUS' : null }
   }
 
@@ -536,8 +545,22 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       }
     }
     if (deps.archive.getArchivedSessions(history.projectPath).includes(id)) await deps.archive.restoreSession(history.projectPath, id)
-    if (match) await saveSessionOpenedAt(deps.metadata, projectHistory(match.entry, match.item), Date.now(),
-      () => findHistory(id).length === 1).catch(() => {})
+    if (match) {
+      // CLI 自身归档（codex archived_sessions）不在 Desk 注册表内：它的恢复就是
+      // 让 CLI 取消归档。codex 明确拒绝 resume 已归档会话（要求先 unarchive），
+      // 所以这里不能走 resume；Desk 也不搬动 CLI 的归档文件。
+      if (match.item.archived === true) {
+        const unarchive = deps.cliUnarchive
+        if (!unarchive) throw new Error('CLI_UNARCHIVE_UNAVAILABLE')
+        await unarchive.unarchive(match.entry.context, match.item.nativeSessionId)
+        // 归档状态由下一次历史读取按容器位置重投影；all() 仍是旧缓存，必须
+        // 强制重读原上下文，调用方的目录刷新才能看到已恢复的行。不提前返回：
+        // 恢复后的行照常写入最近打开时间，保持既有排序语义。
+        await deps.history.load?.({ ...match.entry.context, force: true })
+      }
+      await saveSessionOpenedAt(deps.metadata, projectHistory(match.entry, match.item), Date.now(),
+        () => findHistory(id).length === 1).catch(() => {})
+    }
   }
 
   return { runtime: 'native-cli', captureOwnership, listSessions, createSession, resumeSession, activateSession, stopSession, restartSession, closeSession, renameSession, archiveSession, restoreArchivedSession, verifyMissingSession, clearUnread }

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-14
+
+- Resolve repeated Codex rollout identities to their latest thread history and prefer CLI session names while excluding injected context and automation-only sessions
+- Cache bounded Codex display metadata without relaxing scoped filesystem authority, source replacement checks or incomplete-history disclosure
+- Restore CLI-owned Codex archives through an explicit one-shot unarchive command, preserve their opening-time metadata, and wait for the exact command owner during application shutdown
+- Add independent Claude Code and Codex support preferences for creation and history while retaining open terminal ownership
+- Preserve independent Legacy/native history and archive origins even when their CLI session IDs match
+- Defer release preflight runner allocation until signed platform builds finish while retaining exact-main CI, coverage and updater signature gates
+- Align historical unread-receipt documentation with the existing provenance, generation, exact ACK and bounded application-lifetime cache contracts
+
+Hosted CI and signed publication remain required. Real installed CLI, Windows WebView2, unfiltered native All and native installation/return acceptance remain separately unverified.
+
 ## [0.18.12] - 2026-10-12
 
 - Combine each session's application and lifecycle indicators in one fixed icon slot while keeping the Claude and Codex marks recognizable and all existing states visible

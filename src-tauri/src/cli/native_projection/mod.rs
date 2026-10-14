@@ -1,4 +1,5 @@
 //! Authenticated, read-only native observations. The CLI remains the configuration authority.
+pub(crate) mod cache;
 pub(crate) mod catalog;
 pub(crate) mod diagnostics;
 pub(crate) mod registry;

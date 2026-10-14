@@ -8,6 +8,11 @@ use std::time::{Duration, Instant};
 pub(crate) type ReadResult<T> = Result<T, &'static str>;
 type HistoryObserver<'a> = dyn FnMut(&[u8]) -> ReadResult<bool> + 'a;
 pub(crate) type TitleTail = (Vec<u8>, Vec<u8>, bool);
+/// Codex 头窗口观察结果：头字节、尾字节、是否只观察到文件前缀。
+pub(crate) type CodexHead = (Vec<u8>, Vec<u8>, bool);
+/// Codex 身份与首条用户消息的头窗口上限。实测本机 2131 个 rollout 在 192KiB
+/// 窗口下可覆盖 1769 条（83%）用户的标题来源，总头窗口 IO 约 150MiB。
+const CODEX_HEAD_WINDOW: usize = 192 * 1024;
 #[derive(Clone, Copy)]
 pub(crate) struct Limits {
     pub file_bytes: usize,
@@ -18,10 +23,12 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             file_bytes: 2 * 1024 * 1024,
-            // 真实 Codex 根（约 2100 个 rollout、按年/月/日分层）的一次性元数据采样
-            // 实测消耗约 45 MiB / 4400 entries（首记录超过 4KiB 时会扩展读取）；
-            // 64 MiB / 16384 entries 留出约三成字节余量，5 秒协作截止仍是硬护栏。
-            total_bytes: 64 * 1024 * 1024,
+            // 真实 Codex 根（约 2130 个 rollout，含 archived_sessions）一次完整
+            // 元数据采样：头窗口最深 192KiB，跳过注入上下文后多数文件需读到窗口
+            // 上限附近，实测约 340–366MiB。512MiB 留出余量；稳定根经元数据缓存
+            // 命中后不再重读，预算只在冷扫描/文件变化时消耗。120 秒协作截止与
+            // entries 上限仍是硬护栏。
+            total_bytes: 512 * 1024 * 1024,
             entries: 16384,
         }
     }
@@ -48,7 +55,10 @@ impl Budget {
     }
     pub(crate) fn checkpoint(&self) -> ReadResult<()> {
         // Cooperative deadline between operations; not a promise to interrupt OS filesystem I/O.
-        if self.started.elapsed() > Duration::from_secs(5) {
+        // 首次冷扫描（真实 ~/.codex，2130 个 rollout，含 192KiB 头窗口富化）实测约
+        // 40 秒；其结果写入元数据缓存后，后续扫描与手动刷新只重读变化文件。120 秒
+        // 相对冷扫描留约 3 倍余量，256 MiB / 16384 entries 仍是硬护栏。
+        if self.started.elapsed() > Duration::from_secs(120) {
             return Err("SOURCE_BUDGET_EXCEEDED");
         }
         Ok(())
@@ -57,6 +67,10 @@ impl Budget {
         self.history_metadata_incomplete
     }
     pub(crate) fn unobserved_history_association(&mut self) {
+        self.history_metadata_incomplete = true;
+    }
+    /// 缓存命中不打开文件；行内恢复的「观察不完整」事实由此回到来源级标记。
+    pub(crate) fn retain_history_metadata_incomplete(&mut self) {
         self.history_metadata_incomplete = true;
     }
     pub(crate) fn optional_title_available(&self, header_bytes: usize) -> bool {
@@ -148,10 +162,32 @@ impl Root {
     }
 
     pub(crate) fn current(&self) -> ReadResult<()> {
-        let now = Dir::open_ambient_dir(&self.selected, cap_std::ambient_authority())
-            .map_err(|_| "SOURCE_CHANGED")?;
-        if directory_key(&now)? != self.identity {
-            return Err("SOURCE_CHANGED");
+        #[cfg(windows)]
+        {
+            // Windows 目录能力以 deny delete-sharing 打开（held_root_cannot_
+            // silently_follow_replacement 的 Windows 分支）：持有句柄期间目录
+            // 无法删除或替换，重开路径只能解析到同一目录。直接对持有句柄取
+            // 身份 key 即可；check() 按目录×项目调用本函数，重开路径在实时
+            // 扫描下是 O(目录数×项目数) 次 CreateFile 的主导成本。
+            if directory_key(&self.dir)? != self.identity {
+                return Err("SOURCE_CHANGED");
+            }
+        }
+        #[cfg(unix)]
+        {
+            let now = Dir::open_ambient_dir(&self.selected, cap_std::ambient_authority())
+                .map_err(|_| "SOURCE_CHANGED")?;
+            if directory_key(&now)? != self.identity {
+                return Err("SOURCE_CHANGED");
+            }
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let now = Dir::open_ambient_dir(&self.selected, cap_std::ambient_authority())
+                .map_err(|_| "SOURCE_CHANGED")?;
+            if directory_key(&now)? != self.identity {
+                return Err("SOURCE_CHANGED");
+            }
         }
         Ok(())
     }
@@ -176,6 +212,145 @@ impl Root {
         // Codex stores identity/cwd in its first complete session_meta record.
         // Sample a bounded title only when it is in the same observed chunks.
         self.read_bounded(path, budget, true, 4 * 1024, None)
+    }
+    /// Codex `session_meta` 是第一行（本机实测约 23KiB，内嵌系统提示），而第一条
+    /// 用户消息位于其后的 developer 环境上下文之后（实测中位约 75KiB，p90 约
+    /// 118KiB）。一次打开内读头窗口直到观察者确认「身份 + 首条用户消息」或到
+    /// 窗口上限，再读尾部取最近原生时间戳。窗口未覆盖用户消息时标题未知、行照常
+    /// 列出，绝不因取标题失败而丢弃整行。
+    pub(crate) fn history_codex_metadata(
+        &self,
+        path: &Path,
+        budget: &mut Budget,
+        observe: &mut HistoryObserver<'_>,
+    ) -> ReadResult<Option<CodexHead>> {
+        relative(path, false)?;
+        budget.entry()?;
+        budget.checkpoint()?;
+        self.current()?;
+        let metadata = match self.dir.symlink_metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(read_error(e)),
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("SOURCE_NOT_REGULAR");
+        }
+        let cap = budget.file_bytes.min(budget.bytes_left);
+        if cap == 0 {
+            return Err("SOURCE_TOO_LARGE");
+        }
+        // 尾部观察最多再读 4KiB，必须先从本次上限预留，头窗口与尾部的合计才不
+        // 会突破剩余聚合预算；否则 saturating 扣减会把超额读取伪装成预算恰好
+        // 耗尽（实测 115 字节预算下 233 字节文件仍被完整读出）。
+        let readable = cap.saturating_sub((metadata.len() as usize).min(4096));
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            // A file swapped for a FIFO must not indefinitely block the reader.
+            options.custom_flags(libc::O_NONBLOCK);
+        }
+        let file = self.dir.open_with(path, &options).map_err(read_error)?;
+        let before = file.metadata().map_err(read_error)?;
+        if !before.is_file() {
+            return Err("SOURCE_NOT_REGULAR");
+        }
+
+        // 阶段一：读完整的第一条记录（身份）。真实 session_meta 可达 ~230KiB，
+        // 因此这一步不受头窗口上限约束，只受单文件字节上限保护。
+        let mut head = Vec::new();
+        let chunk = 8 * 1024;
+        while head.iter().all(|byte| *byte != b'\n') {
+            budget.checkpoint()?;
+            let next = chunk.min(readable.saturating_sub(head.len()));
+            if next == 0 {
+                break;
+            }
+            let previous = head.len();
+            let read = (&file).take(next as u64).read_to_end(&mut head);
+            budget.bytes_left = budget.bytes_left.saturating_sub(head.len() - previous);
+            read.map_err(read_error)?;
+            if head.len() == previous {
+                break;
+            }
+        }
+        // 首条记录已完整（缓冲含换行）。阶段一可能多读至块边界，这些字节必须
+        // 保留：游标已越过它们，若在此截断缓冲，阶段二会从游标处继续追加，
+        // 中间的记录被永久跳过（实测曾因此丢失 200 个 rollout 并切断多字节字符）。
+        if !head.contains(&b'\n') {
+            return Err("SOURCE_TOO_LARGE");
+        }
+
+        // 阶段二：继续读到首条用户消息（标题来源）或头窗口上限；观察者确认后即停，
+        // 把本机真实根的头窗口 IO 从约 366MiB 降到约 102MiB。
+        let head_cap = readable.min(CODEX_HEAD_WINDOW);
+        while head.len() < head_cap {
+            budget.checkpoint()?;
+            let next = chunk.min(head_cap - head.len());
+            if next == 0 {
+                break;
+            }
+            let previous = head.len();
+            let read = (&file).take(next as u64).read_to_end(&mut head);
+            budget.bytes_left = budget.bytes_left.saturating_sub(head.len() - previous);
+            read.map_err(read_error)?;
+            if head.len() == previous {
+                break;
+            }
+            if observe(&head)? {
+                break;
+            }
+        }
+        // 只保留完整记录：解析路径要求以换行结尾。
+        if let Some(end) = head.iter().rposition(|byte| *byte == b'\n') {
+            head.truncate(end + 1);
+        }
+
+        let tail_bytes = before.len().min(4096);
+        let mut tail = Vec::new();
+        if tail_bytes > 0 {
+            (&file)
+                .seek(SeekFrom::End(-(tail_bytes as i64)))
+                .map_err(read_error)?;
+            let read = (&file).take(tail_bytes).read_to_end(&mut tail);
+            budget.bytes_left = budget.bytes_left.saturating_sub(tail.len());
+            read.map_err(read_error)?;
+            // 尾部按字节截取可能起始于多字节字符中间；丢弃首个不完整行，保证
+            // tail 是完整行序列，否则 CJK 内容会让整个 tail 无法通过 UTF-8 校验，
+            // 最近时间戳整体丢失。
+            if let Some(position) = tail.iter().position(|byte| *byte == b'\n') {
+                tail.drain(..=position);
+            }
+        }
+        let after = file.metadata().map_err(read_error)?;
+        if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+            return Err("SOURCE_CHANGED");
+        }
+        budget.checkpoint()?;
+        self.current()?;
+        let incomplete = (head.len() as u64) < before.len();
+        if incomplete {
+            budget.history_metadata_incomplete = true;
+        }
+        Ok(Some((head, tail, incomplete)))
+    }
+    /// 无打开的开销：仅取大小与修改时间，供元数据缓存命中判定使用。
+    pub(crate) fn stat(
+        &self,
+        path: &Path,
+    ) -> ReadResult<Option<(u64, Option<std::time::SystemTime>)>> {
+        relative(path, false)?;
+        match self.dir.symlink_metadata(path) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(Some((
+                metadata.len(),
+                metadata.modified().ok().map(|t| t.into_std()),
+            ))),
+            Ok(_) => Ok(None),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(read_error(e)),
+        }
     }
     pub(crate) fn history_until(
         &self,

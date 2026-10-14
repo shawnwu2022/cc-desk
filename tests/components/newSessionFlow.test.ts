@@ -160,3 +160,39 @@ describe('New session flow', () => {
   })
 
 })
+
+// 支持开关关闭的 CLI 从新建菜单隐藏（而非置灰），恢复/更多选项不受影响。
+it('NewSession_DisabledCliLosesMenuEntry_011', async () => {
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled('codex', false)
+  const w = mount(ProjectNode, { props: { project, expanded: true }, global: global(), attachTo: document.body }); wrappers.push(w)
+  await w.get('[data-project-quick-action]').trigger('click'); await flushPromises()
+  expect(document.querySelectorAll('[role=menuitem]')).toHaveLength(3)
+  expect(document.querySelector('[data-item-id=codex]')).toBeNull()
+  expect(document.querySelector('[data-item-id=claude]')).not.toBeNull()
+  expect(document.querySelector('[data-item-id=restore]')).not.toBeNull()
+})
+
+// 默认 CLI 被关闭时，草稿回落到仍启用的工具，不静默开出被屏蔽的会话。
+it('NewSession_DisabledDefaultCliFallsBack_012', async () => {
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled('claude', false)
+  const draft = useNewSessionDraftStore()
+  draft.openChooser(project)
+  expect(draft.cli).toBe('codex')
+})
+
+// 对话框里 draft.cli 停在停用工具上时（如对话框打开期间切换开关），Create 禁用
+// 且提交被拦截；恢复签发同样不带停用 CLI。
+it('NewSession_DisabledCliCannotSubmit_013', async () => {
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled('codex', false)
+  const draft = useNewSessionDraftStore()
+  draft.open(project, 'codex')
+  const w = mount(NewSessionDialog, { props: { active: true }, global: global(), attachTo: document.body }); wrappers.push(w)
+  await flushPromises()
+  const create = document.querySelector('[data-create-session]') as HTMLButtonElement
+  expect(create.disabled).toBe(true)
+  ;(create as HTMLButtonElement).click(); await flushPromises()
+  expect(w.emitted('create')).toBeUndefined()
+})

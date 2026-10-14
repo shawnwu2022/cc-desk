@@ -33,7 +33,7 @@ describe('Exact Native tab occurrence receipts', () => {
     const sessionKey = JSON.stringify(['local', 'claude', 'root-one', 'session'])
     store.tab(tab.tabId)!.sourceSessionKey = sessionKey
     store.applyObservationIdentity(tab.tabId, attempt, 'session')
-    const entry: NativeHistoryEntry = { key: 'one', context: { cli: 'claude', projectId: 'p', projectPath: '/repo', profileId: 'claude', profileRevision: '1' }, sessions: [{ type: 'session', sessionKey, nativeSessionId: 'session', title: 'One', cwd: '/repo', updatedAt: '2026-10-12T00:00:00Z', truncated: false }], loaded: true, loading: false, error: null, requestEpoch: '1' }
+    const entry: NativeHistoryEntry = { key: 'one', context: { cli: 'claude', projectId: 'p', projectPath: '/repo', profileId: 'claude', profileRevision: '1' }, sessions: [{ type: 'session', sessionKey, nativeSessionId: 'session', title: 'One', cwd: '/repo', updatedAt: '2026-10-12T00:00:00Z', truncated: false, archived: false }], loaded: true, loading: false, error: null, requestEpoch: '1' }
     const other = { ...entry, key: 'other', sessions: [{ ...entry.sessions[0], sessionKey: JSON.stringify(['local', 'claude', 'root-two', 'session']) }] }
     const port = createNativeCliAdapter({ tabs: store, history: { all: () => [entry, other] }, runtime: {
       stopTab: async value => { store.applyLaunchStatus(value.tabId, status(value, 'exited')) },

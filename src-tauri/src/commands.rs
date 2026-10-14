@@ -534,3 +534,14 @@ pub(crate) async fn native_list_resources(
 > {
     runtime.projection_read(&webview, &request).await
 }
+
+/// 恢复 CLI 自身归档的会话（当前仅 codex 有该子命令）。归档状态归 CLI 所有，
+/// 这里只请求 CLI 执行 `unarchive`，Desk 不触碰 CLI 的归档文件。
+#[tauri::command]
+pub(crate) async fn native_unarchive_session(
+    webview: tauri::Webview,
+    request: tauri::ipc::Request<'_>,
+    runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,
+) -> std::result::Result<(), crate::cli::types::SafeError> {
+    runtime.unarchive(&webview, &request).await
+}

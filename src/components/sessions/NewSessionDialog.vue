@@ -11,12 +11,18 @@ import AppSelect from '@/components/ui/AppSelect.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import { useNewSessionDraftStore, type NewSessionStartMode } from '@/stores/newSessionDraft'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
+import { useCliSupportStore } from '@/stores/cliSupport'
 import type { CreateUnifiedSessionInput, UnifiedCliKind, UnifiedProjectIdentity } from '@/types/unifiedSession'
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
 const emit = defineEmits<{ create: [input: CreateUnifiedSessionInput]; restore: [request: { project: UnifiedProjectIdentity; cli: UnifiedCliKind; mode: Exclude<NewSessionStartMode, 'new'>; launchConfigId?: string; launchConfigRevision?: string }] }>()
 const { t } = useI18n()
 const draft = useNewSessionDraftStore()
 const profiles = useCliProfilesStore()
+const support = useCliSupportStore()
+const toolOptions = computed(() => [
+  support.isEnabled('claude') ? { value: 'claude' as const, label: 'Claude Code' } : null,
+  support.isEnabled('codex') ? { value: 'codex' as const, label: 'Codex CLI' } : null,
+].filter(option => option !== null))
 const error = ref('')
 const formId = `new-session-form-${++nextFormId}`
 const configurations = computed(() => [{ value: '', label: t('newSessionAutomaticConfig') }, ...profiles.byCli[draft.cli].map(profile => ({ value: profile.id, label: profile.name }))])
@@ -30,6 +36,9 @@ watch(() => draft.cli, () => { draft.launchConfigId = '' })
 function format(value: string) { try { draft.setArgvFormat(value as 'lines' | 'json'); error.value = '' } catch { error.value = 'newSessionArgvFormatError' } }
 function submit() {
   if (!props.active || !draft.visible || !draft.project) return
+  // 选项隐藏后 draft.cli 可能仍停在停用工具上（如对话框打开期间切换开关），
+  // 提交前按支持开关再拦一次。
+  if (!support.isEnabled(draft.cli)) return
   try {
     if (draft.startMode !== 'new') emit('restore', { project: { ...draft.project }, cli: draft.cli, mode: draft.startMode, ...(draft.launchConfigId && selected.value ? { launchConfigId: selected.value.id, launchConfigRevision: selected.value.revision } : {}) })
     else emit('create', draft.toInput())
@@ -42,7 +51,7 @@ function submit() {
     <form :id="formId" class="new-session-fields" @submit.prevent="submit">
       <fieldset><legend>{{ t('newSessionBasic') }}</legend>
         <AppInput :model-value="draft.project?.projectPath ?? ''" :label="t('newSessionProject')" readonly />
-        <AppSelect v-model="draft.cli" :label="t('newSessionTool')" :options="[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }]" />
+        <AppSelect v-model="draft.cli" :label="t('newSessionTool')" :options="toolOptions" />
         <AppSelect v-model="draft.startMode" :label="t('newSessionStartMode')" :options="[
           { value: 'new', label: t('newSession') }, { value: 'history', label: t('newSessionRestore') },
           { value: 'resume-picker', label: t('newSessionNativePicker') }, { value: 'resume-id', label: t('newSessionById') }]" />
@@ -64,7 +73,7 @@ function submit() {
       <InlineNotice v-if="error" kind="error" :message="t(error)" />
     </form>
     <template #footer>
-      <AppButton data-create-session type="submit" :form="formId" variant="primary">{{ t(draft.startMode === 'new' ? 'newSessionCreate' : 'newSessionContinueRestore') }}</AppButton>
+      <AppButton data-create-session type="submit" :form="formId" variant="primary" :disabled="!support.isEnabled(draft.cli)">{{ t(draft.startMode === 'new' ? 'newSessionCreate' : 'newSessionContinueRestore') }}</AppButton>
     </template>
   </AppDialog>
 </template>

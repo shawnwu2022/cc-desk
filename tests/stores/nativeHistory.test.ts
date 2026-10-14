@@ -78,7 +78,7 @@ describe('native history cache', () => {
   // 分页保留去重后的固定失败码，部分观察不能证明历史不存在。
   it('History_RetainPageReadFailures_004', async () => {
     const s = source('codex', 'p', '1', 'x')
-    const item = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Known' }
+    const item = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Known' , archived: false }
     clients.push({ scope: vi.fn().mockResolvedValue(s), read: vi.fn()
       .mockResolvedValueOnce({ state: 'ready', items: [item], hasMore: true, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_UNSUPPORTED'] })
       .mockResolvedValueOnce({ state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_UNSUPPORTED', 'SOURCE_INVALID'] }) })
@@ -105,7 +105,7 @@ describe('native history cache', () => {
     clients.push({ scope: vi.fn().mockResolvedValue(s), read: vi.fn().mockReturnValue(firstRead) })
     clients.push({ scope: vi.fn().mockResolvedValue(s), read: vi.fn().mockResolvedValue({
       source: s, resourceKind: 'history', requestEpoch: '2', observedAt: '2', state: 'ready', reason: null,
-      items: [{ type: 'session', sessionKey: '["local","codex","/root","new"]', nativeSessionId: 'new', title: 'New', truncated: false, cwd: '/repo', updatedAt: '2026-09-29T00:00:00Z' }], hasMore: false,
+      items: [{ type: 'session', sessionKey: '["local","codex","/root","new"]', nativeSessionId: 'new', title: 'New', truncated: false, cwd: '/repo', updatedAt: '2026-09-29T00:00:00Z' , archived: false }], hasMore: false,
     }) })
     const store = useNativeHistoryStore()
     const input = { cli: 'codex' as const, profileId: 'codex-main', profileRevision: '7', projectId: 'project-1', projectPath: '/repo' }
@@ -114,7 +114,7 @@ describe('native history cache', () => {
     await p2
     firstResolve({
       source: s, resourceKind: 'history', requestEpoch: '1', observedAt: '1', state: 'ready', reason: null,
-      items: [{ type: 'session', sessionKey: '["local","codex","/root","old"]', nativeSessionId: 'old', title: 'Old', truncated: false, cwd: '/repo', updatedAt: '2026-09-28T00:00:00Z' }], hasMore: false,
+      items: [{ type: 'session', sessionKey: '["local","codex","/root","old"]', nativeSessionId: 'old', title: 'Old', truncated: false, cwd: '/repo', updatedAt: '2026-09-28T00:00:00Z' , archived: false }], hasMore: false,
     })
     await p1
     expect(store.get(input)?.sessions.map(x => x.nativeSessionId)).toEqual(['new'])
@@ -144,7 +144,7 @@ describe('native history cache', () => {
 
 it('History_CompletePaginationRemainsPositiveOnly_011', async () => {
   const s = source('codex', 'p', '1', 'x')
-  const item = (id: string) => ({ type: 'session', sessionKey: `key-${id}`, nativeSessionId: id, title: id })
+  const item = (id: string) => ({ type: 'session', sessionKey: `key-${id}`, nativeSessionId: id, title: id, truncated: false, archived: false })
   const read = vi.fn()
     .mockResolvedValueOnce({ state: 'ready', observedAt: '100', items: [item('a')], hasMore: true })
     .mockResolvedValueOnce({ state: 'ready', observedAt: '100', items: [item('b')], hasMore: false })
@@ -160,7 +160,7 @@ it('History_CompletePaginationRemainsPositiveOnly_011', async () => {
 it('History_ExpiredContinuationCannotAdmitCachedPresence_012', async () => {
   const s = source('codex', 'p', '1', 'x')
   const context = { cli: 'codex' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
-  const known = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Known' }
+  const known = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Known' , archived: false }
   clients.push({ scope: vi.fn().mockResolvedValue(s), read: vi.fn().mockResolvedValue({ state: 'ready', items: [known], hasMore: false }) })
   const read = vi.fn()
     .mockResolvedValueOnce({ state: 'ready', items: [known], hasMore: true })
@@ -177,7 +177,7 @@ it('History_ExpiredContinuationCannotAdmitCachedPresence_012', async () => {
 
 it('History_SnapshotExpiryRestartsWholeObservationOnce_013', async () => {
   const s = source('codex', 'p', '1', 'x')
-  const item = (id: string) => ({ type: 'session', sessionKey: `key-${id}`, nativeSessionId: id, title: id })
+  const item = (id: string) => ({ type: 'session', sessionKey: `key-${id}`, nativeSessionId: id, title: id, truncated: false, archived: false })
   const read = vi.fn()
     .mockResolvedValueOnce({ state: 'ready', observedAt: '10', items: [item('old-page')], hasMore: true })
     .mockResolvedValueOnce({ state: 'unavailable', reason: 'SOURCE_SNAPSHOT_EXPIRED', items: [], hasMore: false })
@@ -194,7 +194,7 @@ it('History_SnapshotExpiryRestartsWholeObservationOnce_013', async () => {
 
 it('History_RepeatedSnapshotExpiryIsBoundedAndFailsClosed_014', async () => {
   const s = source('codex', 'p', '1', 'x')
-  const item = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Known' }
+  const item = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Known' , archived: false }
   const read = vi.fn()
     .mockResolvedValueOnce({ state: 'ready', items: [item], hasMore: true })
     .mockResolvedValueOnce({ state: 'unavailable', reason: 'SOURCE_SNAPSHOT_EXPIRED', items: [], hasMore: false })
@@ -210,7 +210,7 @@ it('History_RepeatedSnapshotExpiryIsBoundedAndFailsClosed_014', async () => {
 
 it('History_UnknownTitleKeepsExactLastObservation_015', async () => {
   const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
-  const original = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Observed native title', titleUnknown: false }
+  const original = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Observed native title', titleUnknown: false , archived: false }
   const uncertain = { ...original, title: 'Untitled', titleUnknown: true }
   for (const item of [original, uncertain, uncertain, { ...uncertain, title: 'Untitled', titleUnknown: false }]) clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')), read: vi.fn().mockResolvedValue({ state: 'ready', items: [item], hasMore: false, historyMetadataIncomplete: true }) })
   const history = useNativeHistoryStore()
@@ -222,7 +222,7 @@ it('History_UnknownTitleKeepsExactLastObservation_015', async () => {
 
 it('History_UnknownTitleNeverCrossesRootOrSessionIdentity_016', async () => {
   const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
-  const original = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Observed native title' }
+  const original = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Observed native title' , archived: false }
   for (const [root, item] of [['/root', original], ['/root', { ...original, nativeSessionId: 'other', title: 'Untitled', titleUnknown: true }], ['/different', { ...original, title: 'Untitled', titleUnknown: true }]] as const) clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x', root)), read: vi.fn().mockResolvedValue({ state: 'ready', items: [item], hasMore: false, historyMetadataIncomplete: true }) })
   const history = useNativeHistoryStore()
   await history.load(context)
@@ -243,7 +243,7 @@ it('History_ThreeScopesStrictBridgePagination_017', async () => {
     const response = { source: payload.source, resourceKind: 'history', requestEpoch: payload.requestEpoch, observedAt: payload.requestEpoch, state: 'ready', reason: null, items: [], hasMore: false }
     if (project === 'x' && payload.offset === 1 && !expired) { expired = true; return { ...response, state: 'unavailable', reason: 'SOURCE_SNAPSHOT_EXPIRED' } }
     const id = `${project}-${payload.offset === 0 ? 'a' : 'b'}-${payload.requestEpoch}`
-    return { ...response, items: [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', '/root', id]), nativeSessionId: id, title: id, truncated: false, cwd: `/repo/${project}`, updatedAt: null }], hasMore: payload.offset === 0 }
+    return { ...response, items: [{ type: 'session', sessionKey: JSON.stringify(['local', 'codex', '/root', id]), nativeSessionId: id, title: id, truncated: false, archived: false, cwd: `/repo/${project}`, updatedAt: null }], hasMore: payload.offset === 0 }
   })
   const contexts = ['x', 'y', 'z'].map(projectId => ({ cli: 'codex' as const, profileId: 'p', profileRevision: '1', projectId, projectPath: `/repo/${projectId}` }))
   for (const _context of contexts) clients.push(createProjectionClient({ instanceId: 'instance_1', invoke }))
@@ -261,7 +261,7 @@ it('History_ThreeScopesStrictBridgePagination_017', async () => {
 
 it('History_IncompletePromptFallbackKeepsHigherNativeTitle_018', async () => {
   const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
-  const base = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Known AI title', titleSource: 'ai', truncated: true, metadataIncomplete: true, updatedAt: null }
+  const base = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Known AI title', titleSource: 'ai', truncated: true, metadataIncomplete: true, updatedAt: null , archived: false }
   for (const [item, partial] of [[base, true], [{ ...base, title: 'First user fallback', titleSource: 'prompt' }, true], [{ ...base, title: 'New AI title' }, true], [{ ...base, title: 'Complete prompt title', titleSource: 'prompt', truncated: false, metadataIncomplete: false }, false]] as const) clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')), read: vi.fn().mockResolvedValue({ state: 'ready', items: [item], hasMore: false, historyMetadataIncomplete: partial }) })
   const history = useNativeHistoryStore()
   await history.load(context)
@@ -274,7 +274,7 @@ it('History_IncompletePromptFallbackKeepsHigherNativeTitle_018', async () => {
 // source status cannot turn this EOF-complete observation into a title fallback.
 it('History_CompleteLongPromptReplacesPriorTitleDespiteOtherPartialRows_019', async () => {
   const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
-  const base = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Old AI title', titleSource: 'ai', truncated: true }
+  const base = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Old AI title', titleSource: 'ai', truncated: true , archived: false }
   for (const item of [base, { ...base, title: 'Complete long prompt', titleSource: 'prompt', metadataIncomplete: false }]) clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')), read: vi.fn().mockResolvedValue({ state: 'ready', items: [item], hasMore: false, historyMetadataIncomplete: true }) })
   const history = useNativeHistoryStore()
   await history.load(context)
@@ -294,7 +294,7 @@ it('History_IsolateOfflineProject_020', async () => {
     return { source: payload.source, resourceKind: 'history', requestEpoch: payload.requestEpoch, observedAt: '1',
       state: 'ready', reason: null, hasMore: false,
       items: [{ type: 'session', projectId: 'healthy', sessionKey: '["local","codex","/root","session-healthy"]',
-        nativeSessionId: 'session-healthy', title: 'Healthy', truncated: false, cwd: '/repo/healthy', updatedAt: null }] }
+        nativeSessionId: 'session-healthy', title: 'Healthy', truncated: false, cwd: '/repo/healthy', updatedAt: null , archived: false }] }
   })
   const client = createProjectionClient({ instanceId: 'instance_1', invoke })
   clients.push(client, client, client)
@@ -318,7 +318,7 @@ it('History_Batch65Projects_021', async () => {
       state: 'ready', reason: null, hasMore: false,
       items: payload.source.target.projectIds.map((projectId: string) => ({ type: 'session', projectId,
         sessionKey: JSON.stringify(['local', 'codex', '/root', `session-${projectId}`]), nativeSessionId: `session-${projectId}`,
-        title: projectId, truncated: false, cwd: `/repo/${projectId}`, updatedAt: null })) }
+        title: projectId, truncated: false, archived: false, cwd: `/repo/${projectId}`, updatedAt: null })) }
   })
   const client = createProjectionClient({ instanceId: 'instance_1', invoke })
   clients.push(client, client)
@@ -341,7 +341,7 @@ it('History_LastBatchFailure_022', async () => {
       state: 'ready', reason: null, hasMore: false,
       items: payload.source.target.projectIds.map((projectId: string) => ({ type: 'session', projectId,
         sessionKey: JSON.stringify(['local', 'codex', '/root', projectId]), nativeSessionId: projectId,
-        title: projectId, truncated: false, cwd: `/repo/${projectId}`, updatedAt: null })) }
+        title: projectId, truncated: false, archived: false, cwd: `/repo/${projectId}`, updatedAt: null })) }
   })
   const client = createProjectionClient({ instanceId: 'instance_1', invoke })
   clients.push(client, client)

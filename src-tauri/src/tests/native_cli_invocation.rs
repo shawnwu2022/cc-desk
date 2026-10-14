@@ -89,6 +89,12 @@ fn resume(locator: &str) -> LaunchAction {
     }
 }
 
+fn unarchive(locator: &str) -> LaunchAction {
+    LaunchAction::Unarchive {
+        native_session_id: locator.into(),
+    }
+}
+
 #[test]
 fn D09_Golden_AllSupportedActions_001() {
     let cases = [
@@ -112,6 +118,12 @@ fn D09_Golden_AllSupportedActions_001() {
         ),
         (CliKind::Claude, resume(LOCATOR), vec!["--resume", LOCATOR]),
         (CliKind::Codex, resume(LOCATOR), vec!["resume", LOCATOR]),
+        // CLI 自身归档的会话必须由 CLI 取消归档：codex 拒绝 resume 归档会话。
+        (
+            CliKind::Codex,
+            unarchive(LOCATOR),
+            vec!["unarchive", LOCATOR],
+        ),
     ];
     for (cli, action, expected) in cases {
         let fixture = Fixture::new(cli, action);
@@ -131,6 +143,8 @@ fn D09_Unsupported_ShellResumeAndClaudeAll_002() {
         (CliKind::Shell, picker(ResumeScope::CurrentProject)),
         (CliKind::Shell, picker(ResumeScope::All)),
         (CliKind::Claude, picker(ResumeScope::All)),
+        // 只有 codex 有会话归档语义；claude 桌面端不存在对应子命令。
+        (CliKind::Claude, unarchive(LOCATOR)),
     ] {
         let fixture = Fixture::new(cli, action);
         let snapshot = fixture.freeze();
@@ -517,4 +531,71 @@ fn D09_Environment_NonUnicodeOsValuesSurvive_018() {
     let invocation = build_invocation(&fixture.request, &snapshot).unwrap();
     assert_eq!(invocation.environment(), &fixture.inherited);
     assert!(invocation.cwd() == std::path::Path::new(&fixture.request.launch_cwd));
+}
+
+// 恢复 CLI 归档会话的请求只带身份与项目上下文，不接受 claude，也不接受被
+// 当作选项注入的 locator；转换出的 LaunchRequest 必须与冻结路径完全一致。
+#[test]
+fn D09_UnarchiveRequest_ValidatesAndConverts_019() {
+    use crate::cli::types::UnarchiveRequest;
+    let request = UnarchiveRequest {
+        request_id: "request-one".into(),
+        cli: CliKind::Codex,
+        profile_id: "profile-one".into(),
+        expected_profile_revision: WireU64::parse("9").unwrap(),
+        project_path: "C:\\repo".into(),
+        native_session_id: LOCATOR.into(),
+    };
+    request.validate().unwrap();
+    let launch = request.to_launch_request();
+    assert_eq!(launch.cli, CliKind::Codex);
+    assert_eq!(launch.launch_cwd, "C:\\repo");
+    assert_eq!(
+        launch.expected_profile_revision,
+        request.expected_profile_revision
+    );
+    assert_eq!(launch.action, unarchive(LOCATOR));
+    assert!(launch.extra_args.is_empty());
+    launch.validate().unwrap();
+    // 一次性命令没有 tab/run 归属，但形状必须与启动请求等价。
+    assert_eq!(launch.request_id, request.request_id);
+    assert_ne!(launch.tab_id, "");
+    assert_ne!(launch.run_id, "");
+
+    let claude = UnarchiveRequest {
+        cli: CliKind::Claude,
+        ..request.clone()
+    };
+    assert_eq!(claude.validate().unwrap_err().code, "INVALID_REQUEST");
+    assert_eq!(claude.validate().unwrap_err().field.as_deref(), Some("cli"));
+
+    for (field, value) in [
+        ("requestId", ""),
+        ("profileId", ""),
+        ("projectPath", ""),
+        ("nativeSessionId", ""),
+    ] {
+        let mut broken = request.clone();
+        match field {
+            "requestId" => broken.request_id = value.into(),
+            "profileId" => broken.profile_id = value.into(),
+            "projectPath" => broken.project_path = value.into(),
+            _ => broken.native_session_id = value.into(),
+        }
+        let failure = broken.validate().unwrap_err();
+        assert_eq!(failure.code, "INVALID_REQUEST");
+        assert_eq!(failure.field.as_deref(), Some(field));
+    }
+
+    // 选项形式或含控制字符的 locator 仍被拒绝，且错误不回声原文。
+    for locator in ["--last", "\nsecret"] {
+        let mut broken = request.clone();
+        broken.native_session_id = locator.into();
+        broken.validate().unwrap();
+        let fixture = Fixture::new(CliKind::Codex, unarchive(locator));
+        let snapshot = fixture.freeze();
+        let failure = build_invocation(&fixture.request, &snapshot).unwrap_err();
+        assert_eq!(failure.code, "INVALID_REQUEST");
+        assert_eq!(failure.field.as_deref(), Some("action.nativeSessionId"));
+    }
 }

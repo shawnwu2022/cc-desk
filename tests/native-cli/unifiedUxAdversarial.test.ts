@@ -45,7 +45,7 @@ function project(path: string, id = 'project'): RegisteredProject {
 }
 function history(cli: 'claude' | 'codex', root: string, id: string, path: string, title = id): NativeHistorySession {
   return { type: 'session', sessionKey: JSON.stringify(['local', cli, root, id]), nativeSessionId: id, title,
-    truncated: false, cwd: path, updatedAt: '2026-09-30T12:00:00Z' }
+    truncated: false, archived: false, cwd: path, updatedAt: '2026-09-30T12:00:00Z' }
 }
 function reply(request: ReadRequest, items: ResourceItem[] = [], hasMore = false): ProjectionResult {
   return { source: request.source, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch,

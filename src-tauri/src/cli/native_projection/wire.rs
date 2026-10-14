@@ -179,6 +179,8 @@ pub(crate) enum ResourceItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         metadata_incomplete: Option<bool>,
         truncated: bool,
+        /// 代表 rollout 位于 CLI 自身的归档容器（如 Codex archived_sessions/）。
+        archived: bool,
         cwd: Option<String>,
         updated_at: Option<String>,
     },

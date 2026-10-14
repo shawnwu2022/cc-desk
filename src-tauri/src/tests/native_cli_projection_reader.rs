@@ -974,6 +974,10 @@ fn HistoryMetadata_LongHeaderAndCutRecordRemainBounded_003() {
     assert_eq!(items[0]["nativeSessionId"], "long-header");
     assert_eq!(items[0]["title"], "long header task");
     assert_eq!(items[0]["truncated"], true);
+    // 真实 codex rollout 的字符串值可能含裸换行，把一条记录拆成无法解析的片段。
+    // 因此头窗口内无法解析的行只跳过；只要身份头有效，行仍按该身份列出。实测
+    // compact/fork 续写的 rollout 会内嵌其他 thread 的 session_meta 且 codex 自身
+    // 仍按首条 meta（文件名 id）resume，因此后续 meta 跳过而非拒绝整个文件。
     for invalid in [
         "{broken}\n",
         "{\"type\":\"session_meta\",\"payload\":{\"id\":\"different\"}}\n",
@@ -983,18 +987,17 @@ fn HistoryMetadata_LongHeaderAndCutRecordRemainBounded_003() {
             "sessions/2026/10/04/rollout-long.jsonl",
             &format!("{header}\n{invalid}{}", "x".repeat(200 * 1024)),
         );
-        assert!(list(
+        let history = list(
             t.path(),
             CliKind::Codex,
             None,
             ResourceKind::History,
             None,
-            None
+            None,
         )
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .is_empty());
+        .unwrap();
+        assert_eq!(history[0]["nativeSessionId"], "long-header");
+        assert_eq!(history[0]["title"], "Untitled");
         assert_eq!(
             list(
                 t.path(),

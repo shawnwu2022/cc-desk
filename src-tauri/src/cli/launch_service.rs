@@ -14,12 +14,13 @@ use crate::platform::launch::resolve_process;
 use crate::platform::owned_pty::OwnedPty;
 use crate::terminal_transport::OutputFrame;
 use crate::version_history::maintenance::{PreparingStart, RuntimeKind};
-use parking_lot::RwLock;
+use parking_lot::{Condvar, Mutex, RwLock};
 use portable_pty::PtySize;
 use std::cell::{Cell, RefCell};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub(crate) struct FrozenPty {
     pub(crate) pty: OwnedPty,
@@ -39,13 +40,48 @@ pub(crate) trait RunSupervisor: Send + Sync {
     ) -> Result<(), SafeError>;
 }
 
+#[derive(Default)]
+struct CommandOwners {
+    active: Mutex<usize>,
+    settled: Condvar,
+}
+
+struct CommandOwner {
+    owners: Arc<CommandOwners>,
+    settled: bool,
+}
+impl CommandOwners {
+    fn register(self: &Arc<Self>) -> Result<CommandOwner, SafeError> {
+        let mut active = self.active.lock();
+        // 与 launch receipt 同量级的硬上限，关闭等待不维护无界 owner 清单。
+        if *active >= 4096 {
+            return Err(error("REGISTRY_CAPACITY"));
+        }
+        *active += 1;
+        Ok(CommandOwner {
+            owners: self.clone(),
+            settled: false,
+        })
+    }
+}
+impl Drop for CommandOwner {
+    fn drop(&mut self) {
+        // 只有真实 reap 或已证实未创建 child 才解除；panic/未知状态继续阻止清静证明。
+        if self.settled {
+            *self.owners.active.lock() -= 1;
+            self.owners.settled.notify_all();
+        }
+    }
+}
+
 pub(crate) struct LaunchService {
     coordinator: LaunchCoordinator<NativeRun>,
     repository: WorkspaceRepository,
     inherited: Option<EnvMap>,
     supervisor: Option<Arc<dyn RunSupervisor>>,
     observer: Option<Arc<crate::observer_host::ObserverHost>>,
-    shutting_down: RwLock<bool>,
+    shutting_down: Arc<RwLock<bool>>,
+    command_owners: Arc<CommandOwners>,
 }
 impl LaunchService {
     pub(crate) fn new(
@@ -59,7 +95,8 @@ impl LaunchService {
             inherited,
             supervisor,
             observer: None,
-            shutting_down: RwLock::new(false),
+            shutting_down: Arc::new(RwLock::new(false)),
+            command_owners: Arc::new(CommandOwners::default()),
         }
     }
     pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
@@ -241,6 +278,181 @@ impl LaunchService {
 
     pub(crate) fn begin_shutdown(&self) {
         *self.shutting_down.write() = true;
+    }
+
+    /// 普通 run 与一次性 command 分别保有 child；退出必须等待两类 owner 收口。
+    pub(crate) fn wait_for_commands(&self) {
+        const SHUTDOWN_REAP_TIMEOUT: Duration = Duration::from_secs(5);
+        let started = Instant::now();
+        let mut active = self.command_owners.active.lock();
+        while *active != 0 {
+            let remaining = SHUTDOWN_REAP_TIMEOUT.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                log::warn!("native command shutdown timed out with unresolved owners");
+                return;
+            }
+            self.command_owners.settled.wait_for(&mut active, remaining);
+        }
+    }
+
+    /// 一次性 CLI 子命令：复用启动完全相同的 profile/环境冻结与 argv 构造，但
+    /// 不注册 run、不建立 document/输出路由、不返回 tab。用于 `codex unarchive`
+    /// 这类必须由 CLI 自己执行的会话状态变更——Desk 不得搬动 CLI 的归档文件。
+    /// 子进程仍走 PTY 与既有 admission 门禁，因此窗口/维护冻结语义保持一致；
+    /// 输出丢弃，仅以退出状态判定成功。
+    pub(crate) fn run_command(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+    ) -> Result<(), SafeError> {
+        self.registry().check_caller(caller)?;
+        if *self.shutting_down.read() {
+            return Err(error("RUN_SUPERVISOR_STOPPING"));
+        }
+        let profile = self.repository.get_profile(&request.profile_id)?;
+        let legacy =
+            profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+        let inherited = self.inherited_environment()?;
+        let snapshot = freeze_launch(
+            request,
+            &profile,
+            caller,
+            &FreezeContext {
+                inherited: &inherited,
+                terminal: &EnvMap::new(),
+                legacy: legacy.as_ref(),
+                // 一次性命令不安装 observer：它没有 run 身份可供授权回调核验。
+                observer: None,
+            },
+        )?;
+        let invocation = build_invocation(request, &snapshot)?;
+        let spec = resolve_process(&invocation)?;
+        let mut admission = self.admit_start()?;
+        let registry = self.registry().clone();
+        let caller = caller.clone();
+        let shutting_down = self.shutting_down.clone();
+        let command_owners = self.command_owners.clone();
+        let size = PtySize {
+            cols: request.cols,
+            rows: request.rows,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<Result<(), SafeError>>(1);
+        // worker 先建立、child 后创建；线程创建失败时从未产生无 owner 的 child。
+        std::thread::Builder::new()
+            .name("native-command-owner".into())
+            .spawn(move || {
+                let mut response = Some(sender);
+                let mut reply = |result| {
+                    if let Some(sender) = response.take() {
+                        let _ = sender.send(result);
+                    }
+                };
+                let shutdown = shutting_down.read();
+                if *shutdown {
+                    reply(Err(error("RUN_SUPERVISOR_STOPPING")));
+                    return;
+                }
+                // 与 Ticket::begin 相同的提交点：撤销先到则不创建 child；提交后
+                // document/回执消失也不撤销后台保有的精确 child。
+                if let Err(failure) = registry.check_caller(&caller) {
+                    reply(Err(failure));
+                    return;
+                }
+                // read guard 仍在：begin_shutdown 不可能先越过门禁再漏掉此 owner。
+                let mut command_owner = match command_owners.register() {
+                    Ok(owner) => owner,
+                    Err(failure) => {
+                        reply(Err(failure));
+                        return;
+                    }
+                };
+                let pty = match OwnedPty::spawn_admitted(&spec, size, admission.begin_creation()) {
+                    Ok(pty) => pty,
+                    Err(failure) => {
+                        command_owner.settled = true;
+                        reply(Err(failure));
+                        return;
+                    }
+                };
+                // shutdown 的读门禁直到此 worker 已保有 child 才释放。
+                drop(shutdown);
+                let reader_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let reader_state = reader_failed.clone();
+                let mut stopping = match pty.take_reader() {
+                    Ok(mut reader) => {
+                        match std::thread::Builder::new()
+                            .name("native-command-drain".into())
+                            .spawn(move || {
+                                let mut discard = [0u8; 4096];
+                                loop {
+                                    match reader.read(&mut discard) {
+                                        Ok(0) => break,
+                                        Ok(_) => {}
+                                        Err(_) => {
+                                            reader_state
+                                                .store(true, std::sync::atomic::Ordering::Release);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }) {
+                            Ok(_) => false,
+                            Err(_) => {
+                                reply(Err(error("COMMAND_FAILED")));
+                                true
+                            }
+                        }
+                    }
+                    Err(failure) => {
+                        reply(Err(failure));
+                        true
+                    }
+                };
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    match pty.try_wait() {
+                        Ok(Some(status)) => {
+                            command_owner.settled = true;
+                            reply(if status.success() {
+                                Ok(())
+                            } else {
+                                Err(error("COMMAND_FAILED"))
+                            });
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(failure) => {
+                            reply(Err(failure));
+                            stopping = true;
+                        }
+                    }
+                    if !stopping {
+                        let failure = if *shutting_down.read() {
+                            Some(error("RUN_SUPERVISOR_STOPPING"))
+                        } else if reader_failed.load(std::sync::atomic::Ordering::Acquire) {
+                            Some(error("COMMAND_FAILED"))
+                        } else if Instant::now() >= deadline {
+                            Some(error("COMMAND_TIMEOUT"))
+                        } else {
+                            None
+                        };
+                        if let Some(failure) = failure {
+                            reply(Err(failure));
+                            stopping = true;
+                        }
+                    }
+                    if stopping {
+                        // 错误回执不是退出证明。终止/等待失败仍保留原始 handle 与
+                        // admission ticket，定间隔重试到真实 reap，不再 blocking wait。
+                        let _ = pty.terminate_root();
+                    }
+                    std::thread::sleep(Duration::from_millis(if stopping { 100 } else { 25 }));
+                }
+            })
+            .map_err(|_| error("PROCESS_START_FAILED"))?;
+        receiver.recv().map_err(|_| error("LAUNCH_STATE_UNKNOWN"))?
     }
 
     pub(crate) fn access(

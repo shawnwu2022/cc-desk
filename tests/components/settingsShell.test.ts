@@ -307,3 +307,22 @@ describe('Unified settings shell', () => {
   })
 
 })
+
+// CLI 支持以图标表示：点击切换启用/停用，aria-pressed 与灰态同步，持久化进 localStorage。
+it('Settings_CliSupportIconTogglesPersist_020', async () => {
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  const wrapper = render()
+  await flushPromises()
+  const claude = wrapper.find('[data-cli-support=claude]')
+  const codex = wrapper.find('[data-cli-support=codex]')
+  expect(claude.attributes('aria-pressed')).toBe('true')
+  expect(codex.classes()).not.toContain('cli-support-toggle--off')
+  await codex.trigger('click'); await flushPromises()
+  const support = useCliSupportStore()
+  expect(support.isEnabled('codex')).toBe(false)
+  expect(wrapper.find('[data-cli-support=codex]').attributes('aria-pressed')).toBe('false')
+  expect(wrapper.find('[data-cli-support=codex]').classes()).toContain('cli-support-toggle--off')
+  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: false })
+  await wrapper.find('[data-cli-support=codex]').trigger('click'); await flushPromises()
+  expect(support.isEnabled('codex')).toBe(true)
+})

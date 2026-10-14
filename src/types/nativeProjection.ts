@@ -12,7 +12,7 @@ export interface ReadRequest {
   query?: string | null; sessionId?: string | null; limit?: number; offset?: number
 }
 export type ResourceItem =
-  | { type: 'session'; sessionKey: string; nativeSessionId: string; projectId?: string; title: string; titleUnknown?: boolean; titleSource?: 'prompt' | 'ai' | 'custom'; metadataIncomplete?: boolean; truncated: boolean; cwd: string | null; updatedAt: string | null }
+  | { type: 'session'; sessionKey: string; nativeSessionId: string; projectId?: string; title: string; titleUnknown?: boolean; titleSource?: 'prompt' | 'ai' | 'custom'; metadataIncomplete?: boolean; truncated: boolean; archived: boolean; cwd: string | null; updatedAt: string | null }
   | { type: 'message'; sessionKey: string; nativeSessionId: string; role: string; text: string; truncated: boolean }
   | { type: 'setting'; name: string; value: string; origin: string }
   | { type: 'mcp'; name: string; transport: string; origin: string }
@@ -27,3 +27,8 @@ export interface ProjectionResult {
   historyReadFailures?: HistoryReadFailure[]
 }
 export type HistoryReadFailure = 'SOURCE_UNSUPPORTED' | 'SOURCE_INVALID' | 'SOURCE_INVALID_TEXT' | 'SOURCE_TOO_LARGE' | 'SOURCE_READ_FAILED'
+/** 恢复 CLI 自身归档会话的最小请求；归档位置由 CLI 管理，Desk 只转达意图。 */
+export interface UnarchiveRequest {
+  requestId: string; cli: 'codex'; profileId: string; expectedProfileRevision: string
+  projectPath: string; nativeSessionId: string
+}
