@@ -23,7 +23,10 @@ impl Stamps {
     pub(crate) fn from_system(len: u64, modified: Option<SystemTime>) -> Option<Self> {
         let (secs, nanos) = match modified?.duration_since(UNIX_EPOCH) {
             Ok(d) => (d.as_secs() as i64, d.subsec_nanos()),
-            Err(e) => (-(e.duration().as_secs() as i64), e.duration().subsec_nanos()),
+            Err(e) => (
+                -(e.duration().as_secs() as i64),
+                e.duration().subsec_nanos(),
+            ),
         };
         Some(Self { len, secs, nanos })
     }
@@ -171,7 +174,11 @@ mod tests {
     use super::*;
 
     fn stamps(len: u64, secs: i64) -> Stamps {
-        Stamps { len, secs, nanos: 0 }
+        Stamps {
+            len,
+            secs,
+            nanos: 0,
+        }
     }
 
     fn metadata(id: &str) -> CachedMetadata {

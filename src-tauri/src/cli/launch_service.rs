@@ -46,7 +46,7 @@ pub(crate) struct LaunchService {
     inherited: Option<EnvMap>,
     supervisor: Option<Arc<dyn RunSupervisor>>,
     observer: Option<Arc<crate::observer_host::ObserverHost>>,
-    shutting_down: RwLock<bool>,
+    shutting_down: Arc<RwLock<bool>>,
 }
 impl LaunchService {
     pub(crate) fn new(
@@ -60,7 +60,7 @@ impl LaunchService {
             inherited,
             supervisor,
             observer: None,
-            shutting_down: RwLock::new(false),
+            shutting_down: Arc::new(RwLock::new(false)),
         }
     }
     pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
@@ -254,11 +254,13 @@ impl LaunchService {
         caller: &CallerIdentity,
         request: &LaunchRequest,
     ) -> Result<(), SafeError> {
+        self.registry().check_caller(caller)?;
         if *self.shutting_down.read() {
             return Err(error("RUN_SUPERVISOR_STOPPING"));
         }
         let profile = self.repository.get_profile(&request.profile_id)?;
-        let legacy = profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+        let legacy =
+            profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
         let inherited = self.inherited_environment()?;
         let snapshot = freeze_launch(
             request,
@@ -275,40 +277,120 @@ impl LaunchService {
         let invocation = build_invocation(request, &snapshot)?;
         let spec = resolve_process(&invocation)?;
         let mut admission = self.admit_start()?;
-        let pty = OwnedPty::spawn_admitted(
-            &spec,
-            PtySize {
-                cols: request.cols,
-                rows: request.rows,
-                pixel_width: 0,
-                pixel_height: 0,
-            },
-            admission.begin_creation(),
-        )?;
-        // 子进程的输出必须被读走，否则 PTY 缓冲写满会阻塞它；内容本身无意义。
-        if let Ok(mut reader) = pty.take_reader() {
-            std::thread::spawn(move || {
-                let mut discard = [0u8; 4096];
-                while matches!(reader.read(&mut discard), Ok(read) if read > 0) {}
-            });
-        }
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            if let Some(status) = pty.try_wait()? {
-                return if status.success() {
-                    Ok(())
-                } else {
-                    Err(error("COMMAND_FAILED"))
+        let registry = self.registry().clone();
+        let caller = caller.clone();
+        let shutting_down = self.shutting_down.clone();
+        let size = PtySize {
+            cols: request.cols,
+            rows: request.rows,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<Result<(), SafeError>>(1);
+        // worker 先建立、child 后创建；线程创建失败时从未产生无 owner 的 child。
+        std::thread::Builder::new()
+            .name("native-command-owner".into())
+            .spawn(move || {
+                let mut response = Some(sender);
+                let mut reply = |result| {
+                    if let Some(sender) = response.take() {
+                        let _ = sender.send(result);
+                    }
                 };
-            }
-            if Instant::now() >= deadline {
-                // 先终止再回收：留下未知状态的一次性子进程会阻塞后续维护冻结。
-                let _ = pty.terminate_root();
-                let _ = pty.wait();
-                return Err(error("COMMAND_TIMEOUT"));
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
+                let shutdown = shutting_down.read();
+                if *shutdown {
+                    reply(Err(error("RUN_SUPERVISOR_STOPPING")));
+                    return;
+                }
+                // 与 Ticket::begin 相同的提交点：撤销先到则不创建 child；提交后
+                // document/回执消失也不撤销后台保有的精确 child。
+                if let Err(failure) = registry.check_caller(&caller) {
+                    reply(Err(failure));
+                    return;
+                }
+                let pty = match OwnedPty::spawn_admitted(&spec, size, admission.begin_creation()) {
+                    Ok(pty) => pty,
+                    Err(failure) => {
+                        reply(Err(failure));
+                        return;
+                    }
+                };
+                // shutdown 的读门禁直到此 worker 已保有 child 才释放。
+                drop(shutdown);
+                let reader_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let reader_state = reader_failed.clone();
+                let mut stopping = match pty.take_reader() {
+                    Ok(mut reader) => {
+                        match std::thread::Builder::new()
+                            .name("native-command-drain".into())
+                            .spawn(move || {
+                                let mut discard = [0u8; 4096];
+                                loop {
+                                    match reader.read(&mut discard) {
+                                        Ok(0) => break,
+                                        Ok(_) => {}
+                                        Err(_) => {
+                                            reader_state
+                                                .store(true, std::sync::atomic::Ordering::Release);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }) {
+                            Ok(_) => false,
+                            Err(_) => {
+                                reply(Err(error("COMMAND_FAILED")));
+                                true
+                            }
+                        }
+                    }
+                    Err(failure) => {
+                        reply(Err(failure));
+                        true
+                    }
+                };
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    match pty.try_wait() {
+                        Ok(Some(status)) => {
+                            reply(if status.success() {
+                                Ok(())
+                            } else {
+                                Err(error("COMMAND_FAILED"))
+                            });
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(failure) => {
+                            reply(Err(failure));
+                            stopping = true;
+                        }
+                    }
+                    if !stopping {
+                        let failure = if *shutting_down.read() {
+                            Some(error("RUN_SUPERVISOR_STOPPING"))
+                        } else if reader_failed.load(std::sync::atomic::Ordering::Acquire) {
+                            Some(error("COMMAND_FAILED"))
+                        } else if Instant::now() >= deadline {
+                            Some(error("COMMAND_TIMEOUT"))
+                        } else {
+                            None
+                        };
+                        if let Some(failure) = failure {
+                            reply(Err(failure));
+                            stopping = true;
+                        }
+                    }
+                    if stopping {
+                        // 错误回执不是退出证明。终止/等待失败仍保留原始 handle 与
+                        // admission ticket，定间隔重试到真实 reap，不再 blocking wait。
+                        let _ = pty.terminate_root();
+                    }
+                    std::thread::sleep(Duration::from_millis(if stopping { 100 } else { 25 }));
+                }
+            })
+            .map_err(|_| error("PROCESS_START_FAILED"))?;
+        receiver.recv().map_err(|_| error("LAUNCH_STATE_UNKNOWN"))?
     }
 
     pub(crate) fn access(

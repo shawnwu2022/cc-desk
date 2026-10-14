@@ -343,9 +343,10 @@ impl Root {
     ) -> ReadResult<Option<(u64, Option<std::time::SystemTime>)>> {
         relative(path, false)?;
         match self.dir.symlink_metadata(path) {
-            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-                Ok(Some((metadata.len(), metadata.modified().ok().map(|t| t.into_std()))))
-            }
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(Some((
+                metadata.len(),
+                metadata.modified().ok().map(|t| t.into_std()),
+            ))),
             Ok(_) => Ok(None),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(read_error(e)),

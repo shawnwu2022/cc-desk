@@ -1,7 +1,7 @@
+use super::super::cache;
 use super::*;
 use serde_json::Value;
 use std::collections::BTreeSet;
-use super::super::cache;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum TitlePriority {
@@ -251,9 +251,10 @@ fn codex_session_names(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let Some(id) = value["id"].as_str().filter(|id| {
-            !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control)
-        }) else {
+        let Some(id) = value["id"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
+        else {
             continue;
         };
         let Some(name) = value["thread_name"]
@@ -380,7 +381,9 @@ fn cached_transcript(metadata: cache::CachedMetadata) -> Transcript {
 /// 后即可停止读取。逐行解析失败只跳过该行，不使整次观察失败。若首个
 /// session_meta 已表明该 rollout 由 subagent 或自动流程创建，则不再继续读取，
 /// 并把该结论写入 `auto`（这类会话不进历史列表，其头窗口无需展开）。
-pub(super) fn codex_metadata_probe(auto: &std::cell::Cell<bool>) -> impl FnMut(&[u8]) -> ReadResult<bool> + '_ {
+pub(super) fn codex_metadata_probe(
+    auto: &std::cell::Cell<bool>,
+) -> impl FnMut(&[u8]) -> ReadResult<bool> + '_ {
     let mut line_start = 0usize;
     let mut scanned = 0usize;
     let mut seen_meta = false;
@@ -461,15 +464,13 @@ fn is_injected_user_context(text: &str) -> bool {
 /// codex 的自动评审、代码评审与安全扫描插件把整段任务以 role=user 写进 rollout。
 /// 这些会话的 thread_source 通常已标为自动来源，但由 `codex exec`/SDK 驱动时仍会
 /// 记为 user，因此这里再按实测前缀识别：开头是这些包装、且窗口内没有任何真实用户
-/// 消息的会话视为非用户创建。已知前缀来自本机真实根（132 个这类会话中 76 个仅含
-/// 包装）；未知包装最坏只会作为会话名显示，不会被误判为自动会话。
+/// 消息的会话视为非用户创建。只保留明确任务脚手架的前缀；未知包装最坏作为
+/// 会话名显示。普通人工文件引用、评审和限制说明不作为来源判据。
+// 文件引用、人工评审或读取限制可由普通用户直接输入，不能作为自动来源证据。
 fn is_automation_wrapper(text: &str) -> bool {
-    const WRAPPERS: [&str; 8] = [
+    const WRAPPERS: [&str; 5] = [
         "The following is the Codex agent history",
-        "Review the code changes against the base branch",
         "## Code review guidelines:",
-        "IMPORTANT: Do NOT read",
-        "# Files mentioned by the user:",
         "Run one Standard security scan",
         "You are the single serial semantic reducer",
         "You are one independent discovery worker",
@@ -501,7 +502,11 @@ fn display_title(raw: &str) -> String {
 /// 因此逐行解析失败只跳过该行。身份只取首条 session_meta（与文件名、
 /// `codex resume <id>` 一致）；compact/fork 续写的 rollout 可能内嵌其他 thread 的
 /// meta，后续出现一律跳过，不视为来源级错误。
-fn parse_codex_metadata(head: &str, tail: Option<&str>, observed_completely: bool) -> ReadResult<Transcript> {
+fn parse_codex_metadata(
+    head: &str,
+    tail: Option<&str>,
+    observed_completely: bool,
+) -> ReadResult<Transcript> {
     let mut id = None;
     let mut cwd = None;
     let mut title = None;
@@ -567,7 +572,9 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>, observed_completely: boo
         // 证明也不该直接列出——由调用方按省略披露处理。
         auto_session: auto_session
             || (wrapper_only && title_priority.is_none() && observed_completely),
-        unconfirmable_wrapper_only: wrapper_only && title_priority.is_none() && !observed_completely,
+        unconfirmable_wrapper_only: wrapper_only
+            && title_priority.is_none()
+            && !observed_completely,
         source_path: String::new(),
         observation_bytes: 0,
     })

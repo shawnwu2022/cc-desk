@@ -55,9 +55,11 @@
 - `vitest.config.ts` 的 Node/进程文件清单是显式分类；其余普通测试进入 DOM，视觉 fixture 用独立配置。保持测试发现全量、文件隔离、断言和压力工作量；需要浏览器全局的文件不能移入 Node。`tests/config/testProjects.test.ts` 核对真实发现库存与分组。
 - 修改后先跑最小适用检查。涉及多模块时补充类型检查、受影响组与必要完整 gate；检查通过后仅在新变更、失败或证据缺口需要时扩大或重复。全量 Rust 本地可能很慢，不作为每次修改默认环。
 - 普通 CI 仍必须执行原库存与 required checks：Windows Rust 编译四个原始 harness 后确定性分 16 片，`Rust checks` 聚合 producer/static/全片及名称、忽略集合、原始计数。18 条 Job-free 专项按原政策披露未验证，不增排除；timeout/部分输出不算通过，source SHA/run/attempt 证据不得混用。详见 [测试编写原则](docs/测试编写原则.md) 与 [CI 性能](docs/ci-performance.md)。
+- Release 的 signed build 仍只依赖精确 main admission；preflight 等全部 build 成功后才等待普通 CI，publication 仍依赖 preflight 与 build。原 120 分钟 CI wait 从该 step 开始，异常 CI 诊断可能额外延迟构建耗时；来源、覆盖和签名门禁不变。
 - Roundtrip debug 两场景仅在同一 job 首次完整构建成功且前端存在后复用前端；第二次只覆盖 `beforeBuildCommand`。两次 Rust 构建、严格 Clippy、disabled binding 和原始字节恢复不变，不跨 job/源码复用 `dist`。
 - 独立 Node 粘贴验收编译真实生产源码；共享 AST 编译器仅将 Vite 的 `import.meta.env.DEV` 设为 `false`，不改正文或其他开关。宿主剪贴板隔离不能替代真实策略，详见 [粘贴契约](docs/paste-framing.md)。
 - Rust 权重校准须使用本次编译识别的 executable、完整原始名称及源码/工具链记录；fixture 初始化失败、timeout 和并行输出观察时间均不能当作单例耗时。受限环境核对临时目录准入，保留失败记录，不改 ACL/token、Job 门禁或测试断言。持有 Windows 目录句柄的 fixture 先释放句柄、最后释放 `TempDir`，不得放宽生产共享或身份校验来清理测试树。
+- 所有版本先将经审查和 CI 验证的变更合并 main，再从对应精确 main 提交发布；合并后清理已合并、冗余及临时本地/远程分支。独有工作须先保留并验证可恢复引用或 bundle，不能静默丢弃。
 - 发布只接受经授权的 protected-main promotion：同一精确源码与 workflow run/attempt 的完整 CI/coverage、产物字节和三平台实际签名。开始任何发布/恢复操作前必须阅读 [发布流程](docs/release-process.md) 及项目约束的版本/发布章节；不能靠本地摘要、普通套件成功或构建候选绕过门禁。D20 真实 CLI Layer-C 单独记录。
 
 ## 按任务阅读

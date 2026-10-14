@@ -68,6 +68,32 @@ No changed timeout is presented as a speedup. The signed Release profile,
 production safety assertions, all native exclusions/ignore classifications,
 matrix platforms, exact selectors, and suite inventories remain unchanged.
 
+## Release preflight runner occupation follow-up (2026-10-10)
+
+The minimal follow-up changes only `preflight.needs` to `[admission, build]`.
+All three signed builds still depend only on the exact protected-main admission;
+publication still depends on `[preflight, build]`. Full preflight now starts
+after successful builds, avoiding an idle CI-polling runner during those builds.
+No script, compiler/profile, test inventory, version or provenance rule changes.
+
+On released main `a02f944f8bb4933fd7ac22cf437ae0e27c4a5526`, Release
+[38055870540](https://github.com/shawnwu2022/cc-desk/actions/runs/38055870540)
+attempt 1 started preflight at 13:29:07 UTC; its last signed build ended at
+13:38:48. Main CI
+[38055870683](https://github.com/shawnwu2022/cc-desk/actions/runs/38055870683)
+ended at 13:41:02. Delaying preflight would avoid approximately 9m41s of runner
+occupation on that timeline, subject to scheduling and polling-phase variation.
+This is a counterfactual runner-cost estimate, not a measured CI speedup or a
+claim that ordinary PR CI is under ten minutes. Freed shared-runner capacity
+may reduce queues when release and main CI overlap; actual results remain pending.
+
+When signed builds determine the critical path, preflight setup/verification
+becomes additional serial work (about 18s in that observed job). Failed/cancelled
+builds skip preflight and publication. The existing 120-minute CI wait starts
+when its step runs; a stalled CI can therefore be diagnosed up to one build
+duration later (the unchanged build timeout is 60 minutes). The accepted tradeoff
+does not relax exact main/SHA/run/attempt coverage or same-run signature gates.
+
 ## Local supporting-workflow validation
 
 - The new build-admission behavioral tests were observed failing before the gate

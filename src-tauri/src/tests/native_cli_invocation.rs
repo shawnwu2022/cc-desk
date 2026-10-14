@@ -119,7 +119,11 @@ fn D09_Golden_AllSupportedActions_001() {
         (CliKind::Claude, resume(LOCATOR), vec!["--resume", LOCATOR]),
         (CliKind::Codex, resume(LOCATOR), vec!["resume", LOCATOR]),
         // CLI 自身归档的会话必须由 CLI 取消归档：codex 拒绝 resume 归档会话。
-        (CliKind::Codex, unarchive(LOCATOR), vec!["unarchive", LOCATOR]),
+        (
+            CliKind::Codex,
+            unarchive(LOCATOR),
+            vec!["unarchive", LOCATOR],
+        ),
     ];
     for (cli, action, expected) in cases {
         let fixture = Fixture::new(cli, action);
@@ -546,7 +550,10 @@ fn D09_UnarchiveRequest_ValidatesAndConverts_019() {
     let launch = request.to_launch_request();
     assert_eq!(launch.cli, CliKind::Codex);
     assert_eq!(launch.launch_cwd, "C:\\repo");
-    assert_eq!(launch.expected_profile_revision, request.expected_profile_revision);
+    assert_eq!(
+        launch.expected_profile_revision,
+        request.expected_profile_revision
+    );
     assert_eq!(launch.action, unarchive(LOCATOR));
     assert!(launch.extra_args.is_empty());
     launch.validate().unwrap();
@@ -560,10 +567,7 @@ fn D09_UnarchiveRequest_ValidatesAndConverts_019() {
         ..request.clone()
     };
     assert_eq!(claude.validate().unwrap_err().code, "INVALID_REQUEST");
-    assert_eq!(
-        claude.validate().unwrap_err().field.as_deref(),
-        Some("cli")
-    );
+    assert_eq!(claude.validate().unwrap_err().field.as_deref(), Some("cli"));
 
     for (field, value) in [
         ("requestId", ""),

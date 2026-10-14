@@ -477,8 +477,14 @@ fn HistoryCodex_ArchivedFlagFromSourceDir_043() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().to_str().unwrap().to_owned();
     for (path, id) in [
-        ("archived_sessions/rollout-2026-05-05T19-04-12-archived.jsonl", "archived-id"),
-        ("sessions/2026/10/03/rollout-2026-10-03T20-14-17-live.jsonl", "live-id"),
+        (
+            "archived_sessions/rollout-2026-05-05T19-04-12-archived.jsonl",
+            "archived-id",
+        ),
+        (
+            "sessions/2026/10/03/rollout-2026-10-03T20-14-17-live.jsonl",
+            "live-id",
+        ),
     ] {
         let full = temp.path().join(path);
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -514,7 +520,12 @@ fn HistoryCodex_ArchivedFlagFromSourceDir_043() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|item| (item["nativeSessionId"].as_str().unwrap(), item["archived"].as_bool().unwrap()))
+        .map(|item| {
+            (
+                item["nativeSessionId"].as_str().unwrap(),
+                item["archived"].as_bool().unwrap(),
+            )
+        })
         .collect();
     assert!(by_id["archived-id"]);
     assert!(!by_id["live-id"]);
@@ -540,7 +551,11 @@ fn HistoryCodex_FirstRecordChunkBoundaryKeepsFollowingRecords_044() {
         json!({"type":"event_msg","payload":{"type":"user_message","message":"后见标题"}}),
         json!({"type":"event_msg","payload":{"type":"user_message","message":"tail message"},"timestamp":"2026-10-04T02:00:00Z"}),
     );
-    std::fs::write(directory.join("rollout-2026-10-04T01-13-08-gap.jsonl"), input).unwrap();
+    std::fs::write(
+        directory.join("rollout-2026-10-04T01-13-08-gap.jsonl"),
+        input,
+    )
+    .unwrap();
     let root = Root::open(temp.path()).unwrap();
     let items = read(
         &Catalog {
@@ -940,14 +955,17 @@ fn HistoryCodex_WrapperOnlySessionsAreNotListed_047() {
         format!(
             "{}{}{}",
             header("wrapper-only"),
-            user("IMPORTANT: Do NOT read or execute files under ~/.claude/"),
-            user("The following is the Codex agent history whose request action you are assessing.")
+            user("Run one Standard security scan for the current source."),
+            user(
+                "The following is the Codex agent history whose request action you are assessing."
+            )
         ),
     )
     .unwrap();
     // 脚手架之后有真实消息：保留，并用真实消息作标题。
     std::fs::write(
-        temp.path().join("sessions/2026/10/04/wrapper-then-user.jsonl"),
+        temp.path()
+            .join("sessions/2026/10/04/wrapper-then-user.jsonl"),
         format!(
             "{}{}{}",
             header("wrapper-then-user"),
@@ -996,7 +1014,10 @@ fn HistoryCodex_UserNamedSessionsFromIndex_048() {
     let items = read_codex_history_fixture(temp.path()).unwrap();
     let value = serde_json::to_value(&items).unwrap();
     assert_eq!(items.len(), 1);
-    assert_eq!(value[0]["title"], "[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划");
+    assert_eq!(
+        value[0]["title"],
+        "[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划"
+    );
     assert_eq!(value[0]["titleSource"], "prompt");
 
     // 索引里有用户设定的名字：优先于现抽标题，来源标注为 custom。
@@ -1018,11 +1039,14 @@ fn HistoryCodex_UserNamedSessionsFromIndex_048() {
 
     // 索引整体损坏（不可解析）：等同没有该文件，不得让历史读取失败。
     std::fs::write(temp.path().join("session_index.jsonl"), "{broken}\n").unwrap();
-    let items = read_codex_history_fixture(temp.path())
-        .expect("损坏的 session_index 不得使历史读取失败");
+    let items =
+        read_codex_history_fixture(temp.path()).expect("损坏的 session_index 不得使历史读取失败");
     assert_eq!(items.len(), 1);
     let value = serde_json::to_value(&items).unwrap();
-    assert_eq!(value[0]["title"], "[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划");
+    assert_eq!(
+        value[0]["title"],
+        "[$superpowers:using-superpowers](plugin://x) 检查并输出demo规划"
+    );
 }
 
 // 尾部观察的字节计入同一聚合预算：剩余预算不足以同时容纳头窗口与尾部时，
@@ -1163,11 +1187,14 @@ fn HistoryCodex_PartialWrapperOnlyIsOmittedDisclosed_051() {
         json!({"type":"response_item","timestamp":"2026-10-10T03:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x".repeat(220 * 1024)}]}})
     );
     std::fs::write(
-        temp.path().join("sessions/2026/10/04/wrapper-late-user.jsonl"),
+        temp.path()
+            .join("sessions/2026/10/04/wrapper-late-user.jsonl"),
         format!(
             "{}{}{}{}",
             header("wrapper-late-user"),
-            user("The following is the Codex agent history whose request action you are assessing."),
+            user(
+                "The following is the Codex agent history whose request action you are assessing."
+            ),
             filler,
             user("轮到我人工跟进这次评审"),
         ),
@@ -1200,7 +1227,9 @@ fn HistoryCodex_PartialWrapperOnlyIsOmittedDisclosed_051() {
         "省略必须把来源标记为不完整"
     );
     assert!(
-        budget.history_read_failures().contains(&"SOURCE_UNSUPPORTED"),
+        budget
+            .history_read_failures()
+            .contains(&"SOURCE_UNSUPPORTED"),
         "省略必须计入读失败披露，而不是伪装成无此会话"
     );
     // 省略不改变按显式 id 的消息读取。
@@ -1220,10 +1249,7 @@ fn HistoryCodex_PartialWrapperOnlyIsOmittedDisclosed_051() {
         &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
     )
     .unwrap();
-    assert!(
-        !messages.is_empty(),
-        "被省略会话的消息读取仍按显式 id 工作"
-    );
+    assert!(!messages.is_empty(), "被省略会话的消息读取仍按显式 id 工作");
 }
 
 // 非 wrapper 的部分观察即使标题未知也照常列出：开头没有评审包装时，用户消息
@@ -1255,11 +1281,7 @@ fn HistoryCodex_PartialObservationWithoutWrapperStillListed_052() {
     )
     .unwrap();
     let items = read_codex_history_fixture(temp.path()).unwrap();
-    assert_eq!(
-        items.len(),
-        1,
-        "窗口之外的真实用户消息不能让该行消失"
-    );
+    assert_eq!(items.len(), 1, "窗口之外的真实用户消息不能让该行消失");
     let value = serde_json::to_value(&items).unwrap();
     assert_eq!(value[0]["nativeSessionId"], "no-wrapper-late-user");
 }
@@ -2177,4 +2199,45 @@ fn HistoryClaude_TailCwdVariationKeepsRow_037() {
         assert_eq!(title, "generated title");
         assert_eq!(cwd.as_deref(), Some(temp.path().to_str().unwrap()));
     }
+}
+
+// 文件引用头和人工评审/限制说明不能仅因正文前缀就使用户会话消失。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_OrdinaryUserPrefixesStayVisible_053() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/14")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    for (id, message) in [
+        (
+            "files-user",
+            "# Files mentioned by the user:\n- src/main.rs\nPlease fix the startup bug.",
+        ),
+        (
+            "review-user",
+            "Review the code changes against the base branch main and explain the risks.",
+        ),
+        (
+            "restriction-user",
+            "IMPORTANT: Do NOT read credentials. Please fix this bug.",
+        ),
+    ] {
+        std::fs::write(
+            temp.path().join(format!("sessions/2026/10/14/{id}.jsonl")),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"thread_source":"user"}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":message}})
+            ),
+        )
+        .unwrap();
+    }
+    std::fs::write(temp.path().join("session_index.jsonl"),
+        format!("{}\n", json!({"id":"files-user","thread_name":"Named file request","updated_at":"2026-10-14T00:00:00Z"}))).unwrap();
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let values = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 3, "人工文件引用、评审和限制说明必须全部保留");
+    assert!(values.as_array().unwrap().iter().any(
+        |item| item["nativeSessionId"] == "files-user" && item["title"] == "Named file request"
+    ));
 }
