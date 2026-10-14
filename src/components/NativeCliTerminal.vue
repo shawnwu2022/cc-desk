@@ -8,6 +8,8 @@
 </template>
 
 <script setup lang="ts">
+import type { InputWriteAdmission } from '@/terminal/inputAdmission'
+
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Channel } from '@tauri-apps/api/core'
 import { Terminal } from '@xterm/xterm'
@@ -267,10 +269,14 @@ function dropPaths(paths: string[]): boolean {
 }
 
 // claude /rename 是 CLI 自身的会话改名机制；注入后名字随 catalog.refresh 从 CLI 回流。
-async function renameTab(title: string): Promise<void> {
+async function renameTab(title: string, admission?: InputWriteAdmission): Promise<void> {
   if (!props.active || !inputEnabled || !binding) throw new Error('NATIVE_RENAME_UNAVAILABLE')
   const attempt = currentAttempt()
-  await binding.sendUserText(`/rename ${title}\r`).catch(error => { markInputFailure(attempt); throw error })
+  await binding.sendUserText(`/rename ${title}\r`, admission).catch(error => {
+    // dispatch 前撤销不是输入暂停；卸载后也不写回旧终端诊断。
+    if (!disposed && !(error instanceof Error && error.message === 'STALE_SESSION_ATTEMPT')) markInputFailure(attempt)
+    throw error
+  })
 }
 
 // Do not use xterm disableStdin for visibility: it also suppresses parser replies.

@@ -106,6 +106,7 @@ export default {
   errorSessionNotResumable: "This session does not yet have a verified history record to archive. Its terminal has been kept.",
   feedbackArchived: "Session archived",
   feedbackRenamed: "Session renamed",
+  feedbackRenameSent: "Rename request written to the CLI terminal; CLI acceptance is unverified",
   feedbackSessionOpenTimeNotSaved: "The session opened, but its list order could not be saved. The order may change after restarting the app.",
   feedbackCopied: "Session ID copied",
   feedbackConfigurationDeleted: "Launch configuration deleted",

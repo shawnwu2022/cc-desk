@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { InputWriteAdmission } from '@/terminal/inputAdmission'
+
 import { computed, inject, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
@@ -36,7 +38,7 @@ async function startTab(tabId: string) {
 }
 async function stopTab(tabId: string) { await requireTerminal().stopTab(tabId) }
 async function restartTab(tabId: string) { await requireTerminal().restartTab(tabId) }
-async function renameTab(tabId: string, title: string) { await requireTerminal().renameTab(tabId, title) }
+async function renameTab(tabId: string, title: string, admission?: InputWriteAdmission) { await requireTerminal().renameTab(tabId, title, admission) }
 function dropPaths(paths: string[]) { terminalRef.value?.dropPaths(paths) }
 async function recover() { await requireTerminal().recover() }
 function focus() { if (props.visible) terminalRef.value?.focus() }

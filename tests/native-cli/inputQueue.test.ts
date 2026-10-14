@@ -427,3 +427,12 @@ describe('D16 terminal host source classification', () => {
     expect(Array.from(event.bytes)).toEqual(Array.from(utf8('中')))
   })
 })
+
+// 卸载后的迟到 producer 不得重新入账，也不得发送已撤销的 reservation。
+it('InputQueue_DisposeLateProducerKeepsZeroBytes_016', async () => {
+  const paste = deferred<Uint8Array>()
+  const queue = createInputIntentQueue({ runId: 'run', generation: 1, currentTarget: () => ({ runId: 'run', generation: 1, modeEpoch: '1' }), send: () => { throw new Error('MUST_NOT_SEND') } })
+  const reserved = queue.reserveAsync({ source: 'user-paste', modeEpoch: '1', produce: () => paste.promise })
+  queue.dispose(); paste.resolve(utf8('late')); await reserved.settled
+  expect(queue.snapshot()).toMatchObject({ queued: 0, queuedBytes: 0 })
+})

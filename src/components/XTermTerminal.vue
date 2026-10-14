@@ -13,6 +13,8 @@
 </template>
 
 <script setup lang="ts">
+import type { InputWriteAdmission } from '@/terminal/inputAdmission'
+
 import { computed, ref, reactive, watch, onMounted, onUnmounted, nextTick, markRaw, toRaw, type ComponentPublicInstance } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -968,7 +970,7 @@ async function stopTab(tabId: string) {
   }
 }
 async function recover() { throw new Error('LEGACY_RECOVERY_UNSUPPORTED') }
-async function renameTab(tabId: string, title: string) {
+async function renameTab(tabId: string, title: string, admission: InputWriteAdmission = {}) {
   if (!title.trim() || /[\x00-\x1f\x7f]/.test(title)) throw new Error('SESSION_TITLE_REQUIRED')
   const tab = sessionStore.tabs.get(tabId)
   if (!tab) throw new Error('LEGACY_SESSION_NOT_FOUND')
@@ -976,7 +978,12 @@ async function renameTab(tabId: string, title: string) {
   const instance = terminalInstances.get(tabId)
   // 无法注入必须报错：静默成功会让 adapter 误判改名已送达并清除 GUI 覆盖名，导致改名丢失。
   if (tab.status !== 'running' || !ptyId || instance?.ptyId !== ptyId) throw new Error('LEGACY_RENAME_UNAVAILABLE')
-  await enqueueLegacyInput(instance, `/rename ${title}\r`)
+  const queue = legacyInputQueues.get(instance.term)
+  if (!queue) throw new Error('LEGACY_RENAME_UNAVAILABLE')
+  await queue.enqueue(`/rename ${title}\r`, undefined, { ...admission, beforeDispatch: () => {
+    if (!visible.value || sessionStore.tabs.get(tabId) !== tab || tab.ptyId !== ptyId || tab.status !== 'running') throw new Error('STALE_SESSION_ATTEMPT')
+    admission.beforeDispatch?.()
+  } })
 }
 watch(() => props.visible, async () => {
   for (const id of terminalInstances.keys()) needsFit.add(id)

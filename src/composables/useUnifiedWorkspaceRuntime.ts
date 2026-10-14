@@ -272,7 +272,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
             if (!tab || app.isProjectAdmissionBlocked(tab.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
             return requireHost().startLegacy(id)
           }, stopTab: id => requireHost().stopLegacy(id),
-          restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title) => requireHost().renameLegacy(id, title),
+          restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title, admission) => requireHost().renameLegacy(id, title, admission),
         } }),
       createNativeCliAdapter({ tabs: native, history, metadata: projects, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
         cliUnarchive: { unarchive: (context, nativeSessionId) => {
@@ -284,7 +284,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         } },
         runtime: { createTab: createNativeTab, restartTab: restartNative,
           stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)),
-          renameTab: (tabId, title) => requireHost().renameNative(tabId, title) } }),
+          renameTab: (tabId, title, admission) => requireHost().renameNative(tabId, title, admission) } }),
     ])
   }
 
@@ -411,7 +411,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     await catalog.resumeCatalogSession(frozen, canAdmit, () => claimFeedback(frozen))
   }
 
-  async function dispatch(request: WorkspaceRequest, claimResumeFeedback: (target: UnifiedSession) => void, resumeTarget?: UnifiedSession): Promise<boolean> {
+  async function dispatch(request: WorkspaceRequest, claimResumeFeedback: (target: UnifiedSession) => void, resumeTarget?: UnifiedSession): Promise<boolean | 'rename-written'> {
     if (request.kind === 'refresh') { await refresh(); return true }
     if (request.kind === 'rename-cancel') { catalog.cancelRename(request.sessionId); return true }
     if (request.kind === 'new-session') {
@@ -460,8 +460,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     if (request.kind === 'restore-archive') { await catalog.restoreArchivedSession(session.id); return true }
     if (request.kind === 'rename') {
-      await catalog.renameSession(session.id, request.title, true)
-      return true
+      const result = await catalog.renameSession(session.id, request.title, true)
+      return result === 'input-written' ? 'rename-written' : true
     }
     if (!('action' in request)) return false
     const action = request.action
@@ -543,9 +543,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     retryRequest = null
     claimedSequence = sequence // Claim before async work; never retry on reactive changes.
     try {
-      if (await dispatch(request, claimResumeFeedback, retryTarget)) {
+      const dispatched = await dispatch(request, claimResumeFeedback, retryTarget)
+      if (dispatched) {
         shell.clearWorkspaceRequest(sequence)
-        const key = request.kind === 'rename' ? 'feedbackRenamed'
+        const key = request.kind === 'rename' ? (dispatched === 'rename-written' ? 'feedbackRenameSent' : 'feedbackRenamed')
           : 'action' in request && request.action === 'copy-session-id' ? 'feedbackCopied'
           : 'action' in request && request.action === 'archive' && !catalog.sessionConfirmation ? 'feedbackArchived' : null
         if (key) catalog.publishActionSuccess(current, key)

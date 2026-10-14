@@ -1,8 +1,10 @@
+import type { InputWriteAdmission } from '@/terminal/inputAdmission'
 import type { HistorySession, TerminalTab } from '@/stores/session'
 import type {
   CreateUnifiedSessionInput,
   ResumeUnifiedSessionInput,
   SessionAdapter,
+  SessionRenameResult,
   UnifiedSession,
 } from '@/types/unifiedSession'
 import { normalizePath } from '@/utils/path'
@@ -43,7 +45,7 @@ export interface LegacyClaudeRuntimePort {
   startTab(tabId: string): Promise<void>
   stopTab(tabId: string): Promise<void>
   restartTab(tabId: string): Promise<void>
-  renameTab(tabId: string, title: string): Promise<void>
+  renameTab(tabId: string, title: string, admission?: InputWriteAdmission): Promise<void>
 }
 
 export interface LegacyClaudeAdapterDeps {
@@ -339,7 +341,8 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     acceptedOpens.delete(tab.tabId)
   }
 
-  async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
+  async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void, signal?: AbortSignal): Promise<SessionRenameResult> {
+    let inputWritten = false
     const value = title.trim()
     // 与 metadata 写入同一契约：运行态注入不再比 stopped 兜底更宽松，避免 201 字符标题
     // 在运行中成功、停止后却被下游拒绝。
@@ -352,10 +355,14 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
       if (tab.status === 'running') {
         // 恢复 CLI 自身改名机制：/rename 注入运行中的 PTY；GUI 覆盖名清除，标题随 refresh 回流。
         // 注入路由到 XTermTerminal.renameTab，无法注入时其抛错中止，GUI 覆盖名不会被误清。
-        await deps.runtime.renameTab(tab.tabId, value)
-        // 注入已送达 CLI：issued 绑定真实提交点，之后切换会话不得把这次改名当未发出操作撤销，
-        // 否则覆盖名清理被拒、旧名永久残留。写后过期仍由 clear 的 requireCurrent 抛出。
-        onIssued?.()
+        await deps.runtime.renameTab(tab.tabId, value, { signal, beforeDispatch: () => {
+          if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+          // dispatch 已开始但写入尚待确认；切换选择不能再撤销该操作的收尾。
+          onIssued?.()
+        } })
+        inputWritten = true
+        // 此时只证明 PTY 完整写入，不证明 CLI 已执行 /rename。
+        if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
         if (deps.metadata) await clearSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), current)
       } else {
         // 未运行的激活 tab 没有 CLI 可写，显示名继续由 GUI metadata 兜底。
@@ -369,6 +376,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
       if (!row || !deps.metadata) throw new Error('SESSION_NOT_FOUND')
       await saveSessionDisplayName(deps.metadata, projectHistorySession(history.projectPath, row), value, current, onIssued)
     }
+    return inputWritten ? 'input-written' : 'display-name-saved'
   }
 
   async function archiveSession(id: string, canContinue = () => true): Promise<void> {

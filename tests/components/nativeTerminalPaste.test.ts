@@ -320,3 +320,25 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(io.binding.sendUserText).not.toHaveBeenCalled()
   })
 })
+
+// dispatch 前取消只撤销操作，不能把仍正常的输入队列诊断成 paused。
+it('Rename_CancelledAdmissionDoesNotPauseTerminal_011', async () => {
+  useCliProfilesStore().profiles[0].cli = 'claude'
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await vi.advanceTimersByTimeAsync(0)
+  io.binding.sendUserText.mockRejectedValueOnce(new Error('STALE_SESSION_ATTEMPT'))
+  await expect((wrapper.vm as any).renameTab('New name')).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  expect(tabs.tab(tab.tabId)?.errorCode).toBeNull()
+})
+
+// 真正写入未确认仍保留错误边界，不因为过滤取消而吞掉传输失败。
+it('Rename_UnconfirmedWriteRetainsPauseDiagnostic_012', async () => {
+  useCliProfilesStore().profiles[0].cli = 'claude'
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await vi.advanceTimersByTimeAsync(0)
+  io.binding.sendUserText.mockRejectedValueOnce(new Error('NATIVE_INPUT_PAUSED'))
+  await expect((wrapper.vm as any).renameTab('New name')).rejects.toThrow('NATIVE_INPUT_PAUSED')
+  expect(tabs.tab(tab.tabId)?.errorCode).toBe('NATIVE_INPUT_PAUSED')
+})

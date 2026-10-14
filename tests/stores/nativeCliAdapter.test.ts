@@ -425,7 +425,7 @@ describe('Native rename routes through CLI injection', () => {
     const claudeTab = tab({ tabId: 'cc-1', cli: 'claude', profileId: 'claude-main', status: 'running' })
     const { adapter, runtime, metadata, map } = setup([claudeTab], [])
     await adapter.renameSession('native-tab:cc-1', 'New name')
-    expect(runtime.renameTab).toHaveBeenCalledWith('cc-1', 'New name')
+    expect(runtime.renameTab).toHaveBeenCalledWith('cc-1', 'New name', expect.objectContaining({ beforeDispatch: expect.any(Function) }))
     expect(metadata.upsertSessionRecord).not.toHaveBeenCalled()
     expect(map.get('cc-1')?.title).toBe('New name')
   })

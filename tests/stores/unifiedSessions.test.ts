@@ -483,7 +483,7 @@ it('Unified_RenameAttemptBeforeProjection_019', async () => {
   expect(store.sessions[0].renameState).toBe('idle')
   store.beginRename(value.id)
   await store.renameSession(value.id, 'Explicit new edit')
-  expect(native.adapter.renameSession).toHaveBeenCalledExactlyOnceWith(value.id, 'Explicit new edit', expect.any(Function), expect.any(Function))
+  expect(native.adapter.renameSession).toHaveBeenCalledExactlyOnceWith(value.id, 'Explicit new edit', expect.any(Function), expect.any(Function), expect.any(AbortSignal))
   expect(store.sessions[0].renameState).toBe('idle')
 })
 

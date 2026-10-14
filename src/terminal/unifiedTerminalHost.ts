@@ -1,3 +1,4 @@
+import type { InputWriteAdmission } from '@/terminal/inputAdmission'
 import type { NativeAttemptIdentity } from '@/stores/nativeTabs'
 import type { UnifiedSession } from '@/types/unifiedSession'
 
@@ -7,9 +8,9 @@ export interface UnifiedTerminalHostPort {
   startLegacy(tabId: string): Promise<void>
   stopLegacy(tabId: string): Promise<void>
   restartLegacy(tabId: string): Promise<void>
-  renameLegacy(tabId: string, title: string): Promise<void>
+  renameLegacy(tabId: string, title: string, admission?: InputWriteAdmission): Promise<void>
   stopNative(tabId: string, attempt: NativeAttemptIdentity): Promise<void>
   recoverNative(tabId: string, attempt: NativeAttemptIdentity): Promise<void>
-  renameNative(tabId: string, title: string): Promise<void>
+  renameNative(tabId: string, title: string, admission?: InputWriteAdmission): Promise<void>
   focus(): void
 }

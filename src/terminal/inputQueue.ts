@@ -1,4 +1,5 @@
 import type { U64String } from '@/types/cli'
+import type { InputWriteAdmission } from './inputAdmission'
 
 const MAX_U64 = BigInt('18446744073709551615')
 
@@ -62,6 +63,8 @@ export interface InputIntentQueue {
     produce: () => Promise<Uint8Array>
   }): InputReservation
   flush(): Promise<void>
+  enqueueConfirmed(input: { source: UserInputSource; modeEpoch: U64String; bytes: Uint8Array; admission?: InputWriteAdmission }): { inputSeq: U64String; settled: Promise<void> }
+  dispose(): void
   sendProtocol(bytes: Uint8Array): Promise<void>
   recover(inputSeq: U64String, action: InputRecovery): boolean
   snapshot(): InputQueueSnapshot
@@ -89,6 +92,7 @@ interface QueueItem {
   state: ItemState
   failure?: InputPauseReason
   bytes?: Uint8Array
+  confirmation?: { resolve: () => void; reject: (error: Error) => void; admission?: InputWriteAdmission; dispatched: boolean; settled: boolean; detach: () => void }
 }
 
 interface Pause {
@@ -131,6 +135,7 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
   const items: QueueItem[] = []
   let pause: Pause | undefined
   let flushInFlight: Promise<void> | null = null
+  let disposed = false
 
   // FIFO mutex around each actual host dispatch. Protocol traffic can bypass an
   // unresolved clipboard reservation because no dispatch is active yet. If a
@@ -191,9 +196,27 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
     }
   }
 
+  const finishConfirmation = (item: QueueItem, error?: Error) => {
+    const receipt = item.confirmation
+    if (!receipt || receipt.settled) return
+    receipt.settled = true
+    receipt.detach()
+    if (error) receipt.reject(error)
+    else receipt.resolve()
+  }
   const pauseFor = (item: QueueItem, reason: InputPauseReason) => {
     item.failure = reason
     pause = { blockedSeq: item.inputSeq, reason }
+    // 保留阻塞项与既有恢复边界，拒绝其后未发送的 confirmed 输入，绝不重放。
+    for (const queued of [...items]) {
+      if (!queued.confirmation) continue
+      finishConfirmation(queued, new Error('NATIVE_INPUT_PAUSED'))
+      if (queued !== item && !queued.confirmation.dispatched) {
+        queued.state = 'cancelled'
+        items.splice(items.indexOf(queued), 1)
+        releaseItemBytes(queued)
+      }
+    }
   }
 
   const pushReady = (
@@ -201,6 +224,7 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
     modeEpoch: U64String,
     bytes: Uint8Array,
   ): { inputSeq: U64String } => {
+    if (disposed) throw new Error('NATIVE_TERMINAL_DISPOSED')
     validateModeEpoch(modeEpoch)
     checkBytes(bytes)
     const inputSeq = allocateSeq()
@@ -217,7 +241,7 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
   }
 
   const runFlush = async () => {
-    while (!pause) {
+    while (!pause && !disposed) {
       const head = items[0]
       if (!head || head.state === 'pending') return
       if (head.state === 'failed') {
@@ -231,6 +255,7 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
       let gateFailure: InputPauseReason | undefined
       try {
         await dispatchExclusive(async () => {
+          if (disposed || head.state === 'cancelled') return
           const target = currentTarget()
           if (target.runId !== options.runId || target.generation !== options.generation) {
             gateFailure = 'target-changed'
@@ -239,6 +264,15 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
           if (target.modeEpoch !== head.modeEpoch) {
             gateFailure = 'mode-changed'
             return
+          }
+          if (head.confirmation) {
+            try { head.confirmation.admission?.beforeDispatch?.() }
+            catch {
+              head.state = 'cancelled'
+              finishConfirmation(head, new Error('STALE_SESSION_ATTEMPT'))
+              return
+            }
+            head.confirmation.dispatched = true
           }
           await options.send({
             runId: options.runId,
@@ -250,17 +284,24 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
           })
         })
       } catch {
+        if (disposed) return
         head.state = 'failed'
         pauseFor(head, 'send-failed')
         return
       }
 
+      if (disposed) return
+      if (head.state === 'cancelled') {
+        if (items[0] === head) { items.shift(); releaseItemBytes(head) }
+        continue
+      }
       if (gateFailure) {
         pauseFor(head, gateFailure)
         return
       }
       items.shift()
       releaseItemBytes(head)
+      finishConfirmation(head)
     }
   }
 
@@ -268,6 +309,7 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
     if (flushInFlight) return flushInFlight
     flushInFlight = runFlush().finally(() => {
       flushInFlight = null
+      if (!disposed && !pause && items[0]?.state === 'ready') void flush()
     })
     return flushInFlight
   }
@@ -277,7 +319,39 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
       return pushReady(input.source, input.modeEpoch, input.bytes)
     },
 
+    enqueueConfirmed(input) {
+      if (disposed) throw new Error('NATIVE_TERMINAL_DISPOSED')
+      if (pause) throw new Error('NATIVE_INPUT_PAUSED')
+      if (input.admission?.signal?.aborted) throw new Error('STALE_SESSION_ATTEMPT')
+      const allocated = pushReady(input.source, input.modeEpoch, input.bytes)
+      const item = items[items.length - 1]
+      let resolve!: () => void, reject!: (error: Error) => void
+      const settled = new Promise<void>((res, rej) => { resolve = res; reject = rej })
+      const signal = input.admission?.signal
+      const cancel = () => {
+        if (item.confirmation?.dispatched || item.confirmation?.settled) return
+        item.state = 'cancelled'
+        const index = items.indexOf(item)
+        if (index >= 0) { items.splice(index, 1); releaseItemBytes(item) }
+        finishConfirmation(item, new Error('STALE_SESSION_ATTEMPT'))
+        void flush()
+      }
+      item.confirmation = { resolve, reject, admission: input.admission, dispatched: false, settled: false, detach: () => signal?.removeEventListener('abort', cancel) }
+      signal?.addEventListener('abort', cancel, { once: true })
+      void flush()
+      return { ...allocated, settled }
+    },
+
+    dispose() {
+      if (disposed) return
+      disposed = true
+      for (const item of items) { item.state = 'cancelled'; finishConfirmation(item, new Error('NATIVE_TERMINAL_DISPOSED')) }
+      items.length = 0
+      queuedBytes = 0
+    },
+
     reserveAsync(input) {
+      if (disposed) throw new Error('NATIVE_TERMINAL_DISPOSED')
       validateModeEpoch(input.modeEpoch)
       const inputSeq = allocateSeq()
       const item: QueueItem = {

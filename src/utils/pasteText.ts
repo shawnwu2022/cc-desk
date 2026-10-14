@@ -10,6 +10,7 @@
  * 避免终端层擅自改写用户输入。
  */
 import type { Platform } from './platform'
+import type { InputWriteAdmission } from '@/terminal/inputAdmission'
 import type { PtyInputSource } from '@/api/tauri'
 import { classifyClipboardSnapshot, readClipboardSnapshot } from '@/terminal/inputPolicy'
 import { readImage, readText } from '@tauri-apps/plugin-clipboard-manager'
@@ -88,7 +89,7 @@ export interface LegacyInputReservation {
 }
 
 export interface LegacyInputQueue {
-  enqueue(payload: string, source?: PtyInputSource): Promise<void>
+  enqueue(payload: string, source?: PtyInputSource, admission?: InputWriteAdmission): Promise<void>
   reserve(produce: () => Promise<string | null>): LegacyInputReservation
   dispose(): void
 }
@@ -97,6 +98,7 @@ type LegacyQueueItem = {
   state: 'pending' | 'ready' | 'writing' | 'cancelled'
   payload?: string
   source?: PtyInputSource
+  admission?: InputWriteAdmission
   resolve: () => void
   reject: (error: unknown) => void
 }
@@ -135,17 +137,26 @@ export function createLegacyInputQueue(options: {
         if (!canWrite()) {
           item.state = 'cancelled'
           items.shift()
-          item.resolve()
+          if (item.admission) item.reject(new Error('LEGACY_RENAME_UNAVAILABLE'))
+          else item.resolve()
           continue
         }
         const payload = item.payload
         if (!payload) {
           item.state = 'cancelled'
           items.shift()
-          item.resolve()
+          if (item.admission) item.reject(new Error('LEGACY_RENAME_UNAVAILABLE'))
+          else item.resolve()
           continue
         }
 
+        try { item.admission?.beforeDispatch?.() }
+        catch {
+          item.state = 'cancelled'
+          items.shift()
+          item.reject(new Error('STALE_SESSION_ATTEMPT'))
+          continue
+        }
         item.state = 'writing'
         try {
           await options.write(payload, item.source)
@@ -166,18 +177,26 @@ export function createLegacyInputQueue(options: {
     if (item.state !== 'pending' && item.state !== 'ready') return false
     item.state = 'cancelled'
     remove(item)
-    item.resolve()
+    if (item.admission) item.reject(new Error('STALE_SESSION_ATTEMPT'))
+    else item.resolve()
     void drain()
     return true
   }
 
   return {
-    enqueue(payload, source) {
-      if (!payload || !canWrite()) return Promise.resolve()
+    enqueue(payload, source, admission) {
+      if (!payload || !canWrite()) return admission ? Promise.reject(new Error('LEGACY_RENAME_UNAVAILABLE')) : Promise.resolve()
+      if (admission?.signal?.aborted) return Promise.reject(new Error('STALE_SESSION_ATTEMPT'))
       let resolve!: () => void
       let reject!: (error: unknown) => void
       const settled = new Promise<void>((res, rej) => { resolve = res; reject = rej })
-      items.push({ state: 'ready', payload, source, resolve, reject })
+      const signal = admission?.signal
+      const cancel = () => { cancelUnsubmitted(item) }
+      const detach = () => signal?.removeEventListener('abort', cancel)
+      const item: LegacyQueueItem = { state: 'ready', payload, source, admission,
+        resolve: () => { detach(); resolve() }, reject: error => { detach(); reject(error) } }
+      signal?.addEventListener('abort', cancel, { once: true })
+      items.push(item)
       void drain()
       return settled
     },
@@ -216,10 +235,11 @@ export function createLegacyInputQueue(options: {
       if (disposed) return
       disposed = true
       for (const item of [...items]) {
-        if (item.state === 'writing') continue
+        if (item.state === 'writing') { if (item.admission) item.reject(new Error('LEGACY_RENAME_UNAVAILABLE')); continue }
         item.state = 'cancelled'
         remove(item)
-        item.resolve()
+        if (item.admission) item.reject(new Error('LEGACY_RENAME_UNAVAILABLE'))
+        else item.resolve()
       }
     },
   }

@@ -65,7 +65,7 @@ describe('Legacy terminal port', () => {
     await flushPromises(); expect(finished).toBe(false)
     expect(host.stop).toHaveBeenCalledWith('owned-tab'); stopped(); await stopping
     await port.restartTab('owned-tab'); expect(host.restart).toHaveBeenCalledWith('owned-tab')
-    await port.renameTab('owned-tab', 'Title'); expect(host.rename).toHaveBeenCalledWith('owned-tab', 'Title')
+    await port.renameTab('owned-tab', 'Title'); expect(host.rename).toHaveBeenCalledWith('owned-tab', 'Title', undefined)
     await port.recover(); expect(host.recover).toHaveBeenCalledOnce()
   })
   // 隐藏只改变可见性；终端保持同一实例，不触发启动/停止或抢焦点。

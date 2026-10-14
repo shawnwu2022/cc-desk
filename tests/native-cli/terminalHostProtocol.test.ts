@@ -180,9 +180,11 @@ it.each([
     },
     writeProtocol: async (_run, bytes) => ({ state: 'host-written', confirmedBytes: String(bytes.length) }),
   })
-  await Promise.all([host.sendUserText('first'), host.sendUserText('second')])
+  const outcomes = await Promise.allSettled([host.sendUserText('first'), host.sendUserText('second')])
+  expect(outcomes.map(outcome => outcome.status)).toEqual(['rejected', 'rejected'])
+  for (const outcome of outcomes) if (outcome.status === 'rejected') expect(outcome.reason.message).toBe('NATIVE_INPUT_PAUSED')
   expect(writes).toEqual(['1'])
-  expect(host.snapshot()).toMatchObject({ state: 'paused', reason: 'send-failed', blockedSeq: '1', queued: 2 })
+  expect(host.snapshot()).toMatchObject({ state: 'paused', reason: 'send-failed', blockedSeq: '1', queued: 1 })
 })
 
 // 数字、空值、前导零、负数、溢出和不完整回执不能冒充精确成功。
@@ -197,7 +199,9 @@ it.each([1, null, undefined, '01', '-1', '18446744073709551616', '0', '2'])('Nat
     },
     writeProtocol: async (_run, bytes) => ({ state: 'host-written', confirmedBytes: String(bytes.length) }),
   })
-  await Promise.all([host.sendUserText('x'), host.sendUserText('y')])
+  const outcomes = await Promise.allSettled([host.sendUserText('x'), host.sendUserText('y')])
+  expect(outcomes.map(outcome => outcome.status)).toEqual(['rejected', 'rejected'])
+  for (const outcome of outcomes) if (outcome.status === 'rejected') expect(outcome.reason.message).toBe('NATIVE_INPUT_PAUSED')
   expect(writes).toEqual(['1'])
   expect(host.snapshot()).toMatchObject({ state: 'paused', reason: 'send-failed' })
 })
@@ -216,7 +220,9 @@ it('Native_FreezeReceiptIdentity_010', async () => {
     },
     writeProtocol: async (_run, bytes) => ({ state: 'host-written', confirmedBytes: String(bytes.length) }),
   })
-  await Promise.all([host.sendUserText('x'), host.sendUserText('y')])
+  const outcomes = await Promise.allSettled([host.sendUserText('x'), host.sendUserText('y')])
+  expect(outcomes.map(outcome => outcome.status)).toEqual(['rejected', 'rejected'])
+  for (const outcome of outcomes) if (outcome.status === 'rejected') expect(outcome.reason.message).toBe('NATIVE_INPUT_PAUSED')
   expect(writes).toEqual(['1'])
   expect(host.snapshot()).toMatchObject({ state: 'paused', reason: 'send-failed' })
 })

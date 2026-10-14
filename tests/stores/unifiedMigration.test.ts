@@ -1,3 +1,4 @@
+import { useNotificationsStore } from '@/stores/notifications'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
@@ -255,11 +256,12 @@ describe('Unified migration through real workspace composition', () => {
     if (kind === 'live') {
       // 运行中的会话改名路由到终端注入 CLI 自身 /rename；字节注入由终端组件层负责。
       expect(f.host.renameLegacy).toHaveBeenCalledTimes(1)
-      expect(f.host.renameLegacy).toHaveBeenCalledWith(target.adapterSessionId, 'Desk-only name')
+      expect(f.host.renameLegacy).toHaveBeenCalledWith(target.adapterSessionId, 'Desk-only name', expect.objectContaining({ beforeDispatch: expect.any(Function), signal: expect.any(AbortSignal) }))
     } else {
       expect(f.host.renameLegacy).not.toHaveBeenCalled()
       expect(f.ipc.mock.calls.some(([command]) => command === 'pty_input')).toBe(false)
     }
+    expect(useNotificationsStore().toasts[useNotificationsStore().toasts.length - 1]?.messageKey).toBe(kind === 'live' ? 'feedbackRenameSent' : 'feedbackRenamed')
     f.resetStores(); await boot()
     // live 名字由 CLI 会话数据持有；测试桩不模拟 CLI 落盘，重启后回落历史名。
     expect(useUnifiedSessionsStore().sessions.find(value => value.id === row.id)?.title)

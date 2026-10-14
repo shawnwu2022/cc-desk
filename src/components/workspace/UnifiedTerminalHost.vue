@@ -87,10 +87,10 @@ const port: UnifiedTerminalHostPort = {
   async startLegacy(id) { await nextTick(); await requireLegacy().startTab(id) },
   async stopLegacy(id) { await requireLegacy().stopTab(id) },
   async restartLegacy(id) { await requireLegacy().restartTab(id) },
-  async renameLegacy(id, title) { await requireLegacy().renameTab(id, title) },
+  async renameLegacy(id, title, admission) { await requireLegacy().renameTab(id, title, admission) },
   async stopNative(id: string, attempt: NativeAttemptIdentity) { await requireNative(id).stop(attempt) },
   async recoverNative(id: string, attempt: NativeAttemptIdentity) { await requireNative(id).recover(attempt) },
-  async renameNative(id: string, title: string) { await requireNative(id).renameTab(title) },
+  async renameNative(id: string, title: string, admission) { await requireNative(id).renameTab(title, admission) },
   focus,
 }
 defineExpose({ ...port, fitVisible })

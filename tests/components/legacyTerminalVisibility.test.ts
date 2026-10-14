@@ -352,3 +352,28 @@ describe('Legacy unified ownership', () => {
   })
 
 })
+
+// 真实 SFC 的 FIFO 端口必须转交 admission；取消排队的改名不会影响前一条输入。
+it('Legacy_RenameCancelledBehindWriter_020', async () => {
+  const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+  wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
+  let finish!: () => void; io.input.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+  io.terms[0].userData('earlier'); await flushPromises()
+  const controller = new AbortController(), issued = vi.fn()
+  const result = (wrapper.vm as any).renameTab(id, 'New name', { signal: controller.signal, beforeDispatch: issued }).catch((error: unknown) => error)
+  controller.abort()
+  expect(await result).toBeInstanceOf(Error); expect(issued).not.toHaveBeenCalled()
+  finish(); await flushPromises()
+  expect(io.input).toHaveBeenCalledExactlyOnceWith(sessions.tabs.get(id)!.ptyId, 'earlier', 'terminal-ondata')
+})
+
+// 排队期间离开工作区也必须在真正 dispatch 前拒绝改名。
+it('Legacy_RenameHiddenBeforeDispatch_021', async () => {
+  const sessions = useSessionStore(); const id = sessions.createTab('/repo')
+  wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
+  let finish!: () => void; io.input.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+  io.terms[0].userData('earlier'); await flushPromises()
+  const result = (wrapper.vm as any).renameTab(id, 'New name').catch((error: unknown) => error)
+  await wrapper.setProps({ visible: false }); finish(); await flushPromises()
+  expect(await result).toBeInstanceOf(Error); expect(io.input).toHaveBeenCalledTimes(1)
+})

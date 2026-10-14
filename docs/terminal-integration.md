@@ -74,6 +74,15 @@ An uncertain launch is recovered by querying the original request. CC Desk never
 
 ## Input transport
 
+`sendUserText` waits for the specific input intent's complete authenticated write
+receipt. The generic queue `flush` still returns at a pending producer or pause;
+keyboard/parser scheduling retains that contract. Explicit text rejects on pause,
+write failure, incomplete/mismatched acknowledgement or disposal. An optional
+admission checks and marks dispatch synchronously just before calling the writer;
+its AbortSignal can cancel only an unsubmitted intent. The Legacy rename path
+uses the same admission contract inside its FIFO, preserving normal keyboard and
+paste queue behavior. Successful PTY delivery does not certify CLI interpretation.
+
 Native input is ordered before async work begins.
 
 The queue reserves monotone intent sequence numbers so keyboard, IME, paste and protocol traffic cannot overtake each other merely because one path is asynchronous.

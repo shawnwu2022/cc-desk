@@ -95,7 +95,19 @@ unsupported operations are never translated to Legacy commands. Refresh reloads
 sources without retrying a failed lifecycle request. Renaming a running session
 drives the CLI's own rename mechanism (a `/rename` injection for Claude; Codex
 keeps `projectsState` display metadata until its command form is verified) and
-clears the stored display override so the title flows back from CLI history.
+clears the stored display override only after its own input is confirmed written.
+Native checks the exact run/generation/inputSeq/modeEpoch and full byte count;
+Legacy waits for its existing PTY writer acknowledgement. Pending clipboard,
+paused input, partial/unknown or mismatched receipts never authorize that cleanup.
+The result is `input-written`, not CLI command acceptance; feedback says the request
+was written to the CLI terminal with acceptance unverified. Display-only renames
+return `display-name-saved`. Proposed live titles remain optimistic until CLI history
+provides evidence; no PTY receipt proves that the CLI executed `/rename`.
+Both FIFO queues check the rename's admission just before dispatch. Selection
+cancels only unsubmitted rename intents through the owner's AbortSignal; dispatched
+writes retain their exact owner while awaiting acknowledgement. Source/attempt
+invalidation still prevents cleanup of another owner, and unmount rejects pending
+confirmation without replay. Cancellation alone does not report an input pause.
 Rename admission is limited to opened sessions; stopped tabs and history rows
 without a writable CLI keep the display-metadata fallback.
 
@@ -230,6 +242,10 @@ independent occurrence-notice description. It reserves one 20px slot and combine
 the real 16px application mark with a solid lower-right badge (10px SVG box,
 approximately 8px colored backplate). Known idle has no badge and keeps native
 artwork static; closed/stopped marks use a recognizable neutral-gray treatment.
+Codex retains its black/white brand artwork, with closed-treatment opacity tokens
+of 0.48 in light and 0.44 in dark GUI themes. Closed rows never render a badge,
+including unread receipts and archive context; their full accessible name,
+Tooltip, unread data and existing Clear unread menu remain available.
 Working uses a 2.6-second opacity cycle and a static working/thinking/tool/subagent/
 compacting shape. Permission is an amber lock, input a blue bubble, error a red
 exclamation, unknown a neutral question; starting/confirmation/stopped/archive

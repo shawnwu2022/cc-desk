@@ -24,6 +24,22 @@ for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex']) {
       await expect(row.locator('.cli-app-icon__image')).toHaveAttribute('src', new RegExp(cli + '\\.svg'))
     }
     await expect(idle.locator('[data-session-badge]')).toHaveCount(0)
+    await expect(closed.locator('[data-session-badge]')).toHaveCount(0)
+    await expect(closed).toHaveAttribute('aria-label', `${cli === 'claude' ? 'Claude Code' : 'Codex CLI'}; Closed`)
+    if (cli === 'codex') {
+      await expect(idle.locator('.session-app-icon__app')).toHaveCSS('opacity', '1')
+      const closedApp = closed.locator('.session-app-icon__app')
+      expect(Number(await closedApp.evaluate(el => getComputedStyle(el).opacity))).toBeLessThanOrEqual(.55)
+      await expect(closed.locator('img')).toHaveCSS('filter', gui === 'dark' ? 'invert(1)' : 'none')
+      expect(await closed.locator('img').evaluate(el => (el as HTMLImageElement).naturalWidth)).toBe(16)
+      for (const interaction of ['hover', 'focus'] as const) {
+        await closed[interaction]()
+        expect(Number(await closedApp.evaluate(el => getComputedStyle(el).opacity))).toBeLessThanOrEqual(.55)
+        await expect(closed.locator('[data-session-badge]')).toHaveCount(0)
+      }
+      await page.keyboard.press('Escape')
+      await clearFixtureSetupFocus(page)
+    }
     await expect(working.locator('[data-session-badge]')).toHaveAttribute('data-session-badge', 'working')
     await expect(working.locator('.session-app-icon__badge')).toHaveCSS('width', '10px')
     const badgeBox = await working.locator('.session-app-icon__badge').boundingBox()
