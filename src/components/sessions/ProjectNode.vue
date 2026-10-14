@@ -9,7 +9,7 @@ import NewSessionMenu from './NewSessionMenu.vue'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import type {
   ProjectActionRequest, ProjectMenuAction, SessionMenuAction, SessionPrimaryAction,
-  SessionTreeConfirmationRequest, UnifiedProjectGroup, UnifiedProjectIdentity, NewSessionRequest,
+  SessionTreeConfirmationRequest, UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession, NewSessionRequest,
 } from '@/types/unifiedSession'
 
 const props = withDefaults(defineProps<{
@@ -51,6 +51,22 @@ function openNewMenu(event: MouseEvent) {
 const anchor = ref({ x: 8, y: 8 })
 const menuPosition = ref({ left: '8px', top: '8px' })
 const sessions = computed(() => props.project.sessions.filter(session => !session.archived))
+// 类型分组与打开状态无关：项目内按 CLI 分组，组内保持父级传入的创建时间倒序。
+const CLI_GROUP_ORDER: Record<string, number> = { claude: 0, codex: 1, shell: 2 }
+const typeGroups = computed(() => {
+  const byCli = new Map<string, UnifiedSession[]>()
+  for (const row of sessions.value) {
+    const list = byCli.get(row.cli)
+    if (list) list.push(row)
+    else byCli.set(row.cli, [row])
+  }
+  return [...byCli.entries()]
+    .sort((a, b) => (CLI_GROUP_ORDER[a[0]] ?? 9) - (CLI_GROUP_ORDER[b[0]] ?? 9))
+    .map(([cli, rows]) => ({ cli, rows }))
+})
+function cliGroupLabel(cli: string): string {
+  return cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : cli
+}
 const statusBadge = computed(() => {
   // Some project projections also contain empty registered projects. Preserve
   // explicit causes from their unified rows when aggregate fields are absent.
@@ -181,9 +197,12 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
       </div>
     </div>
     <div v-if="expanded" class="session-sub">
-      <SessionList :sessions="sessions" :selected-id="selectedId" :surface-active="surfaceActive" @activate="emit('activate', $event)"
-        @primary-action="(id, action) => emit('primary-action', id, action)" @menu-action="sessionMenuAction"
-        @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)" />
+      <div v-for="typeGroup in typeGroups" :key="typeGroup.cli" class="cli-group" :data-cli-group="typeGroup.cli">
+        <div class="cli-group-label">{{ cliGroupLabel(typeGroup.cli) }}</div>
+        <SessionList :sessions="typeGroup.rows" :selected-id="selectedId" :surface-active="surfaceActive" @activate="emit('activate', $event)"
+          @primary-action="(id, action) => emit('primary-action', id, action)" @menu-action="sessionMenuAction"
+          @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)" />
+      </div>
       <div v-if="sessions.length === 0" class="empty-hint">{{ t('noHistorySessions') }}</div>
     </div>
     <NewSessionMenu v-model:open="newMenuOpen" :active="surfaceActive" :anchor="newMenuAnchor" :availability="draft.availabilityFor(projectIdentity)"
@@ -232,6 +251,8 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
 .expand-arrow :deep(svg) { transition: transform 0.15s ease; }
 .expand-arrow.expanded :deep(svg) { transform: rotate(90deg); }
 .session-sub { padding-left: 8px; min-width: 0; }
+.cli-group + .cli-group { margin-top: 6px; }
+.cli-group-label { padding: 2px 8px; font-size: 11px; color: var(--text-tertiary); user-select: none; }
 .empty-hint { padding: 12px 8px; font-size: 12px; color: var(--text-secondary); }
 .project-menu { position: fixed; max-height: calc(100vh - 16px); }
 @media (prefers-reduced-motion: reduce) { .expand-arrow :deep(svg) { transition: none; } }

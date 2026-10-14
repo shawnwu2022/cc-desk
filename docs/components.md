@@ -659,14 +659,16 @@ Resume/failed-creation Retry/archive Restore sit beside the live age and remain
 visible without hover. Their duplicate menu entries are omitted. The existing open
 Close overlay and ended-session Archive control retain their sizing and ownership.
 
-`SessionsPanel` owns the activity snapshot, not the runtime stores. Initial/Workspace
-entry and entry into a different current project snapshot latest activity descending
-with ID ties. Its existing Refresh sessions button snapshots immediately, rereads the
-catalog and snapshots the resulting rows when loading ends. Selection is untouched.
-Existing row order stays fixed through output, status, completion, search and rerender.
-New/admitted openings and manual restore metadata move to the front; background
-closed-history discovery appends without displacing the existing rows. Project
-pin/name ordering and archive opening-order grouping are unchanged.
+`SessionsPanel` orders rows by a frozen first-seen creation key, not live activity.
+A tab's key is its real creation time; a history row's key is its first-seen activity
+time, because CLI history carries only the last-updated time and no creation time.
+The key is written once per row id and never updated, so output, status, completion,
+search, rerender, later activity, opening, closing, background discovery and the
+Refresh sessions button all leave existing row positions unchanged. A newly seen row
+(including a just-closed session's history identity and archive restores) inserts at
+its frozen key. `ProjectNode` groups the rows of one project by CLI type (Claude then
+Codex, reusing the row-app-icon names), independent of open state. Project pin/name
+ordering and archive opening-order grouping are unchanged.
 
 Exact-source pending restores publish `resumePending` only as presentation metadata.
 Both `unifiedSessions.projectGroups` and `projectManagement` groups project it. One

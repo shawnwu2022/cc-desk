@@ -63,7 +63,7 @@ function rules(file: string) {
 }
 
 describe('Unified project session tree', () => {
-  // 首次关闭完成后的历史身份替换必须立即按活动快照排序，与手动刷新一致。
+  // 创建序冻结：关闭后的历史身份替换是新增行，按其首见活动时间插入；行序此后稳定。
   it('Tree_CloseRefreshesSnapshot_024', async () => {
     const closing = session({ id: 'legacy-tab:closing', adapterSessionId: 'closing', nativeSessionId: 'same-session', lastActivityAt: 20 })
     const recent = session({ id: 'recent', opened: false, lastActivityAt: 40 })
@@ -78,7 +78,7 @@ describe('Unified project session tree', () => {
     const wrapper = panel({ currentProjectPath: '/work/game', loading: false })
     await wrapper.get('.project-main').trigger('click')
     const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
-    expect(order()).toEqual(['legacy-tab:closing', 'recent', 'old'])
+    expect(order()).toEqual(['recent', 'legacy-tab:closing', 'old'])
     await catalog.closeSession(closing.id); await nextTick()
     expect(order()).toEqual(['legacy-history:same-session', 'recent', 'old'])
     await wrapper.get('button[aria-label="Refresh sessions"]').trigger('click')
@@ -107,25 +107,25 @@ describe('Unified project session tree', () => {
     expect(wrapper.emitted('refresh')).toHaveLength(1)
   })
 
-  // 背景发现旧历史只追加，不伪装新建置顶；同活动时间由精确 ID 决定快照顺序。
+  // 创建序倒序（同键按精确 ID 破平）；已存在行不随后续活动或刷新移动。
   it('Tree_DiscoveredHistoryAndTies_025', async () => {
     const a = session({ id: 'a', lastActivityAt: 20, lastOpenedAt: 1 })
     const b = session({ id: 'b', lastActivityAt: 20, lastOpenedAt: 2 })
     const wrapper = panel({ projectGroups: [group([b, a])] })
     await wrapper.get('.project-main').trigger('click')
     const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
-    expect(order()).toEqual(['a', 'b'])
-    const old = session({ id: 'old', opened: false, processState: 'stopped', lastOpenedAt: 99, lastActivityAt: 10 })
+    expect(order()).toEqual(['b', 'a'])
+    const old = session({ id: 'old', opened: false, processState: 'stopped', lastActivityAt: 10 })
     await wrapper.setProps({ projectGroups: [group([old, b, a])] })
-    expect(order()).toEqual(['a', 'b', 'old'])
-    await wrapper.setProps({ projectGroups: [group([a, b, { ...old, lastOpenedAt: 150, lastActivityAt: 1000 }])] })
-    expect(order()).toEqual(['a', 'b', 'old'])
+    expect(order()).toEqual(['old', 'b', 'a'])
+    await wrapper.setProps({ projectGroups: [group([a, b, { ...old, lastActivityAt: 1000 }])] })
+    expect(order()).toEqual(['old', 'b', 'a'])
     await wrapper.get('button[aria-label="Refresh sessions"]').trigger('click')
-    // 关闭的历史行始终排在打开行之后；分区内仍按最新活动排序。
-    expect(order()).toEqual(['a', 'b', 'old'])
+    // 创建序键首见即冻结：刷新与后续活动都不改变已存在行位置。
+    expect(order()).toEqual(['old', 'b', 'a'])
   })
 
-  // 新建、重新打开和归档恢复行置顶；状态恢复不重排，项目重新进入按活动重取快照。
+  // 新行按创建序插入，已存在行位置冻结；项目重新进入或恢复活跃不重取快照。
   it('Tree_EntryCreateRestore_024', async () => {
     const a = session({ id: 'a', lastActivityAt: 20, lastOpenedAt: 10, opened: true })
     const b = session({ id: 'b', lastActivityAt: 40, lastOpenedAt: 15, opened: true })
@@ -133,21 +133,34 @@ describe('Unified project session tree', () => {
     const wrapper = panel({ projectGroups: [group([a, b])], currentProjectPath: '/work/game', archivedSessions: [{ ...restored, archived: true }] })
     await wrapper.get('.project-main').trigger('click')
     const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(order()).toEqual(['b', 'a'])
     const created = session({ id: 'c', lastActivityAt: 1, lastOpenedAt: 50, processState: 'starting' })
     await wrapper.setProps({ projectGroups: [group([a, b, created])] })
     expect(order()).toEqual(['c', 'b', 'a'])
+    // 已存在行的打开时间变化不再触发重排：创建序键保持不变。
     await wrapper.setProps({ projectGroups: [group([{ ...a, lastOpenedAt: 60 }, b, created])] })
-    expect(order()).toEqual(['a', 'c', 'b'])
+    expect(order()).toEqual(['c', 'b', 'a'])
     await wrapper.setProps({ projectGroups: [group([{ ...a, processState: 'running', lastOpenedAt: 60 }, b, created, restored])], archivedSessions: [] })
-    // 归档恢复的 d 仍是关闭行；新加入的置顶行 c 由分区重新落到打开行尾。
-    expect(order()).toEqual(['a', 'c', 'b', 'd'])
+    expect(order()).toEqual(['c', 'b', 'a', 'd'])
     await wrapper.setProps({ active: false })
     await wrapper.setProps({ active: true })
-    // 关闭的归档行 d 仍在打开行之后；活动序只在同一归属分组内生效。
-    expect(order()).toEqual(['b', 'a', 'c', 'd'])
+    expect(order()).toEqual(['c', 'b', 'a', 'd'])
     await wrapper.setProps({ currentProjectPath: '/other' })
     await wrapper.setProps({ projectGroups: [group([{ ...a, lastActivityAt: 80 }, b, created, restored])], currentProjectPath: '/work/game' })
-    expect(order()).toEqual(['a', 'b', 'c', 'd'])
+    expect(order()).toEqual(['c', 'b', 'a', 'd'])
+  })
+
+  // 项目内按 CLI 类型分组（claude 在前、codex 在后），组内保持创建序倒序；与打开状态无关。
+  it('Tree_GroupByCliType_026', async () => {
+    const claudeOld = session({ id: 'cc-old', cli: 'claude', runtime: 'legacy-claude', lastOpenedAt: 1, opened: false, processState: 'stopped' })
+    const claudeNew = session({ id: 'cc-new', cli: 'claude', runtime: 'legacy-claude', lastOpenedAt: 9, opened: false, processState: 'stopped' })
+    const codexOpen = session({ id: 'cx-open', cli: 'codex', runtime: 'native-cli', lastOpenedAt: 5, opened: true })
+    const wrapper = panel({ projectGroups: [group([claudeOld, codexOpen, claudeNew])] })
+    await wrapper.get('.project-main').trigger('click')
+    expect(wrapper.findAll('[data-cli-group]').map(group => group.attributes('data-cli-group'))).toEqual(['claude', 'codex'])
+    expect(wrapper.findAll('.cli-group-label').map(label => label.text())).toEqual(['Claude Code', 'Codex CLI'])
+    const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(order()).toEqual(['cc-new', 'cc-old', 'cx-open'])
   })
 
   // 普通项目与仅归档项目统一按名称排序，活动刷新和来源顺序不会移动项目行。
