@@ -120,7 +120,6 @@ function commitRename() {
   if (!isRenaming.value || isSaving.value) return
   const title = renameValue.value.trim()
   if (!title || /\p{Cc}/u.test(renameValue.value)) { renameInvalid.value = true; return }
-  localRename.value = false
   renameInvalid.value = false
   emit('rename-commit', props.session.id, title)
   void nextTick(() => row.value?.focus())

@@ -63,3 +63,57 @@ for (const kind of ['native', 'legacy']) {
     assert.equal(h.metadata.sessionRecords.get(h.id).title, 'Old override')
   })
 }
+
+function catalogRenameHarness(owns = () => true) {
+  const source = readFileSync('src/stores/unifiedSessions.ts', 'utf8')
+  const sessions = { value: [{ id: 'history', title: 'Old title', opened: false, renameState: 'idle' }] }
+  const renameOwners = new Map(), pendingRenames = new Map()
+  const captureRenameOwner = (_row, state) => ({ controller: new AbortController(), state, owns })
+  const ownsRename = (owner, row) => !!row && owner.owns()
+  const beginBody = source.match(/  function beginRename\(id: string\) \{([\s\S]*?)\n  \}/)?.[1]
+  const cancelBody = source.match(/  function cancelRename\(id: string\) \{([\s\S]*?)\n  \}/)?.[1]
+  const renameBody = source.match(/  function renameSession\([^]*?\): Promise<[^]*?> \{([\s\S]*?)\n  \}/)?.[1]
+  assert.ok(beginBody && cancelBody && renameBody)
+  const cancel = Function('pendingRenames', 'renameOwners', 'sessions', 'return function(id){' + cancelBody + '}')(pendingRenames, renameOwners, sessions)
+  const begin = Function('sessions', 'activeSessionId', 'pendingRenames', 'isPreparingSession', 'renameOwners', 'ownsRename', 'captureRenameOwner',
+    'return function(id){' + beginBody + '}')(sessions, { value: 'live' }, pendingRenames, () => false, renameOwners, ownsRename, captureRenameOwner)
+  const adapter = { async renameSession() { throw Error('REVISION_CONFLICT') } }
+  const rename = Function('requireSession', 'adapterForRuntime', 'renameOwners', 'pendingRenames', 'activeSessionId', 'ownsRename', 'sessions', 'captureRenameOwner', 'enqueue', 'refresh', 'cancelRename',
+    'return function(id,title,requireEditor=false){' + renameBody + '}')(
+    id => sessions.value.find(row => row.id === id), () => adapter, renameOwners, pendingRenames, { value: 'live' }, ownsRename, sessions, captureRenameOwner,
+    async (_id, operation, publish) => { const result = await operation(); await publish(result); return result }, async () => {}, cancel)
+  return { sessions, begin, rename, renameOwners }
+}
+
+test('Rename_MissingHistoryNeverAdmitsEditor_004', () => {
+  const h = catalogRenameHarness(() => false)
+  h.begin('history')
+  assert.equal(h.sessions.value[0].renameState, 'idle')
+  assert.equal(h.renameOwners.size, 0)
+})
+
+test('Rename_OwnedFailedSaveRestoresEditor_005', async () => {
+  const h = catalogRenameHarness()
+  h.begin('history')
+  await assert.rejects(h.rename('history', 'Recoverable draft', true), /REVISION_CONFLICT/)
+  assert.equal(h.sessions.value[0].renameState, 'editing')
+  assert.equal(h.renameOwners.size, 1)
+})
+
+test('Rename_HistoryDraftSurvivesQueuedSaveAndFailure_006', () => {
+  const source = readFileSync('src/components/sessions/SessionItem.vue', 'utf8')
+  const body = source.match(/function commitRename\(\) \{([\s\S]*?)\n\}/)?.[1]
+  const watchBody = source.match(/watch\(\(\) => props.session.renameState, \(state, previous\) => \{([\s\S]*?)\n\}, \{ immediate: true \}\)/)?.[1]
+  assert.ok(body && watchBody)
+  const localRename = { value: true }, renameValue = { value: 'Recoverable draft' }, renameInvalid = { value: false }
+  const emitted = []
+  Function('isRenaming', 'isSaving', 'renameValue', 'renameInvalid', 'localRename', 'emit', 'props', 'nextTick', 'row', body)(
+    { value: true }, { value: false }, renameValue, renameInvalid, localRename, (...args) => emitted.push(args), { session: { id: 'history' } }, () => {}, {})
+  const watchState = Function('state', 'previous', 'localRename', 'renameValue', 'props', 'isSaving', 'focusRename', 'renameInvalid', watchBody)
+  for (const [state, previous] of [['saving', 'editing'], ['editing', 'saving']]) {
+    watchState(state, previous, localRename, renameValue, { session: { title: 'Old title' } }, { value: state === 'saving' }, () => {}, renameInvalid)
+    assert.equal(renameValue.value, 'Recoverable draft')
+    assert.equal(localRename.value, true)
+  }
+  assert.deepEqual(emitted, [['rename-commit', 'history', 'Recoverable draft']])
+})

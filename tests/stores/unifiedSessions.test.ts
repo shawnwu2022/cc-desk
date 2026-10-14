@@ -505,6 +505,32 @@ it('Unified_RenameAttemptBeforeProjection_019', async () => {
   expect(store.sessions[0].renameState).toBe('idle')
 })
 
+// 缺失历史没有有效 adapter owner，不能让用户进入必然失败的编辑。
+it('Unified_MissingHistoryRejectsRenameAdmission_035', async () => {
+  const value = session({ opened: false, safeErrorCode: 'SESSION_NOT_FOUND' })
+  const legacy = fakeAdapter('legacy-claude', [value]), store = useUnifiedSessionsStore()
+  legacy.adapter.captureOwnership = () => () => false
+  store.configureAdapters([legacy.adapter]); await store.refresh()
+  store.beginRename(value.id)
+  expect(store.sessions[0].renameState).toBe('idle')
+  await expect(store.renameSession(value.id, 'Invalid draft', true)).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  expect(legacy.adapter.renameSession).not.toHaveBeenCalled()
+})
+
+// 仍拥有同一历史来源的失败保存保留编辑器；用户可修改草稿并显式重试。
+it('Unified_OwnedRenameFailureAllowsExplicitRetry_036', async () => {
+  const value = session({ opened: false })
+  const legacy = fakeAdapter('legacy-claude', [value]), store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter]); await store.refresh(); store.beginRename(value.id)
+  vi.mocked(legacy.adapter.renameSession).mockRejectedValueOnce(new Error('REVISION_CONFLICT'))
+  await expect(store.renameSession(value.id, 'Recoverable draft', true)).rejects.toThrow('REVISION_CONFLICT')
+  expect(store.sessions[0].renameState).toBe('editing')
+  expect(store.activeSessionId).toBeNull()
+  await store.renameSession(value.id, 'Explicit retry', true)
+  expect(store.sessions[0].renameState).toBe('idle')
+  expect(store.sessions[0].title).toBe('Explicit retry')
+})
+
 // 非当前选择的重命名请求不得自动切换或启动会话，当前选择才允许显示编辑器。
 it('Unified_RenameSelectedOnly_020', async () => {
   const value = session(), other = session({ id: 'other', adapterSessionId: 'other' })
