@@ -13,8 +13,8 @@ export function relativizePath(filePath: string, projectPath: string): string {
   if (!projectPath || !filePath) return filePath
 
   // Windows 路径以盘符开头（C:\ / D:\ ...），比较时大小写不敏感
-  const isWindows = /^[a-zA-Z]:[\\/]/.test(projectPath)
-  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const isWindows = /^[a-zA-Z]:[\\/]/.test(projectPath) || projectPath.startsWith('\\\\')
+  const norm = (p: string) => (isWindows ? p.replace(/\\/g, '/') : p).replace(/\/+$/, '')
   const base = norm(projectPath)
   const target = norm(filePath)
   const eq = (a: string, b: string) =>

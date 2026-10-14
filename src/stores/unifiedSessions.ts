@@ -698,9 +698,14 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   function beginRename(id: string) {
     const row = sessions.value.find(value => value.id === id)
-    if (!row || activeSessionId.value !== id || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
+    if (!row || (row.opened !== false && activeSessionId.value !== id) || row.archived || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
     const current = renameOwners.get(id)
-    if (!current || !ownsRename(current, row)) { current?.controller.abort(); renameOwners.set(id, captureRenameOwner(row, 'editing')) }
+    if (!current || !ownsRename(current, row)) {
+      current?.controller.abort()
+      const owner = captureRenameOwner(row, 'editing')
+      if (!ownsRename(owner, row)) { owner.controller.abort(); renameOwners.delete(id); return }
+      renameOwners.set(id, owner)
+    }
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'editing' } : row)
   }
   function cancelRename(id: string) {
@@ -714,7 +719,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     const current = renameOwners.get(id)
-    if ((requireEditor && (!current || activeSessionId.value !== id)) || (current && !ownsRename(current, session))) {
+    if ((requireEditor && (!current || (session.opened !== false && activeSessionId.value !== id))) || (current && !ownsRename(current, session))) {
       if (!current?.issued) {
         renameOwners.delete(id)
         current?.controller.abort()
@@ -730,11 +735,20 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return enqueue(id, () => {
       if (renameOwners.get(id) !== owner || !ownsRename(owner, sessions.value.find(row => row.id === id))) throw new Error('STALE_SESSION_ATTEMPT')
       return adapter.renameSession(id, title, () => renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id)), () => { owner.issued = true }, owner.controller.signal)
-    }, () => refresh(session.projectKey)).finally(() => {
+    }, () => refresh(session.projectKey)).catch(failure => {
+      // A failed owned editor save must keep the user's draft available for
+      // retry; revoked/replaced attempts still close through normal cleanup.
+      if (requireEditor && renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id))) {
+        owner.state = 'editing'
+        owner.issued = false
+        sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'editing' } : row)
+      }
+      throw failure
+    }).finally(() => {
       const remaining = (pendingRenames.get(id) ?? 1) - 1
       if (remaining) pendingRenames.set(id, remaining)
       else pendingRenames.delete(id)
-      if (renameOwners.get(id) === owner && !remaining) cancelRename(id)
+      if (renameOwners.get(id) === owner && !remaining && owner.state === 'saving') cancelRename(id)
     })
   }
 

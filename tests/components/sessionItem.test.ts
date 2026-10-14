@@ -44,6 +44,43 @@ function row(session = base, extra: Record<string, unknown> = {}) {
 function menuIds() {
   return Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'), (item) => item.dataset.itemId)
 }
+
+// 关闭历史从菜单进入显示名编辑，焦点进入输入框而不恢复或选择终端。
+it('Row_ClosedHistoryRenameKeepsTerminalSelection_042', async () => {
+  const history = { ...base, opened: false, processState: 'stopped' as const }
+  const wrapper = row(history)
+  await wrapper.trigger('contextmenu'); await nextTick()
+  await body.get('[data-item-id="rename"]').trigger('click')
+  expect(wrapper.emitted('menu-action')).toEqual([[history.id, 'rename']])
+  await wrapper.setProps({ session: { ...history, renameState: 'editing' } })
+  await nextTick(); await nextTick()
+  const input = wrapper.get('input')
+  expect(document.activeElement).toBe(input.element)
+  await input.setValue('History display name')
+  await input.trigger('keydown', { key: 'Enter' })
+  expect(wrapper.emitted('rename-commit')).toEqual([[history.id, 'History display name']])
+  expect(wrapper.emitted('activate')).toBeUndefined()
+  expect(wrapper.emitted('primary-action')).toBeUndefined()
+})
+// 已准入的关闭历史编辑在队列等待与失败重试时保留草稿，成功才退出。
+it('Row_ClosedHistoryQueuedSaveKeepsDraft_045', async () => {
+  const history = { ...base, opened: false, processState: 'stopped' as const }
+  const wrapper = row({ ...history, renameState: 'editing' })
+  await wrapper.get('input').setValue('Recoverable history draft')
+  await wrapper.get('input').trigger('keydown', { key: 'Enter' })
+  await wrapper.setProps({ session: { ...history, renameState: 'saving' } })
+  expect((wrapper.get('input').element as HTMLInputElement).value).toBe('Recoverable history draft')
+  expect(wrapper.get('input').attributes('disabled')).toBeDefined()
+  expect(wrapper.find('[data-session-archive]').exists()).toBe(false)
+  await wrapper.setProps({ session: { ...history, renameState: 'editing' } })
+  expect((wrapper.get('input').element as HTMLInputElement).value).toBe('Recoverable history draft')
+  expect(wrapper.get('input').attributes('disabled')).toBeUndefined()
+  await wrapper.get('input').trigger('keydown', { key: 'Enter' })
+  expect(wrapper.emitted('rename-commit')).toHaveLength(2)
+  await wrapper.setProps({ session: { ...history, title: 'Recoverable history draft', renameState: 'idle' } })
+  expect(wrapper.find('input').exists()).toBe(false)
+  expect(wrapper.get('.session-name').text()).toBe('Recoverable history draft')
+})
 function styleRules() {
   const source = readFileSync(resolve('src/components/sessions/SessionItem.vue'), 'utf8')
   const style = document.createElement('style')
@@ -466,6 +503,7 @@ describe('Unified session menu model', () => {
     for (const runtime of ['legacy-claude', 'native-cli'] as const) {
       const history = { ...base, runtime, processState: 'stopped' as const, opened: false }
       const ids = selectSessionMenuActions(history, { restart: true, close: true }).map(action => action.id)
+      expect(ids).toContain('rename')
       expect(ids).not.toContain('restart')
       expect(ids).not.toContain('close')
       expect(ids).not.toContain('resume')

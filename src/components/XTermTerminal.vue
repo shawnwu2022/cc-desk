@@ -39,7 +39,7 @@ import {
 } from '@/api/tauri'
 import { registerTerminalCommand } from '@/composables/useTerminalCommand'
 import { safeDispose } from '@/utils/dispose'
-import { relativizePath } from '@/utils/path'
+import { formatDroppedPaths } from '@/utils/terminalDropPaths'
 import { parseLegacyCustomArgs } from '@/utils/legacyCustomArgs'
 import { PtyIndex } from '@/utils/ptyIndex'
 import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
@@ -565,10 +565,7 @@ function dropPaths(paths: string[]): boolean {
   const tabId = currentDisplayTabId.value
   if (!tabId) return false
   const projectPath = sessionStore.tabs.get(tabId)?.projectPath ?? ''
-  const text = paths
-    .map(p => relativizePath(p, projectPath))
-    .map(p => p.includes(' ') ? `"${p}"` : p)
-    .join(' ')
+  const text = formatDroppedPaths(paths, projectPath)
   if (!text) return false
   return sendText(text)
 }
@@ -970,20 +967,9 @@ async function stopTab(tabId: string) {
   }
 }
 async function recover() { throw new Error('LEGACY_RECOVERY_UNSUPPORTED') }
-async function renameTab(tabId: string, title: string, admission: InputWriteAdmission = {}) {
-  if (!title.trim() || /[\x00-\x1f\x7f]/.test(title)) throw new Error('SESSION_TITLE_REQUIRED')
-  const tab = sessionStore.tabs.get(tabId)
-  if (!tab) throw new Error('LEGACY_SESSION_NOT_FOUND')
-  const ptyId = tab.ptyId
-  const instance = terminalInstances.get(tabId)
-  // 无法注入必须报错：静默成功会让 adapter 误判改名已送达并清除 GUI 覆盖名，导致改名丢失。
-  if (tab.status !== 'running' || !ptyId || instance?.ptyId !== ptyId) throw new Error('LEGACY_RENAME_UNAVAILABLE')
-  const queue = legacyInputQueues.get(instance.term)
-  if (!queue) throw new Error('LEGACY_RENAME_UNAVAILABLE')
-  await queue.enqueue(`/rename ${title}\r`, undefined, { ...admission, beforeDispatch: () => {
-    if (!visible.value || sessionStore.tabs.get(tabId) !== tab || tab.ptyId !== ptyId || tab.status !== 'running') throw new Error('STALE_SESSION_ATTEMPT')
-    admission.beforeDispatch?.()
-  } })
+async function renameTab(_tabId: string, _title: string, _admission: InputWriteAdmission = {}): Promise<void> {
+  // 当前没有 CLI 编辑态证明，禁止向未知 prompt 追加命令或回车。
+  throw new Error('CLI_RENAME_EDITOR_UNVERIFIED')
 }
 watch(() => props.visible, async () => {
   for (const id of terminalInstances.keys()) needsFit.add(id)

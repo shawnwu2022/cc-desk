@@ -92,22 +92,26 @@ explicit restart/retry, rename, close/archive/restore, copy session ID and
 open directory to current adapters and shared confirmations. New/Resume dialogs,
 project management, contextual resources and safe diagnostics are implemented;
 unsupported operations are never translated to Legacy commands. Refresh reloads
-sources without retrying a failed lifecycle request. Renaming a running session
-drives the CLI's own rename mechanism (a `/rename` injection for Claude; Codex
-keeps `projectsState` display metadata until its command form is verified) and
-clears the stored display override only after its own input is confirmed written.
-Native checks the exact run/generation/inputSeq/modeEpoch and full byte count;
-Legacy waits for its existing PTY writer acknowledgement. Pending clipboard,
-paused input, partial/unknown or mismatched receipts never authorize that cleanup.
-The result is `input-written`, not CLI command acceptance; feedback says the request
-was written to the CLI terminal with acceptance unverified. Display-only renames
-return `display-name-saved`. Proposed live titles remain optimistic until CLI history
-provides evidence; no PTY receipt proves that the CLI executed `/rename`.
-Both FIFO queues check the rename's admission just before dispatch. Selection
-cancels only unsubmitted rename intents through the owner's AbortSignal; dispatched
-writes retain their exact owner while awaiting acknowledgement. Source/attempt
-invalidation still prevents cleanup of another owner, and unmount rejects pending
-confirmation without replay. Cancellation alone does not report an input pause.
+sources without retrying a failed lifecycle request. GUI renames save Desk display
+metadata for running and closed sessions through the existing queued writer.
+The CLI editor contents remain unchanged: PTY ownership and exact write receipts
+cannot prove an empty prompt or safe slash-command interpretation. The explicit
+terminal rename ports reject with `CLI_RENAME_EDITOR_UNVERIFIED`; they never clear
+a draft or inject a command. The result is `display-name-saved`, and feedback says
+that the display name was saved, without claiming a CLI-native name change.
+Selection cancels unissued metadata saves; an issued save retains its exact owner,
+and source/attempt invalidation still rejects stale completion.
+
+Closed non-archived history exposes Rename without resuming or selecting a
+terminal. Its original source owner admits the inline editor and metadata write.
+Preparing/archived rows remain excluded, and active rows retain their selection
+requirement. Both drop endpoints use `formatDroppedPaths`: original paths,
+project context and relative results reject terminal control characters as one
+batch. Simple file references remain plain; other references use explicit JSON
+string quoting with escaped quotes/backslashes. POSIX literal backslashes retain
+path identity. This is coding-CLI reference text, not a promise of universal shell
+argument escaping; dropped paths never add Enter or terminal control bytes.
+
 Rename admission is limited to opened sessions; stopped tabs and history rows
 without a writable CLI keep the display-metadata fallback.
 

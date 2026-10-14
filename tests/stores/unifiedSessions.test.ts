@@ -94,6 +94,24 @@ function fakeAdapter(runtime: SessionRuntimeKind, initial: UnifiedSession[] = []
   }
 }
 
+// 历史显示名编辑不能先恢复 CLI，也不能抢占当前运行终端的选择。
+it('Rename_ClosedHistoryEditsWithoutResume_013', async () => {
+  setActivePinia(createPinia())
+  const history = session({ id: 'history', opened: false, processState: 'stopped' })
+  const live = session({ id: 'live', opened: true })
+  const fake = fakeAdapter('legacy-claude', [history, live])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([fake.adapter]); await store.refresh()
+  store.activeSessionId = live.id
+  store.beginRename(history.id)
+  expect(store.sessions.find(row => row.id === history.id)?.renameState).toBe('editing')
+  await store.renameSession(history.id, 'History display name', true)
+  expect(store.sessions.find(row => row.id === history.id)?.title).toBe('History display name')
+  expect(store.activeSessionId).toBe(live.id)
+  expect(fake.adapter.resumeSession).not.toHaveBeenCalled()
+  expect(fake.adapter.activateSession).not.toHaveBeenCalled()
+})
+
 it.each(['navigation', 'selection', 'revision', 'success'] as const)('confirmed discovery pins revision and cancels stale preflight: %s', async reason => {
   setActivePinia(createPinia())
   const store = useUnifiedSessionsStore(), native = fakeAdapter('native-cli')
@@ -485,6 +503,32 @@ it('Unified_RenameAttemptBeforeProjection_019', async () => {
   await store.renameSession(value.id, 'Explicit new edit')
   expect(native.adapter.renameSession).toHaveBeenCalledExactlyOnceWith(value.id, 'Explicit new edit', expect.any(Function), expect.any(Function), expect.any(AbortSignal))
   expect(store.sessions[0].renameState).toBe('idle')
+})
+
+// 缺失历史没有有效 adapter owner，不能让用户进入必然失败的编辑。
+it('Unified_MissingHistoryRejectsRenameAdmission_035', async () => {
+  const value = session({ opened: false, safeErrorCode: 'SESSION_NOT_FOUND' })
+  const legacy = fakeAdapter('legacy-claude', [value]), store = useUnifiedSessionsStore()
+  legacy.adapter.captureOwnership = () => () => false
+  store.configureAdapters([legacy.adapter]); await store.refresh()
+  store.beginRename(value.id)
+  expect(store.sessions[0].renameState).toBe('idle')
+  await expect(store.renameSession(value.id, 'Invalid draft', true)).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  expect(legacy.adapter.renameSession).not.toHaveBeenCalled()
+})
+
+// 仍拥有同一历史来源的失败保存保留编辑器；用户可修改草稿并显式重试。
+it('Unified_OwnedRenameFailureAllowsExplicitRetry_036', async () => {
+  const value = session({ opened: false })
+  const legacy = fakeAdapter('legacy-claude', [value]), store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter]); await store.refresh(); store.beginRename(value.id)
+  vi.mocked(legacy.adapter.renameSession).mockRejectedValueOnce(new Error('REVISION_CONFLICT'))
+  await expect(store.renameSession(value.id, 'Recoverable draft', true)).rejects.toThrow('REVISION_CONFLICT')
+  expect(store.sessions[0].renameState).toBe('editing')
+  expect(store.activeSessionId).toBeNull()
+  await store.renameSession(value.id, 'Explicit retry', true)
+  expect(store.sessions[0].renameState).toBe('idle')
+  expect(store.sessions[0].title).toBe('Explicit retry')
 })
 
 // 非当前选择的重命名请求不得自动切换或启动会话，当前选择才允许显示编辑器。

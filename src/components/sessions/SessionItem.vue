@@ -41,7 +41,7 @@ const renameInvalid = ref(false)
 const menuOpen = ref(false)
 let firstClick: { session: UnifiedSession; owner: string; owns: (() => boolean) | null; selected: boolean } | null = null
 const menuAnchor = ref({ x: 8, y: 8 })
-const isRenaming = computed(() => props.selected && (localRename.value || props.session.renameState === 'editing' || props.session.renameState === 'saving'))
+const isRenaming = computed(() => (props.selected || props.session.opened === false) && (localRename.value || props.session.renameState === 'editing' || (props.selected && props.session.renameState === 'saving')))
 const isSaving = computed(() => props.session.renameState === 'saving')
 const visualState = computed(() => deriveSessionVisualState(props.session, props.session.opened === true))
 const observationNotice = computed(() => selectSessionObservationNotice(props.session))
@@ -49,7 +49,7 @@ const receiptId = computed(() => {
   const notice = props.session.observationNotice?.unreadReplyEnd
   return notice ? JSON.stringify([notice.runId, notice.generation, notice.eventId]) : undefined
 })
-const canRename = computed(() => props.selected && !props.session.preparationState && props.menuActionVisibility?.rename !== false)
+const canRename = computed(() => (props.selected || props.session.opened === false) && !props.session.archived && !props.session.preparationState && props.menuActionVisibility?.rename !== false)
 const actions = computed(() => selectSessionMenuActions(props.session, { ...props.menuActionVisibility, rename: canRename.value }))
 const archive = computed(() => selectSessionArchiveAction(props.session, props.menuActionVisibility))
 const requestedPrimary = computed(() => isRenaming.value ? 'save-rename'
@@ -85,7 +85,7 @@ watch(() => props.selected, selected => { if (!selected) { localRename.value = f
 watch(() => props.surfaceActive, active => { if (!active) menuOpen.value = false }, { flush: 'sync' })
 async function focusRename() {
   await nextTick()
-  if (!props.surfaceActive || !props.selected) return
+  if (!props.surfaceActive || (props.session.opened !== false && !props.selected)) return
   const input = renameInput.value?.$el.querySelector('input') as HTMLInputElement | null
   input?.focus()
   input?.select()
@@ -120,7 +120,6 @@ function commitRename() {
   if (!isRenaming.value || isSaving.value) return
   const title = renameValue.value.trim()
   if (!title || /\p{Cc}/u.test(renameValue.value)) { renameInvalid.value = true; return }
-  localRename.value = false
   renameInvalid.value = false
   emit('rename-commit', props.session.id, title)
   void nextTick(() => row.value?.focus())
