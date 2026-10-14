@@ -524,10 +524,8 @@ it('Unified_ResumeIntentRevokesEdit_022', async () => {
   expect(stateWhileWaiting).toBe('idle')
 })
 
-// legacy 与 native 的历史扫描会把同一 Claude 转录各列一行；统一树必须按
-// 项目+会话身份折叠成一行。两者都已关闭时保留 native 行（投影元数据更完整），
-// 并合并归档标记与最近活动时间。
-it('Unified_CrossRuntimeClaudeDuplicateCollapses_023', async () => {
+// Legacy 与 Native 缺少相同配置根的证明，即使原生 UUID 相同也保留各自关闭历史。
+it('Unified_UnknownRootsKeepClosedRows_023', async () => {
   const legacyRow = session({
     id: 'legacy-history:/repo:sess-1',
     runtime: 'legacy-claude',
@@ -550,14 +548,13 @@ it('Unified_CrossRuntimeClaudeDuplicateCollapses_023', async () => {
   store.configureAdapters([legacy.adapter, native.adapter])
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
-  expect(rows).toHaveLength(1)
-  expect(rows[0].runtime).toBe('native-cli')
-  expect(rows[0].lastActivityAt).toBe(200)
+  expect(rows).toHaveLength(2)
+  expect(rows.map(row => row.runtime).sort()).toEqual(['legacy-claude', 'native-cli'])
+  expect(rows.find(row => row.runtime === 'native-cli')?.lastActivityAt).toBe(200)
 })
 
-// 同一会话在 legacy 中打开（活动行）时，折叠结果必须保留活动行本身，
-// 不能让 native 历史行顶替打开中的终端投影。
-it('Unified_CrossRuntimeDuplicateKeepsLiveRow_024', async () => {
+// 未知配置根的同 ID 历史不能顶替 Legacy 活动终端，两个入口各自保留。
+it('Unified_UnknownRootsKeepLiveRow_024', async () => {
   const liveLegacyTab = session({
     id: 'legacy-tab:t1',
     runtime: 'legacy-claude',
@@ -580,13 +577,12 @@ it('Unified_CrossRuntimeDuplicateKeepsLiveRow_024', async () => {
   store.configureAdapters([legacy.adapter, native.adapter])
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
-  expect(rows).toHaveLength(1)
+  expect(rows).toHaveLength(2)
   expect(rows[0].id).toBe('legacy-tab:t1')
 })
 
-// 两侧都关闭但归档状态不同：折叠行必须继承任一来源的归档标记，
-// 否则已归档会话会以普通历史身份重新出现在项目列表。
-it('Unified_CrossRuntimeDuplicateMergesArchived_025', async () => {
+// 归档只属于原来源，不得传播到同 ID 的独立 Native 历史。
+it('Unified_UnknownRootsKeepArchiveState_025', async () => {
   const legacyRow = session({
     id: 'legacy-history:/repo:sess-1',
     runtime: 'legacy-claude',
@@ -609,14 +605,14 @@ it('Unified_CrossRuntimeDuplicateMergesArchived_025', async () => {
   store.configureAdapters([legacy.adapter, native.adapter])
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
-  expect(rows).toHaveLength(1)
+  expect(rows).toHaveLength(2)
   expect(rows[0].archived).toBe(true)
 })
 
 // 自然退出后仍打开的 legacy 终端（opened=true、processState=stopped）是真实
 // 终端 owner：底层 tab 仍在，不能被 native 历史行当作重复项折叠掉，
 // 否则用户无法再选中或关闭它，活动选中也会被 refresh 清空。
-it('Unified_CrossRuntimeDuplicateKeepsOpenedTerminal_026', async () => {
+it('Unified_UnknownRootsKeepOpenedTerminal_026', async () => {
   const legacyRow = session({
     id: 'legacy-tab:t1',
     runtime: 'legacy-claude',
@@ -642,13 +638,12 @@ it('Unified_CrossRuntimeDuplicateKeepsOpenedTerminal_026', async () => {
   await store.refresh()
   store.activeSessionId = 'legacy-tab:t1'
   await store.refresh()
-  expect(store.sessions.map(value => value.id)).toEqual(['legacy-tab:t1'])
+  expect(store.sessions.map(value => value.id).sort()).toEqual(['legacy-tab:t1', 'native-history:/repo:sess-1'])
   expect(store.activeSessionId).toBe('legacy-tab:t1')
 })
 
-// 折叠只针对已证明的跨运行时重复：同运行时不同 profile/来源身份的多行
-// 是各自准确的恢复来源，不得按身份互相吞并只剩第一条。
-it('Unified_CrossRuntimeCollapseRequiresBothRuntimes_027', async () => {
+// 同运行时不同 profile/来源身份保留各自准确的恢复来源。
+it('Unified_NativeOriginsRemainDistinct_027', async () => {
   const first = session({
     id: 'nh-1',
     runtime: 'native-cli',
@@ -672,9 +667,8 @@ it('Unified_CrossRuntimeCollapseRequiresBothRuntimes_027', async () => {
   expect(store.sessions.map(value => value.id).sort()).toEqual(['nh-1', 'nh-2'])
 })
 
-// 归档标记属于写它的运行时：唯一归档行必须作为折叠 winner 保留其 id/runtime，
-// 恢复动作才能派发给持有原归档键的 adapter，否则 legacy 注册表键无法清除。
-it('Unified_CrossRuntimeArchivedWinnerKeepsRestoreOwner_028', async () => {
+// 归档标记和恢复动作只属于原运行时，不能改变独立来源的同 ID 历史。
+it('Unified_UnknownRootsKeepRestoreOwner_028', async () => {
   const legacyRow = session({
     id: 'legacy-history:/repo:sess-1',
     runtime: 'legacy-claude',
@@ -697,7 +691,7 @@ it('Unified_CrossRuntimeArchivedWinnerKeepsRestoreOwner_028', async () => {
   store.configureAdapters([legacy.adapter, native.adapter])
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
-  expect(rows).toHaveLength(1)
+  expect(rows).toHaveLength(2)
   expect(rows[0].archived).toBe(true)
   await store.restoreArchivedSession(rows[0].id)
   expect(legacy.adapter.restoreArchivedSession).toHaveBeenCalledWith('legacy-history:/repo:sess-1')
@@ -778,7 +772,7 @@ it('Unified_BothArchivesKeepOwners_030', async () => {
   expect(store.sessions.filter(row => row.archived).map(row => row.id)).toEqual(['native-history:profile-a'])
   await store.restoreArchivedSession('native-history:profile-a')
   expect(store.sessions.some(row => row.archived)).toBe(false)
-  expect(store.projectGroups[0].sessions.map(row => row.id)).toEqual(['native-history:profile-a'])
+  expect(store.projectGroups[0].sessions.map(row => row.id).sort()).toEqual(['legacy-history:/repo:sess-1', 'native-history:profile-a'])
 })
 
 // CLI 支持开关关闭的 CLI 不列出历史行；已打开终端是活进程，保留可选中与关闭。
@@ -848,4 +842,19 @@ it('UnifiedSessions_MissingRecordHonorsCliSupport_031', async () => {
   await store.refresh()
   expect(store.sessions).toHaveLength(0)
   localStorage.removeItem('cc-desk-cli-support-v1')
+})
+
+// 相同原生 UUID 不能证明两个配置根相同，各自历史和归档恢复入口必须保留。
+it('Unified_OneEachRootKeepsRestoreOrigins_040', async () => {
+  const legacyRow = session({ id: 'legacy-origin', runtime: 'legacy-claude', processState: 'stopped', opened: false, archived: true, adapterSessionId: 'same-id', nativeSessionId: 'same-id' })
+  const nativeRow = session({ id: 'native-origin', runtime: 'native-cli', processState: 'stopped', opened: false, archived: false, adapterSessionId: '["local","claude","independent-root","same-id"]', nativeSessionId: 'same-id', launchConfigId: 'independent-profile', nativeOrigin: { cli: 'claude', profileId: 'independent-profile', profileRevision: '1', projectId: 'project-1', projectPath: '/repo' } })
+  const legacy = fakeAdapter('legacy-claude', [legacyRow])
+  const native = fakeAdapter('native-cli', [nativeRow])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter])
+  await store.refresh()
+  expect(store.sessions.map(row => row.id).sort()).toEqual(['legacy-origin', 'native-origin'])
+  await store.restoreArchivedSession('legacy-origin')
+  expect(legacy.adapter.restoreArchivedSession).toHaveBeenCalledWith('legacy-origin')
+  expect(native.adapter.restoreArchivedSession).not.toHaveBeenCalled()
 })

@@ -6,9 +6,9 @@
 
 - Resolve repeated Codex rollout identities to their latest thread history and prefer CLI session names while excluding injected context and automation-only sessions
 - Cache bounded Codex display metadata without relaxing scoped filesystem authority, source replacement checks or incomplete-history disclosure
-- Restore CLI-owned Codex archives through an explicit one-shot unarchive command and preserve their opening-time metadata
+- Restore CLI-owned Codex archives through an explicit one-shot unarchive command, preserve their opening-time metadata, and wait for the exact command owner during application shutdown
 - Add independent Claude Code and Codex support preferences for creation and history while retaining open terminal ownership
-- Collapse uniquely paired cross-runtime Claude history rows without hiding independent live or archived owners
+- Preserve independent Legacy/native history and archive origins even when their CLI session IDs match
 - Defer release preflight runner allocation until signed platform builds finish while retaining exact-main CI, coverage and updater signature gates
 - Align historical unread-receipt documentation with the existing provenance, generation, exact ACK and bounded application-lifetime cache contracts
 

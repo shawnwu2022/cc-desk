@@ -2241,3 +2241,85 @@ fn HistoryCodex_OrdinaryUserPrefixesStayVisible_053() {
         |item| item["nativeSessionId"] == "files-user" && item["title"] == "Named file request"
     ));
 }
+
+// 相同大小和修改时间的显示缓存不能把陈旧会话身份变成当前来源或缺失证明。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_CacheChecksCurrentIdentity_054() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/14")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let relative = Path::new("sessions/2026/10/14/rollout-cache-proof.jsonl");
+    std::fs::write(temp.path().join(relative), format!("{}\n{}\n",
+        json!({"type":"session_meta","payload":{"id":"fresh-bb","cwd":cwd,"thread_source":"user"}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"real work"}}))).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let (len, modified) = root.stat(relative).unwrap().unwrap();
+    let stamps = cache::Stamps::from_system(len, modified).unwrap();
+    cache::with(|cache| {
+        cache.record(
+            cache::key(root.key(), "codex", relative),
+            stamps,
+            cache::CachedMetadata {
+                native_id: "stale-aa".into(),
+                cwd: Some(cwd),
+                title: "Cached old title".into(),
+                title_priority: Some(0),
+                updated: None,
+                metadata_incomplete: false,
+            },
+        )
+    });
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let values = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        values[0]["nativeSessionId"], "fresh-bb",
+        "当前文件身份必须优先于同 stamp 的陈旧缓存"
+    );
+}
+
+// 暖缓存的身份读取只能解析完整记录；4KiB 后续正文字符切半不能丢失合法会话。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_CacheHeaderKeepsUtf8Seam_055() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/14")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let relative = Path::new("sessions/2026/10/14/rollout-cache-utf8.jsonl");
+    let header = format!(
+        "{}\n",
+        json!({"type":"session_meta","payload":{"id":"cached-utf8","cwd":cwd,"thread_source":"user"}})
+    );
+    let prefix = r#"{"type":"event_msg","payload":{"type":"user_message","message":""#;
+    let padding = 4095 - header.len() - prefix.len();
+    let body = format!(
+        "{}{}{}中{}\"}}}}\n",
+        header,
+        prefix,
+        "x".repeat(padding),
+        "x".repeat(8192)
+    );
+    assert!(!std::str::from_utf8(&body.as_bytes()[..4096]).is_ok());
+    std::fs::write(temp.path().join(relative), body).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let (len, modified) = root.stat(relative).unwrap().unwrap();
+    cache::with(|cache| {
+        cache.record(
+            cache::key(root.key(), "codex", relative),
+            cache::Stamps::from_system(len, modified).unwrap(),
+            cache::CachedMetadata {
+                native_id: "cached-utf8".into(),
+                cwd: Some(cwd),
+                title: "Kept cached title".into(),
+                title_priority: Some(0),
+                updated: None,
+                metadata_incomplete: true,
+            },
+        )
+    });
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let values = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1, "后续正文切半的字符不能使暖缓存历史消失");
+    assert_eq!(values[0]["nativeSessionId"], "cached-utf8");
+}

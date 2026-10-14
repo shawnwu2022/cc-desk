@@ -285,8 +285,8 @@ fn codex_session_names(
     best.into_iter().map(|(id, (_, name))| (id, name)).collect()
 }
 
-/// Codex 历史行：先查显示元数据缓存（命中则零读取），未命中则做一次打开
-/// 内的头窗口 + 尾部观察并回填缓存。缓存只服务展示，不充当身份或存在证据。
+/// Codex 缓存只复用显示字段：命中后仍从持有文件读取首个完整身份记录，
+/// 身份/归属/来源不匹配即重新观察，不能把 size/mtime 相等当作缺失证明。
 fn codex_history(
     c: &Catalog<'_>,
     path: &str,
@@ -301,18 +301,44 @@ fn codex_history(
         return Err("SOURCE_CHANGED");
     };
     let key = cache::key(c.root.key(), c.cli.as_str(), relative);
-    // 缓存只保存用户主动创建的会话，因此命中本身就代表该行应被列出，
-    // 不需要在读文件之前再判断一次来源标记。
     if let Some(metadata) = cache::with(|cache| cache.lookup(&key, &stamps).cloned()) {
-        let mut transcript = cached_transcript(metadata);
-        // 归档状态由代表 rollout 的容器位置决定，必须保留真实相对路径。
-        transcript.source_path = path.to_owned();
-        // 缓存命中的行若上次只观察到文件前缀，这个事实必须回到来源级标记：
-        // 否则同一文件冷读标记不完整、暖读漏记，部分观察被升级成缺失证明。
-        if transcript.metadata_incomplete {
-            b.retain_history_metadata_incomplete();
+        // 恢复/同步可保留 size/mtime；每次从已准入且持有的文件证明当前首个身份。
+        let mut identity_probe = |bytes: &[u8]| {
+            Ok(bytes.split_inclusive(|byte| *byte == b'\n').any(|line| {
+                line.last() == Some(&b'\n')
+                    && serde_json::from_slice::<Value>(line).is_ok_and(|value| {
+                        value["type"] == "session_meta" && value["payload"]["id"].is_string()
+                    })
+            }))
+        };
+        let Some((header, incomplete)) = c.root.history_until(relative, b, &mut identity_probe)?
+        else {
+            cache::with(|cache| cache.forget(&key));
+            return Err("SOURCE_CHANGED");
+        };
+        // 整个块仍计入预算，只解析最后完整记录前的字节，避免后续 UTF-8 字符切半。
+        let complete = header
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        let observed = parse_codex_metadata(text(&header[..complete])?, None, !incomplete)?;
+        if observed.id == metadata.native_id
+            && observed.cwd == metadata.cwd
+            && !observed.auto_session
+            && !observed.unconfirmable_wrapper_only
+        {
+            *observation_bytes = header.len();
+            let mut transcript = cached_transcript(metadata);
+            // 归档状态由代表 rollout 的容器位置决定，必须保留真实相对路径。
+            transcript.source_path = path.to_owned();
+            // 缓存命中的行若上次只观察到文件前缀，这个事实必须回到来源级标记：
+            // 否则同一文件冷读标记不完整、暖读漏记，部分观察被升级成缺失证明。
+            if transcript.metadata_incomplete {
+                b.retain_history_metadata_incomplete();
+            }
+            return Ok(Some(transcript));
         }
-        return Ok(Some(transcript));
+        cache::with(|cache| cache.forget(&key));
     }
     // 观察者在确认「非用户创建的会话」时立即停止，省下该文件其余头窗口的读取。
     let auto = std::cell::Cell::new(false);

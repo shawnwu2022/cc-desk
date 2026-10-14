@@ -14,7 +14,7 @@ use crate::platform::launch::resolve_process;
 use crate::platform::owned_pty::OwnedPty;
 use crate::terminal_transport::OutputFrame;
 use crate::version_history::maintenance::{PreparingStart, RuntimeKind};
-use parking_lot::RwLock;
+use parking_lot::{Condvar, Mutex, RwLock};
 use portable_pty::PtySize;
 use std::cell::{Cell, RefCell};
 use std::io::{self, Read, Write};
@@ -40,6 +40,40 @@ pub(crate) trait RunSupervisor: Send + Sync {
     ) -> Result<(), SafeError>;
 }
 
+#[derive(Default)]
+struct CommandOwners {
+    active: Mutex<usize>,
+    settled: Condvar,
+}
+
+struct CommandOwner {
+    owners: Arc<CommandOwners>,
+    settled: bool,
+}
+impl CommandOwners {
+    fn register(self: &Arc<Self>) -> Result<CommandOwner, SafeError> {
+        let mut active = self.active.lock();
+        // 与 launch receipt 同量级的硬上限，关闭等待不维护无界 owner 清单。
+        if *active >= 4096 {
+            return Err(error("REGISTRY_CAPACITY"));
+        }
+        *active += 1;
+        Ok(CommandOwner {
+            owners: self.clone(),
+            settled: false,
+        })
+    }
+}
+impl Drop for CommandOwner {
+    fn drop(&mut self) {
+        // 只有真实 reap 或已证实未创建 child 才解除；panic/未知状态继续阻止清静证明。
+        if self.settled {
+            *self.owners.active.lock() -= 1;
+            self.owners.settled.notify_all();
+        }
+    }
+}
+
 pub(crate) struct LaunchService {
     coordinator: LaunchCoordinator<NativeRun>,
     repository: WorkspaceRepository,
@@ -47,6 +81,7 @@ pub(crate) struct LaunchService {
     supervisor: Option<Arc<dyn RunSupervisor>>,
     observer: Option<Arc<crate::observer_host::ObserverHost>>,
     shutting_down: Arc<RwLock<bool>>,
+    command_owners: Arc<CommandOwners>,
 }
 impl LaunchService {
     pub(crate) fn new(
@@ -61,6 +96,7 @@ impl LaunchService {
             supervisor,
             observer: None,
             shutting_down: Arc::new(RwLock::new(false)),
+            command_owners: Arc::new(CommandOwners::default()),
         }
     }
     pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
@@ -244,6 +280,21 @@ impl LaunchService {
         *self.shutting_down.write() = true;
     }
 
+    /// 普通 run 与一次性 command 分别保有 child；退出必须等待两类 owner 收口。
+    pub(crate) fn wait_for_commands(&self) {
+        const SHUTDOWN_REAP_TIMEOUT: Duration = Duration::from_secs(5);
+        let started = Instant::now();
+        let mut active = self.command_owners.active.lock();
+        while *active != 0 {
+            let remaining = SHUTDOWN_REAP_TIMEOUT.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                log::warn!("native command shutdown timed out with unresolved owners");
+                return;
+            }
+            self.command_owners.settled.wait_for(&mut active, remaining);
+        }
+    }
+
     /// 一次性 CLI 子命令：复用启动完全相同的 profile/环境冻结与 argv 构造，但
     /// 不注册 run、不建立 document/输出路由、不返回 tab。用于 `codex unarchive`
     /// 这类必须由 CLI 自己执行的会话状态变更——Desk 不得搬动 CLI 的归档文件。
@@ -280,6 +331,7 @@ impl LaunchService {
         let registry = self.registry().clone();
         let caller = caller.clone();
         let shutting_down = self.shutting_down.clone();
+        let command_owners = self.command_owners.clone();
         let size = PtySize {
             cols: request.cols,
             rows: request.rows,
@@ -308,9 +360,18 @@ impl LaunchService {
                     reply(Err(failure));
                     return;
                 }
+                // read guard 仍在：begin_shutdown 不可能先越过门禁再漏掉此 owner。
+                let mut command_owner = match command_owners.register() {
+                    Ok(owner) => owner,
+                    Err(failure) => {
+                        reply(Err(failure));
+                        return;
+                    }
+                };
                 let pty = match OwnedPty::spawn_admitted(&spec, size, admission.begin_creation()) {
                     Ok(pty) => pty,
                     Err(failure) => {
+                        command_owner.settled = true;
                         reply(Err(failure));
                         return;
                     }
@@ -353,6 +414,7 @@ impl LaunchService {
                 loop {
                     match pty.try_wait() {
                         Ok(Some(status)) => {
+                            command_owner.settled = true;
                             reply(if status.success() {
                                 Ok(())
                             } else {

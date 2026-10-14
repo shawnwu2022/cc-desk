@@ -550,3 +550,30 @@ fn NativeCommand_TimeoutReapsExactChild_003() {
     }
     assert_eq!(f.children(), 1, "timeout retried process creation");
 }
+
+// 实际 NativeRuntime 退出入口必须等待一次性 command 的真实 reap，不能仅发 flag。
+#[test]
+fn NativeCommand_RuntimeShutdownWaitsForReap_004() {
+    let f = Fixture::new(false);
+    let runtime = crate::cli::native_runtime::NativeRuntime::new(f.service.clone());
+    let service = f.service.clone();
+    let caller = f.caller.clone();
+    let request = f.request.clone();
+    let worker = std::thread::spawn(move || service.run_command(&caller, &request));
+    f.ready();
+    let started = Instant::now();
+    runtime.shutdown();
+    let settled = f
+        .repository
+        .admission()
+        .freeze(&uuid::Uuid::new_v4().to_string());
+    // RED 时仍等待后台线程自行收口，以免测试失败遗留活进程。
+    let failure = worker.join().unwrap().unwrap_err();
+    assert_eq!(failure.code, "RUN_SUPERVISOR_STOPPING");
+    assert!(started.elapsed() < Duration::from_secs(6));
+    settled
+        .expect("runtime shutdown returned before command reap")
+        .release_review()
+        .unwrap();
+    assert_eq!(f.children(), 1);
+}

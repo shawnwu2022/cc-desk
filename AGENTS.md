@@ -59,7 +59,7 @@
 - Roundtrip debug 两场景仅在同一 job 首次完整构建成功且前端存在后复用前端；第二次只覆盖 `beforeBuildCommand`。两次 Rust 构建、严格 Clippy、disabled binding 和原始字节恢复不变，不跨 job/源码复用 `dist`。
 - 独立 Node 粘贴验收编译真实生产源码；共享 AST 编译器仅将 Vite 的 `import.meta.env.DEV` 设为 `false`，不改正文或其他开关。宿主剪贴板隔离不能替代真实策略，详见 [粘贴契约](docs/paste-framing.md)。
 - Rust 权重校准须使用本次编译识别的 executable、完整原始名称及源码/工具链记录；fixture 初始化失败、timeout 和并行输出观察时间均不能当作单例耗时。受限环境核对临时目录准入，保留失败记录，不改 ACL/token、Job 门禁或测试断言。持有 Windows 目录句柄的 fixture 先释放句柄、最后释放 `TempDir`，不得放宽生产共享或身份校验来清理测试树。
-- 所有版本先将经审查和 CI 验证的变更合并 main，再从对应精确 main 提交发布；合并后清理已合并、冗余及临时本地/远程分支。独有工作须先保留并验证可恢复引用或 bundle，不能静默丢弃。
+- 所有版本先将经审查和 CI 验证的变更合并 main，再从对应精确 main 提交发布；合并后清理已合并、冗余及临时本地/远程分支。有继续价值或长期用途的独有工作直接保留原分支；未整合独有改动的永久删除须逐项确认，不为清理自动创建备份。
 - 发布只接受经授权的 protected-main promotion：同一精确源码与 workflow run/attempt 的完整 CI/coverage、产物字节和三平台实际签名。开始任何发布/恢复操作前必须阅读 [发布流程](docs/release-process.md) 及项目约束的版本/发布章节；不能靠本地摘要、普通套件成功或构建候选绕过门禁。D20 真实 CLI Layer-C 单独记录。
 
 ## 按任务阅读

@@ -47,70 +47,7 @@ function mergeDuplicateSession(existing: UnifiedSession | undefined, candidate: 
   }
 }
 
-// 跨运行时会话身份：Claude 转录会被 legacy 目录扫描与 native 历史投影同时发现，
-// 可唯一配对且不丢失独立 owner 的两行参与折叠。身份取 nativeSessionId；legacy 历史行没有该字段时回退其
-// adapterSessionId（即转录 sessionId）。身份缺失（如尚未建立会话身份的
-// 新 tab）不参与折叠，避免误合并。
-function crossRuntimeSessionIdentity(row: UnifiedSession): string | null {
-  if (row.cli !== 'claude') return null
-  const identity = row.nativeSessionId ?? (row.runtime === 'legacy-claude' ? row.adapterSessionId : null)
-  return identity ? identity : null
-}
-
-function collapseCrossRuntimeDuplicates(
-  byId: Map<string, UnifiedSession>,
-  renameOwners: Map<string, unknown>,
-): void {
-  const groups = new Map<string, UnifiedSession[]>()
-  for (const row of byId.values()) {
-    const identity = crossRuntimeSessionIdentity(row)
-    if (!identity) continue
-    const key = `${normalizePath(row.projectPath)}\u0000${identity}`
-    const group = groups.get(key)
-    if (group) group.push(row)
-    else groups.set(key, [row])
-  }
-  const dropped = new Set<string>()
-  const replaced = new Map<string, UnifiedSession>()
-  for (const group of groups.values()) {
-    // 仅有一个 Legacy 与一个 Native 时可唯一配对；多条来源保留各自准确恢复身份。
-    if (group.length !== 2) continue
-    if (!group.some(row => row.runtime === 'legacy-claude') || !group.some(row => row.runtime === 'native-cli')) continue
-    // 打开中的终端 owner（含自然退出后仍打开的 tab）不能被历史投影折叠掉。
-    const live = group.filter(row => row.opened === true || row.processState === 'running' || row.processState === 'starting')
-    const archivedRows = group.filter(row => row.archived)
-    // 多个终端或归档 owner 各自保留入口，终端行与归档记录也不互相折叠。
-    if (live.length > 1 || archivedRows.length > 1 || (live.length > 0 && archivedRows.length > 0)) continue
-    // 唯一打开行优先；否则唯一归档行作为 winner——恢复动作必须派发给持有
-    // 原归档键的 adapter；否则保留 native 行（历史投影元数据更完整）。
-    const winner = live.length === 1
-      ? live[0]
-      : archivedRows.length === 1
-        ? archivedRows[0]
-        : (group.find(row => row.runtime === 'native-cli') ?? group[0])
-    const merged: UnifiedSession = {
-      ...winner,
-      archived: group.some(row => row.archived),
-      lastActivityAt: Math.max(...group.map(row => row.lastActivityAt)),
-      lastOpenedAt: group.reduce<number | undefined>(
-        (latest, row) => (row.lastOpenedAt === undefined ? latest : Math.max(latest ?? 0, row.lastOpenedAt)),
-        undefined,
-      ),
-    }
-    for (const row of group) {
-      if (row === winner) replaced.set(row.id, merged)
-      else dropped.add(row.id)
-    }
-  }
-  if (!dropped.size && !replaced.size) return
-  // 正在重命名的行不能被替换或移除，否则在途编辑会丢失归属。
-  for (const id of dropped) if (renameOwners.has(id)) dropped.delete(id)
-  for (const [id] of replaced) if (renameOwners.has(id)) { replaced.delete(id); dropped.delete(id) }
-  if (!dropped.size && !replaced.size) return
-  for (const [id, merged] of replaced) byId.set(id, merged)
-  for (const id of dropped) byId.delete(id)
-}
-
+// CLI UUID 只在原配置来源内有意义；缺少两端同一根的正向证明时，保留各自恢复和归档 owner。
 export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const projects = useProjectsStateStore()
   const cliSupport = useCliSupportStore()
@@ -493,7 +430,6 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         if (!cliSupport.isEnabled(row.cli) && row.opened !== true) continue
         byId.set(id, row)
       }
-      collapseCrossRuntimeDuplicates(byId, renameOwners)
       // Adapter reads project runtime state; an unsaved draft belongs to the
       // current UI owner until cancellation or exact source/attempt invalidation.
       for (const [id, owner] of renameOwners) {

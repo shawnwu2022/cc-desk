@@ -452,6 +452,7 @@ impl NativeRuntime {
         if let Some(supervisor) = &self.supervisor {
             supervisor.shutdown();
         }
+        self.service.wait_for_commands();
     }
 }
 
