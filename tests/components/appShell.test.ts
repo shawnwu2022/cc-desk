@@ -464,6 +464,14 @@ describe('Unified application shell', () => {
     finish({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en', startupDestination: 'projects', claudeEnvVars: { TEST: 'keep' } }); await flushPromises()
     expect(useShellStore().section).toBe('workspace')
   })
+  // 设置按钮沉底必须由 tooltip 包裹层承载 auto margin，按钮不是 flex item；层级或规则被改会失效。
+  it('Shell_SettingsNavAnchorSinksToBottom_027', () => {
+    const wrapper = render(PrimaryNav)
+    const anchor = wrapper.get('[data-primary-section="settings"]').element.closest('.ui-tooltip-anchor')
+    expect(anchor?.parentElement).toBe(wrapper.get('nav.primary-nav').element)
+    const style = readFileSync('src/components/shell/PrimaryNav.vue', 'utf8').match(/<style[^>]*>([\s\S]*?)<\/style>/)![1]
+    expect(style).toContain('.primary-nav :deep(.ui-tooltip-anchor:has([data-primary-section="settings"])) { margin-top: auto; }')
+  })
 
 })
 

@@ -55,6 +55,7 @@ function native(entries = [source('a'), source('b')]) {
       createTab(input) { return tabs.create({ cli: input.cli, projectId: 'project', projectPath: input.projectPath,
         profileId: 'cx', profileRevision: '7', action: input.action, sourceSessionKey: input.sourceSessionKey, title: input.title }) },
       restartTab: vi.fn(), stopTab: async tab => { tabs.tabs.get(tab.tabId)!.status = 'stopped' },
+      renameTab: vi.fn(),
     } })
   catalog.configureAdapters([adapter])
   return { tabs, projects, catalog, adapter, entries }

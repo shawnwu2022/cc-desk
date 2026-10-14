@@ -12,6 +12,8 @@ const { t } = useI18n()
 const statusLabel = computed(() => t(sessionVisualLabelKey(props.state, props.activityState, props.archived)))
 const label = computed(() => [props.cli === 'claude' ? 'Claude Code' : 'Codex CLI', statusLabel.value, props.notice && t(props.notice.labelKey)].filter(Boolean).join('; '))
 const badge = computed(() => {
+  // 关闭仅由应用图标本身的明暗区分；回执仍保留在可访问名称和 Tooltip 中。
+  if (props.state === 'closed') return null
   if (props.archived) return 'archived'
   // 未读是历史发生事实；已知的新活动、权限、错误及启动状态优先。
   if (props.notice?.unread && ['unknown', 'running', 'closed', 'stopped', 'ended', 'completed'].includes(props.state)) return 'completed'
@@ -33,7 +35,7 @@ function preserveNoticeInspection(event: MouseEvent) {
 
 <template>
   <AppTooltip :text="label">
-    <span class="session-app-icon" :class="{ 'session-app-icon--closed': ['closed', 'stopped', 'ended'].includes(state) || archived, 'session-app-icon--working': state === 'working' && !archived, 'session-app-icon--completion-entry': completionEntry }"
+    <span class="session-app-icon" :class="[`session-app-icon--${cli}`, { 'session-app-icon--closed': ['closed', 'stopped', 'ended'].includes(state) || archived, 'session-app-icon--working': state === 'working' && !archived, 'session-app-icon--completion-entry': completionEntry }]"
       role="img" :aria-label="label" tabindex="0" :data-completion-entry="completionEntry || undefined"
       :data-native-observation-notice="notice ? '' : undefined" :data-unread="notice ? String(notice.unread) : undefined"
       @animationend="finishEntry" @animationcancel="finishEntry" @click="preserveNoticeInspection" @dblclick="preserveNoticeInspection">
@@ -50,6 +52,8 @@ function preserveNoticeInspection(event: MouseEvent) {
 .session-app-icon:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .session-app-icon__app { display: inline-flex; }
 .session-app-icon--closed .session-app-icon__app { filter: grayscale(1); opacity: .72; }
+/* 黑白 Codex 图形不受灰度影响，单独拉开明暗，保留品牌形状与主题反色。 */
+.session-app-icon--codex.session-app-icon--closed .session-app-icon__app { opacity: var(--session-codex-closed-opacity); }
 .session-app-icon__badge { display: flex; position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; background: var(--bg-primary); border-radius: var(--radius-lg); }
 .session-app-icon__badge :deep(.session-status-icon), .session-app-icon__badge :deep(.session-status-icon__shape), .session-app-icon__badge :deep(svg) { width: 10px; height: 10px; flex-basis: 10px; }
 .session-app-icon__badge :deep(.session-status-icon) { --session-status-info: var(--status-info); --session-status-success: var(--status-success); --session-status-error: var(--status-error); }

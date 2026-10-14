@@ -1,4 +1,5 @@
 import { classifyExplicitUserText, classifyXtermBinary } from './hostAdapter'
+import type { InputWriteAdmission } from './inputAdmission'
 import {
   createInputIntentQueue,
   type InputReservation,
@@ -23,7 +24,8 @@ export interface NativeTerminalHostProtocol {
   beginParserOutput(): () => void
   handleData(data: string): Promise<void>
   handleBinary(data: string): Promise<void>
-  sendUserText(data: string): Promise<void>
+  sendUserText(data: string, admission?: InputWriteAdmission): Promise<void>
+  dispose(): void
   reserveUserPaste(produce: () => Promise<Uint8Array>): InputReservation
   snapshot(): InputQueueSnapshot
 }
@@ -150,16 +152,16 @@ export function createTerminalHostProtocol(
       await queue.sendProtocol(classified.bytes)
     },
 
-    async sendUserText(data) {
+    async sendUserText(data, admission) {
       const classified = classifyExplicitUserText(data)
       const target = options.currentTarget()
-      queue.enqueue({
-        source: 'user-text',
-        modeEpoch: target.modeEpoch,
-        bytes: classified.bytes,
+      const receipt = queue.enqueueConfirmed({
+        source: 'user-text', modeEpoch: target.modeEpoch, bytes: classified.bytes, admission,
       })
-      await queue.flush()
+      await receipt.settled
     },
+
+    dispose() { queue.dispose() },
 
     reserveUserPaste(produce) {
       const target = options.currentTarget()

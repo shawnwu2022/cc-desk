@@ -5,6 +5,7 @@ import {
   type XtermProvenanceSource,
 } from './xtermProvenance'
 import type { InputReservation, InputTarget } from './inputQueue'
+import type { InputWriteAdmission } from './inputAdmission'
 import type {
   InputWriteReceipt,
   NativeInputFrame,
@@ -31,7 +32,7 @@ export interface NativeTerminalBindingOptions extends RunKey {
 
 export interface NativeTerminalBinding {
   acceptOutput(frame: OutputFrame): boolean
-  sendUserText(data: string): Promise<void>
+  sendUserText(data: string, admission?: InputWriteAdmission): Promise<void>
   reserveUserPaste(produce: () => Promise<Uint8Array>): InputReservation
   drainInput(): Promise<void>
   dispose(): void
@@ -111,10 +112,13 @@ export function createNativeTerminalBinding(
       return output.accept(frame)
     },
 
-    sendUserText(data) {
+    sendUserText(data, admission) {
       if (disposed) return Promise.reject(new Error('NATIVE_TERMINAL_DISPOSED'))
       if (options.isUserInputAllowed?.() === false) return Promise.reject(new Error('NATIVE_TERMINAL_HIDDEN'))
-      return host.sendUserText(data).then(() => completeUserOperation(data.length > 0))
+      return host.sendUserText(data, admission).then(() => completeUserOperation(data.length > 0), error => {
+        completeUserOperation(false)
+        throw error
+      })
     },
 
     reserveUserPaste(produce) {
@@ -143,6 +147,7 @@ export function createNativeTerminalBinding(
     dispose() {
       if (disposed) return
       disposed = true
+      host.dispose()
       provenance.dispose()
       output.dispose()
     },

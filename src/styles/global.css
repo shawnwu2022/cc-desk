@@ -22,6 +22,7 @@
   --text-secondary: #5a5550;   /* 次级文字：中灰 */
   --text-tertiary: #69645e;    /* 辅助文字：暖深灰（对 bg-primary/secondary/tertiary 均满足 WCAG AA 4.5:1） */
   --text-inverse: #faf9f6;     /* 反色文字 */
+  --session-codex-closed-opacity: .48; /* 黑色品牌图形关闭后变灰，仍可辨识 */
 
   /* 边框系统 */
   --border-color: #d9d5cc;     /* 默认边框：精致灰 */
@@ -115,6 +116,7 @@
   --text-secondary: #c4c0b8;   /* 次级文字：暖灰 */
   --text-tertiary: #9c9788;    /* 辅助文字：暖灰（对 bg-primary/secondary/tertiary 均满足 WCAG AA 4.5:1） */
   --text-inverse: #1c1a17;     /* 反色文字 */
+  --session-codex-closed-opacity: .44; /* 白色品牌图形关闭后变暗，保留深色底对比 */
 
   /* 边框系统 */
   --border-color: #3a3734;     /* 默认边框 */

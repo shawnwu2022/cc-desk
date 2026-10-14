@@ -106,6 +106,7 @@ export default {
   errorSessionNotResumable: "此会话尚无已验证的历史记录可供归档，已保留终端。",
   feedbackArchived: "会话已归档",
   feedbackRenamed: "会话已重命名",
+  feedbackRenameSent: "改名请求已写入 CLI 终端，CLI 是否接受尚未验证",
   feedbackSessionOpenTimeNotSaved: "会话已打开，但列表顺序未能保存，重启应用后顺序可能改变。",
   feedbackCopied: "Session ID 已复制",
   feedbackConfigurationDeleted: "启动配置已删除",

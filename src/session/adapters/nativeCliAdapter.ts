@@ -1,3 +1,4 @@
+import type { InputWriteAdmission } from '@/terminal/inputAdmission'
 import type { LaunchAction } from '@/types/cli'
 import { captureNativeAttempt, matchesNativeAttempt, type NativeAttemptIdentity, type NativeCliTab } from '@/stores/nativeTabs'
 import type { NativeObservationNotice, NativeObservationNoticeState } from '@/types/nativeObservationNotice'
@@ -6,11 +7,12 @@ import type {
   CreateUnifiedSessionInput,
   ResumeUnifiedSessionInput,
   SessionAdapter,
+  SessionRenameResult,
   UnifiedSession,
 } from '@/types/unifiedSession'
 import { makeSessionCatalogKey } from '@/utils/sessionPresentation'
 import { normalizePath } from '@/utils/path'
-import { saveSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
+import { saveSessionDisplayName, clearSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 
 const ACTIVE_PREFIX = 'native-tab:'
@@ -39,6 +41,7 @@ export interface NativeRuntimePort {
   createTab(input: NativeRuntimeCreateInput): Promise<NativeCliTab> | NativeCliTab
   restartTab(tabId: string): Promise<NativeCliTab> | NativeCliTab
   stopTab(tab: NativeCliTab): Promise<void>
+  renameTab(tabId: string, title: string, admission?: InputWriteAdmission): Promise<void>
 }
 
 export interface NativeArchivePort {
@@ -491,21 +494,41 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       noticeOwner.publish(closedNotice)
     } finally { noticeOwner.release() }
   }
-  async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
+  async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void, signal?: AbortSignal): Promise<SessionRenameResult> {
+    let inputWritten = false
+    const value = title.trim()
+    // 与 metadata 写入同一契约：运行态注入不再比 stopped 兜底更宽松，避免 201 字符标题
+    // 在运行中成功、停止后却被下游拒绝。
+    if (!value || /[\x00-\x1f\x7f]/.test(value) || value.includes('\0') || [...value].length > 200) throw new Error('SESSION_TITLE_REQUIRED')
     const owns = captureOwnership(id)
     const current = () => canContinue() && owns()
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
     if (id.startsWith(ACTIVE_PREFIX)) {
       const tab = requireTab(id)
-      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), title, current, onIssued)
-      if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
-      if (!deps.metadata) onIssued?.()
-      deps.tabs.rename(tab.tabId, title)
+      if (tab.cli === 'claude' && tab.status === 'running') {
+        // claude 的 /rename 是 CLI 自身改名机制：注入后名字随 catalog.refresh 回流，GUI 覆盖名清除。
+        // 注入路由到 NativeCliTerminal.renameTab，输入不可用时其抛错中止，GUI 覆盖名不会被误清。
+        await deps.runtime.renameTab(tab.tabId, value, { signal, beforeDispatch: () => {
+          if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+          // dispatch 已开始但写入尚待确认；切换选择不能再撤销该操作的收尾。
+          onIssued?.()
+        } })
+        inputWritten = true
+        // 此时只证明 PTY 完整写入，不证明 CLI 已执行 /rename。
+        if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+        if (deps.metadata) await clearSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), current)
+      } else {
+        // codex 的 /rename 参数形式未证实；GUI 显示名继续兜底，待实测后切到 CLI 注入。
+        if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current, onIssued)
+        else onIssued?.()
+      }
+      deps.tabs.rename(tab.tabId, value)
     } else {
       const matches = findHistory(id)
       if (matches.length !== 1 || !deps.metadata) throw new Error('SESSION_NOT_FOUND')
-      await saveSessionDisplayName(deps.metadata, projectHistory(matches[0].entry, matches[0].item), title, current, onIssued)
+      await saveSessionDisplayName(deps.metadata, projectHistory(matches[0].entry, matches[0].item), value, current, onIssued)
     }
+    return inputWritten ? 'input-written' : 'display-name-saved'
   }
   async function archiveSession(id: string, canContinue = () => true): Promise<void> {
     const owns = captureOwnership(id)

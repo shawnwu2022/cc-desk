@@ -1,5 +1,5 @@
 <template>
-  <div ref="containerRef" class="xterm-container" :class="{ 'drag-over': isDragOver }">
+  <div ref="containerRef" class="xterm-container">
     <!-- 动态渲染每个 Tab 的终端容器 -->
     <div
       v-for="[tabId] in terminalInstances"
@@ -13,6 +13,8 @@
 </template>
 
 <script setup lang="ts">
+import type { InputWriteAdmission } from '@/terminal/inputAdmission'
+
 import { computed, ref, reactive, watch, onMounted, onUnmounted, nextTick, markRaw, toRaw, type ComponentPublicInstance } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -52,7 +54,6 @@ import type { XtermProvenanceSource } from '@/terminal/xtermProvenance'
 import { createImeInputPolicy, isPasteShortcut } from '@/terminal/inputPolicy'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { getCurrentWebview } from '@tauri-apps/api/webview'
 
 const props = defineProps<{
   visible?: boolean
@@ -68,7 +69,6 @@ const appStore = useAppStore()
 const sessionStore = useSessionStore()
 const hookStore = useHookStore()
 const containerRef = ref<HTMLElement>()
-const isDragOver = ref(false)
 const visible = computed(() => props.visible !== false)
 const needsFit = new Set<string>()
 const pendingFits = new Map<string, Terminal>()
@@ -198,7 +198,6 @@ function handleNativeCopy(e: ClipboardEvent) {
 // Unlisten functions
 let unlistenPtyOutput: (() => void) | null = null
 let unlistenPtyExit: (() => void) | null = null
-let unlistenDragDrop: (() => void) | null = null
 let unlistenWindowResized: (() => void) | null = null
 let unbindNativePaste: (() => void) | null = null
 
@@ -521,10 +520,8 @@ onMounted(async () => {
       imageFallback: () => imagePasteBytes(platform),
     })
   }
-  // Drag/drop is optional. Only output/exit registration gates process spawn.
-  void setupDragDropListener().catch(() => {})
   await ensureCoreListeners().catch(() => { /* startTab reports the safe readiness error. */ })
-  if (disposed) { unlistenPtyOutput?.(); unlistenPtyExit?.(); unlistenDragDrop?.(); return }
+  if (disposed) { unlistenPtyOutput?.(); unlistenPtyExit?.(); return }
   window.addEventListener('copy', handleNativeCopy)
 
   if (containerRef.value) {
@@ -561,32 +558,19 @@ onMounted(async () => {
   }
 })
 
-// 设置事件监听器
-async function setupDragDropListener() {
-  // 文件拖放 → 将路径输入终端
-  // 项目内文件转换为相对路径，便于 Claude 直接引用
-  const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
-    if (!visible.value) { isDragOver.value = false; return }
-    if (event.payload.type === 'drop') {
-      isDragOver.value = false
-      const paths = event.payload.paths
-      if (paths.length > 0) {
-        const projectPath = sessionStore.tabs.get(currentDisplayTabId.value ?? '')?.projectPath ?? ''
-        const text = paths
-          .map(p => relativizePath(p, projectPath))
-          .map(p => p.includes(' ') ? `"${p}"` : p)
-          .join(' ')
-        sendText(text)
-      }
-    } else if (event.payload.type === 'enter' || event.payload.type === 'over') {
-      isDragOver.value = true
-    } else {
-      isDragOver.value = false
-    }
-  })
-
-  if (disposed) unlisten()
-  else unlistenDragDrop = unlisten
+// 拖入文件路径转换为项目相对路径后注入，便于 CLI 直接引用项目内文件。
+// webview 级 drop 事件由 UnifiedTerminalHost 统一监听并分发到这里。
+function dropPaths(paths: string[]): boolean {
+  if (!visible.value || paths.length === 0) return false
+  const tabId = currentDisplayTabId.value
+  if (!tabId) return false
+  const projectPath = sessionStore.tabs.get(tabId)?.projectPath ?? ''
+  const text = paths
+    .map(p => relativizePath(p, projectPath))
+    .map(p => p.includes(' ') ? `"${p}"` : p)
+    .join(' ')
+  if (!text) return false
+  return sendText(text)
 }
 
 let coreListenersReady: Promise<void> | null = null
@@ -986,15 +970,20 @@ async function stopTab(tabId: string) {
   }
 }
 async function recover() { throw new Error('LEGACY_RECOVERY_UNSUPPORTED') }
-async function renameTab(tabId: string, title: string) {
+async function renameTab(tabId: string, title: string, admission: InputWriteAdmission = {}) {
   if (!title.trim() || /[\x00-\x1f\x7f]/.test(title)) throw new Error('SESSION_TITLE_REQUIRED')
   const tab = sessionStore.tabs.get(tabId)
   if (!tab) throw new Error('LEGACY_SESSION_NOT_FOUND')
   const ptyId = tab.ptyId
   const instance = terminalInstances.get(tabId)
-  if (tab.status === 'running' && ptyId && instance?.ptyId === ptyId) {
-    await enqueueLegacyInput(instance, `/rename ${title}\r`)
-  }
+  // 无法注入必须报错：静默成功会让 adapter 误判改名已送达并清除 GUI 覆盖名，导致改名丢失。
+  if (tab.status !== 'running' || !ptyId || instance?.ptyId !== ptyId) throw new Error('LEGACY_RENAME_UNAVAILABLE')
+  const queue = legacyInputQueues.get(instance.term)
+  if (!queue) throw new Error('LEGACY_RENAME_UNAVAILABLE')
+  await queue.enqueue(`/rename ${title}\r`, undefined, { ...admission, beforeDispatch: () => {
+    if (!visible.value || sessionStore.tabs.get(tabId) !== tab || tab.ptyId !== ptyId || tab.status !== 'running') throw new Error('STALE_SESSION_ATTEMPT')
+    admission.beforeDispatch?.()
+  } })
 }
 watch(() => props.visible, async () => {
   for (const id of terminalInstances.keys()) needsFit.add(id)
@@ -1025,7 +1014,6 @@ onUnmounted(() => {
   unbindNativePaste?.()
   unlistenPtyOutput?.()
   unlistenPtyExit?.()
-  unlistenDragDrop?.()
   unlistenWindowResized?.()
   for (const [tabId, instance] of terminalInstances.entries()) {
     void disposeTerminal(instance.term, `onUnmounted(tabId=${tabId})`)
@@ -1040,6 +1028,7 @@ defineExpose({
   restartCurrentPty,
   cleanup,
   sendText,
+  dropPaths,
   focus,
   fitCurrentTerminal, fitVisible, stopTab, stop: stopTab, recover, renameTab,
   disposeTabInstance,
@@ -1056,10 +1045,6 @@ defineExpose({
   position: relative;
   overflow: hidden;
   transition: box-shadow 0.15s ease;
-}
-
-.xterm-container.drag-over {
-  box-shadow: inset 0 0 0 2px var(--accent-gold);
 }
 
 .terminal-wrapper {

@@ -243,10 +243,11 @@ it('Native_AppCloseLateHistory_008', async () => {
   expect(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'closed'))
     .toMatchObject({ opened: false, lastActivityAt: Date.parse(fresh.updatedAt) })
   const order = () => wrapper.findAll('[data-session-row]').map(row => row.get('.session-name').text())
-  expect(order()).toEqual(['Closing history', 'Old history'])
+  // 创建序键首见即冻结：迟到来源读取更新的活动时间不再重排行位置。
+  expect(order()).toEqual(['Old history', 'Closing history'])
   await wrapper.get('button[aria-label="Refresh sessions"]').trigger('click')
   await flushPromises()
-  expect(order()).toEqual(['Closing history', 'Old history'])
+  expect(order()).toEqual(['Old history', 'Closing history'])
   expect(io.start).toHaveBeenCalledOnce(); expect(io.stop).toHaveBeenCalledOnce()
   expect(useUnifiedSessionsStore().actionFeedback).toBeNull()
 })

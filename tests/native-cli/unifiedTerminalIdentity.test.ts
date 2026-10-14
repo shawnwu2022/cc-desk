@@ -149,7 +149,7 @@ describe('Unified native terminal identity', () => {
     const tabs = useNativeTabsStore(); const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } }); tabs.tab(tab.tabId)!.status = 'running'
     let finish!: () => void
     const stopTab = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
-    const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() } })
+    const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab, renameTab: vi.fn() }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() } })
     const closing = adapter.closeSession(`native-tab:${tab.tabId}`)
     const rejected = expect(closing).rejects.toThrow('STALE_SESSION_ATTEMPT')
     expect(stopTab).toHaveBeenCalledTimes(1)
@@ -178,7 +178,7 @@ describe('Unified native terminal identity', () => {
     const tabs = useNativeTabsStore(); const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } }); tabs.tab(tab.tabId)!.status = 'running'
     let finish!: () => void
     const stopTab = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
-    const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() } })
+    const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab, renameTab: vi.fn() }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() } })
     useProjectsStateStore().loaded = true
     const catalog = useUnifiedSessionsStore(); catalog.configureAdapters([adapter]); await catalog.initialize()
     const stopping = catalog.stopSession(`native-tab:${tab.tabId}`); await flushPromises()
@@ -201,7 +201,7 @@ describe('Unified native terminal identity', () => {
   it('Native_QueuedCloseRechecksPhase_012', async () => {
     const tabs = useNativeTabsStore(); const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
     const stopTab = vi.fn().mockResolvedValue(undefined)
-    const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() } })
+    const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab, renameTab: vi.fn() }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() } })
     useProjectsStateStore().loaded = true; const catalog = useUnifiedSessionsStore(); catalog.configureAdapters([adapter]); await catalog.initialize()
     const closing = catalog.closeSession(`native-tab:${tab.tabId}`); const rejected = expect(closing).rejects.toThrow('STALE_SESSION_ATTEMPT')
     tabs.markStarting(tab.tabId); await rejected
@@ -230,7 +230,7 @@ describe('Unified native terminal identity', () => {
   it('Native_StaleClosePreservesSelection_015', async () => {
     const tabs = useNativeTabsStore(); const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } }); tabs.tab(tab.tabId)!.status = 'running'
     let finish!: () => void; const stopTab = vi.fn(() => new Promise<void>(r => { finish = r }))
-    const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() } })
+    const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab, renameTab: vi.fn() }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() } })
     useProjectsStateStore().loaded = true; const catalog = useUnifiedSessionsStore(); catalog.configureAdapters([adapter]); await catalog.initialize(); await catalog.activateSession(`native-tab:${tab.tabId}`)
     const closing = catalog.closeSession(`native-tab:${tab.tabId}`); const rejected = expect(closing).rejects.toThrow('STALE_SESSION_ATTEMPT'); await flushPromises()
     tabs.tab(tab.tabId)!.status = 'exited'; tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' }); finish(); await rejected

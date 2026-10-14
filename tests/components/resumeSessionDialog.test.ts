@@ -65,7 +65,7 @@ it('Resume_RejectsStaleSearch_003', async () => {
   tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' }, title: 'Alpha' })
   tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' }, title: 'Beta' })
   const catalog = useUnifiedSessionsStore()
-  catalog.configureAdapters([createNativeCliAdapter({ tabs, history: { all: () => [] }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() } })])
+  catalog.configureAdapters([createNativeCliAdapter({ tabs, history: { all: () => [] }, archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() } })])
   const pending: Array<() => void> = []
   catalog.configureHistoryLoader(() => new Promise(resolve => pending.push(() => resolve(false))))
   catalog.openResumeDialog({ project: { projectKey: '/repo', projectPath: '/repo' }, mode: 'history' })

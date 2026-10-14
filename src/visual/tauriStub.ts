@@ -16,7 +16,10 @@ export function listen(event?: string) {
 export const open = blocked, check = blocked, relaunch = blocked
 export const writeText = blocked, readText = blocked, readImage = blocked, message = blocked
 export class Channel { constructor() { blocked() } }
-export const getCurrentWebview = blocked
+// 拖拽订阅同 onResized 一样是只读监听注册，无 host 数据流入；提供惰性 unlisten 保持夹具零阻塞调用。
+export function getCurrentWebview() {
+  return { onDragDropEvent: async () => () => {} }
+}
 export const UserAttentionType = { Critical: 1, Informational: 2 }
 export function getCurrentWindow() {
   return {

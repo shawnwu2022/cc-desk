@@ -88,12 +88,28 @@ runtime before creating the tab. Restart retains that context and revalidates it
 after stop. It never creates a profile, registers a frontend path, or changes argv.
 
 Runtime request handling connects selection, stop/cancel, exact status recovery,
-explicit restart/retry, metadata rename, close/archive/restore, copy session ID and
+explicit restart/retry, rename, close/archive/restore, copy session ID and
 open directory to current adapters and shared confirmations. New/Resume dialogs,
 project management, contextual resources and safe diagnostics are implemented;
 unsupported operations are never translated to Legacy commands. Refresh reloads
-sources without retrying a failed lifecycle request. Historical and live rename
-both use `projectsState` display metadata, never terminal `/rename` input.
+sources without retrying a failed lifecycle request. Renaming a running session
+drives the CLI's own rename mechanism (a `/rename` injection for Claude; Codex
+keeps `projectsState` display metadata until its command form is verified) and
+clears the stored display override only after its own input is confirmed written.
+Native checks the exact run/generation/inputSeq/modeEpoch and full byte count;
+Legacy waits for its existing PTY writer acknowledgement. Pending clipboard,
+paused input, partial/unknown or mismatched receipts never authorize that cleanup.
+The result is `input-written`, not CLI command acceptance; feedback says the request
+was written to the CLI terminal with acceptance unverified. Display-only renames
+return `display-name-saved`. Proposed live titles remain optimistic until CLI history
+provides evidence; no PTY receipt proves that the CLI executed `/rename`.
+Both FIFO queues check the rename's admission just before dispatch. Selection
+cancels only unsubmitted rename intents through the owner's AbortSignal; dispatched
+writes retain their exact owner while awaiting acknowledgement. Source/attempt
+invalidation still prevents cleanup of another owner, and unmount rejects pending
+confirmation without replay. Cancellation alone does not report an input pause.
+Rename admission is limited to opened sessions; stopped tabs and history rows
+without a writable CLI keep the display-metadata fallback.
 
 Windows directory opening restores normalized `//server/share` and `//?/` paths
 to backslash prefixes before passing one literal argument to Explorer. Explorer
@@ -226,6 +242,10 @@ independent occurrence-notice description. It reserves one 20px slot and combine
 the real 16px application mark with a solid lower-right badge (10px SVG box,
 approximately 8px colored backplate). Known idle has no badge and keeps native
 artwork static; closed/stopped marks use a recognizable neutral-gray treatment.
+Codex retains its black/white brand artwork, with closed-treatment opacity tokens
+of 0.48 in light and 0.44 in dark GUI themes. Closed rows never render a badge,
+including unread receipts and archive context; their full accessible name,
+Tooltip, unread data and existing Clear unread menu remain available.
 Working uses a 2.6-second opacity cycle and a static working/thinking/tool/subagent/
 compacting shape. Permission is an amber lock, input a blue bubble, error a red
 exclamation, unknown a neutral question; starting/confirmation/stopped/archive
@@ -659,14 +679,16 @@ Resume/failed-creation Retry/archive Restore sit beside the live age and remain
 visible without hover. Their duplicate menu entries are omitted. The existing open
 Close overlay and ended-session Archive control retain their sizing and ownership.
 
-`SessionsPanel` owns the activity snapshot, not the runtime stores. Initial/Workspace
-entry and entry into a different current project snapshot latest activity descending
-with ID ties. Its existing Refresh sessions button snapshots immediately, rereads the
-catalog and snapshots the resulting rows when loading ends. Selection is untouched.
-Existing row order stays fixed through output, status, completion, search and rerender.
-New/admitted openings and manual restore metadata move to the front; background
-closed-history discovery appends without displacing the existing rows. Project
-pin/name ordering and archive opening-order grouping are unchanged.
+`SessionsPanel` orders rows by a frozen first-seen creation key, not live activity.
+A tab's key is its real creation time; a history row's key is its first-seen activity
+time, because CLI history carries only the last-updated time and no creation time.
+The key is written once per row id and never updated, so output, status, completion,
+search, rerender, later activity, opening, closing, background discovery and the
+Refresh sessions button all leave existing row positions unchanged. A newly seen row
+(including a just-closed session's history identity and archive restores) inserts at
+its frozen key. `ProjectNode` clusters the rows of one project by CLI type (Claude then Codex) with no
+rendered heading — the row app-icon already distinguishes the CLI. Project pin/name
+ordering and archive opening-order grouping are unchanged.
 
 Exact-source pending restores publish `resumePending` only as presentation metadata.
 Both `unifiedSessions.projectGroups` and `projectManagement` groups project it. One

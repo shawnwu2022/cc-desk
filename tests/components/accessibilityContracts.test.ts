@@ -56,14 +56,15 @@ it('A11y_ViewportBoundTooltip_003', async () => {
 // 中英文真实会话行保留图标语义；状态仅在焦点提示出现，菜单键不触发会话动作。
 it.each(['en', 'zh'] as const)('A11y_RowKeyboard_004_%s', async locale => {
   i18n.global.locale.value = locale
-  const w = mount(SessionItem, { attachTo: document.body, global: { plugins: [i18n] }, props: { selected: true, session: { id: 'row', cli: 'codex', runtime: 'native-cli', adapterSessionId: 'tab', projectKey: '/repo', projectPath: '/repo', title: 'A'.repeat(200), processState: 'running', activityState: 'idle', attentionState: 'none', archived: false, resumable: true, lastActivityAt: Date.now() } } }); wrappers.push(w)
+  const w = mount(SessionItem, { attachTo: document.body, global: { plugins: [i18n] }, props: { selected: true, session: { id: 'row', cli: 'codex', runtime: 'native-cli', adapterSessionId: 'tab', projectKey: '/repo', projectPath: '/repo', title: 'A'.repeat(200), processState: 'running', activityState: 'idle', attentionState: 'none', archived: false, opened: true, resumable: true, lastActivityAt: Date.now() } } }); wrappers.push(w)
   expect(w.text()).not.toContain(locale === 'en' ? en.sessionStatusRunning : zh.sessionStatusRunning)
   const icon = w.get('.session-app-icon'); (icon.element as HTMLElement).focus(); await flushPromises()
   expect(body.get('[role="tooltip"]').text()).toBe('Codex CLI; ' + (locale === 'en' ? en.sessionStatusRunning : zh.sessionStatusRunning))
   await icon.trigger('keydown', { key: 'Escape' }); await w.trigger('keydown', { key: 'ContextMenu' }); await flushPromises()
   const menu = document.querySelector<HTMLElement>('[role="menu"]')!
   expect(menu).not.toBeNull(); menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
-  expect(document.activeElement).toBe(menu.querySelector('[data-item-id="view-diagnostics"]'))
+  // opened 会话使 restart 动作可见并按危险动作沉底；End 落到重排后的最后一项。
+  expect(document.activeElement).toBe(menu.querySelector('[data-item-id="restart"]'))
   menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await flushPromises()
   expect(document.querySelector('[role="menu"]')).toBeNull(); expect(document.activeElement).toBe(w.element)
   await w.trigger('keydown', { key: 'ContextMenu' }); await flushPromises()

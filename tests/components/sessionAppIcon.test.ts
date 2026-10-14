@@ -64,10 +64,29 @@ describe('Merged session app status', () => {
       expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe(badge)
     }
     await wrapper.setProps({ session: { ...session, processState: 'stopped', opened: false }, selected: true })
-    expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('completed')
+    expect(wrapper.find('[data-session-badge]').exists()).toBe(false)
     expect(wrapper.get('.session-app-icon').attributes('aria-label')).toContain('Closed')
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toContain('current activity unverified')
+    expect(wrapper.get('.session-app-icon').attributes('data-unread')).toBe('true')
     await wrapper.get('.session-app-icon').trigger('click')
     expect(wrapper.emitted('primary-action')).toBeUndefined()
+    wrapper.unmount()
+  })
+  // 关闭态即使带回执或归档上下文也不加角标；状态切换仍保留必要提示。
+  it('AppIcon_ClosedNeverAddsBadge_005', async () => {
+    const wrapper = mount(SessionAppIcon, { props: { cli: 'codex', state: 'closed' }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+    const image = wrapper.get('img').element
+    for (const context of [{}, { notice: { labelKey: 'nativeNoticeReplyEndUnread', unread: true } }, { archived: true }]) {
+      await wrapper.setProps(context)
+      expect(wrapper.find('[data-session-badge]').exists()).toBe(false)
+      expect(wrapper.get('img').element).toBe(image)
+      expect(wrapper.get('.session-app-icon').attributes('aria-label')).toContain('Codex CLI')
+    }
+    await wrapper.setProps({ archived: false, notice: null })
+    for (const state of ['working', 'needs-user', 'permission', 'error', 'stopped'] as const) {
+      await wrapper.setProps({ state })
+      expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe(state)
+    }
     wrapper.unmount()
   })
 })

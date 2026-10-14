@@ -391,3 +391,95 @@ The history row has no separate Resume control, and status/title/age and selecte
 row layout remain intact. These sheets remain synthetic evidence, not historical
 baselines or Windows WebView2/live CLI acceptance. Source-drawer behavior has
 actual App interaction coverage but no dedicated browser pixel acceptance.
+
+## PrimaryNav settings-anchor sink invalidates all baselines
+
+A broken style was fixed in `PrimaryNav.vue`: `margin-top: auto` was declared on
+the settings button, but the flex item of `nav.primary-nav` is the wrapping
+`.ui-tooltip-anchor`, so the rule never applied and all three destinations sat at
+the top. The auto margin now targets the anchor via
+`:deep(.ui-tooltip-anchor:has([data-primary-section="settings"]))`, and the
+settings button renders at the bottom of the nav column.
+
+Every one of the thirteen baselines shows the primary nav, so all of them
+necessarily differ (the settings glyph moves from the third top position to the
+bottom-left corner). Until the standard cycle completes — full RED run, artifact
+capture with `--update-snapshots=all`, independent pixel review, manifest update,
+fresh no-update gate — the committed baselines do not match the intended UI. A
+local Chromium (1280×800, non-WebView2) measurement confirmed
+`settings.bottom = 792/800`, `projects = 78–110`, anchor is the flex child.
+
+## Session-list regrouping also invalidates all baselines
+
+The same batch also changes the session list itself, so the baseline refresh above
+must cover both at once. `ProjectNode` now clusters a project's non-archived rows by
+CLI type (Claude first, then Codex) with no rendered heading, and `SessionsPanel`
+orders rows by a frozen first-seen creation key (descending) instead of live
+activity. Any baseline that renders a populated project tree changes in row order and
+vertical position (the `mixed`, `hover`, `resources`, `projects` and `archived`
+scenarios at minimum); settings-, dialog- and terminal-only baselines show no session
+rows and are expected to differ only from the nav move. The exact per-image split must
+be read from the actual capture, not assumed. A local Chromium check on the visual
+fixture confirmed the `cc-desk` project splits into `claude` (2 rows) then `codex`
+(2 rows) groups with no heading element.
+
+Both changes ride one approved capture: do not accept a partial baseline set that
+reflects only the nav move or only the row regrouping.
+
+## Local acceptance run and the environment floor
+
+The hoisted drag-drop listener in `UnifiedTerminalHost` subscribes through
+`getCurrentWebview().onDragDropEvent` on mount, which the visual stub previously
+counted as a blocked host call, failing all eight empty-workspace geometry cases
+with `data-blocked-host-calls="1"`. The stub now provides the same class of inert
+read-only subscription already granted to window-state listeners: a synthetic
+`onDragDropEvent` that registers nothing and never delivers events. Positive host
+calls stay blocked and counted, and the drag events themselves cannot cross the
+fixture boundary.
+
+With that repair the local no-update gate reproduces the documented RED state
+exactly: 175 cases pass (120 geometry, 8 empty-workspace centering, interaction,
+glyph/receipt/close-state evidence) and only the thirteen baseline comparisons
+fail. A DOM probe on the served fixture confirms the intended structure directly:
+the settings anchor occupies `top=728, bottom=760` inside a nav column ending at
+768, and the `cc-desk` project renders two `claude` rows followed by two `codex`
+rows with no heading element.
+
+Local pixel comparison against the committed baselines has a floor that is
+independent of this batch: an identical capture of unmodified `main` on this
+Windows Chromium does not reproduce the Linux-captured baseline bytes either.
+Within one local environment the branch-vs-`main` delta on the empty scenario is
+378 pixels confined to `x∈[13,30]` at exactly the two settings-icon slots (the
+third top slot vacated, the bottom slot filled); populated scenarios add the row
+regrouping. That isolates the branch's visual change from the font/rasterizer
+noise, but it is not baseline acceptance: freezing the thirteen baselines still
+requires the standard Linux Chromium CI cycle (RED run, `--update-snapshots=all`
+capture, independent pixel review, manifest update, fresh no-update gate), and
+Windows-rendered PNGs must not replace the Linux provenance.
+
+
+## PR51 session UX batch baseline adoption
+
+All thirteen Linux Chromium baselines are copied byte-for-byte from the actual
+PNGs accepted by one independent review of actual, expected and diff images for
+[run 38550064925](https://github.com/shawnwu2022/cc-desk/actions/runs/38550064925),
+artifact `11885664893`. Source head is
+`4c74618853f01dc5a65a848a7a63aed16490eaf2`; tested synthetic merge
+`8ac79430edd9170d85c5f3785b1f8340c2f11483` has the same tree
+`e289558672317438ae56fee7b46b997168f01aa2`.
+
+The review accepts the bottom Settings anchor, CLI group spacing and closed
+Codex artwork/badge changes, with no rejected image. The approval manifest
+records each exact actual hash, size, mapping and previous baseline provenance.
+The Library JSON and decoded ZIP were verified against their supplied SHA-256
+values before all PNG hashes, dimensions and previous baseline hashes were
+verified and any baseline was replaced. No other baseline was regenerated and
+no comparison tolerance or test configuration changed.
+
+The original run remains RED: thirteen screenshot failures and 223 other cases
+passed. Fresh full verification of the updated source remains pending, using
+`--update-snapshots=none` and the existing `maxDiffPixels: 0` configuration.
+The local preparation environment lacks Playwright 1.63.0 and Chromium; this
+adoption is not a successful browser test or hosted CI result. These Linux
+synthetic screenshots do not certify Windows WebView2, native drag-and-drop,
+terminal lifecycle, rename delivery, real CLI IO or authenticated receipts.

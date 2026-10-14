@@ -334,11 +334,11 @@ it.each(['keyboard', 'explicit', 'paste'] as const)('Native_ReportInputPaused_01
   })
   if (source === 'keyboard') {
     xterm.user.fire(); xterm.data.fire('first'); await binding.drainInput()
-  } else if (source === 'explicit') await binding.sendUserText('first')
+  } else if (source === 'explicit') await expect(binding.sendUserText('first')).rejects.toThrow('NATIVE_INPUT_PAUSED')
   else await binding.reserveUserPaste(async () => new TextEncoder().encode('first')).settled
   expect(diagnostics).toEqual(['NATIVE_INPUT_PAUSED'])
   expect(activity).toEqual([])
-  await binding.sendUserText('second')
+  await expect(binding.sendUserText('second')).rejects.toThrow('NATIVE_INPUT_PAUSED')
   await binding.reserveUserPaste(async () => new TextEncoder().encode('third')).settled
   xterm.user.fire(); xterm.data.fire('fourth'); await binding.drainInput()
   expect(writes).toEqual(['1'])

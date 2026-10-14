@@ -57,7 +57,8 @@ function navigate(section: ShellSection) {
 .primary-nav :deep(.primary-destination) { position: relative; width: 32px; height: 32px; padding: 0; }
 .primary-nav :deep(.primary-destination.selected) { background: var(--selected-bg); color: var(--accent-gold-text); }
 .primary-nav :deep(.primary-destination.selected::before) { content: ''; position: absolute; left: -6px; top: 5px; bottom: 5px; width: 3px; border-radius: 0 2px 2px 0; background: var(--accent-gold); }
-.primary-nav :deep([data-primary-section="settings"]) { margin-top: auto; }
+/* 设置按钮沉底：AppTooltip 包裹层才是 flex item，margin 必须加在它上面才生效 */
+.primary-nav :deep(.ui-tooltip-anchor:has([data-primary-section="settings"])) { margin-top: auto; }
 .workspace-status-badge { position: absolute; top: 2px; right: 2px; width: 8px; height: 8px;
   border-radius: 50%; pointer-events: none; }
 .workspace-status-badge--error { background: var(--status-error); }

@@ -53,11 +53,11 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const cliSupport = useCliSupportStore()
   const sessions = ref<UnifiedSession[]>([])
   const activeSessionId = ref<string | null>(null)
-  type RenameOwner = { key: string; owns: () => boolean; state: 'editing' | 'saving'; issued?: boolean }
+  type RenameOwner = { key: string; owns: () => boolean; state: 'editing' | 'saving'; issued?: boolean; controller: AbortController }
   const renameOwners = new Map<string, RenameOwner>()
   const pendingRenames = new Map<string, number>()
   function captureRenameOwner(row: UnifiedSession, state: RenameOwner['state']): RenameOwner {
-    return { key: makeSessionRenameOwnerKey(row), owns: adapters.find(adapter => adapter.runtime === row.runtime)?.captureOwnership?.(row.id) ?? (() => true), state }
+    return { controller: new AbortController(), key: makeSessionRenameOwnerKey(row), owns: adapters.find(adapter => adapter.runtime === row.runtime)?.captureOwnership?.(row.id) ?? (() => true), state }
   }
   function ownsRename(owner: RenameOwner, row: UnifiedSession | undefined) {
     return !!row && owner.key === makeSessionRenameOwnerKey(row) && owner.owns()
@@ -65,7 +65,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   function revokeUnissuedRenames(selectedId: string | null) {
     const revoked = new Set<string>()
     for (const [id, owner] of renameOwners) {
-      if (id !== selectedId && !owner.issued) { renameOwners.delete(id); revoked.add(id) }
+      if (id !== selectedId && !owner.issued) { renameOwners.delete(id); owner.controller.abort(); revoked.add(id) }
     }
     if (revoked.size) sessions.value = sessions.value.map(row => revoked.has(row.id) ? { ...row, renameState: 'idle' } : row)
   }
@@ -435,6 +435,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       for (const [id, owner] of renameOwners) {
         if (!ownsRename(owner, byId.get(id))) {
           renameOwners.delete(id)
+          owner.controller.abort()
           const row = byId.get(id)
           if (row) byId.set(id, { ...row, renameState: 'idle' })
         }
@@ -699,21 +700,24 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const row = sessions.value.find(value => value.id === id)
     if (!row || activeSessionId.value !== id || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
     const current = renameOwners.get(id)
-    if (!current || !ownsRename(current, row)) renameOwners.set(id, captureRenameOwner(row, 'editing'))
+    if (!current || !ownsRename(current, row)) { current?.controller.abort(); renameOwners.set(id, captureRenameOwner(row, 'editing')) }
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'editing' } : row)
   }
   function cancelRename(id: string) {
     if ((pendingRenames.get(id) ?? 0) > 0) return
+    const owner = renameOwners.get(id)
     renameOwners.delete(id)
+    owner?.controller.abort()
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'idle' } : row)
   }
-  function renameSession(id: string, title: string, requireEditor = false): Promise<void> {
+  function renameSession(id: string, title: string, requireEditor = false): Promise<'input-written' | 'display-name-saved' | void> {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     const current = renameOwners.get(id)
     if ((requireEditor && (!current || activeSessionId.value !== id)) || (current && !ownsRename(current, session))) {
       if (!current?.issued) {
         renameOwners.delete(id)
+        current?.controller.abort()
         sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'idle' } : row)
       }
       return Promise.reject(new Error('STALE_SESSION_ATTEMPT'))
@@ -725,7 +729,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'saving' } : row)
     return enqueue(id, () => {
       if (renameOwners.get(id) !== owner || !ownsRename(owner, sessions.value.find(row => row.id === id))) throw new Error('STALE_SESSION_ATTEMPT')
-      return adapter.renameSession(id, title, () => renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id)), () => { owner.issued = true })
+      return adapter.renameSession(id, title, () => renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id)), () => { owner.issued = true }, owner.controller.signal)
     }, () => refresh(session.projectKey)).finally(() => {
       const remaining = (pendingRenames.get(id) ?? 1) - 1
       if (remaining) pendingRenames.set(id, remaining)

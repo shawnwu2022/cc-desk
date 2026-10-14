@@ -450,7 +450,7 @@ describe('Unified session menu model', () => {
     { name: 'Menu_Running_018', session: base, actions: [...common, 'restart'] },
     { name: 'Menu_Stopped_019', session: { ...base, processState: 'stopped' }, actions: [...common, 'resume', 'restart', 'archive'] },
     { name: 'Menu_Failed_020', session: { ...base, processState: 'failed' }, actions: [...common, 'retry', 'restart', 'archive'] },
-    { name: 'Menu_Archived_021', session: { ...base, processState: 'stopped', archived: true }, actions: common },
+    { name: 'Menu_Archived_021', session: { ...base, processState: 'stopped', archived: true }, actions: common.filter(action => action !== 'rename') },
     { name: 'Menu_Unknown_022', session: { ...base, processState: 'unknown' }, actions: [...common, 'confirm-status'] },
     { name: 'Menu_Starting_023', session: { ...base, processState: 'starting' }, actions: [...common, 'cancel-start'] },
   ] as const)('$name', ({ session, actions }) => {
