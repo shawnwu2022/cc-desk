@@ -38,8 +38,9 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
   const archive = { getArchivedSessions: (path: string) => archived.get(path) ?? [], archiveSession: vi.fn(async (path: string, id: string) => { archived.set(path, [...(archived.get(path) ?? []), id]) }), restoreSession: vi.fn(async (path: string, id: string) => { archived.set(path, (archived.get(path) ?? []).filter(value => value !== id)) }) }
   const cliUnarchive = { unarchive: vi.fn().mockResolvedValue(undefined) }
   const historyLoad = vi.fn(async () => entries[0])
-  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries, load: historyLoad }, runtime, archive, cliUnarchive })
-  return { adapter, map, runtime, archive, cliUnarchive, setActive, archived, historyLoad }
+  const metadata = { sessionRecords: new Map(), recordSessionOpened: vi.fn(async () => undefined), upsertSessionRecord: vi.fn(async () => undefined) }
+  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries, load: historyLoad }, runtime, archive, cliUnarchive, metadata })
+  return { adapter, map, runtime, archive, cliUnarchive, setActive, archived, historyLoad, metadata }
 }
 
 describe('native CLI adapter', () => {
@@ -406,11 +407,13 @@ it('CodexArchive_UnarchiveForcesHistoryReload_035', async () => {
   setActivePinia(createPinia())
   const entry = history('codex', '/root', 'session-1')
   entry.sessions[0].archived = true
-  const { adapter, cliUnarchive, historyLoad } = setup([], [entry])
+  const { adapter, cliUnarchive, historyLoad, metadata } = setup([], [entry])
   const rows = await adapter.listSessions()
   const record = rows.find(value => value.archived)
   expect(record).toBeDefined()
   await adapter.restoreArchivedSession(record!.id)
   expect(cliUnarchive.unarchive).toHaveBeenCalledWith(entry.context, 'session-1')
   expect(historyLoad).toHaveBeenCalledWith(expect.objectContaining({ ...entry.context, force: true }))
+  // 恢复后的行照常写入最近打开时间，不能因 CLI 归档分支提前返回而跳过排序更新。
+  expect(metadata.recordSessionOpened).toHaveBeenCalledTimes(1)
 })

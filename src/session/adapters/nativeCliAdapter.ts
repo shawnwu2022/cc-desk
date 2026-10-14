@@ -554,9 +554,9 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         if (!unarchive) throw new Error('CLI_UNARCHIVE_UNAVAILABLE')
         await unarchive.unarchive(match.entry.context, match.item.nativeSessionId)
         // 归档状态由下一次历史读取按容器位置重投影；all() 仍是旧缓存，必须
-        // 强制重读原上下文，调用方的目录刷新才能看到已恢复的行。
+        // 强制重读原上下文，调用方的目录刷新才能看到已恢复的行。不提前返回：
+        // 恢复后的行照常写入最近打开时间，保持既有排序语义。
         await deps.history.load?.({ ...match.entry.context, force: true })
-        return
       }
       await saveSessionOpenedAt(deps.metadata, projectHistory(match.entry, match.item), Date.now(),
         () => findHistory(id).length === 1).catch(() => {})
