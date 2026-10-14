@@ -391,3 +391,20 @@ The history row has no separate Resume control, and status/title/age and selecte
 row layout remain intact. These sheets remain synthetic evidence, not historical
 baselines or Windows WebView2/live CLI acceptance. Source-drawer behavior has
 actual App interaction coverage but no dedicated browser pixel acceptance.
+
+## PrimaryNav settings-anchor sink invalidates all baselines
+
+A broken style was fixed in `PrimaryNav.vue`: `margin-top: auto` was declared on
+the settings button, but the flex item of `nav.primary-nav` is the wrapping
+`.ui-tooltip-anchor`, so the rule never applied and all three destinations sat at
+the top. The auto margin now targets the anchor via
+`:deep(.ui-tooltip-anchor:has([data-primary-section="settings"]))`, and the
+settings button renders at the bottom of the nav column.
+
+Every one of the thirteen baselines shows the primary nav, so all of them
+necessarily differ (the settings glyph moves from the third top position to the
+bottom-left corner). Until the standard cycle completes — full RED run, artifact
+capture with `--update-snapshots=all`, independent pixel review, manifest update,
+fresh no-update gate — the committed baselines do not match the intended UI. A
+local Chromium (1280×800, non-WebView2) measurement confirmed
+`settings.bottom = 792/800`, `projects = 78–110`, anchor is the flex child.
