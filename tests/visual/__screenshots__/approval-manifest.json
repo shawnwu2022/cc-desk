@@ -45,7 +45,7 @@
   },
   "acceptanceLimits": [
     "Exact inspected Linux Chromium PNG bytes with per-entry source/run/attempt and SHA-256 provenance",
-    "Eight other baseline images retain prior reviewed bytes and provenance",
+    "All thirteen current baselines use accepted PR51 actual PNG bytes; earlier baseline provenance remains preserved.",
     "Separate synthetic status captures remain unapproved evidence",
     "Browser fixture cannot certify live Native CLI activity/permission/completion semantics",
     "Not Windows WebView2, native scaling, screen reader, live CLI or taskbar delivery certification",
