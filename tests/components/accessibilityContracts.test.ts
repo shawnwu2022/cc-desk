@@ -63,7 +63,7 @@ it.each(['en', 'zh'] as const)('A11y_RowKeyboard_004_%s', async locale => {
   await icon.trigger('keydown', { key: 'Escape' }); await w.trigger('keydown', { key: 'ContextMenu' }); await flushPromises()
   const menu = document.querySelector<HTMLElement>('[role="menu"]')!
   expect(menu).not.toBeNull(); menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
-  // opened 会话使 restart 动作可见并按 danger 沉底；End 落到重排后的最后一项。
+  // opened 会话使 restart 动作可见并按危险动作沉底；End 落到重排后的最后一项。
   expect(document.activeElement).toBe(menu.querySelector('[data-item-id="restart"]'))
   menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await flushPromises()
   expect(document.querySelector('[role="menu"]')).toBeNull(); expect(document.activeElement).toBe(w.element)
