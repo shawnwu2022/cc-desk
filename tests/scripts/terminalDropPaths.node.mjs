@@ -1,26 +1,34 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
-import { registerHooks } from 'node:module'
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join, resolve } from 'node:path'
 
 // 执行真实 SFC 的 drop 函数及共享生产 formatter；不启动宿主或替换路径算法。
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier.startsWith('@/')) {
-      const path = resolve('src', specifier.slice(2) + '.ts')
-      return { url: pathToFileURL(path).href, shortCircuit: true }
-    }
-    return nextResolve(specifier, context)
-  },
-})
-const { relativizePath } = await import('../../src/utils/path.ts')
-const { selectSessionMenuActions } = await import('../../src/utils/sessionPresentation.ts')
-const formatterPath = resolve('src/utils/terminalDropPaths.ts')
-const formatDroppedPaths = existsSync(formatterPath)
-  ? (await import(pathToFileURL(formatterPath).href)).formatDroppedPaths
-  : undefined
+const require = createRequire(import.meta.url)
+const Module = require('node:module')
+const { transpileProductionSource } = require('../../.github/scripts/transpile_production_source.cjs')
+const sourceRoot = resolve('src')
+const cache = new Map()
+function loadSource(filename) {
+  if (cache.has(filename)) return cache.get(filename).exports
+  const m = new Module(filename)
+  m.filename = filename
+  cache.set(filename, m)
+  m.require = name => {
+    // 只固定浏览器平台输入；路径与 formatter 仍执行真实生产模块。
+    if (name === '@/utils/platform') return { isWindows: false, isMac: false }
+    const dependency = name.startsWith('@/') ? join(sourceRoot, name.slice(2))
+      : name.startsWith('.') ? resolve(dirname(filename), name) : undefined
+    assert.ok(dependency, 'unexpected non-production import: ' + name)
+    return loadSource(dependency + '.ts')
+  }
+  m._compile(transpileProductionSource(readFileSync(filename, 'utf8')), filename)
+  return m.exports
+}
+const { relativizePath } = loadSource(resolve('src/utils/path.ts'))
+const { selectSessionMenuActions } = loadSource(resolve('src/utils/sessionPresentation.ts'))
+const { formatDroppedPaths } = loadSource(resolve('src/utils/terminalDropPaths.ts'))
 
 function controller(kind, projectPath = '/repo') {
   const file = kind === 'native' ? 'NativeCliTerminal.vue' : 'XTermTerminal.vue'
