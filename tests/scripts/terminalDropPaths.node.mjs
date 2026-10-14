@@ -83,3 +83,13 @@ test('Rename_ClosedHistoryEditorDoesNotSelectTerminal_005', () => {
   assert.equal(selection.value, 'live-terminal')
   assert.ok(owners.has('history'))
 })
+
+test('Rename_ClosedHistorySfcAdmitsAndRendersEditor_006', () => {
+  const source = readFileSync('src/components/sessions/SessionItem.vue', 'utf8')
+  const props = { selected: false, session: { opened: false, archived: false, renameState: 'editing' } }
+  for (const name of ['canRename', 'isRenaming']) {
+    const expression = source.match(new RegExp('const ' + name + ' = computed\\(\\(\\) => (.+)\\)'))?.[1]
+    assert.ok(expression)
+    assert.equal(Function('props', 'localRename', 'return ' + expression)(props, { value: false }), true, name)
+  }
+})
