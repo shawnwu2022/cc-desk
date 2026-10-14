@@ -150,7 +150,7 @@ describe('Unified project session tree', () => {
     expect(order()).toEqual(['c', 'b', 'a', 'd'])
   })
 
-  // 项目内按 CLI 类型分组（claude 在前、codex 在后），组内保持创建序倒序；与打开状态无关。
+  // 项目内按 CLI 类型聚类排序（claude 在前、codex 在后），不渲染分组标题；组内保持创建序倒序。
   it('Tree_GroupByCliType_026', async () => {
     const claudeOld = session({ id: 'cc-old', cli: 'claude', runtime: 'legacy-claude', lastOpenedAt: 1, opened: false, processState: 'stopped' })
     const claudeNew = session({ id: 'cc-new', cli: 'claude', runtime: 'legacy-claude', lastOpenedAt: 9, opened: false, processState: 'stopped' })
@@ -158,7 +158,7 @@ describe('Unified project session tree', () => {
     const wrapper = panel({ projectGroups: [group([claudeOld, codexOpen, claudeNew])] })
     await wrapper.get('.project-main').trigger('click')
     expect(wrapper.findAll('[data-cli-group]').map(group => group.attributes('data-cli-group'))).toEqual(['claude', 'codex'])
-    expect(wrapper.findAll('.cli-group-label').map(label => label.text())).toEqual(['Claude Code', 'Codex CLI'])
+    expect(wrapper.find('.cli-group-label').exists()).toBe(false)
     const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
     expect(order()).toEqual(['cc-new', 'cc-old', 'cx-open'])
   })

@@ -666,8 +666,8 @@ The key is written once per row id and never updated, so output, status, complet
 search, rerender, later activity, opening, closing, background discovery and the
 Refresh sessions button all leave existing row positions unchanged. A newly seen row
 (including a just-closed session's history identity and archive restores) inserts at
-its frozen key. `ProjectNode` groups the rows of one project by CLI type (Claude then
-Codex, reusing the row-app-icon names), independent of open state. Project pin/name
+its frozen key. `ProjectNode` clusters the rows of one project by CLI type (Claude then Codex) with no
+rendered heading — the row app-icon already distinguishes the CLI. Project pin/name
 ordering and archive opening-order grouping are unchanged.
 
 Exact-source pending restores publish `resumePending` only as presentation metadata.
