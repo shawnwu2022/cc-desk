@@ -974,9 +974,9 @@ async function renameTab(tabId: string, title: string) {
   if (!tab) throw new Error('LEGACY_SESSION_NOT_FOUND')
   const ptyId = tab.ptyId
   const instance = terminalInstances.get(tabId)
-  if (tab.status === 'running' && ptyId && instance?.ptyId === ptyId) {
-    await enqueueLegacyInput(instance, `/rename ${title}\r`)
-  }
+  // 无法注入必须报错：静默成功会让 adapter 误判改名已送达并清除 GUI 覆盖名，导致改名丢失。
+  if (tab.status !== 'running' || !ptyId || instance?.ptyId !== ptyId) throw new Error('LEGACY_RENAME_UNAVAILABLE')
+  await enqueueLegacyInput(instance, `/rename ${title}\r`)
 }
 watch(() => props.visible, async () => {
   for (const id of terminalInstances.keys()) needsFit.add(id)

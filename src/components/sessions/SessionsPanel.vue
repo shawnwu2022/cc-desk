@@ -82,15 +82,20 @@ const createdKeys = ref(new Map<string, number>())
 watch(() => normalGroups.value, groups => {
   const next = new Map(createdKeys.value)
   let changed = false
+  const live = new Set<string>()
   for (const group of groups) {
     for (const row of group.sessions) {
-      if (row.archived || next.has(row.id)) continue
+      if (row.archived) continue
+      live.add(row.id)
+      if (next.has(row.id)) continue
       changed = true
       const created = row.opened === true && row.lastOpenedAt ? row.lastOpenedAt
         : Number.isFinite(row.lastActivityAt) ? row.lastActivityAt : 0
       next.set(row.id, created)
     }
   }
+  // 清理已消失的键，避免长期运行下 Map 无限增长。
+  for (const id of next.keys()) if (!live.has(id)) { next.delete(id); changed = true }
   if (changed) createdKeys.value = next
 }, { immediate: true })
 function createdOrder(a: UnifiedSession, b: UnifiedSession): number {

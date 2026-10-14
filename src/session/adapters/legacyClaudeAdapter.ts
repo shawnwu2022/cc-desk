@@ -341,7 +341,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
 
   async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
     const value = title.trim()
-    if (!value || value.includes('\0')) throw new Error('SESSION_TITLE_REQUIRED')
+    if (!value || /[\x00-\x1f\x7f]/.test(value) || value.includes('\0')) throw new Error('SESSION_TITLE_REQUIRED')
     const owns = captureOwnership(id)
     const current = () => owns() && canContinue()
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
@@ -349,6 +349,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
       const tab = requireTab(id)
       if (tab.status === 'running') {
         // 恢复 CLI 自身改名机制：/rename 注入运行中的 PTY；GUI 覆盖名清除，标题随 refresh 回流。
+        // 注入路由到 XTermTerminal.renameTab，无法注入时其抛错中止，GUI 覆盖名不会被误清。
         await deps.runtime.renameTab(tab.tabId, value)
         if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
         if (deps.metadata) await clearSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), current, onIssued)

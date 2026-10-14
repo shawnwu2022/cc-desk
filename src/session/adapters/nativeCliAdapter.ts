@@ -502,6 +502,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       const tab = requireTab(id)
       if (tab.cli === 'claude' && tab.status === 'running') {
         // claude 的 /rename 是 CLI 自身改名机制：注入后名字随 catalog.refresh 回流，GUI 覆盖名清除。
+        // 注入路由到 NativeCliTerminal.renameTab，输入不可用时其抛错中止，GUI 覆盖名不会被误清。
         await deps.runtime.renameTab(tab.tabId, value)
         if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
         if (deps.metadata) await clearSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), current, onIssued)

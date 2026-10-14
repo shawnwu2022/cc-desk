@@ -70,7 +70,7 @@ export async function clearSessionDisplayName(metadata: SessionMetadataPort, ide
   const requireCurrent = () => { if (!owns()) throw new Error('STALE_SESSION_ATTEMPT') }
   requireCurrent()
   const saved = metadata.sessionRecords.get(identity.id)
-  if (!matchesSessionMetadata(saved, identity) || !saved.title) { onIssued?.(); return }
+  if (!matchesSessionMetadata(saved, identity) || !saved.title) { requireCurrent(); onIssued?.(); return }
   await metadata.upsertSessionRecord(identity.id, {
     runtime: identity.runtime, cli: identity.cli, projectPath: identity.projectPath,
     adapterSessionId: identity.adapterSessionId, nativeSessionId: identity.nativeSessionId,
