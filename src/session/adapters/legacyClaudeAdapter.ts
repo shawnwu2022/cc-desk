@@ -341,7 +341,9 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
 
   async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
     const value = title.trim()
-    if (!value || /[\x00-\x1f\x7f]/.test(value) || value.includes('\0')) throw new Error('SESSION_TITLE_REQUIRED')
+    // 与 metadata 写入同一契约：运行态注入不再比 stopped 兜底更宽松，避免 201 字符标题
+    // 在运行中成功、停止后却被下游拒绝。
+    if (!value || /[\x00-\x1f\x7f]/.test(value) || value.includes('\0') || [...value].length > 200) throw new Error('SESSION_TITLE_REQUIRED')
     const owns = captureOwnership(id)
     const current = () => owns() && canContinue()
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
@@ -351,9 +353,10 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
         // 恢复 CLI 自身改名机制：/rename 注入运行中的 PTY；GUI 覆盖名清除，标题随 refresh 回流。
         // 注入路由到 XTermTerminal.renameTab，无法注入时其抛错中止，GUI 覆盖名不会被误清。
         await deps.runtime.renameTab(tab.tabId, value)
-        if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
-        if (deps.metadata) await clearSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), current, onIssued)
-        else onIssued?.()
+        // 注入已送达 CLI：issued 绑定真实提交点，之后切换会话不得把这次改名当未发出操作撤销，
+        // 否则覆盖名清理被拒、旧名永久残留。写后过期仍由 clear 的 requireCurrent 抛出。
+        onIssued?.()
+        if (deps.metadata) await clearSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), current)
       } else {
         // 未运行的激活 tab 没有 CLI 可写，显示名继续由 GUI metadata 兜底。
         if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current, onIssued)

@@ -494,7 +494,9 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
   async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void): Promise<void> {
     const value = title.trim()
-    if (!value || /[\x00-\x1f\x7f]/.test(value) || value.includes('\0')) throw new Error('SESSION_TITLE_REQUIRED')
+    // 与 metadata 写入同一契约：运行态注入不再比 stopped 兜底更宽松，避免 201 字符标题
+    // 在运行中成功、停止后却被下游拒绝。
+    if (!value || /[\x00-\x1f\x7f]/.test(value) || value.includes('\0') || [...value].length > 200) throw new Error('SESSION_TITLE_REQUIRED')
     const owns = captureOwnership(id)
     const current = () => canContinue() && owns()
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
@@ -504,9 +506,10 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         // claude 的 /rename 是 CLI 自身改名机制：注入后名字随 catalog.refresh 回流，GUI 覆盖名清除。
         // 注入路由到 NativeCliTerminal.renameTab，输入不可用时其抛错中止，GUI 覆盖名不会被误清。
         await deps.runtime.renameTab(tab.tabId, value)
-        if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
-        if (deps.metadata) await clearSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), current, onIssued)
-        else onIssued?.()
+        // 注入已送达 CLI：issued 绑定真实提交点，之后切换会话不得把这次改名当未发出操作撤销，
+        // 否则覆盖名清理被拒、旧名永久残留。写后过期仍由 clear 的 requireCurrent 抛出。
+        onIssued?.()
+        if (deps.metadata) await clearSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), current)
       } else {
         // codex 的 /rename 参数形式未证实；GUI 显示名继续兜底，待实测后切到 CLI 注入。
         if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current, onIssued)

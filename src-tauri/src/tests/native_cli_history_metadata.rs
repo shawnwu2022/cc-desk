@@ -2323,3 +2323,52 @@ fn HistoryCodex_CacheHeaderKeepsUtf8Seam_055() {
     assert_eq!(items.len(), 1, "后续正文切半的字符不能使暖缓存历史消失");
     assert_eq!(values[0]["nativeSessionId"], "cached-utf8");
 }
+
+// codex exec 等非交互入口把 rollout 记为 `source: "exec"`；CC Desk 只启动交互式
+// codex，这类会话永远不是用户在 Desk 里打开的，其无 prompt 的 Untitled 行只是噪声。
+// 判据是 session_meta 的结构化 source，不依赖包装前缀，因此比 047 的窗口启发式更准。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_ExecSessionsAreNotListed_056() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let meta = |id: &str, source: serde_json::Value| {
+        format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"thread_source":"user","source":source}})
+        )
+    };
+    let user = |text: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})
+        )
+    };
+    // 非交互执行：即使留下了像样的用户文本，也不是 Desk 里用户打开的会话。
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/exec.jsonl"),
+        format!(
+            "{}{}",
+            meta("exec-thread", json!("exec")),
+            user("请对这次改动做对抗性审查")
+        ),
+    )
+    .unwrap();
+    // 交互式 CLI：正常列出。
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/interactive.jsonl"),
+        format!(
+            "{}{}",
+            meta("interactive-thread", json!("cli")),
+            user("交互式会话的真实提问")
+        ),
+    )
+    .unwrap();
+
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1, "codex exec 会话不列出");
+    assert_eq!(value[0]["nativeSessionId"], "interactive-thread");
+    assert_eq!(value[0]["title"], "交互式会话的真实提问");
+}

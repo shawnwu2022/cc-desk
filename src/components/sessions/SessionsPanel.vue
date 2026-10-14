@@ -82,20 +82,17 @@ const createdKeys = ref(new Map<string, number>())
 watch(() => normalGroups.value, groups => {
   const next = new Map(createdKeys.value)
   let changed = false
-  const live = new Set<string>()
   for (const group of groups) {
     for (const row of group.sessions) {
-      if (row.archived) continue
-      live.add(row.id)
-      if (next.has(row.id)) continue
+      if (row.archived || next.has(row.id)) continue
       changed = true
       const created = row.opened === true && row.lastOpenedAt ? row.lastOpenedAt
         : Number.isFinite(row.lastActivityAt) ? row.lastActivityAt : 0
       next.set(row.id, created)
     }
   }
-  // 清理已消失的键，避免长期运行下 Map 无限增长。
-  for (const id of next.keys()) if (!live.has(id)) { next.delete(id); changed = true }
+  // 键只增不删：来源读取失败会临时清空该来源的行，删除键会让同一行在恢复后按新活动
+  // 时间重新插入而跳动。键的数量与出现过的会话身份同阶，不构成无界增长。
   if (changed) createdKeys.value = next
 }, { immediate: true })
 function createdOrder(a: UnifiedSession, b: UnifiedSession): number {

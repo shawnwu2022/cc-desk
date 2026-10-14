@@ -464,15 +464,20 @@ pub(super) fn codex_metadata_probe(
     }
 }
 
-/// 该 rollout 是否由 subagent 或自动流程（守护评审、安全扫描、代码评审）创建。
-/// 判据取自 codex 自己在 session_meta 上写的来源标记：`thread_source` 是权威
-/// 取值；早期版本没有该字段，但 subagent 线程仍带结构化 `source.subagent`。
+/// 该 rollout 是否由 subagent、自动流程（守护评审、安全扫描、代码评审）或
+/// 非交互执行模式创建。判据取自 codex 自己在 session_meta 上写的来源标记：
+/// `thread_source` 与 `source.subagent` 是权威取值；`source == "exec"` 是
+/// `codex exec` 等非交互入口，CC Desk 只启动交互式 codex，这类 rollout 永远
+/// 不是用户在 Desk 里打开的会话，其无 prompt 的 `Untitled` 行只是噪声。
 /// 未知取值一律按用户创建处理——隐藏真实用户会话的代价远大于多列一行噪声。
 fn is_auto_session(payload: &Value) -> bool {
     if matches!(
         payload["thread_source"].as_str(),
         Some("subagent" | "guardian_review" | "security_scan" | "code_review")
     ) {
+        return true;
+    }
+    if payload["source"].as_str() == Some("exec") {
         return true;
     }
     payload["source"].get("subagent").is_some()
