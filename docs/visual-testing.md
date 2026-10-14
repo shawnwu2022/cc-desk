@@ -408,3 +408,20 @@ capture with `--update-snapshots=all`, independent pixel review, manifest update
 fresh no-update gate — the committed baselines do not match the intended UI. A
 local Chromium (1280×800, non-WebView2) measurement confirmed
 `settings.bottom = 792/800`, `projects = 78–110`, anchor is the flex child.
+
+## Session-list regrouping also invalidates all baselines
+
+The same batch also changes the session list itself, so the baseline refresh above
+must cover both at once. `ProjectNode` now clusters a project's non-archived rows by
+CLI type (Claude first, then Codex) with no rendered heading, and `SessionsPanel`
+orders rows by a frozen first-seen creation key (descending) instead of live
+activity. Any baseline that renders a populated project tree changes in row order and
+vertical position (the `mixed`, `hover`, `resources`, `projects` and `archived`
+scenarios at minimum); settings-, dialog- and terminal-only baselines show no session
+rows and are expected to differ only from the nav move. The exact per-image split must
+be read from the actual capture, not assumed. A local Chromium check on the visual
+fixture confirmed the `cc-desk` project splits into `claude` (2 rows) then `codex`
+(2 rows) groups with no heading element.
+
+Both changes ride one approved capture: do not accept a partial baseline set that
+reflects only the nav move or only the row regrouping.
