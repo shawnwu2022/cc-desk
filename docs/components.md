@@ -112,8 +112,8 @@ string quoting with escaped quotes/backslashes. POSIX literal backslashes retain
 path identity. This is coding-CLI reference text, not a promise of universal shell
 argument escaping; dropped paths never add Enter or terminal control bytes.
 
-Rename admission is limited to opened sessions; stopped tabs and history rows
-without a writable CLI keep the display-metadata fallback.
+Rename admission requires the exact current source owner. Opened rows additionally
+require selection; closed history can edit its Desk display metadata directly.
 
 Windows directory opening restores normalized `//server/share` and `//?/` paths
 to backslash prefixes before passing one literal argument to Explorer. Explorer
