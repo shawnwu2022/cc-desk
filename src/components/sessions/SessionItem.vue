@@ -41,7 +41,7 @@ const renameInvalid = ref(false)
 const menuOpen = ref(false)
 let firstClick: { session: UnifiedSession; owner: string; owns: (() => boolean) | null; selected: boolean } | null = null
 const menuAnchor = ref({ x: 8, y: 8 })
-const isRenaming = computed(() => (props.selected || props.session.opened === false) && (localRename.value || props.session.renameState === 'editing' || props.session.renameState === 'saving'))
+const isRenaming = computed(() => (props.selected || props.session.opened === false) && (localRename.value || props.session.renameState === 'editing' || (props.selected && props.session.renameState === 'saving')))
 const isSaving = computed(() => props.session.renameState === 'saving')
 const visualState = computed(() => deriveSessionVisualState(props.session, props.session.opened === true))
 const observationNotice = computed(() => selectSessionObservationNotice(props.session))

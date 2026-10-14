@@ -92,4 +92,11 @@ test('Rename_ClosedHistorySfcAdmitsAndRendersEditor_006', () => {
     assert.ok(expression)
     assert.equal(Function('props', 'localRename', 'return ' + expression)(props, { value: false }), true, name)
   }
+  const expression = source.match(/const isRenaming = computed\(\(\) => (.+)\)/)?.[1]
+  const render = (selected, opened, state, local) => Function('props', 'localRename', 'return ' + expression)(
+    { selected, session: { opened, renameState: state } }, { value: local })
+  // 后台保存只禁用 Archive；已进入的编辑器和选中运行行保存仍保持编辑器。
+  assert.equal(render(false, false, 'saving', false), false)
+  assert.equal(render(false, false, 'saving', true), true)
+  assert.equal(render(true, true, 'saving', false), true)
 })
