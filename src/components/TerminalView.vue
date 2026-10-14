@@ -37,10 +37,11 @@ async function startTab(tabId: string) {
 async function stopTab(tabId: string) { await requireTerminal().stopTab(tabId) }
 async function restartTab(tabId: string) { await requireTerminal().restartTab(tabId) }
 async function renameTab(tabId: string, title: string) { await requireTerminal().renameTab(tabId, title) }
+function dropPaths(paths: string[]) { terminalRef.value?.dropPaths(paths) }
 async function recover() { await requireTerminal().recover() }
 function focus() { if (props.visible) terminalRef.value?.focus() }
 function fitVisible() { terminalRef.value?.fitVisible() }
-defineExpose({ startTab, stopTab, stop: stopTab, recover, restartTab, renameTab, focus, fitVisible })
+defineExpose({ startTab, stopTab, stop: stopTab, recover, restartTab, renameTab, dropPaths, focus, fitVisible })
 </script>
 
 <template>

@@ -293,4 +293,30 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     const reservation = io.binding.reserveUserPaste.mock.results[0].value as { cancel: ReturnType<typeof vi.fn> }
     expect(reservation.cancel).not.toHaveBeenCalled()
   })
+
+  // 拖入文件路径与键盘输入同语义：项目内路径相对化，含空格的外部路径加引号。
+  it('Drop_PathsRelativizeAndQuote_009', async () => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+
+    const terminal = wrapper.vm as unknown as { dropPaths: (paths: string[]) => boolean }
+    expect(terminal.dropPaths(['/repo/src/a.ts', '/outside/my file.txt'])).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(io.binding.sendUserText).toHaveBeenCalledWith('src/a.ts "/outside/my file.txt"')
+  })
+
+  // 非激活 tab 的 drop 必须静默拒绝，避免后台终端收到不属于自己的输入。
+  it('Drop_InactiveTabRejects_010', async () => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: false } })
+    await vi.advanceTimersByTimeAsync(0)
+
+    const terminal = wrapper.vm as unknown as { dropPaths: (paths: string[]) => boolean }
+    expect(terminal.dropPaths(['/repo/src/a.ts'])).toBe(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(io.binding.sendUserText).not.toHaveBeenCalled()
+  })
 })

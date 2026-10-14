@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, provide, ref, toRef, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, toRef, watch } from 'vue'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import TerminalView from '@/components/TerminalView.vue'
 import NativeCliTerminal from '@/components/NativeCliTerminal.vue'
 import { useShellStore } from '@/stores/shell'
@@ -22,6 +23,9 @@ const surface = computed(() => computeTerminalSurfaceVars(getTerminalTheme(app.t
 const legacy = ref<InstanceType<typeof TerminalView> | null>(null)
 const native = new Map<string, InstanceType<typeof NativeCliTerminal>>()
 const legacyMounted = ref(false)
+const isDragOver = ref(false)
+let unlistenDragDrop: (() => void) | null = null
+let dragDropDisposed = false
 watch(() => props.sessions.some(session => session.runtime === 'legacy-claude'), exists => {
   if (exists) legacyMounted.value = true
 }, { immediate: true })
@@ -58,6 +62,27 @@ function requireNative(tabId: string) {
   if (!terminal) throw new Error('NATIVE_TERMINAL_NOT_READY')
   return terminal
 }
+// 拖拽是 webview 级全局事件，由 host 统一监听一次并按活跃会话分发；
+// 各终端组件的 dropPaths 内部仍有各自的可见/输入守卫。
+// 拖拽是可选能力：webview 不可用（如宿主测试环境）时静默降级，不拦截进程产出。
+async function setupDragDropListener() {
+  const unlisten = await getCurrentWebview().onDragDropEvent(event => {
+    if (!props.visible) { isDragOver.value = false; return }
+    if (event.payload.type === 'drop') {
+      isDragOver.value = false
+      const paths = event.payload.paths
+      if (paths.length > 0) activeTerminal()?.dropPaths(paths)
+    } else if (event.payload.type === 'enter' || event.payload.type === 'over') {
+      isDragOver.value = !!active.value
+    } else {
+      isDragOver.value = false
+    }
+  })
+  if (dragDropDisposed) unlisten()
+  else unlistenDragDrop = unlisten
+}
+onMounted(() => { void setupDragDropListener().catch(() => {}) })
+onUnmounted(() => { dragDropDisposed = true; unlistenDragDrop?.(); unlistenDragDrop = null })
 const port: UnifiedTerminalHostPort = {
   async startLegacy(id) { await nextTick(); await requireLegacy().startTab(id) },
   async stopLegacy(id) { await requireLegacy().stopTab(id) },
@@ -71,7 +96,7 @@ defineExpose({ ...port, fitVisible })
 </script>
 
 <template>
-  <div class="unified-terminal-host" data-unified-terminal-host :style="surface">
+  <div class="unified-terminal-host" :class="{ 'drag-over': isDragOver }" data-unified-terminal-host :style="surface">
     <!-- XTermTerminal already aggregates Legacy tabs; there is exactly one owner. -->
     <TerminalView v-if="legacyMounted" ref="legacy" :visible="legacyVisible" v-show="legacyVisible" />
     <NativeCliTerminal v-for="session in nativeSessions" :key="session.id"
@@ -83,5 +108,6 @@ defineExpose({ ...port, fitVisible })
 
 <style scoped>
 .unified-terminal-host { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--terminal-surface-bg); }
+.unified-terminal-host.drag-over { box-shadow: inset 0 0 0 2px var(--accent-gold); }
 .unified-terminal-empty { display: grid; flex: 1; min-width: 0; min-height: 0; background: var(--bg-primary); }
 </style>

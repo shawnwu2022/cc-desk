@@ -1,5 +1,5 @@
 <template>
-  <div ref="containerRef" class="xterm-container" :class="{ 'drag-over': isDragOver }">
+  <div ref="containerRef" class="xterm-container">
     <!-- 动态渲染每个 Tab 的终端容器 -->
     <div
       v-for="[tabId] in terminalInstances"
@@ -52,7 +52,6 @@ import type { XtermProvenanceSource } from '@/terminal/xtermProvenance'
 import { createImeInputPolicy, isPasteShortcut } from '@/terminal/inputPolicy'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { getCurrentWebview } from '@tauri-apps/api/webview'
 
 const props = defineProps<{
   visible?: boolean
@@ -68,7 +67,6 @@ const appStore = useAppStore()
 const sessionStore = useSessionStore()
 const hookStore = useHookStore()
 const containerRef = ref<HTMLElement>()
-const isDragOver = ref(false)
 const visible = computed(() => props.visible !== false)
 const needsFit = new Set<string>()
 const pendingFits = new Map<string, Terminal>()
@@ -198,7 +196,6 @@ function handleNativeCopy(e: ClipboardEvent) {
 // Unlisten functions
 let unlistenPtyOutput: (() => void) | null = null
 let unlistenPtyExit: (() => void) | null = null
-let unlistenDragDrop: (() => void) | null = null
 let unlistenWindowResized: (() => void) | null = null
 let unbindNativePaste: (() => void) | null = null
 
@@ -521,10 +518,8 @@ onMounted(async () => {
       imageFallback: () => imagePasteBytes(platform),
     })
   }
-  // Drag/drop is optional. Only output/exit registration gates process spawn.
-  void setupDragDropListener().catch(() => {})
   await ensureCoreListeners().catch(() => { /* startTab reports the safe readiness error. */ })
-  if (disposed) { unlistenPtyOutput?.(); unlistenPtyExit?.(); unlistenDragDrop?.(); return }
+  if (disposed) { unlistenPtyOutput?.(); unlistenPtyExit?.(); return }
   window.addEventListener('copy', handleNativeCopy)
 
   if (containerRef.value) {
@@ -561,32 +556,19 @@ onMounted(async () => {
   }
 })
 
-// 设置事件监听器
-async function setupDragDropListener() {
-  // 文件拖放 → 将路径输入终端
-  // 项目内文件转换为相对路径，便于 Claude 直接引用
-  const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
-    if (!visible.value) { isDragOver.value = false; return }
-    if (event.payload.type === 'drop') {
-      isDragOver.value = false
-      const paths = event.payload.paths
-      if (paths.length > 0) {
-        const projectPath = sessionStore.tabs.get(currentDisplayTabId.value ?? '')?.projectPath ?? ''
-        const text = paths
-          .map(p => relativizePath(p, projectPath))
-          .map(p => p.includes(' ') ? `"${p}"` : p)
-          .join(' ')
-        sendText(text)
-      }
-    } else if (event.payload.type === 'enter' || event.payload.type === 'over') {
-      isDragOver.value = true
-    } else {
-      isDragOver.value = false
-    }
-  })
-
-  if (disposed) unlisten()
-  else unlistenDragDrop = unlisten
+// 拖入文件路径转换为项目相对路径后注入，便于 CLI 直接引用项目内文件。
+// webview 级 drop 事件由 UnifiedTerminalHost 统一监听并分发到这里。
+function dropPaths(paths: string[]): boolean {
+  if (!visible.value || paths.length === 0) return false
+  const tabId = currentDisplayTabId.value
+  if (!tabId) return false
+  const projectPath = sessionStore.tabs.get(tabId)?.projectPath ?? ''
+  const text = paths
+    .map(p => relativizePath(p, projectPath))
+    .map(p => p.includes(' ') ? `"${p}"` : p)
+    .join(' ')
+  if (!text) return false
+  return sendText(text)
 }
 
 let coreListenersReady: Promise<void> | null = null
@@ -1025,7 +1007,6 @@ onUnmounted(() => {
   unbindNativePaste?.()
   unlistenPtyOutput?.()
   unlistenPtyExit?.()
-  unlistenDragDrop?.()
   unlistenWindowResized?.()
   for (const [tabId, instance] of terminalInstances.entries()) {
     void disposeTerminal(instance.term, `onUnmounted(tabId=${tabId})`)
@@ -1040,6 +1021,7 @@ defineExpose({
   restartCurrentPty,
   cleanup,
   sendText,
+  dropPaths,
   focus,
   fitCurrentTerminal, fitVisible, stopTab, stop: stopTab, recover, renameTab,
   disposeTabInstance,
@@ -1056,10 +1038,6 @@ defineExpose({
   position: relative;
   overflow: hidden;
   transition: box-shadow 0.15s ease;
-}
-
-.xterm-container.drag-over {
-  box-shadow: inset 0 0 0 2px var(--accent-gold);
 }
 
 .terminal-wrapper {

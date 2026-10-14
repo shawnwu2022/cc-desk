@@ -22,6 +22,7 @@ import { createXtermModeEpoch, type XtermModeEpoch } from '@/terminal/modeEpoch'
 import { buildPastePayload, imagePasteBytes } from '@/utils/pasteText'
 import { classifyClipboardSnapshot, createImeInputPolicy, readClipboardSnapshot } from '@/terminal/inputPolicy'
 import { platform } from '@/utils/platform'
+import { relativizePath } from '@/utils/path'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop } from '@/api/tauri'
 import type { OutputFrame } from '@/types/terminal'
@@ -248,6 +249,21 @@ function handleNativeCopy(event: ClipboardEvent) {
   if (!selection) return
   event.preventDefault()
   void writeText(selection).catch(() => {})
+}
+
+// 拖入文件路径与键盘输入同语义，走 native 用户写入通道；相对化便于 CLI 引用项目内文件。
+// webview 级 drop 事件由 UnifiedTerminalHost 统一监听并分发到这里。
+function dropPaths(paths: string[]): boolean {
+  if (!props.active || !inputEnabled || !term || !binding) return false
+  const projectPath = tabs.tab(props.tabId)?.projectPath ?? ''
+  const text = paths
+    .map(p => relativizePath(p, projectPath))
+    .map(p => p.includes(' ') ? `"${p}"` : p)
+    .join(' ')
+  if (!text) return false
+  const attempt = currentAttempt()
+  void binding.sendUserText(text).catch(() => markInputFailure(attempt))
+  return true
 }
 
 // Do not use xterm disableStdin for visibility: it also suppresses parser replies.
@@ -719,7 +735,7 @@ onUnmounted(() => {
   fit = null
 })
 
-defineExpose({ start, recover, stop, focus, fitVisible, needsFit })
+defineExpose({ start, recover, stop, focus, fitVisible, needsFit, dropPaths })
 </script>
 
 <style scoped>
