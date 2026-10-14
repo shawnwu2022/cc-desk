@@ -425,3 +425,34 @@ fixture confirmed the `cc-desk` project splits into `claude` (2 rows) then `code
 
 Both changes ride one approved capture: do not accept a partial baseline set that
 reflects only the nav move or only the row regrouping.
+
+## Local acceptance run and the environment floor
+
+The hoisted drag-drop listener in `UnifiedTerminalHost` subscribes through
+`getCurrentWebview().onDragDropEvent` on mount, which the visual stub previously
+counted as a blocked host call, failing all eight empty-workspace geometry cases
+with `data-blocked-host-calls="1"`. The stub now provides the same class of inert
+read-only subscription already granted to window-state listeners: a synthetic
+`onDragDropEvent` that registers nothing and never delivers events. Positive host
+calls stay blocked and counted, and the drag events themselves cannot cross the
+fixture boundary.
+
+With that repair the local no-update gate reproduces the documented RED state
+exactly: 175 cases pass (120 geometry, 8 empty-workspace centering, interaction,
+glyph/receipt/close-state evidence) and only the thirteen baseline comparisons
+fail. A DOM probe on the served fixture confirms the intended structure directly:
+the settings anchor occupies `top=728, bottom=760` inside a nav column ending at
+768, and the `cc-desk` project renders two `claude` rows followed by two `codex`
+rows with no heading element.
+
+Local pixel comparison against the committed baselines has a floor that is
+independent of this batch: an identical capture of unmodified `main` on this
+Windows Chromium does not reproduce the Linux-captured baseline bytes either.
+Within one local environment the branch-vs-`main` delta on the empty scenario is
+378 pixels confined to `x∈[13,30]` at exactly the two settings-icon slots (the
+third top slot vacated, the bottom slot filled); populated scenarios add the row
+regrouping. That isolates the branch's visual change from the font/rasterizer
+noise, but it is not baseline acceptance: freezing the thirteen baselines still
+requires the standard Linux Chromium CI cycle (RED run, `--update-snapshots=all`
+capture, independent pixel review, manifest update, fresh no-update gate), and
+Windows-rendered PNGs must not replace the Linux provenance.
