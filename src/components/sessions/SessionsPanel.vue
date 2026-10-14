@@ -75,98 +75,39 @@ watch(() => props.active, active => {
 const normalGroups = computed(() => props.projectGroups ?? store.projectGroups)
 const archived = computed(() => (props.archivedSessions ?? store.sessions).filter(session => session.archived)
   .map(session => store.isResumePending(session) ? { ...session, resumePending: true } : session))
-const knownArchivedIds = new Set<string>()
-// Activity is live metadata, not a continuous row-position command. Keep this
-// view's snapshot independently of adapters' catalog publication order.
-const sessionOrders = ref(new Map<string, { ids: string[]; openedAt: Map<string, number> }>())
-function snapshotOrder(groups = normalGroups.value) {
-  const next = new Map(sessionOrders.value)
+// 创建序键一次性冻结：打开 tab 用真实创建时间（lastOpenedAt 即 tab.createdAt），
+// 历史行冻结首见活动时间作为稳定的创建序近似——CLI 历史只有最后活动时间，没有创建时间。
+// 行位置不随后续活动、打开状态或刷新变化。
+const createdKeys = ref(new Map<string, number>())
+watch(() => normalGroups.value, groups => {
+  const next = new Map(createdKeys.value)
+  let changed = false
   for (const group of groups) {
-    const rows = group.sessions.filter(row => !row.archived).sort(listActivityOrder)
-    next.set(group.projectKey, {
-      ids: rows.map(row => row.id),
-      openedAt: new Map(rows.map(row => [row.id, row.lastOpenedAt ?? 0])),
-    })
-  }
-  sessionOrders.value = next
-}
-function activityTime(row: UnifiedSession) {
-  return Number.isFinite(row.lastActivityAt) ? row.lastActivityAt : 0
-}
-// Open terminals always precede closed history; activity orders within a run of
-// equal ownership, with exact identity breaking ties.
-function listActivityOrder(a: UnifiedSession, b: UnifiedSession) {
-  return Number(b.opened === true) - Number(a.opened === true)
-    || activityTime(b) - activityTime(a) || a.id.localeCompare(b.id)
-}
-watch(() => store.completedClose, closed => {
-  if (closed) snapshotOrder(normalGroups.value.filter(group => group.projectKey === closed.projectKey))
-}, { flush: 'sync' })
-// normalGroups/archived 是 computed，每次重算产出全新引用（Map 重建 + 对象 spread），
-// 因此无需 deep 监听：引用变化即数据变化。去掉 flush: 'sync' 让高频会话状态更新
-// 合并到每个 tick 一次，而不是任意属性变化都同步触发全量重排。
-watch(() => ({ groups: normalGroups.value, archived: archived.value }), ({ groups, archived }) => {
-  for (const row of archived) knownArchivedIds.add(row.id)
-  const next = new Map(sessionOrders.value)
-  const keys = new Set(groups.map(group => group.projectKey))
-  for (const key of next.keys()) if (!keys.has(key)) next.delete(key)
-  for (const group of groups) {
-    const rows = group.sessions.filter(row => !row.archived)
-    const openedById = new Map(rows.map(row => [row.id, row.opened === true]))
-    const previous = next.get(group.projectKey)
-    function partition(list: string[]): string[] {
-      // 关闭的行不能排在打开行之前；分区内部保持既定相对顺序。
-      return [...list.filter(id => openedById.get(id) === true), ...list.filter(id => openedById.get(id) !== true)]
+    for (const row of group.sessions) {
+      if (row.archived || next.has(row.id)) continue
+      changed = true
+      const created = row.opened === true && row.lastOpenedAt ? row.lastOpenedAt
+        : Number.isFinite(row.lastActivityAt) ? row.lastActivityAt : 0
+      next.set(row.id, created)
     }
-    if (!previous) {
-      next.set(group.projectKey, { ids: partition([...rows].sort(listActivityOrder).map(row => row.id)),
-        openedAt: new Map(rows.map(row => [row.id, row.lastOpenedAt ?? 0])) })
-      continue
-    }
-    const live = new Set(rows.map(row => row.id))
-    // New/admitted/restored rows lead, while existing relative order stays fixed.
-    const leading = rows.filter(row => (previous.openedAt.has(row.id) && (row.opened === true || !!row.preparationState) && (row.lastOpenedAt ?? 0) > (previous.openedAt.get(row.id) ?? 0))
-      || (!previous.openedAt.has(row.id) && (row.opened === true || !!row.preparationState || knownArchivedIds.has(row.id))))
-      .sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0) || activityTime(b) - activityTime(a) || a.id.localeCompare(b.id))
-    const leadingIds = new Set(leading.map(row => row.id))
-    const discovered = rows.filter(row => !previous.openedAt.has(row.id) && !leadingIds.has(row.id))
-      .sort((a, b) => activityTime(b) - activityTime(a) || a.id.localeCompare(b.id))
-    const retained = previous.ids.filter(id => live.has(id) && !leadingIds.has(id))
-    next.set(group.projectKey, { ids: partition([...leadingIds, ...retained, ...discovered.map(row => row.id)]),
-      openedAt: new Map(rows.map(row => [row.id, row.lastOpenedAt ?? 0])) })
-    for (const row of rows) knownArchivedIds.delete(row.id)
   }
-  sessionOrders.value = next
+  if (changed) createdKeys.value = next
 }, { immediate: true })
-watch(() => [props.active, props.currentProjectPath] as const, ([active, path], previous) => {
-  if (!active) manualRefreshPending = false
-  else if (!previous || !previous[0]) snapshotOrder()
-  else if (!sameProjectPath(path ?? '', previous[1] ?? '')) {
-    manualRefreshPending = false
-    snapshotOrder(normalGroups.value.filter(group => sameProjectPath(group.projectPath, path ?? '')))
-  }
-}, { flush: 'sync' })
-let manualRefreshPending = false
-function refreshSessions() {
-  if (!props.active) return
-  manualRefreshPending = true
-  snapshotOrder()
-  emit('refresh')
+function createdOrder(a: UnifiedSession, b: UnifiedSession): number {
+  return (createdKeys.value.get(b.id) ?? 0) - (createdKeys.value.get(a.id) ?? 0) || a.id.localeCompare(b.id)
 }
 const selectedId = computed(() => props.selectedId === undefined ? store.activeSessionId : props.selectedId)
 const loading = computed(() => props.loading ?? store.loading)
-watch(loading, (busy, previous) => {
-  if (!busy && previous && manualRefreshPending) { manualRefreshPending = false; snapshotOrder() }
-}, { flush: 'post' })
 const stateReady = computed(() => props.projectGroups !== undefined || projects.loaded)
 const stateError = computed(() => props.projectGroups === undefined && projects.error)
 const searching = computed(() => !!searchQuery.value.trim())
+function refreshSessions() {
+  if (!props.active) return
+  emit('refresh')
+}
 const allGroups = computed<UnifiedProjectGroup[]>(() => {
-  const groups = normalGroups.value.filter(group => !group.hidden).map(group => {
-    const ranks = new Map((sessionOrders.value.get(group.projectKey)?.ids ?? []).map((id, rank) => [id, rank]))
-    return { ...group, sessions: group.sessions.filter(session => !session.archived)
-      .sort((a, b) => (ranks.get(a.id) ?? -1) - (ranks.get(b.id) ?? -1) || a.id.localeCompare(b.id)) }
-  })
+  const groups = normalGroups.value.filter(group => !group.hidden).map(group => ({
+    ...group, sessions: group.sessions.filter(session => !session.archived).sort(createdOrder) }))
   const seen = new Set(normalGroups.value.map(group => normalizePath(group.projectPath)))
   const pinned = new Set(projects.pinnedProjects.map(normalizePath))
   // Task 5 intentionally omits all-archived projects. Keep one empty project shell
