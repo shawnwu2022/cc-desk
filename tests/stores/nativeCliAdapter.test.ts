@@ -419,14 +419,14 @@ it('CodexArchive_UnarchiveForcesHistoryReload_035', async () => {
   expect(metadata.recordSessionOpened).toHaveBeenCalledTimes(1)
 })
 
-// claude 运行中改名走 CLI 自身 /rename 机制；GUI 覆盖名清除，不写新的显示名记录。
-describe('Native rename routes through CLI injection', () => {
-  it('Rename_ClaudeRunningInjectsCli_034', async () => {
+// 运行中 Claude 的编辑器状态未知；GUI 改名仅保存显示名。
+describe('Native rename preserves the CLI editor', () => {
+  it('Rename_ClaudeRunningUsesMetadata_034', async () => {
     const claudeTab = tab({ tabId: 'cc-1', cli: 'claude', profileId: 'claude-main', status: 'running' })
     const { adapter, runtime, metadata, map } = setup([claudeTab], [])
     await adapter.renameSession('native-tab:cc-1', 'New name')
-    expect(runtime.renameTab).toHaveBeenCalledWith('cc-1', 'New name', expect.objectContaining({ beforeDispatch: expect.any(Function) }))
-    expect(metadata.upsertSessionRecord).not.toHaveBeenCalled()
+    expect(runtime.renameTab).not.toHaveBeenCalled()
+    expect(metadata.upsertSessionRecord).toHaveBeenCalledWith('native-tab:cc-1', expect.objectContaining({ title: 'New name' }), expect.any(Function))
     expect(map.get('cc-1')?.title).toBe('New name')
   })
   // codex 的 /rename 参数形式未证实，激活改名继续由 GUI 显示名兜底，不注入。

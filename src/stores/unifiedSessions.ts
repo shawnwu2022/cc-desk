@@ -698,7 +698,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   function beginRename(id: string) {
     const row = sessions.value.find(value => value.id === id)
-    if (!row || activeSessionId.value !== id || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
+    if (!row || (row.opened !== false && activeSessionId.value !== id) || row.archived || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
     const current = renameOwners.get(id)
     if (!current || !ownsRename(current, row)) { current?.controller.abort(); renameOwners.set(id, captureRenameOwner(row, 'editing')) }
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'editing' } : row)
@@ -714,7 +714,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     const current = renameOwners.get(id)
-    if ((requireEditor && (!current || activeSessionId.value !== id)) || (current && !ownsRename(current, session))) {
+    if ((requireEditor && (!current || (session.opened !== false && activeSessionId.value !== id))) || (current && !ownsRename(current, session))) {
       if (!current?.issued) {
         renameOwners.delete(id)
         current?.controller.abort()

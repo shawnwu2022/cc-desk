@@ -35,6 +35,16 @@ beforeEach(() => {
 })
 afterEach(() => { wrapper?.unmount(); wrapper = null; vi.unstubAllGlobals(); vi.useRealTimers() })
 describe('Legacy unified ownership', () => {
+  it.each(['\r', '\n', '\x1b', '\t'])('Legacy_DropRejectsWholeUnsafeBatch_022 %j', async control => {
+    const sessions = useSessionStore()
+    const id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises()
+    await (wrapper.vm as any).startTab(id); await flushPromises()
+    io.input.mockClear()
+    expect((wrapper.vm as any).dropPaths(['/repo/safe.txt', '/repo/bad' + control + 'file'])).toBe(false)
+    await flushPromises()
+    expect(io.input).not.toHaveBeenCalled()
+  })
   // 停止响应失败后等待精确退出事件；另一 PTY 的事件不得释放当前会话。
   it('Legacy_StopWaitsForExactExit_017', async () => {
     const sessions = useSessionStore(); const id = sessions.createTab('/repo')
@@ -353,8 +363,8 @@ describe('Legacy unified ownership', () => {
 
 })
 
-// 真实 SFC 的 FIFO 端口必须转交 admission；取消排队的改名不会影响前一条输入。
-it('Legacy_RenameCancelledBehindWriter_020', async () => {
+// 真实 SFC 拒绝没有编辑态证明的 rename；前一条用户输入仍独立完成。
+it('Legacy_UnverifiedRenameKeepsPriorInput_020', async () => {
   const sessions = useSessionStore(); const id = sessions.createTab('/repo')
   wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
   let finish!: () => void; io.input.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
@@ -367,8 +377,8 @@ it('Legacy_RenameCancelledBehindWriter_020', async () => {
   expect(io.input).toHaveBeenCalledExactlyOnceWith(sessions.tabs.get(id)!.ptyId, 'earlier', 'terminal-ondata')
 })
 
-// 排队期间离开工作区也必须在真正 dispatch 前拒绝改名。
-it('Legacy_RenameHiddenBeforeDispatch_021', async () => {
+// 隐藏期间也没有空编辑器证明，rename 不能写入终端。
+it('Legacy_HiddenRenameCannotWrite_021', async () => {
   const sessions = useSessionStore(); const id = sessions.createTab('/repo')
   wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises(); await (wrapper.vm as any).startTab(id); await flushPromises()
   let finish!: () => void; io.input.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
