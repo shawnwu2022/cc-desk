@@ -1136,11 +1136,12 @@ fn HistoryCodex_CacheHitRetainsSourceIncompleteFlag_050() {
     );
 }
 
-// wrapper-only 排除只在观察到完整文件时成立：头窗口只是前缀，真实的人工后续
-// 消息可能位于窗口之外，有界前缀不能证明全会话只含自动包装。
+// wrapper-only 且观察不完整的会话不列出：几乎全为 exec/SDK 自动会话，Untitled 行
+// 只是噪声；但前缀不能证明全会话只含包装，省略必须显式披露（来源不完整 + 读失败
+// 计数），不能伪装成无此会话，Messages 仍可按显式 id 读取。
 #[test]
 #[allow(non_snake_case)]
-fn HistoryCodex_WrapperOnlyExclusionNeedsCompleteObservation_051() {
+fn HistoryCodex_PartialWrapperOnlyIsOmittedDisclosed_051() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
     let cwd = temp.path().to_str().unwrap().to_owned();
@@ -1172,14 +1173,95 @@ fn HistoryCodex_WrapperOnlyExclusionNeedsCompleteObservation_051() {
         ),
     )
     .unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut budget,
+    )
+    .unwrap();
+    assert!(
+        items.is_empty(),
+        "wrapper-only 且部分观察的会话不占用列表行"
+    );
+    assert!(
+        budget.history_metadata_incomplete(),
+        "省略必须把来源标记为不完整"
+    );
+    assert!(
+        budget.history_read_failures().contains(&"SOURCE_UNSUPPORTED"),
+        "省略必须计入读失败披露，而不是伪装成无此会话"
+    );
+    // 省略不改变按显式 id 的消息读取。
+    let messages = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::Messages,
+            query: None,
+            session_id: Some("wrapper-late-user"),
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .unwrap();
+    assert!(
+        !messages.is_empty(),
+        "被省略会话的消息读取仍按显式 id 工作"
+    );
+}
+
+// 非 wrapper 的部分观察即使标题未知也照常列出：开头没有评审包装时，用户消息
+// 可能就在窗口之外，隐藏这类行会丢失真实用户会话。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_PartialObservationWithoutWrapperStillListed_052() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let header = |id: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"thread_source":"user"}})
+        )
+    };
+    let filler = format!(
+        "{}\n",
+        json!({"type":"response_item","timestamp":"2026-10-10T03:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x".repeat(220 * 1024)}]}})
+    );
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/no-wrapper-late-user.jsonl"),
+        format!(
+            "{}{}{}\n",
+            header("no-wrapper-late-user"),
+            filler,
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"窗口外的真实任务"}]}})
+        ),
+    )
+    .unwrap();
     let items = read_codex_history_fixture(temp.path()).unwrap();
     assert_eq!(
         items.len(),
         1,
-        "窗口之外的真实用户消息不能被前缀观察排除"
+        "窗口之外的真实用户消息不能让该行消失"
     );
     let value = serde_json::to_value(&items).unwrap();
-    assert_eq!(value[0]["nativeSessionId"], "wrapper-late-user");
+    assert_eq!(value[0]["nativeSessionId"], "no-wrapper-late-user");
 }
 
 fn read_codex_history_fixture(root_path: &Path) -> ReadResult<Vec<ResourceItem>> {

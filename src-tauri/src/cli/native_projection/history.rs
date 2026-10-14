@@ -28,6 +28,8 @@ struct Transcript {
     title_priority: Option<TitlePriority>,
     /// codex 来源标记表明该 rollout 由 subagent 或自动流程创建（非用户主动创建）。
     auto_session: bool,
+    /// wrapper-only 且观察不完整：不占用列表行，由调用方按单条省略披露。
+    unconfirmable_wrapper_only: bool,
     source_path: String,
     observation_bytes: usize,
 }
@@ -324,6 +326,14 @@ fn codex_history(
         cache::with(|cache| cache.forget(&key));
         return Ok(None);
     }
+    // wrapper-only 且观察不完整：几乎全为 exec/SDK 自动会话，Untitled 行只是
+    // 噪声；但前缀不能证明全会话只含包装，因此按单文件省略披露（来源不完整 +
+    // 读失败计数）而不是伪装成无此会话，Messages 仍可按显式 id 读取。
+    if transcript.unconfirmable_wrapper_only {
+        cache::with(|cache| cache.forget(&key));
+        b.omit_history_entry("SOURCE_UNSUPPORTED");
+        return Ok(None);
+    }
     transcript.metadata_incomplete = incomplete;
     transcript.source_path = path.to_owned();
     *observation_bytes = head.len();
@@ -360,6 +370,7 @@ fn cached_transcript(metadata: cache::CachedMetadata) -> Transcript {
         metadata_incomplete: metadata.metadata_incomplete,
         title_priority,
         auto_session: false,
+        unconfirmable_wrapper_only: false,
         source_path: String::new(),
         observation_bytes: 0,
     }
@@ -552,10 +563,11 @@ fn parse_codex_metadata(head: &str, tail: Option<&str>, observed_completely: boo
         metadata_incomplete: false,
         title_priority,
         // 只含自动评审/安全扫描脚手架、且观察到完整文件的会话，与 thread_source
-        // 已标记的自动会话同等处理。头窗口只是前缀：真实的人工后续消息可能位于
-        // 窗口之外，部分观察不能证明全会话只含包装，行照常列出（标题未知）。
+        // 已标记的自动会话同等处理。头窗口只是前缀：部分观察的 wrapper-only 不能
+        // 证明也不该直接列出——由调用方按省略披露处理。
         auto_session: auto_session
             || (wrapper_only && title_priority.is_none() && observed_completely),
+        unconfirmable_wrapper_only: wrapper_only && title_priority.is_none() && !observed_completely,
         source_path: String::new(),
         observation_bytes: 0,
     })
@@ -809,6 +821,7 @@ fn parse_complete(
         metadata_incomplete: false,
         title_priority: None,
         auto_session: false,
+        unconfirmable_wrapper_only: false,
         source_path: path.into(),
         observation_bytes: 0,
     };
@@ -1097,6 +1110,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
         messages: Vec::new(),
         metadata_incomplete: true,
         title_priority,
+        unconfirmable_wrapper_only: false,
         auto_session: false,
         source_path: path.into(),
         observation_bytes: 0,
