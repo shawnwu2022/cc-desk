@@ -1,6 +1,7 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useProjectsStateStore } from '@/stores/projectsState'
+import { useCliSupportStore } from '@/stores/cliSupport'
 import type {
   CreateUnifiedSessionInput,
   ResumeUnifiedSessionInput,
@@ -112,6 +113,7 @@ function collapseCrossRuntimeDuplicates(
 
 export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const projects = useProjectsStateStore()
+  const cliSupport = useCliSupportStore()
   const sessions = ref<UnifiedSession[]>([])
   const activeSessionId = ref<string | null>(null)
   type RenameOwner = { key: string; owns: () => boolean; state: 'editing' | 'saving'; issued?: boolean }
@@ -482,9 +484,15 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       for (const session of lists.flat()) {
         const sessionKey = normalizePath(session.projectPath)
         if ((key !== undefined && key !== sessionKey) || !ownsProject(sessionKey)) continue
+        // 支持开关关闭的 CLI 不列出其历史行；已打开终端是活进程，保留可选中与关闭。
+        if (!cliSupport.isEnabled(session.cli) && session.opened !== true) continue
         byId.set(session.id, mergeDuplicateSession(byId.get(session.id), session))
       }
-      for (const [id, row] of missingRecords) byId.set(id, row)
+      for (const [id, row] of missingRecords) {
+        // 缺失记录与普通行同一支持过滤，不能经该路径让停用 CLI 绕过隐藏。
+        if (!cliSupport.isEnabled(row.cli) && row.opened !== true) continue
+        byId.set(id, row)
+      }
       collapseCrossRuntimeDuplicates(byId, renameOwners)
       // Adapter reads project runtime state; an unsaved draft belongs to the
       // current UI owner until cancellation or exact source/attempt invalidation.
@@ -544,6 +552,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
 
   async function createSession(input: CreateUnifiedSessionInput, retryId?: string, confirmationGuard?: () => boolean): Promise<UnifiedSession> {
+    // 支持开关是新建的权威门禁：对话框只隐藏入口，这里拒绝任何路径的停用 CLI 创建。
+    if (!cliSupport.isEnabled(input.cli)) throw new Error('NEW_SESSION_PREPARATION_FAILED')
     ++selectionEpoch
     const intentEpoch = ++selectionIntentEpoch
     const id = retryId ?? createNativeId('preparing')

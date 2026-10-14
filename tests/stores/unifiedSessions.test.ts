@@ -780,3 +780,72 @@ it('Unified_BothArchivesKeepOwners_030', async () => {
   expect(store.sessions.some(row => row.archived)).toBe(false)
   expect(store.projectGroups[0].sessions.map(row => row.id)).toEqual(['native-history:profile-a'])
 })
+
+// CLI 支持开关关闭的 CLI 不列出历史行；已打开终端是活进程，保留可选中与关闭。
+it('UnifiedSessions_DisabledCliHidesHistoryKeepsOpenTabs_029', async () => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: false }))
+  try {
+    const codexHistory = session({
+      id: 'native-history:/repo:codex-sess', runtime: 'native-cli', cli: 'codex',
+      processState: 'stopped', opened: false, adapterSessionId: 'codex-key', nativeSessionId: 'codex-sess',
+    })
+    const codexTab = session({
+      id: 'native-tab:t1', runtime: 'native-cli', cli: 'codex',
+      processState: 'running', opened: true, adapterSessionId: 't1', nativeSessionId: 'codex-live',
+    })
+    const claudeRow = session({ id: 'claude-history', runtime: 'legacy-claude', processState: 'stopped', nativeSessionId: 'claude-sess' })
+    const native = fakeAdapter('native-cli', [codexHistory, codexTab])
+    const legacy = fakeAdapter('legacy-claude', [claudeRow])
+    const store = useUnifiedSessionsStore()
+    store.configureAdapters([legacy.adapter, native.adapter])
+    await store.refresh()
+    const ids = store.sessions.map(value => value.id).sort()
+    expect(ids).toEqual(['claude-history', 'native-tab:t1'])
+  } finally {
+    localStorage.removeItem('cc-desk-cli-support-v1')
+  }
+})
+
+// 目录层的支持过滤：停用 CLI 的非打开行在 refresh 时被剔除，重新启用后恢复。
+// 切换触发的历史重装载由组合根负责（unifiedWorkspaceRuntime 冷缓存回归）。
+it('UnifiedSessions_CliSupportFiltersCatalogRows_030', async () => {
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  const codexRow = session({
+    id: 'native-history:/repo:codex-sess', runtime: 'native-cli', cli: 'codex',
+    processState: 'stopped', opened: false, adapterSessionId: 'codex-key', nativeSessionId: 'codex-sess',
+  })
+  const native = fakeAdapter('native-cli', [codexRow])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([native.adapter])
+  await store.refresh()
+  expect(store.sessions).toHaveLength(1)
+  useCliSupportStore().setCliEnabled('codex', false)
+  await store.refresh()
+  expect(store.sessions).toHaveLength(0)
+  useCliSupportStore().setCliEnabled('codex', true)
+  await store.refresh()
+  expect(store.sessions.map(value => value.id)).toEqual(['native-history:/repo:codex-sess'])
+  localStorage.removeItem('cc-desk-cli-support-v1')
+})
+
+// 恢复返回 SESSION_NOT_FOUND 后的缺失记录与普通行同一支持过滤，停用 CLI 的
+// missing 行不得在手动刷新后继续显示。
+it('UnifiedSessions_MissingRecordHonorsCliSupport_031', async () => {
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  const codexRow = session({
+    id: 'native-history:/repo:codex-miss', runtime: 'native-cli', cli: 'codex',
+    processState: 'stopped', opened: false, adapterSessionId: 'codex-miss', nativeSessionId: 'codex-miss',
+    launchConfigId: 'p',
+  })
+  const native = fakeAdapter('native-cli', [codexRow])
+  native.adapter.resumeSession = vi.fn(async () => { throw new Error('SESSION_NOT_FOUND') })
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([native.adapter])
+  await store.refresh()
+  await expect(store.resumeCatalogSession('native-history:/repo:codex-miss')).rejects.toThrow('SESSION_NOT_FOUND')
+  expect(store.sessions).toHaveLength(1)
+  useCliSupportStore().setCliEnabled('codex', false)
+  await store.refresh()
+  expect(store.sessions).toHaveLength(0)
+  localStorage.removeItem('cc-desk-cli-support-v1')
+})

@@ -11,6 +11,7 @@ import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
+import { useCliSupportStore } from '@/stores/cliSupport'
 import { useShellStore, type WorkspaceRequest } from '@/stores/shell'
 import { useHookStore } from '@/stores/hook'
 import { useAttentionStore } from '@/stores/attention'
@@ -35,6 +36,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const workspace = useWorkspaceStore()
   const projects = useProjectsStateStore()
   const catalog = useUnifiedSessionsStore()
+  const cliSupport = useCliSupportStore()
   const attention = useAttentionStore()
   const shell = useShellStore()
   const legacyPaths = ref<string[]>([])
@@ -247,13 +249,13 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     catalog.configureHistoryLoader(async query => {
       let partial = false
       const paths = query.scope === 'all' ? [...new Set([...legacyPaths.value, ...projects.pinnedProjects, ...[...legacy.tabs.values()].map(tab => tab.projectPath)])] : [query.projectPath]
-      if (!query.cli || query.cli === 'claude') {
+      if ((!query.cli || query.cli === 'claude') && cliSupport.isEnabled('claude')) {
         for (let i = 0; i < paths.length && !disposed; i += 2) {
           const results = await Promise.all(paths.slice(i, i + 2).map(path => legacy.loadHistoryFor(path)))
           if (results.some(result => !result.ok)) partial = true
         }
       }
-      const contexts = profiles.profiles.flatMap(profile => profile.cli === 'shell' || query.cli && profile.cli !== query.cli ? []
+      const contexts = profiles.profiles.flatMap(profile => profile.cli === 'shell' || (query.cli && profile.cli !== query.cli) || !cliSupport.isEnabled(profile.cli as UnifiedCliKind) ? []
         : workspace.projects.filter(project => query.scope === 'all' || sameProjectPath(project.selectedPath, query.projectPath)).map(project => ({
           cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision, projectId: project.projectId, projectPath: project.selectedPath,
         })))
@@ -315,7 +317,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         if (!current()) return
         legacyPaths.value = rows.map(row => row.path)
         const paths = [...new Set([...legacyPaths.value, ...projects.pinnedProjects, ...[...legacy.tabs.values()].map(tab => tab.projectPath)])]
-        for (let i = 0; i < paths.length && current(); i += 2) {
+        // 关闭的 CLI 不做历史扫描：目录行的过滤由 catalog 兜底，这里省掉全部 IO。
+        if (cliSupport.isEnabled('claude')) for (let i = 0; i < paths.length && current(); i += 2) {
           await Promise.all(paths.slice(i, i + 2).map(path => settle('legacy-history', async () => {
             if (!(await legacy.loadHistoryFor(path, true)).ok) warnings.add('legacy-history')
           })))
@@ -330,7 +333,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         // 同 profile 的全部项目合并为一次后端观察；逐项目加载会让同一棵历史树被完整扫描 N 次。
         const groups = new Map<string, { cli: UnifiedCliKind; profileId: string; profileRevision: string; projects: { projectId: string; projectPath: string }[] }>()
         for (const profile of profiles.profiles) {
-          if (profile.cli === 'shell') continue
+          // 关闭的 CLI 不组装历史观察组；validKeys 随之不含其 context，
+          // 下面的失效循环会把已加载的 entry 一并撤销。
+          if (profile.cli === 'shell' || !cliSupport.isEnabled(profile.cli as UnifiedCliKind)) continue
           groups.set(`${profile.id}\u0000${profile.revision}`, { cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
             projects: workspace.projects.map(project => ({ projectId: project.projectId, projectPath: project.selectedPath })) })
         }
@@ -385,6 +390,11 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     retireHistoryAcknowledgements()
     error.value = warnings.items.length && !fatal.value ? 'workspaceRuntimePartial' : null
   }
+
+  // 支持开关切换后触发完整工作区刷新：catalog.refresh 只读历史缓存，停用期间
+  // 失效的 entry（含启动即停用的冷缓存）必须经由这里的历史观察组重新装载。
+  // Pinia 会解包 setup store 的 ref，必须用 getter 观察每次替换后的新对象。
+  watch(() => cliSupport.support, () => { if (!disposed) void refresh() })
 
   async function resumeDirect(row: UnifiedSession, claimFeedback: (target: UnifiedSession) => void) {
     if (shell.section !== 'workspace') return

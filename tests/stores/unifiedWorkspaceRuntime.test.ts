@@ -1340,3 +1340,17 @@ it('Runtime_SwitchRevokesRowEditor_033', async () => {
   expect(catalog.activeSessionId).toBe(second.id)
   expect(catalog.sessions.find(row => row.id === first.id)?.title).toBe('First')
 })
+
+// 启动时已停用的 CLI 在启用后必须重新加载历史：catalog.refresh 只读缓存，
+// 组合根对支持开关的 watch 必须触发完整刷新（含历史观察组重装载）。
+it('HistorySupport_ColdEnableReloadsHistory_059', async () => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: false }))
+  const { runtime } = render()
+  await runtime.refresh()
+  const catalog = useUnifiedSessionsStore()
+  expect(catalog.sessions.filter(row => row.cli === 'codex')).toHaveLength(0)
+  expect(io.read).not.toHaveBeenCalled()
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled('codex', true)
+  await vi.waitFor(() => expect(catalog.sessions.some(row => row.cli === 'codex' && row.nativeSessionId === 'history-id')).toBe(true))
+})

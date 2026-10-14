@@ -126,6 +126,7 @@ UnifiedSession catalog（Legacy/Native adapters）→ UnifiedProjectGroup[] → 
 ```
 
 - 统一树直接混排 Claude Code / Codex CLI；`ProjectNode` 和 `SessionList` 不再接收旧 tabs/history，也不依赖旧 PTY attention store。`SessionsPanel` 接收显式统一投影或默认读取 `unifiedSessions` store；adapter 初始化和生命周期 dispatch 由 `useUnifiedWorkspaceRuntime` 负责；`UnifiedTerminalHost` 保持一个 Legacy 聚合器及每个 Native 会话的独立终端常驻。
+- CLI 支持开关（设置 → 通用，`useCliSupportStore`，localStorage 持久化）按 CLI 控制入口与目录：停用的工具从新建菜单与高级对话框的 CLI 选项中隐藏（缺省 CLI 被停用时草稿回落到仍启用的工具）；`unifiedSessions.refresh` 不列出其非打开历史行，运行时跳过该 CLI 的 legacy 历史扫描与 native 历史观察组，且 `validKeys` 失效循环清掉其已加载 entry；恢复搜索与归档抽屉经同一目录自然过滤。开关只是显示与入口语义：不触碰 CLI 文件、profile 或注册表，已打开终端（`opened === true` 活进程）始终保留可选中与关闭，重新启用后经常规刷新恢复列表。
 - Legacy 与 Native 的历史扫描会发现同一 Claude 转录；`unifiedSessions.refresh` 在合并后按「规范化项目路径 + 会话身份（nativeSessionId，legacy 历史行回退其 adapterSessionId）」检查跨运行时重复。只有组内恰好一个 Legacy 与一个 Native 时才可唯一配对并折叠；任一运行时包含多条来源时保留全组独立行，避免吞并不同 profile/来源的准确恢复身份。身份缺失的行（如尚未建立会话身份的新 tab）不折叠；打开中的终端 owner（含自然退出后仍打开的 tab，而非仅 running/starting）不被历史投影顶替，终端行与归档行也不互相折叠。多个归档 owner 各自保留恢复入口，分别解除原归档键；可折叠对的 winner 依次为：唯一打开行、唯一归档行（恢复动作必须派发给持有原归档键的 adapter，否则原键无法清除）、否则保留 Native 历史行；随后合并归档标记与最近活动/打开时间。正在重命名的行不参与折叠以免在途编辑丢失归属。Codex 历史仅由 Native 投影提供，不受此折叠影响。
 - 项目行只有一个新建快捷动作；固定/取消固定、重命名、查看归档、打开目录、移除走同一 `AppMenu`，鼠标右键和 overflow 共用动作。`new-session-request` 携带 projectKey/projectPath，不能交给旧容器的 `new-session` Legacy 启动 handler。
 - normal `projectGroups` 保持排除已归档记录。UI 为仅剩归档的项目保留一个空项目壳以访问其归档菜单；面板全局归档入口在搜索无结果时仍可用。恢复仅发 `restore-request`，不直接恢复或启动，成功后由调用方发布 catalog 更新。
