@@ -456,3 +456,30 @@ noise, but it is not baseline acceptance: freezing the thirteen baselines still
 requires the standard Linux Chromium CI cycle (RED run, `--update-snapshots=all`
 capture, independent pixel review, manifest update, fresh no-update gate), and
 Windows-rendered PNGs must not replace the Linux provenance.
+
+
+## PR51 session UX batch baseline adoption
+
+All thirteen Linux Chromium baselines are copied byte-for-byte from the actual
+PNGs accepted by one independent review of actual, expected and diff images for
+[run 38550064925](https://github.com/shawnwu2022/cc-desk/actions/runs/38550064925),
+artifact `11885664893`. Source head is
+`4c74618853f01dc5a65a848a7a63aed16490eaf2`; tested synthetic merge
+`8ac79430edd9170d85c5f3785b1f8340c2f11483` has the same tree
+`e289558672317438ae56fee7b46b997168f01aa2`.
+
+The review accepts the bottom Settings anchor, CLI group spacing and closed
+Codex artwork/badge changes, with no rejected image. The approval manifest
+records each exact actual hash, size, mapping and previous baseline provenance.
+The Library JSON and decoded ZIP were verified against their supplied SHA-256
+values before all PNG hashes, dimensions and previous baseline hashes were
+verified and any baseline was replaced. No other baseline was regenerated and
+no comparison tolerance or test configuration changed.
+
+The original run remains RED: thirteen screenshot failures and 223 other cases
+passed. Fresh full verification of the updated source remains pending, using
+`--update-snapshots=none` and the existing `maxDiffPixels: 0` configuration.
+The local preparation environment lacks Playwright 1.63.0 and Chromium; this
+adoption is not a successful browser test or hosted CI result. These Linux
+synthetic screenshots do not certify Windows WebView2, native drag-and-drop,
+terminal lifecycle, rename delivery, real CLI IO or authenticated receipts.
