@@ -24,7 +24,7 @@ import { createXtermModeEpoch, type XtermModeEpoch } from '@/terminal/modeEpoch'
 import { buildPastePayload, imagePasteBytes } from '@/utils/pasteText'
 import { classifyClipboardSnapshot, createImeInputPolicy, readClipboardSnapshot } from '@/terminal/inputPolicy'
 import { platform } from '@/utils/platform'
-import { relativizePath } from '@/utils/path'
+import { formatDroppedPaths } from '@/utils/terminalDropPaths'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop } from '@/api/tauri'
 import type { OutputFrame } from '@/types/terminal'
@@ -258,25 +258,17 @@ function handleNativeCopy(event: ClipboardEvent) {
 function dropPaths(paths: string[]): boolean {
   if (!props.active || !inputEnabled || !term || !binding) return false
   const projectPath = tabs.tab(props.tabId)?.projectPath ?? ''
-  const text = paths
-    .map(p => relativizePath(p, projectPath))
-    .map(p => p.includes(' ') ? `"${p}"` : p)
-    .join(' ')
+  const text = formatDroppedPaths(paths, projectPath)
   if (!text) return false
   const attempt = currentAttempt()
   void binding.sendUserText(text).catch(() => markInputFailure(attempt))
   return true
 }
 
-// claude /rename 是 CLI 自身的会话改名机制；注入后名字随 catalog.refresh 从 CLI 回流。
-async function renameTab(title: string, admission?: InputWriteAdmission): Promise<void> {
-  if (!props.active || !inputEnabled || !binding) throw new Error('NATIVE_RENAME_UNAVAILABLE')
-  const attempt = currentAttempt()
-  await binding.sendUserText(`/rename ${title}\r`, admission).catch(error => {
-    // dispatch 前撤销不是输入暂停；卸载后也不写回旧终端诊断。
-    if (!disposed && !(error instanceof Error && error.message === 'STALE_SESSION_ATTEMPT')) markInputFailure(attempt)
-    throw error
-  })
+// 保留显式端口的拒绝边界；GUI 重命名由 adapter 的 metadata writer 处理。
+async function renameTab(_title: string, _admission?: InputWriteAdmission): Promise<void> {
+  // 当前没有 CLI 编辑态证明，禁止向未知 prompt 追加命令或回车。
+  throw new Error('CLI_RENAME_EDITOR_UNVERIFIED')
 }
 
 // Do not use xterm disableStdin for visibility: it also suppresses parser replies.

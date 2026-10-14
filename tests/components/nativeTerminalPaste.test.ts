@@ -307,6 +307,15 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(io.binding.sendUserText).toHaveBeenCalledWith('src/a.ts "/outside/my file.txt"')
   })
 
+  it.each(['\r', '\n', '\x1b', '\t'])('Drop_RejectWholeUnsafeBatch_013 %j', async control => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect((wrapper.vm as any).dropPaths(['/repo/safe.txt', '/repo/bad' + control + 'file'])).toBe(false)
+    expect(io.binding.sendUserText).not.toHaveBeenCalled()
+  })
+
   // 非激活 tab 的 drop 必须静默拒绝，避免后台终端收到不属于自己的输入。
   it('Drop_InactiveTabRejects_010', async () => {
     const tabs = useNativeTabsStore()
@@ -321,24 +330,26 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
   })
 })
 
-// dispatch 前取消只撤销操作，不能把仍正常的输入队列诊断成 paused。
-it('Rename_CancelledAdmissionDoesNotPauseTerminal_011', async () => {
+// 直接 rename 端口在编辑器安全未验证时拒绝，不产生输入或暂停诊断。
+it('Rename_UnverifiedEditorRejectsBeforeWriter_011', async () => {
   useCliProfilesStore().profiles[0].cli = 'claude'
   const tabs = useNativeTabsStore()
   const tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
   wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await vi.advanceTimersByTimeAsync(0)
   io.binding.sendUserText.mockRejectedValueOnce(new Error('STALE_SESSION_ATTEMPT'))
-  await expect((wrapper.vm as any).renameTab('New name')).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  await expect((wrapper.vm as any).renameTab('New name')).rejects.toThrow('CLI_RENAME_EDITOR_UNVERIFIED')
+  expect(io.binding.sendUserText).not.toHaveBeenCalled()
   expect(tabs.tab(tab.tabId)?.errorCode).toBeNull()
 })
 
-// 真正写入未确认仍保留错误边界，不因为过滤取消而吞掉传输失败。
-it('Rename_UnconfirmedWriteRetainsPauseDiagnostic_012', async () => {
+// 旧 writer 故障不构成编辑器安全证明；拒绝 rename 不尝试 writer。
+it('Rename_WriterFaultCannotAuthorizeEditor_012', async () => {
   useCliProfilesStore().profiles[0].cli = 'claude'
   const tabs = useNativeTabsStore()
   const tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
   wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await vi.advanceTimersByTimeAsync(0)
   io.binding.sendUserText.mockRejectedValueOnce(new Error('NATIVE_INPUT_PAUSED'))
-  await expect((wrapper.vm as any).renameTab('New name')).rejects.toThrow('NATIVE_INPUT_PAUSED')
-  expect(tabs.tab(tab.tabId)?.errorCode).toBe('NATIVE_INPUT_PAUSED')
+  await expect((wrapper.vm as any).renameTab('New name')).rejects.toThrow('CLI_RENAME_EDITOR_UNVERIFIED')
+  expect(io.binding.sendUserText).not.toHaveBeenCalled()
+  expect(tabs.tab(tab.tabId)?.errorCode).toBeNull()
 })

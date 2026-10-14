@@ -94,6 +94,24 @@ function fakeAdapter(runtime: SessionRuntimeKind, initial: UnifiedSession[] = []
   }
 }
 
+// 历史显示名编辑不能先恢复 CLI，也不能抢占当前运行终端的选择。
+it('Rename_ClosedHistoryEditsWithoutResume_013', async () => {
+  setActivePinia(createPinia())
+  const history = session({ id: 'history', opened: false, processState: 'stopped' })
+  const live = session({ id: 'live', opened: true })
+  const fake = fakeAdapter('legacy-claude', [history, live])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([fake.adapter]); await store.refresh()
+  store.activeSessionId = live.id
+  store.beginRename(history.id)
+  expect(store.sessions.find(row => row.id === history.id)?.renameState).toBe('editing')
+  await store.renameSession(history.id, 'History display name', true)
+  expect(store.sessions.find(row => row.id === history.id)?.title).toBe('History display name')
+  expect(store.activeSessionId).toBe(live.id)
+  expect(fake.adapter.resumeSession).not.toHaveBeenCalled()
+  expect(fake.adapter.activateSession).not.toHaveBeenCalled()
+})
+
 it.each(['navigation', 'selection', 'revision', 'success'] as const)('confirmed discovery pins revision and cancels stale preflight: %s', async reason => {
   setActivePinia(createPinia())
   const store = useUnifiedSessionsStore(), native = fakeAdapter('native-cli')

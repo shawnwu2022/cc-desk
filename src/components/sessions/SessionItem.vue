@@ -85,7 +85,7 @@ watch(() => props.selected, selected => { if (!selected) { localRename.value = f
 watch(() => props.surfaceActive, active => { if (!active) menuOpen.value = false }, { flush: 'sync' })
 async function focusRename() {
   await nextTick()
-  if (!props.surfaceActive || !props.selected) return
+  if (!props.surfaceActive || (props.session.opened !== false && !props.selected)) return
   const input = renameInput.value?.$el.querySelector('input') as HTMLInputElement | null
   input?.focus()
   input?.select()

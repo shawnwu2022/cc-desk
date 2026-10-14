@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { relativizePath } from '@/utils/path'
 describe('relativizePath', () => {
+  // POSIX 反斜杠是合法文件名字符，不得转成另一个目录分隔符。
+  it('RelativizePath_PosixLiteralBackslash_009', () => {
+    expect(relativizePath('/repo/a\\b.txt', '/repo')).toBe('a\\b.txt')
+  })
   // Windows 下文件位于项目目录内 → 返回用 '/' 分隔的相对路径
   it('RelativizePath_WinInside_001', () => {
     expect(
