@@ -6,8 +6,9 @@
 
 - Keep session rows in stable first-seen order, cluster Claude and Codex sessions without headings, move Settings to the bottom navigation anchor, and exclude exec-only Codex history
 - Handle file drops through the unified terminal host for Legacy and Native sessions while retaining exact runtime ownership
-- Route running Claude rename requests through the owning CLI, verify exact input-write delivery, cancel unsent stale requests and retain metadata fallback for Codex
+- Save GUI renames as Desk display metadata for running and closed sessions, preserve unsubmitted CLI drafts, and retain exact-source cancellation and stale-completion guards
 - Distinguish closed Codex artwork in both themes and suppress closed-row badges while preserving accessible labels and active session states
+- Restore closed-history display-name editing without selecting or resuming a terminal and reject complete dropped-path batches containing terminal control characters before either input writer
 - Adopt all thirteen independently accepted Linux Chromium visual baselines with exact byte provenance; fresh PR51 no-update verification passed all 236 cases without changing tolerance
 
 Protected-main CI, authenticated exact-source coverage and all three same-run signed platform artifacts remain required before publication. Real CLI rename acceptance, desktop WebView2, unfiltered native All/D20, native installation/return and cross-platform manual acceptance remain separately unverified. Historical strict Claude editor-normalization differences remain explicitly recorded failed characterization rows.
