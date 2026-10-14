@@ -109,7 +109,7 @@ function workspaceFixture() {
   mockIPC(ipc)
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: { instanceId: 'fixture-instance', invoke: bridge } })
   const host = { startLegacy: vi.fn(), stopLegacy: vi.fn(), restartLegacy: vi.fn(), renameLegacy: vi.fn(),
-    stopNative: vi.fn().mockResolvedValue(undefined), recoverNative: vi.fn().mockResolvedValue(undefined), focus: vi.fn() } satisfies UnifiedTerminalHostPort
+    stopNative: vi.fn().mockResolvedValue(undefined), recoverNative: vi.fn().mockResolvedValue(undefined), renameNative: vi.fn().mockResolvedValue(undefined), focus: vi.fn() } satisfies UnifiedTerminalHostPort
   function mountRuntime() {
     let runtime!: ReturnType<typeof useUnifiedWorkspaceRuntime>
     const wrapper = mount(defineComponent({ setup() { runtime = useUnifiedWorkspaceRuntime(ref(host)); return () => null } }))
@@ -252,10 +252,18 @@ describe('Unified migration through real workspace composition', () => {
     useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: target.id, title: 'Desk-only name' })
     await flushPromises()
     expect(catalog.sessions.find(value => value.id === target.id)?.title).toBe('Desk-only name')
-    expect(f.host.renameLegacy).not.toHaveBeenCalled()
-    expect(f.ipc.mock.calls.some(([command]) => command === 'pty_input')).toBe(false)
+    if (kind === 'live') {
+      // 运行中的会话改名路由到终端注入 CLI 自身 /rename；字节注入由终端组件层负责。
+      expect(f.host.renameLegacy).toHaveBeenCalledTimes(1)
+      expect(f.host.renameLegacy).toHaveBeenCalledWith(target.adapterSessionId, 'Desk-only name')
+    } else {
+      expect(f.host.renameLegacy).not.toHaveBeenCalled()
+      expect(f.ipc.mock.calls.some(([command]) => command === 'pty_input')).toBe(false)
+    }
     f.resetStores(); await boot()
-    expect(useUnifiedSessionsStore().sessions.find(value => value.id === row.id)?.title).toBe('Desk-only name')
+    // live 名字由 CLI 会话数据持有；测试桩不模拟 CLI 落盘，重启后回落历史名。
+    expect(useUnifiedSessionsStore().sessions.find(value => value.id === row.id)?.title)
+      .toBe(kind === 'live' ? 'Old Claude' : 'Desk-only name')
     expect(f.legacyHistory.get('d:/work/project')![0].name).toBe('Old Claude')
   })
 

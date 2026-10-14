@@ -6,7 +6,7 @@ import type {
   UnifiedSession,
 } from '@/types/unifiedSession'
 import { normalizePath } from '@/utils/path'
-import { saveSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
+import { saveSessionDisplayName, clearSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 import type { AttentionItem } from '@/composables/useAttentionQueue'
 
@@ -347,10 +347,17 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
     if (id.startsWith(ACTIVE_PREFIX)) {
       const tab = requireTab(id)
-      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current, onIssued)
-      if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
-      // Desk row rename is display metadata, never a command injected into CLI input.
-      if (!deps.metadata) onIssued?.()
+      if (tab.status === 'running') {
+        // 恢复 CLI 自身改名机制：/rename 注入运行中的 PTY；GUI 覆盖名清除，标题随 refresh 回流。
+        await deps.runtime.renameTab(tab.tabId, value)
+        if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+        if (deps.metadata) await clearSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), current, onIssued)
+        else onIssued?.()
+      } else {
+        // 未运行的激活 tab 没有 CLI 可写，显示名继续由 GUI metadata 兜底。
+        if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current, onIssued)
+        else onIssued?.()
+      }
       store.updateTabName(tab.tabId, value)
     } else {
       const history = parseHistoryId(id)

@@ -283,7 +283,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
             expectedProfileRevision: context.profileRevision, projectPath: context.projectPath, nativeSessionId })
         } },
         runtime: { createTab: createNativeTab, restartTab: restartNative,
-          stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)) } }),
+          stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)),
+          renameTab: (tabId, title) => requireHost().renameNative(tabId, title) } }),
     ])
   }
 

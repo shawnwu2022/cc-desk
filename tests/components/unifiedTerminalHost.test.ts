@@ -8,17 +8,21 @@ import { mockIPC, clearMocks } from '@tauri-apps/api/mocks'
 import { useAppStore } from '@/stores/app'
 import { useShellStore } from '@/stores/shell'
 import en from '@/i18n/locales/en'
-const seen = { mounts: [] as string[], unmounts: [] as string[], fits: [] as string[], focus: [] as string[], stops: [] as any[] }
+const seen = { mounts: [] as string[], unmounts: [] as string[], fits: [] as string[], focus: [] as string[], stops: [] as any[], drops: [] as [string, string[]][] }
+const drag = vi.hoisted(() => ({ handler: null as null | ((event: any) => void) }))
+vi.mock('@tauri-apps/api/webview', () => ({
+  getCurrentWebview: () => ({ onDragDropEvent: async (handler: (event: any) => void) => { drag.handler = handler; return () => { drag.handler = null } } }),
+}))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {} }) }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
 const Child = defineComponent({ props: { tabId: String, active: { type: Boolean, default: undefined }, visible: Boolean }, setup(props, { expose }) {
   const id = props.tabId ?? 'legacy'
   onMounted(() => seen.mounts.push(id)); onUnmounted(() => seen.unmounts.push(id))
-  expose({ fitVisible: () => seen.fits.push(id), focus: () => seen.focus.push(id), stop: (attempt: any) => seen.stops.push([id, attempt]), recover: vi.fn(), startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn() })
+  expose({ fitVisible: () => seen.fits.push(id), focus: () => seen.focus.push(id), stop: (attempt: any) => seen.stops.push([id, attempt]), recover: vi.fn(), startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn(), dropPaths: (paths: string[]) => { seen.drops.push([id, paths]) } })
   return () => h('div', { 'data-child': id, 'data-visible': String(props.active ?? props.visible) }, id)
 } })
 const wrappers: VueWrapper[] = []
-beforeEach(() => { clearMocks(); mockIPC(command => command === 'get_app_config' ? { theme: 'light', terminalTheme: 'cc-box-light', language: 'en' } : undefined); setActivePinia(createPinia()); Object.values(seen).forEach(values => { values.length = 0 }); vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }) })
+beforeEach(() => { clearMocks(); mockIPC(command => command === 'get_app_config' ? { theme: 'light', terminalTheme: 'cc-box-light', language: 'en' } : undefined); setActivePinia(createPinia()); Object.values(seen).forEach(values => { values.length = 0 }); drag.handler = null; vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }) })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals(); clearMocks() })
 const sessions = [
   { id: 'legacy-tab:old-a', adapterSessionId: 'old-a', runtime: 'legacy-claude' },
@@ -69,6 +73,27 @@ describe('Unified terminal host', () => {
     expect(w.get('[data-unified-terminal-host]').attributes('style')).toBe(surface)
     expect(w.props('activeSessionId')).toBe('native-tab:cc'); expect(seen.mounts).toHaveLength(3); expect(seen.unmounts).toEqual([])
     expect(seen.stops).toEqual([])
+  })
+  // 拖放由 host 统一监听并只分发给当前活跃会话的终端，两个 runtime 行为一致。
+  it('Host_DropDispatchesToActiveTerminal_005', async () => {
+    const w = render(); await flushPromises()
+    expect(drag.handler).not.toBeNull()
+    const paths = ['E:/repo/src/a.ts']
+    await w.setProps({ activeSessionId: 'native-tab:cx' }); await flushPromises()
+    drag.handler!({ payload: { type: 'drop', paths } })
+    expect(seen.drops).toEqual([['cx', paths]])
+    await w.setProps({ activeSessionId: 'legacy-tab:old-b' }); await flushPromises()
+    drag.handler!({ payload: { type: 'drop', paths } })
+    expect(seen.drops).toEqual([['cx', paths], ['legacy', paths]])
+  })
+  // host 不可见时 drop 不分发，拖拽悬停态也不进入激活视觉。
+  it('Host_DropIgnoredWhenHidden_006', async () => {
+    const w = render(); await flushPromises()
+    await w.setProps({ visible: false }); await flushPromises()
+    drag.handler!({ payload: { type: 'drop', paths: ['E:/repo/x'] } })
+    expect(seen.drops).toEqual([])
+    drag.handler!({ payload: { type: 'enter', paths: [] } })
+    expect(w.find('[data-unified-terminal-host]').classes()).not.toContain('drag-over')
   })
 
 })

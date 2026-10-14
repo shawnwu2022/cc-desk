@@ -253,6 +253,7 @@ describe('legacy Claude adapter', () => {
       'activate:tab-active',
       'stop:tab-active',
       'restart:tab-active',
+      'runtime-rename:tab-active:Renamed',
       'rename:tab-active:Renamed',
       'stop:tab-active',
       'close:tab-active',

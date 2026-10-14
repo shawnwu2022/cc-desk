@@ -33,6 +33,7 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
     createTab: vi.fn((input: any) => tab({ tabId: 'created', cli: input.cli, projectPath: input.projectPath, action: input.action, title: input.title ?? 'Created' })),
     restartTab: vi.fn((id: string) => tab({ ...(map.get(id) ?? {}), tabId: id, generation: 2, status: 'stopped' })),
     stopTab: vi.fn().mockResolvedValue(undefined),
+    renameTab: vi.fn().mockResolvedValue(undefined),
   }
   const archived = new Map<string, string[]>()
   const archive = { getArchivedSessions: (path: string) => archived.get(path) ?? [], archiveSession: vi.fn(async (path: string, id: string) => { archived.set(path, [...(archived.get(path) ?? []), id]) }), restoreSession: vi.fn(async (path: string, id: string) => { archived.set(path, (archived.get(path) ?? []).filter(value => value !== id)) }) }
@@ -48,7 +49,7 @@ describe('native CLI adapter', () => {
   it('Notice_CacheBoundAndExactClear_033', async () => {
     const map = new Map<string, NativeCliTab>(), entries: NativeHistoryEntry[] = []
     const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive() {}, rename() {}, close: id => { map.delete(id) }, hasOwnedObservationNotice: () => true },
-      history: { all: () => entries }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {} },
+      history: { all: () => entries }, runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {}, renameTab: async () => {} },
       archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
     for (let n = 0; n < 1025; n++) {
       const entry = history('claude', 'root', 'session-' + n); entries.push(entry)
@@ -80,7 +81,7 @@ describe('native CLI adapter', () => {
     const map = new Map<string, NativeCliTab>()
     const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive() {}, rename() {}, close: id => { map.delete(id) }, hasOwnedObservationNotice: () => true },
       history: { all: () => [entry], load: async () => { if (++reads === 1) await new Promise<void>(resolve => { finish = resolve }); return entry } },
-      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {} },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {}, renameTab: async () => {} },
       archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
     const first = tab({ cli: 'claude', profileId: 'claude-main', sourceSessionKey: entry.sessions[0].sessionKey })
     const one = { kind: 'reply-ended' as const, eventId: 'one', receivedAt: 1, runId: first.runId, generation: 1 }
@@ -103,7 +104,7 @@ describe('native CLI adapter', () => {
     const map = new Map([[value.tabId, value]])
     const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive() {}, rename() {}, close: id => { map.delete(id) }, hasOwnedObservationNotice: () => true },
       history: { all: () => entries, load: async () => { entries.push(entry); return entry } },
-      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {} },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {}, renameTab: async () => {} },
       archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
     await adapter.closeSession('native-tab:' + value.tabId)
     expect((await adapter.listSessions())[0].observationNotice?.unreadReplyEnd?.eventId).toBe('first')
@@ -114,7 +115,7 @@ describe('native CLI adapter', () => {
     const map = new Map<string, NativeCliTab>()
     const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive() {}, rename() {}, close: id => { map.delete(id) }, hasOwnedObservationNotice: () => true },
       history: { all: () => entries, load: async () => { if (++reads === 1) await new Promise<void>(resolve => { release = resolve }); return entry } },
-      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {} },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {}, renameTab: async () => {} },
       archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
     const first = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, observedSessionId: 'session-1' })
     const one = { kind: 'reply-ended' as const, eventId: 'one', receivedAt: 1, runId: first.runId, generation: 1 }
@@ -138,7 +139,7 @@ describe('native CLI adapter', () => {
     const map = new Map([[value.tabId, value]])
     const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive() {}, rename() {}, close: id => { map.delete(id) }, hasOwnedObservationNotice: () => true },
       history: { all: () => entries, load: async () => { entries.push(history('claude', 'root-one', 'session-1'), history('claude', 'root-two', 'session-1')); return entries[0] } },
-      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {} },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: async () => {}, renameTab: async () => {} },
       archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
     await adapter.closeSession('native-tab:' + value.tabId)
     expect((await adapter.listSessions()).every(row => row.observationNotice === undefined)).toBe(true)
@@ -161,7 +162,7 @@ describe('native CLI adapter', () => {
     const adapter = createNativeCliAdapter({
       tabs,
       history: { all: () => [history('claude', '/root', 'session-1')] },
-      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() },
       archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
     })
 
@@ -199,7 +200,7 @@ describe('native CLI adapter', () => {
     const adapter = createNativeCliAdapter({ tabs: { tabs, activeTabId: value.tabId,
       setActive: vi.fn(), close: id => { tabs.delete(id) }, rename: vi.fn() },
       history: { all: () => entries, load },
-      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() },
       archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
     })
     let finished = false
@@ -344,7 +345,7 @@ describe('native CLI adapter', () => {
     const adapter = createNativeCliAdapter({
       tabs: { tabs, activeTabId: null, setActive: vi.fn(), close: id => { tabs.delete(id) }, rename: vi.fn() },
       history: { all: () => [] },
-      runtime: { createTab: vi.fn(async () => created), restartTab: vi.fn(), stopTab: vi.fn() },
+      runtime: { createTab: vi.fn(async () => created), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() },
       archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
       metadata: { sessionRecords, upsertSessionRecord },
     })
@@ -391,7 +392,7 @@ describe('native CLI adapter', () => {
     const adapter = createNativeCliAdapter({
       tabs: { tabs: new Map(), activeTabId: null, setActive: vi.fn(), close: vi.fn(), rename: vi.fn() },
       history: { all: () => [entry] },
-      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn() },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() },
       archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
     })
     const rows = await adapter.listSessions()
@@ -416,4 +417,25 @@ it('CodexArchive_UnarchiveForcesHistoryReload_035', async () => {
   expect(historyLoad).toHaveBeenCalledWith(expect.objectContaining({ ...entry.context, force: true }))
   // 恢复后的行照常写入最近打开时间，不能因 CLI 归档分支提前返回而跳过排序更新。
   expect(metadata.recordSessionOpened).toHaveBeenCalledTimes(1)
+})
+
+// claude 运行中改名走 CLI 自身 /rename 机制；GUI 覆盖名清除，不写新的显示名记录。
+describe('Native rename routes through CLI injection', () => {
+  it('Rename_ClaudeRunningInjectsCli_034', async () => {
+    const claudeTab = tab({ tabId: 'cc-1', cli: 'claude', profileId: 'claude-main', status: 'running' })
+    const { adapter, runtime, metadata, map } = setup([claudeTab], [])
+    await adapter.renameSession('native-tab:cc-1', 'New name')
+    expect(runtime.renameTab).toHaveBeenCalledWith('cc-1', 'New name')
+    expect(metadata.upsertSessionRecord).not.toHaveBeenCalled()
+    expect(map.get('cc-1')?.title).toBe('New name')
+  })
+  // codex 的 /rename 参数形式未证实，激活改名继续由 GUI 显示名兜底，不注入。
+  it('Rename_CodexKeepsDisplayOverlay_035', async () => {
+    const codexTab = tab({ tabId: 'cx-1', status: 'running' })
+    const { adapter, runtime, metadata, map } = setup([codexTab], [])
+    await adapter.renameSession('native-tab:cx-1', 'New name')
+    expect(runtime.renameTab).not.toHaveBeenCalled()
+    expect(metadata.upsertSessionRecord).toHaveBeenCalledWith('native-tab:cx-1', expect.objectContaining({ title: 'New name' }), expect.any(Function))
+    expect(map.get('cx-1')?.title).toBe('New name')
+  })
 })

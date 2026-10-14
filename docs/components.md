@@ -88,12 +88,16 @@ runtime before creating the tab. Restart retains that context and revalidates it
 after stop. It never creates a profile, registers a frontend path, or changes argv.
 
 Runtime request handling connects selection, stop/cancel, exact status recovery,
-explicit restart/retry, metadata rename, close/archive/restore, copy session ID and
+explicit restart/retry, rename, close/archive/restore, copy session ID and
 open directory to current adapters and shared confirmations. New/Resume dialogs,
 project management, contextual resources and safe diagnostics are implemented;
 unsupported operations are never translated to Legacy commands. Refresh reloads
-sources without retrying a failed lifecycle request. Historical and live rename
-both use `projectsState` display metadata, never terminal `/rename` input.
+sources without retrying a failed lifecycle request. Renaming a running session
+drives the CLI's own rename mechanism (a `/rename` injection for Claude; Codex
+keeps `projectsState` display metadata until its command form is verified) and
+clears the stored display override so the title flows back from CLI history.
+Rename admission is limited to opened sessions; stopped tabs and history rows
+without a writable CLI keep the display-metadata fallback.
 
 Windows directory opening restores normalized `//server/share` and `//?/` paths
 to backslash prefixes before passing one literal argument to Explorer. Explorer

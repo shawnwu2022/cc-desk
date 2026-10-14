@@ -10,5 +10,6 @@ export interface UnifiedTerminalHostPort {
   renameLegacy(tabId: string, title: string): Promise<void>
   stopNative(tabId: string, attempt: NativeAttemptIdentity): Promise<void>
   recoverNative(tabId: string, attempt: NativeAttemptIdentity): Promise<void>
+  renameNative(tabId: string, title: string): Promise<void>
   focus(): void
 }
