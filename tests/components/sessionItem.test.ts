@@ -62,6 +62,25 @@ it('Row_ClosedHistoryRenameKeepsTerminalSelection_042', async () => {
   expect(wrapper.emitted('activate')).toBeUndefined()
   expect(wrapper.emitted('primary-action')).toBeUndefined()
 })
+// 已准入的关闭历史编辑在队列等待与失败重试时保留草稿，成功才退出。
+it('Row_ClosedHistoryQueuedSaveKeepsDraft_045', async () => {
+  const history = { ...base, opened: false, processState: 'stopped' as const }
+  const wrapper = row({ ...history, renameState: 'editing' })
+  await wrapper.get('input').setValue('Recoverable history draft')
+  await wrapper.get('input').trigger('keydown', { key: 'Enter' })
+  await wrapper.setProps({ session: { ...history, renameState: 'saving' } })
+  expect((wrapper.get('input').element as HTMLInputElement).value).toBe('Recoverable history draft')
+  expect(wrapper.get('input').attributes('disabled')).toBeDefined()
+  expect(wrapper.find('[data-session-archive]').exists()).toBe(false)
+  await wrapper.setProps({ session: { ...history, renameState: 'editing' } })
+  expect((wrapper.get('input').element as HTMLInputElement).value).toBe('Recoverable history draft')
+  expect(wrapper.get('input').attributes('disabled')).toBeUndefined()
+  await wrapper.get('input').trigger('keydown', { key: 'Enter' })
+  expect(wrapper.emitted('rename-commit')).toHaveLength(2)
+  await wrapper.setProps({ session: { ...history, title: 'Recoverable history draft', renameState: 'idle' } })
+  expect(wrapper.find('input').exists()).toBe(false)
+  expect(wrapper.get('.session-name').text()).toBe('Recoverable history draft')
+})
 function styleRules() {
   const source = readFileSync(resolve('src/components/sessions/SessionItem.vue'), 'utf8')
   const style = document.createElement('style')
