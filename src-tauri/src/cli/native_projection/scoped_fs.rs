@@ -13,6 +13,11 @@ pub(crate) type CodexHead = (Vec<u8>, Vec<u8>, bool);
 /// Codex 身份与首条用户消息的头窗口上限。实测本机 2131 个 rollout 在 192KiB
 /// 窗口下可覆盖 1769 条（83%）用户的标题来源，总头窗口 IO 约 150MiB。
 const CODEX_HEAD_WINDOW: usize = 192 * 1024;
+/// Claude 有界标题尾窗。CLI 把 `ai-title`/`custom-title` 写在转录末尾附近；
+/// 实测本机 627 个转录中 37 个带 ai-title，距 EOF 中位 20KiB、p90 33KiB。
+/// 64KiB 覆盖其中 35 个（95%）。窗口越大越准，但冷扫描 IO 随之上升；首次
+/// 可接受，其后由元数据缓存按 (size, mtime) 命中而不重读。
+const CLAUDE_TITLE_TAIL: usize = 64 * 1024;
 #[derive(Clone, Copy)]
 pub(crate) struct Limits {
     pub file_bytes: usize,
@@ -73,11 +78,13 @@ impl Budget {
     pub(crate) fn retain_history_metadata_incomplete(&mut self) {
         self.history_metadata_incomplete = true;
     }
-    pub(crate) fn optional_title_available(&self, header_bytes: usize) -> bool {
-        self.started.elapsed() < Duration::from_secs(4)
-            && self.entries_left > 0
-            && header_bytes.saturating_add(4096) <= self.bytes_left
-            && header_bytes.saturating_mul(2).saturating_add(4096) <= self.file_bytes
+    pub(crate) fn optional_title_available(&self, header_bytes: usize, tail_bytes: usize) -> bool {
+        // 可选标题读写不设短时门槛：真实冷扫描必然远超任何秒级窗口，过早放弃
+        // 会让全部行的 CLI 标题静默失效（实测即为此前 ai-title 永不可见的根因）。
+        // 代价由聚合字节预算与 entries 上限约束，协作截止仍由 checkpoint 兜底。
+        self.entries_left > 0
+            && header_bytes.saturating_add(tail_bytes) <= self.bytes_left
+            && header_bytes.saturating_mul(2).saturating_add(tail_bytes) <= self.file_bytes
     }
     pub(crate) fn history_read_failures(&self) -> Vec<&'static str> {
         self.history_read_failures.iter().copied().collect()
@@ -368,7 +375,7 @@ impl Root {
         header_bytes: usize,
         budget: &mut Budget,
     ) -> ReadResult<Option<TitleTail>> {
-        if !budget.optional_title_available(header_bytes) {
+        if !budget.optional_title_available(header_bytes, CLAUDE_TITLE_TAIL) {
             return Ok(None);
         }
         relative(path, false)?;
@@ -411,7 +418,10 @@ impl Root {
         budget.bytes_left = budget.bytes_left.saturating_sub(header.len());
         read.map_err(read_error)?;
         budget.checkpoint()?;
-        let tail_bytes = before.len().min(4096);
+        // 尾窗按 CLAUDE_TITLE_TAIL 读取；CLI 的 ai-title/custom-title 写在末尾附近，
+        // 4KiB 不足以覆盖实测 p90（33KiB）。调用方已在 optional_title_available
+        // 里按同一常量预付预算，这里不再重复校验。
+        let tail_bytes = before.len().min(CLAUDE_TITLE_TAIL as u64);
         (&file)
             .seek(SeekFrom::End(-(tail_bytes as i64)))
             .map_err(read_error)?;

@@ -6,6 +6,8 @@
 - Collapse the duplicate Claude history row that Legacy and Native each projected from the same default CLI source; opened terminals never collapse
 - Show observed record timestamps for bounded Claude history reads so closed rows keep a display time instead of “—”
 - Project sessions without an observation channel (observer off, Codex, connecting) as a neutral running state instead of “Activity unknown”
+- Read Claude history until a real title source is observed instead of stopping at `cwd`, widen the bounded title tail to 64 KiB, and drop the short wall-clock gate that had silently disabled CLI titles; sessions whose only input was a slash command (e.g. `/exit`) no longer occupy a row
+- Attribute Claude history rows to the first cwd observed on a supported record type and ignore cwd on unsupported record types, so the legal per-turn cwd changes of a real transcript (subdirectory navigation, letter casing) no longer mislabel a whole source `SOURCE_AMBIGUOUS` once the widened observation window reaches them
 
 ## [0.20.0] - 2026-10-14
 
