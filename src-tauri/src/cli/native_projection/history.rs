@@ -18,6 +18,8 @@ impl TitlePriority {
         }
     }
 }
+/// 有界标题尾读的结果：优先标题候选，以及尾段观察到的最新记录时间。
+type BoundedTitleResult = (Option<(String, TitlePriority)>, Option<String>);
 struct Transcript {
     id: String,
     cwd: Option<String>,
@@ -30,6 +32,8 @@ struct Transcript {
     auto_session: bool,
     /// wrapper-only 且观察不完整：不占用列表行，由调用方按单条省略披露。
     unconfirmable_wrapper_only: bool,
+    /// 完整观察到的输入仅为退出命令，且无用户任务或 assistant/工具工作。
+    envelope_only: bool,
     source_path: String,
     observation_bytes: usize,
 }
@@ -66,7 +70,7 @@ pub(super) fn read(
         // Ok(None) 表示这一行不是用户主动创建的会话，直接跳过而不计入任何失败。
         let parsed: ReadResult<Option<Transcript>> = (|| {
             // Codex 历史走缓存 + 一次打开的头窗口观察：身份取自 session_meta，
-            // 标题取自首条用户消息，时间取自尾部。命中缓存则不读文件。
+            // 标题取自首条用户消息，时间取自尾部。命中缓存仍校验当前身份。
             if o.kind == ResourceKind::History && c.cli == CliKind::Codex {
                 return codex_history(c, &path, b, &mut observation_bytes);
             }
@@ -105,15 +109,24 @@ pub(super) fn read(
             }
             Err(code) => return Err(code),
         };
+        // 行是否展示不能削弱全源身份检查，退出行也可能与另一目录的会话重名。
+        if c.cli == CliKind::Claude && !seen.insert(transcript.id.clone()) {
+            return Err("SOURCE_AMBIGUOUS");
+        }
+        // 只有完整观察才能证明「从未有过真实用户输入」；有界观察未覆盖全程时
+        // 照常列出（fail-open），不因未读到标题而隐藏真实会话。
+        if o.kind == ResourceKind::History
+            && transcript.envelope_only
+            && !transcript.metadata_incomplete
+        {
+            continue;
+        }
         transcript.observation_bytes = observation_bytes;
         if let Some(name) = named.get(&transcript.id) {
             // 用户自己起的名字就是这条会话的身份：优先于任何现抽标题，且不受
             // 头窗口是否覆盖用户消息影响。
             transcript.title = name.clone();
             transcript.title_priority = Some(TitlePriority::Custom);
-        }
-        if c.cli == CliKind::Claude && !seen.insert(transcript.id.clone()) {
-            return Err("SOURCE_AMBIGUOUS");
         }
         // 一次观察服务多个已注册项目：cwd 唯一归属一个项目；无归属行不进入任何项目。
         let owner = if c.projects.is_empty() {
@@ -162,13 +175,20 @@ pub(super) fn read(
             }
             let enriched = enrich_claude_title(c, transcript, b);
             match enriched {
-                Ok(Some((title, priority)))
-                    if transcript.title_priority.is_none_or(|old| priority >= old) =>
-                {
-                    transcript.title = title;
-                    transcript.title_priority = Some(priority);
+                Ok((candidate, tail_updated)) => {
+                    // 尾读观察到的更新时间总是可采用的证据，与标题候选无关。
+                    if let Some(newer) = tail_updated {
+                        if transcript.updated.as_ref().is_none_or(|old| newer > *old) {
+                            transcript.updated = Some(newer);
+                        }
+                    }
+                    if let Some((title, priority)) = candidate {
+                        if transcript.title_priority.is_none_or(|old| priority >= old) {
+                            transcript.title = title;
+                            transcript.title_priority = Some(priority);
+                        }
+                    }
                 }
-                Ok(_) => {}
                 Err(code) if b.omit_history_entry(code) => {}
                 Err(code) => return Err(code),
             }
@@ -398,6 +418,7 @@ fn cached_transcript(metadata: cache::CachedMetadata) -> Transcript {
         title_priority,
         auto_session: false,
         unconfirmable_wrapper_only: false,
+        envelope_only: false,
         source_path: String::new(),
         observation_bytes: 0,
     }
@@ -606,6 +627,7 @@ fn parse_codex_metadata(
         unconfirmable_wrapper_only: wrapper_only
             && title_priority.is_none()
             && !observed_completely,
+        envelope_only: false,
         source_path: String::new(),
         observation_bytes: 0,
     })
@@ -701,6 +723,11 @@ fn parse(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
     parse_complete(path, cli, input, false)
 }
 
+fn claude_injected_user_message(message: &str) -> bool {
+    let head = message.trim_start();
+    head.starts_with("<local-command-caveat>") || head.starts_with("<local-command-stdout>")
+}
+
 fn claude_observed_session_id(value: &Value, session_id: &str) -> ReadResult<()> {
     if matches!(
         value["type"].as_str(),
@@ -729,18 +756,43 @@ fn claude_ai_title(value: &Value, session_id: &str) -> ReadResult<String> {
         .ok_or("SOURCE_INVALID")
 }
 
+/// Claude Code 把 slash 命令调用（/model、/clear、/diagnosing-bugs 等）写成首条
+/// user 记录的 XML 封套。原始封套不是可读标题；提取命令名与参数合成紧凑标题。
+/// 返回 None 表示该记录不是命令封套（可能仍是注入噪声，由调用方按 `<` 前缀排除）。
+fn claude_envelope_title(text: &str) -> Option<String> {
+    let head = text.trim_start();
+    if !head.starts_with("<command-name>") && !head.starts_with("<command-message>") {
+        return None;
+    }
+    let field = |tag: &str| -> Option<String> {
+        let open = format!("<{tag}>");
+        let close = format!("</{tag}>");
+        let start = head.find(&open)? + open.len();
+        let end = head[start..].find(&close)? + start;
+        Some(head[start..end].trim().to_owned())
+    };
+    let name = field("command-name").or_else(|| field("command-message"))?;
+    let args = field("command-args").unwrap_or_default();
+    let compact = if args.is_empty() {
+        name
+    } else {
+        format!("{name} {args}")
+    };
+    Some(display_title(&compact))
+}
+
 fn enrich_claude_title(
     catalog: &Catalog<'_>,
     transcript: &Transcript,
     budget: &mut Budget,
-) -> ReadResult<Option<(String, TitlePriority)>> {
+) -> ReadResult<BoundedTitleResult> {
     let Some((header, tail, cut_first)) = catalog.history_title_tail(
         &transcript.source_path,
         transcript.observation_bytes,
         budget,
     )?
     else {
-        return Ok(None);
+        return Ok((None, None));
     };
     let end = header
         .iter()
@@ -768,6 +820,7 @@ fn enrich_claude_title(
         0
     };
     let mut candidate = None;
+    let mut tail_updated: Option<String> = None;
     for line in text(&tail[start..])?
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -781,6 +834,12 @@ fn enrich_claude_title(
         // 同一转录内的 cwd 会随会话进入子目录而变化（例如 root/web、root/mobile/android），
         // 首段观察到的只是其中一个取值。这里不再比对 cwd：行归属已由首段观察决定，
         // 尾段只用于提取标题，其身份约束由上面的 sessionId 校验承担。
+        if let Some(stamp) = value["timestamp"]
+            .as_str()
+            .filter(|stamp| stamp.len() <= 64)
+        {
+            tail_updated = std::cmp::max(tail_updated, Some(stamp.to_owned()));
+        }
         let title = match value["type"].as_str() {
             Some("ai-title") => Some((claude_ai_title(&value, &transcript.id)?, TitlePriority::Ai)),
             Some("custom-title") => value["customTitle"]
@@ -794,16 +853,38 @@ fn enrich_claude_title(
             }
         }
     }
-    Ok(candidate)
+    Ok((candidate, tail_updated))
 }
 
 // Official SDK 0.2.165 (bundled CLI 2.1.296) demonstrates permission-mode
 // before a user record. It carries no cwd and cannot end our observation.
 // https://github.com/anthropics/claude-agent-sdk-python/blob/b6e9d12fe1cc98dde988ab7b7713c1feeee50c6c/tests/test_sessions.py#L1399-L1426
+//
+// 观察终点从「看到 cwd」后移到「cwd + 可用标题来源」。真实会话的首条用户消息常
+// 在 cwd 之后很远（实测 depth-2 中位 12.9KiB、p90 965KiB）：旧探针在 cwd 处早停
+// 会让标题回落到命令封套或 Untitled。标题来源 = 显式标题记录（ai-title/custom-title）
+// 或首条真实用户消息（非 slash 命令封套、非注入噪声）。
+fn claude_project_cwd(value: &Value) -> Option<&str> {
+    match value["type"].as_str() {
+        Some(
+            "user"
+            | "assistant"
+            | "custom-title"
+            | "summary"
+            | "file-history-snapshot"
+            | "queue-operation"
+            | "progress"
+            | "system",
+        ) => value["cwd"].as_str(),
+        _ => None,
+    }
+}
+
 pub(super) fn claude_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
     let mut searched = 0;
     let mut line_start = 0;
     let mut cwd_observed = false;
+    let mut titled = false;
     move |bytes| {
         // Search only newly appended bytes. A long record is decoded once,
         // after its newline, rather than rescanned and parsed on each chunk.
@@ -821,22 +902,21 @@ pub(super) fn claude_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
             if !value.is_object() {
                 return Err("SOURCE_INVALID");
             }
-            cwd_observed |= matches!(
-                value["type"].as_str(),
-                Some(
-                    "user"
-                        | "assistant"
-                        | "custom-title"
-                        | "summary"
-                        | "file-history-snapshot"
-                        | "queue-operation"
-                        | "progress"
-                        | "system"
-                )
-            ) && value["cwd"].as_str().is_some();
+            let record = value["type"].as_str();
+            cwd_observed |= claude_project_cwd(&value).is_some();
+            titled |= matches!(record, Some("ai-title" | "custom-title"));
+            if !titled && record == Some("user") && value["isMeta"] != true {
+                let message = content(&value["message"]["content"]);
+                if !message.trim().is_empty()
+                    && claude_envelope_title(&message).is_none()
+                    && !claude_injected_user_message(&message)
+                {
+                    titled = true;
+                }
+            }
         }
         searched = bytes.len();
-        Ok(cwd_observed)
+        Ok(cwd_observed && titled)
     }
 }
 fn parse_complete(
@@ -860,6 +940,7 @@ fn parse_complete(
         title_priority: None,
         auto_session: false,
         unconfirmable_wrapper_only: false,
+        envelope_only: false,
         source_path: path.into(),
         observation_bytes: 0,
     };
@@ -868,6 +949,11 @@ fn parse_complete(
     let mut ai_title = None;
     let mut codex_id = None;
     let mut event_user = false;
+    let mut envelope_fallback: Option<String> = None;
+    let mut real_user = false;
+    let mut saw_envelope = false;
+    let mut only_exit_commands = true;
+    let mut substantive_reply = false;
     for line in input.lines().filter(|l| !l.trim().is_empty()) {
         let v: Value = serde_json::from_str(line).map_err(|_| "SOURCE_INVALID")?;
         validate_value(&v)?;
@@ -877,8 +963,9 @@ fn parse_complete(
         match cli {
             CliKind::Claude => {
                 claude_observed_session_id(&v, fallback)?;
-                if let Some(cwd) = v.get("cwd").and_then(Value::as_str) {
-                    t.cwd = Some(cwd.to_owned());
+                if t.cwd.is_none() {
+                    // 与有界读取一致：后续子目录或未知记录不能改变会话的项目归属。
+                    t.cwd = claude_project_cwd(&v).map(str::to_owned);
                 }
                 match v.get("type").and_then(Value::as_str) {
                     Some("ai-title") => {
@@ -898,12 +985,36 @@ fn parse_complete(
                             continue;
                         }
                         let role = v["type"].as_str().unwrap();
+                        // 工具调用没有可提取的纯文本，但仍然证明会话已经做过工作。
+                        if role == "assistant" {
+                            let body = &v["message"]["content"];
+                            substantive_reply |=
+                                body.as_str().is_some_and(|s| !s.trim().is_empty())
+                                    || body.as_array().is_some_and(|blocks| !blocks.is_empty());
+                        }
                         // History needs only the first user title. Every record is
                         // still decoded and validated; Messages/Search retain all bodies.
                         if include_messages || (role == "user" && t.messages.is_empty()) {
                             let message = content(&v["message"]["content"]);
-                            if !message.is_empty() {
-                                t.messages.push((role.into(), message));
+                            if include_messages {
+                                if !message.is_empty() {
+                                    t.messages.push((role.into(), message));
+                                }
+                            } else if let Some(envelope) = claude_envelope_title(&message) {
+                                // 命令封套只作兜底：先跳过，等不到真实用户消息时再使用。
+                                saw_envelope = true;
+                                only_exit_commands &=
+                                    matches!(envelope.as_str(), "/exit" | "/quit");
+                                if envelope_fallback.is_none() {
+                                    envelope_fallback = Some(envelope);
+                                }
+                            } else if !message.is_empty() {
+                                // 注入噪声（<local-command-caveat> 等）不占标题槽位，
+                                // 让后续真实用户消息成为标题。
+                                if !claude_injected_user_message(&message) {
+                                    real_user = true;
+                                    t.messages.push((role.into(), message));
+                                }
                             }
                         }
                     }
@@ -998,11 +1109,22 @@ fn parse_complete(
         Some(TitlePriority::Custom)
     } else if ai_title.is_some() {
         Some(TitlePriority::Ai)
-    } else if t.messages.iter().any(|(role, _)| role == "user") {
+    } else if t.messages.iter().any(|(role, _)| role == "user") || envelope_fallback.is_some() {
         Some(TitlePriority::Prompt)
     } else {
         None
     };
+    // 仅明确无工作的退出会话可省略。其他 slash 命令可以直接发起任务，
+    // assistant 的工具调用及手写 XML 用户输入也不能被视作空会话。
+    // 纯元数据文件（无任何 user 记录）不算空会话，保持既有列出行为。
+    t.envelope_only = cli == CliKind::Claude
+        && saw_envelope
+        && only_exit_commands
+        && !substantive_reply
+        && !real_user
+        && explicit_title.is_none()
+        && ai_title.is_none()
+        && t.messages.iter().all(|(role, _)| role != "user");
     t.title = explicit_title
         .or(ai_title)
         .or_else(|| {
@@ -1011,6 +1133,7 @@ fn parse_complete(
                 .find(|(role, _)| role == "user")
                 .map(|(_, text)| text.clone())
         })
+        .or(envelope_fallback)
         .unwrap_or_else(|| "Untitled".into());
     if !include_messages {
         t.messages = Vec::new();
@@ -1025,6 +1148,8 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
     let mut title = None;
     let mut explicit_title = None;
     let mut ai_title = None;
+    let mut observed_updated: Option<String> = None;
+    let mut envelope_title: Option<String> = None;
     let mut recognized = false;
     for line in input.lines().filter(|line| !line.trim().is_empty()) {
         let value: Value = serde_json::from_str(line).map_err(|_| "SOURCE_INVALID")?;
@@ -1069,11 +1194,19 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
                 }
                 if title.is_none() && value["type"] == "user" && value["isMeta"] != true {
                     let candidate = content(&value["message"]["content"]);
-                    if !candidate.is_empty() {
+                    // slash 命令封套不是可读标题，记为兜底；注入噪声跳过；
+                    // 后续真实用户消息优先于封套。
+                    if let Some(envelope) = claude_envelope_title(&candidate) {
+                        if envelope_title.is_none() {
+                            envelope_title = Some(envelope);
+                        }
+                    } else if !candidate.is_empty() && !claude_injected_user_message(&candidate) {
                         title = Some(candidate);
                     }
                 }
-                value["cwd"].as_str()
+                // 只有受支持记录类型的 cwd 才建立项目归属。未知类型（例如未来新增
+                // 的记录）携带的 cwd 不作数，也不与已观察值冲突。
+                claude_project_cwd(&value)
             }
             CliKind::Codex => {
                 if value["type"] == "session_meta" {
@@ -1106,10 +1239,20 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
             CliKind::Shell => return Err("SOURCE_UNSUPPORTED"),
         };
         if let Some(observed) = observed_cwd {
-            if cwd.as_ref().is_some_and(|old| old != observed) {
-                return Err("SOURCE_AMBIGUOUS");
+            // Claude 每条记录都带当轮 cwd，进入子目录后合法变化（实测同一转录
+            // `E:\qgs\qgs` 与 `E:\qgs\qgs\docs\reviews\...` 并存）。首段观察到的
+            // 取值即行归属，后续差异不是来源歧义——与尾段同一语义。Codex 的 cwd
+            // 来自唯一 session_meta，其配对逻辑在解析处已单独校验。
+            if cwd.is_none() {
+                cwd = Some(observed.to_owned());
             }
-            cwd = Some(observed.to_owned());
+        }
+        // 与 codex 尾部时间同语义：已观察记录的时间是最新部分证据（ISO 字典序即时间序）。
+        if let Some(stamp) = value["timestamp"]
+            .as_str()
+            .filter(|stamp| stamp.len() <= 64)
+        {
+            observed_updated = std::cmp::max(observed_updated, Some(stamp.to_owned()));
         }
     }
     if !recognized {
@@ -1132,7 +1275,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
         Some(TitlePriority::Custom)
     } else if ai_title.is_some() {
         Some(TitlePriority::Ai)
-    } else if title.is_some() {
+    } else if title.is_some() || envelope_title.is_some() {
         Some(TitlePriority::Prompt)
     } else {
         None
@@ -1143,12 +1286,14 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
         title: explicit_title
             .or(ai_title)
             .or(title)
+            .or(envelope_title)
             .unwrap_or_else(|| "Untitled".into()),
-        updated: None,
+        updated: observed_updated,
         messages: Vec::new(),
         metadata_incomplete: true,
         title_priority,
         unconfirmable_wrapper_only: false,
+        envelope_only: false,
         auto_session: false,
         source_path: path.into(),
         observation_bytes: 0,

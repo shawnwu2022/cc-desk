@@ -4,7 +4,7 @@ import { openInFileManager, nativeUnarchiveSession } from '@/api/tauri'
 import { createNativeId } from '@/utils/nativeId'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
-import { useNativeTabsStore, captureNativeAttempt, matchesNativeAttempt } from '@/stores/nativeTabs'
+import { useNativeTabsStore, captureNativeAttempt, matchesNativeAttempt, type NativeCliTab } from '@/stores/nativeTabs'
 import { nativeHistoryContextKey, useNativeHistoryStore } from '@/stores/nativeHistory'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
@@ -260,7 +260,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision, projectId: project.projectId, projectPath: project.selectedPath,
         })))
       for (let i = 0; i < contexts.length && !disposed; i += 2) await Promise.all(contexts.slice(i, i + 2).map(async context => {
-        try { const entry = await history.load(context); if (entry.error || entry.metadataIncomplete) partial = true } catch { partial = true }
+        // 恢复搜索显式重读当前项目；普通 owner 投影不经过此 loader。
+        try { const entry = await history.load({ ...context, force: query.scope !== 'all' }); if (entry.error || entry.metadataIncomplete) partial = true } catch { partial = true }
       }))
       return partial
     })
@@ -330,6 +331,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         if (results[0].status === 'rejected') warnings.add('configurations', results[0].reason)
         if (results[1].status === 'rejected') warnings.add('registrations', results[1].reason)
         if (results.some(result => result.status === 'rejected')) return
+        // 旧模板的 false 与用户主动关闭无法区分；读取工作区不能猜测来源并覆写。
         await draft.refreshAvailability()
         // 同 profile 的全部项目合并为一次后端观察；逐项目加载会让同一棵历史树被完整扫描 N 次。
         const groups = new Map<string, { cli: UnifiedCliKind; profileId: string; profileRevision: string; projects: { projectId: string; projectPath: string }[] }>()
@@ -601,6 +603,62 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       await refreshCatalog(changed)
     })
   }
+  // 身份确认/回复结束才请求历史 IO；状态、输出和焦点仍只刷新 catalog 投影。
+  // 每个 tab 仅保留最新请求，同 profile 合并项目，读取中至多留一批后继任务。
+  type HistoryOwner = { tab: NativeCliTab; attempt: ReturnType<typeof captureNativeAttempt>;
+    context: Pick<NativeCliTab, 'cli' | 'profileId' | 'profileRevision' | 'projectId' | 'projectPath'> }
+  const pendingHistoryOwners = new Map<string, HistoryOwner>()
+  let historyTimer: ReturnType<typeof setTimeout> | undefined
+  let historyReading = false
+  function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null } | null {
+    if (tab.cli !== 'claude' || tab.action.kind === 'raw' || tab.status !== 'running' || tab.observationState !== 'active') return null
+    const attempt = captureNativeAttempt(tab)
+    const notice = native.hasOwnedObservationNotice(tab.tabId, attempt) ? tab.observationNotice : undefined
+    const reply = notice?.recent?.kind === 'reply-ended' ? notice.recent : notice?.unreadReplyEnd
+    const key = [attempt.requestId, attempt.runId, attempt.generation]
+    return tab.observedSessionId || reply ? {
+      identity: tab.observedSessionId ? JSON.stringify([...key, tab.observedSessionId]) : null,
+      reply: reply ? JSON.stringify([...key, reply.eventId]) : null,
+    } : null
+  }
+  function scheduleHistoryRead() {
+    if (disposed || historyReading || loading.value || !ready.value || !pendingHistoryOwners.size) return
+    if (historyTimer) clearTimeout(historyTimer)
+    historyTimer = setTimeout(() => { historyTimer = undefined; void refreshObservedHistory() }, 250)
+  }
+  async function refreshObservedHistory() {
+    if (disposed || historyReading || loading.value || !ready.value) return
+    const groups = new Map<string, HistoryOwner[]>()
+    for (const owner of pendingHistoryOwners.values()) {
+      const key = JSON.stringify([owner.context.profileId, owner.context.profileRevision])
+      const group = groups.get(key) ?? []
+      group.push(owner)
+      groups.set(key, group)
+    }
+    pendingHistoryOwners.clear()
+    historyReading = true
+    try {
+      const reads = [...groups.values()]
+      for (let index = 0; index < reads.length && !disposed; index += 2) {
+        await Promise.all(reads.slice(index, index + 2).map(group => {
+          // 前一批可能等待磁盘；每一组真正发起前重新核对冻结 owner/context。
+          const current = group.filter(({ tab, attempt, context }) => native.tabs.get(tab.tabId) === tab
+            && matchesNativeAttempt(tab, attempt) && historyCue(tab) && context.cli === 'claude' && cliSupport.isEnabled('claude')
+            && tab.profileId === context.profileId && tab.profileRevision === context.profileRevision
+            && tab.projectId === context.projectId && sameProjectPath(tab.projectPath, context.projectPath)
+            && profiles.profile(context.profileId)?.revision === context.profileRevision
+            && workspace.projects.some(project => project.projectId === context.projectId && sameProjectPath(project.selectedPath, context.projectPath)))
+          if (!current.length) return
+          const context = current[0].context
+          const projects = new Map(current.map(owner => [owner.context.projectId, { projectId: owner.context.projectId, projectPath: owner.context.projectPath }]))
+          // 自动投影失败保留已有行，但 store 仍发布错误且撤销 absence 证明。
+          return history.loadGrouped({ cli: 'claude', profileId: context.profileId, profileRevision: context.profileRevision,
+            projects: [...projects.values()] }, { force: true, retainOnFailure: true }).catch(() => undefined)
+        }))
+      }
+    } finally { historyReading = false; scheduleHistoryRead() }
+  }
+  watch(() => [ready.value, loading.value], scheduleHistoryRead)
   // 每个运行 owner 独立监听；状态变化不再遍历全部历史。移动或替换时刷新旧、新项目。
   const catalogOwnerWatches = new Map<object, { projectPath: string; stop: () => void }>()
   watch(() => [...legacy.tabs.values(), ...native.tabs.values()], tabs => {
@@ -608,18 +666,33 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     for (const [tab, owner] of catalogOwnerWatches) {
       if (current.has(tab)) continue
       owner.stop(); catalogOwnerWatches.delete(tab)
+      const removedId = (tab as { tabId: string }).tabId
+      if (pendingHistoryOwners.get(removedId)?.tab === tab) pendingHistoryOwners.delete(removedId)
       queueCatalogProjects(owner.projectPath)
     }
     for (const tab of tabs) {
       if (catalogOwnerWatches.has(tab)) continue
-      const owner = { projectPath: tab.projectPath, stop: () => {} }
+      const nativeTab = native.tabs.get(tab.tabId) === tab ? tab as NativeCliTab : null
+      const owner = { projectPath: tab.projectPath, stop: () => {}, historyCue: nativeTab && historyCue(nativeTab) }
+      const queueHistory = () => {
+        if (!nativeTab) return
+        pendingHistoryOwners.set(nativeTab.tabId, { tab: nativeTab, attempt: captureNativeAttempt(nativeTab), context: {
+          cli: nativeTab.cli, profileId: nativeTab.profileId, profileRevision: nativeTab.profileRevision,
+          projectId: nativeTab.projectId, projectPath: nativeTab.projectPath,
+        } })
+        scheduleHistoryRead()
+      }
       owner.stop = watch(tab, () => {
         const previousPath = owner.projectPath
         owner.projectPath = tab.projectPath
         queueCatalogProjects(previousPath, owner.projectPath)
+        const cue = nativeTab && historyCue(nativeTab)
+        if (cue && (cue.identity && cue.identity !== owner.historyCue?.identity || cue.reply && cue.reply !== owner.historyCue?.reply)) queueHistory()
+        owner.historyCue = cue
       })
       catalogOwnerWatches.set(tab, owner)
       queueCatalogProjects(owner.projectPath)
+      if (owner.historyCue) queueHistory()
     }
   }, { immediate: true })
   watch(() => attention.queue, (next, previous) => {
@@ -638,6 +711,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   })
   onUnmounted(() => {
     disposed = true; ++refreshOwner
+    if (historyTimer) clearTimeout(historyTimer)
+    pendingHistoryOwners.clear()
     for (const owner of catalogOwnerWatches.values()) owner.stop()
     catalogOwnerWatches.clear(); pendingCatalogProjects.clear()
   })

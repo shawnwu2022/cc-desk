@@ -78,6 +78,9 @@ Its localized accessible description remains outside the decorative icon glyph.
   visible, selected and focused ownership acknowledges its exact event ID. Each
   hook owner and tab attempt retains at most 1024 accepted IDs; exhaustion rejects
   further events without evicting IDs and allowing replay.
+  Automatic history-title refresh uses those same accepted receipts and stops
+  receiving reply triggers when this existing budget is exhausted. Explicit
+  Refresh, project history queries and closing remain separate read entry points.
 
 ## Current native evidence gap
 
@@ -126,8 +129,8 @@ completed`, permission or error reasons, and it does not touch authority,
 ownership or authorization. Restoring authoritative turn state still requires
 a certified producer with authenticated exact-run identity, source-owned
 monotone sequence and explicit turn/reason evidence (see follow-up choices).
-Native profiles still default observation off, and Codex/raw/Shell launches
-receive no Claude overlay.
+New safe Claude templates enable observation; saved choices remain authoritative.
+Codex/raw/Shell launches receive no Claude overlay.
 
 The Native row now shows a separate localized event marker. An unread `Stop`
 receipt is described as “Reply-end notice received (unread); current activity
@@ -135,8 +138,15 @@ unverified”. It never becomes `attentionKind: completed` or changes the curren
 activity icon. Other allowlisted hooks show recent prompt, tool, permission,
 input, subagent or compaction events. These are receipt observations in host
 arrival order, not proof of provider event order or present activity. The five
-existing optional observer capabilities remain `partial`; observation defaults,
-profile fields, CLI launch arguments and permissions are unchanged.
+existing optional observer capabilities remain `partial`; profile fields, CLI
+launch arguments and permissions are unchanged. Newly auto-created safe Claude
+templates default the observer on (it backs session status, rename follow-through and row
+claiming); Codex profiles never receive the Claude overlay, an explicit user
+`observer: false` is respected, including existing `desk-safe-claude` templates.
+Their old default cannot be distinguished from an explicit user choice, so refresh
+never rewrites them or bumps their revision. Sessions without an observation channel (observer off, Codex,
+connecting) now project a neutral running state instead of “Activity unknown”;
+an observed `unknown` remains genuinely unknown.
 
 ## Smallest follow-up choices
 
@@ -151,8 +161,8 @@ Shell have no Claude source and must keep their own capability boundary.
    turn identity and working/permission/error/completion facts. Carry that proof
    through the backend observer DTO and the existing strict reducer before
    projecting it. Parallel hook processes and server arrival counters cannot
-   supply this contract. Certify the actual selected CLI before enabling it; do
-   not change CLI flags or optional observer defaults as a UI repair.
+   supply this contract. Certify the actual selected CLI before claiming accurate
+   turn state; enabling the observer channel by default is not itself proof of it.
 2. **Implemented bounded compromise: occurrence notices:** use the existing
    authenticated hook envelope and subscription to keep independent recent and
    unread reply-end receipts, with exact request/run/generation ownership and

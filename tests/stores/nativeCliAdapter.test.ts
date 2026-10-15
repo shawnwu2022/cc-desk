@@ -2,6 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { describe, expect, it, vi } from 'vitest'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
+import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
 import { captureNativeAttempt, useNativeTabsStore, type NativeCliTab } from '@/stores/nativeTabs'
 import type { NativeHistoryEntry } from '@/stores/nativeHistory'
 
@@ -39,10 +40,64 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
   const archive = { getArchivedSessions: (path: string) => archived.get(path) ?? [], archiveSession: vi.fn(async (path: string, id: string) => { archived.set(path, [...(archived.get(path) ?? []), id]) }), restoreSession: vi.fn(async (path: string, id: string) => { archived.set(path, (archived.get(path) ?? []).filter(value => value !== id)) }) }
   const cliUnarchive = { unarchive: vi.fn().mockResolvedValue(undefined) }
   const historyLoad = vi.fn(async () => entries[0])
-  const metadata = { sessionRecords: new Map(), recordSessionOpened: vi.fn(async () => undefined), upsertSessionRecord: vi.fn(async () => undefined) }
+  const metadata = { sessionRecords: new Map(), recordSessionOpened: vi.fn(async () => undefined), upsertSessionRecord: vi.fn(async (_key: string, _record: any, _beforeMutation?: () => void) => undefined) }
   const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries, load: historyLoad }, runtime, archive, cliUnarchive, metadata })
   return { adapter, map, runtime, archive, cliUnarchive, setActive, archived, historyLoad, metadata }
 }
+
+// 实际两个 adapter 使用不同历史键；原生行不能接管未知来源的 Legacy 归档或恢复。
+it('History_KeepLegacyArchiveOwner_037', async () => {
+  setActivePinia(createPinia())
+  const native = setup([], [history('claude', 'independent-root', 'session-1')])
+  native.archived.set('/repo', ['session-1'])
+  const restore = vi.fn(async () => undefined)
+  const legacy = createLegacyClaudeAdapter({
+    store: { tabs: new Map(), getCatalogHistoryFor: () => [{ sessionId: 'session-1', name: 'Legacy archived', projectPath: '/repo', lastActiveAt: 1 }],
+      getArchivedSessions: () => ['session-1'], createTab: vi.fn(), setActiveTab: vi.fn(), removeTab: vi.fn(), closeTab: vi.fn(), updateTabName: vi.fn(), archiveSession: vi.fn(), restoreSession: restore },
+    runtime: { startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn() }, projectPaths: () => ['/repo'],
+  })
+  const catalog = useUnifiedSessionsStore()
+  catalog.configureAdapters([legacy, native.adapter])
+  await catalog.refresh()
+  const archived = catalog.sessions.find(row => row.runtime === 'legacy-claude')
+  expect(archived).toMatchObject({ archived: true, title: 'Legacy archived' })
+  expect(catalog.sessions.find(row => row.runtime === 'native-cli')).toMatchObject({ archived: false })
+  await catalog.restoreArchivedSession(archived!.id)
+  expect(restore).toHaveBeenCalledWith('/repo', 'session-1')
+  expect(native.archive.restoreSession).not.toHaveBeenCalled()
+})
+
+// 已恢复 tab 的 sourceSessionKey 仍应从唯一来源刷新 CLI 名称；Desk 自定义名保持优先。
+it('History_ResumeFollowsCliTitle_038', async () => {
+  const entry = history('claude', 'root', 'session-1')
+  const active = tab({ cli: 'claude', profileId: 'claude-main', sourceSessionKey: entry.sessions[0].sessionKey, title: 'Old CLI title' })
+  const state = setup([active], [entry])
+  entry.sessions[0].title = 'New CLI title'
+  expect((await state.adapter.listSessions())[0].title).toBe('New CLI title')
+})
+
+// 认证身份稍后出现时，已保存的 tab 显示名不能被新发现的 CLI 标题覆盖。
+it.each([false, true])('History_PreserveEarlyTabRename_039 identity known: %s', async identityKnown => {
+  const active = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, title: 'Claude Code',
+    ...(identityKnown ? { observedSessionId: 'session-1' } : {}) })
+  const entries: NativeHistoryEntry[] = []
+  const state = setup([active], entries)
+  state.metadata.upsertSessionRecord.mockImplementation(async (key: string, record: any, beforeMutation?: () => void) => {
+    beforeMutation?.(); state.metadata.sessionRecords.set(key, record)
+  })
+  await state.adapter.renameSession('native-tab:tab-1', 'Saved before identity')
+  active.observedSessionId = 'session-1'
+  entries.push(history('claude', 'root', 'session-1'))
+  expect((await state.adapter.listSessions())[0].title).toBe('Saved before identity')
+  entries[0].sessions[0].title = 'Later CLI title'
+  expect((await state.adapter.listSessions())[0].title).toBe('Saved before identity')
+  state.map.delete(active.tabId)
+  const closed = (await state.adapter.listSessions())[0]
+  expect(closed.title).toBe('Later CLI title')
+  await state.adapter.renameSession(closed.id, 'Exact history name')
+  state.map.set(active.tabId, active)
+  expect((await state.adapter.listSessions())[0].title).toBe('Exact history name')
+})
 
 describe('native CLI adapter', () => {
   // 容量满时不淘汰旧未读；同一完整来源的新回执仍可替换，并拒绝旧快照清除。
@@ -178,6 +233,16 @@ describe('native CLI adapter', () => {
     const matched = (await adapter.listSessions()).filter(row => row.nativeSessionId === 'session-1')
     expect(matched).toHaveLength(1)
     expect(matched[0]).toMatchObject({ opened: true })
+    // 认领后活动行标题跟随 CLI 记录标题，不停留在本地占位名。
+    expect(matched[0].title).toBe('claude-/root')
+  })
+
+  // 无观察身份时不猜测，活动行保持本地名（无唯一历史对应可跟随）。
+  it('NativeObservedIdentity_WithoutIdentityKeepsLocalTitle_031b', async () => {
+    const active = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, title: 'Claude Code' })
+    const { adapter } = setup([active], [])
+    const rows = await adapter.listSessions('/repo')
+    expect(rows[0].title).toBe('Claude Code')
   })
 
   // 无观察身份时维持不猜测立场：历史行照常投出，与活动行并存。
@@ -323,7 +388,9 @@ describe('native CLI adapter', () => {
     const second = history('codex', '/root-b', 'session-1')
     const { adapter } = setup([tab({ sourceSessionKey: first.sessions[0].sessionKey })], [first, second])
     const sessions = await adapter.listSessions('/repo')
-    expect(sessions.map(value => value.title).sort()).toEqual(['Codex active', 'codex-/root-b'])
+    expect(sessions.map(value => value.title).sort()).toEqual(['codex-/root-a', 'codex-/root-b'])
+    expect(sessions.find(value => value.opened)?.adapterSessionId).toBe('tab-1')
+    expect(sessions.find(value => !value.opened)?.adapterSessionId).toBe(second.sessions[0].sessionKey)
   })
 
   it('NativeResume_DistinguishesRevision_010', async () => {

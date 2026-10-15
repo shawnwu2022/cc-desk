@@ -136,7 +136,9 @@ Raw IDs and ambiguous old Native keys are never guessed into another origin.
 
 A new or raw Native terminal without a known authenticated history association
 can only save its name under its exact tab identity. It retains the name across a
-restart of that tab, but independently discovered CLI history after application
+restart of that tab and when authenticated identity/history association appears
+later. Exact history display names take priority. Tab records are not migrated;
+independently discovered CLI history after application
 restart keeps its own title. No safe association can be inferred from a raw ID,
 title, current configuration or default root. Optional metadata alone never
 creates a catalog row or restores a process.

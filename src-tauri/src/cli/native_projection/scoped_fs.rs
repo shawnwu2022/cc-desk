@@ -13,6 +13,11 @@ pub(crate) type CodexHead = (Vec<u8>, Vec<u8>, bool);
 /// Codex 身份与首条用户消息的头窗口上限。实测本机 2131 个 rollout 在 192KiB
 /// 窗口下可覆盖 1769 条（83%）用户的标题来源，总头窗口 IO 约 150MiB。
 const CODEX_HEAD_WINDOW: usize = 192 * 1024;
+/// Claude 有界标题尾窗。CLI 把 `ai-title`/`custom-title` 写在转录末尾附近；
+/// 实测本机 627 个转录中 37 个带 ai-title，距 EOF 中位 20KiB、p90 33KiB。
+/// 64KiB 覆盖其中 35 个（95%）。窗口越大越准，但冷扫描 IO 随之上升；首次
+/// 该比例是标题覆盖证据，不是扫描耗时收益；Claude 每次读取仍观察头部和尾部。
+const CLAUDE_TITLE_TAIL: usize = 64 * 1024;
 #[derive(Clone, Copy)]
 pub(crate) struct Limits {
     pub file_bytes: usize,
@@ -25,8 +30,8 @@ impl Default for Limits {
             file_bytes: 2 * 1024 * 1024,
             // 真实 Codex 根（约 2130 个 rollout，含 archived_sessions）一次完整
             // 元数据采样：头窗口最深 192KiB，跳过注入上下文后多数文件需读到窗口
-            // 上限附近，实测约 340–366MiB。512MiB 留出余量；稳定根经元数据缓存
-            // 命中后不再重读，预算只在冷扫描/文件变化时消耗。120 秒协作截止与
+            // 上限附近，实测约 340–366MiB。512MiB 留出余量；Codex 缓存命中后
+            // 仍需重读当前身份，Claude 没有这层显示缓存。120 秒协作截止与
             // entries 上限仍是硬护栏。
             total_bytes: 512 * 1024 * 1024,
             entries: 16384,
@@ -56,8 +61,8 @@ impl Budget {
     pub(crate) fn checkpoint(&self) -> ReadResult<()> {
         // Cooperative deadline between operations; not a promise to interrupt OS filesystem I/O.
         // 首次冷扫描（真实 ~/.codex，2130 个 rollout，含 192KiB 头窗口富化）实测约
-        // 40 秒；其结果写入元数据缓存后，后续扫描与手动刷新只重读变化文件。120 秒
-        // 相对冷扫描留约 3 倍余量，256 MiB / 16384 entries 仍是硬护栏。
+        // 40 秒，属于旧实现的历史记录；当前缓存身份重读策略不能复用该计时。
+        // 512 MiB / 16384 entries 与 120 秒仍是独立硬护栏。
         if self.started.elapsed() > Duration::from_secs(120) {
             return Err("SOURCE_BUDGET_EXCEEDED");
         }
@@ -73,11 +78,13 @@ impl Budget {
     pub(crate) fn retain_history_metadata_incomplete(&mut self) {
         self.history_metadata_incomplete = true;
     }
-    pub(crate) fn optional_title_available(&self, header_bytes: usize) -> bool {
-        self.started.elapsed() < Duration::from_secs(4)
-            && self.entries_left > 0
-            && header_bytes.saturating_add(4096) <= self.bytes_left
-            && header_bytes.saturating_mul(2).saturating_add(4096) <= self.file_bytes
+    pub(crate) fn optional_title_available(&self, header_bytes: usize, tail_bytes: usize) -> bool {
+        // 可选标题读写不设短时门槛：真实冷扫描必然远超任何秒级窗口，过早放弃
+        // 会让全部行的 CLI 标题静默失效（实测即为此前 ai-title 永不可见的根因）。
+        // 代价由聚合字节预算与 entries 上限约束，协作截止仍由 checkpoint 兜底。
+        self.entries_left > 0
+            && header_bytes.saturating_add(tail_bytes) <= self.bytes_left
+            && header_bytes.saturating_mul(2).saturating_add(tail_bytes) <= self.file_bytes
     }
     pub(crate) fn history_read_failures(&self) -> Vec<&'static str> {
         self.history_read_failures.iter().copied().collect()
@@ -368,7 +375,7 @@ impl Root {
         header_bytes: usize,
         budget: &mut Budget,
     ) -> ReadResult<Option<TitleTail>> {
-        if !budget.optional_title_available(header_bytes) {
+        if !budget.optional_title_available(header_bytes, CLAUDE_TITLE_TAIL) {
             return Ok(None);
         }
         relative(path, false)?;
@@ -411,7 +418,10 @@ impl Root {
         budget.bytes_left = budget.bytes_left.saturating_sub(header.len());
         read.map_err(read_error)?;
         budget.checkpoint()?;
-        let tail_bytes = before.len().min(4096);
+        // 尾窗按 CLAUDE_TITLE_TAIL 读取；CLI 的 ai-title/custom-title 写在末尾附近，
+        // 4KiB 不足以覆盖实测 p90（33KiB）。调用方已在 optional_title_available
+        // 里按同一常量预付预算，这里不再重复校验。
+        let tail_bytes = before.len().min(CLAUDE_TITLE_TAIL as u64);
         (&file)
             .seek(SeekFrom::End(-(tail_bytes as i64)))
             .map_err(read_error)?;

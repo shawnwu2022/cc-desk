@@ -4,6 +4,74 @@ fn budget() -> Budget {
     Budget::new(Limits::default())
 }
 
+// 隔离样例量化 Claude 冷/暖枚举的预算扣减；不把 OS 缓存或标题命中率当作零读取。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryScan_ColdWarmBytes_045() {
+    use super::super::catalog::{Catalog, Options, ProjectRef};
+    use super::super::wire::ResourceKind;
+    use crate::cli::types::CliKind;
+    use serde_json::json;
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    for index in 0..64 {
+        let id = format!("sample-{index}");
+        let records = [
+            json!({"type":"user","cwd":temp.path().to_str().unwrap(),"sessionId":id,"message":{"content":"synthetic task"}}),
+            json!({"type":"assistant","sessionId":id,"message":{"content":"a".repeat(96 * 1024)}}),
+            json!({"type":"ai-title","sessionId":id,"aiTitle":"synthetic title"}),
+        ];
+        let input = records
+            .iter()
+            .map(|record| format!("{record}\n"))
+            .collect::<String>();
+        fs::write(temp.path().join(format!("projects/p/{id}.jsonl")), input).unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let paths = vec![temp.path().to_path_buf()];
+    let projects = [ProjectRef {
+        id: "p",
+        root: &root,
+        paths: &paths,
+    }];
+    let catalog = Catalog {
+        cli: CliKind::Claude,
+        root: &root,
+        projects: &projects,
+        user_config: None,
+        check: &|| Ok(()),
+    };
+    let mut measured = Vec::new();
+    for label in ["cold", "warm"] {
+        let limits = Limits::default();
+        let mut budget = Budget::new(limits);
+        let started = Instant::now();
+        let items = super::super::catalog::read(
+            &catalog,
+            &Options {
+                kind: ResourceKind::History,
+                query: None,
+                session_id: None,
+            },
+            &mut budget,
+        )
+        .unwrap();
+        let charged = limits.total_bytes - budget.bytes_left;
+        eprintln!(
+            "Claude synthetic {label}: files=64 rows={} charged_bytes={charged} elapsed_ms={}",
+            items.len(),
+            started.elapsed().as_millis()
+        );
+        assert_eq!(items.len(), 64);
+        assert!(charged > 0 && charged <= 64 * 80 * 1024);
+        measured.push(charged);
+    }
+    assert_eq!(
+        measured[0], measured[1],
+        "Claude still freshly reads both observations"
+    );
+}
+
 // Validate the production decoder without asking a filesystem to create an
 // invalid name: macOS rejects non-UTF-8 filenames before enumeration can begin.
 #[test]

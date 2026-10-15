@@ -33,10 +33,10 @@ describe('Honest Native event notice presentation', () => {
   ])('Notice_UnreadIsSeparateFromActivity_001 %s', async (locale, expected) => {
     const wrapper = render(row(), locale)
     const marker = wrapper.get('[data-native-observation-notice]')
-    expect(marker.attributes('aria-label')).toBe('Claude Code; ' + (locale === 'en' ? 'Activity unknown' : '活动未知') + '; ' + expected)
+    expect(marker.attributes('aria-label')).toBe('Claude Code; ' + (locale === 'en' ? 'Running' : '运行中') + '; ' + expected)
     expect(marker.attributes('data-unread')).toBe('true')
     expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('completed')
-    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toContain(locale === 'en' ? 'Activity unknown' : '活动未知')
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toContain(locale === 'en' ? 'Running' : '运行中')
     expect(wrapper.html()).not.toContain('opaque-event')
     expect(wrapper.html()).not.toContain('opaque-run')
     expect(wrapper.text()).not.toMatch(/completed|已完成/i)
@@ -52,8 +52,9 @@ describe('Honest Native event notice presentation', () => {
     expect(wrapper.get('[data-native-observation-notice]').attributes('aria-label')).toContain('Reply-end notice received (unread)')
     await wrapper.setProps({ session: { ...session, observationNotice: { ...session.observationNotice!, unreadReplyEnd: null } } })
     expect(wrapper.get('[data-native-observation-notice]').attributes('data-unread')).toBe('false')
-    expect(wrapper.get('[data-native-observation-notice]').attributes('aria-label')).toBe('Claude Code; Activity unknown; Recent notice: prompt submitted; current activity unverified')
-    expect(wrapper.get('.session-status-icon').attributes('aria-label')).toBe('Activity unknown')
+    expect(wrapper.get('[data-native-observation-notice]').attributes('aria-label')).toBe('Claude Code; Running; Recent notice: prompt submitted; current activity unverified')
+    // 运行中不再是异常未知，未读角标已随 ack 清除。
+    expect(wrapper.find('.session-status-icon').exists()).toBe(false)
   })
   it.each(['legacy-claude', 'codex', 'failed', 'empty'] as const)('Notice_HiddenOutsideNativeReceiptScope_003 %s', invalidation => {
     const session = row()

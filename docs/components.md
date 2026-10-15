@@ -54,6 +54,10 @@ admits/dispatches requests through runtime-owned adapters; paths in these
 requests do not authorize Native filesystem access. The Legacy adapter reads `getCatalogHistoryFor`, an unfiltered cached history
 projection. Ordinary `getHistoryFor` keeps its existing archived/claimed filtering,
 while the unified catalog retains archived rows so the archive drawer can restore them.
+Legacy and Native rows retain their own source, archive, display-name and restore owner.
+A matching UUID/project path does not prove the configuration roots are identical;
+the Legacy projection cannot provide that proof, so it is not folded into Native.
+The Native adapter claims history only for its unique exact profile/project/source key.
 Live close/archive requests go through `SessionConfirmDialog` and the Task 16 exact-owner confirmation layer.
 Admission reads current runtime state, rather than trusting an older catalog row.
 Queued operations capture adapter ownership before awaiting; an ended close/archive
@@ -418,7 +422,23 @@ failure and completion from older filters.
 History search defaults to the request's current project. Title and Session ID text,
 CLI, current/all project scope, and 24-hour/7-day/30-day activity filters combine.
 Unavailable sources produce a partial-history notice without hiding readable sources.
-History remains cached for filtering; workspace Refresh explicitly rereads sources.
+Workspace Refresh and project restore search explicitly reread sources. Ordinary
+owner state/attention changes only refresh the catalog projection. Authenticated
+Native Claude identity and reply-end receipts queue a 250ms debounced history reread,
+grouped by profile/revision across affected registered projects, with two readers
+and at most one pending batch while reading. Queued owners are rechecked before
+each group starts; restart, close, configuration change and unmount revoke them.
+Reply acknowledgment/focus/output never request a read. Resumed tabs also use the
+latest uniquely matched CLI title, below any explicit Desk display-name override.
+Names saved under the same tab before history association remain visible on that
+tab; exact history names take priority, and tab metadata is not migrated to an
+independently discovered history row. Automatic title refresh shares the existing
+1024-event observer budget: exhaustion rejects new receipts, so later automatic
+reply-triggered refreshes stop until a new attempt. Explicit Refresh, project
+queries and closing still read history; no replay protection is relaxed.
+Claude still reads its bounded header and optional tail on each observation; there
+is no zero-read warm metadata cache. See the reproducible measurements in
+[history-source-diagnostics.md](history-source-diagnostics.md).
 Native history consumes all supported pages through the authenticated projection
 client, rejecting partial/error reads as absence evidence.
 

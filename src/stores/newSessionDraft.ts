@@ -161,7 +161,9 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
           name: input.cli === 'claude' ? 'Claude Code' : 'Codex CLI', launcher: { kind: 'native' },
           programPath: { mode: 'inherit' }, defaultArgs: { mode: 'set', value: [] },
           skipPermissions: input.cli === 'claude' ? { mode: 'set', value: false } : { mode: 'inherit' },
-          observer: { mode: 'set', value: false }, env: {} }
+          // 观察器是会话状态、改名跟随与行认领的基础；hook 只在 Desk 启动的
+          // 会话按 snapshot 请求注入，不触碰用户在 Desk 外的 CLI 进程。
+          observer: { mode: 'set', value: true }, env: {} }
         try { await profiles.patch(profiles.revision, { op: 'create', profile: safe }) }
         catch { await profiles.load().catch(() => undefined); throw new Error('NEW_SESSION_PREPARATION_FAILED') }
         selected = profiles.profile(safe.id)

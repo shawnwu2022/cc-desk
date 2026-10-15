@@ -80,9 +80,6 @@ impl Catalog<'_> {
         header_bytes: usize,
         budget: &mut Budget,
     ) -> ReadResult<Option<TitleTail>> {
-        if !budget.optional_title_available(header_bytes) {
-            return Ok(None);
-        }
         let result = self
             .root
             .history_title_tail(Path::new(path), header_bytes, budget)?;

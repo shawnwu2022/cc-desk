@@ -204,12 +204,18 @@ it('Resume_ReconfirmAfterClose_012', async () => {
   ;(document.querySelector('[data-confirm-resume]') as HTMLButtonElement).click(); await flushPromises()
   ;(document.querySelector('.resume-actions button') as HTMLButtonElement).click(); await flushPromises()
   expect(document.querySelector('[role=dialog]')).toBeNull()
+  // 单项目历史查询强制重读:重开对话框会发起新 read,旧挂起不能复用为
+  // 新对话框的来源证明;新 read 未完成前列表不出现。
+  let finishReopen!: (value: unknown) => void
+  io.read.mockImplementationOnce(() => new Promise(resolve => { finishReopen = resolve }))
   const reads = io.read.mock.calls.length
   useShellStore().requestWorkspaceAction(request); await flushPromises()
   expect(document.querySelector('[data-resume-result]')).toBeNull()
-  expect(io.read).toHaveBeenCalledTimes(reads)
+  expect(io.read.mock.calls.length).toBe(reads + 1)
   expect(useNativeTabsStore().tabs.size).toBe(0)
-  finish({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this' }], hasMore: false }); await flushPromises()
+  const readyResult = { state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this' }], hasMore: false }
+  finish(readyResult); await flushPromises()
+  finishReopen(readyResult); await flushPromises()
   expect(useNativeTabsStore().tabs.size).toBe(0)
   ;(document.querySelector('[data-resume-result]') as HTMLButtonElement).click(); await flushPromises()
   ;(document.querySelector('[data-confirm-resume]') as HTMLButtonElement).click(); await flushPromises()

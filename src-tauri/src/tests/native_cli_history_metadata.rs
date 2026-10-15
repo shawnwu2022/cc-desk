@@ -147,7 +147,7 @@ fn HistoryParse_ValidateBodies_003() {
     }
 }
 
-// Claude 完整历史保留末尾标题、末尾时间和既有 cwd 规则，消息详情继续保留正文。
+// Claude 完整历史保留末尾标题和时间，cwd 固定为首个受支持记录，消息详情继续保留正文。
 #[test]
 #[allow(non_snake_case)]
 fn HistoryParse_ClaudeMetadata_004() {
@@ -164,7 +164,7 @@ fn HistoryParse_ClaudeMetadata_004() {
     assert_eq!(metadata.title, full.title);
     assert_eq!(metadata.title, "latest title");
     assert_eq!(metadata.cwd, full.cwd);
-    assert_eq!(metadata.cwd.as_deref(), Some("/last"));
+    assert_eq!(metadata.cwd.as_deref(), Some("/first"));
     assert_eq!(metadata.updated, full.updated);
     assert_eq!(full.messages.len(), 3);
     assert!(metadata.messages.is_empty());
@@ -1596,8 +1596,209 @@ fn HistoryClaude_DuplicateBeforeProjectFilter_019() {
     );
 }
 
+// 不显示退出行也必须核对其身份；列表和消息读取不能对同源重复 ID 得出不同结论。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ExitOnlyDuplicate_047() {
+    for exit_first in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        for (directory, exit_only) in [("a", exit_first), ("b", !exit_first)] {
+            std::fs::create_dir_all(temp.path().join(format!("projects/{directory}"))).unwrap();
+            let input = format!(
+                "{}\n",
+                json!({"type":"user","sessionId":"same-id",
+                    "cwd":if exit_only { "/synthetic/foreign" } else { temp.path().to_str().unwrap() },
+                    "message":{"content":if exit_only { "<command-name>/exit</command-name>" } else { "real task" }}}),
+            );
+            std::fs::write(
+                temp.path()
+                    .join(format!("projects/{directory}/same-id.jsonl")),
+                input,
+            )
+            .unwrap();
+        }
+        let root = Root::open(temp.path()).unwrap();
+        for kind in [ResourceKind::History, ResourceKind::Messages] {
+            let result = read(
+                &Catalog {
+                    cli: CliKind::Claude,
+                    root: &root,
+                    projects: &granted(&root, &[temp.path().to_owned()]),
+                    user_config: None,
+                    check: &|| Ok(()),
+                },
+                &Options {
+                    kind,
+                    query: None,
+                    session_id: Some("same-id"),
+                },
+                &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+            );
+            assert_eq!(result.err(), Some("SOURCE_AMBIGUOUS"));
+        }
+    }
+}
+
 // Preserve titles and native time from a complete observed file. A partial file
 // can retain observed explicit titles but never promote its observed time to latest.
+// Claude Code 把 slash 命令调用写成首条 user 记录的 XML 封套（/model、/clear 等）。
+// 原始封套不是可读标题；合成紧凑命令标题，且后续真实用户消息优先于封套。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_CommandEnvelopeSynthesizesCompactTitle_040() {
+    let input = format!(
+        "{}\n{}\n",
+        json!({"type":"user","cwd":"/synthetic/project","sessionId":"fixture","message":{"content":"<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args></command-args>"}}),
+        json!({"type":"assistant","message":{"content":"ok"}}),
+    );
+    let transcript = parse("fixture.jsonl", CliKind::Claude, &input).unwrap();
+    assert_eq!(transcript.title, "/model");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_CommandEnvelopeSkipsToRealPrompt_041() {
+    let input = format!(
+        "{}\n{}\n{}\n",
+        json!({"type":"user","cwd":"/synthetic/project","sessionId":"fixture","message":{"content":"<command-message>diagnosing-bugs</command-message>\n<command-name>/diagnosing-bugs</command-name>\n<command-args>codex cli ctrl+c 导致会话终止</command-args>"}}),
+        json!({"type":"user","message":{"content":"真正的诊断请求"}}),
+        json!({"type":"assistant","message":{"content":"ok"}}),
+    );
+    let transcript = parse("fixture.jsonl", CliKind::Claude, &input).unwrap();
+    assert_eq!(transcript.title, "真正的诊断请求");
+    let bounded = parse_metadata("fixture.jsonl", CliKind::Claude, &input).unwrap();
+    assert_eq!(bounded.title, "真正的诊断请求");
+}
+
+// 手写 XML 是正文；只有已知 CLI 注入封套不能抢占首条用户标题。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_XmlPromptTitle_048() {
+    let input = [
+        json!({"type":"user","cwd":"/synthetic/project","sessionId":"fixture","message":{"content":"<command-name>/exit</command-name>"}}),
+        json!({"type":"user","message":{"content":"<local-command-caveat>injected</local-command-caveat>"}}),
+        json!({"type":"user","message":{"content":"<task>Fix the regression</task>"}}),
+    ].iter().map(|record| format!("{record}\n")).collect::<String>();
+    let complete = parse("fixture.jsonl", CliKind::Claude, &input).unwrap();
+    let bounded = parse_metadata("fixture.jsonl", CliKind::Claude, &input).unwrap();
+    assert_eq!(complete.title, "<task>Fix the regression</task>");
+    assert_eq!(bounded.title, complete.title);
+    let mut probe = claude_metadata_probe();
+    assert!(probe(input.as_bytes()).unwrap());
+}
+
+// 只有 slash 命令封套、从无真实用户消息的转录是「空会话」（如只运行 `/exit`）。
+// 这类行不占列表（用户从未真正使用过），且只在完整观察下判定，避免把
+// 尚未读到真实消息的完整文件误隐藏。有显式标题的空会话照常保留。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_EnvelopeOnlySessionIsHidden_042() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let cwd = temp.path().to_str().unwrap();
+    let empty = format!(
+        "{}\n{}\n",
+        json!({"type":"user","cwd":cwd,"sessionId":"exit-only","message":{"content":"<command-name>/exit</command-name>\n<command-message>exit</command-message>"}}),
+        json!({"type":"user","cwd":cwd,"sessionId":"exit-only","message":{"content":"<local-command-stdout>Goodbye!</local-command-stdout>"}}),
+    );
+    std::fs::write(temp.path().join("projects/p/exit-only.jsonl"), empty).unwrap();
+    let titled = format!(
+        "{}\n{}\n",
+        json!({"type":"custom-title","customTitle":"用户命名过的空会话","sessionId":"named"}),
+        json!({"type":"user","cwd":cwd,"sessionId":"named","message":{"content":"<command-name>/exit</command-name>\n<command-message>exit</command-message>"}}),
+    );
+    std::fs::write(temp.path().join("projects/p/named.jsonl"), titled).unwrap();
+
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    let ids: Vec<_> = items
+        .iter()
+        .filter_map(|item| match item {
+            ResourceItem::Session {
+                native_session_id, ..
+            } => Some(native_session_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !ids.contains(&"exit-only".into()),
+        "envelope-only session must not occupy a row"
+    );
+    assert!(
+        ids.contains(&"named".into()),
+        "an explicitly titled session stays visible regardless of envelope-only input"
+    );
+}
+
+// 任务 slash、工具调用和手写 XML 输入不能被当作无工作的 /exit 会话丢弃。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_KeepSlashWork_044() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    for (id, command, followup) in [
+        (
+            "task",
+            "/diagnosing-bugs",
+            json!({"type":"assistant","message":{"content":"Diagnosed the regression"}}),
+        ),
+        (
+            "tool",
+            "/exit",
+            json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-1","name":"Read","input":{}}]}}),
+        ),
+        (
+            "xml",
+            "/exit",
+            json!({"type":"user","message":{"content":"<task>Fix the regression</task>"}}),
+        ),
+        ("custom", "/build-project", json!({"type":"system"})),
+    ] {
+        let input = format!(
+            "{}\n{}\n",
+            json!({"type":"user","cwd":temp.path().to_str().unwrap(),"sessionId":id,"message":{"content":format!("<command-name>{command}</command-name>")}}),
+            followup
+        );
+        std::fs::write(temp.path().join(format!("projects/p/{id}.jsonl")), input).unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert_eq!(
+        items.len(),
+        4,
+        "slash tasks and substantive replies must remain discoverable"
+    );
+}
+
+// 完整短文件与有界文件使用相同的首个受支持 cwd，未知记录不能抢走项目归属。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_CompleteCwdFirst_046() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let input = [
+        json!({"type":"future-record","cwd":"/untrusted"}),
+        json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":"real task"}}),
+        json!({"type":"assistant","cwd":temp.path().join("sub"),"message":{"content":"done"}}),
+        json!({"type":"future-record","cwd":"/other"}),
+    ].iter().map(|record| format!("{record}\n")).collect::<String>();
+    std::fs::write(temp.path().join("projects/p/short.jsonl"), input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "complete transcripts keep the first supported project cwd"
+    );
+    let ResourceItem::Session { cwd, .. } = &items[0] else {
+        panic!("session metadata")
+    };
+    assert_eq!(cwd.as_deref(), temp.path().to_str());
+}
+
 #[test]
 #[allow(non_snake_case)]
 fn HistoryClaude_ObservedTitleAndTime_020() {
@@ -1633,19 +1834,16 @@ fn HistoryClaude_ObservedTitleAndTime_020() {
         };
         assert_eq!(title, "observed latest title");
         assert_eq!(*truncated, partial);
-        assert_eq!(
-            updated_at.as_deref(),
-            if partial {
-                None
-            } else {
-                Some("2026-10-10T07:00:00Z")
-            }
-        );
+        // 有界观察携带已观察记录的最新时间；partial 的 08:00 大记录被窗口截断不计入。
+        assert_eq!(updated_at.as_deref(), Some("2026-10-10T07:00:00Z"));
     }
 }
 
 // Arbitrary metadata with a cwd cannot terminate sampling before the actual
-// supported record. It does not establish an authorized project directory.
+// supported record. It does not establish an authorized project directory:
+// 未知类型携带的 cwd 既不归属项目，也不与受支持记录的 cwd 冲突。
+// 真机复现：会话进入子目录后 cwd 合法变化（qgs 与 qgs\docs\reviews 并存），
+// 逐记录冲突判定会把整源判成 SOURCE_AMBIGUOUS，因此归属取首个受支持记录。
 #[test]
 #[allow(non_snake_case)]
 fn HistoryClaude_UnknownCwdDoesNotEndObservation_021() {
@@ -1660,11 +1858,9 @@ fn HistoryClaude_UnknownCwdDoesNotEndObservation_021() {
     std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
     let root = Root::open(temp.path()).unwrap();
     let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
-    assert_eq!(
-        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).err(),
-        Some("SOURCE_AMBIGUOUS"),
-        "observed conflicting cwd records keep their existing fail-closed semantics"
-    );
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget)
+        .expect("unsupported-type cwd must not create ambiguity");
+    assert_eq!(items.len(), 1, "supported record's cwd owns the row");
 }
 
 #[cfg(unix)]
@@ -1816,7 +2012,8 @@ fn HistoryClaude_AiTitleSchemaAndPrecedence_024() {
 fn claude_tail_input(cwd: &Path, tail: &str) -> String {
     format!(
         "{}\n{}\n{tail}",
-        json!({"type":"user","cwd":cwd.to_str().unwrap(),"sessionId":"fixture","message":{"content":"first prompt"}}),
+        // cwd 行必然落在自适应头窗口内；它携带的时间是观察到的部分证据。
+        json!({"type":"user","cwd":cwd.to_str().unwrap(),"sessionId":"fixture","timestamp":"2026-10-10T09:00:00Z","message":{"content":"first prompt"}}),
         json!({"type":"assistant","timestamp":"2026-10-10T09:00:00Z","message":{"content":"a".repeat(150 * 1024)}}),
     )
 }
@@ -1836,7 +2033,8 @@ fn HistoryClaude_BoundedTailTitle_025() {
         let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
         let ResourceItem::Session { title, updated_at, truncated, .. } = &items[0] else { panic!("session metadata") };
         assert_eq!(title, expected);
-        assert!(updated_at.is_none(), "tail display enrichment is not complete activity evidence");
+        // 头窗口观察到的记录时间是真实证据；尾读只能在更完整时纠正它。
+        assert_eq!(updated_at.as_deref(), Some("2026-10-10T09:00:00Z"));
         assert!(*truncated);
         assert!(budget.history_metadata_incomplete());
     }
@@ -1893,10 +2091,15 @@ fn HistoryClaude_TailIdMismatchFailsClosed_027() {
     );
 }
 
+// 头窗口不再在 cwd 处早停：空 prompt 的会话会继续读到 150KiB 处的 ai-title，
+// 不再停留在 Untitled。字面 "Untitled" 是真实用户消息，仍在首块内作为标题。
 #[test]
 #[allow(non_snake_case)]
 fn HistoryClaude_UnreadMiddleAndLiteralUntitled_028() {
-    for (prompt, expect_unknown) in [("", true), ("Untitled", false)] {
+    for (prompt, expected, expect_unknown) in [
+        ("", "unread middle title", false),
+        ("Untitled", "Untitled", false),
+    ] {
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
         let input = format!(
@@ -1912,7 +2115,7 @@ fn HistoryClaude_UnreadMiddleAndLiteralUntitled_028() {
         let items =
             read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
         let row = serde_json::to_value(&items[0]).unwrap();
-        assert_eq!(row["title"], "Untitled");
+        assert_eq!(row["title"], expected);
         assert_eq!(
             row.get("titleUnknown").and_then(Value::as_bool),
             expect_unknown.then_some(true)
@@ -1940,9 +2143,10 @@ fn HistoryClaude_OptionalTitlesCannotStarveHeaders_029() {
         .unwrap();
     }
     let root = Root::open(temp.path()).unwrap();
+    // 八个必需头窗口各读 4KiB，随后只剩一次「头复读 + 64KiB 尾窗」的额度。
     let mut budget = Budget::new(super::super::super::scoped_fs::Limits {
         file_bytes: 2 * 1024 * 1024,
-        total_bytes: 8 * 4096 + 8192,
+        total_bytes: 8 * 4096 + 4096 + 64 * 1024,
         entries: 4096,
     });
     let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
@@ -2201,6 +2405,75 @@ fn HistoryClaude_TailCwdVariationKeepsRow_037() {
     }
 }
 
+// 首段观察窗口自身也会覆盖多个 cwd 取值（会话中段进入子目录）。归属取首个
+// 受支持记录的 cwd，后续差异不是 SOURCE_AMBIGUOUS；真机复现见 docs/
+// history-source-diagnostics.md（qgs 转录 root 与 docs\reviews 并存）。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_HeaderCwdVariationKeepsRow_043() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let nested = temp.path().join("sub").to_str().unwrap().to_string();
+    let input = format!(
+        "{}\n{}\n{}\n{}\n",
+        json!({"type":"user","cwd":temp.path().to_str().unwrap(),"sessionId":"fixture","message":{"content":"first turn"}}),
+        json!({"type":"assistant","cwd":nested,"sessionId":"fixture","message":{"content":"a".repeat(96 * 1024)}}),
+        json!({"type":"user","cwd":nested,"sessionId":"fixture","message":{"content":"second turn"}}),
+        json!({"type":"ai-title","aiTitle":"generated title","sessionId":"fixture"}),
+    );
+    std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget)
+        .expect("header cwd variation is not ambiguity");
+    assert_eq!(items.len(), 1);
+    let ResourceItem::Session { title, cwd, .. } = &items[0] else {
+        panic!("history must return session metadata")
+    };
+    assert_eq!(title, "generated title");
+    assert_eq!(cwd.as_deref(), Some(temp.path().to_str().unwrap()));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_BoundedObservationKeepsObservedTimestamp_038() {
+    let input = format!(
+        "{}\n{}\n",
+        json!({"type":"user","cwd":"/synthetic/project","sessionId":"fixture","timestamp":"2026-10-10T01:00:00Z","message":{"content":"task"}}),
+        json!({"type":"assistant","timestamp":"2026-10-10T02:00:00Z"}),
+    );
+    let transcript = parse_metadata("fixture.jsonl", CliKind::Claude, &input).unwrap();
+    // 有界观察不宣称完整流，但已观察到的记录时间仍是最新的部分证据，
+    // 不得退回 None 让会话行丢失排序与显示时间。
+    assert_eq!(transcript.updated.as_deref(), Some("2026-10-10T02:00:00Z"));
+    assert!(transcript.metadata_incomplete);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_OptionalTailRefreshesObservedTime_039() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_string();
+    let tail = format!(
+        "{}\n",
+        json!({"type":"user","cwd":cwd,"sessionId":"fixture","timestamp":"2026-10-10T18:00:00Z","message":{"content":"later turn"}}),
+    );
+    std::fs::write(
+        temp.path().join("projects/p/fixture.jsonl"),
+        claude_tail_input(temp.path(), &tail),
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    let ResourceItem::Session { updated_at, .. } = &items[0] else {
+        panic!("session metadata")
+    };
+    // 尾读观察到的更新时间纠正头窗口的偏旧时间；两者都是真实记录证据。
+    assert_eq!(updated_at.as_deref(), Some("2026-10-10T18:00:00Z"));
+}
+
 // 文件引用头和人工评审/限制说明不能仅因正文前缀就使用户会话消失。
 #[test]
 #[allow(non_snake_case)]
@@ -2300,7 +2573,7 @@ fn HistoryCodex_CacheHeaderKeepsUtf8Seam_055() {
         "x".repeat(padding),
         "x".repeat(8192)
     );
-    assert!(!std::str::from_utf8(&body.as_bytes()[..4096]).is_ok());
+    assert!(std::str::from_utf8(&body.as_bytes()[..4096]).is_err());
     std::fs::write(temp.path().join(relative), body).unwrap();
     let root = Root::open(temp.path()).unwrap();
     let (len, modified) = root.stat(relative).unwrap().unwrap();

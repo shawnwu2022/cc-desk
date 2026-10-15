@@ -425,6 +425,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         if (!cliSupport.isEnabled(session.cli) && session.opened !== true) continue
         byId.set(session.id, mergeDuplicateSession(byId.get(session.id), session))
       }
+      // Legacy 没有可与 Native 比对的已准入根身份；UUID 相等不能转移其归档、
+      // 显示名或恢复 owner。两端继续独立，Native 内部只认领唯一精确来源。
       for (const [id, row] of missingRecords) {
         // 缺失记录与普通行同一支持过滤，不能经该路径让停用 CLI 绕过隐藏。
         if (!cliSupport.isEnabled(row.cli) && row.opened !== true) continue

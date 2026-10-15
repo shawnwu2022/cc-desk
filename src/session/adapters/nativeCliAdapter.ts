@@ -252,13 +252,26 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
   function tabDisplayIdentity(tab: NativeCliTab): UnifiedSession {
     const row = projectTab(tab)
+    const matches = historyForTab(tab)
+    if (matches.length === 1) return projectHistory(matches[0].entry, matches[0].item)
     if (tab.sourceSessionKey && row.nativeSessionId) {
       return { ...row, id: historyId({ context: row.nativeOrigin! }, tab.sourceSessionKey, row.nativeSessionId), adapterSessionId: tab.sourceSessionKey }
     }
-    const matches = historyForTab(tab)
-    return matches.length === 1 ? projectHistory(matches[0].entry, matches[0].item) : row
+    return row
   }
-  function projectActive(tab: NativeCliTab) { return withSessionDisplayName(projectTab(tab, deps.tabs), deps.metadata, tabDisplayIdentity(tab)) }
+  function projectActive(tab: NativeCliTab) {
+    const row = projectTab(tab, deps.tabs)
+    const identity = tabDisplayIdentity(tab)
+    // 唯一历史对应存在时（观察器回填身份后），活动行跟随 CLI 记录的标题
+    // （首条消息 / AI 摘要 / 手动改名），而不是停留在本地占位名 "Claude Code"。
+    // 保存的 Desk 显示名在 withSessionDisplayName 内仍优先于 CLI 标题。
+    const titled = identity.id.startsWith(HISTORY_PREFIX) ? { ...row, title: identity.title } : row
+    // 首次认证身份晚于用户改名时，未知身份下保存的名称仍属于这个 tab。
+    // 仅用于当前终端显示；不猜测或迁移独立历史的 metadata key。
+    const earlyNamed = withSessionDisplayName(titled, deps.metadata, { ...row, nativeSessionId: null })
+    const tabNamed = withSessionDisplayName(earlyNamed, deps.metadata, row)
+    return withSessionDisplayName(tabNamed, deps.metadata, identity)
+  }
   const acceptedOpens = new Map<string, { at: number; savedIdentities: Set<string> }>()
   async function transferOpen(tab: NativeCliTab) {
     const accepted = acceptedOpens.get(tab.tabId)

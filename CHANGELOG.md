@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Preserve XML-leading user prompts as Claude history titles, retain early tab display names when authenticated history identity arrives, and keep newer known display timestamps across partial reads of the same exact source
+- Enable the observer for newly auto-created safe Claude templates; preserve all saved observer choices, including existing templates, without refresh-time profile writes
+- Preserve separate Legacy/Native history and archive/restore owners when their source roots cannot be proven identical; a matching session UUID is insufficient to fold them
+- Show observed record timestamps for bounded Claude history reads so closed rows keep a display time instead of “—”
+- Project sessions without an observation channel (observer off, Codex, connecting) as a neutral running state instead of “Activity unknown”
+- Read Claude history until a real title source is observed instead of stopping at `cwd`, widen the bounded title tail to 64 KiB, and drop the short wall-clock gate; only completely observed exit-only sessions without user tasks, assistant/tool work or explicit titles are omitted
+- Refresh CLI titles after authenticated Native Claude identity/reply-end receipts, coalescing affected projects per profile; resumed tabs follow the exact source and ordinary output/status/focus changes do not rescan history
+- Attribute Claude history rows to the first cwd observed on a supported record type and ignore cwd on unsupported record types, so the legal per-turn cwd changes of a real transcript (subdirectory navigation, letter casing) no longer mislabel a whole source `SOURCE_AMBIGUOUS` once the widened observation window reaches them
+
 ## [0.20.0] - 2026-10-14
 
 - Keep session rows in stable first-seen order, cluster Claude and Codex sessions without headings, move Settings to the bottom navigation anchor, and exclude exec-only Codex history
